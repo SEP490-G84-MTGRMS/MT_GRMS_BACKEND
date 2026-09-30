@@ -1,0 +1,65 @@
+using System.Net;
+using System.Text.Json;
+using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Constants;
+using MT_GRMS.Domain.Exceptions;
+
+namespace MT_GRMS.Api.Middlewares;
+
+public class ExceptionHandlingMiddleware
+{
+    private readonly RequestDelegate _next;
+    private readonly ILogger<ExceptionHandlingMiddleware> _logger;
+
+    public ExceptionHandlingMiddleware(RequestDelegate next, ILogger<ExceptionHandlingMiddleware> logger)
+    {
+        _next = next;
+        _logger = logger;
+    }
+
+    public async Task InvokeAsync(HttpContext context)
+    {
+        try
+        {
+            await _next(context);
+        }
+        catch (Exception ex)
+        {
+            await HandleExceptionAsync(context, ex);
+        }
+    }
+
+    private async Task HandleExceptionAsync(HttpContext context, Exception exception)
+    {
+        var response = context.Response;
+        response.ContentType = "application/json";
+
+        int statusCode;
+        ApiResponse<object> apiResponse;
+
+        switch (exception)
+        {
+            case BusinessException businessEx:
+                statusCode = (int)HttpStatusCode.UnprocessableEntity;
+                apiResponse = ApiResponse<object>.Fail(businessEx.ErrorCode, businessEx.Message);
+                _logger.LogWarning(businessEx, "Business exception occurred: {Message}", businessEx.Message);
+                break;
+
+            case NotFoundException notFoundEx:
+                statusCode = (int)HttpStatusCode.NotFound;
+                apiResponse = ApiResponse<object>.Fail(ErrorCodes.NotFound, notFoundEx.Message);
+                _logger.LogWarning(notFoundEx, "Not found exception occurred: {Message}", notFoundEx.Message);
+                break;
+
+            default:
+                statusCode = (int)HttpStatusCode.InternalServerError;
+                apiResponse = ApiResponse<object>.Fail(ErrorCodes.UnhandledError, "Đã xảy ra lỗi máy chủ nội bộ. Vui lòng thử lại sau.");
+                _logger.LogError(exception, "Unhandled exception occurred");
+                break;
+        }
+
+        response.StatusCode = statusCode;
+        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
+        await response.WriteAsync(JsonSerializer.Serialize(apiResponse, jsonOptions));
+    }
+}

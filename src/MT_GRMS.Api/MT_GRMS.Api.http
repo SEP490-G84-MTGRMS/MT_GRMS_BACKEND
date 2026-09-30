@@ -1,0 +1,6 @@
+@MT_GRMS.Api_HostAddress = http://localhost:5232
+
+GET {{MT_GRMS.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

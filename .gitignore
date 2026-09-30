@@ -1,0 +1,46 @@
+## ----------------------------------------------------
+## .NET & Visual Studio Build Output
+## ----------------------------------------------------
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+build/
+dist/
+
+## Visual Studio Cache & User Preferences
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.userprefs
+
+## Visual Studio Code & Rider
+.vscode/
+.idea/
+*.sln.iml
+
+## Test Results & Code Coverage
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+*.opencover.xml
+coverage/
+
+## Publish Output
+publish/
+*.publishsettings
+
+## Sensitive Data & Local Environment Configurations
+appsettings.Local.json
+*.local.json
+secrets.json
+
+## Crash Dumps & Logs
+*.log
+*.dmp
+*.crash
+
+## OS Generated Files
+.DS_Store
+Thumbs.db
+ehthumbs.db
