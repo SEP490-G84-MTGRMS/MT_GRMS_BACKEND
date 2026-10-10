@@ -42,7 +42,7 @@ Toàn bộ quy trình từ đặc tả, chia việc theo người phụ trách, 
 - Kết quả được ghi vào `test-report.md` với `verdict: PASS` (0 Warning, 0 Error, 100% Tests Passed).
 
 ### 5. Hỗ Trợ Admin & Tech Lead Review & Merge PR An Toàn
-Admin / PM chỉ cần thực hiện 2 thao tác để kiểm tra trước khi bấm Merge PR trên GitHub:
+Admin / PM chỉ cần thực hiện các thao tác để kiểm tra trước khi bấm Merge PR trên GitHub:
 1. **Kiểm tra danh sách và tiến độ toàn team**:
    ```bash
    cd ai-team-kit/team-ai-knowledge
@@ -57,6 +57,7 @@ Admin / PM chỉ cần thực hiện 2 thao tác để kiểm tra trước khi b
    - [x] 100% tasks trong `tasks.md` đã tick `[x]`.
    - [x] `test-report.md` đạt `verdict: PASS`.
    - [x] Không có xung đột Git với nhánh chính.
+   - [x] Dán đường dẫn file worklog markdown vào phần mô tả PR theo [`pull_request_template.md`](./.github/pull_request_template.md).
 4. **Sau khi Merge**: Chạy `/sep-archive <tên-change>` để đưa delta spec vào spec gốc của dự án.
 
 <!-- sep-kit:start -->
@@ -64,7 +65,7 @@ Admin / PM chỉ cần thực hiện 2 thao tác để kiểm tra trước khi b
 
 Repo này làm theo quy trình SEP 6 bước: `/sep-spec` → `/sep-brainstorm` → `/sep-verify-spec` → `/sep-apply` → `/sep-test` → `/sep-archive`
 (xem tiến độ: `/sep-status`). Mỗi bước kết thúc bằng Approve/Reject của user. Artifact nằm trong
-`D:/FPT_University/Final/Grade/new/project/ai-team-kit/team-ai-knowledge/openspec/` và chỉ được ghi qua MCP server "sep".
+`D:/FPT UNIVERSITY/FALL_2026_SEASON9/SEP490/sep490-repo/ai-team-kit/team-ai-knowledge/openspec/` và chỉ được ghi qua MCP server "sep".
 
 Rules chi tiết: `.cursor/rules/sep-kit-*.mdc` (Cursor), `.agents/rules/sep-kit-*.md` (Antigravity) —
 sinh từ `sep-kit/rules` (karpathy-coding, mt-grms-stack, multi-agent-review, sep-knowledge, sep-workflow). Cập nhật: `npm run sep -- init <repo>`.
