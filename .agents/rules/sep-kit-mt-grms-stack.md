@@ -1,0 +1,19 @@
+---
+trigger: "glob"
+description: "Convention kỹ thuật của MT-GRMS (backend .NET 8 Clean Architecture, frontend React 19 + antd) khi đọc/sửa code."
+globs: "**/*.{cs,csproj,ts,tsx}"
+---
+
+# Convention MT-GRMS
+
+## Backend (SGMS.sln — .NET 8)
+- Clean Architecture: `SGMS.Domain` (entity, không phụ thuộc gì) → `SGMS.Application` (use case, DTO, FluentValidation)
+  → `SGMS.Infrastructure` (EF Core 8 + SQL Server, repository) → `SGMS.API` (controller mỏng, JWT, Swagger).
+- Mọi truy vấn lọc theo `TenantId`; kiểm tra role/ownership ở Application.
+- Lỗi trả ProblemDetails; không lộ stack trace. Tiền: `decimal(18,2)`. Thời gian lưu UTC.
+- Đổi DB → EF Core migration mới; không sửa migration đã merge. Test: xUnit (`SGMS.UnitTests`, `SGMS.IntegrationTests`).
+
+## Frontend (Vite + React 19 + TS)
+- Code theo feature: `src/features/<feature>/{pages,components,lib,types}`.
+- UI nghiệp vụ dùng antd; style bằng Tailwind CSS v4 (không thêm file .css mới). Data: TanStack Query; state: Zustand.
+- Lint bằng `npm run lint` (oxlint), build `npm run build` trước khi báo xong.

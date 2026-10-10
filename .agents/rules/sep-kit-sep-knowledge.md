@@ -1,0 +1,23 @@
+---
+trigger: "always_on"
+description: "Dùng knowledge base chung của team (MCP server \"sep\") — tra cứu trước khi làm, lưu bài học và tổng kết phiên sau khi làm."
+---
+
+# Knowledge base của team
+
+MCP server "sep" đọc/ghi repo `team-ai-knowledge` (pattern, ADR, bài học, phiên làm việc, OpenSpec).
+
+## Đầu phiên (khi bắt đầu một việc mới)
+- `xem_tong_quan` một lần để nắm bản đồ KB; `danh_sach_phien_gan_day` để biết team vừa làm gì.
+- `xem_ngu_canh_du_an` (MT-GRMS) khi cần bối cảnh nghiệp vụ.
+
+## Trong khi làm
+- Trước khi viết code theo một convention: `xem_mau_thiet_ke`.
+- Trước khi đưa ra quyết định kiến trúc: `xem_quyet_dinh` (ADR).
+- Gặp lỗi: `xem_bai_hoc` trước khi tự mò.
+- Cần spec hiện tại của một capability: `xem_dac_ta`.
+
+## Cuối việc (hỏi user trước khi lưu)
+- Sửa xong lỗi khó → `luu_bai_hoc` (problem + root cause + solution).
+- Kết thúc phiên dài → `luu_phien_lam_viec` (mục tiêu, file đã đổi, tóm tắt).
+- Không lưu thông tin bí mật (token, mật khẩu, connection string) vào KB.
