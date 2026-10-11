@@ -4,7 +4,14 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ---
 
-## [Unreleased] - 2026-09-30
+## [Unreleased] - 2026-10-11
+
+### Added
+
+- Triển khai endpoints `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout` [BE-AUTH].
+- Cung cấp `IAuthService` và `AuthService` xử lý xác thực tenant và sinh JWT token / Refresh Token.
+
+## [0.1.0] - 2026-09-30
 
 ### Added
 
