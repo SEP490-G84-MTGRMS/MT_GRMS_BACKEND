@@ -2,17 +2,17 @@ using MT_GRMS.Domain.Common;
 
 namespace MT_GRMS.Domain.Entities.Identity;
 
-public class User : BaseTenantEntity
+/// <summary>
+/// Thực thể User tối giản phục vụ xác thực đăng nhập:
+/// - Id: string Uid (chuỗi định danh duy nhất, ví dụ: usr_xxx hoặc NanoId/Guid string)
+/// - Username: tên đăng nhập
+/// - Password: mật khẩu
+/// </summary>
+public class User
 {
+    public string Id { get; set; } = string.Empty;
     public string Username { get; set; } = string.Empty;
-    public string Email { get; set; } = string.Empty;
-    public string PasswordHash { get; set; } = string.Empty;
-    public string FullName { get; set; } = string.Empty;
-    public string Phone { get; set; } = string.Empty;
-    public Guid RoleId { get; set; }
-    public Guid? BranchId { get; set; }
-    public bool IsActive { get; set; } = true;
-    public Role? Role { get; set; }
+    public string Password { get; set; } = string.Empty;
 }
 
 public class Role : BaseTenantEntity

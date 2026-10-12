@@ -14,7 +14,7 @@ public record LoginResponse(
 );
 
 public record UserInfo(
-    Guid Id,
+    string Id,
     string Username,
     string FullName,
     string Email,

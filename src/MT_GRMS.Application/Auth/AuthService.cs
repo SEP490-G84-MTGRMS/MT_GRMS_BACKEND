@@ -16,24 +16,19 @@ public class AuthService : IAuthService
 
     public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
     {
-        // 1. Tìm user theo username hoặc email
-        var users = await _userRepository.FindAsync(
-            u => (u.Username == request.UsernameOrEmail || u.Email == request.UsernameOrEmail) && !u.IsDeleted,
-            cancellationToken
-        );
-
-        var user = users.FirstOrDefault();
+        // 1. Tìm user theo username
+        var user = await _userRepository.GetByUsernameAsync(request.UsernameOrEmail, cancellationToken);
 
         // 2. Trả về thông tin đăng nhập thành công
         if (user == null)
         {
             var fallbackUser = new UserInfo(
-                Id: Guid.NewGuid(),
+                Id: $"usr_{Guid.NewGuid():N}",
                 Username: request.UsernameOrEmail,
                 FullName: request.UsernameOrEmail.Split('@')[0],
                 Email: request.UsernameOrEmail.Contains('@') ? request.UsernameOrEmail : $"{request.UsernameOrEmail}@mtgrms.vn",
                 RoleName: "SUPER_ADMIN",
-                BranchId: Guid.NewGuid(),
+                BranchId: null,
                 TenantId: request.TenantCode ?? "TENANT-HCM-01"
             );
 
@@ -48,11 +43,11 @@ public class AuthService : IAuthService
         var userInfo = new UserInfo(
             Id: user.Id,
             Username: user.Username,
-            FullName: user.FullName,
-            Email: user.Email,
-            RoleName: user.Role?.RoleName ?? "ADMIN",
-            BranchId: user.BranchId,
-            TenantId: user.TenantId
+            FullName: user.Username,
+            Email: $"{user.Username}@mtgrms.vn",
+            RoleName: "ADMIN",
+            BranchId: null,
+            TenantId: request.TenantCode ?? "DEFAULT"
         );
 
         return new LoginResponse(
@@ -66,12 +61,12 @@ public class AuthService : IAuthService
     public Task<LoginResponse> RefreshTokenAsync(RefreshTokenRequest request, CancellationToken cancellationToken = default)
     {
         var refreshedUser = new UserInfo(
-            Id: Guid.NewGuid(),
+            Id: $"usr_{Guid.NewGuid():N}",
             Username: "refreshed_user",
             FullName: "Refreshed User",
             Email: "user@mtgrms.vn",
             RoleName: "ADMIN",
-            BranchId: Guid.NewGuid(),
+            BranchId: null,
             TenantId: "TENANT-HCM-01"
         );
 
