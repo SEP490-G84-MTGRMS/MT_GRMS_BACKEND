@@ -4,7 +4,7 @@ using MT_GRMS.Application.PosOrders;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/orders")]
+[Route("api/orders")]
 public class OrdersController : BaseApiController
 {
     private readonly IOrderService _orderService;

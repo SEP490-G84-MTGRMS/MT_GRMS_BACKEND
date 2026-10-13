@@ -12,7 +12,7 @@ namespace MT_GRMS.Api.Controllers;
 /// - Đóng gói kết quả trả về trong ApiResponse<T> chuẩn mực.
 /// </summary>
 [ApiController]
-[Route("api/v1/products")]
+[Route("api/products")]
 public class ProductsController : BaseApiController
 {
     private readonly ICatalogService _catalogService;

@@ -16,30 +16,22 @@ public class AuthService : IAuthService
 
     public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
     {
-        // 1. Tìm user theo username
-        var user = await _userRepository.GetByUsernameAsync(request.UsernameOrEmail, cancellationToken);
-
-        // 2. Trả về thông tin đăng nhập thành công
-        if (user == null)
+        // 1. Kiểm tra tính hợp lệ của tham số đầu vào
+        if (string.IsNullOrWhiteSpace(request.UsernameOrEmail) || string.IsNullOrWhiteSpace(request.Password))
         {
-            var fallbackUser = new UserInfo(
-                Id: $"usr_{Guid.NewGuid():N}",
-                Username: request.UsernameOrEmail,
-                FullName: request.UsernameOrEmail.Split('@')[0],
-                Email: request.UsernameOrEmail.Contains('@') ? request.UsernameOrEmail : $"{request.UsernameOrEmail}@mtgrms.vn",
-                RoleName: "SUPER_ADMIN",
-                BranchId: null,
-                TenantId: request.TenantCode ?? "TENANT-HCM-01"
-            );
-
-            return new LoginResponse(
-                AccessToken: $"mt_jwt_{Guid.NewGuid():N}_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}",
-                RefreshToken: $"mt_refresh_{Guid.NewGuid():N}",
-                ExpiresAt: DateTime.UtcNow.AddHours(2),
-                User: fallbackUser
-            );
+            throw new ArgumentException("Tài khoản và mật khẩu không được để trống.");
         }
 
+        // 2. Tìm user trong cơ sở dữ liệu
+        var user = await _userRepository.GetByUsernameAsync(request.UsernameOrEmail.Trim(), cancellationToken);
+
+        // 3. Nếu không tìm thấy user HOẶC sai mật khẩu -> Từ chối xác thực (HTTP 401)
+        if (user == null || user.Password != request.Password)
+        {
+            throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
+        }
+
+        // 4. Đăng nhập thành công với thông tin user từ database
         var userInfo = new UserInfo(
             Id: user.Id,
             Username: user.Username,
