@@ -40,10 +40,13 @@ public class ExceptionHandlingMiddleware
         switch (exception)
         {
             case BusinessException businessEx:
-                statusCode = (int)HttpStatusCode.UnprocessableEntity;
+                statusCode = businessEx.ErrorCode == "PRODUCT_ALREADY_ASSIGNED_TO_SUPPLIER"
+                    ? (int)HttpStatusCode.Conflict
+                    : (int)HttpStatusCode.UnprocessableEntity;
                 apiResponse = ApiResponse<object>.Fail(businessEx.ErrorCode, businessEx.Message);
                 _logger.LogWarning(businessEx, "Business exception occurred: {Message}", businessEx.Message);
                 break;
+
 
             case NotFoundException notFoundEx:
                 statusCode = (int)HttpStatusCode.NotFound;

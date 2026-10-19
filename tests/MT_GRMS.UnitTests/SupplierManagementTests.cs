@@ -178,7 +178,73 @@ public class SupplierManagementTests
             BlackoutDates.AddRange(blackoutDates);
             return Task.CompletedTask;
         }
+
+        public List<SupplierProduct> SupplierProducts { get; } = new();
+        public List<MT_GRMS.Domain.Entities.Catalog.Product> Products { get; } = new();
+
+        public Task<SupplierProduct?> GetSupplierProductAsync(Guid supplierId, Guid productId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(SupplierProducts.FirstOrDefault(sp => sp.SupplierId == supplierId && sp.ProductId == productId));
+        }
+
+        public Task<(IReadOnlyList<SupplierProduct> Items, int TotalCount)> GetPagedSupplierProductsAsync(
+            Guid supplierId,
+            string? searchTerm,
+            Guid? categoryId,
+            SupplierProductStatus? status,
+            int pageIndex,
+            int pageSize,
+            CancellationToken cancellationToken = default)
+        {
+            var query = SupplierProducts.AsEnumerable();
+            if (supplierId != Guid.Empty) query = query.Where(sp => sp.SupplierId == supplierId);
+            if (status.HasValue) query = query.Where(sp => sp.Status == status.Value);
+            var list = query.ToList();
+            var paged = list.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
+            return Task.FromResult(((IReadOnlyList<SupplierProduct>)paged, list.Count));
+        }
+
+        public Task AddSupplierProductAsync(SupplierProduct supplierProduct, CancellationToken cancellationToken = default)
+        {
+            SupplierProducts.Add(supplierProduct);
+            return Task.CompletedTask;
+        }
+
+        public Task ClearPrimarySupplierFlagAsync(Guid productId, Guid? excludeSupplierId = null, CancellationToken cancellationToken = default)
+        {
+            var primaries = SupplierProducts.Where(sp => sp.ProductId == productId && sp.IsPrimarySupplier);
+            if (excludeSupplierId.HasValue && excludeSupplierId != Guid.Empty)
+            {
+                primaries = primaries.Where(sp => sp.SupplierId != excludeSupplierId.Value);
+            }
+            foreach (var sp in primaries)
+            {
+                sp.IsPrimarySupplier = false;
+            }
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyList<SupplierProduct>> GetSuppliersForProductAsync(Guid productId, bool onlyActive = false, CancellationToken cancellationToken = default)
+        {
+            var query = SupplierProducts.Where(sp => sp.ProductId == productId);
+            if (onlyActive)
+            {
+                query = query.Where(sp => sp.Status == SupplierProductStatus.Active);
+            }
+            return Task.FromResult((IReadOnlyList<SupplierProduct>)query.ToList());
+        }
+
+        public Task<bool> ProductExistsAsync(Guid productId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Products.Any(p => p.Id == productId));
+        }
+
+        public Task<MT_GRMS.Domain.Entities.Catalog.Product?> GetProductByIdAsync(Guid productId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Products.FirstOrDefault(p => p.Id == productId));
+        }
     }
+
 
     [Fact]
     public async Task REQ01_CreateSupplier_ValidData_GeneratesCodeAndSucceeds()

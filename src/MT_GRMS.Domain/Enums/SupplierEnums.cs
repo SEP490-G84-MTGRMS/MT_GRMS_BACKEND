@@ -20,3 +20,10 @@ public enum APDocType
     PaymentVoucher = 3,
     ReturnAdjustment = 4
 }
+
+public enum SupplierProductStatus
+{
+    Active = 1,
+    Inactive = 2
+}
+

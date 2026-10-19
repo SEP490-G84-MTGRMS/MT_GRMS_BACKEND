@@ -57,7 +57,7 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("Category");
+                    b.ToTable("Categories");
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Catalog.Product", b =>
@@ -539,6 +539,73 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("supplier_delivery_configs", (string)null);
                 });
 
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.SupplierProduct", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("AgreedWholesalePrice")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("DeliveryUoM")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<bool>("IsPrimarySupplier")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<int>("MinimumOrderQuantity")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1);
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("SupplierId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SupplierProductCode")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProductId");
+
+                    b.HasIndex("SupplierId");
+
+                    b.HasIndex("TenantId", "ProductId", "IsPrimarySupplier");
+
+                    b.HasIndex("TenantId", "SupplierId", "ProductId")
+                        .IsUnique();
+
+                    b.ToTable("supplier_products", (string)null);
+                });
+
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Catalog.Product", b =>
                 {
                     b.HasOne("MT_GRMS.Domain.Entities.Catalog.Category", "Category")
@@ -578,7 +645,7 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade);
 
                     b.HasOne("MT_GRMS.Domain.Entities.Supplier.Supplier", "Supplier")
-                        .WithMany()
+                        .WithMany("BlackoutDates")
                         .HasForeignKey("SupplierId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
@@ -599,6 +666,25 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Supplier");
                 });
 
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.SupplierProduct", b =>
+                {
+                    b.HasOne("MT_GRMS.Domain.Entities.Catalog.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("MT_GRMS.Domain.Entities.Supplier.Supplier", "Supplier")
+                        .WithMany()
+                        .HasForeignKey("SupplierId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Product");
+
+                    b.Navigation("Supplier");
+                });
+
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Catalog.Category", b =>
                 {
                     b.Navigation("Products");
@@ -607,6 +693,8 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.Supplier", b =>
                 {
                     b.Navigation("APLedgers");
+
+                    b.Navigation("BlackoutDates");
 
                     b.Navigation("DeliveryConfig");
                 });

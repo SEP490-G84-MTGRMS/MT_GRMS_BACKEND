@@ -33,4 +33,21 @@ public interface ISupplierRepository : IRepository<Supplier>
     Task AddDeliveryConfigAsync(SupplierDeliveryConfig config, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default);
     Task ReplaceBlackoutDatesAsync(Guid supplierId, Guid configId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default);
+
+    // Supplier Product Management (REQ-SP01 đến REQ-SP06)
+    Task<SupplierProduct?> GetSupplierProductAsync(Guid supplierId, Guid productId, CancellationToken cancellationToken = default);
+    Task<(IReadOnlyList<SupplierProduct> Items, int TotalCount)> GetPagedSupplierProductsAsync(
+        Guid supplierId,
+        string? searchTerm,
+        Guid? categoryId,
+        SupplierProductStatus? status,
+        int pageIndex,
+        int pageSize,
+        CancellationToken cancellationToken = default);
+    Task AddSupplierProductAsync(SupplierProduct supplierProduct, CancellationToken cancellationToken = default);
+    Task ClearPrimarySupplierFlagAsync(Guid productId, Guid? excludeSupplierId = null, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<SupplierProduct>> GetSuppliersForProductAsync(Guid productId, bool onlyActive = false, CancellationToken cancellationToken = default);
+    Task<bool> ProductExistsAsync(Guid productId, CancellationToken cancellationToken = default);
+    Task<Domain.Entities.Catalog.Product?> GetProductByIdAsync(Guid productId, CancellationToken cancellationToken = default);
 }
+

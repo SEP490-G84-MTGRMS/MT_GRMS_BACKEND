@@ -136,4 +136,73 @@ public class SuppliersController : BaseApiController
         var result = await _supplierService.LinkCustomerAsync(id, request, cancellationToken);
         return Ok(ApiResponse<SupplierDetailDto>.Ok(result, "Liên kết hồ sơ khách hàng thành công."));
     }
+
+    /// <summary>
+    /// Lấy danh mục sản phẩm được gán cho Nhà cung cấp có phân trang và bộ lọc (REQ-SP05, REQ-SP06)
+    /// </summary>
+    [HttpGet("{id:guid}/products")]
+    public async Task<IActionResult> GetSupplierProducts(
+        Guid id,
+        [FromQuery] SupplierProductQueryFilter filter,
+        CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.GetSupplierProductsAsync(id, filter, cancellationToken);
+        return Ok(ApiResponse<PagedResult<SupplierProductDto>>.Ok(result));
+    }
+
+    /// <summary>
+    /// Gán sản phẩm mới cho Nhà cung cấp kèm đơn vị giao hàng, giá sỉ và MOQ (REQ-SP01, BR-SP01, BR-SP02)
+    /// </summary>
+    [HttpPost("{id:guid}/products")]
+    public async Task<IActionResult> AssignProduct(
+        Guid id,
+        [FromBody] AssignSupplierProductCommand command,
+        CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.AssignSupplierProductAsync(id, command, cancellationToken);
+        return CreatedAtAction(nameof(GetSupplierProducts), new { id = result.SupplierId }, ApiResponse<SupplierProductDto>.Ok(result, "Gán sản phẩm cho nhà cung cấp thành công."));
+    }
+
+    /// <summary>
+    /// Cập nhật giá sỉ thỏa thuận, đơn vị giao hàng và MOQ của sản phẩm (REQ-SP02)
+    /// </summary>
+    [HttpPut("{id:guid}/products/{productId:guid}")]
+    public async Task<IActionResult> UpdateSupplierProduct(
+        Guid id,
+        Guid productId,
+        [FromBody] UpdateSupplierProductCommand command,
+        CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.UpdateSupplierProductAsync(id, productId, command, cancellationToken);
+        return Ok(ApiResponse<SupplierProductDto>.Ok(result, "Cập nhật sản phẩm nhà cung cấp thành công."));
+    }
+
+    /// <summary>
+    /// Chuyển đổi trạng thái hoạt động / tạm ngưng của sản phẩm theo NCC (REQ-SP03)
+    /// </summary>
+    [HttpPatch("{id:guid}/products/{productId:guid}/status")]
+    public async Task<IActionResult> ToggleProductStatus(
+        Guid id,
+        Guid productId,
+        [FromBody] ToggleSupplierProductStatusRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.ToggleSupplierProductStatusAsync(id, productId, request, cancellationToken);
+        return Ok(ApiResponse<SupplierProductDto>.Ok(result, "Cập nhật trạng thái sản phẩm thành công."));
+    }
+
+    /// <summary>
+    /// Đặt hoặc hủy quyền Nhà cung cấp chính (Primary Supplier) cho sản phẩm (REQ-SP04, BR-SP02)
+    /// </summary>
+    [HttpPatch("{id:guid}/products/{productId:guid}/primary")]
+    public async Task<IActionResult> SetPrimarySupplier(
+        Guid id,
+        Guid productId,
+        [FromBody] SetPrimarySupplierRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.SetPrimarySupplierAsync(id, productId, request, cancellationToken);
+        return Ok(ApiResponse<SupplierProductDto>.Ok(result, "Cập nhật nhà cung cấp chính thành công."));
+    }
 }
+
