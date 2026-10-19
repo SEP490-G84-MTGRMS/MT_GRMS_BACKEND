@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Enums;
 
@@ -16,11 +17,15 @@ public class Supplier : BaseTenantEntity
 
     public string ContactPerson { get; set; } = string.Empty;
     public string Phone { get; set; } = string.Empty;
+    [NotMapped]
     public string? ContactPhone { get; set; }
     public string? Email { get; set; }
     public string? Address { get; set; }
+    [NotMapped]
     public string? Ward { get; set; }
+    [NotMapped]
     public string? District { get; set; }
+    [NotMapped]
     public string? Province { get; set; }
 
     public int PaymentTermDays { get; set; } = 0;
@@ -36,10 +41,13 @@ public class Supplier : BaseTenantEntity
     public string? InvoiceAddress { get; set; }
     public string? BankName { get; set; }
     public string? BankAccount { get; set; }
+    [NotMapped]
     public string? BankAccountNumber { get => BankAccount; set => BankAccount = value; }
     public string? AccountHolder { get; set; }
+    [NotMapped]
     public string? BankAccountHolder { get => AccountHolder; set => AccountHolder = value; }
     public string? Note { get; set; }
+    [NotMapped]
     public string? Notes { get => Note; set => Note = value; }
 
     public SupplierDeliveryConfig? DeliveryConfig { get; set; }

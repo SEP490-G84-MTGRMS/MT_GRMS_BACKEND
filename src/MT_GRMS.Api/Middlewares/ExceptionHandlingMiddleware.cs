@@ -53,7 +53,7 @@ public class ExceptionHandlingMiddleware
 
             default:
                 statusCode = (int)HttpStatusCode.InternalServerError;
-                apiResponse = ApiResponse<object>.Fail(ErrorCodes.UnhandledError, "Đã xảy ra lỗi máy chủ nội bộ. Vui lòng thử lại sau.");
+                apiResponse = ApiResponse<object>.Fail(ErrorCodes.UnhandledError, $"Lỗi: {exception.Message} | {exception.InnerException?.Message}");
                 _logger.LogError(exception, "Unhandled exception occurred");
                 break;
         }

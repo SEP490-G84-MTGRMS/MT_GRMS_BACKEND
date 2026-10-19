@@ -64,5 +64,45 @@ public partial class AppDbContext : DbContext
             (_tenantContext == null || string.IsNullOrEmpty(_tenantContext.CurrentTenantId) || e.TenantId == _tenantContext.CurrentTenantId));
     }
 
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        ApplyAuditAndTenantInfo();
+        return base.SaveChangesAsync(cancellationToken);
+    }
+
+    public override int SaveChanges()
+    {
+        ApplyAuditAndTenantInfo();
+        return base.SaveChanges();
+    }
+
+    private void ApplyAuditAndTenantInfo()
+    {
+        var tenantId = _tenantContext?.CurrentTenantId;
+        if (string.IsNullOrWhiteSpace(tenantId))
+        {
+            tenantId = "default-tenant";
+        }
+
+        foreach (var entry in ChangeTracker.Entries<BaseTenantEntity>())
+        {
+            if (entry.State == EntityState.Added)
+            {
+                if (string.IsNullOrWhiteSpace(entry.Entity.TenantId))
+                {
+                    entry.Entity.TenantId = tenantId;
+                }
+                if (entry.Entity.CreatedAt == default)
+                {
+                    entry.Entity.CreatedAt = DateTime.UtcNow;
+                }
+            }
+            else if (entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = DateTime.UtcNow;
+            }
+        }
+    }
+
     partial void OnModelCreatingPartial(ModelBuilder modelBuilder);
 }
