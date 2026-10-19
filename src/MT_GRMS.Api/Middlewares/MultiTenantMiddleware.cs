@@ -29,6 +29,14 @@ public class MultiTenantMiddleware
             }
         }
 
+        // Hỗ trợ header X-Tenant-Id hoặc fallback tenant cho môi trường dev/standalone
+        if (string.IsNullOrWhiteSpace(tenantContext.CurrentTenantId))
+        {
+            var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
+            var fallbackTenant = !string.IsNullOrWhiteSpace(headerTenantId) ? headerTenantId : "default-tenant";
+            tenantContext.SetContext(fallbackTenant, Guid.Empty, null);
+        }
+
         await _next(context);
     }
 }

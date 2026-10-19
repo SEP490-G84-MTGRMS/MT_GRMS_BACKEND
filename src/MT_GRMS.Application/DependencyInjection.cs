@@ -24,6 +24,7 @@ public static class DependencyInjection
         services.AddScoped<ICatalogService, CatalogService>();
         services.AddScoped<IBatchService, BatchService>();
         services.AddScoped<ICashbookService, CashbookService>();
+        services.AddScoped<Suppliers.ISupplierService, Suppliers.SupplierService>();
         services.AddScoped<AiPipeline.IAiRecommendationService, AiPipeline.AiRecommendationService>();
 
         return services;
