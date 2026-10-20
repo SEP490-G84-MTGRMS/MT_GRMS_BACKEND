@@ -2,8 +2,10 @@ using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Common;
+using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Entities.Supplier;
+
 
 namespace MT_GRMS.Infrastructure.Persistence;
 
@@ -28,12 +30,18 @@ public partial class AppDbContext : DbContext
     // Identity
     public virtual DbSet<User> Users { get; set; } = null!;
 
+    // Catalog Module
+    public virtual DbSet<Product> Products { get; set; } = null!;
+    public virtual DbSet<Category> Categories { get; set; } = null!;
+
     // Supplier Module
     public virtual DbSet<Domain.Entities.Supplier.Supplier> Suppliers { get; set; } = null!;
     public virtual DbSet<SupplierCategory> SupplierCategories { get; set; } = null!;
     public virtual DbSet<SupplierAPLedger> SupplierAPLedgers { get; set; } = null!;
     public virtual DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs { get; set; } = null!;
     public virtual DbSet<SupplierBlackoutDate> SupplierBlackoutDates { get; set; } = null!;
+    public virtual DbSet<SupplierProduct> SupplierProducts { get; set; } = null!;
+
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

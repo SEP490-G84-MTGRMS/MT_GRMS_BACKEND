@@ -1,8 +1,10 @@
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
+using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Domain.Enums;
+
 using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Infrastructure.Repositories;
@@ -175,4 +177,118 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             await _context.SupplierBlackoutDates.AddAsync(bo, cancellationToken);
         }
     }
+
+    // Supplier Product Management (REQ-SP01 đến REQ-SP06)
+    public async Task<SupplierProduct?> GetSupplierProductAsync(Guid supplierId, Guid productId, CancellationToken cancellationToken = default)
+    {
+        return await _context.SupplierProducts
+            .Include(sp => sp.Supplier)
+            .Include(sp => sp.Product)
+                .ThenInclude(p => p.Category)
+            .FirstOrDefaultAsync(sp => sp.SupplierId == supplierId && sp.ProductId == productId, cancellationToken);
+    }
+
+    public async Task<(IReadOnlyList<SupplierProduct> Items, int TotalCount)> GetPagedSupplierProductsAsync(
+        Guid supplierId,
+        string? searchTerm,
+        Guid? categoryId,
+        SupplierProductStatus? status,
+        int pageIndex,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _context.SupplierProducts
+            .Include(sp => sp.Supplier)
+            .Include(sp => sp.Product)
+                .ThenInclude(p => p.Category)
+            .AsNoTracking();
+
+        if (supplierId != Guid.Empty)
+        {
+            query = query.Where(sp => sp.SupplierId == supplierId);
+        }
+
+        if (categoryId.HasValue && categoryId != Guid.Empty)
+        {
+            query = query.Where(sp => sp.Product.CategoryId == categoryId.Value);
+        }
+
+        if (status.HasValue)
+        {
+            query = query.Where(sp => sp.Status == status.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(searchTerm))
+        {
+            var term = searchTerm.Trim().ToLower();
+            query = query.Where(sp =>
+                sp.Product.ProductName.ToLower().Contains(term) ||
+                sp.Product.Barcode.ToLower().Contains(term) ||
+                sp.Product.SKU.ToLower().Contains(term) ||
+                (sp.SupplierProductCode != null && sp.SupplierProductCode.ToLower().Contains(term)));
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken);
+
+        var items = await query
+            .OrderByDescending(sp => sp.IsPrimarySupplier)
+            .ThenByDescending(sp => sp.CreatedAt)
+            .Skip((pageIndex - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return (items, totalCount);
+    }
+
+    public async Task AddSupplierProductAsync(SupplierProduct supplierProduct, CancellationToken cancellationToken = default)
+    {
+        await _context.SupplierProducts.AddAsync(supplierProduct, cancellationToken);
+    }
+
+    public async Task ClearPrimarySupplierFlagAsync(Guid productId, Guid? excludeSupplierId = null, CancellationToken cancellationToken = default)
+    {
+        var query = _context.SupplierProducts
+            .Where(sp => sp.ProductId == productId && sp.IsPrimarySupplier);
+
+        if (excludeSupplierId.HasValue && excludeSupplierId != Guid.Empty)
+        {
+            query = query.Where(sp => sp.SupplierId != excludeSupplierId.Value);
+        }
+
+        var primaries = await query.ToListAsync(cancellationToken);
+        foreach (var sp in primaries)
+        {
+            sp.IsPrimarySupplier = false;
+        }
+    }
+
+    public async Task<IReadOnlyList<SupplierProduct>> GetSuppliersForProductAsync(Guid productId, bool onlyActive = false, CancellationToken cancellationToken = default)
+    {
+        var query = _context.SupplierProducts
+            .Include(sp => sp.Supplier)
+            .Where(sp => sp.ProductId == productId);
+
+        if (onlyActive)
+        {
+            query = query.Where(sp => sp.Status == SupplierProductStatus.Active && sp.Supplier.Status == SupplierStatus.Active);
+        }
+
+        return await query
+            .OrderByDescending(sp => sp.IsPrimarySupplier)
+            .ThenBy(sp => sp.AgreedWholesalePrice)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<bool> ProductExistsAsync(Guid productId, CancellationToken cancellationToken = default)
+    {
+        return await _context.Products.AnyAsync(p => p.Id == productId, cancellationToken);
+    }
+
+    public async Task<Product?> GetProductByIdAsync(Guid productId, CancellationToken cancellationToken = default)
+    {
+        return await _context.Products
+            .Include(p => p.Category)
+            .FirstOrDefaultAsync(p => p.Id == productId, cancellationToken);
+    }
 }
+

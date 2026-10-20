@@ -1,6 +1,8 @@
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers.Dtos;
+using MT_GRMS.Application.Suppliers.Validators;
 using MT_GRMS.Domain.Entities.Supplier;
+
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
@@ -547,4 +549,231 @@ public class SupplierService : ISupplierService
             }).ToList() ?? []
         };
     }
+
+    // ==========================================
+    // SUPPLIER PRODUCT MANAGEMENT (REQ-SP01 - REQ-SP06)
+    // ==========================================
+
+    public async Task<PagedResult<SupplierProductDto>> GetSupplierProductsAsync(
+        Guid supplierId,
+        SupplierProductQueryFilter filter,
+        CancellationToken cancellationToken = default)
+    {
+        if (supplierId != Guid.Empty)
+        {
+            var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
+            if (supplier == null)
+            {
+                throw new NotFoundException($"Không tìm thấy nhà cung cấp với ID: {supplierId}");
+            }
+        }
+
+        var (items, totalCount) = await _supplierRepository.GetPagedSupplierProductsAsync(
+            supplierId,
+            filter.SearchTerm,
+            filter.CategoryId,
+            filter.Status,
+            filter.PageIndex,
+            filter.PageSize,
+            cancellationToken);
+
+        var dtos = items.Select(MapToSupplierProductDto).ToList();
+
+        return new PagedResult<SupplierProductDto>
+        {
+            Items = dtos,
+            Page = filter.PageIndex,
+            PageSize = filter.PageSize,
+            TotalItems = totalCount
+        };
+    }
+
+    public async Task<SupplierProductDto> AssignSupplierProductAsync(
+        Guid supplierId,
+        AssignSupplierProductCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        var validator = new AssignSupplierProductValidator();
+        var validationResult = await validator.ValidateAsync(command, cancellationToken);
+        if (!validationResult.IsValid)
+        {
+            throw new BusinessException("VALIDATION_ERROR", validationResult.Errors.First().ErrorMessage);
+        }
+
+        var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
+        if (supplier == null)
+        {
+            throw new NotFoundException($"Không tìm thấy nhà cung cấp với ID: {supplierId}");
+        }
+
+        var product = await _supplierRepository.GetProductByIdAsync(command.ProductId, cancellationToken);
+        if (product == null)
+        {
+            throw new NotFoundException($"Không tìm thấy sản phẩm với ID: {command.ProductId}");
+        }
+
+        // BR-SP01: Chặn trùng lặp gán cùng 1 sản phẩm cho cùng 1 nhà cung cấp trong cùng Tenant
+        var existing = await _supplierRepository.GetSupplierProductAsync(supplierId, command.ProductId, cancellationToken);
+        if (existing != null)
+        {
+            throw new BusinessException("PRODUCT_ALREADY_ASSIGNED_TO_SUPPLIER", "Sản phẩm này đã được gán cho nhà cung cấp này trong hệ thống.");
+        }
+
+        // BR-SP02: Độc quyền Primary Supplier — nếu đặt làm Primary thì tự động gỡ cờ Primary của NCC cũ
+        if (command.IsPrimarySupplier)
+        {
+            await _supplierRepository.ClearPrimarySupplierFlagAsync(command.ProductId, null, cancellationToken);
+        }
+
+        var entity = new SupplierProduct
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplierId,
+            Supplier = supplier,
+            ProductId = command.ProductId,
+            Product = product,
+            SupplierProductCode = command.SupplierProductCode,
+            DeliveryUoM = command.DeliveryUoM,
+            AgreedWholesalePrice = command.AgreedWholesalePrice,
+            MinimumOrderQuantity = command.MinimumOrderQuantity,
+            IsPrimarySupplier = command.IsPrimarySupplier,
+            Status = SupplierProductStatus.Active
+        };
+
+        await _supplierRepository.AddSupplierProductAsync(entity, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return MapToSupplierProductDto(entity);
+    }
+
+    public async Task<SupplierProductDto> UpdateSupplierProductAsync(
+        Guid supplierId,
+        Guid productId,
+        UpdateSupplierProductCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        var validator = new UpdateSupplierProductValidator();
+        var validationResult = await validator.ValidateAsync(command, cancellationToken);
+        if (!validationResult.IsValid)
+        {
+            throw new BusinessException("VALIDATION_ERROR", validationResult.Errors.First().ErrorMessage);
+        }
+
+        var entity = await _supplierRepository.GetSupplierProductAsync(supplierId, productId, cancellationToken);
+        if (entity == null)
+        {
+            throw new NotFoundException($"Không tìm thấy liên kết sản phẩm - nhà cung cấp với Product ID: {productId}");
+        }
+
+        // BR-SP02: Độc quyền Primary Supplier
+        if (command.IsPrimarySupplier && !entity.IsPrimarySupplier)
+        {
+            await _supplierRepository.ClearPrimarySupplierFlagAsync(productId, supplierId, cancellationToken);
+        }
+
+        entity.DeliveryUoM = command.DeliveryUoM;
+        entity.AgreedWholesalePrice = command.AgreedWholesalePrice;
+        entity.MinimumOrderQuantity = command.MinimumOrderQuantity;
+        entity.IsPrimarySupplier = command.IsPrimarySupplier;
+        entity.SupplierProductCode = command.SupplierProductCode;
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return MapToSupplierProductDto(entity);
+    }
+
+    public async Task<SupplierProductDto> ToggleSupplierProductStatusAsync(
+        Guid supplierId,
+        Guid productId,
+        ToggleSupplierProductStatusRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var entity = await _supplierRepository.GetSupplierProductAsync(supplierId, productId, cancellationToken);
+        if (entity == null)
+        {
+            throw new NotFoundException($"Không tìm thấy liên kết sản phẩm - nhà cung cấp với Product ID: {productId}");
+        }
+
+        entity.Status = request.Status;
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return MapToSupplierProductDto(entity);
+    }
+
+    public async Task<SupplierProductDto> SetPrimarySupplierAsync(
+        Guid supplierId,
+        Guid productId,
+        SetPrimarySupplierRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var entity = await _supplierRepository.GetSupplierProductAsync(supplierId, productId, cancellationToken);
+        if (entity == null)
+        {
+            throw new NotFoundException($"Không tìm thấy liên kết sản phẩm - nhà cung cấp với Product ID: {productId}");
+        }
+
+        // BR-SP02: Khi đặt làm Primary thì gỡ cờ của tất cả các NCC khác cung ứng sản phẩm này
+        if (request.IsPrimarySupplier)
+        {
+            await _supplierRepository.ClearPrimarySupplierFlagAsync(productId, supplierId, cancellationToken);
+        }
+
+        entity.IsPrimarySupplier = request.IsPrimarySupplier;
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return MapToSupplierProductDto(entity);
+    }
+
+    public async Task<IReadOnlyList<ProductSupplierMappingDto>> GetSuppliersForProductAsync(
+        Guid productId,
+        bool onlyActive = false,
+        CancellationToken cancellationToken = default)
+    {
+        var productExists = await _supplierRepository.ProductExistsAsync(productId, cancellationToken);
+        if (!productExists)
+        {
+            throw new NotFoundException($"Không tìm thấy sản phẩm với ID: {productId}");
+        }
+
+        var list = await _supplierRepository.GetSuppliersForProductAsync(productId, onlyActive, cancellationToken);
+
+        return list.Select(sp => new ProductSupplierMappingDto
+        {
+            SupplierId = sp.SupplierId,
+            SupplierCode = sp.Supplier?.Code ?? string.Empty,
+            SupplierName = sp.Supplier?.Name ?? string.Empty,
+            SupplierProductCode = sp.SupplierProductCode,
+            DeliveryUoM = sp.DeliveryUoM,
+            AgreedWholesalePrice = sp.AgreedWholesalePrice,
+            MinimumOrderQuantity = sp.MinimumOrderQuantity,
+            IsPrimarySupplier = sp.IsPrimarySupplier,
+            Status = sp.Status.ToString()
+        }).ToList();
+    }
+
+    private static SupplierProductDto MapToSupplierProductDto(SupplierProduct sp)
+    {
+        return new SupplierProductDto
+        {
+            Id = sp.Id,
+            SupplierId = sp.SupplierId,
+            SupplierCode = sp.Supplier?.Code ?? string.Empty,
+            SupplierName = sp.Supplier?.Name ?? string.Empty,
+            ProductId = sp.ProductId,
+            Barcode = sp.Product?.Barcode ?? string.Empty,
+            Sku = sp.Product?.SKU ?? string.Empty,
+            ProductName = sp.Product?.ProductName ?? string.Empty,
+            CategoryName = sp.Product?.Category?.CategoryName,
+            BaseUoM = sp.Product?.UnitName ?? "Cái",
+            SupplierProductCode = sp.SupplierProductCode,
+            DeliveryUoM = sp.DeliveryUoM,
+            AgreedWholesalePrice = sp.AgreedWholesalePrice,
+            MinimumOrderQuantity = sp.MinimumOrderQuantity,
+            IsPrimarySupplier = sp.IsPrimarySupplier,
+            Status = sp.Status.ToString(),
+            CreatedAt = sp.CreatedAt,
+            UpdatedAt = sp.UpdatedAt
+        };
+    }
 }
+
