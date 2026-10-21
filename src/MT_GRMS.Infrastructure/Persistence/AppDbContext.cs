@@ -4,6 +4,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Identity;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Entities.Supplier;
 
 
@@ -41,6 +42,9 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs { get; set; } = null!;
     public virtual DbSet<SupplierBlackoutDate> SupplierBlackoutDates { get; set; } = null!;
     public virtual DbSet<SupplierProduct> SupplierProducts { get; set; } = null!;
+
+    // SaaS / Branch Module
+    public virtual DbSet<Branch> Branches { get; set; } = null!;
 
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
