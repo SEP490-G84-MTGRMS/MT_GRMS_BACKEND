@@ -125,6 +125,10 @@ public partial class AppDbContext : DbContext
                 {
                     throw new InvalidOperationException($"Cấm soft-delete thực thể sổ cái tài chính bất biến: {entry.Entity.GetType().Name}. Vui lòng sử dụng bút toán đảo.");
                 }
+                if (entry.State == EntityState.Modified)
+                {
+                    throw new InvalidOperationException($"Cấm chỉnh sửa (Modified) thực thể sổ cái tài chính bất biến: {entry.Entity.GetType().Name}. Sổ cái chỉ hỗ trợ cơ chế append-only và điều chỉnh qua bút toán đảo.");
+                }
             }
 
             if (entry.State == EntityState.Added)

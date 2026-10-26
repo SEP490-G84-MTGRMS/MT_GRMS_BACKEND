@@ -189,4 +189,28 @@ public class HouseholdTaxDatabaseIntegrationTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => context.SaveChangesAsync());
         Assert.Contains("Cấm soft-delete thực thể sổ cái tài chính bất biến", ex.Message);
     }
+
+    [Fact]
+    public async Task AppDbContext_ModifiedOnImmutableLedger_ShouldThrowInvalidOperationException()
+    {
+        // Arrange
+        using var context = CreateDbContext();
+        var entry = new CashbookEntry
+        {
+            EntryCode = "PT-SAFE-02",
+            AccountId = Guid.NewGuid(),
+            AccountType = FinanceAccountType.Safe,
+            EntryType = CashbookEntryType.Receipt,
+            Amount = 5_000_000m,
+            SourceType = "CASH_DROP",
+            Description = "Tiền chuyển két sắt"
+        };
+        context.CashbookEntries.Add(entry);
+        await context.SaveChangesAsync();
+
+        // Act & Assert: Thử sửa đổi số tiền của bản ghi sổ quỹ
+        entry.Amount = 99_000_000m;
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => context.SaveChangesAsync());
+        Assert.Contains("Cấm chỉnh sửa (Modified) thực thể sổ cái tài chính bất biến", ex.Message);
+    }
 }
