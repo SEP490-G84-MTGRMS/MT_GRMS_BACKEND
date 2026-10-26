@@ -1,10 +1,11 @@
-using System.Reflection;
+﻿using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Entities.Supplier;
+using MT_GRMS.Domain.Entities.Finance;
 
 
 namespace MT_GRMS.Infrastructure.Persistence;
@@ -41,6 +42,16 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs { get; set; } = null!;
     public virtual DbSet<SupplierBlackoutDate> SupplierBlackoutDates { get; set; } = null!;
     public virtual DbSet<SupplierProduct> SupplierProducts { get; set; } = null!;
+
+    // Finance Module (FE-07, FE-17)
+    public virtual DbSet<CashbookEntry> CashbookEntries { get; set; } = null!;
+    public virtual DbSet<BranchCashTill> BranchCashTills { get; set; } = null!;
+    public virtual DbSet<BranchSafe> BranchSafes { get; set; } = null!;
+    public virtual DbSet<CashInTransit> CashInTransits { get; set; } = null!;
+    public virtual DbSet<ShiftZReport> ShiftZReports { get; set; } = null!;
+    public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!;
+    public virtual DbSet<TenantBankAccount> TenantBankAccounts { get; set; } = null!;
+    public virtual DbSet<IdempotencyRecord> IdempotencyRecords { get; set; } = null!;
 
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)

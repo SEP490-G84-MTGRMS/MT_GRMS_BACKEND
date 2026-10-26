@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
 using MT_GRMS.Application.Auth;
@@ -24,6 +24,8 @@ public static class DependencyInjection
         services.AddScoped<ICatalogService, CatalogService>();
         services.AddScoped<IBatchService, BatchService>();
         services.AddScoped<ICashbookService, CashbookService>();
+        services.AddScoped<Expenses.IExpenseService, Expenses.ExpenseService>();
+        services.AddSingleton<Common.Services.IAuditHashService, Common.Services.AuditHashService>();
         services.AddScoped<Suppliers.ISupplierService, Suppliers.SupplierService>();
         services.AddScoped<AiPipeline.IAiRecommendationService, AiPipeline.AiRecommendationService>();
 
