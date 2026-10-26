@@ -60,6 +60,9 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<CustomerDebtEntry> CustomerDebtEntries { get; set; } = null!;
     public virtual DbSet<CustomerDebtAllocation> CustomerDebtAllocations { get; set; } = null!;
 
+    // Household Tax Module (FE-19 TT 152/2025/TT-BTC)
+    public virtual DbSet<HouseholdTaxSnapshot> HouseholdTaxSnapshots { get; set; } = null!;
+
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -132,5 +135,6 @@ public partial class AppDbContext : DbContext
 
     partial void OnModelCreatingPartial(ModelBuilder modelBuilder);
 }
+
 
 
