@@ -342,6 +342,26 @@ public class HouseholdTaxServiceTests
     }
 
     [Fact]
+    public async Task FinalizeTaxSnapshot_WhenPriorPeriodNotFinalized_ShouldThrowBusinessException()
+    {
+        // Arrange: Chốt Quý 2 khi Quý 1 chưa được chốt
+        _fakeRepo.ExistingSnapshot = null; // Không có snapshot kỳ trước
+
+        var request = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 2
+        };
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.FinalizeTaxSnapshotAsync(request, "accountant-user"));
+
+        Assert.Equal("PRIOR_PERIOD_NOT_FINALIZED", ex.ErrorCode);
+    }
+
+    [Fact]
     public async Task GetTaxSummary_WhenApplyVatReduction2026_ShouldCalculateVatAt0Point8Percent()
     {
         // Arrange: Năm 2026 áp dụng chính sách giảm 20% tỷ lệ GTGT (NQ 204/2025/QH15 & NĐ 174/2025/NĐ-CP)

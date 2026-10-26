@@ -100,7 +100,8 @@ public class HouseholdTaxService : IHouseholdTaxService
                 // Phương pháp Kê khai theo mô hình lũy kế từ đầu năm YTD (Year-To-Date)
                 var startOfYearUtc = new DateTime(filter.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
                 deductibleExpenses = await _repository.GetPeriodDeductibleExpensesAsync(fromDateUtc, toDateUtc, filter.BranchId, cancellationToken);
-                ytdExpenses = await _repository.GetPeriodDeductibleExpensesAsync(startOfYearUtc, toDateUtc, filter.BranchId, cancellationToken);
+                // Chi phí lũy kế toàn Tenant để đồng nhất phạm vi với doanh thu lũy kế toàn Tenant
+                ytdExpenses = await _repository.GetPeriodDeductibleExpensesAsync(startOfYearUtc, toDateUtc, null, cancellationToken);
                 ytdRevenue = annualAccumulatedRevenue;
 
                 taxableIncomeYtd = Math.Max(0, ytdRevenue - ytdExpenses);
@@ -114,9 +115,9 @@ public class HouseholdTaxService : IHouseholdTaxService
                 }
                 else
                 {
-                    var priorSnapshots = await _repository.GetSnapshotsAsync(filter.Year, filter.BranchId, cancellationToken);
+                    var priorSnapshots = await _repository.GetSnapshotsAsync(filter.Year, null, cancellationToken);
                     priorDeclaredPitTax = priorSnapshots
-                        .Where(s => s.PeriodType == filter.PeriodType && s.PeriodNumber < filter.PeriodNumber)
+                        .Where(s => s.Year == filter.Year && s.PeriodType == filter.PeriodType && s.PeriodNumber < filter.PeriodNumber)
                         .Sum(s => s.PitAmount);
                 }
 
@@ -130,12 +131,29 @@ public class HouseholdTaxService : IHouseholdTaxService
             }
             else
             {
-                // Phương pháp Tỷ lệ: Chỉ tính trên phần doanh thu lũy kế vượt 1 tỷ đồng
-                var currentExcess = Math.Max(0, annualAccumulatedRevenue - TaxExemptionThreshold);
-                var priorExcess = Math.Max(0, priorPeriodsRevenue - TaxExemptionThreshold);
-                pitTaxableRevenue = Math.Min(taxableRevenueInPeriod, Math.Max(0, currentExcess - priorExcess));
+                // Phương pháp Tỷ lệ %: Đồng nhất theo mô hình lũy kế YTD
+                ytdRevenue = annualAccumulatedRevenue;
+                var currentExcess = Math.Max(0, ytdRevenue - TaxExemptionThreshold);
                 pitRate = filter.CustomPitRate ?? RetailPitRate;
-                pitAmount = Math.Round(pitTaxableRevenue * (pitRate / 100m), 0, MidpointRounding.AwayFromZero);
+                taxDueYtd = Math.Round(currentExcess * (pitRate / 100m), 0, MidpointRounding.AwayFromZero);
+
+                if (filter.PriorDeclaredPitTaxOverride.HasValue)
+                {
+                    priorDeclaredPitTax = filter.PriorDeclaredPitTaxOverride.Value;
+                }
+                else
+                {
+                    var priorSnapshots = await _repository.GetSnapshotsAsync(filter.Year, null, cancellationToken);
+                    priorDeclaredPitTax = priorSnapshots
+                        .Where(s => s.Year == filter.Year && s.PeriodType == filter.PeriodType && s.PeriodNumber < filter.PeriodNumber)
+                        .Sum(s => s.PitAmount);
+                }
+
+                var pitPayable = Math.Max(0, taxDueYtd - priorDeclaredPitTax);
+                overpaidTaxCarry = Math.Max(0, priorDeclaredPitTax - taxDueYtd);
+
+                pitAmount = pitPayable;
+                pitTaxableRevenue = currentExcess;
             }
         }
 
@@ -251,6 +269,23 @@ public class HouseholdTaxService : IHouseholdTaxService
         if (existing != null)
         {
             throw new BusinessException("TAX_PERIOD_LOCKED", $"Kỳ tính thuế {request.PeriodType} {request.PeriodNumber}/{request.Year} đã được chốt và khóa sổ.");
+        }
+
+        // Kiểm tra tính tuần tự: Kỳ k-1 cùng năm phải được chốt trước khi chốt kỳ k
+        if (request.PeriodType == TaxPeriodType.Quarter && request.PeriodNumber > 1)
+        {
+            var priorPeriodSnapshot = await _repository.GetSnapshotAsync(
+                request.Year,
+                request.PeriodType,
+                request.PeriodNumber - 1,
+                request.BranchId,
+                cancellationToken);
+
+            if (priorPeriodSnapshot == null)
+            {
+                throw new BusinessException("PRIOR_PERIOD_NOT_FINALIZED", 
+                    $"Không thể chốt kỳ {request.PeriodType} {request.PeriodNumber}/{request.Year} khi kỳ {request.PeriodNumber - 1}/{request.Year} chưa được chốt và khóa sổ.");
+            }
         }
 
         var filter = new HouseholdTaxFilterDto
