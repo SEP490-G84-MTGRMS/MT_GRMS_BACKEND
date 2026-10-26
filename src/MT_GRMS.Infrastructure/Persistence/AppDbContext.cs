@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Common;
@@ -52,6 +52,12 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!;
     public virtual DbSet<TenantBankAccount> TenantBankAccounts { get; set; } = null!;
     public virtual DbSet<IdempotencyRecord> IdempotencyRecords { get; set; } = null!;
+
+    // Customer Debt Module (FE-08)
+    public virtual DbSet<CustomerDebtProfile> CustomerDebtProfiles { get; set; } = null!;
+    public virtual DbSet<CustomerDebtInvoice> CustomerDebtInvoices { get; set; } = null!;
+    public virtual DbSet<CustomerDebtEntry> CustomerDebtEntries { get; set; } = null!;
+    public virtual DbSet<CustomerDebtAllocation> CustomerDebtAllocations { get; set; } = null!;
 
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -125,3 +131,4 @@ public partial class AppDbContext : DbContext
 
     partial void OnModelCreatingPartial(ModelBuilder modelBuilder);
 }
+

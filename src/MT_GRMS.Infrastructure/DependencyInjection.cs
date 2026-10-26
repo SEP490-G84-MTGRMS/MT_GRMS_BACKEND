@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using MT_GRMS.Application.Auth;
@@ -61,8 +61,10 @@ public static class DependencyInjection
         services.AddScoped<IBatchRepository, BatchRepository>();
         services.AddScoped<ICashbookRepository, CashbookRepository>();
         services.AddScoped<Application.Expenses.IExpenseRepository, ExpenseRepository>();
+        services.AddScoped<Application.Debt.ICustomerDebtRepository, CustomerDebtRepository>();
         services.AddScoped<ISupplierRepository, SupplierRepository>();
 
         return services;
     }
 }
+
