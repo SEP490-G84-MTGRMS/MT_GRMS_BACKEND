@@ -3,24 +3,24 @@ using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Application.Common;
 
+using MT_GRMS.Application.Suppliers;
+using MT_GRMS.Application.Suppliers.Dtos;
+
 namespace MT_GRMS.Api.Controllers;
 
-/// <summary>
-/// KHUNG MẪU CONTROLLER TẦNG API (Presentation Layer):
-/// - CHỈ làm việc với DTO (ProductCreateRequest, ProductResponse).
-/// - TUYỆT ĐỐI KHÔNG using MT_GRMS.Domain.Entities.
-/// - Đóng gói kết quả trả về trong ApiResponse<T> chuẩn mực.
-/// </summary>
 [ApiController]
 [Route("api/v1/products")]
 public class ProductsController : BaseApiController
 {
     private readonly ICatalogService _catalogService;
+    private readonly ISupplierService _supplierService;
 
-    public ProductsController(ICatalogService catalogService)
+    public ProductsController(ICatalogService catalogService, ISupplierService supplierService)
     {
         _catalogService = catalogService;
+        _supplierService = supplierService;
     }
+
 
     [HttpGet]
     public async Task<IActionResult> GetAll(CancellationToken cancellationToken)
@@ -46,4 +46,18 @@ public class ProductsController : BaseApiController
         var result = await _catalogService.CreateProductAsync(request, cancellationToken);
         return CreatedAtAction(nameof(GetById), new { id = result.Id }, ApiResponse<ProductResponse>.Ok(result, "Tạo sản phẩm thành công."));
     }
+
+    /// <summary>
+    /// Tra cứu ngược danh sách nhà cung cấp cung ứng một sản phẩm (REQ-SP05)
+    /// </summary>
+    [HttpGet("{id:guid}/suppliers")]
+    public async Task<IActionResult> GetSuppliersForProduct(
+        Guid id,
+        [FromQuery] bool onlyActive = false,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _supplierService.GetSuppliersForProductAsync(id, onlyActive, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<ProductSupplierMappingDto>>.Ok(result));
+    }
 }
+

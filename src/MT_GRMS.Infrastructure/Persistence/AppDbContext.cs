@@ -1,15 +1,17 @@
+using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
-using MT_GRMS.Domain.Entities;
+using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Entities.Catalog;
-using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Identity;
-using MT_GRMS.Domain.Entities.Inventory;
+using MT_GRMS.Domain.Entities.Supplier;
+
 
 namespace MT_GRMS.Infrastructure.Persistence;
 
 /// <summary>
-/// DbContext chuẩn cấu trúc Database-First (hỗ trợ Scaffold-DbContext và DI)
+/// DbContext quản lý kết nối cơ sở dữ liệu MT-GRMS:
+/// Hỗ trợ Multi-tenancy Isolation và Soft Delete tự động qua Global Query Filter.
 /// </summary>
 public partial class AppDbContext : DbContext
 {
@@ -25,52 +27,90 @@ public partial class AppDbContext : DbContext
         _tenantContext = tenantContext;
     }
 
-    // Các DbSet tương ứng với các bảng trong Database
-    public virtual DbSet<Order> Orders { get; set; } = null!;
-    public virtual DbSet<OrderItem> OrderItems { get; set; } = null!;
+    // Identity
     public virtual DbSet<User> Users { get; set; } = null!;
-    public virtual DbSet<Role> Roles { get; set; } = null!;
+
+    // Catalog Module
     public virtual DbSet<Product> Products { get; set; } = null!;
     public virtual DbSet<Category> Categories { get; set; } = null!;
-    public virtual DbSet<Batch> Batches { get; set; } = null!;
-    public virtual DbSet<StockOnHand> StockOnHands { get; set; } = null!;
-    public virtual DbSet<CashbookTransaction> CashbookTransactions { get; set; } = null!;
 
-    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
-    {
-        // Cho phép Scaffold-DbContext hoặc chạy console mà không cần qua Web Host DI
-        if (!optionsBuilder.IsConfigured)
-        {
-            // Fallback connection string (khi chạy công cụ Scaffold của EF Core)
-        }
-    }
+    // Supplier Module
+    public virtual DbSet<Domain.Entities.Supplier.Supplier> Suppliers { get; set; } = null!;
+    public virtual DbSet<SupplierCategory> SupplierCategories { get; set; } = null!;
+    public virtual DbSet<SupplierAPLedger> SupplierAPLedgers { get; set; } = null!;
+    public virtual DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs { get; set; } = null!;
+    public virtual DbSet<SupplierBlackoutDate> SupplierBlackoutDates { get; set; } = null!;
+    public virtual DbSet<SupplierProduct> SupplierProducts { get; set; } = null!;
+
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
 
-        // 1. Tự động quét và nạp toàn bộ cấu hình Fluent API Code-First trong assembly
+        // Tự động nạp toàn bộ Configurations trong assembly Infrastructure
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
 
-        // 2. Áp dụng Global Query Filter cho đa người thuê (Multi-Tenancy) & Soft-Delete
-        ConfigureTenantFilters(modelBuilder);
+        // Áp dụng Global Query Filter cho toàn bộ thực thể kế thừa BaseTenantEntity
+        foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+        {
+            if (typeof(BaseTenantEntity).IsAssignableFrom(entityType.ClrType))
+            {
+                var method = typeof(AppDbContext)
+                    .GetMethod(nameof(ApplyTenantFilter), BindingFlags.NonPublic | BindingFlags.Instance)?
+                    .MakeGenericMethod(entityType.ClrType);
+                method?.Invoke(this, [modelBuilder]);
+            }
+        }
 
         OnModelCreatingPartial(modelBuilder);
     }
 
-    partial void OnModelCreatingPartial(ModelBuilder modelBuilder);
-
-    private void ConfigureTenantFilters(ModelBuilder modelBuilder)
+    private void ApplyTenantFilter<T>(ModelBuilder modelBuilder) where T : BaseTenantEntity
     {
-        // Đánh giá động ở runtime: EF Core tự động chèn TenantId vào parameter câu truy vấn SQL
-        modelBuilder.Entity<Order>().HasQueryFilter(e => !e.IsDeleted && (_tenantContext == null || string.IsNullOrEmpty(_tenantContext.CurrentTenantId) || e.TenantId == _tenantContext.CurrentTenantId));
-        modelBuilder.Entity<OrderItem>().HasQueryFilter(e => !e.IsDeleted && (_tenantContext == null || string.IsNullOrEmpty(_tenantContext.CurrentTenantId) || e.TenantId == _tenantContext.CurrentTenantId));
-        modelBuilder.Entity<User>().HasQueryFilter(e => !e.IsDeleted && (_tenantContext == null || string.IsNullOrEmpty(_tenantContext.CurrentTenantId) || e.TenantId == _tenantContext.CurrentTenantId));
-        modelBuilder.Entity<Role>().HasQueryFilter(e => !e.IsDeleted && (_tenantContext == null || string.IsNullOrEmpty(_tenantContext.CurrentTenantId) || e.TenantId == _tenantContext.CurrentTenantId));
-        modelBuilder.Entity<Product>().HasQueryFilter(e => !e.IsDeleted && (_tenantContext == null || string.IsNullOrEmpty(_tenantContext.CurrentTenantId) || e.TenantId == _tenantContext.CurrentTenantId));
-        modelBuilder.Entity<Category>().HasQueryFilter(e => !e.IsDeleted && (_tenantContext == null || string.IsNullOrEmpty(_tenantContext.CurrentTenantId) || e.TenantId == _tenantContext.CurrentTenantId));
-        modelBuilder.Entity<Batch>().HasQueryFilter(e => !e.IsDeleted && (_tenantContext == null || string.IsNullOrEmpty(_tenantContext.CurrentTenantId) || e.TenantId == _tenantContext.CurrentTenantId));
-        modelBuilder.Entity<StockOnHand>().HasQueryFilter(e => !e.IsDeleted && (_tenantContext == null || string.IsNullOrEmpty(_tenantContext.CurrentTenantId) || e.TenantId == _tenantContext.CurrentTenantId));
-        modelBuilder.Entity<CashbookTransaction>().HasQueryFilter(e => !e.IsDeleted && (_tenantContext == null || string.IsNullOrEmpty(_tenantContext.CurrentTenantId) || e.TenantId == _tenantContext.CurrentTenantId));
+        modelBuilder.Entity<T>().HasQueryFilter(e =>
+            !e.IsDeleted &&
+            (_tenantContext == null || string.IsNullOrEmpty(_tenantContext.CurrentTenantId) || e.TenantId == _tenantContext.CurrentTenantId));
     }
+
+    public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        ApplyAuditAndTenantInfo();
+        return base.SaveChangesAsync(cancellationToken);
+    }
+
+    public override int SaveChanges()
+    {
+        ApplyAuditAndTenantInfo();
+        return base.SaveChanges();
+    }
+
+    private void ApplyAuditAndTenantInfo()
+    {
+        var tenantId = _tenantContext?.CurrentTenantId;
+        if (string.IsNullOrWhiteSpace(tenantId))
+        {
+            tenantId = "default-tenant";
+        }
+
+        foreach (var entry in ChangeTracker.Entries<BaseTenantEntity>())
+        {
+            if (entry.State == EntityState.Added)
+            {
+                if (string.IsNullOrWhiteSpace(entry.Entity.TenantId))
+                {
+                    entry.Entity.TenantId = tenantId;
+                }
+                if (entry.Entity.CreatedAt == default)
+                {
+                    entry.Entity.CreatedAt = DateTime.UtcNow;
+                }
+            }
+            else if (entry.State == EntityState.Modified)
+            {
+                entry.Entity.UpdatedAt = DateTime.UtcNow;
+            }
+        }
+    }
+
+    partial void OnModelCreatingPartial(ModelBuilder modelBuilder);
 }

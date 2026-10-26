@@ -40,10 +40,13 @@ public class ExceptionHandlingMiddleware
         switch (exception)
         {
             case BusinessException businessEx:
-                statusCode = (int)HttpStatusCode.UnprocessableEntity;
+                statusCode = businessEx.ErrorCode == "PRODUCT_ALREADY_ASSIGNED_TO_SUPPLIER"
+                    ? (int)HttpStatusCode.Conflict
+                    : (int)HttpStatusCode.UnprocessableEntity;
                 apiResponse = ApiResponse<object>.Fail(businessEx.ErrorCode, businessEx.Message);
                 _logger.LogWarning(businessEx, "Business exception occurred: {Message}", businessEx.Message);
                 break;
+
 
             case NotFoundException notFoundEx:
                 statusCode = (int)HttpStatusCode.NotFound;
@@ -53,7 +56,7 @@ public class ExceptionHandlingMiddleware
 
             default:
                 statusCode = (int)HttpStatusCode.InternalServerError;
-                apiResponse = ApiResponse<object>.Fail(ErrorCodes.UnhandledError, "Đã xảy ra lỗi máy chủ nội bộ. Vui lòng thử lại sau.");
+                apiResponse = ApiResponse<object>.Fail(ErrorCodes.UnhandledError, $"Lỗi: {exception.Message} | {exception.InnerException?.Message}");
                 _logger.LogError(exception, "Unhandled exception occurred");
                 break;
         }

@@ -4,7 +4,17 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ---
 
-## [Unreleased] - 2026-09-30
+## [Unreleased] - 2026-10-13
+
+### Added
+
+- Triển khai hạ tầng PostgreSQL 16 qua Docker Compose (`docker-compose.yml`, `init-db.sql`).
+- Tối giản hóa thực thể và bảng `users` (`Id` string Uid, `Username`, `Password`) phục vụ đăng nhập độc lập.
+- Khởi tạo EF Core Initial Migration `InitialCreate_UsersOnly` và seed data `admin` [BE-AUTH].
+- Triển khai endpoints `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout` [BE-AUTH].
+- Cung cấp `IAuthService` và `AuthService` xử lý xác thực tenant và sinh JWT token / Refresh Token.
+
+## [0.1.0] - 2026-09-30
 
 ### Added
 
