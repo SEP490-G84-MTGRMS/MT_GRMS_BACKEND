@@ -115,6 +115,18 @@ public partial class AppDbContext : DbContext
 
         foreach (var entry in ChangeTracker.Entries<BaseTenantEntity>())
         {
+            if (entry.Entity is CashbookEntry || entry.Entity is CustomerDebtEntry || entry.Entity is HouseholdTaxSnapshot)
+            {
+                if (entry.State == EntityState.Deleted)
+                {
+                    throw new InvalidOperationException($"Cấm xóa thực thể sổ cái tài chính bất biến: {entry.Entity.GetType().Name}. Vui lòng sử dụng bút toán đảo.");
+                }
+                if (entry.Entity.IsDeleted)
+                {
+                    throw new InvalidOperationException($"Cấm soft-delete thực thể sổ cái tài chính bất biến: {entry.Entity.GetType().Name}. Vui lòng sử dụng bút toán đảo.");
+                }
+            }
+
             if (entry.State == EntityState.Added)
             {
                 if (string.IsNullOrWhiteSpace(entry.Entity.TenantId))

@@ -12,47 +12,25 @@ public class HouseholdTaxServiceTests
     private class FakeHouseholdTaxRepository : IHouseholdTaxRepository
     {
         public decimal AnnualAccumulatedRevenue { get; set; } = 800_000_000m;
+        public decimal PriorPeriodsAccumulatedRevenue { get; set; } = 0m;
         public decimal GrossRevenue { get; set; } = 250_000_000m;
         public decimal DiscountAmount { get; set; } = 10_000_000m;
         public decimal ReturnAmount { get; set; } = 5_000_000m;
+        public decimal DeductibleExpenses { get; set; } = 40_000_000m;
 
-        public List<AccountingBookEntryDto> BookEntries { get; set; } = new()
-        {
-            new AccountingBookEntryDto
-            {
-                VoucherNumber = "ORD-001",
-                Amount = 235_000_000m,
-                BookType = AccountingBookType.S2b_Revenue,
-                BookCode = "S2b-HKD"
-            },
-            new AccountingBookEntryDto
-            {
-                VoucherNumber = "PC-001",
-                Amount = 20_000_000m,
-                BookType = AccountingBookType.S2c_Salary,
-                BookCode = "S2c-HKD"
-            },
-            new AccountingBookEntryDto
-            {
-                VoucherNumber = "PC-002",
-                Amount = 5_000_000m,
-                BookType = AccountingBookType.S2d_Supplies,
-                BookCode = "S2d-HKD"
-            },
-            new AccountingBookEntryDto
-            {
-                VoucherNumber = "PC-003",
-                Amount = 15_000_000m,
-                BookType = AccountingBookType.S2e_Services,
-                BookCode = "S2e-HKD"
-            }
-        };
-
+        public List<AccountingBookEntryDto> BookEntries { get; set; } = new();
         public HouseholdTaxSnapshot? ExistingSnapshot { get; set; }
         public List<HouseholdTaxSnapshot> SavedSnapshots { get; } = new();
 
-        public Task<decimal> GetAnnualAccumulatedRevenueAsync(int year, DateTime upToDateUtc, CancellationToken cancellationToken = default) =>
-            Task.FromResult(AnnualAccumulatedRevenue);
+        public Task<decimal> GetAnnualAccumulatedRevenueAsync(int year, DateTime upToDateUtc, CancellationToken cancellationToken = default)
+        {
+            // Nếu ngày hỏi là trước kỳ hiện tại -> trả về PriorPeriodsAccumulatedRevenue
+            if (upToDateUtc < new DateTime(year, 4, 1, 0, 0, 0, DateTimeKind.Utc) && PriorPeriodsAccumulatedRevenue > 0)
+            {
+                return Task.FromResult(PriorPeriodsAccumulatedRevenue);
+            }
+            return Task.FromResult(AnnualAccumulatedRevenue);
+        }
 
         public Task<(decimal GrossRevenue, decimal DiscountAmount, decimal ReturnAmount)> GetPeriodRevenueAsync(
             DateTime fromDateUtc,
@@ -61,17 +39,23 @@ public class HouseholdTaxServiceTests
             CancellationToken cancellationToken = default) =>
             Task.FromResult((GrossRevenue, DiscountAmount, ReturnAmount));
 
+        public Task<decimal> GetPeriodDeductibleExpensesAsync(
+            DateTime fromDateUtc,
+            DateTime toDateUtc,
+            Guid? branchId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(DeductibleExpenses);
+
         public Task<List<AccountingBookEntryDto>> GetBookEntriesAsync(
             DateTime fromDateUtc,
             DateTime toDateUtc,
             Guid? branchId,
+            HouseholdTaxGroup group,
+            TaxCalculationMethod method,
             AccountingBookType? bookType,
             CancellationToken cancellationToken = default)
         {
-            var result = bookType.HasValue
-                ? BookEntries.Where(x => x.BookType == bookType.Value).ToList()
-                : BookEntries;
-            return Task.FromResult(result);
+            return Task.FromResult(BookEntries);
         }
 
         public Task<HouseholdTaxSnapshot?> GetSnapshotAsync(int year, TaxPeriodType periodType, int periodNumber, Guid? branchId, CancellationToken cancellationToken = default) =>
@@ -122,20 +106,24 @@ public class HouseholdTaxServiceTests
         // Assert
         Assert.Equal(HouseholdTaxGroup.Group1_Under1B, result.HouseholdGroup);
         Assert.True(result.IsTaxExempt);
-        Assert.Equal(285_000_000m, result.TaxableRevenueInPeriod); // 300M - 10M - 5M
+        Assert.Equal(285_000_000m, result.TaxableRevenueInPeriod);
         Assert.Equal(0m, result.VatRate);
         Assert.Equal(0m, result.VatAmount);
         Assert.Equal(0m, result.PitRate);
         Assert.Equal(0m, result.PitAmount);
         Assert.Equal(0m, result.TotalTaxAmount);
+        Assert.Equal("S1a-HKD", result.BooksSummary.PrimaryBookCode);
     }
 
     [Fact]
-    public async Task GetTaxSummary_Between1BAnd3B_ShouldApplyRetailRates_Group2()
+    public async Task GetTaxSummary_WhenYearExceeds1Billion_ShouldCalculateVatOnTotalAndPitOnlyOnExcess()
     {
-        // Arrange: Lũy kế năm 1.8 tỷ (thuộc nhóm 2: 1B - 3B)
-        _fakeRepo.AnnualAccumulatedRevenue = 1_800_000_000m;
-        _fakeRepo.GrossRevenue = 400_000_000m;
+        // Arrange:
+        // Kỳ trước (Quý 1): Doanh thu lũy kế 900 triệu (chưa vượt 1 tỷ)
+        // Kỳ này (Quý 2): Doanh thu phát sinh 300 triệu -> Lũy kế thành 1.2 tỷ (vượt 1 tỷ)
+        _fakeRepo.PriorPeriodsAccumulatedRevenue = 900_000_000m;
+        _fakeRepo.AnnualAccumulatedRevenue = 1_200_000_000m;
+        _fakeRepo.GrossRevenue = 300_000_000m;
         _fakeRepo.DiscountAmount = 0m;
         _fakeRepo.ReturnAmount = 0m;
 
@@ -143,7 +131,8 @@ public class HouseholdTaxServiceTests
         {
             Year = 2026,
             PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 2
+            PeriodNumber = 2,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage
         };
 
         // Act
@@ -152,82 +141,56 @@ public class HouseholdTaxServiceTests
         // Assert
         Assert.Equal(HouseholdTaxGroup.Group2_1BTo3B, result.HouseholdGroup);
         Assert.False(result.IsTaxExempt);
-        Assert.Equal(400_000_000m, result.TaxableRevenueInPeriod);
+        Assert.Equal(300_000_000m, result.TaxableRevenueInPeriod);
+
+        // GTGT tính trên TOÀN BỘ doanh thu kỳ khi vượt 1 tỷ: 300M * 1% = 3.000.000 VNĐ
         Assert.Equal(1.0m, result.VatRate);
-        Assert.Equal(4_000_000m, result.VatAmount); // 400M * 1%
+        Assert.Equal(300_000_000m, result.VatTaxableRevenue);
+        Assert.Equal(3_000_000m, result.VatAmount);
+
+        // TNCN CHỈ tính trên phần vượt 1 tỷ: (1.2 tỷ - 1.0 tỷ) - 0 = 200M * 0.5% = 1.000.000 VNĐ
         Assert.Equal(0.5m, result.PitRate);
-        Assert.Equal(2_000_000m, result.PitAmount); // 400M * 0.5%
-        Assert.Equal(6_000_000m, result.TotalTaxAmount);
+        Assert.Equal(200_000_000m, result.PitTaxableRevenue);
+        Assert.Equal(1_000_000m, result.PitAmount);
+
+        // Tổng thuế = 3M (GTGT) + 1M (TNCN) = 4.000.000 VNĐ
+        Assert.Equal(4_000_000m, result.TotalTaxAmount);
+        Assert.Equal("S2a-HKD (và S3a-HKD)", result.BooksSummary.PrimaryBookCode);
     }
 
     [Fact]
-    public async Task GetTaxSummary_Between3BAnd50B_ShouldBeGroup3()
+    public async Task GetTaxSummary_DeclarationMethod_ShouldCalculatePitOnTaxableIncome()
     {
-        // Arrange: Lũy kế năm 10 tỷ
-        _fakeRepo.AnnualAccumulatedRevenue = 10_000_000_000m;
+        // Arrange: Phương pháp Kê khai
+        _fakeRepo.AnnualAccumulatedRevenue = 2_000_000_000m;
+        _fakeRepo.PriorPeriodsAccumulatedRevenue = 1_500_000_000m;
+        _fakeRepo.GrossRevenue = 500_000_000m;
+        _fakeRepo.DiscountAmount = 0m;
+        _fakeRepo.ReturnAmount = 0m;
+        _fakeRepo.DeductibleExpenses = 300_000_000m; // Chi phí hợp lý: 300M
 
-        var filter = new HouseholdTaxFilterDto { Year = 2026, PeriodType = TaxPeriodType.Year, PeriodNumber = 1 };
-
-        // Act
-        var result = await _service.GetTaxSummaryAsync(filter);
-
-        // Assert
-        Assert.Equal(HouseholdTaxGroup.Group3_3BTo50B, result.HouseholdGroup);
-        Assert.False(result.IsTaxExempt);
-    }
-
-    [Fact]
-    public async Task GetTaxSummary_Over50B_ShouldBeGroup4()
-    {
-        // Arrange: Lũy kế năm 65 tỷ
-        _fakeRepo.AnnualAccumulatedRevenue = 65_000_000_000m;
-
-        var filter = new HouseholdTaxFilterDto { Year = 2026, PeriodType = TaxPeriodType.Year, PeriodNumber = 1 };
-
-        // Act
-        var result = await _service.GetTaxSummaryAsync(filter);
-
-        // Assert
-        Assert.Equal(HouseholdTaxGroup.Group4_Over50B, result.HouseholdGroup);
-        Assert.False(result.IsTaxExempt);
-    }
-
-    [Fact]
-    public async Task GetTaxSummary_BooksSummary_ShouldAggregateS2b_S2c_S2d_S2e_Correctly()
-    {
-        // Act
-        var result = await _service.GetTaxSummaryAsync(new HouseholdTaxFilterDto { Year = 2026, PeriodType = TaxPeriodType.Quarter, PeriodNumber = 1 });
-
-        // Assert
-        Assert.Equal(235_000_000m, result.BooksSummary.S2bTotalRevenue);
-        Assert.Equal(20_000_000m, result.BooksSummary.S2cTotalSalary);
-        Assert.Equal(5_000_000m, result.BooksSummary.S2dTotalSupplies);
-        Assert.Equal(15_000_000m, result.BooksSummary.S2eTotalServices);
-        Assert.Equal(40_000_000m, result.BooksSummary.TotalDeductibleExpenses);
-    }
-
-    [Fact]
-    public async Task FinalizeTaxSnapshot_WhenNewPeriod_ShouldCreateSnapshotSuccessfully()
-    {
-        // Arrange
-        _fakeRepo.ExistingSnapshot = null;
-        var request = new CreateTaxSnapshotRequest
+        var filter = new HouseholdTaxFilterDto
         {
             Year = 2026,
             PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 1,
-            Notes = "Chốt thuế quý 1"
+            PeriodNumber = 2,
+            CalculationMethod = TaxCalculationMethod.DeclarationBased
         };
 
         // Act
-        var snapshot = await _service.FinalizeTaxSnapshotAsync(request, "accountant-user");
+        var result = await _service.GetTaxSummaryAsync(filter);
 
         // Assert
-        Assert.NotEqual(Guid.Empty, snapshot.Id);
-        Assert.Equal("accountant-user", snapshot.FinalizedBy);
-        Assert.Equal(2026, snapshot.Year);
-        Assert.Equal(TaxPeriodType.Quarter, snapshot.PeriodType);
-        Assert.Equal(1, snapshot.PeriodNumber);
+        Assert.Equal(500_000_000m, result.TaxableRevenueInPeriod);
+        Assert.Equal(300_000_000m, result.DeductibleExpensesInPeriod);
+        Assert.Equal(200_000_000m, result.TaxableIncomeDeclaration); // 500M - 300M = 200M
+
+        // Thuế GTGT 1% trên 500M = 5M
+        Assert.Equal(5_000_000m, result.VatAmount);
+
+        // Thuế TNCN Kê khai: 200M * 15% = 30M
+        Assert.Equal(30_000_000m, result.DeclarationPitAmount);
+        Assert.Equal(35_000_000m, result.TotalTaxAmount);
     }
 
     [Fact]

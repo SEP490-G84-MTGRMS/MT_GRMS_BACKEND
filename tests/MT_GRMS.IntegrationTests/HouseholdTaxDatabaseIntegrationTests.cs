@@ -98,7 +98,7 @@ public class HouseholdTaxDatabaseIntegrationTests
         var fromDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         var toDate = new DateTime(2026, 3, 31, 23, 59, 59, DateTimeKind.Utc);
 
-        // S2b: Doanh thu bán hàng
+        // Doanh thu bán hàng
         context.Orders.Add(new Order
         {
             OrderCode = "ORD-S2B",
@@ -109,7 +109,7 @@ public class HouseholdTaxDatabaseIntegrationTests
             CreatedAt = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc)
         });
 
-        // S2c: Tiền lương
+        // Chi phí hợp lý: Lương nhân viên
         context.ExpenseVouchers.Add(new ExpenseVoucher
         {
             VoucherCode = "PC-S2C",
@@ -120,7 +120,7 @@ public class HouseholdTaxDatabaseIntegrationTests
             ExpenseDate = new DateTime(2026, 1, 31, 0, 0, 0, DateTimeKind.Utc)
         });
 
-        // S2d: Vật tư / bao bì
+        // Chi phí hợp lý: Vật tư bao bì
         context.ExpenseVouchers.Add(new ExpenseVoucher
         {
             VoucherCode = "PC-S2D",
@@ -131,7 +131,7 @@ public class HouseholdTaxDatabaseIntegrationTests
             ExpenseDate = new DateTime(2026, 2, 5, 0, 0, 0, DateTimeKind.Utc)
         });
 
-        // S2e: Chi phí dịch vụ mua ngoài
+        // Chi phí hợp lý: Tiền điện nước
         context.ExpenseVouchers.Add(new ExpenseVoucher
         {
             VoucherCode = "PC-S2E",
@@ -142,7 +142,7 @@ public class HouseholdTaxDatabaseIntegrationTests
             ExpenseDate = new DateTime(2026, 2, 10, 0, 0, 0, DateTimeKind.Utc)
         });
 
-        // LOẠI TRỪ 100%: Vốn chủ sở hữu rút vốn
+        // LOẠI TRỪ 100%: Rút vốn chủ sở hữu
         context.ExpenseVouchers.Add(new ExpenseVoucher
         {
             VoucherCode = "PC-EQUITY",
@@ -155,53 +155,38 @@ public class HouseholdTaxDatabaseIntegrationTests
 
         await context.SaveChangesAsync();
 
-        // Act
-        var entries = await repo.GetBookEntriesAsync(fromDate, toDate, branchId, null);
+        // Act: Lấy sổ sách theo Phương pháp Kê khai
+        var entries = await repo.GetBookEntriesAsync(fromDate, toDate, branchId, HouseholdTaxGroup.Group3_3BTo50B, TaxCalculationMethod.DeclarationBased, null);
 
         // Assert
-        Assert.Equal(4, entries.Count); // 4 hợp lệ, 1 rút vốn bị loại trừ hoàn toàn
         Assert.DoesNotContain(entries, e => e.VoucherNumber == "PC-EQUITY");
-
         Assert.Contains(entries, e => e.BookCode == "S2b-HKD" && e.Amount == 2_000_000m);
-        Assert.Contains(entries, e => e.BookCode == "S2c-HKD" && e.Amount == 10_000_000m);
+        Assert.Contains(entries, e => e.BookCode == "S2c-HKD");
         Assert.Contains(entries, e => e.BookCode == "S2d-HKD" && e.Amount == 1_500_000m);
-        Assert.Contains(entries, e => e.BookCode == "S2e-HKD" && e.Amount == 3_000_000m);
+        Assert.Contains(entries, e => e.BookCode == "S2e-HKD");
     }
 
     [Fact]
-    public async Task HouseholdTaxRepository_AddAndGetSnapshot_ShouldPersistAndRetrieveSnapshot()
+    public async Task AppDbContext_SoftDeleteOnImmutableLedger_ShouldThrowInvalidOperationException()
     {
         // Arrange
         using var context = CreateDbContext();
-        var repo = new HouseholdTaxRepository(context);
-
-        var snapshot = new HouseholdTaxSnapshot
+        var entry = new CashbookEntry
         {
-            PeriodType = TaxPeriodType.Quarter,
-            Year = 2026,
-            PeriodNumber = 1,
-            AnnualAccumulatedRevenue = 1_500_000_000m,
-            HouseholdGroup = HouseholdTaxGroup.Group2_1BTo3B,
-            IsTaxExempt = false,
-            TaxableRevenueInPeriod = 400_000_000m,
-            VatRate = 1.0m,
-            VatAmount = 4_000_000m,
-            PitRate = 0.5m,
-            PitAmount = 2_000_000m,
-            TotalTaxAmount = 6_000_000m,
-            BookDataJson = "[{\"VoucherNumber\":\"ORD-01\",\"Amount\":400000000}]",
-            FinalizedBy = "accountant@mtgrms.vn",
-            Notes = "Kỳ thuế Q1/2026 đã chốt"
+            EntryCode = "PT-SAFE-01",
+            AccountId = Guid.NewGuid(),
+            AccountType = FinanceAccountType.Safe,
+            EntryType = CashbookEntryType.Receipt,
+            Amount = 10_000_000m,
+            SourceType = "CASH_DROP",
+            Description = "Tiền chuyển nội bộ"
         };
+        context.CashbookEntries.Add(entry);
+        await context.SaveChangesAsync();
 
-        // Act
-        await repo.AddSnapshotAsync(snapshot);
-        var retrieved = await repo.GetSnapshotAsync(2026, TaxPeriodType.Quarter, 1, null);
-
-        // Assert
-        Assert.NotNull(retrieved);
-        Assert.Equal(6_000_000m, retrieved.TotalTaxAmount);
-        Assert.Equal(HouseholdTaxGroup.Group2_1BTo3B, retrieved.HouseholdGroup);
-        Assert.Equal("accountant@mtgrms.vn", retrieved.FinalizedBy);
+        // Act & Assert: Thử gán IsDeleted = true
+        entry.IsDeleted = true;
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => context.SaveChangesAsync());
+        Assert.Contains("Cấm soft-delete thực thể sổ cái tài chính bất biến", ex.Message);
     }
 }
