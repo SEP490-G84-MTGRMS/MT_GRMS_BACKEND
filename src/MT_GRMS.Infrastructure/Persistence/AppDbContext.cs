@@ -33,6 +33,7 @@ public partial class AppDbContext : DbContext
 
     // Catalog Module
     public virtual DbSet<Product> Products { get; set; } = null!;
+    public virtual DbSet<Domain.Entities.Order> Orders { get; set; } = null!;
     public virtual DbSet<Category> Categories { get; set; } = null!;
 
     // Supplier Module
@@ -131,4 +132,5 @@ public partial class AppDbContext : DbContext
 
     partial void OnModelCreatingPartial(ModelBuilder modelBuilder);
 }
+
 

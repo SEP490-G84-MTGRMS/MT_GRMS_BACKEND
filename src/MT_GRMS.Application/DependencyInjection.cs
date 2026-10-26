@@ -26,6 +26,7 @@ public static class DependencyInjection
         services.AddScoped<ICashbookService, CashbookService>();
         services.AddScoped<Expenses.IExpenseService, Expenses.ExpenseService>();
         services.AddScoped<Debt.ICustomerDebtService, Debt.CustomerDebtService>();
+        services.AddScoped<Reports.IPnLReportService, Reports.PnLReportService>();
         services.AddSingleton<Common.Services.IAuditHashService, Common.Services.AuditHashService>();
         services.AddScoped<Suppliers.ISupplierService, Suppliers.SupplierService>();
         services.AddScoped<AiPipeline.IAiRecommendationService, AiPipeline.AiRecommendationService>();
@@ -33,4 +34,5 @@ public static class DependencyInjection
         return services;
     }
 }
+
 
