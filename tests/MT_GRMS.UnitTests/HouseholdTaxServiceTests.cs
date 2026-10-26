@@ -155,7 +155,7 @@ public class HouseholdTaxServiceTests
 
         // Tổng thuế = 3M (GTGT) + 1M (TNCN) = 4.000.000 VNĐ
         Assert.Equal(4_000_000m, result.TotalTaxAmount);
-        Assert.Equal("S2a-HKD (và S3a-HKD)", result.BooksSummary.PrimaryBookCode);
+        Assert.Equal("S2a-HKD", result.BooksSummary.PrimaryBookCode);
     }
 
     [Fact]
@@ -217,5 +217,124 @@ public class HouseholdTaxServiceTests
             _service.FinalizeTaxSnapshotAsync(request, "accountant-user"));
 
         Assert.Equal("TAX_PERIOD_LOCKED", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task GetTaxSummary_WhenApplyVatReduction2026_ShouldCalculateVatAt0Point8Percent()
+    {
+        // Arrange: Năm 2026 áp dụng chính sách giảm 20% tỷ lệ GTGT (NQ 204/2025/QH15 & NĐ 174/2025/NĐ-CP)
+        _fakeRepo.AnnualAccumulatedRevenue = 1_500_000_000m;
+        _fakeRepo.PriorPeriodsAccumulatedRevenue = 1_000_000_000m;
+        _fakeRepo.GrossRevenue = 500_000_000m;
+        _fakeRepo.DiscountAmount = 0m;
+        _fakeRepo.ReturnAmount = 0m;
+
+        var filter = new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 2,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            ApplyVatReduction2026 = true // Kích hoạt chính sách giảm 20%
+        };
+
+        // Act
+        var result = await _service.GetTaxSummaryAsync(filter);
+
+        // Assert: Tỷ lệ GTGT giảm từ 1.0% xuống 0.8%
+        Assert.True(result.IsVatReduced);
+        Assert.Equal(0.8m, result.VatRate);
+        Assert.Equal(4_000_000m, result.VatAmount); // 500M * 0.8% = 4.000.000 VNĐ (thay vì 5.000.000 VNĐ)
+        Assert.Equal(0.5m, result.PitRate);
+        Assert.Equal(2_500_000m, result.PitAmount); // 500M * 0.5% = 2.500.000 VNĐ
+        Assert.Equal(6_500_000m, result.TotalTaxAmount);
+    }
+
+    [Fact]
+    public async Task GetTaxSummary_ThresholdBoundaryExact1Billion_ShouldBeExempt()
+    {
+        // Arrange: Doanh thu đúng 1.000.000.000 VNĐ
+        _fakeRepo.AnnualAccumulatedRevenue = 1_000_000_000m;
+        _fakeRepo.PriorPeriodsAccumulatedRevenue = 700_000_000m;
+        _fakeRepo.GrossRevenue = 300_000_000m;
+        _fakeRepo.DiscountAmount = 0m;
+        _fakeRepo.ReturnAmount = 0m;
+
+        var filter = new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 4
+        };
+
+        // Act
+        var result = await _service.GetTaxSummaryAsync(filter);
+
+        // Assert: Doanh thu đúng 1 tỷ vẫn thuộc Nhóm 1 và được miễn 100% thuế
+        Assert.True(result.IsTaxExempt);
+        Assert.Equal(HouseholdTaxGroup.Group1_Under1B, result.HouseholdGroup);
+        Assert.Equal(0m, result.VatAmount);
+        Assert.Equal(0m, result.PitAmount);
+        Assert.Equal(0m, result.TotalTaxAmount);
+        Assert.Equal("S1a-HKD", result.BooksSummary.PrimaryBookCode);
+    }
+
+    [Fact]
+    public async Task GetTaxSummary_ThresholdBoundary1BillionAnd1VND_ShouldCalculateVatAndPitOn1VND()
+    {
+        // Arrange: Doanh thu 1.000.000.001 VNĐ (vượt đúng 1 đồng)
+        _fakeRepo.AnnualAccumulatedRevenue = 1_000_000_001m;
+        _fakeRepo.PriorPeriodsAccumulatedRevenue = 1_000_000_000m;
+        _fakeRepo.GrossRevenue = 1m;
+        _fakeRepo.DiscountAmount = 0m;
+        _fakeRepo.ReturnAmount = 0m;
+
+        var filter = new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 2
+        };
+
+        // Act
+        var result = await _service.GetTaxSummaryAsync(filter);
+
+        // Assert: Chuyển sang Nhóm 2, GTGT tính trên doanh thu kỳ (1đ * 1% làm tròn = 0đ), TNCN tính trên 1đ vượt (1đ * 0.5% làm tròn = 0đ hoặc integer VND)
+        Assert.False(result.IsTaxExempt);
+        Assert.Equal(HouseholdTaxGroup.Group2_1BTo3B, result.HouseholdGroup);
+        Assert.Equal(1m, result.VatTaxableRevenue);
+        Assert.Equal(1m, result.PitTaxableRevenue);
+    }
+
+    [Fact]
+    public async Task GetTaxSummary_WhenAnnualRevenueExceeds3Billion_ShouldAutoTransitionToGroup3Declaration()
+    {
+        // Arrange: Doanh thu năm đạt 3.500.000.000 VNĐ (> 3 tỷ)
+        _fakeRepo.AnnualAccumulatedRevenue = 3_500_000_000m;
+        _fakeRepo.PriorPeriodsAccumulatedRevenue = 2_800_000_000m;
+        _fakeRepo.GrossRevenue = 700_000_000m;
+        _fakeRepo.DiscountAmount = 0m;
+        _fakeRepo.ReturnAmount = 0m;
+        _fakeRepo.DeductibleExpenses = 500_000_000m;
+
+        var filter = new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 4,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage // Dù người dùng chọn Tỷ lệ
+        };
+
+        // Act
+        var result = await _service.GetTaxSummaryAsync(filter);
+
+        // Assert: Tự động chuyển sang Nhóm 3 bắt buộc tính theo Thu nhập tính thuế (thuế suất 17%)
+        Assert.Equal(HouseholdTaxGroup.Group3_3BTo50B, result.HouseholdGroup);
+        Assert.Equal(700_000_000m, result.VatTaxableRevenue);
+        Assert.Equal(7_000_000m, result.VatAmount); // 700M * 1% = 7M
+        Assert.Equal(200_000_000m, result.TaxableIncomeDeclaration); // 700M - 500M = 200M
+        Assert.Equal(17.0m, result.PitRate); // Thuế suất Nhóm 3: 17%
+        Assert.Equal(34_000_000m, result.DeclarationPitAmount); // 200M * 17% = 34M
+        Assert.Equal("Bộ 4 sổ: S2b, S2c, S2d, S2e-HKD", result.BooksSummary.PrimaryBookCode);
     }
 }

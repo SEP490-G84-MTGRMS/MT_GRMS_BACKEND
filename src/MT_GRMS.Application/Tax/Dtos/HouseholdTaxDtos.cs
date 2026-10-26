@@ -9,6 +9,9 @@ public class HouseholdTaxFilterDto
     public int PeriodNumber { get; set; } = 1;
     public Guid? BranchId { get; set; }
     public TaxCalculationMethod CalculationMethod { get; set; } = TaxCalculationMethod.RevenuePercentage;
+    public bool ApplyVatReduction2026 { get; set; } = false; // Giảm 20% mức tỷ lệ GTGT (còn 0.8%) theo NQ 204/2025/QH15 & NĐ 174/2025/NĐ-CP
+    public decimal? CustomVatRate { get; set; }
+    public decimal? CustomPitRate { get; set; }
 }
 
 public class HouseholdTaxSummaryDto
@@ -34,7 +37,8 @@ public class HouseholdTaxSummaryDto
     public decimal TaxableRevenueInPeriod { get; set; }
 
     // Chi tiết thuế GTGT (Tính trên toàn bộ doanh thu kỳ khi lũy kế năm > 1 tỷ)
-    public decimal VatRate { get; set; } // 1.0%
+    public decimal VatRate { get; set; } // 1.0% hoặc 0.8% nếu giảm 20%
+    public bool IsVatReduced { get; set; } // Cờ xác nhận áp dụng chính sách giảm thuế GTGT 2026
     public decimal VatTaxableRevenue { get; set; }
     public decimal VatAmount { get; set; }
 

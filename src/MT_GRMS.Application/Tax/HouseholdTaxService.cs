@@ -64,20 +64,37 @@ public class HouseholdTaxService : IHouseholdTaxService
         decimal taxableIncomeDeclaration = 0;
         decimal declarationPitAmount = 0;
 
+        bool isVatReduced = false;
         if (!isExempt)
         {
             // A. THUẾ GTGT: Đánh trên toàn bộ doanh thu phát sinh trong kỳ chịu thuế
-            vatRate = RetailVatRate;
+            decimal baseVatRate = filter.CustomVatRate ?? RetailVatRate;
+            if (filter.ApplyVatReduction2026)
+            {
+                // Giảm 20% mức tỷ lệ % GTGT theo Nghị quyết 204/2025/QH15 và Nghị định 174/2025/NĐ-CP (1.0% -> 0.8%)
+                vatRate = baseVatRate * 0.8m;
+                isVatReduced = true;
+            }
+            else
+            {
+                vatRate = baseVatRate;
+            }
+
             vatTaxableRevenue = taxableRevenueInPeriod;
             vatAmount = Math.Round(vatTaxableRevenue * (vatRate / 100m), 0, MidpointRounding.AwayFromZero);
 
             // B. THUẾ TNCN:
-            if (filter.CalculationMethod == TaxCalculationMethod.DeclarationBased || group == HouseholdTaxGroup.Group4_Over50B)
+            // Tự động chuyển phương pháp Kê khai nếu chủ hộ đăng ký hoặc khi doanh thu năm vượt 3 tỷ (Nhóm 3, Nhóm 4)
+            bool isDeclaration = filter.CalculationMethod == TaxCalculationMethod.DeclarationBased 
+                || group == HouseholdTaxGroup.Group3_3BTo50B 
+                || group == HouseholdTaxGroup.Group4_Over50B;
+
+            if (isDeclaration)
             {
-                // Phương pháp Kê khai: Thu nhập tính thuế = Doanh thu - Chi phí hợp lệ
+                // Phương pháp Kê khai (Doanh thu - Chi phí)
                 deductibleExpenses = await _repository.GetPeriodDeductibleExpensesAsync(fromDateUtc, toDateUtc, filter.BranchId, cancellationToken);
                 taxableIncomeDeclaration = Math.Max(0, taxableRevenueInPeriod - deductibleExpenses);
-                pitRate = DeclarationDefaultPitRate;
+                pitRate = filter.CustomPitRate ?? (group == HouseholdTaxGroup.Group4_Over50B ? 20.0m : (group == HouseholdTaxGroup.Group3_3BTo50B ? 17.0m : DeclarationDefaultPitRate));
                 declarationPitAmount = Math.Round(taxableIncomeDeclaration * (pitRate / 100m), 0, MidpointRounding.AwayFromZero);
                 pitAmount = declarationPitAmount;
                 pitTaxableRevenue = taxableIncomeDeclaration;
@@ -88,7 +105,7 @@ public class HouseholdTaxService : IHouseholdTaxService
                 var currentExcess = Math.Max(0, annualAccumulatedRevenue - TaxExemptionThreshold);
                 var priorExcess = Math.Max(0, priorPeriodsRevenue - TaxExemptionThreshold);
                 pitTaxableRevenue = Math.Min(taxableRevenueInPeriod, Math.Max(0, currentExcess - priorExcess));
-                pitRate = RetailPitRate;
+                pitRate = filter.CustomPitRate ?? RetailPitRate;
                 pitAmount = Math.Round(pitTaxableRevenue * (pitRate / 100m), 0, MidpointRounding.AwayFromZero);
             }
         }
@@ -108,8 +125,11 @@ public class HouseholdTaxService : IHouseholdTaxService
         var primaryBook = group switch
         {
             HouseholdTaxGroup.Group1_Under1B => "S1a-HKD",
-            HouseholdTaxGroup.Group2_1BTo3B => "S2a-HKD (và S3a-HKD)",
-            _ => filter.CalculationMethod == TaxCalculationMethod.DeclarationBased ? "S2b, S2c, S2d, S2e, S3a-HKD" : "S2a-HKD (và S3a-HKD)"
+            HouseholdTaxGroup.Group2_1BTo3B => filter.CalculationMethod == TaxCalculationMethod.DeclarationBased 
+                ? "Bộ 4 sổ: S2b, S2c, S2d, S2e-HKD" 
+                : "S2a-HKD",
+            HouseholdTaxGroup.Group3_3BTo50B => "Bộ 4 sổ: S2b, S2c, S2d, S2e-HKD",
+            _ => "Bộ 4 sổ: S2b, S2c, S2d, S2e-HKD (Kèm chế độ kế toán doanh nghiệp cho Nhóm 4)"
         };
 
         var booksSummary = new TaxBooksSummaryDto
@@ -140,6 +160,7 @@ public class HouseholdTaxService : IHouseholdTaxService
             ReturnAmountInPeriod = returns,
             TaxableRevenueInPeriod = taxableRevenueInPeriod,
             VatRate = vatRate,
+            IsVatReduced = isVatReduced,
             VatTaxableRevenue = vatTaxableRevenue,
             VatAmount = vatAmount,
             PitRate = pitRate,
