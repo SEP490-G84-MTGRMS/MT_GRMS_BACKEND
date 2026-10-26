@@ -12,6 +12,7 @@ public class HouseholdTaxFilterDto
     public bool ApplyVatReduction2026 { get; set; } = false; // Giảm 20% mức tỷ lệ GTGT (còn 0.8%) theo NQ 204/2025/QH15 & NĐ 174/2025/NĐ-CP
     public decimal? CustomVatRate { get; set; }
     public decimal? CustomPitRate { get; set; }
+    public decimal? PriorDeclaredPitTaxOverride { get; set; } // Cho phép mock số thuế TNCN đã khai các kỳ trước khi test
 }
 
 public class HouseholdTaxSummaryDto
@@ -47,9 +48,15 @@ public class HouseholdTaxSummaryDto
     public decimal PitTaxableRevenue { get; set; } // Doanh thu chịu thuế TNCN
     public decimal PitAmount { get; set; }
 
-    // Phương pháp Kê khai (Doanh thu - Chi phí)
+    // Phương pháp Kê khai theo mô hình lũy kế từ đầu năm YTD (Year-To-Date)
     public decimal DeductibleExpensesInPeriod { get; set; }
-    public decimal TaxableIncomeDeclaration { get; set; } // Thu nhập tính thuế nếu kê khai
+    public decimal YtdRevenue { get; set; }
+    public decimal YtdExpenses { get; set; }
+    public decimal TaxableIncomeYtd { get; set; }
+    public decimal TaxDueYtd { get; set; }
+    public decimal PriorDeclaredPitTax { get; set; }
+    public decimal OverpaidTaxCarry { get; set; }
+    public decimal TaxableIncomeDeclaration { get; set; } // Thu nhập tính thuế lũy kế
     public decimal DeclarationPitAmount { get; set; }
 
     public decimal TotalTaxAmount { get; set; }

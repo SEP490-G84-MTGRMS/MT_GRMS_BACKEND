@@ -61,6 +61,12 @@ public class HouseholdTaxService : IHouseholdTaxService
         decimal pitAmount = 0;
 
         decimal deductibleExpenses = 0;
+        decimal ytdExpenses = 0;
+        decimal ytdRevenue = 0;
+        decimal taxableIncomeYtd = 0;
+        decimal taxDueYtd = 0;
+        decimal priorDeclaredPitTax = 0;
+        decimal overpaidTaxCarry = 0;
         decimal taxableIncomeDeclaration = 0;
         decimal declarationPitAmount = 0;
 
@@ -91,13 +97,36 @@ public class HouseholdTaxService : IHouseholdTaxService
 
             if (isDeclaration)
             {
-                // Phương pháp Kê khai (Doanh thu - Chi phí)
+                // Phương pháp Kê khai theo mô hình lũy kế từ đầu năm YTD (Year-To-Date)
+                var startOfYearUtc = new DateTime(filter.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
                 deductibleExpenses = await _repository.GetPeriodDeductibleExpensesAsync(fromDateUtc, toDateUtc, filter.BranchId, cancellationToken);
-                taxableIncomeDeclaration = Math.Max(0, taxableRevenueInPeriod - deductibleExpenses);
+                ytdExpenses = await _repository.GetPeriodDeductibleExpensesAsync(startOfYearUtc, toDateUtc, filter.BranchId, cancellationToken);
+                ytdRevenue = annualAccumulatedRevenue;
+
+                taxableIncomeYtd = Math.Max(0, ytdRevenue - ytdExpenses);
                 pitRate = filter.CustomPitRate ?? (group == HouseholdTaxGroup.Group4_Over50B ? 20.0m : (group == HouseholdTaxGroup.Group3_3BTo50B ? 17.0m : DeclarationDefaultPitRate));
-                declarationPitAmount = Math.Round(taxableIncomeDeclaration * (pitRate / 100m), 0, MidpointRounding.AwayFromZero);
+                taxDueYtd = Math.Round(taxableIncomeYtd * (pitRate / 100m), 0, MidpointRounding.AwayFromZero);
+
+                // Lấy tổng số thuế TNCN đã kê khai ở các kỳ trước trong năm từ các snapshot đã chốt (hoặc override khi test)
+                if (filter.PriorDeclaredPitTaxOverride.HasValue)
+                {
+                    priorDeclaredPitTax = filter.PriorDeclaredPitTaxOverride.Value;
+                }
+                else
+                {
+                    var priorSnapshots = await _repository.GetSnapshotsAsync(filter.Year, filter.BranchId, cancellationToken);
+                    priorDeclaredPitTax = priorSnapshots
+                        .Where(s => s.PeriodType == filter.PeriodType && s.PeriodNumber < filter.PeriodNumber)
+                        .Sum(s => s.PitAmount);
+                }
+
+                var pitPayable = Math.Max(0, taxDueYtd - priorDeclaredPitTax);
+                overpaidTaxCarry = Math.Max(0, priorDeclaredPitTax - taxDueYtd);
+
+                declarationPitAmount = pitPayable;
+                taxableIncomeDeclaration = taxableIncomeYtd;
                 pitAmount = declarationPitAmount;
-                pitTaxableRevenue = taxableIncomeDeclaration;
+                pitTaxableRevenue = taxableIncomeYtd;
             }
             else
             {
@@ -167,6 +196,12 @@ public class HouseholdTaxService : IHouseholdTaxService
             PitTaxableRevenue = pitTaxableRevenue,
             PitAmount = pitAmount,
             DeductibleExpensesInPeriod = deductibleExpenses,
+            YtdRevenue = ytdRevenue,
+            YtdExpenses = ytdExpenses,
+            TaxableIncomeYtd = taxableIncomeYtd,
+            TaxDueYtd = taxDueYtd,
+            PriorDeclaredPitTax = priorDeclaredPitTax,
+            OverpaidTaxCarry = overpaidTaxCarry,
             TaxableIncomeDeclaration = taxableIncomeDeclaration,
             DeclarationPitAmount = declarationPitAmount,
             TotalTaxAmount = totalTax,
