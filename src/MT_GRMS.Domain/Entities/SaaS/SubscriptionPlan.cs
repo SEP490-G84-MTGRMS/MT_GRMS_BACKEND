@@ -9,7 +9,7 @@ public class SubscriptionPlan : BaseEntity<string>
 {
     public SubscriptionPlan()
     {
-        Id = Guid.NewGuid().ToString();
+        Id = Uuid7.NewString();
     }
 
     public string PlanCode { get; set; } = string.Empty;

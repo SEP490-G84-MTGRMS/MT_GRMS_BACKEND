@@ -10,7 +10,7 @@ public class Tenant : BaseEntity<string>
 {
     public Tenant()
     {
-        Id = Guid.NewGuid().ToString();
+        Id = Uuid7.NewString();
     }
 
     public string Name { get; set; } = string.Empty;

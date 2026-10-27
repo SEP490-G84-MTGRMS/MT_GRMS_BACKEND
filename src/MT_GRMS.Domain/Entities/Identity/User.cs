@@ -10,7 +10,7 @@ public class User : BaseEntity<string>
 {
     public User()
     {
-        Id = Guid.NewGuid().ToString();
+        Id = Uuid7.NewString();
     }
 
     public string UserName { get; set; } = string.Empty;

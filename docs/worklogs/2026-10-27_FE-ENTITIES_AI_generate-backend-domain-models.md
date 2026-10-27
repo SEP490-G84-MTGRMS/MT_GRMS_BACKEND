@@ -16,8 +16,9 @@
 
 ## 2. Danh sách file & Nội dung sửa (What)
 - **Tầng Domain (`MT_GRMS.Domain`)**:
-  - `Common/BaseEntity.cs`: Khởi tạo lớp thực thể cơ sở toàn cục (`Id`, `CreatedAt`, `UpdatedAt`, `IsDeleted`).
-  - `Common/BaseTenantEntity.cs`: Kế thừa `BaseEntity`, bổ sung `TenantId`, `CreatedBy`.
+  - `Common/Uuid7.cs`: Khởi tạo bộ sinh UUIDv7 chuẩn RFC 9562 tuần tự theo thời gian (48-bit timestamp + entropy ngẫu nhiên) cho .NET 8.
+  - `Common/BaseEntity.cs`: Khởi tạo lớp thực thể cơ sở toàn cục (`Id`, `CreatedAt`, `UpdatedAt`, `IsDeleted`), sử dụng `Uuid7.NewGuid()`.
+  - `Common/BaseTenantEntity.cs`: Kế thừa `BaseEntity`, bổ sung `TenantId`, `CreatedBy`, sử dụng `Uuid7.NewGuid()`.
   - `Entities/SaaS/`: `SubscriptionPlan.cs`, `Tenant.cs`, cập nhật `Branch.cs`.
   - `Entities/Identity/`: Cập nhật `User.cs` đầy đủ theo CSDL chuẩn, thêm `TenantUser.cs`.
   - `Entities/System/`: `TaxSnapshot.cs`, `AuditLog.cs`.

@@ -14,6 +14,6 @@ public abstract class BaseTenantEntity : BaseTenantEntity<Guid>
 {
     protected BaseTenantEntity()
     {
-        Id = Guid.NewGuid();
+        Id = Uuid7.NewGuid();
     }
 }

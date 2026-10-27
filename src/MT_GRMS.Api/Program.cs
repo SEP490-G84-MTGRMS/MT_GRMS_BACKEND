@@ -57,4 +57,20 @@ app.UseAuthorization();
 
 app.MapControllers();
 
+// 6. Tự động khởi tạo Database và nạp dữ liệu mẫu (Code-First Migration & Seed Data)
+using (var scope = app.Services.CreateScope())
+{
+    var services = scope.ServiceProvider;
+    try
+    {
+        var context = services.GetRequiredService<MT_GRMS.Infrastructure.Persistence.AppDbContext>();
+        await MT_GRMS.Infrastructure.Persistence.DbInitializer.InitializeAsync(context);
+    }
+    catch (Exception ex)
+    {
+        var logger = services.GetRequiredService<ILogger<Program>>();
+        logger.LogError(ex, "Lỗi khi tự động khởi tạo CSDL hoặc nạp Seed Data.");
+    }
+}
+
 app.Run();
