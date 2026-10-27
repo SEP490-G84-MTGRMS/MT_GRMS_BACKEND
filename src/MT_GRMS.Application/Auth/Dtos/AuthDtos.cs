@@ -21,7 +21,10 @@ public record UserInfo(
     string RoleName,
     Guid? BranchId,
     string TenantId
-);
+)
+{
+    public string Role => RoleName;
+}
 
 public record RefreshTokenRequest(
     string RefreshToken

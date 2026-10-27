@@ -115,7 +115,142 @@ public class UserAuthenticationTests
         // THEN
         Assert.NotNull(response);
         Assert.False(string.IsNullOrEmpty(response.AccessToken));
+        Assert.StartsWith("mt_jwt_", response.AccessToken);
+        Assert.StartsWith("mt_refresh_", response.RefreshToken);
         Assert.Equal("usr_test_01", response.User.Id);
         Assert.Equal("testuser", response.User.Username);
+        Assert.Equal("ADMIN", response.User.Role);
+        Assert.Equal("ADMIN", response.User.RoleName);
+        Assert.Equal("TENANT-01", response.User.TenantId);
+    }
+
+    [Fact]
+    public async Task AuthService_LoginAsync_Should_Throw_Unauthorized_When_Password_Mismatch()
+    {
+        // GIVEN
+        var repo = new FakeUserRepository();
+        await repo.AddAsync(new User
+        {
+            Id = "usr_admin_01",
+            Username = "admin",
+            Password = "CorrectPassword@123"
+        });
+
+        var authService = new AuthService(repo);
+
+        // WHEN & THEN
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            authService.LoginAsync(new LoginRequest("admin", "WrongPassword@999", null))
+        );
+
+        Assert.Equal("Tài khoản hoặc mật khẩu không chính xác.", ex.Message);
+    }
+
+    [Fact]
+    public async Task AuthService_LoginAsync_Should_Fallback_To_DefaultTenant_When_TenantCode_Null()
+    {
+        // GIVEN
+        var repo = new FakeUserRepository();
+        await repo.AddAsync(new User
+        {
+            Id = "usr_admin_01",
+            Username = "admin",
+            Password = "Password@123"
+        });
+
+        var authService = new AuthService(repo);
+
+        // WHEN
+        var response = await authService.LoginAsync(new LoginRequest("admin", "Password@123", TenantCode: null));
+
+        // THEN
+        Assert.Equal("DEFAULT", response.User.TenantId);
+        Assert.Equal("usr_admin_01", response.User.Id);
+    }
+
+    [Fact]
+    public async Task AuthService_LoginAsync_Should_Throw_Unauthorized_When_User_Not_Found()
+    {
+        // GIVEN
+        var repo = new FakeUserRepository();
+        var authService = new AuthService(repo);
+
+        // WHEN & THEN (Không có user trong DB -> Phải ném UnauthorizedAccessException)
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            authService.LoginAsync(new LoginRequest("non_existing_user", "AnyPassword@123", "TENANT-HN-01"))
+        );
+
+        Assert.Equal("Tài khoản hoặc mật khẩu không chính xác.", ex.Message);
+    }
+
+    [Fact]
+    public async Task AuthService_LoginAsync_Should_Throw_ArgumentException_When_Input_Is_Empty()
+    {
+        // GIVEN
+        var repo = new FakeUserRepository();
+        var authService = new AuthService(repo);
+
+        // WHEN & THEN
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            authService.LoginAsync(new LoginRequest("", "Pass123", null))
+        );
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            authService.LoginAsync(new LoginRequest("admin", "", null))
+        );
+    }
+
+    [Fact]
+    public async Task AuthService_LoginAsync_Should_Set_Token_ExpiresAt_To_Two_Hours()
+    {
+        // GIVEN
+        var repo = new FakeUserRepository();
+        await repo.AddAsync(new User { Id = "usr_01", Username = "user01", Password = "123" });
+        var authService = new AuthService(repo);
+
+        // WHEN
+        var before = DateTime.UtcNow;
+        var response = await authService.LoginAsync(new LoginRequest("user01", "123", null));
+        var after = DateTime.UtcNow;
+
+        // THEN
+        Assert.InRange(response.ExpiresAt, before.AddHours(2), after.AddHours(2).AddSeconds(5));
+    }
+
+    [Fact]
+    public async Task AuthService_RefreshTokenAsync_Should_Return_New_Tokens()
+    {
+        // GIVEN
+        var repo = new FakeUserRepository();
+        var authService = new AuthService(repo);
+
+        // WHEN
+        var response = await authService.RefreshTokenAsync(new RefreshTokenRequest("mt_refresh_token_sample"));
+
+        // THEN
+        Assert.NotNull(response);
+        Assert.StartsWith("mt_jwt_", response.AccessToken);
+        Assert.StartsWith("mt_refresh_", response.RefreshToken);
+        Assert.Equal("refreshed_user", response.User.Username);
+        Assert.Equal("ADMIN", response.User.Role);
+    }
+
+    [Fact]
+    public void UserInfo_Should_Expose_Role_Property_Matching_RoleName()
+    {
+        // GIVEN
+        var userInfo = new UserInfo(
+            Id: "usr_01",
+            Username: "admin",
+            FullName: "Admin User",
+            Email: "admin@mtgrms.vn",
+            RoleName: "MANAGER",
+            BranchId: null,
+            TenantId: "TENANT-HCM-01"
+        );
+
+        // THEN
+        Assert.Equal("MANAGER", userInfo.RoleName);
+        Assert.Equal("MANAGER", userInfo.Role);
     }
 }

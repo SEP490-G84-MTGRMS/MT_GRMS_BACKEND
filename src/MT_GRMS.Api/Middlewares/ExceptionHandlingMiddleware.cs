@@ -47,6 +47,17 @@ public class ExceptionHandlingMiddleware
                 _logger.LogWarning(businessEx, "Business exception occurred: {Message}", businessEx.Message);
                 break;
 
+            case ArgumentException argEx:
+                statusCode = (int)HttpStatusCode.BadRequest;
+                apiResponse = ApiResponse<object>.Fail("BAD_REQUEST", argEx.Message);
+                _logger.LogWarning(argEx, "Invalid argument: {Message}", argEx.Message);
+                break;
+
+            case UnauthorizedAccessException unauthEx:
+                statusCode = (int)HttpStatusCode.Unauthorized;
+                apiResponse = ApiResponse<object>.Fail("UNAUTHORIZED", unauthEx.Message);
+                _logger.LogWarning(unauthEx, "Unauthorized access: {Message}", unauthEx.Message);
+                break;
 
             case NotFoundException notFoundEx:
                 statusCode = (int)HttpStatusCode.NotFound;

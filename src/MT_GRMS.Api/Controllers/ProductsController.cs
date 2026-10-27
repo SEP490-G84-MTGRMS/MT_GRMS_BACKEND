@@ -9,7 +9,7 @@ using MT_GRMS.Application.Suppliers.Dtos;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/products")]
+[Route("api/products")]
 public class ProductsController : BaseApiController
 {
     private readonly ICatalogService _catalogService;
