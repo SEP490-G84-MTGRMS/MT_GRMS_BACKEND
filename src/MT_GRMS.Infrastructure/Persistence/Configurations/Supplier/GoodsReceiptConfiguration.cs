@@ -38,7 +38,7 @@ public class GoodsReceiptConfiguration : IEntityTypeConfiguration<GoodsReceipt>
         builder.HasOne(x => x.PurchaseOrder)
             .WithMany(p => p.GoodsReceipts)
             .HasForeignKey(x => x.PurchaseOrderId)
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasOne(x => x.Supplier)
             .WithMany()
@@ -58,11 +58,11 @@ public class GoodsReceiptConfiguration : IEntityTypeConfiguration<GoodsReceipt>
         builder.HasOne(x => x.ConfirmedByUser)
             .WithMany()
             .HasForeignKey(x => x.ConfirmedByUserId)
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasOne(x => x.RejectedByUser)
             .WithMany()
             .HasForeignKey(x => x.RejectedByUserId)
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }

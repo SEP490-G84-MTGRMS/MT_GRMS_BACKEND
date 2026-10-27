@@ -30,8 +30,13 @@
   - `Entities/HR/`: `Employee.cs`, `Payslip.cs`, `EmployeeSchedule.cs`, `EmployeeBonusViolation.cs`.
   - `Enums/`: Khai báo các Enum trạng thái, phương thức và vai trò mới phục vụ 34 bảng.
 - **Tầng Infrastructure (`MT_GRMS.Infrastructure`)**:
-  - `Persistence/AppDbContext.cs`: Khai báo 34 `DbSet<T>` và đồng bộ Global Query Filter.
+  - `Persistence/AppDbContext.cs`: Khai báo 34 `DbSet<T>`, đồng bộ Global Query Filter và tự động thiết lập `DeleteBehavior.Restrict` cho mọi quan hệ Cascade để triệt tiêu lỗi Multiple Cascade Paths (Error 1785) của SQL Server.
   - `Persistence/Configurations/`: Tạo đầy đủ các Fluent API EntityTypeConfiguration tương ứng chia theo từng thư mục phân hệ.
+  - `Persistence/DbInitializer.cs`: Tạo bộ khởi tạo Code-First tự động áp dụng `MigrateAsync()` và nạp dữ liệu mẫu (Seed Data) phong phú cho cả 7 phân hệ.
+  - `Persistence/Migrations/20261027154419_InitialSqlServerFull34Tables.cs`: Migration Code-First tạo trọn vẹn 34 bảng chuẩn Microsoft SQL Server.
+- **Tầng Presentation (`MT_GRMS.Api`)**:
+  - `appsettings.json`: Cấu hình chuỗi kết nối Microsoft SQL Server (`Server=localhost;Database=mtgrms_db;...`).
+  - `Program.cs`: Tự động gọi `DbInitializer.InitializeAsync(context)` khi khởi động máy chủ.
 
 ---
 
@@ -40,15 +45,22 @@
 - **Composite Keys**: Cấu hình `builder.HasKey(x => new { ... })` cho `TenantUsers`, `ProductCombos`, `BranchStocks` (Unique Index), `SupplierProducts`.
 - **Decimal Precision**: Thiết lập rõ ràng `decimal(18,2)` cho các trường tiền tệ và `decimal(18,3)` / `decimal(12,2)` cho các trường số lượng.
 - **Concurrency Token**: Cấu hình `.IsConcurrencyToken()` cho cột `RowVersion` ở các bảng giao dịch.
+- **SQL Server Compatibility**: Giải quyết triệt để lỗi chu kỳ cascade bằng quy tắc Soft-Delete `DeleteBehavior.Restrict`.
 
 ---
 
 ## 4. Kết quả Kiểm thử (Verification)
-- Sẽ thực hiện `dotnet build MT_GRMS_BACKEND.sln` sau khi hoàn thành toàn bộ mã nguồn để xác nhận đạt 0 Error, 0 Warning nghiêm trọng.
+- `dotnet build MT_GRMS_BACKEND.sln`: **Build succeeded (0 Error)**.
+- `dotnet test`: **50/50 tests PASS** (45 Unit tests + 5 Integration tests).
+- Khởi động thực tế (`dotnet run --project src/MT_GRMS.Api`):
+  - Tự động tạo CSDL `mtgrms_db` trên SQL Server localhost.
+  - Sinh đủ **35 bảng** (34 bảng nghiệp vụ + `__EFMigrationsHistory`).
+  - Insert toàn bộ dữ liệu mẫu (Plans, Tenants, Users, Products, Suppliers, Employees, CashBooks).
+  - API lắng nghe ổn định tại `http://localhost:5232`.
 
 ---
 
 ## 5. Ghi chú cho Manager khi Duyệt & Merge (Manager Merge Notes)
-- **Mức độ rủi ro**: Medium.
-- **File cần lưu tâm**: `AppDbContext.cs`, `Product.cs`, `User.cs`.
-- **Hậu merge**: Thay đổi này chuẩn hóa tầng Domain & Infrastructure Code-First, sẵn sàng cho việc sinh EF Core migration mới hoặc kết nối trực tiếp với DB hiện có.
+- **Mức độ rủi ro**: Low - Medium.
+- **File cần lưu tâm**: `AppDbContext.cs`, `DbInitializer.cs`, `appsettings.json`.
+- **Hậu merge**: Chạy ứng dụng (`dotnet run`) là hệ thống sẽ tự động khởi tạo CSDL và seed data nếu CSDL chưa có dữ liệu. Không cần chạy lệnh tay.

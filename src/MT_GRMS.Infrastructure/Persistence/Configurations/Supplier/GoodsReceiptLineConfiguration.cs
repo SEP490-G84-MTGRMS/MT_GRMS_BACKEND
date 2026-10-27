@@ -44,11 +44,11 @@ public class GoodsReceiptLineConfiguration : IEntityTypeConfiguration<GoodsRecei
         builder.HasOne(x => x.PurchaseOrderDetail)
             .WithMany()
             .HasForeignKey(x => x.PurchaseOrderDetailId)
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasOne(x => x.BranchStock)
             .WithMany()
             .HasForeignKey(x => x.BranchStockId)
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }

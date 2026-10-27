@@ -47,16 +47,16 @@ public class PurchaseOrderConfiguration : IEntityTypeConfiguration<PurchaseOrder
         builder.HasOne(x => x.SubmittedByUser)
             .WithMany()
             .HasForeignKey(x => x.SubmittedByUserId)
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasOne(x => x.ApprovedByUser)
             .WithMany()
             .HasForeignKey(x => x.ApprovedByUserId)
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasOne(x => x.RejectedByUser)
             .WithMany()
             .HasForeignKey(x => x.RejectedByUserId)
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }

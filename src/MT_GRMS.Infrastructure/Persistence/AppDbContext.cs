@@ -87,6 +87,16 @@ public partial class AppDbContext : DbContext
         // Tự động nạp toàn bộ Configurations trong assembly Infrastructure
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
 
+        // Tắt toàn bộ Cascade Delete ở mức Database để tránh lỗi Multiple Cascade Paths (Error 1785) của SQL Server
+        // Dự án áp dụng Soft Delete (IsDeleted) toàn diện nên an toàn 100%
+        foreach (var foreignKey in modelBuilder.Model.GetEntityTypes().SelectMany(e => e.GetForeignKeys()))
+        {
+            if (foreignKey.DeleteBehavior == DeleteBehavior.Cascade)
+            {
+                foreignKey.DeleteBehavior = DeleteBehavior.Restrict;
+            }
+        }
+
         // Áp dụng Global Query Filter cho toàn bộ thực thể kế thừa BaseTenantEntity
         foreach (var entityType in modelBuilder.Model.GetEntityTypes())
         {
