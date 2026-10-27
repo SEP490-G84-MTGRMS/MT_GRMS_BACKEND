@@ -8,7 +8,7 @@ public class SupplierDeliveryConfigConfiguration : IEntityTypeConfiguration<Supp
 {
     public void Configure(EntityTypeBuilder<SupplierDeliveryConfig> builder)
     {
-        builder.ToTable("supplier_delivery_configs");
+        builder.ToTable("SupplierDeliveryConfigs");
 
         builder.HasKey(x => x.Id);
 

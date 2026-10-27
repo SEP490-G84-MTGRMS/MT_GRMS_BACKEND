@@ -22,7 +22,7 @@ public class UserRepository : IUserRepository
 
     public async Task<User?> GetByUsernameAsync(string username, CancellationToken cancellationToken = default)
     {
-        return await _context.Users.FirstOrDefaultAsync(u => u.Username == username, cancellationToken);
+        return await _context.Users.FirstOrDefaultAsync(u => u.UserName == username, cancellationToken);
     }
 
     public async Task<IReadOnlyList<User>> FindAsync(Expression<Func<User, bool>> predicate, CancellationToken cancellationToken = default)
