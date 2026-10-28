@@ -8,14 +8,15 @@ public class SupplierCategoryConfiguration : IEntityTypeConfiguration<SupplierCa
 {
     public void Configure(EntityTypeBuilder<SupplierCategory> builder)
     {
-        builder.ToTable("supplier_categories");
+        builder.ToTable("SupplierCategories");
 
         builder.HasKey(x => x.Id);
 
-        builder.Property(x => x.CategoryCode).HasMaxLength(50).IsRequired();
-        builder.Property(x => x.CategoryName).HasMaxLength(150).IsRequired();
+        builder.Property(x => x.TenantId).HasMaxLength(50).IsRequired();
+        builder.Property(x => x.Code).HasMaxLength(50).IsRequired();
+        builder.Property(x => x.Name).HasMaxLength(255).IsRequired();
         builder.Property(x => x.Description).HasMaxLength(500);
 
-        builder.HasIndex(x => new { x.TenantId, x.CategoryCode }).IsUnique();
+        builder.HasIndex(x => new { x.TenantId, x.Code }).IsUnique();
     }
 }

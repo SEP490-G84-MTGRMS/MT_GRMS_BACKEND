@@ -8,7 +8,7 @@ public class SupplierConfiguration : IEntityTypeConfiguration<Domain.Entities.Su
 {
     public void Configure(EntityTypeBuilder<Domain.Entities.Supplier.Supplier> builder)
     {
-        builder.ToTable("suppliers");
+        builder.ToTable("Suppliers");
 
         builder.HasKey(x => x.Id);
 

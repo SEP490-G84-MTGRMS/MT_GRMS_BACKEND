@@ -1,18 +1,45 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using MT_GRMS.Domain.Common;
 
 namespace MT_GRMS.Domain.Entities.Identity;
 
 /// <summary>
-/// Thực thể User tối giản phục vụ xác thực đăng nhập:
-/// - Id: string Uid (chuỗi định danh duy nhất, ví dụ: usr_xxx hoặc NanoId/Guid string)
-/// - Username: tên đăng nhập
-/// - Password: mật khẩu
+/// Bảng Users (Tài khoản người dùng toàn hệ thống)
 /// </summary>
-public class User
+public class User : BaseEntity<string>
 {
-    public string Id { get; set; } = string.Empty;
-    public string Username { get; set; } = string.Empty;
-    public string Password { get; set; } = string.Empty;
+    public User()
+    {
+        Id = Uuid7.NewString();
+    }
+
+    public string UserName { get; set; } = string.Empty;
+    public string PasswordHash { get; set; } = string.Empty;
+    public string FullName { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+    public string? Phone { get; set; }
+    public string? AvatarUrl { get; set; }
+    public bool IsActive { get; set; } = true;
+    public bool IsEmailVerified { get; set; } = false;
+    public bool MustChangePassword { get; set; } = false;
+    public DateTime? LastLoginAt { get; set; }
+    public string? LastLoginIp { get; set; }
+    public string? SecurityStamp { get; set; }
+    public string? PasswordResetOtp { get; set; }
+    public DateTime? OtpExpiry { get; set; }
+    public string? RefreshToken { get; set; }
+    public DateTime? RefreshTokenExpiryTime { get; set; }
+    public int AccessFailedCount { get; set; } = 0;
+    public DateTime? LockoutEnd { get; set; }
+
+    // Backward compatibility aliases
+    [NotMapped]
+    public string Username { get => UserName; set => UserName = value; }
+    [NotMapped]
+    public string Password { get => PasswordHash; set => PasswordHash = value; }
+
+    // Navigations
+    public ICollection<TenantUser> TenantUsers { get; set; } = new List<TenantUser>();
 }
 
 public class Role : BaseTenantEntity

@@ -8,19 +8,26 @@ public class BranchConfiguration : IEntityTypeConfiguration<Branch>
 {
     public void Configure(EntityTypeBuilder<Branch> builder)
     {
-        builder.ToTable("branches");
+        builder.ToTable("Branches");
 
         builder.HasKey(x => x.Id);
+        builder.Property(x => x.Id).HasColumnName("BranchID");
 
-        builder.Property(x => x.Code).HasMaxLength(50).IsRequired();
-        builder.Property(x => x.Name).HasMaxLength(200).IsRequired();
-        builder.Property(x => x.Address).HasMaxLength(500).IsRequired();
+        builder.Property(x => x.TenantId).HasColumnName("TenantID").HasMaxLength(50).IsRequired();
+        builder.Property(x => x.BranchCode).HasMaxLength(30).IsRequired();
+        builder.Property(x => x.Name).HasMaxLength(150).IsRequired();
+        builder.Property(x => x.Address).HasMaxLength(255);
         builder.Property(x => x.Phone).HasMaxLength(20);
-        builder.Property(x => x.ManagerName).HasMaxLength(100);
-        builder.Property(x => x.Status).HasMaxLength(20).HasDefaultValue("Active");
-        builder.Property(x => x.PendingOrdersCount).HasDefaultValue(0);
+        builder.Property(x => x.Latitude).HasColumnType("decimal(10,7)");
+        builder.Property(x => x.Longitude).HasColumnType("decimal(10,7)");
+        builder.Property(x => x.CheckinRadiusMeters).HasDefaultValue(100);
+        builder.Property(x => x.IsActive).HasDefaultValue(true);
 
-        builder.HasIndex(x => new { x.TenantId, x.Code }).IsUnique();
-        builder.HasIndex(x => x.TenantId);
+        builder.HasIndex(x => new { x.TenantId, x.BranchCode }).IsUnique();
+
+        builder.HasOne(x => x.Tenant)
+            .WithMany(t => t.Branches)
+            .HasForeignKey(x => x.TenantId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }

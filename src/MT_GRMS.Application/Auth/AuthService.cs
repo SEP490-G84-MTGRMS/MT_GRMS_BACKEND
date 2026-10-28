@@ -1,3 +1,8 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
+using System.Text;
+using Microsoft.Extensions.Configuration;
+using Microsoft.IdentityModel.Tokens;
 using MT_GRMS.Application.Auth.Dtos;
 
 namespace MT_GRMS.Application.Auth;
@@ -8,10 +13,12 @@ namespace MT_GRMS.Application.Auth;
 public class AuthService : IAuthService
 {
     private readonly IUserRepository _userRepository;
+    private readonly IConfiguration? _configuration;
 
-    public AuthService(IUserRepository userRepository)
+    public AuthService(IUserRepository userRepository, IConfiguration? configuration = null)
     {
         _userRepository = userRepository;
+        _configuration = configuration;
     }
 
     public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
@@ -31,21 +38,29 @@ public class AuthService : IAuthService
             throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
         }
 
+        var tenantId = request.TenantCode ?? "DEFAULT";
+        var role = "ADMIN";
+
         // 4. Đăng nhập thành công với thông tin user từ database
         var userInfo = new UserInfo(
             Id: user.Id,
             Username: user.Username,
-            FullName: user.Username,
-            Email: $"{user.Username}@mtgrms.vn",
-            RoleName: "ADMIN",
+            FullName: string.IsNullOrWhiteSpace(user.FullName) ? user.Username : user.FullName,
+            Email: string.IsNullOrWhiteSpace(user.Email) ? $"{user.Username}@mtgrms.vn" : user.Email,
+            RoleName: role,
             BranchId: null,
-            TenantId: request.TenantCode ?? "DEFAULT"
+            TenantId: tenantId
         );
 
+        var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
+        var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
+        var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, expiresAt);
+        var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
+
         return new LoginResponse(
-            AccessToken: $"mt_jwt_{Guid.NewGuid():N}_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}",
-            RefreshToken: $"mt_refresh_{Guid.NewGuid():N}",
-            ExpiresAt: DateTime.UtcNow.AddHours(2),
+            AccessToken: accessToken,
+            RefreshToken: refreshToken,
+            ExpiresAt: expiresAt,
             User: userInfo
         );
     }
@@ -62,11 +77,52 @@ public class AuthService : IAuthService
             TenantId: "TENANT-HCM-01"
         );
 
+        var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
+        var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
+        var accessToken = GenerateJwtToken(refreshedUser.Id, refreshedUser.Username, refreshedUser.Email, refreshedUser.RoleName, refreshedUser.TenantId, expiresAt);
+
         return Task.FromResult(new LoginResponse(
-            AccessToken: $"mt_jwt_{Guid.NewGuid():N}_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}",
+            AccessToken: accessToken,
             RefreshToken: $"mt_refresh_{Guid.NewGuid():N}",
-            ExpiresAt: DateTime.UtcNow.AddHours(2),
+            ExpiresAt: expiresAt,
             User: refreshedUser
         ));
+    }
+
+    private string GenerateJwtToken(string userId, string username, string email, string role, string tenantId, DateTime expiresAt)
+    {
+        var secretKey = _configuration?["Jwt:Key"];
+        if (string.IsNullOrWhiteSpace(secretKey))
+        {
+            // Fallback token nếu không có cấu hình JWT Key (ví dụ unit test không truyền IConfiguration)
+            return $"mt_jwt_{Guid.NewGuid():N}_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+        }
+
+        var issuer = _configuration["Jwt:Issuer"] ?? "MTGRMS_API";
+        var audience = _configuration["Jwt:Audience"] ?? "MTGRMS_CLIENT";
+
+        var claims = new[]
+        {
+            new Claim(ClaimTypes.NameIdentifier, userId),
+            new Claim(ClaimTypes.Name, username),
+            new Claim(ClaimTypes.Email, email),
+            new Claim(ClaimTypes.Role, role),
+            new Claim("role", role),
+            new Claim("tenant_id", tenantId),
+            new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
+        };
+
+        var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
+        var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
+
+        var token = new JwtSecurityToken(
+            issuer: issuer,
+            audience: audience,
+            claims: claims,
+            expires: expiresAt,
+            signingCredentials: creds
+        );
+
+        return new JwtSecurityTokenHandler().WriteToken(token);
     }
 }
