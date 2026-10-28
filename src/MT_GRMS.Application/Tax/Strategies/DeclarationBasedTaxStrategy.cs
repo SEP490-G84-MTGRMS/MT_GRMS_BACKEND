@@ -28,6 +28,9 @@ public class DeclarationBasedTaxStrategy : ITaxCalculationStrategy
                 PitRate = 0,
                 PitAmount = 0,
                 TotalTaxAmount = 0,
+                CogsAmount = 0,
+                OpexAmount = 0,
+                IsCogsEstimated = false,
                 YtdRevenue = context.AnnualAccumulatedRevenue
             };
         }
@@ -39,7 +42,7 @@ public class DeclarationBasedTaxStrategy : ITaxCalculationStrategy
         var vatTaxableRevenue = context.TaxableRevenueInPeriod;
         var vatAmount = Math.Round(vatTaxableRevenue * (vatRate / 100m), 0, MidpointRounding.AwayFromZero);
 
-        // 2. PIT Calculation (YTD Profit Model: Revenue - Expenses)
+        // 2. PIT Calculation (YTD Profit Model: Revenue - Expenses (COGS + OPEX))
         var ytdExpenses = context.YtdDeductibleExpenses;
         var ytdRevenue = context.AnnualAccumulatedRevenue;
         var taxableIncomeYtd = Math.Max(0, ytdRevenue - ytdExpenses);
@@ -62,6 +65,9 @@ public class DeclarationBasedTaxStrategy : ITaxCalculationStrategy
             PitRate = pitRate,
             PitAmount = pitPayable,
             TotalTaxAmount = vatAmount + pitPayable,
+            CogsAmount = context.PeriodCogs,
+            OpexAmount = context.PeriodOpex,
+            IsCogsEstimated = context.IsCogsEstimated,
             DeductibleExpenses = context.PeriodDeductibleExpenses,
             YtdExpenses = ytdExpenses,
             YtdRevenue = ytdRevenue,

@@ -213,4 +213,146 @@ public class HouseholdTaxDatabaseIntegrationTests
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => context.SaveChangesAsync());
         Assert.Contains("Cấm chỉnh sửa (Modified) thực thể sổ cái tài chính bất biến", ex.Message);
     }
+
+    [Fact]
+    public async Task HouseholdTaxRepository_GetPeriodCogsAsync_WithRealCostPrice_ShouldCalculateActualCogs()
+    {
+        // Arrange
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+
+        var branchId = Guid.NewGuid();
+        var fromDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var toDate = new DateTime(2026, 3, 31, 23, 59, 59, DateTimeKind.Utc);
+
+        var prodA = new MT_GRMS.Domain.Entities.Catalog.Product
+        {
+            ProductName = "Sản phẩm A",
+            CostPrice = 70_000m,
+            BasePrice = 100_000m
+        };
+        var prodB = new MT_GRMS.Domain.Entities.Catalog.Product
+        {
+            ProductName = "Sản phẩm B",
+            CostPrice = 35_000m,
+            BasePrice = 50_000m
+        };
+        context.Products.AddRange(prodA, prodB);
+        await context.SaveChangesAsync();
+
+        var order = new Order
+        {
+            OrderCode = "ORD-COGS-01",
+            StoreId = branchId,
+            SubTotal = 2_000_000m,
+            TotalAmount = 2_000_000m,
+            PaymentStatus = PaymentStatus.Paid,
+            CreatedAt = new DateTime(2026, 2, 1, 10, 0, 0, DateTimeKind.Utc),
+            Items = new List<OrderItem>
+            {
+                new() { ProductId = prodA.Id, Quantity = 10, UnitPrice = 100_000m, TotalLineAmount = 1_000_000m },
+                new() { ProductId = prodB.Id, Quantity = 20, UnitPrice = 50_000m, TotalLineAmount = 1_000_000m }
+            }
+        };
+        context.Orders.Add(order);
+        await context.SaveChangesAsync();
+
+        // Act
+        var (totalCogs, isEstimated) = await repo.GetPeriodCogsAsync(fromDate, toDate, branchId);
+
+        // Assert: 10 * 70.000 + 20 * 35.000 = 700.000 + 700.000 = 1.400.000đ
+        Assert.False(isEstimated);
+        Assert.Equal(1_400_000m, totalCogs);
+    }
+
+    [Fact]
+    public async Task HouseholdTaxRepository_GetPeriodCogsAsync_WithoutCostPrice_ShouldFallbackTo70Percent()
+    {
+        // Arrange
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+
+        var branchId = Guid.NewGuid();
+        var fromDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var toDate = new DateTime(2026, 3, 31, 23, 59, 59, DateTimeKind.Utc);
+
+        var prodNoCost = new MT_GRMS.Domain.Entities.Catalog.Product
+        {
+            ProductName = "Sản phẩm chưa có giá vốn",
+            CostPrice = 0m,
+            BasePrice = 100_000m
+        };
+        context.Products.Add(prodNoCost);
+        await context.SaveChangesAsync();
+
+        var order = new Order
+        {
+            OrderCode = "ORD-NO-COST",
+            StoreId = branchId,
+            SubTotal = 1_000_000m,
+            TotalAmount = 1_000_000m,
+            PaymentStatus = PaymentStatus.Paid,
+            CreatedAt = new DateTime(2026, 2, 1, 10, 0, 0, DateTimeKind.Utc),
+            Items = new List<OrderItem>
+            {
+                new() { ProductId = prodNoCost.Id, Quantity = 10, UnitPrice = 100_000m, TotalLineAmount = 1_000_000m }
+            }
+        };
+        context.Orders.Add(order);
+        await context.SaveChangesAsync();
+
+        // Act
+        var (totalCogs, isEstimated) = await repo.GetPeriodCogsAsync(fromDate, toDate, branchId);
+
+        // Assert: Fallback 70% của 1.000.000đ = 700.000đ, IsEstimated = true
+        Assert.True(isEstimated);
+        Assert.Equal(700_000m, totalCogs);
+    }
+
+    [Fact]
+    public async Task HouseholdTaxRepository_GetPeriodOpexAsync_ShouldExcludeEquityAndAggregateCorrectly()
+    {
+        // Arrange
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+
+        var branchId = Guid.NewGuid();
+        var fromDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var toDate = new DateTime(2026, 3, 31, 23, 59, 59, DateTimeKind.Utc);
+
+        context.ExpenseVouchers.AddRange(
+            new ExpenseVoucher
+            {
+                BranchId = branchId,
+                Category = "Tiền điện nước",
+                Amount = 5_000_000m,
+                Status = ExpenseVoucherStatus.Paid,
+                ExpenseDate = new DateTime(2026, 1, 20, 0, 0, 0, DateTimeKind.Utc)
+            },
+            new ExpenseVoucher
+            {
+                BranchId = branchId,
+                Category = "Lương nhân viên phụ tiệm",
+                Amount = 15_000_000m,
+                Status = ExpenseVoucherStatus.Approved,
+                ExpenseDate = new DateTime(2026, 1, 25, 0, 0, 0, DateTimeKind.Utc)
+            },
+            new ExpenseVoucher
+            {
+                BranchId = branchId,
+                Category = "Chủ hộ rút vốn (Equity)",
+                Amount = 100_000_000m,
+                Status = ExpenseVoucherStatus.Paid,
+                ExpenseDate = new DateTime(2026, 1, 30, 0, 0, 0, DateTimeKind.Utc)
+            }
+        );
+        await context.SaveChangesAsync();
+
+        // Act
+        var opex = await repo.GetPeriodOpexAsync(fromDate, toDate, branchId);
+
+        // Assert: 5tr + 15tr = 20tr (loại bỏ hoàn toàn 100tr rút vốn)
+        Assert.Equal(20_000_000m, opex);
+    }
 }
+

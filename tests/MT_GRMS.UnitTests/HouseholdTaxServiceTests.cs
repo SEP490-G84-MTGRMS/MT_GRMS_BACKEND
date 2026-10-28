@@ -39,12 +39,30 @@ public class HouseholdTaxServiceTests
             CancellationToken cancellationToken = default) =>
             Task.FromResult((GrossRevenue, DiscountAmount, ReturnAmount));
 
+        public decimal CogsAmount { get; set; } = 0m;
+        public decimal OpexAmount { get; set; } = 0m;
+        public bool IsCogsEstimated { get; set; } = false;
+
         public Task<decimal> GetPeriodDeductibleExpensesAsync(
             DateTime fromDateUtc,
             DateTime toDateUtc,
             Guid? branchId,
             CancellationToken cancellationToken = default) =>
             Task.FromResult(DeductibleExpenses);
+
+        public Task<(decimal TotalCogs, bool IsEstimated)> GetPeriodCogsAsync(
+            DateTime fromDateUtc,
+            DateTime toDateUtc,
+            Guid? branchId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult((CogsAmount, IsCogsEstimated));
+
+        public Task<decimal> GetPeriodOpexAsync(
+            DateTime fromDateUtc,
+            DateTime toDateUtc,
+            Guid? branchId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(OpexAmount > 0 ? OpexAmount : DeductibleExpenses);
 
         public Task<List<AccountingBookEntryDto>> GetBookEntriesAsync(
             DateTime fromDateUtc,
@@ -480,4 +498,37 @@ public class HouseholdTaxServiceTests
         Assert.Equal(510_000_000m, result.DeclarationPitAmount); // 3.0B * 17% = 510M
         Assert.Equal("Bộ 4 sổ: S2b, S2c, S2d, S2e-HKD", result.BooksSummary.PrimaryBookCode);
     }
+
+    [Fact]
+    public async Task GetTaxSummary_DeclarationMethod_WithRealCogsAndOpex_DeductsBothCorrectly()
+    {
+        // Kịch bản chuẩn Q3: Doanh thu 467.5tr, COGS 327.25tr (70%), OPEX 20tr
+        // Thu nhập chịu thuế = 467.5tr - 327.25tr - 20tr = 120.25tr (không còn bị 447.5tr)
+        _fakeRepo.AnnualAccumulatedRevenue = 1_417_500_000m;
+        _fakeRepo.GrossRevenue = 467_500_000m;
+        _fakeRepo.DiscountAmount = 0m;
+        _fakeRepo.ReturnAmount = 0m;
+        _fakeRepo.CogsAmount = 327_250_000m;
+        _fakeRepo.OpexAmount = 20_000_000m;
+        _fakeRepo.IsCogsEstimated = false;
+
+        var filter = new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 3,
+            CalculationMethod = TaxCalculationMethod.DeclarationBased,
+            PriorDeclaredPitTaxOverride = 0m
+        };
+
+        var result = await _service.GetTaxSummaryAsync(filter);
+
+        Assert.Equal(467_500_000m, result.TaxableRevenueInPeriod);
+        Assert.Equal(327_250_000m, result.CogsAmount);
+        Assert.Equal(20_000_000m, result.OpexAmount);
+        Assert.False(result.IsCogsEstimated);
+        Assert.Equal(347_250_000m, result.DeductibleExpensesInPeriod); // 327.25M + 20M
+    }
 }
+
+

@@ -27,8 +27,8 @@ public class PnLReportRepository : IPnLReportRepository
 
         query = query.Where(o => o.CreatedAt >= fromDate && o.CreatedAt <= toDate && o.PaymentStatus == PaymentStatus.Paid);
 
-        var gross = await query.SumAsync(o => (decimal?)o.SubTotal, ct) ?? 0;
-        var discounts = await query.SumAsync(o => (decimal?)o.DiscountAmount, ct) ?? 0;
+        var gross = await query.SumAsync(o => (decimal?)o.SubTotal, ct) ?? 0m;
+        var discounts = await query.SumAsync(o => (decimal?)o.DiscountAmount, ct) ?? 0m;
 
         // Doanh thu hàng trả lại từ các bút toán hoàn hàng trong sổ nợ/sổ quỹ
         var returnQuery = _context.CustomerDebtEntries.AsQueryable();
@@ -38,7 +38,7 @@ public class PnLReportRepository : IPnLReportRepository
         }
         var salesReturns = await returnQuery
             .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= fromDate && e.OccurredAtUtc <= toDate)
-            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0;
+            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
 
         return new RevenueAggregation(gross, discounts, salesReturns);
     }
@@ -56,12 +56,36 @@ public class PnLReportRepository : IPnLReportRepository
             .Where(o => o.CreatedAt >= fromDate && o.CreatedAt <= toDate && o.PaymentStatus == PaymentStatus.Paid)
             .ToListAsync(ct);
 
-        // Giả lập giá vốn 70% doanh thu theo chuẩn ngành tạp hóa bán lẻ nếu chưa liên kết lô
-        decimal totalCogs = orders.Sum(o => o.Items.Any()
-            ? o.Items.Sum(i => i.Quantity * i.UnitPrice * 0.70m)
-            : o.SubTotal * 0.70m);
+        var productIds = orders.SelectMany(o => o.Items).Select(i => i.ProductId).Distinct().ToList();
+        var productCostDict = await _context.Products
+            .Where(p => productIds.Contains(p.Id))
+            .ToDictionaryAsync(p => p.Id, p => p.CostPrice, ct);
 
-        return new CogsAggregation(totalCogs);
+        decimal actualCogs = 0m;
+        bool hasAnyRealCost = false;
+
+        foreach (var order in orders)
+        {
+            foreach (var item in order.Items)
+            {
+                if (productCostDict.TryGetValue(item.ProductId, out var costPrice) && costPrice > 0)
+                {
+                    actualCogs += item.Quantity * costPrice;
+                    hasAnyRealCost = true;
+                }
+            }
+        }
+
+        if (!hasAnyRealCost)
+        {
+            // Fallback 70% doanh thu theo chuẩn ngành tạp hóa bán lẻ nếu chưa liên kết giá vốn
+            decimal totalCogs = orders.Sum(o => o.Items.Any()
+                ? o.Items.Sum(i => i.Quantity * i.UnitPrice * 0.70m)
+                : o.SubTotal * 0.70m);
+            return new CogsAggregation(totalCogs);
+        }
+
+        return new CogsAggregation(actualCogs);
     }
 
     public async Task<List<CategoryExpenseItem>> GetOperatingExpensesAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default)
@@ -95,6 +119,6 @@ public class PnLReportRepository : IPnLReportRepository
 
         return await query
             .Where(e => e.EntryType == CustomerDebtType.BadDebtWriteOff && e.OccurredAtUtc >= fromDate && e.OccurredAtUtc <= toDate)
-            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0;
+            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
     }
 }

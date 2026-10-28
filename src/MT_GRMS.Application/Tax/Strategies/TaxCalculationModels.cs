@@ -15,6 +15,9 @@ public record TaxCalculationContext
     public bool ApplyVatReduction2026 { get; init; }
     public decimal? CustomPitRate { get; init; }
     public decimal PriorDeclaredPitTax { get; init; }
+    public decimal PeriodCogs { get; init; }
+    public decimal PeriodOpex { get; init; }
+    public bool IsCogsEstimated { get; init; }
     public decimal PeriodDeductibleExpenses { get; init; }
     public decimal YtdDeductibleExpenses { get; init; }
 }
@@ -35,6 +38,9 @@ public record TaxCalculationResult
     public decimal TotalTaxAmount { get; init; }
 
     // Breakdown for declaration-based reporting and YTD accounting
+    public decimal CogsAmount { get; init; }
+    public decimal OpexAmount { get; init; }
+    public bool IsCogsEstimated { get; init; }
     public decimal DeductibleExpenses { get; init; }
     public decimal YtdExpenses { get; init; }
     public decimal YtdRevenue { get; init; }

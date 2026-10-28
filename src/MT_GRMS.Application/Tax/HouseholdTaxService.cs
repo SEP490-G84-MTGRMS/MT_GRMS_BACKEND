@@ -77,13 +77,31 @@ public class HouseholdTaxService : IHouseholdTaxService
             : TaxCalculationMethod.RevenuePercentage;
 
         // 5. Chuẩn bị dữ liệu chi phí và thuế kỳ trước cho Strategy (Pure Logic)
-        decimal deductibleExpenses = 0;
-        decimal ytdExpenses = 0;
+        decimal periodCogs = 0m;
+        decimal periodOpex = 0m;
+        bool isCogsEstimated = false;
+        decimal deductibleExpenses = 0m;
+        decimal ytdExpenses = 0m;
+
         if (isDeclaration && !isExempt)
         {
-            var startOfYearUtc = new DateTime(filter.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-            deductibleExpenses = await _repository.GetPeriodDeductibleExpensesAsync(fromDateUtc, toDateUtc, filter.BranchId, cancellationToken);
-            ytdExpenses = await _repository.GetPeriodDeductibleExpensesAsync(startOfYearUtc, toDateUtc, null, cancellationToken);
+            var (cogs, estimated) = await _repository.GetPeriodCogsAsync(fromDateUtc, toDateUtc, filter.BranchId, cancellationToken);
+            var opex = await _repository.GetPeriodOpexAsync(fromDateUtc, toDateUtc, filter.BranchId, cancellationToken);
+            periodCogs = cogs;
+            periodOpex = opex;
+            isCogsEstimated = estimated;
+
+            // Nếu repository có dữ liệu COGS + OPEX thì dùng tổng đó, ngược lại fallback GetPeriodDeductibleExpensesAsync (cho fake mock test)
+            var directExpenses = await _repository.GetPeriodDeductibleExpensesAsync(fromDateUtc, toDateUtc, filter.BranchId, cancellationToken);
+            deductibleExpenses = (periodCogs + periodOpex) > 0 ? (periodCogs + periodOpex) : directExpenses;
+
+            var startOfYearVn = new DateTime(filter.Year, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
+            var startOfYearUtc = TimeZoneInfo.ConvertTimeToUtc(startOfYearVn, GetVietnamTimeZone());
+
+            var (ytdCogs, _) = await _repository.GetPeriodCogsAsync(startOfYearUtc, toDateUtc, null, cancellationToken);
+            var ytdOpex = await _repository.GetPeriodOpexAsync(startOfYearUtc, toDateUtc, null, cancellationToken);
+            var directYtdExpenses = await _repository.GetPeriodDeductibleExpensesAsync(startOfYearUtc, toDateUtc, null, cancellationToken);
+            ytdExpenses = (ytdCogs + ytdOpex) > 0 ? (ytdCogs + ytdOpex) : directYtdExpenses;
         }
 
         decimal priorDeclaredPitTax = 0;
@@ -113,6 +131,9 @@ public class HouseholdTaxService : IHouseholdTaxService
             ApplyVatReduction2026 = filter.ApplyVatReduction2026,
             CustomPitRate = filter.CustomPitRate,
             PriorDeclaredPitTax = priorDeclaredPitTax,
+            PeriodCogs = periodCogs,
+            PeriodOpex = periodOpex,
+            IsCogsEstimated = isCogsEstimated,
             PeriodDeductibleExpenses = deductibleExpenses,
             YtdDeductibleExpenses = ytdExpenses
         };
@@ -174,6 +195,9 @@ public class HouseholdTaxService : IHouseholdTaxService
             PitRate = calcResult.PitRate,
             PitTaxableRevenue = calcResult.PitTaxableRevenue,
             PitAmount = calcResult.PitAmount,
+            CogsAmount = calcResult.CogsAmount,
+            OpexAmount = calcResult.OpexAmount,
+            IsCogsEstimated = calcResult.IsCogsEstimated,
             DeductibleExpensesInPeriod = calcResult.DeductibleExpenses,
             YtdRevenue = calcResult.YtdRevenue,
             YtdExpenses = calcResult.YtdExpenses,
@@ -366,21 +390,41 @@ public class HouseholdTaxService : IHouseholdTaxService
         };
     }
 
-    private static (DateTime FromDateUtc, DateTime ToDateUtc, DateTime? PriorPeriodToDateUtc) GetDateRangesForPeriod(int year, TaxPeriodType periodType, int periodNumber)
+    public static TimeZoneInfo GetVietnamTimeZone()
     {
-        DateTime fromDate;
-        DateTime toDate;
-        DateTime? priorToDate = null;
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
+        }
+        catch (Exception)
+        {
+            try
+            {
+                return TimeZoneInfo.FindSystemTimeZoneById("Asia/Ho_Chi_Minh");
+            }
+            catch (Exception)
+            {
+                return TimeZoneInfo.CreateCustomTimeZone("VN_TZ", TimeSpan.FromHours(7), "Vietnam Standard Time", "Vietnam Standard Time");
+            }
+        }
+    }
+
+    public static (DateTime FromDateUtc, DateTime ToDateUtc, DateTime? PriorPeriodToDateUtc) GetDateRangesForPeriod(int year, TaxPeriodType periodType, int periodNumber)
+    {
+        var vnTz = GetVietnamTimeZone();
+        DateTime fromLocal;
+        DateTime toLocal;
+        DateTime? priorToLocal = null;
 
         switch (periodType)
         {
             case TaxPeriodType.Month:
                 var month = Math.Clamp(periodNumber, 1, 12);
-                fromDate = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
-                toDate = fromDate.AddMonths(1).AddTicks(-1);
+                fromLocal = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Unspecified);
+                toLocal = fromLocal.AddMonths(1).AddTicks(-1);
                 if (month > 1)
                 {
-                    priorToDate = fromDate.AddTicks(-1);
+                    priorToLocal = fromLocal.AddTicks(-1);
                 }
                 break;
 
@@ -388,42 +432,46 @@ public class HouseholdTaxService : IHouseholdTaxService
                 switch (periodNumber)
                 {
                     case 1:
-                        fromDate = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-                        toDate = new DateTime(year, 3, 31, 23, 59, 59, 999, DateTimeKind.Utc);
-                        priorToDate = null;
+                        fromLocal = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
+                        toLocal = new DateTime(year, 3, 31, 23, 59, 59, 999, DateTimeKind.Unspecified);
+                        priorToLocal = null;
                         break;
                     case 2:
-                        fromDate = new DateTime(year, 4, 1, 0, 0, 0, DateTimeKind.Utc);
-                        toDate = new DateTime(year, 6, 30, 23, 59, 59, 999, DateTimeKind.Utc);
-                        priorToDate = new DateTime(year, 3, 31, 23, 59, 59, 999, DateTimeKind.Utc);
+                        fromLocal = new DateTime(year, 4, 1, 0, 0, 0, DateTimeKind.Unspecified);
+                        toLocal = new DateTime(year, 6, 30, 23, 59, 59, 999, DateTimeKind.Unspecified);
+                        priorToLocal = new DateTime(year, 3, 31, 23, 59, 59, 999, DateTimeKind.Unspecified);
                         break;
                     case 3:
-                        fromDate = new DateTime(year, 7, 1, 0, 0, 0, DateTimeKind.Utc);
-                        toDate = new DateTime(year, 9, 30, 23, 59, 59, 999, DateTimeKind.Utc);
-                        priorToDate = new DateTime(year, 6, 30, 23, 59, 59, 999, DateTimeKind.Utc);
+                        fromLocal = new DateTime(year, 7, 1, 0, 0, 0, DateTimeKind.Unspecified);
+                        toLocal = new DateTime(year, 9, 30, 23, 59, 59, 999, DateTimeKind.Unspecified);
+                        priorToLocal = new DateTime(year, 6, 30, 23, 59, 59, 999, DateTimeKind.Unspecified);
                         break;
                     case 4:
-                        fromDate = new DateTime(year, 10, 1, 0, 0, 0, DateTimeKind.Utc);
-                        toDate = new DateTime(year, 12, 31, 23, 59, 59, 999, DateTimeKind.Utc);
-                        priorToDate = new DateTime(year, 9, 30, 23, 59, 59, 999, DateTimeKind.Utc);
+                        fromLocal = new DateTime(year, 10, 1, 0, 0, 0, DateTimeKind.Unspecified);
+                        toLocal = new DateTime(year, 12, 31, 23, 59, 59, 999, DateTimeKind.Unspecified);
+                        priorToLocal = new DateTime(year, 9, 30, 23, 59, 59, 999, DateTimeKind.Unspecified);
                         break;
                     default:
-                        fromDate = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-                        toDate = new DateTime(year, 3, 31, 23, 59, 59, 999, DateTimeKind.Utc);
-                        priorToDate = null;
+                        fromLocal = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
+                        toLocal = new DateTime(year, 3, 31, 23, 59, 59, 999, DateTimeKind.Unspecified);
+                        priorToLocal = null;
                         break;
                 }
                 break;
 
             case TaxPeriodType.Year:
             default:
-                fromDate = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-                toDate = new DateTime(year, 12, 31, 23, 59, 59, 999, DateTimeKind.Utc);
-                priorToDate = null;
+                fromLocal = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
+                toLocal = new DateTime(year, 12, 31, 23, 59, 59, 999, DateTimeKind.Unspecified);
+                priorToLocal = null;
                 break;
         }
 
-        return (fromDate, toDate, priorToDate);
+        var fromDateUtc = TimeZoneInfo.ConvertTimeToUtc(fromLocal, vnTz);
+        var toDateUtc = TimeZoneInfo.ConvertTimeToUtc(toLocal, vnTz);
+        var priorPeriodToDateUtc = priorToLocal.HasValue ? TimeZoneInfo.ConvertTimeToUtc(priorToLocal.Value, vnTz) : (DateTime?)null;
+
+        return (fromDateUtc, toDateUtc, priorPeriodToDateUtc);
     }
 
     private static (HouseholdTaxGroup Group, string GroupName, bool IsExempt) DetermineHouseholdGroup(decimal annualAccumulatedRevenue)

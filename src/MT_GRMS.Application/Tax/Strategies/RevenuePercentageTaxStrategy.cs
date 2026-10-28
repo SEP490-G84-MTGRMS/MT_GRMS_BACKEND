@@ -29,6 +29,9 @@ public class RevenuePercentageTaxStrategy : ITaxCalculationStrategy
                 PitRate = 0,
                 PitAmount = 0,
                 TotalTaxAmount = 0,
+                CogsAmount = 0,
+                OpexAmount = 0,
+                IsCogsEstimated = false,
                 YtdRevenue = context.AnnualAccumulatedRevenue
             };
         }
@@ -60,6 +63,9 @@ public class RevenuePercentageTaxStrategy : ITaxCalculationStrategy
             PitRate = pitRate,
             PitAmount = pitPayable,
             TotalTaxAmount = vatAmount + pitPayable,
+            CogsAmount = 0,
+            OpexAmount = 0,
+            IsCogsEstimated = false,
             DeductibleExpenses = 0,
             YtdExpenses = 0,
             YtdRevenue = ytdRevenue,

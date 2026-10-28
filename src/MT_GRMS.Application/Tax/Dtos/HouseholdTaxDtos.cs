@@ -49,6 +49,9 @@ public class HouseholdTaxSummaryDto
     public decimal PitAmount { get; set; }
 
     // Phương pháp Kê khai theo mô hình lũy kế từ đầu năm YTD (Year-To-Date)
+    public decimal CogsAmount { get; set; } // Giá vốn hàng bán (COGS) trong kỳ
+    public decimal OpexAmount { get; set; } // Chi phí vận hành hợp lý (OPEX) trong kỳ
+    public bool IsCogsEstimated { get; set; } // Cờ cảnh báo: True nếu giá vốn đang áp dụng ước tính 70% do thiếu giá vốn sản phẩm
     public decimal DeductibleExpensesInPeriod { get; set; }
     public decimal YtdRevenue { get; set; }
     public decimal YtdExpenses { get; set; }
@@ -125,3 +128,4 @@ public class HouseholdTaxSnapshotDto
     public DateTime FinalizedAtUtc { get; set; }
     public string? Notes { get; set; }
 }
+
