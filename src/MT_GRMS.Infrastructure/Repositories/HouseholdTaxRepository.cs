@@ -381,8 +381,17 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
 
     public async Task<HouseholdTaxSnapshot> AddSnapshotAsync(HouseholdTaxSnapshot snapshot, CancellationToken cancellationToken = default)
     {
-        _context.HouseholdTaxSnapshots.Add(snapshot);
-        await _context.SaveChangesAsync(cancellationToken);
-        return snapshot;
+        try
+        {
+            _context.HouseholdTaxSnapshots.Add(snapshot);
+            await _context.SaveChangesAsync(cancellationToken);
+            return snapshot;
+        }
+        catch (DbUpdateException)
+        {
+            // Bắt ngoại lệ vi phạm Unique Index khi có race condition (chốt kỳ song song)
+            throw new MT_GRMS.Domain.Exceptions.BusinessException("TAX_PERIOD_LOCKED", $"Kỳ tính thuế {snapshot.PeriodType} {snapshot.PeriodNumber}/{snapshot.Year} đã được chốt và khóa sổ.");
+        }
     }
 }
+

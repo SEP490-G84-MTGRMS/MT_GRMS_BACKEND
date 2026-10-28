@@ -29,6 +29,11 @@ public class HouseholdTaxSnapshot : BaseTenantEntity
     /// </summary>
     public string BookDataJson { get; set; } = "{}";
 
+    /// <summary>
+    /// Chữ ký số HMAC-SHA256 bảo đảm tính toàn vẹn và chống giả mạo số liệu của snapshot chốt kỳ.
+    /// </summary>
+    public string AuditSignatureHash { get; set; } = string.Empty;
+
     public string FinalizedBy { get; set; } = string.Empty;
     public DateTime FinalizedAtUtc { get; set; } = DateTime.UtcNow;
     public string? Notes { get; set; }

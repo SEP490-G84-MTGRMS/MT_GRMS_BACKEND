@@ -126,9 +126,12 @@ public class HouseholdTaxSnapshotDto
     public decimal PitRate { get; set; }
     public decimal PitAmount { get; set; }
     public decimal TotalTaxAmount { get; set; }
+    public string AuditSignatureHash { get; set; } = string.Empty;
+    public bool IsIntegrityValid { get; set; } = true;
     public string FinalizedBy { get; set; } = string.Empty;
     public DateTime FinalizedAtUtc { get; set; }
     public string? Notes { get; set; }
 }
+
 
 

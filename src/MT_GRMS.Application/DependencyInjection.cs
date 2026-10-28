@@ -31,6 +31,7 @@ public static class DependencyInjection
         services.AddScoped<Tax.Strategies.ITaxCalculationStrategy, Tax.Strategies.RevenuePercentageTaxStrategy>();
         services.AddScoped<Tax.Strategies.ITaxCalculationStrategy, Tax.Strategies.DeclarationBasedTaxStrategy>();
         services.AddScoped<Tax.Strategies.ITaxCalculationStrategyFactory, Tax.Strategies.TaxCalculationStrategyFactory>();
+        services.AddSingleton<Tax.Security.ITaxSnapshotSignatureService, Tax.Security.TaxSnapshotSignatureService>();
         services.AddSingleton<Common.Services.IAuditHashService, Common.Services.AuditHashService>();
         services.AddScoped<Suppliers.ISupplierService, Suppliers.SupplierService>();
         services.AddScoped<AiPipeline.IAiRecommendationService, AiPipeline.AiRecommendationService>();
@@ -38,6 +39,7 @@ public static class DependencyInjection
         return services;
     }
 }
+
 
 
 

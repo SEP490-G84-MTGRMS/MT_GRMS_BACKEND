@@ -37,6 +37,10 @@ public class HouseholdTaxSnapshotConfiguration : IEntityTypeConfiguration<Househ
             .HasMaxLength(100)
             .IsRequired();
 
+        builder.Property(x => x.AuditSignatureHash)
+            .HasMaxLength(128)
+            .IsRequired(false);
+
         builder.Property(x => x.Notes)
             .HasMaxLength(500);
 
@@ -48,3 +52,4 @@ public class HouseholdTaxSnapshotConfiguration : IEntityTypeConfiguration<Househ
             .IsUnique();
     }
 }
+

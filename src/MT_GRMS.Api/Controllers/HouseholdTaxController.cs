@@ -102,4 +102,14 @@ public class HouseholdTaxController : BaseApiController
 
         return Ok(ApiResponse<HouseholdTaxSnapshotDto>.Ok(result));
     }
+
+    [HttpGet("snapshots/{id:guid}/verify-integrity")]
+    public async Task<ActionResult<ApiResponse<object>>> VerifyIntegrity(
+        [FromRoute] Guid id,
+        CancellationToken ct)
+    {
+        var isValid = await _taxService.VerifySnapshotIntegrityAsync(id, ct);
+        return Ok(ApiResponse<object>.Ok(new { SnapshotId = id, IsIntegrityValid = isValid }, isValid ? "Chữ ký số hợp lệ, dữ liệu toàn vẹn." : "Cảnh báo: Dữ liệu snapshot có dấu hiệu bị can thiệp trái phép!"));
+    }
 }
+

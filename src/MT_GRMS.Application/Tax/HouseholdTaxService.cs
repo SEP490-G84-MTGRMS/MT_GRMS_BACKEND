@@ -7,11 +7,13 @@ using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.Tax;
 
+
 public class HouseholdTaxService : IHouseholdTaxService
 {
     private readonly IHouseholdTaxRepository _repository;
     private readonly ITaxCalculationStrategyFactory _strategyFactory;
     private readonly Security.IPinVerificationService? _pinService;
+    private readonly Security.ITaxSnapshotSignatureService _signatureService;
 
     public const decimal TaxExemptionThreshold = RevenuePercentageTaxStrategy.TaxExemptionThreshold;
     public const decimal RetailVatRate = RevenuePercentageTaxStrategy.RetailVatRate;
@@ -23,18 +25,20 @@ public class HouseholdTaxService : IHouseholdTaxService
         {
             new RevenuePercentageTaxStrategy(),
             new DeclarationBasedTaxStrategy()
-        }), null)
+        }), null, null)
     {
     }
 
     public HouseholdTaxService(
         IHouseholdTaxRepository repository,
         ITaxCalculationStrategyFactory strategyFactory,
-        Security.IPinVerificationService? pinService = null)
+        Security.IPinVerificationService? pinService = null,
+        Security.ITaxSnapshotSignatureService? signatureService = null)
     {
         _repository = repository;
         _strategyFactory = strategyFactory;
         _pinService = pinService;
+        _signatureService = signatureService ?? new Security.TaxSnapshotSignatureService();
     }
 
     public async Task<HouseholdTaxSummaryDto> GetTaxSummaryAsync(HouseholdTaxFilterDto filter, CancellationToken cancellationToken = default)
@@ -327,6 +331,9 @@ public class HouseholdTaxService : IHouseholdTaxService
             Notes = request.Notes
         };
 
+        // Ký số HMAC-SHA256 trên Canonical JSON snapshot
+        snapshot.AuditSignatureHash = _signatureService.ComputeSignature(snapshot);
+
         var created = await _repository.AddSnapshotAsync(snapshot, cancellationToken);
 
         return new HouseholdTaxSnapshotDto
@@ -346,6 +353,8 @@ public class HouseholdTaxService : IHouseholdTaxService
             PitRate = created.PitRate,
             PitAmount = created.PitAmount,
             TotalTaxAmount = created.TotalTaxAmount,
+            AuditSignatureHash = created.AuditSignatureHash,
+            IsIntegrityValid = true,
             FinalizedBy = created.FinalizedBy,
             FinalizedAtUtc = created.FinalizedAtUtc,
             Notes = created.Notes
@@ -372,6 +381,8 @@ public class HouseholdTaxService : IHouseholdTaxService
             PitRate = s.PitRate,
             PitAmount = s.PitAmount,
             TotalTaxAmount = s.TotalTaxAmount,
+            AuditSignatureHash = s.AuditSignatureHash,
+            IsIntegrityValid = _signatureService.VerifySignature(s),
             FinalizedBy = s.FinalizedBy,
             FinalizedAtUtc = s.FinalizedAtUtc,
             Notes = s.Notes
@@ -403,10 +414,23 @@ public class HouseholdTaxService : IHouseholdTaxService
             PitRate = s.PitRate,
             PitAmount = s.PitAmount,
             TotalTaxAmount = s.TotalTaxAmount,
+            AuditSignatureHash = s.AuditSignatureHash,
+            IsIntegrityValid = _signatureService.VerifySignature(s),
             FinalizedBy = s.FinalizedBy,
             FinalizedAtUtc = s.FinalizedAtUtc,
             Notes = s.Notes
         };
+    }
+
+    public async Task<bool> VerifySnapshotIntegrityAsync(Guid snapshotId, CancellationToken cancellationToken = default)
+    {
+        var s = await _repository.GetSnapshotByIdAsync(snapshotId, cancellationToken);
+        if (s == null)
+        {
+            return false;
+        }
+
+        return _signatureService.VerifySignature(s);
     }
 
     public static TimeZoneInfo GetVietnamTimeZone()
@@ -529,4 +553,6 @@ public class HouseholdTaxService : IHouseholdTaxService
         );
     }
 }
+
+
 

@@ -10,5 +10,7 @@ public interface IHouseholdTaxService
     Task<HouseholdTaxSnapshotDto> FinalizeTaxSnapshotAsync(CreateTaxSnapshotRequest request, string finalizedBy, string? userId = null, CancellationToken cancellationToken = default);
     Task<List<HouseholdTaxSnapshotDto>> GetSnapshotsAsync(int? year, Guid? branchId, CancellationToken cancellationToken = default);
     Task<HouseholdTaxSnapshotDto?> GetSnapshotByIdAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<bool> VerifySnapshotIntegrityAsync(Guid snapshotId, CancellationToken cancellationToken = default);
 }
+
 

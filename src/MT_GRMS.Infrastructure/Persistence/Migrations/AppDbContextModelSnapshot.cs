@@ -730,6 +730,10 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
+                    b.Property<string>("AuditSignatureHash")
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
                     b.Property<string>("BookDataJson")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
