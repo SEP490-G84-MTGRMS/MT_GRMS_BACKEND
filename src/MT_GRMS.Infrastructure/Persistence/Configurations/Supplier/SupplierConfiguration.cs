@@ -64,5 +64,10 @@ public class SupplierConfiguration : IEntityTypeConfiguration<Domain.Entities.Su
             .WithOne(b => b.Supplier)
             .HasForeignKey(b => b.SupplierId)
             .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasMany(x => x.BranchAssignments)
+            .WithOne(a => a.Supplier)
+            .HasForeignKey(a => a.SupplierId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }

@@ -8,7 +8,10 @@ public class SupplierDeliveryConfig : BaseTenantEntity
     public Supplier? Supplier { get; set; }
 
     public int LeadTimeHours { get; set; } = 24;
+    public int LeadTimeDays { get; set; } = 1;
+    public int CutoffDayOffset { get; set; } = 1;
     public string CutoffTime { get; set; } = "17:00";
+    public string OrderCutoffTime { get; set; } = "17:00";
     public int DeliveryWeekdaysMask { get; set; } = 127; // 7 days (binary 1111111)
     public string DeliveryDaysJson { get; set; } = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]";
 

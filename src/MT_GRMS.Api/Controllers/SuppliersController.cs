@@ -103,6 +103,27 @@ public class SuppliersController : BaseApiController
     /// <summary>
     /// Xem sổ cái biến động công nợ AP của nhà cung cấp (REQ-04)
     /// </summary>
+    [HttpGet("{id:guid}/ap/summary")]
+    public async Task<IActionResult> GetApSummary(Guid id, CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.GetApSummaryAsync(id, cancellationToken);
+        return Ok(ApiResponse<SupplierApSummaryDto>.Ok(result));
+    }
+
+    [HttpGet("{id:guid}/branches")]
+    public async Task<IActionResult> GetAssignedBranches(Guid id, CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.GetAssignedBranchesAsync(id, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<SupplierBranchAssignmentDto>>.Ok(result));
+    }
+
+    [HttpPut("{id:guid}/branches")]
+    public async Task<IActionResult> ReplaceAssignedBranches(Guid id, [FromBody] ReplaceSupplierBranchesCommand command, CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.ReplaceAssignedBranchesAsync(id, command, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<SupplierBranchAssignmentDto>>.Ok(result, "Cập nhật chi nhánh gán NCC thành công."));
+    }
+
     [HttpGet("{id:guid}/ap/ledger")]
     public async Task<IActionResult> GetAPLedger(
         Guid id,

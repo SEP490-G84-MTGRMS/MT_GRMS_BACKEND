@@ -225,6 +225,7 @@ public class BranchManagementTests
         public string CurrentTenantId { get; set; } = "tenant-test-1";
         public Guid CurrentUserId { get; set; } = Guid.Parse("11111111-1111-1111-1111-111111111111");
         public Guid? CurrentBranchId { get; set; } = null;
+        public string CurrentRole { get; set; } = "STORE_OWNER";
 
         public void SetContext(string tenantId, Guid userId, Guid? branchId)
         {
@@ -232,6 +233,8 @@ public class BranchManagementTests
             CurrentUserId = userId;
             CurrentBranchId = branchId;
         }
+
+        public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
 
         public FakeTenantContext(string tenantId) => CurrentTenantId = tenantId;
     }

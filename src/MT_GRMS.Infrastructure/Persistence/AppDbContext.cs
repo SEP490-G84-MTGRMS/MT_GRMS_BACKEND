@@ -42,6 +42,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs { get; set; } = null!;
     public virtual DbSet<SupplierBlackoutDate> SupplierBlackoutDates { get; set; } = null!;
     public virtual DbSet<SupplierProduct> SupplierProducts { get; set; } = null!;
+    public virtual DbSet<SupplierBranchAssignment> SupplierBranchAssignments { get; set; } = null!;
 
     // SaaS / Branch Module
     public virtual DbSet<Branch> Branches { get; set; } = null!;

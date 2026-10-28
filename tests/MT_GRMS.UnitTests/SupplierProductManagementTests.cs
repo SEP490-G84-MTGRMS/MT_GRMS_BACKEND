@@ -350,6 +350,7 @@ public class SupplierProductManagementTests
         public string CurrentTenantId { get; set; } = "tenant-test-1";
         public Guid CurrentUserId { get; set; } = Guid.Parse("11111111-1111-1111-1111-111111111111");
         public Guid? CurrentBranchId { get; set; } = null;
+        public string CurrentRole { get; set; } = "STORE_OWNER";
 
         public void SetContext(string tenantId, Guid userId, Guid? branchId)
         {
@@ -357,6 +358,8 @@ public class SupplierProductManagementTests
             CurrentUserId = userId;
             CurrentBranchId = branchId;
         }
+
+        public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
 
         public FakeTenantContext(string tenantId) => CurrentTenantId = tenantId;
     }
@@ -409,7 +412,8 @@ public class SupplierProductManagementTests
         public Task<int> CountTodayAsync(CancellationToken cancellationToken = default) => Task.FromResult(Suppliers.Count);
 
         public Task<(IReadOnlyList<Supplier> Items, int TotalCount)> GetPagedListAsync(
-            string? searchTerm, SupplierType? supplierType, SupplierStatus? status, Guid? categoryId, int pageIndex, int pageSize, CancellationToken cancellationToken = default)
+            string? searchTerm, SupplierType? supplierType, SupplierStatus? status, Guid? categoryId, int pageIndex, int pageSize,
+            string? code = null, string? name = null, string? contactPerson = null, string? phone = null, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(((IReadOnlyList<Supplier>)Suppliers, Suppliers.Count));
         }

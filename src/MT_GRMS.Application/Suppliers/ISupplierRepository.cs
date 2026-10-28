@@ -16,6 +16,10 @@ public interface ISupplierRepository : IRepository<Supplier>
         Guid? categoryId,
         int pageIndex,
         int pageSize,
+        string? code = null,
+        string? name = null,
+        string? contactPerson = null,
+        string? phone = null,
         CancellationToken cancellationToken = default);
 
     Task<bool> HasLedgerTransactionsAsync(Guid supplierId, APDocType docType, CancellationToken cancellationToken = default);
