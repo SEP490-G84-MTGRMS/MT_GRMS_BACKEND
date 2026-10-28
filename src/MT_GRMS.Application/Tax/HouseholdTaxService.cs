@@ -1,5 +1,6 @@
 using System.Text.Json;
 using MT_GRMS.Application.Tax.Dtos;
+using MT_GRMS.Application.Tax.Strategies;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
@@ -9,14 +10,28 @@ namespace MT_GRMS.Application.Tax;
 public class HouseholdTaxService : IHouseholdTaxService
 {
     private readonly IHouseholdTaxRepository _repository;
-    public const decimal TaxExemptionThreshold = 1_000_000_000m; // 1 tỷ VNĐ theo Nghị định 141/2026/NĐ-CP (sửa đổi NĐ 68/2026/NĐ-CP)
-    public const decimal RetailVatRate = 1.0m; // 1.0% GTGT ngành thương mại / bán lẻ
-    public const decimal RetailPitRate = 0.5m; // 0.5% TNCN ngành thương mại / bán lẻ (phần vượt 1 tỷ)
-    public const decimal DeclarationDefaultPitRate = 15.0m; // 15% thuế suất TNCN kê khai tham khảo theo quy mô
+    private readonly ITaxCalculationStrategyFactory _strategyFactory;
+
+    public const decimal TaxExemptionThreshold = RevenuePercentageTaxStrategy.TaxExemptionThreshold;
+    public const decimal RetailVatRate = RevenuePercentageTaxStrategy.RetailVatRate;
+    public const decimal RetailPitRate = RevenuePercentageTaxStrategy.RetailPitRate;
+    public const decimal DeclarationDefaultPitRate = DeclarationBasedTaxStrategy.DeclarationDefaultPitRate;
 
     public HouseholdTaxService(IHouseholdTaxRepository repository)
+        : this(repository, new TaxCalculationStrategyFactory(new ITaxCalculationStrategy[]
+        {
+            new RevenuePercentageTaxStrategy(),
+            new DeclarationBasedTaxStrategy()
+        }))
+    {
+    }
+
+    public HouseholdTaxService(
+        IHouseholdTaxRepository repository,
+        ITaxCalculationStrategyFactory strategyFactory)
     {
         _repository = repository;
+        _strategyFactory = strategyFactory;
     }
 
     public async Task<HouseholdTaxSummaryDto> GetTaxSummaryAsync(HouseholdTaxFilterDto filter, CancellationToken cancellationToken = default)
@@ -52,114 +67,60 @@ public class HouseholdTaxService : IHouseholdTaxService
 
         var taxableRevenueInPeriod = Math.Max(0, gross - discount - returns);
 
-        decimal vatTaxableRevenue = 0;
-        decimal vatRate = 0;
-        decimal vatAmount = 0;
+        // 4. Xác định phương pháp tính thuế (Kê khai nếu chủ hộ đăng ký hoặc doanh thu > 3 tỷ)
+        bool isDeclaration = filter.CalculationMethod == TaxCalculationMethod.DeclarationBased 
+            || group == HouseholdTaxGroup.Group3_3BTo50B 
+            || group == HouseholdTaxGroup.Group4_Over50B;
 
-        decimal pitTaxableRevenue = 0;
-        decimal pitRate = 0;
-        decimal pitAmount = 0;
+        var calculationMethod = isDeclaration 
+            ? TaxCalculationMethod.DeclarationBased 
+            : TaxCalculationMethod.RevenuePercentage;
 
+        // 5. Chuẩn bị dữ liệu chi phí và thuế kỳ trước cho Strategy (Pure Logic)
         decimal deductibleExpenses = 0;
         decimal ytdExpenses = 0;
-        decimal ytdRevenue = 0;
-        decimal taxableIncomeYtd = 0;
-        decimal taxDueYtd = 0;
-        decimal priorDeclaredPitTax = 0;
-        decimal overpaidTaxCarry = 0;
-        decimal taxableIncomeDeclaration = 0;
-        decimal declarationPitAmount = 0;
+        if (isDeclaration && !isExempt)
+        {
+            var startOfYearUtc = new DateTime(filter.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+            deductibleExpenses = await _repository.GetPeriodDeductibleExpensesAsync(fromDateUtc, toDateUtc, filter.BranchId, cancellationToken);
+            ytdExpenses = await _repository.GetPeriodDeductibleExpensesAsync(startOfYearUtc, toDateUtc, null, cancellationToken);
+        }
 
-        bool isVatReduced = false;
+        decimal priorDeclaredPitTax = 0;
         if (!isExempt)
         {
-            // A. THUẾ GTGT: Đánh trên toàn bộ doanh thu phát sinh trong kỳ chịu thuế
-            decimal baseVatRate = filter.CustomVatRate ?? RetailVatRate;
-            if (filter.ApplyVatReduction2026)
+            if (filter.PriorDeclaredPitTaxOverride.HasValue)
             {
-                // Giảm 20% mức tỷ lệ % GTGT theo Nghị quyết 204/2025/QH15 và Nghị định 174/2025/NĐ-CP (1.0% -> 0.8%)
-                vatRate = baseVatRate * 0.8m;
-                isVatReduced = true;
+                priorDeclaredPitTax = filter.PriorDeclaredPitTaxOverride.Value;
             }
             else
             {
-                vatRate = baseVatRate;
-            }
-
-            vatTaxableRevenue = taxableRevenueInPeriod;
-            vatAmount = Math.Round(vatTaxableRevenue * (vatRate / 100m), 0, MidpointRounding.AwayFromZero);
-
-            // B. THUẾ TNCN:
-            // Tự động chuyển phương pháp Kê khai nếu chủ hộ đăng ký hoặc khi doanh thu năm vượt 3 tỷ (Nhóm 3, Nhóm 4)
-            bool isDeclaration = filter.CalculationMethod == TaxCalculationMethod.DeclarationBased 
-                || group == HouseholdTaxGroup.Group3_3BTo50B 
-                || group == HouseholdTaxGroup.Group4_Over50B;
-
-            if (isDeclaration)
-            {
-                // Phương pháp Kê khai theo mô hình lũy kế từ đầu năm YTD (Year-To-Date)
-                var startOfYearUtc = new DateTime(filter.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-                deductibleExpenses = await _repository.GetPeriodDeductibleExpensesAsync(fromDateUtc, toDateUtc, filter.BranchId, cancellationToken);
-                // Chi phí lũy kế toàn Tenant để đồng nhất phạm vi với doanh thu lũy kế toàn Tenant
-                ytdExpenses = await _repository.GetPeriodDeductibleExpensesAsync(startOfYearUtc, toDateUtc, null, cancellationToken);
-                ytdRevenue = annualAccumulatedRevenue;
-
-                taxableIncomeYtd = Math.Max(0, ytdRevenue - ytdExpenses);
-                pitRate = filter.CustomPitRate ?? (group == HouseholdTaxGroup.Group4_Over50B ? 20.0m : (group == HouseholdTaxGroup.Group3_3BTo50B ? 17.0m : DeclarationDefaultPitRate));
-                taxDueYtd = Math.Round(taxableIncomeYtd * (pitRate / 100m), 0, MidpointRounding.AwayFromZero);
-
-                // Lấy tổng số thuế TNCN đã kê khai ở các kỳ trước trong năm từ các snapshot đã chốt (hoặc override khi test)
-                if (filter.PriorDeclaredPitTaxOverride.HasValue)
-                {
-                    priorDeclaredPitTax = filter.PriorDeclaredPitTaxOverride.Value;
-                }
-                else
-                {
-                    var priorSnapshots = await _repository.GetSnapshotsAsync(filter.Year, null, cancellationToken);
-                    priorDeclaredPitTax = priorSnapshots
-                        .Where(s => s.Year == filter.Year && s.PeriodType == filter.PeriodType && s.PeriodNumber < filter.PeriodNumber)
-                        .Sum(s => s.PitAmount);
-                }
-
-                var pitPayable = Math.Max(0, taxDueYtd - priorDeclaredPitTax);
-                overpaidTaxCarry = Math.Max(0, priorDeclaredPitTax - taxDueYtd);
-
-                declarationPitAmount = pitPayable;
-                taxableIncomeDeclaration = taxableIncomeYtd;
-                pitAmount = declarationPitAmount;
-                pitTaxableRevenue = taxableIncomeYtd;
-            }
-            else
-            {
-                // Phương pháp Tỷ lệ %: Đồng nhất theo mô hình lũy kế YTD
-                ytdRevenue = annualAccumulatedRevenue;
-                var currentExcess = Math.Max(0, ytdRevenue - TaxExemptionThreshold);
-                pitRate = filter.CustomPitRate ?? RetailPitRate;
-                taxDueYtd = Math.Round(currentExcess * (pitRate / 100m), 0, MidpointRounding.AwayFromZero);
-
-                if (filter.PriorDeclaredPitTaxOverride.HasValue)
-                {
-                    priorDeclaredPitTax = filter.PriorDeclaredPitTaxOverride.Value;
-                }
-                else
-                {
-                    var priorSnapshots = await _repository.GetSnapshotsAsync(filter.Year, null, cancellationToken);
-                    priorDeclaredPitTax = priorSnapshots
-                        .Where(s => s.Year == filter.Year && s.PeriodType == filter.PeriodType && s.PeriodNumber < filter.PeriodNumber)
-                        .Sum(s => s.PitAmount);
-                }
-
-                var pitPayable = Math.Max(0, taxDueYtd - priorDeclaredPitTax);
-                overpaidTaxCarry = Math.Max(0, priorDeclaredPitTax - taxDueYtd);
-
-                pitAmount = pitPayable;
-                pitTaxableRevenue = currentExcess;
+                var priorSnapshots = await _repository.GetSnapshotsAsync(filter.Year, null, cancellationToken);
+                priorDeclaredPitTax = priorSnapshots
+                    .Where(s => s.Year == filter.Year && s.PeriodType == filter.PeriodType && s.PeriodNumber < filter.PeriodNumber)
+                    .Sum(s => s.PitAmount);
             }
         }
 
-        var totalTax = vatAmount + pitAmount;
+        // 6. Tính toán thuế qua Strategy
+        var calculationContext = new TaxCalculationContext
+        {
+            Group = group,
+            IsExempt = isExempt,
+            AnnualAccumulatedRevenue = annualAccumulatedRevenue,
+            TaxableRevenueInPeriod = taxableRevenueInPeriod,
+            CustomVatRate = filter.CustomVatRate,
+            ApplyVatReduction2026 = filter.ApplyVatReduction2026,
+            CustomPitRate = filter.CustomPitRate,
+            PriorDeclaredPitTax = priorDeclaredPitTax,
+            PeriodDeductibleExpenses = deductibleExpenses,
+            YtdDeductibleExpenses = ytdExpenses
+        };
 
-        // 4. Lấy chứng từ sổ kế toán Thông tư 152/2025/TT-BTC
+        var strategy = _strategyFactory.Resolve(calculationMethod);
+        var calcResult = strategy.Calculate(calculationContext);
+
+        // 7. Lấy chứng từ sổ kế toán Thông tư 152/2025/TT-BTC
         var bookEntries = await _repository.GetBookEntriesAsync(
             fromDateUtc,
             toDateUtc,
@@ -184,7 +145,7 @@ public class HouseholdTaxService : IHouseholdTaxService
             PrimaryBookCode = primaryBook,
             TotalRecordedRevenue = taxableRevenueInPeriod,
             TotalRecordedExpenses = deductibleExpenses,
-            TotalTaxObligationsAccrued = totalTax,
+            TotalTaxObligationsAccrued = calcResult.TotalTaxAmount,
             TotalTaxPaidToState = snapshot != null ? snapshot.TotalTaxAmount : 0m
         };
 
@@ -206,23 +167,23 @@ public class HouseholdTaxService : IHouseholdTaxService
             DiscountAmountInPeriod = discount,
             ReturnAmountInPeriod = returns,
             TaxableRevenueInPeriod = taxableRevenueInPeriod,
-            VatRate = vatRate,
-            IsVatReduced = isVatReduced,
-            VatTaxableRevenue = vatTaxableRevenue,
-            VatAmount = vatAmount,
-            PitRate = pitRate,
-            PitTaxableRevenue = pitTaxableRevenue,
-            PitAmount = pitAmount,
-            DeductibleExpensesInPeriod = deductibleExpenses,
-            YtdRevenue = ytdRevenue,
-            YtdExpenses = ytdExpenses,
-            TaxableIncomeYtd = taxableIncomeYtd,
-            TaxDueYtd = taxDueYtd,
-            PriorDeclaredPitTax = priorDeclaredPitTax,
-            OverpaidTaxCarry = overpaidTaxCarry,
-            TaxableIncomeDeclaration = taxableIncomeDeclaration,
-            DeclarationPitAmount = declarationPitAmount,
-            TotalTaxAmount = totalTax,
+            VatRate = calcResult.VatRate,
+            IsVatReduced = calcResult.IsVatReduced,
+            VatTaxableRevenue = calcResult.VatTaxableRevenue,
+            VatAmount = calcResult.VatAmount,
+            PitRate = calcResult.PitRate,
+            PitTaxableRevenue = calcResult.PitTaxableRevenue,
+            PitAmount = calcResult.PitAmount,
+            DeductibleExpensesInPeriod = calcResult.DeductibleExpenses,
+            YtdRevenue = calcResult.YtdRevenue,
+            YtdExpenses = calcResult.YtdExpenses,
+            TaxableIncomeYtd = calcResult.TaxableIncomeYtd,
+            TaxDueYtd = calcResult.TaxDueYtd,
+            PriorDeclaredPitTax = calcResult.PriorDeclaredPitTax,
+            OverpaidTaxCarry = calcResult.OverpaidTaxCarry,
+            TaxableIncomeDeclaration = calcResult.TaxableIncomeDeclaration,
+            DeclarationPitAmount = calcResult.DeclarationPitAmount,
+            TotalTaxAmount = calcResult.TotalTaxAmount,
             BooksSummary = booksSummary,
             IsFinalized = snapshot != null,
             SnapshotId = snapshot?.Id,
