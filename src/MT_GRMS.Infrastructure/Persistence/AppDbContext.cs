@@ -59,6 +59,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<SupplierBlackoutDate> SupplierBlackoutDates { get; set; } = null!;
     public virtual DbSet<SupplierAPLedger> SupplierAPLedgers { get; set; } = null!;
     public virtual DbSet<SupplierProduct> SupplierProducts { get; set; } = null!;
+    public virtual DbSet<SupplierBranchAssignment> SupplierBranchAssignments { get; set; } = null!;
     public virtual DbSet<PurchaseOrder> PurchaseOrders { get; set; } = null!;
     public virtual DbSet<PurchaseOrderDetail> PurchaseOrderDetails { get; set; } = null!;
     public virtual DbSet<GoodsReceipt> GoodsReceipts { get; set; } = null!;

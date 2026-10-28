@@ -16,6 +16,8 @@ public class SupplierSummaryDto
         _ => "Khác"
     };
     public string Phone { get; set; } = string.Empty;
+    public string ContactPerson { get; set; } = string.Empty;
+    public string? TaxCode { get; set; }
     public string? Email { get; set; }
     public Guid? CategoryId { get; set; }
     public string? CategoryName { get; set; }
@@ -29,18 +31,17 @@ public class SupplierSummaryDto
     public int PaymentTermDays { get; set; }
     public decimal CreditLimit { get; set; }
     public decimal CurrentDebt { get; set; }
+    public int OpenPurchaseOrderCount { get; set; }
     public Guid? LinkedCustomerId { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
 public class SupplierDetailDto : SupplierSummaryDto
 {
-    public string? TaxCode { get; set; }
     public string? Address { get; set; }
     public string? Ward { get; set; }
     public string? District { get; set; }
     public string? Province { get; set; }
-    public string? ContactPerson { get; set; }
     public string? ContactPhone { get; set; }
     public string? BankName { get; set; }
     public string? BankAccountNumber { get; set; }
@@ -109,6 +110,25 @@ public class LinkCustomerRequest
     public Guid CustomerId { get; set; }
 }
 
+public class SupplierApSummaryDto
+{
+    public Guid SupplierId { get; set; }
+    public decimal CurrentDebt { get; set; }
+    public decimal OverdueDebt { get; set; }
+    public decimal CreditLimit { get; set; }
+    public int OpenPurchaseOrderCount { get; set; }
+}
+
+public class ReplaceSupplierBranchesCommand
+{
+    public List<Guid> BranchIds { get; set; } = [];
+}
+
+public class SupplierBranchAssignmentDto
+{
+    public Guid BranchId { get; set; }
+}
+
 public class SupplierAPLedgerDto
 {
     public Guid Id { get; set; }
@@ -151,7 +171,10 @@ public class SupplierDeliveryConfigDto
     public Guid Id { get; set; }
     public Guid SupplierId { get; set; }
     public int LeadTimeHours { get; set; }
+    public int LeadTimeDays { get; set; } = 1;
+    public int CutoffDayOffset { get; set; } = 1;
     public string CutoffTime { get; set; } = "17:00";
+    public string OrderCutoffTime { get; set; } = "17:00";
     public int DeliveryWeekdaysMask { get; set; }
     public List<string> DeliveryDays { get; set; } = [];
     public decimal MinOrderValue { get; set; }
@@ -166,7 +189,10 @@ public class SupplierDeliveryConfigDto
 public class UpdateSupplierDeliveryConfigCommand
 {
     public int LeadTimeHours { get; set; } = 24;
+    public int LeadTimeDays { get; set; } = 1;
+    public int CutoffDayOffset { get; set; } = 1;
     public string CutoffTime { get; set; } = "17:00";
+    public string OrderCutoffTime { get; set; } = "17:00";
     public List<string> DeliveryDays { get; set; } = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
     public decimal MinOrderValue { get; set; } = 0;
     public int MinOrderQuantity { get; set; } = 0;
@@ -189,6 +215,10 @@ public class SupplierBlackoutDateDto
 public class SupplierQueryFilter
 {
     public string? SearchTerm { get; set; }
+    public string? Code { get; set; }
+    public string? Name { get; set; }
+    public string? ContactPerson { get; set; }
+    public string? Phone { get; set; }
     public SupplierType? SupplierType { get; set; }
     public SupplierStatus? Status { get; set; }
     public Guid? CategoryId { get; set; }

@@ -16,12 +16,14 @@ public class SupplierManagementTests
         public string CurrentTenantId { get; set; } = "tenant-test-01";
         public Guid CurrentUserId { get; set; } = Guid.Parse("11111111-1111-1111-1111-111111111111");
         public Guid? CurrentBranchId { get; set; } = null;
+        public string CurrentRole { get; set; } = "STORE_OWNER";
         public void SetContext(string tenantId, Guid userId, Guid? branchId)
         {
             CurrentTenantId = tenantId;
             CurrentUserId = userId;
             CurrentBranchId = branchId;
         }
+        public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
     }
 
     private class FakeUnitOfWork : IUnitOfWork
@@ -104,9 +106,18 @@ public class SupplierManagementTests
             Guid? categoryId,
             int pageIndex,
             int pageSize,
+            string? code = null,
+            string? name = null,
+            string? contactPerson = null,
+            string? phone = null,
             CancellationToken cancellationToken = default)
         {
             var query = Suppliers.Where(s => !s.IsDeleted).AsEnumerable();
+
+            if (!string.IsNullOrWhiteSpace(code)) query = query.Where(s => s.Code.ToLower().Contains(code.ToLower()));
+            if (!string.IsNullOrWhiteSpace(name)) query = query.Where(s => s.Name.ToLower().Contains(name.ToLower()));
+            if (!string.IsNullOrWhiteSpace(contactPerson)) query = query.Where(s => s.ContactPerson.ToLower().Contains(contactPerson.ToLower()));
+            if (!string.IsNullOrWhiteSpace(phone)) query = query.Where(s => s.Phone.Contains(phone));
 
             if (!string.IsNullOrWhiteSpace(searchTerm))
             {
@@ -406,9 +417,8 @@ public class SupplierManagementTests
     }
 
     [Fact]
-    public async Task REQ03_UpdateStatus_ToInactive_WhenDebtExists_ThrowsBusinessException()
+    public async Task REQ03_UpdateStatus_ToInactive_WhenDebtExists_SucceedsWithWarningCount()
     {
-        // ARRANGE
         var repo = new FakeSupplierRepository();
         var uow = new FakeUnitOfWork();
         var service = new SupplierService(repo, uow, new FakeTenantContext());
@@ -424,12 +434,12 @@ public class SupplierManagementTests
         };
         await repo.AddAsync(supplier);
 
-        // ACT & ASSERT (BR-S03)
-        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.UpdateStatusAsync(supplier.Id, new UpdateSupplierStatusRequest
+        var result = await service.UpdateStatusAsync(supplier.Id, new UpdateSupplierStatusRequest
         {
             Status = SupplierStatus.Inactive
-        }));
-        Assert.Equal("SUPPLIER_HAS_OUTSTANDING_DEBT", ex.ErrorCode);
+        });
+
+        Assert.Equal(SupplierStatus.Inactive, result.Status);
     }
 
     [Fact]

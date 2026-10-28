@@ -24,6 +24,7 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             .Include(s => s.Category)
             .Include(s => s.DeliveryConfig)
             .Include(s => s.BlackoutDates)
+            .Include(s => s.BranchAssignments)
             .FirstOrDefaultAsync(s => s.Id == id, cancellationToken);
     }
 
@@ -47,11 +48,40 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         Guid? categoryId,
         int pageIndex,
         int pageSize,
+        string? code = null,
+        string? name = null,
+        string? contactPerson = null,
+        string? phone = null,
         CancellationToken cancellationToken = default)
     {
         var query = _context.Suppliers
             .Include(s => s.Category)
+            .Include(s => s.BranchAssignments)
             .AsNoTracking();
+
+        if (!string.IsNullOrWhiteSpace(code))
+        {
+            var codeTerm = code.Trim().ToLower();
+            query = query.Where(s => s.Code.ToLower().Contains(codeTerm));
+        }
+
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            var nameTerm = name.Trim().ToLower();
+            query = query.Where(s => s.Name.ToLower().Contains(nameTerm));
+        }
+
+        if (!string.IsNullOrWhiteSpace(contactPerson))
+        {
+            var contactTerm = contactPerson.Trim().ToLower();
+            query = query.Where(s => s.ContactPerson.ToLower().Contains(contactTerm));
+        }
+
+        if (!string.IsNullOrWhiteSpace(phone))
+        {
+            var phoneTerm = phone.Trim();
+            query = query.Where(s => s.Phone.Contains(phoneTerm));
+        }
 
         if (!string.IsNullOrWhiteSpace(searchTerm))
         {
@@ -59,7 +89,9 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             query = query.Where(s =>
                 s.Name.ToLower().Contains(term) ||
                 s.Code.ToLower().Contains(term) ||
-                s.Phone.Contains(term));
+                s.Phone.Contains(term) ||
+                (s.TaxCode != null && s.TaxCode.ToLower().Contains(term)) ||
+                s.ContactPerson.ToLower().Contains(term));
         }
 
         if (supplierType.HasValue)
@@ -75,6 +107,15 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         if (categoryId.HasValue)
         {
             query = query.Where(s => s.CategoryId == categoryId.Value);
+        }
+
+        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+        var isStoreOwner = string.IsNullOrEmpty(role) || role is "STORE_OWNER" or "ADMIN";
+        if (!isStoreOwner && _tenantContext.CurrentBranchId is Guid branchId)
+        {
+            query = query.Where(s =>
+                !s.BranchAssignments.Any() ||
+                s.BranchAssignments.Any(a => a.BranchId == branchId));
         }
 
         var totalCount = await query.CountAsync(cancellationToken);

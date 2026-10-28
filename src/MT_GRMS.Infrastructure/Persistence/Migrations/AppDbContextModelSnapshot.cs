@@ -2590,6 +2590,46 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.ToTable("SupplierBlackoutDates", (string)null);
                 });
 
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.SupplierBranchAssignment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<Guid>("SupplierId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BranchId");
+
+                    b.HasIndex("SupplierId");
+
+                    b.HasIndex("TenantId", "SupplierId", "BranchId")
+                        .IsUnique();
+
+                    b.ToTable("supplier_branch_assignments", (string)null);
+                });
+
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.SupplierCategory", b =>
                 {
                     b.Property<Guid>("Id")
@@ -2650,6 +2690,11 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<int>("CutoffDayOffset")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1);
+
                     b.Property<string>("CutoffTime")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
@@ -2670,6 +2715,11 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
 
+                    b.Property<int>("LeadTimeDays")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1);
+
                     b.Property<int>("LeadTimeHours")
                         .HasColumnType("integer");
 
@@ -2680,6 +2730,13 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(18,2)")
                         .HasDefaultValue(0m);
+
+                    b.Property<string>("OrderCutoffTime")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasDefaultValue("17:00");
 
                     b.Property<Guid>("SupplierId")
                         .HasColumnType("uuid");
@@ -3434,6 +3491,25 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.Navigation("SupplierDeliveryConfig");
                 });
 
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.SupplierBranchAssignment", b =>
+                {
+                    b.HasOne("MT_GRMS.Domain.Entities.SaaS.Branch", "Branch")
+                        .WithMany()
+                        .HasForeignKey("BranchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("MT_GRMS.Domain.Entities.Supplier.Supplier", "Supplier")
+                        .WithMany("BranchAssignments")
+                        .HasForeignKey("SupplierId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Branch");
+
+                    b.Navigation("Supplier");
+                });
+
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.SupplierDeliveryConfig", b =>
                 {
                     b.HasOne("MT_GRMS.Domain.Entities.Supplier.Supplier", "Supplier")
@@ -3578,6 +3654,8 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.Navigation("APLedgers");
 
                     b.Navigation("BlackoutDates");
+
+                    b.Navigation("BranchAssignments");
 
                     b.Navigation("DeliveryConfig");
                 });
