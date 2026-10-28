@@ -9,6 +9,7 @@ namespace MT_GRMS.Infrastructure.Persistence.Configurations;
 /// - Khóa chính Id kiểu string Uid
 /// - Username có Unique Index
 /// - Password lưu mật khẩu hash
+/// - Security PIN bảo mật PBKDF2
 /// </summary>
 public class UserConfiguration : IEntityTypeConfiguration<User>
 {
@@ -35,5 +36,21 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         // 4. Chỉ mục Unique trên Username chống trùng lặp
         builder.HasIndex(x => x.Username)
             .IsUnique();
+
+        // 5. Cấu hình các cột Security PIN
+        builder.Property(x => x.SecurityPinHash)
+            .HasMaxLength(255)
+            .IsRequired(false);
+
+        builder.Property(x => x.SecurityPinSalt)
+            .HasMaxLength(255)
+            .IsRequired(false);
+
+        builder.Property(x => x.FailedPinAttempts)
+            .HasDefaultValue(0)
+            .IsRequired();
+
+        builder.Property(x => x.PinLockedUntilUtc)
+            .IsRequired(false);
     }
 }

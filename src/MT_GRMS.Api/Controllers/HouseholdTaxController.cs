@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Tax;
@@ -6,6 +7,7 @@ using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Api.Controllers;
 
+[Authorize]
 [Route("api/tax/household")]
 public class HouseholdTaxController : BaseApiController
 {
@@ -53,13 +55,27 @@ public class HouseholdTaxController : BaseApiController
         return Ok(ApiResponse<List<AccountingBookEntryDto>>.Ok(result));
     }
 
+    [Authorize(Roles = "StoreOwner,ChiefAccountant,ADMIN,SUPER_ADMIN")]
     [HttpPost("snapshots")]
     public async Task<ActionResult<ApiResponse<HouseholdTaxSnapshotDto>>> CreateSnapshot(
         [FromBody] CreateTaxSnapshotRequest request,
         CancellationToken ct)
     {
-        var finalizedBy = User?.Identity?.Name ?? "system-accountant";
-        var result = await _taxService.FinalizeTaxSnapshotAsync(request, finalizedBy, ct);
+        var userId = User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+            ?? User?.FindFirst("sub")?.Value
+            ?? User?.FindFirst("id")?.Value
+            ?? User?.Identity?.Name;
+
+        var finalizedBy = User?.Identity?.Name
+            ?? User?.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value
+            ?? User?.FindFirst("username")?.Value;
+
+        if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(finalizedBy))
+        {
+            return Unauthorized(ApiResponse<HouseholdTaxSnapshotDto>.Fail("UNAUTHORIZED", "Không xác định được danh tính người dùng thực hiện chốt kỳ tính thuế."));
+        }
+
+        var result = await _taxService.FinalizeTaxSnapshotAsync(request, finalizedBy, userId, ct);
         return Ok(ApiResponse<HouseholdTaxSnapshotDto>.Ok(result, "Chốt kỳ tính thuế thành công."));
     }
 

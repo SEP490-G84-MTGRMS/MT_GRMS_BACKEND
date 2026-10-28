@@ -11,6 +11,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 {
     private readonly IHouseholdTaxRepository _repository;
     private readonly ITaxCalculationStrategyFactory _strategyFactory;
+    private readonly Security.IPinVerificationService? _pinService;
 
     public const decimal TaxExemptionThreshold = RevenuePercentageTaxStrategy.TaxExemptionThreshold;
     public const decimal RetailVatRate = RevenuePercentageTaxStrategy.RetailVatRate;
@@ -22,16 +23,18 @@ public class HouseholdTaxService : IHouseholdTaxService
         {
             new RevenuePercentageTaxStrategy(),
             new DeclarationBasedTaxStrategy()
-        }))
+        }), null)
     {
     }
 
     public HouseholdTaxService(
         IHouseholdTaxRepository repository,
-        ITaxCalculationStrategyFactory strategyFactory)
+        ITaxCalculationStrategyFactory strategyFactory,
+        Security.IPinVerificationService? pinService = null)
     {
         _repository = repository;
         _strategyFactory = strategyFactory;
+        _pinService = pinService;
     }
 
     public async Task<HouseholdTaxSummaryDto> GetTaxSummaryAsync(HouseholdTaxFilterDto filter, CancellationToken cancellationToken = default)
@@ -242,8 +245,24 @@ public class HouseholdTaxService : IHouseholdTaxService
     public async Task<HouseholdTaxSnapshotDto> FinalizeTaxSnapshotAsync(
         CreateTaxSnapshotRequest request,
         string finalizedBy,
+        string? userId = null,
         CancellationToken cancellationToken = default)
     {
+        // 1. Xác thực bảo mật mã PIN chủ hộ
+        if (_pinService != null && !string.IsNullOrEmpty(userId))
+        {
+            if (string.IsNullOrWhiteSpace(request.SecurityPin))
+            {
+                throw new BusinessException("PIN_REQUIRED", "Yêu cầu mã PIN bảo mật của chủ hộ để chốt kỳ tính thuế.");
+            }
+
+            var pinResult = await _pinService.VerifyStoreOwnerPinAsync(userId, request.SecurityPin, cancellationToken);
+            if (!pinResult.IsSuccess)
+            {
+                throw new BusinessException(pinResult.ErrorCode ?? "INVALID_PIN", pinResult.ErrorMessage ?? "Mã PIN xác thực chốt kỳ không chính xác.");
+            }
+        }
+
         var existing = await _repository.GetSnapshotAsync(
             request.Year,
             request.PeriodType,
@@ -510,3 +529,4 @@ public class HouseholdTaxService : IHouseholdTaxService
         );
     }
 }
+

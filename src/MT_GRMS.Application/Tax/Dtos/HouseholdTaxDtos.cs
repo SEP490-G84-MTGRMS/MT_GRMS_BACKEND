@@ -9,6 +9,7 @@ public class HouseholdTaxFilterDto
     public int PeriodNumber { get; set; } = 1;
     public Guid? BranchId { get; set; }
     public TaxCalculationMethod CalculationMethod { get; set; } = TaxCalculationMethod.RevenuePercentage;
+    public string SecurityPin { get; set; } = string.Empty;
     public bool ApplyVatReduction2026 { get; set; } = false; // Giảm 20% mức tỷ lệ GTGT (còn 0.8%) theo NQ 204/2025/QH15 & NĐ 174/2025/NĐ-CP
     public decimal? CustomVatRate { get; set; }
     public decimal? CustomPitRate { get; set; }
@@ -104,6 +105,7 @@ public class CreateTaxSnapshotRequest
     public int PeriodNumber { get; set; }
     public Guid? BranchId { get; set; }
     public TaxCalculationMethod CalculationMethod { get; set; } = TaxCalculationMethod.RevenuePercentage;
+    public string SecurityPin { get; set; } = string.Empty;
     public string? Notes { get; set; }
 }
 
@@ -128,4 +130,5 @@ public class HouseholdTaxSnapshotDto
     public DateTime FinalizedAtUtc { get; set; }
     public string? Notes { get; set; }
 }
+
 
