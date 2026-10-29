@@ -1,6 +1,18 @@
-using MT_GRMS.Domain.Enums;
+﻿using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Application.Tax.Strategies;
+
+/// <summary>
+/// Breakdown chi tiết thuế GTGT phân tách giữa hàng thường (0.8% theo NQ 204) và hàng không được giảm (1.0% như bia/rượu/thuốc lá).
+/// </summary>
+public record VatBreakdown
+{
+    public decimal RevenueStandardRate10 { get; init; }
+    public decimal TaxAmountStandardRate10 { get; init; }
+    public decimal RevenueReducedRate08 { get; init; }
+    public decimal TaxAmountReducedRate08 { get; init; }
+    public decimal EffectiveVatRate { get; init; }
+}
 
 /// <summary>
 /// Immutable input context for tax calculation strategies (pure logic).
@@ -11,6 +23,8 @@ public record TaxCalculationContext
     public bool IsExempt { get; init; }
     public decimal AnnualAccumulatedRevenue { get; init; }
     public decimal TaxableRevenueInPeriod { get; init; }
+    public decimal? ReducedVatRevenueInPeriod { get; init; } // Doanh thu hàng thường được giảm 0.8%
+    public decimal? StandardVatRevenueInPeriod { get; init; } // Doanh thu hàng chịu 1.0% (bia, rượu, thuốc lá...)
     public decimal? CustomVatRate { get; init; }
     public bool ApplyVatReduction2026 { get; init; }
     public decimal? VatReductionPercentage { get; init; } // Cấu hình mức giảm linh hoạt (%): Mặc định 20% nếu bật giảm
@@ -32,9 +46,11 @@ public record TaxCalculationResult
     public decimal OriginalVatRate { get; init; }
     public decimal VatReductionPercentage { get; init; }
     public decimal VatTaxableRevenue { get; init; }
-    public decimal VatRate { get; init; }
+    public decimal VatRate { get; init; } // Effective VAT rate
     public decimal VatAmount { get; init; }
     public bool IsVatReduced { get; init; }
+    public VatBreakdown VatBreakdown { get; init; } = new();
+
     public decimal PitTaxableRevenue { get; init; }
     public decimal PitRate { get; init; }
     public decimal PitAmount { get; init; }

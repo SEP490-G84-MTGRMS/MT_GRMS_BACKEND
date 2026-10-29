@@ -1,4 +1,4 @@
-using MT_GRMS.Domain.Common;
+﻿using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Domain.Entities;
@@ -25,6 +25,9 @@ public class OrderItem : BaseTenantEntity
     public decimal UnitPrice { get; set; }
     public decimal Quantity { get; set; }
     public decimal TotalLineAmount { get; set; }
+    public decimal AppliedVatRate { get; set; } = 0.01m;
+    public decimal VatAmount { get; set; } = 0m;
+    public decimal VatDiscountAmount { get; set; } = 0m;
 
     public Order? Order { get; set; }
 }

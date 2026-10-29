@@ -1,3 +1,4 @@
+﻿using MT_GRMS.Application.Tax.Security;
 using MT_GRMS.Application.Tax;
 using MT_GRMS.Application.Tax.Dtos;
 using MT_GRMS.Domain.Entities.Finance;
@@ -496,7 +497,7 @@ public class HouseholdTaxServiceTests
         Assert.Equal(3_000_000_000m, result.TaxableIncomeYtd);
         Assert.Equal(17.0m, result.PitRate); // Thuế suất Nhóm 3: 17%
         Assert.Equal(510_000_000m, result.DeclarationPitAmount); // 3.0B * 17% = 510M
-        Assert.Equal("Bộ 4 sổ: S2b, S2c, S2d, S2e-HKD", result.BooksSummary.PrimaryBookCode);
+        Assert.Equal("Bộ 5 sổ: S2b, S2c, S2d, S2e, S3a-HKD", result.BooksSummary.PrimaryBookCode);
     }
 
     [Fact]
@@ -529,6 +530,115 @@ public class HouseholdTaxServiceTests
         Assert.False(result.IsCogsEstimated);
         Assert.Equal(347_250_000m, result.DeductibleExpensesInPeriod); // 327.25M + 20M
     }
+
+    [Fact]
+    public async Task GetTaxSummary_WithMixedVatCatalog_CalculatesEffectiveVatRateCorrectly()
+    {
+        // Giả lập kỳ có cả hàng thường được giảm 0.8% và hàng TTĐB chịu 1.0%
+        _fakeRepo.AnnualAccumulatedRevenue = 1_500_000_000m;
+        _fakeRepo.GrossRevenue = 400_000_000m;
+        _fakeRepo.DiscountAmount = 0m;
+        _fakeRepo.ReturnAmount = 0m;
+
+        var filter = new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 3,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            ApplyVatReduction2026 = true,
+            ReducedVatRevenueInPeriod = 300_000_000m,  // 300M * 0.8% = 2.4M
+            StandardVatRevenueInPeriod = 100_000_000m // 100M * 1.0% = 1.0M
+        };
+
+        var result = await _service.GetTaxSummaryAsync(filter);
+
+        Assert.Equal(400_000_000m, result.TaxableRevenueInPeriod);
+        Assert.Equal(3_400_000m, result.VatAmount); // 2.4M + 1.0M = 3.4M
+        Assert.Equal(0.85m, result.VatRate); // 3.4M / 400M = 0.85%
+        Assert.Equal(300_000_000m, result.VatBreakdown.RevenueReducedRate08);
+        Assert.Equal(2_400_000m, result.VatBreakdown.TaxAmountReducedRate08);
+        Assert.Equal(100_000_000m, result.VatBreakdown.RevenueStandardRate10);
+        Assert.Equal(1_000_000m, result.VatBreakdown.TaxAmountStandardRate10);
+    }
+
+    [Fact]
+    public async Task FinalizeTaxSnapshot_WhenCogsEstimatedWithoutConfirmation_ThrowsBusinessException()
+    {
+        _fakeRepo.AnnualAccumulatedRevenue = 4_000_000_000m;
+        _fakeRepo.GrossRevenue = 500_000_000m;
+        _fakeRepo.CogsAmount = 350_000_000m;
+        _fakeRepo.IsCogsEstimated = true; // Sử dụng giá vốn ước tính 70%
+
+        var request = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.DeclarationBased,
+            ConfirmEstimatedCogsResponsible = false // Chưa xác nhận trách nhiệm
+        };
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.FinalizeTaxSnapshotAsync(request, "admin_user"));
+
+        Assert.Equal("ESTIMATED_COGS_CONFIRMATION_REQUIRED", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task FinalizeTaxSnapshot_WhenCogsEstimatedWithConfirmation_RecordsAuditEvidenceInBookData()
+    {
+        _fakeRepo.AnnualAccumulatedRevenue = 4_000_000_000m;
+        _fakeRepo.GrossRevenue = 500_000_000m;
+        _fakeRepo.CogsAmount = 350_000_000m;
+        _fakeRepo.IsCogsEstimated = true;
+
+        var request = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.DeclarationBased,
+            ConfirmEstimatedCogsResponsible = true,
+            EstimatedCogsConfirmationStatement = "Tôi cam kết chịu trách nhiệm pháp lý khi dùng COGS ước tính."
+        };
+
+        var result = await _service.FinalizeTaxSnapshotAsync(request, "store_owner_nguyen");
+
+        Assert.NotNull(result);
+        Assert.True(result.IsCogsEstimated);
+        Assert.NotEmpty(result.AuditSignatureHash);
+
+        var savedSnapshot = await _fakeRepo.GetSnapshotAsync(2026, TaxPeriodType.Quarter, 1, null);
+        Assert.NotNull(savedSnapshot);
+        Assert.Contains("ownerConfirmation", savedSnapshot.BookDataJson);
+        Assert.Contains("store_owner_nguyen", savedSnapshot.BookDataJson);
+        Assert.Contains("Tôi cam kết chịu trách nhiệm pháp lý", savedSnapshot.BookDataJson);
+    }
+
+    [Fact]
+    public void TaxSnapshotSignatureService_WhenBookDataJsonTampered_VerificationFails()
+    {
+        var sigService = new TaxSnapshotSignatureService();
+        var snapshot = new HouseholdTaxSnapshot
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            TaxableRevenueInPeriod = 500_000_000m,
+            TotalTaxAmount = 25_000_000m,
+            BookDataJson = "{\"metadata\":{\"policy\":\"NQ 204\"}}",
+            FinalizedAtUtc = new DateTime(2026, 4, 1, 10, 0, 0, DateTimeKind.Utc),
+            FinalizedBy = "admin"
+        };
+
+        snapshot.AuditSignatureHash = sigService.ComputeSignature(snapshot);
+        Assert.True(sigService.VerifySignature(snapshot));
+
+        // Kẻ gian sửa đổi metadata trong BookDataJson
+        snapshot.BookDataJson = "{\"metadata\":{\"policy\":\"FAKE MODIFIED POLICY\"}}";
+
+        // Verification phải báo false ngay lập tức!
+        Assert.False(sigService.VerifySignature(snapshot));
+    }
 }
-
-

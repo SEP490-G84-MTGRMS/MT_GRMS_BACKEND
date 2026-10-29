@@ -1,4 +1,4 @@
-namespace MT_GRMS.Domain.Enums;
+﻿namespace MT_GRMS.Domain.Enums;
 
 /// <summary>
 /// Kỳ tính thuế hộ kinh doanh (FE-19).
@@ -96,4 +96,25 @@ public enum AccountingBookType
     /// Mẫu S3a-HKD: Sổ theo dõi tình hình thực hiện nghĩa vụ thuế với NSNN.
     /// </summary>
     S3a_TaxObligation = 7
+}
+
+/// <summary>
+/// Các nhóm phân loại thuế hàng hóa theo Nghị quyết 204/2025/QH15 và Luật thuế GTGT.
+/// </summary>
+public static class TaxCategoryConstants
+{
+    /// <summary>
+    /// Hàng thông thường (thuế suất gốc 1.0%, đủ điều kiện giảm còn 0.8% theo NQ 204).
+    /// </summary>
+    public const string Standard1Pct = "STANDARD_1PCT";
+
+    /// <summary>
+    /// Hàng chịu thuế tiêu thụ đặc biệt hoặc thuộc diện loại trừ (bia, rượu, thuốc lá... giữ nguyên 1.0%, không giảm).
+    /// </summary>
+    public const string NoReduction1Pct = "NO_REDUCTION_1PCT";
+
+    /// <summary>
+    /// Hàng không chịu thuế.
+    /// </summary>
+    public const string NonTaxable = "NON_TAXABLE";
 }

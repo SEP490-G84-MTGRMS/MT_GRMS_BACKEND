@@ -1,3 +1,5 @@
+﻿using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using MT_GRMS.Application.Tax.Dtos;
 using MT_GRMS.Application.Tax.Strategies;
@@ -6,7 +8,6 @@ using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.Tax;
-
 
 public class HouseholdTaxService : IHouseholdTaxService
 {
@@ -53,7 +54,7 @@ public class HouseholdTaxService : IHouseholdTaxService
             filter.BranchId,
             cancellationToken);
 
-        // 2. Tính doanh thu lũy kế đến hết kỳ trước và đến cuối kỳ hiện tại
+        // 2. Tính doanh thu lũy kế đến hết kỳ trước và đến cuối kỳ hiện tại (Tính trên toàn chuỗi Tenant)
         var priorPeriodsRevenue = priorPeriodToDateUtc.HasValue
             ? await _repository.GetAnnualAccumulatedRevenueAsync(filter.Year, priorPeriodToDateUtc.Value, cancellationToken)
             : 0m;
@@ -65,6 +66,10 @@ public class HouseholdTaxService : IHouseholdTaxService
 
         var (group, groupName, isExempt) = DetermineHouseholdGroup(annualAccumulatedRevenue);
 
+        // Cảnh báo tiến trình ngưỡng Nhóm 4 (40 tỷ = 80%, 50 tỷ = 100%)
+        var isApproachingGroup4 = annualAccumulatedRevenue >= 40_000_000_000m && annualAccumulatedRevenue < 50_000_000_000m;
+        var isExceedingGroup4 = annualAccumulatedRevenue >= 50_000_000_000m;
+
         // 3. Doanh thu phát sinh trong kỳ
         var (gross, discount, returns) = await _repository.GetPeriodRevenueAsync(
             fromDateUtc,
@@ -74,14 +79,27 @@ public class HouseholdTaxService : IHouseholdTaxService
 
         var taxableRevenueInPeriod = Math.Max(0, gross - discount - returns);
 
-        // 4. Xác định phương pháp tính thuế (Kê khai nếu chủ hộ đăng ký hoặc doanh thu > 3 tỷ)
-        bool isDeclaration = filter.CalculationMethod == TaxCalculationMethod.DeclarationBased 
-            || group == HouseholdTaxGroup.Group3_3BTo50B 
-            || group == HouseholdTaxGroup.Group4_Over50B;
+        // 4. Xác định phương pháp tính thuế
+        // Nhóm 2: Hỗ trợ 2 phương pháp (Cách 1: Doanh thu vượt 1 tỷ * 0.5%, Cách 2: 15% lợi nhuận khi chọn PROFIT_15)
+        bool isDeclaration;
+        if (group == HouseholdTaxGroup.Group2_1BTo3B)
+        {
+            isDeclaration = filter.Tier2Method == "PROFIT_15" || filter.CalculationMethod == TaxCalculationMethod.DeclarationBased;
+        }
+        else
+        {
+            isDeclaration = filter.CalculationMethod == TaxCalculationMethod.DeclarationBased 
+                || group == HouseholdTaxGroup.Group3_3BTo50B 
+                || group == HouseholdTaxGroup.Group4_Over50B;
+        }
 
         var calculationMethod = isDeclaration 
             ? TaxCalculationMethod.DeclarationBased 
             : TaxCalculationMethod.RevenuePercentage;
+
+        var tier2Method = group == HouseholdTaxGroup.Group2_1BTo3B
+            ? (isDeclaration ? "PROFIT_15" : "REVENUE_EXCESS")
+            : "N/A";
 
         // 5. Chuẩn bị dữ liệu chi phí và thuế kỳ trước cho Strategy (Pure Logic)
         decimal periodCogs = 0m;
@@ -98,7 +116,6 @@ public class HouseholdTaxService : IHouseholdTaxService
             periodOpex = opex;
             isCogsEstimated = estimated;
 
-            // Nếu repository có dữ liệu COGS + OPEX thì dùng tổng đó, ngược lại fallback GetPeriodDeductibleExpensesAsync (cho fake mock test)
             var directExpenses = await _repository.GetPeriodDeductibleExpensesAsync(fromDateUtc, toDateUtc, filter.BranchId, cancellationToken);
             deductibleExpenses = (periodCogs + periodOpex) > 0 ? (periodCogs + periodOpex) : directExpenses;
 
@@ -134,6 +151,8 @@ public class HouseholdTaxService : IHouseholdTaxService
             IsExempt = isExempt,
             AnnualAccumulatedRevenue = annualAccumulatedRevenue,
             TaxableRevenueInPeriod = taxableRevenueInPeriod,
+            ReducedVatRevenueInPeriod = filter.ReducedVatRevenueInPeriod,
+            StandardVatRevenueInPeriod = filter.StandardVatRevenueInPeriod,
             CustomVatRate = filter.CustomVatRate,
             ApplyVatReduction2026 = filter.ApplyVatReduction2026,
             VatReductionPercentage = filter.VatReductionPercentage,
@@ -155,18 +174,18 @@ public class HouseholdTaxService : IHouseholdTaxService
             toDateUtc,
             filter.BranchId,
             group,
-            filter.CalculationMethod,
+            calculationMethod,
             null,
             cancellationToken);
 
         var primaryBook = group switch
         {
             HouseholdTaxGroup.Group1_Under1B => "S1a-HKD",
-            HouseholdTaxGroup.Group2_1BTo3B => filter.CalculationMethod == TaxCalculationMethod.DeclarationBased 
-                ? "Bộ 4 sổ: S2b, S2c, S2d, S2e-HKD" 
+            HouseholdTaxGroup.Group2_1BTo3B => isDeclaration 
+                ? "Bộ 5 sổ: S2b, S2c, S2d, S2e, S3a-HKD" 
                 : "S2a-HKD",
-            HouseholdTaxGroup.Group3_3BTo50B => "Bộ 4 sổ: S2b, S2c, S2d, S2e-HKD",
-            _ => "Bộ 4 sổ: S2b, S2c, S2d, S2e-HKD (Kèm chế độ kế toán doanh nghiệp cho Nhóm 4)"
+            HouseholdTaxGroup.Group3_3BTo50B => "Bộ 5 sổ: S2b, S2c, S2d, S2e, S3a-HKD",
+            _ => "Bộ 5 sổ: S2b, S2c, S2d, S2e, S3a-HKD (Kèm chế độ kế toán doanh nghiệp cho Nhóm 4)"
         };
 
         var booksSummary = new TaxBooksSummaryDto
@@ -189,9 +208,12 @@ public class HouseholdTaxService : IHouseholdTaxService
             PriorPeriodsAccumulatedRevenue = priorPeriodsRevenue,
             HouseholdGroup = group,
             HouseholdGroupName = groupName,
-            CalculationMethod = filter.CalculationMethod,
+            CalculationMethod = calculationMethod,
+            Tier2Method = tier2Method,
             IsTaxExempt = isExempt,
             TaxExemptionThreshold = TaxExemptionThreshold,
+            IsApproachingGroup4Threshold = isApproachingGroup4,
+            IsExceedingGroup4Threshold = isExceedingGroup4,
             GrossRevenueInPeriod = gross,
             DiscountAmountInPeriod = discount,
             ReturnAmountInPeriod = returns,
@@ -202,6 +224,14 @@ public class HouseholdTaxService : IHouseholdTaxService
             IsVatReduced = calcResult.IsVatReduced,
             VatTaxableRevenue = calcResult.VatTaxableRevenue,
             VatAmount = calcResult.VatAmount,
+            VatBreakdown = new VatBreakdownDto
+            {
+                RevenueStandardRate10 = calcResult.VatBreakdown.RevenueStandardRate10,
+                TaxAmountStandardRate10 = calcResult.VatBreakdown.TaxAmountStandardRate10,
+                RevenueReducedRate08 = calcResult.VatBreakdown.RevenueReducedRate08,
+                TaxAmountReducedRate08 = calcResult.VatBreakdown.TaxAmountReducedRate08,
+                EffectiveVatRate = calcResult.VatBreakdown.EffectiveVatRate
+            },
             PitRate = calcResult.PitRate,
             PitTaxableRevenue = calcResult.PitTaxableRevenue,
             PitAmount = calcResult.PitAmount,
@@ -306,16 +336,86 @@ public class HouseholdTaxService : IHouseholdTaxService
             PeriodNumber = request.PeriodNumber,
             BranchId = request.BranchId,
             CalculationMethod = request.CalculationMethod,
+            Tier2Method = request.Tier2Method,
             ApplyVatReduction2026 = request.ApplyVatReduction2026,
             VatReductionPercentage = request.VatReductionPercentage,
+            ReducedVatRevenueInPeriod = request.ReducedVatRevenueInPeriod,
+            StandardVatRevenueInPeriod = request.StandardVatRevenueInPeriod,
             CustomVatRate = request.CustomVatRate,
             CustomPitRate = request.CustomPitRate
         };
 
         var summary = await GetTaxSummaryAsync(filter, cancellationToken);
+
+        // Ràng buộc kiểm toán: Chặn chốt kỳ nếu dùng giá vốn ước tính mà thiếu cam kết chịu trách nhiệm của chủ hộ
+        if (summary.IsCogsEstimated && !request.ConfirmEstimatedCogsResponsible)
+        {
+            throw new BusinessException("ESTIMATED_COGS_CONFIRMATION_REQUIRED",
+                "Kỳ tính thuế đang sử dụng giá vốn ước tính (do thiếu hóa đơn chứng từ mua hàng). Chủ hộ bắt buộc phải xác nhận cam kết tự chịu trách nhiệm pháp lý trước khi chốt kỳ.");
+        }
+
         var (fromDateUtc, toDateUtc, _) = GetDateRangesForPeriod(request.Year, request.PeriodType, request.PeriodNumber);
-        var bookEntries = await _repository.GetBookEntriesAsync(fromDateUtc, toDateUtc, request.BranchId, summary.HouseholdGroup, request.CalculationMethod, null, cancellationToken);
-        var bookDataJson = JsonSerializer.Serialize(bookEntries);
+        var bookEntries = await _repository.GetBookEntriesAsync(fromDateUtc, toDateUtc, request.BranchId, summary.HouseholdGroup, summary.CalculationMethod, null, cancellationToken);
+
+        // Tính mã băm COGS Calculation Hash
+        var cogsHashInput = $"YEAR:{request.Year}_PERIOD:{request.PeriodNumber}_COGS:{summary.CogsAmount:F2}_EST:{summary.IsCogsEstimated}";
+        var cogsCalculationHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(cogsHashInput))).ToLowerInvariant();
+
+        // Xây dựng BookDataJson có cấu trúc chuẩn gồm metadata kiểm toán và danh mục chứng từ sổ sách
+        var auditMetadata = new
+        {
+            policy = new
+            {
+                vatResolution = "NQ 204/2025/QH15",
+                vatReductionEffectiveTo = "2026-12-31",
+                vatRoundingRule = "ROUND_PER_LINE",
+                lossCarryForwardEnabled = false
+            },
+            taxGroupMethod = new
+            {
+                householdGroup = (int)summary.HouseholdGroup,
+                householdGroupName = summary.HouseholdGroupName,
+                calculationMethod = summary.CalculationMethod.ToString(),
+                tier2Method = summary.Tier2Method,
+                exemptionThreshold = TaxExemptionThreshold
+            },
+            cogsAudit = new
+            {
+                method = "PERIODIC_WEIGHTED_AVERAGE",
+                isCogsEstimated = summary.IsCogsEstimated,
+                cogsCalculationHash = cogsCalculationHash,
+                ownerConfirmation = new
+                {
+                    isConfirmed = summary.IsCogsEstimated ? request.ConfirmEstimatedCogsResponsible : (bool?)null,
+                    confirmedBy = summary.IsCogsEstimated ? finalizedBy : null,
+                    confirmedAtUtc = summary.IsCogsEstimated ? DateTime.UtcNow : (DateTime?)null,
+                    statement = summary.IsCogsEstimated
+                        ? (request.EstimatedCogsConfirmationStatement ?? "Tôi cam kết tự chịu trách nhiệm pháp lý về số liệu giá vốn ước tính khi chốt kỳ thuế.")
+                        : null
+                }
+            },
+            vatBreakdown = new
+            {
+                revenueStandardRate10 = summary.VatBreakdown.RevenueStandardRate10,
+                taxAmountStandardRate10 = summary.VatBreakdown.TaxAmountStandardRate10,
+                revenueReducedRate08 = summary.VatBreakdown.RevenueReducedRate08,
+                taxAmountReducedRate08 = summary.VatBreakdown.TaxAmountReducedRate08,
+                effectiveVatRate = summary.VatRate
+            }
+        };
+
+        var fullBookData = new
+        {
+            metadata = auditMetadata,
+            bookEntries = bookEntries
+        };
+
+                var jsonOptions = new JsonSerializerOptions
+        {
+            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            WriteIndented = false
+        };
+        var bookDataJson = JsonSerializer.Serialize(fullBookData, jsonOptions);
 
         var snapshot = new HouseholdTaxSnapshot
         {
@@ -327,7 +427,7 @@ public class HouseholdTaxService : IHouseholdTaxService
             HouseholdGroup = summary.HouseholdGroup,
             IsTaxExempt = summary.IsTaxExempt,
             TaxableRevenueInPeriod = summary.TaxableRevenueInPeriod,
-            VatRate = summary.VatRate,
+            VatRate = summary.VatRate, // Effective VAT rate
             VatAmount = summary.VatAmount,
             PitRate = summary.PitRate,
             PitAmount = summary.PitAmount,
@@ -338,7 +438,7 @@ public class HouseholdTaxService : IHouseholdTaxService
             Notes = request.Notes
         };
 
-        // Ký số HMAC-SHA256 trên Canonical JSON snapshot
+        // Ký số HMAC-SHA256 trên Canonical JSON snapshot (Bao gồm cả mã băm BookDataHash)
         snapshot.AuditSignatureHash = _signatureService.ComputeSignature(snapshot);
 
         var created = await _repository.AddSnapshotAsync(snapshot, cancellationToken);
@@ -352,7 +452,7 @@ public class HouseholdTaxService : IHouseholdTaxService
             PeriodNumber = created.PeriodNumber,
             AnnualAccumulatedRevenue = created.AnnualAccumulatedRevenue,
             HouseholdGroup = created.HouseholdGroup,
-            CalculationMethod = request.CalculationMethod,
+            CalculationMethod = summary.CalculationMethod,
             IsTaxExempt = created.IsTaxExempt,
             TaxableRevenueInPeriod = created.TaxableRevenueInPeriod,
             VatRate = created.VatRate,
@@ -360,6 +460,8 @@ public class HouseholdTaxService : IHouseholdTaxService
             PitRate = created.PitRate,
             PitAmount = created.PitAmount,
             TotalTaxAmount = created.TotalTaxAmount,
+            VatBreakdown = summary.VatBreakdown,
+            IsCogsEstimated = summary.IsCogsEstimated,
             AuditSignatureHash = created.AuditSignatureHash,
             IsIntegrityValid = true,
             FinalizedBy = created.FinalizedBy,
@@ -368,41 +470,10 @@ public class HouseholdTaxService : IHouseholdTaxService
         };
     }
 
-    public async Task<List<HouseholdTaxSnapshotDto>> GetSnapshotsAsync(int? year, Guid? branchId, CancellationToken cancellationToken = default)
-    {
-        var snapshots = await _repository.GetSnapshotsAsync(year, branchId, cancellationToken);
-        return snapshots.Select(s => new HouseholdTaxSnapshotDto
-        {
-            Id = s.Id,
-            BranchId = s.BranchId,
-            PeriodType = s.PeriodType,
-            Year = s.Year,
-            PeriodNumber = s.PeriodNumber,
-            AnnualAccumulatedRevenue = s.AnnualAccumulatedRevenue,
-            HouseholdGroup = s.HouseholdGroup,
-            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
-            IsTaxExempt = s.IsTaxExempt,
-            TaxableRevenueInPeriod = s.TaxableRevenueInPeriod,
-            VatRate = s.VatRate,
-            VatAmount = s.VatAmount,
-            PitRate = s.PitRate,
-            PitAmount = s.PitAmount,
-            TotalTaxAmount = s.TotalTaxAmount,
-            AuditSignatureHash = s.AuditSignatureHash,
-            IsIntegrityValid = _signatureService.VerifySignature(s),
-            FinalizedBy = s.FinalizedBy,
-            FinalizedAtUtc = s.FinalizedAtUtc,
-            Notes = s.Notes
-        }).ToList();
-    }
-
     public async Task<HouseholdTaxSnapshotDto?> GetSnapshotByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
         var s = await _repository.GetSnapshotByIdAsync(id, cancellationToken);
-        if (s == null)
-        {
-            return null;
-        }
+        if (s == null) return null;
 
         return new HouseholdTaxSnapshotDto
         {
@@ -413,7 +484,11 @@ public class HouseholdTaxService : IHouseholdTaxService
             PeriodNumber = s.PeriodNumber,
             AnnualAccumulatedRevenue = s.AnnualAccumulatedRevenue,
             HouseholdGroup = s.HouseholdGroup,
-            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            CalculationMethod = s.HouseholdGroup == HouseholdTaxGroup.Group1_Under1B
+                ? TaxCalculationMethod.Exempt
+                : (s.HouseholdGroup == HouseholdTaxGroup.Group3_3BTo50B || s.HouseholdGroup == HouseholdTaxGroup.Group4_Over50B
+                    ? TaxCalculationMethod.DeclarationBased
+                    : TaxCalculationMethod.RevenuePercentage),
             IsTaxExempt = s.IsTaxExempt,
             TaxableRevenueInPeriod = s.TaxableRevenueInPeriod,
             VatRate = s.VatRate,
@@ -432,34 +507,44 @@ public class HouseholdTaxService : IHouseholdTaxService
     public async Task<bool> VerifySnapshotIntegrityAsync(Guid snapshotId, CancellationToken cancellationToken = default)
     {
         var s = await _repository.GetSnapshotByIdAsync(snapshotId, cancellationToken);
-        if (s == null)
-        {
-            return false;
-        }
+        if (s == null) return false;
 
         return _signatureService.VerifySignature(s);
     }
 
-    public static TimeZoneInfo GetVietnamTimeZone()
+    public async Task<List<HouseholdTaxSnapshotDto>> GetSnapshotsAsync(int? year, Guid? branchId, CancellationToken cancellationToken = default)
     {
-        try
+        var snapshots = await _repository.GetSnapshotsAsync(year, branchId, cancellationToken);
+        return snapshots.Select(s => new HouseholdTaxSnapshotDto
         {
-            return TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
-        }
-        catch (Exception)
-        {
-            try
-            {
-                return TimeZoneInfo.FindSystemTimeZoneById("Asia/Ho_Chi_Minh");
-            }
-            catch (Exception)
-            {
-                return TimeZoneInfo.CreateCustomTimeZone("VN_TZ", TimeSpan.FromHours(7), "Vietnam Standard Time", "Vietnam Standard Time");
-            }
-        }
+            Id = s.Id,
+            BranchId = s.BranchId,
+            PeriodType = s.PeriodType,
+            Year = s.Year,
+            PeriodNumber = s.PeriodNumber,
+            AnnualAccumulatedRevenue = s.AnnualAccumulatedRevenue,
+            HouseholdGroup = s.HouseholdGroup,
+            CalculationMethod = s.HouseholdGroup == HouseholdTaxGroup.Group1_Under1B
+                ? TaxCalculationMethod.Exempt
+                : (s.HouseholdGroup == HouseholdTaxGroup.Group3_3BTo50B || s.HouseholdGroup == HouseholdTaxGroup.Group4_Over50B
+                    ? TaxCalculationMethod.DeclarationBased
+                    : TaxCalculationMethod.RevenuePercentage),
+            IsTaxExempt = s.IsTaxExempt,
+            TaxableRevenueInPeriod = s.TaxableRevenueInPeriod,
+            VatRate = s.VatRate,
+            VatAmount = s.VatAmount,
+            PitRate = s.PitRate,
+            PitAmount = s.PitAmount,
+            TotalTaxAmount = s.TotalTaxAmount,
+            AuditSignatureHash = s.AuditSignatureHash,
+            IsIntegrityValid = _signatureService.VerifySignature(s),
+            FinalizedBy = s.FinalizedBy,
+            FinalizedAtUtc = s.FinalizedAtUtc,
+            Notes = s.Notes
+        }).ToList();
     }
 
-    public static (DateTime FromDateUtc, DateTime ToDateUtc, DateTime? PriorPeriodToDateUtc) GetDateRangesForPeriod(int year, TaxPeriodType periodType, int periodNumber)
+    private static (DateTime FromDateUtc, DateTime ToDateUtc, DateTime? PriorPeriodToDateUtc) GetDateRangesForPeriod(int year, TaxPeriodType periodType, int periodNumber)
     {
         var vnTz = GetVietnamTimeZone();
         DateTime fromLocal;
@@ -469,12 +554,11 @@ public class HouseholdTaxService : IHouseholdTaxService
         switch (periodType)
         {
             case TaxPeriodType.Month:
-                var month = Math.Clamp(periodNumber, 1, 12);
-                fromLocal = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Unspecified);
-                toLocal = fromLocal.AddMonths(1).AddTicks(-1);
-                if (month > 1)
+                fromLocal = new DateTime(year, periodNumber, 1, 0, 0, 0, DateTimeKind.Unspecified);
+                toLocal = new DateTime(year, periodNumber, DateTime.DaysInMonth(year, periodNumber), 23, 59, 59, 999, DateTimeKind.Unspecified);
+                if (periodNumber > 1)
                 {
-                    priorToLocal = fromLocal.AddTicks(-1);
+                    priorToLocal = new DateTime(year, periodNumber - 1, DateTime.DaysInMonth(year, periodNumber - 1), 23, 59, 59, 999, DateTimeKind.Unspecified);
                 }
                 break;
 
@@ -497,14 +581,10 @@ public class HouseholdTaxService : IHouseholdTaxService
                         priorToLocal = new DateTime(year, 6, 30, 23, 59, 59, 999, DateTimeKind.Unspecified);
                         break;
                     case 4:
+                    default:
                         fromLocal = new DateTime(year, 10, 1, 0, 0, 0, DateTimeKind.Unspecified);
                         toLocal = new DateTime(year, 12, 31, 23, 59, 59, 999, DateTimeKind.Unspecified);
                         priorToLocal = new DateTime(year, 9, 30, 23, 59, 59, 999, DateTimeKind.Unspecified);
-                        break;
-                    default:
-                        fromLocal = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
-                        toLocal = new DateTime(year, 3, 31, 23, 59, 59, 999, DateTimeKind.Unspecified);
-                        priorToLocal = null;
                         break;
                 }
                 break;
@@ -559,8 +639,16 @@ public class HouseholdTaxService : IHouseholdTaxService
             false
         );
     }
+
+    private static TimeZoneInfo GetVietnamTimeZone()
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("Asia/Ho_Chi_Minh");
+        }
+    }
 }
-
-
-
-

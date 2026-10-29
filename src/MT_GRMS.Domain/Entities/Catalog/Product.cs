@@ -1,4 +1,4 @@
-using MT_GRMS.Domain.Common;
+﻿using MT_GRMS.Domain.Common;
 
 namespace MT_GRMS.Domain.Entities.Catalog;
 
@@ -11,6 +11,7 @@ public class Product : BaseTenantEntity
     public decimal BasePrice { get; set; }
     public decimal CostPrice { get; set; }
     public string UnitName { get; set; } = "Cái";
+    public string TaxCategory { get; set; } = "STANDARD_1PCT";
     public bool HasBatches { get; set; } = false;
     public bool IsActive { get; set; } = true;
     public Category? Category { get; set; }

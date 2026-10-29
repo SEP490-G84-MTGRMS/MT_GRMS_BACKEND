@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Configuration;
 using MT_GRMS.Domain.Entities.Finance;
@@ -7,6 +7,7 @@ namespace MT_GRMS.Application.Tax.Security;
 
 /// <summary>
 /// Service implementation for HMAC-SHA256 snapshot signing and integrity verification using Canonical JSON.
+/// Binds both core financial figures and the cryptographic SHA-256 digest of BookDataJson (including metadata & books).
 /// </summary>
 public class TaxSnapshotSignatureService : ITaxSnapshotSignatureService
 {
@@ -45,15 +46,20 @@ public class TaxSnapshotSignatureService : ITaxSnapshotSignatureService
 
     private static string BuildCanonicalJson(HouseholdTaxSnapshot s)
     {
-        // Canonical string format with deterministic property ordering and culture invariant formatting
+        var bookDataBytes = Encoding.UTF8.GetBytes(s.BookDataJson ?? string.Empty);
+        var bookDataHash = Convert.ToHexString(SHA256.HashData(bookDataBytes)).ToLowerInvariant();
+
+        // Canonical string format with deterministic property ordering, culture invariant formatting,
+        // and cryptographic digest of BookDataJson (including audit metadata and books).
         return string.Format(
             System.Globalization.CultureInfo.InvariantCulture,
-            "{{\"Year\":{0},\"PeriodType\":{1},\"PeriodNumber\":{2},\"TaxableRevenue\":{3:F2},\"TotalTaxAmount\":{4:F2},\"FinalizedAtUtc\":\"{5:O}\",\"FinalizedBy\":\"{6}\"}}",
+            "{{\"Year\":{0},\"PeriodType\":{1},\"PeriodNumber\":{2},\"TaxableRevenue\":{3:F2},\"TotalTaxAmount\":{4:F2},\"BookDataHash\":\"{5}\",\"FinalizedAtUtc\":\"{6:O}\",\"FinalizedBy\":\"{7}\"}}",
             s.Year,
             (int)s.PeriodType,
             s.PeriodNumber,
             s.TaxableRevenueInPeriod,
             s.TotalTaxAmount,
+            bookDataHash,
             s.FinalizedAtUtc,
             s.FinalizedBy
         );
