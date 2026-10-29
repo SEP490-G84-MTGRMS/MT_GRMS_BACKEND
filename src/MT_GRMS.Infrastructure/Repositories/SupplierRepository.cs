@@ -331,5 +331,78 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             .Include(p => p.Category)
             .FirstOrDefaultAsync(p => p.Id == productId, cancellationToken);
     }
+
+    public async Task<(IReadOnlyList<SupplierBranchAssignment> Items, int TotalCount)> GetPagedBranchAssignmentsAsync(
+        string? supplierSearch,
+        string? branchSearch,
+        Guid? supplierId,
+        Guid? branchId,
+        int pageIndex,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _context.SupplierBranchAssignments
+            .Include(sba => sba.Supplier)
+            .Include(sba => sba.Branch)
+            .AsNoTracking();
+
+        if (supplierId.HasValue && supplierId.Value != Guid.Empty)
+        {
+            query = query.Where(sba => sba.SupplierId == supplierId.Value);
+        }
+
+        if (branchId.HasValue && branchId.Value != Guid.Empty)
+        {
+            query = query.Where(sba => sba.BranchId == branchId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(supplierSearch))
+        {
+            var term = supplierSearch.Trim();
+            query = query.Where(sba =>
+                EF.Functions.ILike(sba.Supplier!.Code, $"%{term}%") ||
+                EF.Functions.ILike(sba.Supplier.Name, $"%{term}%"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(branchSearch))
+        {
+            var term = branchSearch.Trim();
+            query = query.Where(sba =>
+                EF.Functions.ILike(sba.Branch!.Code, $"%{term}%") ||
+                EF.Functions.ILike(sba.Branch.Name, $"%{term}%"));
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken);
+
+        var items = await query
+            .OrderByDescending(sba => sba.CreatedAt)
+            .Skip((pageIndex - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return (items, totalCount);
+    }
+
+    public async Task<bool> BranchAssignmentExistsAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
+    {
+        return await _context.SupplierBranchAssignments
+            .AnyAsync(sba => sba.SupplierId == supplierId && sba.BranchId == branchId, cancellationToken);
+    }
+
+    public async Task AddBranchAssignmentAsync(SupplierBranchAssignment assignment, CancellationToken cancellationToken = default)
+    {
+        await _context.SupplierBranchAssignments.AddAsync(assignment, cancellationToken);
+    }
+
+    public async Task RemoveBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
+    {
+        var existing = await _context.SupplierBranchAssignments
+            .FirstOrDefaultAsync(sba => sba.SupplierId == supplierId && sba.BranchId == branchId, cancellationToken);
+        if (existing != null)
+        {
+            _context.SupplierBranchAssignments.Remove(existing);
+        }
+    }
 }
+
 

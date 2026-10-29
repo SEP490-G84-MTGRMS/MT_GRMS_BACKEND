@@ -534,6 +534,97 @@ public class SupplierService : ISupplierService
         return uniqueIds.Select(id => new SupplierBranchAssignmentDto { BranchId = id }).ToList();
     }
 
+    public async Task<PagedResult<SupplierBranchAssignmentDetailDto>> GetBranchAssignmentsAsync(SupplierBranchAssignmentQueryFilter filter, CancellationToken cancellationToken = default)
+    {
+        var (items, totalCount) = await _supplierRepository.GetPagedBranchAssignmentsAsync(
+            filter.SupplierSearch,
+            filter.BranchSearch,
+            filter.SupplierId,
+            filter.BranchId,
+            filter.PageIndex,
+            filter.PageSize,
+            cancellationToken);
+
+        var dtos = items.Select(a => new SupplierBranchAssignmentDetailDto
+        {
+            Id = a.Id,
+            SupplierId = a.SupplierId,
+            SupplierCode = a.Supplier?.Code ?? string.Empty,
+            SupplierName = a.Supplier?.Name ?? string.Empty,
+            SupplierType = a.Supplier?.SupplierType ?? SupplierType.Goods,
+            BranchId = a.BranchId,
+            BranchCode = a.Branch?.Code ?? string.Empty,
+            BranchName = a.Branch?.Name ?? string.Empty,
+            BranchAddress = a.Branch?.Address ?? string.Empty,
+            CreatedAt = a.CreatedAt,
+            Status = a.Supplier?.Status == SupplierStatus.Active ? "Active" : "Inactive"
+        }).ToList();
+
+        return new PagedResult<SupplierBranchAssignmentDetailDto>
+        {
+            Items = dtos,
+            TotalItems = totalCount,
+            Page = filter.PageIndex,
+            PageSize = filter.PageSize
+        };
+    }
+
+    public async Task<IReadOnlyList<SupplierBranchAssignmentDetailDto>> AssignSupplierToBranchesAsync(AssignSupplierToBranchesCommand command, CancellationToken cancellationToken = default)
+    {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        var supplier = await _supplierRepository.GetByIdAsync(command.SupplierId, cancellationToken);
+        if (supplier == null)
+        {
+            throw new NotFoundException("Nhà cung cấp", command.SupplierId);
+        }
+
+        var uniqueBranchIds = (command.BranchIds ?? [])
+            .Where(bId => bId != Guid.Empty)
+            .Distinct()
+            .ToList();
+
+        var addedAssignments = new List<SupplierBranchAssignment>();
+        foreach (var branchId in uniqueBranchIds)
+        {
+            var exists = await _supplierRepository.BranchAssignmentExistsAsync(command.SupplierId, branchId, cancellationToken);
+            if (!exists)
+            {
+                var assignment = new SupplierBranchAssignment
+                {
+                    SupplierId = command.SupplierId,
+                    BranchId = branchId,
+                    TenantId = _tenantContext.CurrentTenantId,
+                    CreatedAt = DateTime.UtcNow
+                };
+                await _supplierRepository.AddBranchAssignmentAsync(assignment, cancellationToken);
+                addedAssignments.Add(assignment);
+            }
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return addedAssignments.Select(a => new SupplierBranchAssignmentDetailDto
+        {
+            Id = a.Id,
+            SupplierId = a.SupplierId,
+            SupplierCode = supplier.Code,
+            SupplierName = supplier.Name,
+            SupplierType = supplier.SupplierType,
+            BranchId = a.BranchId,
+            CreatedAt = a.CreatedAt,
+            Status = "Active"
+        }).ToList();
+    }
+
+    public async Task UnassignSupplierBranchAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
+    {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        await _supplierRepository.RemoveBranchAssignmentAsync(supplierId, branchId, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
     public async Task<SupplierDetailDto> LinkCustomerAsync(Guid supplierId, LinkCustomerRequest request, CancellationToken cancellationToken = default)
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
