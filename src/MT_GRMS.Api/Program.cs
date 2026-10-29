@@ -1,7 +1,9 @@
+﻿using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Api.Middlewares;
 using MT_GRMS.Application;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Infrastructure;
+using MT_GRMS.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -31,7 +33,32 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// 4. Cấu hình Swagger trong môi trường Development
+// 5. Tự động áp dụng Migration (Auto-migration) và Nạp dữ liệu mẫu (Seeder) mỗi lần khởi động
+using (var scope = app.Services.CreateScope())
+{
+    var services = scope.ServiceProvider;
+    var logger = services.GetRequiredService<ILogger<Program>>();
+    try
+    {
+        var dbContext = services.GetRequiredService<AppDbContext>();
+        if (dbContext.Database.IsRelational())
+        {
+            logger.LogInformation("Applying EF Core migrations to Neon PostgreSQL database...");
+            await dbContext.Database.MigrateAsync();
+            logger.LogInformation("Database migrations applied successfully.");
+        }
+
+        logger.LogInformation("Seeding sample data into database...");
+        await DatabaseSeeder.SeedAsync(dbContext, logger);
+        logger.LogInformation("Database seeded successfully.");
+    }
+    catch (Exception ex)
+    {
+        logger.LogError(ex, "An error occurred while applying migrations or seeding the database.");
+    }
+}
+
+// 6. Cấu hình Swagger trong môi trường Development
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
@@ -42,7 +69,7 @@ if (app.Environment.IsDevelopment())
     });
 }
 
-// 5. Cấu hình HTTP Pipeline theo thứ tự chuẩn
+// 7. Cấu hình HTTP Pipeline theo thứ tự chuẩn
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 app.UseHttpsRedirection();

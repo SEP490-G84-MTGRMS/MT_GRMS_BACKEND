@@ -434,7 +434,7 @@ public class HouseholdTaxService : IHouseholdTaxService
             TotalTaxAmount = summary.TotalTaxAmount,
             BookDataJson = bookDataJson,
             FinalizedBy = finalizedBy,
-            FinalizedAtUtc = DateTime.UtcNow,
+            FinalizedAtUtc = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, DateTime.UtcNow.Day, DateTime.UtcNow.Hour, DateTime.UtcNow.Minute, DateTime.UtcNow.Second, DateTimeKind.Utc),
             Notes = request.Notes
         };
 

@@ -45,7 +45,7 @@ public class HouseholdTaxSnapshotConfiguration : IEntityTypeConfiguration<Househ
             .HasMaxLength(500);
 
         builder.Property(x => x.BookDataJson)
-            .HasColumnType("nvarchar(max)")
+            .HasColumnType("text")
             .IsRequired();
 
         builder.HasIndex(x => new { x.TenantId, x.BranchId, x.PeriodType, x.Year, x.PeriodNumber })

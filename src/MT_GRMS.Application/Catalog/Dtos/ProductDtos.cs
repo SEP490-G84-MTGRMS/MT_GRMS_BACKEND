@@ -22,5 +22,6 @@ public record ProductResponse(
     decimal CostPrice,
     string UnitName,
     bool HasBatches,
-    bool IsActive
+    bool IsActive,
+    string TaxCategory = "STANDARD_1PCT"
 );

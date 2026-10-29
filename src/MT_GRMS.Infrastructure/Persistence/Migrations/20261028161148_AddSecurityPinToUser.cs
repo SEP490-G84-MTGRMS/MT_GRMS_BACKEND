@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -292,7 +292,7 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     PitRate = table.Column<decimal>(type: "numeric(5,2)", precision: 5, scale: 2, nullable: false),
                     PitAmount = table.Column<decimal>(type: "numeric(18,2)", precision: 18, scale: 2, nullable: false),
                     TotalTaxAmount = table.Column<decimal>(type: "numeric(18,2)", precision: 18, scale: 2, nullable: false),
-                    BookDataJson = table.Column<string>(type: "nvarchar(max)", nullable: false),
+                    BookDataJson = table.Column<string>(type: "text", nullable: false),
                     FinalizedBy = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: false),
                     FinalizedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
                     Notes = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: true),
