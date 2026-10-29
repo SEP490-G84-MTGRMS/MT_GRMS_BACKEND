@@ -13,21 +13,21 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
         {
             migrationBuilder.AddColumn<int>(
                 name: "CutoffDayOffset",
-                table: "supplier_delivery_configs",
+                table: "SupplierDeliveryConfigs",
                 type: "integer",
                 nullable: false,
                 defaultValue: 1);
 
             migrationBuilder.AddColumn<int>(
                 name: "LeadTimeDays",
-                table: "supplier_delivery_configs",
+                table: "SupplierDeliveryConfigs",
                 type: "integer",
                 nullable: false,
                 defaultValue: 1);
 
             migrationBuilder.AddColumn<string>(
                 name: "OrderCutoffTime",
-                table: "supplier_delivery_configs",
+                table: "SupplierDeliveryConfigs",
                 type: "character varying(10)",
                 maxLength: 10,
                 nullable: false,
@@ -52,13 +52,13 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     table.ForeignKey(
                         name: "FK_supplier_branch_assignments_branches_BranchId",
                         column: x => x.BranchId,
-                        principalTable: "branches",
-                        principalColumn: "Id",
+                        principalTable: "Branches",
+                        principalColumn: "BranchID",
                         onDelete: ReferentialAction.Restrict);
                     table.ForeignKey(
                         name: "FK_supplier_branch_assignments_suppliers_SupplierId",
                         column: x => x.SupplierId,
-                        principalTable: "suppliers",
+                        principalTable: "Suppliers",
                         principalColumn: "Id",
                         onDelete: ReferentialAction.Cascade);
                 });
@@ -88,15 +88,15 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
 
             migrationBuilder.DropColumn(
                 name: "CutoffDayOffset",
-                table: "supplier_delivery_configs");
+                table: "SupplierDeliveryConfigs");
 
             migrationBuilder.DropColumn(
                 name: "LeadTimeDays",
-                table: "supplier_delivery_configs");
+                table: "SupplierDeliveryConfigs");
 
             migrationBuilder.DropColumn(
                 name: "OrderCutoffTime",
-                table: "supplier_delivery_configs");
+                table: "SupplierDeliveryConfigs");
         }
     }
 }

@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MT_GRMS.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20261027152502_AddSupplierBranchAssignmentsAndCutoff")]
+    [Migration("20261028093300_AddSupplierBranchAssignmentsAndCutoff")]
     partial class AddSupplierBranchAssignmentsAndCutoff
     {
         /// <inheritdoc />

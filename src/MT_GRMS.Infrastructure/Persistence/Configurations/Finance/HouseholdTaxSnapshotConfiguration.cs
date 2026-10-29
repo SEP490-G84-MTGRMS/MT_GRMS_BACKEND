@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using MT_GRMS.Domain.Entities.Finance;
 
@@ -38,7 +38,8 @@ public class HouseholdTaxSnapshotConfiguration : IEntityTypeConfiguration<Househ
             .IsRequired();
 
         builder.Property(x => x.AuditSignatureHash)
-            .HasMaxLength(128)
+            .HasColumnName("AuditSignature")
+            .HasMaxLength(256)
             .IsRequired(false);
 
         builder.Property(x => x.Notes)

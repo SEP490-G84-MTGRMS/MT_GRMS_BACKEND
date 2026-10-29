@@ -6,39 +6,72 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace MT_GRMS.Infrastructure.Persistence.Migrations
 {
     /// <inheritdoc />
-    public partial class AddSecurityPinToUser : Migration
+    public partial class AddTaxAndFinanceModules : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
+            // 1. Cột Security PIN (PBKDF2) trên bảng Users
             migrationBuilder.AddColumn<int>(
                 name: "FailedPinAttempts",
-                table: "users",
+                table: "Users",
                 type: "integer",
                 nullable: false,
                 defaultValue: 0);
 
             migrationBuilder.AddColumn<DateTime>(
                 name: "PinLockedUntilUtc",
-                table: "users",
+                table: "Users",
                 type: "timestamp with time zone",
                 nullable: true);
 
             migrationBuilder.AddColumn<string>(
                 name: "SecurityPinHash",
-                table: "users",
+                table: "Users",
                 type: "character varying(255)",
                 maxLength: 255,
                 nullable: true);
 
             migrationBuilder.AddColumn<string>(
                 name: "SecurityPinSalt",
-                table: "users",
+                table: "Users",
                 type: "character varying(255)",
                 maxLength: 255,
                 nullable: true);
 
-            migrationBuilder.CreateTable(
+            // 2. Cột TaxCategory trên bảng Products
+            migrationBuilder.AddColumn<string>(
+                name: "TaxCategory",
+                table: "Products",
+                type: "character varying(50)",
+                maxLength: 50,
+                nullable: false,
+                defaultValue: "STANDARD_1PCT");
+
+            // 3. Cột Thuế GTGT từng dòng hàng trên bảng OrderDetails
+            migrationBuilder.AddColumn<decimal>(
+                name: "AppliedVatRate",
+                table: "OrderDetails",
+                type: "numeric(5,4)",
+                nullable: false,
+                defaultValue: 0.01m);
+
+            migrationBuilder.AddColumn<decimal>(
+                name: "VatAmount",
+                table: "OrderDetails",
+                type: "numeric(18,2)",
+                nullable: false,
+                defaultValue: 0.00m);
+
+            migrationBuilder.AddColumn<decimal>(
+                name: "VatDiscountAmount",
+                table: "OrderDetails",
+                type: "numeric(18,2)",
+                nullable: false,
+                defaultValue: 0.00m);
+
+            // 4. Các bảng Phân hệ Tài chính, Sổ nợ khách hàng và Sổ thuế hộ kinh doanh
+migrationBuilder.CreateTable(
                 name: "BranchCashTills",
                 columns: table => new
                 {
@@ -294,6 +327,8 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     TotalTaxAmount = table.Column<decimal>(type: "numeric(18,2)", precision: 18, scale: 2, nullable: false),
                     BookDataJson = table.Column<string>(type: "text", nullable: false),
                     FinalizedBy = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: false),
+                    AuditSignature = table.Column<string>(type: "character varying(256)", maxLength: 256, nullable: true),
+
                     FinalizedAtUtc = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
                     Notes = table.Column<string>(type: "character varying(500)", maxLength: 500, nullable: true),
                     TenantId = table.Column<string>(type: "text", nullable: false),
@@ -327,30 +362,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                 constraints: table =>
                 {
                     table.PrimaryKey("PK_IdempotencyRecords", x => x.Id);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "Orders",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "uuid", nullable: false),
-                    OrderCode = table.Column<string>(type: "text", nullable: false),
-                    StoreId = table.Column<Guid>(type: "uuid", nullable: false),
-                    SubTotal = table.Column<decimal>(type: "numeric", nullable: false),
-                    DiscountAmount = table.Column<decimal>(type: "numeric", nullable: false),
-                    TotalAmount = table.Column<decimal>(type: "numeric", nullable: false),
-                    PaymentMethod = table.Column<int>(type: "integer", nullable: false),
-                    PaymentStatus = table.Column<int>(type: "integer", nullable: false),
-                    Note = table.Column<string>(type: "text", nullable: true),
-                    TenantId = table.Column<string>(type: "text", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    CreatedBy = table.Column<Guid>(type: "uuid", nullable: true),
-                    IsDeleted = table.Column<bool>(type: "boolean", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_Orders", x => x.Id);
                 });
 
             migrationBuilder.CreateTable(
@@ -405,35 +416,9 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     table.PrimaryKey("PK_TenantBankAccounts", x => x.Id);
                 });
 
-            migrationBuilder.CreateTable(
-                name: "OrderItem",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "uuid", nullable: false),
-                    OrderId = table.Column<Guid>(type: "uuid", nullable: false),
-                    ProductId = table.Column<Guid>(type: "uuid", nullable: false),
-                    ProductName = table.Column<string>(type: "text", nullable: false),
-                    UnitPrice = table.Column<decimal>(type: "numeric", nullable: false),
-                    Quantity = table.Column<decimal>(type: "numeric", nullable: false),
-                    TotalLineAmount = table.Column<decimal>(type: "numeric", nullable: false),
-                    TenantId = table.Column<string>(type: "text", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "timestamp with time zone", nullable: true),
-                    CreatedBy = table.Column<Guid>(type: "uuid", nullable: true),
-                    IsDeleted = table.Column<bool>(type: "boolean", nullable: false)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_OrderItem", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_OrderItem_Orders_OrderId",
-                        column: x => x.OrderId,
-                        principalTable: "Orders",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Cascade);
-                });
-
-            migrationBuilder.CreateIndex(
+            
+            // 5. Indexes cho các bảng tài chính
+migrationBuilder.CreateIndex(
                 name: "IX_BranchCashTills_TenantId_BranchId",
                 table: "BranchCashTills",
                 columns: new[] { "TenantId", "BranchId" });
@@ -522,10 +507,7 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                 columns: new[] { "TenantId", "Endpoint", "Key" },
                 unique: true);
 
-            migrationBuilder.CreateIndex(
-                name: "IX_OrderItem_OrderId",
-                table: "OrderItem",
-                column: "OrderId");
+            
 
             migrationBuilder.CreateIndex(
                 name: "IX_ShiftZReports_TenantId_TillId_Status",
@@ -542,66 +524,28 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.DropTable(
-                name: "BranchCashTills");
+            migrationBuilder.DropTable(name: "TenantBankAccounts");
+            migrationBuilder.DropTable(name: "ShiftZReports");
+            migrationBuilder.DropTable(name: "IdempotencyRecords");
+            migrationBuilder.DropTable(name: "HouseholdTaxSnapshots");
+            migrationBuilder.DropTable(name: "ExpenseVouchers");
+            migrationBuilder.DropTable(name: "CustomerDebtProfiles");
+            migrationBuilder.DropTable(name: "CustomerDebtInvoices");
+            migrationBuilder.DropTable(name: "CustomerDebtEntries");
+            migrationBuilder.DropTable(name: "CustomerDebtAllocations");
+            migrationBuilder.DropTable(name: "CashInTransits");
+            migrationBuilder.DropTable(name: "CashbookEntries");
+            migrationBuilder.DropTable(name: "BranchSafes");
+            migrationBuilder.DropTable(name: "BranchCashTills");
 
-            migrationBuilder.DropTable(
-                name: "BranchSafes");
-
-            migrationBuilder.DropTable(
-                name: "CashbookEntries");
-
-            migrationBuilder.DropTable(
-                name: "CashInTransits");
-
-            migrationBuilder.DropTable(
-                name: "CustomerDebtAllocations");
-
-            migrationBuilder.DropTable(
-                name: "CustomerDebtEntries");
-
-            migrationBuilder.DropTable(
-                name: "CustomerDebtInvoices");
-
-            migrationBuilder.DropTable(
-                name: "CustomerDebtProfiles");
-
-            migrationBuilder.DropTable(
-                name: "ExpenseVouchers");
-
-            migrationBuilder.DropTable(
-                name: "HouseholdTaxSnapshots");
-
-            migrationBuilder.DropTable(
-                name: "IdempotencyRecords");
-
-            migrationBuilder.DropTable(
-                name: "OrderItem");
-
-            migrationBuilder.DropTable(
-                name: "ShiftZReports");
-
-            migrationBuilder.DropTable(
-                name: "TenantBankAccounts");
-
-            migrationBuilder.DropTable(
-                name: "Orders");
-
-            migrationBuilder.DropColumn(
-                name: "FailedPinAttempts",
-                table: "users");
-
-            migrationBuilder.DropColumn(
-                name: "PinLockedUntilUtc",
-                table: "users");
-
-            migrationBuilder.DropColumn(
-                name: "SecurityPinHash",
-                table: "users");
-
-            migrationBuilder.DropColumn(
-                name: "SecurityPinSalt",
-                table: "users");
+            migrationBuilder.DropColumn(name: "AppliedVatRate", table: "OrderDetails");
+            migrationBuilder.DropColumn(name: "VatAmount", table: "OrderDetails");
+            migrationBuilder.DropColumn(name: "VatDiscountAmount", table: "OrderDetails");
+            migrationBuilder.DropColumn(name: "TaxCategory", table: "Products");
+            migrationBuilder.DropColumn(name: "FailedPinAttempts", table: "Users");
+            migrationBuilder.DropColumn(name: "PinLockedUntilUtc", table: "Users");
+            migrationBuilder.DropColumn(name: "SecurityPinHash", table: "Users");
+            migrationBuilder.DropColumn(name: "SecurityPinSalt", table: "Users");
         }
     }
 }

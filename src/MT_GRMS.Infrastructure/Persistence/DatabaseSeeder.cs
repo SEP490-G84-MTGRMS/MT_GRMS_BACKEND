@@ -23,7 +23,7 @@ public static class DatabaseSeeder
         try
         {
             // 1. Seed Users (Chủ tiệm với mã PIN 1234 đã băm PBKDF2)
-            if (!await context.Users.AnyAsync(ct))
+            if (!await context.Users.IgnoreQueryFilters().AnyAsync(u => u.Id == "user-owner-001", ct))
             {
                 logger.LogInformation("Seeding Users...");
                 var saltBytes = RandomNumberGenerator.GetBytes(16);
@@ -41,7 +41,9 @@ public static class DatabaseSeeder
                 var owner = new User
                 {
                     Id = "user-owner-001",
-                    Username = "store_owner",
+                    UserName = "store_owner",
+                    FullName = "Chủ Cửa Hàng",
+                    Email = "owner@mtgrms.vn",
                     Password = passwordHash,
                     SecurityPinSalt = Convert.ToBase64String(saltBytes),
                     SecurityPinHash = Convert.ToBase64String(pinHashBytes),
@@ -51,7 +53,9 @@ public static class DatabaseSeeder
                 var cashier = new User
                 {
                     Id = "user-cashier-001",
-                    Username = "staff_cashier",
+                    UserName = "staff_cashier",
+                    FullName = "Nhân Viên Thu Ngân",
+                    Email = "cashier@mtgrms.vn",
                     Password = staffPasswordHash
                 };
 
@@ -60,7 +64,7 @@ public static class DatabaseSeeder
             }
 
             // 2. Seed Categories
-            if (!await context.Categories.IgnoreQueryFilters().AnyAsync(ct))
+            if (!await context.Categories.IgnoreQueryFilters().AnyAsync(c => c.Id == Guid.Parse("11111111-1111-1111-1111-111111111111"), ct))
             {
                 logger.LogInformation("Seeding Categories...");
                 var fmcgCategory = new Category
@@ -92,7 +96,7 @@ public static class DatabaseSeeder
             }
 
             // 3. Seed Products (Gắn TaxCategory theo NQ 204: STANDARD_1PCT vs NO_REDUCTION_1PCT)
-            if (!await context.Products.IgnoreQueryFilters().AnyAsync(ct))
+            if (!await context.Products.IgnoreQueryFilters().AnyAsync(p => p.Id == Guid.Parse("aaaaaaaa-1111-1111-1111-111111111111"), ct))
             {
                 logger.LogInformation("Seeding Products with TaxCategory...");
                 var products = new List<Product>
@@ -181,8 +185,25 @@ public static class DatabaseSeeder
                 await context.SaveChangesAsync(ct);
             }
 
+            // Resolve default branch for Orders & Expenses foreign key
+            var defaultBranch = await context.Branches.IgnoreQueryFilters().FirstOrDefaultAsync(ct);
+            var branchId = defaultBranch?.Id ?? Guid.Parse("99999999-9999-9999-9999-999999999999");
+            if (defaultBranch == null)
+            {
+                defaultBranch = new Domain.Entities.SaaS.Branch
+                {
+                    Id = branchId,
+                    TenantId = DefaultTenantId,
+                    BranchCode = "BR-DEFAULT",
+                    Name = "Chi Nhánh Mặc Định",
+                    IsActive = true
+                };
+                await context.Branches.AddAsync(defaultBranch, ct);
+                await context.SaveChangesAsync(ct);
+            }
+
             // 4. Seed Orders & OrderItems (Phát sinh trong Q3/2026: 01/07/2026 - 30/09/2026)
-            if (!await context.Orders.IgnoreQueryFilters().AnyAsync(ct))
+            if (!await context.Orders.IgnoreQueryFilters().AnyAsync(o => o.Id == Guid.Parse("f0000001-1111-1111-1111-111111111111"), ct))
             {
                 logger.LogInformation("Seeding Orders and OrderItems...");
 
@@ -192,7 +213,7 @@ public static class DatabaseSeeder
                     Id = Guid.Parse("f0000001-1111-1111-1111-111111111111"),
                     TenantId = DefaultTenantId,
                     OrderCode = "ORD-20260715-001",
-                    StoreId = Guid.Parse("99999999-9999-9999-9999-999999999999"),
+                    BranchId = branchId,
                     SubTotal = 465000m,
                     DiscountAmount = 0m,
                     TotalAmount = 465000m,
@@ -235,7 +256,7 @@ public static class DatabaseSeeder
                     Id = Guid.Parse("f0000002-2222-2222-2222-222222222222"),
                     TenantId = DefaultTenantId,
                     OrderCode = "ORD-20260820-002",
-                    StoreId = Guid.Parse("99999999-9999-9999-9999-999999999999"),
+                    BranchId = branchId,
                     SubTotal = 565000m,
                     DiscountAmount = 0m,
                     TotalAmount = 565000m,
@@ -292,7 +313,7 @@ public static class DatabaseSeeder
                     Id = Guid.Parse("f0000003-3333-3333-3333-333333333333"),
                     TenantId = DefaultTenantId,
                     OrderCode = "ORD-20260910-003",
-                    StoreId = Guid.Parse("99999999-9999-9999-9999-999999999999"),
+                    BranchId = branchId,
                     SubTotal = 385000000m, // 385 triệu doanh thu
                     DiscountAmount = 0m,
                     TotalAmount = 385000000m,
@@ -320,7 +341,7 @@ public static class DatabaseSeeder
             }
 
             // 5. Seed Expense Vouchers (Phiếu chi chi phí mặt bằng, điện nước cho sổ chi phí S2c, S2e)
-            if (!await context.ExpenseVouchers.IgnoreQueryFilters().AnyAsync(ct))
+            if (!await context.ExpenseVouchers.IgnoreQueryFilters().AnyAsync(e => e.VoucherCode == "PC-202607-001", ct))
             {
                 logger.LogInformation("Seeding Expense Vouchers...");
                 var expenses = new List<ExpenseVoucher>
@@ -334,7 +355,7 @@ public static class DatabaseSeeder
                         Note = "Thanh toán tiền thuê mặt bằng tạp hóa tháng 7/2026",
                         Amount = 15000000m,
                         BeneficiaryName = "Nguyễn Văn Chủ Nhà",
-                        BranchId = Guid.Parse("99999999-9999-9999-9999-999999999999"),
+                        BranchId = branchId,
                         Status = ExpenseVoucherStatus.Approved,
                         IsTaxDeductible = true,
                         ExpenseDate = new DateTime(2026, 7, 5, 8, 0, 0, DateTimeKind.Utc),
@@ -349,7 +370,7 @@ public static class DatabaseSeeder
                         Note = "Thanh toán tiền thuê mặt bằng tạp hóa tháng 8/2026",
                         Amount = 15000000m,
                         BeneficiaryName = "Nguyễn Văn Chủ Nhà",
-                        BranchId = Guid.Parse("99999999-9999-9999-9999-999999999999"),
+                        BranchId = branchId,
                         Status = ExpenseVoucherStatus.Approved,
                         IsTaxDeductible = true,
                         ExpenseDate = new DateTime(2026, 8, 5, 8, 0, 0, DateTimeKind.Utc),
@@ -364,7 +385,7 @@ public static class DatabaseSeeder
                         Note = "Thanh toán tiền thuê mặt bằng tạp hóa tháng 9/2026",
                         Amount = 15000000m,
                         BeneficiaryName = "Nguyễn Văn Chủ Nhà",
-                        BranchId = Guid.Parse("99999999-9999-9999-9999-999999999999"),
+                        BranchId = branchId,
                         Status = ExpenseVoucherStatus.Approved,
                         IsTaxDeductible = true,
                         ExpenseDate = new DateTime(2026, 9, 5, 8, 0, 0, DateTimeKind.Utc),
@@ -379,7 +400,7 @@ public static class DatabaseSeeder
                         Note = "Hóa đơn EVN & VNPT chi nhánh",
                         Amount = 6500000m,
                         BeneficiaryName = "Điện lực & Viễn thông",
-                        BranchId = Guid.Parse("99999999-9999-9999-9999-999999999999"),
+                        BranchId = branchId,
                         Status = ExpenseVoucherStatus.Approved,
                         IsTaxDeductible = true,
                         ExpenseDate = new DateTime(2026, 9, 25, 14, 0, 0, DateTimeKind.Utc),
