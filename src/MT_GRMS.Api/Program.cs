@@ -1,10 +1,16 @@
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using MT_GRMS.Api.Common;
 using MT_GRMS.Api.Middlewares;
 using MT_GRMS.Application;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Infrastructure;
+using MT_GRMS.Infrastructure.Persistence;
+
+// 0. Nạp biến môi trường từ file .env (nếu có)
+EnvLoader.Load();
 
 AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 
@@ -91,19 +97,31 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-// 8. Tự động khởi tạo Database và nạp dữ liệu mẫu (Code-First Migration & Seed Data)
+// 8. Tự động áp dụng Migration (Auto-migration) và Nạp dữ liệu mẫu (Seeder) mỗi lần khởi động
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
+    var logger = services.GetRequiredService<ILogger<Program>>();
     try
     {
-        var context = services.GetRequiredService<MT_GRMS.Infrastructure.Persistence.AppDbContext>();
-        await MT_GRMS.Infrastructure.Persistence.DbInitializer.InitializeAsync(context);
+        var dbContext = services.GetRequiredService<AppDbContext>();
+        if (dbContext.Database.IsRelational())
+        {
+            logger.LogInformation("Applying EF Core migrations to Neon PostgreSQL database...");
+            await dbContext.Database.MigrateAsync();
+            logger.LogInformation("Database migrations applied successfully.");
+        }
+
+        logger.LogInformation("Initializing standard database baseline seed data...");
+        await DbInitializer.InitializeAsync(dbContext);
+
+        logger.LogInformation("Seeding tax & finance sample data into database...");
+        await DatabaseSeeder.SeedAsync(dbContext, logger);
+        logger.LogInformation("Database seeded successfully.");
     }
     catch (Exception ex)
     {
-        var logger = services.GetRequiredService<ILogger<Program>>();
-        logger.LogError(ex, "Lỗi khi tự động khởi tạo CSDL hoặc nạp Seed Data.");
+        logger.LogError(ex, "Lỗi khi tự động áp dụng migrations hoặc nạp dữ liệu mẫu vào CSDL.");
     }
 }
 

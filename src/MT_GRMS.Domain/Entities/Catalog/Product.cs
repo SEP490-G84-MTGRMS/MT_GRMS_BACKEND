@@ -18,6 +18,7 @@ public class Product : BaseTenantEntity
     public decimal MinStock { get; set; } = 0.00m;
     public decimal MaxStock { get; set; } = 1000.00m;
     public decimal VatRate { get; set; } = 0.00m;
+    public string TaxCategory { get; set; } = "STANDARD_1PCT";
     public string ProductType { get; set; } = "STANDARD";
     public string Status { get; set; } = "Active";
     public string? ImageUrl { get; set; }

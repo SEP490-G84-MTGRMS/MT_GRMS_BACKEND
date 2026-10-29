@@ -22,6 +22,20 @@ public static class DependencyInjection
         IConfiguration configuration)
     {
         var connectionString = configuration.GetConnectionString("DefaultConnection");
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            connectionString = configuration["DATABASE_URL"]
+                ?? Environment.GetEnvironmentVariable("DATABASE_URL")
+                ?? Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection")
+                ?? Environment.GetEnvironmentVariable("DB_CONNECTION_STRING");
+        }
+
+        if (!string.IsNullOrWhiteSpace(connectionString) &&
+            (connectionString.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) ||
+             connectionString.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase)))
+        {
+            connectionString = ParsePostgreSqlUri(connectionString);
+        }
 
         // Cấu hình DbContext kết nối Database thật (Database-First)
         services.AddDbContext<AppDbContext>((serviceProvider, options) =>
@@ -61,9 +75,34 @@ public static class DependencyInjection
         services.AddScoped<IProductRepository, ProductRepository>();
         services.AddScoped<IBatchRepository, BatchRepository>();
         services.AddScoped<ICashbookRepository, CashbookRepository>();
+        services.AddScoped<Application.Expenses.IExpenseRepository, ExpenseRepository>();
+        services.AddScoped<Application.Debt.ICustomerDebtRepository, CustomerDebtRepository>();
+                services.AddScoped<Application.Reports.IPnLReportRepository, PnLReportRepository>();
+        services.AddScoped<Application.Tax.IHouseholdTaxRepository, HouseholdTaxRepository>();
+        services.AddScoped<Application.Tax.Security.IPinVerificationService, Services.PinVerificationService>();
         services.AddScoped<ISupplierRepository, SupplierRepository>();
         services.AddScoped<IBranchRepository, BranchRepository>();
 
         return services;
+    }
+
+    private static string ParsePostgreSqlUri(string uriString)
+    {
+        try
+        {
+            var uri = new Uri(uriString);
+            var userInfo = uri.UserInfo.Split(':');
+            var username = userInfo.Length > 0 ? Uri.UnescapeDataString(userInfo[0]) : "";
+            var password = userInfo.Length > 1 ? Uri.UnescapeDataString(userInfo[1]) : "";
+            var host = uri.Host;
+            var port = uri.Port > 0 ? uri.Port : 5432;
+            var database = uri.AbsolutePath.Trim('/');
+
+            return $"Host={host};Port={port};Database={database};Username={username};Password={password};SSL Mode=Require;Trust Server Certificate=true;";
+        }
+        catch
+        {
+            return uriString;
+        }
     }
 }

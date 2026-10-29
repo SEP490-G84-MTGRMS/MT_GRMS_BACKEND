@@ -5,10 +5,7 @@ using MT_GRMS.Domain.Entities.Catalog;
 namespace MT_GRMS.Application.Catalog;
 
 /// <summary>
-/// KHUNG MẪU RỖNG CHO SERVICE TẦNG APPLICATION:
-/// - Tầng Service là nơi duy nhất (cùng DbContext) được phép trỏ tới Entity (Product).
-/// - Các hàm chỉ nhận Input là DTO và trả Output là DTO (tuyệt đối không trả Entity ra ngoài).
-/// - Nhóm tự viết business logic chi tiết vào các hàm bên dưới.
+/// Service tầng Application quản lý danh mục sản phẩm (Catalog)
 /// </summary>
 public class CatalogService : ICatalogService
 {
@@ -21,21 +18,79 @@ public class CatalogService : ICatalogService
         _unitOfWork = unitOfWork;
     }
 
-    public Task<ProductResponse> CreateProductAsync(ProductCreateRequest request, CancellationToken cancellationToken = default)
+    public async Task<ProductResponse> CreateProductAsync(ProductCreateRequest request, CancellationToken cancellationToken = default)
     {
-        // TODO: Nhóm tự viết logic ở đây (Map DTO -> Entity -> AddAsync -> SaveChangesAsync -> Map sang Response DTO)
-        throw new NotImplementedException();
+        var product = new Product
+        {
+            Id = Guid.NewGuid(),
+            SKU = request.SKU,
+            Barcode = request.Barcode,
+            ProductName = request.ProductName,
+            CategoryId = request.CategoryId ?? Guid.Empty,
+            BasePrice = request.BasePrice,
+            CostPrice = request.CostPrice,
+            UnitName = request.UnitName,
+            HasBatches = request.HasBatches,
+            IsActive = true,
+            TaxCategory = "STANDARD_1PCT"
+        };
+
+        await _productRepository.AddAsync(product, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return new ProductResponse(
+            product.Id,
+            product.SKU,
+            product.Barcode,
+            product.ProductName,
+            product.CategoryId,
+            null,
+            product.BasePrice,
+            product.CostPrice ?? 0m,
+            product.UnitName,
+            product.HasBatches,
+            product.IsActive,
+            product.TaxCategory
+        );
     }
 
-    public Task<ProductResponse?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+    public async Task<ProductResponse?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        // TODO: Nhóm tự viết logic ở đây (Query Entity -> Map sang Response DTO)
-        throw new NotImplementedException();
+        var p = await _productRepository.GetByIdAsync(id, cancellationToken);
+        if (p == null) return null;
+
+        return new ProductResponse(
+            p.Id,
+            p.SKU,
+            p.Barcode,
+            p.ProductName,
+            p.CategoryId,
+            p.Category?.CategoryName,
+            p.BasePrice,
+            p.CostPrice ?? 0m,
+            p.UnitName,
+            p.HasBatches,
+            p.IsActive,
+            p.TaxCategory
+        );
     }
 
-    public Task<IReadOnlyList<ProductResponse>> GetAllAsync(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ProductResponse>> GetAllAsync(CancellationToken cancellationToken = default)
     {
-        // TODO: Nhóm tự viết logic ở đây (Query danh sách Entity -> Map sang List Response DTO)
-        throw new NotImplementedException();
+        var products = await _productRepository.GetAllAsync(cancellationToken);
+        return products.Select(p => new ProductResponse(
+            p.Id,
+            p.SKU,
+            p.Barcode,
+            p.ProductName,
+            p.CategoryId,
+            p.Category?.CategoryName,
+            p.BasePrice,
+            p.CostPrice ?? 0m,
+            p.UnitName,
+            p.HasBatches,
+            p.IsActive,
+            p.TaxCategory
+        )).ToList();
     }
 }

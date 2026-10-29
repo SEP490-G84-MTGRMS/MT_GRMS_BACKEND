@@ -19,6 +19,11 @@ public class OrderDetail : BaseEntity
     public decimal ActualPrice { get; set; } = 0.00m;
     public bool IsGift { get; set; } = false;
 
+    // Thuế GTGT từng dòng hàng theo TT 152/2025/TT-BTC
+    public decimal AppliedVatRate { get; set; } = 0.01m;
+    public decimal VatAmount { get; set; } = 0m;
+    public decimal VatDiscountAmount { get; set; } = 0m;
+
     // Backward compatibility aliases
     [NotMapped]
     public decimal Quantity { get => Qty; set => Qty = value; }

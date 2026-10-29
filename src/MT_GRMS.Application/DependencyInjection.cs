@@ -24,6 +24,15 @@ public static class DependencyInjection
         services.AddScoped<ICatalogService, CatalogService>();
         services.AddScoped<IBatchService, BatchService>();
         services.AddScoped<ICashbookService, CashbookService>();
+        services.AddScoped<Expenses.IExpenseService, Expenses.ExpenseService>();
+        services.AddScoped<Debt.ICustomerDebtService, Debt.CustomerDebtService>();
+                services.AddScoped<Reports.IPnLReportService, Reports.PnLReportService>();
+        services.AddScoped<Tax.IHouseholdTaxService, Tax.HouseholdTaxService>();
+        services.AddScoped<Tax.Strategies.ITaxCalculationStrategy, Tax.Strategies.RevenuePercentageTaxStrategy>();
+        services.AddScoped<Tax.Strategies.ITaxCalculationStrategy, Tax.Strategies.DeclarationBasedTaxStrategy>();
+        services.AddScoped<Tax.Strategies.ITaxCalculationStrategyFactory, Tax.Strategies.TaxCalculationStrategyFactory>();
+        services.AddSingleton<Tax.Security.ITaxSnapshotSignatureService, Tax.Security.TaxSnapshotSignatureService>();
+        services.AddSingleton<Common.Services.IAuditHashService, Common.Services.AuditHashService>();
         services.AddScoped<Suppliers.ISupplierService, Suppliers.SupplierService>();
         services.AddScoped<Branches.IBranchService, Branches.BranchService>();
         services.AddScoped<AiPipeline.IAiRecommendationService, AiPipeline.AiRecommendationService>();
@@ -31,3 +40,7 @@ public static class DependencyInjection
         return services;
     }
 }
+
+
+
+
