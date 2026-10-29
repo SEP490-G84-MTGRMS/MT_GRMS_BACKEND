@@ -36,7 +36,7 @@ public class PinVerificationService : IPinVerificationService
             return new PinVerificationResult(false, "PIN_REQUIRED", "Vui lòng nhập mã PIN xác thực.");
         }
 
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId || u.Username == userId, ct);
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId || u.UserName == userId, ct);
         if (user == null)
         {
             return new PinVerificationResult(false, "USER_NOT_FOUND", "Không tìm thấy thông tin tài khoản người dùng.");
@@ -125,7 +125,7 @@ public class PinVerificationService : IPinVerificationService
             throw new ArgumentException("Mã PIN phải có tối thiểu 4 ký tự.");
         }
 
-        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId || u.Username == userId, ct);
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId || u.UserName == userId, ct);
         if (user == null)
         {
             throw new InvalidOperationException($"Không tìm thấy người dùng với Id '{userId}'.");

@@ -83,6 +83,12 @@ public class UpdateSupplierDeliveryConfigCommandValidator : AbstractValidator<Up
         RuleFor(x => x.LeadTimeHours)
             .GreaterThanOrEqualTo(0).WithMessage("Thời gian chuẩn bị giao hàng (Lead Time) phải lớn hơn hoặc bằng 0.");
 
+        RuleFor(x => x.LeadTimeDays)
+            .GreaterThanOrEqualTo(0).WithMessage("Lead time (ngày) phải lớn hơn hoặc bằng 0.");
+
+        RuleFor(x => x.CutoffDayOffset)
+            .GreaterThanOrEqualTo(0).WithMessage("Cutoff day offset phải lớn hơn hoặc bằng 0.");
+
         RuleFor(x => x.MinOrderValue)
             .GreaterThanOrEqualTo(0).WithMessage("Giá trị đơn tối thiểu phải lớn hơn hoặc bằng 0.");
 

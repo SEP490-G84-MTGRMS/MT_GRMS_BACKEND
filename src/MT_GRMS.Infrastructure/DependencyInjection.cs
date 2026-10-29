@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Batches;
+using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Common;
@@ -80,6 +81,7 @@ public static class DependencyInjection
         services.AddScoped<Application.Tax.IHouseholdTaxRepository, HouseholdTaxRepository>();
         services.AddScoped<Application.Tax.Security.IPinVerificationService, Services.PinVerificationService>();
         services.AddScoped<ISupplierRepository, SupplierRepository>();
+        services.AddScoped<IBranchRepository, BranchRepository>();
 
         return services;
     }

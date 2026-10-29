@@ -21,6 +21,8 @@ public class CashbookDatabaseIntegrationTests
             CurrentUserId = userId;
             CurrentBranchId = branchId;
         }
+        public string CurrentRole { get; set; } = "ADMIN";
+        public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
     }
 
     private AppDbContext CreateDbContext()

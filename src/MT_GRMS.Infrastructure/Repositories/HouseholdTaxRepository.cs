@@ -21,11 +21,11 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         var startOfYearUtc = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
 
         var orderGross = await _context.Orders
-            .Where(o => o.CreatedAt >= startOfYearUtc && o.CreatedAt <= upToDateUtc && o.PaymentStatus == PaymentStatus.Paid)
-            .SumAsync(o => (decimal?)o.SubTotal, cancellationToken) ?? 0m;
+            .Where(o => o.CreatedAt >= startOfYearUtc && o.CreatedAt <= upToDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"))
+            .SumAsync(o => (decimal?)o.TotalAmount, cancellationToken) ?? 0m;
 
         var orderDiscounts = await _context.Orders
-            .Where(o => o.CreatedAt >= startOfYearUtc && o.CreatedAt <= upToDateUtc && o.PaymentStatus == PaymentStatus.Paid)
+            .Where(o => o.CreatedAt >= startOfYearUtc && o.CreatedAt <= upToDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"))
             .SumAsync(o => (decimal?)o.DiscountAmount, cancellationToken) ?? 0m;
 
         var returns = await _context.CustomerDebtEntries
@@ -45,12 +45,12 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         var orderQuery = _context.Orders.AsQueryable();
         if (branchId.HasValue)
         {
-            orderQuery = orderQuery.Where(o => o.StoreId == branchId.Value);
+            orderQuery = orderQuery.Where(o => o.BranchId == branchId.Value);
         }
 
-        orderQuery = orderQuery.Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt <= toDateUtc && o.PaymentStatus == PaymentStatus.Paid);
+        orderQuery = orderQuery.Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt <= toDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"));
 
-        var gross = await orderQuery.SumAsync(o => (decimal?)o.SubTotal, cancellationToken) ?? 0m;
+        var gross = await orderQuery.SumAsync(o => (decimal?)o.TotalAmount, cancellationToken) ?? 0m;
         var discounts = await orderQuery.SumAsync(o => (decimal?)o.DiscountAmount, cancellationToken) ?? 0m;
 
         var returnQuery = _context.CustomerDebtEntries.AsQueryable();
@@ -107,12 +107,12 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         Guid? branchId,
         CancellationToken cancellationToken = default)
     {
-        var orderQuery = _context.Orders.Include(o => o.Items).AsQueryable();
+        var orderQuery = _context.Orders.Include(o => o.Details).AsQueryable();
         if (branchId.HasValue)
         {
-            orderQuery = orderQuery.Where(o => o.StoreId == branchId.Value);
+            orderQuery = orderQuery.Where(o => o.BranchId == branchId.Value);
         }
-        orderQuery = orderQuery.Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt <= toDateUtc && o.PaymentStatus == PaymentStatus.Paid);
+        orderQuery = orderQuery.Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt <= toDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"));
 
         var orders = await orderQuery.ToListAsync(cancellationToken);
 
@@ -120,7 +120,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         var productIds = orders.SelectMany(o => o.Items).Select(i => i.ProductId).Distinct().ToList();
         var productCostDict = await _context.Products
             .Where(p => productIds.Contains(p.Id))
-            .ToDictionaryAsync(p => p.Id, p => p.CostPrice, cancellationToken);
+            .ToDictionaryAsync(p => p.Id, p => p.CostPrice ?? 0m, cancellationToken);
 
         decimal actualCogs = 0m;
         bool hasAnyRealCost = false;
@@ -150,7 +150,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         if (!hasAnyRealCost)
         {
             // Fallback: Ước tính 70% doanh thu thuần nếu sản phẩm chưa liên kết giá vốn
-            var gross = orders.Sum(o => o.SubTotal);
+            var gross = orders.Sum(o => o.TotalAmount);
             var discounts = orders.Sum(o => o.DiscountAmount);
             var netRevenue = Math.Max(0, gross - discounts - salesReturns);
             var estimatedCogs = Math.Round(netRevenue * 0.70m, 0, MidpointRounding.AwayFromZero);
@@ -158,7 +158,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         }
 
         // Trừ giá vốn hàng trả lại theo tỷ lệ giá vốn thực tế trên doanh thu
-        var totalGrossRevenue = orders.Sum(o => o.SubTotal);
+        var totalGrossRevenue = orders.Sum(o => o.TotalAmount);
         decimal returnCogs = 0m;
         if (totalGrossRevenue > 0 && salesReturns > 0)
         {
@@ -185,9 +185,9 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         var orderQuery = _context.Orders.AsQueryable();
         if (branchId.HasValue)
         {
-            orderQuery = orderQuery.Where(o => o.StoreId == branchId.Value);
+            orderQuery = orderQuery.Where(o => o.BranchId == branchId.Value);
         }
-        orderQuery = orderQuery.Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt <= toDateUtc && o.PaymentStatus == PaymentStatus.Paid);
+        orderQuery = orderQuery.Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt <= toDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"));
 
         var orders = await orderQuery
             .OrderBy(o => o.CreatedAt)

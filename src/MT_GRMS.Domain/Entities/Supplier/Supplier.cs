@@ -53,4 +53,5 @@ public class Supplier : BaseTenantEntity
     public SupplierDeliveryConfig? DeliveryConfig { get; set; }
     public ICollection<SupplierAPLedger> APLedgers { get; set; } = new List<SupplierAPLedger>();
     public ICollection<SupplierBlackoutDate> BlackoutDates { get; set; } = new List<SupplierBlackoutDate>();
+    public ICollection<SupplierBranchAssignment> BranchAssignments { get; set; } = new List<SupplierBranchAssignment>();
 }

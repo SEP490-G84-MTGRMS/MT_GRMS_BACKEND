@@ -33,8 +33,13 @@ public class SupplierService : ISupplierService
             filter.CategoryId,
             filter.PageIndex,
             filter.PageSize,
+            filter.Code,
+            filter.Name,
+            filter.ContactPerson,
+            filter.Phone,
             cancellationToken);
 
+        var canSeeDebt = SupplierAccess.IsStoreOwner(_tenantContext);
         var dtos = items.Select(s => new SupplierSummaryDto
         {
             Id = s.Id,
@@ -42,13 +47,15 @@ public class SupplierService : ISupplierService
             Name = s.Name,
             SupplierType = s.SupplierType,
             Phone = s.Phone,
+            ContactPerson = s.ContactPerson,
+            TaxCode = s.TaxCode,
             Email = s.Email,
             CategoryId = s.CategoryId,
             CategoryName = s.Category?.CategoryName,
             Status = s.Status,
             PaymentTermDays = s.PaymentTermDays,
             CreditLimit = s.CreditLimit,
-            CurrentDebt = s.CurrentDebt,
+            CurrentDebt = canSeeDebt ? s.CurrentDebt : 0,
             LinkedCustomerId = Guid.TryParse(s.LinkedCustomerId, out var lcid) ? lcid : null,
             CreatedAt = s.CreatedAt
         }).ToList();
@@ -66,8 +73,13 @@ public class SupplierService : ISupplierService
     {
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
         if (supplier == null) return null;
+        if (!SupplierAccess.CanViewSupplier(_tenantContext, supplier)) return null;
 
         var dto = MapToDetailDto(supplier);
+        if (!SupplierAccess.IsStoreOwner(_tenantContext))
+        {
+            dto.CurrentDebt = 0;
+        }
 
         // Tính toán EarliestDeliveryDate nếu có DeliveryConfig
         if (dto.DeliveryConfig != null)
@@ -85,6 +97,8 @@ public class SupplierService : ISupplierService
 
     public async Task<SupplierDetailDto> CreateSupplierAsync(CreateSupplierCommand command, CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         // 1. Tự động sinh mã nếu trống (REQ-01)
         var code = command.Code?.Trim();
         if (string.IsNullOrWhiteSpace(code))
@@ -132,7 +146,10 @@ public class SupplierService : ISupplierService
         {
             Supplier = supplier,
             LeadTimeHours = 24,
+            LeadTimeDays = 1,
+            CutoffDayOffset = 1,
             CutoffTime = "17:00",
+            OrderCutoffTime = "17:00",
             DeliveryWeekdaysMask = 63, // Mon-Sat
             DeliveryDaysJson = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]",
             MinOrderValue = 0,
@@ -149,6 +166,8 @@ public class SupplierService : ISupplierService
 
     public async Task<SupplierDetailDto> UpdateSupplierAsync(Guid id, UpdateSupplierCommand command, CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
         if (supplier == null)
         {
@@ -207,40 +226,37 @@ public class SupplierService : ISupplierService
 
     public async Task<SupplierDetailDto> UpdateStatusAsync(Guid id, UpdateSupplierStatusRequest request, CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
         if (supplier == null)
         {
             throw new NotFoundException("Nhà cung cấp", id);
         }
 
-        // BR-S03: Chặn Inactive / Suspended khi còn nợ AP
-        if (request.Status != SupplierStatus.Active)
-        {
-            if (supplier.CurrentDebt > 0)
-            {
-                throw new BusinessException("SUPPLIER_HAS_OUTSTANDING_DEBT", "BR-S03: Không thể chuyển trạng thái ngừng hoạt động khi nhà cung cấp còn dư nợ AP.");
-            }
-        }
-
         supplier.Status = request.Status;
         _supplierRepository.Update(supplier);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapToDetailDto(supplier);
+        var dto = MapToDetailDto(supplier);
+        dto.OpenPurchaseOrderCount = 0;
+        return dto;
     }
 
     public async Task DeleteSupplierAsync(Guid id, CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         var supplier = await _supplierRepository.GetByIdAsync(id, cancellationToken);
         if (supplier == null)
         {
             throw new NotFoundException("Nhà cung cấp", id);
         }
 
-        // BR-S03: Chặn Delete khi còn nợ AP
-        if (supplier.CurrentDebt > 0)
+        var (_, ledgerCount) = await _supplierRepository.GetPagedLedgerAsync(id, null, null, 1, 1, cancellationToken);
+        if (supplier.CurrentDebt > 0 || ledgerCount > 0)
         {
-            throw new BusinessException("SUPPLIER_HAS_OUTSTANDING_DEBT", "BR-S03: Không thể xóa nhà cung cấp khi còn dư nợ AP.");
+            throw new BusinessException("SUPPLIER_HAS_HISTORY", "Không thể xóa nhà cung cấp đã có lịch sử giao dịch hoặc công nợ.");
         }
 
         _supplierRepository.Delete(supplier);
@@ -261,7 +277,10 @@ public class SupplierService : ISupplierService
             {
                 SupplierId = supplierId,
                 LeadTimeHours = 24,
+                LeadTimeDays = 1,
+                CutoffDayOffset = 1,
                 CutoffTime = "17:00",
+                OrderCutoffTime = "17:00",
                 DeliveryWeekdaysMask = 63,
                 DeliveryDaysJson = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]"
             };
@@ -284,6 +303,8 @@ public class SupplierService : ISupplierService
 
     public async Task<SupplierDeliveryConfigDto> UpdateDeliveryConfigAsync(Guid supplierId, UpdateSupplierDeliveryConfigCommand command, CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         var config = await _supplierRepository.GetDeliveryConfigAsync(supplierId, cancellationToken);
 
         if (config == null)
@@ -296,7 +317,10 @@ public class SupplierService : ISupplierService
         }
 
         config.LeadTimeHours = command.LeadTimeHours;
+        config.LeadTimeDays = command.LeadTimeDays > 0 ? command.LeadTimeDays : 1;
+        config.CutoffDayOffset = command.CutoffDayOffset >= 0 ? command.CutoffDayOffset : 1;
         config.CutoffTime = string.IsNullOrWhiteSpace(command.CutoffTime) ? "17:00" : command.CutoffTime.Trim();
+        config.OrderCutoffTime = string.IsNullOrWhiteSpace(command.OrderCutoffTime) ? config.CutoffTime : command.OrderCutoffTime.Trim();
         config.DeliveryWeekdaysMask = DeliveryScheduleCalculator.DayNamesToMask(command.DeliveryDays);
         config.DeliveryDaysJson = System.Text.Json.JsonSerializer.Serialize(command.DeliveryDays ?? []);
         config.MinOrderValue = command.MinOrderValue;
@@ -338,6 +362,8 @@ public class SupplierService : ISupplierService
 
     public async Task<PagedResult<SupplierAPLedgerDto>> GetAPLedgerAsync(Guid supplierId, DateTime? fromDate, DateTime? toDate, int pageIndex = 1, int pageSize = 20, CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         var (items, totalCount) = await _supplierRepository.GetPagedLedgerAsync(supplierId, fromDate, toDate, pageIndex, pageSize, cancellationToken);
 
         var dtos = items.Select(l => new SupplierAPLedgerDto
@@ -367,6 +393,8 @@ public class SupplierService : ISupplierService
 
     public async Task<SupplierAPLedgerDto> RecordAPTransactionAsync(RecordAPTransactionCommand command, CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         // 1. Kiểm tra IdempotencyKey (BR-S08)
         if (!string.IsNullOrWhiteSpace(command.IdempotencyKey))
         {
@@ -440,8 +468,76 @@ public class SupplierService : ISupplierService
         };
     }
 
+    public async Task<SupplierApSummaryDto> GetApSummaryAsync(Guid supplierId, CancellationToken cancellationToken = default)
+    {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
+        if (supplier == null)
+        {
+            throw new NotFoundException("Nhà cung cấp", supplierId);
+        }
+
+        return new SupplierApSummaryDto
+        {
+            SupplierId = supplier.Id,
+            CurrentDebt = supplier.CurrentDebt,
+            OverdueDebt = supplier.OverdueDebt,
+            CreditLimit = supplier.CreditLimit,
+            OpenPurchaseOrderCount = 0
+        };
+    }
+
+    public async Task<IReadOnlyList<SupplierBranchAssignmentDto>> GetAssignedBranchesAsync(Guid supplierId, CancellationToken cancellationToken = default)
+    {
+        var supplier = await _supplierRepository.GetByIdWithDetailsAsync(supplierId, cancellationToken);
+        if (supplier == null || !SupplierAccess.CanViewSupplier(_tenantContext, supplier))
+        {
+            throw new NotFoundException("Nhà cung cấp", supplierId);
+        }
+
+        return (supplier.BranchAssignments ?? [])
+            .Select(a => new SupplierBranchAssignmentDto { BranchId = a.BranchId })
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<SupplierBranchAssignmentDto>> ReplaceAssignedBranchesAsync(Guid supplierId, ReplaceSupplierBranchesCommand command, CancellationToken cancellationToken = default)
+    {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        var supplier = await _supplierRepository.GetByIdWithDetailsAsync(supplierId, cancellationToken);
+        if (supplier == null)
+        {
+            throw new NotFoundException("Nhà cung cấp", supplierId);
+        }
+
+        supplier.BranchAssignments ??= new List<SupplierBranchAssignment>();
+        supplier.BranchAssignments.Clear();
+
+        var uniqueIds = (command.BranchIds ?? [])
+            .Where(id => id != Guid.Empty)
+            .Distinct()
+            .ToList();
+
+        foreach (var branchId in uniqueIds)
+        {
+            supplier.BranchAssignments.Add(new SupplierBranchAssignment
+            {
+                SupplierId = supplier.Id,
+                BranchId = branchId
+            });
+        }
+
+        _supplierRepository.Update(supplier);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return uniqueIds.Select(id => new SupplierBranchAssignmentDto { BranchId = id }).ToList();
+    }
+
     public async Task<SupplierDetailDto> LinkCustomerAsync(Guid supplierId, LinkCustomerRequest request, CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(supplierId, cancellationToken);
         if (supplier == null)
         {
@@ -530,7 +626,10 @@ public class SupplierService : ISupplierService
             Id = config.Id,
             SupplierId = config.SupplierId,
             LeadTimeHours = config.LeadTimeHours,
+            LeadTimeDays = config.LeadTimeDays,
+            CutoffDayOffset = config.CutoffDayOffset,
             CutoffTime = config.CutoffTime,
+            OrderCutoffTime = string.IsNullOrWhiteSpace(config.OrderCutoffTime) ? config.CutoffTime : config.OrderCutoffTime,
             DeliveryWeekdaysMask = config.DeliveryWeekdaysMask,
             DeliveryDays = days,
             MinOrderValue = config.MinOrderValue,

@@ -8,7 +8,7 @@ public class SupplierAPLedgerConfiguration : IEntityTypeConfiguration<SupplierAP
 {
     public void Configure(EntityTypeBuilder<SupplierAPLedger> builder)
     {
-        builder.ToTable("supplier_ap_ledgers");
+        builder.ToTable("SupplierAPLedgers");
 
         builder.HasKey(x => x.Id);
 

@@ -26,6 +26,10 @@ public class MultiTenantMiddleware
             if (!string.IsNullOrWhiteSpace(tenantId))
             {
                 tenantContext.SetContext(tenantId, userId, branchId);
+                var role = context.User.FindFirst(ClaimTypes.Role)?.Value
+                    ?? context.User.FindFirst("role")?.Value
+                    ?? context.User.FindFirst("RoleName")?.Value;
+                tenantContext.SetRole(role);
             }
         }
 

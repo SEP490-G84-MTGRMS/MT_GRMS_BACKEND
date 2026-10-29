@@ -22,6 +22,8 @@ public class PnLReportDatabaseIntegrationTests
             CurrentUserId = userId;
             CurrentBranchId = branchId;
         }
+        public string CurrentRole { get; set; } = "ADMIN";
+        public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
     }
 
     private AppDbContext CreateDbContext()
@@ -48,8 +50,8 @@ public class PnLReportDatabaseIntegrationTests
             StoreId = branchId,
             SubTotal = 1_000_000m,
             DiscountAmount = 50_000m,
-            TotalAmount = 950_000m,
-            PaymentStatus = PaymentStatus.Paid,
+            FinalAmount = 950_000m,
+            PaymentStatus = "PAID",
             CreatedAt = now
         };
 
@@ -60,7 +62,7 @@ public class PnLReportDatabaseIntegrationTests
             SubTotal = 500_000m,
             DiscountAmount = 0m,
             TotalAmount = 500_000m,
-            PaymentStatus = PaymentStatus.Paid,
+            PaymentStatus = "PAID",
             CreatedAt = now.AddHours(2)
         };
 

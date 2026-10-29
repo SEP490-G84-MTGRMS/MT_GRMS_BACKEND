@@ -22,6 +22,8 @@ public class HouseholdTaxDatabaseIntegrationTests
             CurrentUserId = userId;
             CurrentBranchId = branchId;
         }
+        public string CurrentRole { get; set; } = "ADMIN";
+        public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
     }
 
     private AppDbContext CreateDbContext()
@@ -50,8 +52,8 @@ public class HouseholdTaxDatabaseIntegrationTests
             StoreId = branchId,
             SubTotal = 10_000_000m,
             DiscountAmount = 500_000m,
-            TotalAmount = 9_500_000m,
-            PaymentStatus = PaymentStatus.Paid,
+            FinalAmount = 9_500_000m,
+            PaymentStatus = "PAID",
             CreatedAt = new DateTime(2026, 2, 10, 10, 0, 0, DateTimeKind.Utc)
         };
 
@@ -62,7 +64,7 @@ public class HouseholdTaxDatabaseIntegrationTests
             SubTotal = 5_000_000m,
             DiscountAmount = 0m,
             TotalAmount = 5_000_000m,
-            PaymentStatus = PaymentStatus.Paid,
+            PaymentStatus = "PAID",
             CreatedAt = new DateTime(2026, 2, 15, 14, 0, 0, DateTimeKind.Utc)
         };
 
@@ -105,7 +107,7 @@ public class HouseholdTaxDatabaseIntegrationTests
             StoreId = branchId,
             SubTotal = 2_000_000m,
             TotalAmount = 2_000_000m,
-            PaymentStatus = PaymentStatus.Paid,
+            PaymentStatus = "PAID",
             CreatedAt = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc)
         });
 
@@ -246,9 +248,9 @@ public class HouseholdTaxDatabaseIntegrationTests
             StoreId = branchId,
             SubTotal = 2_000_000m,
             TotalAmount = 2_000_000m,
-            PaymentStatus = PaymentStatus.Paid,
+            PaymentStatus = "PAID",
             CreatedAt = new DateTime(2026, 2, 1, 10, 0, 0, DateTimeKind.Utc),
-            Items = new List<OrderItem>
+            Items = new List<MT_GRMS.Domain.Entities.Sales.OrderDetail>
             {
                 new() { ProductId = prodA.Id, Quantity = 10, UnitPrice = 100_000m, TotalLineAmount = 1_000_000m },
                 new() { ProductId = prodB.Id, Quantity = 20, UnitPrice = 50_000m, TotalLineAmount = 1_000_000m }
@@ -291,9 +293,9 @@ public class HouseholdTaxDatabaseIntegrationTests
             StoreId = branchId,
             SubTotal = 1_000_000m,
             TotalAmount = 1_000_000m,
-            PaymentStatus = PaymentStatus.Paid,
+            PaymentStatus = "PAID",
             CreatedAt = new DateTime(2026, 2, 1, 10, 0, 0, DateTimeKind.Utc),
-            Items = new List<OrderItem>
+            Items = new List<MT_GRMS.Domain.Entities.Sales.OrderDetail>
             {
                 new() { ProductId = prodNoCost.Id, Quantity = 10, UnitPrice = 100_000m, TotalLineAmount = 1_000_000m }
             }

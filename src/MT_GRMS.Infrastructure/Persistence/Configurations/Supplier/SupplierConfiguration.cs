@@ -8,7 +8,7 @@ public class SupplierConfiguration : IEntityTypeConfiguration<Domain.Entities.Su
 {
     public void Configure(EntityTypeBuilder<Domain.Entities.Supplier.Supplier> builder)
     {
-        builder.ToTable("suppliers");
+        builder.ToTable("Suppliers");
 
         builder.HasKey(x => x.Id);
 
@@ -63,6 +63,11 @@ public class SupplierConfiguration : IEntityTypeConfiguration<Domain.Entities.Su
         builder.HasMany(x => x.BlackoutDates)
             .WithOne(b => b.Supplier)
             .HasForeignKey(b => b.SupplierId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasMany(x => x.BranchAssignments)
+            .WithOne(a => a.Supplier)
+            .HasForeignKey(a => a.SupplierId)
             .OnDelete(DeleteBehavior.Cascade);
     }
 }

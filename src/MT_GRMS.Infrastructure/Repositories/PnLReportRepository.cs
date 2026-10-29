@@ -22,12 +22,12 @@ public class PnLReportRepository : IPnLReportRepository
 
         if (branchId.HasValue)
         {
-            query = query.Where(o => o.StoreId == branchId.Value);
+            query = query.Where(o => o.BranchId == branchId.Value);
         }
 
-        query = query.Where(o => o.CreatedAt >= fromDate && o.CreatedAt <= toDate && o.PaymentStatus == PaymentStatus.Paid);
+        query = query.Where(o => o.CreatedAt >= fromDate && o.CreatedAt <= toDate && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"));
 
-        var gross = await query.SumAsync(o => (decimal?)o.SubTotal, ct) ?? 0m;
+        var gross = await query.SumAsync(o => (decimal?)o.TotalAmount, ct) ?? 0m;
         var discounts = await query.SumAsync(o => (decimal?)o.DiscountAmount, ct) ?? 0m;
 
         // Doanh thu hàng trả lại từ các bút toán hoàn hàng trong sổ nợ/sổ quỹ
@@ -45,21 +45,21 @@ public class PnLReportRepository : IPnLReportRepository
 
     public async Task<CogsAggregation> GetCogsAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default)
     {
-        var query = _context.Orders.Include(o => o.Items).AsQueryable();
+        var query = _context.Orders.Include(o => o.Details).AsQueryable();
 
         if (branchId.HasValue)
         {
-            query = query.Where(o => o.StoreId == branchId.Value);
+            query = query.Where(o => o.BranchId == branchId.Value);
         }
 
         var orders = await query
-            .Where(o => o.CreatedAt >= fromDate && o.CreatedAt <= toDate && o.PaymentStatus == PaymentStatus.Paid)
+            .Where(o => o.CreatedAt >= fromDate && o.CreatedAt <= toDate && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"))
             .ToListAsync(ct);
 
         var productIds = orders.SelectMany(o => o.Items).Select(i => i.ProductId).Distinct().ToList();
         var productCostDict = await _context.Products
             .Where(p => productIds.Contains(p.Id))
-            .ToDictionaryAsync(p => p.Id, p => p.CostPrice, ct);
+            .ToDictionaryAsync(p => p.Id, p => p.CostPrice ?? 0m, ct);
 
         decimal actualCogs = 0m;
         bool hasAnyRealCost = false;
@@ -81,7 +81,7 @@ public class PnLReportRepository : IPnLReportRepository
             // Fallback 70% doanh thu theo chuẩn ngành tạp hóa bán lẻ nếu chưa liên kết giá vốn
             decimal totalCogs = orders.Sum(o => o.Items.Any()
                 ? o.Items.Sum(i => i.Quantity * i.UnitPrice * 0.70m)
-                : o.SubTotal * 0.70m);
+                : o.TotalAmount * 0.70m);
             return new CogsAggregation(totalCogs);
         }
 

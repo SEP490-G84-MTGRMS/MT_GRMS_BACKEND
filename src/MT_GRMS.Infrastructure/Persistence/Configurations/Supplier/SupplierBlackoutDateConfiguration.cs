@@ -8,7 +8,7 @@ public class SupplierBlackoutDateConfiguration : IEntityTypeConfiguration<Suppli
 {
     public void Configure(EntityTypeBuilder<SupplierBlackoutDate> builder)
     {
-        builder.ToTable("supplier_blackout_dates");
+        builder.ToTable("SupplierBlackoutDates");
 
         builder.HasKey(x => x.Id);
 

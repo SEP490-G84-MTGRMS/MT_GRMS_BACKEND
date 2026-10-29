@@ -34,6 +34,7 @@ public static class DependencyInjection
         services.AddSingleton<Tax.Security.ITaxSnapshotSignatureService, Tax.Security.TaxSnapshotSignatureService>();
         services.AddSingleton<Common.Services.IAuditHashService, Common.Services.AuditHashService>();
         services.AddScoped<Suppliers.ISupplierService, Suppliers.SupplierService>();
+        services.AddScoped<Branches.IBranchService, Branches.BranchService>();
         services.AddScoped<AiPipeline.IAiRecommendationService, AiPipeline.AiRecommendationService>();
 
         return services;

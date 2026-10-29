@@ -196,15 +196,14 @@ public static class DatabaseSeeder
                     SubTotal = 465000m,
                     DiscountAmount = 0m,
                     TotalAmount = 465000m,
-                    PaymentMethod = PaymentMethod.Cash,
-                    PaymentStatus = PaymentStatus.Paid,
+                    PaymentMethod = "CASH",
+                    PaymentStatus = "PAID",
                     CreatedAt = new DateTime(2026, 7, 15, 10, 30, 0, DateTimeKind.Utc)
                 };
 
                 order1.Items.Add(new OrderItem
                 {
                     Id = Guid.NewGuid(),
-                    TenantId = DefaultTenantId,
                     OrderId = order1.Id,
                     ProductId = Guid.Parse("aaaaaaaa-2222-2222-2222-222222222222"), // Mì Hảo Hảo
                     ProductName = "Mì tôm Hảo Hảo tôm chua cay thùng 30 gói",
@@ -219,7 +218,6 @@ public static class DatabaseSeeder
                 order1.Items.Add(new OrderItem
                 {
                     Id = Guid.NewGuid(),
-                    TenantId = DefaultTenantId,
                     OrderId = order1.Id,
                     ProductId = Guid.Parse("aaaaaaaa-1111-1111-1111-111111111111"), // Chocopie
                     ProductName = "Bánh Chocopie Orion hộp 12 cái (360g)",
@@ -241,15 +239,14 @@ public static class DatabaseSeeder
                     SubTotal = 565000m,
                     DiscountAmount = 0m,
                     TotalAmount = 565000m,
-                    PaymentMethod = PaymentMethod.BankTransfer,
-                    PaymentStatus = PaymentStatus.Paid,
+                    PaymentMethod = "BANK_TRANSFER",
+                    PaymentStatus = "PAID",
                     CreatedAt = new DateTime(2026, 8, 20, 15, 45, 0, DateTimeKind.Utc)
                 };
 
                 order2.Items.Add(new OrderItem
                 {
                     Id = Guid.NewGuid(),
-                    TenantId = DefaultTenantId,
                     OrderId = order2.Id,
                     ProductId = Guid.Parse("aaaaaaaa-3333-3333-3333-333333333333"), // Coca
                     ProductName = "Nước ngọt Coca-Cola lốc 6 lon 320ml",
@@ -264,7 +261,6 @@ public static class DatabaseSeeder
                 order2.Items.Add(new OrderItem
                 {
                     Id = Guid.NewGuid(),
-                    TenantId = DefaultTenantId,
                     OrderId = order2.Id,
                     ProductId = Guid.Parse("bbbbbbbb-1111-1111-1111-111111111111"), // Bia Tiger
                     ProductName = "Bia Tiger lon thùng 24 lon 330ml",
@@ -279,7 +275,6 @@ public static class DatabaseSeeder
                 order2.Items.Add(new OrderItem
                 {
                     Id = Guid.NewGuid(),
-                    TenantId = DefaultTenantId,
                     OrderId = order2.Id,
                     ProductId = Guid.Parse("cccccccc-1111-1111-1111-111111111111"), // Thuốc lá
                     ProductName = "Thuốc lá Craven A đỏ bao mềm",
@@ -301,15 +296,14 @@ public static class DatabaseSeeder
                     SubTotal = 385000000m, // 385 triệu doanh thu
                     DiscountAmount = 0m,
                     TotalAmount = 385000000m,
-                    PaymentMethod = PaymentMethod.BankTransfer,
-                    PaymentStatus = PaymentStatus.Paid,
+                    PaymentMethod = "BANK_TRANSFER",
+                    PaymentStatus = "PAID",
                     CreatedAt = new DateTime(2026, 9, 10, 9, 0, 0, DateTimeKind.Utc)
                 };
 
                 order3.Items.Add(new OrderItem
                 {
                     Id = Guid.NewGuid(),
-                    TenantId = DefaultTenantId,
                     OrderId = order3.Id,
                     ProductId = Guid.Parse("bbbbbbbb-1111-1111-1111-111111111111"), // Bia Tiger
                     ProductName = "Bia Tiger lon thùng 24 lon 330ml",
