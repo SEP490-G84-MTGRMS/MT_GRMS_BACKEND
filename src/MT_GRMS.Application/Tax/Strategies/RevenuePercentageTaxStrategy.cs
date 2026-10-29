@@ -5,6 +5,7 @@ namespace MT_GRMS.Application.Tax.Strategies;
 /// <summary>
 /// Strategy for calculating household taxes using the Revenue Percentage (Tỷ lệ %) method.
 /// Pure logic according to Decree 141/2026/ND-CP and Resolution 204/2025/QH15.
+/// Supports configurable VAT reduction policies with custom reduction percentages and enable/disable toggles.
 /// </summary>
 public class RevenuePercentageTaxStrategy : ITaxCalculationStrategy
 {
@@ -21,6 +22,8 @@ public class RevenuePercentageTaxStrategy : ITaxCalculationStrategy
             return new TaxCalculationResult
             {
                 Method = Method,
+                OriginalVatRate = RetailVatRate,
+                VatReductionPercentage = 0,
                 VatTaxableRevenue = 0,
                 VatRate = 0,
                 VatAmount = 0,
@@ -36,10 +39,12 @@ public class RevenuePercentageTaxStrategy : ITaxCalculationStrategy
             };
         }
 
-        // 1. VAT Calculation
+        // 1. VAT Calculation with configurable reduction policy
         var baseVatRate = context.CustomVatRate ?? RetailVatRate;
-        var isVatReduced = context.ApplyVatReduction2026;
-        var vatRate = isVatReduced ? (baseVatRate * 0.8m) : baseVatRate;
+        var isVatReduced = context.ApplyVatReduction2026 || (context.VatReductionPercentage.HasValue && context.VatReductionPercentage.Value > 0);
+        var reductionPct = isVatReduced ? (context.VatReductionPercentage ?? 20.0m) : 0m;
+        var discountMultiplier = Math.Max(0m, 1.0m - (reductionPct / 100m));
+        var vatRate = isVatReduced ? Math.Round(baseVatRate * discountMultiplier, 4, MidpointRounding.AwayFromZero) : baseVatRate;
         var vatTaxableRevenue = context.TaxableRevenueInPeriod;
         var vatAmount = Math.Round(vatTaxableRevenue * (vatRate / 100m), 0, MidpointRounding.AwayFromZero);
 
@@ -55,6 +60,8 @@ public class RevenuePercentageTaxStrategy : ITaxCalculationStrategy
         return new TaxCalculationResult
         {
             Method = Method,
+            OriginalVatRate = baseVatRate,
+            VatReductionPercentage = reductionPct,
             VatTaxableRevenue = vatTaxableRevenue,
             VatRate = vatRate,
             VatAmount = vatAmount,

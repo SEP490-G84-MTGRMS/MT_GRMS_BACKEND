@@ -9,8 +9,8 @@ public class HouseholdTaxFilterDto
     public int PeriodNumber { get; set; } = 1;
     public Guid? BranchId { get; set; }
     public TaxCalculationMethod CalculationMethod { get; set; } = TaxCalculationMethod.RevenuePercentage;
-    public string SecurityPin { get; set; } = string.Empty;
-    public bool ApplyVatReduction2026 { get; set; } = false; // Giảm 20% mức tỷ lệ GTGT (còn 0.8%) theo NQ 204/2025/QH15 & NĐ 174/2025/NĐ-CP
+    public bool ApplyVatReduction2026 { get; set; } = false; // Bật/tắt chính sách giảm thuế GTGT (có thời hạn)
+    public decimal? VatReductionPercentage { get; set; } // Mức giảm thuế GTGT tùy chỉnh (%, ví dụ: 20% hoặc 30%), mặc định 20% khi bật
     public decimal? CustomVatRate { get; set; }
     public decimal? CustomPitRate { get; set; }
     public decimal? PriorDeclaredPitTaxOverride { get; set; } // Cho phép mock số thuế TNCN đã khai các kỳ trước khi test
@@ -39,7 +39,9 @@ public class HouseholdTaxSummaryDto
     public decimal TaxableRevenueInPeriod { get; set; }
 
     // Chi tiết thuế GTGT (Tính trên toàn bộ doanh thu kỳ khi lũy kế năm > 1 tỷ)
-    public decimal VatRate { get; set; } // 1.0% hoặc 0.8% nếu giảm 20%
+    public decimal OriginalVatRate { get; set; } = 1.0m; // Thuế suất GTGT gốc (ví dụ: 1.0%)
+    public decimal VatReductionPercentage { get; set; } = 0m; // Mức giảm GTGT đang áp dụng (ví dụ: 20%)
+    public decimal VatRate { get; set; } // Thuế suất GTGT thực tế sau giảm (ví dụ: 0.8%)
     public bool IsVatReduced { get; set; } // Cờ xác nhận áp dụng chính sách giảm thuế GTGT 2026
     public decimal VatTaxableRevenue { get; set; }
     public decimal VatAmount { get; set; }
@@ -106,6 +108,10 @@ public class CreateTaxSnapshotRequest
     public Guid? BranchId { get; set; }
     public TaxCalculationMethod CalculationMethod { get; set; } = TaxCalculationMethod.RevenuePercentage;
     public string SecurityPin { get; set; } = string.Empty;
+    public bool ApplyVatReduction2026 { get; set; } = false;
+    public decimal? VatReductionPercentage { get; set; }
+    public decimal? CustomVatRate { get; set; }
+    public decimal? CustomPitRate { get; set; }
     public string? Notes { get; set; }
 }
 
@@ -132,6 +138,8 @@ public class HouseholdTaxSnapshotDto
     public DateTime FinalizedAtUtc { get; set; }
     public string? Notes { get; set; }
 }
+
+
 
 
 

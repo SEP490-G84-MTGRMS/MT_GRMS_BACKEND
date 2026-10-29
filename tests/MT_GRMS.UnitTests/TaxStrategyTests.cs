@@ -138,4 +138,51 @@ public class TaxStrategyTests
         Assert.IsType<RevenuePercentageTaxStrategy>(strategy1);
         Assert.IsType<DeclarationBasedTaxStrategy>(strategy2);
     }
+
+    [Fact]
+    public void RevenuePercentage_WithCustomVatReductionPercentage_AppliesConfiguredDiscount()
+    {
+        // Base rate 1.0%, cấu hình giảm 30% -> Thuế suất sau giảm = 0.70%
+        // Doanh thu kỳ 200.000.000đ -> VAT = 1.400.000đ
+        var context = new TaxCalculationContext
+        {
+            Group = HouseholdTaxGroup.Group2_1BTo3B,
+            IsExempt = false,
+            AnnualAccumulatedRevenue = 1_200_000_000m,
+            TaxableRevenueInPeriod = 200_000_000m,
+            ApplyVatReduction2026 = true,
+            VatReductionPercentage = 30.0m // Giảm 30%
+        };
+
+        var result = _revenuePercentageStrategy.Calculate(context);
+
+        Assert.True(result.IsVatReduced);
+        Assert.Equal(1.0m, result.OriginalVatRate);
+        Assert.Equal(30.0m, result.VatReductionPercentage);
+        Assert.Equal(0.7m, result.VatRate);
+        Assert.Equal(1_400_000m, result.VatAmount);
+    }
+
+    [Fact]
+    public void RevenuePercentage_WithoutVatReduction_KeepsStandardRate()
+    {
+        var context = new TaxCalculationContext
+        {
+            Group = HouseholdTaxGroup.Group2_1BTo3B,
+            IsExempt = false,
+            AnnualAccumulatedRevenue = 1_200_000_000m,
+            TaxableRevenueInPeriod = 200_000_000m,
+            ApplyVatReduction2026 = false,
+            VatReductionPercentage = null
+        };
+
+        var result = _revenuePercentageStrategy.Calculate(context);
+
+        Assert.False(result.IsVatReduced);
+        Assert.Equal(1.0m, result.OriginalVatRate);
+        Assert.Equal(0m, result.VatReductionPercentage);
+        Assert.Equal(1.0m, result.VatRate);
+        Assert.Equal(2_000_000m, result.VatAmount);
+    }
 }
+

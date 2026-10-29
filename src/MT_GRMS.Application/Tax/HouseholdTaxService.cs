@@ -136,6 +136,7 @@ public class HouseholdTaxService : IHouseholdTaxService
             TaxableRevenueInPeriod = taxableRevenueInPeriod,
             CustomVatRate = filter.CustomVatRate,
             ApplyVatReduction2026 = filter.ApplyVatReduction2026,
+            VatReductionPercentage = filter.VatReductionPercentage,
             CustomPitRate = filter.CustomPitRate,
             PriorDeclaredPitTax = priorDeclaredPitTax,
             PeriodCogs = periodCogs,
@@ -195,6 +196,8 @@ public class HouseholdTaxService : IHouseholdTaxService
             DiscountAmountInPeriod = discount,
             ReturnAmountInPeriod = returns,
             TaxableRevenueInPeriod = taxableRevenueInPeriod,
+            OriginalVatRate = calcResult.OriginalVatRate,
+            VatReductionPercentage = calcResult.VatReductionPercentage,
             VatRate = calcResult.VatRate,
             IsVatReduced = calcResult.IsVatReduced,
             VatTaxableRevenue = calcResult.VatTaxableRevenue,
@@ -302,7 +305,11 @@ public class HouseholdTaxService : IHouseholdTaxService
             PeriodType = request.PeriodType,
             PeriodNumber = request.PeriodNumber,
             BranchId = request.BranchId,
-            CalculationMethod = request.CalculationMethod
+            CalculationMethod = request.CalculationMethod,
+            ApplyVatReduction2026 = request.ApplyVatReduction2026,
+            VatReductionPercentage = request.VatReductionPercentage,
+            CustomVatRate = request.CustomVatRate,
+            CustomPitRate = request.CustomPitRate
         };
 
         var summary = await GetTaxSummaryAsync(filter, cancellationToken);
@@ -553,6 +560,7 @@ public class HouseholdTaxService : IHouseholdTaxService
         );
     }
 }
+
 
 
 

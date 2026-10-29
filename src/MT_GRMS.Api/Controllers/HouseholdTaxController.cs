@@ -24,6 +24,11 @@ public class HouseholdTaxController : BaseApiController
         [FromQuery] TaxPeriodType? periodType,
         [FromQuery] int? periodNumber,
         [FromQuery] Guid? branchId,
+        [FromQuery] TaxCalculationMethod? method,
+        [FromQuery] bool? applyVatReduction,
+        [FromQuery] decimal? vatReductionPercentage,
+        [FromQuery] decimal? customVatRate,
+        [FromQuery] decimal? customPitRate,
         CancellationToken ct)
     {
         var filter = new HouseholdTaxFilterDto
@@ -31,7 +36,12 @@ public class HouseholdTaxController : BaseApiController
             Year = year ?? DateTime.UtcNow.Year,
             PeriodType = periodType ?? TaxPeriodType.Quarter,
             PeriodNumber = periodNumber ?? 1,
-            BranchId = branchId
+            BranchId = branchId,
+            CalculationMethod = method ?? TaxCalculationMethod.RevenuePercentage,
+            ApplyVatReduction2026 = applyVatReduction ?? false,
+            VatReductionPercentage = vatReductionPercentage,
+            CustomVatRate = customVatRate,
+            CustomPitRate = customPitRate
         };
 
         var result = await _taxService.GetTaxSummaryAsync(filter, ct);
@@ -112,4 +122,5 @@ public class HouseholdTaxController : BaseApiController
         return Ok(ApiResponse<object>.Ok(new { SnapshotId = id, IsIntegrityValid = isValid }, isValid ? "Chữ ký số hợp lệ, dữ liệu toàn vẹn." : "Cảnh báo: Dữ liệu snapshot có dấu hiệu bị can thiệp trái phép!"));
     }
 }
+
 

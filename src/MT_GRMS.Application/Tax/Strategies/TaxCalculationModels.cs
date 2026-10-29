@@ -13,6 +13,7 @@ public record TaxCalculationContext
     public decimal TaxableRevenueInPeriod { get; init; }
     public decimal? CustomVatRate { get; init; }
     public bool ApplyVatReduction2026 { get; init; }
+    public decimal? VatReductionPercentage { get; init; } // Cấu hình mức giảm linh hoạt (%): Mặc định 20% nếu bật giảm
     public decimal? CustomPitRate { get; init; }
     public decimal PriorDeclaredPitTax { get; init; }
     public decimal PeriodCogs { get; init; }
@@ -28,6 +29,8 @@ public record TaxCalculationContext
 public record TaxCalculationResult
 {
     public TaxCalculationMethod Method { get; init; }
+    public decimal OriginalVatRate { get; init; }
+    public decimal VatReductionPercentage { get; init; }
     public decimal VatTaxableRevenue { get; init; }
     public decimal VatRate { get; init; }
     public decimal VatAmount { get; init; }
