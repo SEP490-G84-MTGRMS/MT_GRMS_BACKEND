@@ -21,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\MT_GRMS.Api\MT_GRMS.Api.csproj" />
     <ProjectReference Include="..\..\src\MT_GRMS.Application\MT_GRMS.Application.csproj" />
     <ProjectReference Include="..\..\src\MT_GRMS.Domain\MT_GRMS.Domain.csproj" />
   </ItemGroup>

@@ -1,6 +1,7 @@
 using System.Reflection;
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
+using MT_GRMS.Application.Admin.Services;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Batches;
 using MT_GRMS.Application.Cashbook;
@@ -27,6 +28,11 @@ public static class DependencyInjection
         services.AddScoped<Suppliers.ISupplierService, Suppliers.SupplierService>();
         services.AddScoped<Branches.IBranchService, Branches.BranchService>();
         services.AddScoped<AiPipeline.IAiRecommendationService, AiPipeline.AiRecommendationService>();
+
+        // 3. Đăng ký các Service cho Master Admin Portal
+        services.AddScoped<ISubscriptionPlanService, SubscriptionPlanService>();
+        services.AddScoped<ITenantService, TenantService>();
+        services.AddScoped<IAdminDashboardService, AdminDashboardService>();
 
         return services;
     }

@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using MT_GRMS.Application.Admin.Repositories;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Batches;
 using MT_GRMS.Application.Branches;
@@ -63,6 +64,8 @@ public static class DependencyInjection
         services.AddScoped<ICashbookRepository, CashbookRepository>();
         services.AddScoped<ISupplierRepository, SupplierRepository>();
         services.AddScoped<IBranchRepository, BranchRepository>();
+        services.AddScoped<ISubscriptionPlanRepository, SubscriptionPlanRepository>();
+        services.AddScoped<ITenantRepository, TenantRepository>();
 
         return services;
     }
