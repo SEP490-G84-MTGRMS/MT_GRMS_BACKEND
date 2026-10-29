@@ -31,6 +31,7 @@ public static class DbInitializer
         // 2. Kiểm tra nếu đã có dữ liệu mẫu thì bỏ qua việc seed
         if (await context.SubscriptionPlans.AnyAsync())
         {
+            await CatalogSeedData.SeedAsync(context, "tenant_mt_mart_01");
             return;
         }
 
@@ -452,6 +453,9 @@ public static class DbInitializer
             Description = "Nạp tiền lẻ quỹ đầu ca phục vụ thanh toán POS"
         };
         await context.CashBooks.AddAsync(initialCashBook);
+
+        // Nạp 15 danh mục và 5-8 sản phẩm mỗi danh mục
+        await CatalogSeedData.SeedAsync(context, defaultTenantId);
 
         // Lưu toàn bộ dữ liệu mẫu vào CSDL
         await context.SaveChangesAsync();

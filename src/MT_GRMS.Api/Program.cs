@@ -51,12 +51,24 @@ builder.Services.AddScoped<ITenantContext, TenantContext>();
 builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructureServices(builder.Configuration);
 
-// 5. Cấu hình CORS (cho phép frontend gọi API)
+// 5. Cấu hình CORS (cho phép frontend gọi API từ localhost bất kỳ port nào)
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:5173", "http://localhost:3000")
+        policy.SetIsOriginAllowed(origin =>
+        {
+            if (string.IsNullOrWhiteSpace(origin)) return false;
+            try
+            {
+                var uri = new Uri(origin);
+                return uri.Host == "localhost" || uri.Host == "127.0.0.1";
+            }
+            catch
+            {
+                return false;
+            }
+        })
               .AllowAnyHeader()
               .AllowAnyMethod()
               .AllowCredentials();
@@ -79,8 +91,13 @@ if (app.Environment.IsDevelopment())
 // 7. Cấu hình HTTP Pipeline theo thứ tự chuẩn
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
-app.UseHttpsRedirection();
+// CORS đặt trước để xử lý preflight OPTIONS request tránh 307 Redirect
 app.UseCors("AllowFrontend");
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseHttpsRedirection();
+}
 
 app.UseRouting();
 
