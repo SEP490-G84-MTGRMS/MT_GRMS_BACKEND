@@ -3,7 +3,11 @@ using MT_GRMS.Api.Middlewares;
 using MT_GRMS.Application;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Infrastructure;
+using MT_GRMS.Api.Common;
 using MT_GRMS.Infrastructure.Persistence;
+
+// 0. Nạp biến môi trường từ file .env (nếu có)
+EnvLoader.Load();
 
 var builder = WebApplication.CreateBuilder(args);
 
