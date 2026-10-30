@@ -77,11 +77,15 @@ public static class DependencyInjection
         services.AddScoped<ICashbookRepository, CashbookRepository>();
         services.AddScoped<Application.Expenses.IExpenseRepository, ExpenseRepository>();
         services.AddScoped<Application.Debt.ICustomerDebtRepository, CustomerDebtRepository>();
-                services.AddScoped<Application.Reports.IPnLReportRepository, PnLReportRepository>();
+        services.AddScoped<Application.Reports.IPnLReportRepository, PnLReportRepository>();
         services.AddScoped<Application.Tax.IHouseholdTaxRepository, HouseholdTaxRepository>();
         services.AddScoped<Application.Tax.Security.IPinVerificationService, Services.PinVerificationService>();
         services.AddScoped<ISupplierRepository, SupplierRepository>();
         services.AddScoped<IBranchRepository, BranchRepository>();
+        services.AddScoped<IBranchProductRepository, BranchProductRepository>();
+        services.AddScoped<MT_GRMS.Application.PurchaseOrders.IPurchaseOrderRepository, PurchaseOrderRepository>();
+        services.AddScoped<MT_GRMS.Application.GoodsReceipts.IGoodsReceiptRepository, GoodsReceiptRepository>();
+        services.AddScoped<MT_GRMS.Application.SupplierReturns.ISupplierReturnRepository, SupplierReturnRepository>();
         services.AddScoped<Application.Promotions.IPromotionRepository, PromotionRepository>();
 
         return services;

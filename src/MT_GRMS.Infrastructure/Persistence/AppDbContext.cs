@@ -51,6 +51,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<BranchStock> BranchStocks { get; set; } = null!;
     public virtual DbSet<Transfer> Transfers { get; set; } = null!;
     public virtual DbSet<TransferDetail> TransferDetails { get; set; } = null!;
+    public virtual DbSet<Batch> Batches { get; set; } = null!;
+    public virtual DbSet<StockOnHand> StockOnHands { get; set; } = null!;
 
     // 4. Phân hệ Nhà cung cấp, Mua hàng PO & Nhập kho GRN (10 bảng)
     public virtual DbSet<SupplierCategory> SupplierCategories { get; set; } = null!;
@@ -64,6 +66,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<PurchaseOrderDetail> PurchaseOrderDetails { get; set; } = null!;
     public virtual DbSet<GoodsReceipt> GoodsReceipts { get; set; } = null!;
     public virtual DbSet<GoodsReceiptLine> GoodsReceiptLines { get; set; } = null!;
+    public virtual DbSet<SupplierReturn> SupplierReturns { get; set; } = null!;
+    public virtual DbSet<SupplierReturnLine> SupplierReturnLines { get; set; } = null!;
 
     // 5. Phân hệ Khách hàng, Khuyến mãi & Bán lẻ POS (4 bảng)
     public virtual DbSet<Customer> Customers { get; set; } = null!;

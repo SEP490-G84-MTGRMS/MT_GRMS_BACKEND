@@ -53,5 +53,18 @@ public interface ISupplierRepository : IRepository<Supplier>
     Task<IReadOnlyList<SupplierProduct>> GetSuppliersForProductAsync(Guid productId, bool onlyActive = false, CancellationToken cancellationToken = default);
     Task<bool> ProductExistsAsync(Guid productId, CancellationToken cancellationToken = default);
     Task<Domain.Entities.Catalog.Product?> GetProductByIdAsync(Guid productId, CancellationToken cancellationToken = default);
+
+    // Supplier Branch Assignment (REQ-SBA01 đến REQ-SBA03)
+    Task<(IReadOnlyList<SupplierBranchAssignment> Items, int TotalCount)> GetPagedBranchAssignmentsAsync(
+        string? supplierSearch,
+        string? branchSearch,
+        Guid? supplierId,
+        Guid? branchId,
+        int pageIndex,
+        int pageSize,
+        CancellationToken cancellationToken = default);
+    Task<bool> BranchAssignmentExistsAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default);
+    Task AddBranchAssignmentAsync(SupplierBranchAssignment assignment, CancellationToken cancellationToken = default);
+    Task RemoveBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default);
 }
 
