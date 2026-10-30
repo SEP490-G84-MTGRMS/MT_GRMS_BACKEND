@@ -12,6 +12,7 @@ using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Infrastructure.Repositories;
+using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Infrastructure.Services;
 
@@ -62,6 +63,7 @@ public static class DependencyInjection
         services.AddScoped<IOrderRepository, OrderRepository>();
         services.AddScoped<IProductRepository, ProductRepository>();
         services.AddScoped<ICategoryRepository, CategoryRepository>();
+        services.AddScoped<IProductUnitRepository, ProductUnitRepository>();
         services.AddScoped<IBatchRepository, BatchRepository>();
         services.AddScoped<ICashbookRepository, CashbookRepository>();
         services.AddScoped<ISupplierRepository, SupplierRepository>();
