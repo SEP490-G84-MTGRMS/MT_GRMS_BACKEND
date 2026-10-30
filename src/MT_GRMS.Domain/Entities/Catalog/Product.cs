@@ -41,5 +41,4 @@ public class Product : BaseTenantEntity
     // Navigations
     public Category? Category { get; set; }
     public ICollection<ProductUnit> Units { get; set; } = new List<ProductUnit>();
-    public ICollection<ProductCombo> ComboComponents { get; set; } = new List<ProductCombo>();
 }
