@@ -65,6 +65,7 @@ public static class DependencyInjection
         services.AddScoped<IBranchRepository, BranchRepository>();
         services.AddScoped<IBranchProductRepository, BranchProductRepository>();
         services.AddScoped<MT_GRMS.Application.PurchaseOrders.IPurchaseOrderRepository, PurchaseOrderRepository>();
+        services.AddScoped<MT_GRMS.Application.GoodsReceipts.IGoodsReceiptRepository, GoodsReceiptRepository>();
 
         return services;
     }
