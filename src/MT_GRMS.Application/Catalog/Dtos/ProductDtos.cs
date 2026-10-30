@@ -96,6 +96,7 @@ public class ProductQueryFilter
 {
     public string? SearchTerm { get; set; }
     public Guid? CategoryId { get; set; }
+    public List<Guid>? CategoryIds { get; set; }
     public string? Status { get; set; }
     public int PageIndex { get; set; } = 1;
     public int PageSize { get; set; } = 10;

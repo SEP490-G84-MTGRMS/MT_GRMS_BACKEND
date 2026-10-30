@@ -30,7 +30,15 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
                 p.Barcode.ToLower().Contains(term));
         }
 
-        if (filter.CategoryId.HasValue)
+        if (filter.CategoryIds != null && filter.CategoryIds.Any())
+        {
+            var validIds = filter.CategoryIds.Where(id => id != Guid.Empty).ToList();
+            if (validIds.Any())
+            {
+                query = query.Where(p => validIds.Contains(p.CategoryId));
+            }
+        }
+        else if (filter.CategoryId.HasValue)
         {
             query = query.Where(p => p.CategoryId == filter.CategoryId.Value);
         }
