@@ -124,6 +124,43 @@ public class SuppliersController : BaseApiController
         return Ok(ApiResponse<IReadOnlyList<SupplierBranchAssignmentDto>>.Ok(result, "Cập nhật chi nhánh gán NCC thành công."));
     }
 
+    /// <summary>
+    /// Lấy danh sách liên kết Nhà cung cấp - Chi nhánh / Cửa hàng có phân trang và bộ lọc (REQ-SBA02)
+    /// </summary>
+    [HttpGet("branch-assignments")]
+    public async Task<IActionResult> GetBranchAssignments(
+        [FromQuery] SupplierBranchAssignmentQueryFilter filter,
+        CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.GetBranchAssignmentsAsync(filter, cancellationToken);
+        return Ok(ApiResponse<PagedResult<SupplierBranchAssignmentDetailDto>>.Ok(result));
+    }
+
+    /// <summary>
+    /// Gán Nhà cung cấp cho một hoặc nhiều Cửa hàng / Chi nhánh (REQ-SBA01)
+    /// </summary>
+    [HttpPost("branch-assignments")]
+    public async Task<IActionResult> AssignSupplierToBranches(
+        [FromBody] AssignSupplierToBranchesCommand command,
+        CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.AssignSupplierToBranchesAsync(command, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<SupplierBranchAssignmentDetailDto>>.Ok(result, "Gán nhà cung cấp cho cửa hàng thành công."));
+    }
+
+    /// <summary>
+    /// Hủy liên kết Nhà cung cấp khỏi một Cửa hàng / Chi nhánh (REQ-SBA03)
+    /// </summary>
+    [HttpDelete("{id:guid}/branches/{branchId:guid}")]
+    public async Task<IActionResult> UnassignSupplierBranch(
+        Guid id,
+        Guid branchId,
+        CancellationToken cancellationToken)
+    {
+        await _supplierService.UnassignSupplierBranchAsync(id, branchId, cancellationToken);
+        return Ok(ApiResponse<object>.Ok(new { }, "Hủy liên kết cửa hàng khỏi nhà cung cấp thành công."));
+    }
+
     [HttpGet("{id:guid}/ap/ledger")]
     public async Task<IActionResult> GetAPLedger(
         Guid id,

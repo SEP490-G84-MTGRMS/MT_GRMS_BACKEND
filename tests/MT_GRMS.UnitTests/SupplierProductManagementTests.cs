@@ -486,5 +486,42 @@ public class SupplierProductManagementTests
         {
             return Task.FromResult(Products.FirstOrDefault(p => p.Id == productId));
         }
+
+        public List<SupplierBranchAssignment> BranchAssignments { get; } = new();
+
+        public Task<(IReadOnlyList<SupplierBranchAssignment> Items, int TotalCount)> GetPagedBranchAssignmentsAsync(
+            string? supplierSearch,
+            string? branchSearch,
+            Guid? supplierId,
+            Guid? branchId,
+            int pageIndex,
+            int pageSize,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(((IReadOnlyList<SupplierBranchAssignment>)new List<SupplierBranchAssignment>(), 0));
+        }
+
+
+        public Task<bool> BranchAssignmentExistsAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(BranchAssignments.Any(x => x.SupplierId == supplierId && x.BranchId == branchId));
+        }
+
+        public Task AddBranchAssignmentAsync(SupplierBranchAssignment assignment, CancellationToken cancellationToken = default)
+        {
+            BranchAssignments.Add(assignment);
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
+        {
+            var item = BranchAssignments.FirstOrDefault(x => x.SupplierId == supplierId && x.BranchId == branchId);
+            if (item != null)
+            {
+                BranchAssignments.Remove(item);
+            }
+            return Task.CompletedTask;
+        }
     }
 }
+

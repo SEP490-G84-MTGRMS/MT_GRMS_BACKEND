@@ -225,3 +225,43 @@ public class SupplierQueryFilter
     public int PageIndex { get; set; } = 1;
     public int PageSize { get; set; } = 20;
 }
+
+public class SupplierBranchAssignmentDetailDto
+{
+    public Guid Id { get; set; }
+    public Guid SupplierId { get; set; }
+    public string SupplierCode { get; set; } = string.Empty;
+    public string SupplierName { get; set; } = string.Empty;
+    public SupplierType SupplierType { get; set; }
+    public string SupplierTypeName => SupplierType switch
+    {
+        SupplierType.Goods => "Hàng hóa",
+        SupplierType.Service => "Dịch vụ",
+        SupplierType.Both => "Cả hai",
+        _ => "Khác"
+    };
+    public Guid BranchId { get; set; }
+    public string BranchCode { get; set; } = string.Empty;
+    public string BranchName { get; set; } = string.Empty;
+    public string BranchAddress { get; set; } = string.Empty;
+    public DateTime CreatedAt { get; set; }
+    public string Status { get; set; } = "Active";
+}
+
+public class SupplierBranchAssignmentQueryFilter
+{
+    public string? SupplierSearch { get; set; }
+    public string? BranchSearch { get; set; }
+    public Guid? SupplierId { get; set; }
+    public Guid? BranchId { get; set; }
+    public string? Status { get; set; }
+    public int PageIndex { get; set; } = 1;
+    public int PageSize { get; set; } = 12;
+}
+
+public class AssignSupplierToBranchesCommand
+{
+    public Guid SupplierId { get; set; }
+    public List<Guid> BranchIds { get; set; } = [];
+}
+

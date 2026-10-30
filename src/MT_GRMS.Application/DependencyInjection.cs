@@ -26,7 +26,7 @@ public static class DependencyInjection
         services.AddScoped<ICashbookService, CashbookService>();
         services.AddScoped<Expenses.IExpenseService, Expenses.ExpenseService>();
         services.AddScoped<Debt.ICustomerDebtService, Debt.CustomerDebtService>();
-                services.AddScoped<Reports.IPnLReportService, Reports.PnLReportService>();
+        services.AddScoped<Reports.IPnLReportService, Reports.PnLReportService>();
         services.AddScoped<Tax.IHouseholdTaxService, Tax.HouseholdTaxService>();
         services.AddScoped<Tax.Strategies.ITaxCalculationStrategy, Tax.Strategies.RevenuePercentageTaxStrategy>();
         services.AddScoped<Tax.Strategies.ITaxCalculationStrategy, Tax.Strategies.DeclarationBasedTaxStrategy>();
@@ -35,7 +35,12 @@ public static class DependencyInjection
         services.AddSingleton<Common.Services.IAuditHashService, Common.Services.AuditHashService>();
         services.AddScoped<Suppliers.ISupplierService, Suppliers.SupplierService>();
         services.AddScoped<Branches.IBranchService, Branches.BranchService>();
+        services.AddScoped<Branches.IBranchProductService, Branches.BranchProductService>();
+        services.AddScoped<PurchaseOrders.IPurchaseOrderService, PurchaseOrders.PurchaseOrderService>();
+        services.AddScoped<GoodsReceipts.IGoodsReceiptService, GoodsReceipts.GoodsReceiptService>();
+        services.AddScoped<SupplierReturns.ISupplierReturnService, SupplierReturns.SupplierReturnService>();
         services.AddScoped<AiPipeline.IAiRecommendationService, AiPipeline.AiRecommendationService>();
+        services.AddScoped<Promotions.IPromotionService, Promotions.PromotionService>();
 
         return services;
     }

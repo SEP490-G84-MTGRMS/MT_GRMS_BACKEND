@@ -7,6 +7,7 @@ using MT_GRMS.Application.Common;
 namespace MT_GRMS.API.Controllers;
 
 [ApiController]
+[Route("api/v1/auth")]
 [Route("api/[controller]")]
 public class AuthController : BaseApiController
 {

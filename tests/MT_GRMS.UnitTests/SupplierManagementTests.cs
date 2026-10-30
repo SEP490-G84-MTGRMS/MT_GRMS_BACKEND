@@ -254,7 +254,55 @@ public class SupplierManagementTests
         {
             return Task.FromResult(Products.FirstOrDefault(p => p.Id == productId));
         }
+
+        public List<SupplierBranchAssignment> BranchAssignments { get; } = new();
+
+        public Task<(IReadOnlyList<SupplierBranchAssignment> Items, int TotalCount)> GetPagedBranchAssignmentsAsync(
+            string? supplierSearch,
+            string? branchSearch,
+            Guid? supplierId,
+            Guid? branchId,
+            int pageIndex,
+            int pageSize,
+            CancellationToken cancellationToken = default)
+        {
+            var query = BranchAssignments.AsEnumerable();
+            if (supplierId.HasValue && supplierId.Value != Guid.Empty)
+            {
+                query = query.Where(x => x.SupplierId == supplierId.Value);
+            }
+            if (branchId.HasValue && branchId.Value != Guid.Empty)
+            {
+                query = query.Where(x => x.BranchId == branchId.Value);
+            }
+            var list = query.ToList();
+            var paged = list.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
+            return Task.FromResult(((IReadOnlyList<SupplierBranchAssignment>)paged, list.Count));
+        }
+
+
+        public Task<bool> BranchAssignmentExistsAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(BranchAssignments.Any(x => x.SupplierId == supplierId && x.BranchId == branchId));
+        }
+
+        public Task AddBranchAssignmentAsync(SupplierBranchAssignment assignment, CancellationToken cancellationToken = default)
+        {
+            BranchAssignments.Add(assignment);
+            return Task.CompletedTask;
+        }
+
+        public Task RemoveBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
+        {
+            var item = BranchAssignments.FirstOrDefault(x => x.SupplierId == supplierId && x.BranchId == branchId);
+            if (item != null)
+            {
+                BranchAssignments.Remove(item);
+            }
+            return Task.CompletedTask;
+        }
     }
+
 
 
     [Fact]
@@ -619,4 +667,76 @@ public class SupplierManagementTests
         Assert.Equal(new DateTime(2026, 9, 4), earliest.Date);
         Assert.Equal(DayOfWeek.Friday, earliest.DayOfWeek);
     }
+
+    [Fact]
+    public async Task REQ_SBA01_AssignSupplierToBranches_Success()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid(),
+            Name = "Vinamilk",
+            Code = "SUP-001",
+            Status = SupplierStatus.Active,
+            TenantId = "tenant-test-01"
+        };
+        await repo.AddAsync(supplier);
+
+        var branch1 = Guid.NewGuid();
+        var branch2 = Guid.NewGuid();
+
+        var cmd = new AssignSupplierToBranchesCommand
+        {
+            SupplierId = supplier.Id,
+            BranchIds = new List<Guid> { branch1, branch2 }
+        };
+
+        // ACT
+        var result = await service.AssignSupplierToBranchesAsync(cmd);
+
+        // ASSERT
+        Assert.Equal(2, result.Count);
+        Assert.Equal(2, repo.BranchAssignments.Count);
+        Assert.Contains(repo.BranchAssignments, a => a.BranchId == branch1);
+        Assert.Contains(repo.BranchAssignments, a => a.BranchId == branch2);
+    }
+
+    [Fact]
+    public async Task REQ_SBA02_UnassignSupplierBranch_Success()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid(),
+            Name = "Vinamilk",
+            Code = "SUP-001",
+            Status = SupplierStatus.Active,
+            TenantId = "tenant-test-01"
+        };
+        await repo.AddAsync(supplier);
+
+        var branchId = Guid.NewGuid();
+        await repo.AddBranchAssignmentAsync(new SupplierBranchAssignment
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            BranchId = branchId
+        });
+
+        // ACT
+        await service.UnassignSupplierBranchAsync(supplier.Id, branchId);
+
+        // ASSERT
+        Assert.Empty(repo.BranchAssignments);
+    }
 }
+
+
