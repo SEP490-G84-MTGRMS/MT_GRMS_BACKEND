@@ -82,6 +82,7 @@ public static class DependencyInjection
         services.AddScoped<Application.Tax.Security.IPinVerificationService, Services.PinVerificationService>();
         services.AddScoped<ISupplierRepository, SupplierRepository>();
         services.AddScoped<IBranchRepository, BranchRepository>();
+        services.AddScoped<Application.Promotions.IPromotionRepository, PromotionRepository>();
 
         return services;
     }

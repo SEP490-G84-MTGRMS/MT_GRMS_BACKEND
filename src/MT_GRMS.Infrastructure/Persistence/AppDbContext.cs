@@ -68,6 +68,8 @@ public partial class AppDbContext : DbContext
     // 5. Phân hệ Khách hàng, Khuyến mãi & Bán lẻ POS (4 bảng)
     public virtual DbSet<Customer> Customers { get; set; } = null!;
     public virtual DbSet<Promotion> Promotions { get; set; } = null!;
+    public virtual DbSet<PromotionCondition> PromotionConditions { get; set; } = null!;
+    public virtual DbSet<VoucherCode> VoucherCodes { get; set; } = null!;
     public virtual DbSet<Domain.Entities.Sales.Order> Orders { get; set; } = null!;
     public virtual DbSet<OrderDetail> OrderDetails { get; set; } = null!;
 
