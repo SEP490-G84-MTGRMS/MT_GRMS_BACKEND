@@ -66,6 +66,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<PurchaseOrderDetail> PurchaseOrderDetails { get; set; } = null!;
     public virtual DbSet<GoodsReceipt> GoodsReceipts { get; set; } = null!;
     public virtual DbSet<GoodsReceiptLine> GoodsReceiptLines { get; set; } = null!;
+    public virtual DbSet<SupplierReturn> SupplierReturns { get; set; } = null!;
+    public virtual DbSet<SupplierReturnLine> SupplierReturnLines { get; set; } = null!;
 
     // 5. Phân hệ Khách hàng, Khuyến mãi & Bán lẻ POS (4 bảng)
     public virtual DbSet<Customer> Customers { get; set; } = null!;
