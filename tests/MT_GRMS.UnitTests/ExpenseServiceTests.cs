@@ -372,4 +372,102 @@ public class ExpenseServiceTests
         var list = await _service.GetExpensesAsync(branchId, null, null, 1, 10);
         Assert.Single(list);
     }
+
+    [Fact]
+    public async Task GetExpenseSummaryAsync_ShouldCalculateKPIsAccurately()
+    {
+        var branchId = Guid.NewGuid();
+        _expenseRepo.Items.Add(new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            Amount = 1_000_000m,
+            Status = ExpenseVoucherStatus.Paid,
+            IsTaxDeductible = true,
+            CreatedAt = DateTime.UtcNow
+        });
+        _expenseRepo.Items.Add(new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            Amount = 600_000m,
+            Status = ExpenseVoucherStatus.PendingApproval,
+            IsTaxDeductible = false,
+            IsFlaggedAsSuspiciousSplit = true,
+            CreatedAt = DateTime.UtcNow
+        });
+
+        var summary = await _service.GetExpenseSummaryAsync(branchId, null, null);
+
+        Assert.Equal(1_600_000m, summary.TotalAmount);
+        Assert.Equal(2, summary.TotalCount);
+        Assert.Equal(1_000_000m, summary.PaidAmount);
+        Assert.Equal(1, summary.PaidCount);
+        Assert.Equal(600_000m, summary.PendingApprovalAmount);
+        Assert.Equal(1, summary.PendingApprovalCount);
+        Assert.Equal(600_000m, summary.SuspiciousAmount);
+        Assert.Equal(1, summary.SuspiciousCount);
+        Assert.Equal(1_000_000m, summary.TaxDeductibleAmount);
+        Assert.Equal(1, summary.TaxDeductibleCount);
+        Assert.Equal(600_000m, summary.NonTaxDeductibleAmount);
+        Assert.Equal(1, summary.NonTaxDeductibleCount);
+    }
+
+    [Fact]
+    public async Task ApproveExpenseAsync_WhenFlaggedAsSuspiciousAndNoteIsEmpty_ShouldThrowBusinessException()
+    {
+        var voucher = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            Amount = 450_000m,
+            Status = ExpenseVoucherStatus.PendingApproval,
+            IsFlaggedAsSuspiciousSplit = true,
+            SuspiciousReason = "Cảnh báo xé nhỏ chi phí cùng vendor trong ngày"
+        };
+        _expenseRepo.Items.Add(voucher);
+
+        // Duyệt nhưng để trống ghi chú -> Ném lỗi NOTE_REQUIRED_FOR_SUSPICIOUS_EXPENSE
+        var request = new ApproveExpenseRequest(voucher.Id, "");
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.ApproveExpenseAsync(request));
+
+        Assert.Equal("NOTE_REQUIRED_FOR_SUSPICIOUS_EXPENSE", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ApproveExpenseAsync_WhenFlaggedAsSuspiciousAndNoteProvided_ShouldApproveSuccessfully()
+    {
+        var voucher = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            Amount = 450_000m,
+            Status = ExpenseVoucherStatus.PendingApproval,
+            IsFlaggedAsSuspiciousSplit = true,
+            SuspiciousReason = "Cảnh báo xé nhỏ chi phí cùng vendor trong ngày"
+        };
+        _expenseRepo.Items.Add(voucher);
+
+        // Chủ hộ giải trình rõ lý do -> Phê duyệt thành công
+        var request = new ApproveExpenseRequest(voucher.Id, "Đã kiểm tra hóa đơn đỏ đính kèm, mua gấp do hết vật tư");
+        var response = await _service.ApproveExpenseAsync(request);
+
+        Assert.Equal(ExpenseVoucherStatus.Approved.ToString(), response.Status);
+        Assert.Equal("Đã kiểm tra hóa đơn đỏ đính kèm, mua gấp do hết vật tư", response.Note);
+    }
+
+    [Fact]
+    public async Task ApproveExpenseAsync_WhenUserHasUnauthorizedRole_ShouldThrowUnauthorizedAccessException()
+    {
+        _tenantContext.SetRole("Cashier");
+        var voucher = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            Amount = 100_000m,
+            Status = ExpenseVoucherStatus.PendingApproval
+        };
+        _expenseRepo.Items.Add(voucher);
+
+        var request = new ApproveExpenseRequest(voucher.Id, "Duyệt chi");
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _service.ApproveExpenseAsync(request));
+    }
 }

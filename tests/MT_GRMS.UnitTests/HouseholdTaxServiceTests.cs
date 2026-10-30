@@ -641,4 +641,65 @@ public class HouseholdTaxServiceTests
         // Verification phải báo false ngay lập tức!
         Assert.False(sigService.VerifySignature(snapshot));
     }
+
+    [Fact]
+    public async Task GetTaxSummary_WhenThresholdCrossedMidYear_ShouldSetFlagAndNeutralNote()
+    {
+        // GIVEN: Kỳ trước tích lũy 700 triệu (<= 1 tỷ), kỳ này phát sinh thêm 500 triệu -> Lũy kế 1.2 tỷ (> 1 tỷ)
+        _fakeRepo.PriorPeriodsAccumulatedRevenue = 700_000_000m;
+        _fakeRepo.AnnualAccumulatedRevenue = 1_200_000_000m;
+        _fakeRepo.GrossRevenue = 500_000_000m;
+        _fakeRepo.DiscountAmount = 0m;
+        _fakeRepo.ReturnAmount = 0m;
+
+        var filter = new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 2,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage
+        };
+
+        // WHEN
+        var summary = await _service.GetTaxSummaryAsync(filter);
+
+        // THEN
+        Assert.True(summary.IsThresholdCrossedMidYear);
+        Assert.NotNull(summary.ThresholdExceededNote);
+        Assert.Contains("vượt ngưỡng 1 tỷ VNĐ trong kỳ này", summary.ThresholdExceededNote);
+        Assert.Contains("tham vấn cơ quan thuế địa bàn", summary.ThresholdExceededNote);
+        Assert.False(summary.IsTaxExempt);
+        Assert.Equal(HouseholdTaxGroup.Group2_1BTo3B, summary.HouseholdGroup);
+    }
+
+    [Fact]
+    public async Task GetTaxSummary_Group2_WhenTier2MethodIsProfit15_ShouldUseDeclarationStrategyWith15PercentPit()
+    {
+        // GIVEN: Hộ Nhóm 2 (Doanh thu 1.5 tỷ), chọn phương án PROFIT_15 (15% lợi nhuận)
+        _fakeRepo.AnnualAccumulatedRevenue = 1_500_000_000m;
+        _fakeRepo.GrossRevenue = 400_000_000m;
+        _fakeRepo.DiscountAmount = 0m;
+        _fakeRepo.ReturnAmount = 0m;
+        _fakeRepo.CogsAmount = 200_000_000m;
+        _fakeRepo.OpexAmount = 50_000_000m;
+
+        var filter = new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 3,
+            Tier2Method = "PROFIT_15"
+        };
+
+        // WHEN
+        var summary = await _service.GetTaxSummaryAsync(filter);
+
+        // THEN
+        Assert.Equal("PROFIT_15", summary.Tier2Method);
+        Assert.Equal(TaxCalculationMethod.DeclarationBased, summary.CalculationMethod);
+        // Mô hình YTD Kê khai: Thu nhập tính thuế lũy kế = 1.500tr (YTD Rev) - 250tr (YTD Exp: 200tr COGS + 50tr OPEX) = 1.250.000.000đ
+        // Thuế TNCN (15% theo PROFIT_15) = 1.250tr * 15% = 187.500.000đ
+        Assert.Equal(187_500_000m, summary.PitAmount);
+        Assert.Equal(15.0m, summary.PitRate);
+    }
 }

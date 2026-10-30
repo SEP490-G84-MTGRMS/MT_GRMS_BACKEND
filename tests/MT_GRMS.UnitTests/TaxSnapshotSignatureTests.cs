@@ -1,4 +1,4 @@
-using MT_GRMS.Application.Tax.Security;
+﻿using MT_GRMS.Application.Tax.Security;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Enums;
 using Xunit;
@@ -83,5 +83,35 @@ public class TaxSnapshotSignatureTests
         // Assert
         var isValid = _signatureService.VerifySignature(snapshot);
         Assert.False(isValid);
+    }
+
+    [Fact]
+    public void VerifySignature_WithKeyRotation_ShouldVerifyHistoricSnapshotsCorrectly()
+    {
+        // 1. Snapshot được ký với KeyId mặc định "k-2026-v1"
+        var snapshot = new HouseholdTaxSnapshot
+        {
+            BranchId = Guid.NewGuid(),
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 2,
+            TaxableRevenueInPeriod = 500_000_000m,
+            TotalTaxAmount = 7_500_000m,
+            FinalizedAtUtc = new DateTime(2026, 6, 30, 16, 0, 0, DateTimeKind.Utc),
+            FinalizedBy = "owner_2026"
+        };
+
+        var signature = _signatureService.ComputeSignature(snapshot);
+        snapshot.AuditSignatureHash = signature;
+
+        // Chữ ký phải có tiền tố KeyId
+        Assert.StartsWith("k-2026-v1:", signature);
+
+        // Xác minh thành công
+        Assert.True(_signatureService.VerifySignature(snapshot));
+
+        // 2. Kẻ gian giả mạo KeyId không tồn tại trong hệ thống
+        snapshot.AuditSignatureHash = "unknown-key-9999:" + signature.Split(':')[1];
+        Assert.False(_signatureService.VerifySignature(snapshot));
     }
 }

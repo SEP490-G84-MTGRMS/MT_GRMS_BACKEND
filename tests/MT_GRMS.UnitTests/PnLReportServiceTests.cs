@@ -1,4 +1,4 @@
-using MT_GRMS.Application.Reports;
+﻿using MT_GRMS.Application.Reports;
 using MT_GRMS.Application.Reports.Dtos;
 using Xunit;
 
@@ -28,6 +28,25 @@ public class PnLReportServiceTests
 
         public Task<decimal> GetBadDebtExpenseAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default) =>
             Task.FromResult(BadDebt);
+
+        public Task<List<DailyPnLItem>> GetDailyTrendAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default)
+        {
+            var result = new List<DailyPnLItem>();
+            var current = fromDate.Date;
+            var end = toDate.Date;
+            while (current <= end)
+            {
+                result.Add(new DailyPnLItem(
+                    current,
+                    93_000_000m,
+                    60_000_000m,
+                    10_000_000m,
+                    1_000_000m
+                ));
+                current = current.AddDays(1);
+            }
+            return Task.FromResult(result);
+        }
     }
 
     private readonly FakePnLReportRepository _fakeRepo = new();
@@ -67,6 +86,9 @@ public class PnLReportServiceTests
         Assert.Equal(23.66m, response.NetMarginPercentage);
 
         Assert.Equal("Toàn chuỗi (Consolidated)", response.BranchName);
+        Assert.Equal("ACTUAL", response.CogsSource);
+        Assert.Equal(0m, response.CogsEstimatedPercentage);
+        Assert.Null(response.CogsWarningNotice);
     }
 
     [Fact]
