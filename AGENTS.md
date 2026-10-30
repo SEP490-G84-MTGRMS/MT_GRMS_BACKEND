@@ -65,7 +65,7 @@ Admin / PM chỉ cần thực hiện các thao tác để kiểm tra trước kh
 
 Repo này làm theo quy trình SEP 6 bước: `/sep-spec` → `/sep-brainstorm` → `/sep-verify-spec` → `/sep-apply` → `/sep-test` → `/sep-archive`
 (xem tiến độ: `/sep-status`). Mỗi bước kết thúc bằng Approve/Reject của user. Artifact nằm trong
-`D:/Sourse_code_Do_An/ai-team-kit/team-ai-knowledge/openspec/` và chỉ được ghi qua MCP server "sep".
+`D:/FPT/FPT_Ky9/SEP490/PhanMen/Code/ai-team-kit/team-ai-knowledge/openspec/` và chỉ được ghi qua MCP server "sep".
 
 Rules chi tiết: `.cursor/rules/sep-kit-*.mdc` (Cursor), `.agents/rules/sep-kit-*.md` (Antigravity) —
 sinh từ `sep-kit/rules` (karpathy-coding, mt-grms-stack, multi-agent-review, sep-knowledge, sep-workflow). Cập nhật: `npm run sep -- init <repo>`.

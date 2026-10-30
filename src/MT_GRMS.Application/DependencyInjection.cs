@@ -36,6 +36,7 @@ public static class DependencyInjection
         services.AddScoped<Suppliers.ISupplierService, Suppliers.SupplierService>();
         services.AddScoped<Branches.IBranchService, Branches.BranchService>();
         services.AddScoped<AiPipeline.IAiRecommendationService, AiPipeline.AiRecommendationService>();
+        services.AddScoped<Promotions.IPromotionService, Promotions.PromotionService>();
 
         return services;
     }
