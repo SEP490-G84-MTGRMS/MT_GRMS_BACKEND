@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using MT_GRMS.Domain.Entities.Finance;
 
@@ -202,6 +202,11 @@ public class IdempotencyRecordConfiguration : IEntityTypeConfiguration<Idempoten
         builder.Property(i => i.PayloadHash)
             .HasMaxLength(128)
             .IsRequired();
+
+        builder.Property(i => i.Status)
+            .HasMaxLength(20)
+            .IsRequired()
+            .HasDefaultValue("PENDING");
 
         builder.HasIndex(i => new { i.TenantId, i.Endpoint, i.Key }).IsUnique();
     }

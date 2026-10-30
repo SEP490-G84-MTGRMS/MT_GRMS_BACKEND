@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
@@ -10,6 +10,9 @@ using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Api.Filters;
 
+/// <summary>
+/// Attribute to enforce idempotency on sensitive financial actions.
+/// </summary>
 [AttributeUsage(AttributeTargets.Method | AttributeTargets.Class)]
 public class RequireIdempotencyAttribute : TypeFilterAttribute
 {
@@ -18,6 +21,11 @@ public class RequireIdempotencyAttribute : TypeFilterAttribute
     }
 }
 
+/// <summary>
+/// Two-Phase Idempotency filter preventing double-spending and race conditions.
+/// Phase 1: Claims key with PENDING status before action execution.
+/// Phase 2: Marks COMPLETED on 2xx success, or deletes PENDING on 4xx/5xx/exceptions to allow retry.
+/// </summary>
 public class IdempotencyFilter : IAsyncActionFilter
 {
     private readonly AppDbContext _context;
@@ -29,15 +37,16 @@ public class IdempotencyFilter : IAsyncActionFilter
         _tenantContext = tenantContext;
     }
 
+    /// <summary>
+    /// Executes the two-phase idempotency pipeline.
+    /// </summary>
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
     {
         var httpContext = context.HttpContext;
         var req = httpContext.Request;
 
-        // Check for Idempotency-Key header
         if (!req.Headers.TryGetValue("Idempotency-Key", out var keyValues) || string.IsNullOrWhiteSpace(keyValues.ToString()))
         {
-            // If required attribute is present, reject
             context.Result = new BadRequestObjectResult(new ApiResponse<string>
             {
                 Success = false,
@@ -49,63 +58,200 @@ public class IdempotencyFilter : IAsyncActionFilter
 
         var key = keyValues.ToString();
         var endpoint = $"{req.Method}:{req.Path}";
+        var payloadHash = ComputePayloadHash(context.ActionArguments);
 
-        // Read and hash payload
-        req.EnableBuffering();
-        using var reader = new StreamReader(req.Body, Encoding.UTF8, leaveOpen: true);
-        var bodyStr = await reader.ReadToEndAsync();
-        req.Body.Position = 0;
-
-        var payloadHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(bodyStr))).ToLowerInvariant();
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
+        var userGuid = _tenantContext.CurrentUserId;
+        var userIdStr = userGuid != Guid.Empty ? userGuid.ToString() : "anonymous";
+        var scopedKey = $"{userIdStr}:{key}";
 
+        // Phase 1: Check existing record or claim lock
         var existingRecord = await _context.IdempotencyRecords
-            .AsNoTracking()
-            .FirstOrDefaultAsync(r => r.TenantId == tenantId && r.Endpoint == endpoint && r.Key == key);
+            .FirstOrDefaultAsync(r => r.TenantId == tenantId && r.Endpoint == endpoint && r.Key == scopedKey);
 
         if (existingRecord != null)
         {
-            if (existingRecord.PayloadHash != payloadHash)
+            if (HandleExistingRecord(context, existingRecord, payloadHash))
+            {
+                return;
+            }
+
+            // Stale PENDING lock cleaned up -> proceed to re-claim
+            _context.IdempotencyRecords.Remove(existingRecord);
+            await _context.SaveChangesAsync();
+        }
+
+        var pendingRecord = new IdempotencyRecord
+        {
+            TenantId = tenantId,
+            UserId = userGuid != Guid.Empty ? userGuid : null,
+            Key = scopedKey,
+            Endpoint = endpoint,
+            PayloadHash = payloadHash,
+            Status = "PENDING",
+            StatusCode = 0,
+            ResponseJson = string.Empty,
+            ExpiresAtUtc = DateTime.UtcNow.AddMinutes(5)
+        };
+
+        if (!await TryClaimPendingLockAsync(context, pendingRecord, tenantId, endpoint, scopedKey, payloadHash))
+        {
+            return;
+        }
+
+        // Phase 2: Execute action and finalize or rollback lock
+        await ExecuteAndFinalizeAsync(context, next, pendingRecord);
+    }
+
+    private static string ComputePayloadHash(IDictionary<string, object?> actionArguments)
+    {
+        var serializableArgs = actionArguments
+            .Where(kvp => !(kvp.Value is CancellationToken))
+            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+        var payloadString = JsonSerializer.Serialize(serializableArgs);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payloadString))).ToLowerInvariant();
+    }
+
+    private static bool HandleExistingRecord(ActionExecutingContext context, IdempotencyRecord record, string payloadHash)
+    {
+        if (record.Status == "PENDING")
+        {
+            if (record.ExpiresAtUtc >= DateTime.UtcNow)
             {
                 context.Result = new ConflictObjectResult(new ApiResponse<string>
                 {
                     Success = false,
-                    Message = "Xung đột Idempotency-Key: Khóa này đã được sử dụng với nội dung payload khác.",
-                    ErrorCode = "IDEMPOTENCY_PAYLOAD_MISMATCH"
+                    Message = "Giao dịch đang được xử lý bởi một yêu cầu song song. Vui lòng không gửi lại yêu cầu lúc này.",
+                    ErrorCode = "IDEMPOTENCY_IN_PROGRESS"
                 });
-                return;
+                return true;
             }
 
-            // Return cached response
-            var jsonDoc = JsonDocument.Parse(existingRecord.ResponseJson);
-            context.Result = new ContentResult
+            // Lock is stale / expired due to server crash -> allow cleanup and reclaim
+            return false;
+        }
+
+        // Status is COMPLETED
+        if (record.PayloadHash != payloadHash)
+        {
+            context.Result = new ConflictObjectResult(new ApiResponse<string>
             {
-                Content = existingRecord.ResponseJson,
-                ContentType = "application/json",
-                StatusCode = existingRecord.StatusCode
-            };
+                Success = false,
+                Message = "Xung đột Idempotency-Key: Khóa này đã được sử dụng với nội dung payload khác.",
+                ErrorCode = "IDEMPOTENCY_PAYLOAD_MISMATCH"
+            });
+            return true;
+        }
+
+        context.Result = new ContentResult
+        {
+            Content = record.ResponseJson,
+            ContentType = "application/json",
+            StatusCode = record.StatusCode
+        };
+        return true;
+    }
+
+    private async Task<bool> TryClaimPendingLockAsync(
+        ActionExecutingContext context,
+        IdempotencyRecord pendingRecord,
+        string tenantId,
+        string endpoint,
+        string scopedKey,
+        string payloadHash)
+    {
+        try
+        {
+            _context.IdempotencyRecords.Add(pendingRecord);
+            await _context.SaveChangesAsync();
+            return true;
+        }
+        catch (DbUpdateException)
+        {
+            // Concurrent race condition caught by Unique Constraint
+            _context.Entry(pendingRecord).State = EntityState.Detached;
+            var racedRecord = await _context.IdempotencyRecords
+                .AsNoTracking()
+                .FirstOrDefaultAsync(r => r.TenantId == tenantId && r.Endpoint == endpoint && r.Key == scopedKey);
+
+            if (racedRecord != null && racedRecord.Status == "COMPLETED")
+            {
+                if (racedRecord.PayloadHash != payloadHash)
+                {
+                    context.Result = new ConflictObjectResult(new ApiResponse<string>
+                    {
+                        Success = false,
+                        Message = "Xung đột Idempotency-Key: Khóa này đã được sử dụng với nội dung payload khác.",
+                        ErrorCode = "IDEMPOTENCY_PAYLOAD_MISMATCH"
+                    });
+                    return false;
+                }
+
+                context.Result = new ContentResult
+                {
+                    Content = racedRecord.ResponseJson,
+                    ContentType = "application/json",
+                    StatusCode = racedRecord.StatusCode
+                };
+                return false;
+            }
+
+            context.Result = new ConflictObjectResult(new ApiResponse<string>
+            {
+                Success = false,
+                Message = "Giao dịch đang được xử lý bởi một yêu cầu song song. Vui lòng không gửi lại yêu cầu lúc này.",
+                ErrorCode = "IDEMPOTENCY_IN_PROGRESS"
+            });
+            return false;
+        }
+    }
+
+    private async Task ExecuteAndFinalizeAsync(
+        ActionExecutingContext context,
+        ActionExecutionDelegate next,
+        IdempotencyRecord pendingRecord)
+    {
+        ActionExecutedContext executedContext;
+        try
+        {
+            executedContext = await next();
+        }
+        catch (Exception)
+        {
+            await SafeRemovePendingRecordAsync(pendingRecord);
+            throw;
+        }
+
+        if (executedContext.Exception != null && !executedContext.ExceptionHandled)
+        {
+            await SafeRemovePendingRecordAsync(pendingRecord);
             return;
         }
 
-        var executedContext = await next();
-
-        // If execution succeeded, save response
-        if (executedContext.Result is ObjectResult objectResult && objectResult.StatusCode is null or >= 200 and < 300)
+        if (executedContext.Result is ObjectResult objectResult && (objectResult.StatusCode is null or (>= 200 and < 300)))
         {
-            var responseJson = JsonSerializer.Serialize(objectResult.Value);
-            var record = new IdempotencyRecord
-            {
-                TenantId = tenantId,
-                Key = key,
-                Endpoint = endpoint,
-                PayloadHash = payloadHash,
-                ResponseJson = responseJson,
-                StatusCode = objectResult.StatusCode ?? 200,
-                ExpiresAtUtc = DateTime.UtcNow.AddHours(24)
-            };
-
-            _context.IdempotencyRecords.Add(record);
+            pendingRecord.Status = "COMPLETED";
+            pendingRecord.StatusCode = objectResult.StatusCode ?? 200;
+            pendingRecord.ResponseJson = JsonSerializer.Serialize(objectResult.Value);
+            pendingRecord.ExpiresAtUtc = DateTime.UtcNow.AddHours(24);
             await _context.SaveChangesAsync();
+        }
+        else
+        {
+            await SafeRemovePendingRecordAsync(pendingRecord);
+        }
+    }
+
+    private async Task SafeRemovePendingRecordAsync(IdempotencyRecord pendingRecord)
+    {
+        try
+        {
+            _context.IdempotencyRecords.Remove(pendingRecord);
+            await _context.SaveChangesAsync();
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to remove pending idempotency record: {ex.Message}");
         }
     }
 }
