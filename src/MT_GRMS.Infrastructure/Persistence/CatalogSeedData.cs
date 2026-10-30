@@ -29,7 +29,6 @@ public static class CatalogSeedData
         public string Code { get; set; } = string.Empty;
         public string Name { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
-        public int DisplayOrder { get; set; }
         public List<SeedProductItem> Products { get; set; } = new();
     }
 
@@ -51,8 +50,7 @@ public static class CatalogSeedData
                     TenantId = tenantId,
                     CategoryCode = catTpl.Code,
                     Name = catTpl.Name,
-                    Description = catTpl.Description,
-                    DisplayOrder = catTpl.DisplayOrder
+                    Description = catTpl.Description
                 };
                 await context.Categories.AddAsync(category);
                 await context.SaveChangesAsync();
@@ -117,7 +115,6 @@ public static class CatalogSeedData
                 Code = "BEV",
                 Name = "Sữa & Đồ Uống Giải Khát",
                 Description = "Sữa tươi tiệt trùng, nước ngọt có ga, nước khoáng và trà giải nhiệt",
-                DisplayOrder = 1,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-BEV-001", Barcode = "893850120101", Name = "Nước ngọt Coca Cola lon 330ml", BaseUnit = "Lon", CostPrice = 8500m, SellingPrice = 11000m, IsFavorite = true },
@@ -136,7 +133,6 @@ public static class CatalogSeedData
                 Code = "DRY",
                 Name = "Bách Hóa Tiêu Dùng & Gạo Hạt",
                 Description = "Gạo đặc sản, các loại đậu hạt dinh dưỡng và thực phẩm khô",
-                DisplayOrder = 2,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-DRY-001", Barcode = "893850120201", Name = "Gạo thơm ST25 Ông Cua túi 5kg", BaseUnit = "Túi", CostPrice = 160000m, SellingPrice = 195000m, HasBatches = true, IsFavorite = true },
@@ -154,7 +150,6 @@ public static class CatalogSeedData
                 Code = "FRESH",
                 Name = "Thực Phẩm & Nông Sản Tươi Sống",
                 Description = "Thịt bò, thịt heo, phi lê gà và thủy hải sản tươi sạch VietGAP",
-                DisplayOrder = 3,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-FRH-001", Barcode = "893850120301", Name = "Thịt ba chỉ bò Mỹ đông lạnh khay 500g", BaseUnit = "Khay", CostPrice = 85000m, SellingPrice = 115000m, HasBatches = true, IsFavorite = true },
@@ -172,7 +167,6 @@ public static class CatalogSeedData
                 Code = "SPICE",
                 Name = "Gia Vị & Phụ Gia Nấu Ăn",
                 Description = "Nước mắm, dầu ăn, hạt nêm, nước tương và sốt ướp",
-                DisplayOrder = 4,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-SPC-001", Barcode = "893850120401", Name = "Nước mắm Nam Ngư Đệ Nhị chai 900ml", BaseUnit = "Chai", CostPrice = 22000m, SellingPrice = 28500m },
@@ -191,7 +185,6 @@ public static class CatalogSeedData
                 Code = "CONF",
                 Name = "Bánh Kẹo & Đồ Ăn Vặt",
                 Description = "Snack, bánh quy, sô cô la và kẹo dẻo các loại",
-                DisplayOrder = 5,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-CNF-001", Barcode = "893850120501", Name = "Bánh ChocoPie Orion truyền thống hộp 12 cái", BaseUnit = "Hộp", CostPrice = 46000m, SellingPrice = 58000m, IsFavorite = true },
@@ -209,7 +202,6 @@ public static class CatalogSeedData
                 Code = "FROZ",
                 Name = "Thực Phẩm Đông Lạnh & Đóng Hộp",
                 Description = "Xúc xích, cá hộp, nem rán, sủi cảo và đồ hộp tiện lợi",
-                DisplayOrder = 6,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-FRZ-001", Barcode = "893850120601", Name = "Cá nục sốt cà Three Lady Cooks hộp 155g", BaseUnit = "Hộp", CostPrice = 15000m, SellingPrice = 20000m },
@@ -227,7 +219,6 @@ public static class CatalogSeedData
                 Code = "COSM",
                 Name = "Hóa Mỹ Phẩm & Chăm Sóc Cá Nhân",
                 Description = "Dầu gội, sữa tắm, kem đánh răng và sản phẩm vệ sinh cá nhân",
-                DisplayOrder = 7,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-CSM-001", Barcode = "893850120701", Name = "Dầu gội Clear Men mát lạnh sạch gàu chai 630g", BaseUnit = "Chai", CostPrice = 145000m, SellingPrice = 182000m, IsFavorite = true },
@@ -245,7 +236,6 @@ public static class CatalogSeedData
                 Code = "CLEAN",
                 Name = "Tẩy Rửa & Vệ Sinh Nhà Cửa",
                 Description = "Nước giặt, nước xả, nước rửa chén và chất tẩy rửa gia dụng",
-                DisplayOrder = 8,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-CLN-001", Barcode = "893850120801", Name = "Nước giặt OMO Matic cửa trên túi 3.6kg", BaseUnit = "Túi", CostPrice = 175000m, SellingPrice = 219000m, IsFavorite = true },
@@ -263,7 +253,6 @@ public static class CatalogSeedData
                 Code = "INST",
                 Name = "Mì Ăn Liền & Thực Phẩm Tiện Lợi",
                 Description = "Mì gói, phở gói, cháo ăn liền và miến tiện dụng",
-                DisplayOrder = 9,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-INS-001", Barcode = "893850120901", Name = "Mì Hảo Hảo tôm chua cay gói 75g", BaseUnit = "Gói", CostPrice = 3800m, SellingPrice = 4800m, IsFavorite = true },
@@ -281,7 +270,6 @@ public static class CatalogSeedData
                 Code = "TEA",
                 Name = "Trà, Cà Phê & Đồ Uống Pha Chế",
                 Description = "Cà phê hòa tan, trà túi lọc, bột cacao và trà thảo mộc",
-                DisplayOrder = 10,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-TEA-001", Barcode = "893850121001", Name = "Cà phê hòa tan Nescafe 3in1 Đậm Đà hộp 20 gói", BaseUnit = "Hộp", CostPrice = 51000m, SellingPrice = 64000m, IsFavorite = true },
@@ -299,7 +287,6 @@ public static class CatalogSeedData
                 Code = "BABY",
                 Name = "Sản Phẩm Mẹ & Bé",
                 Description = "Tã bỉm, sữa bột trẻ em, khăn ướt và bột ăn dặm",
-                DisplayOrder = 11,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-BBY-001", Barcode = "893850121101", Name = "Tã dán Bobby sơ sinh XS gói 70 miếng", BaseUnit = "Gói", CostPrice = 135000m, SellingPrice = 168000m },
@@ -317,7 +304,6 @@ public static class CatalogSeedData
                 Code = "BAKE",
                 Name = "Đồ Làm Bánh & Ngũ Cốc Dinh Dưỡng",
                 Description = "Bột mì, bột chiên, ngũ cốc dinh dưỡng và men nở",
-                DisplayOrder = 12,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-BAK-001", Barcode = "893850121201", Name = "Bột mì đa dụng Hoa Ngọc Lan gói 1kg", BaseUnit = "Gói", CostPrice = 19000m, SellingPrice = 25000m },
@@ -335,7 +321,6 @@ public static class CatalogSeedData
                 Code = "EGG",
                 Name = "Trứng & Đậu Phụ Tươi",
                 Description = "Trứng gà tươi, trứng vịt, trứng cút và đậu phụ sạch",
-                DisplayOrder = 13,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-EGG-001", Barcode = "893850121301", Name = "Trứng gà sạch Ba Huân vỉ 10 quả", BaseUnit = "Vỉ", CostPrice = 26000m, SellingPrice = 33000m, HasBatches = true, IsFavorite = true },
@@ -353,7 +338,6 @@ public static class CatalogSeedData
                 Code = "FRUIT",
                 Name = "Trái Cây Nhập Khẩu & Nội Địa",
                 Description = "Táo Envy, cam sành, nho đen và trái cây tươi theo mùa",
-                DisplayOrder = 14,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-FRU-001", Barcode = "893850121401", Name = "Táo Envy New Zealand khay 4 quả", BaseUnit = "Khay", CostPrice = 85000m, SellingPrice = 115000m, HasBatches = true, IsFavorite = true },
@@ -371,7 +355,6 @@ public static class CatalogSeedData
                 Code = "HOUSE",
                 Name = "Đồ Dùng Gia Đình & Tiện Ích",
                 Description = "Màng bọc thực phẩm, túi rác tự hủy, giấy bạc và vật dụng nhà bếp",
-                DisplayOrder = 15,
                 Products = new List<SeedProductItem>
                 {
                     new() { Code = "SP-HOU-001", Barcode = "893850121501", Name = "Màng bọc thực phẩm PE Sunhouse cuộn 100m", BaseUnit = "Cuộn", CostPrice = 42000m, SellingPrice = 56000m },

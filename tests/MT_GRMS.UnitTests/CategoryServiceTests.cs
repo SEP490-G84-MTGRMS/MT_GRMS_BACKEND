@@ -29,14 +29,13 @@ public class CategoryServiceTests
         {
             var list = Categories
                 .Where(c => !c.IsDeleted)
-                .OrderBy(c => c.DisplayOrder)
+                .OrderByDescending(c => c.CreatedAt)
                 .ThenBy(c => c.Name)
                 .Select(c => new CategoryResponse(
                     c.Id,
                     c.CategoryCode,
                     c.Name,
                     c.Description,
-                    c.DisplayOrder,
                     ProductCounts.GetValueOrDefault(c.Id, 0)
                 ))
                 .ToList();
@@ -47,7 +46,7 @@ public class CategoryServiceTests
         {
             var c = Categories.FirstOrDefault(x => x.Id == id && !x.IsDeleted);
             if (c == null) return Task.FromResult<CategoryResponse?>(null);
-            var res = new CategoryResponse(c.Id, c.CategoryCode, c.Name, c.Description, c.DisplayOrder, ProductCounts.GetValueOrDefault(c.Id, 0));
+            var res = new CategoryResponse(c.Id, c.CategoryCode, c.Name, c.Description, ProductCounts.GetValueOrDefault(c.Id, 0));
             return Task.FromResult<CategoryResponse?>(res);
         }
 
@@ -119,8 +118,7 @@ public class CategoryServiceTests
         {
             Id = catId,
             CategoryCode = "CAT-001",
-            Name = "Bánh kẹo",
-            DisplayOrder = 1
+            Name = "Bánh kẹo"
         });
         fakeRepo.ProductCounts[catId] = 12;
 
@@ -143,7 +141,7 @@ public class CategoryServiceTests
         var fakeUow = new FakeUnitOfWork();
         var service = new CategoryService(fakeRepo, fakeUow);
 
-        var request = new CategoryCreateRequest("Đồ uống", "BEV", "Nước khoáng, trà", 1);
+        var request = new CategoryCreateRequest("Đồ uống", "BEV", "Nước khoáng, trà");
 
         // Act
         var result = await service.CreateAsync(request);

@@ -16,14 +16,13 @@ public class CategoryRepository : GenericRepository<Category>, ICategoryReposito
     {
         return await _dbSet
             .AsNoTracking()
-            .OrderBy(c => c.DisplayOrder)
+            .OrderByDescending(c => c.CreatedAt)
             .ThenBy(c => c.Name)
             .Select(c => new CategoryResponse(
                 c.Id,
                 c.CategoryCode,
                 c.Name,
                 c.Description,
-                c.DisplayOrder,
                 c.Products.Count(p => !p.IsDeleted)
             ))
             .ToListAsync(cancellationToken);
@@ -39,7 +38,6 @@ public class CategoryRepository : GenericRepository<Category>, ICategoryReposito
                 c.CategoryCode,
                 c.Name,
                 c.Description,
-                c.DisplayOrder,
                 c.Products.Count(p => !p.IsDeleted)
             ))
             .FirstOrDefaultAsync(cancellationToken);

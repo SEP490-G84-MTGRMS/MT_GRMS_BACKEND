@@ -194,8 +194,7 @@ public static class DbInitializer
             TenantId = defaultTenantId,
             CategoryCode = "FRESH",
             Name = "Thực Phẩm & Nông Sản Tươi Sống",
-            Description = "Rau, củ, quả, thịt cá tươi đạt chuẩn VietGAP",
-            DisplayOrder = 1
+            Description = "Rau, củ, quả, thịt cá tươi đạt chuẩn VietGAP"
         };
 
         var catDry = new Category
@@ -203,8 +202,7 @@ public static class DbInitializer
             TenantId = defaultTenantId,
             CategoryCode = "DRY",
             Name = "Bách Hóa Tiêu Dùng & Gạo Hạt",
-            Description = "Gạo, gia vị, dầu ăn, thực phẩm khô đóng gói",
-            DisplayOrder = 2
+            Description = "Gạo, gia vị, dầu ăn, thực phẩm khô đóng gói"
         };
 
         var catBeverage = new Category
@@ -212,8 +210,7 @@ public static class DbInitializer
             TenantId = defaultTenantId,
             CategoryCode = "BEV",
             Name = "Sữa & Đồ Uống Giải Khát",
-            Description = "Sữa tươi tiệt trùng, nước khoáng, nước trái cây",
-            DisplayOrder = 3
+            Description = "Sữa tươi tiệt trùng, nước khoáng, nước trái cây"
         };
 
         await context.Categories.AddRangeAsync(catFresh, catDry, catBeverage);

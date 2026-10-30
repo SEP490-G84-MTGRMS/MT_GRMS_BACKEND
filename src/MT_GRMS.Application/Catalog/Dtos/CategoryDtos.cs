@@ -9,20 +9,17 @@ public record CategoryResponse(
     string Code,
     string Name,
     string? Description,
-    int DisplayOrder,
     int ProductCount
 );
 
 public record CategoryCreateRequest(
     string Name,
     string? Code = null,
-    string? Description = null,
-    int DisplayOrder = 0
+    string? Description = null
 );
 
 public record CategoryUpdateRequest(
     string Name,
-    string? Description = null,
-    int DisplayOrder = 0
+    string? Description = null
 );
 

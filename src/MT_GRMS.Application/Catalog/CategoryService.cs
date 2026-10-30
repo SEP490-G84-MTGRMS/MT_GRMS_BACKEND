@@ -63,8 +63,7 @@ public class CategoryService : ICategoryService
             Id = Guid.NewGuid(),
             CategoryCode = code,
             Name = trimmedName,
-            Description = request.Description?.Trim(),
-            DisplayOrder = request.DisplayOrder
+            Description = request.Description?.Trim()
         };
 
         await _categoryRepository.AddAsync(category, cancellationToken);
@@ -75,7 +74,6 @@ public class CategoryService : ICategoryService
             category.CategoryCode,
             category.Name,
             category.Description,
-            category.DisplayOrder,
             0
         );
     }
@@ -106,7 +104,6 @@ public class CategoryService : ICategoryService
 
         category.Name = trimmedName;
         category.Description = request.Description?.Trim();
-        category.DisplayOrder = request.DisplayOrder;
         category.UpdatedAt = DateTime.UtcNow;
 
         _categoryRepository.Update(category);
@@ -119,7 +116,6 @@ public class CategoryService : ICategoryService
             category.CategoryCode,
             category.Name,
             category.Description,
-            category.DisplayOrder,
             productCount
         );
     }
