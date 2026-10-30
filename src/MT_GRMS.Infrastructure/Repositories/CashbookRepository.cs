@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Infrastructure.Persistence;
@@ -20,6 +20,13 @@ public class CashbookRepository : GenericRepository<CashbookEntry>, ICashbookRep
                 .SingleOrDefaultAsync(ct);
         }
 
+        if (_context.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return await _context.BranchCashTills
+                .FromSqlInterpolated($"SELECT * FROM \"BranchCashTills\" WHERE \"Id\" = {tillId} FOR UPDATE")
+                .SingleOrDefaultAsync(ct);
+        }
+
         return await _context.BranchCashTills.SingleOrDefaultAsync(t => t.Id == tillId, ct);
     }
 
@@ -32,6 +39,13 @@ public class CashbookRepository : GenericRepository<CashbookEntry>, ICashbookRep
                 .SingleOrDefaultAsync(ct);
         }
 
+        if (_context.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return await _context.BranchSafes
+                .FromSqlInterpolated($"SELECT * FROM \"BranchSafes\" WHERE \"Id\" = {safeId} FOR UPDATE")
+                .SingleOrDefaultAsync(ct);
+        }
+
         return await _context.BranchSafes.SingleOrDefaultAsync(s => s.Id == safeId, ct);
     }
 
@@ -41,6 +55,13 @@ public class CashbookRepository : GenericRepository<CashbookEntry>, ICashbookRep
         {
             return await _context.TenantBankAccounts
                 .FromSqlInterpolated($"SELECT * FROM TenantBankAccounts WITH (UPDLOCK, ROWLOCK) WHERE Id = {bankAccountId}")
+                .SingleOrDefaultAsync(ct);
+        }
+
+        if (_context.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return await _context.TenantBankAccounts
+                .FromSqlInterpolated($"SELECT * FROM \"TenantBankAccounts\" WHERE \"Id\" = {bankAccountId} FOR UPDATE")
                 .SingleOrDefaultAsync(ct);
         }
 
