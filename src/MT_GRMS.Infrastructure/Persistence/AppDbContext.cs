@@ -15,18 +15,18 @@ using MT_GRMS.Domain.Entities.System;
 namespace MT_GRMS.Infrastructure.Persistence;
 
 /// <summary>
-/// DbContext quản lý kết nối cơ sở dữ liệu MT-GRMS:
-/// Hỗ trợ Multi-tenancy Isolation và Soft Delete tự động qua Global Query Filter.
+/// AppDbContext trung tâm quản lý toàn bộ 34+ bảng thực thể của MT_GRMS
 /// </summary>
 public partial class AppDbContext : DbContext
 {
     private readonly ITenantContext? _tenantContext;
 
-    public AppDbContext()
+    public AppDbContext(DbContextOptions<AppDbContext> options)
+        : base(options)
     {
     }
 
-    public AppDbContext(DbContextOptions<AppDbContext> options, ITenantContext? tenantContext = null)
+    public AppDbContext(DbContextOptions<AppDbContext> options, ITenantContext tenantContext)
         : base(options)
     {
         _tenantContext = tenantContext;
@@ -72,14 +72,33 @@ public partial class AppDbContext : DbContext
     // 5. Phân hệ Khách hàng, Khuyến mãi & Bán lẻ POS (4 bảng)
     public virtual DbSet<Customer> Customers { get; set; } = null!;
     public virtual DbSet<Promotion> Promotions { get; set; } = null!;
+    public virtual DbSet<PromotionCondition> PromotionConditions { get; set; } = null!;
+    public virtual DbSet<VoucherCode> VoucherCodes { get; set; } = null!;
     public virtual DbSet<Domain.Entities.Sales.Order> Orders { get; set; } = null!;
     public virtual DbSet<OrderDetail> OrderDetails { get; set; } = null!;
 
-    // 6. Phân hệ Tài chính, Sổ quỹ & Chi phí (2 bảng)
+    // 6. Phân hệ Tài chính, Sổ quỹ & Chi phí (FE-07, FE-17)
     public virtual DbSet<CashBook> CashBooks { get; set; } = null!;
     public virtual DbSet<ServiceExpense> ServiceExpenses { get; set; } = null!;
+    public virtual DbSet<CashbookEntry> CashbookEntries { get; set; } = null!;
+    public virtual DbSet<BranchCashTill> BranchCashTills { get; set; } = null!;
+    public virtual DbSet<BranchSafe> BranchSafes { get; set; } = null!;
+    public virtual DbSet<CashInTransit> CashInTransits { get; set; } = null!;
+    public virtual DbSet<ShiftZReport> ShiftZReports { get; set; } = null!;
+    public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!;
+    public virtual DbSet<TenantBankAccount> TenantBankAccounts { get; set; } = null!;
+    public virtual DbSet<IdempotencyRecord> IdempotencyRecords { get; set; } = null!;
 
-    // 7. Phân hệ Nhân sự, Ca kíp & Tiền lương (4 bảng)
+    // 7. Customer Debt Module (FE-08)
+    public virtual DbSet<CustomerDebtProfile> CustomerDebtProfiles { get; set; } = null!;
+    public virtual DbSet<CustomerDebtInvoice> CustomerDebtInvoices { get; set; } = null!;
+    public virtual DbSet<CustomerDebtEntry> CustomerDebtEntries { get; set; } = null!;
+    public virtual DbSet<CustomerDebtAllocation> CustomerDebtAllocations { get; set; } = null!;
+
+    // 8. Household Tax Module (FE-19 TT 152/2025/TT-BTC)
+    public virtual DbSet<HouseholdTaxSnapshot> HouseholdTaxSnapshots { get; set; } = null!;
+
+    // 9. Phân hệ Nhân sự, Ca kíp & Tiền lương (4 bảng)
     public virtual DbSet<Employee> Employees { get; set; } = null!;
     public virtual DbSet<Payslip> Payslips { get; set; } = null!;
     public virtual DbSet<EmployeeSchedule> EmployeeSchedules { get; set; } = null!;
@@ -146,6 +165,22 @@ public partial class AppDbContext : DbContext
 
         foreach (var entry in ChangeTracker.Entries<BaseTenantEntity>())
         {
+            if (entry.Entity is CashbookEntry || entry.Entity is CustomerDebtEntry || entry.Entity is HouseholdTaxSnapshot)
+            {
+                if (entry.State == EntityState.Deleted)
+                {
+                    throw new InvalidOperationException($"Cấm xóa thực thể sổ cái tài chính bất biến: {entry.Entity.GetType().Name}. Vui lòng sử dụng bút toán đảo.");
+                }
+                if (entry.Entity.IsDeleted)
+                {
+                    throw new InvalidOperationException($"Cấm soft-delete thực thể sổ cái tài chính bất biến: {entry.Entity.GetType().Name}. Vui lòng sử dụng bút toán đảo.");
+                }
+                if (entry.State == EntityState.Modified)
+                {
+                    throw new InvalidOperationException($"Cấm chỉnh sửa (Modified) thực thể sổ cái tài chính bất biến: {entry.Entity.GetType().Name}. Sổ cái chỉ hỗ trợ cơ chế append-only và điều chỉnh qua bút toán đảo.");
+                }
+            }
+
             if (entry.State == EntityState.Added)
             {
                 if (string.IsNullOrWhiteSpace(entry.Entity.TenantId))

@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Domain.Entities.Catalog;
@@ -263,9 +263,9 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         {
             var term = searchTerm.Trim().ToLower();
             query = query.Where(sp =>
-                sp.Product.ProductName.ToLower().Contains(term) ||
+                sp.Product.Name.ToLower().Contains(term) ||
                 sp.Product.Barcode.ToLower().Contains(term) ||
-                sp.Product.SKU.ToLower().Contains(term) ||
+                sp.Product.ProductCode.ToLower().Contains(term) ||
                 (sp.SupplierProductCode != null && sp.SupplierProductCode.ToLower().Contains(term)));
         }
 
