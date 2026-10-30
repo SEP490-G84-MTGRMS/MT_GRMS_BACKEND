@@ -12,6 +12,8 @@ using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Infrastructure.Repositories;
+using MT_GRMS.Application.Common.Interfaces;
+using MT_GRMS.Infrastructure.Services;
 
 namespace MT_GRMS.Infrastructure;
 
@@ -64,6 +66,10 @@ public static class DependencyInjection
         services.AddScoped<ICashbookRepository, CashbookRepository>();
         services.AddScoped<ISupplierRepository, SupplierRepository>();
         services.AddScoped<IBranchRepository, BranchRepository>();
+
+                // Cấu hình & Đăng ký dịch vụ lưu trữ đám mây Cloudinary
+        services.Configure<CloudinarySettings>(configuration.GetSection(CloudinarySettings.SectionName));
+        services.AddScoped<ICloudinaryService, CloudinaryService>();
 
         return services;
     }
