@@ -35,7 +35,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(30)");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -43,11 +43,6 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.Property<string>("Description")
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
-
-                    b.Property<int>("DisplayOrder")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasDefaultValue(0);
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
@@ -57,10 +52,6 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
-                    b.Property<Guid?>("ParentCategoryId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("ParentCategoryID");
-
                     b.Property<string>("TenantId")
                         .IsRequired()
                         .HasMaxLength(50)
@@ -68,14 +59,14 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnName("TenantID");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("ParentCategoryId");
-
                     b.HasIndex("TenantId", "CategoryCode")
                         .IsUnique();
+
+                    b.HasIndex("TenantId", "Name");
 
                     b.ToTable("Categories", (string)null);
                 });
@@ -105,7 +96,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("decimal(18,2)");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -181,7 +172,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnName("TenantID");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<decimal>("VatRate")
                         .ValueGeneratedOnAdd()
@@ -201,60 +192,6 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.ToTable("Products", (string)null);
                 });
 
-            modelBuilder.Entity("MT_GRMS.Domain.Entities.Catalog.ProductCombo", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("ComboID");
-
-                    b.Property<Guid>("ComboProductId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("ComboProductID");
-
-                    b.Property<Guid>("ComponentProductId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("ComponentProductID");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<Guid?>("CreatedBy")
-                        .HasColumnType("uuid");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean");
-
-                    b.Property<string>("Note")
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
-                    b.Property<decimal>("Quantity")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(12,2)")
-                        .HasDefaultValue(1.00m);
-
-                    b.Property<string>("TenantId")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)")
-                        .HasColumnName("TenantID");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ComboProductId");
-
-                    b.HasIndex("ComponentProductId");
-
-                    b.HasIndex("TenantId", "ComboProductId", "ComponentProductId")
-                        .IsUnique();
-
-                    b.ToTable("ProductCombos", (string)null);
-                });
-
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Catalog.ProductUnit", b =>
                 {
                     b.Property<Guid>("Id")
@@ -272,7 +209,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(1.00m);
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<bool>("IsBaseUnit")
                         .ValueGeneratedOnAdd()
@@ -297,7 +234,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -323,7 +260,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnName("BranchID");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<decimal>("CurrentBalance")
                         .ValueGeneratedOnAdd()
@@ -363,7 +300,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(20)");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -397,13 +334,13 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(100)");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
 
                     b.Property<DateTime?>("DueDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("ExpenseCode")
                         .IsRequired()
@@ -411,7 +348,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime>("ExpenseDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("InvoiceNumber")
                         .HasMaxLength(50)
@@ -438,7 +375,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnName("TenantID");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("VendorName")
                         .HasMaxLength(150)
@@ -492,13 +429,13 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(20)");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
 
                     b.Property<DateTime?>("DateOfBirth")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<decimal>("DebtAmount")
                         .ValueGeneratedOnAdd()
@@ -566,7 +503,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("UserId")
                         .HasMaxLength(50)
@@ -601,7 +538,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -615,7 +552,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(255)");
 
                     b.Property<DateTime>("IncidentDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
@@ -641,7 +578,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(30)");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -686,7 +623,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(30)");
 
                     b.Property<DateTime?>("ApprovedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("ApprovedBy")
                         .HasMaxLength(100)
@@ -699,13 +636,13 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("decimal(10,7)");
 
                     b.Property<DateTime?>("CheckInTime")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<DateTime?>("CheckOutTime")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<decimal>("DurationHours")
                         .ValueGeneratedOnAdd()
@@ -761,10 +698,10 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue("scheduled");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<DateTime>("WorkDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -803,7 +740,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid>("EmployeeId")
                         .HasColumnType("uuid")
@@ -833,7 +770,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("PaidAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("PaymentMethod")
                         .HasMaxLength(30)
@@ -882,7 +819,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<decimal>("ViolationDeduction")
                         .ValueGeneratedOnAdd()
@@ -917,7 +854,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnName("UserID");
 
                     b.Property<DateTime>("AssignedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<bool>("IsActive")
                         .ValueGeneratedOnAdd()
@@ -955,7 +892,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(255)");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("Email")
                         .IsRequired()
@@ -981,14 +918,14 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(false);
 
                     b.Property<DateTime?>("LastLoginAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("LastLoginIp")
                         .HasMaxLength(45)
                         .HasColumnType("character varying(45)");
 
                     b.Property<DateTime?>("LockoutEnd")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<bool>("MustChangePassword")
                         .ValueGeneratedOnAdd()
@@ -996,7 +933,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(false);
 
                     b.Property<DateTime?>("OtpExpiry")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("PasswordHash")
                         .IsRequired()
@@ -1016,14 +953,14 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(255)");
 
                     b.Property<DateTime?>("RefreshTokenExpiryTime")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("SecurityStamp")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("UserName")
                         .IsRequired()
@@ -1058,13 +995,13 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
 
                     b.Property<DateTime?>("ExpiryDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
@@ -1075,7 +1012,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("ManufactureDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid>("ProductId")
                         .HasColumnType("uuid");
@@ -1109,7 +1046,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("ZoneArea")
                         .HasMaxLength(50)
@@ -1141,7 +1078,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(255)");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("CreatedByStaff")
                         .IsRequired()
@@ -1153,10 +1090,10 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(500)");
 
                     b.Property<DateTime?>("DispatchedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<DateTime?>("ExpectedDeliveryDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid>("FromBranchId")
                         .HasColumnType("uuid")
@@ -1175,7 +1112,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(500)");
 
                     b.Property<DateTime?>("ReceivedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -1199,7 +1136,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -1230,7 +1167,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<decimal>("DamagedQuantity")
                         .ValueGeneratedOnAdd()
@@ -1242,7 +1179,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(255)");
 
                     b.Property<DateTime?>("ExpiryDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
@@ -1279,7 +1216,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -1312,7 +1249,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(100);
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -1347,7 +1284,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnName("TenantID");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -1365,7 +1302,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnName("PlanID");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("EnabledModulesJson")
                         .HasColumnType("text");
@@ -1409,7 +1346,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -1440,14 +1377,14 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(30)");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("CurrentPlan")
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("GracePeriodExpiresAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("Hotline")
                         .HasMaxLength(20)
@@ -1465,7 +1402,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("LockedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("LockedBy")
                         .HasMaxLength(100)
@@ -1489,14 +1426,14 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(100)");
 
                     b.Property<DateTime?>("SubscriptionExpiresAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("TaxCode")
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -1528,7 +1465,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(false);
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -1594,7 +1531,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -1619,7 +1556,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnName("BranchID");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -1652,7 +1589,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime>("OrderDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("PaymentMethod")
                         .IsRequired()
@@ -1685,7 +1622,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -1712,7 +1649,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<decimal>("DiscountAmount")
                         .ValueGeneratedOnAdd()
@@ -1755,7 +1692,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -1776,7 +1713,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnName("PromotionID");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -1787,7 +1724,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime>("EndDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<bool>("IsActive")
                         .ValueGeneratedOnAdd()
@@ -1808,7 +1745,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(150)");
 
                     b.Property<DateTime>("StartDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("TenantId")
                         .IsRequired()
@@ -1822,7 +1759,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -1850,7 +1787,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("ConfirmedAtUtc")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("ConfirmedByUserId")
                         .HasMaxLength(50)
@@ -1862,7 +1799,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(true);
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -1894,7 +1831,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(500)");
 
                     b.Property<DateTime?>("PaymentDueDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("PaymentMethod")
                         .IsRequired()
@@ -1907,7 +1844,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<DateTime>("ReceivedAtUtc")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("ReceiverUserId")
                         .IsRequired()
@@ -1915,7 +1852,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("RejectedAtUtc")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("RejectedByUserId")
                         .HasMaxLength(50)
@@ -1952,7 +1889,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<decimal>("VatAmount")
                         .ValueGeneratedOnAdd()
@@ -2003,7 +1940,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -2019,7 +1956,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("ExpiryDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<decimal>("FreightAllocated")
                         .ValueGeneratedOnAdd()
@@ -2043,7 +1980,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("ManufactureDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("Note")
                         .HasMaxLength(300)
@@ -2091,7 +2028,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<decimal>("VatAllocated")
                         .ValueGeneratedOnAdd()
@@ -2118,7 +2055,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<DateTime?>("ApprovedAtUtc")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("ApprovedByUserId")
                         .HasMaxLength(50)
@@ -2133,10 +2070,10 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("ConfirmedBySupplierAtUtc")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -2146,10 +2083,10 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(30)");
 
                     b.Property<DateTime?>("DeliveryDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<DateTime?>("DispatchedAtUtc")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
@@ -2159,13 +2096,13 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(500)");
 
                     b.Property<DateTime?>("OrderedAtUtc")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("ParentDraftId")
                         .HasColumnType("uuid");
 
                     b.Property<DateTime?>("RejectedAtUtc")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("RejectedByUserId")
                         .HasMaxLength(50)
@@ -2189,7 +2126,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue("DRAFT");
 
                     b.Property<DateTime?>("SubmittedAtUtc")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("SubmittedByUserId")
                         .HasMaxLength(50)
@@ -2214,13 +2151,13 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.000m);
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<DateTime?>("ViewFromDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<DateTime?>("ViewToDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -2249,13 +2186,13 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
 
                     b.Property<DateTime?>("DeliveryDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("DeliveryUoM")
                         .IsRequired()
@@ -2313,7 +2250,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -2371,7 +2308,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(150)");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -2449,7 +2386,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(255)");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -2478,7 +2415,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("decimal(18,2)");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -2519,10 +2456,10 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("text");
 
                     b.Property<DateTime>("TransactionDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -2544,13 +2481,13 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
 
                     b.Property<DateTime>("EndDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
@@ -2564,7 +2501,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(255)");
 
                     b.Property<DateTime>("StartDate")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("SupplierDeliveryConfigId")
                         .HasColumnType("uuid");
@@ -2577,7 +2514,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("text");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -2600,7 +2537,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("uuid");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -2616,7 +2553,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("text");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -2642,7 +2579,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -2665,7 +2602,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -2685,7 +2622,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("boolean");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -2746,7 +2683,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("text");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<decimal>("UrgentFeePercent")
                         .ValueGeneratedOnAdd()
@@ -2784,7 +2721,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(1.000m);
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
@@ -2834,7 +2771,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("text");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.HasKey("Id");
 
@@ -2878,7 +2815,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("IpAddress")
                         .HasMaxLength(45)
@@ -2909,7 +2846,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnName("TenantID");
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("UserAgent")
                         .HasMaxLength(255)
@@ -2932,13 +2869,13 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnName("TaxID");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
 
                     b.Property<DateTime?>("GeneratedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
@@ -2949,7 +2886,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(false);
 
                     b.Property<DateTime?>("PaidAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("PitMethod")
                         .IsRequired()
@@ -2971,7 +2908,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue("DRAFT");
 
                     b.Property<DateTime?>("SubmittedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<int?>("TaxQuarter")
                         .HasColumnType("integer");
@@ -2997,7 +2934,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<decimal>("VatAmount")
                         .ValueGeneratedOnAdd()
@@ -3018,16 +2955,6 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.ToTable("TaxSnapshots", (string)null);
                 });
 
-            modelBuilder.Entity("MT_GRMS.Domain.Entities.Catalog.Category", b =>
-                {
-                    b.HasOne("MT_GRMS.Domain.Entities.Catalog.Category", "ParentCategory")
-                        .WithMany("SubCategories")
-                        .HasForeignKey("ParentCategoryId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.Navigation("ParentCategory");
-                });
-
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Catalog.Product", b =>
                 {
                     b.HasOne("MT_GRMS.Domain.Entities.Catalog.Category", "Category")
@@ -3037,25 +2964,6 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Category");
-                });
-
-            modelBuilder.Entity("MT_GRMS.Domain.Entities.Catalog.ProductCombo", b =>
-                {
-                    b.HasOne("MT_GRMS.Domain.Entities.Catalog.Product", "ComboProduct")
-                        .WithMany("ComboComponents")
-                        .HasForeignKey("ComboProductId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.HasOne("MT_GRMS.Domain.Entities.Catalog.Product", "ComponentProduct")
-                        .WithMany()
-                        .HasForeignKey("ComponentProductId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("ComboProduct");
-
-                    b.Navigation("ComponentProduct");
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Catalog.ProductUnit", b =>
@@ -3502,7 +3410,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.HasOne("MT_GRMS.Domain.Entities.Supplier.Supplier", "Supplier")
                         .WithMany("BranchAssignments")
                         .HasForeignKey("SupplierId")
-                        .OnDelete(DeleteBehavior.Cascade)
+                        .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
                     b.Navigation("Branch");
@@ -3578,14 +3486,10 @@ namespace MT_GRMS.Infrastructure.Migrations
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Catalog.Category", b =>
                 {
                     b.Navigation("Products");
-
-                    b.Navigation("SubCategories");
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Catalog.Product", b =>
                 {
-                    b.Navigation("ComboComponents");
-
                     b.Navigation("Units");
                 });
 
