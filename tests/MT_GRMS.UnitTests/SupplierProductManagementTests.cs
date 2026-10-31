@@ -500,8 +500,13 @@ public class SupplierProductManagementTests
         public Task<(IReadOnlyList<SupplierBranchAssignment> Items, int TotalCount)> GetPagedBranchAssignmentsAsync(
             string? supplierSearch,
             string? branchSearch,
+            IReadOnlyList<string>? supplierCodes,
+            IReadOnlyList<string>? supplierNames,
+            IReadOnlyList<string>? branchCodes,
+            IReadOnlyList<string>? branchNames,
             Guid? supplierId,
             Guid? branchId,
+            SupplierStatus? status,
             int pageIndex,
             int pageSize,
             CancellationToken cancellationToken = default)
@@ -509,6 +514,10 @@ public class SupplierProductManagementTests
             return Task.FromResult(((IReadOnlyList<SupplierBranchAssignment>)new List<SupplierBranchAssignment>(), 0));
         }
 
+        public Task<SupplierBranchAssignment?> GetBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(BranchAssignments.FirstOrDefault(x => x.SupplierId == supplierId && x.BranchId == branchId));
+        }
 
         public Task<bool> BranchAssignmentExistsAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
         {

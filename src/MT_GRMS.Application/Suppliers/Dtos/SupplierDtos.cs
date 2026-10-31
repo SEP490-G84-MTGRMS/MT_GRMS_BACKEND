@@ -177,7 +177,6 @@ public class SupplierDeliveryConfigDto
     public string OrderCutoffTime { get; set; } = "17:00";
     public int DeliveryWeekdaysMask { get; set; }
     public List<string> DeliveryDays { get; set; } = [];
-    public decimal MinOrderValue { get; set; }
     public int MinOrderQuantity { get; set; }
     public bool AllowUrgent { get; set; }
     public int UrgentLeadTimeHours { get; set; }
@@ -194,7 +193,6 @@ public class UpdateSupplierDeliveryConfigCommand
     public string CutoffTime { get; set; } = "17:00";
     public string OrderCutoffTime { get; set; } = "17:00";
     public List<string> DeliveryDays { get; set; } = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    public decimal MinOrderValue { get; set; } = 0;
     public int MinOrderQuantity { get; set; } = 0;
     public bool AllowUrgent { get; set; } = false;
     public int UrgentLeadTimeHours { get; set; } = 0;
@@ -302,12 +300,17 @@ public class SupplierBranchAssignmentDetailDto
     public string BranchAddress { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
     public string Status { get; set; } = "Active";
+    public string? InactiveReason { get; set; }
 }
 
 public class SupplierBranchAssignmentQueryFilter
 {
     public string? SupplierSearch { get; set; }
     public string? BranchSearch { get; set; }
+    public List<string>? SupplierCodes { get; set; }
+    public List<string>? SupplierNames { get; set; }
+    public List<string>? BranchCodes { get; set; }
+    public List<string>? BranchNames { get; set; }
     public Guid? SupplierId { get; set; }
     public Guid? BranchId { get; set; }
     public string? Status { get; set; }
@@ -319,5 +322,11 @@ public class AssignSupplierToBranchesCommand
 {
     public Guid SupplierId { get; set; }
     public List<Guid> BranchIds { get; set; } = [];
+}
+
+public class UpdateSupplierBranchAssignmentStatusRequest
+{
+    public SupplierStatus Status { get; set; }
+    public string? Reason { get; set; }
 }
 

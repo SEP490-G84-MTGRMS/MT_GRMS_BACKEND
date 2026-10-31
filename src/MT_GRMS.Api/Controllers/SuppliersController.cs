@@ -185,6 +185,23 @@ public class SuppliersController : BaseApiController
         return Ok(ApiResponse<object>.Ok(new { }, "Hủy liên kết cửa hàng khỏi nhà cung cấp thành công."));
     }
 
+    /// <summary>
+    /// Chuyển trạng thái Active / Inactive của phân bổ NCC với cửa hàng. Inactive bắt buộc có lý do.
+    /// </summary>
+    [HttpPatch("{id:guid}/branches/{branchId:guid}/status")]
+    public async Task<IActionResult> UpdateBranchAssignmentStatus(
+        Guid id,
+        Guid branchId,
+        [FromBody] UpdateSupplierBranchAssignmentStatusRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.UpdateBranchAssignmentStatusAsync(id, branchId, request, cancellationToken);
+        var message = result.Status == "Inactive"
+            ? "Đã tạm ngưng phân bổ nhà cung cấp với cửa hàng."
+            : "Đã kích hoạt phân bổ nhà cung cấp với cửa hàng.";
+        return Ok(ApiResponse<SupplierBranchAssignmentDetailDto>.Ok(result, message));
+    }
+
     [HttpGet("{id:guid}/ap/ledger")]
     public async Task<IActionResult> GetAPLedger(
         Guid id,

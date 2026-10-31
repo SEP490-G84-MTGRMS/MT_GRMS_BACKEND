@@ -158,7 +158,6 @@ public class SupplierService : ISupplierService
             OrderCutoffTime = "17:00",
             DeliveryWeekdaysMask = 63, // Mon-Sat
             DeliveryDaysJson = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]",
-            MinOrderValue = 0,
             MinOrderQuantity = 0,
             AllowUrgent = false
         };
@@ -329,7 +328,6 @@ public class SupplierService : ISupplierService
         config.OrderCutoffTime = string.IsNullOrWhiteSpace(command.OrderCutoffTime) ? config.CutoffTime : command.OrderCutoffTime.Trim();
         config.DeliveryWeekdaysMask = DeliveryScheduleCalculator.DayNamesToMask(command.DeliveryDays);
         config.DeliveryDaysJson = System.Text.Json.JsonSerializer.Serialize(command.DeliveryDays ?? []);
-        config.MinOrderValue = command.MinOrderValue;
         config.MinOrderQuantity = command.MinOrderQuantity;
         config.AllowUrgent = command.AllowUrgent;
         config.UrgentLeadTimeHours = command.UrgentLeadTimeHours;
@@ -542,29 +540,28 @@ public class SupplierService : ISupplierService
 
     public async Task<PagedResult<SupplierBranchAssignmentDetailDto>> GetBranchAssignmentsAsync(SupplierBranchAssignmentQueryFilter filter, CancellationToken cancellationToken = default)
     {
+        SupplierStatus? statusFilter = filter.Status switch
+        {
+            "Active" => SupplierStatus.Active,
+            "Inactive" => SupplierStatus.Inactive,
+            _ => null
+        };
+
         var (items, totalCount) = await _supplierRepository.GetPagedBranchAssignmentsAsync(
             filter.SupplierSearch,
             filter.BranchSearch,
+            filter.SupplierCodes,
+            filter.SupplierNames,
+            filter.BranchCodes,
+            filter.BranchNames,
             filter.SupplierId,
             filter.BranchId,
+            statusFilter,
             filter.PageIndex,
             filter.PageSize,
             cancellationToken);
 
-        var dtos = items.Select(a => new SupplierBranchAssignmentDetailDto
-        {
-            Id = a.Id,
-            SupplierId = a.SupplierId,
-            SupplierCode = a.Supplier?.Code ?? string.Empty,
-            SupplierName = a.Supplier?.Name ?? string.Empty,
-            SupplierType = a.Supplier?.SupplierType ?? SupplierType.Goods,
-            BranchId = a.BranchId,
-            BranchCode = a.Branch?.Code ?? string.Empty,
-            BranchName = a.Branch?.Name ?? string.Empty,
-            BranchAddress = a.Branch?.Address ?? string.Empty,
-            CreatedAt = a.CreatedAt,
-            Status = a.Supplier?.Status == SupplierStatus.Active ? "Active" : "Inactive"
-        }).ToList();
+        var dtos = items.Select(MapToBranchAssignmentDetailDto).ToList();
 
         return new PagedResult<SupplierBranchAssignmentDetailDto>
         {
@@ -601,7 +598,8 @@ public class SupplierService : ISupplierService
                     SupplierId = command.SupplierId,
                     BranchId = branchId,
                     TenantId = _tenantContext.CurrentTenantId,
-                    CreatedAt = DateTime.UtcNow
+                    CreatedAt = DateTime.UtcNow,
+                    Status = SupplierStatus.Active
                 };
                 await _supplierRepository.AddBranchAssignmentAsync(assignment, cancellationToken);
                 addedAssignments.Add(assignment);
@@ -610,16 +608,13 @@ public class SupplierService : ISupplierService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return addedAssignments.Select(a => new SupplierBranchAssignmentDetailDto
+        return addedAssignments.Select(a =>
         {
-            Id = a.Id,
-            SupplierId = a.SupplierId,
-            SupplierCode = supplier.Code,
-            SupplierName = supplier.Name,
-            SupplierType = supplier.SupplierType,
-            BranchId = a.BranchId,
-            CreatedAt = a.CreatedAt,
-            Status = "Active"
+            var dto = MapToBranchAssignmentDetailDto(a);
+            dto.SupplierCode = supplier.Code;
+            dto.SupplierName = supplier.Name;
+            dto.SupplierType = supplier.SupplierType;
+            return dto;
         }).ToList();
     }
 
@@ -629,6 +624,60 @@ public class SupplierService : ISupplierService
 
         await _supplierRepository.RemoveBranchAssignmentAsync(supplierId, branchId, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<SupplierBranchAssignmentDetailDto> UpdateBranchAssignmentStatusAsync(
+        Guid supplierId,
+        Guid branchId,
+        UpdateSupplierBranchAssignmentStatusRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        var assignment = await _supplierRepository.GetBranchAssignmentAsync(supplierId, branchId, cancellationToken);
+        if (assignment == null)
+        {
+            throw new NotFoundException("Phân bổ nhà cung cấp với cửa hàng", branchId);
+        }
+
+        if (request.Status == SupplierStatus.Inactive)
+        {
+            var reason = request.Reason?.Trim();
+            if (string.IsNullOrWhiteSpace(reason))
+            {
+                throw new BusinessException("INACTIVE_REASON_REQUIRED", "Vui lòng nhập lý do tạm ngưng.");
+            }
+
+            assignment.Status = SupplierStatus.Inactive;
+            assignment.InactiveReason = reason;
+        }
+        else
+        {
+            assignment.Status = SupplierStatus.Active;
+            assignment.InactiveReason = null;
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapToBranchAssignmentDetailDto(assignment);
+    }
+
+    private static SupplierBranchAssignmentDetailDto MapToBranchAssignmentDetailDto(SupplierBranchAssignment assignment)
+    {
+        return new SupplierBranchAssignmentDetailDto
+        {
+            Id = assignment.Id,
+            SupplierId = assignment.SupplierId,
+            SupplierCode = assignment.Supplier?.Code ?? string.Empty,
+            SupplierName = assignment.Supplier?.Name ?? string.Empty,
+            SupplierType = assignment.Supplier?.SupplierType ?? SupplierType.Goods,
+            BranchId = assignment.BranchId,
+            BranchCode = assignment.Branch?.Code ?? string.Empty,
+            BranchName = assignment.Branch?.Name ?? string.Empty,
+            BranchAddress = assignment.Branch?.Address ?? string.Empty,
+            CreatedAt = assignment.CreatedAt,
+            Status = assignment.Status == SupplierStatus.Active ? "Active" : "Inactive",
+            InactiveReason = assignment.InactiveReason
+        };
     }
 
     public async Task<SupplierDetailDto> LinkCustomerAsync(Guid supplierId, LinkCustomerRequest request, CancellationToken cancellationToken = default)
@@ -729,7 +778,6 @@ public class SupplierService : ISupplierService
             OrderCutoffTime = string.IsNullOrWhiteSpace(config.OrderCutoffTime) ? config.CutoffTime : config.OrderCutoffTime,
             DeliveryWeekdaysMask = config.DeliveryWeekdaysMask,
             DeliveryDays = days,
-            MinOrderValue = config.MinOrderValue,
             MinOrderQuantity = config.MinOrderQuantity,
             AllowUrgent = config.AllowUrgent,
             UrgentLeadTimeHours = config.UrgentLeadTimeHours,

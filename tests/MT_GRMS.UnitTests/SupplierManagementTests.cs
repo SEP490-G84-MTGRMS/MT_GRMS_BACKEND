@@ -284,8 +284,13 @@ public class SupplierManagementTests
         public Task<(IReadOnlyList<SupplierBranchAssignment> Items, int TotalCount)> GetPagedBranchAssignmentsAsync(
             string? supplierSearch,
             string? branchSearch,
+            IReadOnlyList<string>? supplierCodes,
+            IReadOnlyList<string>? supplierNames,
+            IReadOnlyList<string>? branchCodes,
+            IReadOnlyList<string>? branchNames,
             Guid? supplierId,
             Guid? branchId,
+            SupplierStatus? status,
             int pageIndex,
             int pageSize,
             CancellationToken cancellationToken = default)
@@ -299,11 +304,19 @@ public class SupplierManagementTests
             {
                 query = query.Where(x => x.BranchId == branchId.Value);
             }
+            if (status.HasValue)
+            {
+                query = query.Where(x => x.Status == status.Value);
+            }
             var list = query.ToList();
             var paged = list.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
             return Task.FromResult(((IReadOnlyList<SupplierBranchAssignment>)paged, list.Count));
         }
 
+        public Task<SupplierBranchAssignment?> GetBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(BranchAssignments.FirstOrDefault(x => x.SupplierId == supplierId && x.BranchId == branchId));
+        }
 
         public Task<bool> BranchAssignmentExistsAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
         {
@@ -760,6 +773,83 @@ public class SupplierManagementTests
 
         // ASSERT
         Assert.Empty(repo.BranchAssignments);
+    }
+
+    [Fact]
+    public async Task UpdateBranchAssignmentStatus_ToInactive_WithoutReason_Throws()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid(),
+            Name = "Vinamilk",
+            Code = "SUP-001",
+            Status = SupplierStatus.Active,
+            TenantId = "tenant-test-01"
+        };
+        await repo.AddAsync(supplier);
+
+        var branchId = Guid.NewGuid();
+        await repo.AddBranchAssignmentAsync(new SupplierBranchAssignment
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            BranchId = branchId,
+            Status = SupplierStatus.Active
+        });
+
+        await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateBranchAssignmentStatusAsync(supplier.Id, branchId, new UpdateSupplierBranchAssignmentStatusRequest
+            {
+                Status = SupplierStatus.Inactive
+            }));
+    }
+
+    [Fact]
+    public async Task UpdateBranchAssignmentStatus_ToInactive_WithReason_ThenReactivate_Succeeds()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid(),
+            Name = "Vinamilk",
+            Code = "SUP-001",
+            Status = SupplierStatus.Active,
+            TenantId = "tenant-test-01"
+        };
+        await repo.AddAsync(supplier);
+
+        var branchId = Guid.NewGuid();
+        await repo.AddBranchAssignmentAsync(new SupplierBranchAssignment
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            BranchId = branchId,
+            Status = SupplierStatus.Active
+        });
+
+        var inactive = await service.UpdateBranchAssignmentStatusAsync(supplier.Id, branchId, new UpdateSupplierBranchAssignmentStatusRequest
+        {
+            Status = SupplierStatus.Inactive,
+            Reason = "Cửa hàng tạm đóng để sửa chữa"
+        });
+
+        Assert.Equal("Inactive", inactive.Status);
+        Assert.Equal("Cửa hàng tạm đóng để sửa chữa", inactive.InactiveReason);
+
+        var active = await service.UpdateBranchAssignmentStatusAsync(supplier.Id, branchId, new UpdateSupplierBranchAssignmentStatusRequest
+        {
+            Status = SupplierStatus.Active
+        });
+
+        Assert.Equal("Active", active.Status);
+        Assert.Null(active.InactiveReason);
     }
 
     [Fact]

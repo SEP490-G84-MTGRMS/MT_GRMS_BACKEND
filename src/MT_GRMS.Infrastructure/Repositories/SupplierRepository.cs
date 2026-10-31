@@ -489,8 +489,13 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
     public async Task<(IReadOnlyList<SupplierBranchAssignment> Items, int TotalCount)> GetPagedBranchAssignmentsAsync(
         string? supplierSearch,
         string? branchSearch,
+        IReadOnlyList<string>? supplierCodes,
+        IReadOnlyList<string>? supplierNames,
+        IReadOnlyList<string>? branchCodes,
+        IReadOnlyList<string>? branchNames,
         Guid? supplierId,
         Guid? branchId,
+        SupplierStatus? status,
         int pageIndex,
         int pageSize,
         CancellationToken cancellationToken = default)
@@ -510,7 +515,17 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             query = query.Where(sba => sba.BranchId == branchId.Value);
         }
 
-        if (!string.IsNullOrWhiteSpace(supplierSearch))
+        if (status.HasValue)
+        {
+            query = query.Where(sba => sba.Status == status.Value);
+        }
+
+        var supplierCodeTerms = CleanTerms(supplierCodes);
+        if (supplierCodeTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sba => sba.Supplier!.Code, supplierCodeTerms, ignoreCase: true);
+        }
+        else if (!string.IsNullOrWhiteSpace(supplierSearch))
         {
             var term = supplierSearch.Trim();
             query = query.Where(sba =>
@@ -518,12 +533,29 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
                 EF.Functions.ILike(sba.Supplier.Name, $"%{term}%"));
         }
 
-        if (!string.IsNullOrWhiteSpace(branchSearch))
+        var supplierNameTerms = CleanTerms(supplierNames);
+        if (supplierNameTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sba => sba.Supplier!.Name, supplierNameTerms, ignoreCase: true);
+        }
+
+        var branchCodeTerms = CleanTerms(branchCodes);
+        if (branchCodeTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sba => sba.Branch!.BranchCode, branchCodeTerms, ignoreCase: true);
+        }
+        else if (!string.IsNullOrWhiteSpace(branchSearch))
         {
             var term = branchSearch.Trim();
             query = query.Where(sba =>
-                EF.Functions.ILike(sba.Branch!.Code, $"%{term}%") ||
+                EF.Functions.ILike(sba.Branch!.BranchCode, $"%{term}%") ||
                 EF.Functions.ILike(sba.Branch.Name, $"%{term}%"));
+        }
+
+        var branchNameTerms = CleanTerms(branchNames);
+        if (branchNameTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sba => sba.Branch!.Name, branchNameTerms, ignoreCase: true);
         }
 
         var totalCount = await query.CountAsync(cancellationToken);
@@ -535,6 +567,14 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             .ToListAsync(cancellationToken);
 
         return (items, totalCount);
+    }
+
+    public async Task<SupplierBranchAssignment?> GetBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
+    {
+        return await _context.SupplierBranchAssignments
+            .Include(sba => sba.Supplier)
+            .Include(sba => sba.Branch)
+            .FirstOrDefaultAsync(sba => sba.SupplierId == supplierId && sba.BranchId == branchId, cancellationToken);
     }
 
     public async Task<bool> BranchAssignmentExistsAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
@@ -558,9 +598,19 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         }
     }
 
-    private static IQueryable<Supplier> WhereAnyContains(
-        IQueryable<Supplier> query,
-        Expression<Func<Supplier, string>> selector,
+    private static List<string> CleanTerms(IReadOnlyList<string>? values)
+    {
+        if (values == null || values.Count == 0) return [];
+        return values
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v.Trim().ToLower())
+            .Distinct()
+            .ToList();
+    }
+
+    private static IQueryable<T> WhereAnyContains<T>(
+        IQueryable<T> query,
+        Expression<Func<T, string>> selector,
         IReadOnlyList<string> terms,
         bool ignoreCase)
     {
@@ -584,7 +634,7 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             body = body is null ? contains : Expression.OrElse(body, contains);
         }
 
-        var predicate = Expression.Lambda<Func<Supplier, bool>>(body!, parameter);
+        var predicate = Expression.Lambda<Func<T, bool>>(body!, parameter);
         return query.Where(predicate);
     }
 }

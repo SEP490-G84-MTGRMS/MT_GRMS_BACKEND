@@ -70,11 +70,17 @@ public interface ISupplierRepository : IRepository<Supplier>
     Task<(IReadOnlyList<SupplierBranchAssignment> Items, int TotalCount)> GetPagedBranchAssignmentsAsync(
         string? supplierSearch,
         string? branchSearch,
+        IReadOnlyList<string>? supplierCodes,
+        IReadOnlyList<string>? supplierNames,
+        IReadOnlyList<string>? branchCodes,
+        IReadOnlyList<string>? branchNames,
         Guid? supplierId,
         Guid? branchId,
+        SupplierStatus? status,
         int pageIndex,
         int pageSize,
         CancellationToken cancellationToken = default);
+    Task<SupplierBranchAssignment?> GetBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default);
     Task<bool> BranchAssignmentExistsAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default);
     Task AddBranchAssignmentAsync(SupplierBranchAssignment assignment, CancellationToken cancellationToken = default);
     Task RemoveBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default);
