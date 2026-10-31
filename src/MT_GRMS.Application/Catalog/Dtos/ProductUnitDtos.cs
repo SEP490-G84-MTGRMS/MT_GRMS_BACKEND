@@ -39,4 +39,3 @@ public class ProductUnitUpdateRequest
     public string? Barcode { get; set; }
     public bool IsBaseUnit { get; set; } = false;
 }
-

@@ -23,7 +23,7 @@ public class ProductUnit : BaseEntity
     public ProductUnit() { }
 
     /// <summary>
-    /// Constructor tiện ích với 6 tham số để khởi tạo đơn vị tính quy đổi
+    /// Constructor tiện ích để khởi tạo đơn vị tính quy đổi
     /// </summary>
     public ProductUnit(
         Guid productId,

@@ -461,5 +461,68 @@ public class CatalogServiceTests
         Assert.True(request.HasBatches);
         Assert.True(request.IsFavorite);
     }
+
+    [Fact]
+    public async Task CreateProduct_WithMultipleImageUrls_StoresListAndSetsAvatarAsFirstImage()
+    {
+        var unitOfWork = new FakeUnitOfWork();
+        var productRepo = new FakeProductRepository();
+        var categoryRepo = new FakeCategoryRepo();
+        var tenantContext = new FakeTenantContext();
+        var service = new CatalogService(productRepo, categoryRepo, unitOfWork, tenantContext);
+
+        var categoryId = Guid.NewGuid();
+        categoryRepo.Categories.Add(new Category { Id = categoryId, Name = "Đồ uống" });
+
+        var request = new ProductCreateRequest(
+            Name: "Nước tăng lực RedBull",
+            CategoryId: categoryId,
+            SellingPrice: 15000m,
+            ImageUrls: new List<string> { "https://res.cloudinary.com/img1.png", "https://res.cloudinary.com/img2.png" }
+        );
+
+        var response = await service.CreateProductAsync(request);
+
+        Assert.Equal(2, response.ImageUrls?.Count);
+        Assert.Equal("https://res.cloudinary.com/img1.png", response.ImageUrl); // avatar = first
+        Assert.Equal(1, productRepo.Products.Count);
+        Assert.Equal(2, productRepo.Products[0].ImageUrls.Count);
+        Assert.Equal("https://res.cloudinary.com/img1.png", productRepo.Products[0].ImageUrl);
+    }
+
+    [Fact]
+    public async Task UpdateProduct_WithImageUrls_UpdatesListProperly()
+    {
+        var unitOfWork = new FakeUnitOfWork();
+        var productRepo = new FakeProductRepository();
+        var categoryRepo = new FakeCategoryRepo();
+        var tenantContext = new FakeTenantContext();
+        var service = new CatalogService(productRepo, categoryRepo, unitOfWork, tenantContext);
+
+        var productId = Guid.NewGuid();
+        var categoryId = Guid.NewGuid();
+        categoryRepo.Categories.Add(new Category { Id = categoryId, Name = "Bánh kẹo" });
+        productRepo.Products.Add(new Product
+        {
+            Id = productId,
+            Name = "Bánh Oreo",
+            CategoryId = categoryId,
+            ImageUrls = new List<string> { "https://old.png" }
+        });
+
+        var updateReq = new ProductUpdateRequest(
+            Name: "Bánh Oreo Vani",
+            CategoryId: categoryId,
+            SellingPrice: 20000m,
+            ImageUrls: new List<string> { "https://new1.png", "https://new2.png" }
+        );
+
+        var response = await service.UpdateProductAsync(productId, updateReq);
+
+        Assert.Equal(2, response.ImageUrls?.Count);
+        Assert.Equal("https://new1.png", response.ImageUrl);
+        Assert.Equal(2, productRepo.Products[0].ImageUrls.Count);
+        Assert.Equal("https://new1.png", productRepo.Products[0].ImageUrl);
+    }
 }
 

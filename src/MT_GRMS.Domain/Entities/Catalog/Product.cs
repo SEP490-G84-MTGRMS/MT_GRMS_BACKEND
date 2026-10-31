@@ -20,13 +20,15 @@ public class Product : BaseTenantEntity
     public decimal VatRate { get; set; } = 0.00m;
     public string ProductType { get; set; } = "STANDARD";
     public string Status { get; set; } = "Active";
-    public string? ImageUrl { get; set; }
+    public List<string> ImageUrls { get; set; } = new();
     public string? Description { get; set; }
     public string? InternalNote { get; set; }
     public bool HasBatches { get; set; } = false;
     public bool IsFavorite { get; set; } = false;
 
     // Backward compatibility aliases
+    [NotMapped]
+    public string? ImageUrl => ImageUrls.FirstOrDefault();
     [NotMapped]
     public string SKU { get => ProductCode; set => ProductCode = value; }
     [NotMapped]

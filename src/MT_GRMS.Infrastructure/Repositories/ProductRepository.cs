@@ -65,7 +65,6 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
     public async Task<Product?> GetByIdWithCategoryAsync(Guid id, CancellationToken cancellationToken = default)
     {
         return await _dbSet
-            .AsNoTracking()
             .Include(p => p.Category)
             .FirstOrDefaultAsync(p => p.Id == id && !p.IsDeleted, cancellationToken);
     }
@@ -99,8 +98,9 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
     {
         var normalizedPrefix = prefix.Trim().ToUpper();
         return await _dbSet
-            .AsNoTracking()
-            .Where(p => !p.IsDeleted && p.ProductCode.ToUpper().StartsWith(normalizedPrefix) && p.ProductCode.Length == totalLength)
+            .Where(p => !p.IsDeleted &&
+                        p.ProductCode.StartsWith(normalizedPrefix) &&
+                        p.ProductCode.Length == totalLength)
             .OrderByDescending(p => p.ProductCode)
             .Select(p => p.ProductCode)
             .FirstOrDefaultAsync(cancellationToken);

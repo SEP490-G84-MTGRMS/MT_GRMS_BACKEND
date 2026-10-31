@@ -313,4 +313,28 @@ public class ProductUnitServiceTests
         _mockUnitRepo.Verify(r => r.Delete(unit), Times.Once);
         _mockUnitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
+
+    [Fact]
+    public async Task Create_WhenValidRequest_CreatesUnitSuccessfully()
+    {
+        var productId = Guid.NewGuid();
+        var product = new Product { Id = productId, ProductCode = "SP0001", Name = "Coca Cola" };
+        var request = new ProductUnitCreateRequest
+        {
+            UnitName = "Thùng 24 lon",
+            ConversionRate = 24m,
+            Price = 240000m
+        };
+
+        _mockProductRepo.Setup(r => r.GetByIdAsync(productId, It.IsAny<CancellationToken>())).ReturnsAsync(product);
+        _mockUnitRepo.Setup(r => r.ExistsByNameAsync(productId, request.UnitName, null, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        _mockUnitRepo.Setup(r => r.GetByProductIdAsync(productId, It.IsAny<CancellationToken>())).ReturnsAsync(new List<ProductUnit>());
+
+        var result = await _service.CreateAsync(productId, request);
+
+        Assert.NotNull(result);
+        Assert.Equal("Thùng 24 lon", result.UnitName);
+        Assert.Equal(24m, result.ConversionRate);
+        Assert.Equal(240000m, result.Price);
+    }
 }

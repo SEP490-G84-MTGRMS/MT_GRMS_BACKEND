@@ -23,7 +23,8 @@ public record ProductResponse(
     bool HasBatches,
     bool IsFavorite,
     DateTime CreatedAt,
-    DateTime? UpdatedAt
+    DateTime? UpdatedAt,
+    List<string>? ImageUrls = null
 )
 {
     // Backward compatibility aliases
@@ -52,7 +53,8 @@ public record ProductCreateRequest(
     string? Description = null,
     string? InternalNote = null,
     bool HasBatches = false,
-    bool IsFavorite = false
+    bool IsFavorite = false,
+    List<string>? ImageUrls = null
 )
 {
     // Backward compatibility constructor
@@ -92,7 +94,8 @@ public record ProductUpdateRequest(
     string? Description = null,
     string? InternalNote = null,
     bool HasBatches = false,
-    bool IsFavorite = false
+    bool IsFavorite = false,
+    List<string>? ImageUrls = null
 );
 
 public class ProductQueryFilter
@@ -102,5 +105,5 @@ public class ProductQueryFilter
     public List<Guid>? CategoryIds { get; set; }
     public string? Status { get; set; }
     public int PageIndex { get; set; } = 1;
-    public int PageSize { get; set; } = 10;
+    public int PageSize { get; set; } = 20;
 }

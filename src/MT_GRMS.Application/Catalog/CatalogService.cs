@@ -32,6 +32,9 @@ public class CatalogService : ICatalogService
 
     private static ProductResponse MapToResponse(Product p, bool canViewCostPrice)
     {
+        var imageUrls = p.ImageUrls ?? new List<string>();
+        var avatar = imageUrls.FirstOrDefault();
+
         return new ProductResponse(
             p.Id,
             p.ProductCode,
@@ -47,13 +50,14 @@ public class CatalogService : ICatalogService
             p.VatRate,
             p.ProductType,
             p.Status,
-            p.ImageUrl,
+            avatar,
             p.Description,
             p.InternalNote,
             p.HasBatches,
             p.IsFavorite,
             p.CreatedAt,
-            p.UpdatedAt
+            p.UpdatedAt,
+            imageUrls
         );
     }
 
@@ -141,6 +145,16 @@ public class CatalogService : ICatalogService
             throw new BusinessException("PRODUCT_BARCODE_EXISTS", $"Mã vạch '{barcode}' đã được sử dụng bởi sản phẩm khác.");
         }
 
+        var imageUrls = new List<string>();
+        if (request.ImageUrls != null && request.ImageUrls.Any())
+        {
+            imageUrls = request.ImageUrls.Where(u => !string.IsNullOrWhiteSpace(u)).Select(u => u.Trim()).ToList();
+        }
+        else if (!string.IsNullOrWhiteSpace(request.ImageUrl))
+        {
+            imageUrls.Add(request.ImageUrl.Trim());
+        }
+
         var product = new Product
         {
             Id = Guid.NewGuid(),
@@ -157,7 +171,7 @@ public class CatalogService : ICatalogService
             VatRate = request.VatRate,
             ProductType = string.IsNullOrWhiteSpace(request.ProductType) ? "STANDARD" : request.ProductType,
             Status = string.IsNullOrWhiteSpace(request.Status) ? "Active" : request.Status,
-            ImageUrl = request.ImageUrl,
+            ImageUrls = imageUrls,
             Description = request.Description?.Trim(),
             InternalNote = request.InternalNote?.Trim(),
             HasBatches = request.HasBatches,
@@ -228,12 +242,27 @@ public class CatalogService : ICatalogService
         product.MaxStock = request.MaxStock;
         product.VatRate = request.VatRate;
         product.Status = string.IsNullOrWhiteSpace(request.Status) ? product.Status : request.Status;
-        product.ImageUrl = request.ImageUrl;
         product.Description = request.Description?.Trim();
         product.InternalNote = request.InternalNote?.Trim();
         product.HasBatches = request.HasBatches;
         product.IsFavorite = request.IsFavorite;
         product.UpdatedAt = DateTime.UtcNow;
+
+        if (request.ImageUrls != null)
+        {
+            product.ImageUrls = request.ImageUrls.Where(u => !string.IsNullOrWhiteSpace(u)).Select(u => u.Trim()).ToList();
+        }
+        else if (request.ImageUrl != null)
+        {
+            if (string.IsNullOrWhiteSpace(request.ImageUrl))
+            {
+                product.ImageUrls.Clear();
+            }
+            else if (!product.ImageUrls.Contains(request.ImageUrl.Trim()))
+            {
+                product.ImageUrls = new List<string> { request.ImageUrl.Trim() };
+            }
+        }
 
         _productRepository.Update(product);
         await _unitOfWork.SaveChangesAsync(cancellationToken);

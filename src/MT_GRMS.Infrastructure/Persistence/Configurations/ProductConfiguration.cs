@@ -26,7 +26,7 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(x => x.VatRate).HasColumnType("decimal(5,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.ProductType).HasMaxLength(30).HasDefaultValue("STANDARD");
         builder.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("Active");
-        builder.Property(x => x.ImageUrl).HasMaxLength(500);
+        builder.Property(x => x.ImageUrls).HasColumnType("text[]");
         builder.Property(x => x.Description).HasMaxLength(1000);
         builder.Property(x => x.InternalNote).HasMaxLength(500);
         builder.Property(x => x.HasBatches).HasDefaultValue(false);
