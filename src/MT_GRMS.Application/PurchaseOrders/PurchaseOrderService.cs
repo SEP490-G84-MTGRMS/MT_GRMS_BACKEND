@@ -37,6 +37,7 @@ public class PurchaseOrderService : IPurchaseOrderService
         }
 
         var products = await _repository.GetMatrixProductsAsync(query.BranchId, query.SupplierId, cancellationToken);
+        var supplierConfigs = await _repository.GetMatrixSupplierConfigsAsync(query.BranchId, query.SupplierId, cancellationToken);
 
         var draftPo = await _repository.GetDraftMatrixPoAsync(query.BranchId, query.SupplierId, query.ViewFrom, cancellationToken);
 
@@ -47,13 +48,15 @@ public class PurchaseOrderService : IPurchaseOrderService
             {
                 if (detail.DeliveryDate.HasValue)
                 {
+                    var finalQty = detail.FinalQty ?? (detail.IsOwnerAdjusted ? (detail.StoreQty ?? 0m) : (detail.EmployeeQty ?? 0m));
                     cells.Add(new OrderMatrixCellDto
                     {
                         ProductId = detail.ProductId,
                         DeliveryDate = detail.DeliveryDate.Value,
                         EmployeeQty = detail.EmployeeQty ?? 0m,
                         StoreQty = detail.StoreQty,
-                        FinalQty = detail.FinalQty ?? detail.StoreQty ?? detail.EmployeeQty ?? 0m
+                        IsOwnerAdjusted = detail.IsOwnerAdjusted,
+                        FinalQty = finalQty
                     });
                 }
             }
@@ -68,6 +71,7 @@ public class PurchaseOrderService : IPurchaseOrderService
             DurationDays = query.DurationDays,
             Products = products,
             Cells = cells,
+            SupplierConfigs = supplierConfigs,
             DraftPoId = draftPo?.Id,
             Status = draftPo?.Status ?? "DRAFT"
         };
@@ -88,12 +92,19 @@ public class PurchaseOrderService : IPurchaseOrderService
         if (draft == null)
         {
             var code = $"DRAFT-{DateTime.UtcNow:yyyyMMdd}-{branch.Code}-{Guid.NewGuid().ToString().Substring(0, 4).ToUpper()}";
+            var effectiveSupplierId = command.SupplierId;
+            if (!effectiveSupplierId.HasValue || effectiveSupplierId.Value == Guid.Empty)
+            {
+                var configs = await _repository.GetMatrixSupplierConfigsAsync(command.BranchId, null, cancellationToken);
+                effectiveSupplierId = configs.FirstOrDefault()?.SupplierId;
+            }
+
             draft = new PurchaseOrder
             {
                 TenantId = _tenantContext.CurrentTenantId,
                 Code = code,
                 BranchId = command.BranchId,
-                SupplierId = command.SupplierId ?? Guid.Empty,
+                SupplierId = effectiveSupplierId ?? Guid.Empty,
                 ViewFromDate = command.ViewFrom,
                 ViewToDate = command.ViewTo,
                 Status = "DRAFT",
@@ -109,39 +120,90 @@ public class PurchaseOrderService : IPurchaseOrderService
             draft.ViewFromDate = command.ViewFrom;
             draft.ViewToDate = command.ViewTo;
             draft.Note = command.Note;
-            draft.Details.Clear();
         }
 
-        decimal totalQty = 0m;
-        decimal totalAmount = 0m;
+        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+        bool isStoreOwner = string.IsNullOrEmpty(role) || role is "STORE_OWNER" or "ADMIN";
 
-        foreach (var cell in command.Cells.Where(c => c.FinalQty > 0 || c.EmployeeQty > 0 || (c.StoreQty.HasValue && c.StoreQty.Value > 0)))
+        // Map existing details theo (ProductId, DeliveryDate) để thực hiện upsert an toàn mà không làm mất lịch sử
+        var existingDetails = draft.Details
+            .Where(d => d.DeliveryDate.HasValue)
+            .ToDictionary(d => (d.ProductId, d.DeliveryDate!.Value.Date));
+
+        foreach (var cell in command.Cells)
         {
-            var product = await _repository.GetProductByIdAsync(cell.ProductId, cancellationToken);
-            var unitPrice = product?.CostPrice ?? product?.SellingPrice ?? 0m;
-            var lineAmt = cell.FinalQty * unitPrice;
+            var cellDate = cell.DeliveryDate.Date;
+            existingDetails.TryGetValue((cell.ProductId, cellDate), out var detail);
 
-            draft.Details.Add(new PurchaseOrderDetail
+            decimal employeeQty;
+            decimal? storeQty;
+            bool isOwnerAdjusted;
+
+            if (isStoreOwner)
             {
-                TenantId = _tenantContext.CurrentTenantId,
-                PurchaseOrderId = draft.Id,
-                ProductId = cell.ProductId,
-                DeliveryDate = cell.DeliveryDate,
-                EmployeeQty = cell.EmployeeQty,
-                StoreQty = cell.StoreQty,
-                FinalQty = cell.FinalQty,
-                OrderedQty = cell.FinalQty,
-                UnitPrice = unitPrice,
-                DeliveryUoM = product?.BaseUnit ?? "Gói",
-                LineAmount = lineAmt
-            });
+                // Store Owner điều chỉnh
+                storeQty = cell.StoreQty;
+                isOwnerAdjusted = cell.IsOwnerAdjusted || cell.StoreQty.HasValue;
+                // Giữ nguyên đề xuất ban đầu của Employee từ detail cũ nếu có
+                employeeQty = detail?.EmployeeQty ?? cell.EmployeeQty;
+            }
+            else
+            {
+                // Employee nhập số lượng đề xuất: chỉ được cập nhật EmployeeQty
+                employeeQty = cell.EmployeeQty;
+                // Không được phép can thiệp owner override nếu đã tồn tại
+                storeQty = detail?.StoreQty;
+                isOwnerAdjusted = detail?.IsOwnerAdjusted ?? false;
+            }
 
-            totalQty += cell.FinalQty;
-            totalAmount += lineAmt;
+            // Tính finalQuantity chuẩn nghiệp vụ:
+            // finalQuantity = isOwnerAdjusted ? (ownerQuantity ?? 0) : employeeQuantity;
+            decimal finalQty = isOwnerAdjusted
+                ? (storeQty ?? 0m)
+                : employeeQty;
+
+            if (detail == null)
+            {
+                // Nếu chưa có detail và cả 2 bên đều không có số lượng thì bỏ qua
+                if (finalQty == 0 && employeeQty == 0 && !isOwnerAdjusted)
+                {
+                    continue;
+                }
+
+                var product = await _repository.GetProductByIdAsync(cell.ProductId, cancellationToken);
+                var unitPrice = product?.CostPrice ?? product?.SellingPrice ?? 0m;
+                var lineAmt = finalQty * unitPrice;
+
+                detail = new PurchaseOrderDetail
+                {
+                    TenantId = _tenantContext.CurrentTenantId,
+                    PurchaseOrderId = draft.Id,
+                    ProductId = cell.ProductId,
+                    DeliveryDate = cellDate,
+                    EmployeeQty = employeeQty,
+                    StoreQty = storeQty,
+                    IsOwnerAdjusted = isOwnerAdjusted,
+                    FinalQty = finalQty,
+                    OrderedQty = finalQty,
+                    UnitPrice = unitPrice,
+                    DeliveryUoM = product?.BaseUnit ?? "Gói",
+                    LineAmount = lineAmt
+                };
+                draft.Details.Add(detail);
+            }
+            else
+            {
+                detail.EmployeeQty = employeeQty;
+                detail.StoreQty = storeQty;
+                detail.IsOwnerAdjusted = isOwnerAdjusted;
+                detail.FinalQty = finalQty;
+                detail.OrderedQty = finalQty;
+                detail.LineAmount = finalQty * detail.UnitPrice;
+            }
         }
 
-        draft.TotalQty = totalQty;
-        draft.TotalAmount = totalAmount;
+        draft.TotalQty = draft.Details.Sum(d => d.FinalQty ?? 0m);
+        draft.TotalAmount = draft.Details.Sum(d => d.LineAmount);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -312,6 +374,10 @@ public class PurchaseOrderService : IPurchaseOrderService
             ProductName = d.Product?.Name ?? "Sản phẩm",
             Sku = d.Product?.ProductCode ?? string.Empty,
             Unit = d.DeliveryUoM,
+            EmployeeQty = d.EmployeeQty,
+            StoreQty = d.StoreQty,
+            IsOwnerAdjusted = d.IsOwnerAdjusted,
+            FinalQty = d.FinalQty,
             OrderedQty = d.OrderedQty ?? d.FinalQty ?? 0m,
             UnitPrice = d.UnitPrice,
             LineAmount = d.LineAmount,

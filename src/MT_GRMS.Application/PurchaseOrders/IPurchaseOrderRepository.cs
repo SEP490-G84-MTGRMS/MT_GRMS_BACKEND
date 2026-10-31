@@ -22,6 +22,11 @@ public interface IPurchaseOrderRepository
         Guid? supplierId,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<OrderMatrixSupplierDeliveryConfigDto>> GetMatrixSupplierConfigsAsync(
+        Guid branchId,
+        Guid? supplierId,
+        CancellationToken cancellationToken = default);
+
     Task<PurchaseOrder?> GetDraftMatrixPoAsync(
         Guid branchId,
         Guid? supplierId,

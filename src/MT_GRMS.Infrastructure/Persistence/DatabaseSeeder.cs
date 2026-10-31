@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -59,7 +59,16 @@ public static class DatabaseSeeder
                     Password = staffPasswordHash
                 };
 
-                await context.Users.AddRangeAsync(new[] { owner, cashier }, ct);
+                var employee = new User
+                {
+                    Id = "user-employee-001",
+                    UserName = "staff_employee",
+                    FullName = "Nhân Viên Cửa Hàng (Employee)",
+                    Email = "employee@mtgrms.vn",
+                    Password = staffPasswordHash
+                };
+
+                await context.Users.AddRangeAsync(new[] { owner, cashier, employee }, ct);
                 await context.SaveChangesAsync(ct);
             }
 

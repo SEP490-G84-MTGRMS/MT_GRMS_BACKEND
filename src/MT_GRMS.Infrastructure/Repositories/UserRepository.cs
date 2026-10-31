@@ -24,12 +24,14 @@ public class UserRepository : IUserRepository
     {
         var normalized = username.Trim();
         var compact = normalized.Replace(" ", "");
-        return await _context.Users.FirstOrDefaultAsync(u =>
-            u.UserName == normalized
-            || u.Email == normalized
-            || u.Phone == normalized
-            || u.Phone == compact,
-            cancellationToken);
+        return await _context.Users
+            .Include(u => u.TenantUsers)
+            .FirstOrDefaultAsync(u =>
+                u.UserName == normalized
+                || u.Email == normalized
+                || u.Phone == normalized
+                || u.Phone == compact,
+                cancellationToken);
     }
 
     public async Task<IReadOnlyList<User>> FindAsync(Expression<Func<User, bool>> predicate, CancellationToken cancellationToken = default)
