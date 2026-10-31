@@ -37,17 +37,16 @@ public class MediaController : BaseApiController
     /// <summary>
     /// Tải tệp hình ảnh lên Cloudinary qua luồng backend an toàn
     /// </summary>
-    /// <param name="request">Model chứa file tải lên và folder đích</param>
+    /// <param name="file">Tệp hình ảnh cần tải lên (.jpg, .jpeg, .png, .webp, tối đa 5MB)</param>
+    /// <param name="folder">Thư mục lưu trữ đích trên Cloudinary (tùy chọn)</param>
     /// <param name="cancellationToken">Cancellation Token</param>
     [HttpPost("upload")]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadImage(
-        [FromForm] ImageUploadRequest request,
+        IFormFile? file,
+        [FromForm] string? folder,
         CancellationToken cancellationToken)
     {
-        var file = request?.File;
-        var folder = request?.Folder;
-
         // 1. Kiểm tra sự tồn tại của file
         if (file == null || file.Length == 0)
         {
@@ -94,5 +93,11 @@ public class MediaController : BaseApiController
             _logger.LogError(ex, "Lỗi không xác định khi tải ảnh lên Cloudinary");
             return StatusCode(500, ApiResponse<object>.Fail("SERVER_ERROR", "Đã xảy ra lỗi khi xử lý tải ảnh lên máy chủ."));
         }
+    }
+
+    [NonAction]
+    public Task<IActionResult> UploadImage(ImageUploadRequest request, CancellationToken cancellationToken)
+    {
+        return UploadImage(request?.File, request?.Folder, cancellationToken);
     }
 }

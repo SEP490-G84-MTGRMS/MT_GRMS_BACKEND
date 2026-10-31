@@ -276,15 +276,7 @@ public static class DbInitializer
         await context.SaveChangesAsync();
 
         // Đơn vị quy đổi (1 Thùng = 12 Hộp sữa)
-        var unitCartonMilk = new ProductUnit
-        {
-            ProductId = prodMilk.Id,
-            UnitName = "Thùng",
-            ConversionRate = 12.00m,
-            Price = 445000.00m,
-            Barcode = "893850123499",
-            IsBaseUnit = false
-        };
+        var unitCartonMilk = new ProductUnit(prodMilk.Id, "Thùng", 12.00m, 445000.00m, "893850123499", false);
         await context.ProductUnits.AddAsync(unitCartonMilk);
 
         // =========================================================================

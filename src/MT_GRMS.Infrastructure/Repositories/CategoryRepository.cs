@@ -66,5 +66,16 @@ public class CategoryRepository : GenericRepository<Category>, ICategoryReposito
         return await _context.Products
             .CountAsync(p => p.CategoryId == categoryId && !p.IsDeleted, cancellationToken);
     }
+
+    public async Task<string?> GetMaxSequentialCodeAsync(string prefix, int totalLength, CancellationToken cancellationToken = default)
+    {
+        var normalizedPrefix = prefix.Trim().ToUpper();
+        return await _dbSet
+            .AsNoTracking()
+            .Where(c => c.CategoryCode.ToUpper().StartsWith(normalizedPrefix) && c.CategoryCode.Length == totalLength)
+            .OrderByDescending(c => c.CategoryCode)
+            .Select(c => c.CategoryCode)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
 }
 

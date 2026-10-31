@@ -109,17 +109,34 @@ public class CatalogService : ICatalogService
             throw new BusinessException("CATEGORY_NOT_FOUND", "Nhóm hàng không tồn tại trong hệ thống.");
         }
 
-        var code = string.IsNullOrWhiteSpace(request.ProductCode)
-            ? $"SP-{Guid.NewGuid().ToString()[..6].ToUpper()}"
-            : request.ProductCode.Trim().ToUpper();
-
-        if (await _productRepository.ExistsByCodeAsync(code, null, cancellationToken))
+        string code;
+        if (string.IsNullOrWhiteSpace(request.ProductCode))
         {
-            throw new BusinessException("PRODUCT_CODE_EXISTS", $"Mã sản phẩm '{code}' đã tồn tại trong hệ thống.");
+            var maxCode = await _productRepository.GetMaxSequentialCodeAsync("SP", 8, cancellationToken);
+            var nextNumber = 1;
+            if (!string.IsNullOrWhiteSpace(maxCode) && maxCode.Length == 8 && int.TryParse(maxCode[2..], out var currentMax))
+            {
+                nextNumber = currentMax + 1;
+            }
+
+            code = $"SP{nextNumber:D6}";
+            while (await _productRepository.ExistsByCodeAsync(code, null, cancellationToken))
+            {
+                nextNumber++;
+                code = $"SP{nextNumber:D6}";
+            }
+        }
+        else
+        {
+            code = request.ProductCode.Trim().ToUpper();
+            if (await _productRepository.ExistsByCodeAsync(code, null, cancellationToken))
+            {
+                throw new BusinessException("PRODUCT_CODE_EXISTS", $"Mã sản phẩm '{code}' đã tồn tại trong hệ thống.");
+            }
         }
 
-        var barcode = string.IsNullOrWhiteSpace(request.Barcode) ? code : request.Barcode.Trim();
-        if (await _productRepository.ExistsByBarcodeAsync(barcode, null, cancellationToken))
+        string? barcode = string.IsNullOrWhiteSpace(request.Barcode) ? null : request.Barcode.Trim();
+        if (!string.IsNullOrWhiteSpace(barcode) && await _productRepository.ExistsByBarcodeAsync(barcode, null, cancellationToken))
         {
             throw new BusinessException("PRODUCT_BARCODE_EXISTS", $"Mã vạch '{barcode}' đã được sử dụng bởi sản phẩm khác.");
         }
@@ -195,6 +212,10 @@ public class CatalogService : ICatalogService
                 throw new BusinessException("PRODUCT_BARCODE_EXISTS", $"Mã vạch '{trimmedBarcode}' đã được sử dụng bởi sản phẩm khác.");
             }
             product.Barcode = trimmedBarcode;
+        }
+        else if (string.IsNullOrWhiteSpace(request.Barcode))
+        {
+            product.Barcode = null;
         }
 
         product.Name = request.Name.Trim();

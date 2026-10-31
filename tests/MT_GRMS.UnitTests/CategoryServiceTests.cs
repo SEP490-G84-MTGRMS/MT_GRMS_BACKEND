@@ -68,6 +68,16 @@ public class CategoryServiceTests
             return Task.FromResult(exists);
         }
 
+        public Task<string?> GetMaxSequentialCodeAsync(string prefix, int totalLength, CancellationToken cancellationToken = default)
+        {
+            var max = Categories
+                .Where(c => !c.IsDeleted && c.CategoryCode.ToUpper().StartsWith(prefix.ToUpper()) && c.CategoryCode.Length == totalLength)
+                .OrderByDescending(c => c.CategoryCode)
+                .Select(c => c.CategoryCode)
+                .FirstOrDefault();
+            return Task.FromResult(max);
+        }
+
         public Task<int> GetProductCountAsync(Guid categoryId, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(ProductCounts.GetValueOrDefault(categoryId, 0));
@@ -220,6 +230,55 @@ public class CategoryServiceTests
         // Assert
         Assert.True(category.IsDeleted);
         Assert.True(fakeUow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenCodeIsEmpty_GeneratesFirstCode_CAT000001()
+    {
+        // Arrange
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        // Act
+        var result = await service.CreateAsync(new CategoryCreateRequest("Đồ uống", "", null));
+
+        // Assert
+        Assert.Equal("CAT000001", result.Code);
+        Assert.Equal("Đồ uống", result.Name);
+        Assert.True(fakeUow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenCodeIsEmptyAndPreviousExists_GeneratesNextSequentialCode_CAT000002()
+    {
+        // Arrange
+        var fakeRepo = new FakeCategoryRepository();
+        fakeRepo.Categories.Add(new Category { Id = Guid.NewGuid(), Name = "Bánh kẹo", CategoryCode = "CAT000001" });
+        var fakeUow = new FakeUnitOfWork();
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        // Act
+        var result = await service.CreateAsync(new CategoryCreateRequest("Nước ngọt", null, null));
+
+        // Assert
+        Assert.Equal("CAT000002", result.Code);
+        Assert.Equal("Nước ngọt", result.Name);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenCodeProvided_UsesProvidedCode()
+    {
+        // Arrange
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        // Act
+        var result = await service.CreateAsync(new CategoryCreateRequest("Thịt nguội", "thit-nguoi-01", null));
+
+        // Assert
+        Assert.Equal("THIT-NGUOI-01", result.Code);
     }
 }
 

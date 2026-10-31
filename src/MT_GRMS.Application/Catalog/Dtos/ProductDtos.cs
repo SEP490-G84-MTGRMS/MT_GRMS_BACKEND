@@ -1,9 +1,11 @@
+using System.Text.Json.Serialization;
+
 namespace MT_GRMS.Application.Catalog.Dtos;
 
 public record ProductResponse(
     Guid Id,
     string ProductCode,
-    string Barcode,
+    string? Barcode,
     string Name,
     Guid CategoryId,
     string CategoryName,
@@ -32,6 +34,7 @@ public record ProductResponse(
     public bool IsActive => Status == "Active";
 }
 
+[method: JsonConstructor]
 public record ProductCreateRequest(
     string Name,
     Guid CategoryId,
@@ -55,7 +58,7 @@ public record ProductCreateRequest(
     // Backward compatibility constructor
     public ProductCreateRequest(
         string SKU,
-        string Barcode,
+        string? Barcode,
         string ProductName,
         Guid? CategoryId,
         decimal BasePrice,

@@ -10,7 +10,7 @@ public class Product : BaseTenantEntity
 {
     public Guid CategoryId { get; set; }
     public string ProductCode { get; set; } = string.Empty;
-    public string Barcode { get; set; } = string.Empty;
+    public string? Barcode { get; set; }
     public string Name { get; set; } = string.Empty;
     public string BaseUnit { get; set; } = "Cái";
     public decimal? CostPrice { get; set; }

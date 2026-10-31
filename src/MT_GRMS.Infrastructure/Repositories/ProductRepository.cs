@@ -27,7 +27,7 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
             query = query.Where(p =>
                 p.Name.ToLower().Contains(term) ||
                 p.ProductCode.ToLower().Contains(term) ||
-                p.Barcode.ToLower().Contains(term));
+                (p.Barcode != null && p.Barcode.ToLower().Contains(term)));
         }
 
         if (filter.CategoryIds != null && filter.CategoryIds.Any())
@@ -82,11 +82,27 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
 
     public async Task<bool> ExistsByBarcodeAsync(string barcode, Guid? excludeId = null, CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(barcode))
+        {
+            return false;
+        }
+
         var normalizedBarcode = barcode.Trim();
         return await _dbSet.AnyAsync(p =>
             !p.IsDeleted &&
             p.Barcode == normalizedBarcode &&
             (!excludeId.HasValue || p.Id != excludeId.Value),
             cancellationToken);
+    }
+
+    public async Task<string?> GetMaxSequentialCodeAsync(string prefix, int totalLength, CancellationToken cancellationToken = default)
+    {
+        var normalizedPrefix = prefix.Trim().ToUpper();
+        return await _dbSet
+            .AsNoTracking()
+            .Where(p => !p.IsDeleted && p.ProductCode.ToUpper().StartsWith(normalizedPrefix) && p.ProductCode.Length == totalLength)
+            .OrderByDescending(p => p.ProductCode)
+            .Select(p => p.ProductCode)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 }

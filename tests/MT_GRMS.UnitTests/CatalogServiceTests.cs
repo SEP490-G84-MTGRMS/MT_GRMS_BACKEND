@@ -56,7 +56,7 @@ public class CatalogServiceTests
                 query = query.Where(p =>
                     p.Name.ToLower().Contains(term) ||
                     p.ProductCode.ToLower().Contains(term) ||
-                    p.Barcode.ToLower().Contains(term));
+                    (p.Barcode != null && p.Barcode.ToLower().Contains(term)));
             }
 
             if (filter.CategoryId.HasValue)
@@ -89,11 +89,23 @@ public class CatalogServiceTests
 
         public Task<bool> ExistsByBarcodeAsync(string barcode, Guid? excludeId = null, CancellationToken cancellationToken = default)
         {
+            if (string.IsNullOrWhiteSpace(barcode)) return Task.FromResult(false);
             var exists = Products.Any(p =>
                 !p.IsDeleted &&
+                p.Barcode != null &&
                 p.Barcode.Equals(barcode.Trim(), StringComparison.OrdinalIgnoreCase) &&
                 (!excludeId.HasValue || p.Id != excludeId.Value));
             return Task.FromResult(exists);
+        }
+
+        public Task<string?> GetMaxSequentialCodeAsync(string prefix, int totalLength, CancellationToken cancellationToken = default)
+        {
+            var max = Products
+                .Where(p => !p.IsDeleted && p.ProductCode.ToUpper().StartsWith(prefix.ToUpper()) && p.ProductCode.Length == totalLength)
+                .OrderByDescending(p => p.ProductCode)
+                .Select(p => p.ProductCode)
+                .FirstOrDefault();
+            return Task.FromResult(max);
         }
 
         public Task<Product?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -146,6 +158,8 @@ public class CatalogServiceTests
             => throw new NotImplementedException();
         public Task<bool> ExistsByCodeAsync(string code, Guid? excludeId = null, CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
+        public Task<string?> GetMaxSequentialCodeAsync(string prefix, int totalLength, CancellationToken cancellationToken = default)
+            => Task.FromResult<string?>(null);
         public Task<int> GetProductCountAsync(Guid categoryId, CancellationToken cancellationToken = default)
             => throw new NotImplementedException();
         public Task<IReadOnlyList<Category>> GetAllAsync(CancellationToken cancellationToken = default)
@@ -211,8 +225,8 @@ public class CatalogServiceTests
 
         // Assert
         Assert.NotNull(result);
-        Assert.StartsWith("SP-", result.ProductCode);
-        Assert.Equal(result.ProductCode, result.Barcode);
+        Assert.Equal("SP000001", result.ProductCode);
+        Assert.Null(result.Barcode);
         Assert.Equal("Coca Cola 320ml", result.Name);
         Assert.True(fakeUow.SaveChangesCalled);
     }
@@ -327,6 +341,125 @@ public class CatalogServiceTests
         // Assert
         Assert.True(product.IsDeleted);
         Assert.True(fakeUow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task CreateProductAsync_WhenProductCodeIsEmpty_GeneratesFirstCode_SP000001_AndNullBarcode()
+    {
+        // Arrange
+        var fakeProdRepo = new FakeProductRepository();
+        var fakeCatRepo = new FakeCategoryRepo();
+        var fakeUow = new FakeUnitOfWork();
+        var fakeTenantContext = new FakeTenantContext();
+
+        var catId = Guid.NewGuid();
+        fakeCatRepo.Categories.Add(new Category { Id = catId, Name = "Sữa tươi" });
+
+        var service = new CatalogService(fakeProdRepo, fakeCatRepo, fakeUow, fakeTenantContext);
+
+        var request = new ProductCreateRequest("Sữa đặc Ông Thọ", catId, 25000m, ProductCode: "", Barcode: "");
+
+        // Act
+        var result = await service.CreateProductAsync(request);
+
+        // Assert
+        Assert.Equal("SP000001", result.ProductCode);
+        Assert.Null(result.Barcode);
+        Assert.True(fakeUow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task CreateProductAsync_WhenProductCodeIsEmptyAndPreviousExists_GeneratesNextCode_SP000002()
+    {
+        // Arrange
+        var fakeProdRepo = new FakeProductRepository();
+        fakeProdRepo.Products.Add(new Product { Id = Guid.NewGuid(), Name = "Sản phẩm 1", ProductCode = "SP000001" });
+        var fakeCatRepo = new FakeCategoryRepo();
+        var fakeUow = new FakeUnitOfWork();
+        var fakeTenantContext = new FakeTenantContext();
+
+        var catId = Guid.NewGuid();
+        fakeCatRepo.Categories.Add(new Category { Id = catId, Name = "Bánh kẹo" });
+
+        var service = new CatalogService(fakeProdRepo, fakeCatRepo, fakeUow, fakeTenantContext);
+
+        var request = new ProductCreateRequest("Bánh AFC", catId, 15000m, ProductCode: null, Barcode: null);
+
+        // Act
+        var result = await service.CreateProductAsync(request);
+
+        // Assert
+        Assert.Equal("SP000002", result.ProductCode);
+        Assert.Null(result.Barcode);
+    }
+
+    [Fact]
+    public async Task CreateProductAsync_WhenBarcodeProvided_StoresBarcodeAndChecksUnique()
+    {
+        // Arrange
+        var fakeProdRepo = new FakeProductRepository();
+        var fakeCatRepo = new FakeCategoryRepo();
+        var fakeUow = new FakeUnitOfWork();
+        var fakeTenantContext = new FakeTenantContext();
+
+        var catId = Guid.NewGuid();
+        fakeCatRepo.Categories.Add(new Category { Id = catId, Name = "Đồ uống" });
+
+        var service = new CatalogService(fakeProdRepo, fakeCatRepo, fakeUow, fakeTenantContext);
+
+        var request = new ProductCreateRequest("Coca Cola", catId, 10000m, ProductCode: null, Barcode: "893500123456");
+
+        // Act
+        var result = await service.CreateProductAsync(request);
+
+        // Assert
+        Assert.Equal("SP000001", result.ProductCode);
+        Assert.Equal("893500123456", result.Barcode);
+    }
+
+    [Fact]
+    public void ProductCreateRequest_CanBeDeserializedFromJson()
+    {
+        // Arrange
+        var json = """
+        {
+          "name": "Bánh AFC",
+          "categoryId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+          "sellingPrice": 20000,
+          "productCode": "string",
+          "barcode": "string",
+          "baseUnit": "Hộp",
+          "costPrice": 15000,
+          "minStock": 1,
+          "maxStock": 100,
+          "vatRate": 10,
+          "productType": "STANDARD",
+          "status": "Active",
+          "imageUrl": "https://example.com/img.png",
+          "description": "Mô tả",
+          "internalNote": "Ghi chú",
+          "hasBatches": true,
+          "isFavorite": true
+        }
+        """;
+
+        var options = new System.Text.Json.JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        };
+
+        // Act
+        var request = System.Text.Json.JsonSerializer.Deserialize<ProductCreateRequest>(json, options);
+
+        // Assert
+        Assert.NotNull(request);
+        Assert.Equal("Bánh AFC", request.Name);
+        Assert.Equal(Guid.Parse("3fa85f64-5717-4562-b3fc-2c963f66afa6"), request.CategoryId);
+        Assert.Equal(20000m, request.SellingPrice);
+        Assert.Equal("string", request.ProductCode);
+        Assert.Equal("string", request.Barcode);
+        Assert.True(request.HasBatches);
+        Assert.True(request.IsFavorite);
     }
 }
 

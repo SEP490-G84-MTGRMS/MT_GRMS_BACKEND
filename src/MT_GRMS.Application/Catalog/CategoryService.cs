@@ -47,7 +47,19 @@ public class CategoryService : ICategoryService
         string code;
         if (string.IsNullOrWhiteSpace(request.Code))
         {
-            code = $"CAT-{Guid.NewGuid().ToString()[..6].ToUpper()}";
+            var maxCode = await _categoryRepository.GetMaxSequentialCodeAsync("CAT", 9, cancellationToken);
+            var nextNumber = 1;
+            if (!string.IsNullOrWhiteSpace(maxCode) && maxCode.Length == 9 && int.TryParse(maxCode[3..], out var currentMax))
+            {
+                nextNumber = currentMax + 1;
+            }
+
+            code = $"CAT{nextNumber:D6}";
+            while (await _categoryRepository.ExistsByCodeAsync(code, null, cancellationToken))
+            {
+                nextNumber++;
+                code = $"CAT{nextNumber:D6}";
+            }
         }
         else
         {

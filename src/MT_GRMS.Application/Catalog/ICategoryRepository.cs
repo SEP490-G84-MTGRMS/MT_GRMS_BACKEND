@@ -10,6 +10,7 @@ public interface ICategoryRepository : IRepository<Category>
     Task<CategoryResponse?> GetByIdWithProductCountAsync(Guid id, CancellationToken cancellationToken = default);
     Task<bool> ExistsByNameAsync(string name, Guid? excludeId = null, CancellationToken cancellationToken = default);
     Task<bool> ExistsByCodeAsync(string code, Guid? excludeId = null, CancellationToken cancellationToken = default);
+    Task<string?> GetMaxSequentialCodeAsync(string prefix, int totalLength, CancellationToken cancellationToken = default);
     Task<int> GetProductCountAsync(Guid categoryId, CancellationToken cancellationToken = default);
 }
 

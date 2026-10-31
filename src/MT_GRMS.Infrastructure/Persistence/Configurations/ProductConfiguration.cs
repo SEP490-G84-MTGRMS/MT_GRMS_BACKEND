@@ -16,7 +16,7 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(x => x.TenantId).HasColumnName("TenantID").HasMaxLength(50).IsRequired();
         builder.Property(x => x.CategoryId).HasColumnName("CategoryID").IsRequired();
         builder.Property(x => x.ProductCode).HasMaxLength(50).IsRequired();
-        builder.Property(x => x.Barcode).HasMaxLength(50).IsRequired();
+        builder.Property(x => x.Barcode).HasMaxLength(50).IsRequired(false);
         builder.Property(x => x.Name).HasMaxLength(200).IsRequired();
         builder.Property(x => x.BaseUnit).HasMaxLength(30).IsRequired();
         builder.Property(x => x.CostPrice).HasColumnType("decimal(18,2)");

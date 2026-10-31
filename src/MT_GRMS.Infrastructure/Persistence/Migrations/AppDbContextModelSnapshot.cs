@@ -79,7 +79,6 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnName("ProductID");
 
                     b.Property<string>("Barcode")
-                        .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)");
 

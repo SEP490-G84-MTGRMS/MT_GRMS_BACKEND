@@ -10,7 +10,10 @@ public record CategoryResponse(
     string Name,
     string? Description,
     int ProductCount
-);
+)
+{
+    public string CategoryCode => Code;
+}
 
 public record CategoryCreateRequest(
     string Name,
