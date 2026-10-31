@@ -8,6 +8,7 @@ namespace MT_GRMS.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Route("api/v1/[controller]")]
 public class AuthController : BaseApiController
 {
     private readonly IAuthService _authService;

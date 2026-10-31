@@ -20,7 +20,8 @@ public record UserInfo(
     string Email,
     string RoleName,
     Guid? BranchId,
-    string TenantId
+    string TenantId,
+    bool IsAdmin = false
 )
 {
     public string Role => RoleName;

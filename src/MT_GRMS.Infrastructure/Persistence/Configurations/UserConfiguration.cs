@@ -20,6 +20,7 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(x => x.Phone).HasMaxLength(20);
         builder.Property(x => x.AvatarUrl).HasMaxLength(255);
         builder.Property(x => x.IsActive).HasDefaultValue(true);
+        builder.Property(x => x.IsAdmin).HasDefaultValue(false);
         builder.Property(x => x.IsEmailVerified).HasDefaultValue(false);
         builder.Property(x => x.MustChangePassword).HasDefaultValue(false);
         builder.Property(x => x.LastLoginIp).HasMaxLength(45);

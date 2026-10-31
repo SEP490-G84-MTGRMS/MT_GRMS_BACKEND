@@ -96,6 +96,7 @@ public static class DbInitializer
             Email = "admin@mtgrms.vn",
             Phone = "0901234567",
             IsActive = true,
+            IsAdmin = true,
             IsEmailVerified = true
         };
 
@@ -108,6 +109,7 @@ public static class DbInitializer
             Email = "hung.nguyen@mtmart.vn",
             Phone = "0909876543",
             IsActive = true,
+            IsAdmin = false,
             IsEmailVerified = true
         };
 
@@ -120,6 +122,7 @@ public static class DbInitializer
             Email = "thao.le@mtmart.vn",
             Phone = "0912345678",
             IsActive = true,
+            IsAdmin = false,
             IsEmailVerified = true
         };
 
