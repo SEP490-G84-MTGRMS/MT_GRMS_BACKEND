@@ -27,6 +27,16 @@ public class SuppliersController : BaseApiController
     }
 
     /// <summary>
+    /// Gợi ý tìm kiếm nhanh phân nhóm đa thực thể (NCC, Sản phẩm, Liên hệ, SĐT) (REQ-SEARCH-01)
+    /// </summary>
+    [HttpGet("search-suggestions")]
+    public async Task<IActionResult> GetSearchSuggestions([FromQuery] string query, [FromQuery] int limit = 10, CancellationToken cancellationToken = default)
+    {
+        var result = await _supplierService.GetSearchSuggestionsAsync(query, limit, cancellationToken);
+        return Ok(ApiResponse<SupplierSearchSuggestionsDto>.Ok(result));
+    }
+
+    /// <summary>
     /// Lấy thông tin chi tiết nhà cung cấp theo ID (REQ-01, REQ-06)
     /// </summary>
     [HttpGet("{id:guid}")]
@@ -108,6 +118,20 @@ public class SuppliersController : BaseApiController
     {
         var result = await _supplierService.GetApSummaryAsync(id, cancellationToken);
         return Ok(ApiResponse<SupplierApSummaryDto>.Ok(result));
+    }
+
+    /// <summary>
+    /// Lấy lịch sử giao dịch đơn đặt hàng và nhập kho của NCC theo phạm vi chi nhánh (REQ-HIST-01)
+    /// </summary>
+    [HttpGet("{id:guid}/transactions")]
+    public async Task<IActionResult> GetTransactions(
+        Guid id,
+        [FromQuery] int pageIndex = 1,
+        [FromQuery] int pageSize = 20,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _supplierService.GetTransactionsAsync(id, pageIndex, pageSize, cancellationToken);
+        return Ok(ApiResponse<PagedResult<SupplierTransactionDto>>.Ok(result));
     }
 
     [HttpGet("{id:guid}/branches")]

@@ -37,6 +37,10 @@ public class SupplierService : ISupplierService
             filter.Name,
             filter.ContactPerson,
             filter.Phone,
+            filter.SupplierIds,
+            filter.ProductIds,
+            filter.ContactPersons,
+            filter.Phones,
             cancellationToken);
 
         var canSeeDebt = SupplierAccess.IsStoreOwner(_tenantContext);
@@ -939,6 +943,34 @@ public class SupplierService : ISupplierService
             IsPrimarySupplier = sp.IsPrimarySupplier,
             Status = sp.Status.ToString()
         }).ToList();
+    }
+
+    public async Task<SupplierSearchSuggestionsDto> GetSearchSuggestionsAsync(string query, int limit = 10, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return new SupplierSearchSuggestionsDto();
+        }
+
+        return await _supplierRepository.GetSearchSuggestionsAsync(query.Trim(), limit, cancellationToken);
+    }
+
+    public async Task<PagedResult<SupplierTransactionDto>> GetTransactionsAsync(Guid supplierId, int pageIndex = 1, int pageSize = 20, CancellationToken cancellationToken = default)
+    {
+        var supplier = await _supplierRepository.GetByIdWithDetailsAsync(supplierId, cancellationToken);
+        if (supplier == null || !SupplierAccess.CanViewSupplier(_tenantContext, supplier))
+        {
+            throw new NotFoundException("Nhà cung cấp", supplierId);
+        }
+
+        // Transactions history (currently 0 items, ready for PO/GRN linkage, no mock)
+        return new PagedResult<SupplierTransactionDto>
+        {
+            Items = new List<SupplierTransactionDto>(),
+            Page = pageIndex,
+            PageSize = pageSize,
+            TotalItems = 0
+        };
     }
 
     private static SupplierProductDto MapToSupplierProductDto(SupplierProduct sp)

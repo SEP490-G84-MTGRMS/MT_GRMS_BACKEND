@@ -110,9 +110,17 @@ public class SupplierManagementTests
             string? name = null,
             string? contactPerson = null,
             string? phone = null,
+            List<Guid>? supplierIds = null,
+            List<Guid>? productIds = null,
+            List<string>? contactPersons = null,
+            List<string>? phones = null,
             CancellationToken cancellationToken = default)
         {
             var query = Suppliers.Where(s => !s.IsDeleted).AsEnumerable();
+
+            if (supplierIds != null && supplierIds.Any()) query = query.Where(s => supplierIds.Contains(s.Id));
+            if (contactPersons != null && contactPersons.Any()) query = query.Where(s => contactPersons.Any(c => s.ContactPerson.Equals(c, StringComparison.OrdinalIgnoreCase)));
+            if (phones != null && phones.Any()) query = query.Where(s => phones.Contains(s.Phone));
 
             if (!string.IsNullOrWhiteSpace(code)) query = query.Where(s => s.Code.ToLower().Contains(code.ToLower()));
             if (!string.IsNullOrWhiteSpace(name)) query = query.Where(s => s.Name.ToLower().Contains(name.ToLower()));
@@ -131,6 +139,20 @@ public class SupplierManagementTests
             var list = query.ToList();
             var paged = list.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
             return Task.FromResult(((IReadOnlyList<Supplier>)paged, list.Count));
+        }
+
+        public Task<SupplierSearchSuggestionsDto> GetSearchSuggestionsAsync(string query, int limit = 10, CancellationToken cancellationToken = default)
+        {
+            var term = query.ToLower();
+            var matched = Suppliers.Where(s => !s.IsDeleted && (s.Name.ToLower().Contains(term) || s.Code.ToLower().Contains(term)))
+                .Take(limit)
+                .Select(s => new SupplierSuggestionItemDto { Id = s.Id, Code = s.Code, Name = s.Name })
+                .ToList();
+
+            return Task.FromResult(new SupplierSearchSuggestionsDto
+            {
+                Suppliers = matched
+            });
         }
 
         public Task<bool> HasLedgerTransactionsAsync(Guid supplierId, APDocType docType, CancellationToken cancellationToken = default)
@@ -736,6 +758,59 @@ public class SupplierManagementTests
 
         // ASSERT
         Assert.Empty(repo.BranchAssignments);
+    }
+
+    [Fact]
+    public async Task REQ_SEARCH01_GetSearchSuggestions_ReturnsMatchingSuppliers()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var s1 = new Supplier { Id = Guid.NewGuid(), Name = "Công ty CP Sữa Hà Nam", Code = "SUP-HANAM", ContactPerson = "Trần Hà", Phone = "0988111222", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        var s2 = new Supplier { Id = Guid.NewGuid(), Name = "Công ty TNHH Ba Vì", Code = "SUP-BAVI", ContactPerson = "Lê Lan", Phone = "0977333444", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        await repo.AddAsync(s1);
+        await repo.AddAsync(s2);
+
+        // ACT
+        var suggestions = await service.GetSearchSuggestionsAsync("Hà", 10);
+
+        // ASSERT
+        Assert.NotNull(suggestions);
+        Assert.Single(suggestions.Suppliers);
+        Assert.Equal("SUP-HANAM", suggestions.Suppliers[0].Code);
+    }
+
+    [Fact]
+    public async Task REQ_SEARCH01_FilterByMultipleSuppliersAndContacts_Success()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var s1 = new Supplier { Id = Guid.NewGuid(), Name = "NCC A", Code = "SUP-A", ContactPerson = "Nguyễn Văn A", Phone = "0911", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        var s2 = new Supplier { Id = Guid.NewGuid(), Name = "NCC B", Code = "SUP-B", ContactPerson = "Trần Thị B", Phone = "0922", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        var s3 = new Supplier { Id = Guid.NewGuid(), Name = "NCC C", Code = "SUP-C", ContactPerson = "Lê C", Phone = "0933", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        await repo.AddAsync(s1);
+        await repo.AddAsync(s2);
+        await repo.AddAsync(s3);
+
+        // ACT: Lọc theo danh sách 2 NCC (s1, s2)
+        var filter = new SupplierQueryFilter
+        {
+            SupplierIds = new List<Guid> { s1.Id, s2.Id },
+            PageIndex = 1,
+            PageSize = 10
+        };
+        var result = await service.GetSuppliersAsync(filter);
+
+        // ASSERT
+        Assert.Equal(2, result.TotalItems);
+        Assert.Contains(result.Items, x => x.Code == "SUP-A");
+        Assert.Contains(result.Items, x => x.Code == "SUP-B");
+        Assert.DoesNotContain(result.Items, x => x.Code == "SUP-C");
     }
 }
 

@@ -1,4 +1,5 @@
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Suppliers.Dtos;
 using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Domain.Enums;
 
@@ -20,6 +21,15 @@ public interface ISupplierRepository : IRepository<Supplier>
         string? name = null,
         string? contactPerson = null,
         string? phone = null,
+        List<Guid>? supplierIds = null,
+        List<Guid>? productIds = null,
+        List<string>? contactPersons = null,
+        List<string>? phones = null,
+        CancellationToken cancellationToken = default);
+
+    Task<SupplierSearchSuggestionsDto> GetSearchSuggestionsAsync(
+        string query,
+        int limit = 10,
         CancellationToken cancellationToken = default);
 
     Task<bool> HasLedgerTransactionsAsync(Guid supplierId, APDocType docType, CancellationToken cancellationToken = default);

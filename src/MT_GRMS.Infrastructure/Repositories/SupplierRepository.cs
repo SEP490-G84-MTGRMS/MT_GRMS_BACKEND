@@ -1,6 +1,7 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
+using MT_GRMS.Application.Suppliers.Dtos;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Domain.Enums;
@@ -52,12 +53,53 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         string? name = null,
         string? contactPerson = null,
         string? phone = null,
+        List<Guid>? supplierIds = null,
+        List<Guid>? productIds = null,
+        List<string>? contactPersons = null,
+        List<string>? phones = null,
         CancellationToken cancellationToken = default)
     {
         var query = _context.Suppliers
             .Include(s => s.Category)
             .Include(s => s.BranchAssignments)
             .AsNoTracking();
+
+        if (supplierIds != null && supplierIds.Any())
+        {
+            query = query.Where(s => supplierIds.Contains(s.Id));
+        }
+
+        if (productIds != null && productIds.Any())
+        {
+            var matchingSupplierIds = _context.SupplierProducts
+                .Where(sp => productIds.Contains(sp.ProductId))
+                .Select(sp => sp.SupplierId);
+            query = query.Where(s => matchingSupplierIds.Contains(s.Id));
+        }
+
+        if (contactPersons != null && contactPersons.Any())
+        {
+            var cleanContacts = contactPersons
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Select(c => c.Trim().ToLower())
+                .ToList();
+            if (cleanContacts.Any())
+            {
+                query = query.Where(s => cleanContacts.Contains(s.ContactPerson.ToLower()));
+            }
+        }
+
+        if (phones != null && phones.Any())
+        {
+            var cleanPhones = phones
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Select(p => p.Trim())
+                .ToList();
+            if (cleanPhones.Any())
+            {
+                query = query.Where(s => cleanPhones.Contains(s.Phone));
+            }
+        }
 
         if (!string.IsNullOrWhiteSpace(code))
         {
@@ -127,6 +169,97 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             .ToListAsync(cancellationToken);
 
         return (items, totalCount);
+    }
+
+    public async Task<SupplierSearchSuggestionsDto> GetSearchSuggestionsAsync(
+        string query,
+        int limit = 10,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new SupplierSearchSuggestionsDto();
+        if (string.IsNullOrWhiteSpace(query)) return result;
+
+        var term = query.Trim().ToLower();
+        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+        var isStoreOwner = string.IsNullOrEmpty(role) || role is "STORE_OWNER" or "ADMIN";
+        var branchId = _tenantContext.CurrentBranchId;
+
+        // Base Supplier query with branch isolation
+        var supplierQuery = _context.Suppliers.AsNoTracking();
+        if (!isStoreOwner && branchId is Guid bId)
+        {
+            supplierQuery = supplierQuery.Where(s =>
+                !s.BranchAssignments.Any() ||
+                s.BranchAssignments.Any(a => a.BranchId == bId));
+        }
+
+        // 1. Matched suppliers
+        result.Suppliers = await supplierQuery
+            .Where(s => s.Name.ToLower().Contains(term) || s.Code.ToLower().Contains(term) || (s.TaxCode != null && s.TaxCode.ToLower().Contains(term)))
+            .OrderBy(s => s.Name)
+            .Take(limit)
+            .Select(s => new SupplierSuggestionItemDto
+            {
+                Id = s.Id,
+                Code = s.Code,
+                Name = s.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        // 2. Matched products through SupplierProducts
+        var spQuery = _context.SupplierProducts
+            .Include(sp => sp.Product)
+            .Include(sp => sp.Supplier)
+            .AsNoTracking();
+
+        if (!isStoreOwner && branchId is Guid bId2)
+        {
+            spQuery = spQuery.Where(sp =>
+                !sp.Supplier.BranchAssignments.Any() ||
+                sp.Supplier.BranchAssignments.Any(a => a.BranchId == bId2));
+        }
+
+        result.Products = await spQuery
+            .Where(sp => sp.Product.ProductName.ToLower().Contains(term) || (sp.Product.SKU != null && sp.Product.SKU.ToLower().Contains(term)))
+            .OrderBy(sp => sp.Product.ProductName)
+            .Take(limit)
+            .Select(sp => new ProductSuggestionItemDto
+            {
+                Id = sp.ProductId,
+                Sku = sp.Product.SKU ?? string.Empty,
+                Name = sp.Product.ProductName,
+                SupplierId = sp.SupplierId,
+                SupplierName = sp.Supplier.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        // 3. Matched contact persons
+        result.ContactPersons = await supplierQuery
+            .Where(s => !string.IsNullOrEmpty(s.ContactPerson) && s.ContactPerson.ToLower().Contains(term))
+            .OrderBy(s => s.ContactPerson)
+            .Take(limit)
+            .Select(s => new ContactPersonSuggestionItemDto
+            {
+                Name = s.ContactPerson,
+                SupplierId = s.Id,
+                SupplierName = s.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        // 4. Matched phones
+        result.Phones = await supplierQuery
+            .Where(s => !string.IsNullOrEmpty(s.Phone) && s.Phone.Contains(term))
+            .OrderBy(s => s.Phone)
+            .Take(limit)
+            .Select(s => new PhoneSuggestionItemDto
+            {
+                Phone = s.Phone,
+                SupplierId = s.Id,
+                SupplierName = s.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        return result;
     }
 
     public async Task<bool> HasLedgerTransactionsAsync(Guid supplierId, APDocType docType, CancellationToken cancellationToken = default)

@@ -222,8 +222,62 @@ public class SupplierQueryFilter
     public SupplierType? SupplierType { get; set; }
     public SupplierStatus? Status { get; set; }
     public Guid? CategoryId { get; set; }
+    public List<Guid>? SupplierIds { get; set; }
+    public List<Guid>? ProductIds { get; set; }
+    public List<string>? ContactPersons { get; set; }
+    public List<string>? Phones { get; set; }
     public int PageIndex { get; set; } = 1;
     public int PageSize { get; set; } = 20;
+}
+
+public class SupplierSearchSuggestionsDto
+{
+    public List<SupplierSuggestionItemDto> Suppliers { get; set; } = new();
+    public List<ProductSuggestionItemDto> Products { get; set; } = new();
+    public List<ContactPersonSuggestionItemDto> ContactPersons { get; set; } = new();
+    public List<PhoneSuggestionItemDto> Phones { get; set; } = new();
+}
+
+public class SupplierSuggestionItemDto
+{
+    public Guid Id { get; set; }
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+}
+
+public class ProductSuggestionItemDto
+{
+    public Guid Id { get; set; }
+    public string Sku { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public Guid SupplierId { get; set; }
+    public string SupplierName { get; set; } = string.Empty;
+}
+
+public class ContactPersonSuggestionItemDto
+{
+    public string Name { get; set; } = string.Empty;
+    public Guid SupplierId { get; set; }
+    public string SupplierName { get; set; } = string.Empty;
+}
+
+public class PhoneSuggestionItemDto
+{
+    public string Phone { get; set; } = string.Empty;
+    public Guid SupplierId { get; set; }
+    public string SupplierName { get; set; } = string.Empty;
+}
+
+public class SupplierTransactionDto
+{
+    public Guid Id { get; set; }
+    public string TransactionCode { get; set; } = string.Empty;
+    public string TransactionType { get; set; } = string.Empty; // PO / GRN
+    public DateTime TransactionDate { get; set; }
+    public decimal Amount { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public Guid? BranchId { get; set; }
+    public string? BranchName { get; set; }
 }
 
 public class SupplierBranchAssignmentDetailDto
