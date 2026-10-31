@@ -539,6 +539,22 @@ public class SupplierProductManagementTests
             }
             return Task.CompletedTask;
         }
+
+        public Task<bool> BranchExistsAsync(Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
+        }
+
+        public Task<MT_GRMS.Domain.Entities.SaaS.Branch?> GetBranchByIdAsync(Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<MT_GRMS.Domain.Entities.SaaS.Branch?>(new MT_GRMS.Domain.Entities.SaaS.Branch
+            {
+                Id = branchId,
+                BranchCode = "BR-01",
+                Name = "Chi nhánh mẫu",
+                IsActive = true
+            });
+        }
     }
 }
 

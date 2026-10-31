@@ -598,6 +598,16 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         }
     }
 
+    public async Task<bool> BranchExistsAsync(Guid branchId, CancellationToken cancellationToken = default)
+    {
+        return await _context.Branches.AnyAsync(b => b.Id == branchId, cancellationToken);
+    }
+
+    public async Task<MT_GRMS.Domain.Entities.SaaS.Branch?> GetBranchByIdAsync(Guid branchId, CancellationToken cancellationToken = default)
+    {
+        return await _context.Branches.FirstOrDefaultAsync(b => b.Id == branchId, cancellationToken);
+    }
+
     private static List<string> CleanTerms(IReadOnlyList<string>? values)
     {
         if (values == null || values.Count == 0) return [];

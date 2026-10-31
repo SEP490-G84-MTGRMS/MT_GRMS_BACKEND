@@ -618,6 +618,100 @@ public class SupplierService : ISupplierService
         }).ToList();
     }
 
+    public async Task<IReadOnlyList<SupplierBranchAssignmentDetailDto>> AssignSuppliersToBranchAsync(AssignSuppliersToBranchCommand command, CancellationToken cancellationToken = default)
+    {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        if (command.BranchId == Guid.Empty)
+        {
+            throw new BusinessException("Vui lòng chọn Cửa hàng / Chi nhánh cần phân bổ.");
+        }
+
+        var branch = await _supplierRepository.GetBranchByIdAsync(command.BranchId, cancellationToken);
+        if (branch == null)
+        {
+            throw new NotFoundException("Cửa hàng / Chi nhánh", command.BranchId);
+        }
+
+        if (!branch.IsActive)
+        {
+            throw new BusinessException("Cửa hàng / Chi nhánh này hiện đang tạm ngưng hoạt động, không thể phân bổ.");
+        }
+
+        var uniqueSupplierIds = (command.SupplierIds ?? [])
+            .Where(id => id != Guid.Empty)
+            .Distinct()
+            .ToList();
+
+        if (uniqueSupplierIds.Count == 0)
+        {
+            throw new BusinessException("Vui lòng chọn ít nhất 1 nhà cung cấp để phân bổ.");
+        }
+
+        // All-or-nothing: Kiểm tra tất cả NCC hợp lệ và đang Active trước khi xử lý
+        var suppliers = new List<Supplier>();
+        foreach (var supId in uniqueSupplierIds)
+        {
+            var sup = await _supplierRepository.GetByIdAsync(supId, cancellationToken);
+            if (sup == null)
+            {
+                throw new NotFoundException("Nhà cung cấp", supId);
+            }
+            if (sup.Status != SupplierStatus.Active)
+            {
+                throw new BusinessException($"Nhà cung cấp '{sup.Name}' đang tạm ngưng hoạt động, không thể phân bổ.");
+            }
+            suppliers.Add(sup);
+        }
+
+        var resultAssignments = new List<SupplierBranchAssignmentDetailDto>();
+        foreach (var sup in suppliers)
+        {
+            var existing = await _supplierRepository.GetBranchAssignmentAsync(sup.Id, command.BranchId, cancellationToken);
+            if (existing != null)
+            {
+                // Tái kích hoạt quan hệ nếu đã từng bị Inactive
+                if (existing.Status == SupplierStatus.Inactive)
+                {
+                    existing.Status = SupplierStatus.Active;
+                    existing.InactiveReason = null;
+                    existing.CreatedAt = DateTime.UtcNow;
+                }
+                var dto = MapToBranchAssignmentDetailDto(existing);
+                dto.SupplierCode = sup.Code;
+                dto.SupplierName = sup.Name;
+                dto.SupplierType = sup.SupplierType;
+                dto.BranchCode = branch.BranchCode;
+                dto.BranchName = branch.Name;
+                dto.BranchAddress = branch.Address ?? string.Empty;
+                resultAssignments.Add(dto);
+            }
+            else
+            {
+                var newAssignment = new SupplierBranchAssignment
+                {
+                    SupplierId = sup.Id,
+                    BranchId = command.BranchId,
+                    TenantId = _tenantContext.CurrentTenantId,
+                    CreatedAt = DateTime.UtcNow,
+                    Status = SupplierStatus.Active
+                };
+                await _supplierRepository.AddBranchAssignmentAsync(newAssignment, cancellationToken);
+                var dto = MapToBranchAssignmentDetailDto(newAssignment);
+                dto.SupplierCode = sup.Code;
+                dto.SupplierName = sup.Name;
+                dto.SupplierType = sup.SupplierType;
+                dto.BranchCode = branch.BranchCode;
+                dto.BranchName = branch.Name;
+                dto.BranchAddress = branch.Address ?? string.Empty;
+                resultAssignments.Add(dto);
+            }
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return resultAssignments;
+    }
+
     public async Task UnassignSupplierBranchAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);

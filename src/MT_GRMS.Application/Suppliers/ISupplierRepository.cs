@@ -84,5 +84,7 @@ public interface ISupplierRepository : IRepository<Supplier>
     Task<bool> BranchAssignmentExistsAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default);
     Task AddBranchAssignmentAsync(SupplierBranchAssignment assignment, CancellationToken cancellationToken = default);
     Task RemoveBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default);
+    Task<bool> BranchExistsAsync(Guid branchId, CancellationToken cancellationToken = default);
+    Task<MT_GRMS.Domain.Entities.SaaS.Branch?> GetBranchByIdAsync(Guid branchId, CancellationToken cancellationToken = default);
 }
 

@@ -173,6 +173,32 @@ public class SuppliersController : BaseApiController
     }
 
     /// <summary>
+    /// Gán nhiều Nhà cung cấp cho một Cửa hàng / Chi nhánh (REQ-SBA01 refactored)
+    /// </summary>
+    [HttpPost("branch-assignments/batch-to-branch")]
+    public async Task<IActionResult> AssignSuppliersToBranch(
+        [FromBody] AssignSuppliersToBranchCommand command,
+        CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.AssignSuppliersToBranchAsync(command, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<SupplierBranchAssignmentDetailDto>>.Ok(result, "Phân bổ nhà cung cấp cho cửa hàng thành công."));
+    }
+
+    /// <summary>
+    /// Gán nhiều Nhà cung cấp cho một Cửa hàng / Chi nhánh (Route alias)
+    /// </summary>
+    [HttpPost("branches/{branchId:guid}/suppliers")]
+    public async Task<IActionResult> AssignSuppliersToBranchAlias(
+        Guid branchId,
+        [FromBody] AssignSuppliersToBranchCommand command,
+        CancellationToken cancellationToken)
+    {
+        command.BranchId = branchId;
+        var result = await _supplierService.AssignSuppliersToBranchAsync(command, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<SupplierBranchAssignmentDetailDto>>.Ok(result, "Phân bổ nhà cung cấp cho cửa hàng thành công."));
+    }
+
+    /// <summary>
     /// Hủy liên kết Nhà cung cấp khỏi một Cửa hàng / Chi nhánh (REQ-SBA03)
     /// </summary>
     [HttpDelete("{id:guid}/branches/{branchId:guid}")]

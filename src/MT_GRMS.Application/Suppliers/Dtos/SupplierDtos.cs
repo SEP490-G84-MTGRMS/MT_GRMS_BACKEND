@@ -324,6 +324,12 @@ public class AssignSupplierToBranchesCommand
     public List<Guid> BranchIds { get; set; } = [];
 }
 
+public class AssignSuppliersToBranchCommand
+{
+    public Guid BranchId { get; set; }
+    public List<Guid> SupplierIds { get; set; } = [];
+}
+
 public class UpdateSupplierBranchAssignmentStatusRequest
 {
     public SupplierStatus Status { get; set; }

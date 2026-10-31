@@ -338,6 +338,18 @@ public class SupplierManagementTests
             }
             return Task.CompletedTask;
         }
+
+        public List<MT_GRMS.Domain.Entities.SaaS.Branch> Branches { get; } = new();
+
+        public Task<bool> BranchExistsAsync(Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Branches.Any(x => x.Id == branchId));
+        }
+
+        public Task<MT_GRMS.Domain.Entities.SaaS.Branch?> GetBranchByIdAsync(Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Branches.FirstOrDefault(x => x.Id == branchId));
+        }
     }
 
 
@@ -903,6 +915,119 @@ public class SupplierManagementTests
         Assert.Contains(result.Items, x => x.Code == "SUP-A");
         Assert.Contains(result.Items, x => x.Code == "SUP-B");
         Assert.DoesNotContain(result.Items, x => x.Code == "SUP-C");
+    }
+
+    [Fact]
+    public async Task REQ_SBA01_AssignSuppliersToBranch_Success_WithMultipleSuppliers()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var branch = new MT_GRMS.Domain.Entities.SaaS.Branch
+        {
+            Id = Guid.NewGuid(),
+            BranchCode = "BR-HCM-01",
+            Name = "Chi Nhánh Quận 1",
+            IsActive = true
+        };
+        repo.Branches.Add(branch);
+
+        var s1 = new Supplier { Id = Guid.NewGuid(), Name = "NCC A", Code = "SUP-001", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        var s2 = new Supplier { Id = Guid.NewGuid(), Name = "NCC B", Code = "SUP-002", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        await repo.AddAsync(s1);
+        await repo.AddAsync(s2);
+
+        // ACT
+        var command = new AssignSuppliersToBranchCommand
+        {
+            BranchId = branch.Id,
+            SupplierIds = new List<Guid> { s1.Id, s2.Id }
+        };
+        var result = await service.AssignSuppliersToBranchAsync(command);
+
+        // ASSERT
+        Assert.Equal(2, result.Count);
+        Assert.Contains(result, r => r.SupplierId == s1.Id && r.BranchId == branch.Id && r.Status == "Active");
+        Assert.Contains(result, r => r.SupplierId == s2.Id && r.BranchId == branch.Id && r.Status == "Active");
+        Assert.Equal(2, repo.BranchAssignments.Count);
+    }
+
+    [Fact]
+    public async Task REQ_SBA01_AssignSuppliersToBranch_ReactivatesInactiveAssignment()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var branch = new MT_GRMS.Domain.Entities.SaaS.Branch
+        {
+            Id = Guid.NewGuid(),
+            BranchCode = "BR-01",
+            Name = "Chi nhánh 1",
+            IsActive = true
+        };
+        repo.Branches.Add(branch);
+
+        var supplier = new Supplier { Id = Guid.NewGuid(), Name = "NCC A", Code = "SUP-A", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        await repo.AddAsync(supplier);
+
+        // Đã từng gán nhưng đang Inactive
+        var oldAssignment = new SupplierBranchAssignment
+        {
+            SupplierId = supplier.Id,
+            BranchId = branch.Id,
+            TenantId = "tenant-01",
+            Status = SupplierStatus.Inactive,
+            InactiveReason = "Tạm ngưng hợp tác"
+        };
+        await repo.AddBranchAssignmentAsync(oldAssignment);
+
+        // ACT: Gán lại NCC cho chi nhánh đó
+        var command = new AssignSuppliersToBranchCommand
+        {
+            BranchId = branch.Id,
+            SupplierIds = new List<Guid> { supplier.Id }
+        };
+        var result = await service.AssignSuppliersToBranchAsync(command);
+
+        // ASSERT: Tái kích hoạt thành Active và xóa InactiveReason
+        Assert.Single(result);
+        Assert.Equal("Active", result[0].Status);
+        Assert.Null(oldAssignment.InactiveReason);
+        Assert.Equal(SupplierStatus.Active, oldAssignment.Status);
+    }
+
+    [Fact]
+    public async Task REQ_SBA01_AssignSuppliersToBranch_Throws_WhenBranchInactive()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var branch = new MT_GRMS.Domain.Entities.SaaS.Branch
+        {
+            Id = Guid.NewGuid(),
+            BranchCode = "BR-02",
+            Name = "Chi nhánh đóng cửa",
+            IsActive = false // Bị vô hiệu hóa
+        };
+        repo.Branches.Add(branch);
+
+        var supplier = new Supplier { Id = Guid.NewGuid(), Name = "NCC A", Code = "SUP-A", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        await repo.AddAsync(supplier);
+
+        var command = new AssignSuppliersToBranchCommand
+        {
+            BranchId = branch.Id,
+            SupplierIds = new List<Guid> { supplier.Id }
+        };
+
+        // ACT & ASSERT: Ném BusinessException
+        await Assert.ThrowsAsync<BusinessException>(() => service.AssignSuppliersToBranchAsync(command));
     }
 }
 
