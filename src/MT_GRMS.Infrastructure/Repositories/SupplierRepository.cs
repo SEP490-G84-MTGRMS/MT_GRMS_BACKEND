@@ -1,6 +1,8 @@
-﻿using Microsoft.EntityFrameworkCore;
+using System.Linq.Expressions;
+using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
+using MT_GRMS.Application.Suppliers.Dtos;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Domain.Enums;
@@ -52,12 +54,73 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         string? name = null,
         string? contactPerson = null,
         string? phone = null,
+        List<Guid>? supplierIds = null,
+        List<Guid>? productIds = null,
+        List<string>? contactPersons = null,
+        List<string>? phones = null,
+        List<string>? codes = null,
+        List<string>? names = null,
         CancellationToken cancellationToken = default)
     {
         var query = _context.Suppliers
             .Include(s => s.Category)
             .Include(s => s.BranchAssignments)
             .AsNoTracking();
+
+        if (supplierIds != null && supplierIds.Any())
+        {
+            query = query.Where(s => supplierIds.Contains(s.Id));
+        }
+
+        if (productIds != null && productIds.Any())
+        {
+            var matchingSupplierIds = _context.SupplierProducts
+                .Where(sp => productIds.Contains(sp.ProductId))
+                .Select(sp => sp.SupplierId);
+            query = query.Where(s => matchingSupplierIds.Contains(s.Id));
+        }
+
+        if (codes != null && codes.Any())
+        {
+            var codeTerms = codes.Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c.Trim().ToLower()).ToList();
+            if (codeTerms.Any())
+            {
+                query = WhereAnyContains(query, s => s.Code, codeTerms, ignoreCase: true);
+            }
+        }
+
+        if (names != null && names.Any())
+        {
+            var nameTerms = names.Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim().ToLower()).ToList();
+            if (nameTerms.Any())
+            {
+                query = WhereAnyContains(query, s => s.Name, nameTerms, ignoreCase: true);
+            }
+        }
+
+        if (contactPersons != null && contactPersons.Any())
+        {
+            var cleanContacts = contactPersons
+                .Where(c => !string.IsNullOrWhiteSpace(c))
+                .Select(c => c.Trim().ToLower())
+                .ToList();
+            if (cleanContacts.Any())
+            {
+                query = WhereAnyContains(query, s => s.ContactPerson, cleanContacts, ignoreCase: true);
+            }
+        }
+
+        if (phones != null && phones.Any())
+        {
+            var cleanPhones = phones
+                .Where(p => !string.IsNullOrWhiteSpace(p))
+                .Select(p => p.Trim())
+                .ToList();
+            if (cleanPhones.Any())
+            {
+                query = WhereAnyContains(query, s => s.Phone, cleanPhones, ignoreCase: false);
+            }
+        }
 
         if (!string.IsNullOrWhiteSpace(code))
         {
@@ -127,6 +190,97 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             .ToListAsync(cancellationToken);
 
         return (items, totalCount);
+    }
+
+    public async Task<SupplierSearchSuggestionsDto> GetSearchSuggestionsAsync(
+        string query,
+        int limit = 10,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new SupplierSearchSuggestionsDto();
+        if (string.IsNullOrWhiteSpace(query)) return result;
+
+        var term = query.Trim().ToLower();
+        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+        var isStoreOwner = string.IsNullOrEmpty(role) || role is "STORE_OWNER" or "ADMIN";
+        var branchId = _tenantContext.CurrentBranchId;
+
+        // Base Supplier query with branch isolation
+        var supplierQuery = _context.Suppliers.AsNoTracking();
+        if (!isStoreOwner && branchId is Guid bId)
+        {
+            supplierQuery = supplierQuery.Where(s =>
+                !s.BranchAssignments.Any() ||
+                s.BranchAssignments.Any(a => a.BranchId == bId));
+        }
+
+        // 1. Matched suppliers
+        result.Suppliers = await supplierQuery
+            .Where(s => s.Name.ToLower().Contains(term) || s.Code.ToLower().Contains(term) || (s.TaxCode != null && s.TaxCode.ToLower().Contains(term)))
+            .OrderBy(s => s.Name)
+            .Take(limit)
+            .Select(s => new SupplierSuggestionItemDto
+            {
+                Id = s.Id,
+                Code = s.Code,
+                Name = s.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        // 2. Matched products through SupplierProducts
+        var spQuery = _context.SupplierProducts
+            .Include(sp => sp.Product)
+            .Include(sp => sp.Supplier)
+            .AsNoTracking();
+
+        if (!isStoreOwner && branchId is Guid bId2)
+        {
+            spQuery = spQuery.Where(sp =>
+                !sp.Supplier.BranchAssignments.Any() ||
+                sp.Supplier.BranchAssignments.Any(a => a.BranchId == bId2));
+        }
+
+        result.Products = await spQuery
+            .Where(sp => sp.Product.ProductName.ToLower().Contains(term) || (sp.Product.SKU != null && sp.Product.SKU.ToLower().Contains(term)))
+            .OrderBy(sp => sp.Product.ProductName)
+            .Take(limit)
+            .Select(sp => new ProductSuggestionItemDto
+            {
+                Id = sp.ProductId,
+                Sku = sp.Product.SKU ?? string.Empty,
+                Name = sp.Product.ProductName,
+                SupplierId = sp.SupplierId,
+                SupplierName = sp.Supplier.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        // 3. Matched contact persons
+        result.ContactPersons = await supplierQuery
+            .Where(s => !string.IsNullOrEmpty(s.ContactPerson) && s.ContactPerson.ToLower().Contains(term))
+            .OrderBy(s => s.ContactPerson)
+            .Take(limit)
+            .Select(s => new ContactPersonSuggestionItemDto
+            {
+                Name = s.ContactPerson,
+                SupplierId = s.Id,
+                SupplierName = s.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        // 4. Matched phones
+        result.Phones = await supplierQuery
+            .Where(s => !string.IsNullOrEmpty(s.Phone) && s.Phone.Contains(term))
+            .OrderBy(s => s.Phone)
+            .Take(limit)
+            .Select(s => new PhoneSuggestionItemDto
+            {
+                Phone = s.Phone,
+                SupplierId = s.Id,
+                SupplierName = s.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        return result;
     }
 
     public async Task<bool> HasLedgerTransactionsAsync(Guid supplierId, APDocType docType, CancellationToken cancellationToken = default)
@@ -335,8 +489,13 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
     public async Task<(IReadOnlyList<SupplierBranchAssignment> Items, int TotalCount)> GetPagedBranchAssignmentsAsync(
         string? supplierSearch,
         string? branchSearch,
+        IReadOnlyList<string>? supplierCodes,
+        IReadOnlyList<string>? supplierNames,
+        IReadOnlyList<string>? branchCodes,
+        IReadOnlyList<string>? branchNames,
         Guid? supplierId,
         Guid? branchId,
+        SupplierStatus? status,
         int pageIndex,
         int pageSize,
         CancellationToken cancellationToken = default)
@@ -356,7 +515,17 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             query = query.Where(sba => sba.BranchId == branchId.Value);
         }
 
-        if (!string.IsNullOrWhiteSpace(supplierSearch))
+        if (status.HasValue)
+        {
+            query = query.Where(sba => sba.Status == status.Value);
+        }
+
+        var supplierCodeTerms = CleanTerms(supplierCodes);
+        if (supplierCodeTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sba => sba.Supplier!.Code, supplierCodeTerms, ignoreCase: true);
+        }
+        else if (!string.IsNullOrWhiteSpace(supplierSearch))
         {
             var term = supplierSearch.Trim();
             query = query.Where(sba =>
@@ -364,12 +533,29 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
                 EF.Functions.ILike(sba.Supplier.Name, $"%{term}%"));
         }
 
-        if (!string.IsNullOrWhiteSpace(branchSearch))
+        var supplierNameTerms = CleanTerms(supplierNames);
+        if (supplierNameTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sba => sba.Supplier!.Name, supplierNameTerms, ignoreCase: true);
+        }
+
+        var branchCodeTerms = CleanTerms(branchCodes);
+        if (branchCodeTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sba => sba.Branch!.BranchCode, branchCodeTerms, ignoreCase: true);
+        }
+        else if (!string.IsNullOrWhiteSpace(branchSearch))
         {
             var term = branchSearch.Trim();
             query = query.Where(sba =>
-                EF.Functions.ILike(sba.Branch!.Code, $"%{term}%") ||
+                EF.Functions.ILike(sba.Branch!.BranchCode, $"%{term}%") ||
                 EF.Functions.ILike(sba.Branch.Name, $"%{term}%"));
+        }
+
+        var branchNameTerms = CleanTerms(branchNames);
+        if (branchNameTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sba => sba.Branch!.Name, branchNameTerms, ignoreCase: true);
         }
 
         var totalCount = await query.CountAsync(cancellationToken);
@@ -381,6 +567,14 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             .ToListAsync(cancellationToken);
 
         return (items, totalCount);
+    }
+
+    public async Task<SupplierBranchAssignment?> GetBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
+    {
+        return await _context.SupplierBranchAssignments
+            .Include(sba => sba.Supplier)
+            .Include(sba => sba.Branch)
+            .FirstOrDefaultAsync(sba => sba.SupplierId == supplierId && sba.BranchId == branchId, cancellationToken);
     }
 
     public async Task<bool> BranchAssignmentExistsAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
@@ -402,6 +596,56 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         {
             _context.SupplierBranchAssignments.Remove(existing);
         }
+    }
+
+    public async Task<bool> BranchExistsAsync(Guid branchId, CancellationToken cancellationToken = default)
+    {
+        return await _context.Branches.AnyAsync(b => b.Id == branchId, cancellationToken);
+    }
+
+    public async Task<MT_GRMS.Domain.Entities.SaaS.Branch?> GetBranchByIdAsync(Guid branchId, CancellationToken cancellationToken = default)
+    {
+        return await _context.Branches.FirstOrDefaultAsync(b => b.Id == branchId, cancellationToken);
+    }
+
+    private static List<string> CleanTerms(IReadOnlyList<string>? values)
+    {
+        if (values == null || values.Count == 0) return [];
+        return values
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v.Trim().ToLower())
+            .Distinct()
+            .ToList();
+    }
+
+    private static IQueryable<T> WhereAnyContains<T>(
+        IQueryable<T> query,
+        Expression<Func<T, string>> selector,
+        IReadOnlyList<string> terms,
+        bool ignoreCase)
+    {
+        if (terms.Count == 0) return query;
+
+        var parameter = selector.Parameters[0];
+        Expression source = selector.Body;
+        if (ignoreCase)
+        {
+            source = Expression.Call(source, nameof(string.ToLower), Type.EmptyTypes);
+        }
+
+        Expression? body = null;
+        foreach (var term in terms)
+        {
+            var contains = Expression.Call(
+                source,
+                nameof(string.Contains),
+                Type.EmptyTypes,
+                Expression.Constant(term));
+            body = body is null ? contains : Expression.OrElse(body, contains);
+        }
+
+        var predicate = Expression.Lambda<Func<T, bool>>(body!, parameter);
+        return query.Where(predicate);
     }
 }
 

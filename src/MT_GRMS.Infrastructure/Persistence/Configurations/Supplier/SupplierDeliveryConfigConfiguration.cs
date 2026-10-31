@@ -17,7 +17,6 @@ public class SupplierDeliveryConfigConfiguration : IEntityTypeConfiguration<Supp
         builder.Property(x => x.LeadTimeDays).HasDefaultValue(1);
         builder.Property(x => x.CutoffDayOffset).HasDefaultValue(1);
         builder.Property(x => x.DeliveryDaysJson).HasMaxLength(500).HasDefaultValue("[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]");
-        builder.Property(x => x.MinOrderValue).HasColumnType("decimal(18,2)").HasDefaultValue(0);
         builder.Property(x => x.UrgentFeePercent).HasColumnType("decimal(5,2)").HasDefaultValue(0);
 
         builder.HasIndex(x => new { x.TenantId, x.SupplierId }).IsUnique();

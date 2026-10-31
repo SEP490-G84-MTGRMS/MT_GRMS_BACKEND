@@ -177,7 +177,6 @@ public class SupplierDeliveryConfigDto
     public string OrderCutoffTime { get; set; } = "17:00";
     public int DeliveryWeekdaysMask { get; set; }
     public List<string> DeliveryDays { get; set; } = [];
-    public decimal MinOrderValue { get; set; }
     public int MinOrderQuantity { get; set; }
     public bool AllowUrgent { get; set; }
     public int UrgentLeadTimeHours { get; set; }
@@ -194,7 +193,6 @@ public class UpdateSupplierDeliveryConfigCommand
     public string CutoffTime { get; set; } = "17:00";
     public string OrderCutoffTime { get; set; } = "17:00";
     public List<string> DeliveryDays { get; set; } = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    public decimal MinOrderValue { get; set; } = 0;
     public int MinOrderQuantity { get; set; } = 0;
     public bool AllowUrgent { get; set; } = false;
     public int UrgentLeadTimeHours { get; set; } = 0;
@@ -222,8 +220,64 @@ public class SupplierQueryFilter
     public SupplierType? SupplierType { get; set; }
     public SupplierStatus? Status { get; set; }
     public Guid? CategoryId { get; set; }
+    public List<Guid>? SupplierIds { get; set; }
+    public List<Guid>? ProductIds { get; set; }
+    public List<string>? Codes { get; set; }
+    public List<string>? Names { get; set; }
+    public List<string>? ContactPersons { get; set; }
+    public List<string>? Phones { get; set; }
     public int PageIndex { get; set; } = 1;
     public int PageSize { get; set; } = 20;
+}
+
+public class SupplierSearchSuggestionsDto
+{
+    public List<SupplierSuggestionItemDto> Suppliers { get; set; } = new();
+    public List<ProductSuggestionItemDto> Products { get; set; } = new();
+    public List<ContactPersonSuggestionItemDto> ContactPersons { get; set; } = new();
+    public List<PhoneSuggestionItemDto> Phones { get; set; } = new();
+}
+
+public class SupplierSuggestionItemDto
+{
+    public Guid Id { get; set; }
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+}
+
+public class ProductSuggestionItemDto
+{
+    public Guid Id { get; set; }
+    public string Sku { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public Guid SupplierId { get; set; }
+    public string SupplierName { get; set; } = string.Empty;
+}
+
+public class ContactPersonSuggestionItemDto
+{
+    public string Name { get; set; } = string.Empty;
+    public Guid SupplierId { get; set; }
+    public string SupplierName { get; set; } = string.Empty;
+}
+
+public class PhoneSuggestionItemDto
+{
+    public string Phone { get; set; } = string.Empty;
+    public Guid SupplierId { get; set; }
+    public string SupplierName { get; set; } = string.Empty;
+}
+
+public class SupplierTransactionDto
+{
+    public Guid Id { get; set; }
+    public string TransactionCode { get; set; } = string.Empty;
+    public string TransactionType { get; set; } = string.Empty; // PO / GRN
+    public DateTime TransactionDate { get; set; }
+    public decimal Amount { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public Guid? BranchId { get; set; }
+    public string? BranchName { get; set; }
 }
 
 public class SupplierBranchAssignmentDetailDto
@@ -246,12 +300,17 @@ public class SupplierBranchAssignmentDetailDto
     public string BranchAddress { get; set; } = string.Empty;
     public DateTime CreatedAt { get; set; }
     public string Status { get; set; } = "Active";
+    public string? InactiveReason { get; set; }
 }
 
 public class SupplierBranchAssignmentQueryFilter
 {
     public string? SupplierSearch { get; set; }
     public string? BranchSearch { get; set; }
+    public List<string>? SupplierCodes { get; set; }
+    public List<string>? SupplierNames { get; set; }
+    public List<string>? BranchCodes { get; set; }
+    public List<string>? BranchNames { get; set; }
     public Guid? SupplierId { get; set; }
     public Guid? BranchId { get; set; }
     public string? Status { get; set; }
@@ -263,5 +322,17 @@ public class AssignSupplierToBranchesCommand
 {
     public Guid SupplierId { get; set; }
     public List<Guid> BranchIds { get; set; } = [];
+}
+
+public class AssignSuppliersToBranchCommand
+{
+    public Guid BranchId { get; set; }
+    public List<Guid> SupplierIds { get; set; } = [];
+}
+
+public class UpdateSupplierBranchAssignmentStatusRequest
+{
+    public SupplierStatus Status { get; set; }
+    public string? Reason { get; set; }
 }
 
