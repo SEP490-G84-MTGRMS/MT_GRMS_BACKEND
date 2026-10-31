@@ -51,35 +51,63 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         Guid? supplierId,
         CancellationToken cancellationToken = default)
     {
-        // Cùng nguồn với màn sản phẩm theo chi nhánh: BranchStocks
-        var stockQuery = _context.BranchStocks
-            .Include(bs => bs.Product)
-                .ThenInclude(p => p!.Category)
-            .Include(bs => bs.Supplier)
-            .Where(bs => bs.BranchId == branchId && !bs.IsDeleted && bs.Product != null && !bs.Product.IsDeleted)
-            .AsNoTracking();
+        // 1. Xác định các Nhà cung cấp được gán cho Cửa hàng (Chi nhánh) này qua SupplierBranchAssignments
+        var assignedSupplierIds = await _context.SupplierBranchAssignments
+            .Where(sba => sba.BranchId == branchId && !sba.IsDeleted)
+            .Select(sba => sba.SupplierId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        // Fallback: Nếu có tồn kho lô cũ
+        var branchStockSupplierIds = await _context.BranchStocks
+            .Where(bs => bs.BranchId == branchId && !bs.IsDeleted && bs.SupplierId.HasValue)
+            .Select(bs => bs.SupplierId!.Value)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        var validSupplierIds = assignedSupplierIds.Union(branchStockSupplierIds).Distinct().ToList();
 
         if (supplierId.HasValue && supplierId.Value != Guid.Empty)
         {
-            stockQuery = stockQuery.Where(bs => bs.SupplierId == supplierId.Value);
+            if (!validSupplierIds.Contains(supplierId.Value))
+            {
+                return Array.Empty<OrderMatrixProductDto>();
+            }
+            validSupplierIds = new List<Guid> { supplierId.Value };
         }
 
-        var stocks = await stockQuery.ToListAsync(cancellationToken);
-        var grouped = stocks.GroupBy(bs => bs.ProductId).ToList();
-        if (grouped.Count == 0)
+        if (validSupplierIds.Count == 0)
         {
             return Array.Empty<OrderMatrixProductDto>();
         }
 
-        var productIds = grouped.Select(g => g.Key).ToList();
-        var supplierProducts = await _context.SupplierProducts
-            .Where(sp => productIds.Contains(sp.ProductId) && !sp.IsDeleted)
+        // 2. Lấy các sản phẩm đã được add cho các Nhà cung cấp hợp lệ của cửa hàng (từ SupplierProducts)
+        var spQuery = _context.SupplierProducts
+            .Include(sp => sp.Product)
+                .ThenInclude(p => p!.Category)
+            .Include(sp => sp.Supplier)
+            .Where(sp => validSupplierIds.Contains(sp.SupplierId)
+                         && !sp.IsDeleted
+                         && sp.Product != null
+                         && !sp.Product.IsDeleted);
+
+        var supplierProducts = await spQuery.AsNoTracking().ToListAsync(cancellationToken);
+        if (supplierProducts.Count == 0)
+        {
+            return Array.Empty<OrderMatrixProductDto>();
+        }
+
+        var productIds = supplierProducts.Select(sp => sp.ProductId).Distinct().ToList();
+
+        // 3. Lấy thông tin tồn kho BranchStocks theo sản phẩm tại chi nhánh (nếu có)
+        var stocks = await _context.BranchStocks
+            .Where(bs => bs.BranchId == branchId && productIds.Contains(bs.ProductId) && !bs.IsDeleted)
             .AsNoTracking()
             .ToListAsync(cancellationToken);
 
-        var spLookup = supplierProducts
-            .GroupBy(sp => (sp.ProductId, sp.SupplierId))
-            .ToDictionary(g => g.Key, g => g.First());
+        var stockLookup = stocks
+            .GroupBy(bs => bs.ProductId)
+            .ToDictionary(g => g.Key, g => g.Sum(x => x.QuantityOnHand));
 
         var branchAssignments = await _context.SupplierBranchAssignments
             .Where(sba => sba.BranchId == branchId && !sba.IsDeleted)
@@ -87,53 +115,16 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
 
         var list = new List<OrderMatrixProductDto>();
 
-        foreach (var group in grouped)
+        foreach (var sp in supplierProducts)
         {
-            var lots = group.ToList();
-            var p = lots[0].Product!;
-            var soh = lots.Sum(x => x.QuantityOnHand);
-
-            var primaryLot = lots
-                .OrderByDescending(x => x.QuantityOnHand)
-                .FirstOrDefault(x => x.SupplierId.HasValue && x.SupplierId.Value != Guid.Empty)
-                ?? lots[0];
-
-            var resolvedSupplierId = primaryLot.SupplierId ?? Guid.Empty;
-            var resolvedSupplier = primaryLot.Supplier;
-
-            if (resolvedSupplierId == Guid.Empty)
-            {
-                var fallbackSp = supplierProducts.FirstOrDefault(sp => sp.ProductId == p.Id && sp.IsPrimarySupplier)
-                    ?? supplierProducts.FirstOrDefault(sp => sp.ProductId == p.Id);
-                if (fallbackSp != null)
-                {
-                    resolvedSupplierId = fallbackSp.SupplierId;
-                }
-            }
-
-            if (resolvedSupplierId == Guid.Empty)
-            {
-                continue;
-            }
-
-            if (supplierId.HasValue && supplierId.Value != Guid.Empty && resolvedSupplierId != supplierId.Value)
-            {
-                continue;
-            }
-
-            spLookup.TryGetValue((p.Id, resolvedSupplierId), out var sp);
-
-            if (resolvedSupplier == null || resolvedSupplier.Id != resolvedSupplierId)
-            {
-                resolvedSupplier = lots.Select(x => x.Supplier).FirstOrDefault(s => s != null && s.Id == resolvedSupplierId);
-            }
-
+            var p = sp.Product!;
+            var resolvedSupplier = sp.Supplier;
+            var resolvedSupplierId = sp.SupplierId;
             var supplierName = resolvedSupplier?.Name ?? "Nhà cung cấp";
+
             var isSupActive = resolvedSupplier == null || resolvedSupplier.Status == SupplierStatus.Active;
-            var price = sp != null && sp.AgreedWholesalePrice > 0
-                ? sp.AgreedWholesalePrice
-                : (p.CostPrice ?? p.SellingPrice);
-            var moq = sp != null && sp.MinimumOrderQuantity > 0 ? sp.MinimumOrderQuantity : 10;
+            var price = sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : (p.CostPrice ?? p.SellingPrice);
+            var moq = sp.MinimumOrderQuantity > 0 ? (int)sp.MinimumOrderQuantity : 10;
 
             var isProdActive = p.Status == "Active";
             var prodInactiveReason = !isProdActive ? "Sản phẩm đang tạm ngưng kinh doanh" : null;
@@ -141,7 +132,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 ? $"Nhà cung cấp {resolvedSupplier.Name} đang tạm ngừng hoạt động"
                 : null;
 
-            var isSpActive = sp == null || sp.Status == SupplierProductStatus.Active;
+            var isSpActive = sp.Status == SupplierProductStatus.Active;
             var spInactiveReason = !isSpActive
                 ? $"Sản phẩm tạm ngừng nhập từ NCC {supplierName}"
                 : null;
@@ -159,6 +150,8 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             var safetyStock = p.MinStock > 0 ? p.MinStock : 10m;
             var salesPerDay = Math.Max(2m, Math.Round(safetyStock / 2m));
 
+            stockLookup.TryGetValue(p.Id, out var soh);
+
             list.Add(new OrderMatrixProductDto
             {
                 Id = p.Id,
@@ -168,7 +161,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 Name = p.Name,
                 Sku = p.ProductCode,
                 Barcode = p.Barcode,
-                Unit = !string.IsNullOrWhiteSpace(sp?.DeliveryUoM) ? sp!.DeliveryUoM : (p.BaseUnit ?? "Gói"),
+                Unit = !string.IsNullOrWhiteSpace(sp.DeliveryUoM) ? sp.DeliveryUoM : (p.BaseUnit ?? "Gói"),
                 Price = price,
                 Moq = moq,
                 Soh = soh,
@@ -188,7 +181,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             });
         }
 
-        return list.OrderBy(x => x.Sku).ToList();
+        return list.OrderBy(x => x.SupplierName).ThenBy(x => x.Sku).ToList();
     }
 
     public async Task<IReadOnlyList<OrderMatrixSupplierDeliveryConfigDto>> GetMatrixSupplierConfigsAsync(
@@ -196,11 +189,19 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         Guid? supplierId,
         CancellationToken cancellationToken = default)
     {
-        var branchSupplierIds = await _context.BranchStocks
+        var assignedSupplierIds = await _context.SupplierBranchAssignments
+            .Where(sba => sba.BranchId == branchId && !sba.IsDeleted)
+            .Select(sba => sba.SupplierId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        var branchStockSupplierIds = await _context.BranchStocks
             .Where(bs => bs.BranchId == branchId && !bs.IsDeleted && bs.SupplierId != null)
             .Select(bs => bs.SupplierId!.Value)
             .Distinct()
             .ToListAsync(cancellationToken);
+
+        var branchSupplierIds = assignedSupplierIds.Union(branchStockSupplierIds).Distinct().ToList();
 
         var supQuery = _context.Suppliers
             .Include(s => s.DeliveryConfig)
