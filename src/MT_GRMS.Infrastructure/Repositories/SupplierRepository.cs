@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
@@ -57,6 +58,8 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         List<Guid>? productIds = null,
         List<string>? contactPersons = null,
         List<string>? phones = null,
+        List<string>? codes = null,
+        List<string>? names = null,
         CancellationToken cancellationToken = default)
     {
         var query = _context.Suppliers
@@ -77,6 +80,24 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             query = query.Where(s => matchingSupplierIds.Contains(s.Id));
         }
 
+        if (codes != null && codes.Any())
+        {
+            var codeTerms = codes.Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c.Trim().ToLower()).ToList();
+            if (codeTerms.Any())
+            {
+                query = WhereAnyContains(query, s => s.Code, codeTerms, ignoreCase: true);
+            }
+        }
+
+        if (names != null && names.Any())
+        {
+            var nameTerms = names.Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim().ToLower()).ToList();
+            if (nameTerms.Any())
+            {
+                query = WhereAnyContains(query, s => s.Name, nameTerms, ignoreCase: true);
+            }
+        }
+
         if (contactPersons != null && contactPersons.Any())
         {
             var cleanContacts = contactPersons
@@ -85,7 +106,7 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
                 .ToList();
             if (cleanContacts.Any())
             {
-                query = query.Where(s => cleanContacts.Contains(s.ContactPerson.ToLower()));
+                query = WhereAnyContains(query, s => s.ContactPerson, cleanContacts, ignoreCase: true);
             }
         }
 
@@ -97,7 +118,7 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
                 .ToList();
             if (cleanPhones.Any())
             {
-                query = query.Where(s => cleanPhones.Contains(s.Phone));
+                query = WhereAnyContains(query, s => s.Phone, cleanPhones, ignoreCase: false);
             }
         }
 
@@ -535,6 +556,36 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         {
             _context.SupplierBranchAssignments.Remove(existing);
         }
+    }
+
+    private static IQueryable<Supplier> WhereAnyContains(
+        IQueryable<Supplier> query,
+        Expression<Func<Supplier, string>> selector,
+        IReadOnlyList<string> terms,
+        bool ignoreCase)
+    {
+        if (terms.Count == 0) return query;
+
+        var parameter = selector.Parameters[0];
+        Expression source = selector.Body;
+        if (ignoreCase)
+        {
+            source = Expression.Call(source, nameof(string.ToLower), Type.EmptyTypes);
+        }
+
+        Expression? body = null;
+        foreach (var term in terms)
+        {
+            var contains = Expression.Call(
+                source,
+                nameof(string.Contains),
+                Type.EmptyTypes,
+                Expression.Constant(term));
+            body = body is null ? contains : Expression.OrElse(body, contains);
+        }
+
+        var predicate = Expression.Lambda<Func<Supplier, bool>>(body!, parameter);
+        return query.Where(predicate);
     }
 }
 

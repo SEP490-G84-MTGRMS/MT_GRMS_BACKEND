@@ -41,6 +41,8 @@ public class SupplierService : ISupplierService
             filter.ProductIds,
             filter.ContactPersons,
             filter.Phones,
+            filter.Codes,
+            filter.Names,
             cancellationToken);
 
         var canSeeDebt = SupplierAccess.IsStoreOwner(_tenantContext);

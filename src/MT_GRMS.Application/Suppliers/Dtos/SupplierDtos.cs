@@ -224,6 +224,8 @@ public class SupplierQueryFilter
     public Guid? CategoryId { get; set; }
     public List<Guid>? SupplierIds { get; set; }
     public List<Guid>? ProductIds { get; set; }
+    public List<string>? Codes { get; set; }
+    public List<string>? Names { get; set; }
     public List<string>? ContactPersons { get; set; }
     public List<string>? Phones { get; set; }
     public int PageIndex { get; set; } = 1;

@@ -415,6 +415,7 @@ public class SupplierProductManagementTests
             string? searchTerm, SupplierType? supplierType, SupplierStatus? status, Guid? categoryId, int pageIndex, int pageSize,
             string? code = null, string? name = null, string? contactPerson = null, string? phone = null,
             List<Guid>? supplierIds = null, List<Guid>? productIds = null, List<string>? contactPersons = null, List<string>? phones = null,
+            List<string>? codes = null, List<string>? names = null,
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult(((IReadOnlyList<Supplier>)Suppliers, Suppliers.Count));

@@ -114,6 +114,8 @@ public class SupplierManagementTests
             List<Guid>? productIds = null,
             List<string>? contactPersons = null,
             List<string>? phones = null,
+            List<string>? codes = null,
+            List<string>? names = null,
             CancellationToken cancellationToken = default)
         {
             var query = Suppliers.Where(s => !s.IsDeleted).AsEnumerable();
