@@ -299,20 +299,7 @@ public class CatalogService : ICatalogService
         var p = list.FirstOrDefault();
         if (p == null) return null;
 
-        return new ProductResponse(
-            p.Id,
-            p.SKU,
-            p.Barcode,
-            p.ProductName,
-            p.CategoryId,
-            p.Category?.CategoryName,
-            p.BasePrice,
-            p.CostPrice ?? 0m,
-            p.UnitName,
-            p.HasBatches,
-            p.IsActive,
-            p.TaxCategory
-        );
+        return MapToResponse(p, CanViewCostPrice());
     }
 
     public async Task<IReadOnlyList<ProductResponse>> GetAllAsync(CancellationToken cancellationToken = default)
