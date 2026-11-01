@@ -917,8 +917,9 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("numeric(18,2)");
 
                     b.Property<string>("AuditSignatureHash")
-                        .HasMaxLength(128)
-                        .HasColumnType("character varying(128)");
+                        .HasMaxLength(256)
+                        .HasColumnType("character varying(256)")
+                        .HasColumnName("AuditSignature");
 
                     b.Property<string>("BookDataJson")
                         .IsRequired()
@@ -2597,11 +2598,18 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("PromotionID");
 
+                    b.Property<decimal?>("BudgetLimit")
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp without time zone");
 
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
 
                     b.Property<decimal>("DiscountValue")
                         .ValueGeneratedOnAdd()
@@ -2619,6 +2627,14 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
 
+                    b.Property<decimal?>("MaxDiscountAmount")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<decimal>("MinOrderValue")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(18,2)")
+                        .HasDefaultValue(0.00m);
+
                     b.Property<string>("PromotionCode")
                         .IsRequired()
                         .HasMaxLength(50)
@@ -2632,11 +2648,28 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.Property<DateTime>("StartDate")
                         .HasColumnType("timestamp without time zone");
 
+                    b.Property<string>("TargetBranches")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)")
+                        .HasDefaultValue("ALL");
+
                     b.Property<string>("TenantId")
                         .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)")
                         .HasColumnName("TenantID");
+
+                    b.Property<decimal>("TotalDiscountGiven")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(18,2)")
+                        .HasDefaultValue(0.00m);
+
+                    b.Property<int>("TotalVoucherQuantity")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
 
                     b.Property<string>("Type")
                         .IsRequired()
@@ -2646,12 +2679,164 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp without time zone");
 
+                    b.Property<int?>("UsageLimit")
+                        .HasColumnType("integer");
+
+                    b.Property<int>("UsedCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<string>("VoucherPrefix")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
                     b.HasKey("Id");
 
                     b.HasIndex("TenantId", "PromotionCode")
                         .IsUnique();
 
                     b.ToTable("Promotions", (string)null);
+                });
+
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Sales.PromotionCondition", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("ConditionID");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal?>("DiscountValue")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<decimal>("MinQty")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(12,2)")
+                        .HasDefaultValue(1.00m);
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("ProductID");
+
+                    b.Property<string>("ProductRole")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasDefaultValue("BUY");
+
+                    b.Property<Guid>("PromotionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("PromotionID");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("TenantID");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProductId");
+
+                    b.HasIndex("PromotionId");
+
+                    b.HasIndex("TenantId", "PromotionId", "ProductId", "ProductRole")
+                        .IsUnique();
+
+                    b.ToTable("PromotionConditions", (string)null);
+                });
+
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Sales.VoucherCode", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("VoucherCodeID");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("CustomerId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("CustomerID");
+
+                    b.Property<string>("CustomerName")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("CustomerPhone")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("OrderCode")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<Guid?>("OrderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("OrderID");
+
+                    b.Property<Guid>("PromotionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("PromotionID");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasDefaultValue("UNUSED");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("TenantID");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<DateTime?>("UsedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("PromotionId");
+
+                    b.HasIndex("TenantId", "Code")
+                        .IsUnique();
+
+                    b.HasIndex("TenantId", "PromotionId", "Status");
+
+                    b.ToTable("VoucherCodes", (string)null);
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.GoodsReceipt", b =>
@@ -4091,13 +4276,43 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .IsRequired();
 
                     b.HasOne("MT_GRMS.Domain.Entities.Sales.Promotion", "Promotion")
-                        .WithMany()
+                        .WithMany("OrderDetails")
                         .HasForeignKey("PromotionId")
                         .OnDelete(DeleteBehavior.SetNull);
 
                     b.Navigation("Order");
 
                     b.Navigation("Product");
+
+                    b.Navigation("Promotion");
+                });
+
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Sales.PromotionCondition", b =>
+                {
+                    b.HasOne("MT_GRMS.Domain.Entities.Catalog.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("MT_GRMS.Domain.Entities.Sales.Promotion", "Promotion")
+                        .WithMany("Conditions")
+                        .HasForeignKey("PromotionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Product");
+
+                    b.Navigation("Promotion");
+                });
+
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Sales.VoucherCode", b =>
+                {
+                    b.HasOne("MT_GRMS.Domain.Entities.Sales.Promotion", "Promotion")
+                        .WithMany("VoucherCodes")
+                        .HasForeignKey("PromotionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.Navigation("Promotion");
                 });
@@ -4428,6 +4643,15 @@ namespace MT_GRMS.Infrastructure.Migrations
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Sales.Order", b =>
                 {
                     b.Navigation("Details");
+                });
+
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Sales.Promotion", b =>
+                {
+                    b.Navigation("Conditions");
+
+                    b.Navigation("OrderDetails");
+
+                    b.Navigation("VoucherCodes");
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.GoodsReceipt", b =>

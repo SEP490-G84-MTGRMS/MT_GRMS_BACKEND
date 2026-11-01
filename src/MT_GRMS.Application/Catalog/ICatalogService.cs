@@ -10,6 +10,7 @@ public interface ICatalogService
 {
     Task<PagedResult<ProductResponse>> GetProductsPagedAsync(ProductQueryFilter filter, CancellationToken cancellationToken = default);
     Task<ProductResponse?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<ProductResponse?> GetByBarcodeAsync(string barcode, CancellationToken cancellationToken = default);
     Task<ProductResponse> CreateProductAsync(ProductCreateRequest request, CancellationToken cancellationToken = default);
     Task<ProductResponse> UpdateProductAsync(Guid id, ProductUpdateRequest request, CancellationToken cancellationToken = default);
     Task DeleteProductAsync(Guid id, CancellationToken cancellationToken = default);

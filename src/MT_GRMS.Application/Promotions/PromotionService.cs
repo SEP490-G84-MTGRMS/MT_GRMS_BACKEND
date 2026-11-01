@@ -485,6 +485,257 @@ public class PromotionService : IPromotionService
     }
     #endregion
 
+    #region 3. Seeder Dữ Liệu Mẫu Cho Kiểm Thử API
+    public async Task<int> SeedSampleDataAsync(CancellationToken cancellationToken = default)
+    {
+        var tenantId = string.IsNullOrWhiteSpace(_tenantContext.CurrentTenantId) ? "tenant-grocery-001" : _tenantContext.CurrentTenantId;
+        var addedCount = 0;
+        var now = DateTime.UtcNow;
+
+        // 1. Giảm 10% đơn từ 200k, tối đa 50k
+        if (!await _promotionRepository.ExistsByCodeAsync("KM-GIAM10-TOIDA50K", cancellationToken))
+        {
+            var p1 = new Promotion
+            {
+                TenantId = tenantId,
+                PromotionCode = "KM-GIAM10-TOIDA50K",
+                PromotionName = "Giảm 10% cho đơn từ 200.000đ (Tối đa 50.000đ)",
+                Type = "ORDER_DISCOUNT",
+                DiscountValue = 10.00m,
+                MinOrderValue = 200000.00m,
+                MaxDiscountAmount = 50000.00m,
+                UsageLimit = 500,
+                UsedCount = 15,
+                BudgetLimit = 10000000.00m,
+                TotalDiscountGiven = 750000.00m,
+                StartDate = now.AddDays(-30),
+                EndDate = now.AddDays(180),
+                IsActive = true,
+                Description = "Chương trình tri ân khách hàng: Giảm 10% cho hóa đơn từ 200.000đ, trần chiết khấu 50.000đ.",
+                TargetBranches = "ALL"
+            };
+            await _promotionRepository.AddAsync(p1, cancellationToken);
+            addedCount++;
+        }
+
+        // 2. Giảm 30.000đ đơn từ 150k
+        if (!await _promotionRepository.ExistsByCodeAsync("KM-GIAM30K-DON150K", cancellationToken))
+        {
+            var p2 = new Promotion
+            {
+                TenantId = tenantId,
+                PromotionCode = "KM-GIAM30K-DON150K",
+                PromotionName = "Giảm thẳng 30.000đ cho đơn từ 150.000đ",
+                Type = "FIXED_AMOUNT",
+                DiscountValue = 30000.00m,
+                MinOrderValue = 150000.00m,
+                MaxDiscountAmount = null,
+                UsageLimit = 200,
+                UsedCount = 28,
+                BudgetLimit = 6000000.00m,
+                TotalDiscountGiven = 840000.00m,
+                StartDate = now.AddDays(-15),
+                EndDate = now.AddDays(90),
+                IsActive = true,
+                Description = "Ưu đãi trực tiếp: Trừ ngay 30.000 VNĐ cho hóa đơn mua sắm từ 150.000 VNĐ.",
+                TargetBranches = "ALL"
+            };
+            await _promotionRepository.AddAsync(p2, cancellationToken);
+            addedCount++;
+        }
+
+        // 3. Mua 3 bánh Chocopie tặng 1 Coca-Cola
+        if (!await _promotionRepository.ExistsByCodeAsync("KM-MUA3TANG1-COCA", cancellationToken))
+        {
+            var p3 = new Promotion
+            {
+                TenantId = tenantId,
+                PromotionCode = "KM-MUA3TANG1-COCA",
+                PromotionName = "Mua 3 Bánh Chocopie tặng 1 Coca-Cola lon",
+                Type = "BUY_X_GET_Y",
+                DiscountValue = 0.00m,
+                MinOrderValue = 0.00m,
+                UsageLimit = 100,
+                UsedCount = 8,
+                StartDate = now.AddDays(-10),
+                EndDate = now.AddDays(60),
+                IsActive = true,
+                Description = "Ưu đãi giải khát: Khi mua đủ 3 hộp Bánh Chocopie Orion, tặng ngay 1 lốc Coca-Cola lon 320ml.",
+                TargetBranches = "ALL"
+            };
+
+            p3.Conditions.Add(new PromotionCondition
+            {
+                TenantId = tenantId,
+                PromotionId = p3.Id,
+                ProductId = Guid.Parse("aaaaaaaa-1111-1111-1111-111111111111"),
+                ProductRole = "BUY",
+                MinQty = 3.00m,
+                Note = "Mua tối thiểu 3 hộp Bánh Chocopie Orion"
+            });
+
+            p3.Conditions.Add(new PromotionCondition
+            {
+                TenantId = tenantId,
+                PromotionId = p3.Id,
+                ProductId = Guid.Parse("aaaaaaaa-3333-3333-3333-333333333333"),
+                ProductRole = "GIFT",
+                MinQty = 1.00m,
+                Note = "Tặng 1 lốc nước ngọt Coca-Cola 320ml"
+            });
+
+            await _promotionRepository.AddAsync(p3, cancellationToken);
+            addedCount++;
+        }
+
+        // 4. Đợt phát hành Voucher VIP 50k
+        if (!await _promotionRepository.ExistsByCodeAsync("VOUCHER-VIP50K", cancellationToken))
+        {
+            var p4 = new Promotion
+            {
+                TenantId = tenantId,
+                PromotionCode = "VOUCHER-VIP50K",
+                PromotionName = "Chiến dịch Voucher VIP Giảm 50.000đ",
+                Type = "VOUCHER",
+                DiscountValue = 50000.00m,
+                MinOrderValue = 250000.00m,
+                MaxDiscountAmount = null,
+                UsageLimit = 10,
+                UsedCount = 1,
+                BudgetLimit = 500000.00m,
+                TotalDiscountGiven = 50000.00m,
+                StartDate = now.AddDays(-20),
+                EndDate = now.AddDays(120),
+                IsActive = true,
+                Description = "Mã voucher tri ân giảm 50.000đ cho khách hàng VIP đạt cấp độ Vàng/Kim Cương.",
+                TargetBranches = "ALL",
+                VoucherPrefix = "VIP50K",
+                TotalVoucherQuantity = 4
+            };
+
+            p4.VoucherCodes.Add(new VoucherCode
+            {
+                TenantId = tenantId,
+                PromotionId = p4.Id,
+                Code = "VIP50K-TEST01",
+                Status = "UNUSED"
+            });
+
+            p4.VoucherCodes.Add(new VoucherCode
+            {
+                TenantId = tenantId,
+                PromotionId = p4.Id,
+                Code = "VIP50K-TEST02",
+                Status = "UNUSED"
+            });
+
+            p4.VoucherCodes.Add(new VoucherCode
+            {
+                TenantId = tenantId,
+                PromotionId = p4.Id,
+                Code = "VIP50K-TEST03",
+                Status = "UNUSED"
+            });
+
+            p4.VoucherCodes.Add(new VoucherCode
+            {
+                TenantId = tenantId,
+                PromotionId = p4.Id,
+                Code = "VIP50K-DA-DUNG",
+                Status = "USED",
+                OrderCode = "ORD-20261015-001",
+                OrderId = Guid.Parse("f0000001-1111-1111-1111-111111111111"),
+                UsedAt = now.AddDays(-2)
+            });
+
+            await _promotionRepository.AddAsync(p4, cancellationToken);
+            addedCount++;
+        }
+
+        // 5. Đợt phát hành Voucher Giảm 20% Cuối Tuần
+        if (!await _promotionRepository.ExistsByCodeAsync("VOUCHER-CUOITUAN20", cancellationToken))
+        {
+            var p5 = new Promotion
+            {
+                TenantId = tenantId,
+                PromotionCode = "VOUCHER-CUOITUAN20",
+                PromotionName = "Voucher Giảm 20% Mua Sắm Cuối Tuần (Tối đa 40.000đ)",
+                Type = "VOUCHER",
+                DiscountValue = 20.00m,
+                MinOrderValue = 100000.00m,
+                MaxDiscountAmount = 40000.00m,
+                UsageLimit = 20,
+                UsedCount = 0,
+                StartDate = now.AddDays(-5),
+                EndDate = now.AddDays(90),
+                IsActive = true,
+                Description = "Mã voucher giảm 20% áp dụng cho khách hàng thanh toán tại quầy POS vào cuối tuần.",
+                TargetBranches = "ALL",
+                VoucherPrefix = "WEEKEND",
+                TotalVoucherQuantity = 3
+            };
+
+            p5.VoucherCodes.Add(new VoucherCode
+            {
+                TenantId = tenantId,
+                PromotionId = p5.Id,
+                Code = "WEEKEND-20PCT01",
+                Status = "UNUSED"
+            });
+
+            p5.VoucherCodes.Add(new VoucherCode
+            {
+                TenantId = tenantId,
+                PromotionId = p5.Id,
+                Code = "WEEKEND-20PCT02",
+                Status = "UNUSED"
+            });
+
+            p5.VoucherCodes.Add(new VoucherCode
+            {
+                TenantId = tenantId,
+                PromotionId = p5.Id,
+                Code = "WEEKEND-20PCT03",
+                Status = "UNUSED"
+            });
+
+            await _promotionRepository.AddAsync(p5, cancellationToken);
+            addedCount++;
+        }
+
+        // 6. Khuyến mãi đã hết hạn (Phục vụ test lọc trạng thái EXPIRED)
+        if (!await _promotionRepository.ExistsByCodeAsync("KM-TET2025-HETHAN", cancellationToken))
+        {
+            var p6 = new Promotion
+            {
+                TenantId = tenantId,
+                PromotionCode = "KM-TET2025-HETHAN",
+                PromotionName = "Khuyến mãi Tết 2025 (Đã hết hạn)",
+                Type = "ORDER_DISCOUNT",
+                DiscountValue = 15.00m,
+                MinOrderValue = 100000.00m,
+                MaxDiscountAmount = 30000.00m,
+                UsageLimit = 100,
+                UsedCount = 100,
+                StartDate = now.AddDays(-400),
+                EndDate = now.AddDays(-340),
+                IsActive = false,
+                Description = "Chương trình khuyến mãi mùa Tết năm cũ, đã hết hạn để test bộ lọc trạng thái.",
+                TargetBranches = "ALL"
+            };
+            await _promotionRepository.AddAsync(p6, cancellationToken);
+            addedCount++;
+        }
+
+        if (addedCount > 0)
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        return addedCount;
+    }
+    #endregion
+
     #region Helpers & Mappers
     private static PromotionResponse MapToResponse(Promotion p)
     {

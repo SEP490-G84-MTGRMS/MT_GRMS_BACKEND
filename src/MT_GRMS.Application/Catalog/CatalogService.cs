@@ -291,6 +291,17 @@ public class CatalogService : ICatalogService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
+    public async Task<ProductResponse?> GetByBarcodeAsync(string barcode, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(barcode)) return null;
+        var trimmed = barcode.Trim();
+        var list = await _productRepository.FindAsync(p => p.Barcode == trimmed || p.ProductCode == trimmed, cancellationToken);
+        var p = list.FirstOrDefault();
+        if (p == null) return null;
+
+        return MapToResponse(p, CanViewCostPrice());
+    }
+
     public async Task<IReadOnlyList<ProductResponse>> GetAllAsync(CancellationToken cancellationToken = default)
     {
         var (items, _) = await _productRepository.GetPagedListAsync(new ProductQueryFilter { PageSize = 1000 }, cancellationToken);
