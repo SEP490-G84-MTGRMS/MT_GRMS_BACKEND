@@ -4,7 +4,7 @@ using MT_GRMS.Domain.Common;
 namespace MT_GRMS.Domain.Entities.Identity;
 
 /// <summary>
-/// Bảng Users (Tài khoản người dùng toàn hệ thống)
+/// Bảng Users (Tài khoản người dùng toàn hệ thống và mã PIN bảo mật PBKDF2)
 /// </summary>
 public class User : BaseEntity<string>
 {
@@ -31,6 +31,12 @@ public class User : BaseEntity<string>
     public DateTime? RefreshTokenExpiryTime { get; set; }
     public int AccessFailedCount { get; set; } = 0;
     public DateTime? LockoutEnd { get; set; }
+
+    // Security PIN (PBKDF2 >= 600.000 iterations)
+    public string? SecurityPinHash { get; set; }
+    public string? SecurityPinSalt { get; set; }
+    public int FailedPinAttempts { get; set; } = 0;
+    public DateTime? PinLockedUntilUtc { get; set; }
 
     // Backward compatibility aliases
     [NotMapped]

@@ -4,6 +4,9 @@ using MT_GRMS.Domain.Entities.Identity;
 
 namespace MT_GRMS.Infrastructure.Persistence.Configurations;
 
+/// <summary>
+/// Cấu hình Code-First Fluent API cho bảng Users và các cột Security PIN PBKDF2
+/// </summary>
 public class UserConfiguration : IEntityTypeConfiguration<User>
 {
     public void Configure(EntityTypeBuilder<User> builder)
@@ -31,5 +34,21 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.HasIndex(x => x.UserName).IsUnique();
         builder.HasIndex(x => x.Email).IsUnique();
         builder.HasIndex(x => x.Phone).IsUnique();
+
+        // Cấu hình các cột Security PIN phục vụ ký số và bảo mật chốt kỳ
+        builder.Property(x => x.SecurityPinHash)
+            .HasMaxLength(255)
+            .IsRequired(false);
+
+        builder.Property(x => x.SecurityPinSalt)
+            .HasMaxLength(255)
+            .IsRequired(false);
+
+        builder.Property(x => x.FailedPinAttempts)
+            .HasDefaultValue(0)
+            .IsRequired();
+
+        builder.Property(x => x.PinLockedUntilUtc)
+            .IsRequired(false);
     }
 }

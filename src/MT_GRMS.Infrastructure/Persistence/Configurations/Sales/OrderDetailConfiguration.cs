@@ -23,6 +23,11 @@ public class OrderDetailConfiguration : IEntityTypeConfiguration<OrderDetail>
         builder.Property(x => x.ActualPrice).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.IsGift).HasDefaultValue(false);
 
+        // Thuế GTGT từng dòng hàng TT 152/2025/TT-BTC
+        builder.Property(x => x.AppliedVatRate).HasColumnType("decimal(5,4)").HasDefaultValue(0.01m);
+        builder.Property(x => x.VatAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
+        builder.Property(x => x.VatDiscountAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
+
         builder.HasOne(x => x.Order)
             .WithMany(o => o.Details)
             .HasForeignKey(x => x.OrderId)
