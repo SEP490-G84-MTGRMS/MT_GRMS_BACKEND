@@ -32,5 +32,13 @@ public class UpdateBranchProductValidator : AbstractValidator<UpdateBranchProduc
 
         RuleFor(x => x.MinStockLevel)
             .GreaterThanOrEqualTo(0).WithMessage("Định mức tồn an toàn tối thiểu không thể nhỏ hơn 0.");
+
+        RuleFor(x => x.MinOrderQuantity)
+            .GreaterThanOrEqualTo(1).When(x => x.MinOrderQuantity.HasValue)
+            .WithMessage("Số lượng đặt hàng tối thiểu (MOQ) phải từ 1 trở lên.");
+
+        RuleFor(x => x.Status)
+            .Must(s => string.IsNullOrEmpty(s) || s == "Active" || s == "Inactive")
+            .WithMessage("Trạng thái kinh doanh chỉ có thể là 'Active' hoặc 'Inactive'.");
     }
 }

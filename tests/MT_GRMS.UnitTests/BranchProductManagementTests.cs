@@ -9,6 +9,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Domain.Exceptions;
 using Xunit;
 
@@ -200,6 +201,98 @@ public class BranchProductManagementTests
         Assert.True(_uow.HasSaved);
     }
 
+    [Fact]
+    public async Task REQ_STOREPROD_08_UpdateProduct_UpdatesSupplierMoq()
+    {
+        // Arrange: seed a SupplierProduct for Product 1
+        var supplierId = Guid.NewGuid();
+        var sp = new SupplierProduct
+        {
+            Id = Guid.NewGuid(),
+            ProductId = _prod1Id,
+            SupplierId = supplierId,
+            MinimumOrderQuantity = 5,
+            AgreedWholesalePrice = 150000m,
+            IsPrimarySupplier = true
+        };
+        _repo.SupplierProducts.Add(sp);
+
+        // Act: update MOQ to 25
+        var command = new UpdateBranchProductCommand
+        {
+            RetailPrice = 210000m,
+            MinStockLevel = 10m,
+            MinOrderQuantity = 25,
+            SupplierId = supplierId
+        };
+        var result = await _service.UpdateProductAsync(_branchId, _prod1Id, command);
+
+        // Assert
+        Assert.Equal(25, result.MinOrderQuantity);
+        Assert.Equal(25, sp.MinimumOrderQuantity);
+        Assert.True(_uow.HasSaved);
+    }
+
+    [Fact]
+    public async Task REQ_STOREPROD_09_UpdateProduct_BranchPriceIsolation()
+    {
+        // Branch 1 has Product 1. Let's create Branch 2 and assign Product 1 to Branch 2
+        var branch2Id = Guid.NewGuid();
+        _repo.Branches.Add(new Branch { Id = branch2Id, Code = "BR-02", Name = "Chi nhánh 2", IsActive = true });
+        _repo.BranchStocks.Add(new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branch2Id,
+            ProductId = _prod1Id,
+            QuantityOnHand = 10m,
+            RetailPrice = 195000m
+        });
+
+        // Act: Update price at Branch 1 only to 220,000
+        var command = new UpdateBranchProductCommand
+        {
+            RetailPrice = 220000m,
+            MinStockLevel = 10m
+        };
+        await _service.UpdateProductAsync(_branchId, _prod1Id, command);
+
+        // Assert: Branch 1 stock has RetailPrice 220,000, Branch 2 stock still has 195,000
+        var b1Stocks = await _repo.GetBranchStocksByProductAsync(_branchId, _prod1Id);
+        var b2Stocks = await _repo.GetBranchStocksByProductAsync(branch2Id, _prod1Id);
+
+        Assert.Equal(220000m, b1Stocks.First().RetailPrice);
+        Assert.Equal(195000m, b2Stocks.First().RetailPrice);
+    }
+
+    [Fact]
+    public async Task REQ_STOREPROD_10_ToggleStatus_BranchStatusIsolation()
+    {
+        // Branch 1 has Product 1. Let's create Branch 2 and assign Product 1 to Branch 2
+        var branch2Id = Guid.NewGuid();
+        _repo.Branches.Add(new Branch { Id = branch2Id, Code = "BR-02", Name = "Chi nhánh 2", IsActive = true });
+        _repo.BranchStocks.Add(new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branch2Id,
+            ProductId = _prod1Id,
+            QuantityOnHand = 10m,
+            Status = "Active"
+        });
+
+        // Act: Inactivate Product 1 at Branch 1
+        var toggled = await _service.ToggleStatusAsync(_branchId, _prod1Id, "Inactive");
+        Assert.Equal("Inactive", toggled.Status);
+
+        // Assert: Branch 1 stock is Inactive, Branch 2 stock is STILL Active, Master Product is STILL Active
+        var b1Stocks = await _repo.GetBranchStocksByProductAsync(_branchId, _prod1Id);
+        var b2Stocks = await _repo.GetBranchStocksByProductAsync(branch2Id, _prod1Id);
+        var masterProd = await _repo.GetProductByIdAsync(_prod1Id);
+
+        Assert.Equal("Inactive", b1Stocks.First().Status);
+        Assert.Equal("Active", b2Stocks.First().Status);
+        Assert.Equal("Active", masterProd!.Status);
+    }
+
     // =========================================================================
     // FAKE REPOSITORY & CONTEXT IMPLEMENTATIONS
     // =========================================================================
@@ -209,6 +302,7 @@ public class BranchProductManagementTests
         public List<Branch> Branches { get; } = new();
         public List<Product> Products { get; } = new();
         public List<BranchStock> BranchStocks { get; } = new();
+        public List<SupplierProduct> SupplierProducts { get; } = new();
 
         public Task<(IReadOnlyList<BranchProductDto> Items, int TotalCount)> GetPagedBranchProductsAsync(
             Guid branchId,
@@ -330,6 +424,20 @@ public class BranchProductManagementTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult(Branches.FirstOrDefault(b => b.Id == branchId));
+        }
+
+        public Task<SupplierProduct?> GetSupplierProductAsync(
+            Guid productId,
+            Guid? supplierId,
+            CancellationToken cancellationToken = default)
+        {
+            var query = SupplierProducts.Where(sp => sp.ProductId == productId);
+            if (supplierId.HasValue && supplierId.Value != Guid.Empty)
+            {
+                var match = query.FirstOrDefault(sp => sp.SupplierId == supplierId.Value);
+                if (match != null) return Task.FromResult<SupplierProduct?>(match);
+            }
+            return Task.FromResult(query.OrderByDescending(sp => sp.IsPrimarySupplier).FirstOrDefault());
         }
     }
 

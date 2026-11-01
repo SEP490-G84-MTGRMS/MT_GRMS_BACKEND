@@ -22,7 +22,10 @@ public class BranchProductDto
     public decimal CostPrice { get; set; }
     public decimal CurrentStock { get; set; }
     public decimal MinStockLevel { get; set; }
+    public Guid? SupplierId { get; set; }
+    public string PrimarySupplierCode { get; set; } = string.Empty;
     public string PrimarySupplierName { get; set; } = string.Empty;
+    public int MinOrderQuantity { get; set; } = 10;
     public string Status { get; set; } = "Active";
     public string? ShelfLocation { get; set; }
     public DateTime AssignedDate { get; set; }
@@ -55,6 +58,8 @@ public class BranchProductQueryFilter
     public List<string>? Names { get; set; }
     public List<string>? BranchCodes { get; set; }
     public List<string>? BranchNames { get; set; }
+    public List<string>? SupplierCodes { get; set; }
+    public List<string>? SupplierNames { get; set; }
     public string? Category { get; set; }
     public string? Status { get; set; }
     public string? StockAlertFilter { get; set; } // "ALL", "LOW", "OUT_OF_STOCK", "NORMAL"
@@ -74,12 +79,15 @@ public class AssignBranchProductsCommand
 }
 
 /// <summary>
-/// Lệnh cập nhật giá bán lẻ niêm yết, mức tồn an toàn và vị trí kệ hàng tại chi nhánh
+/// Lệnh cập nhật giá bán lẻ niêm yết, mức tồn an toàn, MOQ, trạng thái và vị trí kệ hàng tại chi nhánh
 /// </summary>
 public class UpdateBranchProductCommand
 {
     public decimal RetailPrice { get; set; }
     public decimal MinStockLevel { get; set; }
+    public int? MinOrderQuantity { get; set; }
+    public string? Status { get; set; }
+    public Guid? SupplierId { get; set; }
     public string? ShelfLocation { get; set; }
 }
 

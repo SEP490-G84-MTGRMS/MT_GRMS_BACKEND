@@ -18,6 +18,8 @@ public class BranchStock : BaseTenantEntity
     public decimal QuantityOnHand { get; set; } = 0.000m;
     public decimal QuantityReserved { get; set; } = 0.000m;
     public decimal LandedCostPerUnit { get; set; } = 0.00m;
+    public decimal? RetailPrice { get; set; }
+    public string Status { get; set; } = "Active";
     public string? ShelfLocation { get; set; }
     public string? ZoneArea { get; set; }
     public int RowVersion { get; set; } = 1;
