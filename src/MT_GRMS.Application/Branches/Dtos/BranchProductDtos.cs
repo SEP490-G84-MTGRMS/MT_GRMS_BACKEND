@@ -25,7 +25,7 @@ public class BranchProductDto
     public Guid? SupplierId { get; set; }
     public string PrimarySupplierCode { get; set; } = string.Empty;
     public string PrimarySupplierName { get; set; } = string.Empty;
-    public int MinOrderQuantity { get; set; } = 10;
+    public int MinOrderQuantity { get; set; } = 1;
     public string Status { get; set; } = "Active";
     public string? ShelfLocation { get; set; }
     public DateTime AssignedDate { get; set; }
@@ -75,6 +75,7 @@ public class AssignBranchProductsCommand
     public List<Guid> ProductIds { get; set; } = new();
     public decimal? DefaultRetailPrice { get; set; }
     public decimal? DefaultMinStock { get; set; }
+    public int? DefaultMinOrderQuantity { get; set; }
     public string? ShelfLocation { get; set; }
 }
 

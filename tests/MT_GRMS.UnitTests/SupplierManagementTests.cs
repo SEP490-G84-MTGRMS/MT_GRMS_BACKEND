@@ -750,6 +750,170 @@ public class SupplierManagementTests
     }
 
     [Fact]
+    public void REQDEL03_CalculateEarliestDeliveryDate_CutoffBoundary_ExactAtCutoff_Vs_AfterCutoff()
+    {
+        // 1. Đặt chính xác vào thời điểm Cutoff (17:00) -> Không bị tính sang ngày kế tiếp
+        var exactOrderTime = new DateTime(2026, 11, 2, 17, 0, 0, DateTimeKind.Utc); // Monday 17:00
+        var earliestExact = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
+            exactOrderTime,
+            leadTimeHours: 24,
+            cutoffTimeStr: "17:00",
+            deliveryWeekdaysMask: 127,
+            blackoutDates: null);
+
+        // 17:00 Thứ 2 + 24h = 17:00 Thứ 3 (2026-11-03)
+        Assert.Equal(new DateTime(2026, 11, 3), earliestExact.Date);
+
+        // 2. Đặt sau Cutoff 1 phút (17:01) -> Bị đẩy sang 00:00 ngày hôm sau (Thứ 3)
+        var afterCutoffOrderTime = new DateTime(2026, 11, 2, 17, 1, 0, DateTimeKind.Utc); // Monday 17:01
+        var earliestAfter = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
+            afterCutoffOrderTime,
+            leadTimeHours: 24,
+            cutoffTimeStr: "17:00",
+            deliveryWeekdaysMask: 127,
+            blackoutDates: null);
+
+        // Tính từ Thứ 3 (2026-11-03 00:00) + 24h = Thứ 4 (2026-11-04)
+        Assert.Equal(new DateTime(2026, 11, 4), earliestAfter.Date);
+    }
+
+    [Fact]
+    public void REQDEL04_CalculateEarliestDeliveryDate_ConsecutiveNonDeliveryDays_SkipsToNextActiveDay()
+    {
+        // NCC chỉ nhận giao hàng vào Thứ 2 (mask = 1)
+        // Đặt hàng vào Thứ 3 (2026-11-03) lúc 09:00 sáng
+        var orderTime = new DateTime(2026, 11, 3, 9, 0, 0, DateTimeKind.Utc); // Tuesday
+        var earliest = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
+            orderTime,
+            leadTimeHours: 24,
+            cutoffTimeStr: "17:00",
+            deliveryWeekdaysMask: 1, // Only Monday
+            blackoutDates: null);
+
+        // Bỏ qua Thứ 4, 5, 6, 7, CN -> Chuyển sang Thứ 2 tuần sau (2026-11-09)
+        Assert.Equal(DayOfWeek.Monday, earliest.DayOfWeek);
+        Assert.Equal(new DateTime(2026, 11, 9), earliest.Date);
+    }
+
+    [Fact]
+    public void REQDEL05_CalculateEarliestDeliveryDate_LeadTimeZero_SameDayDelivery()
+    {
+        // Lead Time = 0h, Đặt trước Cutoff vào ngày được nhận giao
+        var orderTime = new DateTime(2026, 11, 2, 10, 0, 0, DateTimeKind.Utc); // Monday 10:00 AM
+        var earliest = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
+            orderTime,
+            leadTimeHours: 0,
+            cutoffTimeStr: "17:00",
+            deliveryWeekdaysMask: 127,
+            blackoutDates: null);
+
+        // Giao ngay trong ngày Thứ 2
+        Assert.Equal(new DateTime(2026, 11, 2), earliest.Date);
+        Assert.Equal(DayOfWeek.Monday, earliest.DayOfWeek);
+    }
+
+    [Fact]
+    public async Task REQDEL06_UpdateDeliveryConfig_EmptyDeliveryDays_ThrowsBusinessException()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplierId = Guid.NewGuid();
+        await repo.AddAsync(new Supplier { Id = supplierId, Name = "NCC Thực Phẩm Sạch", TenantId = "tenant-01" });
+
+        var command = new UpdateSupplierDeliveryConfigCommand
+        {
+            LeadTimeDays = 1,
+            CutoffTime = "17:00",
+            DeliveryDays = [] // Không chọn ngày nào
+        };
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateDeliveryConfigAsync(supplierId, command));
+
+        Assert.Equal("INVALID_DELIVERY_DAYS", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQDEL07_UpdateDeliveryConfig_InvalidCutoffFormat_ThrowsBusinessException()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplierId = Guid.NewGuid();
+        await repo.AddAsync(new Supplier { Id = supplierId, Name = "NCC Nông Sản", TenantId = "tenant-01" });
+
+        var command = new UpdateSupplierDeliveryConfigCommand
+        {
+            LeadTimeDays = 1,
+            CutoffTime = "25:99", // Giờ không hợp lệ
+            DeliveryDays = ["Mon", "Tue"]
+        };
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateDeliveryConfigAsync(supplierId, command));
+
+        Assert.Equal("INVALID_CUTOFF_TIME", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQDEL08_UpdateDeliveryConfig_NegativeMoq_ThrowsBusinessException()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplierId = Guid.NewGuid();
+        await repo.AddAsync(new Supplier { Id = supplierId, Name = "NCC Nông Sản", TenantId = "tenant-01" });
+
+        var command = new UpdateSupplierDeliveryConfigCommand
+        {
+            LeadTimeDays = 1,
+            MinOrderQuantity = -10, // Âm
+            CutoffTime = "17:00",
+            DeliveryDays = ["Mon"]
+        };
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateDeliveryConfigAsync(supplierId, command));
+
+        Assert.Equal("INVALID_MOQ", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQDEL09_UpdateDeliveryConfig_ValidConfig_PersistsAndReturnsDto()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplierId = Guid.NewGuid();
+        await repo.AddAsync(new Supplier { Id = supplierId, Name = "NCC Rau Củ Quả", TenantId = "tenant-01" });
+
+        var command = new UpdateSupplierDeliveryConfigCommand
+        {
+            LeadTimeDays = 2,
+            LeadTimeHours = 48,
+            MinOrderQuantity = 15,
+            CutoffTime = "16:30",
+            DeliveryDays = ["Mon", "Wed", "Fri"]
+        };
+
+        var result = await service.UpdateDeliveryConfigAsync(supplierId, command);
+
+        Assert.NotNull(result);
+        Assert.Equal(2, result.LeadTimeDays);
+        Assert.Equal(15, result.MinOrderQuantity);
+        Assert.Equal("16:30", result.CutoffTime);
+        Assert.Contains("Mon", result.DeliveryDays);
+        Assert.Contains("Wed", result.DeliveryDays);
+        Assert.Contains("Fri", result.DeliveryDays);
+        Assert.DoesNotContain("Tue", result.DeliveryDays);
+    }
+
+    [Fact]
     public async Task REQ_SBA01_AssignSupplierToBranches_Success()
     {
         // ARRANGE

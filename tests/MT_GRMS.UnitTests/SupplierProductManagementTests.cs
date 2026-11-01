@@ -498,6 +498,7 @@ public class SupplierProductManagementTests
             string? code = null, string? name = null, string? contactPerson = null, string? phone = null,
             List<Guid>? supplierIds = null, List<Guid>? productIds = null, List<string>? contactPersons = null, List<string>? phones = null,
             List<string>? codes = null, List<string>? names = null,
+            string? category = null,
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult(((IReadOnlyList<Supplier>)Suppliers, Suppliers.Count));

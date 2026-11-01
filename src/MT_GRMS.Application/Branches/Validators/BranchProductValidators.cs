@@ -20,6 +20,10 @@ public class AssignBranchProductsValidator : AbstractValidator<AssignBranchProdu
         RuleFor(x => x.DefaultMinStock)
             .GreaterThanOrEqualTo(0).When(x => x.DefaultMinStock.HasValue)
             .WithMessage("Định mức tồn tối thiểu mặc định không thể nhỏ hơn 0.");
+
+        RuleFor(x => x.DefaultMinOrderQuantity)
+            .GreaterThanOrEqualTo(0).When(x => x.DefaultMinOrderQuantity.HasValue)
+            .WithMessage("Số lượng đặt hàng tối thiểu (MOQ) mặc định không thể nhỏ hơn 0.");
     }
 }
 

@@ -292,7 +292,7 @@ public class BranchProductRepository : IBranchProductRepository
 
             var finalMoq = (matchedSp != null && matchedSp.MinimumOrderQuantity > 0)
                 ? (int)matchedSp.MinimumOrderQuantity
-                : 10;
+                : (matchedSp != null ? (int)matchedSp.MinimumOrderQuantity : 1);
 
             var finalSupplierId = x.DirectSupplierId ?? matchedSp?.SupplierId;
 

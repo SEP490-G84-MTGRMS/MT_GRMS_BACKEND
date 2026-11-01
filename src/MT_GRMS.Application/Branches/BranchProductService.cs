@@ -119,6 +119,18 @@ public class BranchProductService : IBranchProductService
                     product.MinStock = command.DefaultMinStock.Value;
                 }
 
+                var sp = await _repository.GetSupplierProductAsync(productId, null, cancellationToken);
+                var moq = sp != null && sp.MinimumOrderQuantity > 0 ? (int)sp.MinimumOrderQuantity : 1;
+                if (command.DefaultMinOrderQuantity.HasValue && command.DefaultMinOrderQuantity.Value >= 0)
+                {
+                    moq = command.DefaultMinOrderQuantity.Value;
+                    if (sp != null)
+                    {
+                        sp.MinimumOrderQuantity = command.DefaultMinOrderQuantity.Value;
+                        sp.UpdatedAt = DateTime.UtcNow;
+                    }
+                }
+
                 await _repository.AddBranchStockAsync(newStock, cancellationToken);
 
                 assignedList.Add(new BranchProductDto
@@ -134,11 +146,12 @@ public class BranchProductService : IBranchProductService
                     Category = product.Category?.Name ?? "Khác",
                     Unit = product.BaseUnit,
                     RetailPrice = product.SellingPrice,
-                    CostPrice = product.CostPrice ?? 0m,
+                    CostPrice = sp?.AgreedWholesalePrice ?? product.CostPrice ?? 0m,
                     CurrentStock = 0,
                     MinStockLevel = product.MinStock,
-                    PrimarySupplierCode = string.Empty,
-                    PrimarySupplierName = string.Empty,
+                    PrimarySupplierCode = sp?.Supplier?.Code ?? string.Empty,
+                    PrimarySupplierName = sp?.Supplier?.Name ?? string.Empty,
+                    MinOrderQuantity = moq,
                     Status = product.Status,
                     ShelfLocation = newStock.ShelfLocation,
                     AssignedDate = DateTime.UtcNow
@@ -222,7 +235,7 @@ public class BranchProductService : IBranchProductService
             : (product.CostPrice ?? 0m);
         var moq = (spUpdated != null && spUpdated.MinimumOrderQuantity > 0)
             ? (int)spUpdated.MinimumOrderQuantity
-            : (command.MinOrderQuantity ?? 10);
+            : (command.MinOrderQuantity ?? 1);
 
         var totalStock = stocks.Sum(s => s.QuantityOnHand);
 

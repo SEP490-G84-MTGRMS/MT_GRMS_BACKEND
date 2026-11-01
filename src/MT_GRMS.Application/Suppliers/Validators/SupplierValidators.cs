@@ -198,13 +198,21 @@ public class UpdateSupplierDeliveryConfigCommandValidator : AbstractValidator<Up
             .GreaterThanOrEqualTo(0).WithMessage("Thời gian chuẩn bị giao hàng (Lead Time) phải lớn hơn hoặc bằng 0.");
 
         RuleFor(x => x.LeadTimeDays)
-            .GreaterThanOrEqualTo(0).WithMessage("Lead time (ngày) phải lớn hơn hoặc bằng 0.");
+            .InclusiveBetween(0, 30).WithMessage("Lead time (ngày) phải từ 0 đến 30 ngày.");
 
         RuleFor(x => x.CutoffDayOffset)
             .GreaterThanOrEqualTo(0).WithMessage("Cutoff day offset phải lớn hơn hoặc bằng 0.");
 
         RuleFor(x => x.MinOrderQuantity)
             .GreaterThanOrEqualTo(0).WithMessage("Số lượng đặt tối thiểu (MOQ) phải lớn hơn hoặc bằng 0.");
+
+        RuleFor(x => x.CutoffTime)
+            .NotEmpty().WithMessage("Giờ chốt đơn (Cutoff Time) không được để trống.")
+            .Matches(@"^(?:[01]\d|2[0-3]):[0-5]\d$").WithMessage("Giờ chốt đơn không đúng định dạng HH:mm (từ 00:00 đến 23:59).");
+
+        RuleFor(x => x.DeliveryDays)
+            .NotNull().WithMessage("Danh sách ngày giao hàng không được null.")
+            .Must(d => d != null && d.Count > 0).WithMessage("Phải chọn ít nhất một ngày giao hàng hoạt động trong tuần (Active Delivery Days).");
 
         RuleFor(x => x.UrgentFeePercent)
             .InclusiveBetween(0, 100).WithMessage("Phụ phí hỏa tốc phải từ 0% đến 100%.");

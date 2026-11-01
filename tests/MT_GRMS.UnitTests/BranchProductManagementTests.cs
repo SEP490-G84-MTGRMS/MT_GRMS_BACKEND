@@ -143,6 +143,43 @@ public class BranchProductManagementTests
     }
 
     [Fact]
+    public async Task REQ_STOREPROD_03b_AssignProducts_WithDefaultMinOrderQuantity_AppliesMoq()
+    {
+        // Arrange
+        var prod3Id = Guid.NewGuid();
+        _repo.Products.Add(new Product
+        {
+            Id = prod3Id,
+            TenantId = "tenant-test-1",
+            ProductCode = "SP0003",
+            Name = "Bánh Quy Bơ Danisa 454g",
+            BaseUnit = "Hộp",
+            CostPrice = 90000m,
+            SellingPrice = 120000m,
+            MinStock = 5m,
+            Status = "Active"
+        });
+
+        var command = new AssignBranchProductsCommand
+        {
+            ProductIds = new List<Guid> { prod3Id },
+            DefaultRetailPrice = 125000m,
+            DefaultMinStock = 8m,
+            DefaultMinOrderQuantity = 15,
+            ShelfLocation = "Kệ C1-03"
+        };
+
+        // Act
+        var result = await _service.AssignProductsAsync(_branchId, command);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Equal("SP0003", result[0].Sku);
+        Assert.Equal(15, result[0].MinOrderQuantity);
+        Assert.True(_uow.HasSaved);
+    }
+
+    [Fact]
     public async Task REQ_STOREPROD_04_UpdateProduct_ModifiesPriceAndMinStock()
     {
         // Act

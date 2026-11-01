@@ -405,6 +405,26 @@ public class SupplierService : ISupplierService
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
 
+        if (command.DeliveryDays == null || command.DeliveryDays.Count == 0)
+        {
+            throw new BusinessException("INVALID_DELIVERY_DAYS", "Phải chọn ít nhất một ngày giao hàng hoạt động trong tuần (Active Delivery Days).");
+        }
+
+        if (command.LeadTimeDays < 0 || command.LeadTimeDays > 30)
+        {
+            throw new BusinessException("INVALID_LEAD_TIME", "Thời gian chuẩn bị (Lead Time) phải từ 0 đến 30 ngày.");
+        }
+
+        if (command.MinOrderQuantity < 0)
+        {
+            throw new BusinessException("INVALID_MOQ", "Số lượng đặt tối thiểu (MOQ) phải lớn hơn hoặc bằng 0.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(command.CutoffTime) && !System.Text.RegularExpressions.Regex.IsMatch(command.CutoffTime.Trim(), @"^(?:[01]\d|2[0-3]):[0-5]\d$"))
+        {
+            throw new BusinessException("INVALID_CUTOFF_TIME", "Giờ chốt đơn (Cutoff Time) không đúng định dạng HH:mm (từ 00:00 đến 23:59).");
+        }
+
         var config = await _supplierRepository.GetDeliveryConfigAsync(supplierId, cancellationToken);
 
         if (config == null)
