@@ -66,4 +66,9 @@ public class UserRepository : IUserRepository
     {
         _context.Users.Remove(user);
     }
+
+    public async Task SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        await _context.SaveChangesAsync(cancellationToken);
+    }
 }

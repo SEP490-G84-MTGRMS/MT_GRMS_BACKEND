@@ -29,11 +29,22 @@ public class AuthController : BaseApiController
     {
         if (request == null || string.IsNullOrWhiteSpace(request.UsernameOrEmail) || string.IsNullOrWhiteSpace(request.Password))
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Tài khoản và mật khẩu không được để trống."));
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Tài khoản và mật khẩu không được để trống.", StatusCodes.Status400BadRequest));
         }
 
-        var result = await _authService.LoginAsync(request, cancellationToken);
-        return Ok(ApiResponse<LoginResponse>.Ok(result, "Đăng nhập thành công."));
+        try
+        {
+            var result = await _authService.LoginAsync(request, cancellationToken);
+            return Ok(ApiResponse<LoginResponse>.Ok(result, "Đăng nhập thành công.", StatusCodes.Status200OK));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", ex.Message, StatusCodes.Status401Unauthorized));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+        }
     }
 
     /// <summary>
@@ -46,11 +57,11 @@ public class AuthController : BaseApiController
     {
         if (request == null || string.IsNullOrWhiteSpace(request.RefreshToken))
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "RefreshToken không được để trống."));
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "RefreshToken không được để trống.", StatusCodes.Status400BadRequest));
         }
 
         var result = await _authService.RefreshTokenAsync(request, cancellationToken);
-        return Ok(ApiResponse<LoginResponse>.Ok(result, "Làm mới token thành công."));
+        return Ok(ApiResponse<LoginResponse>.Ok(result, "Làm mới token thành công.", StatusCodes.Status200OK));
     }
 
     /// <summary>
@@ -60,6 +71,6 @@ public class AuthController : BaseApiController
     [ProducesResponseType(typeof(ApiResponse<string>), StatusCodes.Status200OK)]
     public IActionResult Logout()
     {
-        return Ok(ApiResponse<string>.Ok(string.Empty, "Đăng xuất thành công."));
+        return Ok(ApiResponse<string>.Ok(string.Empty, "Đăng xuất thành công.", StatusCodes.Status200OK));
     }
 }

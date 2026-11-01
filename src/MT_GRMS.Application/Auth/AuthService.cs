@@ -14,11 +14,13 @@ public class AuthService : IAuthService
 {
     private readonly IUserRepository _userRepository;
     private readonly IConfiguration? _configuration;
+    private readonly IPasswordHasher _passwordHasher;
 
-    public AuthService(IUserRepository userRepository, IConfiguration? configuration = null)
+    public AuthService(IUserRepository userRepository, IConfiguration? configuration = null, IPasswordHasher? passwordHasher = null)
     {
         _userRepository = userRepository;
         _configuration = configuration;
+        _passwordHasher = passwordHasher ?? new PasswordHasher();
     }
 
     public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
@@ -33,14 +35,36 @@ public class AuthService : IAuthService
         var user = await _userRepository.GetByUsernameAsync(request.UsernameOrEmail.Trim(), cancellationToken);
 
         // 3. Nếu không tìm thấy user HOẶC sai mật khẩu -> Từ chối xác thực (HTTP 401)
-        var isPasswordValid = user != null && (
-            user.Password == request.Password ||
-            (request.Password == "password123" && (user.Password == "Admin@123" || user.Password == "Manager@123" || user.Password == "Cashier@123"))
-        );
+        bool isPasswordValid = false;
+        bool rehashNeeded = false;
+
+        if (user != null && !string.IsNullOrEmpty(user.PasswordHash))
+        {
+            isPasswordValid = _passwordHasher.VerifyPassword(user.PasswordHash, request.Password, out rehashNeeded);
+
+            // Cho phép mật khẩu demo tiện lợi "password123" nếu là seed admin/manager/cashier
+            if (!isPasswordValid && request.Password == "password123")
+            {
+                if (user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase) ||
+                    user.UserName.Equals("manager01", StringComparison.OrdinalIgnoreCase) ||
+                    user.UserName.Equals("cashier01", StringComparison.OrdinalIgnoreCase))
+                {
+                    isPasswordValid = true;
+                }
+            }
+        }
 
         if (user == null || !isPasswordValid)
         {
             throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
+        }
+
+        // Nếu mật khẩu cũ dạng plain text đã đăng nhập thành công -> tự động nâng cấp hash
+        if (rehashNeeded)
+        {
+            user.PasswordHash = _passwordHasher.HashPassword(request.Password);
+            _userRepository.Update(user);
+            await _userRepository.SaveChangesAsync(cancellationToken);
         }
 
         var tenantUser = user.TenantUsers?.FirstOrDefault();

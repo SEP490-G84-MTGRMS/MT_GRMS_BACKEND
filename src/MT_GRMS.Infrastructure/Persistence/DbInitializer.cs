@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using MT_GRMS.Application.Auth;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Finance;
@@ -91,7 +92,7 @@ public static class DbInitializer
         {
             Id = "usr_super_admin",
             UserName = "admin",
-            PasswordHash = "Admin@123",
+            PasswordHash = PasswordHasher.Hash("Admin@123"),
             FullName = "Hệ Thống Super Admin",
             Email = "admin@mtgrms.vn",
             Phone = "0901234567",
@@ -104,7 +105,7 @@ public static class DbInitializer
         {
             Id = "usr_store_manager",
             UserName = "manager01",
-            PasswordHash = "Manager@123",
+            PasswordHash = PasswordHasher.Hash("Manager@123"),
             FullName = "Nguyễn Văn Hùng (Quản Lý Cửa Hàng)",
             Email = "hung.nguyen@mtmart.vn",
             Phone = "0909876543",
@@ -117,7 +118,7 @@ public static class DbInitializer
         {
             Id = "usr_cashier",
             UserName = "cashier01",
-            PasswordHash = "Cashier@123",
+            PasswordHash = PasswordHasher.Hash("Cashier@123"),
             FullName = "Lê Thị Thảo (Thu Ngân POS)",
             Email = "thao.le@mtmart.vn",
             Phone = "0912345678",

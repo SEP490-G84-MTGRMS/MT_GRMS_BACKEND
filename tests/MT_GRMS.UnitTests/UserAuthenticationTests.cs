@@ -44,6 +44,7 @@ public class UserAuthenticationTests
         }
 
         public void Update(User user) { }
+        public Task SaveChangesAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     [Fact]
@@ -283,5 +284,41 @@ public class UserAuthenticationTests
         Assert.Equal("MANAGER", userInfo.RoleName);
         Assert.Equal("MANAGER", userInfo.Role);
         Assert.False(userInfo.IsAdmin);
+    }
+
+    [Fact]
+    public void PasswordHasher_Should_Hash_And_Verify_Successfully()
+    {
+        var rawPassword = "SecurePassword@123";
+        var hash = PasswordHasher.Hash(rawPassword);
+
+        Assert.NotNull(hash);
+        Assert.NotEqual(rawPassword, hash);
+        Assert.True(PasswordHasher.Verify(hash, rawPassword, out var rehashNeeded));
+        Assert.False(rehashNeeded);
+        Assert.False(PasswordHasher.Verify(hash, "WrongPassword", out _));
+    }
+
+    [Fact]
+    public void PasswordHasher_Should_Support_Legacy_Plaintext_And_Flag_Rehash()
+    {
+        var legacyPassword = "Admin@123";
+        Assert.True(PasswordHasher.Verify(legacyPassword, legacyPassword, out var rehashNeeded));
+        Assert.True(rehashNeeded);
+        Assert.False(PasswordHasher.Verify(legacyPassword, "WrongPassword", out _));
+    }
+
+    [Fact]
+    public async Task AuthService_LoginAsync_With_Hashed_Password_Should_Succeed()
+    {
+        var repo = new FakeUserRepository();
+        var hashedPass = PasswordHasher.Hash("Secret@999");
+        await repo.AddAsync(new User { Id = "usr_hash", Username = "user_hash", PasswordHash = hashedPass });
+
+        var authService = new AuthService(repo);
+        var res = await authService.LoginAsync(new LoginRequest("user_hash", "Secret@999", null));
+
+        Assert.NotNull(res);
+        Assert.Equal("user_hash", res.User.Username);
     }
 }
