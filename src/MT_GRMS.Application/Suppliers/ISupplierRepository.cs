@@ -27,6 +27,7 @@ public interface ISupplierRepository : IRepository<Supplier>
         List<string>? phones = null,
         List<string>? codes = null,
         List<string>? names = null,
+        string? category = null,
         CancellationToken cancellationToken = default);
 
     Task<SupplierSearchSuggestionsDto> GetSearchSuggestionsAsync(

@@ -43,6 +43,7 @@ public class SupplierService : ISupplierService
             filter.Phones,
             filter.Codes,
             filter.Names,
+            filter.Category,
             cancellationToken);
 
         var canSeeDebt = SupplierAccess.IsStoreOwner(_tenantContext);
@@ -63,6 +64,13 @@ public class SupplierService : ISupplierService
             CreditLimit = s.CreditLimit,
             CurrentDebt = canSeeDebt ? s.CurrentDebt : 0,
             LinkedCustomerId = Guid.TryParse(s.LinkedCustomerId, out var lcid) ? lcid : null,
+            Address = s.Address,
+            Notes = s.Notes,
+            CompanyName = s.CompanyName,
+            InvoiceAddress = s.InvoiceAddress,
+            BankName = s.BankName,
+            BankAccountNumber = s.BankAccount,
+            BankAccountHolder = s.AccountHolder,
             CreatedAt = s.CreatedAt
         }).ToList();
 
@@ -127,6 +135,7 @@ public class SupplierService : ISupplierService
             Name = command.Name.Trim(),
             SupplierType = command.SupplierType,
             CategoryId = command.CategoryId,
+            CategoryCode = !string.IsNullOrWhiteSpace(command.CategoryCode) ? command.CategoryCode.Trim() : "FRESH",
             TaxCode = command.TaxCode?.Trim(),
             Phone = command.Phone.Trim(),
             Email = command.Email?.Trim(),
@@ -139,10 +148,10 @@ public class SupplierService : ISupplierService
             PaymentTermDays = command.PaymentTermDays,
             CreditLimit = command.CreditLimit,
             CurrentDebt = 0,
-            Status = SupplierStatus.Active,
+            Status = command.Status,
             BankName = command.BankName?.Trim(),
-            BankAccountNumber = command.BankAccountNumber?.Trim(),
-            BankAccountHolder = command.BankAccountHolder?.Trim(),
+            BankAccount = command.BankAccountNumber?.Trim(),
+            AccountHolder = command.BankAccountHolder?.Trim(),
             Notes = command.Notes?.Trim(),
             LinkedCustomerId = command.LinkedCustomerId?.ToString()
         };
@@ -218,10 +227,96 @@ public class SupplierService : ISupplierService
         supplier.PaymentTermDays = command.PaymentTermDays;
         supplier.CreditLimit = command.CreditLimit;
         supplier.BankName = command.BankName?.Trim();
-        supplier.BankAccountNumber = command.BankAccountNumber?.Trim();
-        supplier.BankAccountHolder = command.BankAccountHolder?.Trim();
+        supplier.BankAccount = command.BankAccountNumber?.Trim();
+        supplier.AccountHolder = command.BankAccountHolder?.Trim();
+        supplier.CompanyName = command.CompanyName?.Trim();
+        supplier.InvoiceAddress = command.InvoiceAddress?.Trim();
         supplier.Notes = command.Notes?.Trim();
         supplier.LinkedCustomerId = command.LinkedCustomerId?.ToString();
+        if (command.Status.HasValue)
+        {
+            supplier.Status = command.Status.Value;
+        }
+
+        _supplierRepository.Update(supplier);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return MapToDetailDto(supplier);
+    }
+
+    public async Task<SupplierDetailDto> UpdateBasicSupplierAsync(Guid id, UpdateBasicSupplierCommand command, CancellationToken cancellationToken = default)
+    {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
+        if (supplier == null)
+        {
+            throw new NotFoundException("Nhà cung cấp", id);
+        }
+
+        supplier.Name = command.Name.Trim();
+        supplier.ContactPerson = command.ContactPerson?.Trim() ?? string.Empty;
+        supplier.Phone = command.Phone.Trim();
+        supplier.Status = command.Status;
+        if (command.Email != null)
+        {
+            supplier.Email = string.IsNullOrWhiteSpace(command.Email) ? null : command.Email.Trim();
+        }
+        if (command.TaxCode != null)
+        {
+            supplier.TaxCode = command.TaxCode.Trim();
+        }
+        if (command.Address != null)
+        {
+            supplier.Address = command.Address.Trim();
+        }
+        if (command.Notes != null)
+        {
+            supplier.Notes = command.Notes.Trim();
+        }
+
+        _supplierRepository.Update(supplier);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return MapToDetailDto(supplier);
+    }
+
+    public async Task<SupplierDetailDto> UpdateBankAsync(Guid id, UpdateSupplierBankCommand command, CancellationToken cancellationToken = default)
+    {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
+        if (supplier == null)
+        {
+            throw new NotFoundException("Nhà cung cấp", id);
+        }
+
+        supplier.BankName = string.IsNullOrWhiteSpace(command.BankName) ? null : command.BankName.Trim();
+        supplier.BankAccount = string.IsNullOrWhiteSpace(command.BankAccountNumber) ? null : command.BankAccountNumber.Trim();
+        supplier.AccountHolder = string.IsNullOrWhiteSpace(command.BankAccountHolder) ? null : command.BankAccountHolder.Trim().ToUpperInvariant();
+
+        _supplierRepository.Update(supplier);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return MapToDetailDto(supplier);
+    }
+
+    public async Task<SupplierDetailDto> UpdateVatAsync(Guid id, UpdateSupplierVatCommand command, CancellationToken cancellationToken = default)
+    {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
+        if (supplier == null)
+        {
+            throw new NotFoundException("Nhà cung cấp", id);
+        }
+
+        supplier.CompanyName = string.IsNullOrWhiteSpace(command.CompanyName) ? null : command.CompanyName.Trim();
+        if (command.TaxCode != null)
+        {
+            supplier.TaxCode = string.IsNullOrWhiteSpace(command.TaxCode) ? null : command.TaxCode.Trim();
+        }
+        supplier.InvoiceAddress = string.IsNullOrWhiteSpace(command.InvoiceAddress) ? null : command.InvoiceAddress.Trim();
 
         _supplierRepository.Update(supplier);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -876,8 +971,10 @@ public class SupplierService : ISupplierService
             ContactPerson = s.ContactPerson,
             ContactPhone = s.ContactPhone,
             BankName = s.BankName,
-            BankAccountNumber = s.BankAccountNumber,
-            BankAccountHolder = s.BankAccountHolder,
+            BankAccountNumber = s.BankAccount ?? s.BankAccountNumber,
+            BankAccountHolder = s.AccountHolder ?? s.BankAccountHolder,
+            CompanyName = s.CompanyName,
+            InvoiceAddress = s.InvoiceAddress,
             Notes = s.Notes,
             BlackoutDates = blackoutList.Select(b => new SupplierBlackoutDateDto
             {

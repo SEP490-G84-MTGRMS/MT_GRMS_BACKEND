@@ -9,6 +9,9 @@ public interface ISupplierService
     Task<SupplierDetailDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<SupplierDetailDto> CreateSupplierAsync(CreateSupplierCommand command, CancellationToken cancellationToken = default);
     Task<SupplierDetailDto> UpdateSupplierAsync(Guid id, UpdateSupplierCommand command, CancellationToken cancellationToken = default);
+    Task<SupplierDetailDto> UpdateBasicSupplierAsync(Guid id, UpdateBasicSupplierCommand command, CancellationToken cancellationToken = default);
+    Task<SupplierDetailDto> UpdateBankAsync(Guid id, UpdateSupplierBankCommand command, CancellationToken cancellationToken = default);
+    Task<SupplierDetailDto> UpdateVatAsync(Guid id, UpdateSupplierVatCommand command, CancellationToken cancellationToken = default);
     Task<SupplierDetailDto> UpdateStatusAsync(Guid id, UpdateSupplierStatusRequest request, CancellationToken cancellationToken = default);
     Task DeleteSupplierAsync(Guid id, CancellationToken cancellationToken = default);
 

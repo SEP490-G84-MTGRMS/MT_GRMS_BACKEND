@@ -71,6 +71,37 @@ public class SuppliersController : BaseApiController
     }
 
     /// <summary>
+    /// Cập nhật thông tin cơ bản của nhà cung cấp (Tên, Người liên hệ, SĐT, Email, Trạng thái, MST, Địa chỉ, Ghi chú) - bảo toàn toàn bộ dữ liệu chi tiết
+    /// </summary>
+    [HttpPut("{id:guid}/basic")]
+    [HttpPatch("{id:guid}/basic")]
+    public async Task<IActionResult> UpdateBasic(Guid id, [FromBody] UpdateBasicSupplierCommand command, CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.UpdateBasicSupplierAsync(id, command, cancellationToken);
+        return Ok(ApiResponse<SupplierDetailDto>.Ok(result, "Cập nhật thông tin cơ bản nhà cung cấp thành công."));
+    }
+
+    /// <summary>
+    /// Cập nhật thông tin tài khoản ngân hàng nhà cung cấp
+    /// </summary>
+    [HttpPut("{id:guid}/bank")]
+    public async Task<IActionResult> UpdateBank(Guid id, [FromBody] UpdateSupplierBankCommand command, CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.UpdateBankAsync(id, command, cancellationToken);
+        return Ok(ApiResponse<SupplierDetailDto>.Ok(result, "Cập nhật tài khoản ngân hàng nhà cung cấp thành công."));
+    }
+
+    /// <summary>
+    /// Cập nhật thông tin hóa đơn VAT nhà cung cấp
+    /// </summary>
+    [HttpPut("{id:guid}/vat")]
+    public async Task<IActionResult> UpdateVat(Guid id, [FromBody] UpdateSupplierVatCommand command, CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.UpdateVatAsync(id, command, cancellationToken);
+        return Ok(ApiResponse<SupplierDetailDto>.Ok(result, "Cập nhật thông tin hóa đơn VAT nhà cung cấp thành công."));
+    }
+
+    /// <summary>
     /// Chuyển đổi trạng thái hoạt động của nhà cung cấp (REQ-03, BR-S03)
     /// </summary>
     [HttpPatch("{id:guid}/status")]

@@ -60,6 +60,7 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         List<string>? phones = null,
         List<string>? codes = null,
         List<string>? names = null,
+        string? category = null,
         CancellationToken cancellationToken = default)
     {
         var query = _context.Suppliers
@@ -170,6 +171,14 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         if (categoryId.HasValue)
         {
             query = query.Where(s => s.CategoryId == categoryId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(category))
+        {
+            var catTerm = category.Trim().ToLower();
+            query = query.Where(s =>
+                (s.CategoryCode != null && s.CategoryCode.ToLower().Contains(catTerm)) ||
+                (s.Category != null && (s.Category.Code.ToLower().Contains(catTerm) || s.Category.Name.ToLower().Contains(catTerm))));
         }
 
         var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
