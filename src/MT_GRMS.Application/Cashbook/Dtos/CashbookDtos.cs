@@ -90,3 +90,65 @@ public record CashbookCreateRequest(
     string ReferenceCode,
     string Description
 );
+public record CashAccountResponse(
+    Guid Id,
+    Guid? BranchId,
+    string BranchName,
+    string AccountName,
+    string AccountType,
+    string? BankName,
+    string? AccountNumber,
+    decimal CurrentBalance,
+    decimal InitialBalance,
+    bool IsActive,
+    string Currency,
+    bool IsSafeDeposit
+);
+
+public record CashbookSummaryResponse(
+    decimal TotalOpeningBalance,
+    decimal TotalReceipts,
+    decimal TotalPayments,
+    decimal TotalClosingBalance,
+    decimal TotalCashInDrawers,
+    decimal TotalBankDeposits,
+    decimal TotalSafeDepositBalance
+);
+
+public record CreateReceiptRequest(
+    Guid AccountId,
+    decimal Amount,
+    string Category,
+    string? Description,
+    string? ReferenceCode
+);
+
+public record CreatePaymentRequest(
+    Guid AccountId,
+    decimal Amount,
+    string Category,
+    string? Description,
+    string? ReferenceCode
+);
+
+public record TransferFundRequest(
+    Guid FromAccountId,
+    Guid ToAccountId,
+    decimal Amount,
+    string? Note
+);
+
+public record ReconcileAccountRequest(
+    Guid AccountId,
+    decimal ActualCountedBalance,
+    string Reason
+);
+
+public record VoidEntryRequest(
+    string Reason
+);
+
+public record TransferFundResponse(
+    CashbookEntryResponse Payment,
+    CashbookEntryResponse Receipt
+);

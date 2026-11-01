@@ -8,4 +8,8 @@ public class BusinessException : Exception
     {
         ErrorCode = errorCode;
     }
+
+    public BusinessException(string message) : this("BUSINESS_ERROR", message)
+    {
+    }
 }

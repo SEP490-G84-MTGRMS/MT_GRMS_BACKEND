@@ -455,4 +455,66 @@ public class CashbookServiceTests
         var receiveBank = await _service.ReceiveCashAsync(bank.Id, FinanceAccountType.Bank, 3_000_000m, "TRANSFER", null, "REF-B", "Chuyển khoản nộp tiền");
         Assert.Equal(11_000_000m, bank.CurrentBalance);
     }
+
+    [Fact]
+    public async Task TransferFundsAsync_StandardTransfer_ShouldTransferBalancesCorrectly()
+    {
+        var till = new BranchCashTill { Id = Guid.NewGuid(), CurrentBalance = 5_000_000m };
+        var safe = new BranchSafe { Id = Guid.NewGuid(), CurrentBalance = 10_000_000m };
+
+        _cashbookRepo.Tills.Add(till);
+        _cashbookRepo.Safes.Add(safe);
+        _tillRepo.Items.Add(till);
+        _safeRepo.Items.Add(safe);
+
+        // Chuyển 2.000.000đ từ Két quầy sang Két sắt
+        var request = new TransferFundRequest(till.Id, safe.Id, 2_000_000m, "Chuyển tiền dư ca về két sắt");
+        var response = await _service.TransferFundsAsync(request);
+
+        Assert.NotNull(response.Payment);
+        Assert.NotNull(response.Receipt);
+        Assert.Equal(3_000_000m, till.CurrentBalance);
+        Assert.Equal(12_000_000m, safe.CurrentBalance);
+    }
+
+    [Fact]
+    public async Task TransferFundsAsync_WhenFromAndToAccountsAreSame_ShouldThrowBusinessException()
+    {
+        var sameAccountId = Guid.NewGuid();
+        var request = new TransferFundRequest(sameAccountId, sameAccountId, 1_000_000m, "Chuyển tiền cùng tài khoản");
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.TransferFundsAsync(request));
+        Assert.Equal("INVALID_ACCOUNTS", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task TransferFundsAsync_WhenAmountIsZeroOrNegative_ShouldThrowBusinessException()
+    {
+        var fromId = Guid.NewGuid();
+        var toId = Guid.NewGuid();
+        var request = new TransferFundRequest(fromId, toId, 0m, "Chuyển 0đ");
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.TransferFundsAsync(request));
+        Assert.Equal("INVALID_AMOUNT", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task VoidTransactionAsync_WhenUserHasUnauthorizedRole_ShouldThrowUnauthorizedAccessException()
+    {
+        _tenantContext.SetRole("Cashier");
+        var entryId = Guid.NewGuid();
+        var request = new VoidEntryRequest("Gạch nhầm phiếu");
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _service.VoidTransactionAsync(entryId, request));
+    }
+
+    [Fact]
+    public async Task ReconcileCashAccountAsync_WhenUserHasUnauthorizedRole_ShouldThrowUnauthorizedAccessException()
+    {
+        _tenantContext.SetRole("Staff");
+        var accountId = Guid.NewGuid();
+        var request = new ReconcileAccountRequest(accountId, 5_000_000m, "Kiểm kê định kỳ");
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _service.ReconcileCashAccountAsync(request));
+    }
 }

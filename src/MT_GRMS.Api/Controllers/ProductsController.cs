@@ -25,13 +25,19 @@ public class ProductsController : BaseApiController
         _supplierService = supplierService;
     }
 
+    /// <summary>
+    /// Lấy danh sách sản phẩm có phân trang, tìm kiếm đa tiêu chí và lọc theo danh mục
+    /// </summary>
     [HttpGet]
-    public async Task<IActionResult> GetAll(CancellationToken cancellationToken)
+    public async Task<IActionResult> GetProducts([FromQuery] ProductQueryFilter filter, CancellationToken cancellationToken)
     {
-        var result = await _catalogService.GetAllAsync(cancellationToken);
-        return Ok(ApiResponse<IReadOnlyList<ProductResponse>>.Ok(result));
+        var result = await _catalogService.GetProductsPagedAsync(filter, cancellationToken);
+        return Ok(ApiResponse<PagedResult<ProductResponse>>.Ok(result));
     }
 
+    /// <summary>
+    /// Lấy thông tin chi tiết một sản phẩm theo ID
+    /// </summary>
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(Guid id, CancellationToken cancellationToken)
     {
@@ -57,11 +63,34 @@ public class ProductsController : BaseApiController
         return Ok(ApiResponse<ProductResponse>.Ok(result));
     }
 
+    /// <summary>
+    /// Tạo mới một sản phẩm
+    /// </summary>
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] ProductCreateRequest request, CancellationToken cancellationToken)
     {
         var result = await _catalogService.CreateProductAsync(request, cancellationToken);
         return CreatedAtAction(nameof(GetById), new { id = result.Id }, ApiResponse<ProductResponse>.Ok(result, "Tạo sản phẩm thành công."));
+    }
+
+    /// <summary>
+    /// Cập nhật thông tin sản phẩm
+    /// </summary>
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> Update(Guid id, [FromBody] ProductUpdateRequest request, CancellationToken cancellationToken)
+    {
+        var result = await _catalogService.UpdateProductAsync(id, request, cancellationToken);
+        return Ok(ApiResponse<ProductResponse>.Ok(result, "Cập nhật sản phẩm thành công."));
+    }
+
+    /// <summary>
+    /// Xóa mềm một sản phẩm
+    /// </summary>
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
+    {
+        await _catalogService.DeleteProductAsync(id, cancellationToken);
+        return Ok(ApiResponse<object>.Ok(null!, "Xóa sản phẩm thành công."));
     }
 
     /// <summary>

@@ -45,6 +45,10 @@ public class HouseholdTaxSummaryDto
     public bool IsTaxExempt { get; set; }
     public decimal TaxExemptionThreshold { get; set; } = 1_000_000_000m; // 1 tỷ VNĐ theo NĐ 141/2026/NĐ-CP
 
+    // Cảnh báo vượt ngưỡng miễn thuế giữa năm (từ <= 1 tỷ lên > 1 tỷ)
+    public bool IsThresholdCrossedMidYear { get; set; }
+    public string? ThresholdExceededNote { get; set; }
+
     // Cảnh báo tiến trình ngưỡng Nhóm 4 (toàn chuỗi Tenant)
     public bool IsApproachingGroup4Threshold { get; set; } // >= 40 tỷ (80% của 50 tỷ)
     public bool IsExceedingGroup4Threshold { get; set; } // >= 50 tỷ (100%)

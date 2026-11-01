@@ -50,3 +50,18 @@ public record ExpenseVoucherResponse(
     DateTime ExpenseDate,
     string? Note
 );
+
+public record ExpenseSummaryResponse(
+    decimal TotalAmount,
+    int TotalCount,
+    decimal PaidAmount,
+    int PaidCount,
+    decimal PendingApprovalAmount,
+    int PendingApprovalCount,
+    decimal SuspiciousAmount,
+    int SuspiciousCount,
+    decimal TaxDeductibleAmount,
+    int TaxDeductibleCount,
+    decimal NonTaxDeductibleAmount,
+    int NonTaxDeductibleCount
+);

@@ -1,4 +1,4 @@
-namespace MT_GRMS.Application.Reports.Dtos;
+﻿namespace MT_GRMS.Application.Reports.Dtos;
 
 public record CategoryExpenseBreakdown(
     string Category,
@@ -30,7 +30,10 @@ public record PnLSummaryResponse(
     OperatingExpenseSummary OperatingExpenses,
     decimal BadDebtExpense,
     decimal NetProfit,
-    decimal NetMarginPercentage
+    decimal NetMarginPercentage,
+    string CogsSource = "ACTUAL",
+    decimal CogsEstimatedPercentage = 0m,
+    string? CogsWarningNotice = null
 );
 
 public record PnLComparisonResponse(

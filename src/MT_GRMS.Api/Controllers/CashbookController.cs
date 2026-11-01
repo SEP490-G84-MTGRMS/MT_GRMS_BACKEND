@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Cashbook.Dtos;
@@ -73,5 +73,74 @@ public class CashbookController : BaseApiController
     {
         var till = await _cashbookService.GetOrCreateTillAsync(branchId, tillName, ct);
         return Ok(ApiResponse<Guid>.Ok(till.Id, "Khởi tạo/lấy két quầy thành công."));
+    }
+
+    [HttpGet("accounts")]
+    public async Task<ActionResult<ApiResponse<List<CashAccountResponse>>>> GetAccounts(
+        [FromQuery] Guid? branchId,
+        CancellationToken ct = default)
+    {
+        var result = await _cashbookService.GetAccountsAsync(branchId, ct);
+        return Ok(ApiResponse<List<CashAccountResponse>>.Ok(result));
+    }
+
+    [HttpGet("summary")]
+    public async Task<ActionResult<ApiResponse<CashbookSummaryResponse>>> GetSummary(
+        [FromQuery] Guid? branchId,
+        CancellationToken ct = default)
+    {
+        var result = await _cashbookService.GetSummaryAsync(branchId, ct);
+        return Ok(ApiResponse<CashbookSummaryResponse>.Ok(result));
+    }
+
+    [HttpPost("receipts")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<CashbookEntryResponse>>> CreateReceipt(
+        [FromBody] CreateReceiptRequest request,
+        CancellationToken ct)
+    {
+        var result = await _cashbookService.CreateReceiptAsync(request, ct);
+        return Ok(ApiResponse<CashbookEntryResponse>.Ok(result, "Ghi nhận phiếu thu thành công."));
+    }
+
+    [HttpPost("payments")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<CashbookEntryResponse>>> CreatePayment(
+        [FromBody] CreatePaymentRequest request,
+        CancellationToken ct)
+    {
+        var result = await _cashbookService.CreatePaymentAsync(request, ct);
+        return Ok(ApiResponse<CashbookEntryResponse>.Ok(result, "Ghi nhận phiếu chi thành công."));
+    }
+
+    [HttpPost("transfers")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<TransferFundResponse>>> TransferFunds(
+        [FromBody] TransferFundRequest request,
+        CancellationToken ct)
+    {
+        var result = await _cashbookService.TransferFundsAsync(request, ct);
+        return Ok(ApiResponse<TransferFundResponse>.Ok(result, "Điều chuyển tiền nội bộ thành công."));
+    }
+
+    [HttpPost("reconcile")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<CashbookEntryResponse?>>> ReconcileCashAccount(
+        [FromBody] ReconcileAccountRequest request,
+        CancellationToken ct)
+    {
+        var result = await _cashbookService.ReconcileCashAccountAsync(request, ct);
+        return Ok(ApiResponse<CashbookEntryResponse?>.Ok(result, "Hoàn tất kiểm kê và đối soát két quỹ."));
+    }
+
+    [HttpPost("entries/{id:guid}/void")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<CashbookEntryResponse>>> VoidTransaction(
+        [FromRoute] Guid id,
+        [FromBody] VoidEntryRequest request,
+        CancellationToken ct)
+    {
+        var result = await _cashbookService.VoidTransactionAsync(id, request, ct);
+        return Ok(ApiResponse<CashbookEntryResponse>.Ok(result, "Đã tạo bút toán bù trừ gạch bỏ phiếu thành công."));
     }
 }

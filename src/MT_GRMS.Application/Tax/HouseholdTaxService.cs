@@ -70,6 +70,12 @@ public class HouseholdTaxService : IHouseholdTaxService
         var isApproachingGroup4 = annualAccumulatedRevenue >= 40_000_000_000m && annualAccumulatedRevenue < 50_000_000_000m;
         var isExceedingGroup4 = annualAccumulatedRevenue >= 50_000_000_000m;
 
+        // Cảnh báo vượt ngưỡng miễn thuế 1 tỷ VNĐ giữa năm (từ <= 1 tỷ lên > 1 tỷ)
+        var isThresholdCrossedMidYear = priorPeriodsRevenue <= TaxExemptionThreshold && annualAccumulatedRevenue > TaxExemptionThreshold;
+        string? thresholdExceededNote = isThresholdCrossedMidYear
+            ? $"Doanh thu lũy kế năm đã vượt ngưỡng 1 tỷ VNĐ trong kỳ này (từ {priorPeriodsRevenue:N0}đ lên {annualAccumulatedRevenue:N0}đ). Hệ thống bắt đầu tính nghĩa vụ thuế GTGT và TNCN theo thuế suất ngành nghề đăng ký trên phần doanh thu vượt ngưỡng. Khuyến nghị chủ hộ tham vấn cơ quan thuế địa bàn về quy định kê khai và chính sách áp dụng cho trường hợp vượt ngưỡng giữa năm."
+            : null;
+
         // 3. Doanh thu phát sinh trong kỳ
         var (gross, discount, returns) = await _repository.GetPeriodRevenueAsync(
             fromDateUtc,
@@ -214,6 +220,8 @@ public class HouseholdTaxService : IHouseholdTaxService
             TaxExemptionThreshold = TaxExemptionThreshold,
             IsApproachingGroup4Threshold = isApproachingGroup4,
             IsExceedingGroup4Threshold = isExceedingGroup4,
+            IsThresholdCrossedMidYear = isThresholdCrossedMidYear,
+            ThresholdExceededNote = thresholdExceededNote,
             GrossRevenueInPeriod = gross,
             DiscountAmountInPeriod = discount,
             ReturnAmountInPeriod = returns,

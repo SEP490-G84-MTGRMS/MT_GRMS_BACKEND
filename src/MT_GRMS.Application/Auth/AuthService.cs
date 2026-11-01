@@ -41,7 +41,11 @@ public class AuthService : IAuthService
         var tenantUser = user.TenantUsers?.FirstOrDefault(tu => !string.IsNullOrWhiteSpace(request.TenantCode) && tu.TenantId == request.TenantCode)
                          ?? user.TenantUsers?.FirstOrDefault();
 
-        var tenantId = tenantUser?.TenantId ?? (!string.IsNullOrWhiteSpace(request.TenantCode) ? request.TenantCode : "DEFAULT");
+        var tenantId = tenantUser?.TenantId ?? (!string.IsNullOrWhiteSpace(request.TenantCode) ? request.TenantCode : "tenant_mt_mart_01");
+        if (tenantId is "DEFAULT" or "default-tenant" or "TENANT-HCM-01" or "TENANT-DEFAULT")
+        {
+            tenantId = "tenant_mt_mart_01";
+        }
         var role = tenantUser?.Role ?? "ADMIN";
 
         // 4. Đăng nhập thành công với thông tin user từ database

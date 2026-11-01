@@ -25,9 +25,14 @@ public class UserRepository : IUserRepository
     public async Task<User?> GetByUsernameAsync(string username, CancellationToken cancellationToken = default)
     {
         var clean = username.Trim().ToLower();
+        var compact = clean.Replace(" ", "");
         return await _context.Users
             .Include(u => u.TenantUsers)
-            .FirstOrDefaultAsync(u => u.UserName.ToLower() == clean || u.Email.ToLower() == clean || (u.Phone != null && u.Phone.Replace(" ", "") == clean.Replace(" ", "")), cancellationToken);
+            .FirstOrDefaultAsync(u =>
+                u.UserName.ToLower() == clean
+                || u.Email.ToLower() == clean
+                || (u.Phone != null && (u.Phone.ToLower() == clean || u.Phone.Replace(" ", "") == compact)),
+                cancellationToken);
     }
 
     public async Task<IReadOnlyList<User>> FindAsync(Expression<Func<User, bool>> predicate, CancellationToken cancellationToken = default)

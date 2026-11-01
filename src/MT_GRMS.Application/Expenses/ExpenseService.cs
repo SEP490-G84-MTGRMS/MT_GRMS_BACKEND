@@ -73,7 +73,7 @@ public class ExpenseService : IExpenseService
             }
 
             // 2. Mẫu hình tần suất: >= 3 phiếu trong 60 phút có giá trị >= 60% T1 (300.000đ)
-            var currentUserId = Guid.NewGuid();
+            var currentUserId = _tenantContext.CurrentUserId;
             var recentCount = await _expenseRepo.GetRecentVouchersCountAsync(branchId, currentUserId, DateTime.UtcNow.AddMinutes(-60), T1_AutoApprovalThreshold * 0.6m, ct);
             if (recentCount >= 2 && request.Amount >= T1_AutoApprovalThreshold * 0.6m)
             {
@@ -112,6 +112,16 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> ApproveExpenseAsync(ApproveExpenseRequest request, CancellationToken ct = default)
     {
+        var role = _tenantContext.CurrentRole;
+        if (!string.IsNullOrWhiteSpace(role) &&
+            !role.Equals("Owner", StringComparison.OrdinalIgnoreCase) &&
+            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) &&
+            !role.Equals("Admin", StringComparison.OrdinalIgnoreCase) &&
+            !role.Equals("Manager", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException("Chỉ Chủ hộ kinh doanh hoặc Quản lý cửa hàng mới có thẩm quyền phê duyệt phiếu chi.");
+        }
+
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
@@ -120,8 +130,14 @@ public class ExpenseService : IExpenseService
             throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể phê duyệt.");
         }
 
+        // Kiểm toán tiệm 1 chủ solo: Nếu phiếu bị cảnh báo xé nhỏ hạn mức thì bắt buộc phải nhập lý do/ghi chú giải trình
+        if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note))
+        {
+            throw new BusinessException("NOTE_REQUIRED_FOR_SUSPICIOUS_EXPENSE", "Phiếu chi bị gắn cờ nghi vấn xé nhỏ hạn mức. Bắt buộc nhập ghi chú giải trình khi phê duyệt.");
+        }
+
         voucher.Status = ExpenseVoucherStatus.Approved;
-        voucher.ApprovedByUserId = Guid.NewGuid();
+        voucher.ApprovedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId : Guid.NewGuid();
         voucher.ApprovedAtUtc = DateTime.UtcNow;
         if (!string.IsNullOrEmpty(request.Note)) voucher.Note = request.Note;
 
@@ -190,6 +206,38 @@ public class ExpenseService : IExpenseService
             .Take(pageSize)
             .Select(MapVoucherResponse)
             .ToList();
+    }
+
+    public async Task<ExpenseSummaryResponse> GetExpenseSummaryAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, CancellationToken ct = default)
+    {
+        var vouchers = await _expenseRepo.FindAsync(e =>
+            (!branchId.HasValue || e.BranchId == branchId.Value) &&
+            (!fromDate.HasValue || e.CreatedAt >= fromDate.Value) &&
+            (!toDate.HasValue || e.CreatedAt <= toDate.Value), ct);
+
+        var totalAmount = vouchers.Sum(v => v.Amount);
+        var totalCount = vouchers.Count;
+
+        var paidVouchers = vouchers.Where(v => v.Status == ExpenseVoucherStatus.Paid).ToList();
+        var pendingVouchers = vouchers.Where(v => v.Status == ExpenseVoucherStatus.PendingApproval).ToList();
+        var suspiciousVouchers = vouchers.Where(v => v.IsFlaggedAsSuspiciousSplit).ToList();
+        var taxDeductibleVouchers = vouchers.Where(v => v.IsTaxDeductible).ToList();
+        var nonTaxDeductibleVouchers = vouchers.Where(v => !v.IsTaxDeductible).ToList();
+
+        return new ExpenseSummaryResponse(
+            TotalAmount: totalAmount,
+            TotalCount: totalCount,
+            PaidAmount: paidVouchers.Sum(v => v.Amount),
+            PaidCount: paidVouchers.Count,
+            PendingApprovalAmount: pendingVouchers.Sum(v => v.Amount),
+            PendingApprovalCount: pendingVouchers.Count,
+            SuspiciousAmount: suspiciousVouchers.Sum(v => v.Amount),
+            SuspiciousCount: suspiciousVouchers.Count,
+            TaxDeductibleAmount: taxDeductibleVouchers.Sum(v => v.Amount),
+            TaxDeductibleCount: taxDeductibleVouchers.Count,
+            NonTaxDeductibleAmount: nonTaxDeductibleVouchers.Sum(v => v.Amount),
+            NonTaxDeductibleCount: nonTaxDeductibleVouchers.Count
+        );
     }
 
     private static ExpenseVoucherResponse MapVoucherResponse(ExpenseVoucher v) =>

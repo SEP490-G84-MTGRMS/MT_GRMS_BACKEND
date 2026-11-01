@@ -21,7 +21,35 @@ public static class DbInitializer
         // 1. Tự động áp dụng Migrations để tạo CSDL và toàn bộ 34 bảng nếu chưa có
         if (context.Database.IsRelational())
         {
+            // Đảm bảo bảng supplier_branch_assignments tồn tại trước khi chạy Migrations
+            // để tránh lỗi 42P01: relation "supplier_branch_assignments" does not exist khi migration thực hiện ALTER TABLE
+            await context.Database.ExecuteSqlRawAsync(@"
+                CREATE TABLE IF NOT EXISTS supplier_branch_assignments (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""BranchId"" uuid NOT NULL,
+                    ""SupplierId"" uuid NOT NULL,
+                    ""TenantId"" text NOT NULL,
+                    ""CreatedBy"" uuid,
+                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""UpdatedAt"" timestamp without time zone,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT false
+                );
+            ");
+
             await context.Database.MigrateAsync();
+
+            // Đảm bảo đồng bộ cấu trúc cột và bảng sau migration RemoveDisplayOrderAndProductCombos
+            await context.Database.ExecuteSqlRawAsync(@"
+                ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];
+                ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
+                ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
+                ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
+                DROP TABLE IF EXISTS ""ProductCombos"";
+                DROP INDEX IF EXISTS ""IX_Products_TenantID_ProductCode"";
+                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_TenantID_ProductCode"" ON ""Products"" (""TenantID"", ""ProductCode"") WHERE ""IsDeleted"" = false;
+                DROP INDEX IF EXISTS ""IX_Products_Barcode"";
+                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_Barcode"" ON ""Products"" (""Barcode"") WHERE ""IsDeleted"" = false AND ""Barcode"" IS NOT NULL;
+            ");
         }
         else
         {
@@ -31,6 +59,7 @@ public static class DbInitializer
         // 2. Kiểm tra nếu đã có dữ liệu mẫu thì đảm bảo seed Orders cho chủ tiệm
         if (await context.SubscriptionPlans.AnyAsync())
         {
+            await CatalogSeedData.SeedAsync(context, "tenant_mt_mart_01");
             await SeedOrdersAndPreOrdersAsync(context);
             return;
         }
@@ -247,8 +276,7 @@ public static class DbInitializer
             TenantId = defaultTenantId,
             CategoryCode = "FRESH",
             Name = "Thực Phẩm & Nông Sản Tươi Sống",
-            Description = "Rau, củ, quả, thịt cá tươi đạt chuẩn VietGAP",
-            DisplayOrder = 1
+            Description = "Rau, củ, quả, thịt cá tươi đạt chuẩn VietGAP"
         };
 
         var catDry = new Category
@@ -256,8 +284,7 @@ public static class DbInitializer
             TenantId = defaultTenantId,
             CategoryCode = "DRY",
             Name = "Bách Hóa Tiêu Dùng & Gạo Hạt",
-            Description = "Gạo, gia vị, dầu ăn, thực phẩm khô đóng gói",
-            DisplayOrder = 2
+            Description = "Gạo, gia vị, dầu ăn, thực phẩm khô đóng gói"
         };
 
         var catBeverage = new Category
@@ -265,8 +292,7 @@ public static class DbInitializer
             TenantId = defaultTenantId,
             CategoryCode = "BEV",
             Name = "Sữa & Đồ Uống Giải Khát",
-            Description = "Sữa tươi tiệt trùng, nước khoáng, nước trái cây",
-            DisplayOrder = 3
+            Description = "Sữa tươi tiệt trùng, nước khoáng, nước trái cây"
         };
 
         await context.Categories.AddRangeAsync(catFresh, catDry, catBeverage);
@@ -408,15 +434,7 @@ public static class DbInitializer
         await context.SaveChangesAsync();
 
         // Đơn vị quy đổi (1 Thùng = 12 Hộp sữa)
-        var unitCartonMilk = new ProductUnit
-        {
-            ProductId = prodMilk.Id,
-            UnitName = "Thùng",
-            ConversionRate = 12.00m,
-            Price = 445000.00m,
-            Barcode = "893850123499",
-            IsBaseUnit = false
-        };
+        var unitCartonMilk = new ProductUnit(prodMilk.Id, "Thùng", 12.00m, 445000.00m, "893850123499", false);
         await context.ProductUnits.AddAsync(unitCartonMilk);
 
         // =========================================================================
@@ -642,6 +660,9 @@ public static class DbInitializer
             Description = "Nạp tiền lẻ quỹ đầu ca phục vụ thanh toán POS"
         };
         await context.CashBooks.AddAsync(initialCashBook);
+
+        // Nạp 15 danh mục và 5-8 sản phẩm mỗi danh mục
+        await CatalogSeedData.SeedAsync(context, defaultTenantId);
 
         // Lưu toàn bộ dữ liệu mẫu vào CSDL
         await context.SaveChangesAsync();

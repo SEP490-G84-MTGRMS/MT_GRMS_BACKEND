@@ -1,4 +1,4 @@
-using MT_GRMS.Application.Reports.Dtos;
+﻿using MT_GRMS.Application.Reports.Dtos;
 
 namespace MT_GRMS.Application.Reports;
 
@@ -53,7 +53,10 @@ public class PnLReportService : IPnLReportService
             new OperatingExpenseSummary(totalOpex, categories),
             badDebt,
             netProfit,
-            netMarginPct
+            netMarginPct,
+            cogsData.Source,
+            cogsData.EstimatedPercentage,
+            cogsData.WarningNotice
         );
     }
 
@@ -91,27 +94,15 @@ public class PnLReportService : IPnLReportService
 
     public async Task<List<PnLTrendPointResponse>> GetTrendAsync(PnLFilterRequest request, CancellationToken ct = default)
     {
-        var trendPoints = new List<PnLTrendPointResponse>();
-        var currentStart = request.FromDate.Date;
-        var end = request.ToDate.Date;
+        // Tối ưu hóa: Thay thế vòng lặp N+1 queries bằng 1 lần gom toàn kỳ qua GetDailyTrendAsync
+        var dailyItems = await _pnlRepo.GetDailyTrendAsync(request.BranchId, request.FromDate, request.ToDate, ct);
 
-        // Nếu khoảng thời gian <= 60 ngày thì phân tích theo từng ngày
-        while (currentStart <= end)
-        {
-            var dayEnd = currentStart.AddDays(1).AddSeconds(-1);
-            var daySummary = await GetPnLSummaryAsync(new PnLFilterRequest(request.BranchId, currentStart, dayEnd), ct);
-
-            trendPoints.Add(new PnLTrendPointResponse(
-                currentStart,
-                daySummary.NetRevenue,
-                daySummary.Cogs,
-                daySummary.OperatingExpenses.TotalAmount,
-                daySummary.NetProfit
-            ));
-
-            currentStart = currentStart.AddDays(1);
-        }
-
-        return trendPoints;
+        return dailyItems.Select(d => new PnLTrendPointResponse(
+            d.Date,
+            d.NetRevenue,
+            d.Cogs,
+            d.Expenses,
+            d.NetRevenue - d.Cogs - d.Expenses - d.BadDebt
+        )).ToList();
     }
 }

@@ -38,6 +38,17 @@ public class ExpensesController : BaseApiController
         return Ok(ApiResponse<ExpenseVoucherResponse>.Ok(result, "Xuất quỹ chi tiền thành công."));
     }
 
+    [HttpGet("summary")]
+    public async Task<ActionResult<ApiResponse<ExpenseSummaryResponse>>> GetExpenseSummary(
+        [FromQuery] Guid? branchId,
+        [FromQuery] DateTime? fromDate,
+        [FromQuery] DateTime? toDate,
+        CancellationToken ct = default)
+    {
+        var result = await _expenseService.GetExpenseSummaryAsync(branchId, fromDate, toDate, ct);
+        return Ok(ApiResponse<ExpenseSummaryResponse>.Ok(result));
+    }
+
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<ApiResponse<ExpenseVoucherResponse>>> GetExpenseById([FromRoute] Guid id, CancellationToken ct)
     {
