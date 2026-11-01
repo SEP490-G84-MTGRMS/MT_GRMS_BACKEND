@@ -51,21 +51,12 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         Guid? supplierId,
         CancellationToken cancellationToken = default)
     {
-        // 1. Xác định các Nhà cung cấp được gán cho Cửa hàng (Chi nhánh) này qua SupplierBranchAssignments
-        var assignedSupplierIds = await _context.SupplierBranchAssignments
-            .Where(sba => sba.BranchId == branchId && !sba.IsDeleted)
+        // 1. Xác định các Nhà cung cấp được gán HOẠT ĐỘNG cho Cửa hàng (Chi nhánh) này qua SupplierBranchAssignments
+        var validSupplierIds = await _context.SupplierBranchAssignments
+            .Where(sba => sba.BranchId == branchId && !sba.IsDeleted && sba.Status == SupplierStatus.Active)
             .Select(sba => sba.SupplierId)
             .Distinct()
             .ToListAsync(cancellationToken);
-
-        // Fallback: Nếu có tồn kho lô cũ
-        var branchStockSupplierIds = await _context.BranchStocks
-            .Where(bs => bs.BranchId == branchId && !bs.IsDeleted && bs.SupplierId.HasValue)
-            .Select(bs => bs.SupplierId!.Value)
-            .Distinct()
-            .ToListAsync(cancellationToken);
-
-        var validSupplierIds = assignedSupplierIds.Union(branchStockSupplierIds).Distinct().ToList();
 
         if (supplierId.HasValue && supplierId.Value != Guid.Empty)
         {
@@ -81,25 +72,53 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             return Array.Empty<OrderMatrixProductDto>();
         }
 
-        // 2. Lấy các sản phẩm đã được add cho các Nhà cung cấp hợp lệ của cửa hàng (từ SupplierProducts)
+        // 2. Lấy danh sách ProductId đã được phân bổ tới chi nhánh (qua BranchStocks)
+        var allocatedProductIds = await _context.BranchStocks
+            .Where(bs => bs.BranchId == branchId && !bs.IsDeleted)
+            .Select(bs => bs.ProductId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        if (allocatedProductIds.Count == 0)
+        {
+            return Array.Empty<OrderMatrixProductDto>();
+        }
+
+        // 3. Lấy các sản phẩm đã được add cho các Nhà cung cấp hợp lệ của cửa hàng (từ SupplierProducts)
+        // và đã được phân bổ đến chi nhánh (allocatedProductIds)
         var spQuery = _context.SupplierProducts
             .Include(sp => sp.Product)
                 .ThenInclude(p => p!.Category)
             .Include(sp => sp.Supplier)
             .Where(sp => validSupplierIds.Contains(sp.SupplierId)
                          && !sp.IsDeleted
+                         && sp.Status == SupplierProductStatus.Active
                          && sp.Product != null
-                         && !sp.Product.IsDeleted);
+                         && !sp.Product.IsDeleted
+                         && sp.Product.Status == "Active"
+                         && allocatedProductIds.Contains(sp.ProductId));
 
-        var supplierProducts = await spQuery.AsNoTracking().ToListAsync(cancellationToken);
-        if (supplierProducts.Count == 0)
+        var rawSupplierProducts = await spQuery.AsNoTracking().ToListAsync(cancellationToken);
+        if (rawSupplierProducts.Count == 0)
         {
             return Array.Empty<OrderMatrixProductDto>();
         }
 
+        // Khử trùng lặp sản phẩm: Khi xem Tất cả NCC, nếu 1 sản phẩm được nhiều NCC cung cấp, ưu tiên NCC chính (IsPrimarySupplier), sau đó là giá sỉ tốt nhất
+        var supplierProducts = rawSupplierProducts;
+        if (!supplierId.HasValue || supplierId.Value == Guid.Empty)
+        {
+            supplierProducts = rawSupplierProducts
+                .GroupBy(sp => sp.ProductId)
+                .Select(g => g.OrderByDescending(sp => sp.IsPrimarySupplier)
+                              .ThenBy(sp => sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : decimal.MaxValue)
+                              .First())
+                .ToList();
+        }
+
         var productIds = supplierProducts.Select(sp => sp.ProductId).Distinct().ToList();
 
-        // 3. Lấy thông tin tồn kho BranchStocks theo sản phẩm tại chi nhánh (nếu có)
+        // 4. Lấy thông tin tồn kho BranchStocks theo sản phẩm tại chi nhánh (nếu có)
         var stocks = await _context.BranchStocks
             .Where(bs => bs.BranchId == branchId && productIds.Contains(bs.ProductId) && !bs.IsDeleted)
             .AsNoTracking()
@@ -189,39 +208,28 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         Guid? supplierId,
         CancellationToken cancellationToken = default)
     {
-        var assignedSupplierIds = await _context.SupplierBranchAssignments
-            .Where(sba => sba.BranchId == branchId && !sba.IsDeleted)
+        var activeSupplierIds = await _context.SupplierBranchAssignments
+            .Where(sba => sba.BranchId == branchId && !sba.IsDeleted && sba.Status == SupplierStatus.Active)
             .Select(sba => sba.SupplierId)
             .Distinct()
             .ToListAsync(cancellationToken);
 
-        var branchStockSupplierIds = await _context.BranchStocks
-            .Where(bs => bs.BranchId == branchId && !bs.IsDeleted && bs.SupplierId != null)
-            .Select(bs => bs.SupplierId!.Value)
-            .Distinct()
-            .ToListAsync(cancellationToken);
-
-        var branchSupplierIds = assignedSupplierIds.Union(branchStockSupplierIds).Distinct().ToList();
+        if (activeSupplierIds.Count == 0)
+        {
+            return Array.Empty<OrderMatrixSupplierDeliveryConfigDto>();
+        }
 
         var supQuery = _context.Suppliers
             .Include(s => s.DeliveryConfig)
                 .ThenInclude(dc => dc!.BlackoutDates)
             .Include(s => s.BlackoutDates)
             .Include(s => s.BranchAssignments)
-            .Where(s => !s.IsDeleted)
+            .Where(s => !s.IsDeleted && s.Status == SupplierStatus.Active && activeSupplierIds.Contains(s.Id))
             .AsNoTracking();
 
         if (supplierId.HasValue && supplierId.Value != Guid.Empty)
         {
             supQuery = supQuery.Where(s => s.Id == supplierId.Value);
-        }
-        else if (branchSupplierIds.Count > 0)
-        {
-            supQuery = supQuery.Where(s => branchSupplierIds.Contains(s.Id));
-        }
-        else
-        {
-            return Array.Empty<OrderMatrixSupplierDeliveryConfigDto>();
         }
 
         var suppliers = await supQuery.ToListAsync(cancellationToken);
@@ -231,8 +239,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         {
             var dc = s.DeliveryConfig;
             var asg = s.BranchAssignments.FirstOrDefault(b => b.BranchId == branchId && !b.IsDeleted);
-            var hasStockAtBranch = branchSupplierIds.Contains(s.Id);
-            var isAssigned = asg != null || hasStockAtBranch;
+            var isAssigned = activeSupplierIds.Contains(s.Id);
             var isSupActive = s.Status == SupplierStatus.Active && (asg == null || asg.Status == SupplierStatus.Active);
             var inactiveReason = s.Status != SupplierStatus.Active
                 ? $"Nhà cung cấp {s.Name} đang tạm ngừng hoạt động"
@@ -436,4 +443,21 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         var nextSeq = count + 1;
         return $"PO-{datePrefix}-{nextSeq:D4}";
     }
+
+    public async Task<bool> UserExistsAsync(string userId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+            return false;
+
+        return await _context.Users
+            .IgnoreQueryFilters()
+            .AnyAsync(u => u.Id == userId, cancellationToken);
+    }
+
+    public void AddPurchaseOrderDetail(PurchaseOrderDetail detail)
+    {
+        _context.PurchaseOrderDetails.Add(detail);
+    }
 }
+
+

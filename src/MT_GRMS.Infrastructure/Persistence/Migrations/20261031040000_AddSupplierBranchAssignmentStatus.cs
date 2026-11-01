@@ -12,10 +12,19 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
         {
             migrationBuilder.Sql(
                 """
-                ALTER TABLE supplier_branch_assignments
-                ADD COLUMN IF NOT EXISTS "Status" integer NOT NULL DEFAULT 1;
-                ALTER TABLE supplier_branch_assignments
-                ADD COLUMN IF NOT EXISTS "InactiveReason" character varying(500);
+                DO $$
+                DECLARE tbl text;
+                BEGIN
+                    IF to_regclass('public."SupplierBranch"') IS NOT NULL THEN
+                        tbl := '"SupplierBranch"';
+                    ELSIF to_regclass('public.supplier_branch_assignments') IS NOT NULL THEN
+                        tbl := 'supplier_branch_assignments';
+                    ELSE
+                        RETURN;
+                    END IF;
+                    EXECUTE format('ALTER TABLE %s ADD COLUMN IF NOT EXISTS "Status" integer NOT NULL DEFAULT 1', tbl);
+                    EXECUTE format('ALTER TABLE %s ADD COLUMN IF NOT EXISTS "InactiveReason" character varying(500)', tbl);
+                END $$;
                 """);
         }
 
@@ -24,8 +33,19 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
         {
             migrationBuilder.Sql(
                 """
-                ALTER TABLE supplier_branch_assignments DROP COLUMN IF EXISTS "InactiveReason";
-                ALTER TABLE supplier_branch_assignments DROP COLUMN IF EXISTS "Status";
+                DO $$
+                DECLARE tbl text;
+                BEGIN
+                    IF to_regclass('public."SupplierBranch"') IS NOT NULL THEN
+                        tbl := '"SupplierBranch"';
+                    ELSIF to_regclass('public.supplier_branch_assignments') IS NOT NULL THEN
+                        tbl := 'supplier_branch_assignments';
+                    ELSE
+                        RETURN;
+                    END IF;
+                    EXECUTE format('ALTER TABLE %s DROP COLUMN IF EXISTS "InactiveReason"', tbl);
+                    EXECUTE format('ALTER TABLE %s DROP COLUMN IF EXISTS "Status"', tbl);
+                END $$;
                 """);
         }
     }

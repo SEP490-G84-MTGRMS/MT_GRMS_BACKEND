@@ -22,6 +22,7 @@ public class SupplierProductDto
     public int MinimumOrderQuantity { get; set; } = 1;
     public bool IsPrimarySupplier { get; set; }
     public string Status { get; set; } = "Active";
+    public int SyncedBranchesCount { get; set; }
 
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
@@ -35,6 +36,22 @@ public class AssignSupplierProductCommand
     public int MinimumOrderQuantity { get; set; } = 1;
     public bool IsPrimarySupplier { get; set; } = false;
     public string? SupplierProductCode { get; set; }
+}
+
+public class BatchAssignSupplierProductsCommand
+{
+    public List<Guid> ProductIds { get; set; } = new();
+    public string? DeliveryUoM { get; set; }
+    public decimal? AgreedWholesalePrice { get; set; }
+    public int MinimumOrderQuantity { get; set; } = 1;
+    public string? SupplierProductCode { get; set; }
+}
+
+public class BatchAssignSupplierProductsResultDto
+{
+    public int AssignedCount { get; set; }
+    public int SyncedBranchesCount { get; set; }
+    public List<SupplierProductDto> Items { get; set; } = new();
 }
 
 public class UpdateSupplierProductCommand

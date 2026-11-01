@@ -424,7 +424,7 @@ public static class DatabaseSeeder
             }
 
             // 6. Seed Additional Products & Supplier Linkages for Order Matrix
-            if (!await context.Products.IgnoreQueryFilters().AnyAsync(p => p.ProductCode == "SP-MI-HAOHAO-TC", ct))
+            if (!await context.SupplierProducts.IgnoreQueryFilters().AnyAsync(sp => sp.SupplierProductCode == "SP-MI-HAOHAO-TC", ct))
             {
                 logger.LogInformation("Seeding 20 Additional Grocery Products with Suppliers and Stocks...");
 
@@ -905,35 +905,46 @@ public static class DatabaseSeeder
 
                 foreach (var item in extraProducts)
                 {
-                    await context.Products.AddAsync(item.prod, ct);
-
-                    await context.SupplierProducts.AddAsync(new SupplierProduct
+                    var existingProd = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.ProductCode == item.prod.ProductCode, ct);
+                    var targetProd = existingProd ?? item.prod;
+                    if (existingProd == null)
                     {
-                        TenantId = DefaultTenantId,
-                        ProductId = item.prod.Id,
-                        SupplierId = item.supplierId,
-                        SupplierProductCode = item.prod.ProductCode,
-                        AgreedWholesalePrice = item.wholesalePrice,
-                        DeliveryUoM = item.prod.BaseUnit,
-                        MinimumOrderQuantity = item.moq,
-                        IsPrimarySupplier = true,
-                        Status = SupplierProductStatus.Active
-                    }, ct);
+                        await context.Products.AddAsync(item.prod, ct);
+                    }
+
+                    if (!await context.SupplierProducts.IgnoreQueryFilters().AnyAsync(sp => sp.ProductId == targetProd.Id && sp.SupplierId == item.supplierId, ct))
+                    {
+                        await context.SupplierProducts.AddAsync(new SupplierProduct
+                        {
+                            TenantId = DefaultTenantId,
+                            ProductId = targetProd.Id,
+                            SupplierId = item.supplierId,
+                            SupplierProductCode = targetProd.ProductCode,
+                            AgreedWholesalePrice = item.wholesalePrice,
+                            DeliveryUoM = targetProd.BaseUnit,
+                            MinimumOrderQuantity = item.moq,
+                            IsPrimarySupplier = true,
+                            Status = SupplierProductStatus.Active
+                        }, ct);
+                    }
 
                     foreach (var br in branches)
                     {
-                        await context.BranchStocks.AddAsync(new BranchStock
+                        if (!await context.BranchStocks.IgnoreQueryFilters().AnyAsync(bs => bs.BranchId == br.Id && bs.ProductId == targetProd.Id, ct))
                         {
-                            TenantId = DefaultTenantId,
-                            BranchId = br.Id,
-                            ProductId = item.prod.Id,
-                            SupplierId = item.supplierId,
-                            BatchCode = $"LOT-202610-{item.prod.ProductCode}",
-                            QuantityOnHand = item.prod.MinStock * 2,
-                            QuantityReserved = 0,
-                            LandedCostPerUnit = item.wholesalePrice,
-                            ShelfLocation = "KHO-CHÍNH"
-                        }, ct);
+                            await context.BranchStocks.AddAsync(new BranchStock
+                            {
+                                TenantId = DefaultTenantId,
+                                BranchId = br.Id,
+                                ProductId = targetProd.Id,
+                                SupplierId = item.supplierId,
+                                BatchCode = $"LOT-202610-{targetProd.ProductCode}",
+                                QuantityOnHand = targetProd.MinStock * 2,
+                                QuantityReserved = 0,
+                                LandedCostPerUnit = item.wholesalePrice,
+                                ShelfLocation = "KHO-CHÍNH"
+                            }, ct);
+                        }
                     }
                 }
 

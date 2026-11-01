@@ -212,10 +212,7 @@ public class BranchProductManagementTests
 
         public Task<(IReadOnlyList<BranchProductDto> Items, int TotalCount)> GetPagedBranchProductsAsync(
             Guid branchId,
-            string? searchTerm,
-            string? category,
-            string? status,
-            string? stockAlertFilter,
+            BranchProductQueryFilter filter,
             int pageIndex,
             int pageSize,
             CancellationToken cancellationToken = default)
@@ -230,6 +227,7 @@ public class BranchProductManagementTests
                 {
                     Id = s.Id,
                     BranchId = s.BranchId,
+                    BranchCode = branch?.BranchCode ?? "BR-01",
                     BranchName = branch?.Name ?? "Chi nhánh",
                     ProductId = s.ProductId,
                     Name = prod?.Name ?? "Sản phẩm",
@@ -249,6 +247,19 @@ public class BranchProductManagementTests
             }).ToList();
 
             return Task.FromResult(((IReadOnlyList<BranchProductDto>)items, items.Count));
+        }
+
+        public Task<(IReadOnlyList<BranchProductDto> Items, int TotalCount)> GetPagedBranchProductsAsync(
+            Guid branchId,
+            string? searchTerm,
+            string? category,
+            string? status,
+            string? stockAlertFilter,
+            int pageIndex,
+            int pageSize,
+            CancellationToken cancellationToken = default)
+        {
+            return GetPagedBranchProductsAsync(branchId, new BranchProductQueryFilter(), pageIndex, pageSize, cancellationToken);
         }
 
         public Task<IReadOnlyList<BranchSummaryDto>> GetBranchSummariesAsync(

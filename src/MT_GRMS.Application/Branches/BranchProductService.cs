@@ -46,10 +46,7 @@ public class BranchProductService : IBranchProductService
 
         var (items, totalCount) = await _repository.GetPagedBranchProductsAsync(
             branchId,
-            filter.SearchTerm,
-            filter.Category,
-            filter.Status,
-            filter.StockAlertFilter,
+            filter,
             pageIndex,
             pageSize,
             cancellationToken);
@@ -128,6 +125,7 @@ public class BranchProductService : IBranchProductService
                 {
                     Id = newStock.Id,
                     BranchId = branch.Id,
+                    BranchCode = branch.BranchCode,
                     BranchName = branch.Name,
                     ProductId = product.Id,
                     Name = product.Name,
@@ -202,6 +200,7 @@ public class BranchProductService : IBranchProductService
         {
             Id = stocks.First().Id,
             BranchId = branch.Id,
+            BranchCode = branch.BranchCode,
             BranchName = branch.Name,
             ProductId = product.Id,
             Name = product.Name,
@@ -253,6 +252,7 @@ public class BranchProductService : IBranchProductService
         {
             Id = stocks.First().Id,
             BranchId = branch.Id,
+            BranchCode = branch.BranchCode,
             BranchName = branch.Name,
             ProductId = product.Id,
             Name = product.Name,

@@ -10,6 +10,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/products")]
+[Route("api/v1/products")]
 public class ProductsController : BaseApiController
 {
     private readonly ICatalogService _catalogService;

@@ -10,6 +10,7 @@ public class BranchProductDto
 {
     public Guid Id { get; set; }
     public Guid BranchId { get; set; }
+    public string BranchCode { get; set; } = string.Empty;
     public string BranchName { get; set; } = string.Empty;
     public Guid ProductId { get; set; }
     public string Name { get; set; } = string.Empty;
@@ -49,6 +50,11 @@ public class BranchSummaryDto
 public class BranchProductQueryFilter
 {
     public string? SearchTerm { get; set; }
+    public string? BranchCode { get; set; }
+    public List<string>? Skus { get; set; }
+    public List<string>? Names { get; set; }
+    public List<string>? BranchCodes { get; set; }
+    public List<string>? BranchNames { get; set; }
     public string? Category { get; set; }
     public string? Status { get; set; }
     public string? StockAlertFilter { get; set; } // "ALL", "LOW", "OUT_OF_STOCK", "NORMAL"

@@ -608,6 +608,33 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         return await _context.Branches.FirstOrDefaultAsync(b => b.Id == branchId, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<Guid>> GetActiveBranchIdsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
+    {
+        return await _context.SupplierBranchAssignments
+            .Where(sba => sba.SupplierId == supplierId && sba.Status == SupplierStatus.Active && !sba.IsDeleted)
+            .Select(sba => sba.BranchId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<SupplierProduct>> GetActiveSupplierProductsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
+    {
+        return await _context.SupplierProducts
+            .Where(sp => sp.SupplierId == supplierId && sp.Status == SupplierProductStatus.Active && !sp.IsDeleted)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<bool> BranchStockExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
+    {
+        return await _context.BranchStocks
+            .AnyAsync(bs => bs.BranchId == branchId && bs.ProductId == productId && !bs.IsDeleted, cancellationToken);
+    }
+
+    public async Task AddBranchStockAsync(MT_GRMS.Domain.Entities.Inventory.BranchStock branchStock, CancellationToken cancellationToken = default)
+    {
+        await _context.BranchStocks.AddAsync(branchStock, cancellationToken);
+    }
+
     private static List<string> CleanTerms(IReadOnlyList<string>? values)
     {
         if (values == null || values.Count == 0) return [];

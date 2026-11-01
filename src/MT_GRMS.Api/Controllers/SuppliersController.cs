@@ -263,6 +263,20 @@ public class SuppliersController : BaseApiController
     }
 
     /// <summary>
+    /// Lấy danh mục sản phẩm theo tất cả Nhà cung cấp hoặc lọc theo nhà cung cấp (REQ-SP05)
+    /// </summary>
+    [HttpGet("products")]
+    public async Task<IActionResult> GetAllSupplierProducts(
+        [FromQuery] Guid? supplierId,
+        [FromQuery] SupplierProductQueryFilter filter,
+        CancellationToken cancellationToken)
+    {
+        var targetSupplierId = supplierId ?? Guid.Empty;
+        var result = await _supplierService.GetSupplierProductsAsync(targetSupplierId, filter, cancellationToken);
+        return Ok(ApiResponse<PagedResult<SupplierProductDto>>.Ok(result));
+    }
+
+    /// <summary>
     /// Lấy danh mục sản phẩm được gán cho Nhà cung cấp có phân trang và bộ lọc (REQ-SP05, REQ-SP06)
     /// </summary>
     [HttpGet("{id:guid}/products")]
@@ -286,6 +300,21 @@ public class SuppliersController : BaseApiController
     {
         var result = await _supplierService.AssignSupplierProductAsync(id, command, cancellationToken);
         return CreatedAtAction(nameof(GetSupplierProducts), new { id = result.SupplierId }, ApiResponse<SupplierProductDto>.Ok(result, "Gán sản phẩm cho nhà cung cấp thành công."));
+    }
+
+    /// <summary>
+    /// Gán đồng thời nhiều sản phẩm cho Nhà cung cấp và tự động phân bổ đến chi nhánh
+    /// </summary>
+    [HttpPost("{id:guid}/products/batch")]
+    public async Task<IActionResult> BatchAssignProducts(
+        Guid id,
+        [FromBody] BatchAssignSupplierProductsCommand command,
+        CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.BatchAssignSupplierProductsAsync(id, command, cancellationToken);
+        return Ok(ApiResponse<BatchAssignSupplierProductsResultDto>.Ok(
+            result,
+            $"Đã gán thành công {result.AssignedCount} sản phẩm cho nhà cung cấp và tự động phân bổ đến {result.SyncedBranchesCount} chi nhánh."));
     }
 
     /// <summary>

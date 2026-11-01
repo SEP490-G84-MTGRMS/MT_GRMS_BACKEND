@@ -54,4 +54,12 @@ public interface IPurchaseOrderRepository
     Task<string> GeneratePoCodeAsync(
         DateTime deliveryDate,
         CancellationToken cancellationToken = default);
+
+    Task<bool> UserExistsAsync(
+        string userId,
+        CancellationToken cancellationToken = default);
+
+    void AddPurchaseOrderDetail(PurchaseOrderDetail detail);
 }
+
+

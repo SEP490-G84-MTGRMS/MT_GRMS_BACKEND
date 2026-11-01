@@ -567,6 +567,16 @@ public class PurchaseOrderMatrixTests
             _poCounter++;
             return Task.FromResult($"PO-{deliveryDate:yyyyMMdd}-{_poCounter:D4}");
         }
+
+        public Task<bool> UserExistsAsync(string userId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
+        }
+
+        public void AddPurchaseOrderDetail(PurchaseOrderDetail detail)
+        {
+            // No-op in memory test
+        }
     }
 
     private class FakeUnitOfWork : IUnitOfWork

@@ -60,6 +60,88 @@ public class SupplierProductManagementTests
     }
 
     [Fact]
+    public async Task REQ_SP01_AssignProduct_AutomaticallySyncsToLinkedActiveBranches()
+    {
+        // Arrange
+        var supplier = CreateTestSupplier("Vinamilk", "NCC-VNM-001");
+        var product = CreateTestProduct("Sữa Tươi Tiệt Trùng 1L", "89312345601", "PRD-MILK-1L");
+        var branch1Id = Guid.NewGuid();
+        var branch2Id = Guid.NewGuid();
+
+        _repo.Suppliers.Add(supplier);
+        _repo.Products.Add(product);
+        _repo.BranchAssignments.Add(new SupplierBranchAssignment
+        {
+            SupplierId = supplier.Id,
+            BranchId = branch1Id,
+            Status = SupplierStatus.Active
+        });
+        _repo.BranchAssignments.Add(new SupplierBranchAssignment
+        {
+            SupplierId = supplier.Id,
+            BranchId = branch2Id,
+            Status = SupplierStatus.Active
+        });
+
+        var command = new AssignSupplierProductCommand
+        {
+            ProductId = product.Id,
+            DeliveryUoM = "Thùng",
+            AgreedWholesalePrice = 280000m,
+            MinimumOrderQuantity = 5,
+            IsPrimarySupplier = false,
+            SupplierProductCode = "VNM-TH-1L"
+        };
+
+        // Act
+        var result = await _service.AssignSupplierProductAsync(supplier.Id, command);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(2, result.SyncedBranchesCount);
+        Assert.Equal(2, _repo.BranchStocks.Count);
+        Assert.Contains(_repo.BranchStocks, bs => bs.BranchId == branch1Id && bs.ProductId == product.Id);
+        Assert.Contains(_repo.BranchStocks, bs => bs.BranchId == branch2Id && bs.ProductId == product.Id);
+    }
+
+    [Fact]
+    public async Task REQ_SP01_BatchAssignProducts_AssignsMultipleAndSyncsBranches()
+    {
+        // Arrange
+        var supplier = CreateTestSupplier("Unilever", "NCC-UNI-001");
+        var product1 = CreateTestProduct("Dầu gội Clear", "893111111", "PRD-CLEAR");
+        var product2 = CreateTestProduct("Bột giặt OMO", "893222222", "PRD-OMO");
+        var branchId = Guid.NewGuid();
+
+        _repo.Suppliers.Add(supplier);
+        _repo.Products.Add(product1);
+        _repo.Products.Add(product2);
+        _repo.BranchAssignments.Add(new SupplierBranchAssignment
+        {
+            SupplierId = supplier.Id,
+            BranchId = branchId,
+            Status = SupplierStatus.Active
+        });
+
+        var command = new BatchAssignSupplierProductsCommand
+        {
+            ProductIds = new List<Guid> { product1.Id, product2.Id },
+            AgreedWholesalePrice = 50000m,
+            MinimumOrderQuantity = 2
+        };
+
+        // Act
+        var result = await _service.BatchAssignSupplierProductsAsync(supplier.Id, command);
+
+        // Assert
+        Assert.Equal(2, result.AssignedCount);
+        Assert.Equal(1, result.SyncedBranchesCount);
+        Assert.Equal(2, _repo.SupplierProducts.Count);
+        Assert.Equal(2, _repo.BranchStocks.Count);
+        Assert.True(_uow.HasSaved);
+    }
+
+    [Fact]
     public async Task REQ_SP01_AssignProduct_DuplicateAssignment_ThrowsConflictException()
     {
         // Arrange (BR-SP01)
@@ -554,6 +636,37 @@ public class SupplierProductManagementTests
                 Name = "Chi nhánh mẫu",
                 IsActive = true
             });
+        }
+
+        public List<MT_GRMS.Domain.Entities.Inventory.BranchStock> BranchStocks { get; } = new();
+
+        public Task<IReadOnlyList<Guid>> GetActiveBranchIdsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
+        {
+            var branchIds = BranchAssignments
+                .Where(sba => sba.SupplierId == supplierId && sba.Status == SupplierStatus.Active && !sba.IsDeleted)
+                .Select(sba => sba.BranchId)
+                .Distinct()
+                .ToList();
+            return Task.FromResult<IReadOnlyList<Guid>>(branchIds);
+        }
+
+        public Task<IReadOnlyList<SupplierProduct>> GetActiveSupplierProductsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
+        {
+            var products = SupplierProducts
+                .Where(sp => sp.SupplierId == supplierId && sp.Status == SupplierProductStatus.Active && !sp.IsDeleted)
+                .ToList();
+            return Task.FromResult<IReadOnlyList<SupplierProduct>>(products);
+        }
+
+        public Task<bool> BranchStockExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(BranchStocks.Any(bs => bs.BranchId == branchId && bs.ProductId == productId && !bs.IsDeleted));
+        }
+
+        public Task AddBranchStockAsync(MT_GRMS.Domain.Entities.Inventory.BranchStock branchStock, CancellationToken cancellationToken = default)
+        {
+            BranchStocks.Add(branchStock);
+            return Task.CompletedTask;
         }
     }
 }

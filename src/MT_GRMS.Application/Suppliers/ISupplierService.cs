@@ -32,6 +32,7 @@ public interface ISupplierService
     // Supplier Product Management (REQ-SP01 đến REQ-SP06)
     Task<PagedResult<SupplierProductDto>> GetSupplierProductsAsync(Guid supplierId, SupplierProductQueryFilter filter, CancellationToken cancellationToken = default);
     Task<SupplierProductDto> AssignSupplierProductAsync(Guid supplierId, AssignSupplierProductCommand command, CancellationToken cancellationToken = default);
+    Task<BatchAssignSupplierProductsResultDto> BatchAssignSupplierProductsAsync(Guid supplierId, BatchAssignSupplierProductsCommand command, CancellationToken cancellationToken = default);
     Task<SupplierProductDto> UpdateSupplierProductAsync(Guid supplierId, Guid productId, UpdateSupplierProductCommand command, CancellationToken cancellationToken = default);
     Task<SupplierProductDto> ToggleSupplierProductStatusAsync(Guid supplierId, Guid productId, ToggleSupplierProductStatusRequest request, CancellationToken cancellationToken = default);
     Task<SupplierProductDto> SetPrimarySupplierAsync(Guid supplierId, Guid productId, SetPrimarySupplierRequest request, CancellationToken cancellationToken = default);

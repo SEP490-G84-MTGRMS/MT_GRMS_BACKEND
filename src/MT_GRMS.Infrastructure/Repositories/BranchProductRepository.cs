@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
@@ -25,12 +26,29 @@ public class BranchProductRepository : IBranchProductRepository
         _tenantContext = tenantContext;
     }
 
-    public async Task<(IReadOnlyList<BranchProductDto> Items, int TotalCount)> GetPagedBranchProductsAsync(
+    public Task<(IReadOnlyList<BranchProductDto> Items, int TotalCount)> GetPagedBranchProductsAsync(
         Guid branchId,
         string? searchTerm,
         string? category,
         string? status,
         string? stockAlertFilter,
+        int pageIndex,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        var filter = new BranchProductQueryFilter
+        {
+            SearchTerm = searchTerm,
+            Category = category,
+            Status = status,
+            StockAlertFilter = stockAlertFilter
+        };
+        return GetPagedBranchProductsAsync(branchId, filter, pageIndex, pageSize, cancellationToken);
+    }
+
+    public async Task<(IReadOnlyList<BranchProductDto> Items, int TotalCount)> GetPagedBranchProductsAsync(
+        Guid branchId,
+        BranchProductQueryFilter filter,
         int pageIndex,
         int pageSize,
         CancellationToken cancellationToken = default)
@@ -47,23 +65,54 @@ public class BranchProductRepository : IBranchProductRepository
             stockQuery = stockQuery.Where(bs => bs.BranchId == branchId);
         }
 
-        if (!string.IsNullOrWhiteSpace(searchTerm))
+        if (!string.IsNullOrWhiteSpace(filter.SearchTerm))
         {
-            var kw = searchTerm.Trim().ToLower();
+            var kw = filter.SearchTerm.Trim().ToLower();
             stockQuery = stockQuery.Where(bs =>
                 (bs.Product != null && bs.Product.Name.ToLower().Contains(kw)) ||
                 (bs.Product != null && bs.Product.ProductCode.ToLower().Contains(kw)) ||
-                (bs.Product != null && bs.Product.Barcode.ToLower().Contains(kw)));
+                (bs.Product != null && bs.Product.Barcode.ToLower().Contains(kw)) ||
+                (bs.Branch != null && bs.Branch.BranchCode.ToLower().Contains(kw)) ||
+                (bs.Branch != null && bs.Branch.Name.ToLower().Contains(kw)));
         }
 
-        if (!string.IsNullOrWhiteSpace(category) && !string.Equals(category, "all", StringComparison.OrdinalIgnoreCase))
+        var skuTerms = CleanTerms(filter.Skus);
+        if (skuTerms.Count > 0)
         {
-            stockQuery = stockQuery.Where(bs => bs.Product != null && bs.Product.Category != null && bs.Product.Category.Name == category);
+            stockQuery = WhereAnyContains(stockQuery, bs => bs.Product!.ProductCode, skuTerms, true);
         }
 
-        if (!string.IsNullOrWhiteSpace(status) && !string.Equals(status, "all", StringComparison.OrdinalIgnoreCase))
+        var nameTerms = CleanTerms(filter.Names);
+        if (nameTerms.Count > 0)
         {
-            stockQuery = stockQuery.Where(bs => bs.Product != null && bs.Product.Status == status);
+            stockQuery = WhereAnyContains(stockQuery, bs => bs.Product!.Name, nameTerms, true);
+        }
+
+        var branchCodeTerms = CleanTerms(filter.BranchCodes);
+        if (branchCodeTerms.Count > 0)
+        {
+            stockQuery = WhereAnyContains(stockQuery, bs => bs.Branch!.BranchCode, branchCodeTerms, true);
+        }
+        else if (!string.IsNullOrWhiteSpace(filter.BranchCode) && !string.Equals(filter.BranchCode, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            var code = filter.BranchCode.Trim().ToLower();
+            stockQuery = stockQuery.Where(bs => bs.Branch != null && bs.Branch.BranchCode.ToLower().Contains(code));
+        }
+
+        var branchNameTerms = CleanTerms(filter.BranchNames);
+        if (branchNameTerms.Count > 0)
+        {
+            stockQuery = WhereAnyContains(stockQuery, bs => bs.Branch!.Name, branchNameTerms, true);
+        }
+
+        if (!string.IsNullOrWhiteSpace(filter.Category) && !string.Equals(filter.Category, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            stockQuery = stockQuery.Where(bs => bs.Product != null && bs.Product.Category != null && bs.Product.Category.Name == filter.Category);
+        }
+
+        if (!string.IsNullOrWhiteSpace(filter.Status) && !string.Equals(filter.Status, "all", StringComparison.OrdinalIgnoreCase))
+        {
+            stockQuery = stockQuery.Where(bs => bs.Product != null && bs.Product.Status == filter.Status);
         }
 
         // Nhóm theo từng cặp (BranchId, ProductId)
@@ -73,6 +122,7 @@ public class BranchProductRepository : IBranchProductRepository
             {
                 bs.BranchId,
                 bs.ProductId,
+                BranchCode = bs.Branch!.BranchCode,
                 BranchName = bs.Branch!.Name,
                 ProductName = bs.Product!.Name,
                 ProductCode = bs.Product.ProductCode,
@@ -89,6 +139,7 @@ public class BranchProductRepository : IBranchProductRepository
             {
                 g.Key.BranchId,
                 g.Key.ProductId,
+                g.Key.BranchCode,
                 g.Key.BranchName,
                 g.Key.ProductName,
                 g.Key.ProductCode,
@@ -107,17 +158,18 @@ public class BranchProductRepository : IBranchProductRepository
             });
 
         // Áp dụng bộ lọc cảnh báo tồn kho
-        if (!string.IsNullOrWhiteSpace(stockAlertFilter) && !string.Equals(stockAlertFilter, "all", StringComparison.OrdinalIgnoreCase))
+        var stockAlert = filter.StockAlertFilter;
+        if (!string.IsNullOrWhiteSpace(stockAlert) && !string.Equals(stockAlert, "all", StringComparison.OrdinalIgnoreCase))
         {
-            if (string.Equals(stockAlertFilter, "OUT_OF_STOCK", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(stockAlert, "OUT_OF_STOCK", StringComparison.OrdinalIgnoreCase))
             {
                 grouped = grouped.Where(x => x.CurrentStock == 0);
             }
-            else if (string.Equals(stockAlertFilter, "LOW", StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(stockAlert, "LOW", StringComparison.OrdinalIgnoreCase))
             {
                 grouped = grouped.Where(x => x.CurrentStock > 0 && x.CurrentStock <= x.MinStock);
             }
-            else if (string.Equals(stockAlertFilter, "NORMAL", StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(stockAlert, "NORMAL", StringComparison.OrdinalIgnoreCase))
             {
                 grouped = grouped.Where(x => x.CurrentStock > x.MinStock);
             }
@@ -138,6 +190,7 @@ public class BranchProductRepository : IBranchProductRepository
         {
             Id = x.FirstStockId,
             BranchId = x.BranchId,
+            BranchCode = x.BranchCode,
             BranchName = x.BranchName,
             ProductId = x.ProductId,
             Name = x.ProductName,
@@ -156,6 +209,46 @@ public class BranchProductRepository : IBranchProductRepository
         }).ToList();
 
         return (dtos, totalCount);
+    }
+
+    private static List<string> CleanTerms(IReadOnlyList<string>? values)
+    {
+        if (values == null || values.Count == 0) return [];
+        return values
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v.Trim().ToLower())
+            .Distinct()
+            .ToList();
+    }
+
+    private static IQueryable<T> WhereAnyContains<T>(
+        IQueryable<T> query,
+        Expression<Func<T, string>> selector,
+        IReadOnlyList<string> terms,
+        bool ignoreCase)
+    {
+        if (terms.Count == 0) return query;
+
+        var parameter = selector.Parameters[0];
+        Expression source = selector.Body;
+        if (ignoreCase)
+        {
+            source = Expression.Call(source, nameof(string.ToLower), Type.EmptyTypes);
+        }
+
+        Expression? body = null;
+        foreach (var term in terms)
+        {
+            var contains = Expression.Call(
+                source,
+                nameof(string.Contains),
+                Type.EmptyTypes,
+                Expression.Constant(term));
+            body = body is null ? contains : Expression.OrElse(body, contains);
+        }
+
+        var predicate = Expression.Lambda<Func<T, bool>>(body!, parameter);
+        return query.Where(predicate);
     }
 
     public async Task<IReadOnlyList<BranchSummaryDto>> GetBranchSummariesAsync(

@@ -13,6 +13,13 @@ public interface IBranchProductRepository
 {
     Task<(IReadOnlyList<BranchProductDto> Items, int TotalCount)> GetPagedBranchProductsAsync(
         Guid branchId,
+        BranchProductQueryFilter filter,
+        int pageIndex,
+        int pageSize,
+        CancellationToken cancellationToken = default);
+
+    Task<(IReadOnlyList<BranchProductDto> Items, int TotalCount)> GetPagedBranchProductsAsync(
+        Guid branchId,
         string? searchTerm,
         string? category,
         string? status,

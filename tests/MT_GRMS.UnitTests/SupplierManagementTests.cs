@@ -350,6 +350,37 @@ public class SupplierManagementTests
         {
             return Task.FromResult(Branches.FirstOrDefault(x => x.Id == branchId));
         }
+
+        public List<MT_GRMS.Domain.Entities.Inventory.BranchStock> BranchStocks { get; } = new();
+
+        public Task<IReadOnlyList<Guid>> GetActiveBranchIdsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
+        {
+            var branchIds = BranchAssignments
+                .Where(sba => sba.SupplierId == supplierId && sba.Status == SupplierStatus.Active && !sba.IsDeleted)
+                .Select(sba => sba.BranchId)
+                .Distinct()
+                .ToList();
+            return Task.FromResult<IReadOnlyList<Guid>>(branchIds);
+        }
+
+        public Task<IReadOnlyList<SupplierProduct>> GetActiveSupplierProductsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
+        {
+            var products = SupplierProducts
+                .Where(sp => sp.SupplierId == supplierId && sp.Status == SupplierProductStatus.Active && !sp.IsDeleted)
+                .ToList();
+            return Task.FromResult<IReadOnlyList<SupplierProduct>>(products);
+        }
+
+        public Task<bool> BranchStockExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(BranchStocks.Any(bs => bs.BranchId == branchId && bs.ProductId == productId && !bs.IsDeleted));
+        }
+
+        public Task AddBranchStockAsync(MT_GRMS.Domain.Entities.Inventory.BranchStock branchStock, CancellationToken cancellationToken = default)
+        {
+            BranchStocks.Add(branchStock);
+            return Task.CompletedTask;
+        }
     }
 
 
