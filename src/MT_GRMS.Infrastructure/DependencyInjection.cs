@@ -12,6 +12,7 @@ using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Infrastructure.Repositories;
+using MT_GRMS.Infrastructure.Services.Printer;
 
 namespace MT_GRMS.Infrastructure;
 
@@ -37,7 +38,7 @@ public static class DependencyInjection
             connectionString = ParsePostgreSqlUri(connectionString);
         }
 
-        // Cấu hình DbContext kết nối Database thật (Database-First)
+        // Cấu hình DbContext kết nối Database thật
         services.AddDbContext<AppDbContext>((serviceProvider, options) =>
         {
             if (string.IsNullOrWhiteSpace(connectionString))
@@ -77,12 +78,15 @@ public static class DependencyInjection
         services.AddScoped<ICashbookRepository, CashbookRepository>();
         services.AddScoped<Application.Expenses.IExpenseRepository, ExpenseRepository>();
         services.AddScoped<Application.Debt.ICustomerDebtRepository, CustomerDebtRepository>();
-                services.AddScoped<Application.Reports.IPnLReportRepository, PnLReportRepository>();
+        services.AddScoped<Application.Reports.IPnLReportRepository, PnLReportRepository>();
         services.AddScoped<Application.Tax.IHouseholdTaxRepository, HouseholdTaxRepository>();
         services.AddScoped<Application.Tax.Security.IPinVerificationService, Services.PinVerificationService>();
         services.AddScoped<ISupplierRepository, SupplierRepository>();
         services.AddScoped<IBranchRepository, BranchRepository>();
         services.AddScoped<Application.Promotions.IPromotionRepository, PromotionRepository>();
+
+        // Đăng ký dịch vụ máy in nhiệt hóa đơn POS-58 (khổ in 43mm siêu thị mini)
+        services.AddScoped<IThermalPrintService, ThermalPrintService>();
 
         return services;
     }

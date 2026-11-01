@@ -1,8 +1,11 @@
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Application.Common;
-
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Application.Suppliers.Dtos;
 
@@ -10,6 +13,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/products")]
+[Route("api/v1/products")]
 public class ProductsController : BaseApiController
 {
     private readonly ICatalogService _catalogService;
@@ -20,7 +24,6 @@ public class ProductsController : BaseApiController
         _catalogService = catalogService;
         _supplierService = supplierService;
     }
-
 
     [HttpGet]
     public async Task<IActionResult> GetAll(CancellationToken cancellationToken)
@@ -36,6 +39,20 @@ public class ProductsController : BaseApiController
         if (result == null)
         {
             return NotFound(ApiResponse<object>.Fail("NOT_FOUND", "Không tìm thấy sản phẩm."));
+        }
+        return Ok(ApiResponse<ProductResponse>.Ok(result));
+    }
+
+    /// <summary>
+    /// Tra cứu sản phẩm theo mã vạch Barcode hoặc SKU phục vụ bán hàng POS & máy quét mã vạch USB HID
+    /// </summary>
+    [HttpGet("barcode/{barcode}")]
+    public async Task<IActionResult> GetByBarcode([FromRoute] string barcode, CancellationToken cancellationToken)
+    {
+        var result = await _catalogService.GetByBarcodeAsync(barcode, cancellationToken);
+        if (result == null)
+        {
+            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", $"Không tìm thấy sản phẩm với mã vạch hoặc mã hàng '{barcode}'."));
         }
         return Ok(ApiResponse<ProductResponse>.Ok(result));
     }
@@ -60,4 +77,3 @@ public class ProductsController : BaseApiController
         return Ok(ApiResponse<IReadOnlyList<ProductSupplierMappingDto>>.Ok(result));
     }
 }
-

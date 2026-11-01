@@ -38,8 +38,11 @@ public class AuthService : IAuthService
             throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
         }
 
-        var tenantId = request.TenantCode ?? "DEFAULT";
-        var role = "ADMIN";
+        var tenantUser = user.TenantUsers?.FirstOrDefault(tu => !string.IsNullOrWhiteSpace(request.TenantCode) && tu.TenantId == request.TenantCode)
+                         ?? user.TenantUsers?.FirstOrDefault();
+
+        var tenantId = tenantUser?.TenantId ?? (!string.IsNullOrWhiteSpace(request.TenantCode) ? request.TenantCode : "DEFAULT");
+        var role = tenantUser?.Role ?? "ADMIN";
 
         // 4. Đăng nhập thành công với thông tin user từ database
         var userInfo = new UserInfo(

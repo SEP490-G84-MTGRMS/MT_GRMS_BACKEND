@@ -37,7 +37,10 @@ public class MultiTenantMiddleware
         if (string.IsNullOrWhiteSpace(tenantContext.CurrentTenantId))
         {
             var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
-            var fallbackTenant = !string.IsNullOrWhiteSpace(headerTenantId) ? headerTenantId : "default-tenant";
+            // Nếu không truyền header hoặc truyền default-tenant, fallback về tenant chính của CSDL (tenant_mt_mart_01)
+            var fallbackTenant = (!string.IsNullOrWhiteSpace(headerTenantId) && headerTenantId != "default-tenant")
+                ? headerTenantId
+                : "tenant_mt_mart_01";
             tenantContext.SetContext(fallbackTenant, Guid.Empty, null);
         }
 

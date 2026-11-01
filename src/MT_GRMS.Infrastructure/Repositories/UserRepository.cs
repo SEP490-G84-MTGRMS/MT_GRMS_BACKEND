@@ -17,12 +17,17 @@ public class UserRepository : IUserRepository
 
     public async Task<User?> GetByIdAsync(string id, CancellationToken cancellationToken = default)
     {
-        return await _context.Users.FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
+        return await _context.Users
+            .Include(u => u.TenantUsers)
+            .FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
     }
 
     public async Task<User?> GetByUsernameAsync(string username, CancellationToken cancellationToken = default)
     {
-        return await _context.Users.FirstOrDefaultAsync(u => u.UserName == username, cancellationToken);
+        var clean = username.Trim().ToLower();
+        return await _context.Users
+            .Include(u => u.TenantUsers)
+            .FirstOrDefaultAsync(u => u.UserName.ToLower() == clean || u.Email.ToLower() == clean || (u.Phone != null && u.Phone.Replace(" ", "") == clean.Replace(" ", "")), cancellationToken);
     }
 
     public async Task<IReadOnlyList<User>> FindAsync(Expression<Func<User, bool>> predicate, CancellationToken cancellationToken = default)
