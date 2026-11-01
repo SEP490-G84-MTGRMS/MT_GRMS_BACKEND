@@ -34,8 +34,8 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
         builder.Property(x => x.DebtAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("active");
 
-        builder.HasIndex(x => x.CitizenId).IsUnique();
-        builder.HasIndex(x => new { x.TenantId, x.EmployeeCode }).IsUnique();
+        builder.HasIndex(x => new { x.TenantId, x.CitizenId }).IsUnique().HasFilter("\"IsDeleted\" = false");
+        builder.HasIndex(x => new { x.TenantId, x.EmployeeCode }).IsUnique().HasFilter("\"IsDeleted\" = false");
 
         builder.HasOne(x => x.Branch)
             .WithMany()

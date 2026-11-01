@@ -5,6 +5,7 @@ using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Batches;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Catalog;
+using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders;
 
@@ -43,11 +44,8 @@ public static class DependencyInjection
         services.AddScoped<SupplierReturns.ISupplierReturnService, SupplierReturns.SupplierReturnService>();
         services.AddScoped<AiPipeline.IAiRecommendationService, AiPipeline.AiRecommendationService>();
         services.AddScoped<Promotions.IPromotionService, Promotions.PromotionService>();
+        services.AddScoped<IEmployeeService, EmployeeService>();
 
         return services;
     }
 }
-
-
-
-
