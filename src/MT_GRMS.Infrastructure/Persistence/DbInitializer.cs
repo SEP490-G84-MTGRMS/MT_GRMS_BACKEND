@@ -21,7 +21,35 @@ public static class DbInitializer
         // 1. Tự động áp dụng Migrations để tạo CSDL và toàn bộ 34 bảng nếu chưa có
         if (context.Database.IsRelational())
         {
+            // Đảm bảo bảng supplier_branch_assignments tồn tại trước khi chạy Migrations
+            // để tránh lỗi 42P01: relation "supplier_branch_assignments" does not exist khi migration thực hiện ALTER TABLE
+            await context.Database.ExecuteSqlRawAsync(@"
+                CREATE TABLE IF NOT EXISTS supplier_branch_assignments (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""BranchId"" uuid NOT NULL,
+                    ""SupplierId"" uuid NOT NULL,
+                    ""TenantId"" text NOT NULL,
+                    ""CreatedBy"" uuid,
+                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""UpdatedAt"" timestamp without time zone,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT false
+                );
+            ");
+
             await context.Database.MigrateAsync();
+
+            // Đảm bảo đồng bộ cấu trúc cột và bảng sau migration RemoveDisplayOrderAndProductCombos
+            await context.Database.ExecuteSqlRawAsync(@"
+                ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];
+                ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
+                ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
+                ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
+                DROP TABLE IF EXISTS ""ProductCombos"";
+                DROP INDEX IF EXISTS ""IX_Products_TenantID_ProductCode"";
+                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_TenantID_ProductCode"" ON ""Products"" (""TenantID"", ""ProductCode"") WHERE ""IsDeleted"" = false;
+                DROP INDEX IF EXISTS ""IX_Products_Barcode"";
+                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_Barcode"" ON ""Products"" (""Barcode"") WHERE ""IsDeleted"" = false AND ""Barcode"" IS NOT NULL;
+            ");
         }
         else
         {

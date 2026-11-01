@@ -98,11 +98,48 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
     {
         var normalizedPrefix = prefix.Trim().ToUpper();
         return await _dbSet
-            .Where(p => !p.IsDeleted &&
-                        p.ProductCode.StartsWith(normalizedPrefix) &&
+            .IgnoreQueryFilters()
+            .Where(p => p.ProductCode.StartsWith(normalizedPrefix) &&
                         p.ProductCode.Length == totalLength)
             .OrderByDescending(p => p.ProductCode)
             .Select(p => p.ProductCode)
             .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<bool> HasOrdersAsync(Guid productId, CancellationToken cancellationToken = default)
+    {
+        return await _context.OrderDetails.AnyAsync(od => od.ProductId == productId, cancellationToken);
+    }
+
+    public async Task<HashSet<Guid>> GetProductIdsWithOrdersAsync(IEnumerable<Guid> productIds, CancellationToken cancellationToken = default)
+    {
+        var idList = productIds.Distinct().ToList();
+        if (!idList.Any()) return new HashSet<Guid>();
+
+        var orderedIds = await _context.OrderDetails
+            .Where(od => idList.Contains(od.ProductId))
+            .Select(od => od.ProductId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        return orderedIds.ToHashSet();
+    }
+
+    public async Task DeleteWithUnitsAsync(Product product, CancellationToken cancellationToken = default)
+    {
+        product.IsDeleted = true;
+        product.UpdatedAt = DateTime.UtcNow;
+        _dbSet.Update(product);
+
+        var units = await _context.ProductUnits
+            .Where(u => u.ProductId == product.Id && !u.IsDeleted)
+            .ToListAsync(cancellationToken);
+
+        foreach (var unit in units)
+        {
+            unit.IsDeleted = true;
+            unit.UpdatedAt = DateTime.UtcNow;
+            _context.ProductUnits.Update(unit);
+        }
     }
 }

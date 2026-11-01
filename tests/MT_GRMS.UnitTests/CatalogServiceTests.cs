@@ -139,6 +139,28 @@ public class CatalogServiceTests
         {
             entity.IsDeleted = true;
         }
+
+        public HashSet<Guid> OrderedProductIds { get; } = new();
+
+        public Task<bool> HasOrdersAsync(Guid productId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(OrderedProductIds.Contains(productId));
+        }
+
+        public Task<HashSet<Guid>> GetProductIdsWithOrdersAsync(IEnumerable<Guid> productIds, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(productIds.Where(id => OrderedProductIds.Contains(id)).ToHashSet());
+        }
+
+        public Task DeleteWithUnitsAsync(Product product, CancellationToken cancellationToken = default)
+        {
+            product.IsDeleted = true;
+            foreach (var unit in product.Units)
+            {
+                unit.IsDeleted = true;
+            }
+            return Task.CompletedTask;
+        }
     }
 
     private class FakeCategoryRepo : ICategoryRepository
@@ -331,6 +353,8 @@ public class CatalogServiceTests
 
         var prodId = Guid.NewGuid();
         var product = new Product { Id = prodId, Name = "Sản phẩm test", ProductCode = "SP-DEL", Barcode = "DEL123" };
+        var unit = new ProductUnit(prodId, "Thùng", 10, 100000, "BARCODE-THUNG");
+        product.Units.Add(unit);
         fakeProdRepo.Products.Add(product);
 
         var service = new CatalogService(fakeProdRepo, fakeCatRepo, fakeUow, fakeTenantContext);
@@ -340,7 +364,30 @@ public class CatalogServiceTests
 
         // Assert
         Assert.True(product.IsDeleted);
+        Assert.True(unit.IsDeleted);
         Assert.True(fakeUow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task DeleteProductAsync_WhenProductHasOrders_ThrowsBusinessException()
+    {
+        // Arrange
+        var fakeProdRepo = new FakeProductRepository();
+        var fakeCatRepo = new FakeCategoryRepo();
+        var fakeUow = new FakeUnitOfWork();
+        var fakeTenantContext = new FakeTenantContext();
+
+        var prodId = Guid.NewGuid();
+        var product = new Product { Id = prodId, Name = "Sản phẩm đã có đơn hàng", ProductCode = "SP-ORDERED" };
+        fakeProdRepo.Products.Add(product);
+        fakeProdRepo.OrderedProductIds.Add(prodId);
+
+        var service = new CatalogService(fakeProdRepo, fakeCatRepo, fakeUow, fakeTenantContext);
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.DeleteProductAsync(prodId));
+        Assert.Equal("PRODUCT_HAS_ORDERS", ex.ErrorCode);
+        Assert.False(product.IsDeleted);
     }
 
     [Fact]

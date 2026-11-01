@@ -32,8 +32,12 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(x => x.HasBatches).HasDefaultValue(false);
         builder.Property(x => x.IsFavorite).HasDefaultValue(false);
 
-        builder.HasIndex(x => x.Barcode).IsUnique();
-        builder.HasIndex(x => new { x.TenantId, x.ProductCode }).IsUnique();
+        builder.HasIndex(x => x.Barcode)
+            .IsUnique()
+            .HasFilter("\"IsDeleted\" = false AND \"Barcode\" IS NOT NULL");
+        builder.HasIndex(x => new { x.TenantId, x.ProductCode })
+            .IsUnique()
+            .HasFilter("\"IsDeleted\" = false");
 
         builder.HasOne(x => x.Category)
             .WithMany(c => c.Products)

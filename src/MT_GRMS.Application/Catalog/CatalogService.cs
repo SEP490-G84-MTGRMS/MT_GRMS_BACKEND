@@ -30,7 +30,7 @@ public class CatalogService : ICatalogService
         return role is "SUPER_ADMIN" or "STORE_OWNER" or "BRANCH_MANAGER" or "StoreOwner" or "Manager";
     }
 
-    private static ProductResponse MapToResponse(Product p, bool canViewCostPrice)
+    private static ProductResponse MapToResponse(Product p, bool canViewCostPrice, bool hasOrders = false)
     {
         var imageUrls = p.ImageUrls ?? new List<string>();
         var avatar = imageUrls.FirstOrDefault();
@@ -57,7 +57,8 @@ public class CatalogService : ICatalogService
             p.IsFavorite,
             p.CreatedAt,
             p.UpdatedAt,
-            imageUrls
+            imageUrls,
+            hasOrders
         );
     }
 
@@ -65,8 +66,10 @@ public class CatalogService : ICatalogService
     {
         var (items, totalCount) = await _productRepository.GetPagedListAsync(filter, cancellationToken);
         var canSeeCost = CanViewCostPrice();
+        var itemIds = items.Select(x => x.Id).ToList();
+        var productIdsWithOrders = await _productRepository.GetProductIdsWithOrdersAsync(itemIds, cancellationToken);
 
-        var dtos = items.Select(p => MapToResponse(p, canSeeCost)).ToList();
+        var dtos = items.Select(p => MapToResponse(p, canSeeCost, productIdsWithOrders.Contains(p.Id))).ToList();
 
         return new PagedResult<ProductResponse>
         {
@@ -82,7 +85,8 @@ public class CatalogService : ICatalogService
         var product = await _productRepository.GetByIdWithCategoryAsync(id, cancellationToken);
         if (product == null) return null;
 
-        return MapToResponse(product, CanViewCostPrice());
+        var hasOrders = await _productRepository.HasOrdersAsync(id, cancellationToken);
+        return MapToResponse(product, CanViewCostPrice(), hasOrders);
     }
 
     public async Task<ProductResponse> CreateProductAsync(ProductCreateRequest request, CancellationToken cancellationToken = default)
@@ -278,7 +282,12 @@ public class CatalogService : ICatalogService
             throw new NotFoundException("Sản phẩm", id);
         }
 
-        _productRepository.Delete(product);
+        if (await _productRepository.HasOrdersAsync(id, cancellationToken))
+        {
+            throw new BusinessException("PRODUCT_HAS_ORDERS", "Sản phẩm đã có đơn hàng (Order) phát sinh, không thể xóa mà chỉ được phép chuyển sang trạng thái Ngừng kinh doanh.");
+        }
+
+        await _productRepository.DeleteWithUnitsAsync(product, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
@@ -286,6 +295,8 @@ public class CatalogService : ICatalogService
     {
         var (items, _) = await _productRepository.GetPagedListAsync(new ProductQueryFilter { PageSize = 1000 }, cancellationToken);
         var canSeeCost = CanViewCostPrice();
-        return items.Select(p => MapToResponse(p, canSeeCost)).ToList();
+        var itemIds = items.Select(x => x.Id).ToList();
+        var productIdsWithOrders = await _productRepository.GetProductIdsWithOrdersAsync(itemIds, cancellationToken);
+        return items.Select(p => MapToResponse(p, canSeeCost, productIdsWithOrders.Contains(p.Id))).ToList();
     }
 }

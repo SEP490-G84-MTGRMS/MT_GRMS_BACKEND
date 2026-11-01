@@ -24,7 +24,8 @@ public record ProductResponse(
     bool IsFavorite,
     DateTime CreatedAt,
     DateTime? UpdatedAt,
-    List<string>? ImageUrls = null
+    List<string>? ImageUrls = null,
+    bool HasOrders = false
 )
 {
     // Backward compatibility aliases
@@ -33,6 +34,7 @@ public record ProductResponse(
     public decimal BasePrice => SellingPrice;
     public string UnitName => BaseUnit;
     public bool IsActive => Status == "Active";
+    public bool HasTransactions => HasOrders;
 }
 
 [method: JsonConstructor]

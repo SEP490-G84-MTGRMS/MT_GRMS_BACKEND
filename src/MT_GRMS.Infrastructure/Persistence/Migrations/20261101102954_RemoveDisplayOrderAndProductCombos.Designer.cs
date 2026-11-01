@@ -13,8 +13,8 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace MT_GRMS.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    [Migration("20261031185633_AddProductImageUrlsAndUnitCode")]
-    partial class AddProductImageUrlsAndUnitCode
+    [Migration("20261101102954_RemoveDisplayOrderAndProductCombos")]
+    partial class RemoveDisplayOrderAndProductCombos
     {
         /// <inheritdoc />
         protected override void BuildTargetModel(ModelBuilder modelBuilder)
@@ -231,10 +231,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("ProductID");
 
-                    b.Property<string>("UnitCode")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
                     b.Property<string>("UnitName")
                         .IsRequired()
                         .HasMaxLength(50)
@@ -246,8 +242,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("ProductId");
-
-                    b.HasIndex("UnitCode");
 
                     b.ToTable("ProductUnits", (string)null);
                 });
