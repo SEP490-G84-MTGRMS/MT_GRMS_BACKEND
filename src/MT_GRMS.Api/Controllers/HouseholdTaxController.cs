@@ -24,6 +24,8 @@ public class HouseholdTaxController : BaseApiController
         [FromQuery] int? periodNumber,
         [FromQuery] Guid? branchId,
         [FromQuery] TaxCalculationMethod? method,
+        [FromQuery] TaxCalculationMethod? calculationMethod,
+        [FromQuery] string? tier2Method,
         [FromQuery] bool? applyVatReduction,
         [FromQuery] decimal? vatReductionPercentage,
         [FromQuery] decimal? customVatRate,
@@ -36,7 +38,8 @@ public class HouseholdTaxController : BaseApiController
             PeriodType = periodType ?? TaxPeriodType.Quarter,
             PeriodNumber = periodNumber ?? 1,
             BranchId = branchId,
-            CalculationMethod = method ?? TaxCalculationMethod.RevenuePercentage,
+            CalculationMethod = calculationMethod ?? method ?? TaxCalculationMethod.RevenuePercentage,
+            Tier2Method = tier2Method ?? "REVENUE_EXCESS",
             ApplyVatReduction2026 = applyVatReduction ?? false,
             VatReductionPercentage = vatReductionPercentage,
             CustomVatRate = customVatRate,
@@ -122,6 +125,39 @@ public class HouseholdTaxController : BaseApiController
     {
         var isValid = await _taxService.VerifySnapshotIntegrityAsync(id, ct);
         return Ok(ApiResponse<object>.Ok(new { SnapshotId = id, IsIntegrityValid = isValid }, isValid ? "Chữ ký số hợp lệ, dữ liệu toàn vẹn." : "Cảnh báo: Dữ liệu snapshot có dấu hiệu bị can thiệp trái phép!"));
+    }
+
+    [HttpGet("export-excel")]
+    public async Task<IActionResult> ExportExcel(
+        [FromQuery] int? year,
+        [FromQuery] TaxPeriodType? periodType,
+        [FromQuery] int? periodNumber,
+        [FromQuery] Guid? branchId,
+        [FromQuery] TaxCalculationMethod? method,
+        [FromQuery] TaxCalculationMethod? calculationMethod,
+        [FromQuery] string? tier2Method,
+        [FromQuery] bool? applyVatReduction,
+        [FromQuery] decimal? vatReductionPercentage,
+        [FromServices] ITaxExportService exportService,
+        CancellationToken ct)
+    {
+        var filter = new HouseholdTaxFilterDto
+        {
+            Year = year ?? DateTime.UtcNow.Year,
+            PeriodType = periodType ?? TaxPeriodType.Quarter,
+            PeriodNumber = periodNumber ?? 1,
+            BranchId = branchId,
+            CalculationMethod = calculationMethod ?? method ?? TaxCalculationMethod.RevenuePercentage,
+            Tier2Method = tier2Method ?? "REVENUE_EXCESS",
+            ApplyVatReduction2026 = applyVatReduction ?? false,
+            VatReductionPercentage = vatReductionPercentage
+        };
+
+        var bytes = await exportService.ExportTaxSummaryToExcelAsync(filter, ct);
+        var pCode = filter.PeriodType == TaxPeriodType.Quarter ? $"Q{filter.PeriodNumber}" : $"T{filter.PeriodNumber}";
+        var fileName = $"BaoCaoThue_{filter.Year}_{pCode}.xlsx";
+
+        return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
     }
 }
 

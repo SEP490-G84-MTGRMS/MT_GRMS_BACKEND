@@ -97,6 +97,7 @@ public partial class AppDbContext : DbContext
 
     // 8. Household Tax Module (FE-19 TT 152/2025/TT-BTC)
     public virtual DbSet<HouseholdTaxSnapshot> HouseholdTaxSnapshots { get; set; } = null!;
+    public virtual DbSet<HouseholdTaxYearSetting> HouseholdTaxYearSettings { get; set; } = null!;
 
     // 9. Phân hệ Nhân sự, Ca kíp & Tiền lương (4 bảng)
     public virtual DbSet<Employee> Employees { get; set; } = null!;
