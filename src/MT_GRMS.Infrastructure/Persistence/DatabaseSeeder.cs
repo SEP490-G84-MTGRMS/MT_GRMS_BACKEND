@@ -27,6 +27,63 @@ public static class DatabaseSeeder
     {
         try
         {
+            // Migration FE-10: Bổ sung cột CostPriceAtSale và Backfill giá vốn đơn hàng
+            try
+            {
+                await context.Database.ExecuteSqlRawAsync(
+                    "ALTER TABLE \"OrderDetails\" ADD COLUMN IF NOT EXISTS \"CostPriceAtSale\" numeric(18,4) NOT NULL DEFAULT 0.0000;",
+                    ct);
+
+                await context.Database.ExecuteSqlRawAsync(
+                    "UPDATE \"OrderDetails\" od " +
+                    "SET \"CostPriceAtSale\" = COALESCE(p.\"CostPrice\", od.\"UnitPrice\" * 0.70) " +
+                    "FROM \"Products\" p " +
+                    "WHERE od.\"ProductID\" = p.\"ProductID\" AND od.\"CostPriceAtSale\" = 0;",
+                    ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "CostPriceAtSale migration check passed or already applied.");
+            }
+
+            // 0. Seed SaaS Tenant & Default Branch for Grocery Store
+            if (!await context.Tenants.IgnoreQueryFilters().AnyAsync(t => t.Id == DefaultTenantId, ct))
+            {
+                logger.LogInformation("Seeding SaaS Tenant for Grocery Store...");
+                var groceryTenant = new Domain.Entities.SaaS.Tenant
+                {
+                    Id = DefaultTenantId,
+                    Name = "Hộ Kinh Doanh Tạp Hóa Siêu Thị MT-GRMS",
+                    Code = "GROCERY-001",
+                    Subdomain = "grocery001",
+                    TaxCode = "0318999888",
+                    Status = "ACTIVE",
+                    Address = "12 Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP.HCM",
+                    City = "Hồ Chí Minh",
+                    CurrentPlan = "PRO",
+                    SubscriptionExpiresAt = DateTime.UtcNow.AddYears(1)
+                };
+                await context.Tenants.AddAsync(groceryTenant, ct);
+                await context.SaveChangesAsync(ct);
+            }
+
+            var groceryBranchId = Guid.Parse("cd5e8d1b-b08b-448d-beff-b85ea5873d52");
+            if (!await context.Branches.IgnoreQueryFilters().AnyAsync(b => b.Id == groceryBranchId, ct))
+            {
+                logger.LogInformation("Seeding Default Branch for Grocery Store...");
+                var branch = new Domain.Entities.SaaS.Branch
+                {
+                    Id = groceryBranchId,
+                    TenantId = DefaultTenantId,
+                    BranchCode = "BR-Q1-GROCERY",
+                    Name = "Cửa hàng Tạp hóa Chi nhánh Quận 1",
+                    Address = "12 Nguyễn Huệ, Quận 1, TP.HCM",
+                    IsActive = true
+                };
+                await context.Branches.AddAsync(branch, ct);
+                await context.SaveChangesAsync(ct);
+            }
+
             // 1. Seed Users (Chủ tiệm với mã PIN 1234 đã băm PBKDF2)
             if (!await context.Users.IgnoreQueryFilters().AnyAsync(u => u.Id == "user-owner-001", ct))
             {

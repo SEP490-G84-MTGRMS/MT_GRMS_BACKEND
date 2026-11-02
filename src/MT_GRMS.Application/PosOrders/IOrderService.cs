@@ -24,6 +24,11 @@ public interface IOrderService
     Task<(IReadOnlyList<OrderResponse> Items, int TotalCount)> GetOrdersAsync(OrderFilterRequest filter, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Lấy danh sách đơn hàng theo chi nhánh, khách hàng hoặc khoảng thời gian
+    /// </summary>
+    Task<List<OrderResponse>> GetOrdersAsync(Guid? branchId = null, Guid? customerId = null, DateTime? fromDate = null, DateTime? toDate = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// In hóa đơn nhiệt POS-58 (khổ in 43mm siêu thị mini / tạp hóa) gửi thẳng qua Windows Print Spooler RAW
     /// </summary>
     Task<bool> PrintOrderInvoiceAsync(Guid orderId, PrintOrderRequest? printRequest = null, CancellationToken cancellationToken = default);

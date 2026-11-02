@@ -18,22 +18,24 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
 
     public async Task<decimal> GetAnnualAccumulatedRevenueAsync(int year, DateTime upToDateUtc, CancellationToken cancellationToken = default)
     {
-        var startOfYearUtc = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var vnTz = HouseholdTaxService.GetVietnamTimeZone();
+        var startOfYearVn = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
+        var startOfYearUtc = TimeZoneInfo.ConvertTimeToUtc(startOfYearVn, vnTz);
 
         var orderGross = await _context.Orders
-            .Where(o => o.CreatedAt >= startOfYearUtc && o.CreatedAt <= upToDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"))
+            .Where(o => o.CreatedAt >= startOfYearUtc && o.CreatedAt < upToDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid" || o.PaymentStatus == "DEBT" || o.PaymentStatus == "Debt") && o.Status != "Cancelled")
             .SumAsync(o => (decimal?)o.TotalAmount, cancellationToken) ?? 0m;
 
         var orderDiscounts = await _context.Orders
-            .Where(o => o.CreatedAt >= startOfYearUtc && o.CreatedAt <= upToDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"))
+            .Where(o => o.CreatedAt >= startOfYearUtc && o.CreatedAt < upToDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid" || o.PaymentStatus == "DEBT" || o.PaymentStatus == "Debt") && o.Status != "Cancelled")
             .SumAsync(o => (decimal?)o.DiscountAmount, cancellationToken) ?? 0m;
 
         var returns = await _context.CustomerDebtEntries
-            .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= startOfYearUtc && e.OccurredAtUtc <= upToDateUtc)
+            .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= startOfYearUtc && e.OccurredAtUtc < upToDateUtc)
             .SumAsync(e => (decimal?)e.Amount, cancellationToken) ?? 0m;
 
         var netRevenue = orderGross - orderDiscounts - returns;
-        return Math.Max(0, netRevenue);
+        return netRevenue;
     }
 
     public async Task<(decimal GrossRevenue, decimal DiscountAmount, decimal ReturnAmount)> GetPeriodRevenueAsync(
@@ -48,7 +50,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             orderQuery = orderQuery.Where(o => o.BranchId == branchId.Value);
         }
 
-        orderQuery = orderQuery.Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt <= toDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"));
+        orderQuery = orderQuery.Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt < toDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid" || o.PaymentStatus == "DEBT" || o.PaymentStatus == "Debt") && o.Status != "Cancelled");
 
         var gross = await orderQuery.SumAsync(o => (decimal?)o.TotalAmount, cancellationToken) ?? 0m;
         var discounts = await orderQuery.SumAsync(o => (decimal?)o.DiscountAmount, cancellationToken) ?? 0m;
@@ -60,7 +62,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         }
 
         var returns = await returnQuery
-            .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc <= toDateUtc)
+            .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc < toDateUtc)
             .SumAsync(e => (decimal?)e.Amount, cancellationToken) ?? 0m;
 
         return (gross, discounts, returns);
@@ -101,6 +103,26 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         return GetPeriodOpexAsync(fromDateUtc, toDateUtc, branchId, cancellationToken);
     }
 
+    public async Task<List<ExpenseVoucher>> GetDeductibleExpenseVouchersAsync(
+        DateTime fromDateUtc,
+        DateTime toDateUtc,
+        Guid? branchId,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _context.ExpenseVouchers.AsNoTracking().Where(v =>
+            v.ExpenseDate >= fromDateUtc &&
+            v.ExpenseDate <= toDateUtc &&
+            v.IsTaxDeductible &&
+            (v.Status == ExpenseVoucherStatus.Paid || v.Status == ExpenseVoucherStatus.Approved));
+
+        if (branchId.HasValue)
+        {
+            query = query.Where(v => v.BranchId == branchId.Value);
+        }
+
+        return await query.OrderBy(v => v.ExpenseDate).ToListAsync(cancellationToken);
+    }
+
     public async Task<(decimal TotalCogs, bool IsEstimated)> GetPeriodCogsAsync(
         DateTime fromDateUtc,
         DateTime toDateUtc,
@@ -112,7 +134,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         {
             orderQuery = orderQuery.Where(o => o.BranchId == branchId.Value);
         }
-        orderQuery = orderQuery.Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt <= toDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"));
+        orderQuery = orderQuery.Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt < toDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid" || o.PaymentStatus == "DEBT" || o.PaymentStatus == "Debt") && o.Status != "Cancelled");
 
         var orders = await orderQuery.ToListAsync(cancellationToken);
 
@@ -129,10 +151,25 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         {
             foreach (var item in order.Items)
             {
-                if (productCostDict.TryGetValue(item.ProductId, out var costPrice) && costPrice > 0)
+                decimal itemCost = 0m;
+                if (item.CostPriceAtSale > 0)
                 {
-                    actualCogs += item.Quantity * costPrice;
+                    itemCost = item.CostPriceAtSale;
                     hasAnyRealCost = true;
+                }
+                else if (productCostDict.TryGetValue(item.ProductId, out var costPrice) && costPrice > 0)
+                {
+                    itemCost = costPrice;
+                    hasAnyRealCost = true;
+                }
+
+                if (hasAnyRealCost)
+                {
+                    actualCogs += item.Quantity * itemCost;
+                }
+                else
+                {
+                    actualCogs += item.Quantity * item.UnitPrice * 0.70m;
                 }
             }
         }
@@ -144,7 +181,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             returnQuery = returnQuery.Where(e => e.BranchId == branchId.Value);
         }
         var salesReturns = await returnQuery
-            .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc <= toDateUtc)
+            .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc < toDateUtc)
             .SumAsync(e => (decimal?)e.Amount, cancellationToken) ?? 0m;
 
         if (!hasAnyRealCost)
@@ -187,7 +224,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         {
             orderQuery = orderQuery.Where(o => o.BranchId == branchId.Value);
         }
-        orderQuery = orderQuery.Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt <= toDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"));
+        orderQuery = orderQuery.Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt < toDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid" || o.PaymentStatus == "DEBT" || o.PaymentStatus == "Debt") && o.Status != "Cancelled");
 
         var orders = await orderQuery
             .OrderBy(o => o.CreatedAt)
@@ -213,7 +250,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             .ToListAsync(cancellationToken);
 
         // 1. Phân loại theo Nhóm 1 (Dưới 1 tỷ): Dùng mẫu S1a-HKD
-        if (group == HouseholdTaxGroup.Group1_Under1B && (!bookType.HasValue || bookType == AccountingBookType.S1a_RevenueGroup1))
+        if ((!bookType.HasValue && group == HouseholdTaxGroup.Group1_Under1B) || bookType == AccountingBookType.S1a_RevenueGroup1)
         {
             result.AddRange(orders.Select(o => new AccountingBookEntryDto
             {
@@ -228,8 +265,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         }
 
         // 2. Phân loại theo Nhóm 2 (Phương pháp tỷ lệ % doanh thu): Dùng mẫu S2a-HKD
-        if (group == HouseholdTaxGroup.Group2_1BTo3B && method == TaxCalculationMethod.RevenuePercentage &&
-            (!bookType.HasValue || bookType == AccountingBookType.S2a_RevenueGroup2))
+        if ((!bookType.HasValue && group == HouseholdTaxGroup.Group2_1BTo3B && method == TaxCalculationMethod.RevenuePercentage) || bookType == AccountingBookType.S2a_RevenueGroup2)
         {
             result.AddRange(orders.Select(o => new AccountingBookEntryDto
             {
@@ -244,81 +280,154 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         }
 
         // 3. Phân loại theo Phương pháp Kê khai (Nhóm 3, 4 hoặc hộ lựa chọn): Bộ sổ S2b, S2c, S2d, S2e
-        if (method == TaxCalculationMethod.DeclarationBased || group == HouseholdTaxGroup.Group4_Over50B)
+        // S2b-HKD: Sổ chi tiết doanh thu bán hàng hóa, dịch vụ kê khai
+        if ((!bookType.HasValue && (method == TaxCalculationMethod.DeclarationBased || group == HouseholdTaxGroup.Group4_Over50B)) || bookType == AccountingBookType.S2b_RevenueDeclaration)
         {
-            // S2b-HKD: Sổ chi tiết doanh thu bán hàng hóa, dịch vụ
-            if (!bookType.HasValue || bookType == AccountingBookType.S2b_RevenueDeclaration)
+            result.AddRange(orders.Select(o => new AccountingBookEntryDto
             {
-                result.AddRange(orders.Select(o => new AccountingBookEntryDto
+                VoucherNumber = o.OrderCode,
+                VoucherDate = o.CreatedAt,
+                Description = $"Doanh thu bán hàng kê khai {o.OrderCode}",
+                Amount = o.TotalAmount,
+                Category = "Doanh thu bán lẻ kê khai",
+                BookType = AccountingBookType.S2b_RevenueDeclaration,
+                BookCode = "S2b-HKD"
+            }));
+        }
+
+        // S2c-HKD: Sổ chi tiết doanh thu, chi phí (Thu & Chi)
+        if ((!bookType.HasValue && (method == TaxCalculationMethod.DeclarationBased || group == HouseholdTaxGroup.Group4_Over50B)) || bookType == AccountingBookType.S2c_RevenueAndExpense)
+        {
+            // Doanh thu
+            result.AddRange(orders.Select(o => new AccountingBookEntryDto
+            {
+                VoucherNumber = o.OrderCode,
+                VoucherDate = o.CreatedAt,
+                Description = $"[Thu] Bán lẻ đơn hàng {o.OrderCode}",
+                Amount = o.TotalAmount,
+                Category = "Doanh thu",
+                BookType = AccountingBookType.S2c_RevenueAndExpense,
+                BookCode = "S2c-HKD"
+            }));
+
+            // Chi phí
+            result.AddRange(vouchers.Select(v => new AccountingBookEntryDto
+            {
+                VoucherNumber = v.VoucherCode ?? string.Empty,
+                VoucherDate = v.ExpenseDate,
+                Description = $"[Chi] {(!string.IsNullOrEmpty(v.Note) ? v.Note : $"{v.Category} - {v.BeneficiaryName}")}",
+                Amount = v.Amount,
+                Category = v.Category ?? string.Empty,
+                BookType = AccountingBookType.S2c_RevenueAndExpense,
+                BookCode = "S2c-HKD",
+                BeneficiaryName = v.BeneficiaryName,
+                InvoiceNumber = v.InvoiceNumber
+            }));
+        }
+
+        // S2d-HKD: Sổ chi tiết vật liệu, dụng cụ, sản phẩm, hàng hóa (Nhập - Xuất - Tồn)
+        if ((!bookType.HasValue && (method == TaxCalculationMethod.DeclarationBased || group == HouseholdTaxGroup.Group4_Over50B)) || bookType == AccountingBookType.S2d_MaterialsAndGoods)
+        {
+            // 1. Nhập kho từ Nhà cung cấp (GoodsReceipts)
+            var receiptQuery = _context.GoodsReceipts.Include(g => g.Supplier).AsQueryable();
+            if (branchId.HasValue)
+            {
+                receiptQuery = receiptQuery.Where(g => g.BranchId == branchId.Value);
+            }
+            receiptQuery = receiptQuery.Where(g => g.ReceivedAtUtc >= fromDateUtc && g.ReceivedAtUtc <= toDateUtc && (g.Status == "CONFIRMED" || g.Status == "COMPLETED" || g.Status == "DRAFT"));
+            var receipts = await receiptQuery.OrderBy(g => g.ReceivedAtUtc).ToListAsync(cancellationToken);
+
+            result.AddRange(receipts.Select(g => new AccountingBookEntryDto
+            {
+                VoucherNumber = g.Code,
+                VoucherDate = g.ReceivedAtUtc,
+                Description = $"[Nhập kho] Nhập hàng từ NCC {(g.Supplier != null ? g.Supplier.Name : "Nhà cung cấp")}",
+                Amount = g.GrandTotal,
+                Category = "Nhập kho hàng hóa",
+                BookType = AccountingBookType.S2d_MaterialsAndGoods,
+                BookCode = "S2d-HKD",
+                BeneficiaryName = g.Supplier?.Name,
+                InvoiceNumber = g.InvoiceNo
+            }));
+
+            // 2. Xuất kho bán lẻ POS
+            result.AddRange(orders.Select(o => new AccountingBookEntryDto
+            {
+                VoucherNumber = o.OrderCode,
+                VoucherDate = o.CreatedAt,
+                Description = $"[Xuất kho] Xuất bán lẻ đơn hàng {o.OrderCode}",
+                Amount = o.TotalAmount,
+                Category = "Xuất kho bán lẻ",
+                BookType = AccountingBookType.S2d_MaterialsAndGoods,
+                BookCode = "S2d-HKD"
+            }));
+
+            // 3. Chi phí bao bì, dụng cụ, vật tư tiêu hao
+            var materialVouchers = vouchers.Where(v =>
+            {
+                var cat = (v.Category ?? string.Empty).ToUpperInvariant();
+                return cat.Contains("BAO BÌ") || cat.Contains("PACKAGING") || cat.Contains("VẬT TƯ") ||
+                       cat.Contains("CONSUMABLE") || cat.Contains("DỤNG CỤ") || cat.Contains("TOOL") ||
+                       cat.Contains("VẬT LIỆU") || cat.Contains("HÀNG HÓA");
+            });
+
+            result.AddRange(materialVouchers.Select(v => new AccountingBookEntryDto
+            {
+                VoucherNumber = v.VoucherCode ?? string.Empty,
+                VoucherDate = v.ExpenseDate,
+                Description = !string.IsNullOrEmpty(v.Note) ? v.Note : $"[Vật tư] {v.Category} - {v.BeneficiaryName}",
+                Amount = v.Amount,
+                Category = v.Category ?? string.Empty,
+                BookType = AccountingBookType.S2d_MaterialsAndGoods,
+                BookCode = "S2d-HKD",
+                BeneficiaryName = v.BeneficiaryName,
+                InvoiceNumber = v.InvoiceNumber
+            }));
+        }
+
+        // S2e-HKD: Sổ chi tiết tiền (tiền mặt và tiền gửi ngân hàng - Đọc trực tiếp CashbookEntries)
+        if ((!bookType.HasValue && (method == TaxCalculationMethod.DeclarationBased || group == HouseholdTaxGroup.Group4_Over50B)) || bookType == AccountingBookType.S2e_CashAndBank)
+        {
+            var cashbookQuery = _context.CashbookEntries.AsQueryable();
+            if (branchId.HasValue)
+            {
+                cashbookQuery = cashbookQuery.Where(c => c.BranchId == branchId.Value);
+            }
+            cashbookQuery = cashbookQuery.Where(c => c.OccurredAtUtc >= fromDateUtc && c.OccurredAtUtc <= toDateUtc);
+
+            var cashEntries = await cashbookQuery.OrderBy(c => c.OccurredAtUtc).ToListAsync(cancellationToken);
+
+            if (cashEntries.Any())
+            {
+                result.AddRange(cashEntries.Select(c =>
                 {
-                    VoucherNumber = o.OrderCode,
-                    VoucherDate = o.CreatedAt,
-                    Description = $"Doanh thu bán hàng kê khai {o.OrderCode}",
-                    Amount = o.TotalAmount,
-                    Category = "Doanh thu bán lẻ kê khai",
-                    BookType = AccountingBookType.S2b_RevenueDeclaration,
-                    BookCode = "S2b-HKD"
+                    var accName = c.AccountType switch
+                    {
+                        FinanceAccountType.Till => "Két quầy",
+                        FinanceAccountType.Safe => "Két sắt",
+                        FinanceAccountType.Bank => "Ngân hàng",
+                        _ => "Quỹ"
+                    };
+                    var isReceipt = c.EntryType == CashbookEntryType.Receipt;
+                    return new AccountingBookEntryDto
+                    {
+                        VoucherNumber = c.EntryCode,
+                        VoucherDate = c.OccurredAtUtc,
+                        Description = isReceipt
+                            ? $"[Thu tiền {accName}] {c.Description}"
+                            : $"[Chi tiền {accName}] {c.Description}",
+                        Amount = c.Amount,
+                        Category = isReceipt ? $"Thu quỹ ({accName})" : $"Chi quỹ ({accName})",
+                        BookType = AccountingBookType.S2e_CashAndBank,
+                        BookCode = "S2e-HKD",
+                        BeneficiaryName = accName,
+                        InvoiceNumber = c.ReferenceCode
+                    };
                 }));
             }
-
-            // S2c-HKD: Sổ chi tiết doanh thu, chi phí
-            if (!bookType.HasValue || bookType == AccountingBookType.S2c_RevenueAndExpense)
+            else
             {
-                // Doanh thu
-                result.AddRange(orders.Select(o => new AccountingBookEntryDto
-                {
-                    VoucherNumber = o.OrderCode,
-                    VoucherDate = o.CreatedAt,
-                    Description = $"[Thu] Bán lẻ đơn hàng {o.OrderCode}",
-                    Amount = o.TotalAmount,
-                    Category = "Doanh thu",
-                    BookType = AccountingBookType.S2c_RevenueAndExpense,
-                    BookCode = "S2c-HKD"
-                }));
-
-                // Chi phí
-                result.AddRange(vouchers.Select(v => new AccountingBookEntryDto
-                {
-                    VoucherNumber = v.VoucherCode ?? string.Empty,
-                    VoucherDate = v.ExpenseDate,
-                    Description = $"[Chi] {(!string.IsNullOrEmpty(v.Note) ? v.Note : $"{v.Category} - {v.BeneficiaryName}")}",
-                    Amount = v.Amount,
-                    Category = v.Category ?? string.Empty,
-                    BookType = AccountingBookType.S2c_RevenueAndExpense,
-                    BookCode = "S2c-HKD",
-                    BeneficiaryName = v.BeneficiaryName,
-                    InvoiceNumber = v.InvoiceNumber
-                }));
-            }
-
-            // S2d-HKD: Sổ chi tiết vật liệu, dụng cụ, sản phẩm, hàng hóa
-            if (!bookType.HasValue || bookType == AccountingBookType.S2d_MaterialsAndGoods)
-            {
-                var materialVouchers = vouchers.Where(v =>
-                {
-                    var cat = (v.Category ?? string.Empty).ToUpperInvariant();
-                    return cat.Contains("BAO BÌ") || cat.Contains("PACKAGING") || cat.Contains("VẬT TƯ") ||
-                           cat.Contains("CONSUMABLE") || cat.Contains("DỤNG CỤ") || cat.Contains("TOOL") ||
-                           cat.Contains("VẬT LIỆU") || cat.Contains("HÀNG HÓA");
-                });
-
-                result.AddRange(materialVouchers.Select(v => new AccountingBookEntryDto
-                {
-                    VoucherNumber = v.VoucherCode ?? string.Empty,
-                    VoucherDate = v.ExpenseDate,
-                    Description = !string.IsNullOrEmpty(v.Note) ? v.Note : $"{v.Category} - {v.BeneficiaryName}",
-                    Amount = v.Amount,
-                    Category = v.Category ?? string.Empty,
-                    BookType = AccountingBookType.S2d_MaterialsAndGoods,
-                    BookCode = "S2d-HKD",
-                    BeneficiaryName = v.BeneficiaryName,
-                    InvoiceNumber = v.InvoiceNumber
-                }));
-            }
-
-            // S2e-HKD: Sổ chi tiết tiền (tiền mặt và tiền gửi)
-            if (!bookType.HasValue || bookType == AccountingBookType.S2e_CashAndBank)
-            {
+                // Fallback sang ExpenseVouchers nếu chưa có CashbookEntries trong kỳ
                 result.AddRange(vouchers.Select(v => new AccountingBookEntryDto
                 {
                     VoucherNumber = v.VoucherCode ?? string.Empty,
@@ -332,6 +441,51 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
                     InvoiceNumber = v.InvoiceNumber
                 }));
             }
+        }
+
+        // S3a-HKD: Sổ theo dõi tình hình thực hiện nghĩa vụ thuế với NSNN
+        if (bookType == AccountingBookType.S3a_TaxObligation)
+        {
+            // 1. Nghĩa vụ thuế phát sinh từ các kỳ đã chốt thuế (Snapshots)
+            var snapshotQuery = _context.HouseholdTaxSnapshots.AsQueryable();
+            if (branchId.HasValue)
+            {
+                snapshotQuery = snapshotQuery.Where(s => s.BranchId == branchId.Value);
+            }
+            snapshotQuery = snapshotQuery.Where(s => s.CreatedAt >= fromDateUtc && s.CreatedAt <= toDateUtc);
+            var snapshots = await snapshotQuery.OrderBy(s => s.CreatedAt).ToListAsync(cancellationToken);
+
+            result.AddRange(snapshots.Select(s => new AccountingBookEntryDto
+            {
+                VoucherNumber = $"TAX-SNP-{s.Year}-Q{s.PeriodNumber}",
+                VoucherDate = s.CreatedAt,
+                Description = $"[Nghĩa vụ thuế] Chốt thuế Q{s.PeriodNumber}/{s.Year} (GTGT: {s.VatAmount:N0} đ, TNCN: {s.PitAmount:N0} đ)",
+                Amount = s.TotalTaxAmount,
+                Category = "Nghĩa vụ thuế phát sinh",
+                BookType = AccountingBookType.S3a_TaxObligation,
+                BookCode = "S3a-HKD",
+                BeneficiaryName = "Ngân sách Nhà nước"
+            }));
+
+            // 2. Chứng từ chi nộp thuế
+            var taxVouchers = vouchers.Where(v =>
+            {
+                var cat = (v.Category ?? string.Empty).ToUpperInvariant();
+                return cat.Contains("THUẾ") || cat.Contains("TAX") || cat.Contains("NSNN") || cat.Contains("KHO BẠC");
+            });
+
+            result.AddRange(taxVouchers.Select(v => new AccountingBookEntryDto
+            {
+                VoucherNumber = v.VoucherCode ?? string.Empty,
+                VoucherDate = v.ExpenseDate,
+                Description = !string.IsNullOrEmpty(v.Note) ? v.Note : $"[Nộp thuế] {v.Category} - {v.BeneficiaryName}",
+                Amount = v.Amount,
+                Category = "Đã nộp thuế NSNN",
+                BookType = AccountingBookType.S3a_TaxObligation,
+                BookCode = "S3a-HKD",
+                BeneficiaryName = v.BeneficiaryName,
+                InvoiceNumber = v.InvoiceNumber
+            }));
         }
 
         return result;
@@ -393,5 +547,107 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             throw new MT_GRMS.Domain.Exceptions.BusinessException("TAX_PERIOD_LOCKED", $"Kỳ tính thuế {snapshot.PeriodType} {snapshot.PeriodNumber}/{snapshot.Year} đã được chốt và khóa sổ.");
         }
     }
-}
 
+    public async Task<(decimal ReducedVatRevenue, decimal StandardVatRevenue)> GetPeriodRevenueSplitAsync(
+        DateTime fromDateUtc,
+        DateTime toDateUtc,
+        Guid? branchId,
+        CancellationToken cancellationToken = default)
+    {
+        var itemQuery = _context.OrderDetails
+            .Where(d =>
+                d.Order != null &&
+                d.Order.CreatedAt >= fromDateUtc &&
+                d.Order.CreatedAt <= toDateUtc &&
+                (d.Order.PaymentStatus == "PAID" || d.Order.PaymentStatus == "Paid" || d.Order.PaymentStatus == "DEBT" || d.Order.PaymentStatus == "Debt") &&
+                d.Order.Status != "Cancelled");
+
+        if (branchId.HasValue)
+        {
+            itemQuery = itemQuery.Where(d => d.Order!.BranchId == branchId.Value);
+        }
+
+        // Ưu tiên tỷ lệ thuế đã áp dụng tại thời điểm bán (d.AppliedVatRate > 0)
+        // Fallback về cờ sản phẩm chỉ áp dụng khi AppliedVatRate == 0 (dữ liệu cũ trước migration)
+        var grossReduced = await itemQuery
+            .Where(d => d.AppliedVatRate == 0.008m || (d.AppliedVatRate == 0m && d.Product != null && d.Product.EligibleForVatReduction))
+            .SumAsync(d => (decimal?)(d.Qty * d.UnitPrice), cancellationToken) ?? 0m;
+
+        var grossStandard = await itemQuery
+            .Where(d => (d.AppliedVatRate > 0m && d.AppliedVatRate != 0.008m) || (d.AppliedVatRate == 0m && (d.Product == null || !d.Product.EligibleForVatReduction)))
+            .SumAsync(d => (decimal?)(d.Qty * d.UnitPrice), cancellationToken) ?? 0m;
+
+        var grossTotal = grossReduced + grossStandard;
+
+        // Phân bổ chiết khấu + trả hàng theo tỷ lệ gross
+        // Giả định: Chiết khấu và hàng trả lại phân bổ đều theo tỷ lệ gross
+        var (gross, discount, returns) = await GetPeriodRevenueAsync(fromDateUtc, toDateUtc, branchId, cancellationToken);
+        var netTotal = gross - discount - returns;
+
+        if (grossTotal <= 0)
+        {
+            // Nếu kỳ này không phát sinh bán hàng (chỉ có trả hàng hoặc gross = 0)
+            // Phân bổ phần âm trả hàng theo tỷ lệ doanh thu bán hàng cả năm YTD
+            var vnTz = HouseholdTaxService.GetVietnamTimeZone();
+            var startOfYearVn = new DateTime(fromDateUtc.Year, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
+            var startOfYearUtc = TimeZoneInfo.ConvertTimeToUtc(startOfYearVn, vnTz);
+
+            var ytdReduced = await _context.OrderDetails
+                .Where(d => d.Order != null && d.Order.CreatedAt >= startOfYearUtc && d.Order.CreatedAt < toDateUtc && (d.Order.PaymentStatus == "PAID" || d.Order.PaymentStatus == "Paid" || d.Order.PaymentStatus == "DEBT" || d.Order.PaymentStatus == "Debt") && d.Order.Status != "Cancelled")
+                .Where(d => d.AppliedVatRate == 0.008m || (d.AppliedVatRate == 0m && d.Product != null && d.Product.EligibleForVatReduction))
+                .SumAsync(d => (decimal?)(d.Qty * d.UnitPrice), cancellationToken) ?? 0m;
+
+            var ytdStandard = await _context.OrderDetails
+                .Where(d => d.Order != null && d.Order.CreatedAt >= startOfYearUtc && d.Order.CreatedAt < toDateUtc && (d.Order.PaymentStatus == "PAID" || d.Order.PaymentStatus == "Paid" || d.Order.PaymentStatus == "DEBT" || d.Order.PaymentStatus == "Debt") && d.Order.Status != "Cancelled")
+                .Where(d => (d.AppliedVatRate > 0m && d.AppliedVatRate != 0.008m) || (d.AppliedVatRate == 0m && (d.Product == null || !d.Product.EligibleForVatReduction)))
+                .SumAsync(d => (decimal?)(d.Qty * d.UnitPrice), cancellationToken) ?? 0m;
+
+            var ytdGrossTotal = ytdReduced + ytdStandard;
+            if (ytdGrossTotal > 0)
+            {
+                var ytdRatioReduced = ytdReduced / ytdGrossTotal;
+                var splitReduced = Math.Round(netTotal * ytdRatioReduced, 0, MidpointRounding.AwayFromZero);
+                return (splitReduced, netTotal - splitReduced);
+            }
+
+            // Fallback thận trọng khi cả YTD Gross cũng = 0 (ví dụ đầu năm chỉ có khách trả hàng của năm ngoái):
+            // Gán toàn bộ số âm vào nhóm 0.8% (netTotal, 0m) theo nguyên tắc thận trọng (giảm trừ thuế ít hơn, không ước tính thiếu thuế)
+            return (netTotal, 0m);
+        }
+
+        var ratioReduced = grossReduced / grossTotal;
+        var reduced = Math.Round(netTotal * ratioReduced, 0, MidpointRounding.AwayFromZero);
+        var standard = netTotal - reduced;
+
+        return (reduced, standard);
+    }
+
+    public async Task<HouseholdTaxYearSetting?> GetYearSettingAsync(int year, CancellationToken cancellationToken = default)
+    {
+        return await _context.HouseholdTaxYearSettings
+            .Where(s => s.Year == year || (s.Year <= year && s.LockedUntilYear >= year))
+            .OrderByDescending(s => s.Year)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task UpsertYearSettingAsync(HouseholdTaxYearSetting setting, CancellationToken cancellationToken = default)
+    {
+        var existing = await _context.HouseholdTaxYearSettings
+            .FirstOrDefaultAsync(s => s.Year == setting.Year, cancellationToken);
+
+        if (existing == null)
+        {
+            _context.HouseholdTaxYearSettings.Add(setting);
+        }
+        else
+        {
+            existing.PitMethod = setting.PitMethod;
+            existing.LockedUntilYear = setting.LockedUntilYear;
+            existing.LockReason = setting.LockReason;
+            existing.LockedBySystem = setting.LockedBySystem;
+            existing.LockedAtUtc = setting.LockedAtUtc;
+        }
+
+        await _context.SaveChangesAsync(cancellationToken);
+    }
+}

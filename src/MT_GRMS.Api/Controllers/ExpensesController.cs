@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Expenses;
@@ -28,6 +28,20 @@ public class ExpensesController : BaseApiController
     {
         var result = await _expenseService.ApproveExpenseAsync(request with { ExpenseId = id }, ct);
         return Ok(ApiResponse<ExpenseVoucherResponse>.Ok(result, "Phê duyệt phiếu chi thành công."));
+    }
+
+    [HttpPost("{id:guid}/reject")]
+    public async Task<ActionResult<ApiResponse<ExpenseVoucherResponse>>> RejectExpense([FromRoute] Guid id, [FromBody] RejectExpenseRequest request, CancellationToken ct)
+    {
+        var result = await _expenseService.RejectExpenseAsync(request with { ExpenseId = id }, ct);
+        return Ok(ApiResponse<ExpenseVoucherResponse>.Ok(result, "Từ chối phê duyệt phiếu chi thành công."));
+    }
+
+    [HttpPost("{id:guid}/cancel")]
+    public async Task<ActionResult<ApiResponse<ExpenseVoucherResponse>>> CancelExpense([FromRoute] Guid id, [FromBody] CancelExpenseRequest request, CancellationToken ct)
+    {
+        var result = await _expenseService.CancelExpenseAsync(request with { ExpenseId = id }, ct);
+        return Ok(ApiResponse<ExpenseVoucherResponse>.Ok(result, "Hủy phiếu chi thành công."));
     }
 
     [HttpPost("{id:guid}/disburse")]

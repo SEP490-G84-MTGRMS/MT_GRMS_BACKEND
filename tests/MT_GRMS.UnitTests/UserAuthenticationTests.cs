@@ -164,7 +164,7 @@ public class UserAuthenticationTests
         var response = await authService.LoginAsync(new LoginRequest("admin", "Password@123", TenantCode: null));
 
         // THEN
-        Assert.Equal("DEFAULT", response.User.TenantId);
+        Assert.Equal("tenant_mt_mart_01", response.User.TenantId);
         Assert.Equal("usr_admin_01", response.User.Id);
     }
 

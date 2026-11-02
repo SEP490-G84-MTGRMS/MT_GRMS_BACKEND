@@ -25,6 +25,11 @@ public class HouseholdTaxSnapshot : BaseTenantEntity
     public decimal TotalTaxAmount { get; set; }
 
     /// <summary>
+    /// Phương pháp tính TNCN được áp dụng trong kỳ này (chỉ ghi nhận khi !IsTaxExempt).
+    /// </summary>
+    public TaxCalculationMethod? AppliedPitMethod { get; set; }
+
+    /// <summary>
     /// Lưu trữ snapshot chi tiết 4 sổ kế toán (S2b, S2c, S2d, S2e) dạng JSON tại thời điểm chốt.
     /// </summary>
     public string BookDataJson { get; set; } = "{}";

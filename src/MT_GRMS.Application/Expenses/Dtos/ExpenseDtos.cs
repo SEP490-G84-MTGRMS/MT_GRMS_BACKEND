@@ -1,4 +1,4 @@
-﻿using MT_GRMS.Domain.Enums;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Application.Expenses.Dtos;
 
@@ -19,6 +19,16 @@ public record CreateExpenseRequest(
 public record ApproveExpenseRequest(
     Guid ExpenseId,
     string? Note
+);
+
+public record RejectExpenseRequest(
+    Guid ExpenseId,
+    string? Reason
+);
+
+public record CancelExpenseRequest(
+    Guid ExpenseId,
+    string Reason
 );
 
 public record DisburseExpenseRequest(

@@ -1,21 +1,24 @@
 using System;
 using System.Collections.Generic;
+using MT_GRMS.Application.Debt.Dtos;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Application.PosOrders.Dtos;
 
 public record OrderCreateRequest(
-    Guid BranchId,
+    Guid? BranchId,
     Guid? CustomerId,
     string PaymentMethod,
     List<OrderItemCreateDto> Items,
     decimal? CashTendered = null,
     decimal? DiscountAmount = null,
+    string? ManagerBypassCode = null,
     string? Note = null,
     string? CreatorRole = null
 )
 {
     // Hỗ trợ tương thích ngược cho StoreId
-    public Guid StoreId => BranchId;
+    public Guid StoreId => BranchId ?? Guid.Empty;
 }
 
 public record OrderItemCreateDto(
@@ -45,7 +48,8 @@ public record OrderResponse(
     List<OrderItemResponse> Items,
     string? CustomerPhone = null,
     decimal DepositAmount = 0m,
-    string? Note = null
+    string? Note = null,
+    CustomerDebtInvoiceResponse? DebtInvoice = null
 )
 {
     public Guid StoreId => BranchId;
@@ -61,7 +65,10 @@ public record OrderItemResponse(
     decimal UnitPrice,
     decimal DiscountAmount,
     decimal ActualPrice,
+    decimal CostPriceAtSale,
     decimal TotalLineAmount,
+    decimal AppliedVatRate = 0m,
+    decimal VatAmount = 0m,
     string? BatchCode = null
 );
 
