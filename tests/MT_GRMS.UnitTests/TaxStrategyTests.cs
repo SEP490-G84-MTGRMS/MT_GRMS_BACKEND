@@ -66,6 +66,7 @@ public class TaxStrategyTests
             IsExempt = false,
             AnnualAccumulatedRevenue = 1_417_500_000m,
             TaxableRevenueInPeriod = 467_500_000m,
+            ReducedVatRevenueInPeriod = 467_500_000m,
             ApplyVatReduction2026 = true,
             PriorDeclaredPitTax = 0m
         };
@@ -150,6 +151,7 @@ public class TaxStrategyTests
             IsExempt = false,
             AnnualAccumulatedRevenue = 1_200_000_000m,
             TaxableRevenueInPeriod = 200_000_000m,
+            ReducedVatRevenueInPeriod = 200_000_000m,
             ApplyVatReduction2026 = true,
             VatReductionPercentage = 30.0m // Giảm 30%
         };
@@ -184,5 +186,29 @@ public class TaxStrategyTests
         Assert.Equal(1.0m, result.VatRate);
         Assert.Equal(2_000_000m, result.VatAmount);
     }
-}
 
+    [Fact]
+    public void RevenuePercentage_WhenSplitRevenueNull_FallbackTreatsAsUnreduced()
+    {
+        // Khi không có dữ liệu tách doanh thu theo cờ (ReducedVatRevenueInPeriod = null),
+        // fallback an toàn là tính 1.0% chuẩn, KHÔNG tự ý giảm 100% doanh thu.
+        var context = new TaxCalculationContext
+        {
+            Group = HouseholdTaxGroup.Group2_1BTo3B,
+            IsExempt = false,
+            AnnualAccumulatedRevenue = 1_417_500_000m,
+            TaxableRevenueInPeriod = 467_500_000m,
+            ApplyVatReduction2026 = true,
+            ReducedVatRevenueInPeriod = null,
+            StandardVatRevenueInPeriod = null,
+            PriorDeclaredPitTax = 0m
+        };
+
+        var result = _revenuePercentageStrategy.Calculate(context);
+
+        Assert.Equal(1.0m, result.VatRate);
+        Assert.Equal(4_675_000m, result.VatAmount);
+        Assert.Equal(467_500_000m, result.VatBreakdown.RevenueStandardRate10);
+        Assert.Equal(0m, result.VatBreakdown.RevenueReducedRate08);
+    }
+}

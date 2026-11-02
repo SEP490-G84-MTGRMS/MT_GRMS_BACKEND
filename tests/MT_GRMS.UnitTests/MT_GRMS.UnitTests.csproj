@@ -14,6 +14,7 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
     <PackageReference Include="xunit" Version="2.5.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+    <PackageReference Include="ClosedXML" Version="0.105.1" />
   </ItemGroup>
 
   <ItemGroup>
@@ -23,6 +24,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\MT_GRMS.Application\MT_GRMS.Application.csproj" />
     <ProjectReference Include="..\..\src\MT_GRMS.Domain\MT_GRMS.Domain.csproj" />
+    <ProjectReference Include="..\..\src\MT_GRMS.Infrastructure\MT_GRMS.Infrastructure.csproj" />
   </ItemGroup>
 
 </Project>

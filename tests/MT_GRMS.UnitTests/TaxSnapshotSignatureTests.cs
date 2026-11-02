@@ -114,4 +114,35 @@ public class TaxSnapshotSignatureTests
         snapshot.AuditSignatureHash = "unknown-key-9999:" + signature.Split(':')[1];
         Assert.False(_signatureService.VerifySignature(snapshot));
     }
+    [Fact]
+    public void VerifySignature_WhenVatOptionInBookDataTampered_ShouldReturnFalse()
+    {
+        // Bug 4 Verification: VatOption được niêm phong trong BookDataJson và bảo vệ bằng HMAC-SHA256
+        var snapshot = new HouseholdTaxSnapshot
+        {
+            BranchId = Guid.NewGuid(),
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 2,
+            TaxableRevenueInPeriod = 500_000_000m,
+            TotalTaxAmount = 11_000_000m,
+            FinalizedAtUtc = new DateTime(2026, 7, 10, 10, 0, 0, DateTimeKind.Utc),
+            FinalizedBy = "store_owner_01",
+            BookDataJson = "{\"policy\":{\"vatOption\":\"PRUDENT_YTD\"},\"totalRevenue\":500000000}"
+        };
+
+        var signature = _signatureService.ComputeSignature(snapshot);
+        snapshot.AuditSignatureHash = signature;
+
+        // Verify ban đầu: Hợp lệ
+        Assert.True(_signatureService.VerifySignature(snapshot));
+
+        // Kẻ gian sửa lén VatOption từ PRUDENT_YTD thành QUARTER_ONLY trong DB
+        snapshot.BookDataJson = "{\"policy\":{\"vatOption\":\"QUARTER_ONLY\"},\"totalRevenue\":500000000}";
+
+        // Chữ ký phải phát hiện giả mạo và từ chối xác thực
+        var isTamperedValid = _signatureService.VerifySignature(snapshot);
+        Assert.False(isTamperedValid, "Chữ ký số phải từ chối khi VatOption trong BookDataJson bị sửa đổi.");
+    }
+
 }

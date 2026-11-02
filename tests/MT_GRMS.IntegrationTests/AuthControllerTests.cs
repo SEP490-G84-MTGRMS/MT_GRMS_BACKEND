@@ -86,7 +86,7 @@ public class AuthControllerTests
         Assert.Equal("usr_super_admin_01", apiResponse.Data.User.Id);
         Assert.Equal("admin", apiResponse.Data.User.Username);
         Assert.Equal("ADMIN", apiResponse.Data.User.Role);
-        Assert.Equal("TENANT-HCM-01", apiResponse.Data.User.TenantId);
+        Assert.Equal("tenant_mt_mart_01", apiResponse.Data.User.TenantId);
     }
 
     [Fact]
