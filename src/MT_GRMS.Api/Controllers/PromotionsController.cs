@@ -85,5 +85,15 @@ public class PromotionsController : BaseApiController
         var result = await _promotionService.EvaluateCartAsync(request, cancellationToken);
         return Ok(ApiResponse<EvaluateCartResponse>.Ok(result));
     }
+
+    /// <summary>
+    /// Nạp dữ liệu mẫu khởi tạo khuyến mại và voucher phục vụ kiểm thử API (Seeder)
+    /// </summary>
+    [HttpPost("seed-sample-data")]
+    public async Task<IActionResult> SeedSampleData(CancellationToken cancellationToken)
+    {
+        var addedCount = await _promotionService.SeedSampleDataAsync(cancellationToken);
+        return Ok(ApiResponse<int>.Ok(addedCount, $"Đã nạp thành công {addedCount} chương trình khuyến mại/voucher mẫu vào hệ thống"));
+    }
 }
 

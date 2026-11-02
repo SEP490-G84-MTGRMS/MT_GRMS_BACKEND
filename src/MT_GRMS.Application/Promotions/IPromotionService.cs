@@ -22,5 +22,7 @@ public interface IPromotionService
     Task<PagedResult<VoucherCodeDto>> GetVoucherCodesAsync(Guid batchId, int pageIndex, int pageSize, string? status = null, CancellationToken cancellationToken = default);
     Task<ValidateVoucherResponse> ValidateVoucherAsync(ValidateVoucherRequest request, CancellationToken cancellationToken = default);
     Task<RedeemVoucherResponse> RedeemVoucherAsync(RedeemVoucherRequest request, CancellationToken cancellationToken = default);
-}
 
+    // 3. Seeder dữ liệu mẫu cho kiểm thử API
+    Task<int> SeedSampleDataAsync(CancellationToken cancellationToken = default);
+}

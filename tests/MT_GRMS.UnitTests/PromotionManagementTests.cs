@@ -174,6 +174,26 @@ public class PromotionManagementTests
         Assert.DoesNotContain(result.Items, p => p.PromotionCode == "KM-OTHER");
     }
 
+    [Fact]
+    public async Task REQ_PV01_SeedSampleData_WhenCalled_SeedsSamplePromotionsAndVouchers()
+    {
+        // Act: Lần 1 nạp dữ liệu mẫu
+        var addedCount = await _service.SeedSampleDataAsync();
+
+        // Assert
+        Assert.True(addedCount >= 5);
+        Assert.True(_uow.HasSaved);
+        Assert.Contains(_repo.Promotions, p => p.PromotionCode == "KM-GIAM10-TOIDA50K");
+        Assert.Contains(_repo.Promotions, p => p.PromotionCode == "KM-GIAM30K-DON150K");
+        Assert.Contains(_repo.Promotions, p => p.PromotionCode == "KM-MUA3TANG1-COCA");
+        Assert.Contains(_repo.Promotions, p => p.PromotionCode == "VOUCHER-VIP50K");
+        Assert.Contains(_repo.Promotions, p => p.PromotionCode == "VOUCHER-CUOITUAN20");
+
+        // Act: Lần 2 chạy lại (Idempotency check) -> Không trùng lặp dữ liệu
+        var secondRun = await _service.SeedSampleDataAsync();
+        Assert.Equal(0, secondRun);
+    }
+
     #region Fakes
     private class FakePromotionRepository : IPromotionRepository
     {

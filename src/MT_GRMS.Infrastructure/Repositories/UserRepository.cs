@@ -17,20 +17,21 @@ public class UserRepository : IUserRepository
 
     public async Task<User?> GetByIdAsync(string id, CancellationToken cancellationToken = default)
     {
-        return await _context.Users.FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
+        return await _context.Users
+            .Include(u => u.TenantUsers)
+            .FirstOrDefaultAsync(u => u.Id == id, cancellationToken);
     }
 
     public async Task<User?> GetByUsernameAsync(string username, CancellationToken cancellationToken = default)
     {
-        var normalized = username.Trim();
-        var compact = normalized.Replace(" ", "");
+        var clean = username.Trim().ToLower();
+        var compact = clean.Replace(" ", "");
         return await _context.Users
             .Include(u => u.TenantUsers)
             .FirstOrDefaultAsync(u =>
-                u.UserName == normalized
-                || u.Email == normalized
-                || u.Phone == normalized
-                || u.Phone == compact,
+                u.UserName.ToLower() == clean
+                || u.Email.ToLower() == clean
+                || (u.Phone != null && (u.Phone.ToLower() == clean || u.Phone.Replace(" ", "") == compact)),
                 cancellationToken);
     }
 

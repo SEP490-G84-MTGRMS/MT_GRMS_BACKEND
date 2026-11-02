@@ -49,12 +49,11 @@ public class AuthService : IAuthService
             throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
         }
 
-        var tenantId = string.IsNullOrWhiteSpace(request.TenantCode)
-            ? "DEFAULT"
-            : request.TenantCode;
-
-        var tenantUser = user.TenantUsers?.FirstOrDefault(tu => tu.TenantId == tenantId)
+        var tenantUser = user.TenantUsers?.FirstOrDefault(tu => !string.IsNullOrWhiteSpace(request.TenantCode) && tu.TenantId == request.TenantCode)
                          ?? user.TenantUsers?.FirstOrDefault();
+
+        var tenantId = tenantUser?.TenantId ?? (!string.IsNullOrWhiteSpace(request.TenantCode) ? request.TenantCode : "DEFAULT");
+
         var role = tenantUser?.Role;
         if (string.IsNullOrWhiteSpace(role))
         {
