@@ -10,7 +10,7 @@ public class Product : BaseTenantEntity
 {
     public Guid CategoryId { get; set; }
     public string ProductCode { get; set; } = string.Empty;
-    public string Barcode { get; set; } = string.Empty;
+    public string? Barcode { get; set; }
     public string Name { get; set; } = string.Empty;
     public string BaseUnit { get; set; } = "Cái";
     public decimal? CostPrice { get; set; }
@@ -21,7 +21,7 @@ public class Product : BaseTenantEntity
     public string TaxCategory { get; set; } = "STANDARD_1PCT";
     public string ProductType { get; set; } = "STANDARD";
     public string Status { get; set; } = "Active";
-    public string? ImageUrl { get; set; }
+    public List<string> ImageUrls { get; set; } = new();
     public string? Description { get; set; }
     public string? InternalNote { get; set; }
     public bool HasBatches { get; set; } = false;
@@ -36,6 +36,8 @@ public class Product : BaseTenantEntity
 
     // Backward compatibility aliases
     [NotMapped]
+    public string? ImageUrl => ImageUrls.FirstOrDefault();
+    [NotMapped]
     public string SKU { get => ProductCode; set => ProductCode = value; }
     [NotMapped]
     public string ProductName { get => Name; set => Name = value; }
@@ -49,5 +51,4 @@ public class Product : BaseTenantEntity
     // Navigations
     public Category? Category { get; set; }
     public ICollection<ProductUnit> Units { get; set; } = new List<ProductUnit>();
-    public ICollection<ProductCombo> ComboComponents { get; set; } = new List<ProductCombo>();
 }

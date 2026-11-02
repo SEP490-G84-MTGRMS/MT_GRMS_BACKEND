@@ -110,9 +110,19 @@ public class SupplierManagementTests
             string? name = null,
             string? contactPerson = null,
             string? phone = null,
+            List<Guid>? supplierIds = null,
+            List<Guid>? productIds = null,
+            List<string>? contactPersons = null,
+            List<string>? phones = null,
+            List<string>? codes = null,
+            List<string>? names = null,
             CancellationToken cancellationToken = default)
         {
             var query = Suppliers.Where(s => !s.IsDeleted).AsEnumerable();
+
+            if (supplierIds != null && supplierIds.Any()) query = query.Where(s => supplierIds.Contains(s.Id));
+            if (contactPersons != null && contactPersons.Any()) query = query.Where(s => contactPersons.Any(c => s.ContactPerson.Equals(c, StringComparison.OrdinalIgnoreCase)));
+            if (phones != null && phones.Any()) query = query.Where(s => phones.Contains(s.Phone));
 
             if (!string.IsNullOrWhiteSpace(code)) query = query.Where(s => s.Code.ToLower().Contains(code.ToLower()));
             if (!string.IsNullOrWhiteSpace(name)) query = query.Where(s => s.Name.ToLower().Contains(name.ToLower()));
@@ -131,6 +141,20 @@ public class SupplierManagementTests
             var list = query.ToList();
             var paged = list.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
             return Task.FromResult(((IReadOnlyList<Supplier>)paged, list.Count));
+        }
+
+        public Task<SupplierSearchSuggestionsDto> GetSearchSuggestionsAsync(string query, int limit = 10, CancellationToken cancellationToken = default)
+        {
+            var term = query.ToLower();
+            var matched = Suppliers.Where(s => !s.IsDeleted && (s.Name.ToLower().Contains(term) || s.Code.ToLower().Contains(term)))
+                .Take(limit)
+                .Select(s => new SupplierSuggestionItemDto { Id = s.Id, Code = s.Code, Name = s.Name })
+                .ToList();
+
+            return Task.FromResult(new SupplierSearchSuggestionsDto
+            {
+                Suppliers = matched
+            });
         }
 
         public Task<bool> HasLedgerTransactionsAsync(Guid supplierId, APDocType docType, CancellationToken cancellationToken = default)
@@ -260,8 +284,13 @@ public class SupplierManagementTests
         public Task<(IReadOnlyList<SupplierBranchAssignment> Items, int TotalCount)> GetPagedBranchAssignmentsAsync(
             string? supplierSearch,
             string? branchSearch,
+            IReadOnlyList<string>? supplierCodes,
+            IReadOnlyList<string>? supplierNames,
+            IReadOnlyList<string>? branchCodes,
+            IReadOnlyList<string>? branchNames,
             Guid? supplierId,
             Guid? branchId,
+            SupplierStatus? status,
             int pageIndex,
             int pageSize,
             CancellationToken cancellationToken = default)
@@ -275,11 +304,19 @@ public class SupplierManagementTests
             {
                 query = query.Where(x => x.BranchId == branchId.Value);
             }
+            if (status.HasValue)
+            {
+                query = query.Where(x => x.Status == status.Value);
+            }
             var list = query.ToList();
             var paged = list.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
             return Task.FromResult(((IReadOnlyList<SupplierBranchAssignment>)paged, list.Count));
         }
 
+        public Task<SupplierBranchAssignment?> GetBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(BranchAssignments.FirstOrDefault(x => x.SupplierId == supplierId && x.BranchId == branchId));
+        }
 
         public Task<bool> BranchAssignmentExistsAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
         {
@@ -300,6 +337,18 @@ public class SupplierManagementTests
                 BranchAssignments.Remove(item);
             }
             return Task.CompletedTask;
+        }
+
+        public List<MT_GRMS.Domain.Entities.SaaS.Branch> Branches { get; } = new();
+
+        public Task<bool> BranchExistsAsync(Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Branches.Any(x => x.Id == branchId));
+        }
+
+        public Task<MT_GRMS.Domain.Entities.SaaS.Branch?> GetBranchByIdAsync(Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Branches.FirstOrDefault(x => x.Id == branchId));
         }
     }
 
@@ -736,6 +785,249 @@ public class SupplierManagementTests
 
         // ASSERT
         Assert.Empty(repo.BranchAssignments);
+    }
+
+    [Fact]
+    public async Task UpdateBranchAssignmentStatus_ToInactive_WithoutReason_Throws()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid(),
+            Name = "Vinamilk",
+            Code = "SUP-001",
+            Status = SupplierStatus.Active,
+            TenantId = "tenant-test-01"
+        };
+        await repo.AddAsync(supplier);
+
+        var branchId = Guid.NewGuid();
+        await repo.AddBranchAssignmentAsync(new SupplierBranchAssignment
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            BranchId = branchId,
+            Status = SupplierStatus.Active
+        });
+
+        await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateBranchAssignmentStatusAsync(supplier.Id, branchId, new UpdateSupplierBranchAssignmentStatusRequest
+            {
+                Status = SupplierStatus.Inactive
+            }));
+    }
+
+    [Fact]
+    public async Task UpdateBranchAssignmentStatus_ToInactive_WithReason_ThenReactivate_Succeeds()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid(),
+            Name = "Vinamilk",
+            Code = "SUP-001",
+            Status = SupplierStatus.Active,
+            TenantId = "tenant-test-01"
+        };
+        await repo.AddAsync(supplier);
+
+        var branchId = Guid.NewGuid();
+        await repo.AddBranchAssignmentAsync(new SupplierBranchAssignment
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            BranchId = branchId,
+            Status = SupplierStatus.Active
+        });
+
+        var inactive = await service.UpdateBranchAssignmentStatusAsync(supplier.Id, branchId, new UpdateSupplierBranchAssignmentStatusRequest
+        {
+            Status = SupplierStatus.Inactive,
+            Reason = "Cửa hàng tạm đóng để sửa chữa"
+        });
+
+        Assert.Equal("Inactive", inactive.Status);
+        Assert.Equal("Cửa hàng tạm đóng để sửa chữa", inactive.InactiveReason);
+
+        var active = await service.UpdateBranchAssignmentStatusAsync(supplier.Id, branchId, new UpdateSupplierBranchAssignmentStatusRequest
+        {
+            Status = SupplierStatus.Active
+        });
+
+        Assert.Equal("Active", active.Status);
+        Assert.Null(active.InactiveReason);
+    }
+
+    [Fact]
+    public async Task REQ_SEARCH01_GetSearchSuggestions_ReturnsMatchingSuppliers()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var s1 = new Supplier { Id = Guid.NewGuid(), Name = "Công ty CP Sữa Hà Nam", Code = "SUP-HANAM", ContactPerson = "Trần Hà", Phone = "0988111222", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        var s2 = new Supplier { Id = Guid.NewGuid(), Name = "Công ty TNHH Ba Vì", Code = "SUP-BAVI", ContactPerson = "Lê Lan", Phone = "0977333444", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        await repo.AddAsync(s1);
+        await repo.AddAsync(s2);
+
+        // ACT
+        var suggestions = await service.GetSearchSuggestionsAsync("Hà", 10);
+
+        // ASSERT
+        Assert.NotNull(suggestions);
+        Assert.Single(suggestions.Suppliers);
+        Assert.Equal("SUP-HANAM", suggestions.Suppliers[0].Code);
+    }
+
+    [Fact]
+    public async Task REQ_SEARCH01_FilterByMultipleSuppliersAndContacts_Success()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var s1 = new Supplier { Id = Guid.NewGuid(), Name = "NCC A", Code = "SUP-A", ContactPerson = "Nguyễn Văn A", Phone = "0911", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        var s2 = new Supplier { Id = Guid.NewGuid(), Name = "NCC B", Code = "SUP-B", ContactPerson = "Trần Thị B", Phone = "0922", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        var s3 = new Supplier { Id = Guid.NewGuid(), Name = "NCC C", Code = "SUP-C", ContactPerson = "Lê C", Phone = "0933", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        await repo.AddAsync(s1);
+        await repo.AddAsync(s2);
+        await repo.AddAsync(s3);
+
+        // ACT: Lọc theo danh sách 2 NCC (s1, s2)
+        var filter = new SupplierQueryFilter
+        {
+            SupplierIds = new List<Guid> { s1.Id, s2.Id },
+            PageIndex = 1,
+            PageSize = 10
+        };
+        var result = await service.GetSuppliersAsync(filter);
+
+        // ASSERT
+        Assert.Equal(2, result.TotalItems);
+        Assert.Contains(result.Items, x => x.Code == "SUP-A");
+        Assert.Contains(result.Items, x => x.Code == "SUP-B");
+        Assert.DoesNotContain(result.Items, x => x.Code == "SUP-C");
+    }
+
+    [Fact]
+    public async Task REQ_SBA01_AssignSuppliersToBranch_Success_WithMultipleSuppliers()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var branch = new MT_GRMS.Domain.Entities.SaaS.Branch
+        {
+            Id = Guid.NewGuid(),
+            BranchCode = "BR-HCM-01",
+            Name = "Chi Nhánh Quận 1",
+            IsActive = true
+        };
+        repo.Branches.Add(branch);
+
+        var s1 = new Supplier { Id = Guid.NewGuid(), Name = "NCC A", Code = "SUP-001", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        var s2 = new Supplier { Id = Guid.NewGuid(), Name = "NCC B", Code = "SUP-002", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        await repo.AddAsync(s1);
+        await repo.AddAsync(s2);
+
+        // ACT
+        var command = new AssignSuppliersToBranchCommand
+        {
+            BranchId = branch.Id,
+            SupplierIds = new List<Guid> { s1.Id, s2.Id }
+        };
+        var result = await service.AssignSuppliersToBranchAsync(command);
+
+        // ASSERT
+        Assert.Equal(2, result.Count);
+        Assert.Contains(result, r => r.SupplierId == s1.Id && r.BranchId == branch.Id && r.Status == "Active");
+        Assert.Contains(result, r => r.SupplierId == s2.Id && r.BranchId == branch.Id && r.Status == "Active");
+        Assert.Equal(2, repo.BranchAssignments.Count);
+    }
+
+    [Fact]
+    public async Task REQ_SBA01_AssignSuppliersToBranch_ReactivatesInactiveAssignment()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var branch = new MT_GRMS.Domain.Entities.SaaS.Branch
+        {
+            Id = Guid.NewGuid(),
+            BranchCode = "BR-01",
+            Name = "Chi nhánh 1",
+            IsActive = true
+        };
+        repo.Branches.Add(branch);
+
+        var supplier = new Supplier { Id = Guid.NewGuid(), Name = "NCC A", Code = "SUP-A", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        await repo.AddAsync(supplier);
+
+        // Đã từng gán nhưng đang Inactive
+        var oldAssignment = new SupplierBranchAssignment
+        {
+            SupplierId = supplier.Id,
+            BranchId = branch.Id,
+            TenantId = "tenant-01",
+            Status = SupplierStatus.Inactive,
+            InactiveReason = "Tạm ngưng hợp tác"
+        };
+        await repo.AddBranchAssignmentAsync(oldAssignment);
+
+        // ACT: Gán lại NCC cho chi nhánh đó
+        var command = new AssignSuppliersToBranchCommand
+        {
+            BranchId = branch.Id,
+            SupplierIds = new List<Guid> { supplier.Id }
+        };
+        var result = await service.AssignSuppliersToBranchAsync(command);
+
+        // ASSERT: Tái kích hoạt thành Active và xóa InactiveReason
+        Assert.Single(result);
+        Assert.Equal("Active", result[0].Status);
+        Assert.Null(oldAssignment.InactiveReason);
+        Assert.Equal(SupplierStatus.Active, oldAssignment.Status);
+    }
+
+    [Fact]
+    public async Task REQ_SBA01_AssignSuppliersToBranch_Throws_WhenBranchInactive()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var branch = new MT_GRMS.Domain.Entities.SaaS.Branch
+        {
+            Id = Guid.NewGuid(),
+            BranchCode = "BR-02",
+            Name = "Chi nhánh đóng cửa",
+            IsActive = false // Bị vô hiệu hóa
+        };
+        repo.Branches.Add(branch);
+
+        var supplier = new Supplier { Id = Guid.NewGuid(), Name = "NCC A", Code = "SUP-A", Status = SupplierStatus.Active, TenantId = "tenant-01" };
+        await repo.AddAsync(supplier);
+
+        var command = new AssignSuppliersToBranchCommand
+        {
+            BranchId = branch.Id,
+            SupplierIds = new List<Guid> { supplier.Id }
+        };
+
+        // ACT & ASSERT: Ném BusinessException
+        await Assert.ThrowsAsync<BusinessException>(() => service.AssignSuppliersToBranchAsync(command));
     }
 }
 

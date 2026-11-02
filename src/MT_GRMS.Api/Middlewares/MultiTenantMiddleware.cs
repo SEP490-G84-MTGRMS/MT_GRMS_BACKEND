@@ -33,18 +33,29 @@ public class MultiTenantMiddleware
             }
         }
 
-        // Header X-Tenant-Id hoặc tenant seed local (tenant_mt_mart_01)
-        if (string.IsNullOrWhiteSpace(tenantContext.CurrentTenantId)
-            || tenantContext.CurrentTenantId is "DEFAULT" or "default-tenant")
+        // Hỗ trợ header X-Tenant-Id hoặc fallback tenant cho môi trường dev/standalone
+        if (string.IsNullOrWhiteSpace(tenantContext.CurrentTenantId) ||
+            tenantContext.CurrentTenantId == "default-tenant" ||
+            tenantContext.CurrentTenantId == "DEFAULT" ||
+            tenantContext.CurrentTenantId == "TENANT-HCM-01")
         {
             var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
-            var fallbackTenant = !string.IsNullOrWhiteSpace(headerTenantId) && headerTenantId is not ("DEFAULT" or "default-tenant")
-                ? headerTenantId
-                : "tenant_mt_mart_01";
-            tenantContext.SetContext(
-                fallbackTenant,
-                tenantContext.CurrentUserId == Guid.Empty ? Guid.Empty : tenantContext.CurrentUserId,
-                tenantContext.CurrentBranchId);
+            var fallbackTenant = !string.IsNullOrWhiteSpace(headerTenantId) ? headerTenantId : "tenant_mt_mart_01";
+            if (fallbackTenant is "default-tenant" or "DEFAULT" or "TENANT-HCM-01")
+            {
+                fallbackTenant = "tenant_mt_mart_01";
+            }
+            tenantContext.SetContext(fallbackTenant, Guid.Empty, null);
+
+            var headerRole = context.Request.Headers["X-User-Role"].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(headerRole))
+            {
+                tenantContext.SetRole(headerRole);
+            }
+            else if (string.IsNullOrWhiteSpace(tenantContext.CurrentRole))
+            {
+                tenantContext.SetRole("StoreOwner");
+            }
         }
 
         await _next(context);

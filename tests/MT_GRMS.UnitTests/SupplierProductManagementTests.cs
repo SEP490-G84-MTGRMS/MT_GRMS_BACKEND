@@ -413,9 +413,17 @@ public class SupplierProductManagementTests
 
         public Task<(IReadOnlyList<Supplier> Items, int TotalCount)> GetPagedListAsync(
             string? searchTerm, SupplierType? supplierType, SupplierStatus? status, Guid? categoryId, int pageIndex, int pageSize,
-            string? code = null, string? name = null, string? contactPerson = null, string? phone = null, CancellationToken cancellationToken = default)
+            string? code = null, string? name = null, string? contactPerson = null, string? phone = null,
+            List<Guid>? supplierIds = null, List<Guid>? productIds = null, List<string>? contactPersons = null, List<string>? phones = null,
+            List<string>? codes = null, List<string>? names = null,
+            CancellationToken cancellationToken = default)
         {
             return Task.FromResult(((IReadOnlyList<Supplier>)Suppliers, Suppliers.Count));
+        }
+
+        public Task<SupplierSearchSuggestionsDto> GetSearchSuggestionsAsync(string query, int limit = 10, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new SupplierSearchSuggestionsDto());
         }
 
         public Task<bool> HasLedgerTransactionsAsync(Guid supplierId, APDocType docType, CancellationToken cancellationToken = default) => Task.FromResult(false);
@@ -492,8 +500,13 @@ public class SupplierProductManagementTests
         public Task<(IReadOnlyList<SupplierBranchAssignment> Items, int TotalCount)> GetPagedBranchAssignmentsAsync(
             string? supplierSearch,
             string? branchSearch,
+            IReadOnlyList<string>? supplierCodes,
+            IReadOnlyList<string>? supplierNames,
+            IReadOnlyList<string>? branchCodes,
+            IReadOnlyList<string>? branchNames,
             Guid? supplierId,
             Guid? branchId,
+            SupplierStatus? status,
             int pageIndex,
             int pageSize,
             CancellationToken cancellationToken = default)
@@ -501,6 +514,10 @@ public class SupplierProductManagementTests
             return Task.FromResult(((IReadOnlyList<SupplierBranchAssignment>)new List<SupplierBranchAssignment>(), 0));
         }
 
+        public Task<SupplierBranchAssignment?> GetBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(BranchAssignments.FirstOrDefault(x => x.SupplierId == supplierId && x.BranchId == branchId));
+        }
 
         public Task<bool> BranchAssignmentExistsAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default)
         {
@@ -521,6 +538,22 @@ public class SupplierProductManagementTests
                 BranchAssignments.Remove(item);
             }
             return Task.CompletedTask;
+        }
+
+        public Task<bool> BranchExistsAsync(Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
+        }
+
+        public Task<MT_GRMS.Domain.Entities.SaaS.Branch?> GetBranchByIdAsync(Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<MT_GRMS.Domain.Entities.SaaS.Branch?>(new MT_GRMS.Domain.Entities.SaaS.Branch
+            {
+                Id = branchId,
+                BranchCode = "BR-01",
+                Name = "Chi nhánh mẫu",
+                IsActive = true
+            });
         }
     }
 }

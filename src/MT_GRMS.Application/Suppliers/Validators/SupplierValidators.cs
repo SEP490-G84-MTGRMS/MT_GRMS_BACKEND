@@ -89,11 +89,8 @@ public class UpdateSupplierDeliveryConfigCommandValidator : AbstractValidator<Up
         RuleFor(x => x.CutoffDayOffset)
             .GreaterThanOrEqualTo(0).WithMessage("Cutoff day offset phải lớn hơn hoặc bằng 0.");
 
-        RuleFor(x => x.MinOrderValue)
-            .GreaterThanOrEqualTo(0).WithMessage("Giá trị đơn tối thiểu phải lớn hơn hoặc bằng 0.");
-
         RuleFor(x => x.MinOrderQuantity)
-            .GreaterThanOrEqualTo(0).WithMessage("Số lượng đặt tối thiểu phải lớn hơn hoặc bằng 0.");
+            .GreaterThanOrEqualTo(0).WithMessage("Số lượng đặt tối thiểu (MOQ) phải lớn hơn hoặc bằng 0.");
 
         RuleFor(x => x.UrgentFeePercent)
             .InclusiveBetween(0, 100).WithMessage("Phụ phí hỏa tốc phải từ 0% đến 100%.");

@@ -44,7 +44,6 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<Category> Categories { get; set; } = null!;
     public virtual DbSet<Product> Products { get; set; } = null!;
     public virtual DbSet<ProductUnit> ProductUnits { get; set; } = null!;
-    public virtual DbSet<ProductCombo> ProductCombos { get; set; } = null!;
 
     // 3. Phân hệ Chi nhánh, Kho & Điều chuyển (4 bảng)
     public virtual DbSet<Branch> Branches { get; set; } = null!;

@@ -15,7 +15,6 @@ public class SupplierDeliveryConfig : BaseTenantEntity
     public int DeliveryWeekdaysMask { get; set; } = 127; // 7 days (binary 1111111)
     public string DeliveryDaysJson { get; set; } = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]";
 
-    public decimal MinOrderValue { get; set; } = 0;
     public int MinOrderQuantity { get; set; } = 0;
 
     public bool AllowUrgent { get; set; } = false;

@@ -1,4 +1,5 @@
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Suppliers.Dtos;
 using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Domain.Enums;
 
@@ -20,6 +21,17 @@ public interface ISupplierRepository : IRepository<Supplier>
         string? name = null,
         string? contactPerson = null,
         string? phone = null,
+        List<Guid>? supplierIds = null,
+        List<Guid>? productIds = null,
+        List<string>? contactPersons = null,
+        List<string>? phones = null,
+        List<string>? codes = null,
+        List<string>? names = null,
+        CancellationToken cancellationToken = default);
+
+    Task<SupplierSearchSuggestionsDto> GetSearchSuggestionsAsync(
+        string query,
+        int limit = 10,
         CancellationToken cancellationToken = default);
 
     Task<bool> HasLedgerTransactionsAsync(Guid supplierId, APDocType docType, CancellationToken cancellationToken = default);
@@ -58,13 +70,21 @@ public interface ISupplierRepository : IRepository<Supplier>
     Task<(IReadOnlyList<SupplierBranchAssignment> Items, int TotalCount)> GetPagedBranchAssignmentsAsync(
         string? supplierSearch,
         string? branchSearch,
+        IReadOnlyList<string>? supplierCodes,
+        IReadOnlyList<string>? supplierNames,
+        IReadOnlyList<string>? branchCodes,
+        IReadOnlyList<string>? branchNames,
         Guid? supplierId,
         Guid? branchId,
+        SupplierStatus? status,
         int pageIndex,
         int pageSize,
         CancellationToken cancellationToken = default);
+    Task<SupplierBranchAssignment?> GetBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default);
     Task<bool> BranchAssignmentExistsAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default);
     Task AddBranchAssignmentAsync(SupplierBranchAssignment assignment, CancellationToken cancellationToken = default);
     Task RemoveBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default);
+    Task<bool> BranchExistsAsync(Guid branchId, CancellationToken cancellationToken = default);
+    Task<MT_GRMS.Domain.Entities.SaaS.Branch?> GetBranchByIdAsync(Guid branchId, CancellationToken cancellationToken = default);
 }
 

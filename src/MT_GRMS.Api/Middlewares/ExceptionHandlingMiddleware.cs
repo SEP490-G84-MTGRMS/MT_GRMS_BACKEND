@@ -62,6 +62,18 @@ public class ExceptionHandlingMiddleware
                 _logger.LogWarning(unauthEx, "Unauthorized access: {Message}", unauthEx.Message);
                 break;
 
+            case Microsoft.EntityFrameworkCore.DbUpdateException dbUpdateEx when dbUpdateEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505":
+                statusCode = (int)HttpStatusCode.Conflict;
+                var constraintName = pgEx.ConstraintName ?? string.Empty;
+                var friendlyMsg = constraintName.Contains("ProductCode", StringComparison.OrdinalIgnoreCase)
+                    ? "Mã sản phẩm đã tồn tại trong hệ thống. Vui lòng nhập mã khác."
+                    : constraintName.Contains("Barcode", StringComparison.OrdinalIgnoreCase)
+                        ? "Mã vạch đã được sử dụng bởi sản phẩm khác."
+                        : "Dữ liệu bị trùng lặp trong hệ thống (vi phạm ràng buộc duy nhất).";
+                apiResponse = ApiResponse<object>.Fail("DUPLICATE_KEY", friendlyMsg);
+                _logger.LogWarning(dbUpdateEx, "Unique constraint violation: {ConstraintName}", constraintName);
+                break;
+
             case NotFoundException notFoundEx:
                 statusCode = (int)HttpStatusCode.NotFound;
                 apiResponse = ApiResponse<object>.Fail(ErrorCodes.NotFound, notFoundEx.Message);

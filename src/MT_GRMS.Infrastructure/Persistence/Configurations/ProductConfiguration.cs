@@ -16,7 +16,7 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(x => x.TenantId).HasColumnName("TenantID").HasMaxLength(50).IsRequired();
         builder.Property(x => x.CategoryId).HasColumnName("CategoryID").IsRequired();
         builder.Property(x => x.ProductCode).HasMaxLength(50).IsRequired();
-        builder.Property(x => x.Barcode).HasMaxLength(50).IsRequired();
+        builder.Property(x => x.Barcode).HasMaxLength(50).IsRequired(false);
         builder.Property(x => x.Name).HasMaxLength(200).IsRequired();
         builder.Property(x => x.BaseUnit).HasMaxLength(30).IsRequired();
         builder.Property(x => x.CostPrice).HasColumnType("decimal(18,2)");
@@ -26,15 +26,19 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(x => x.VatRate).HasColumnType("decimal(5,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.ProductType).HasMaxLength(30).HasDefaultValue("STANDARD");
         builder.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("Active");
-        builder.Property(x => x.ImageUrl).HasMaxLength(500);
+        builder.Property(x => x.ImageUrls).HasColumnType("text[]");
         builder.Property(x => x.Description).HasMaxLength(1000);
         builder.Property(x => x.InternalNote).HasMaxLength(500);
         builder.Property(x => x.HasBatches).HasDefaultValue(false);
         builder.Property(x => x.IsFavorite).HasDefaultValue(false);
         builder.Property(x => x.EligibleForVatReduction).HasDefaultValue(false);
 
-        builder.HasIndex(x => x.Barcode).IsUnique();
-        builder.HasIndex(x => new { x.TenantId, x.ProductCode }).IsUnique();
+        builder.HasIndex(x => x.Barcode)
+            .IsUnique()
+            .HasFilter("\"IsDeleted\" = false AND \"Barcode\" IS NOT NULL");
+        builder.HasIndex(x => new { x.TenantId, x.ProductCode })
+            .IsUnique()
+            .HasFilter("\"IsDeleted\" = false");
 
         builder.HasOne(x => x.Category)
             .WithMany(c => c.Products)

@@ -6,6 +6,9 @@ using MT_GRMS.Domain.Entities;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Identity;
+using Promotion = MT_GRMS.Domain.Entities.Sales.Promotion;
+using PromotionCondition = MT_GRMS.Domain.Entities.Sales.PromotionCondition;
+using VoucherCode = MT_GRMS.Domain.Entities.Sales.VoucherCode;
 using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Infrastructure.Persistence;
@@ -468,6 +471,13 @@ public static class DatabaseSeeder
                 await context.ExpenseVouchers.AddRangeAsync(expenses, ct);
                 await context.SaveChangesAsync(ct);
             }
+            // 6. Seed Promotions and Vouchers
+            await SeedPromotionsAsync(context, DefaultTenantId, logger, ct);
+            if (DefaultTenantId != "default-tenant")
+            {
+                await SeedPromotionsAsync(context, "default-tenant", logger, ct);
+            }
+
 
             // 6. Seed Default Cash Accounts (Till, Safe, Bank) for Tenant if not present
             if (!await context.BranchCashTills.IgnoreQueryFilters().AnyAsync(t => t.TenantId == DefaultTenantId, ct))
@@ -724,5 +734,357 @@ public static class DatabaseSeeder
             logger.LogError(ex, "An error occurred during DatabaseSeeder execution.");
             throw;
         }
+    }
+    private static async Task SeedPromotionsAsync(AppDbContext context, string tenantId, ILogger logger, CancellationToken ct)
+    {
+        var now = DateTime.UtcNow;
+
+        if (!await context.Promotions.IgnoreQueryFilters().AnyAsync(p => p.TenantId == tenantId && p.PromotionCode == "KM-GIAM10-TOIDA50K", ct))
+        {
+            logger.LogInformation("Seeding Promotions and Vouchers for Tenant {TenantId}...", tenantId);
+
+            var promotions = new List<Promotion>
+            {
+                new Promotion
+                {
+                    TenantId = tenantId,
+                    PromotionCode = "KM-GIAM10-TOIDA50K",
+                    PromotionName = "Giảm 10% cho đơn từ 200.000đ (Tối đa 50.000đ)",
+                    Type = "ORDER_DISCOUNT",
+                    DiscountValue = 10.00m,
+                    MinOrderValue = 200000.00m,
+                    MaxDiscountAmount = 50000.00m,
+                    UsageLimit = 500,
+                    UsedCount = 15,
+                    BudgetLimit = 10000000.00m,
+                    TotalDiscountGiven = 750000.00m,
+                    StartDate = now.AddDays(-30),
+                    EndDate = now.AddDays(180),
+                    IsActive = true,
+                    Description = "Chương trình tri ân khách hàng: Giảm 10% cho hóa đơn từ 200.000đ, trần chiết khấu 50.000đ.",
+                    TargetBranches = "ALL"
+                },
+                new Promotion
+                {
+                    TenantId = tenantId,
+                    PromotionCode = "KM-GIAM30K-DON150K",
+                    PromotionName = "Giảm thẳng 30.000đ cho đơn từ 150.000đ",
+                    Type = "FIXED_AMOUNT",
+                    DiscountValue = 30000.00m,
+                    MinOrderValue = 150000.00m,
+                    MaxDiscountAmount = null,
+                    UsageLimit = 200,
+                    UsedCount = 28,
+                    BudgetLimit = 6000000.00m,
+                    TotalDiscountGiven = 840000.00m,
+                    StartDate = now.AddDays(-15),
+                    EndDate = now.AddDays(90),
+                    IsActive = true,
+                    Description = "Ưu đãi trực tiếp: Trừ ngay 30.000 VNĐ cho hóa đơn mua sắm từ 150.000 VNĐ.",
+                    TargetBranches = "ALL"
+                }
+            };
+
+            // Promotion 3: Mua 3 Chocopie tặng 1 Coca
+            var p3 = new Promotion
+            {
+                TenantId = tenantId,
+                PromotionCode = "KM-MUA3TANG1-COCA",
+                PromotionName = "Mua 3 Bánh Chocopie tặng 1 Coca-Cola lon",
+                Type = "BUY_X_GET_Y",
+                DiscountValue = 0.00m,
+                MinOrderValue = 0.00m,
+                UsageLimit = 100,
+                UsedCount = 8,
+                StartDate = now.AddDays(-10),
+                EndDate = now.AddDays(60),
+                IsActive = true,
+                Description = "Ưu đãi giải khát: Khi mua đủ 3 hộp Bánh Chocopie Orion, tặng ngay 1 lốc Coca-Cola lon 320ml.",
+                TargetBranches = "ALL"
+            };
+            p3.Conditions.Add(new PromotionCondition
+            {
+                TenantId = tenantId,
+                PromotionId = p3.Id,
+                ProductId = Guid.Parse("aaaaaaaa-1111-1111-1111-111111111111"),
+                ProductRole = "BUY",
+                MinQty = 3.00m,
+                Note = "Mua tối thiểu 3 hộp Bánh Chocopie Orion"
+            });
+            p3.Conditions.Add(new PromotionCondition
+            {
+                TenantId = tenantId,
+                PromotionId = p3.Id,
+                ProductId = Guid.Parse("aaaaaaaa-3333-3333-3333-333333333333"),
+                ProductRole = "GIFT",
+                MinQty = 1.00m,
+                Note = "Tặng 1 lốc nước ngọt Coca-Cola 320ml"
+            });
+            promotions.Add(p3);
+
+            // Promotion 4: Voucher VIP 50k
+            var p4 = new Promotion
+            {
+                TenantId = tenantId,
+                PromotionCode = "VOUCHER-VIP50K",
+                PromotionName = "Chiến dịch Voucher VIP Giảm 50.000đ",
+                Type = "VOUCHER",
+                DiscountValue = 50000.00m,
+                MinOrderValue = 250000.00m,
+                MaxDiscountAmount = null,
+                UsageLimit = 10,
+                UsedCount = 1,
+                BudgetLimit = 500000.00m,
+                TotalDiscountGiven = 50000.00m,
+                StartDate = now.AddDays(-20),
+                EndDate = now.AddDays(120),
+                IsActive = true,
+                Description = "Mã voucher tri ân giảm 50.000đ cho khách hàng VIP đạt cấp độ Vàng/Kim Cương.",
+                TargetBranches = "ALL",
+                VoucherPrefix = "VIP50K",
+                TotalVoucherQuantity = 4
+            };
+            p4.VoucherCodes.Add(new VoucherCode { TenantId = tenantId, PromotionId = p4.Id, Code = "VIP50K-TEST01", Status = "UNUSED" });
+            p4.VoucherCodes.Add(new VoucherCode { TenantId = tenantId, PromotionId = p4.Id, Code = "VIP50K-TEST02", Status = "UNUSED" });
+            p4.VoucherCodes.Add(new VoucherCode { TenantId = tenantId, PromotionId = p4.Id, Code = "VIP50K-TEST03", Status = "UNUSED" });
+            p4.VoucherCodes.Add(new VoucherCode
+            {
+                TenantId = tenantId,
+                PromotionId = p4.Id,
+                Code = "VIP50K-DA-DUNG",
+                Status = "USED",
+                OrderCode = "ORD-20261015-001",
+                OrderId = Guid.Parse("f0000001-1111-1111-1111-111111111111"),
+                UsedAt = now.AddDays(-2)
+            });
+            promotions.Add(p4);
+
+            // Promotion 5: Voucher Cuối Tuần 20%
+            var p5 = new Promotion
+            {
+                TenantId = tenantId,
+                PromotionCode = "VOUCHER-CUOITUAN20",
+                PromotionName = "Voucher Giảm 20% Mua Sắm Cuối Tuần (Tối đa 40.000đ)",
+                Type = "VOUCHER",
+                DiscountValue = 20.00m,
+                MinOrderValue = 100000.00m,
+                MaxDiscountAmount = 40000.00m,
+                UsageLimit = 20,
+                UsedCount = 0,
+                StartDate = now.AddDays(-5),
+                EndDate = now.AddDays(90),
+                IsActive = true,
+                Description = "Mã voucher giảm 20% áp dụng cho khách hàng thanh toán tại quầy POS vào cuối tuần.",
+                TargetBranches = "ALL",
+                VoucherPrefix = "WEEKEND",
+                TotalVoucherQuantity = 3
+            };
+            p5.VoucherCodes.Add(new VoucherCode { TenantId = tenantId, PromotionId = p5.Id, Code = "WEEKEND-20PCT01", Status = "UNUSED" });
+            p5.VoucherCodes.Add(new VoucherCode { TenantId = tenantId, PromotionId = p5.Id, Code = "WEEKEND-20PCT02", Status = "UNUSED" });
+            p5.VoucherCodes.Add(new VoucherCode { TenantId = tenantId, PromotionId = p5.Id, Code = "WEEKEND-20PCT03", Status = "UNUSED" });
+            promotions.Add(p5);
+
+            // Promotion 6: Hết hạn
+            var p6 = new Promotion
+            {
+                TenantId = tenantId,
+                PromotionCode = "KM-TET2025-HETHAN",
+                PromotionName = "Khuyến mãi Tết 2025 (Đã hết hạn)",
+                Type = "ORDER_DISCOUNT",
+                DiscountValue = 15.00m,
+                MinOrderValue = 100000.00m,
+                MaxDiscountAmount = 30000.00m,
+                UsageLimit = 100,
+                UsedCount = 100,
+                StartDate = now.AddDays(-400),
+                EndDate = now.AddDays(-340),
+                IsActive = false,
+                Description = "Chương trình khuyến mãi mùa Tết năm cũ, đã hết hạn để test bộ lọc trạng thái.",
+                TargetBranches = "ALL"
+            };
+            promotions.Add(p6);
+
+            await context.Promotions.AddRangeAsync(promotions, ct);
+            await context.SaveChangesAsync(ct);
+        }
+
+        // 7. Seed Dữ liệu bán lẻ POS (Hàng tạp hóa, Barcode, Tồn kho FEFO & Khách hàng công nợ)
+        await SeedPosRetailDataAsync(context, logger, ct);
+    }
+
+    private static async Task SeedPosRetailDataAsync(AppDbContext context, ILogger logger, CancellationToken ct)
+    {
+        // 1. Tạo hoặc lấy Branch POS chuẩn
+        var branch = await context.Branches.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.BranchCode == "BR-POS-01", ct);
+        if (branch == null)
+        {
+            branch = new Domain.Entities.SaaS.Branch
+            {
+                Id = Guid.Parse("11111111-1111-1111-1111-111111111111"),
+                TenantId = DefaultTenantId,
+                BranchCode = "BR-POS-01",
+                Name = "Siêu Thị Mini MT-Grocery (Cầu Giấy)",
+                Address = "123 Xuân Thủy, Cầu Giấy, Hà Nội",
+                Phone = "0987.654.321",
+                IsActive = true
+            };
+            await context.Branches.AddAsync(branch, ct);
+            await context.SaveChangesAsync(ct);
+        }
+
+        // 2. Thêm khách hàng mẫu phục vụ test bán hàng và bán nợ
+        if (!await context.Customers.IgnoreQueryFilters().AnyAsync(c => c.CustomerCode == "KH-POS-001", ct))
+        {
+            logger.LogInformation("Seeding POS Retail Customers...");
+            var customers = new List<Domain.Entities.Sales.Customer>
+            {
+                new Domain.Entities.Sales.Customer
+                {
+                    Id = Guid.Parse("22222222-2222-2222-2222-222222222222"),
+                    TenantId = DefaultTenantId,
+                    CustomerCode = "KH-POS-001",
+                    Name = "Nguyễn Văn Khách (Thân Thiết)",
+                    Phone = "0912345678",
+                    Email = "khach.nguyen@gmail.com",
+                    Address = "Số 15 Cầu Giấy, Hà Nội",
+                    MembershipTier = "Gold",
+                    RewardPoints = 250,
+                    TotalSpending = 5500000m,
+                    TotalDebt = 350000m,
+                    DebtLimit = 5000000m,
+                    AllowDebt = true,
+                    IsBlockedForDebt = false
+                },
+                new Domain.Entities.Sales.Customer
+                {
+                    Id = Guid.Parse("33333333-3333-3333-3333-333333333333"),
+                    TenantId = DefaultTenantId,
+                    CustomerCode = "KH-POS-002",
+                    Name = "Chị Lan Tạp Hóa Xóm",
+                    Phone = "0987654321",
+                    Address = "Ngõ 165 Cầu Giấy, Hà Nội",
+                    MembershipTier = "Platinum",
+                    RewardPoints = 520,
+                    TotalSpending = 18000000m,
+                    TotalDebt = 2100000m,
+                    DebtLimit = 10000000m,
+                    AllowDebt = true,
+                    IsBlockedForDebt = false
+                },
+                new Domain.Entities.Sales.Customer
+                {
+                    Id = Guid.Parse("44444444-4444-4444-4444-444444444444"),
+                    TenantId = DefaultTenantId,
+                    CustomerCode = "KH-POS-003",
+                    Name = "Bác Ba (Bị Khóa Nợ)",
+                    Phone = "0905123456",
+                    Address = "Phố Dịch Vọng, Cầu Giấy, Hà Nội",
+                    MembershipTier = "Standard",
+                    RewardPoints = 20,
+                    TotalSpending = 1200000m,
+                    TotalDebt = 1200000m,
+                    DebtLimit = 1000000m,
+                    AllowDebt = false,
+                    IsBlockedForDebt = true
+                }
+            };
+            await context.Customers.AddRangeAsync(customers, ct);
+            await context.SaveChangesAsync(ct);
+        }
+
+        // 3. Thêm các sản phẩm tạp hóa có Barcode chuẩn
+        var catFmcg = await context.Categories.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.CategoryCode == "FMCG", ct);
+        var catId = catFmcg?.Id ?? Guid.Parse("11111111-1111-1111-1111-111111111111");
+
+        var posProducts = new List<(Guid Id, string SKU, string Barcode, string Name, decimal Price, decimal CostPrice, string Unit, decimal Vat)>
+        {
+            (Guid.Parse("e0000001-0000-0000-0000-000000000001"), "HH-TOM-CAY", "8934563138164", "Mì Hảo Hảo tôm chua cay 75g", 4500m, 3600m, "Gói", 0.01m),
+            (Guid.Parse("e0000002-0000-0000-0000-000000000002"), "COCA-320ML", "8935049500123", "Nước ngọt Coca-Cola lon 320ml", 10000m, 7800m, "Lon", 0.01m),
+            (Guid.Parse("e0000003-0000-0000-0000-000000000003"), "REDBULL-250", "8850228000153", "Nước tăng lực Redbull lon 250ml", 12000m, 9500m, "Lon", 0.01m),
+            (Guid.Parse("e0000004-0000-0000-0000-000000000004"), "LAVIE-500ML", "8936036010022", "Nước khoáng Lavie chai 500ml", 6000m, 4200m, "Chai", 0.01m),
+            (Guid.Parse("e0000005-0000-0000-0000-000000000005"), "VNM-100PCT", "8934673123456", "Sữa tươi tiệt trùng Vinamilk 100% 180ml", 8500m, 6800m, "Hộp", 0.01m),
+            (Guid.Parse("e0000006-0000-0000-0000-000000000006"), "KEN-330ML", "8934822212345", "Bia Heineken lon 330ml", 22000m, 18500m, "Lon", 0.01m),
+            (Guid.Parse("e0000007-0000-0000-0000-000000000007"), "SIMPLY-1L", "8934561230018", "Dầu ăn đậu nành Simply chai 1 lít", 55000m, 45000m, "Chai", 0.01m),
+            (Guid.Parse("e0000008-0000-0000-0000-000000000008"), "GAO-ST25-5K", "8935001780099", "Gạo ST25 Ông Cua túi 5kg Thượng Hạng", 180000m, 150000m, "Túi", 0.01m),
+            (Guid.Parse("e0000009-0000-0000-0000-000000000009"), "SUNLIGHT-750", "8934561234567", "Nước rửa chén Sunlight Chanh túi 750g", 30000m, 24000m, "Túi", 0.01m)
+        };
+
+        foreach (var item in posProducts)
+        {
+            var existingProd = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == item.Id || p.Barcode == item.Barcode, ct);
+            if (existingProd == null)
+            {
+                var newP = new Product
+                {
+                    Id = item.Id,
+                    TenantId = DefaultTenantId,
+                    ProductCode = item.SKU,
+                    Barcode = item.Barcode,
+                    Name = item.Name,
+                    CategoryId = catId,
+                    SellingPrice = item.Price,
+                    CostPrice = item.CostPrice,
+                    BaseUnit = item.Unit,
+                    VatRate = item.Vat,
+                    TaxCategory = "STANDARD_1PCT",
+                    Status = "Active"
+                };
+                await context.Products.AddAsync(newP, ct);
+            }
+        }
+        await context.SaveChangesAsync(ct);
+
+        // 4. Tạo tồn kho chi nhánh BranchStocks theo FEFO cho các sản phẩm
+        var pMap = await context.Products.IgnoreQueryFilters()
+            .Where(p => posProducts.Select(x => x.Id).Contains(p.Id))
+            .ToDictionaryAsync(p => p.Id, ct);
+
+        foreach (var item in posProducts)
+        {
+            if (pMap.TryGetValue(item.Id, out var prod))
+            {
+                var hasStock = await context.BranchStocks.IgnoreQueryFilters()
+                    .AnyAsync(s => s.BranchId == branch.Id && s.ProductId == prod.Id, ct);
+
+                if (!hasStock)
+                {
+                    // Lô 1: Hết hạn sớm (trong 1-2 tháng tới)
+                    var stockLotEarly = new Domain.Entities.Inventory.BranchStock
+                    {
+                        Id = Guid.NewGuid(),
+                        TenantId = DefaultTenantId,
+                        BranchId = branch.Id,
+                        ProductId = prod.Id,
+                        BatchCode = $"LOT-{item.SKU}-EARLY",
+                        ManufactureDate = DateTime.UtcNow.AddMonths(-3),
+                        ExpiryDate = DateTime.UtcNow.AddMonths(2),
+                        QuantityOnHand = 25m,
+                        LandedCostPerUnit = item.CostPrice,
+                        ShelfLocation = "Quầy 01",
+                        ZoneArea = "Khu Bán Lẻ"
+                    };
+
+                    // Lô 2: Hết hạn muộn (trong 12 tháng tới)
+                    var stockLotLate = new Domain.Entities.Inventory.BranchStock
+                    {
+                        Id = Guid.NewGuid(),
+                        TenantId = DefaultTenantId,
+                        BranchId = branch.Id,
+                        ProductId = prod.Id,
+                        BatchCode = $"LOT-{item.SKU}-LATE",
+                        ManufactureDate = DateTime.UtcNow.AddMonths(-1),
+                        ExpiryDate = DateTime.UtcNow.AddMonths(12),
+                        QuantityOnHand = 100m,
+                        LandedCostPerUnit = item.CostPrice,
+                        ShelfLocation = "Kho Phụ",
+                        ZoneArea = "Kho Chi Nhánh"
+                    };
+
+                    await context.BranchStocks.AddRangeAsync(new[] { stockLotEarly, stockLotLate }, ct);
+                }
+            }
+        }
+        await context.SaveChangesAsync(ct);
+        logger.LogInformation("Seeded POS Retail Products and FEFO BranchStocks successfully.");
     }
 }

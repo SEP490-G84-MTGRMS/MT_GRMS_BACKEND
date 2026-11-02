@@ -7,11 +7,14 @@ using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Infrastructure.Repositories;
+using MT_GRMS.Infrastructure.Services;
+using MT_GRMS.Infrastructure.Services.Printer;
 
 namespace MT_GRMS.Infrastructure;
 
@@ -31,35 +34,29 @@ public static class DependencyInjection
         }
 
         if (!string.IsNullOrWhiteSpace(connectionString) &&
-            (connectionString.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase) ||
-             connectionString.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase)))
+            (connectionString.StartsWith("postgres://") || connectionString.StartsWith("postgresql://")))
         {
             connectionString = ParsePostgreSqlUri(connectionString);
         }
 
-        // Cấu hình DbContext kết nối Database thật (Database-First)
+        var isInMemory = configuration.GetValue<bool>("UseInMemoryDatabase")
+            || string.Equals(configuration["DatabaseProvider"], "InMemory", StringComparison.OrdinalIgnoreCase);
+
         services.AddDbContext<AppDbContext>((serviceProvider, options) =>
         {
-            if (string.IsNullOrWhiteSpace(connectionString))
+            if (isInMemory || string.IsNullOrWhiteSpace(connectionString))
             {
-                // Fallback nếu chưa cấu hình chuỗi kết nối
-                options.UseInMemoryDatabase("MT_GRMS_Db");
-            }
-            else if (connectionString.Contains("Host=", StringComparison.OrdinalIgnoreCase) ||
-                     connectionString.Contains("Port=", StringComparison.OrdinalIgnoreCase))
-            {
-                // Kết nối cơ sở dữ liệu PostgreSQL (Npgsql)
-                options.UseNpgsql(connectionString, b =>
-                {
-                    b.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName);
-                });
+                options.UseInMemoryDatabase("MT_GRMS_DevDb");
             }
             else
             {
-                // Kết nối cơ sở dữ liệu Microsoft SQL Server
-                options.UseSqlServer(connectionString, b =>
+                options.UseNpgsql(connectionString, npgsqlOptions =>
                 {
-                    b.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName);
+                    npgsqlOptions.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName);
+                    npgsqlOptions.EnableRetryOnFailure(
+                        maxRetryCount: 3,
+                        maxRetryDelay: TimeSpan.FromSeconds(5),
+                        errorCodesToAdd: null);
                 });
             }
         });
@@ -74,6 +71,8 @@ public static class DependencyInjection
         services.AddScoped<IOrderRepository, OrderRepository>();
         services.AddScoped<Application.PosOrders.ISalesOrderRepository, SalesOrderRepository>();
         services.AddScoped<IProductRepository, ProductRepository>();
+        services.AddScoped<ICategoryRepository, CategoryRepository>();
+        services.AddScoped<IProductUnitRepository, ProductUnitRepository>();
         services.AddScoped<IBatchRepository, BatchRepository>();
         services.AddScoped<ICashbookRepository, CashbookRepository>();
         services.AddScoped<Application.Expenses.IExpenseRepository, ExpenseRepository>();
@@ -89,6 +88,13 @@ public static class DependencyInjection
         services.AddScoped<MT_GRMS.Application.GoodsReceipts.IGoodsReceiptRepository, GoodsReceiptRepository>();
         services.AddScoped<MT_GRMS.Application.SupplierReturns.ISupplierReturnRepository, SupplierReturnRepository>();
         services.AddScoped<Application.Promotions.IPromotionRepository, PromotionRepository>();
+
+        // Đăng ký dịch vụ máy in nhiệt hóa đơn POS-58 (khổ in 43mm siêu thị mini)
+        services.AddScoped<IThermalPrintService, ThermalPrintService>();
+
+        // Cấu hình & Đăng ký dịch vụ lưu trữ đám mây Cloudinary
+        services.Configure<CloudinarySettings>(configuration.GetSection(CloudinarySettings.SectionName));
+        services.AddScoped<ICloudinaryService, CloudinaryService>();
 
         return services;
     }
