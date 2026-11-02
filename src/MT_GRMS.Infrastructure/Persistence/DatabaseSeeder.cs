@@ -722,7 +722,7 @@ public static class DatabaseSeeder
                     BaseUnit = item.Unit,
                     VatRate = item.Vat,
                     TaxCategory = "STANDARD_1PCT",
-                    Status = "Active"
+                    Status = ProductStatus.Active
                 };
                 await context.Products.AddAsync(newP, ct);
             }

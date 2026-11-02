@@ -1,5 +1,7 @@
 namespace MT_GRMS.Application.HR.Employees.Dtos;
 
+public record EmployeeAllowanceDto(string Name, decimal Amount);
+
 public record CreateEmployeeRequest(
     string FullName,
     string CitizenId,
@@ -11,8 +13,7 @@ public record CreateEmployeeRequest(
     string? Gender = null,
     string SalaryType = "monthly",
     decimal BaseRate = 0.00m,
-    decimal LunchAllowance = 0.00m,
-    decimal TravelAllowance = 0.00m,
+    List<EmployeeAllowanceDto>? Allowances = null,
     string? BankAccountNumber = null,
     string? BankName = null,
     string? BankAccountHolder = null,
@@ -30,8 +31,7 @@ public record UpdateEmployeeRequest(
     string? Gender = null,
     string SalaryType = "monthly",
     decimal BaseRate = 0.00m,
-    decimal LunchAllowance = 0.00m,
-    decimal TravelAllowance = 0.00m,
+    List<EmployeeAllowanceDto>? Allowances = null,
     string? BankAccountNumber = null,
     string? BankName = null,
     string? BankAccountHolder = null,
@@ -74,8 +74,7 @@ public record EmployeeResponse(
     string? Role,
     string SalaryType,
     decimal BaseRate,
-    decimal LunchAllowance,
-    decimal TravelAllowance,
+    List<EmployeeAllowanceDto> Allowances,
     decimal DebtAmount,
     string Status,
     string? BankAccountNumber,

@@ -7,6 +7,7 @@ using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Application.Branches.Validators;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Inventory;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.Branches;
@@ -140,7 +141,7 @@ public class BranchProductService : IBranchProductService
                     CurrentStock = 0,
                     MinStockLevel = product.MinStock,
                     PrimarySupplierName = "Nông Sản Tươi Sạch Khải Anh",
-                    Status = product.Status,
+                    Status = product.Status.ToString(),
                     ShelfLocation = newStock.ShelfLocation,
                     AssignedDate = DateTime.UtcNow
                 });
@@ -157,13 +158,6 @@ public class BranchProductService : IBranchProductService
         UpdateBranchProductCommand command,
         CancellationToken cancellationToken = default)
     {
-        var validator = new UpdateBranchProductValidator();
-        var validationResult = await validator.ValidateAsync(command, cancellationToken);
-        if (!validationResult.IsValid)
-        {
-            throw new BusinessException("VALIDATION_ERROR", validationResult.Errors.First().ErrorMessage);
-        }
-
         var branch = await _repository.GetBranchByIdAsync(branchId, cancellationToken);
         if (branch == null || branch.IsDeleted)
         {
@@ -182,15 +176,21 @@ public class BranchProductService : IBranchProductService
             throw new NotFoundException($"Sản phẩm '{product.Name}' chưa được gán vào chi nhánh '{branch.Name}'.");
         }
 
-        // Cập nhật giá bán lẻ niêm yết và mức tồn tối thiểu
-        product.SellingPrice = command.RetailPrice;
-        product.MinStock = command.MinStockLevel;
+        if (command.RetailPrice >= 0)
+        {
+            product.SellingPrice = command.RetailPrice;
+        }
+
+        if (command.MinStockLevel >= 0)
+        {
+            product.MinStock = command.MinStockLevel;
+        }
 
         if (!string.IsNullOrWhiteSpace(command.ShelfLocation))
         {
-            foreach (var stock in stocks)
+            foreach (var s in stocks)
             {
-                stock.ShelfLocation = command.ShelfLocation.Trim();
+                s.ShelfLocation = command.ShelfLocation;
             }
         }
 
@@ -214,7 +214,7 @@ public class BranchProductService : IBranchProductService
             CurrentStock = totalStock,
             MinStockLevel = product.MinStock,
             PrimarySupplierName = "Nông Sản Tươi Sạch Khải Anh",
-            Status = product.Status,
+            Status = product.Status.ToString(),
             ShelfLocation = stocks.First().ShelfLocation,
             AssignedDate = DateTime.UtcNow
         };
@@ -244,8 +244,8 @@ public class BranchProductService : IBranchProductService
             throw new NotFoundException($"Sản phẩm '{product.Name}' chưa được gán vào chi nhánh '{branch.Name}'.");
         }
 
-        var normalizedStatus = string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase) ? "Active" : "Inactive";
-        product.Status = normalizedStatus;
+        var isTargetActive = string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase);
+        product.Status = isTargetActive ? ProductStatus.Active : ProductStatus.Inactive;
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -265,7 +265,7 @@ public class BranchProductService : IBranchProductService
             CurrentStock = stocks.Sum(s => s.QuantityOnHand),
             MinStockLevel = product.MinStock,
             PrimarySupplierName = "Nông Sản Tươi Sạch Khải Anh",
-            Status = product.Status,
+            Status = product.Status.ToString(),
             ShelfLocation = stocks.First().ShelfLocation,
             AssignedDate = DateTime.UtcNow
         };

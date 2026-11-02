@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Employees.Dtos;
 using MT_GRMS.Domain.Entities.HR;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Infrastructure.Repositories;
@@ -31,23 +32,25 @@ public class EmployeeRepository : IEmployeeRepository
     {
         var normalizedCode = code.Trim().ToUpper();
         return await _dbSet
-            .Include(e => e.Branch)
-            .Include(e => e.User)
-            .FirstOrDefaultAsync(e => e.EmployeeCode == normalizedCode, cancellationToken);
-    }
-
-    public async Task<Employee?> GetByCitizenIdAsync(string citizenId, CancellationToken cancellationToken = default)
-    {
-        var normalized = citizenId.Trim();
-        return await _dbSet
-            .FirstOrDefaultAsync(e => e.CitizenId == normalized, cancellationToken);
+            .FirstOrDefaultAsync(e => e.EmployeeCode.ToUpper() == normalizedCode, cancellationToken);
     }
 
     public async Task<Employee?> GetByPhoneAsync(string phone, CancellationToken cancellationToken = default)
     {
-        var normalized = phone.Trim();
         return await _dbSet
-            .FirstOrDefaultAsync(e => e.Phone == normalized, cancellationToken);
+            .FirstOrDefaultAsync(e => e.Phone == phone, cancellationToken);
+    }
+
+    public async Task<Employee?> GetByCitizenIdAsync(string citizenId, CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .FirstOrDefaultAsync(e => e.CitizenId == citizenId, cancellationToken);
+    }
+
+    public async Task<Employee?> GetByUserIdAsync(string userId, CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .FirstOrDefaultAsync(e => e.UserId == userId, cancellationToken);
     }
 
     public async Task<(IReadOnlyList<Employee> Items, int TotalCount)> GetPagedListAsync(
@@ -55,10 +58,10 @@ public class EmployeeRepository : IEmployeeRepository
         CancellationToken cancellationToken = default)
     {
         var query = _dbSet
+            .AsNoTracking()
             .Include(e => e.Branch)
             .Include(e => e.User)
-                .ThenInclude(u => u!.TenantUsers)
-            .AsNoTracking();
+            .Where(e => !e.IsDeleted);
 
         if (!string.IsNullOrWhiteSpace(filter.Keyword))
         {
@@ -66,10 +69,7 @@ public class EmployeeRepository : IEmployeeRepository
             query = query.Where(e =>
                 e.FullName.ToLower().Contains(kw) ||
                 e.EmployeeCode.ToLower().Contains(kw) ||
-                e.Phone.Contains(kw) ||
-                (e.Email != null && e.Email.ToLower().Contains(kw)) ||
-                (e.JobTitle != null && e.JobTitle.ToLower().Contains(kw))
-            );
+                e.Phone.Contains(kw));
         }
 
         if (filter.BranchId.HasValue && filter.BranchId.Value != Guid.Empty)
@@ -80,7 +80,10 @@ public class EmployeeRepository : IEmployeeRepository
         if (!string.IsNullOrWhiteSpace(filter.Status))
         {
             var st = filter.Status.Trim().ToLower();
-            query = query.Where(e => e.Status.ToLower() == st);
+            if (Enum.TryParse<EmployeeStatus>(st, true, out var parsedStatus))
+            {
+                query = query.Where(e => e.Status == parsedStatus);
+            }
         }
 
         var totalCount = await query.CountAsync(cancellationToken);
@@ -128,4 +131,3 @@ public class EmployeeRepository : IEmployeeRepository
         _dbSet.Remove(employee);
     }
 }
-

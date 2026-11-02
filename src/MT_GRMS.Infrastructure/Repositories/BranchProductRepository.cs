@@ -10,6 +10,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Infrastructure.Repositories;
@@ -40,20 +41,16 @@ public class BranchProductRepository : IBranchProductRepository
                 .ThenInclude(p => p!.Category)
             .Include(bs => bs.Branch)
             .Include(bs => bs.Supplier)
-            .AsNoTracking();
-
-        if (branchId != Guid.Empty)
-        {
-            stockQuery = stockQuery.Where(bs => bs.BranchId == branchId);
-        }
+            .Where(bs => bs.BranchId == branchId && !bs.IsDeleted);
 
         if (!string.IsNullOrWhiteSpace(searchTerm))
         {
-            var kw = searchTerm.Trim().ToLower();
+            var term = searchTerm.Trim().ToLower();
             stockQuery = stockQuery.Where(bs =>
-                (bs.Product != null && bs.Product.Name.ToLower().Contains(kw)) ||
-                (bs.Product != null && bs.Product.ProductCode.ToLower().Contains(kw)) ||
-                (bs.Product != null && bs.Product.Barcode.ToLower().Contains(kw)));
+                bs.Product != null &&
+                (bs.Product.Name.ToLower().Contains(term) ||
+                 bs.Product.ProductCode.ToLower().Contains(term) ||
+                 (bs.Product.Barcode != null && bs.Product.Barcode.ToLower().Contains(term))));
         }
 
         if (!string.IsNullOrWhiteSpace(category) && !string.Equals(category, "all", StringComparison.OrdinalIgnoreCase))
@@ -63,7 +60,10 @@ public class BranchProductRepository : IBranchProductRepository
 
         if (!string.IsNullOrWhiteSpace(status) && !string.Equals(status, "all", StringComparison.OrdinalIgnoreCase))
         {
-            stockQuery = stockQuery.Where(bs => bs.Product != null && bs.Product.Status == status);
+            if (Enum.TryParse<ProductStatus>(status.Trim(), true, out var prodStatus))
+            {
+                stockQuery = stockQuery.Where(bs => bs.Product != null && bs.Product.Status == prodStatus);
+            }
         }
 
         // Nhóm theo từng cặp (BranchId, ProductId)
@@ -150,7 +150,7 @@ public class BranchProductRepository : IBranchProductRepository
             CurrentStock = x.CurrentStock,
             MinStockLevel = x.MinStock,
             PrimarySupplierName = x.PrimarySupplierName,
-            Status = x.ProductStatus,
+            Status = x.ProductStatus.ToString(),
             ShelfLocation = x.FirstShelfLocation,
             AssignedDate = x.AssignedDate
         }).ToList();

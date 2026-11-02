@@ -1,6 +1,7 @@
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Domain.Entities.HR;
 
@@ -25,10 +26,9 @@ public class Employee : BaseTenantEntity
     public string? BankAccountNumber { get; set; }
     public string? BankName { get; set; }
     public string? BankAccountHolder { get; set; }
-    public decimal LunchAllowance { get; set; } = 0.00m;
-    public decimal TravelAllowance { get; set; } = 0.00m;
+    public List<EmployeeAllowance> Allowances { get; set; } = new();
     public decimal DebtAmount { get; set; } = 0.00m;
-    public string Status { get; set; } = "active";
+    public EmployeeStatus Status { get; set; } = EmployeeStatus.Active;
 
     // Navigations
     public Branch? Branch { get; set; }
@@ -36,4 +36,13 @@ public class Employee : BaseTenantEntity
     public ICollection<Payslip> Payslips { get; set; } = new List<Payslip>();
     public ICollection<EmployeeSchedule> Schedules { get; set; } = new List<EmployeeSchedule>();
     public ICollection<EmployeeBonusViolation> BonusViolations { get; set; } = new List<EmployeeBonusViolation>();
+}
+
+/// <summary>
+/// Khoản phụ cấp nhân viên (Lưu trữ dạng JSONB trong bảng Employees)
+/// </summary>
+public class EmployeeAllowance
+{
+    public string Name { get; set; } = string.Empty;
+    public decimal Amount { get; set; } = 0.00m;
 }

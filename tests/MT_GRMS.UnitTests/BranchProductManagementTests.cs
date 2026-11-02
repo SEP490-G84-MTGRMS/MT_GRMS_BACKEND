@@ -9,6 +9,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 using Xunit;
 
@@ -59,7 +60,7 @@ public class BranchProductManagementTests
                 CostPrice = 160000m,
                 SellingPrice = 195000m,
                 MinStock = 10m,
-                Status = "Active"
+                Status = ProductStatus.Active
             },
             new Product
             {
@@ -72,7 +73,7 @@ public class BranchProductManagementTests
                 CostPrice = 30000m,
                 SellingPrice = 38000m,
                 MinStock = 20m,
-                Status = "Active"
+                Status = ProductStatus.Active
             }
         });
 
@@ -242,7 +243,7 @@ public class BranchProductManagementTests
                     CurrentStock = s.QuantityOnHand,
                     MinStockLevel = prod?.MinStock ?? 0m,
                     PrimarySupplierName = "Nông Sản Tươi Sạch Khải Anh",
-                    Status = prod?.Status ?? "Active",
+                    Status = prod?.Status.ToString() ?? "Active",
                     ShelfLocation = s.ShelfLocation,
                     AssignedDate = DateTime.UtcNow
                 };

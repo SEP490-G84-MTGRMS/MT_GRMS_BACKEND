@@ -1,4 +1,5 @@
 using MT_GRMS.Domain.Common;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Domain.Entities.HR;
 
@@ -24,9 +25,9 @@ public class EmployeeSchedule : BaseEntity
     public bool IsGpsValid { get; set; } = true;
     public int LateMinutes { get; set; } = 0;
     public decimal ActualWorkHours { get; set; } = 0.00m;
-    public string Status { get; set; } = "scheduled";
+    public ScheduleStatus Status { get; set; } = ScheduleStatus.Scheduled;
     public string? ApprovalType { get; set; }
-    public string ApprovalStatus { get; set; } = "NONE";
+    public ScheduleApprovalStatus ApprovalStatus { get; set; } = ScheduleApprovalStatus.None;
     public string? ApprovalReason { get; set; }
     public string? EvidenceImageUrl { get; set; }
     public string? ApprovedBy { get; set; }

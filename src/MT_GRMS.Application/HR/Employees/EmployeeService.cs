@@ -4,6 +4,7 @@ using MT_GRMS.Application.HR.Employees.Dtos;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Entities.Identity;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.HR.Employees;
@@ -42,7 +43,7 @@ public class EmployeeService : IEmployeeService
             e.BranchId,
             e.Branch?.Name ?? "Chưa gán",
             e.JobTitle,
-            e.Status,
+            e.Status.ToString().ToLower(),
             e.SalaryType,
             e.BaseRate,
             e.UserId,
@@ -128,12 +129,11 @@ public class EmployeeService : IEmployeeService
             JobTitle = request.JobTitle?.Trim(),
             SalaryType = string.IsNullOrWhiteSpace(request.SalaryType) ? "monthly" : request.SalaryType.Trim().ToLower(),
             BaseRate = request.BaseRate,
-            LunchAllowance = request.LunchAllowance,
-            TravelAllowance = request.TravelAllowance,
+            Allowances = MapAllowances(request.Allowances),
             BankAccountNumber = request.BankAccountNumber?.Trim(),
             BankName = request.BankName?.Trim(),
             BankAccountHolder = request.BankAccountHolder?.Trim(),
-            Status = "active"
+            Status = EmployeeStatus.Active
         };
 
         await _employeeRepository.AddAsync(employee, cancellationToken);
@@ -194,8 +194,7 @@ public class EmployeeService : IEmployeeService
         employee.Gender = request.Gender;
         employee.SalaryType = string.IsNullOrWhiteSpace(request.SalaryType) ? "monthly" : request.SalaryType.Trim().ToLower();
         employee.BaseRate = request.BaseRate;
-        employee.LunchAllowance = request.LunchAllowance;
-        employee.TravelAllowance = request.TravelAllowance;
+        employee.Allowances = MapAllowances(request.Allowances);
         employee.BankAccountNumber = request.BankAccountNumber?.Trim();
         employee.BankName = request.BankName?.Trim();
         employee.BankAccountHolder = request.BankAccountHolder?.Trim();
@@ -229,7 +228,7 @@ public class EmployeeService : IEmployeeService
             throw new ArgumentException("Trạng thái nhân viên chỉ chấp nhận 'active' hoặc 'inactive'.");
         }
 
-        employee.Status = normalizedStatus;
+        employee.Status = normalizedStatus == "active" ? EmployeeStatus.Active : EmployeeStatus.Inactive;
         employee.UpdatedAt = DateTime.UtcNow;
 
         _employeeRepository.Update(employee);
@@ -249,7 +248,7 @@ public class EmployeeService : IEmployeeService
 
         // Soft delete
         employee.IsDeleted = true;
-        employee.Status = "inactive";
+        employee.Status = EmployeeStatus.Inactive;
         employee.UpdatedAt = DateTime.UtcNow;
 
         _employeeRepository.Update(employee);
@@ -287,7 +286,7 @@ public class EmployeeService : IEmployeeService
         {
             Id = Uuid7.NewString(),
             UserName = normalizedUsername,
-            PasswordHash = request.Password, // Tương thích với cơ chế kiểm tra mật khẩu hiện tại trong AuthService
+            PasswordHash = request.Password,
             FullName = employee.FullName,
             Email = string.IsNullOrWhiteSpace(employee.Email) ? $"{normalizedUsername}@mtgrms.vn" : employee.Email,
             Phone = employee.Phone,
@@ -339,10 +338,9 @@ public class EmployeeService : IEmployeeService
             role,
             e.SalaryType,
             e.BaseRate,
-            e.LunchAllowance,
-            e.TravelAllowance,
+            e.Allowances.Select(a => new EmployeeAllowanceDto(a.Name, a.Amount)).ToList(),
             e.DebtAmount,
-            e.Status,
+            e.Status.ToString().ToLower(),
             e.BankAccountNumber,
             e.BankName,
             e.BankAccountHolder,
@@ -350,5 +348,21 @@ public class EmployeeService : IEmployeeService
             e.UpdatedAt
         );
     }
-}
 
+    private static List<EmployeeAllowance> MapAllowances(List<EmployeeAllowanceDto>? allowances)
+    {
+        if (allowances == null || allowances.Count == 0)
+        {
+            return new List<EmployeeAllowance>();
+        }
+
+        return allowances
+            .Where(a => !string.IsNullOrWhiteSpace(a.Name))
+            .Select(a => new EmployeeAllowance
+            {
+                Name = a.Name.Trim(),
+                Amount = Math.Max(0, a.Amount)
+            })
+            .ToList();
+    }
+}

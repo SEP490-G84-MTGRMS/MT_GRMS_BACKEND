@@ -8,6 +8,7 @@ using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Entities.Supplier;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Infrastructure.Persistence;
 
@@ -313,7 +314,7 @@ public static class DbInitializer
             MaxStock = 500.00m,
             VatRate = 0.00m,
             ProductType = "STANDARD",
-            Status = "Active",
+            Status = ProductStatus.Active,
             HasBatches = true,
             IsFavorite = true
         };
@@ -332,7 +333,7 @@ public static class DbInitializer
             MaxStock = 1000.00m,
             VatRate = 8.00m,
             ProductType = "STANDARD",
-            Status = "Active",
+            Status = ProductStatus.Active,
             HasBatches = true,
             IsFavorite = true
         };
@@ -351,7 +352,7 @@ public static class DbInitializer
             MaxStock = 300.00m,
             VatRate = 8.00m,
             ProductType = "STANDARD",
-            Status = "Active"
+            Status = ProductStatus.Active
         };
 
         var prodG7 = new Product
@@ -368,7 +369,7 @@ public static class DbInitializer
             MaxStock = 200.00m,
             VatRate = 1.00m,
             ProductType = "STANDARD",
-            Status = "Active",
+            Status = ProductStatus.Active,
             HasBatches = true,
             IsFavorite = true
         };
@@ -387,7 +388,7 @@ public static class DbInitializer
             MaxStock = 200.00m,
             VatRate = 1.00m,
             ProductType = "STANDARD",
-            Status = "Active",
+            Status = ProductStatus.Active,
             HasBatches = true,
             IsFavorite = true
         };
@@ -406,7 +407,7 @@ public static class DbInitializer
             MaxStock = 300.00m,
             VatRate = 1.00m,
             ProductType = "STANDARD",
-            Status = "Active",
+            Status = ProductStatus.Active,
             HasBatches = false,
             IsFavorite = true
         };
@@ -425,7 +426,7 @@ public static class DbInitializer
             MaxStock = 500.00m,
             VatRate = 1.00m,
             ProductType = "STANDARD",
-            Status = "Active",
+            Status = ProductStatus.Active,
             HasBatches = true,
             IsFavorite = true
         };
@@ -621,9 +622,12 @@ public static class DbInitializer
             JobTitle = "Cửa Hàng Trưởng",
             SalaryType = "monthly",
             BaseRate = 15000000.00m,
-            LunchAllowance = 730000.00m,
-            TravelAllowance = 500000.00m,
-            Status = "active"
+            Allowances = new List<EmployeeAllowance>
+            {
+                new() { Name = "Phụ cấp ăn trưa", Amount = 730000.00m },
+                new() { Name = "Phụ cấp xăng xe", Amount = 500000.00m }
+            },
+            Status = EmployeeStatus.Active
         };
 
         var employeeCashier = new Employee
@@ -641,8 +645,11 @@ public static class DbInitializer
             JobTitle = "Nhân Viên Thu Ngân POS",
             SalaryType = "monthly",
             BaseRate = 8500000.00m,
-            LunchAllowance = 730000.00m,
-            Status = "active"
+            Allowances = new List<EmployeeAllowance>
+            {
+                new() { Name = "Phụ cấp ăn trưa", Amount = 730000.00m }
+            },
+            Status = EmployeeStatus.Active
         };
 
         await context.Employees.AddRangeAsync(employeeManager, employeeCashier);

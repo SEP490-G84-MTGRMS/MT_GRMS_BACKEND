@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using MT_GRMS.Domain.Entities.HR;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Infrastructure.Persistence.Configurations.HR;
 
@@ -31,7 +32,12 @@ public class PayslipConfiguration : IEntityTypeConfiguration<Payslip>
         builder.Property(x => x.ViolationDeduction).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.TotalDeductions).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.NetSalary).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
-        builder.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("UNPAID");
+        builder.Property(x => x.Status)
+            .HasConversion(
+                v => v.ToString().ToUpper(),
+                v => Enum.Parse<PayslipStatus>(v, true))
+            .HasMaxLength(30)
+            .HasDefaultValue(PayslipStatus.Unpaid);
         builder.Property(x => x.PaymentMethod).HasMaxLength(30);
 
         builder.HasIndex(x => x.PayslipCode).IsUnique();

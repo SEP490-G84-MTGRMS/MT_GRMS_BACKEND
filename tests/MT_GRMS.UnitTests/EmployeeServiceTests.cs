@@ -5,6 +5,7 @@ using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Employees.Dtos;
 using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Entities.Identity;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 using Xunit;
 
@@ -116,7 +117,7 @@ public class EmployeeServiceTests
             }
             if (!string.IsNullOrWhiteSpace(filter.Status))
             {
-                query = query.Where(e => string.Equals(e.Status, filter.Status, StringComparison.OrdinalIgnoreCase));
+                query = query.Where(e => string.Equals(e.Status.ToString(), filter.Status, StringComparison.OrdinalIgnoreCase));
             }
 
             var list = query.ToList();
@@ -365,7 +366,7 @@ public class EmployeeServiceTests
             CitizenId = "001202007777",
             Phone = "0987654777",
             BranchId = Guid.NewGuid(),
-            Status = "active",
+            Status = EmployeeStatus.Active,
             IsDeleted = false
         };
         empRepo.Employees.Add(employee);
@@ -381,6 +382,43 @@ public class EmployeeServiceTests
         // Assert
         Assert.True(result);
         Assert.True(employee.IsDeleted);
-        Assert.Equal("inactive", employee.Status);
+        Assert.Equal(EmployeeStatus.Inactive, employee.Status);
+    }
+
+    [Fact]
+    public async Task CreateEmployee_WithAllowancesList_ShouldStoreAndReturnAllowances()
+    {
+        // Arrange
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var allowances = new List<EmployeeAllowanceDto>
+        {
+            new("Phụ cấp ăn trưa", 650000m),
+            new("Phụ cấp xăng xe", 300000m),
+            new("Phụ cấp trách nhiệm", 1000000m)
+        };
+
+        var request = new CreateEmployeeRequest(
+            FullName: "Lê Phụ Cấp",
+            CitizenId: "001202008888",
+            Phone: "0987654888",
+            BranchId: Guid.NewGuid(),
+            Allowances: allowances
+        );
+
+        // Act
+        var result = await service.CreateEmployeeAsync(request);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(3, result.Allowances.Count);
+        Assert.Equal("Phụ cấp ăn trưa", result.Allowances[0].Name);
+        Assert.Equal(650000m, result.Allowances[0].Amount);
+        Assert.Equal("Phụ cấp trách nhiệm", result.Allowances[2].Name);
+        Assert.Equal(1000000m, result.Allowances[2].Amount);
     }
 }

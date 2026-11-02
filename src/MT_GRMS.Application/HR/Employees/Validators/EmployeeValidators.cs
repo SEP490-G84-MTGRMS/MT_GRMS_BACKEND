@@ -25,11 +25,12 @@ public class CreateEmployeeRequestValidator : AbstractValidator<CreateEmployeeRe
         RuleFor(x => x.BaseRate)
             .GreaterThanOrEqualTo(0).WithMessage("Mức lương cơ bản không được âm.");
 
-        RuleFor(x => x.LunchAllowance)
-            .GreaterThanOrEqualTo(0).WithMessage("Phụ cấp ăn trưa không được âm.");
-
-        RuleFor(x => x.TravelAllowance)
-            .GreaterThanOrEqualTo(0).WithMessage("Phụ cấp đi lại không được âm.");
+        RuleForEach(x => x.Allowances)
+            .ChildRules(al =>
+            {
+                al.RuleFor(a => a.Name).NotEmpty().WithMessage("Tên phụ cấp không được để trống.");
+                al.RuleFor(a => a.Amount).GreaterThanOrEqualTo(0).WithMessage("Mức phụ cấp không được âm.");
+            });
 
         When(x => !string.IsNullOrWhiteSpace(x.Email), () =>
         {

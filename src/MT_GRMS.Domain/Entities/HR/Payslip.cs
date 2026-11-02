@@ -1,4 +1,5 @@
 using MT_GRMS.Domain.Common;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Domain.Entities.HR;
 
@@ -25,7 +26,7 @@ public class Payslip : BaseEntity
     public decimal ViolationDeduction { get; set; } = 0.00m;
     public decimal TotalDeductions { get; set; } = 0.00m;
     public decimal NetSalary { get; set; } = 0.00m;
-    public string Status { get; set; } = "UNPAID";
+    public PayslipStatus Status { get; set; } = PayslipStatus.Unpaid;
     public DateTime? PaidAt { get; set; }
     public string? PaymentMethod { get; set; }
 
