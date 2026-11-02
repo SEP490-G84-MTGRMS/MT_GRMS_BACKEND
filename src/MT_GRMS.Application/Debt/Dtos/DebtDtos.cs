@@ -99,3 +99,66 @@ public record RepaymentResultResponse(
     decimal ExcessPrepayment,
     List<AllocationDetailResponse> Allocations
 );
+
+public record CustomerResponse(
+    Guid Id,
+    string CustomerCode,
+    string FullName,
+    string PhoneNumber,
+    string? Email,
+    string? Address,
+    string MembershipTier,
+    int LoyaltyPoints,
+    decimal TotalSpending,
+    decimal CurrentDebtAR,
+    decimal DebtLimit,
+    string Status,
+    bool AllowDebt,
+    bool IsBlockedForDebt,
+    DateTime CreatedAt,
+    List<CustomerInvoiceSummaryResponse>? Invoices = null,
+    List<CustomerPaymentSummaryResponse>? Payments = null
+);
+
+public record CustomerInvoiceSummaryResponse(
+    string Id,
+    string Date,
+    decimal Amount,
+    string Status
+);
+
+public record CustomerPaymentSummaryResponse(
+    string Id,
+    string Date,
+    decimal Amount,
+    string Method,
+    string? StaffName,
+    string? Note
+);
+
+public record CustomerKpiSummaryResponse(
+    int TotalCustomers,
+    decimal TotalDebtAR,
+    int OverLimitCount,
+    int TotalLoyaltyPoints
+);
+
+public record CreateCustomerRequest(
+    string PhoneNumber,
+    string FullName,
+    string? Email,
+    string? Address,
+    string? TaxCode,
+    decimal DebtLimit,
+    string? MembershipTier
+);
+
+public record UpdateCustomerRequest(
+    string? FullName,
+    string? Email,
+    string? Address,
+    string? TaxCode,
+    decimal? DebtLimit,
+    string? MembershipTier,
+    string? Status
+);
