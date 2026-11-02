@@ -99,7 +99,15 @@ public class ExpenseServiceTests
         public Task<bool> ProcessCashDropAsync(CashDropRequest request, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<CashInTransitResponse> CreateDepositToBankAsync(DepositToBankRequest request, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<CashInTransitResponse> ConfirmBankDepositAsync(ConfirmBankDepositRequest request, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<CashbookEntryResponse> ReceiveCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default) => throw new NotImplementedException();
+        public decimal ReceivedAmount { get; private set; }
+        public string? LastReceivedReferenceCode { get; private set; }
+
+        public Task<CashbookEntryResponse> ReceiveCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default)
+        {
+            ReceivedAmount += amount;
+            LastReceivedReferenceCode = referenceCode;
+            return Task.FromResult(new CashbookEntryResponse(Guid.NewGuid(), "CB-REC-01", accountId, accountType.ToString(), null, "Receipt", amount, 500_000m, sourceType, sourceId, referenceCode, "HASH-REC-01", description, DateTime.UtcNow));
+        }
         public Task<List<CashbookEntryResponse>> GetEntriesAsync(Guid? accountId, Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<BranchCashTill> GetOrCreateTillAsync(Guid branchId, string tillName, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<BranchSafe> GetOrCreateSafeAsync(Guid branchId, CancellationToken ct = default) => throw new NotImplementedException();
@@ -469,5 +477,51 @@ public class ExpenseServiceTests
         var request = new ApproveExpenseRequest(voucher.Id, "Duyệt chi");
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _service.ApproveExpenseAsync(request));
+    }
+
+    [Fact]
+    public async Task RejectExpenseAsync_WhenPendingApproval_ShouldCancelAndRecordReason()
+    {
+        var voucher = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            Amount = 1_500_000m,
+            Status = ExpenseVoucherStatus.PendingApproval,
+            BeneficiaryName = "NCC Điện Máy",
+            Category = "Sửa chữa"
+        };
+        _expenseRepo.Items.Add(voucher);
+
+        var request = new RejectExpenseRequest(voucher.Id, "Không có hóa đơn hợp lệ");
+        var response = await _service.RejectExpenseAsync(request);
+
+        Assert.Equal(ExpenseVoucherStatus.Cancelled.ToString(), response.Status);
+        Assert.Contains("Không có hóa đơn hợp lệ", response.Note);
+    }
+
+    [Fact]
+    public async Task CancelExpenseAsync_WhenPaid_ShouldExecuteReversalEntryAndSetStatusReversed()
+    {
+        var sourceAccountId = Guid.NewGuid();
+        var voucher = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            VoucherCode = "EXP-20261102-001",
+            Amount = 2_000_000m,
+            Status = ExpenseVoucherStatus.Paid,
+            PaymentSourceType = FinanceAccountType.Till,
+            PaymentSourceAccountId = sourceAccountId,
+            BeneficiaryName = "Nhà Cung Cấp A",
+            Category = "Tiền điện"
+        };
+        _expenseRepo.Items.Add(voucher);
+
+        var request = new CancelExpenseRequest(voucher.Id, "Nhầm lẫn số tiền thực tế");
+        var response = await _service.CancelExpenseAsync(request);
+
+        Assert.Equal(ExpenseVoucherStatus.Reversed.ToString(), response.Status);
+        Assert.Equal(2_000_000m, _cashbookService.ReceivedAmount);
+        Assert.Equal("REV-EXP-20261102-001", _cashbookService.LastReceivedReferenceCode);
+        Assert.Contains("ĐÃ ĐẢO BÚT TOÁN HOÀN TIỀN", response.Note);
     }
 }

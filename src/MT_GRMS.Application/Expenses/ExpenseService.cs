@@ -145,6 +145,102 @@ public class ExpenseService : IExpenseService
         return MapVoucherResponse(voucher);
     }
 
+    public async Task<ExpenseVoucherResponse> RejectExpenseAsync(RejectExpenseRequest request, CancellationToken ct = default)
+    {
+        var role = _tenantContext.CurrentRole;
+        if (!string.IsNullOrWhiteSpace(role) &&
+            !role.Equals("Owner", StringComparison.OrdinalIgnoreCase) &&
+            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) &&
+            !role.Equals("Admin", StringComparison.OrdinalIgnoreCase) &&
+            !role.Equals("Manager", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException("Chỉ Chủ hộ kinh doanh hoặc Quản lý cửa hàng mới có thẩm quyền từ chối phê duyệt phiếu chi.");
+        }
+
+        var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
+            ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
+
+        if (voucher.Status != ExpenseVoucherStatus.PendingApproval)
+        {
+            throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể từ chối duyệt.");
+        }
+
+        voucher.Status = ExpenseVoucherStatus.Cancelled;
+        var reasonText = string.IsNullOrWhiteSpace(request.Reason) ? "Không có lý do cụ thể" : request.Reason.Trim();
+        voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
+            ? $"[TỪ CHỐI DUYỆT]: {reasonText}"
+            : $"{voucher.Note} | [TỪ CHỐI DUYỆT]: {reasonText}";
+
+        await _unitOfWork.SaveChangesAsync(ct);
+        return MapVoucherResponse(voucher);
+    }
+
+    public async Task<ExpenseVoucherResponse> CancelExpenseAsync(CancelExpenseRequest request, CancellationToken ct = default)
+    {
+        var role = _tenantContext.CurrentRole;
+        if (!string.IsNullOrWhiteSpace(role) &&
+            !role.Equals("Owner", StringComparison.OrdinalIgnoreCase) &&
+            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) &&
+            !role.Equals("Admin", StringComparison.OrdinalIgnoreCase) &&
+            !role.Equals("Manager", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException("Chỉ Chủ hộ kinh doanh hoặc Quản lý cửa hàng mới có thẩm quyền hủy phiếu chi.");
+        }
+
+        var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
+            ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
+
+        if (string.IsNullOrWhiteSpace(request.Reason))
+        {
+            throw new BusinessException("REASON_REQUIRED", "Bắt buộc phải nhập lý do khi hủy phiếu chi.");
+        }
+
+        if (voucher.Status == ExpenseVoucherStatus.Paid)
+        {
+            // Bút toán đảo (Reversal Entry): Hoàn tiền lại vào tài khoản nguồn
+            if (!voucher.PaymentSourceAccountId.HasValue)
+            {
+                throw new BusinessException("MISSING_PAYMENT_SOURCE", "Phiếu chi thiếu thông tin tài khoản nguồn để thực hiện bút toán đảo hoàn tiền.");
+            }
+
+            var reversalRefCode = "REV-" + voucher.VoucherCode;
+            var reversalDesc = $"Bút toán đảo: Hoàn tiền phiếu chi {voucher.VoucherCode} đã thanh toán do bị hủy - Lý do: {request.Reason.Trim()}";
+
+            await _cashbookService.ReceiveCashAsync(
+                voucher.PaymentSourceAccountId.Value,
+                voucher.PaymentSourceType,
+                voucher.Amount,
+                "EXPENSE_REVERSAL",
+                voucher.Id,
+                reversalRefCode,
+                reversalDesc,
+                ct
+            );
+
+            voucher.Status = ExpenseVoucherStatus.Reversed;
+            voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
+                ? $"[ĐÃ ĐẢO BÚT TOÁN HOÀN TIỀN]: {request.Reason.Trim()}"
+                : $"{voucher.Note} | [ĐÃ ĐẢO BÚT TOÁN HOÀN TIỀN]: {request.Reason.Trim()}";
+        }
+        else if (voucher.Status == ExpenseVoucherStatus.Draft ||
+                 voucher.Status == ExpenseVoucherStatus.PendingApproval ||
+                 voucher.Status == ExpenseVoucherStatus.Approved ||
+                 voucher.Status == ExpenseVoucherStatus.PaymentFailed)
+        {
+            voucher.Status = ExpenseVoucherStatus.Cancelled;
+            voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
+                ? $"[ĐÃ HỦY]: {request.Reason.Trim()}"
+                : $"{voucher.Note} | [ĐÃ HỦY]: {request.Reason.Trim()}";
+        }
+        else
+        {
+            throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể hủy.");
+        }
+
+        await _unitOfWork.SaveChangesAsync(ct);
+        return MapVoucherResponse(voucher);
+    }
+
     public async Task<ExpenseVoucherResponse> DisburseExpenseAsync(DisburseExpenseRequest request, CancellationToken ct = default)
     {
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
