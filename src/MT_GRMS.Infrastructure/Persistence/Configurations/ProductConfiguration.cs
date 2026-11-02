@@ -31,6 +31,7 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(x => x.InternalNote).HasMaxLength(500);
         builder.Property(x => x.HasBatches).HasDefaultValue(false);
         builder.Property(x => x.IsFavorite).HasDefaultValue(false);
+        builder.Property(x => x.EligibleForVatReduction).HasDefaultValue(false);
 
         builder.HasIndex(x => x.Barcode).IsUnique();
         builder.HasIndex(x => new { x.TenantId, x.ProductCode }).IsUnique();

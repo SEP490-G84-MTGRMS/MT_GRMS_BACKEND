@@ -17,6 +17,7 @@ public class OrderDetail : BaseEntity
     public decimal UnitPrice { get; set; } = 0.00m;
     public decimal DiscountAmount { get; set; } = 0.00m;
     public decimal ActualPrice { get; set; } = 0.00m;
+    public decimal CostPriceAtSale { get; set; } = 0.00m; // Giá vốn chốt cứng tại thời điểm xuất bán (Chống méo mó hồi tố)
     public bool IsGift { get; set; } = false;
 
     // Thuế GTGT từng dòng hàng theo TT 152/2025/TT-BTC

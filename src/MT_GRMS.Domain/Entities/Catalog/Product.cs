@@ -27,6 +27,13 @@ public class Product : BaseTenantEntity
     public bool HasBatches { get; set; } = false;
     public bool IsFavorite { get; set; } = false;
 
+    /// <summary>
+    /// True nếu hàng hóa thuộc nhóm đủ điều kiện giảm 20% thuế GTGT
+    /// theo NQ 204/2025/QH15 & khoản 3 Điều 9 Luật GTGT 48/2024.
+    /// Mặc định false — người dùng phải chủ động đánh dấu khi tạo/sửa sản phẩm.
+    /// </summary>
+    public bool EligibleForVatReduction { get; set; } = false;
+
     // Backward compatibility aliases
     [NotMapped]
     public string SKU { get => ProductCode; set => ProductCode = value; }

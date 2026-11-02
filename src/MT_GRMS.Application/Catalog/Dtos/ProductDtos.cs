@@ -8,7 +8,8 @@ public record ProductCreateRequest(
     decimal BasePrice,
     decimal CostPrice,
     string UnitName,
-    bool HasBatches
+    bool HasBatches,
+    bool EligibleForVatReduction = false
 );
 
 public record ProductResponse(
@@ -23,5 +24,6 @@ public record ProductResponse(
     string UnitName,
     bool HasBatches,
     bool IsActive,
-    string TaxCategory = "STANDARD_1PCT"
+    string TaxCategory = "STANDARD_1PCT",
+    bool EligibleForVatReduction = false
 );

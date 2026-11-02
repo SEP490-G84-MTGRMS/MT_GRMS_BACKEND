@@ -32,7 +32,8 @@ public class CatalogService : ICatalogService
             UnitName = request.UnitName,
             HasBatches = request.HasBatches,
             IsActive = true,
-            TaxCategory = "STANDARD_1PCT"
+            TaxCategory = "STANDARD_1PCT",
+            EligibleForVatReduction = request.EligibleForVatReduction
         };
 
         await _productRepository.AddAsync(product, cancellationToken);
@@ -50,7 +51,8 @@ public class CatalogService : ICatalogService
             product.UnitName,
             product.HasBatches,
             product.IsActive,
-            product.TaxCategory
+            product.TaxCategory,
+            product.EligibleForVatReduction
         );
     }
 
@@ -71,7 +73,8 @@ public class CatalogService : ICatalogService
             p.UnitName,
             p.HasBatches,
             p.IsActive,
-            p.TaxCategory
+            p.TaxCategory,
+            p.EligibleForVatReduction
         );
     }
 
@@ -90,7 +93,8 @@ public class CatalogService : ICatalogService
             p.UnitName,
             p.HasBatches,
             p.IsActive,
-            p.TaxCategory
+            p.TaxCategory,
+            p.EligibleForVatReduction
         )).ToList();
     }
 }
