@@ -116,6 +116,7 @@ public class SupplierManagementTests
             List<string>? phones = null,
             List<string>? codes = null,
             List<string>? names = null,
+            string? category = null,
             CancellationToken cancellationToken = default)
         {
             var query = Suppliers.Where(s => !s.IsDeleted).AsEnumerable();
@@ -349,6 +350,37 @@ public class SupplierManagementTests
         public Task<MT_GRMS.Domain.Entities.SaaS.Branch?> GetBranchByIdAsync(Guid branchId, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(Branches.FirstOrDefault(x => x.Id == branchId));
+        }
+
+        public List<MT_GRMS.Domain.Entities.Inventory.BranchStock> BranchStocks { get; } = new();
+
+        public Task<IReadOnlyList<Guid>> GetActiveBranchIdsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
+        {
+            var branchIds = BranchAssignments
+                .Where(sba => sba.SupplierId == supplierId && sba.Status == SupplierStatus.Active && !sba.IsDeleted)
+                .Select(sba => sba.BranchId)
+                .Distinct()
+                .ToList();
+            return Task.FromResult<IReadOnlyList<Guid>>(branchIds);
+        }
+
+        public Task<IReadOnlyList<SupplierProduct>> GetActiveSupplierProductsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
+        {
+            var products = SupplierProducts
+                .Where(sp => sp.SupplierId == supplierId && sp.Status == SupplierProductStatus.Active && !sp.IsDeleted)
+                .ToList();
+            return Task.FromResult<IReadOnlyList<SupplierProduct>>(products);
+        }
+
+        public Task<bool> BranchStockExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(BranchStocks.Any(bs => bs.BranchId == branchId && bs.ProductId == productId && !bs.IsDeleted));
+        }
+
+        public Task AddBranchStockAsync(MT_GRMS.Domain.Entities.Inventory.BranchStock branchStock, CancellationToken cancellationToken = default)
+        {
+            BranchStocks.Add(branchStock);
+            return Task.CompletedTask;
         }
     }
 
@@ -718,6 +750,170 @@ public class SupplierManagementTests
     }
 
     [Fact]
+    public void REQDEL03_CalculateEarliestDeliveryDate_CutoffBoundary_ExactAtCutoff_Vs_AfterCutoff()
+    {
+        // 1. Đặt chính xác vào thời điểm Cutoff (17:00) -> Không bị tính sang ngày kế tiếp
+        var exactOrderTime = new DateTime(2026, 11, 2, 17, 0, 0, DateTimeKind.Utc); // Monday 17:00
+        var earliestExact = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
+            exactOrderTime,
+            leadTimeHours: 24,
+            cutoffTimeStr: "17:00",
+            deliveryWeekdaysMask: 127,
+            blackoutDates: null);
+
+        // 17:00 Thứ 2 + 24h = 17:00 Thứ 3 (2026-11-03)
+        Assert.Equal(new DateTime(2026, 11, 3), earliestExact.Date);
+
+        // 2. Đặt sau Cutoff 1 phút (17:01) -> Bị đẩy sang 00:00 ngày hôm sau (Thứ 3)
+        var afterCutoffOrderTime = new DateTime(2026, 11, 2, 17, 1, 0, DateTimeKind.Utc); // Monday 17:01
+        var earliestAfter = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
+            afterCutoffOrderTime,
+            leadTimeHours: 24,
+            cutoffTimeStr: "17:00",
+            deliveryWeekdaysMask: 127,
+            blackoutDates: null);
+
+        // Tính từ Thứ 3 (2026-11-03 00:00) + 24h = Thứ 4 (2026-11-04)
+        Assert.Equal(new DateTime(2026, 11, 4), earliestAfter.Date);
+    }
+
+    [Fact]
+    public void REQDEL04_CalculateEarliestDeliveryDate_ConsecutiveNonDeliveryDays_SkipsToNextActiveDay()
+    {
+        // NCC chỉ nhận giao hàng vào Thứ 2 (mask = 1)
+        // Đặt hàng vào Thứ 3 (2026-11-03) lúc 09:00 sáng
+        var orderTime = new DateTime(2026, 11, 3, 9, 0, 0, DateTimeKind.Utc); // Tuesday
+        var earliest = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
+            orderTime,
+            leadTimeHours: 24,
+            cutoffTimeStr: "17:00",
+            deliveryWeekdaysMask: 1, // Only Monday
+            blackoutDates: null);
+
+        // Bỏ qua Thứ 4, 5, 6, 7, CN -> Chuyển sang Thứ 2 tuần sau (2026-11-09)
+        Assert.Equal(DayOfWeek.Monday, earliest.DayOfWeek);
+        Assert.Equal(new DateTime(2026, 11, 9), earliest.Date);
+    }
+
+    [Fact]
+    public void REQDEL05_CalculateEarliestDeliveryDate_LeadTimeZero_SameDayDelivery()
+    {
+        // Lead Time = 0h, Đặt trước Cutoff vào ngày được nhận giao
+        var orderTime = new DateTime(2026, 11, 2, 10, 0, 0, DateTimeKind.Utc); // Monday 10:00 AM
+        var earliest = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
+            orderTime,
+            leadTimeHours: 0,
+            cutoffTimeStr: "17:00",
+            deliveryWeekdaysMask: 127,
+            blackoutDates: null);
+
+        // Giao ngay trong ngày Thứ 2
+        Assert.Equal(new DateTime(2026, 11, 2), earliest.Date);
+        Assert.Equal(DayOfWeek.Monday, earliest.DayOfWeek);
+    }
+
+    [Fact]
+    public async Task REQDEL06_UpdateDeliveryConfig_EmptyDeliveryDays_ThrowsBusinessException()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplierId = Guid.NewGuid();
+        await repo.AddAsync(new Supplier { Id = supplierId, Name = "NCC Thực Phẩm Sạch", TenantId = "tenant-01" });
+
+        var command = new UpdateSupplierDeliveryConfigCommand
+        {
+            LeadTimeDays = 1,
+            CutoffTime = "17:00",
+            DeliveryDays = [] // Không chọn ngày nào
+        };
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateDeliveryConfigAsync(supplierId, command));
+
+        Assert.Equal("INVALID_DELIVERY_DAYS", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQDEL07_UpdateDeliveryConfig_InvalidCutoffFormat_ThrowsBusinessException()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplierId = Guid.NewGuid();
+        await repo.AddAsync(new Supplier { Id = supplierId, Name = "NCC Nông Sản", TenantId = "tenant-01" });
+
+        var command = new UpdateSupplierDeliveryConfigCommand
+        {
+            LeadTimeDays = 1,
+            CutoffTime = "25:99", // Giờ không hợp lệ
+            DeliveryDays = ["Mon", "Tue"]
+        };
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateDeliveryConfigAsync(supplierId, command));
+
+        Assert.Equal("INVALID_CUTOFF_TIME", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQDEL08_UpdateDeliveryConfig_NegativeMoq_ThrowsBusinessException()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplierId = Guid.NewGuid();
+        await repo.AddAsync(new Supplier { Id = supplierId, Name = "NCC Nông Sản", TenantId = "tenant-01" });
+
+        var command = new UpdateSupplierDeliveryConfigCommand
+        {
+            LeadTimeDays = 1,
+            MinOrderQuantity = -10, // Âm
+            CutoffTime = "17:00",
+            DeliveryDays = ["Mon"]
+        };
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateDeliveryConfigAsync(supplierId, command));
+
+        Assert.Equal("INVALID_MOQ", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQDEL09_UpdateDeliveryConfig_ValidConfig_PersistsAndReturnsDto()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplierId = Guid.NewGuid();
+        await repo.AddAsync(new Supplier { Id = supplierId, Name = "NCC Rau Củ Quả", TenantId = "tenant-01" });
+
+        var command = new UpdateSupplierDeliveryConfigCommand
+        {
+            LeadTimeDays = 2,
+            LeadTimeHours = 48,
+            MinOrderQuantity = 15,
+            CutoffTime = "16:30",
+            DeliveryDays = ["Mon", "Wed", "Fri"]
+        };
+
+        var result = await service.UpdateDeliveryConfigAsync(supplierId, command);
+
+        Assert.NotNull(result);
+        Assert.Equal(2, result.LeadTimeDays);
+        Assert.Equal(15, result.MinOrderQuantity);
+        Assert.Equal("16:30", result.CutoffTime);
+        Assert.Contains("Mon", result.DeliveryDays);
+        Assert.Contains("Wed", result.DeliveryDays);
+        Assert.Contains("Fri", result.DeliveryDays);
+        Assert.DoesNotContain("Tue", result.DeliveryDays);
+    }
+
+    [Fact]
     public async Task REQ_SBA01_AssignSupplierToBranches_Success()
     {
         // ARRANGE
@@ -1028,6 +1224,438 @@ public class SupplierManagementTests
 
         // ACT & ASSERT: Ném BusinessException
         await Assert.ThrowsAsync<BusinessException>(() => service.AssignSuppliersToBranchAsync(command));
+    }
+
+    [Fact]
+    public async Task REQ01_CreateSupplier_WithActiveStatus_PersistsActiveStatus()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var cmd = new CreateSupplierCommand
+        {
+            Name = "NCC Active Test",
+            Phone = "0912345678",
+            Status = SupplierStatus.Active,
+            CategoryCode = "FRESH"
+        };
+
+        // ACT
+        var result = await service.CreateSupplierAsync(cmd);
+
+        // ASSERT
+        Assert.NotNull(result);
+        Assert.Equal(SupplierStatus.Active, result.Status);
+        Assert.Equal("Đang hoạt động", result.StatusName);
+    }
+
+    [Fact]
+    public async Task REQ01_CreateSupplier_WithInactiveStatus_PersistsInactiveStatus()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var cmd = new CreateSupplierCommand
+        {
+            Name = "NCC Inactive Test",
+            Phone = "0912345679",
+            Status = SupplierStatus.Inactive,
+            CategoryCode = "AMBIENT"
+        };
+
+        // ACT
+        var result = await service.CreateSupplierAsync(cmd);
+
+        // ASSERT
+        Assert.NotNull(result);
+        Assert.Equal(SupplierStatus.Inactive, result.Status);
+        Assert.Equal("Ngừng giao dịch", result.StatusName);
+    }
+
+    [Fact]
+    public async Task REQ02_UpdateBasicSupplier_UpdatesOnlyBasicFields_PreservesAllDetailedData()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var originalId = Guid.NewGuid();
+        var existing = new Supplier
+        {
+            Id = originalId,
+            Code = "SUP-ORIGINAL",
+            Name = "Tên Ban Đầu",
+            ContactPerson = "Người Ban Đầu",
+            Phone = "0900000001",
+            Status = SupplierStatus.Active,
+            // Detailed fields that must be preserved
+            Email = "original@supplier.vn",
+            Address = "123 Đường Cũ, Quận 1",
+            TaxCode = "0312345678",
+            BankName = "Vietcombank",
+            BankAccount = "9876543210",
+            AccountHolder = "NGUYEN VAN A",
+            CreditLimit = 100000000,
+            PaymentTermDays = 45,
+            Note = "Ghi chú đặc biệt không được mất",
+            CategoryCode = "FROZEN"
+        };
+        await repo.AddAsync(existing);
+
+        var updateCmd = new UpdateBasicSupplierCommand
+        {
+            Name = "Tên Đã Thay Đổi",
+            ContactPerson = "Người Mới",
+            Phone = "0999888777",
+            Status = SupplierStatus.Inactive
+        };
+
+        // ACT
+        var result = await service.UpdateBasicSupplierAsync(originalId, updateCmd);
+
+        // ASSERT: Basic fields are updated
+        Assert.Equal("Tên Đã Thay Đổi", result.Name);
+        Assert.Equal("Người Mới", result.ContactPerson);
+        Assert.Equal("0999888777", result.Phone);
+        Assert.Equal(SupplierStatus.Inactive, result.Status);
+        Assert.Equal("SUP-ORIGINAL", result.Code); // Code remains read-only
+
+        // ASSERT: Detailed fields remain 100% untouched and preserved
+        var savedInRepo = await repo.GetByIdAsync(originalId);
+        Assert.NotNull(savedInRepo);
+        Assert.Equal("original@supplier.vn", savedInRepo.Email);
+        Assert.Equal("123 Đường Cũ, Quận 1", savedInRepo.Address);
+        Assert.Equal("0312345678", savedInRepo.TaxCode);
+        Assert.Equal("Vietcombank", savedInRepo.BankName);
+        Assert.Equal("9876543210", savedInRepo.BankAccount);
+        Assert.Equal("NGUYEN VAN A", savedInRepo.AccountHolder);
+        Assert.Equal(100000000, savedInRepo.CreditLimit);
+        Assert.Equal(45, savedInRepo.PaymentTermDays);
+        Assert.Equal("Ghi chú đặc biệt không được mất", savedInRepo.Note);
+        Assert.Equal(1, uow.SaveChangesCallCount);
+    }
+
+    [Fact]
+    public async Task REQ02_UpdateBasicSupplier_WithAddressAndNotes_UpdatesThemAndPreservesFinancialData()
+    {
+        // ARRANGE
+        var originalId = Guid.NewGuid();
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenant = new FakeTenantContext();
+        var service = new SupplierService(repo, uow, tenant);
+
+        var existing = new Supplier
+        {
+            Id = originalId,
+            Code = "SUP-001",
+            Name = "NCC Ban Dau",
+            Phone = "0900000000",
+            Address = "Dia Chi Cu",
+            Note = "Ghi Chu Cu",
+            TaxCode = "0101010101",
+            BankName = "MBBank",
+            BankAccount = "123456",
+            CreditLimit = 50000000
+        };
+        await repo.AddAsync(existing);
+
+        var updateCmd = new UpdateBasicSupplierCommand
+        {
+            Name = "NCC Moi",
+            Phone = "0911111111",
+            Status = SupplierStatus.Active,
+            Address = "Dia Chi Kho Moi 999",
+            Notes = "Ghi Chu Nhanh Moi 888"
+        };
+
+        // ACT
+        var result = await service.UpdateBasicSupplierAsync(originalId, updateCmd);
+
+        // ASSERT
+        var saved = await repo.GetByIdAsync(originalId);
+        Assert.NotNull(saved);
+        Assert.Equal("Dia Chi Kho Moi 999", saved.Address);
+        Assert.Equal("Ghi Chu Nhanh Moi 888", saved.Note);
+        Assert.Equal("0101010101", saved.TaxCode);
+        Assert.Equal("MBBank", saved.BankName);
+        Assert.Equal("123456", saved.BankAccount);
+        Assert.Equal(50000000, saved.CreditLimit);
+    }
+
+    [Fact]
+    public async Task REQ02_UpdateBasicSupplier_ChangesStatus_ActiveToInactive_AndBackToActive()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var suppId = Guid.NewGuid();
+        await repo.AddAsync(new Supplier
+        {
+            Id = suppId,
+            Code = "SUP-TOGGLE",
+            Name = "NCC Chuyển Trạng Thái",
+            Phone = "0987654321",
+            Status = SupplierStatus.Active
+        });
+
+        // ACT 1: Active -> Inactive
+        var res1 = await service.UpdateBasicSupplierAsync(suppId, new UpdateBasicSupplierCommand
+        {
+            Name = "NCC Chuyển Trạng Thái",
+            Phone = "0987654321",
+            Status = SupplierStatus.Inactive
+        });
+        Assert.Equal(SupplierStatus.Inactive, res1.Status);
+
+        // ACT 2: Inactive -> Active
+        var res2 = await service.UpdateBasicSupplierAsync(suppId, new UpdateBasicSupplierCommand
+        {
+            Name = "NCC Chuyển Trạng Thái",
+            Phone = "0987654321",
+            Status = SupplierStatus.Active
+        });
+        Assert.Equal(SupplierStatus.Active, res2.Status);
+    }
+
+    [Fact]
+    public async Task REQ02_UpdateBasicSupplier_NonexistentId_ThrowsNotFoundException()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var updateCmd = new UpdateBasicSupplierCommand
+        {
+            Name = "Không Tồn Tại",
+            Phone = "0911223344",
+            Status = SupplierStatus.Active
+        };
+
+        // ACT & ASSERT
+        await Assert.ThrowsAsync<NotFoundException>(() => service.UpdateBasicSupplierAsync(Guid.NewGuid(), updateCmd));
+    }
+
+    [Fact]
+    public async Task REQ02_UpdateBasicSupplier_WithTaxCode_UpdatesTaxCodeProperly()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var suppId = Guid.NewGuid();
+        var supplier = new Supplier
+        {
+            Id = suppId,
+            Code = "SUP-TAX-01",
+            Name = "Công ty TNHH Thuế Mẫu",
+            Phone = "0909090909",
+            TaxCode = "0100000001",
+            Status = SupplierStatus.Active,
+            CurrentDebt = 10000000m
+        };
+        await repo.AddAsync(supplier);
+
+        // ACT
+        var updateCmd = new UpdateBasicSupplierCommand
+        {
+            Name = "Công ty TNHH Thuế Mẫu Đổi Tên",
+            Phone = "0909090909",
+            Status = SupplierStatus.Active,
+            TaxCode = "0399887766",
+            Address = "77 Võ Văn Tần, Q3, TP.HCM",
+            Notes = "Cập nhật MST mới"
+        };
+        var result = await service.UpdateBasicSupplierAsync(suppId, updateCmd);
+
+        // ASSERT
+        Assert.Equal("0399887766", result.TaxCode);
+        Assert.Equal("77 Võ Văn Tần, Q3, TP.HCM", result.Address);
+        Assert.Equal("Cập nhật MST mới", result.Notes);
+        Assert.Equal(10000000m, result.CurrentDebt);
+    }
+
+    [Fact]
+    public async Task REQ02_UpdateBank_And_GetSuppliers_PersistsAndReturnsBankInformation()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var suppId = Guid.NewGuid();
+        var supplier = new Supplier
+        {
+            Id = suppId,
+            Code = "SUP-BANK-01",
+            Name = "Nhà Cung Cấp Long Nhật",
+            Phone = "0986312587",
+            Status = SupplierStatus.Active
+        };
+        await repo.AddAsync(supplier);
+
+        // ACT 1: Save bank account information
+        var bankCmd = new UpdateSupplierBankCommand
+        {
+            BankName = "Vietcombank",
+            BankAccountNumber = "0986312587999",
+            BankAccountHolder = "NGUYEN LONG NHAT"
+        };
+        var bankResult = await service.UpdateBankAsync(suppId, bankCmd);
+
+        // ASSERT 1: Detail DTO contains saved bank info
+        Assert.Equal("Vietcombank", bankResult.BankName);
+        Assert.Equal("0986312587999", bankResult.BankAccountNumber);
+        Assert.Equal("NGUYEN LONG NHAT", bankResult.BankAccountHolder);
+
+        // ACT 2: Retrieve list of suppliers (simulating re-entry from list page)
+        var listResult = await service.GetSuppliersAsync(new SupplierQueryFilter { PageIndex = 1, PageSize = 10 });
+        var targetSummary = listResult.Items.FirstOrDefault(s => s.Id == suppId);
+
+        // ASSERT 2: Summary DTO also preserves and returns bank fields
+        Assert.NotNull(targetSummary);
+        Assert.Equal("Vietcombank", targetSummary.BankName);
+        Assert.Equal("0986312587999", targetSummary.BankAccountNumber);
+        Assert.Equal("NGUYEN LONG NHAT", targetSummary.BankAccountHolder);
+
+        // ACT 3: Retrieve by id (simulating direct detail page reload)
+        var directResult = await service.GetByIdAsync(suppId);
+        Assert.NotNull(directResult);
+        Assert.Equal("Vietcombank", directResult.BankName);
+        Assert.Equal("0986312587999", directResult.BankAccountNumber);
+        Assert.Equal("NGUYEN LONG NHAT", directResult.BankAccountHolder);
+    }
+
+    [Fact]
+    public async Task REQ02_UpdateVat_PersistsAndReturnsVatInformation()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var suppId = Guid.NewGuid();
+        var supplier = new Supplier
+        {
+            Id = suppId,
+            Code = "SUP-VAT-01",
+            Name = "Công ty TNHH Mẫu",
+            Phone = "0987654321",
+            Status = SupplierStatus.Active
+        };
+        await repo.AddAsync(supplier);
+
+        // ACT 1: Save VAT information
+        var vatCmd = new UpdateSupplierVatCommand
+        {
+            CompanyName = "Công ty TNHH Mẫu Miền Nam",
+            TaxCode = "0312345678-001",
+            InvoiceAddress = "Tòa nhà Bitexco, Q1, TP.HCM"
+        };
+        var vatResult = await service.UpdateVatAsync(suppId, vatCmd);
+
+        // ASSERT 1: Detail DTO contains saved VAT info
+        Assert.Equal("Công ty TNHH Mẫu Miền Nam", vatResult.CompanyName);
+        Assert.Equal("0312345678-001", vatResult.TaxCode);
+        Assert.Equal("Tòa nhà Bitexco, Q1, TP.HCM", vatResult.InvoiceAddress);
+
+        // ACT 2: Retrieve by ID and verify persistence
+        var directResult = await service.GetByIdAsync(suppId);
+        Assert.NotNull(directResult);
+        Assert.Equal("Công ty TNHH Mẫu Miền Nam", directResult.CompanyName);
+        Assert.Equal("0312345678-001", directResult.TaxCode);
+        Assert.Equal("Tòa nhà Bitexco, Q1, TP.HCM", directResult.InvoiceAddress);
+    }
+
+    [Fact]
+    public async Task REQ02_UpdateBank_EmployeeRole_ThrowsForbiddenException()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        tenantContext.SetRole("EMPLOYEE");
+        var service = new SupplierService(repo, uow, tenantContext);
+
+        var suppId = Guid.NewGuid();
+        var supplier = new Supplier { Id = suppId, Code = "SUP-01", Name = "NCC Test", Phone = "0909090909" };
+        await repo.AddAsync(supplier);
+
+        var bankCmd = new UpdateSupplierBankCommand
+        {
+            BankName = "MB Bank",
+            BankAccountNumber = "123456789",
+            BankAccountHolder = "NGUYEN VAN A"
+        };
+
+        // ACT & ASSERT: Non-StoreOwner cannot update bank info
+        var exBank = await Assert.ThrowsAsync<BusinessException>(() => service.UpdateBankAsync(suppId, bankCmd));
+        Assert.Equal("FORBIDDEN", exBank.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQ02_UpdateVat_EmployeeRole_ThrowsForbiddenException()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        tenantContext.SetRole("EMPLOYEE");
+        var service = new SupplierService(repo, uow, tenantContext);
+
+        var suppId = Guid.NewGuid();
+        var supplier = new Supplier { Id = suppId, Code = "SUP-01", Name = "NCC Test", Phone = "0909090909" };
+        await repo.AddAsync(supplier);
+
+        var vatCmd = new UpdateSupplierVatCommand
+        {
+            CompanyName = "Cong ty Test",
+            TaxCode = "0100000000",
+            InvoiceAddress = "HN"
+        };
+
+        // ACT & ASSERT: Non-StoreOwner cannot update VAT info
+        var exVat = await Assert.ThrowsAsync<BusinessException>(() => service.UpdateVatAsync(suppId, vatCmd));
+        Assert.Equal("FORBIDDEN", exVat.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQ02_GetById_EmployeeRole_MasksCurrentDebtToZero()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        tenantContext.SetRole("EMPLOYEE");
+        tenantContext.CurrentBranchId = Guid.NewGuid();
+        var service = new SupplierService(repo, uow, tenantContext);
+
+        var suppId = Guid.NewGuid();
+        var supplier = new Supplier
+        {
+            Id = suppId,
+            Code = "SUP-DEBT-01",
+            Name = "NCC Công Nợ Lớn",
+            Phone = "0909090909",
+            CurrentDebt = 500000000m
+        };
+        await repo.AddAsync(supplier);
+
+        // ACT
+        var result = await service.GetByIdAsync(suppId);
+
+        // ASSERT: Employee cannot see debt information (CurrentDebt is masked to 0)
+        Assert.NotNull(result);
+        Assert.Equal(0m, result.CurrentDebt);
     }
 }
 

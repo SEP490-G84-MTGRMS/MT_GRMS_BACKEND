@@ -27,6 +27,7 @@ public interface ISupplierRepository : IRepository<Supplier>
         List<string>? phones = null,
         List<string>? codes = null,
         List<string>? names = null,
+        string? category = null,
         CancellationToken cancellationToken = default);
 
     Task<SupplierSearchSuggestionsDto> GetSearchSuggestionsAsync(
@@ -86,5 +87,11 @@ public interface ISupplierRepository : IRepository<Supplier>
     Task RemoveBranchAssignmentAsync(Guid supplierId, Guid branchId, CancellationToken cancellationToken = default);
     Task<bool> BranchExistsAsync(Guid branchId, CancellationToken cancellationToken = default);
     Task<MT_GRMS.Domain.Entities.SaaS.Branch?> GetBranchByIdAsync(Guid branchId, CancellationToken cancellationToken = default);
+
+    // Auto-sync branch products
+    Task<IReadOnlyList<Guid>> GetActiveBranchIdsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<SupplierProduct>> GetActiveSupplierProductsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default);
+    Task<bool> BranchStockExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default);
+    Task AddBranchStockAsync(MT_GRMS.Domain.Entities.Inventory.BranchStock branchStock, CancellationToken cancellationToken = default);
 }
 

@@ -18,6 +18,7 @@ public class PurchaseOrderDetailConfiguration : IEntityTypeConfiguration<Purchas
         builder.Property(x => x.EmployeeQty).HasColumnType("decimal(18,3)");
         builder.Property(x => x.StoreQty).HasColumnType("decimal(18,3)");
         builder.Property(x => x.FinalQty).HasColumnType("decimal(18,3)");
+        builder.Property(x => x.IsOwnerAdjusted).HasDefaultValue(false);
         builder.Property(x => x.OrderedQty).HasColumnType("decimal(18,3)");
         builder.Property(x => x.ReceivedQty).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);
         builder.Property(x => x.UnitPrice).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);

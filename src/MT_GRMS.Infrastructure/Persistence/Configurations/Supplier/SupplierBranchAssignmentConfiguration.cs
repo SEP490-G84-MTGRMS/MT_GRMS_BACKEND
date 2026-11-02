@@ -9,7 +9,7 @@ public class SupplierBranchAssignmentConfiguration : IEntityTypeConfiguration<Su
 {
     public void Configure(EntityTypeBuilder<SupplierBranchAssignment> builder)
     {
-        builder.ToTable("supplier_branch_assignments");
+        builder.ToTable("SupplierBranch");
 
         builder.HasKey(x => x.Id);
 

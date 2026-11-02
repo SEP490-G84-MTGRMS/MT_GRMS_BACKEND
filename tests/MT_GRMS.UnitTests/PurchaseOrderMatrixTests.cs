@@ -9,6 +9,7 @@ using MT_GRMS.Application.PurchaseOrders.Dtos;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Entities.Supplier;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 using Xunit;
 
@@ -82,6 +83,51 @@ public class PurchaseOrderMatrixTests
         Assert.Equal(_branchId, res.BranchId);
         Assert.Equal("Chi nhánh Nguyễn Trãi", res.BranchName);
         Assert.Equal(2, res.Products.Count);
+        Assert.NotNull(res.SupplierConfigs);
+        Assert.Equal(2, res.SupplierConfigs.Count);
+    }
+
+    [Fact]
+    public async Task REQ_PO_05_OrderMatrix_ReturnsSupplierConfigsAndActiveStatusRules()
+    {
+        // Arrange
+        _repo.MatrixProducts.Clear();
+        _repo.MatrixProducts.Add(new OrderMatrixProductDto
+        {
+            Id = _prod1Id,
+            SupplierId = _supplier1Id,
+            SupplierName = "Nông Sản Tươi Sạch Khải Anh",
+            Name = "Sản phẩm tạm ngưng",
+            Sku = "SP-INACTIVE",
+            IsProductActive = false,
+            ProductInactiveReason = "Sản phẩm đang tạm ngưng kinh doanh",
+            IsSupplierActive = true,
+            IsSupplierProductActive = true,
+            IsSupplierBranchActive = true,
+            IsBranchProductActive = true,
+            RowDisabledReason = "Sản phẩm đang tạm ngưng kinh doanh"
+        });
+
+        // Act
+        var res = await _service.GetOrderMatrixAsync(new OrderMatrixQuery
+        {
+            BranchId = _branchId,
+            ViewFrom = new DateTime(2026, 11, 2),
+            DurationDays = 7
+        });
+
+        // Assert
+        Assert.NotNull(res);
+        var product = Assert.Single(res.Products);
+        Assert.False(product.IsProductActive);
+        Assert.True(product.IsRowDisabled);
+        Assert.Equal("Sản phẩm đang tạm ngưng kinh doanh", product.RowDisabledReason);
+
+        // Kiểm tra cấu hình giao hàng NCC
+        var supConfig = res.SupplierConfigs.First(c => c.SupplierId == _supplier1Id);
+        Assert.True(supConfig.IsActive);
+        Assert.Contains(1, supConfig.ActiveDeliveryDays); // Thứ 2
+        Assert.Contains(2, supConfig.ActiveDeliveryDays); // Thứ 3
     }
 
     [Fact]
@@ -200,6 +246,215 @@ public class PurchaseOrderMatrixTests
         Assert.True(_uow.HasSaved);
     }
 
+    [Fact]
+    public async Task REQ_PO_06_EmployeeAndOwnerQuantity_3TierLogicAndPermissions()
+    {
+        // 1. Employee nhập số lượng đề xuất 20
+        _tenantContext.SetRole("EMPLOYEE");
+        var cellDate = new DateTime(2026, 11, 3);
+        var empCommand = new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier1Id,
+            ViewFrom = cellDate,
+            ViewTo = cellDate.AddDays(7),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto
+                {
+                    ProductId = _prod1Id,
+                    DeliveryDate = cellDate,
+                    EmployeeQty = 20m,
+                    StoreQty = null,
+                    IsOwnerAdjusted = false,
+                    FinalQty = 20m
+                }
+            }
+        };
+
+        var draft1 = await _service.SaveMatrixDraftAsync(empCommand);
+        var detail1 = draft1.Details.First();
+        Assert.Equal(20m, detail1.EmployeeQty);
+        Assert.Null(detail1.StoreQty);
+        Assert.False(detail1.FinalQty == 15m);
+        Assert.Equal(20m, detail1.FinalQty);
+
+        // 2. Store Owner xem và điều chỉnh số lượng thành 15
+        _tenantContext.SetRole("STORE_OWNER");
+        var ownerCommand = new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier1Id,
+            ViewFrom = cellDate,
+            ViewTo = cellDate.AddDays(7),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto
+                {
+                    ProductId = _prod1Id,
+                    DeliveryDate = cellDate,
+                    EmployeeQty = 20m,
+                    StoreQty = 15m,
+                    IsOwnerAdjusted = true,
+                    FinalQty = 15m
+                }
+            }
+        };
+
+        var draft2 = await _service.SaveMatrixDraftAsync(ownerCommand);
+        var detail2 = draft2.Details.First();
+        Assert.Equal(20m, detail2.EmployeeQty); // Employee đề xuất ban đầu KHÔNG bị ghi đè
+        Assert.Equal(15m, detail2.StoreQty);
+        Assert.Equal(15m, detail2.FinalQty);
+
+        // 3. Employee tiếp tục cập nhật đề xuất lên 25 -> Không được ghi đè số lượng Owner đã chốt
+        _tenantContext.SetRole("EMPLOYEE");
+        var empCommand2 = new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier1Id,
+            ViewFrom = cellDate,
+            ViewTo = cellDate.AddDays(7),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto
+                {
+                    ProductId = _prod1Id,
+                    DeliveryDate = cellDate,
+                    EmployeeQty = 25m,
+                    StoreQty = null,
+                    IsOwnerAdjusted = false,
+                    FinalQty = 25m
+                }
+            }
+        };
+
+        var draft3 = await _service.SaveMatrixDraftAsync(empCommand2);
+        var detail3 = draft3.Details.First();
+        Assert.Equal(25m, detail3.EmployeeQty); // Đề xuất mới được lưu
+        Assert.Equal(15m, detail3.StoreQty);    // StoreQty của Owner vẫn giữ nguyên 15
+        Assert.Equal(15m, detail3.FinalQty);    // FinalQty vẫn là 15 theo quyết định của Owner
+
+        // 4. Store Owner khôi phục (Reset Override) -> finalQuantity tự động quay về đề xuất mới nhất của Employee (25)
+        _tenantContext.SetRole("STORE_OWNER");
+        var revertCommand = new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier1Id,
+            ViewFrom = cellDate,
+            ViewTo = cellDate.AddDays(7),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto
+                {
+                    ProductId = _prod1Id,
+                    DeliveryDate = cellDate,
+                    EmployeeQty = 25m,
+                    StoreQty = null,
+                    IsOwnerAdjusted = false,
+                    FinalQty = 25m
+                }
+            }
+        };
+
+        var draft4 = await _service.SaveMatrixDraftAsync(revertCommand);
+        var detail4 = draft4.Details.First();
+        Assert.Null(detail4.StoreQty);
+        Assert.Equal(25m, detail4.EmployeeQty);
+        Assert.Equal(25m, detail4.FinalQty); // Khôi phục lấy số lượng Employee mới nhất
+    }
+
+    [Fact]
+    public async Task REQ_PO_07_StoreOwner_CanAdjustQuantityToZero()
+    {
+        // Arrange: Employee đề xuất 20, Owner chủ động gán 0
+        _tenantContext.SetRole("STORE_OWNER");
+        var cellDate = new DateTime(2026, 11, 3);
+        var command = new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier1Id,
+            ViewFrom = cellDate,
+            ViewTo = cellDate.AddDays(7),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto
+                {
+                    ProductId = _prod1Id,
+                    DeliveryDate = cellDate,
+                    EmployeeQty = 20m,
+                    StoreQty = 0m,
+                    IsOwnerAdjusted = true,
+                    FinalQty = 0m
+                }
+            }
+        };
+
+        // Act
+        var draft = await _service.SaveMatrixDraftAsync(command);
+        var detail = draft.Details.First();
+
+        // Assert
+        Assert.Equal(20m, detail.EmployeeQty);
+        Assert.Equal(0m, detail.StoreQty);
+        Assert.Equal(0m, detail.FinalQty);
+    }
+
+    [Fact]
+    public async Task REQ_PO_08_DraftIdempotency_MultipleSavesDoNotDuplicateDetails()
+    {
+        // Arrange
+        _tenantContext.SetRole("EMPLOYEE");
+        var cellDate = new DateTime(2026, 11, 3);
+        var command1 = new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier1Id,
+            ViewFrom = cellDate,
+            ViewTo = cellDate.AddDays(7),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto
+                {
+                    ProductId = _prod1Id,
+                    DeliveryDate = cellDate,
+                    EmployeeQty = 12m,
+                    FinalQty = 12m
+                }
+            }
+        };
+
+        // Act - Save 1st time
+        var draft1 = await _service.SaveMatrixDraftAsync(command1);
+        Assert.Single(draft1.Details);
+        Assert.Equal(12m, draft1.TotalQty);
+
+        // Act - Save 2nd time with updated value
+        var command2 = new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier1Id,
+            ViewFrom = cellDate,
+            ViewTo = cellDate.AddDays(7),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto
+                {
+                    ProductId = _prod1Id,
+                    DeliveryDate = cellDate,
+                    EmployeeQty = 18m,
+                    FinalQty = 18m
+                }
+            }
+        };
+        var draft2 = await _service.SaveMatrixDraftAsync(command2);
+
+        // Assert: No duplicates created, only updated existing detail
+        Assert.Single(draft2.Details);
+        Assert.Equal(18m, draft2.TotalQty);
+        Assert.Equal(18m * 160000m, draft2.TotalAmount);
+    }
+
     // =========================================================================
     // FAKE REPOSITORY
     // =========================================================================
@@ -239,6 +494,33 @@ public class PurchaseOrderMatrixTests
                 query = query.Where(p => p.SupplierId == supplierId.Value);
             }
             return Task.FromResult((IReadOnlyList<OrderMatrixProductDto>)query.ToList());
+        }
+
+        public Task<IReadOnlyList<OrderMatrixSupplierDeliveryConfigDto>> GetMatrixSupplierConfigsAsync(
+            Guid branchId,
+            Guid? supplierId,
+            CancellationToken cancellationToken = default)
+        {
+            var query = Suppliers.AsEnumerable();
+            if (supplierId.HasValue && supplierId.Value != Guid.Empty)
+            {
+                query = query.Where(s => s.Id == supplierId.Value);
+            }
+
+            var list = query.Select(s => new OrderMatrixSupplierDeliveryConfigDto
+            {
+                SupplierId = s.Id,
+                SupplierCode = s.Code,
+                SupplierName = s.Name,
+                IsActive = s.Status == SupplierStatus.Active,
+                IsAssignedToBranch = true,
+                ActiveDeliveryDays = new List<int> { 1, 2, 3, 4, 5, 6 },
+                LeadTimeDays = 1,
+                CutoffTime = "15:00",
+                BlackoutDates = new List<string>()
+            }).ToList();
+
+            return Task.FromResult((IReadOnlyList<OrderMatrixSupplierDeliveryConfigDto>)list);
         }
 
         public Task<PurchaseOrder?> GetDraftMatrixPoAsync(
@@ -284,6 +566,16 @@ public class PurchaseOrderMatrixTests
         {
             _poCounter++;
             return Task.FromResult($"PO-{deliveryDate:yyyyMMdd}-{_poCounter:D4}");
+        }
+
+        public Task<bool> UserExistsAsync(string userId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
+        }
+
+        public void AddPurchaseOrderDetail(PurchaseOrderDetail detail)
+        {
+            // No-op in memory test
         }
     }
 

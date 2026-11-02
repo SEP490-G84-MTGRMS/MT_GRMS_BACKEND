@@ -6,6 +6,8 @@ using MT_GRMS.Domain.Entities;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Identity;
+using MT_GRMS.Domain.Entities.Inventory;
+using MT_GRMS.Domain.Entities.Supplier;
 using Promotion = MT_GRMS.Domain.Entities.Sales.Promotion;
 using PromotionCondition = MT_GRMS.Domain.Entities.Sales.PromotionCondition;
 using VoucherCode = MT_GRMS.Domain.Entities.Sales.VoucherCode;
@@ -19,7 +21,7 @@ namespace MT_GRMS.Infrastructure.Persistence;
 /// </summary>
 public static class DatabaseSeeder
 {
-    private const string DefaultTenantId = "tenant-grocery-001";
+    private const string DefaultTenantId = "tenant_mt_mart_01";
 
     public static async Task SeedAsync(AppDbContext context, ILogger logger, CancellationToken ct = default)
     {
@@ -62,7 +64,16 @@ public static class DatabaseSeeder
                     Password = staffPasswordHash
                 };
 
-                await context.Users.AddRangeAsync(new[] { owner, cashier }, ct);
+                var employee = new User
+                {
+                    Id = "user-employee-001",
+                    UserName = "staff_employee",
+                    FullName = "Nhân Viên Cửa Hàng (Employee)",
+                    Email = "employee@mtgrms.vn",
+                    Password = staffPasswordHash
+                };
+
+                await context.Users.AddRangeAsync(new[] { owner, cashier, employee }, ct);
                 await context.SaveChangesAsync(ct);
             }
 
@@ -421,6 +432,555 @@ public static class DatabaseSeeder
                 await SeedPromotionsAsync(context, "default-tenant", logger, ct);
             }
 
+
+            // 6. Seed Additional Products & Supplier Linkages for Order Matrix
+            if (!await context.SupplierProducts.IgnoreQueryFilters().AnyAsync(sp => sp.SupplierProductCode == "SP-MI-HAOHAO-TC", ct))
+            {
+                logger.LogInformation("Seeding 20 Additional Grocery Products with Suppliers and Stocks...");
+
+                // Lấy hoặc tạo các Nhà Cung Cấp
+                var supAcecook = await context.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Code == "SUP-ACECOOK", ct);
+                if (supAcecook == null)
+                {
+                    supAcecook = new Domain.Entities.Supplier.Supplier
+                    {
+                        TenantId = DefaultTenantId,
+                        Code = "SUP-ACECOOK",
+                        Name = "Công Ty Cổ Phần Acecook Việt Nam",
+                        SupplierType = SupplierType.Goods,
+                        Status = SupplierStatus.Active,
+                        TaxCode = "0300808687",
+                        Phone = "02838154064",
+                        Email = "sales@acecookvietnam.vn",
+                        Address = "Lô II-3, Đường số 11, KCN Tân Bình, Tây Thạnh, Tân Phú, TP.HCM",
+                        ContactPerson = "Nguyễn Văn Hậu",
+                        PaymentTermDays = 15,
+                        CreditLimit = 150000000m
+                    };
+                    await context.Suppliers.AddAsync(supAcecook, ct);
+                }
+
+                var supMasan = await context.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Code == "SUP-MASAN", ct);
+                if (supMasan == null)
+                {
+                    supMasan = new Domain.Entities.Supplier.Supplier
+                    {
+                        TenantId = DefaultTenantId,
+                        Code = "SUP-MASAN",
+                        Name = "Công Ty Cổ Phần Hàng Tiêu Dùng Masan (Masan Consumer)",
+                        SupplierType = SupplierType.Goods,
+                        Status = SupplierStatus.Active,
+                        TaxCode = "0302017440",
+                        Phone = "02862555660",
+                        Email = "contact@masangroup.com",
+                        Address = "Tầng 12, Tòa nhà MPlaza Saigon, 39 Lê Duẩn, Bến Nghé, Quận 1, TP.HCM",
+                        ContactPerson = "Trần Thị Mai",
+                        PaymentTermDays = 30,
+                        CreditLimit = 250000000m
+                    };
+                    await context.Suppliers.AddAsync(supMasan, ct);
+                }
+
+                var supOrion = await context.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Code == "SUP-ORION", ct);
+                if (supOrion == null)
+                {
+                    supOrion = new Domain.Entities.Supplier.Supplier
+                    {
+                        TenantId = DefaultTenantId,
+                        Code = "SUP-ORION",
+                        Name = "Công Ty TNHH Thực Phẩm Orion Vina",
+                        SupplierType = SupplierType.Goods,
+                        Status = SupplierStatus.Active,
+                        TaxCode = "3700685000",
+                        Phone = "02743787999",
+                        Email = "orionvina@orionworld.com",
+                        Address = "KCN Mỹ Phước II, Bến Cát, Bình Dương",
+                        ContactPerson = "Lê Hoàng Long",
+                        PaymentTermDays = 20,
+                        CreditLimit = 180000000m
+                    };
+                    await context.Suppliers.AddAsync(supOrion, ct);
+                }
+
+                var supUnilever = await context.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Code == "SUP-UNILEVER", ct);
+                if (supUnilever == null)
+                {
+                    supUnilever = new Domain.Entities.Supplier.Supplier
+                    {
+                        TenantId = DefaultTenantId,
+                        Code = "SUP-UNILEVER",
+                        Name = "Công Ty TNHH Quốc Tế Unilever Việt Nam",
+                        SupplierType = SupplierType.Goods,
+                        Status = SupplierStatus.Active,
+                        TaxCode = "0303123456",
+                        Phone = "02854135686",
+                        Email = "cskh@unilever.com",
+                        Address = "Lô A2-3 KCN Tây Bắc Củ Chi, TP.HCM",
+                        ContactPerson = "Phạm Thu Hương",
+                        PaymentTermDays = 30,
+                        CreditLimit = 300000000m
+                    };
+                    await context.Suppliers.AddAsync(supUnilever, ct);
+                }
+
+                await context.SaveChangesAsync(ct);
+
+                // Cấu hình Delivery Config cho các NCC
+                var allSups = new[] { supAcecook, supMasan, supOrion, supUnilever };
+                foreach (var sup in allSups)
+                {
+                    if (!await context.SupplierDeliveryConfigs.IgnoreQueryFilters().AnyAsync(dc => dc.SupplierId == sup.Id, ct))
+                    {
+                        await context.SupplierDeliveryConfigs.AddAsync(new SupplierDeliveryConfig
+                        {
+                            TenantId = DefaultTenantId,
+                            SupplierId = sup.Id,
+                            LeadTimeHours = 24,
+                            LeadTimeDays = 1,
+                            CutoffTime = "17:00",
+                            DeliveryWeekdaysMask = 127,
+                            DeliveryDaysJson = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]"
+                        }, ct);
+                    }
+                }
+
+                // Lấy các Chi nhánh
+                var branches = await context.Branches.IgnoreQueryFilters().ToListAsync(ct);
+                foreach (var sup in allSups)
+                {
+                    foreach (var br in branches)
+                    {
+                        if (!await context.SupplierBranchAssignments.IgnoreQueryFilters().AnyAsync(sba => sba.SupplierId == sup.Id && sba.BranchId == br.Id, ct))
+                        {
+                            await context.SupplierBranchAssignments.AddAsync(new SupplierBranchAssignment
+                            {
+                                TenantId = DefaultTenantId,
+                                SupplierId = sup.Id,
+                                BranchId = br.Id,
+                                Status = SupplierStatus.Active
+                            }, ct);
+                        }
+                    }
+                }
+
+                var fmcgCat = await context.Categories.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.CategoryCode == "FMCG", ct);
+                var fmcgCatId = fmcgCat?.Id ?? Guid.Parse("11111111-1111-1111-1111-111111111111");
+
+                var alcCat = await context.Categories.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.CategoryCode == "ALCOHOL", ct);
+                var alcCatId = alcCat?.Id ?? Guid.Parse("22222222-2222-2222-2222-222222222222");
+
+                var extraProducts = new List<(Product prod, Guid supplierId, decimal wholesalePrice, int moq)>
+                {
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-MI-HAOHAO-TC",
+                            Barcode = "8934563020021",
+                            Name = "Mì Hảo Hảo Tôm Chua Cay (Thùng 30 gói)",
+                            BaseUnit = "Thùng",
+                            CostPrice = 110000m,
+                            SellingPrice = 135000m,
+                            MinStock = 10m,
+                            MaxStock = 200m,
+                            Status = "Active"
+                        },
+                        supAcecook.Id, 108000m, 5
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-MI-OMACHI-BBQ",
+                            Barcode = "8935049501234",
+                            Name = "Mì Omachi Xốt Bò Hầm (Thùng 30 gói)",
+                            BaseUnit = "Thùng",
+                            CostPrice = 195000m,
+                            SellingPrice = 235000m,
+                            MinStock = 5m,
+                            MaxStock = 150m,
+                            Status = "Active"
+                        },
+                        supMasan.Id, 192000m, 3
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-ORION-CHOCOPIE",
+                            Barcode = "8936036010015",
+                            Name = "Bánh Chocopie Orion Hộp 12 cái (360g)",
+                            BaseUnit = "Hộp",
+                            CostPrice = 48000m,
+                            SellingPrice = 62000m,
+                            MinStock = 15m,
+                            MaxStock = 300m,
+                            Status = "Active"
+                        },
+                        supOrion.Id, 46000m, 10
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-ORION-CUSTAS",
+                            Barcode = "8936036010022",
+                            Name = "Bánh Trứng Custas Orion Hộp 12 cái (282g)",
+                            BaseUnit = "Hộp",
+                            CostPrice = 52000m,
+                            SellingPrice = 68000m,
+                            MinStock = 12m,
+                            MaxStock = 250m,
+                            Status = "Active"
+                        },
+                        supOrion.Id, 50000m, 10
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-NUOC-COCA-320",
+                            Barcode = "8935049500038",
+                            Name = "Nước Ngọt Coca-Cola Sleek Lon 320ml (Lốc 6)",
+                            BaseUnit = "Lốc",
+                            CostPrice = 45000m,
+                            SellingPrice = 56000m,
+                            MinStock = 15m,
+                            MaxStock = 300m,
+                            Status = "Active"
+                        },
+                        supAcecook.Id, 43000m, 5
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-NUOC-PEPSI-320",
+                            Barcode = "8935049500045",
+                            Name = "Nước Ngọt Pepsi Không Calo Lon 320ml (Lốc 6)",
+                            BaseUnit = "Lốc",
+                            CostPrice = 44000m,
+                            SellingPrice = 55000m,
+                            MinStock = 15m,
+                            MaxStock = 300m,
+                            Status = "Active"
+                        },
+                        supMasan.Id, 42000m, 5
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = alcCatId,
+                            ProductCode = "SP-BIA-TIGER-330",
+                            Barcode = "8934822210041",
+                            Name = "Bia Tiger Nâu Thùng 24 lon 330ml",
+                            BaseUnit = "Thùng",
+                            CostPrice = 345000m,
+                            SellingPrice = 390000m,
+                            MinStock = 10m,
+                            MaxStock = 100m,
+                            Status = "Active"
+                        },
+                        supAcecook.Id, 340000m, 2
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = alcCatId,
+                            ProductCode = "SP-BIA-HEINEKEN-BAC",
+                            Barcode = "8934822210058",
+                            Name = "Bia Heineken Bạc Silver Thùng 24 lon 330ml",
+                            BaseUnit = "Thùng",
+                            CostPrice = 398000m,
+                            SellingPrice = 450000m,
+                            MinStock = 10m,
+                            MaxStock = 100m,
+                            Status = "Active"
+                        },
+                        supAcecook.Id, 395000m, 2
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-SUA-TH-180",
+                            Barcode = "8936036010077",
+                            Name = "Sữa Tươi Tiệt Trùng TH True Milk Ít Đường 180ml (Lốc 4)",
+                            BaseUnit = "Lốc",
+                            CostPrice = 31000m,
+                            SellingPrice = 39000m,
+                            MinStock = 20m,
+                            MaxStock = 400m,
+                            Status = "Active"
+                        },
+                        supOrion.Id, 30000m, 8
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-SUA-MILO-180",
+                            Barcode = "8936036010084",
+                            Name = "Thức Uống Lúa Mạch Nestlé Milo 180ml (Lốc 4 hộp)",
+                            BaseUnit = "Lốc",
+                            CostPrice = 28000m,
+                            SellingPrice = 35000m,
+                            MinStock = 20m,
+                            MaxStock = 400m,
+                            Status = "Active"
+                        },
+                        supOrion.Id, 27000m, 8
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-DAUAN-NEPTUNE-1L",
+                            Barcode = "8936036010091",
+                            Name = "Dầu Ăn Thượng Hạng Neptune Light Chai 1L",
+                            BaseUnit = "Chai",
+                            CostPrice = 48000m,
+                            SellingPrice = 58000m,
+                            MinStock = 12m,
+                            MaxStock = 200m,
+                            Status = "Active"
+                        },
+                        supMasan.Id, 46000m, 6
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-DAUAN-SIMPLY-1L",
+                            Barcode = "8936036010107",
+                            Name = "Dầu Đậu Nành Tinh Khiết Simply Chai 1L",
+                            BaseUnit = "Chai",
+                            CostPrice = 53000m,
+                            SellingPrice = 65000m,
+                            MinStock = 12m,
+                            MaxStock = 200m,
+                            Status = "Active"
+                        },
+                        supMasan.Id, 51000m, 6
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-NUOCMAM-CHINSU-500",
+                            Barcode = "8936036010114",
+                            Name = "Nước Mắm Chinsu Cá Hồi Chai 500ml",
+                            BaseUnit = "Chai",
+                            CostPrice = 39000m,
+                            SellingPrice = 48000m,
+                            MinStock = 15m,
+                            MaxStock = 250m,
+                            Status = "Active"
+                        },
+                        supMasan.Id, 37500m, 6
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-HATNEM-KNORR-900",
+                            Barcode = "8936036010121",
+                            Name = "Hạt Nêm Knorr Thịt Thăn Xương Ống Gói 900g",
+                            BaseUnit = "Gói",
+                            CostPrice = 64000m,
+                            SellingPrice = 79000m,
+                            MinStock = 10m,
+                            MaxStock = 200m,
+                            Status = "Active"
+                        },
+                        supUnilever.Id, 62000m, 5
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-BOTGIAT-OMO-3KG",
+                            Barcode = "8936036010138",
+                            Name = "Nước Giặt OMO Matic Cửa Trên Túi 3.1kg",
+                            BaseUnit = "Túi",
+                            CostPrice = 162000m,
+                            SellingPrice = 198000m,
+                            MinStock = 8m,
+                            MaxStock = 100m,
+                            Status = "Active"
+                        },
+                        supUnilever.Id, 158000m, 3
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-NUOCXAVAI-COMFORT-3L",
+                            Barcode = "8936036010145",
+                            Name = "Nước Xả Vải Comfort Hương Ban Mai Túi 3.2L",
+                            BaseUnit = "Túi",
+                            CostPrice = 175000m,
+                            SellingPrice = 215000m,
+                            MinStock = 8m,
+                            MaxStock = 100m,
+                            Status = "Active"
+                        },
+                        supUnilever.Id, 170000m, 3
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-NUOCRUACHEN-SUNLIGHT-750",
+                            Barcode = "8936036010152",
+                            Name = "Nước Rửa Chén Sunlight Chanh Chai 750g",
+                            BaseUnit = "Chai",
+                            CostPrice = 26000m,
+                            SellingPrice = 33000m,
+                            MinStock = 20m,
+                            MaxStock = 300m,
+                            Status = "Active"
+                        },
+                        supUnilever.Id, 25000m, 10
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-KEMDANHRANG-PS-200",
+                            Barcode = "8936036010169",
+                            Name = "Kem Đánh Răng P/S Trà Xanh Ống 180g",
+                            BaseUnit = "Hộp",
+                            CostPrice = 32000m,
+                            SellingPrice = 42000m,
+                            MinStock = 20m,
+                            MaxStock = 300m,
+                            Status = "Active"
+                        },
+                        supUnilever.Id, 31000m, 12
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-SNACK-LAY-NATURAL",
+                            Barcode = "8936036010176",
+                            Name = "Snack Khoai Tây Lay's Tự Nhiên Classic Gói 95g",
+                            BaseUnit = "Gói",
+                            CostPrice = 16500m,
+                            SellingPrice = 22000m,
+                            MinStock = 30m,
+                            MaxStock = 500m,
+                            Status = "Active"
+                        },
+                        supOrion.Id, 16000m, 15
+                    ),
+                    (
+                        new Product
+                        {
+                            TenantId = DefaultTenantId,
+                            CategoryId = fmcgCatId,
+                            ProductCode = "SP-XUCXICH-CP-500",
+                            Barcode = "8936036010183",
+                            Name = "Xúc Xích Tiệt Trùng Heo C.P Gói 500g (10 cây)",
+                            BaseUnit = "Gói",
+                            CostPrice = 42000m,
+                            SellingPrice = 54000m,
+                            MinStock = 15m,
+                            MaxStock = 200m,
+                            Status = "Active"
+                        },
+                        supAcecook.Id, 40000m, 10
+                    )
+                };
+
+                foreach (var item in extraProducts)
+                {
+                    var existingProd = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.ProductCode == item.prod.ProductCode, ct);
+                    var targetProd = existingProd ?? item.prod;
+                    if (existingProd == null)
+                    {
+                        await context.Products.AddAsync(item.prod, ct);
+                    }
+
+                    if (!await context.SupplierProducts.IgnoreQueryFilters().AnyAsync(sp => sp.ProductId == targetProd.Id && sp.SupplierId == item.supplierId, ct))
+                    {
+                        await context.SupplierProducts.AddAsync(new SupplierProduct
+                        {
+                            TenantId = DefaultTenantId,
+                            ProductId = targetProd.Id,
+                            SupplierId = item.supplierId,
+                            SupplierProductCode = targetProd.ProductCode,
+                            AgreedWholesalePrice = item.wholesalePrice,
+                            DeliveryUoM = targetProd.BaseUnit,
+                            MinimumOrderQuantity = item.moq,
+                            IsPrimarySupplier = true,
+                            Status = SupplierProductStatus.Active
+                        }, ct);
+                    }
+
+                    foreach (var br in branches)
+                    {
+                        if (!await context.BranchStocks.IgnoreQueryFilters().AnyAsync(bs => bs.BranchId == br.Id && bs.ProductId == targetProd.Id, ct))
+                        {
+                            await context.BranchStocks.AddAsync(new BranchStock
+                            {
+                                TenantId = DefaultTenantId,
+                                BranchId = br.Id,
+                                ProductId = targetProd.Id,
+                                SupplierId = item.supplierId,
+                                BatchCode = $"LOT-202610-{targetProd.ProductCode}",
+                                QuantityOnHand = targetProd.MinStock * 2,
+                                QuantityReserved = 0,
+                                LandedCostPerUnit = item.wholesalePrice,
+                                ShelfLocation = "KHO-CHÍNH"
+                            }, ct);
+                        }
+                    }
+                }
+
+                await context.SaveChangesAsync(ct);
+            }
+
+            // Đồng bộ TenantId của tất cả Products, BranchStocks, Suppliers về tenant_mt_mart_01
+            var misalignedProds = await context.Products.IgnoreQueryFilters().Where(p => p.TenantId != DefaultTenantId).ToListAsync(ct);
+            foreach (var p in misalignedProds) { p.TenantId = DefaultTenantId; }
+
+            var misalignedStocks = await context.BranchStocks.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId).ToListAsync(ct);
+            foreach (var s in misalignedStocks) { s.TenantId = DefaultTenantId; }
+
+            var misalignedSups = await context.Suppliers.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId).ToListAsync(ct);
+            foreach (var s in misalignedSups) { s.TenantId = DefaultTenantId; }
+
+            var misalignedSp = await context.SupplierProducts.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId).ToListAsync(ct);
+            foreach (var s in misalignedSp) { s.TenantId = DefaultTenantId; }
+
+            var misalignedSba = await context.SupplierBranchAssignments.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId).ToListAsync(ct);
+            foreach (var s in misalignedSba) { s.TenantId = DefaultTenantId; }
+
+            var misalignedSdc = await context.SupplierDeliveryConfigs.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId).ToListAsync(ct);
+            foreach (var s in misalignedSdc) { s.TenantId = DefaultTenantId; }
+
+            await context.SaveChangesAsync(ct);
 
             logger.LogInformation("DatabaseSeeder finished successfully.");
         }

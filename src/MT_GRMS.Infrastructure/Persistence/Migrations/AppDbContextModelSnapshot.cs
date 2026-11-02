@@ -3643,7 +3643,7 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.HasIndex("TenantId", "SupplierId", "BranchId")
                         .IsUnique();
 
-                    b.ToTable("supplier_branch_assignments", (string)null);
+                    b.ToTable("SupplierBranch", (string)null);
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.SupplierCategory", b =>

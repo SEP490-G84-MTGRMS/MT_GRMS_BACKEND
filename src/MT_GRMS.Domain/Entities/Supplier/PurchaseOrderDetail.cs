@@ -14,6 +14,7 @@ public class PurchaseOrderDetail : BaseTenantEntity
     public decimal? EmployeeQty { get; set; }
     public decimal? StoreQty { get; set; }
     public decimal? FinalQty { get; set; }
+    public bool IsOwnerAdjusted { get; set; } = false;
     public decimal? OrderedQty { get; set; }
     public decimal ReceivedQty { get; set; } = 0.000m;
     public decimal UnitPrice { get; set; } = 0.00m;

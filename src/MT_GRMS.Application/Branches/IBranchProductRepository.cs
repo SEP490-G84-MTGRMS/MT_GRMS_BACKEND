@@ -6,11 +6,19 @@ using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Entities.Supplier;
 
 namespace MT_GRMS.Application.Branches;
 
 public interface IBranchProductRepository
 {
+    Task<(IReadOnlyList<BranchProductDto> Items, int TotalCount)> GetPagedBranchProductsAsync(
+        Guid branchId,
+        BranchProductQueryFilter filter,
+        int pageIndex,
+        int pageSize,
+        CancellationToken cancellationToken = default);
+
     Task<(IReadOnlyList<BranchProductDto> Items, int TotalCount)> GetPagedBranchProductsAsync(
         Guid branchId,
         string? searchTerm,
@@ -47,5 +55,10 @@ public interface IBranchProductRepository
 
     Task<Branch?> GetBranchByIdAsync(
         Guid branchId,
+        CancellationToken cancellationToken = default);
+
+    Task<SupplierProduct?> GetSupplierProductAsync(
+        Guid productId,
+        Guid? supplierId,
         CancellationToken cancellationToken = default);
 }

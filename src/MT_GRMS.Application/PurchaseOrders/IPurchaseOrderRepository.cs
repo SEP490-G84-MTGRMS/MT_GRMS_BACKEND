@@ -22,6 +22,11 @@ public interface IPurchaseOrderRepository
         Guid? supplierId,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<OrderMatrixSupplierDeliveryConfigDto>> GetMatrixSupplierConfigsAsync(
+        Guid branchId,
+        Guid? supplierId,
+        CancellationToken cancellationToken = default);
+
     Task<PurchaseOrder?> GetDraftMatrixPoAsync(
         Guid branchId,
         Guid? supplierId,
@@ -49,4 +54,12 @@ public interface IPurchaseOrderRepository
     Task<string> GeneratePoCodeAsync(
         DateTime deliveryDate,
         CancellationToken cancellationToken = default);
+
+    Task<bool> UserExistsAsync(
+        string userId,
+        CancellationToken cancellationToken = default);
+
+    void AddPurchaseOrderDetail(PurchaseOrderDetail detail);
 }
+
+

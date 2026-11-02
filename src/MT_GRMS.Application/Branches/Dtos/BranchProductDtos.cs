@@ -10,6 +10,7 @@ public class BranchProductDto
 {
     public Guid Id { get; set; }
     public Guid BranchId { get; set; }
+    public string BranchCode { get; set; } = string.Empty;
     public string BranchName { get; set; } = string.Empty;
     public Guid ProductId { get; set; }
     public string Name { get; set; } = string.Empty;
@@ -21,7 +22,10 @@ public class BranchProductDto
     public decimal CostPrice { get; set; }
     public decimal CurrentStock { get; set; }
     public decimal MinStockLevel { get; set; }
+    public Guid? SupplierId { get; set; }
+    public string PrimarySupplierCode { get; set; } = string.Empty;
     public string PrimarySupplierName { get; set; } = string.Empty;
+    public int MinOrderQuantity { get; set; } = 1;
     public string Status { get; set; } = "Active";
     public string? ShelfLocation { get; set; }
     public DateTime AssignedDate { get; set; }
@@ -49,6 +53,13 @@ public class BranchSummaryDto
 public class BranchProductQueryFilter
 {
     public string? SearchTerm { get; set; }
+    public string? BranchCode { get; set; }
+    public List<string>? Skus { get; set; }
+    public List<string>? Names { get; set; }
+    public List<string>? BranchCodes { get; set; }
+    public List<string>? BranchNames { get; set; }
+    public List<string>? SupplierCodes { get; set; }
+    public List<string>? SupplierNames { get; set; }
     public string? Category { get; set; }
     public string? Status { get; set; }
     public string? StockAlertFilter { get; set; } // "ALL", "LOW", "OUT_OF_STOCK", "NORMAL"
@@ -64,16 +75,20 @@ public class AssignBranchProductsCommand
     public List<Guid> ProductIds { get; set; } = new();
     public decimal? DefaultRetailPrice { get; set; }
     public decimal? DefaultMinStock { get; set; }
+    public int? DefaultMinOrderQuantity { get; set; }
     public string? ShelfLocation { get; set; }
 }
 
 /// <summary>
-/// Lệnh cập nhật giá bán lẻ niêm yết, mức tồn an toàn và vị trí kệ hàng tại chi nhánh
+/// Lệnh cập nhật giá bán lẻ niêm yết, mức tồn an toàn, MOQ, trạng thái và vị trí kệ hàng tại chi nhánh
 /// </summary>
 public class UpdateBranchProductCommand
 {
     public decimal RetailPrice { get; set; }
     public decimal MinStockLevel { get; set; }
+    public int? MinOrderQuantity { get; set; }
+    public string? Status { get; set; }
+    public Guid? SupplierId { get; set; }
     public string? ShelfLocation { get; set; }
 }
 
