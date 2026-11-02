@@ -210,8 +210,6 @@ public class OrderService : IOrderService
                 }
             }
 
-            customer.TotalDebt += finalAmount;
-            customer.UpdatedAt = DateTime.UtcNow;
             paymentStatus = "UNPAID";
             cashTendered = 0m;
             changeAmount = 0m;
@@ -228,6 +226,11 @@ public class OrderService : IOrderService
                     Notes: request.Note ?? $"Bán nợ POS đơn"
                 ), cancellationToken);
             }
+            else
+            {
+                customer.TotalDebt += finalAmount;
+            }
+            customer.UpdatedAt = DateTime.UtcNow;
         }
         else if (paymentMethodUpper == "CASH")
         {

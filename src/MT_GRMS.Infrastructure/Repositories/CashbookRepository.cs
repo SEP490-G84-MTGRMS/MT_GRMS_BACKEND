@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Infrastructure.Persistence;
@@ -11,61 +11,23 @@ public class CashbookRepository : GenericRepository<CashbookEntry>, ICashbookRep
     {
     }
 
-    public async Task<BranchCashTill?> GetTillWithLockAsync(Guid tillId, CancellationToken ct = default)
+    public async Task<FinanceAccount?> GetAccountWithLockAsync(Guid accountId, CancellationToken ct = default)
     {
         if (_context.Database.IsSqlServer())
         {
-            return await _context.BranchCashTills
-                .FromSqlInterpolated($"SELECT * FROM BranchCashTills WITH (UPDLOCK, ROWLOCK) WHERE Id = {tillId}")
+            return await _context.FinanceAccounts
+                .FromSqlInterpolated($"SELECT * FROM FinanceAccounts WITH (UPDLOCK, ROWLOCK) WHERE Id = {accountId}")
                 .SingleOrDefaultAsync(ct);
         }
 
         if (_context.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
         {
-            return await _context.BranchCashTills
-                .FromSqlInterpolated($"SELECT * FROM \"BranchCashTills\" WHERE \"Id\" = {tillId} FOR UPDATE")
+            return await _context.FinanceAccounts
+                .FromSqlInterpolated($"SELECT * FROM \"FinanceAccounts\" WHERE \"Id\" = {accountId} FOR UPDATE")
                 .SingleOrDefaultAsync(ct);
         }
 
-        return await _context.BranchCashTills.SingleOrDefaultAsync(t => t.Id == tillId, ct);
-    }
-
-    public async Task<BranchSafe?> GetSafeWithLockAsync(Guid safeId, CancellationToken ct = default)
-    {
-        if (_context.Database.IsSqlServer())
-        {
-            return await _context.BranchSafes
-                .FromSqlInterpolated($"SELECT * FROM BranchSafes WITH (UPDLOCK, ROWLOCK) WHERE Id = {safeId}")
-                .SingleOrDefaultAsync(ct);
-        }
-
-        if (_context.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            return await _context.BranchSafes
-                .FromSqlInterpolated($"SELECT * FROM \"BranchSafes\" WHERE \"Id\" = {safeId} FOR UPDATE")
-                .SingleOrDefaultAsync(ct);
-        }
-
-        return await _context.BranchSafes.SingleOrDefaultAsync(s => s.Id == safeId, ct);
-    }
-
-    public async Task<TenantBankAccount?> GetBankAccountWithLockAsync(Guid bankAccountId, CancellationToken ct = default)
-    {
-        if (_context.Database.IsSqlServer())
-        {
-            return await _context.TenantBankAccounts
-                .FromSqlInterpolated($"SELECT * FROM TenantBankAccounts WITH (UPDLOCK, ROWLOCK) WHERE Id = {bankAccountId}")
-                .SingleOrDefaultAsync(ct);
-        }
-
-        if (_context.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
-        {
-            return await _context.TenantBankAccounts
-                .FromSqlInterpolated($"SELECT * FROM \"TenantBankAccounts\" WHERE \"Id\" = {bankAccountId} FOR UPDATE")
-                .SingleOrDefaultAsync(ct);
-        }
-
-        return await _context.TenantBankAccounts.SingleOrDefaultAsync(b => b.Id == bankAccountId, ct);
+        return await _context.FinanceAccounts.SingleOrDefaultAsync(a => a.Id == accountId, ct);
     }
 
     public async Task<string> GetLastAuditHashAsync(Guid accountId, CancellationToken ct = default)

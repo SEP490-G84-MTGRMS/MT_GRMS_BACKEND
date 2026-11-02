@@ -2,6 +2,7 @@ using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Debt.Dtos;
 using MT_GRMS.Domain.Entities.Finance;
+using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
@@ -42,7 +43,7 @@ public class CustomerDebtService : ICustomerDebtService
             throw new BusinessException("INVALID_AMOUNT", "Số tiền ghi nợ phải lớn hơn 0.");
         }
 
-        var profile = await GetOrCreateProfileWithLockAsync(request.CustomerId, ct);
+        var customer = await GetCustomerWithLockAsync(request.CustomerId, ct);
         var now = DateTime.UtcNow;
 
         var hasOverdue = await _debtRepo.HasOverdueInvoicesAsync(request.CustomerId, now, ct);
@@ -50,25 +51,27 @@ public class CustomerDebtService : ICustomerDebtService
 
         if (hasOverdue && !isManagerBypass)
         {
-            profile.DebtStatus = CustomerDebtStatus.OverdueBlocked;
+            customer.DebtStatus = CustomerDebtStatus.OverdueBlocked;
+            customer.IsBlockedForDebt = true;
             await _unitOfWork.SaveChangesAsync(ct);
             throw new BusinessException("DEBT_OVERDUE_BLOCKED", "Khách hàng có hóa đơn nợ đã quá hạn. Bắt buộc thanh toán nợ cũ hoặc cần mã duyệt của Quản lý.");
         }
 
-        var projectedDebt = profile.CurrentDebtBalance + request.DebtAmount;
-        if (projectedDebt > profile.CreditLimit && !isManagerBypass)
+        var projectedDebt = customer.TotalDebt + request.DebtAmount;
+        if (projectedDebt > customer.DebtLimit && !isManagerBypass)
         {
-            profile.DebtStatus = CustomerDebtStatus.LimitExceededBlocked;
+            customer.DebtStatus = CustomerDebtStatus.LimitExceededBlocked;
+            customer.IsBlockedForDebt = true;
             await _unitOfWork.SaveChangesAsync(ct);
-            throw new BusinessException("CREDIT_LIMIT_EXCEEDED", $"Đơn nợ vượt hạn mức tín dụng ({projectedDebt:N0}đ > {profile.CreditLimit:N0}đ). Cần mã duyệt của Quản lý.");
+            throw new BusinessException("CREDIT_LIMIT_EXCEEDED", $"Đơn nợ vượt hạn mức tín dụng ({projectedDebt:N0}đ > {customer.DebtLimit:N0}đ). Cần mã duyệt của Quản lý.");
         }
 
         // Tự động cấn trừ tiền khách gửi trước nếu có
         var actualDebtAmount = request.DebtAmount;
-        if (profile.PrepaymentBalance > 0)
+        if (customer.PrepaymentBalance > 0)
         {
-            var offsetFromPrepayment = Math.Min(profile.PrepaymentBalance, actualDebtAmount);
-            profile.PrepaymentBalance -= offsetFromPrepayment;
+            var offsetFromPrepayment = Math.Min(customer.PrepaymentBalance, actualDebtAmount);
+            customer.PrepaymentBalance -= offsetFromPrepayment;
             actualDebtAmount -= offsetFromPrepayment;
         }
 
@@ -80,7 +83,7 @@ public class CustomerDebtService : ICustomerDebtService
             BranchId = request.BranchId,
             TotalDebtAmount = request.DebtAmount,
             RemainingDebtAmount = actualDebtAmount,
-            DueDate = now.AddDays(profile.MaxDebtDays),
+            DueDate = now.AddDays(customer.MaxDebtDays > 0 ? customer.MaxDebtDays : 30),
             Status = actualDebtAmount == 0 ? DebtInvoiceStatus.FullyPaid : DebtInvoiceStatus.Unpaid,
             FullyPaidAtUtc = actualDebtAmount == 0 ? now : null,
             Notes = request.Notes
@@ -88,9 +91,10 @@ public class CustomerDebtService : ICustomerDebtService
 
         await _invoiceRepo.AddAsync(invoice, ct);
 
-        profile.CurrentDebtBalance += actualDebtAmount;
-        profile.LastDebtIncurredAtUtc = now;
-        profile.DebtStatus = CustomerDebtStatus.GoodStanding;
+        customer.TotalDebt += actualDebtAmount;
+        customer.LastDebtIncurredAtUtc = now;
+        customer.DebtStatus = CustomerDebtStatus.GoodStanding;
+        customer.IsBlockedForDebt = false;
 
         // Bút toán sổ cái nợ bất biến
         var entry = new CustomerDebtEntry
@@ -100,8 +104,8 @@ public class CustomerDebtService : ICustomerDebtService
             BranchId = request.BranchId,
             EntryType = CustomerDebtType.DebtIncurred,
             Amount = request.DebtAmount,
-            BalanceAfter = profile.CurrentDebtBalance,
-            PrepaymentAfter = profile.PrepaymentBalance,
+            BalanceAfter = customer.TotalDebt,
+            PrepaymentAfter = customer.PrepaymentBalance,
             ReferenceCode = request.OrderCode,
             SourceId = request.OrderId,
             CreatedByUserId = _tenantContext.CurrentUserId,
@@ -122,7 +126,7 @@ public class CustomerDebtService : ICustomerDebtService
             throw new BusinessException("INVALID_AMOUNT", "Số tiền trả nợ phải lớn hơn 0.");
         }
 
-        var profile = await GetOrCreateProfileWithLockAsync(request.CustomerId, ct);
+        var customer = await GetCustomerWithLockAsync(request.CustomerId, ct);
         var openInvoices = await _debtRepo.GetOpenInvoicesAsync(request.CustomerId, ct);
         var now = DateTime.UtcNow;
 
@@ -175,20 +179,21 @@ public class CustomerDebtService : ICustomerDebtService
         }
 
         var actualRepaidDebt = request.Amount - remainingCash;
-        profile.CurrentDebtBalance -= actualRepaidDebt;
+        customer.TotalDebt = Math.Max(0, customer.TotalDebt - actualRepaidDebt);
         if (remainingCash > 0)
         {
-            profile.PrepaymentBalance += remainingCash;
+            customer.PrepaymentBalance += remainingCash;
         }
 
-        profile.LastRepaymentAtUtc = now;
-        if (profile.CurrentDebtBalance == 0)
+        customer.LastRepaymentAtUtc = now;
+        if (customer.TotalDebt == 0)
         {
-            profile.DebtStatus = CustomerDebtStatus.GoodStanding;
+            customer.DebtStatus = CustomerDebtStatus.GoodStanding;
+            customer.IsBlockedForDebt = false;
         }
 
-        entry.BalanceAfter = profile.CurrentDebtBalance;
-        entry.PrepaymentAfter = profile.PrepaymentBalance;
+        entry.BalanceAfter = customer.TotalDebt;
+        entry.PrepaymentAfter = customer.PrepaymentBalance;
 
         // Tích hợp đồng bộ Sổ Quỹ
         await _cashbookService.ReceiveCashAsync(
@@ -204,7 +209,7 @@ public class CustomerDebtService : ICustomerDebtService
 
         await _unitOfWork.SaveChangesAsync(ct);
 
-        return new RepaymentResultResponse(entry.Id, entry.EntryCode, actualRepaidDebt, profile.CurrentDebtBalance, profile.PrepaymentBalance, allocations);
+        return new RepaymentResultResponse(entry.Id, entry.EntryCode, actualRepaidDebt, customer.TotalDebt, customer.PrepaymentBalance, allocations);
     }
 
     public async Task<CustomerDebtEntryResponse> OffsetGoodsReturnDebtAsync(OffsetGoodsReturnDebtRequest request, CancellationToken ct = default)
@@ -214,7 +219,7 @@ public class CustomerDebtService : ICustomerDebtService
             throw new BusinessException("INVALID_AMOUNT", "Số tiền hàng trả phải lớn hơn 0.");
         }
 
-        var profile = await GetOrCreateProfileWithLockAsync(request.CustomerId, ct);
+        var customer = await GetCustomerWithLockAsync(request.CustomerId, ct);
         var now = DateTime.UtcNow;
         var unallocatedReturnAmount = request.ReturnAmount;
 
@@ -293,7 +298,7 @@ public class CustomerDebtService : ICustomerDebtService
         }
 
         var totalDebtOffset = request.ReturnAmount - unallocatedReturnAmount;
-        profile.CurrentDebtBalance -= totalDebtOffset;
+        customer.TotalDebt = Math.Max(0, customer.TotalDebt - totalDebtOffset);
 
         // Bước 3: Xử lý tiền dư khi khách đã sạch 100% nợ
         if (unallocatedReturnAmount > 0)
@@ -315,19 +320,21 @@ public class CustomerDebtService : ICustomerDebtService
             else
             {
                 // Cộng vào số tiền đặt cọc/dư của khách
-                profile.PrepaymentBalance += unallocatedReturnAmount;
+                customer.PrepaymentBalance += unallocatedReturnAmount;
             }
         }
 
-        if (profile.CurrentDebtBalance == 0)
+        if (customer.TotalDebt == 0)
         {
-            profile.DebtStatus = CustomerDebtStatus.GoodStanding;
+            customer.DebtStatus = CustomerDebtStatus.GoodStanding;
+            customer.IsBlockedForDebt = false;
         }
 
-        entry.BalanceAfter = profile.CurrentDebtBalance;
-        entry.PrepaymentAfter = profile.PrepaymentBalance;
+        entry.BalanceAfter = customer.TotalDebt;
+        entry.PrepaymentAfter = customer.PrepaymentBalance;
 
         await _unitOfWork.SaveChangesAsync(ct);
+
         return MapEntryResponse(entry);
     }
 
@@ -335,7 +342,7 @@ public class CustomerDebtService : ICustomerDebtService
     {
         if (request.AdjustmentAmount <= 0)
         {
-            throw new BusinessException("INVALID_AMOUNT", "Số tiền điều chỉnh phải lớn hơn 0.");
+            throw new BusinessException("INVALID_AMOUNT", "Số tiền điều chỉnh nợ phải lớn hơn 0.");
         }
 
         if (string.IsNullOrWhiteSpace(request.ManagerApprovalCode) || request.ManagerApprovalCode != "MGR-ADJUST-2026")
@@ -343,20 +350,16 @@ public class CustomerDebtService : ICustomerDebtService
             throw new BusinessException("UNAUTHORIZED_ADJUSTMENT", "Mã phê duyệt điều chỉnh nợ của Quản lý không hợp lệ.");
         }
 
-        var profile = await GetOrCreateProfileWithLockAsync(request.CustomerId, ct);
+        var customer = await GetCustomerWithLockAsync(request.CustomerId, ct);
         var now = DateTime.UtcNow;
 
         if (request.IsIncrease)
         {
-            profile.CurrentDebtBalance += request.AdjustmentAmount;
+            customer.TotalDebt += request.AdjustmentAmount;
         }
         else
         {
-            if (profile.CurrentDebtBalance < request.AdjustmentAmount)
-            {
-                throw new BusinessException("INVALID_ADJUSTMENT", "Không thể điều chỉnh giảm nợ vượt quá số nợ hiện tại.");
-            }
-            profile.CurrentDebtBalance -= request.AdjustmentAmount;
+            customer.TotalDebt = Math.Max(0, customer.TotalDebt - request.AdjustmentAmount);
         }
 
         var entry = new CustomerDebtEntry
@@ -365,8 +368,8 @@ public class CustomerDebtService : ICustomerDebtService
             CustomerId = request.CustomerId,
             EntryType = CustomerDebtType.DebtAdjustment,
             Amount = request.AdjustmentAmount,
-            BalanceAfter = profile.CurrentDebtBalance,
-            PrepaymentAfter = profile.PrepaymentBalance,
+            BalanceAfter = customer.TotalDebt,
+            PrepaymentAfter = customer.PrepaymentBalance,
             ReferenceCode = "ADJ-" + now.ToString("yyyyMMddHHmmss"),
             CreatedByUserId = _tenantContext.CurrentUserId,
             OccurredAtUtc = now,
@@ -386,15 +389,16 @@ public class CustomerDebtService : ICustomerDebtService
             throw new BusinessException("INVALID_AMOUNT", "Số tiền xóa nợ xấu phải lớn hơn 0.");
         }
 
-        var profile = await GetOrCreateProfileWithLockAsync(request.CustomerId, ct);
-        if (profile.CurrentDebtBalance < request.WriteOffAmount)
+        var customer = await GetCustomerWithLockAsync(request.CustomerId, ct);
+        if (customer.TotalDebt < request.WriteOffAmount)
         {
             throw new BusinessException("INVALID_WRITEOFF", "Số tiền xóa nợ xấu vượt quá số dư nợ hiện tại.");
         }
 
         var now = DateTime.UtcNow;
-        profile.CurrentDebtBalance -= request.WriteOffAmount;
-        profile.DebtStatus = CustomerDebtStatus.GoodStanding;
+        customer.TotalDebt -= request.WriteOffAmount;
+        customer.DebtStatus = CustomerDebtStatus.GoodStanding;
+        customer.IsBlockedForDebt = false;
 
         var entry = new CustomerDebtEntry
         {
@@ -402,8 +406,8 @@ public class CustomerDebtService : ICustomerDebtService
             CustomerId = request.CustomerId,
             EntryType = CustomerDebtType.BadDebtWriteOff,
             Amount = request.WriteOffAmount,
-            BalanceAfter = profile.CurrentDebtBalance,
-            PrepaymentAfter = profile.PrepaymentBalance,
+            BalanceAfter = customer.TotalDebt,
+            PrepaymentAfter = customer.PrepaymentBalance,
             ReferenceCode = "WO-" + now.ToString("yyyyMMddHHmmss"),
             CreatedByUserId = _tenantContext.CurrentUserId,
             OccurredAtUtc = now,
@@ -418,19 +422,19 @@ public class CustomerDebtService : ICustomerDebtService
 
     public async Task<CustomerDebtProfileResponse> GetProfileAsync(Guid customerId, CancellationToken ct = default)
     {
-        var profile = await GetOrCreateProfileWithLockAsync(customerId, ct);
+        var customer = await GetCustomerWithLockAsync(customerId, ct);
         var openInvoices = await _debtRepo.GetOpenInvoicesAsync(customerId, ct);
 
         return new CustomerDebtProfileResponse(
-            profile.Id,
-            profile.CustomerId,
-            profile.CreditLimit,
-            profile.MaxDebtDays,
-            profile.CurrentDebtBalance,
-            profile.PrepaymentBalance,
-            profile.DebtStatus.ToString(),
-            profile.LastDebtIncurredAtUtc,
-            profile.LastRepaymentAtUtc,
+            customer.Id,
+            customer.Id,
+            customer.DebtLimit,
+            customer.MaxDebtDays,
+            customer.TotalDebt,
+            customer.PrepaymentBalance,
+            customer.DebtStatus.ToString(),
+            customer.LastDebtIncurredAtUtc,
+            customer.LastRepaymentAtUtc,
             openInvoices.Select(MapInvoiceResponse).ToList()
         );
     }
@@ -446,24 +450,13 @@ public class CustomerDebtService : ICustomerDebtService
             .ToList();
     }
 
-    private async Task<CustomerDebtProfile> GetOrCreateProfileWithLockAsync(Guid customerId, CancellationToken ct)
+    private async Task<Customer> GetCustomerWithLockAsync(Guid customerId, CancellationToken ct)
     {
-        var profile = await _debtRepo.GetProfileWithLockAsync(customerId, ct);
-        if (profile != null) return profile;
+        var customer = await _debtRepo.GetCustomerWithLockAsync(customerId, ct);
+        if (customer != null) return customer;
 
-        profile = new CustomerDebtProfile
-        {
-            CustomerId = customerId,
-            CreditLimit = 2_000_000m, // Hạn mức mặc định 2 triệu
-            MaxDebtDays = 30,
-            CurrentDebtBalance = 0,
-            PrepaymentBalance = 0,
-            DebtStatus = CustomerDebtStatus.GoodStanding
-        };
-
-        await _debtRepo.AddAsync(profile, ct);
-        await _unitOfWork.SaveChangesAsync(ct);
-        return profile;
+        // Nếu khách chưa có trong DB, ném NotFoundException
+        throw new NotFoundException($"Không tìm thấy khách hàng với Id: {customerId}");
     }
 
     private static CustomerDebtInvoiceResponse MapInvoiceResponse(CustomerDebtInvoice i) =>

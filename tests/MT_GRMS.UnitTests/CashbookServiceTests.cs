@@ -63,19 +63,11 @@ public class CashbookServiceTests
 
     private class FakeCashbookRepository : FakeGenericRepository<CashbookEntry>, ICashbookRepository
     {
-        public List<BranchCashTill> Tills { get; } = new();
-        public List<BranchSafe> Safes { get; } = new();
-        public List<TenantBankAccount> BankAccounts { get; } = new();
+        public List<FinanceAccount> Accounts { get; } = new();
         public List<ShiftZReport> Shifts { get; } = new();
 
-        public Task<BranchCashTill?> GetTillWithLockAsync(Guid tillId, CancellationToken ct = default) =>
-            Task.FromResult(Tills.FirstOrDefault(t => t.Id == tillId));
-
-        public Task<BranchSafe?> GetSafeWithLockAsync(Guid safeId, CancellationToken ct = default) =>
-            Task.FromResult(Safes.FirstOrDefault(s => s.Id == safeId));
-
-        public Task<TenantBankAccount?> GetBankAccountWithLockAsync(Guid bankAccountId, CancellationToken ct = default) =>
-            Task.FromResult(BankAccounts.FirstOrDefault(b => b.Id == bankAccountId));
+        public Task<FinanceAccount?> GetAccountWithLockAsync(Guid accountId, CancellationToken ct = default) =>
+            Task.FromResult(Accounts.FirstOrDefault(a => a.Id == accountId));
 
         public Task<string> GetLastAuditHashAsync(Guid accountId, CancellationToken ct = default)
         {
@@ -99,11 +91,9 @@ public class CashbookServiceTests
     }
 
     private readonly FakeCashbookRepository _cashbookRepo = new();
-    private readonly FakeGenericRepository<BranchCashTill> _tillRepo = new();
-    private readonly FakeGenericRepository<BranchSafe> _safeRepo = new();
+    private readonly FakeGenericRepository<FinanceAccount> _accountRepo = new();
     private readonly FakeGenericRepository<CashInTransit> _transitRepo = new();
     private readonly FakeGenericRepository<ShiftZReport> _shiftRepo = new();
-    private readonly FakeGenericRepository<TenantBankAccount> _bankRepo = new();
     private readonly FakeAuditHashService _auditHashService = new();
     private readonly FakeTenantContext _tenantContext = new();
     private readonly FakeUnitOfWork _unitOfWork = new();
@@ -113,11 +103,9 @@ public class CashbookServiceTests
     {
         _service = new CashbookService(
             _cashbookRepo,
-            _tillRepo,
-            _safeRepo,
+            _accountRepo,
             _transitRepo,
             _shiftRepo,
-            _bankRepo,
             _auditHashService,
             _tenantContext,
             _unitOfWork
@@ -128,9 +116,9 @@ public class CashbookServiceTests
     public async Task OpenShiftAsync_WhenNoActiveShift_ShouldSucceedAndSetOpeningFloat()
     {
         var branchId = Guid.NewGuid();
-        var till = new BranchCashTill { Id = Guid.NewGuid(), BranchId = branchId, TillName = "Quầy 01", CurrentBalance = 500_000m };
-        _cashbookRepo.Tills.Add(till);
-        _tillRepo.Items.Add(till);
+        var till = new FinanceAccount { Id = Guid.NewGuid(), BranchId = branchId, AccountType = FinanceAccountType.Till, AccountName = "Quầy 01", CurrentBalance = 500_000m };
+        _cashbookRepo.Accounts.Add(till);
+        _accountRepo.Items.Add(till);
 
         var request = new OpenShiftRequest(till.Id, 500_000m, "Mở ca đầu ngày");
         var response = await _service.OpenShiftAsync(request);
@@ -145,9 +133,9 @@ public class CashbookServiceTests
     [Fact]
     public async Task OpenShiftAsync_WhenActiveShiftExists_ShouldThrowBusinessException()
     {
-        var till = new BranchCashTill { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), TillName = "Quầy 01", CurrentBalance = 500_000m };
+        var till = new FinanceAccount { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy 01", CurrentBalance = 500_000m };
         var activeShift = new ShiftZReport { Id = Guid.NewGuid(), TillId = till.Id, Status = ShiftState.Open };
-        _cashbookRepo.Tills.Add(till);
+        _cashbookRepo.Accounts.Add(till);
         _cashbookRepo.Shifts.Add(activeShift);
 
         var request = new OpenShiftRequest(till.Id, 500_000m, null);
@@ -158,11 +146,11 @@ public class CashbookServiceTests
     [Fact]
     public async Task OpenShiftAsync_InheritsRetainedFloatFromLastClosedShift()
     {
-        var till = new BranchCashTill { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), TillName = "Quầy 01", CurrentBalance = 0 };
+        var till = new FinanceAccount { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy 01", CurrentBalance = 0 };
         var lastClosed = new ShiftZReport { Id = Guid.NewGuid(), TillId = till.Id, Status = ShiftState.Closed, RetainedFloatAmount = 300_000m, ClosedAtUtc = DateTime.UtcNow.AddHours(-1) };
-        _cashbookRepo.Tills.Add(till);
+        _cashbookRepo.Accounts.Add(till);
         _cashbookRepo.Shifts.Add(lastClosed);
-        _tillRepo.Items.Add(till);
+        _accountRepo.Items.Add(till);
 
         var request = new OpenShiftRequest(till.Id, 300_000m, "Kế thừa ca trước");
         var response = await _service.OpenShiftAsync(request);
@@ -174,7 +162,7 @@ public class CashbookServiceTests
     [Fact]
     public async Task CloseShiftZReportAsync_WithExactCash_ShouldCloseSuccessfully()
     {
-        var till = new BranchCashTill { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), CurrentBalance = 1_500_000m };
+        var till = new FinanceAccount { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy test", CurrentBalance = 1_500_000m };
         var shift = new ShiftZReport
         {
             Id = Guid.NewGuid(),
@@ -185,7 +173,7 @@ public class CashbookServiceTests
             Status = ShiftState.Open
         };
         _shiftRepo.Items.Add(shift);
-        _cashbookRepo.Tills.Add(till);
+        _cashbookRepo.Accounts.Add(till);
 
         var request = new CloseShiftRequest(shift.Id, 1_500_000m, 300_000m, "Khớp tiền ca");
         var response = await _service.CloseShiftZReportAsync(request);
@@ -199,7 +187,7 @@ public class CashbookServiceTests
     [Fact]
     public async Task CloseShiftZReportAsync_WithSurplusCash_ShouldRecordSuspenseEntry()
     {
-        var till = new BranchCashTill { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), CurrentBalance = 1_500_000m };
+        var till = new FinanceAccount { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy test", CurrentBalance = 1_500_000m };
         var shift = new ShiftZReport
         {
             Id = Guid.NewGuid(),
@@ -210,7 +198,7 @@ public class CashbookServiceTests
             Status = ShiftState.Open
         };
         _shiftRepo.Items.Add(shift);
-        _cashbookRepo.Tills.Add(till);
+        _cashbookRepo.Accounts.Add(till);
 
         // Đếm thực tế 1.550.000đ (thừa 50.000đ > dung sai 2.000đ)
         var request = new CloseShiftRequest(shift.Id, 1_550_000m, 300_000m, "Thừa tiền");
@@ -226,7 +214,7 @@ public class CashbookServiceTests
     [Fact]
     public async Task CloseShiftZReportAsync_WithShortageCash_ShouldRecordShortageEntry()
     {
-        var till = new BranchCashTill { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), CurrentBalance = 1_500_000m };
+        var till = new FinanceAccount { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy test", CurrentBalance = 1_500_000m };
         var shift = new ShiftZReport
         {
             Id = Guid.NewGuid(),
@@ -237,7 +225,7 @@ public class CashbookServiceTests
             Status = ShiftState.Open
         };
         _shiftRepo.Items.Add(shift);
-        _cashbookRepo.Tills.Add(till);
+        _cashbookRepo.Accounts.Add(till);
 
         // Đếm thực tế 1.480.000đ (thiếu 20.000đ > dung sai 2.000đ)
         var request = new CloseShiftRequest(shift.Id, 1_480_000m, 300_000m, "Thiếu tiền");
@@ -254,14 +242,14 @@ public class CashbookServiceTests
     public async Task ProcessCashDropAsync_WhenTillHasSufficientBalance_ShouldTransferMoneyToSafe()
     {
         var branchId = Guid.NewGuid();
-        var till = new BranchCashTill { Id = Guid.NewGuid(), BranchId = branchId, CurrentBalance = 2_000_000m };
-        var safe = new BranchSafe { Id = Guid.NewGuid(), BranchId = branchId, SafeName = "Két Sắt Chi Nhánh", CurrentBalance = 5_000_000m };
+        var till = new FinanceAccount { Id = Guid.NewGuid(), BranchId = branchId, AccountType = FinanceAccountType.Till, AccountName = "Quầy test", CurrentBalance = 2_000_000m };
+        var safe = new FinanceAccount { Id = Guid.NewGuid(), BranchId = branchId, AccountType = FinanceAccountType.Safe, AccountName = "Két Sắt Chi Nhánh", CurrentBalance = 5_000_000m };
         var shift = new ShiftZReport { Id = Guid.NewGuid(), TillId = till.Id, Status = ShiftState.Open, DroppedToSafeAmount = 0 };
 
-        _cashbookRepo.Tills.Add(till);
-        _cashbookRepo.Safes.Add(safe);
+        _cashbookRepo.Accounts.Add(till);
+        _cashbookRepo.Accounts.Add(safe);
         _shiftRepo.Items.Add(shift);
-        _safeRepo.Items.Add(safe);
+        _accountRepo.Items.Add(safe);
 
         var request = new CashDropRequest(shift.Id, 1_000_000m, Guid.NewGuid(), "Cash drop giữa ca");
         var result = await _service.ProcessCashDropAsync(request);
@@ -277,10 +265,10 @@ public class CashbookServiceTests
     public async Task ProcessCashDropAsync_WhenTillHasInsufficientBalance_ShouldThrowInsufficientStockException()
     {
         var branchId = Guid.NewGuid();
-        var till = new BranchCashTill { Id = Guid.NewGuid(), BranchId = branchId, CurrentBalance = 200_000m };
+        var till = new FinanceAccount { Id = Guid.NewGuid(), BranchId = branchId, AccountType = FinanceAccountType.Till, AccountName = "Quầy test", CurrentBalance = 200_000m };
         var shift = new ShiftZReport { Id = Guid.NewGuid(), TillId = till.Id, Status = ShiftState.Open };
 
-        _cashbookRepo.Tills.Add(till);
+        _cashbookRepo.Accounts.Add(till);
         _shiftRepo.Items.Add(shift);
 
         var request = new CashDropRequest(shift.Id, 500_000m, Guid.NewGuid(), "Drop quá tay");
@@ -290,9 +278,9 @@ public class CashbookServiceTests
     [Fact]
     public async Task CreateDepositToBankAsync_WhenSafeHasSufficientBalance_ShouldCreateTransitRecord()
     {
-        var safe = new BranchSafe { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), CurrentBalance = 10_000_000m };
+        var safe = new FinanceAccount { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Safe, AccountName = "Két test", CurrentBalance = 10_000_000m };
         var bankId = Guid.NewGuid();
-        _cashbookRepo.Safes.Add(safe);
+        _cashbookRepo.Accounts.Add(safe);
 
         var request = new DepositToBankRequest(safe.Id, bankId, 8_000_000m, Guid.NewGuid(), "Nộp doanh thu cuối ngày");
         var response = await _service.CreateDepositToBankAsync(request);
@@ -307,8 +295,8 @@ public class CashbookServiceTests
     [Fact]
     public async Task CreateDepositToBankAsync_WhenSafeHasInsufficientBalance_ShouldThrowInsufficientStockException()
     {
-        var safe = new BranchSafe { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), CurrentBalance = 1_000_000m };
-        _cashbookRepo.Safes.Add(safe);
+        var safe = new FinanceAccount { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Safe, AccountName = "Két test", CurrentBalance = 1_000_000m };
+        _cashbookRepo.Accounts.Add(safe);
 
         var request = new DepositToBankRequest(safe.Id, Guid.NewGuid(), 5_000_000m, Guid.NewGuid(), "Nộp quá số dư");
         await Assert.ThrowsAsync<InsufficientStockException>(() => _service.CreateDepositToBankAsync(request));
@@ -317,7 +305,7 @@ public class CashbookServiceTests
     [Fact]
     public async Task ConfirmBankDepositAsync_WhenAmountMatches_ShouldMarkCompletedAndIncreaseBankBalance()
     {
-        var bank = new TenantBankAccount { Id = Guid.NewGuid(), AccountNumber = "123456789", CurrentBalance = 50_000_000m };
+        var bank = new FinanceAccount { Id = Guid.NewGuid(), AccountType = FinanceAccountType.Bank, AccountName = "Ngân hàng", AccountNumber = "123456789", CurrentBalance = 50_000_000m };
         var transit = new CashInTransit
         {
             Id = Guid.NewGuid(),
@@ -327,7 +315,7 @@ public class CashbookServiceTests
             Status = CashInTransitStatus.PendingBankConfirmation
         };
         _transitRepo.Items.Add(transit);
-        _cashbookRepo.BankAccounts.Add(bank);
+        _cashbookRepo.Accounts.Add(bank);
 
         var request = new ConfirmBankDepositRequest(transit.Id, 5_000_000m, "Tiền đã vào tài khoản");
         var response = await _service.ConfirmBankDepositAsync(request);
@@ -343,7 +331,7 @@ public class CashbookServiceTests
     [Fact]
     public async Task ConfirmBankDepositAsync_WhenAmountDiffers_ShouldMarkDiscrepancy()
     {
-        var bank = new TenantBankAccount { Id = Guid.NewGuid(), AccountNumber = "123456789", CurrentBalance = 50_000_000m };
+        var bank = new FinanceAccount { Id = Guid.NewGuid(), AccountType = FinanceAccountType.Bank, AccountName = "Ngân hàng", AccountNumber = "123456789", CurrentBalance = 50_000_000m };
         var transit = new CashInTransit
         {
             Id = Guid.NewGuid(),
@@ -353,7 +341,7 @@ public class CashbookServiceTests
             Status = CashInTransitStatus.PendingBankConfirmation
         };
         _transitRepo.Items.Add(transit);
-        _cashbookRepo.BankAccounts.Add(bank);
+        _cashbookRepo.Accounts.Add(bank);
 
         // Thực tế ngân hàng báo vào 4.900.000đ (lệch 100k)
         var request = new ConfirmBankDepositRequest(transit.Id, 4_900_000m, "Bị trừ phí nộp");
@@ -367,8 +355,8 @@ public class CashbookServiceTests
     [Fact]
     public async Task DisburseCashAsync_WhenTillHasInsufficientBalance_ShouldThrowInsufficientStockException()
     {
-        var till = new BranchCashTill { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), CurrentBalance = 100_000m };
-        _cashbookRepo.Tills.Add(till);
+        var till = new FinanceAccount { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy test", CurrentBalance = 100_000m };
+        _cashbookRepo.Accounts.Add(till);
 
         // Chi 150k trong khi két chỉ có 100k -> Chống âm két tức thì
         await Assert.ThrowsAsync<InsufficientStockException>(() =>
@@ -378,9 +366,9 @@ public class CashbookServiceTests
     [Fact]
     public async Task DisburseCashAsync_WhenSufficientBalance_ShouldDecreaseBalanceAndComputeAuditHash()
     {
-        var till = new BranchCashTill { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), CurrentBalance = 500_000m };
-        _cashbookRepo.Tills.Add(till);
-        _tillRepo.Items.Add(till);
+        var till = new FinanceAccount { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy test", CurrentBalance = 500_000m };
+        _cashbookRepo.Accounts.Add(till);
+        _accountRepo.Items.Add(till);
 
         var response = await _service.DisburseCashAsync(till.Id, FinanceAccountType.Till, 200_000m, "EXPENSE", Guid.NewGuid(), "REF02", "Mua băng keo");
 
@@ -394,9 +382,9 @@ public class CashbookServiceTests
     [Fact]
     public async Task ReceiveCashAsync_ShouldIncreaseBalanceAndComputeAuditHash()
     {
-        var safe = new BranchSafe { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), CurrentBalance = 1_000_000m };
-        _cashbookRepo.Safes.Add(safe);
-        _safeRepo.Items.Add(safe);
+        var safe = new FinanceAccount { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Safe, AccountName = "Két test", CurrentBalance = 1_000_000m };
+        _cashbookRepo.Accounts.Add(safe);
+        _accountRepo.Items.Add(safe);
 
         var response = await _service.ReceiveCashAsync(safe.Id, FinanceAccountType.Safe, 500_000m, "CAPITAL", Guid.NewGuid(), "REF03", "Chủ rót thêm vốn");
 
@@ -425,7 +413,7 @@ public class CashbookServiceTests
         var branchId = Guid.NewGuid();
         var till = await _service.GetOrCreateTillAsync(branchId, "Quầy VIP");
         Assert.NotNull(till);
-        Assert.Equal("Quầy VIP", till.TillName);
+        Assert.Equal("Quầy VIP", till.AccountName);
 
         var existingTill = await _service.GetOrCreateTillAsync(branchId, "Quầy VIP");
         Assert.Equal(till.Id, existingTill.Id);
@@ -439,12 +427,12 @@ public class CashbookServiceTests
     [Fact]
     public async Task DisburseAndReceive_FromBankAndSafe_ShouldUpdateBalances()
     {
-        var bank = new TenantBankAccount { Id = Guid.NewGuid(), CurrentBalance = 10_000_000m };
-        var safe = new BranchSafe { Id = Guid.NewGuid(), CurrentBalance = 5_000_000m };
-        _cashbookRepo.BankAccounts.Add(bank);
-        _cashbookRepo.Safes.Add(safe);
-        _bankRepo.Items.Add(bank);
-        _safeRepo.Items.Add(safe);
+        var bank = new FinanceAccount { Id = Guid.NewGuid(), AccountType = FinanceAccountType.Bank, AccountName = "Ngân hàng", CurrentBalance = 10_000_000m };
+        var safe = new FinanceAccount { Id = Guid.NewGuid(), AccountType = FinanceAccountType.Safe, AccountName = "Két test", CurrentBalance = 5_000_000m };
+        _cashbookRepo.Accounts.Add(bank);
+        _cashbookRepo.Accounts.Add(safe);
+        _accountRepo.Items.Add(bank);
+        _accountRepo.Items.Add(safe);
 
         var disburseSafe = await _service.DisburseCashAsync(safe.Id, FinanceAccountType.Safe, 1_000_000m, "RENT", null, "REF-R", "Trả tiền thuê nhà");
         Assert.Equal(4_000_000m, safe.CurrentBalance);
@@ -459,13 +447,13 @@ public class CashbookServiceTests
     [Fact]
     public async Task TransferFundsAsync_StandardTransfer_ShouldTransferBalancesCorrectly()
     {
-        var till = new BranchCashTill { Id = Guid.NewGuid(), CurrentBalance = 5_000_000m };
-        var safe = new BranchSafe { Id = Guid.NewGuid(), CurrentBalance = 10_000_000m };
+        var till = new FinanceAccount { Id = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy test", CurrentBalance = 5_000_000m };
+        var safe = new FinanceAccount { Id = Guid.NewGuid(), AccountType = FinanceAccountType.Safe, AccountName = "Két test", CurrentBalance = 10_000_000m };
 
-        _cashbookRepo.Tills.Add(till);
-        _cashbookRepo.Safes.Add(safe);
-        _tillRepo.Items.Add(till);
-        _safeRepo.Items.Add(safe);
+        _cashbookRepo.Accounts.Add(till);
+        _cashbookRepo.Accounts.Add(safe);
+        _accountRepo.Items.Add(till);
+        _accountRepo.Items.Add(safe);
 
         // Chuyển 2.000.000đ từ Két quầy sang Két sắt
         var request = new TransferFundRequest(till.Id, safe.Id, 2_000_000m, "Chuyển tiền dư ca về két sắt");

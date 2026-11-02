@@ -479,62 +479,55 @@ public static class DatabaseSeeder
             }
 
 
-            // 6. Seed Default Cash Accounts (Till, Safe, Bank) for Tenant if not present
-            if (!await context.BranchCashTills.IgnoreQueryFilters().AnyAsync(t => t.TenantId == DefaultTenantId, ct))
+            // 6. Seed Default FinanceAccounts (Till, Safe, Bank) for Tenant if not present
+            if (!await context.FinanceAccounts.IgnoreQueryFilters().AnyAsync(t => t.TenantId == DefaultTenantId, ct))
             {
-                logger.LogInformation("Seeding BranchCashTill...");
-                var till = new BranchCashTill
+                logger.LogInformation("Seeding FinanceAccounts...");
+                var till = new FinanceAccount
                 {
                     Id = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db"),
                     TenantId = DefaultTenantId,
                     BranchId = branchId,
-                    TillName = "Két tiền mặt quầy chính",
+                    AccountType = FinanceAccountType.Till,
+                    AccountName = "Két tiền mặt quầy chính",
                     CurrentBalance = 12500000m,
                     IsActive = true
                 };
-                await context.BranchCashTills.AddAsync(till, ct);
-                await context.SaveChangesAsync(ct);
-            }
-
-            if (!await context.BranchSafes.IgnoreQueryFilters().AnyAsync(s => s.TenantId == DefaultTenantId, ct))
-            {
-                logger.LogInformation("Seeding BranchSafe...");
-                var safe = new BranchSafe
+                var safe = new FinanceAccount
                 {
                     Id = Guid.Parse("01a19664-6492-7d10-9a82-54801db4f342"),
                     TenantId = DefaultTenantId,
                     BranchId = branchId,
-                    SafeName = "Két sắt chủ shop (Safe Deposit)",
-                    CurrentBalance = 150000000m
+                    AccountType = FinanceAccountType.Safe,
+                    AccountName = "Két sắt chủ shop (Safe Deposit)",
+                    CurrentBalance = 150000000m,
+                    IsActive = true
                 };
-                await context.BranchSafes.AddAsync(safe, ct);
-                await context.SaveChangesAsync(ct);
-            }
-
-            if (!await context.TenantBankAccounts.IgnoreQueryFilters().AnyAsync(b => b.TenantId == DefaultTenantId, ct))
-            {
-                logger.LogInformation("Seeding TenantBankAccounts...");
-                var bank1 = new TenantBankAccount
+                var bank1 = new FinanceAccount
                 {
                     Id = Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559"),
                     TenantId = DefaultTenantId,
+                    AccountType = FinanceAccountType.Bank,
+                    AccountName = "Vietcombank (VCB)",
                     BankName = "Vietcombank (VCB)",
                     AccountNumber = "0071001234567",
                     AccountHolderName = "CHỦ HỘ KINH DOANH",
                     CurrentBalance = 145800000m,
                     IsActive = true
                 };
-                var bank2 = new TenantBankAccount
+                var bank2 = new FinanceAccount
                 {
                     Id = Guid.Parse("01a19664-6761-78c3-b60a-cc460c68c51c"),
                     TenantId = DefaultTenantId,
+                    AccountType = FinanceAccountType.Bank,
+                    AccountName = "Techcombank (TCB)",
                     BankName = "Techcombank (TCB)",
                     AccountNumber = "19036789123011",
                     AccountHolderName = "CHỦ HỘ KINH DOANH",
                     CurrentBalance = 32450000m,
                     IsActive = true
                 };
-                await context.TenantBankAccounts.AddRangeAsync(new[] { bank1, bank2 }, ct);
+                await context.FinanceAccounts.AddRangeAsync(new[] { till, safe, bank1, bank2 }, ct);
                 await context.SaveChangesAsync(ct);
             }
 
@@ -622,60 +615,7 @@ public static class DatabaseSeeder
                 await context.Customers.AddRangeAsync(customers, ct);
                 await context.SaveChangesAsync(ct);
 
-                var debtProfiles = new List<CustomerDebtProfile>
-                {
-                    new CustomerDebtProfile
-                    {
-                        Id = Guid.NewGuid(),
-                        TenantId = DefaultTenantId,
-                        CustomerId = customer1Id,
-                        CreditLimit = 20000000m,
-                        CurrentDebtBalance = 8000000m,
-                        PrepaymentBalance = 0m,
-                        MaxDebtDays = 30,
-                        DebtStatus = CustomerDebtStatus.GoodStanding,
-                        Notes = "Hồ sơ công nợ chuẩn - Đang hoạt động tốt"
-                    },
-                    new CustomerDebtProfile
-                    {
-                        Id = Guid.NewGuid(),
-                        TenantId = DefaultTenantId,
-                        CustomerId = customer2Id,
-                        CreditLimit = 10000000m,
-                        CurrentDebtBalance = 12000000m,
-                        PrepaymentBalance = 0m,
-                        MaxDebtDays = 30,
-                        DebtStatus = CustomerDebtStatus.LimitExceededBlocked,
-                        Notes = "Cảnh báo vượt hạn mức nợ (12tr > 10tr)"
-                    },
-                    new CustomerDebtProfile
-                    {
-                        Id = Guid.NewGuid(),
-                        TenantId = DefaultTenantId,
-                        CustomerId = customer3Id,
-                        CreditLimit = 15000000m,
-                        CurrentDebtBalance = 0m,
-                        PrepaymentBalance = 0m,
-                        MaxDebtDays = 30,
-                        DebtStatus = CustomerDebtStatus.GoodStanding,
-                        Notes = "Không có nợ tồn đọng"
-                    },
-                    new CustomerDebtProfile
-                    {
-                        Id = Guid.NewGuid(),
-                        TenantId = DefaultTenantId,
-                        CustomerId = customer4Id,
-                        CreditLimit = 0m,
-                        CurrentDebtBalance = 0m,
-                        PrepaymentBalance = 0m,
-                        MaxDebtDays = 30,
-                        DebtStatus = CustomerDebtStatus.GoodStanding,
-                        Notes = "Khách hàng mua lẻ trả ngay"
-                    }
-                };
 
-                await context.CustomerDebtProfiles.AddRangeAsync(debtProfiles, ct);
-                await context.SaveChangesAsync(ct);
 
                 var debtInvoices = new List<CustomerDebtInvoice>
                 {

@@ -1,13 +1,7 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Debt.Dtos;
-using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
@@ -15,8 +9,7 @@ using MT_GRMS.Infrastructure.Persistence;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/customers")]
-[Route("api/v1/customers")]
+[Route("api/[controller]")]
 public class CustomersController : BaseApiController
 {
     private readonly AppDbContext _context;
@@ -33,9 +26,7 @@ public class CustomersController : BaseApiController
         [FromQuery] string? search,
         [FromQuery] string? tier,
         [FromQuery] string? debtStatus,
-        [FromQuery] int page = 1,
-        [FromQuery] int pageSize = 50,
-        CancellationToken ct = default)
+        CancellationToken ct)
     {
         var tenantId = _tenantContext.CurrentTenantId;
         var query = _context.Customers
@@ -45,10 +36,7 @@ public class CustomersController : BaseApiController
         if (!string.IsNullOrWhiteSpace(search))
         {
             var s = search.Trim().ToLower();
-            query = query.Where(c =>
-                c.Phone.ToLower().Contains(s) ||
-                c.Name.ToLower().Contains(s) ||
-                c.CustomerCode.ToLower().Contains(s));
+            query = query.Where(c => c.Name.ToLower().Contains(s) || c.Phone.Contains(s) || c.CustomerCode.ToLower().Contains(s));
         }
 
         if (!string.IsNullOrWhiteSpace(tier) && !tier.Equals("ALL", StringComparison.OrdinalIgnoreCase))
@@ -60,19 +48,11 @@ public class CustomersController : BaseApiController
             .OrderByDescending(c => c.CreatedAt)
             .ToListAsync(ct);
 
-        // Load profiles to get real-time debt balance
-        var customerIds = customers.Select(c => c.Id).ToList();
-        var profiles = await _context.CustomerDebtProfiles
-            .AsNoTracking()
-            .Where(p => p.TenantId == tenantId && customerIds.Contains(p.CustomerId))
-            .ToDictionaryAsync(p => p.CustomerId, ct);
-
         var result = new List<CustomerResponse>();
         foreach (var c in customers)
         {
-            profiles.TryGetValue(c.Id, out var profile);
-            var currentDebt = profile?.CurrentDebtBalance ?? c.TotalDebt;
-            var debtLimit = profile?.CreditLimit > 0 ? profile.CreditLimit : c.DebtLimit;
+            var currentDebt = c.TotalDebt;
+            var debtLimit = c.DebtLimit;
 
             // Apply debt status filter
             if (!string.IsNullOrWhiteSpace(debtStatus) && !debtStatus.Equals("ALL", StringComparison.OrdinalIgnoreCase))
@@ -120,13 +100,6 @@ public class CustomersController : BaseApiController
             return NotFound(ApiResponse<object>.Fail("NOT_FOUND", "Khách hàng không tồn tại."));
         }
 
-        var profile = await _context.CustomerDebtProfiles
-            .AsNoTracking()
-            .FirstOrDefaultAsync(p => p.CustomerId == id && p.TenantId == tenantId, ct);
-
-        var currentDebt = profile?.CurrentDebtBalance ?? c.TotalDebt;
-        var debtLimit = profile?.CreditLimit > 0 ? profile.CreditLimit : c.DebtLimit;
-
         // Load open invoices
         var openInvoices = await _context.CustomerDebtInvoices
             .AsNoTracking()
@@ -141,23 +114,7 @@ public class CustomersController : BaseApiController
             ))
             .ToListAsync(ct);
 
-        // Load recent debt repayments
-        var payments = await _context.CustomerDebtEntries
-            .AsNoTracking()
-            .Where(e => e.CustomerId == id && e.TenantId == tenantId && e.EntryType == CustomerDebtType.DebtRepayment)
-            .OrderByDescending(e => e.OccurredAtUtc)
-            .Take(10)
-            .Select(e => new CustomerPaymentSummaryResponse(
-                e.EntryCode,
-                e.OccurredAtUtc.ToString("yyyy-MM-dd"),
-                e.Amount,
-                e.Description.Contains("VietQR") ? "VietQR" : "Cash",
-                "Thu ngân",
-                e.Description
-            ))
-            .ToListAsync(ct);
-
-        var response = new CustomerResponse(
+        var res = new CustomerResponse(
             c.Id,
             c.CustomerCode,
             c.Name,
@@ -167,35 +124,41 @@ public class CustomersController : BaseApiController
             c.MembershipTier,
             c.RewardPoints,
             c.TotalSpending,
-            currentDebt,
-            debtLimit,
+            c.TotalDebt,
+            c.DebtLimit,
             c.IsBlockedForDebt ? "Inactive" : "Active",
             c.AllowDebt,
             c.IsBlockedForDebt,
             c.CreatedAt,
-            openInvoices,
-            payments
+            openInvoices
         );
 
-        return Ok(ApiResponse<CustomerResponse>.Ok(response));
+        return Ok(ApiResponse<CustomerResponse>.Ok(res));
     }
 
     [HttpPost]
     public async Task<ActionResult<ApiResponse<CustomerResponse>>> CreateCustomer([FromBody] CreateCustomerRequest request, CancellationToken ct)
     {
         var tenantId = _tenantContext.CurrentTenantId;
-        var phone = request.PhoneNumber.Trim();
-
-        var exists = await _context.Customers
-            .AnyAsync(c => c.TenantId == tenantId && c.Phone == phone, ct);
-
-        if (exists)
+        if (string.IsNullOrWhiteSpace(request.FullName))
         {
-            return BadRequest(ApiResponse<object>.Fail("DUPLICATE_PHONE", $"Số điện thoại '{phone}' đã được đăng ký bởi khách hàng khác."));
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không được để trống."));
+        }
+        if (string.IsNullOrWhiteSpace(request.PhoneNumber))
+        {
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Số điện thoại không được để trống."));
+        }
+
+        var existingPhone = await _context.Customers
+            .AnyAsync(c => c.Phone == request.PhoneNumber.Trim() && c.TenantId == tenantId, ct);
+
+        if (existingPhone)
+        {
+            return Conflict(ApiResponse<object>.Fail("PHONE_EXISTS", "Số điện thoại này đã được sử dụng cho một khách hàng khác."));
         }
 
         var customerId = Guid.NewGuid();
-        var code = "KH-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss");
+        var code = "KH" + DateTime.UtcNow.ToString("yyMMddHHmmss") + Random.Shared.Next(10, 99);
 
         var customer = new Customer
         {
@@ -203,31 +166,22 @@ public class CustomersController : BaseApiController
             TenantId = tenantId,
             CustomerCode = code,
             Name = request.FullName.Trim(),
-            Phone = phone,
+            Phone = request.PhoneNumber.Trim(),
             Email = request.Email?.Trim(),
             Address = request.Address?.Trim(),
             MembershipTier = request.MembershipTier ?? "Standard",
+            RewardPoints = 0,
+            TotalSpending = 0m,
+            TotalDebt = 0m,
             DebtLimit = request.DebtLimit,
             AllowDebt = request.DebtLimit > 0,
-            CreatedAt = DateTime.UtcNow
-        };
-
-        await _context.Customers.AddAsync(customer, ct);
-
-        // Initialize CustomerDebtProfile
-        var profile = new CustomerDebtProfile
-        {
-            Id = Guid.NewGuid(),
-            TenantId = tenantId,
-            CustomerId = customerId,
-            CreditLimit = request.DebtLimit,
-            MaxDebtDays = 30,
-            CurrentDebtBalance = 0m,
+            IsBlockedForDebt = false,
             PrepaymentBalance = 0m,
+            MaxDebtDays = 30,
             DebtStatus = CustomerDebtStatus.GoodStanding
         };
 
-        await _context.CustomerDebtProfiles.AddAsync(profile, ct);
+        await _context.Customers.AddAsync(customer, ct);
         await _context.SaveChangesAsync(ct);
 
         var response = new CustomerResponse(
@@ -274,31 +228,19 @@ public class CustomersController : BaseApiController
             customer.DebtLimit = request.DebtLimit.Value;
             customer.AllowDebt = customer.DebtLimit > 0;
 
-            var profile = await _context.CustomerDebtProfiles
-                .FirstOrDefaultAsync(p => p.CustomerId == id && p.TenantId == tenantId, ct);
-
-            if (profile != null)
+            if (customer.TotalDebt > customer.DebtLimit)
             {
-                profile.CreditLimit = customer.DebtLimit;
-                if (profile.CurrentDebtBalance > profile.CreditLimit)
-                {
-                    profile.DebtStatus = CustomerDebtStatus.LimitExceededBlocked;
-                }
-                else if (profile.DebtStatus == CustomerDebtStatus.LimitExceededBlocked)
-                {
-                    profile.DebtStatus = CustomerDebtStatus.GoodStanding;
-                }
+                customer.DebtStatus = CustomerDebtStatus.LimitExceededBlocked;
+                customer.IsBlockedForDebt = true;
+            }
+            else if (customer.DebtStatus == CustomerDebtStatus.LimitExceededBlocked)
+            {
+                customer.DebtStatus = CustomerDebtStatus.GoodStanding;
+                customer.IsBlockedForDebt = false;
             }
         }
 
         await _context.SaveChangesAsync(ct);
-
-        var updatedProfile = await _context.CustomerDebtProfiles
-            .AsNoTracking()
-            .FirstOrDefaultAsync(p => p.CustomerId == id && p.TenantId == tenantId, ct);
-
-        var currentDebt = updatedProfile?.CurrentDebtBalance ?? customer.TotalDebt;
-        var limit = updatedProfile?.CreditLimit > 0 ? updatedProfile.CreditLimit : customer.DebtLimit;
 
         var response = new CustomerResponse(
             customer.Id,
@@ -310,19 +252,19 @@ public class CustomersController : BaseApiController
             customer.MembershipTier,
             customer.RewardPoints,
             customer.TotalSpending,
-            currentDebt,
-            limit,
+            customer.TotalDebt,
+            customer.DebtLimit,
             customer.IsBlockedForDebt ? "Inactive" : "Active",
             customer.AllowDebt,
             customer.IsBlockedForDebt,
             customer.CreatedAt
         );
 
-        return Ok(ApiResponse<CustomerResponse>.Ok(response, "Cập nhật thông tin khách hàng thành công."));
+        return Ok(ApiResponse<CustomerResponse>.Ok(response, "Cập nhật khách hàng thành công."));
     }
 
-    [HttpGet("kpi-summary")]
-    public async Task<ActionResult<ApiResponse<CustomerKpiSummaryResponse>>> GetKpiSummary(CancellationToken ct)
+    [HttpGet("debts/summary")]
+    public async Task<ActionResult<ApiResponse<CustomerKpiSummaryResponse>>> GetDebtsSummary(CancellationToken ct)
     {
         var tenantId = _tenantContext.CurrentTenantId;
         var customers = await _context.Customers
@@ -330,27 +272,10 @@ public class CustomersController : BaseApiController
             .Where(c => c.TenantId == tenantId)
             .ToListAsync(ct);
 
-        var customerIds = customers.Select(c => c.Id).ToList();
-        var profiles = await _context.CustomerDebtProfiles
-            .AsNoTracking()
-            .Where(p => p.TenantId == tenantId && customerIds.Contains(p.CustomerId))
-            .ToDictionaryAsync(p => p.CustomerId, ct);
-
         var totalCustomers = customers.Count;
-        decimal totalDebtAR = 0;
-        int overLimitCount = 0;
-        int totalLoyaltyPoints = 0;
-
-        foreach (var c in customers)
-        {
-            profiles.TryGetValue(c.Id, out var profile);
-            var debt = profile?.CurrentDebtBalance ?? c.TotalDebt;
-            var limit = profile?.CreditLimit > 0 ? profile.CreditLimit : c.DebtLimit;
-
-            totalDebtAR += debt;
-            if (debt > limit) overLimitCount++;
-            totalLoyaltyPoints += c.RewardPoints;
-        }
+        decimal totalDebtAR = customers.Sum(c => c.TotalDebt);
+        int overLimitCount = customers.Count(c => c.TotalDebt > c.DebtLimit);
+        int totalLoyaltyPoints = customers.Sum(c => c.RewardPoints);
 
         var summary = new CustomerKpiSummaryResponse(
             totalCustomers,
