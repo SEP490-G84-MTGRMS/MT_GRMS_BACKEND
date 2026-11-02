@@ -50,6 +50,12 @@ public class ExceptionHandlingMiddleware
                 _logger.LogWarning(businessEx, "Business exception occurred: {Message}", businessEx.Message);
                 break;
 
+            case InvalidOperationException invEx:
+                statusCode = (int)HttpStatusCode.UnprocessableEntity;
+                apiResponse = ApiResponse<object>.Fail("INVALID_OPERATION", invEx.Message);
+                _logger.LogWarning(invEx, "Invalid operation occurred: {Message}", invEx.Message);
+                break;
+
             case ArgumentException argEx:
                 statusCode = (int)HttpStatusCode.BadRequest;
                 apiResponse = ApiResponse<object>.Fail("BAD_REQUEST", argEx.Message);

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -11,10 +11,7 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.RenameColumn(
-                name: "AuditSignatureHash",
-                table: "HouseholdTaxSnapshots",
-                newName: "AuditSignature");
+            migrationBuilder.Sql(@"DO $$ BEGIN IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='HouseholdTaxSnapshots' AND column_name='AuditSignatureHash') THEN ALTER TABLE ""HouseholdTaxSnapshots"" RENAME COLUMN ""AuditSignatureHash"" TO ""AuditSignature""; END IF; END $$;");
 
             migrationBuilder.AddColumn<decimal>(
                 name: "BudgetLimit",

@@ -115,7 +115,7 @@ public class ExpenseService : IExpenseService
         var role = _tenantContext.CurrentRole;
         if (!string.IsNullOrWhiteSpace(role) &&
             !role.Equals("Owner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) &&
+            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) && !role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase) &&
             !role.Equals("Admin", StringComparison.OrdinalIgnoreCase) &&
             !role.Equals("Manager", StringComparison.OrdinalIgnoreCase))
         {
@@ -150,7 +150,7 @@ public class ExpenseService : IExpenseService
         var role = _tenantContext.CurrentRole;
         if (!string.IsNullOrWhiteSpace(role) &&
             !role.Equals("Owner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) &&
+            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) && !role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase) &&
             !role.Equals("Admin", StringComparison.OrdinalIgnoreCase) &&
             !role.Equals("Manager", StringComparison.OrdinalIgnoreCase))
         {
@@ -180,7 +180,7 @@ public class ExpenseService : IExpenseService
         var role = _tenantContext.CurrentRole;
         if (!string.IsNullOrWhiteSpace(role) &&
             !role.Equals("Owner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) &&
+            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) && !role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase) &&
             !role.Equals("Admin", StringComparison.OrdinalIgnoreCase) &&
             !role.Equals("Manager", StringComparison.OrdinalIgnoreCase))
         {
