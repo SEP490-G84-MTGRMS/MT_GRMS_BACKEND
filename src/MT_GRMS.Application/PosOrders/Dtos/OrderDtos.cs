@@ -11,7 +11,7 @@ public record OrderCreateRequest(
     string PaymentMethod,
     List<OrderItemCreateDto> Items,
     decimal? CashTendered = null,
-    decimal DiscountAmount = 0m,
+    decimal? DiscountAmount = null,
     string? ManagerBypassCode = null,
     string? Note = null,
     string? CreatorRole = null
@@ -25,7 +25,7 @@ public record OrderItemCreateDto(
     Guid ProductId,
     decimal Quantity,
     decimal UnitPrice,
-    decimal DiscountAmount = 0m,
+    decimal? DiscountAmount = null,
     string? ProductName = null
 );
 

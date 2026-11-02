@@ -44,6 +44,15 @@ public class OrderService : IOrderService
         _validator = validator;
     }
 
+    public OrderService(
+        IOrderRepository orderRepository,
+        IUnitOfWork unitOfWork,
+        IThermalPrintService thermalPrintService,
+        IValidator<OrderCreateRequest>? validator)
+        : this(orderRepository, unitOfWork, thermalPrintService, null, null, validator)
+    {
+    }
+
     public async Task<OrderResponse> CreateOrderAsync(OrderCreateRequest request, CancellationToken cancellationToken = default)
     {
         if (_validator != null)
@@ -132,7 +141,7 @@ public class OrderService : IOrderService
         {
             var prod = products[item.ProductId];
             decimal lineTotal = item.Quantity * item.UnitPrice;
-            decimal itemDiscount = item.DiscountAmount;
+            decimal itemDiscount = item.DiscountAmount ?? 0m;
             decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : item.UnitPrice;
 
             // Tính VAT theo tỷ lệ của sản phẩm (hoặc mặc định 1% cho tạp hóa)
@@ -160,7 +169,7 @@ public class OrderService : IOrderService
             orderDetails.Add(detail);
         }
 
-        decimal orderDiscount = request.DiscountAmount;
+        decimal orderDiscount = request.DiscountAmount ?? 0m;
         decimal totalDiscount = itemDiscountTotal + orderDiscount;
         decimal finalAmount = Math.Max(0, totalAmount - totalDiscount);
 
@@ -184,20 +193,26 @@ public class OrderService : IOrderService
 
             if (!isManagerBypass)
             {
+                if (!string.IsNullOrWhiteSpace(request.CreatorRole) &&
+                    (request.CreatorRole.Equals("CASHIER", StringComparison.OrdinalIgnoreCase) ||
+                     request.CreatorRole.Equals("STAFF", StringComparison.OrdinalIgnoreCase)))
+                {
+                    throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng hoặc Quản trị viên mới có quyền bán nợ / ghi nợ đơn hàng. Nhân viên thu ngân không được phép thực hiện chức năng này.");
+                }
+
                 if (!customer.AllowDebt)
                 {
-                    throw new BusinessException("CUSTOMER_DEBT_NOT_ALLOWED", $"Khách hàng '{customer.Name}' không được phép mua nợ.");
+                    throw new InvalidOperationException($"Khách hàng '{customer.Name}' chưa được kích hoạt quyền mua nợ.");
                 }
                 if (customer.IsBlockedForDebt)
                 {
-                    throw new BusinessException("CUSTOMER_DEBT_BLOCKED", $"Khách hàng '{customer.Name}' có nợ quá hạn chưa thanh toán, hệ thống đã khóa nợ.");
+                    throw new InvalidOperationException($"Khách hàng '{customer.Name}' đang bị khóa nợ do nợ quá hạn.");
                 }
             }
 
             customer.TotalDebt += finalAmount;
             customer.UpdatedAt = DateTime.UtcNow;
-            paymentStatus = "DEBT";
-            paymentMethodUpper = "CREDIT";
+            paymentStatus = "UNPAID";
             cashTendered = 0m;
             changeAmount = 0m;
 
@@ -222,7 +237,6 @@ public class OrderService : IOrderService
             }
             changeAmount = cashTendered - finalAmount;
             paymentStatus = "PAID";
-            paymentMethodUpper = "CASH";
         }
         else
         {
@@ -230,7 +244,6 @@ public class OrderService : IOrderService
             cashTendered = finalAmount;
             changeAmount = 0m;
             paymentStatus = "PAID";
-            paymentMethodUpper = "BANK";
         }
 
         // 7. Tích điểm thưởng cho khách hàng
@@ -287,7 +300,7 @@ public class OrderService : IOrderService
                     cancellationToken
                 );
             }
-            else if (paymentMethodUpper == "BANK")
+            else if (paymentMethodUpper != "CREDIT" && paymentMethodUpper != "DEBT")
             {
                 await _cashbookService.ReceiveCashAsync(
                     DefaultBankId,
@@ -296,7 +309,7 @@ public class OrderService : IOrderService
                     "POS_SALE",
                     order.Id,
                     orderCode,
-                    $"Doanh thu bán hàng POS (Ngân hàng) đơn {orderCode}",
+                    $"Doanh thu bán hàng POS ({paymentMethodUpper}) đơn {orderCode}",
                     cancellationToken
                 );
             }
@@ -456,8 +469,9 @@ public class OrderService : IOrderService
                 remainingToDeduct -= deduct;
 
                 var reqItem = group.First();
-                var discountPerUnit = reqItem.DiscountAmount > 0 && reqItem.Quantity > 0
-                    ? reqItem.DiscountAmount / reqItem.Quantity
+                var itemDiscount = reqItem.DiscountAmount ?? 0m;
+                var discountPerUnit = itemDiscount > 0 && reqItem.Quantity > 0
+                    ? itemDiscount / reqItem.Quantity
                     : 0m;
                 var actualUnitPrice = Math.Max(0, reqItem.UnitPrice - discountPerUnit);
 
@@ -721,7 +735,7 @@ public class OrderService : IOrderService
             {
                 var prod = products[item.ProductId];
                 decimal lineTotal = item.Quantity * item.UnitPrice;
-                decimal itemDiscount = item.DiscountAmount;
+                decimal itemDiscount = item.DiscountAmount ?? 0m;
                 decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : item.UnitPrice;
                 decimal vatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m;
                 decimal vatAmount = (actualPrice * item.Quantity) * vatRate;
