@@ -9,6 +9,9 @@ public interface ISupplierService
     Task<SupplierDetailDto?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<SupplierDetailDto> CreateSupplierAsync(CreateSupplierCommand command, CancellationToken cancellationToken = default);
     Task<SupplierDetailDto> UpdateSupplierAsync(Guid id, UpdateSupplierCommand command, CancellationToken cancellationToken = default);
+    Task<SupplierDetailDto> UpdateBasicSupplierAsync(Guid id, UpdateBasicSupplierCommand command, CancellationToken cancellationToken = default);
+    Task<SupplierDetailDto> UpdateBankAsync(Guid id, UpdateSupplierBankCommand command, CancellationToken cancellationToken = default);
+    Task<SupplierDetailDto> UpdateVatAsync(Guid id, UpdateSupplierVatCommand command, CancellationToken cancellationToken = default);
     Task<SupplierDetailDto> UpdateStatusAsync(Guid id, UpdateSupplierStatusRequest request, CancellationToken cancellationToken = default);
     Task DeleteSupplierAsync(Guid id, CancellationToken cancellationToken = default);
 
@@ -32,6 +35,7 @@ public interface ISupplierService
     // Supplier Product Management (REQ-SP01 đến REQ-SP06)
     Task<PagedResult<SupplierProductDto>> GetSupplierProductsAsync(Guid supplierId, SupplierProductQueryFilter filter, CancellationToken cancellationToken = default);
     Task<SupplierProductDto> AssignSupplierProductAsync(Guid supplierId, AssignSupplierProductCommand command, CancellationToken cancellationToken = default);
+    Task<BatchAssignSupplierProductsResultDto> BatchAssignSupplierProductsAsync(Guid supplierId, BatchAssignSupplierProductsCommand command, CancellationToken cancellationToken = default);
     Task<SupplierProductDto> UpdateSupplierProductAsync(Guid supplierId, Guid productId, UpdateSupplierProductCommand command, CancellationToken cancellationToken = default);
     Task<SupplierProductDto> ToggleSupplierProductStatusAsync(Guid supplierId, Guid productId, ToggleSupplierProductStatusRequest request, CancellationToken cancellationToken = default);
     Task<SupplierProductDto> SetPrimarySupplierAsync(Guid supplierId, Guid productId, SetPrimarySupplierRequest request, CancellationToken cancellationToken = default);

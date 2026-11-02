@@ -71,6 +71,37 @@ public class SuppliersController : BaseApiController
     }
 
     /// <summary>
+    /// Cập nhật thông tin cơ bản của nhà cung cấp (Tên, Người liên hệ, SĐT, Email, Trạng thái, MST, Địa chỉ, Ghi chú) - bảo toàn toàn bộ dữ liệu chi tiết
+    /// </summary>
+    [HttpPut("{id:guid}/basic")]
+    [HttpPatch("{id:guid}/basic")]
+    public async Task<IActionResult> UpdateBasic(Guid id, [FromBody] UpdateBasicSupplierCommand command, CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.UpdateBasicSupplierAsync(id, command, cancellationToken);
+        return Ok(ApiResponse<SupplierDetailDto>.Ok(result, "Cập nhật thông tin cơ bản nhà cung cấp thành công."));
+    }
+
+    /// <summary>
+    /// Cập nhật thông tin tài khoản ngân hàng nhà cung cấp
+    /// </summary>
+    [HttpPut("{id:guid}/bank")]
+    public async Task<IActionResult> UpdateBank(Guid id, [FromBody] UpdateSupplierBankCommand command, CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.UpdateBankAsync(id, command, cancellationToken);
+        return Ok(ApiResponse<SupplierDetailDto>.Ok(result, "Cập nhật tài khoản ngân hàng nhà cung cấp thành công."));
+    }
+
+    /// <summary>
+    /// Cập nhật thông tin hóa đơn VAT nhà cung cấp
+    /// </summary>
+    [HttpPut("{id:guid}/vat")]
+    public async Task<IActionResult> UpdateVat(Guid id, [FromBody] UpdateSupplierVatCommand command, CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.UpdateVatAsync(id, command, cancellationToken);
+        return Ok(ApiResponse<SupplierDetailDto>.Ok(result, "Cập nhật thông tin hóa đơn VAT nhà cung cấp thành công."));
+    }
+
+    /// <summary>
     /// Chuyển đổi trạng thái hoạt động của nhà cung cấp (REQ-03, BR-S03)
     /// </summary>
     [HttpPatch("{id:guid}/status")]
@@ -263,6 +294,20 @@ public class SuppliersController : BaseApiController
     }
 
     /// <summary>
+    /// Lấy danh mục sản phẩm theo tất cả Nhà cung cấp hoặc lọc theo nhà cung cấp (REQ-SP05)
+    /// </summary>
+    [HttpGet("products")]
+    public async Task<IActionResult> GetAllSupplierProducts(
+        [FromQuery] Guid? supplierId,
+        [FromQuery] SupplierProductQueryFilter filter,
+        CancellationToken cancellationToken)
+    {
+        var targetSupplierId = supplierId ?? Guid.Empty;
+        var result = await _supplierService.GetSupplierProductsAsync(targetSupplierId, filter, cancellationToken);
+        return Ok(ApiResponse<PagedResult<SupplierProductDto>>.Ok(result));
+    }
+
+    /// <summary>
     /// Lấy danh mục sản phẩm được gán cho Nhà cung cấp có phân trang và bộ lọc (REQ-SP05, REQ-SP06)
     /// </summary>
     [HttpGet("{id:guid}/products")]
@@ -286,6 +331,21 @@ public class SuppliersController : BaseApiController
     {
         var result = await _supplierService.AssignSupplierProductAsync(id, command, cancellationToken);
         return CreatedAtAction(nameof(GetSupplierProducts), new { id = result.SupplierId }, ApiResponse<SupplierProductDto>.Ok(result, "Gán sản phẩm cho nhà cung cấp thành công."));
+    }
+
+    /// <summary>
+    /// Gán đồng thời nhiều sản phẩm cho Nhà cung cấp và tự động phân bổ đến chi nhánh
+    /// </summary>
+    [HttpPost("{id:guid}/products/batch")]
+    public async Task<IActionResult> BatchAssignProducts(
+        Guid id,
+        [FromBody] BatchAssignSupplierProductsCommand command,
+        CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.BatchAssignSupplierProductsAsync(id, command, cancellationToken);
+        return Ok(ApiResponse<BatchAssignSupplierProductsResultDto>.Ok(
+            result,
+            $"Đã gán thành công {result.AssignedCount} sản phẩm cho nhà cung cấp và tự động phân bổ đến {result.SyncedBranchesCount} chi nhánh."));
     }
 
     /// <summary>
