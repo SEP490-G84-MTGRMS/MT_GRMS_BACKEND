@@ -29,9 +29,38 @@ public static class DbInitializer
             await context.Database.EnsureCreatedAsync();
         }
 
-        // 2. Kiểm tra nếu đã có dữ liệu mẫu thì bỏ qua việc seed
+        // 2. Kiểm tra nếu đã có dữ liệu mẫu
         if (await context.SubscriptionPlans.AnyAsync())
         {
+            if (!await context.SubscriptionPlans.AnyAsync(p => p.PlanCode == "SUPPORT"))
+            {
+                var pSupport = new SubscriptionPlan
+                {
+                    Id = "plan_support",
+                    PlanCode = "SUPPORT",
+                    PlanName = "Gói Hỗ Trợ",
+                    PriceMonthly = 270000.00m,
+                    PriceYearly = 2700000.00m,
+                    MaxBranches = 1,
+                    MaxStaff = 3,
+                    EnabledModulesJson = "[\"Catalog\",\"Pos\"]",
+                    IsActive = true
+                };
+                var pVip = new SubscriptionPlan
+                {
+                    Id = "plan_vip",
+                    PlanCode = "VIP",
+                    PlanName = "Gói Cao Cấp",
+                    PriceMonthly = 490000.00m,
+                    PriceYearly = 4900000.00m,
+                    MaxBranches = 10,
+                    MaxStaff = 100,
+                    EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\"]",
+                    IsActive = true
+                };
+                await context.SubscriptionPlans.AddRangeAsync(pSupport, pVip);
+                await context.SaveChangesAsync();
+            }
             return;
         }
 

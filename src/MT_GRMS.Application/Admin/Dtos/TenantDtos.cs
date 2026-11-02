@@ -83,3 +83,22 @@ public record ExtendGraceRequest(
     string Reason
 );
 
+public record PurchaseSubscriptionRequest(
+    string PlanCode,
+    int Months = 12,
+    int ExtraBranches = 0,
+    int ExtraWarehouses = 0,
+    string PaymentMethod = "Wallet"
+);
+
+public record PurchaseSubscriptionResponse(
+    string PlanCode,
+    string PlanName,
+    DateTime SubscriptionExpiresAt,
+    int DaysRemaining,
+    decimal TotalAmount,
+    string PaymentMethod,
+    string Message
+);
+
+

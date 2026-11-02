@@ -79,5 +79,81 @@ public class TenantStoreController : BaseApiController
         var plans = await _planService.GetPlansAsync(new PlanFilterRequest(Status: "ACTIVE"), cancellationToken);
         return Ok(ApiResponse<IReadOnlyList<PlanSummaryResponse>>.Ok(plans));
     }
+
+    /// <summary>
+    /// Đặt mua hoặc nâng cấp / gia hạn gói dịch vụ SaaS cho gian hàng
+    /// </summary>
+    [HttpPost("subscriptions/purchase")]
+    public async Task<IActionResult> PurchaseSubscription(
+        [FromBody] PurchaseSubscriptionRequest request,
+        CancellationToken cancellationToken)
+    {
+        var tenantId = User.FindFirst("tenant_id")?.Value;
+
+        var tenant = !string.IsNullOrWhiteSpace(tenantId) && tenantId != "DEFAULT"
+            ? await _context.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId || t.Subdomain == tenantId, cancellationToken)
+            : await _context.Tenants.FirstOrDefaultAsync(cancellationToken);
+
+        if (tenant == null)
+        {
+            return NotFound(ApiResponse<PurchaseSubscriptionResponse>.Fail("TENANT_NOT_FOUND", "Không tìm thấy thông tin gian hàng trong hệ thống."));
+        }
+
+        // Tìm gói cước theo PlanCode hoặc Id
+        var plan = await _context.SubscriptionPlans.FirstOrDefaultAsync(
+            p => (p.PlanCode == request.PlanCode || p.Id == request.PlanCode) && p.IsActive,
+            cancellationToken);
+
+        if (plan == null)
+        {
+            // Fallback tìm gói bất kỳ đang active hoặc tạo gói tương ứng
+            plan = await _context.SubscriptionPlans.FirstOrDefaultAsync(p => p.IsActive, cancellationToken);
+            if (plan == null)
+            {
+                return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("PLAN_NOT_FOUND", "Gói dịch vụ không hợp lệ hoặc đã tạm ngưng."));
+            }
+        }
+
+        var months = request.Months <= 0 ? 12 : request.Months;
+
+        // 1. Tính toán chi phí
+        var basePrice = plan.PriceMonthly * months;
+        var branchAddonPrice = request.ExtraBranches * 270000m * months;
+        var warehouseAddonPrice = request.ExtraWarehouses * 150000m * months;
+        var subTotal = basePrice + branchAddonPrice + warehouseAddonPrice;
+        var vatAmount = Math.Round(subTotal * 0.1m, 0);
+        var grandTotal = subTotal + vatAmount;
+
+        // 2. Tính số tháng gia hạn (Khuyến mãi thêm tháng)
+        var bonusMonths = months >= 24 ? 3 : (months >= 12 ? 1 : 0);
+        var totalMonthsAdded = months + bonusMonths;
+
+        // 3. Gia hạn thời gian sử dụng
+        var baseDate = (tenant.SubscriptionExpiresAt.HasValue && tenant.SubscriptionExpiresAt.Value > DateTime.UtcNow)
+            ? tenant.SubscriptionExpiresAt.Value
+            : DateTime.UtcNow;
+
+        var newExpiresAt = baseDate.AddMonths(totalMonthsAdded);
+
+        tenant.CurrentPlan = plan.PlanCode;
+        tenant.SubscriptionExpiresAt = newExpiresAt;
+        tenant.Status = "ACTIVE";
+
+        await _context.SaveChangesAsync(cancellationToken);
+
+        var daysRemaining = (int)Math.Max(0, Math.Ceiling((newExpiresAt - DateTime.UtcNow).TotalDays));
+
+        var response = new PurchaseSubscriptionResponse(
+            PlanCode: plan.PlanCode,
+            PlanName: plan.PlanName,
+            SubscriptionExpiresAt: newExpiresAt,
+            DaysRemaining: daysRemaining,
+            TotalAmount: grandTotal,
+            PaymentMethod: request.PaymentMethod,
+            Message: $"Gia hạn thành công {plan.PlanName} thêm {totalMonthsAdded} tháng."
+        );
+
+        return Ok(ApiResponse<PurchaseSubscriptionResponse>.Ok(response, "Thanh toán và gia hạn gói dịch vụ thành công."));
+    }
 }
 

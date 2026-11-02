@@ -108,4 +108,41 @@ public class TenantStoreControllerTests
         Assert.Equal("PRO", resp.Data![0].Code);
         Assert.Equal(330000m, resp.Data![0].MonthlyPrice);
     }
+
+    [Fact]
+    public async Task PurchaseSubscription_ValidRequest_ExtendsSubscriptionAndReturns200Ok()
+    {
+        _dbContext.SubscriptionPlans.Add(new SubscriptionPlan
+        {
+            Id = "plan-pro",
+            PlanCode = "PRO",
+            PlanName = "Gói Chuyên Nghiệp",
+            PriceMonthly = 330000m,
+            PriceYearly = 3300000m,
+            IsActive = true
+        });
+        await _dbContext.SaveChangesAsync();
+
+        var req = new PurchaseSubscriptionRequest(
+            PlanCode: "PRO",
+            Months: 12,
+            ExtraBranches: 1,
+            ExtraWarehouses: 0,
+            PaymentMethod: "Wallet"
+        );
+
+        var result = await _controller.PurchaseSubscription(req, CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var resp = Assert.IsType<ApiResponse<PurchaseSubscriptionResponse>>(ok.Value);
+        Assert.True(resp.Success);
+        Assert.Equal("PRO", resp.Data!.PlanCode);
+        Assert.True(resp.Data.DaysRemaining > 300);
+        Assert.True(resp.Data.TotalAmount > 0);
+
+        var updatedTenant = await _dbContext.Tenants.FindAsync("tenant-01");
+        Assert.NotNull(updatedTenant);
+        Assert.Equal("PRO", updatedTenant!.CurrentPlan);
+        Assert.NotNull(updatedTenant.SubscriptionExpiresAt);
+    }
 }
