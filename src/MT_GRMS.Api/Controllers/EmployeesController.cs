@@ -62,7 +62,7 @@ public class EmployeesController : BaseApiController
         try
         {
             var result = await _employeeService.CreateEmployeeAsync(request, cancellationToken);
-            return CreatedAtAction(nameof(GetById), new { id = result.Id }, ApiResponse<EmployeeResponse>.Ok(result));
+            return CreatedAtAction(nameof(GetById), new { id = result.Id }, ApiResponse<EmployeeResponse>.Ok(result, "Tạo hồ sơ nhân viên thành công."));
         }
         catch (DbUpdateException dbEx) when (dbEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505")
         {

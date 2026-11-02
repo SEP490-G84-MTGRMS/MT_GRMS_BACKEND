@@ -421,4 +421,70 @@ public class EmployeeServiceTests
         Assert.Equal("Phụ cấp trách nhiệm", result.Allowances[2].Name);
         Assert.Equal(1000000m, result.Allowances[2].Amount);
     }
+
+    [Theory]
+    [InlineData("", "001202009999", "0987654999", 5000000)]
+    [InlineData("Nguyen Van Test", "", "0987654999", 5000000)]
+    [InlineData("Nguyen Van Test", "001202009999", "", 5000000)]
+    [InlineData("Nguyen Van Test", "001202009999", "0987654999", -1)]
+    public async Task CreateEmployee_InvalidInput_ShouldThrowArgumentException(string fullName, string citizenId, string phone, decimal baseRate)
+    {
+        // Arrange
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var request = new CreateEmployeeRequest(
+            FullName: fullName,
+            CitizenId: citizenId,
+            Phone: phone,
+            BranchId: Guid.NewGuid(),
+            BaseRate: baseRate
+        );
+
+        // Act & Assert
+        await Assert.ThrowsAsync<ArgumentException>(() => service.CreateEmployeeAsync(request));
+    }
+
+    [Fact]
+    public async Task CreateEmployee_EmptyBranchId_ShouldThrowArgumentException()
+    {
+        // Arrange
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var request = new CreateEmployeeRequest(
+            FullName: "Nguyen Van Valid",
+            CitizenId: "001202009999",
+            Phone: "0987654999",
+            BranchId: Guid.Empty,
+            BaseRate: 5000000
+        );
+
+        // Act & Assert
+        await Assert.ThrowsAsync<ArgumentException>(() => service.CreateEmployeeAsync(request));
+    }
+
+    [Theory]
+    [InlineData("", "password123")]
+    [InlineData("valid_user", "")]
+    public async Task CreateIdentityAccount_InvalidInput_ShouldThrowArgumentException(string username, string password)
+    {
+        // Arrange
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var request = new CreateIdentityAccountRequest(username, password, "STAFF");
+
+        // Act & Assert
+        await Assert.ThrowsAsync<ArgumentException>(() => service.CreateIdentityAccountAsync(Guid.NewGuid(), request));
+    }
 }

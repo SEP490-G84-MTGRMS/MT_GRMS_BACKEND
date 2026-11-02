@@ -77,6 +77,31 @@ public class EmployeeService : IEmployeeService
         CreateEmployeeRequest request,
         CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(request.FullName))
+        {
+            throw new ArgumentException("Họ và tên nhân viên không được để trống.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.CitizenId))
+        {
+            throw new ArgumentException("Số CCCD không được để trống.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Phone))
+        {
+            throw new ArgumentException("Số điện thoại không được để trống.");
+        }
+
+        if (request.BranchId == Guid.Empty)
+        {
+            throw new ArgumentException("Chi nhánh làm việc bắt buộc phải được chọn.");
+        }
+
+        if (request.BaseRate < 0)
+        {
+            throw new ArgumentException("Mức lương cơ bản không được nhỏ hơn 0.");
+        }
+
         var normalizedCitizenId = request.CitizenId.Trim();
         var normalizedPhone = request.Phone.Trim();
 
@@ -111,6 +136,11 @@ public class EmployeeService : IEmployeeService
             }
         }
         var employeeCode = $"NV{nextNumber:D4}";
+        while (await _employeeRepository.ExistsAsync(e => e.EmployeeCode == employeeCode, cancellationToken))
+        {
+            nextNumber++;
+            employeeCode = $"NV{nextNumber:D4}";
+        }
 
         var currentTenantId = _tenantContext.CurrentTenantId ?? "tenant_mt_mart_01";
 
@@ -261,6 +291,16 @@ public class EmployeeService : IEmployeeService
         CreateIdentityAccountRequest request,
         CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(request.Username))
+        {
+            throw new ArgumentException("Tên đăng nhập không được để trống.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Password))
+        {
+            throw new ArgumentException("Mật khẩu không được để trống.");
+        }
+
         var employee = await _employeeRepository.GetByIdAsync(employeeId, cancellationToken);
         if (employee == null)
         {
