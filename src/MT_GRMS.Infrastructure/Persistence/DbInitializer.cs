@@ -647,20 +647,6 @@ public static class DbInitializer
 
         await context.Employees.AddRangeAsync(employeeManager, employeeCashier);
 
-        // Sổ quỹ tiền mặt ban đầu
-        var initialCashBook = new CashBook
-        {
-            BranchId = branchQ1.Id,
-            TransactionCode = "CB-INIT-2026",
-            SourceDocType = "OPENING_BALANCE",
-            TransactionType = "RECEIPT",
-            Amount = 10000000.00m,
-            OpeningBalance = 0.00m,
-            CurrentBalance = 10000000.00m,
-            Description = "Nạp tiền lẻ quỹ đầu ca phục vụ thanh toán POS"
-        };
-        await context.CashBooks.AddAsync(initialCashBook);
-
         // Nạp 15 danh mục và 5-8 sản phẩm mỗi danh mục
         await CatalogSeedData.SeedAsync(context, defaultTenantId);
 

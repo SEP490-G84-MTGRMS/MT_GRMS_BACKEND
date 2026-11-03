@@ -109,8 +109,8 @@ public class ExpenseServiceTests
             return Task.FromResult(new CashbookEntryResponse(Guid.NewGuid(), "CB-REC-01", accountId, accountType.ToString(), null, "Receipt", amount, 500_000m, sourceType, sourceId, referenceCode, "HASH-REC-01", description, DateTime.UtcNow));
         }
         public Task<List<CashbookEntryResponse>> GetEntriesAsync(Guid? accountId, Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<BranchCashTill> GetOrCreateTillAsync(Guid branchId, string tillName, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<BranchSafe> GetOrCreateSafeAsync(Guid branchId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<FinanceAccount> GetOrCreateTillAsync(Guid branchId, string tillName, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<FinanceAccount> GetOrCreateSafeAsync(Guid branchId, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     private readonly FakeExpenseRepository _expenseRepo = new();

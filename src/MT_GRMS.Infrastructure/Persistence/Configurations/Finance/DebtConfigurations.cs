@@ -4,23 +4,6 @@ using MT_GRMS.Domain.Entities.Finance;
 
 namespace MT_GRMS.Infrastructure.Persistence.Configurations.Finance;
 
-public class CustomerDebtProfileConfiguration : IEntityTypeConfiguration<CustomerDebtProfile>
-{
-    public void Configure(EntityTypeBuilder<CustomerDebtProfile> builder)
-    {
-        builder.ToTable("CustomerDebtProfiles");
-        builder.HasKey(e => e.Id);
-
-        builder.Property(e => e.CreditLimit).HasColumnType("decimal(18,2)");
-        builder.Property(e => e.CurrentDebtBalance).HasColumnType("decimal(18,2)");
-        builder.Property(e => e.PrepaymentBalance).HasColumnType("decimal(18,2)");
-        builder.Property(e => e.RowVersion).IsRowVersion();
-
-        builder.HasIndex(e => new { e.TenantId, e.CustomerId }).IsUnique();
-        builder.HasIndex(e => new { e.TenantId, e.DebtStatus });
-    }
-}
-
 public class CustomerDebtInvoiceConfiguration : IEntityTypeConfiguration<CustomerDebtInvoice>
 {
     public void Configure(EntityTypeBuilder<CustomerDebtInvoice> builder)

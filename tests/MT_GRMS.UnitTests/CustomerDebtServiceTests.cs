@@ -1,3 +1,4 @@
+using MT_GRMS.Domain.Entities.Sales;
 using System.Linq.Expressions;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Cashbook.Dtos;
@@ -62,13 +63,12 @@ public class CustomerDebtServiceTests
         public void Delete(T entity) => Items.Remove(entity);
     }
 
-    private class FakeCustomerDebtRepository : FakeGenericRepository<CustomerDebtProfile>, ICustomerDebtRepository
+    private class FakeCustomerDebtRepository : FakeGenericRepository<Customer>, ICustomerDebtRepository
     {
         public List<CustomerDebtInvoice> Invoices { get; } = new();
         public bool SimulateOverdue { get; set; }
 
-        public Task<CustomerDebtProfile?> GetProfileWithLockAsync(Guid customerId, CancellationToken ct = default) =>
-            Task.FromResult(Items.FirstOrDefault(p => p.CustomerId == customerId));
+        public Task<Customer?> GetCustomerWithLockAsync(Guid customerId, CancellationToken ct = default) => Task.FromResult(Items.FirstOrDefault(p => p.Id == customerId));
 
         public Task<List<CustomerDebtInvoice>> GetOpenInvoicesAsync(Guid customerId, CancellationToken ct = default) =>
             Task.FromResult(Invoices.Where(i => i.CustomerId == customerId && (i.Status == DebtInvoiceStatus.Unpaid || i.Status == DebtInvoiceStatus.PartiallyPaid)).OrderBy(i => i.CreatedAt).ToList());
@@ -103,8 +103,8 @@ public class CustomerDebtServiceTests
         public Task<CashInTransitResponse> CreateDepositToBankAsync(DepositToBankRequest request, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<CashInTransitResponse> ConfirmBankDepositAsync(ConfirmBankDepositRequest request, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<List<CashbookEntryResponse>> GetEntriesAsync(Guid? accountId, Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<BranchCashTill> GetOrCreateTillAsync(Guid branchId, string tillName, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<BranchSafe> GetOrCreateSafeAsync(Guid branchId, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<FinanceAccount> GetOrCreateTillAsync(Guid branchId, string tillName, CancellationToken ct = default) => throw new NotImplementedException();
+        public Task<FinanceAccount> GetOrCreateSafeAsync(Guid branchId, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
     private readonly FakeCustomerDebtRepository _debtRepo = new();
@@ -133,15 +133,15 @@ public class CustomerDebtServiceTests
     public async Task RecordSaleDebtAsync_WhenWithinLimit_ShouldSucceedAndCreateInvoice()
     {
         var customerId = Guid.NewGuid();
-        var profile = new CustomerDebtProfile { CustomerId = customerId, CreditLimit = 2_000_000m, CurrentDebtBalance = 500_000m };
-        _debtRepo.Items.Add(profile);
+        var customer = new Customer { Id = customerId, DebtLimit = 2_000_000m, TotalDebt = 500_000m };
+        _debtRepo.Items.Add(customer);
 
         var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-001", Guid.NewGuid(), 300_000m, null, "Mua chịu đợt 1");
         var response = await _service.RecordSaleDebtAsync(request);
 
         Assert.NotNull(response);
         Assert.Equal(300_000m, response.RemainingDebtAmount);
-        Assert.Equal(800_000m, profile.CurrentDebtBalance);
+        Assert.Equal(800_000m, customer.TotalDebt);
         Assert.Single(_entryRepo.Items);
     }
 
@@ -149,8 +149,8 @@ public class CustomerDebtServiceTests
     public async Task RecordSaleDebtAsync_WhenExceedsCreditLimit_ShouldThrowBusinessException()
     {
         var customerId = Guid.NewGuid();
-        var profile = new CustomerDebtProfile { CustomerId = customerId, CreditLimit = 1_000_000m, CurrentDebtBalance = 800_000m };
-        _debtRepo.Items.Add(profile);
+        var customer = new Customer { Id = customerId, DebtLimit = 1_000_000m, TotalDebt = 800_000m };
+        _debtRepo.Items.Add(customer);
 
         // Nợ hiện tại 800k + đơn mới 300k = 1.1tr > hạn mức 1tr
         var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-002", Guid.NewGuid(), 300_000m, null, "Mua vượt mức");
@@ -162,22 +162,22 @@ public class CustomerDebtServiceTests
     public async Task RecordSaleDebtAsync_WhenExceedsLimitWithManagerBypass_ShouldSucceed()
     {
         var customerId = Guid.NewGuid();
-        var profile = new CustomerDebtProfile { CustomerId = customerId, CreditLimit = 1_000_000m, CurrentDebtBalance = 800_000m };
-        _debtRepo.Items.Add(profile);
+        var customer = new Customer { Id = customerId, DebtLimit = 1_000_000m, TotalDebt = 800_000m };
+        _debtRepo.Items.Add(customer);
 
         var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-003", Guid.NewGuid(), 500_000m, "MGR-BYPASS-2026", "Quản lý duyệt bảo lãnh");
         var response = await _service.RecordSaleDebtAsync(request);
 
         Assert.NotNull(response);
-        Assert.Equal(1_300_000m, profile.CurrentDebtBalance);
+        Assert.Equal(1_300_000m, customer.TotalDebt);
     }
 
     [Fact]
     public async Task RecordSaleDebtAsync_WhenHasOverdueInvoices_ShouldThrowBusinessException()
     {
         var customerId = Guid.NewGuid();
-        var profile = new CustomerDebtProfile { CustomerId = customerId, CreditLimit = 5_000_000m, CurrentDebtBalance = 500_000m };
-        _debtRepo.Items.Add(profile);
+        var customer = new Customer { Id = customerId, DebtLimit = 5_000_000m, TotalDebt = 500_000m };
+        _debtRepo.Items.Add(customer);
         _debtRepo.SimulateOverdue = true;
 
         var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-004", Guid.NewGuid(), 200_000m, null, "Khách có nợ quá hạn");
@@ -189,8 +189,8 @@ public class CustomerDebtServiceTests
     public async Task RecordSaleDebtAsync_WhenHasOverdueWithManagerBypass_ShouldSucceed()
     {
         var customerId = Guid.NewGuid();
-        var profile = new CustomerDebtProfile { CustomerId = customerId, CreditLimit = 5_000_000m, CurrentDebtBalance = 500_000m };
-        _debtRepo.Items.Add(profile);
+        var customer = new Customer { Id = customerId, DebtLimit = 5_000_000m, TotalDebt = 500_000m };
+        _debtRepo.Items.Add(customer);
         _debtRepo.SimulateOverdue = true;
 
         var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-005", Guid.NewGuid(), 200_000m, "MGR-BYPASS-2026", "Quản lý duyệt bảo lãnh quá hạn");
@@ -203,29 +203,29 @@ public class CustomerDebtServiceTests
     public async Task RecordSaleDebtAsync_WhenCustomerHasPrepayment_ShouldOffsetPrepaymentFirst()
     {
         var customerId = Guid.NewGuid();
-        var profile = new CustomerDebtProfile { CustomerId = customerId, CreditLimit = 2_000_000m, CurrentDebtBalance = 0, PrepaymentBalance = 200_000m };
-        _debtRepo.Items.Add(profile);
+        var customer = new Customer { Id = customerId, DebtLimit = 2_000_000m, TotalDebt = 0, PrepaymentBalance = 200_000m };
+        _debtRepo.Items.Add(customer);
 
         // Đơn nợ 500k, khách có sẵn 200k tiền đặt cọc -> chỉ ghi nợ 300k, Prepayment về 0
         var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-006", Guid.NewGuid(), 500_000m, null, "Mua cấn trừ tiền cọc");
         var response = await _service.RecordSaleDebtAsync(request);
 
         Assert.Equal(300_000m, response.RemainingDebtAmount);
-        Assert.Equal(300_000m, profile.CurrentDebtBalance);
-        Assert.Equal(0, profile.PrepaymentBalance);
+        Assert.Equal(300_000m, customer.TotalDebt);
+        Assert.Equal(0, customer.PrepaymentBalance);
     }
 
     [Fact]
     public async Task AdjustDebtAsync_WhenIncrease_ShouldIncreaseDebtBalance()
     {
         var customerId = Guid.NewGuid();
-        var profile = new CustomerDebtProfile { CustomerId = customerId, CurrentDebtBalance = 1_000_000m };
-        _debtRepo.Items.Add(profile);
+        var customer = new Customer { Id = customerId, TotalDebt = 1_000_000m };
+        _debtRepo.Items.Add(customer);
 
         var request = new AdjustDebtRequest(customerId, 100_000m, true, "Bù sai sót tính thiếu", "MGR-ADJUST-2026");
         var response = await _service.AdjustDebtAsync(request);
 
-        Assert.Equal(1_100_000m, profile.CurrentDebtBalance);
+        Assert.Equal(1_100_000m, customer.TotalDebt);
         Assert.Equal(1_100_000m, response.BalanceAfter);
     }
 
@@ -233,13 +233,13 @@ public class CustomerDebtServiceTests
     public async Task AdjustDebtAsync_WhenDecrease_ShouldDecreaseDebtBalance()
     {
         var customerId = Guid.NewGuid();
-        var profile = new CustomerDebtProfile { CustomerId = customerId, CurrentDebtBalance = 1_000_000m };
-        _debtRepo.Items.Add(profile);
+        var customer = new Customer { Id = customerId, TotalDebt = 1_000_000m };
+        _debtRepo.Items.Add(customer);
 
         var request = new AdjustDebtRequest(customerId, 100_000m, false, "Giảm do tính nhầm", "MGR-ADJUST-2026");
         var response = await _service.AdjustDebtAsync(request);
 
-        Assert.Equal(900_000m, profile.CurrentDebtBalance);
+        Assert.Equal(900_000m, customer.TotalDebt);
         Assert.Equal(900_000m, response.BalanceAfter);
     }
 
@@ -247,8 +247,8 @@ public class CustomerDebtServiceTests
     public async Task AdjustDebtAsync_WhenInvalidApprovalCode_ShouldThrowBusinessException()
     {
         var customerId = Guid.NewGuid();
-        var profile = new CustomerDebtProfile { CustomerId = customerId, CurrentDebtBalance = 1_000_000m };
-        _debtRepo.Items.Add(profile);
+        var customer = new Customer { Id = customerId, TotalDebt = 1_000_000m };
+        _debtRepo.Items.Add(customer);
 
         var request = new AdjustDebtRequest(customerId, 100_000m, true, "Lỗi", "WRONG-CODE");
         var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.AdjustDebtAsync(request));
@@ -259,13 +259,13 @@ public class CustomerDebtServiceTests
     public async Task WriteOffBadDebtAsync_WhenValidAmount_ShouldDecreaseDebtBalance()
     {
         var customerId = Guid.NewGuid();
-        var profile = new CustomerDebtProfile { CustomerId = customerId, CurrentDebtBalance = 500_000m };
-        _debtRepo.Items.Add(profile);
+        var customer = new Customer { Id = customerId, TotalDebt = 500_000m };
+        _debtRepo.Items.Add(customer);
 
         var request = new WriteOffBadDebtRequest(customerId, 500_000m, "Khách chuyển đi nơi khác không đòi được", "https://docs.store.vn/bien-ban-xoa-no.pdf");
         var response = await _service.WriteOffBadDebtAsync(request);
 
-        Assert.Equal(0, profile.CurrentDebtBalance);
+        Assert.Equal(0, customer.TotalDebt);
         Assert.Equal(0, response.BalanceAfter);
         Assert.Equal(CustomerDebtType.BadDebtWriteOff.ToString(), response.EntryType);
     }
@@ -274,8 +274,8 @@ public class CustomerDebtServiceTests
     public async Task WriteOffBadDebtAsync_WhenAmountExceedsDebt_ShouldThrowBusinessException()
     {
         var customerId = Guid.NewGuid();
-        var profile = new CustomerDebtProfile { CustomerId = customerId, CurrentDebtBalance = 300_000m };
-        _debtRepo.Items.Add(profile);
+        var customer = new Customer { Id = customerId, TotalDebt = 300_000m };
+        _debtRepo.Items.Add(customer);
 
         var request = new WriteOffBadDebtRequest(customerId, 500_000m, "Xóa quá tay", "link");
         var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.WriteOffBadDebtAsync(request));
@@ -286,9 +286,9 @@ public class CustomerDebtServiceTests
     public async Task GetProfileAsync_ShouldReturnProfileWithOpenInvoices()
     {
         var customerId = Guid.NewGuid();
-        var profile = new CustomerDebtProfile { CustomerId = customerId, CreditLimit = 3_000_000m, CurrentDebtBalance = 700_000m };
+        var customer = new Customer { Id = customerId, DebtLimit = 3_000_000m, TotalDebt = 700_000m };
         var inv = new CustomerDebtInvoice { CustomerId = customerId, OrderCode = "ORD-99", TotalDebtAmount = 700_000m, RemainingDebtAmount = 700_000m, Status = DebtInvoiceStatus.Unpaid, DueDate = DateTime.UtcNow.AddDays(10) };
-        _debtRepo.Items.Add(profile);
+        _debtRepo.Items.Add(customer);
         _debtRepo.Invoices.Add(inv);
 
         var response = await _service.GetProfileAsync(customerId);
