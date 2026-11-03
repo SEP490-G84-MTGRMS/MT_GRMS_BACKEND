@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using MT_GRMS.Application.Admin.Repositories;
 using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Application.Common;
@@ -13,6 +14,8 @@ public class BranchManagementTests
     private readonly FakeBranchRepository _repo;
     private readonly FakeUnitOfWork _uow;
     private readonly FakeTenantContext _tenantContext;
+    private readonly FakeTenantRepository _tenantRepo;
+    private readonly FakeSubscriptionPlanRepository _planRepo;
     private readonly BranchService _service;
 
     public BranchManagementTests()
@@ -20,7 +23,9 @@ public class BranchManagementTests
         _repo = new FakeBranchRepository();
         _uow = new FakeUnitOfWork();
         _tenantContext = new FakeTenantContext("tenant-test-1");
-        _service = new BranchService(_repo, _uow, _tenantContext);
+        _tenantRepo = new FakeTenantRepository();
+        _planRepo = new FakeSubscriptionPlanRepository();
+        _service = new BranchService(_repo, _uow, _tenantContext, _tenantRepo, _planRepo);
 
         // Seed sample branches for tenant-test-1
         _repo.Branches.AddRange(new[]
@@ -107,6 +112,20 @@ public class BranchManagementTests
     }
 
     [Fact]
+    public async Task REQ_BR01_GetBranchQuota_ReturnsCorrectQuota()
+    {
+        // Act
+        var quota = await _service.GetBranchQuotaAsync();
+
+        // Assert
+        Assert.NotNull(quota);
+        Assert.Equal(4, quota.UsedBranches);
+        Assert.Equal(5, quota.MaxBranches);
+        Assert.True(quota.CanAddMore);
+        Assert.Equal("PRO", quota.CurrentPlanCode);
+    }
+
+    [Fact]
     public async Task REQ_BR02_GetBranchById_ExistingValidId_ReturnsBranchDto()
     {
         // Arrange
@@ -132,6 +151,76 @@ public class BranchManagementTests
         await Assert.ThrowsAsync<NotFoundException>(() => _service.GetBranchByIdAsync(nonExistentId));
     }
 
+    [Fact]
+    public async Task REQ_BR02_CreateBranch_ValidRequest_Success()
+    {
+        // Arrange
+        var req = new CreateBranchRequest("BR-NEW", "Chi nhánh Mới", "789 Phố Mới", "0912345678", "Trần Văn Mới");
+
+        // Act
+        var result = await _service.CreateBranchAsync(req);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("BR-NEW", result.Code);
+        Assert.Equal("Chi nhánh Mới", result.Name);
+        Assert.Equal("Active", result.Status);
+    }
+
+    [Fact]
+    public async Task REQ_BR02_CreateBranch_DuplicateCode_ThrowsBusinessException()
+    {
+        // Arrange
+        var req = new CreateBranchRequest("BR-01", "Chi nhánh Trùng", "Địa chỉ");
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.CreateBranchAsync(req));
+        Assert.Equal("DUPLICATE_CODE", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQ_BR02_CreateBranch_QuotaExceeded_ThrowsBusinessException()
+    {
+        // Arrange: limit quota to 4 (currently 4 active)
+        _planRepo.Plan!.MaxBranches = 4;
+        var req = new CreateBranchRequest("BR-OVER", "Chi nhánh Vượt Quota", "Địa chỉ");
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.CreateBranchAsync(req));
+        Assert.Equal("QUOTA_EXCEEDED", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQ_BR03_UpdateBranch_ValidRequest_Success()
+    {
+        // Arrange
+        var id = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var req = new UpdateBranchRequest("Chi nhánh Cầu Giấy Updated", "125 Đường Cầu Giấy", "0999888777", "Nguyễn Văn Mới");
+
+        // Act
+        var result = await _service.UpdateBranchAsync(id, req);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("Chi nhánh Cầu Giấy Updated", result.Name);
+        Assert.Equal("125 Đường Cầu Giấy", result.Address);
+    }
+
+    [Fact]
+    public async Task REQ_BR04_ToggleBranchStatus_Success()
+    {
+        // Arrange
+        var id = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var req = new UpdateBranchStatusRequest(false);
+
+        // Act
+        var result = await _service.ToggleBranchStatusAsync(id, req);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("Inactive", result.Status);
+    }
+
     // Helper classes
     private class FakeBranchRepository : IBranchRepository
     {
@@ -140,6 +229,11 @@ public class BranchManagementTests
         public Task<bool> ExistsByCodeAsync(string code, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(Branches.Any(b => b.Code == code && !b.IsDeleted));
+        }
+
+        public Task<int> CountActiveAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Branches.Count(b => b.TenantId == "tenant-test-1" && b.IsActive && !b.IsDeleted));
         }
 
         public Task<(IReadOnlyList<Branch> Items, int TotalCount)> GetPagedListAsync(
@@ -237,5 +331,55 @@ public class BranchManagementTests
         public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
 
         public FakeTenantContext(string tenantId) => CurrentTenantId = tenantId;
+    }
+
+    private class FakeTenantRepository : ITenantRepository
+    {
+        public Tenant? Tenant { get; set; } = new Tenant
+        {
+            Id = "tenant-test-1",
+            Name = "Chuỗi Tạp Hóa Test",
+            CurrentPlan = "PRO",
+            Status = "ACTIVE"
+        };
+
+        public Task<Tenant?> GetByIdAsync(string id, CancellationToken cancellationToken = default) => Task.FromResult(Tenant);
+        public Task<Tenant?> GetByIdWithDetailsAsync(string id, CancellationToken cancellationToken = default) => Task.FromResult(Tenant);
+        public Task<Tenant?> GetByCodeAsync(string code, CancellationToken cancellationToken = default) => Task.FromResult(Tenant);
+        public Task<Tenant?> GetBySubdomainAsync(string subdomain, CancellationToken cancellationToken = default) => Task.FromResult(Tenant);
+        public Task<(IReadOnlyList<Tenant> Items, int TotalCount)> GetPagedAsync(string? keyword = null, string? status = null, string? planCode = null, int page = 1, int pageSize = 10, CancellationToken cancellationToken = default)
+            => Task.FromResult(((IReadOnlyList<Tenant>)(Tenant != null ? new List<Tenant> { Tenant } : new List<Tenant>()), Tenant != null ? 1 : 0));
+        public Task<int> GetTotalCountAsync(CancellationToken cancellationToken = default) => Task.FromResult(1);
+        public Task<int> GetActiveCountAsync(CancellationToken cancellationToken = default) => Task.FromResult(1);
+        public Task<int> GetExpiringSoonCountAsync(int daysThreshold = 7, CancellationToken cancellationToken = default) => Task.FromResult(0);
+        public Task<int> GetGracePeriodCountAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
+        public Task<int> GetLockedCountAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
+        public Task<int> GetTotalBranchesCountAsync(CancellationToken cancellationToken = default) => Task.FromResult(4);
+        public Task<IReadOnlyList<Tenant>> GetUrgentAlertTenantsAsync(int limit = 10, CancellationToken cancellationToken = default) => Task.FromResult((IReadOnlyList<Tenant>)new List<Tenant>());
+        public Task<IReadOnlyList<Tenant>> GetAllActiveWithPlanAsync(CancellationToken cancellationToken = default) => Task.FromResult((IReadOnlyList<Tenant>)new List<Tenant>());
+        public void Update(Tenant tenant) { }
+    }
+
+    private class FakeSubscriptionPlanRepository : ISubscriptionPlanRepository
+    {
+        public SubscriptionPlan? Plan { get; set; } = new SubscriptionPlan
+        {
+            Id = "plan_pro",
+            PlanCode = "PRO",
+            PlanName = "Gói Doanh Nghiệp (Toàn Năng)",
+            MaxBranches = 5,
+            MaxStaff = 50,
+            PriceMonthly = 999000m
+        };
+
+        public Task<SubscriptionPlan?> GetByIdAsync(string id, CancellationToken cancellationToken = default) => Task.FromResult(Plan);
+        public Task<SubscriptionPlan?> GetByCodeAsync(string code, CancellationToken cancellationToken = default) => Task.FromResult(Plan);
+        public Task<IReadOnlyList<SubscriptionPlan>> GetAllAsync(string? keyword = null, string? status = null, CancellationToken cancellationToken = default)
+            => Task.FromResult((IReadOnlyList<SubscriptionPlan>)(Plan != null ? new List<SubscriptionPlan> { Plan } : new List<SubscriptionPlan>()));
+        public Task<int> CountActiveTenantsByPlanIdAsync(string planId, CancellationToken cancellationToken = default) => Task.FromResult(1);
+        public Task<Dictionary<string, int>> GetActiveTenantCountsAsync(CancellationToken cancellationToken = default) => Task.FromResult(new Dictionary<string, int>());
+        public Task AddAsync(SubscriptionPlan plan, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public void Update(SubscriptionPlan plan) { }
+        public void Delete(SubscriptionPlan plan) { }
     }
 }
