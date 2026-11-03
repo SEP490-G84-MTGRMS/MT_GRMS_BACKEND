@@ -37,6 +37,7 @@ public class AuthControllerTests
 
         public void Update(User user) { }
         public void Delete(User user) => _users.Remove(user);
+        public Task SaveChangesAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     [Fact]

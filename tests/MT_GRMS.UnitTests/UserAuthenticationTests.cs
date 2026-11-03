@@ -44,6 +44,7 @@ public class UserAuthenticationTests
         }
 
         public void Update(User user) { }
+        public Task SaveChangesAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     [Fact]
@@ -54,13 +55,15 @@ public class UserAuthenticationTests
         {
             Id = "usr_admin_01",
             Username = "admin",
-            Password = "Admin@123"
+            Password = "Admin@123",
+            IsAdmin = true
         };
 
         // THEN
         Assert.Equal("usr_admin_01", user.Id);
         Assert.Equal("admin", user.Username);
         Assert.Equal("Admin@123", user.Password);
+        Assert.True(user.IsAdmin);
     }
 
     [Fact]
@@ -72,7 +75,8 @@ public class UserAuthenticationTests
         {
             Id = "usr_super_admin_01",
             Username = "super_admin",
-            Password = "SecurePassword@123"
+            Password = "SecurePassword@123",
+            IsAdmin = true
         };
 
         // WHEN
@@ -99,7 +103,8 @@ public class UserAuthenticationTests
         {
             Id = "usr_test_01",
             Username = "testuser",
-            Password = "Password@123"
+            Password = "Password@123",
+            IsAdmin = true
         };
         await repo.AddAsync(seedUser);
 
@@ -121,7 +126,31 @@ public class UserAuthenticationTests
         Assert.Equal("testuser", response.User.Username);
         Assert.Equal("ADMIN", response.User.Role);
         Assert.Equal("ADMIN", response.User.RoleName);
+        Assert.True(response.User.IsAdmin);
         Assert.Equal("TENANT-01", response.User.TenantId);
+    }
+
+    [Fact]
+    public async Task AuthService_LoginAsync_NonAdminUser_Should_Have_StoreOwner_Role()
+    {
+        // GIVEN
+        var repo = new FakeUserRepository();
+        var seedUser = new User
+        {
+            Id = "usr_owner_01",
+            Username = "shopowner",
+            Password = "Password@123",
+            IsAdmin = false
+        };
+        await repo.AddAsync(seedUser);
+        var authService = new AuthService(repo);
+
+        // WHEN
+        var response = await authService.LoginAsync(new LoginRequest("shopowner", "Password@123", "TENANT-01"));
+
+        // THEN
+        Assert.Equal("STORE_OWNER", response.User.Role);
+        Assert.False(response.User.IsAdmin);
     }
 
     [Fact]
@@ -205,7 +234,7 @@ public class UserAuthenticationTests
     {
         // GIVEN
         var repo = new FakeUserRepository();
-        await repo.AddAsync(new User { Id = "usr_01", Username = "user01", Password = "123" });
+        await repo.AddAsync(new User { Id = "usr_01", Username = "user01", Password = "123", IsAdmin = true });
         var authService = new AuthService(repo);
 
         // WHEN
@@ -233,6 +262,7 @@ public class UserAuthenticationTests
         Assert.StartsWith("mt_refresh_", response.RefreshToken);
         Assert.Equal("refreshed_user", response.User.Username);
         Assert.Equal("ADMIN", response.User.Role);
+        Assert.True(response.User.IsAdmin);
     }
 
     [Fact]
@@ -246,11 +276,49 @@ public class UserAuthenticationTests
             Email: "admin@mtgrms.vn",
             RoleName: "MANAGER",
             BranchId: null,
-            TenantId: "TENANT-HCM-01"
+            TenantId: "TENANT-HCM-01",
+            IsAdmin: false
         );
 
         // THEN
         Assert.Equal("MANAGER", userInfo.RoleName);
         Assert.Equal("MANAGER", userInfo.Role);
+        Assert.False(userInfo.IsAdmin);
+    }
+
+    [Fact]
+    public void PasswordHasher_Should_Hash_And_Verify_Successfully()
+    {
+        var rawPassword = "SecurePassword@123";
+        var hash = PasswordHasher.Hash(rawPassword);
+
+        Assert.NotNull(hash);
+        Assert.NotEqual(rawPassword, hash);
+        Assert.True(PasswordHasher.Verify(hash, rawPassword, out var rehashNeeded));
+        Assert.False(rehashNeeded);
+        Assert.False(PasswordHasher.Verify(hash, "WrongPassword", out _));
+    }
+
+    [Fact]
+    public void PasswordHasher_Should_Support_Legacy_Plaintext_And_Flag_Rehash()
+    {
+        var legacyPassword = "Admin@123";
+        Assert.True(PasswordHasher.Verify(legacyPassword, legacyPassword, out var rehashNeeded));
+        Assert.True(rehashNeeded);
+        Assert.False(PasswordHasher.Verify(legacyPassword, "WrongPassword", out _));
+    }
+
+    [Fact]
+    public async Task AuthService_LoginAsync_With_Hashed_Password_Should_Succeed()
+    {
+        var repo = new FakeUserRepository();
+        var hashedPass = PasswordHasher.Hash("Secret@999");
+        await repo.AddAsync(new User { Id = "usr_hash", Username = "user_hash", PasswordHash = hashedPass });
+
+        var authService = new AuthService(repo);
+        var res = await authService.LoginAsync(new LoginRequest("user_hash", "Secret@999", null));
+
+        Assert.NotNull(res);
+        Assert.Equal("user_hash", res.User.Username);
     }
 }

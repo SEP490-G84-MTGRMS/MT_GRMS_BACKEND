@@ -22,3 +22,32 @@ public class BranchFilterQuery
     public int PageIndex { get; set; } = 1;
     public int PageSize { get; set; } = 10;
 }
+
+public record BranchQuotaDto(
+    int UsedBranches,
+    int MaxBranches,
+    bool CanAddMore,
+    string CurrentPlanCode,
+    string CurrentPlanName
+);
+
+public record CreateBranchRequest(
+    string BranchCode,
+    string Name,
+    string Address,
+    string? Phone = null,
+    string? ManagerName = null,
+    bool IsHeadquarter = false
+);
+
+public record UpdateBranchRequest(
+    string Name,
+    string Address,
+    string? Phone = null,
+    string? ManagerName = null,
+    bool IsHeadquarter = false
+);
+
+public record UpdateBranchStatusRequest(
+    bool IsActive
+);

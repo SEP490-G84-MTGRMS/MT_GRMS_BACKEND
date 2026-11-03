@@ -1,4 +1,5 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
+using MT_GRMS.Application.Auth;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Finance;
@@ -18,47 +19,99 @@ public static class DbInitializer
 {
     public static async Task InitializeAsync(AppDbContext context)
     {
-        // 1. Tự động áp dụng Migrations để tạo CSDL và toàn bộ 34 bảng nếu chưa có
-        if (context.Database.IsRelational())
+        // 1. Tự động áp dụng Migrations hoặc EnsureCreatedAsync để khởi tạo toàn bộ CSDL và 34 bảng nếu chưa có
+        try
         {
-            // Đảm bảo bảng supplier_branch_assignments tồn tại trước khi chạy Migrations
-            // để tránh lỗi 42P01: relation "supplier_branch_assignments" does not exist khi migration thực hiện ALTER TABLE
-            await context.Database.ExecuteSqlRawAsync(@"
-                CREATE TABLE IF NOT EXISTS supplier_branch_assignments (
-                    ""Id"" uuid NOT NULL PRIMARY KEY,
-                    ""BranchId"" uuid NOT NULL,
-                    ""SupplierId"" uuid NOT NULL,
-                    ""TenantId"" text NOT NULL,
-                    ""CreatedBy"" uuid,
-                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    ""UpdatedAt"" timestamp without time zone,
-                    ""IsDeleted"" boolean NOT NULL DEFAULT false
-                );
-            ");
+            if (context.Database.IsRelational())
+            {
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        CREATE TABLE IF NOT EXISTS supplier_branch_assignments (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""BranchId"" uuid NOT NULL,
+                            ""SupplierId"" uuid NOT NULL,
+                            ""TenantId"" text NOT NULL,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+                    ");
+                }
+                catch { }
 
-            await context.Database.MigrateAsync();
+                var migrations = context.Database.GetMigrations();
+                if (migrations.Any())
+                {
+                    await context.Database.MigrateAsync();
+                }
+                else
+                {
+                    await context.Database.EnsureCreatedAsync();
+                }
 
-            // Đảm bảo đồng bộ cấu trúc cột và bảng sau migration RemoveDisplayOrderAndProductCombos
-            await context.Database.ExecuteSqlRawAsync(@"
-                ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];
-                ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
-                ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
-                ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
-                DROP TABLE IF EXISTS ""ProductCombos"";
-                DROP INDEX IF EXISTS ""IX_Products_TenantID_ProductCode"";
-                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_TenantID_ProductCode"" ON ""Products"" (""TenantID"", ""ProductCode"") WHERE ""IsDeleted"" = false;
-                DROP INDEX IF EXISTS ""IX_Products_Barcode"";
-                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_Barcode"" ON ""Products"" (""Barcode"") WHERE ""IsDeleted"" = false AND ""Barcode"" IS NOT NULL;
-            ");
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];`r`n                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""TaxCategory"" text DEFAULT 'STANDARD_1PCT';`r`n                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""EligibleForVatReduction"" boolean DEFAULT false;
+                        ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
+                        ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
+                        ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
+                        DROP TABLE IF EXISTS ""ProductCombos"";
+                        DROP INDEX IF EXISTS ""IX_Products_TenantID_ProductCode"";
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_TenantID_ProductCode"" ON ""Products"" (""TenantID"", ""ProductCode"") WHERE ""IsDeleted"" = false;
+                        DROP INDEX IF EXISTS ""IX_Products_Barcode"";
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_Barcode"" ON ""Products"" (""Barcode"") WHERE ""IsDeleted"" = false AND ""Barcode"" IS NOT NULL;
+                    ");
+                }
+                catch { }
+            }
+            else
+            {
+                await context.Database.EnsureCreatedAsync();
+            }
+
         }
-        else
+        catch (Exception)
         {
+            // Fallback an toàn khi merge code hoặc khi không có migrations: Tự động khởi tạo schema từ Domain Entities
             await context.Database.EnsureCreatedAsync();
         }
 
-        // 2. Kiểm tra nếu đã có dữ liệu mẫu thì đảm bảo seed Orders cho chủ tiệm
+        // 2. Kiểm tra nếu đã có dữ liệu mẫu
         if (await context.SubscriptionPlans.AnyAsync())
         {
+            if (!await context.SubscriptionPlans.AnyAsync(p => p.PlanCode == "SUPPORT"))
+            {
+                var pSupport = new SubscriptionPlan
+                {
+                    Id = "plan_support",
+                    PlanCode = "SUPPORT",
+                    PlanName = "Gói Hỗ Trợ",
+                    PriceMonthly = 270000.00m,
+                    PriceYearly = 2700000.00m,
+                    MaxBranches = 1,
+                    MaxStaff = 3,
+                    EnabledModulesJson = "[\"Catalog\",\"Pos\"]",
+                    IsActive = true
+                };
+                var pVip = new SubscriptionPlan
+                {
+                    Id = "plan_vip",
+                    PlanCode = "VIP",
+                    PlanName = "Gói Cao Cấp",
+                    PriceMonthly = 490000.00m,
+                    PriceYearly = 4900000.00m,
+                    MaxBranches = 10,
+                    MaxStaff = 100,
+                    EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\"]",
+                    IsActive = true
+                };
+                await context.SubscriptionPlans.AddRangeAsync(pSupport, pVip);
+                await context.SaveChangesAsync();
+            }
+
             await CatalogSeedData.SeedAsync(context, "tenant_mt_mart_01");
             await SeedOrdersAndPreOrdersAsync(context);
             return;
@@ -121,11 +174,12 @@ public static class DbInitializer
         {
             Id = "usr_super_admin",
             UserName = "admin",
-            PasswordHash = "Admin@123",
+            PasswordHash = PasswordHasher.Hash("Admin@123"),
             FullName = "Hệ Thống Super Admin",
             Email = "admin@mtgrms.vn",
             Phone = "0901234567",
             IsActive = true,
+            IsAdmin = true,
             IsEmailVerified = true
         };
 
@@ -133,11 +187,12 @@ public static class DbInitializer
         {
             Id = "usr_store_manager",
             UserName = "manager01",
-            PasswordHash = "Manager@123",
+            PasswordHash = PasswordHasher.Hash("Manager@123"),
             FullName = "Nguyễn Văn Hùng (Quản Lý Cửa Hàng)",
             Email = "hung.nguyen@mtmart.vn",
             Phone = "0909876543",
             IsActive = true,
+            IsAdmin = false,
             IsEmailVerified = true
         };
 
@@ -145,11 +200,12 @@ public static class DbInitializer
         {
             Id = "usr_cashier",
             UserName = "cashier01",
-            PasswordHash = "Cashier@123",
+            PasswordHash = PasswordHasher.Hash("Cashier@123"),
             FullName = "Lê Thị Thảo (Thu Ngân POS)",
             Email = "thao.le@mtmart.vn",
             Phone = "0912345678",
             IsActive = true,
+            IsAdmin = false,
             IsEmailVerified = true
         };
 

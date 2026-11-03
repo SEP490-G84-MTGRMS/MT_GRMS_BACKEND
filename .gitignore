@@ -47,3 +47,11 @@ secrets.json
 .DS_Store
 Thumbs.db
 ehthumbs.db
+
+## ----------------------------------------------------
+## Entity Framework Core Migrations
+## ----------------------------------------------------
+# Bỏ qua các file migrations tự động để tránh xung đột (merge conflicts) liên tục giữa các nhánh
+**/[Mm]igrations/
+**/AppDbContextModelSnapshot.cs
+*.Designer.cs
