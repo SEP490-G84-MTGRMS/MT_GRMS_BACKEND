@@ -41,3 +41,4 @@
 - **Mức độ rủi ro**: Low.
 - **File cần review**: `.gitignore`, `DbInitializer.cs`.
 - **Lưu ý sau khi merge**: Các thành viên khác khi pull code về chỉ cần chạy lại backend như bình thường, `DbInitializer` sẽ tự động đảm bảo cấu trúc database luôn đồng bộ.
+
