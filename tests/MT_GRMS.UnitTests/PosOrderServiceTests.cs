@@ -79,7 +79,6 @@ public class PosOrderServiceTests
                 Name = "Mi Hao Hao Tom Chua Cay",
                 SellingPrice = 5000m,
                 BaseUnit = "Goi",
-                VatRate = 0.01m,
                 IsActive = true
             },
             new Product
@@ -91,7 +90,6 @@ public class PosOrderServiceTests
                 Name = "Nuoc Ngot Coca-Cola 330ml",
                 SellingPrice = 10000m,
                 BaseUnit = "Lon",
-                VatRate = 0.01m,
                 IsActive = true
             }
         });
@@ -761,7 +759,6 @@ public class PosOrderServiceTests
             Id = multiBatchProdId,
             Name = "Sữa Tươi Ba Vì 1L",
             BasePrice = 30000m,
-            VatRate = 0.05m
         };
         _orderRepo.Products.Add(multiBatchProd);
 

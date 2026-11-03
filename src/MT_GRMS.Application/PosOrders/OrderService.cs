@@ -118,7 +118,7 @@ public class OrderService : IOrderService
             decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : item.UnitPrice;
 
             // Tính VAT theo tỷ lệ của sản phẩm (hoặc mặc định 1% cho tạp hóa)
-            decimal vatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m;
+            decimal vatRate = 0.01m;
             decimal vatAmount = (actualPrice * item.Quantity) * vatRate;
 
             totalAmount += lineTotal;
@@ -381,7 +381,7 @@ public class OrderService : IOrderService
                 var actualUnitPrice = Math.Max(0, reqItem.UnitPrice - discountPerUnit);
 
                 int lineNumber = orderDetails.Count + 1;
-                decimal vatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m;
+                decimal vatRate = 0.01m;
                 decimal vatAmount = (actualUnitPrice * deduct) * vatRate;
 
                 var detail = new OrderDetail
@@ -641,7 +641,7 @@ public class OrderService : IOrderService
                 decimal lineTotal = item.Quantity * item.UnitPrice;
                 decimal itemDiscount = item.DiscountAmount ?? 0m;
                 decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : item.UnitPrice;
-                decimal vatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m;
+                decimal vatRate = 0.01m;
                 decimal vatAmount = (actualPrice * item.Quantity) * vatRate;
 
                 totalNewAmount += lineTotal - itemDiscount;

@@ -6,6 +6,7 @@ using MT_GRMS.Domain.Entities;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Identity;
+using MT_GRMS.Domain.Entities.SaaS;
 using Promotion = MT_GRMS.Domain.Entities.Sales.Promotion;
 using PromotionCondition = MT_GRMS.Domain.Entities.Sales.PromotionCondition;
 using VoucherCode = MT_GRMS.Domain.Entities.Sales.VoucherCode;
@@ -25,6 +26,24 @@ public static class DatabaseSeeder
     {
         try
         {
+            // 0. Đảm bảo Tenant "tenant-grocery-001" tồn tại trong CSDL trước khi gán FK
+            if (!await context.Tenants.IgnoreQueryFilters().AnyAsync(t => t.Id == DefaultTenantId, ct))
+            {
+                var plan = await context.SubscriptionPlans.IgnoreQueryFilters().FirstOrDefaultAsync(ct);
+                var tenant = new Tenant
+                {
+                    Id = DefaultTenantId,
+                    Name = "Siêu Thị Tạp Hóa Mẫu (Grocery 001)",
+                    Subdomain = "grocery001",
+                    Code = "GROCERY001",
+                    Status = "ACTIVE",
+                    CurrentPlan = plan?.PlanCode ?? "PRO",
+                    SubscriptionExpiresAt = DateTime.UtcNow.AddYears(1)
+                };
+                await context.Tenants.AddAsync(tenant, ct);
+                await context.SaveChangesAsync(ct);
+            }
+
             // 1. Seed Users (Chủ tiệm với mã PIN 1234 đã băm PBKDF2)
             if (!await context.Users.IgnoreQueryFilters().AnyAsync(u => u.Id == "user-owner-001", ct))
             {
@@ -114,7 +133,6 @@ public static class DatabaseSeeder
                         CategoryId = Guid.Parse("11111111-1111-1111-1111-111111111111"),
                         BasePrice = 65000m,
                         CostPrice = 48000m,
-                        TaxCategory = TaxCategoryConstants.Standard1Pct, // Được giảm GTGT còn 0.8%
                         UnitName = "Hộp"
                     },
                     new Product
@@ -127,7 +145,6 @@ public static class DatabaseSeeder
                         CategoryId = Guid.Parse("11111111-1111-1111-1111-111111111111"),
                         BasePrice = 135000m,
                         CostPrice = 110000m,
-                        TaxCategory = TaxCategoryConstants.Standard1Pct, // Được giảm GTGT còn 0.8%
                         UnitName = "Thùng"
                     },
                     new Product
@@ -140,7 +157,6 @@ public static class DatabaseSeeder
                         CategoryId = Guid.Parse("11111111-1111-1111-1111-111111111111"),
                         BasePrice = 58000m,
                         CostPrice = 45000m,
-                        TaxCategory = TaxCategoryConstants.Standard1Pct, // Được giảm GTGT còn 0.8%
                         UnitName = "Lốc"
                     },
                     new Product
@@ -153,7 +169,6 @@ public static class DatabaseSeeder
                         CategoryId = Guid.Parse("22222222-2222-2222-2222-222222222222"),
                         BasePrice = 385000m,
                         CostPrice = 340000m,
-                        TaxCategory = TaxCategoryConstants.NoReduction1Pct, // Hàng TTĐB: Giữ nguyên 1.0%
                         UnitName = "Thùng"
                     },
                     new Product
@@ -166,7 +181,6 @@ public static class DatabaseSeeder
                         CategoryId = Guid.Parse("22222222-2222-2222-2222-222222222222"),
                         BasePrice = 440000m,
                         CostPrice = 395000m,
-                        TaxCategory = TaxCategoryConstants.NoReduction1Pct, // Hàng TTĐB: Giữ nguyên 1.0%
                         UnitName = "Thùng"
                     },
                     new Product
@@ -179,7 +193,6 @@ public static class DatabaseSeeder
                         CategoryId = Guid.Parse("33333333-3333-3333-3333-333333333333"),
                         BasePrice = 32000m,
                         CostPrice = 28000m,
-                        TaxCategory = TaxCategoryConstants.NoReduction1Pct, // Hàng TTĐB: Giữ nguyên 1.0%
                         UnitName = "Gói"
                     }
                 };
@@ -720,8 +733,6 @@ public static class DatabaseSeeder
                     SellingPrice = item.Price,
                     CostPrice = item.CostPrice,
                     BaseUnit = item.Unit,
-                    VatRate = item.Vat,
-                    TaxCategory = "STANDARD_1PCT",
                     Status = "Active"
                 };
                 await context.Products.AddAsync(newP, ct);

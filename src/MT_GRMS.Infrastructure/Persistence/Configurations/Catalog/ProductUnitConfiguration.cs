@@ -23,6 +23,12 @@ public class ProductUnitConfiguration : IEntityTypeConfiguration<ProductUnit>
         builder.HasOne(x => x.Product)
             .WithMany(p => p.Units)
             .HasForeignKey(x => x.ProductId)
+            .IsRequired()
             .OnDelete(DeleteBehavior.Cascade);
+
+        // Khóa bộ phận (Partial Key): Trong phạm vi 1 Product, UnitName phải là duy nhất
+        builder.HasIndex(x => new { x.ProductId, x.UnitName })
+            .IsUnique()
+            .HasFilter("\"IsDeleted\" = false");
     }
 }

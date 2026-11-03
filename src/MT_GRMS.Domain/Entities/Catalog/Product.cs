@@ -4,7 +4,9 @@ using MT_GRMS.Domain.Common;
 namespace MT_GRMS.Domain.Entities.Catalog;
 
 /// <summary>
-/// Bảng Products (Mặt hàng sản phẩm chuẩn 3NF - Layer 1 Master Product)
+/// Bảng Products — Thực thể Mạnh (Strong Entity / Aggregate Root) trong mô hình ERD.
+/// Sở hữu và quản lý vòng đời của Thực thể Yếu <see cref="ProductUnit"/> (Đơn vị tính quy đổi)
+/// qua mối quan hệ xác định (Identifying Relationship).
 /// </summary>
 public class Product : BaseTenantEntity
 {
@@ -15,9 +17,6 @@ public class Product : BaseTenantEntity
     public string BaseUnit { get; set; } = "Cái";
     public decimal? CostPrice { get; set; }
     public decimal SellingPrice { get; set; } = 0.00m;
-    public decimal VatRate { get; set; } = 0.00m;
-    public string TaxCategory { get; set; } = "STANDARD_1PCT";
-    public string ProductType { get; set; } = "STANDARD";
     public string Status { get; set; } = "Active";
     public List<string> ImageUrls { get; set; } = new();
     public string? Description { get; set; }

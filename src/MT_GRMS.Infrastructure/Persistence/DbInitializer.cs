@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Finance;
@@ -57,7 +57,7 @@ public static class DbInitializer
         }
 
         // 2. Kiểm tra nếu đã có dữ liệu mẫu thì đảm bảo seed Orders cho chủ tiệm
-        if (await context.SubscriptionPlans.AnyAsync())
+        if (await context.Tenants.AnyAsync(t => t.Id == "tenant_mt_mart_01"))
         {
             await CatalogSeedData.SeedAsync(context, "tenant_mt_mart_01");
             await SeedOrdersAndPreOrdersAsync(context);
@@ -95,7 +95,11 @@ public static class DbInitializer
             IsActive = true
         };
 
-        await context.SubscriptionPlans.AddRangeAsync(planFree, planPro);
+        if (!await context.SubscriptionPlans.AnyAsync())
+        {
+            await context.SubscriptionPlans.AddRangeAsync(planFree, planPro);
+            await context.SaveChangesAsync();
+        }
         await context.SaveChangesAsync();
 
         // Doanh nghiệp thuê SaaS mẫu (Default Tenant)
@@ -309,9 +313,6 @@ public static class DbInitializer
             BaseUnit = "Túi",
             CostPrice = 160000.00m,
             SellingPrice = 195000.00m,
-            VatRate = 0.00m,
-            TaxCategory = "STANDARD_1PCT",
-            ProductType = "STANDARD",
             Status = "Active",
             IsFavorite = true,
             ImageUrls = new() { "https://images.unsplash.com/photo-1586201375761-83865001e31c?w=500&auto=format&fit=crop&q=60" },
@@ -330,9 +331,6 @@ public static class DbInitializer
             BaseUnit = "Hộp",
             CostPrice = 30000.00m,
             SellingPrice = 38000.00m,
-            VatRate = 8.00m,
-            TaxCategory = "STANDARD_1PCT",
-            ProductType = "STANDARD",
             Status = "Active",
             IsFavorite = true,
             ImageUrls = new() { "https://images.unsplash.com/photo-1556881286-fc6915169721?w=500&auto=format&fit=crop&q=60" },
@@ -351,9 +349,6 @@ public static class DbInitializer
             BaseUnit = "Chai",
             CostPrice = 22000.00m,
             SellingPrice = 28500.00m,
-            VatRate = 8.00m,
-            TaxCategory = "STANDARD_1PCT",
-            ProductType = "STANDARD",
             Status = "Active",
             ImageUrls = new() { "https://images.unsplash.com/photo-1589301760014-d929f3979dbc?w=500&auto=format&fit=crop&q=60" },
             Description = "Nước mắm Nam Ngư Đệ Nhị tinh cốt cá cơm Phú Quốc vị ngon tròn vị cho mọi bữa cơm gia đình.",
@@ -371,9 +366,6 @@ public static class DbInitializer
             BaseUnit = "Hộp",
             CostPrice = 45000.00m,
             SellingPrice = 58000.00m,
-            VatRate = 8.00m,
-            TaxCategory = "STANDARD_1PCT",
-            ProductType = "STANDARD",
             Status = "Active",
             IsFavorite = true,
             ImageUrls = new() { "https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=500&auto=format&fit=crop&q=60" },
@@ -392,9 +384,6 @@ public static class DbInitializer
             BaseUnit = "Hộp",
             CostPrice = 42000.00m,
             SellingPrice = 55000.00m,
-            VatRate = 8.00m,
-            TaxCategory = "STANDARD_1PCT",
-            ProductType = "STANDARD",
             Status = "Active",
             IsFavorite = true,
             ImageUrls = new() { "https://images.unsplash.com/photo-1549007994-cb92caebd54b?w=500&auto=format&fit=crop&q=60" },
@@ -413,9 +402,6 @@ public static class DbInitializer
             BaseUnit = "Hũ",
             CostPrice = 12000.00m,
             SellingPrice = 16000.00m,
-            VatRate = 8.00m,
-            TaxCategory = "STANDARD_1PCT",
-            ProductType = "STANDARD",
             Status = "Active",
             IsFavorite = true,
             ImageUrls = new() { "https://images.unsplash.com/photo-1506368249639-73a05d6f6488?w=500&auto=format&fit=crop&q=60" },
@@ -434,9 +420,6 @@ public static class DbInitializer
             BaseUnit = "Lon",
             CostPrice = 10500.00m,
             SellingPrice = 14000.00m,
-            VatRate = 10.00m,
-            TaxCategory = "NO_REDUCTION_1PCT",
-            ProductType = "STANDARD",
             Status = "Active",
             IsFavorite = true,
             ImageUrls = new() { "https://images.unsplash.com/photo-1608256246200-53e635b5b65f?w=500&auto=format&fit=crop&q=60" },
@@ -449,11 +432,17 @@ public static class DbInitializer
         await context.SaveChangesAsync();
 
         // Đơn vị quy đổi chuẩn xác
-        var unitCartonMilk = new ProductUnit(prodMilk.Id, "Thùng", 12.00m, 445000.00m, "893850123499", false);
-        var unitLocBia = new ProductUnit(prodBia.Id, "Lốc", 6.00m, 82000.00m, "8936000440826", false);
-        var unitThungBia = new ProductUnit(prodBia.Id, "Thùng", 24.00m, 320000.00m, "2893600044082", false);
-        var unitThungChoco = new ProductUnit(prodChoco.Id, "Thùng", 8.00m, 430000.00m, "8936036020388", false);
-        var unitThungG7 = new ProductUnit(prodG7.Id, "Thùng", 24.00m, 1350000.00m, "8935024122314", false);
+        var unitCartonMilk = new ProductUnit(prodMilk.Id, "Thùng", 12.00m, 445000.00m, "893850123499", false) { Product = prodMilk };
+        var unitLocBia = new ProductUnit(prodBia.Id, "Lốc", 6.00m, 82000.00m, "8936000440826", false) { Product = prodBia };
+        var unitThungBia = new ProductUnit(prodBia.Id, "Thùng", 24.00m, 320000.00m, "2893600044082", false) { Product = prodBia };
+        var unitThungChoco = new ProductUnit(prodChoco.Id, "Thùng", 8.00m, 430000.00m, "8936036020388", false) { Product = prodChoco };
+        var unitThungG7 = new ProductUnit(prodG7.Id, "Thùng", 24.00m, 1350000.00m, "8935024122314", false) { Product = prodG7 };
+
+        prodMilk.Units.Add(unitCartonMilk);
+        prodBia.Units.Add(unitLocBia);
+        prodBia.Units.Add(unitThungBia);
+        prodChoco.Units.Add(unitThungChoco);
+        prodG7.Units.Add(unitThungG7);
         await context.ProductUnits.AddRangeAsync(unitCartonMilk, unitLocBia, unitThungBia, unitThungChoco, unitThungG7);
 
         // =========================================================================

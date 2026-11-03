@@ -45,8 +45,6 @@ public class CatalogService : ICatalogService
             p.BaseUnit,
             p.SellingPrice,
             canViewCostPrice ? p.CostPrice : null,
-            p.VatRate,
-            p.ProductType,
             p.Status,
             avatar,
             p.Description,
@@ -162,8 +160,6 @@ public class CatalogService : ICatalogService
             BaseUnit = string.IsNullOrWhiteSpace(request.BaseUnit) ? "Cái" : request.BaseUnit.Trim(),
             CostPrice = request.CostPrice,
             SellingPrice = request.SellingPrice,
-            VatRate = request.VatRate,
-            ProductType = string.IsNullOrWhiteSpace(request.ProductType) ? "STANDARD" : request.ProductType,
             Status = string.IsNullOrWhiteSpace(request.Status) ? "Active" : request.Status,
             ImageUrls = imageUrls,
             Description = request.Description?.Trim(),
@@ -226,7 +222,6 @@ public class CatalogService : ICatalogService
         product.BaseUnit = string.IsNullOrWhiteSpace(request.BaseUnit) ? product.BaseUnit : request.BaseUnit.Trim();
         product.CostPrice = request.CostPrice;
         product.SellingPrice = request.SellingPrice;
-        product.VatRate = request.VatRate;
         product.Status = string.IsNullOrWhiteSpace(request.Status) ? product.Status : request.Status;
         product.Description = request.Description?.Trim();
         product.InternalNote = request.InternalNote?.Trim();

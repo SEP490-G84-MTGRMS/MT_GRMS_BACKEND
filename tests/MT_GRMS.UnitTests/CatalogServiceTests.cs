@@ -477,8 +477,6 @@ public class CatalogServiceTests
           "barcode": "string",
           "baseUnit": "Hộp",
           "costPrice": 15000,
-          "vatRate": 10,
-          "productType": "STANDARD",
           "status": "Active",
           "imageUrl": "https://example.com/img.png",
           "description": "Mô tả",
