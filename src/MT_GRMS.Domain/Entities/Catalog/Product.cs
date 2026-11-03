@@ -4,7 +4,7 @@ using MT_GRMS.Domain.Common;
 namespace MT_GRMS.Domain.Entities.Catalog;
 
 /// <summary>
-/// Bảng Products (Mặt hàng sản phẩm chuẩn 3NF)
+/// Bảng Products (Mặt hàng sản phẩm chuẩn 3NF - Layer 1 Master Product)
 /// </summary>
 public class Product : BaseTenantEntity
 {
@@ -15,8 +15,6 @@ public class Product : BaseTenantEntity
     public string BaseUnit { get; set; } = "Cái";
     public decimal? CostPrice { get; set; }
     public decimal SellingPrice { get; set; } = 0.00m;
-    public decimal MinStock { get; set; } = 0.00m;
-    public decimal MaxStock { get; set; } = 1000.00m;
     public decimal VatRate { get; set; } = 0.00m;
     public string TaxCategory { get; set; } = "STANDARD_1PCT";
     public string ProductType { get; set; } = "STANDARD";
@@ -24,10 +22,9 @@ public class Product : BaseTenantEntity
     public List<string> ImageUrls { get; set; } = new();
     public string? Description { get; set; }
     public string? InternalNote { get; set; }
-    public bool HasBatches { get; set; } = false;
     public bool IsFavorite { get; set; } = false;
 
-    // Backward compatibility aliases
+    // Backward compatibility & ubiquitous language aliases
     [NotMapped]
     public string? ImageUrl => ImageUrls.FirstOrDefault();
     [NotMapped]
@@ -40,6 +37,8 @@ public class Product : BaseTenantEntity
     public string UnitName { get => BaseUnit; set => BaseUnit = value; }
     [NotMapped]
     public bool IsActive { get => Status == "Active"; set => Status = value ? "Active" : "Inactive"; }
+    [NotMapped]
+    public decimal? DefaultPurchasePrice { get => CostPrice; set => CostPrice = value; }
 
     // Navigations
     public Category? Category { get; set; }

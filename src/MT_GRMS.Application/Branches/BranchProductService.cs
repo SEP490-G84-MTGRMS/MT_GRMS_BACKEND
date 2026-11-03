@@ -117,11 +117,6 @@ public class BranchProductService : IBranchProductService
                     product.SellingPrice = command.DefaultRetailPrice.Value;
                 }
 
-                if (command.DefaultMinStock.HasValue && command.DefaultMinStock.Value >= 0)
-                {
-                    product.MinStock = command.DefaultMinStock.Value;
-                }
-
                 await _repository.AddBranchStockAsync(newStock, cancellationToken);
 
                 assignedList.Add(new BranchProductDto
@@ -138,7 +133,7 @@ public class BranchProductService : IBranchProductService
                     RetailPrice = product.SellingPrice,
                     CostPrice = product.CostPrice ?? 0m,
                     CurrentStock = 0,
-                    MinStockLevel = product.MinStock,
+                    MinStockLevel = command.DefaultMinStock ?? 0m,
                     PrimarySupplierName = "Nông Sản Tươi Sạch Khải Anh",
                     Status = product.Status,
                     ShelfLocation = newStock.ShelfLocation,
@@ -182,9 +177,8 @@ public class BranchProductService : IBranchProductService
             throw new NotFoundException($"Sản phẩm '{product.Name}' chưa được gán vào chi nhánh '{branch.Name}'.");
         }
 
-        // Cập nhật giá bán lẻ niêm yết và mức tồn tối thiểu
+        // Cập nhật giá bán lẻ niêm yết
         product.SellingPrice = command.RetailPrice;
-        product.MinStock = command.MinStockLevel;
 
         if (!string.IsNullOrWhiteSpace(command.ShelfLocation))
         {
@@ -212,7 +206,7 @@ public class BranchProductService : IBranchProductService
             RetailPrice = product.SellingPrice,
             CostPrice = product.CostPrice ?? 0m,
             CurrentStock = totalStock,
-            MinStockLevel = product.MinStock,
+            MinStockLevel = command.MinStockLevel,
             PrimarySupplierName = "Nông Sản Tươi Sạch Khải Anh",
             Status = product.Status,
             ShelfLocation = stocks.First().ShelfLocation,
@@ -263,7 +257,7 @@ public class BranchProductService : IBranchProductService
             RetailPrice = product.SellingPrice,
             CostPrice = product.CostPrice ?? 0m,
             CurrentStock = stocks.Sum(s => s.QuantityOnHand),
-            MinStockLevel = product.MinStock,
+            MinStockLevel = 0m,
             PrimarySupplierName = "Nông Sản Tươi Sạch Khải Anh",
             Status = product.Status,
             ShelfLocation = stocks.First().ShelfLocation,

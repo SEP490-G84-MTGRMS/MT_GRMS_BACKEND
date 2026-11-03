@@ -45,15 +45,12 @@ public class CatalogService : ICatalogService
             p.BaseUnit,
             p.SellingPrice,
             canViewCostPrice ? p.CostPrice : null,
-            p.MinStock,
-            p.MaxStock,
             p.VatRate,
             p.ProductType,
             p.Status,
             avatar,
             p.Description,
             p.InternalNote,
-            p.HasBatches,
             p.IsFavorite,
             p.CreatedAt,
             p.UpdatedAt,
@@ -104,11 +101,6 @@ public class CatalogService : ICatalogService
         if (request.CostPrice.HasValue && request.CostPrice.Value < 0)
         {
             throw new ArgumentException("Giá vốn không được nhỏ hơn 0.");
-        }
-
-        if (request.MinStock < 0 || request.MaxStock < request.MinStock)
-        {
-            throw new ArgumentException("Định mức tồn kho không hợp lệ.");
         }
 
         var category = await _categoryRepository.GetByIdAsync(request.CategoryId, cancellationToken);
@@ -170,15 +162,12 @@ public class CatalogService : ICatalogService
             BaseUnit = string.IsNullOrWhiteSpace(request.BaseUnit) ? "Cái" : request.BaseUnit.Trim(),
             CostPrice = request.CostPrice,
             SellingPrice = request.SellingPrice,
-            MinStock = request.MinStock,
-            MaxStock = request.MaxStock,
             VatRate = request.VatRate,
             ProductType = string.IsNullOrWhiteSpace(request.ProductType) ? "STANDARD" : request.ProductType,
             Status = string.IsNullOrWhiteSpace(request.Status) ? "Active" : request.Status,
             ImageUrls = imageUrls,
             Description = request.Description?.Trim(),
             InternalNote = request.InternalNote?.Trim(),
-            HasBatches = request.HasBatches,
             IsFavorite = request.IsFavorite
         };
 
@@ -203,11 +192,6 @@ public class CatalogService : ICatalogService
         if (request.CostPrice.HasValue && request.CostPrice.Value < 0)
         {
             throw new ArgumentException("Giá vốn không được nhỏ hơn 0.");
-        }
-
-        if (request.MinStock < 0 || request.MaxStock < request.MinStock)
-        {
-            throw new ArgumentException("Định mức tồn kho không hợp lệ.");
         }
 
         var product = await _productRepository.GetByIdWithCategoryAsync(id, cancellationToken);
@@ -242,13 +226,10 @@ public class CatalogService : ICatalogService
         product.BaseUnit = string.IsNullOrWhiteSpace(request.BaseUnit) ? product.BaseUnit : request.BaseUnit.Trim();
         product.CostPrice = request.CostPrice;
         product.SellingPrice = request.SellingPrice;
-        product.MinStock = request.MinStock;
-        product.MaxStock = request.MaxStock;
         product.VatRate = request.VatRate;
         product.Status = string.IsNullOrWhiteSpace(request.Status) ? product.Status : request.Status;
         product.Description = request.Description?.Trim();
         product.InternalNote = request.InternalNote?.Trim();
-        product.HasBatches = request.HasBatches;
         product.IsFavorite = request.IsFavorite;
         product.UpdatedAt = DateTime.UtcNow;
 

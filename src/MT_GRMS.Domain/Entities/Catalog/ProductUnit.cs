@@ -1,9 +1,10 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using MT_GRMS.Domain.Common;
 
 namespace MT_GRMS.Domain.Entities.Catalog;
 
 /// <summary>
-/// Bảng ProductUnits (Đơn vị tính quy đổi)
+/// Bảng ProductUnits (Đơn vị tính quy đổi - Layer 1 Master Product)
 /// </summary>
 public class ProductUnit : BaseEntity
 {
@@ -13,6 +14,10 @@ public class ProductUnit : BaseEntity
     public decimal Price { get; set; } = 0.00m;
     public string? Barcode { get; set; }
     public bool IsBaseUnit { get; set; } = false;
+
+    // Backward compatibility & ubiquitous language aliases
+    [NotMapped]
+    public decimal SellingPrice { get => Price; set => Price = value; }
 
     // Navigation
     public Product? Product { get; set; }

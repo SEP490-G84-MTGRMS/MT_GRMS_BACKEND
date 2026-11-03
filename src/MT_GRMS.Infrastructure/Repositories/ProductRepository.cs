@@ -8,6 +8,22 @@ namespace MT_GRMS.Infrastructure.Repositories;
 
 public class ProductRepository : GenericRepository<Product>, IProductRepository
 {
+    private static string RemoveDiacritics(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return string.Empty;
+        var normalizedString = text.Normalize(System.Text.NormalizationForm.FormD);
+        var sb = new System.Text.StringBuilder();
+        foreach (var c in normalizedString)
+        {
+            var uc = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(c);
+            if (uc != System.Globalization.UnicodeCategory.NonSpacingMark)
+            {
+                sb.Append(c);
+            }
+        }
+        return sb.ToString().Normalize(System.Text.NormalizationForm.FormC).Replace('đ', 'd').Replace('Đ', 'D').ToLower();
+    }
+
     public ProductRepository(AppDbContext context) : base(context)
     {
     }
@@ -24,10 +40,23 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
         if (!string.IsNullOrWhiteSpace(filter.SearchTerm))
         {
             var term = filter.SearchTerm.Trim().ToLower();
-            query = query.Where(p =>
-                p.Name.ToLower().Contains(term) ||
-                p.ProductCode.ToLower().Contains(term) ||
-                (p.Barcode != null && p.Barcode.ToLower().Contains(term)));
+            var termNoTone = RemoveDiacritics(term);
+
+            if (_context.Database.IsRelational())
+            {
+                query = query.Where(p =>
+                    p.Name.ToLower().Contains(term) ||
+                    p.ProductCode.ToLower().Contains(term) ||
+                    (p.Barcode != null && p.Barcode.ToLower().Contains(term)));
+            }
+            else
+            {
+                query = query.Where(p =>
+                    p.Name.ToLower().Contains(term) ||
+                    RemoveDiacritics(p.Name).Contains(termNoTone) ||
+                    p.ProductCode.ToLower().Contains(term) ||
+                    (p.Barcode != null && p.Barcode.ToLower().Contains(term)));
+            }
         }
 
         if (filter.CategoryIds != null && filter.CategoryIds.Any())
@@ -55,6 +84,7 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
 
         var items = await query
             .OrderByDescending(p => p.CreatedAt)
+            .ThenByDescending(p => p.Id)
             .Skip((pageIndex - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(cancellationToken);

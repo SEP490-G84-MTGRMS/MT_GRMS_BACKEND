@@ -136,7 +136,7 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
                 ProductCode = l.Product?.ProductCode ?? string.Empty,
                 ProductName = l.Product?.Name ?? string.Empty,
                 Unit = l.Product?.BaseUnit ?? "Cái",
-                HasBatches = l.Product?.HasBatches ?? false,
+                HasBatches = false,
                 PurchaseOrderDetailId = l.PurchaseOrderDetailId,
                 OrderedQty = l.OrderedQty,
                 DeliveredQty = l.DeliveredQty,

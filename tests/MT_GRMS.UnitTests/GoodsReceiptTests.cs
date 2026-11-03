@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -78,7 +78,6 @@ public class GoodsReceiptTests
                 ProductCode = "SKU-MILK",
                 Name = "Sữa Tươi Tiệt Trùng 1L",
                 BaseUnit = "Hộp",
-                HasBatches = true
             }
         });
 

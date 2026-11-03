@@ -21,15 +21,12 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(x => x.BaseUnit).HasMaxLength(30).IsRequired();
         builder.Property(x => x.CostPrice).HasColumnType("decimal(18,2)");
         builder.Property(x => x.SellingPrice).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
-        builder.Property(x => x.MinStock).HasColumnType("decimal(12,2)").HasDefaultValue(0.00m);
-        builder.Property(x => x.MaxStock).HasColumnType("decimal(12,2)").HasDefaultValue(1000.00m);
         builder.Property(x => x.VatRate).HasColumnType("decimal(5,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.ProductType).HasMaxLength(30).HasDefaultValue("STANDARD");
         builder.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("Active");
         builder.Property(x => x.ImageUrls).HasColumnType("text[]");
         builder.Property(x => x.Description).HasMaxLength(1000);
         builder.Property(x => x.InternalNote).HasMaxLength(500);
-        builder.Property(x => x.HasBatches).HasDefaultValue(false);
         builder.Property(x => x.IsFavorite).HasDefaultValue(false);
 
         builder.HasIndex(x => x.Barcode)

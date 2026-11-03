@@ -91,7 +91,7 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
 
                 decimal physicalQty = stock != null ? stock.QuantityOnHand : productBatches.Sum(b => b.InitialQuantity);
                 decimal availableQty = Math.Max(0, physicalQty - pendingQty - expiredQty);
-                decimal minStock = product.MinStock > 0 ? product.MinStock : 10;
+                decimal minStock = 10;
                 decimal costPrice = product.CostPrice ?? (product.SellingPrice * 0.7m);
                 decimal totalValue = physicalQty * costPrice;
 

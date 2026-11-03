@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -54,8 +54,8 @@ public class PurchaseOrderMatrixTests
         // Seed Products
         _repo.Products.AddRange(new[]
         {
-            new Product { Id = _prod1Id, TenantId = "tenant-test-1", ProductCode = "SP01", Name = "Gạo ST25 5kg", BaseUnit = "Túi", CostPrice = 160000m, SellingPrice = 195000m, MinStock = 10m },
-            new Product { Id = _prod2Id, TenantId = "tenant-test-1", ProductCode = "SP02", Name = "Bánh Snack Khoai Tây 50g", BaseUnit = "Gói", CostPrice = 12000m, SellingPrice = 16000m, MinStock = 30m }
+            new Product { Id = _prod1Id, TenantId = "tenant-test-1", ProductCode = "SP01", Name = "Gạo ST25 5kg", BaseUnit = "Túi", CostPrice = 160000m, SellingPrice = 195000m },
+            new Product { Id = _prod2Id, TenantId = "tenant-test-1", ProductCode = "SP02", Name = "Bánh Snack Khoai Tây 50g", BaseUnit = "Gói", CostPrice = 12000m, SellingPrice = 16000m }
         });
 
         // Seed Matrix products

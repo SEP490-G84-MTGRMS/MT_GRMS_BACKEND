@@ -12,15 +12,12 @@ public record ProductResponse(
     string BaseUnit,
     decimal SellingPrice,
     decimal? CostPrice,
-    decimal MinStock,
-    decimal MaxStock,
     decimal VatRate,
     string ProductType,
     string Status,
     string? ImageUrl,
     string? Description,
     string? InternalNote,
-    bool HasBatches,
     bool IsFavorite,
     DateTime CreatedAt,
     DateTime? UpdatedAt,
@@ -46,15 +43,12 @@ public record ProductCreateRequest(
     string? Barcode = null,
     string BaseUnit = "Cái",
     decimal? CostPrice = null,
-    decimal MinStock = 0,
-    decimal MaxStock = 1000,
     decimal VatRate = 0,
     string ProductType = "STANDARD",
     string Status = "Active",
     string? ImageUrl = null,
     string? Description = null,
     string? InternalNote = null,
-    bool HasBatches = false,
     bool IsFavorite = false,
     List<string>? ImageUrls = null
 )
@@ -67,16 +61,14 @@ public record ProductCreateRequest(
         Guid? CategoryId,
         decimal BasePrice,
         decimal CostPrice,
-        string UnitName,
-        bool HasBatches) : this(
+        string UnitName) : this(
             ProductName,
             CategoryId ?? Guid.Empty,
             BasePrice,
             SKU,
             Barcode,
             string.IsNullOrWhiteSpace(UnitName) ? "Cái" : UnitName,
-            CostPrice,
-            HasBatches: HasBatches)
+            CostPrice)
     {
     }
 }
@@ -88,14 +80,11 @@ public record ProductUpdateRequest(
     string? Barcode = null,
     string BaseUnit = "Cái",
     decimal? CostPrice = null,
-    decimal MinStock = 0,
-    decimal MaxStock = 1000,
     decimal VatRate = 0,
     string Status = "Active",
     string? ImageUrl = null,
     string? Description = null,
     string? InternalNote = null,
-    bool HasBatches = false,
     bool IsFavorite = false,
     List<string>? ImageUrls = null
 );

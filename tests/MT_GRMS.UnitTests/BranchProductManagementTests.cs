@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -58,7 +58,6 @@ public class BranchProductManagementTests
                 BaseUnit = "Túi",
                 CostPrice = 160000m,
                 SellingPrice = 195000m,
-                MinStock = 10m,
                 Status = "Active"
             },
             new Product
@@ -71,7 +70,6 @@ public class BranchProductManagementTests
                 BaseUnit = "Hộp",
                 CostPrice = 30000m,
                 SellingPrice = 38000m,
-                MinStock = 20m,
                 Status = "Active"
             }
         });
@@ -240,7 +238,7 @@ public class BranchProductManagementTests
                     RetailPrice = prod?.SellingPrice ?? 0m,
                     CostPrice = prod?.CostPrice ?? 0m,
                     CurrentStock = s.QuantityOnHand,
-                    MinStockLevel = prod?.MinStock ?? 0m,
+                    MinStockLevel = 10m,
                     PrimarySupplierName = "Nông Sản Tươi Sạch Khải Anh",
                     Status = prod?.Status ?? "Active",
                     ShelfLocation = s.ShelfLocation,

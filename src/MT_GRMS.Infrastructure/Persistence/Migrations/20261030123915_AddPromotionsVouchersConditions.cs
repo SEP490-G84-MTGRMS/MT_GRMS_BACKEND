@@ -11,10 +11,13 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.RenameColumn(
-                name: "AuditSignatureHash",
-                table: "HouseholdTaxSnapshots",
-                newName: "AuditSignature");
+            migrationBuilder.Sql(@"
+                DO $$ BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='HouseholdTaxSnapshots' AND column_name='AuditSignatureHash') THEN
+                        ALTER TABLE ""HouseholdTaxSnapshots"" RENAME COLUMN ""AuditSignatureHash"" TO ""AuditSignature"";
+                    END IF;
+                END $$;
+            ");
 
             migrationBuilder.AddColumn<decimal>(
                 name: "BudgetLimit",
@@ -84,16 +87,13 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                 maxLength: 20,
                 nullable: true);
 
-            migrationBuilder.AlterColumn<string>(
-                name: "AuditSignature",
-                table: "HouseholdTaxSnapshots",
-                type: "character varying(256)",
-                maxLength: 256,
-                nullable: true,
-                oldClrType: typeof(string),
-                oldType: "character varying(128)",
-                oldMaxLength: 128,
-                oldNullable: true);
+            migrationBuilder.Sql(@"
+                DO $$ BEGIN
+                    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='HouseholdTaxSnapshots' AND column_name='AuditSignature') THEN
+                        ALTER TABLE ""HouseholdTaxSnapshots"" ALTER COLUMN ""AuditSignature"" TYPE character varying(256);
+                    END IF;
+                END $$;
+            ");
 
             migrationBuilder.CreateTable(
                 name: "PromotionConditions",

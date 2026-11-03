@@ -107,7 +107,7 @@ public class GoodsReceiptService : IGoodsReceiptService
                 ProductCode = d.Product?.ProductCode ?? string.Empty,
                 ProductName = d.Product?.Name ?? string.Empty,
                 Unit = d.Product?.BaseUnit ?? "Cái",
-                HasBatches = d.Product?.HasBatches ?? false,
+                HasBatches = false,
                 OrderedQty = d.OrderedQty ?? d.FinalQty ?? 0,
                 UnitPrice = d.UnitPrice,
                 LineAmount = d.LineAmount
@@ -361,7 +361,7 @@ public class GoodsReceiptService : IGoodsReceiptService
             }
 
             // Kiểm tra lô hạn với sản phẩm quản lý HSD (Mục 5 Bước 4 & 5)
-            if (line.Product?.HasBatches == true && line.AcceptedQty > 0)
+            if (line.AcceptedQty > 0 && (!string.IsNullOrWhiteSpace(line.BatchCode) || line.ExpiryDate.HasValue))
             {
                 if (string.IsNullOrWhiteSpace(line.BatchCode))
                 {
@@ -487,7 +487,7 @@ public class GoodsReceiptService : IGoodsReceiptService
                 ProductCode = l.Product?.ProductCode ?? string.Empty,
                 ProductName = l.Product?.Name ?? string.Empty,
                 Unit = l.Product?.BaseUnit ?? "Cái",
-                HasBatches = l.Product?.HasBatches ?? false,
+                HasBatches = false,
                 PurchaseOrderDetailId = l.PurchaseOrderDetailId,
                 OrderedQty = l.OrderedQty,
                 DeliveredQty = l.DeliveredQty,

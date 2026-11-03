@@ -81,7 +81,7 @@ public class BranchProductRepository : IBranchProductRepository
                 Unit = bs.Product.BaseUnit,
                 RetailPrice = bs.Product.SellingPrice,
                 CostPrice = bs.Product.CostPrice ?? 0m,
-                MinStock = bs.Product.MinStock,
+                MinStock = 10m,
                 ProductStatus = bs.Product.Status,
                 PrimarySupplierName = bs.Supplier != null ? bs.Supplier.Name : "Nông Sản Tươi Sạch Khải Anh"
             })
@@ -184,7 +184,7 @@ public class BranchProductRepository : IBranchProductRepository
                 {
                     ProductId = g.Key,
                     TotalStock = g.Sum(x => x.QuantityOnHand),
-                    MinStock = g.First().Product?.MinStock ?? 0m
+                    MinStock = 10m
                 })
                 .ToList();
 

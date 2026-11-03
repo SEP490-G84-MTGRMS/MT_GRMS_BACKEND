@@ -82,7 +82,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             var moq = sp.MinimumOrderQuantity > 0 ? sp.MinimumOrderQuantity : 10;
 
             // Tính toán mức bán hàng giả định & mức tồn an toàn dựa trên định mức sản phẩm
-            var safetyStock = p.MinStock > 0 ? p.MinStock : 10m;
+            var safetyStock = 10m;
             var salesPerDay = Math.Max(2m, Math.Round(safetyStock / 2m));
 
             list.Add(new OrderMatrixProductDto

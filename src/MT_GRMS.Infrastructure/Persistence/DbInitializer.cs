@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Finance;
@@ -124,7 +124,7 @@ public static class DbInitializer
             PasswordHash = "Admin@123",
             FullName = "Hệ Thống Super Admin",
             Email = "admin@mtgrms.vn",
-            Phone = "0901234567",
+            Phone = "0900000001",
             IsActive = true,
             IsEmailVerified = true
         };
@@ -298,7 +298,7 @@ public static class DbInitializer
         await context.Categories.AddRangeAsync(catFresh, catDry, catBeverage);
         await context.SaveChangesAsync();
 
-        // Sản phẩm
+        // Sản phẩm mẫu chuẩn mực
         var prodRice = new Product
         {
             TenantId = defaultTenantId,
@@ -309,13 +309,15 @@ public static class DbInitializer
             BaseUnit = "Túi",
             CostPrice = 160000.00m,
             SellingPrice = 195000.00m,
-            MinStock = 10.00m,
-            MaxStock = 500.00m,
             VatRate = 0.00m,
+            TaxCategory = "STANDARD_1PCT",
             ProductType = "STANDARD",
             Status = "Active",
-            HasBatches = true,
-            IsFavorite = true
+            IsFavorite = true,
+            ImageUrls = new() { "https://images.unsplash.com/photo-1586201375761-83865001e31c?w=500&auto=format&fit=crop&q=60" },
+            Description = "Gạo ST25 chính hãng DNTN Hồ Quang Cua Sóc Trăng hạt dài đều không gãy, cơm mềm dẻo thơm hương dứa.",
+            InternalNote = "Bảo quản nơi khô ráo, kê cao trên pallet, tránh ẩm mốc.",
+            CreatedAt = DateTime.UtcNow.AddDays(-2).AddHours(-4)
         };
 
         var prodMilk = new Product
@@ -328,13 +330,15 @@ public static class DbInitializer
             BaseUnit = "Hộp",
             CostPrice = 30000.00m,
             SellingPrice = 38000.00m,
-            MinStock = 20.00m,
-            MaxStock = 1000.00m,
             VatRate = 8.00m,
+            TaxCategory = "STANDARD_1PCT",
             ProductType = "STANDARD",
             Status = "Active",
-            HasBatches = true,
-            IsFavorite = true
+            IsFavorite = true,
+            ImageUrls = new() { "https://images.unsplash.com/photo-1556881286-fc6915169721?w=500&auto=format&fit=crop&q=60" },
+            Description = "Sữa tươi tiệt trùng Vinamilk 100% sữa bò tươi nguyên chất giàu Canxi, Vitamin A, D3 và Selen.",
+            InternalNote = "Kệ sữa tươi K1. Hạn sử dụng tối thiểu khi nhập là 4 tháng.",
+            CreatedAt = DateTime.UtcNow.AddDays(-2).AddHours(-6)
         };
 
         var prodSauce = new Product
@@ -347,11 +351,14 @@ public static class DbInitializer
             BaseUnit = "Chai",
             CostPrice = 22000.00m,
             SellingPrice = 28500.00m,
-            MinStock = 15.00m,
-            MaxStock = 300.00m,
             VatRate = 8.00m,
+            TaxCategory = "STANDARD_1PCT",
             ProductType = "STANDARD",
-            Status = "Active"
+            Status = "Active",
+            ImageUrls = new() { "https://images.unsplash.com/photo-1589301760014-d929f3979dbc?w=500&auto=format&fit=crop&q=60" },
+            Description = "Nước mắm Nam Ngư Đệ Nhị tinh cốt cá cơm Phú Quốc vị ngon tròn vị cho mọi bữa cơm gia đình.",
+            InternalNote = "Kệ gia vị dãy B.",
+            CreatedAt = DateTime.UtcNow.AddDays(-3).AddHours(-2)
         };
 
         var prodG7 = new Product
@@ -364,13 +371,15 @@ public static class DbInitializer
             BaseUnit = "Hộp",
             CostPrice = 45000.00m,
             SellingPrice = 58000.00m,
-            MinStock = 10.00m,
-            MaxStock = 200.00m,
-            VatRate = 1.00m,
+            VatRate = 8.00m,
+            TaxCategory = "STANDARD_1PCT",
             ProductType = "STANDARD",
             Status = "Active",
-            HasBatches = true,
-            IsFavorite = true
+            IsFavorite = true,
+            ImageUrls = new() { "https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=500&auto=format&fit=crop&q=60" },
+            Description = "Cà phê hòa tan 3in1 G7 chiết xuất từ những hạt cà phê Robusta Buôn Ma Thuột hảo hạng thơm nồng.",
+            InternalNote = "Kệ đồ uống nóng & cà phê.",
+            CreatedAt = DateTime.UtcNow.AddDays(-3).AddHours(-5)
         };
 
         var prodChoco = new Product
@@ -383,13 +392,15 @@ public static class DbInitializer
             BaseUnit = "Hộp",
             CostPrice = 42000.00m,
             SellingPrice = 55000.00m,
-            MinStock = 10.00m,
-            MaxStock = 200.00m,
-            VatRate = 1.00m,
+            VatRate = 8.00m,
+            TaxCategory = "STANDARD_1PCT",
             ProductType = "STANDARD",
             Status = "Active",
-            HasBatches = true,
-            IsFavorite = true
+            IsFavorite = true,
+            ImageUrls = new() { "https://images.unsplash.com/photo-1549007994-cb92caebd54b?w=500&auto=format&fit=crop&q=60" },
+            Description = "Bánh mềm phủ socola hảo hạng kết hợp nhân dẻo marshmallow đặc trưng gắn liền với tuổi thơ.",
+            InternalNote = "Kệ bánh ngọt quà tặng.",
+            CreatedAt = DateTime.UtcNow.AddDays(-4).AddHours(-3)
         };
 
         var prodMuoi = new Product
@@ -402,13 +413,15 @@ public static class DbInitializer
             BaseUnit = "Hũ",
             CostPrice = 12000.00m,
             SellingPrice = 16000.00m,
-            MinStock = 20.00m,
-            MaxStock = 300.00m,
-            VatRate = 1.00m,
+            VatRate = 8.00m,
+            TaxCategory = "STANDARD_1PCT",
             ProductType = "STANDARD",
             Status = "Active",
-            HasBatches = false,
-            IsFavorite = true
+            IsFavorite = true,
+            ImageUrls = new() { "https://images.unsplash.com/photo-1506368249639-73a05d6f6488?w=500&auto=format&fit=crop&q=60" },
+            Description = "Muối chấm Hảo Hảo chua cay chấm hoa quả, thịt gà, hải sản cực cuốn vị truyền thống Acecook.",
+            InternalNote = "Kệ gia vị chấm.",
+            CreatedAt = DateTime.UtcNow.AddDays(-4).AddHours(-7)
         };
 
         var prodBia = new Product
@@ -421,21 +434,27 @@ public static class DbInitializer
             BaseUnit = "Lon",
             CostPrice = 10500.00m,
             SellingPrice = 14000.00m,
-            MinStock = 24.00m,
-            MaxStock = 500.00m,
-            VatRate = 1.00m,
+            VatRate = 10.00m,
+            TaxCategory = "NO_REDUCTION_1PCT",
             ProductType = "STANDARD",
             Status = "Active",
-            HasBatches = true,
-            IsFavorite = true
+            IsFavorite = true,
+            ImageUrls = new() { "https://images.unsplash.com/photo-1608256246200-53e635b5b65f?w=500&auto=format&fit=crop&q=60" },
+            Description = "Bia Hà Nội Sleek lon cao thanh mảnh hiện đại hương vị hoa bia đậm đà mát lạnh.",
+            InternalNote = "Kệ đồ uống có cồn. Thuế TTĐB giữ nguyên 10%.",
+            CreatedAt = DateTime.UtcNow.AddDays(-5).AddHours(-2)
         };
 
         await context.Products.AddRangeAsync(prodRice, prodMilk, prodSauce, prodG7, prodChoco, prodMuoi, prodBia);
         await context.SaveChangesAsync();
 
-        // Đơn vị quy đổi (1 Thùng = 12 Hộp sữa)
+        // Đơn vị quy đổi chuẩn xác
         var unitCartonMilk = new ProductUnit(prodMilk.Id, "Thùng", 12.00m, 445000.00m, "893850123499", false);
-        await context.ProductUnits.AddAsync(unitCartonMilk);
+        var unitLocBia = new ProductUnit(prodBia.Id, "Lốc", 6.00m, 82000.00m, "8936000440826", false);
+        var unitThungBia = new ProductUnit(prodBia.Id, "Thùng", 24.00m, 320000.00m, "2893600044082", false);
+        var unitThungChoco = new ProductUnit(prodChoco.Id, "Thùng", 8.00m, 430000.00m, "8936036020388", false);
+        var unitThungG7 = new ProductUnit(prodG7.Id, "Thùng", 24.00m, 1350000.00m, "8935024122314", false);
+        await context.ProductUnits.AddRangeAsync(unitCartonMilk, unitLocBia, unitThungBia, unitThungChoco, unitThungG7);
 
         // =========================================================================
         // PHÂN HỆ 4: NHÀ CUNG CẤP & CHÍNH SÁCH GIÁ

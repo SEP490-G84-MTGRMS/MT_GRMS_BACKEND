@@ -1,4 +1,4 @@
-using System.Linq.Expressions;
+﻿using System.Linq.Expressions;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Application.Common;
@@ -477,15 +477,12 @@ public class CatalogServiceTests
           "barcode": "string",
           "baseUnit": "Hộp",
           "costPrice": 15000,
-          "minStock": 1,
-          "maxStock": 100,
           "vatRate": 10,
           "productType": "STANDARD",
           "status": "Active",
           "imageUrl": "https://example.com/img.png",
           "description": "Mô tả",
           "internalNote": "Ghi chú",
-          "hasBatches": true,
           "isFavorite": true
         }
         """;
@@ -505,7 +502,6 @@ public class CatalogServiceTests
         Assert.Equal(20000m, request.SellingPrice);
         Assert.Equal("string", request.ProductCode);
         Assert.Equal("string", request.Barcode);
-        Assert.True(request.HasBatches);
         Assert.True(request.IsFavorite);
     }
 
@@ -571,5 +567,29 @@ public class CatalogServiceTests
         Assert.Equal(2, productRepo.Products[0].ImageUrls.Count);
         Assert.Equal("https://new1.png", productRepo.Products[0].ImageUrl);
     }
-}
 
+    [Fact]
+    public void Product_And_ProductUnit_PricingAliases_WorkCorrectly()
+    {
+        var product = new Product
+        {
+            CostPrice = 160000m,
+            SellingPrice = 195000m
+        };
+
+        Assert.Equal(160000m, product.DefaultPurchasePrice);
+        Assert.Equal(195000m, product.BasePrice);
+
+        product.DefaultPurchasePrice = 165000m;
+        Assert.Equal(165000m, product.CostPrice);
+
+        var unit = new ProductUnit
+        {
+            Price = 1900000m
+        };
+
+        Assert.Equal(1900000m, unit.SellingPrice);
+        unit.SellingPrice = 1850000m;
+        Assert.Equal(1850000m, unit.Price);
+    }
+}
