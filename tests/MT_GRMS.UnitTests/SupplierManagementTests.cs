@@ -230,6 +230,12 @@ public class SupplierManagementTests
             SupplierProductStatus? status,
             int pageIndex,
             int pageSize,
+            string? supplierSearch = null,
+            string? categoryName = null,
+            IReadOnlyList<string>? skus = null,
+            IReadOnlyList<string>? names = null,
+            IReadOnlyList<string>? supplierCodes = null,
+            IReadOnlyList<string>? supplierNames = null,
             CancellationToken cancellationToken = default)
         {
             var query = SupplierProducts.AsEnumerable();

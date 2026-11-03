@@ -25,6 +25,7 @@ public class BranchProductManagementTests
     private readonly Guid _branchId = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private readonly Guid _prod1Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
     private readonly Guid _prod2Id = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+    private readonly Guid _defaultSupplierId = Guid.Parse("cccccccc-cccc-cccc-cccc-cccccccccccc");
 
     public BranchProductManagementTests()
     {
@@ -77,7 +78,17 @@ public class BranchProductManagementTests
             }
         });
 
-        // Seed initial Stock for Product 1
+        // Seed catalog + stock for Product 1
+        _repo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-test-1",
+            BranchId = _branchId,
+            ProductId = _prod1Id,
+            SellingPriceOverride = null,
+            Status = "Active",
+            ShelfLocation = "Kệ A1-02"
+        });
         _repo.BranchStocks.Add(new BranchStock
         {
             Id = Guid.NewGuid(),
@@ -87,6 +98,28 @@ public class BranchProductManagementTests
             QuantityOnHand = 25m,
             ShelfLocation = "Kệ A1-02",
             LandedCostPerUnit = 160000m
+        });
+
+        // Default: chi nhánh đã liên kết NCC và cả 2 SP đều thuộc NCC đó
+        _repo.ActiveSupplierIdsForBranch.Add(_defaultSupplierId);
+        _repo.SupplierProducts.AddRange(new[]
+        {
+            new SupplierProduct
+            {
+                Id = Guid.NewGuid(),
+                ProductId = _prod1Id,
+                SupplierId = _defaultSupplierId,
+                AgreedWholesalePrice = 160000m,
+                MinimumOrderQuantity = 5
+            },
+            new SupplierProduct
+            {
+                Id = Guid.NewGuid(),
+                ProductId = _prod2Id,
+                SupplierId = _defaultSupplierId,
+                AgreedWholesalePrice = 30000m,
+                MinimumOrderQuantity = 8
+            }
         });
     }
 
@@ -143,10 +176,10 @@ public class BranchProductManagementTests
     }
 
     [Fact]
-    public async Task REQ_STOREPROD_03b_AssignProducts_WithDefaultMinOrderQuantity_AppliesMoq()
+    public async Task REQ_STOREPROD_03b_AssignProducts_ReusesSupplierProductTerms_DoesNotWriteMoq()
     {
-        // Arrange
         var prod3Id = Guid.NewGuid();
+        var supplierId = Guid.NewGuid();
         _repo.Products.Add(new Product
         {
             Id = prod3Id,
@@ -159,6 +192,16 @@ public class BranchProductManagementTests
             MinStock = 5m,
             Status = "Active"
         });
+        var sp = new SupplierProduct
+        {
+            Id = Guid.NewGuid(),
+            ProductId = prod3Id,
+            SupplierId = supplierId,
+            AgreedWholesalePrice = 100000m,
+            MinimumOrderQuantity = 10
+        };
+        _repo.SupplierProducts.Add(sp);
+        _repo.ActiveSupplierIdsForBranch.Add(supplierId);
 
         var command = new AssignBranchProductsCommand
         {
@@ -169,13 +212,15 @@ public class BranchProductManagementTests
             ShelfLocation = "Kệ C1-03"
         };
 
-        // Act
         var result = await _service.AssignProductsAsync(_branchId, command);
 
-        // Assert
         Assert.Single(result);
         Assert.Equal("SP0003", result[0].Sku);
-        Assert.Equal(15, result[0].MinOrderQuantity);
+        Assert.Equal(10, result[0].MinOrderQuantity);
+        Assert.Equal(100000m, result[0].CostPrice);
+        Assert.Equal(10, sp.MinimumOrderQuantity);
+        Assert.Equal(120000m, _repo.Products.First(p => p.Id == prod3Id).SellingPrice);
+        Assert.Equal(5m, _repo.Products.First(p => p.Id == prod3Id).MinStock);
         Assert.True(_uow.HasSaved);
     }
 
@@ -194,7 +239,7 @@ public class BranchProductManagementTests
 
         // Assert
         Assert.Equal(210000m, updated.RetailPrice);
-        Assert.Equal(12m, updated.MinStockLevel);
+        Assert.Equal(10m, updated.MinStockLevel);
         Assert.Equal("Kệ A1-05", updated.ShelfLocation);
         Assert.True(_uow.HasSaved);
     }
@@ -239,10 +284,10 @@ public class BranchProductManagementTests
     }
 
     [Fact]
-    public async Task REQ_STOREPROD_08_UpdateProduct_UpdatesSupplierMoq()
+    public async Task REQ_STOREPROD_08_UpdateProduct_DoesNotWriteSupplierMoq()
     {
-        // Arrange: seed a SupplierProduct for Product 1
         var supplierId = Guid.NewGuid();
+        _repo.SupplierProducts.RemoveAll(sp => sp.ProductId == _prod1Id);
         var sp = new SupplierProduct
         {
             Id = Guid.NewGuid(),
@@ -253,8 +298,9 @@ public class BranchProductManagementTests
             IsPrimarySupplier = true
         };
         _repo.SupplierProducts.Add(sp);
+        var stock = _repo.BranchStocks.First(s => s.BranchId == _branchId && s.ProductId == _prod1Id);
+        stock.SupplierId = supplierId;
 
-        // Act: update MOQ to 25
         var command = new UpdateBranchProductCommand
         {
             RetailPrice = 210000m,
@@ -264,9 +310,9 @@ public class BranchProductManagementTests
         };
         var result = await _service.UpdateProductAsync(_branchId, _prod1Id, command);
 
-        // Assert
-        Assert.Equal(25, result.MinOrderQuantity);
-        Assert.Equal(25, sp.MinimumOrderQuantity);
+        Assert.Equal(5, result.MinOrderQuantity);
+        Assert.Equal(5, sp.MinimumOrderQuantity);
+        Assert.Equal(150000m, result.CostPrice);
         Assert.True(_uow.HasSaved);
     }
 
@@ -276,6 +322,14 @@ public class BranchProductManagementTests
         // Branch 1 has Product 1. Let's create Branch 2 and assign Product 1 to Branch 2
         var branch2Id = Guid.NewGuid();
         _repo.Branches.Add(new Branch { Id = branch2Id, Code = "BR-02", Name = "Chi nhánh 2", IsActive = true });
+        _repo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branch2Id,
+            ProductId = _prod1Id,
+            SellingPriceOverride = 195000m,
+            Status = "Active"
+        });
         _repo.BranchStocks.Add(new BranchStock
         {
             Id = Guid.NewGuid(),
@@ -307,6 +361,13 @@ public class BranchProductManagementTests
         // Branch 1 has Product 1. Let's create Branch 2 and assign Product 1 to Branch 2
         var branch2Id = Guid.NewGuid();
         _repo.Branches.Add(new Branch { Id = branch2Id, Code = "BR-02", Name = "Chi nhánh 2", IsActive = true });
+        _repo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branch2Id,
+            ProductId = _prod1Id,
+            Status = "Active"
+        });
         _repo.BranchStocks.Add(new BranchStock
         {
             Id = Guid.NewGuid(),
@@ -330,6 +391,75 @@ public class BranchProductManagementTests
         Assert.Equal("Active", masterProd!.Status);
     }
 
+    [Fact]
+    public async Task REQ_STOREPROD_09_AssignThenSupplierPriceChange_BranchReadsLiveTerms_DoesNotTouchPoSnapshot()
+    {
+        var supplierAId = Guid.NewGuid();
+        var supplierBId = Guid.NewGuid();
+        _repo.ActiveSupplierIdsForBranch.Clear();
+        _repo.ActiveSupplierIdsForBranch.Add(supplierAId);
+        _repo.SupplierProducts.RemoveAll(sp => sp.ProductId == _prod2Id);
+        _repo.SupplierProducts.Add(new SupplierProduct
+        {
+            Id = Guid.NewGuid(),
+            ProductId = _prod2Id,
+            SupplierId = supplierAId,
+            AgreedWholesalePrice = 100000m,
+            MinimumOrderQuantity = 10
+        });
+
+        var assigned = await _service.AssignProductsAsync(_branchId, new AssignBranchProductsCommand
+        {
+            ProductIds = new List<Guid> { _prod2Id }
+        });
+
+        Assert.Single(assigned);
+        Assert.Equal(100000m, assigned[0].CostPrice);
+        Assert.Equal(10, assigned[0].MinOrderQuantity);
+        Assert.Equal(0m, (await _repo.GetBranchStocksByProductAsync(_branchId, _prod2Id)).First().QuantityOnHand);
+
+        var spA = _repo.SupplierProducts.Single(x => x.SupplierId == supplierAId);
+        spA.AgreedWholesalePrice = 110000m;
+        spA.MinimumOrderQuantity = 20;
+
+        var listed = await _service.GetBranchProductsAsync(_branchId, new BranchProductQueryFilter { PageIndex = 1, PageSize = 20 });
+        var row = listed.Items.Single(x => x.ProductId == _prod2Id);
+        Assert.Equal(110000m, row.CostPrice);
+        Assert.Equal(20, row.MinOrderQuantity);
+
+        const decimal historicalPoUnitPrice = 100000m;
+        Assert.Equal(100000m, historicalPoUnitPrice);
+        Assert.Equal(110000m, spA.AgreedWholesalePrice);
+
+        _repo.SupplierProducts.Add(new SupplierProduct
+        {
+            Id = Guid.NewGuid(),
+            ProductId = _prod2Id,
+            SupplierId = supplierBId,
+            AgreedWholesalePrice = 88000m,
+            MinimumOrderQuantity = 6
+        });
+
+        Assert.Equal(2, _repo.SupplierProducts.Count(x => x.ProductId == _prod2Id));
+        Assert.Equal(110000m, _repo.SupplierProducts.Single(x => x.SupplierId == supplierAId).AgreedWholesalePrice);
+        Assert.Equal(88000m, _repo.SupplierProducts.Single(x => x.SupplierId == supplierBId).AgreedWholesalePrice);
+    }
+
+    [Fact]
+    public async Task REQ_STOREPROD_10_AssignExistingProduct_DoesNotOverwriteStockQty()
+    {
+        var existingQty = (await _repo.GetBranchStocksByProductAsync(_branchId, _prod1Id)).First().QuantityOnHand;
+        Assert.Equal(25m, existingQty);
+
+        var result = await _service.AssignProductsAsync(_branchId, new AssignBranchProductsCommand
+        {
+            ProductIds = new List<Guid> { _prod1Id }
+        });
+
+        Assert.Empty(result);
+        Assert.Equal(25m, (await _repo.GetBranchStocksByProductAsync(_branchId, _prod1Id)).First().QuantityOnHand);
+    }
+
     // =========================================================================
     // FAKE REPOSITORY & CONTEXT IMPLEMENTATIONS
     // =========================================================================
@@ -338,6 +468,7 @@ public class BranchProductManagementTests
     {
         public List<Branch> Branches { get; } = new();
         public List<Product> Products { get; } = new();
+        public List<BranchProduct> BranchProducts { get; } = new();
         public List<BranchStock> BranchStocks { get; } = new();
         public List<SupplierProduct> SupplierProducts { get; } = new();
 
@@ -349,31 +480,47 @@ public class BranchProductManagementTests
             CancellationToken cancellationToken = default)
         {
             var branch = Branches.FirstOrDefault(b => b.Id == branchId);
-            var query = BranchStocks.Where(s => s.BranchId == branchId);
-
-            var items = query.Select(s =>
+            var items = BranchProducts
+                .Where(bp => bp.BranchId == branchId && !bp.IsDeleted)
+                .Select(bp =>
             {
-                var prod = Products.FirstOrDefault(p => p.Id == s.ProductId);
+                var prod = Products.FirstOrDefault(p => p.Id == bp.ProductId);
+                var stocks = BranchStocks.Where(s => s.BranchId == bp.BranchId && s.ProductId == bp.ProductId).ToList();
+                var lotSupplierIds = stocks.Where(x => x.SupplierId.HasValue).Select(x => x.SupplierId!.Value).Distinct().ToList();
+                Guid? displaySupplierId = lotSupplierIds.Count == 1 ? lotSupplierIds[0] : null;
+                var spMatches = SupplierProducts.Where(sp => sp.ProductId == bp.ProductId).ToList();
+                SupplierProduct? sp = null;
+                if (displaySupplierId.HasValue)
+                {
+                    sp = spMatches.FirstOrDefault(x => x.SupplierId == displaySupplierId.Value);
+                }
+                else if (lotSupplierIds.Count == 0 && spMatches.Count == 1)
+                {
+                    sp = spMatches[0];
+                }
+
                 return new BranchProductDto
                 {
-                    Id = s.Id,
-                    BranchId = s.BranchId,
+                    Id = bp.Id,
+                    BranchId = bp.BranchId,
                     BranchCode = branch?.BranchCode ?? "BR-01",
                     BranchName = branch?.Name ?? "Chi nhánh",
-                    ProductId = s.ProductId,
+                    ProductId = bp.ProductId,
                     Name = prod?.Name ?? "Sản phẩm",
                     Sku = prod?.ProductCode ?? "SKU",
                     Barcode = prod?.Barcode ?? "BARCODE",
                     Category = "Lương thực",
                     Unit = prod?.BaseUnit ?? "Gói",
-                    RetailPrice = prod?.SellingPrice ?? 0m,
-                    CostPrice = prod?.CostPrice ?? 0m,
-                    CurrentStock = s.QuantityOnHand,
+                    RetailPrice = bp.SellingPriceOverride ?? prod?.SellingPrice ?? 0m,
+                    CostPrice = sp != null && sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : (prod?.CostPrice ?? 0m),
+                    CurrentStock = stocks.Sum(x => x.QuantityOnHand),
                     MinStockLevel = prod?.MinStock ?? 0m,
-                    PrimarySupplierName = "Nông Sản Tươi Sạch Khải Anh",
-                    Status = prod?.Status ?? "Active",
-                    ShelfLocation = s.ShelfLocation,
-                    AssignedDate = DateTime.UtcNow
+                    SupplierId = sp?.SupplierId ?? displaySupplierId,
+                    PrimarySupplierName = sp?.Supplier?.Name ?? string.Empty,
+                    MinOrderQuantity = sp != null && sp.MinimumOrderQuantity > 0 ? (int)sp.MinimumOrderQuantity : 0,
+                    Status = bp.Status,
+                    ShelfLocation = bp.ShelfLocation,
+                    AssignedDate = bp.CreatedAt
                 };
             }).ToList();
 
@@ -398,6 +545,7 @@ public class BranchProductManagementTests
         {
             var summaries = Branches.Select(b =>
             {
+                var bCatalog = BranchProducts.Where(s => s.BranchId == b.Id && !s.IsDeleted).ToList();
                 var bStocks = BranchStocks.Where(s => s.BranchId == b.Id).ToList();
                 return new BranchSummaryDto
                 {
@@ -407,7 +555,7 @@ public class BranchProductManagementTests
                     Address = b.Address ?? string.Empty,
                     ManagerName = b.ManagerName,
                     Phone = b.Phone,
-                    TotalProducts = bStocks.Select(s => s.ProductId).Distinct().Count(),
+                    TotalProducts = bCatalog.Select(s => s.ProductId).Distinct().Count(),
                     TotalStock = bStocks.Sum(s => s.QuantityOnHand),
                     LowStockCount = 0
                 };
@@ -416,12 +564,26 @@ public class BranchProductManagementTests
             return Task.FromResult((IReadOnlyList<BranchSummaryDto>)summaries);
         }
 
-        public Task<BranchStock?> GetBranchStockAsync(
+        public Task<BranchProduct?> GetBranchProductAsync(
             Guid branchId,
             Guid productId,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(BranchStocks.FirstOrDefault(s => s.BranchId == branchId && s.ProductId == productId));
+            return Task.FromResult(BranchProducts.FirstOrDefault(s =>
+                s.BranchId == branchId && s.ProductId == productId && !s.IsDeleted));
+        }
+
+        public Task AddBranchProductAsync(
+            BranchProduct branchProduct,
+            CancellationToken cancellationToken = default)
+        {
+            BranchProducts.Add(branchProduct);
+            return Task.CompletedTask;
+        }
+
+        public void RemoveBranchProduct(BranchProduct branchProduct)
+        {
+            branchProduct.IsDeleted = true;
         }
 
         public Task<IReadOnlyList<BranchStock>> GetBranchStocksByProductAsync(
@@ -468,13 +630,61 @@ public class BranchProductManagementTests
             Guid? supplierId,
             CancellationToken cancellationToken = default)
         {
-            var query = SupplierProducts.Where(sp => sp.ProductId == productId);
+            var query = SupplierProducts.Where(sp => sp.ProductId == productId).ToList();
             if (supplierId.HasValue && supplierId.Value != Guid.Empty)
             {
-                var match = query.FirstOrDefault(sp => sp.SupplierId == supplierId.Value);
-                if (match != null) return Task.FromResult<SupplierProduct?>(match);
+                return Task.FromResult(query.FirstOrDefault(sp => sp.SupplierId == supplierId.Value));
             }
-            return Task.FromResult(query.OrderByDescending(sp => sp.IsPrimarySupplier).FirstOrDefault());
+
+            return Task.FromResult(query.Count == 1 ? query[0] : null);
+        }
+
+        public List<Guid> ActiveSupplierIdsForBranch { get; set; } = new();
+        public List<AssignableBranchProductDto> AssignableProducts { get; set; } = new();
+
+        public Task<IReadOnlyList<Guid>> GetActiveSupplierIdsForBranchAsync(
+            Guid branchId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult((IReadOnlyList<Guid>)ActiveSupplierIdsForBranch);
+        }
+
+        public Task<IReadOnlyList<AssignableBranchProductDto>> GetAssignableProductsForBranchAsync(
+            Guid branchId,
+            CancellationToken cancellationToken = default)
+        {
+            if (AssignableProducts.Count > 0)
+            {
+                return Task.FromResult((IReadOnlyList<AssignableBranchProductDto>)AssignableProducts);
+            }
+
+            // Default: mọi SupplierProduct Active đều khả dụng nếu chi nhánh có NCC liên kết
+            var items = SupplierProducts
+                .Where(sp => ActiveSupplierIdsForBranch.Contains(sp.SupplierId))
+                .GroupBy(sp => sp.ProductId)
+                .Select(g =>
+                {
+                    var sp = g.First();
+                    var prod = Products.FirstOrDefault(p => p.Id == sp.ProductId);
+                    return new AssignableBranchProductDto
+                    {
+                        ProductId = sp.ProductId,
+                        Sku = prod?.ProductCode ?? string.Empty,
+                        Name = prod?.Name ?? string.Empty,
+                        CategoryName = "Lương thực",
+                        BaseUoM = prod?.BaseUnit ?? "Cái",
+                        CostPrice = sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : (prod?.CostPrice ?? 0m),
+                        Moq = sp.MinimumOrderQuantity > 0 ? sp.MinimumOrderQuantity : 1,
+                        SupplierId = sp.SupplierId,
+                        SupplierCode = sp.Supplier?.Code ?? string.Empty,
+                        SupplierName = sp.Supplier?.Name ?? string.Empty,
+                        IsAlreadyAssigned = BranchProducts.Any(bp =>
+                            bp.BranchId == branchId && bp.ProductId == sp.ProductId && !bp.IsDeleted)
+                    };
+                })
+                .ToList();
+
+            return Task.FromResult((IReadOnlyList<AssignableBranchProductDto>)items);
         }
     }
 

@@ -77,6 +77,18 @@ public class BranchesController : BaseApiController
     }
 
     /// <summary>
+    /// Lấy sản phẩm khả dụng để gán vào chi nhánh (chỉ SP thuộc NCC đang liên kết chi nhánh)
+    /// </summary>
+    [HttpGet("{id:guid}/assignable-products")]
+    public async Task<IActionResult> GetAssignableProducts(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        var result = await _branchProductService.GetAssignableProductsAsync(id, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<AssignableBranchProductDto>>.Ok(result));
+    }
+
+    /// <summary>
     /// Gán một hoặc nhiều sản phẩm từ Master Catalog vào Chi nhánh
     /// </summary>
     [HttpPost("{id:guid}/products")]

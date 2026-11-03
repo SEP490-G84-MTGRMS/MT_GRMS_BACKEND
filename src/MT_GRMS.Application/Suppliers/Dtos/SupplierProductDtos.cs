@@ -19,6 +19,8 @@ public class SupplierProductDto
     public string? SupplierProductCode { get; set; }
     public string DeliveryUoM { get; set; } = "Cái";
     public decimal AgreedWholesalePrice { get; set; }
+    public decimal? CostPrice { get; set; }
+    public decimal EffectivePurchasePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
     public bool IsPrimarySupplier { get; set; }
     public string Status { get; set; } = "Active";
@@ -38,9 +40,17 @@ public class AssignSupplierProductCommand
     public string? SupplierProductCode { get; set; }
 }
 
+public class BatchAssignSupplierProductItemCommand
+{
+    public Guid ProductId { get; set; }
+    public decimal AgreedWholesalePrice { get; set; }
+    public int MinimumOrderQuantity { get; set; } = 1;
+}
+
 public class BatchAssignSupplierProductsCommand
 {
     public List<Guid> ProductIds { get; set; } = new();
+    public List<BatchAssignSupplierProductItemCommand> Items { get; set; } = new();
     public string? DeliveryUoM { get; set; }
     public decimal? AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
@@ -89,6 +99,12 @@ public class ProductSupplierMappingDto
 public class SupplierProductQueryFilter
 {
     public string? SearchTerm { get; set; }
+    public string? SupplierSearch { get; set; }
+    public List<string>? Skus { get; set; }
+    public List<string>? Names { get; set; }
+    public List<string>? SupplierCodes { get; set; }
+    public List<string>? SupplierNames { get; set; }
+    public string? CategoryName { get; set; }
     public Guid? CategoryId { get; set; }
     public SupplierProductStatus? Status { get; set; }
     public int PageIndex { get; set; } = 1;

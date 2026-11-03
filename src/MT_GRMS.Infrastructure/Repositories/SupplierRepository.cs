@@ -399,6 +399,12 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         SupplierProductStatus? status,
         int pageIndex,
         int pageSize,
+        string? supplierSearch = null,
+        string? categoryName = null,
+        IReadOnlyList<string>? skus = null,
+        IReadOnlyList<string>? names = null,
+        IReadOnlyList<string>? supplierCodes = null,
+        IReadOnlyList<string>? supplierNames = null,
         CancellationToken cancellationToken = default)
     {
         var query = _context.SupplierProducts
@@ -417,19 +423,57 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             query = query.Where(sp => sp.Product.CategoryId == categoryId.Value);
         }
 
+        if (!string.IsNullOrWhiteSpace(categoryName) && !string.Equals(categoryName, "ALL", StringComparison.OrdinalIgnoreCase))
+        {
+            var cat = categoryName.Trim().ToLower();
+            query = query.Where(sp =>
+                sp.Product.Category != null && sp.Product.Category.Name.ToLower().Contains(cat));
+        }
+
         if (status.HasValue)
         {
             query = query.Where(sp => sp.Status == status.Value);
         }
 
-        if (!string.IsNullOrWhiteSpace(searchTerm))
+        var skuTerms = CleanTerms(skus);
+        if (skuTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sp => sp.Product!.ProductCode, skuTerms, ignoreCase: true);
+        }
+
+        var nameTerms = CleanTerms(names);
+        if (nameTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sp => sp.Product!.Name, nameTerms, ignoreCase: true);
+        }
+        else if (!string.IsNullOrWhiteSpace(searchTerm))
         {
             var term = searchTerm.Trim().ToLower();
             query = query.Where(sp =>
                 sp.Product.Name.ToLower().Contains(term) ||
-                sp.Product.Barcode.ToLower().Contains(term) ||
+                (sp.Product.Barcode != null && sp.Product.Barcode.ToLower().Contains(term)) ||
                 sp.Product.ProductCode.ToLower().Contains(term) ||
                 (sp.SupplierProductCode != null && sp.SupplierProductCode.ToLower().Contains(term)));
+        }
+
+        var supplierCodeTerms = CleanTerms(supplierCodes);
+        if (supplierCodeTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sp => sp.Supplier!.Code, supplierCodeTerms, ignoreCase: true);
+        }
+
+        var supplierNameTerms = CleanTerms(supplierNames);
+        if (supplierNameTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sp => sp.Supplier!.Name, supplierNameTerms, ignoreCase: true);
+        }
+        else if (!string.IsNullOrWhiteSpace(supplierSearch) && supplierCodeTerms.Count == 0)
+        {
+            var supplierTerm = supplierSearch.Trim().ToLower();
+            query = query.Where(sp =>
+                sp.Supplier != null &&
+                (sp.Supplier.Code.ToLower().Contains(supplierTerm) ||
+                 sp.Supplier.Name.ToLower().Contains(supplierTerm)));
         }
 
         var totalCount = await query.CountAsync(cancellationToken);

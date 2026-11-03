@@ -1086,6 +1086,12 @@ public class SupplierService : ISupplierService
             filter.Status,
             filter.PageIndex,
             filter.PageSize,
+            filter.SupplierSearch,
+            filter.CategoryName,
+            filter.Skus,
+            filter.Names,
+            filter.SupplierCodes,
+            filter.SupplierNames,
             cancellationToken);
 
         var dtos = items.Select(MapToSupplierProductDto).ToList();
@@ -1130,6 +1136,15 @@ public class SupplierService : ISupplierService
             throw new BusinessException("PRODUCT_ALREADY_ASSIGNED_TO_SUPPLIER", "Sản phẩm này đã được gán cho nhà cung cấp này trong hệ thống.");
         }
 
+        // Giá nhập: client gửi > 0 thì lưu giá đó; = 0 thì mặc định lấy giá Master (CostPrice)
+        var purchasePrice = SupplierProductPricing.ResolvePurchasePriceToPersist(
+            command.AgreedWholesalePrice,
+            product.CostPrice);
+
+        var deliveryUoM = string.IsNullOrWhiteSpace(command.DeliveryUoM)
+            ? (product.BaseUnit ?? "Cái")
+            : command.DeliveryUoM.Trim();
+
         // BR-SP02: Độc quyền Primary Supplier — nếu đặt làm Primary thì tự động gỡ cờ Primary của NCC cũ
         if (command.IsPrimarySupplier)
         {
@@ -1144,8 +1159,8 @@ public class SupplierService : ISupplierService
             ProductId = command.ProductId,
             Product = product,
             SupplierProductCode = command.SupplierProductCode,
-            DeliveryUoM = command.DeliveryUoM,
-            AgreedWholesalePrice = command.AgreedWholesalePrice,
+            DeliveryUoM = deliveryUoM,
+            AgreedWholesalePrice = purchasePrice,
             MinimumOrderQuantity = command.MinimumOrderQuantity,
             IsPrimarySupplier = command.IsPrimarySupplier,
             Status = SupplierProductStatus.Active
@@ -1154,6 +1169,7 @@ public class SupplierService : ISupplierService
         await _supplierRepository.AddSupplierProductAsync(entity, cancellationToken);
 
         // Tự động phân bổ sản phẩm sang tất cả các chi nhánh đang liên kết Active với NCC này (Chiều đồng bộ A)
+        // Không ghi đè tồn kho / cấu hình chi nhánh đã có.
         var activeBranchIds = await _supplierRepository.GetActiveBranchIdsForSupplierAsync(supplierId, cancellationToken);
         foreach (var branchId in activeBranchIds)
         {
@@ -1169,7 +1185,9 @@ public class SupplierService : ISupplierService
                     SupplierId = supplierId,
                     QuantityOnHand = 0.000m,
                     QuantityReserved = 0.000m,
-                    LandedCostPerUnit = command.AgreedWholesalePrice,
+                    LandedCostPerUnit = 0m,
+                    RetailPrice = null,
+                    Status = "Active",
                     ShelfLocation = "Kệ hàng",
                     ZoneArea = "Khu vực trưng bày",
                     CreatedAt = DateTime.UtcNow
@@ -1188,9 +1206,20 @@ public class SupplierService : ISupplierService
         BatchAssignSupplierProductsCommand command,
         CancellationToken cancellationToken = default)
     {
-        if (command.ProductIds == null || command.ProductIds.Count == 0)
+        var workItems = ResolveBatchWorkItems(command);
+        if (workItems.Count == 0)
         {
             throw new BusinessException("VALIDATION_ERROR", "Vui lòng chọn ít nhất một sản phẩm để gán cho nhà cung cấp.");
+        }
+
+        if (workItems.Any(x => x.MinimumOrderQuantity <= 0))
+        {
+            throw new BusinessException("VALIDATION_ERROR", "Số lượng đặt hàng tối thiểu (MOQ) phải lớn hơn 0.");
+        }
+
+        if (workItems.Any(x => x.AgreedWholesalePrice < 0))
+        {
+            throw new BusinessException("VALIDATION_ERROR", "Giá nhập không được âm.");
         }
 
         var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
@@ -1199,78 +1228,93 @@ public class SupplierService : ISupplierService
             throw new NotFoundException($"Không tìm thấy nhà cung cấp với ID: {supplierId}");
         }
 
-        var activeBranchIds = await _supplierRepository.GetActiveBranchIdsForSupplierAsync(supplierId, cancellationToken);
-        var resultItems = new List<SupplierProductDto>();
-
-        foreach (var productId in command.ProductIds.Distinct())
+        var prepared = new List<(Domain.Entities.Catalog.Product Product, decimal PurchasePrice, int Moq)>();
+        foreach (var item in workItems)
         {
-            var product = await _supplierRepository.GetProductByIdAsync(productId, cancellationToken);
+            var product = await _supplierRepository.GetProductByIdAsync(item.ProductId, cancellationToken);
             if (product == null)
+            {
+                throw new NotFoundException($"Không tìm thấy sản phẩm với ID: {item.ProductId}");
+            }
+
+            var existing = await _supplierRepository.GetSupplierProductAsync(supplierId, item.ProductId, cancellationToken);
+            if (existing != null)
             {
                 continue;
             }
 
-            var existing = await _supplierRepository.GetSupplierProductAsync(supplierId, productId, cancellationToken);
-            if (existing != null)
-            {
-                continue; // Bỏ qua nếu đã được gán trước đó
-            }
+            var purchasePrice = SupplierProductPricing.ResolvePurchasePriceToPersist(
+                item.AgreedWholesalePrice,
+                product.CostPrice);
 
-            var deliveryUoM = !string.IsNullOrWhiteSpace(command.DeliveryUoM) && command.DeliveryUoM != "Theo ĐVT cơ sở"
-                ? command.DeliveryUoM
-                : (product.UnitName ?? "Cái");
-
-            var price = command.AgreedWholesalePrice.HasValue && command.AgreedWholesalePrice.Value >= 0
-                ? command.AgreedWholesalePrice.Value
-                : (product.CostPrice ?? 0m);
-
-            var moq = command.MinimumOrderQuantity > 0 ? command.MinimumOrderQuantity : 1;
-
-            var entity = new SupplierProduct
-            {
-                Id = Guid.NewGuid(),
-                SupplierId = supplierId,
-                Supplier = supplier,
-                ProductId = productId,
-                Product = product,
-                SupplierProductCode = command.SupplierProductCode,
-                DeliveryUoM = deliveryUoM,
-                AgreedWholesalePrice = price,
-                MinimumOrderQuantity = moq,
-                IsPrimarySupplier = false,
-                Status = SupplierProductStatus.Active
-            };
-
-            await _supplierRepository.AddSupplierProductAsync(entity, cancellationToken);
-
-            // Tự động phân bổ sản phẩm sang tất cả các chi nhánh đang liên kết Active với NCC này
-            foreach (var branchId in activeBranchIds)
-            {
-                var exists = await _supplierRepository.BranchStockExistsAsync(branchId, productId, cancellationToken);
-                if (!exists)
-                {
-                    var newStock = new MT_GRMS.Domain.Entities.Inventory.BranchStock
-                    {
-                        Id = Guid.NewGuid(),
-                        TenantId = _tenantContext.CurrentTenantId,
-                        BranchId = branchId,
-                        ProductId = productId,
-                        SupplierId = supplierId,
-                        QuantityOnHand = 0.000m,
-                        QuantityReserved = 0.000m,
-                        LandedCostPerUnit = price,
-                        ShelfLocation = "Kệ hàng",
-                        ZoneArea = "Khu vực trưng bày",
-                        CreatedAt = DateTime.UtcNow
-                    };
-                    await _supplierRepository.AddBranchStockAsync(newStock, cancellationToken);
-                }
-            }
-
-            resultItems.Add(MapToSupplierProductDto(entity, activeBranchIds.Count));
+            prepared.Add((product, purchasePrice, item.MinimumOrderQuantity));
         }
 
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        var activeBranchIds = await _supplierRepository.GetActiveBranchIdsForSupplierAsync(supplierId, cancellationToken);
+        var resultItems = new List<SupplierProductDto>();
+
+        await _unitOfWork.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            foreach (var (product, purchasePrice, moq) in prepared)
+            {
+                var deliveryUoM = !string.IsNullOrWhiteSpace(command.DeliveryUoM) && command.DeliveryUoM != "Theo ĐVT cơ sở"
+                    ? command.DeliveryUoM
+                    : (product.BaseUnit ?? "Cái");
+
+                var entity = new SupplierProduct
+                {
+                    Id = Guid.NewGuid(),
+                    SupplierId = supplierId,
+                    Supplier = supplier,
+                    ProductId = product.Id,
+                    Product = product,
+                    SupplierProductCode = command.SupplierProductCode,
+                    DeliveryUoM = deliveryUoM,
+                    AgreedWholesalePrice = purchasePrice,
+                    MinimumOrderQuantity = moq,
+                    IsPrimarySupplier = false,
+                    Status = SupplierProductStatus.Active
+                };
+
+                await _supplierRepository.AddSupplierProductAsync(entity, cancellationToken);
+
+                foreach (var branchId in activeBranchIds)
+                {
+                    var exists = await _supplierRepository.BranchStockExistsAsync(branchId, product.Id, cancellationToken);
+                    if (!exists)
+                    {
+                        var newStock = new MT_GRMS.Domain.Entities.Inventory.BranchStock
+                        {
+                            Id = Guid.NewGuid(),
+                            TenantId = _tenantContext.CurrentTenantId,
+                            BranchId = branchId,
+                            ProductId = product.Id,
+                            SupplierId = supplierId,
+                            QuantityOnHand = 0.000m,
+                            QuantityReserved = 0.000m,
+                            LandedCostPerUnit = 0m,
+                            RetailPrice = null,
+                            Status = "Active",
+                            ShelfLocation = "Kệ hàng",
+                            ZoneArea = "Khu vực trưng bày",
+                            CreatedAt = DateTime.UtcNow
+                        };
+                        await _supplierRepository.AddBranchStockAsync(newStock, cancellationToken);
+                    }
+                }
+
+                resultItems.Add(MapToSupplierProductDto(entity, activeBranchIds.Count));
+            }
+
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            await _unitOfWork.CommitTransactionAsync(cancellationToken);
+        }
+        catch
+        {
+            await _unitOfWork.RollbackTransactionAsync(cancellationToken);
+            throw;
+        }
 
         return new BatchAssignSupplierProductsResultDto
         {
@@ -1305,11 +1349,28 @@ public class SupplierService : ISupplierService
             await _supplierRepository.ClearPrimarySupplierFlagAsync(productId, supplierId, cancellationToken);
         }
 
-        entity.DeliveryUoM = command.DeliveryUoM;
-        entity.AgreedWholesalePrice = command.AgreedWholesalePrice;
+        var product = entity.Product ?? await _supplierRepository.GetProductByIdAsync(productId, cancellationToken);
+        var purchasePrice = SupplierProductPricing.ResolvePurchasePriceToPersist(
+            command.AgreedWholesalePrice,
+            product?.CostPrice);
+
+        if (!string.IsNullOrWhiteSpace(command.DeliveryUoM))
+        {
+            entity.DeliveryUoM = command.DeliveryUoM.Trim();
+        }
+        else if (product != null)
+        {
+            entity.DeliveryUoM = product.BaseUnit ?? entity.DeliveryUoM;
+        }
+
+        entity.AgreedWholesalePrice = purchasePrice;
         entity.MinimumOrderQuantity = command.MinimumOrderQuantity;
         entity.IsPrimarySupplier = command.IsPrimarySupplier;
         entity.SupplierProductCode = command.SupplierProductCode;
+        if (product != null)
+        {
+            entity.Product = product;
+        }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -1326,6 +1387,25 @@ public class SupplierService : ISupplierService
         if (entity == null)
         {
             throw new NotFoundException($"Không tìm thấy liên kết sản phẩm - nhà cung cấp với Product ID: {productId}");
+        }
+
+        if (request.Status == SupplierProductStatus.Active)
+        {
+            var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
+            if (supplier == null || supplier.Status != SupplierStatus.Active)
+            {
+                throw new BusinessException(
+                    "SUPPLIER_INACTIVE",
+                    "Không thể kích hoạt sản phẩm khi nhà cung cấp đang ngưng hoạt động.");
+            }
+
+            var product = entity.Product ?? await _supplierRepository.GetProductByIdAsync(productId, cancellationToken);
+            if (product == null || !string.Equals(product.Status, "Active", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new BusinessException(
+                    "PRODUCT_INACTIVE",
+                    "Không thể kích hoạt sản phẩm khi hàng hóa đang ngưng kinh doanh.");
+            }
         }
 
         entity.Status = request.Status;
@@ -1413,8 +1493,33 @@ public class SupplierService : ISupplierService
         };
     }
 
+    private static List<BatchAssignSupplierProductItemCommand> ResolveBatchWorkItems(
+        BatchAssignSupplierProductsCommand command)
+    {
+        if (command.Items != null && command.Items.Count > 0)
+        {
+            return command.Items
+                .Where(x => x.ProductId != Guid.Empty)
+                .GroupBy(x => x.ProductId)
+                .Select(g => g.Last())
+                .ToList();
+        }
+
+        return (command.ProductIds ?? new List<Guid>())
+            .Where(id => id != Guid.Empty)
+            .Distinct()
+            .Select(id => new BatchAssignSupplierProductItemCommand
+            {
+                ProductId = id,
+                AgreedWholesalePrice = command.AgreedWholesalePrice ?? 0m,
+                MinimumOrderQuantity = command.MinimumOrderQuantity
+            })
+            .ToList();
+    }
+
     private static SupplierProductDto MapToSupplierProductDto(SupplierProduct sp, int syncedBranchesCount = 0)
     {
+        var costPrice = sp.Product?.CostPrice;
         return new SupplierProductDto
         {
             Id = sp.Id,
@@ -1428,8 +1533,12 @@ public class SupplierService : ISupplierService
             CategoryName = sp.Product?.Category?.CategoryName,
             BaseUoM = sp.Product?.UnitName ?? "Cái",
             SupplierProductCode = sp.SupplierProductCode,
-            DeliveryUoM = sp.DeliveryUoM,
+            DeliveryUoM = string.IsNullOrWhiteSpace(sp.DeliveryUoM) ? (sp.Product?.BaseUnit ?? "Cái") : sp.DeliveryUoM,
             AgreedWholesalePrice = sp.AgreedWholesalePrice,
+            CostPrice = costPrice,
+            EffectivePurchasePrice = SupplierProductPricing.GetEffectivePurchasePriceOrZero(
+                sp.AgreedWholesalePrice,
+                costPrice),
             MinimumOrderQuantity = sp.MinimumOrderQuantity,
             IsPrimarySupplier = sp.IsPrimarySupplier,
             Status = sp.Status.ToString(),
