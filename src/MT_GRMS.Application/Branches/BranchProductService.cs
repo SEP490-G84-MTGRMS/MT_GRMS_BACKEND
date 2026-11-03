@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Application.Branches.Validators;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Exceptions;
 
@@ -66,6 +67,19 @@ public class BranchProductService : IBranchProductService
         return await _repository.GetBranchSummariesAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<AssignableBranchProductDto>> GetAssignableProductsAsync(
+        Guid branchId,
+        CancellationToken cancellationToken = default)
+    {
+        var branch = await _repository.GetBranchByIdAsync(branchId, cancellationToken);
+        if (branch == null || branch.IsDeleted)
+        {
+            throw new NotFoundException("Chi nhánh", branchId);
+        }
+
+        return await _repository.GetAssignableProductsForBranchAsync(branchId, cancellationToken);
+    }
+
     public async Task<IReadOnlyList<BranchProductDto>> AssignProductsAsync(
         Guid branchId,
         AssignBranchProductsCommand command,
@@ -84,79 +98,103 @@ public class BranchProductService : IBranchProductService
             throw new NotFoundException("Chi nhánh", branchId);
         }
 
+        var linkedSupplierIds = await _repository.GetActiveSupplierIdsForBranchAsync(branchId, cancellationToken);
+        if (linkedSupplierIds.Count == 0)
+        {
+            throw new BusinessException(
+                "NO_SUPPLIER_LINKED",
+                "Chi nhánh chưa liên kết nhà cung cấp Active. Hãy gán NCC cho cửa hàng trước khi thêm sản phẩm.");
+        }
+
+        var assignable = await _repository.GetAssignableProductsForBranchAsync(branchId, cancellationToken);
+        var assignableByProduct = assignable
+            .GroupBy(x => x.ProductId)
+            .ToDictionary(g => g.Key, g => g.First());
+
         var assignedList = new List<BranchProductDto>();
 
         foreach (var productId in command.ProductIds.Distinct())
         {
+            var existingStocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);
+            if (existingStocks.Any())
+            {
+                continue;
+            }
+
+            if (!assignableByProduct.TryGetValue(productId, out var eligible))
+            {
+                var productName = (await _repository.GetProductByIdAsync(productId, cancellationToken))?.Name
+                    ?? productId.ToString();
+                throw new BusinessException(
+                    "PRODUCT_NOT_SUPPLIED_TO_BRANCH",
+                    $"Sản phẩm '{productName}' không thuộc nhà cung cấp đang cung cấp cho chi nhánh này.");
+            }
+
+            if (eligible.IsAlreadyAssigned)
+            {
+                continue;
+            }
+
             var product = await _repository.GetProductByIdAsync(productId, cancellationToken);
             if (product == null || product.IsDeleted)
             {
                 continue;
             }
 
-            var existingStocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);
-            if (!existingStocks.Any())
+            if (!string.Equals(product.Status, "Active", StringComparison.OrdinalIgnoreCase))
             {
-                var newStock = new BranchStock
-                {
-                    TenantId = _tenantContext.CurrentTenantId,
-                    BranchId = branchId,
-                    ProductId = productId,
-                    QuantityOnHand = 0.000m,
-                    QuantityReserved = 0.000m,
-                    LandedCostPerUnit = product.CostPrice ?? 0m,
-                    ShelfLocation = command.ShelfLocation ?? "Kệ hàng",
-                    ZoneArea = "Khu vực trưng bày"
-                };
-
-                if (command.DefaultRetailPrice.HasValue && command.DefaultRetailPrice.Value > 0)
-                {
-                    product.SellingPrice = command.DefaultRetailPrice.Value;
-                }
-
-                if (command.DefaultMinStock.HasValue && command.DefaultMinStock.Value >= 0)
-                {
-                    product.MinStock = command.DefaultMinStock.Value;
-                }
-
-                var sp = await _repository.GetSupplierProductAsync(productId, null, cancellationToken);
-                var moq = sp != null && sp.MinimumOrderQuantity > 0 ? (int)sp.MinimumOrderQuantity : 1;
-                if (command.DefaultMinOrderQuantity.HasValue && command.DefaultMinOrderQuantity.Value >= 0)
-                {
-                    moq = command.DefaultMinOrderQuantity.Value;
-                    if (sp != null)
-                    {
-                        sp.MinimumOrderQuantity = command.DefaultMinOrderQuantity.Value;
-                        sp.UpdatedAt = DateTime.UtcNow;
-                    }
-                }
-
-                await _repository.AddBranchStockAsync(newStock, cancellationToken);
-
-                assignedList.Add(new BranchProductDto
-                {
-                    Id = newStock.Id,
-                    BranchId = branch.Id,
-                    BranchCode = branch.BranchCode,
-                    BranchName = branch.Name,
-                    ProductId = product.Id,
-                    Name = product.Name,
-                    Sku = product.ProductCode,
-                    Barcode = product.Barcode,
-                    Category = product.Category?.Name ?? "Khác",
-                    Unit = product.BaseUnit,
-                    RetailPrice = product.SellingPrice,
-                    CostPrice = sp?.AgreedWholesalePrice ?? product.CostPrice ?? 0m,
-                    CurrentStock = 0,
-                    MinStockLevel = product.MinStock,
-                    PrimarySupplierCode = sp?.Supplier?.Code ?? string.Empty,
-                    PrimarySupplierName = sp?.Supplier?.Name ?? string.Empty,
-                    MinOrderQuantity = moq,
-                    Status = product.Status,
-                    ShelfLocation = newStock.ShelfLocation,
-                    AssignedDate = DateTime.UtcNow
-                });
+                throw new BusinessException(
+                    "PRODUCT_INACTIVE",
+                    $"Không thể gán sản phẩm '{product.Name}' đang ngưng kinh doanh vào chi nhánh.");
             }
+
+            var sp = await _repository.GetSupplierProductAsync(productId, eligible.SupplierId, cancellationToken);
+            var effectiveCost = SupplierProductPricing.GetEffectivePurchasePriceOrZero(
+                sp?.AgreedWholesalePrice ?? 0m,
+                product.CostPrice);
+            var moq = sp != null && sp.MinimumOrderQuantity > 0 ? (int)sp.MinimumOrderQuantity : eligible.Moq;
+
+            var newStock = new BranchStock
+            {
+                TenantId = _tenantContext.CurrentTenantId,
+                BranchId = branchId,
+                ProductId = productId,
+                SupplierId = eligible.SupplierId,
+                QuantityOnHand = 0.000m,
+                QuantityReserved = 0.000m,
+                LandedCostPerUnit = effectiveCost,
+                RetailPrice = product.SellingPrice,
+                Status = "Active",
+                ShelfLocation = command.ShelfLocation ?? "Kệ hàng",
+                ZoneArea = "Khu vực trưng bày"
+            };
+
+            await _repository.AddBranchStockAsync(newStock, cancellationToken);
+
+            assignedList.Add(new BranchProductDto
+            {
+                Id = newStock.Id,
+                BranchId = branch.Id,
+                BranchCode = branch.BranchCode,
+                BranchName = branch.Name,
+                ProductId = product.Id,
+                Name = product.Name,
+                Sku = product.ProductCode,
+                Barcode = product.Barcode,
+                Category = product.Category?.Name ?? "Khác",
+                Unit = product.BaseUnit,
+                RetailPrice = newStock.RetailPrice ?? product.SellingPrice,
+                CostPrice = effectiveCost,
+                CurrentStock = 0,
+                MinStockLevel = product.MinStock,
+                SupplierId = eligible.SupplierId,
+                PrimarySupplierCode = eligible.SupplierCode,
+                PrimarySupplierName = eligible.SupplierName,
+                MinOrderQuantity = moq,
+                Status = newStock.Status,
+                ShelfLocation = newStock.ShelfLocation,
+                AssignedDate = DateTime.UtcNow
+            });
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -194,7 +232,16 @@ public class BranchProductService : IBranchProductService
             throw new NotFoundException($"Sản phẩm '{product.Name}' chưa được gán vào chi nhánh '{branch.Name}'.");
         }
 
-        // Cập nhật giá bán lẻ niêm yết và trạng thái trên từng bản ghi kho của chi nhánh
+        if (!string.IsNullOrWhiteSpace(command.Status)
+            && string.Equals(command.Status, "Active", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(product.Status, "Active", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new BusinessException(
+                "PRODUCT_INACTIVE",
+                "Không thể kích hoạt sản phẩm tại chi nhánh khi hàng hóa đang ngưng kinh doanh.");
+        }
+
+        // Chỉ cập nhật thông tin riêng của chi nhánh. Không ghi MOQ / giá nhập sang SupplierProducts.
         foreach (var stock in stocks)
         {
             stock.RetailPrice = command.RetailPrice;
@@ -209,33 +256,22 @@ public class BranchProductService : IBranchProductService
             stock.UpdatedAt = DateTime.UtcNow;
         }
 
-        if (command.MinStockLevel >= 0)
-        {
-            product.MinStock = command.MinStockLevel;
-        }
-
-        // Cập nhật MOQ trên SupplierProduct tương ứng của nhà cung cấp đang thao tác
-        if (command.MinOrderQuantity.HasValue && command.MinOrderQuantity.Value > 0)
-        {
-            var targetSupplierId = command.SupplierId ?? stocks.FirstOrDefault(s => s.SupplierId.HasValue)?.SupplierId;
-            var sp = await _repository.GetSupplierProductAsync(productId, targetSupplierId, cancellationToken);
-            if (sp != null)
-            {
-                sp.MinimumOrderQuantity = command.MinOrderQuantity.Value;
-                sp.UpdatedAt = DateTime.UtcNow;
-            }
-        }
-
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         var firstStock = stocks.First();
-        var spUpdated = await _repository.GetSupplierProductAsync(productId, firstStock.SupplierId, cancellationToken);
-        var costPrice = (spUpdated != null && spUpdated.AgreedWholesalePrice > 0)
-            ? spUpdated.AgreedWholesalePrice
-            : (product.CostPrice ?? 0m);
-        var moq = (spUpdated != null && spUpdated.MinimumOrderQuantity > 0)
+        var uniqueLotSupplierIds = stocks
+            .Where(s => s.SupplierId.HasValue)
+            .Select(s => s.SupplierId!.Value)
+            .Distinct()
+            .ToList();
+        Guid? displaySupplierId = uniqueLotSupplierIds.Count == 1 ? uniqueLotSupplierIds[0] : null;
+        var spUpdated = await _repository.GetSupplierProductAsync(productId, displaySupplierId, cancellationToken);
+        var costPrice = SupplierProductPricing.GetEffectivePurchasePriceOrZero(
+            spUpdated?.AgreedWholesalePrice ?? 0m,
+            product.CostPrice);
+        var moq = spUpdated != null && spUpdated.MinimumOrderQuantity > 0
             ? (int)spUpdated.MinimumOrderQuantity
-            : (command.MinOrderQuantity ?? 1);
+            : 0;
 
         var totalStock = stocks.Sum(s => s.QuantityOnHand);
 
@@ -290,6 +326,14 @@ public class BranchProductService : IBranchProductService
         }
 
         var normalizedStatus = string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase) ? "Active" : "Inactive";
+        if (normalizedStatus == "Active"
+            && !string.Equals(product.Status, "Active", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new BusinessException(
+                "PRODUCT_INACTIVE",
+                "Không thể kích hoạt sản phẩm tại chi nhánh khi hàng hóa đang ngưng kinh doanh.");
+        }
+
         foreach (var stock in stocks)
         {
             stock.Status = normalizedStatus;
@@ -299,13 +343,19 @@ public class BranchProductService : IBranchProductService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         var firstStock = stocks.First();
-        var sp = await _repository.GetSupplierProductAsync(productId, firstStock.SupplierId, cancellationToken);
-        var costPrice = (sp != null && sp.AgreedWholesalePrice > 0)
-            ? sp.AgreedWholesalePrice
-            : (product.CostPrice ?? 0m);
-        var moq = (sp != null && sp.MinimumOrderQuantity > 0)
+        var uniqueLotSupplierIds = stocks
+            .Where(s => s.SupplierId.HasValue)
+            .Select(s => s.SupplierId!.Value)
+            .Distinct()
+            .ToList();
+        Guid? displaySupplierId = uniqueLotSupplierIds.Count == 1 ? uniqueLotSupplierIds[0] : null;
+        var sp = await _repository.GetSupplierProductAsync(productId, displaySupplierId, cancellationToken);
+        var costPrice = SupplierProductPricing.GetEffectivePurchasePriceOrZero(
+            sp?.AgreedWholesalePrice ?? 0m,
+            product.CostPrice);
+        var moq = sp != null && sp.MinimumOrderQuantity > 0
             ? (int)sp.MinimumOrderQuantity
-            : 10;
+            : 0;
 
         return new BranchProductDto
         {

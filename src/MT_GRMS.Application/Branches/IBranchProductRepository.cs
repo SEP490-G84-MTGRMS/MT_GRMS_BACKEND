@@ -61,4 +61,12 @@ public interface IBranchProductRepository
         Guid productId,
         Guid? supplierId,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<AssignableBranchProductDto>> GetAssignableProductsForBranchAsync(
+        Guid branchId,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<Guid>> GetActiveSupplierIdsForBranchAsync(
+        Guid branchId,
+        CancellationToken cancellationToken = default);
 }

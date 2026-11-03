@@ -11,14 +11,14 @@ public class AssignSupplierProductValidator : AbstractValidator<AssignSupplierPr
             .NotEmpty().WithMessage("Vui lòng chọn sản phẩm cần gán cho nhà cung cấp.");
 
         RuleFor(x => x.DeliveryUoM)
-            .NotEmpty().WithMessage("Đơn vị giao hàng không được để trống.")
-            .MaximumLength(50).WithMessage("Đơn vị giao hàng không được vượt quá 50 ký tự.");
+            .MaximumLength(50).WithMessage("Đơn vị giao hàng không được vượt quá 50 ký tự.")
+            .When(x => !string.IsNullOrWhiteSpace(x.DeliveryUoM));
 
         RuleFor(x => x.AgreedWholesalePrice)
-            .GreaterThan(0).WithMessage("Giá sỉ thỏa thuận phải lớn hơn 0 VNĐ.");
+            .GreaterThanOrEqualTo(0).WithMessage("Giá sỉ thỏa thuận không được âm.");
 
         RuleFor(x => x.MinimumOrderQuantity)
-            .GreaterThanOrEqualTo(1).WithMessage("Số lượng đặt hàng tối thiểu (MOQ) phải từ 1 trở lên.");
+            .GreaterThan(0).WithMessage("Số lượng đặt hàng tối thiểu (MOQ) phải lớn hơn 0.");
 
         RuleFor(x => x.SupplierProductCode)
             .MaximumLength(50).WithMessage("Mã sản phẩm phía NCC không được vượt quá 50 ký tự.")
@@ -31,14 +31,14 @@ public class UpdateSupplierProductValidator : AbstractValidator<UpdateSupplierPr
     public UpdateSupplierProductValidator()
     {
         RuleFor(x => x.DeliveryUoM)
-            .NotEmpty().WithMessage("Đơn vị giao hàng không được để trống.")
-            .MaximumLength(50).WithMessage("Đơn vị giao hàng không được vượt quá 50 ký tự.");
+            .MaximumLength(50).WithMessage("Đơn vị giao hàng không được vượt quá 50 ký tự.")
+            .When(x => !string.IsNullOrWhiteSpace(x.DeliveryUoM));
 
         RuleFor(x => x.AgreedWholesalePrice)
-            .GreaterThan(0).WithMessage("Giá sỉ thỏa thuận phải lớn hơn 0 VNĐ.");
+            .GreaterThanOrEqualTo(0).WithMessage("Giá sỉ thỏa thuận không được âm.");
 
         RuleFor(x => x.MinimumOrderQuantity)
-            .GreaterThanOrEqualTo(1).WithMessage("Số lượng đặt hàng tối thiểu (MOQ) phải từ 1 trở lên.");
+            .GreaterThan(0).WithMessage("Số lượng đặt hàng tối thiểu (MOQ) phải lớn hơn 0.");
 
         RuleFor(x => x.SupplierProductCode)
             .MaximumLength(50).WithMessage("Mã sản phẩm phía NCC không được vượt quá 50 ký tự.")

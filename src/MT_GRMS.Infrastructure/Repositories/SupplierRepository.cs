@@ -399,6 +399,8 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         SupplierProductStatus? status,
         int pageIndex,
         int pageSize,
+        string? supplierSearch = null,
+        string? categoryName = null,
         CancellationToken cancellationToken = default)
     {
         var query = _context.SupplierProducts
@@ -417,6 +419,13 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             query = query.Where(sp => sp.Product.CategoryId == categoryId.Value);
         }
 
+        if (!string.IsNullOrWhiteSpace(categoryName) && !string.Equals(categoryName, "ALL", StringComparison.OrdinalIgnoreCase))
+        {
+            var cat = categoryName.Trim().ToLower();
+            query = query.Where(sp =>
+                sp.Product.Category != null && sp.Product.Category.Name.ToLower().Contains(cat));
+        }
+
         if (status.HasValue)
         {
             query = query.Where(sp => sp.Status == status.Value);
@@ -427,9 +436,18 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             var term = searchTerm.Trim().ToLower();
             query = query.Where(sp =>
                 sp.Product.Name.ToLower().Contains(term) ||
-                sp.Product.Barcode.ToLower().Contains(term) ||
+                (sp.Product.Barcode != null && sp.Product.Barcode.ToLower().Contains(term)) ||
                 sp.Product.ProductCode.ToLower().Contains(term) ||
                 (sp.SupplierProductCode != null && sp.SupplierProductCode.ToLower().Contains(term)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(supplierSearch))
+        {
+            var supplierTerm = supplierSearch.Trim().ToLower();
+            query = query.Where(sp =>
+                sp.Supplier != null &&
+                (sp.Supplier.Code.ToLower().Contains(supplierTerm) ||
+                 sp.Supplier.Name.ToLower().Contains(supplierTerm)));
         }
 
         var totalCount = await query.CountAsync(cancellationToken);

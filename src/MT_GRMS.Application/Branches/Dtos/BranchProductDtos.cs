@@ -85,7 +85,7 @@ public class AssignBranchProductsCommand
 public class UpdateBranchProductCommand
 {
     public decimal RetailPrice { get; set; }
-    public decimal MinStockLevel { get; set; }
+    public decimal? MinStockLevel { get; set; }
     public int? MinOrderQuantity { get; set; }
     public string? Status { get; set; }
     public Guid? SupplierId { get; set; }
@@ -98,4 +98,23 @@ public class UpdateBranchProductCommand
 public class ToggleBranchProductStatusRequest
 {
     public string Status { get; set; } = "Active";
+}
+
+/// <summary>
+/// Sản phẩm khả dụng để gán vào chi nhánh: thuộc NCC Active đang liên kết với chi nhánh đó.
+/// </summary>
+public class AssignableBranchProductDto
+{
+    public Guid ProductId { get; set; }
+    public string Sku { get; set; } = string.Empty;
+    public string Barcode { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string CategoryName { get; set; } = string.Empty;
+    public string BaseUoM { get; set; } = "Cái";
+    public decimal CostPrice { get; set; }
+    public int Moq { get; set; } = 1;
+    public Guid SupplierId { get; set; }
+    public string SupplierCode { get; set; } = string.Empty;
+    public string SupplierName { get; set; } = string.Empty;
+    public bool IsAlreadyAssigned { get; set; }
 }

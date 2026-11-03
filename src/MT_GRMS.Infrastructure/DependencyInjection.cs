@@ -61,6 +61,15 @@ public static class DependencyInjection
             }
         });
 
+        if (isInMemory || string.IsNullOrWhiteSpace(connectionString))
+        {
+            Console.WriteLine("[MT-GRMS] Database: InMemory (không dùng Postgres local).");
+        }
+        else
+        {
+            Console.WriteLine("[MT-GRMS] Database: PostgreSQL local Host=localhost;Port=5432;Database=mtgrms_db");
+        }
+
         // Đăng ký Unit of Work & Repositories
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         services.AddScoped(typeof(IRepository<>), typeof(GenericRepository<>));

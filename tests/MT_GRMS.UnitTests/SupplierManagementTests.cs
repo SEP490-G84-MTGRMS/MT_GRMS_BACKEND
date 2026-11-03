@@ -230,6 +230,8 @@ public class SupplierManagementTests
             SupplierProductStatus? status,
             int pageIndex,
             int pageSize,
+            string? supplierSearch = null,
+            string? categoryName = null,
             CancellationToken cancellationToken = default)
         {
             var query = SupplierProducts.AsEnumerable();

@@ -60,6 +60,8 @@ public interface ISupplierRepository : IRepository<Supplier>
         SupplierProductStatus? status,
         int pageIndex,
         int pageSize,
+        string? supplierSearch = null,
+        string? categoryName = null,
         CancellationToken cancellationToken = default);
     Task AddSupplierProductAsync(SupplierProduct supplierProduct, CancellationToken cancellationToken = default);
     Task ClearPrimarySupplierFlagAsync(Guid productId, Guid? excludeSupplierId = null, CancellationToken cancellationToken = default);

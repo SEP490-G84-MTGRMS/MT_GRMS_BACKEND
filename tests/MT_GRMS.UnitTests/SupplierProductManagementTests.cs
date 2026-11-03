@@ -179,7 +179,6 @@ public class SupplierProductManagementTests
     }
 
     [Theory]
-    [InlineData(0, 5)]     // Giá <= 0
     [InlineData(-500, 5)]  // Giá âm
     [InlineData(10000, 0)] // MOQ < 1
     [InlineData(10000, -1)]// MOQ âm
@@ -386,6 +385,211 @@ public class SupplierProductManagementTests
         Assert.Equal(suppX.Id, result.First().SupplierId);
     }
 
+    [Fact]
+    public async Task REQ_SP01_AssignProduct_AgreedPriceZero_UsesProductCostPrice()
+    {
+        var supplier = CreateTestSupplier("Vinamilk", "NCC-VNM-001");
+        var product = CreateTestProduct("Sữa Chua 100g", "89312345602", "PRD-YOGURT");
+        _repo.Suppliers.Add(supplier);
+        _repo.Products.Add(product);
+
+        var result = await _service.AssignSupplierProductAsync(supplier.Id, new AssignSupplierProductCommand
+        {
+            ProductId = product.Id,
+            AgreedWholesalePrice = 0m,
+            MinimumOrderQuantity = 3
+        });
+
+        Assert.Equal(0m, result.AgreedWholesalePrice);
+        Assert.Equal(8000m, result.EffectivePurchasePrice);
+        Assert.Equal(3, result.MinimumOrderQuantity);
+    }
+
+    [Fact]
+    public async Task REQ_SP01_AssignProduct_AgreedPriceZeroWithoutCost_Throws()
+    {
+        var supplier = CreateTestSupplier("Vinamilk", "NCC-VNM-001");
+        var product = CreateTestProduct("Sữa Chua 100g", "89312345602", "PRD-YOGURT");
+        product.CostPrice = null;
+        _repo.Suppliers.Add(supplier);
+        _repo.Products.Add(product);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.AssignSupplierProductAsync(supplier.Id, new AssignSupplierProductCommand
+            {
+                ProductId = product.Id,
+                AgreedWholesalePrice = 0m,
+                MinimumOrderQuantity = 3
+            }));
+
+        Assert.Equal("INVALID_PURCHASE_PRICE", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQ_SP01_BatchAssign_PerProductTerms_KeepsIndependentPrices()
+    {
+        var supplier = CreateTestSupplier("Vinamilk", "NCC-VNM-001");
+        var product1 = CreateTestProduct("Sữa tươi", "893111", "PRD-MILK");
+        var product2 = CreateTestProduct("Sữa chua", "893222", "PRD-YOG");
+        _repo.Suppliers.Add(supplier);
+        _repo.Products.Add(product1);
+        _repo.Products.Add(product2);
+
+        var result = await _service.BatchAssignSupplierProductsAsync(supplier.Id, new BatchAssignSupplierProductsCommand
+        {
+            Items = new List<BatchAssignSupplierProductItemCommand>
+            {
+                new() { ProductId = product1.Id, AgreedWholesalePrice = 100000m, MinimumOrderQuantity = 10 },
+                new() { ProductId = product2.Id, AgreedWholesalePrice = 55000m, MinimumOrderQuantity = 8 }
+            }
+        });
+
+        Assert.Equal(2, result.AssignedCount);
+        Assert.Equal(100000m, result.Items.First(x => x.ProductId == product1.Id).AgreedWholesalePrice);
+        Assert.Equal(10, result.Items.First(x => x.ProductId == product1.Id).MinimumOrderQuantity);
+        Assert.Equal(55000m, result.Items.First(x => x.ProductId == product2.Id).AgreedWholesalePrice);
+        Assert.Equal(8, result.Items.First(x => x.ProductId == product2.Id).MinimumOrderQuantity);
+    }
+
+    [Fact]
+    public async Task REQ_SP01_BatchAssign_SkipsExistingWithoutOverwritingTerms()
+    {
+        var supplier = CreateTestSupplier("Vinamilk", "NCC-VNM-001");
+        var existingProduct = CreateTestProduct("Sữa tươi", "893111", "PRD-MILK");
+        var newProduct = CreateTestProduct("Sữa chua", "893222", "PRD-YOG");
+        _repo.Suppliers.Add(supplier);
+        _repo.Products.Add(existingProduct);
+        _repo.Products.Add(newProduct);
+
+        _repo.SupplierProducts.Add(new SupplierProduct
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            Supplier = supplier,
+            ProductId = existingProduct.Id,
+            Product = existingProduct,
+            DeliveryUoM = existingProduct.BaseUnit,
+            AgreedWholesalePrice = 99000m,
+            MinimumOrderQuantity = 7,
+            Status = SupplierProductStatus.Active
+        });
+
+        var result = await _service.BatchAssignSupplierProductsAsync(supplier.Id, new BatchAssignSupplierProductsCommand
+        {
+            Items = new List<BatchAssignSupplierProductItemCommand>
+            {
+                new() { ProductId = existingProduct.Id, AgreedWholesalePrice = 1m, MinimumOrderQuantity = 1 },
+                new() { ProductId = newProduct.Id, AgreedWholesalePrice = 55000m, MinimumOrderQuantity = 8 }
+            }
+        });
+
+        Assert.Equal(1, result.AssignedCount);
+        Assert.Equal(2, _repo.SupplierProducts.Count);
+
+        var kept = _repo.SupplierProducts.Single(x => x.ProductId == existingProduct.Id);
+        Assert.Equal(99000m, kept.AgreedWholesalePrice);
+        Assert.Equal(7, kept.MinimumOrderQuantity);
+
+        var created = _repo.SupplierProducts.Single(x => x.ProductId == newProduct.Id);
+        Assert.Equal(55000m, created.AgreedWholesalePrice);
+        Assert.Equal(8, created.MinimumOrderQuantity);
+    }
+
+    [Theory]
+    [InlineData(-1, 1)]
+    [InlineData(1000, 0)]
+    [InlineData(1000, -2)]
+    public async Task REQ_SP01_BatchAssign_InvalidPriceOrMoq_ThrowsValidation(decimal price, int moq)
+    {
+        var supplier = CreateTestSupplier("Vinamilk", "NCC-VNM-001");
+        var product = CreateTestProduct("Sữa tươi", "893111", "PRD-MILK");
+        _repo.Suppliers.Add(supplier);
+        _repo.Products.Add(product);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.BatchAssignSupplierProductsAsync(supplier.Id, new BatchAssignSupplierProductsCommand
+            {
+                Items = new List<BatchAssignSupplierProductItemCommand>
+                {
+                    new() { ProductId = product.Id, AgreedWholesalePrice = price, MinimumOrderQuantity = moq }
+                }
+            }));
+
+        Assert.Equal("VALIDATION_ERROR", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQ_SP05_GetSupplierProducts_AndFilters_NeverLeakOtherSupplier()
+    {
+        var supplierA = CreateTestSupplier("NCC A", "SUP-A-0001");
+        var supplierB = CreateTestSupplier("NCC B", "SUP-B-0002");
+        var productA = CreateTestProduct("Cà chua", "893aaa", "PRD-TOM");
+        var productB = CreateTestProduct("Cà rốt", "893bbb", "PRD-CAR");
+        _repo.Suppliers.AddRange(new[] { supplierA, supplierB });
+        _repo.Products.AddRange(new[] { productA, productB });
+        _repo.SupplierProducts.Add(new SupplierProduct
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplierA.Id,
+            Supplier = supplierA,
+            ProductId = productA.Id,
+            Product = productA,
+            AgreedWholesalePrice = 100000m,
+            MinimumOrderQuantity = 10,
+            Status = SupplierProductStatus.Active
+        });
+        _repo.SupplierProducts.Add(new SupplierProduct
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplierB.Id,
+            Supplier = supplierB,
+            ProductId = productB.Id,
+            Product = productB,
+            AgreedWholesalePrice = 20000m,
+            MinimumOrderQuantity = 5,
+            Status = SupplierProductStatus.Active
+        });
+
+        var result = await _service.GetSupplierProductsAsync(Guid.Empty, new SupplierProductQueryFilter
+        {
+            SearchTerm = "Cà",
+            SupplierSearch = "SUP-A-0001",
+            PageIndex = 1,
+            PageSize = 15
+        });
+
+        Assert.Single(result.Items);
+        Assert.Equal(supplierA.Id, result.Items[0].SupplierId);
+        Assert.DoesNotContain(result.Items, x => x.SupplierId == supplierB.Id);
+    }
+
+    [Fact]
+    public async Task REQ_SP03_ToggleActive_WhenSupplierInactive_Throws()
+    {
+        var supplier = CreateTestSupplier("Vinamilk", "NCC-VNM-001");
+        supplier.Status = SupplierStatus.Inactive;
+        var product = CreateTestProduct("Sữa", "8931", "PRD-1");
+        _repo.Suppliers.Add(supplier);
+        _repo.Products.Add(product);
+        _repo.SupplierProducts.Add(new SupplierProduct
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            Supplier = supplier,
+            ProductId = product.Id,
+            Product = product,
+            Status = SupplierProductStatus.Inactive,
+            AgreedWholesalePrice = 10000m,
+            MinimumOrderQuantity = 1
+        });
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.ToggleSupplierProductStatusAsync(supplier.Id, product.Id,
+                new ToggleSupplierProductStatusRequest { Status = SupplierProductStatus.Active }));
+
+        Assert.Equal("SUPPLIER_INACTIVE", ex.ErrorCode);
+    }
+
     // Helper methods
     private static Supplier CreateTestSupplier(string name, string code)
     {
@@ -528,11 +732,31 @@ public class SupplierProductManagementTests
         }
 
         public Task<(IReadOnlyList<SupplierProduct> Items, int TotalCount)> GetPagedSupplierProductsAsync(
-            Guid supplierId, string? searchTerm, Guid? categoryId, SupplierProductStatus? status, int pageIndex, int pageSize, CancellationToken cancellationToken = default)
+            Guid supplierId, string? searchTerm, Guid? categoryId, SupplierProductStatus? status, int pageIndex, int pageSize, string? supplierSearch = null, string? categoryName = null, CancellationToken cancellationToken = default)
         {
             var query = SupplierProducts.AsEnumerable();
             if (supplierId != Guid.Empty) query = query.Where(sp => sp.SupplierId == supplierId);
             if (status.HasValue) query = query.Where(sp => sp.Status == status.Value);
+            if (!string.IsNullOrWhiteSpace(searchTerm))
+            {
+                var term = searchTerm.Trim().ToLowerInvariant();
+                query = query.Where(sp =>
+                    (sp.Product?.Name ?? string.Empty).ToLowerInvariant().Contains(term) ||
+                    (sp.Product?.SKU ?? string.Empty).ToLowerInvariant().Contains(term) ||
+                    (sp.Product?.Barcode ?? string.Empty).ToLowerInvariant().Contains(term));
+            }
+            if (!string.IsNullOrWhiteSpace(supplierSearch))
+            {
+                var term = supplierSearch.Trim().ToLowerInvariant();
+                query = query.Where(sp =>
+                    (sp.Supplier?.Code ?? string.Empty).ToLowerInvariant().Contains(term) ||
+                    (sp.Supplier?.Name ?? string.Empty).ToLowerInvariant().Contains(term));
+            }
+            if (!string.IsNullOrWhiteSpace(categoryName) && !string.Equals(categoryName, "ALL", StringComparison.OrdinalIgnoreCase))
+            {
+                var term = categoryName.Trim().ToLowerInvariant();
+                query = query.Where(sp => (sp.Product?.Category?.Name ?? string.Empty).ToLowerInvariant().Contains(term));
+            }
             var list = query.ToList();
             var paged = list.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
             return Task.FromResult(((IReadOnlyList<SupplierProduct>)paged, list.Count));
