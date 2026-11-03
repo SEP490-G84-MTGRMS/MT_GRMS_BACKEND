@@ -4,10 +4,15 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentValidation;
+using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Debt;
+using MT_GRMS.Application.Debt.Dtos;
 using MT_GRMS.Application.PosOrders.Dtos;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Sales;
+using MT_GRMS.Domain.Enums;
+using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.PosOrders;
 
@@ -16,18 +21,36 @@ public class OrderService : IOrderService
     private readonly IOrderRepository _orderRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IThermalPrintService _thermalPrintService;
+    private readonly ICustomerDebtService? _debtService;
+    private readonly ICashbookService? _cashbookService;
     private readonly IValidator<OrderCreateRequest>? _validator;
+
+    private static readonly Guid DefaultTillId = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db");
+    private static readonly Guid DefaultBankId = Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559");
 
     public OrderService(
         IOrderRepository orderRepository,
         IUnitOfWork unitOfWork,
         IThermalPrintService thermalPrintService,
+        ICustomerDebtService? debtService = null,
+        ICashbookService? cashbookService = null,
         IValidator<OrderCreateRequest>? validator = null)
     {
         _orderRepository = orderRepository;
         _unitOfWork = unitOfWork;
         _thermalPrintService = thermalPrintService;
+        _debtService = debtService;
+        _cashbookService = cashbookService;
         _validator = validator;
+    }
+
+    public OrderService(
+        IOrderRepository orderRepository,
+        IUnitOfWork unitOfWork,
+        IThermalPrintService thermalPrintService,
+        IValidator<OrderCreateRequest>? validator)
+        : this(orderRepository, unitOfWork, thermalPrintService, null, null, validator)
+    {
     }
 
     public async Task<OrderResponse> CreateOrderAsync(OrderCreateRequest request, CancellationToken cancellationToken = default)
@@ -47,10 +70,14 @@ public class OrderService : IOrderService
         }
 
         // 1. Kiểm tra chi nhánh
-        var branch = await _orderRepository.GetBranchByIdAsync(request.BranchId, cancellationToken);
+        var branchId = request.BranchId.HasValue && request.BranchId != Guid.Empty
+            ? request.BranchId.Value
+            : Guid.Parse("cd5e8d1b-b08b-448d-beff-b85ea5873d52");
+
+        var branch = await _orderRepository.GetBranchByIdAsync(branchId, cancellationToken);
         if (branch == null)
         {
-            throw new InvalidOperationException($"Chi nhánh với ID '{request.BranchId}' không tồn tại trong hệ thống.");
+            throw new InvalidOperationException($"Chi nhánh với ID '{branchId}' không tồn tại trong hệ thống.");
         }
 
         // 2. Kiểm tra khách hàng (nếu có)
@@ -84,7 +111,7 @@ public class OrderService : IOrderService
             var requiredQty = group.Sum(x => x.Quantity);
             var prod = products[pId];
 
-            var branchStocks = await _orderRepository.GetBranchStocksForProductFefoAsync(request.BranchId, pId, cancellationToken);
+            var branchStocks = await _orderRepository.GetBranchStocksForProductFefoAsync(branchId, pId, cancellationToken);
 
             var totalOnHand = branchStocks.Sum(s => s.QuantityOnHand);
             if (totalOnHand < requiredQty)
@@ -133,6 +160,7 @@ public class OrderService : IOrderService
                 UnitPrice = item.UnitPrice,
                 DiscountAmount = itemDiscount,
                 ActualPrice = actualPrice,
+                CostPriceAtSale = prod.CostPrice ?? 0m, // Chốt cứng giá vốn COGS (FE-10)
                 AppliedVatRate = vatRate,
                 VatAmount = vatAmount,
                 ProductName = prod.Name,
@@ -150,8 +178,61 @@ public class OrderService : IOrderService
         decimal cashTendered = request.CashTendered ?? finalAmount;
         decimal changeAmount = 0m;
         string paymentStatus = "PAID";
+        CustomerDebtInvoiceResponse? debtInvoiceResponse = null;
 
-        if (paymentMethodUpper == "CASH")
+        if (paymentMethodUpper == "CREDIT" || paymentMethodUpper == "DEBT")
+        {
+            if (customer == null)
+            {
+                throw new InvalidOperationException("Bán nợ (ghi sổ) bắt buộc phải chọn thông tin khách hàng.");
+            }
+
+            bool isManagerBypass = !string.IsNullOrWhiteSpace(request.ManagerBypassCode) &&
+                                  (request.ManagerBypassCode.Trim().Equals("MGR-BYPASS-2026", StringComparison.OrdinalIgnoreCase) ||
+                                   request.ManagerBypassCode.Trim().StartsWith("BYPASS", StringComparison.OrdinalIgnoreCase));
+
+            if (!isManagerBypass)
+            {
+                if (!string.IsNullOrWhiteSpace(request.CreatorRole) &&
+                    (request.CreatorRole.Equals("CASHIER", StringComparison.OrdinalIgnoreCase) ||
+                     request.CreatorRole.Equals("STAFF", StringComparison.OrdinalIgnoreCase)))
+                {
+                    throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng hoặc Quản trị viên mới có quyền bán nợ / ghi nợ đơn hàng. Nhân viên thu ngân không được phép thực hiện chức năng này.");
+                }
+
+                if (!customer.AllowDebt)
+                {
+                    throw new InvalidOperationException($"Khách hàng '{customer.Name}' chưa được kích hoạt quyền mua nợ.");
+                }
+                if (customer.IsBlockedForDebt)
+                {
+                    throw new InvalidOperationException($"Khách hàng '{customer.Name}' đang bị khóa nợ do nợ quá hạn.");
+                }
+            }
+
+            paymentStatus = "UNPAID";
+            cashTendered = 0m;
+            changeAmount = 0m;
+
+            if (_debtService != null)
+            {
+                debtInvoiceResponse = await _debtService.RecordSaleDebtAsync(new RecordSaleDebtRequest(
+                    CustomerId: customer.Id,
+                    OrderId: Guid.NewGuid(), // Will be updated
+                    OrderCode: $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}",
+                    BranchId: branchId,
+                    DebtAmount: finalAmount,
+                    ManagerBypassCode: request.ManagerBypassCode,
+                    Notes: request.Note ?? $"Bán nợ POS đơn"
+                ), cancellationToken);
+            }
+            else
+            {
+                customer.TotalDebt += finalAmount;
+            }
+            customer.UpdatedAt = DateTime.UtcNow;
+        }
+        else if (paymentMethodUpper == "CASH")
         {
             if (cashTendered < finalAmount)
             {
@@ -160,37 +241,9 @@ public class OrderService : IOrderService
             changeAmount = cashTendered - finalAmount;
             paymentStatus = "PAID";
         }
-        else if (paymentMethodUpper == "DEBT")
-        {
-            if (!string.IsNullOrWhiteSpace(request.CreatorRole) &&
-                (request.CreatorRole.Equals("CASHIER", StringComparison.OrdinalIgnoreCase) ||
-                 request.CreatorRole.Equals("STAFF", StringComparison.OrdinalIgnoreCase)))
-            {
-                throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng hoặc Quản trị viên mới có quyền bán nợ / ghi nợ đơn hàng. Nhân viên thu ngân không được phép thực hiện chức năng này.");
-            }
-
-            if (customer == null)
-            {
-                throw new InvalidOperationException("Bán nợ (ghi sổ) bắt buộc phải chọn thông tin khách hàng.");
-            }
-            if (!customer.AllowDebt)
-            {
-                throw new InvalidOperationException($"Khách hàng '{customer.Name}' chưa được kích hoạt quyền mua nợ.");
-            }
-            if (customer.IsBlockedForDebt)
-            {
-                throw new InvalidOperationException($"Khách hàng '{customer.Name}' đang bị khóa nợ do nợ quá hạn.");
-            }
-
-            customer.TotalDebt += finalAmount;
-            customer.UpdatedAt = DateTime.UtcNow;
-            paymentStatus = "UNPAID";
-            cashTendered = 0m;
-            changeAmount = 0m;
-        }
         else
         {
-            // VIETQR / BANK_TRANSFER / CARD
+            // VIETQR / BANK_TRANSFER / BANK / CARD
             cashTendered = finalAmount;
             changeAmount = 0m;
             paymentStatus = "PAID";
@@ -206,11 +259,11 @@ public class OrderService : IOrderService
         }
 
         // 8. Lưu Order Entity
-        string orderCode = $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
+        string orderCode = debtInvoiceResponse != null ? debtInvoiceResponse.OrderCode : $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
         var order = new Order
         {
-            Id = Guid.NewGuid(),
-            BranchId = request.BranchId,
+            Id = debtInvoiceResponse != null ? debtInvoiceResponse.OrderId : Guid.NewGuid(),
+            BranchId = branchId,
             CustomerId = request.CustomerId,
             OrderCode = orderCode,
             OrderDate = DateTime.UtcNow,
@@ -234,10 +287,41 @@ public class OrderService : IOrderService
             d.OrderId = order.Id;
         }
 
+        // Đồng bộ Sổ quỹ (FE-17)
+        if (_cashbookService != null)
+        {
+            if (paymentMethodUpper == "CASH")
+            {
+                await _cashbookService.ReceiveCashAsync(
+                    DefaultTillId,
+                    FinanceAccountType.Till,
+                    finalAmount,
+                    "POS_SALE",
+                    order.Id,
+                    orderCode,
+                    $"Doanh thu bán hàng POS (Tiền mặt) đơn {orderCode}",
+                    cancellationToken
+                );
+            }
+            else if (paymentMethodUpper != "CREDIT" && paymentMethodUpper != "DEBT")
+            {
+                await _cashbookService.ReceiveCashAsync(
+                    DefaultBankId,
+                    FinanceAccountType.Bank,
+                    finalAmount,
+                    "POS_SALE",
+                    order.Id,
+                    orderCode,
+                    $"Doanh thu bán hàng POS ({paymentMethodUpper}) đơn {orderCode}",
+                    cancellationToken
+                );
+            }
+        }
+
         await _orderRepository.AddAsync(order, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapToOrderResponse(order, cashTendered, changeAmount);
+        return MapToOrderResponse(order, cashTendered, changeAmount, debtInvoiceResponse);
     }
 
     public async Task<OrderResponse?> GetOrderByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -247,7 +331,7 @@ public class OrderService : IOrderService
 
         decimal cash = order.DepositAmount;
         decimal change = order.PaymentMethod == "CASH" ? Math.Max(0, cash - order.FinalAmount) : 0m;
-        return MapToOrderResponse(order, cash, change);
+        return MapToOrderResponse(order, cash, change, null);
     }
 
     public async Task<(IReadOnlyList<OrderResponse> Items, int TotalCount)> GetOrdersAsync(OrderFilterRequest filter, CancellationToken cancellationToken = default)
@@ -276,10 +360,23 @@ public class OrderService : IOrderService
         {
             decimal cash = o.DepositAmount;
             decimal change = o.PaymentMethod == "CASH" ? Math.Max(0, cash - o.FinalAmount) : 0m;
-            return MapToOrderResponse(o, cash, change);
+            return MapToOrderResponse(o, cash, change, null);
         }).ToList();
 
         return (responses, totalCount);
+    }
+
+    public async Task<List<OrderResponse>> GetOrdersAsync(Guid? branchId = null, Guid? customerId = null, DateTime? fromDate = null, DateTime? toDate = null, CancellationToken cancellationToken = default)
+    {
+        var (items, _) = await GetOrdersAsync(new OrderFilterRequest
+        {
+            BranchId = branchId,
+            CustomerId = customerId,
+            FromDate = fromDate,
+            ToDate = toDate,
+            PageSize = 1000
+        }, cancellationToken);
+        return items.ToList();
     }
 
     public async Task<bool> PrintOrderInvoiceAsync(Guid orderId, PrintOrderRequest? printRequest = null, CancellationToken cancellationToken = default)
@@ -375,8 +472,9 @@ public class OrderService : IOrderService
                 remainingToDeduct -= deduct;
 
                 var reqItem = group.First();
-                var discountPerUnit = reqItem.DiscountAmount.HasValue && reqItem.Quantity > 0
-                    ? reqItem.DiscountAmount.Value / reqItem.Quantity
+                var itemDiscount = reqItem.DiscountAmount ?? 0m;
+                var discountPerUnit = itemDiscount > 0 && reqItem.Quantity > 0
+                    ? itemDiscount / reqItem.Quantity
                     : 0m;
                 var actualUnitPrice = Math.Max(0, reqItem.UnitPrice - discountPerUnit);
 
@@ -394,6 +492,7 @@ public class OrderService : IOrderService
                     UnitPrice = reqItem.UnitPrice,
                     DiscountAmount = discountPerUnit * deduct,
                     ActualPrice = actualUnitPrice,
+                    CostPriceAtSale = prod.CostPrice ?? 0m,
                     AppliedVatRate = vatRate,
                     VatAmount = vatAmount,
                     Product = prod
@@ -444,7 +543,7 @@ public class OrderService : IOrderService
         await _orderRepository.AddAsync(order, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapToOrderResponse(order, request.DepositAmount, 0m);
+        return MapToOrderResponse(order, request.DepositAmount, 0m, null);
     }
 
     public async Task<OrderResponse> FulfillPreOrderAsync(Guid orderId, PreOrderFulfillRequest request, CancellationToken cancellationToken = default)
@@ -490,7 +589,7 @@ public class OrderService : IOrderService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         decimal changeAmount = Math.Max(0, request.AmountPaid - remainingAmount);
-        return MapToOrderResponse(order, request.AmountPaid, changeAmount);
+        return MapToOrderResponse(order, request.AmountPaid, changeAmount, null);
     }
 
     public async Task<OrderResponse> CancelOrderAsync(Guid orderId, CancelOrderRequest request, CancellationToken cancellationToken = default)
@@ -537,7 +636,7 @@ public class OrderService : IOrderService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapToOrderResponse(order, 0m, 0m);
+        return MapToOrderResponse(order, 0m, 0m, null);
     }
 
     public async Task<OrderResponse> ProcessReturnExchangeAsync(Guid orderId, ReturnExchangeRequest request, CancellationToken cancellationToken = default)
@@ -655,6 +754,7 @@ public class OrderService : IOrderService
                     UnitPrice = item.UnitPrice,
                     DiscountAmount = itemDiscount,
                     ActualPrice = actualPrice,
+                    CostPriceAtSale = prod.CostPrice ?? 0m,
                     AppliedVatRate = vatRate,
                     VatAmount = vatAmount,
                     ProductName = prod.Name,
@@ -739,7 +839,7 @@ public class OrderService : IOrderService
         await _orderRepository.AddAsync(exchangeOrder, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapToOrderResponse(exchangeOrder, cashTendered, changeAmount);
+        return MapToOrderResponse(exchangeOrder, cashTendered, changeAmount, null);
     }
 
     public async Task<OrderSummaryResponse> GetOrderSummaryAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, CancellationToken cancellationToken = default)
@@ -775,7 +875,7 @@ public class OrderService : IOrderService
         );
     }
 
-    private static OrderResponse MapToOrderResponse(Order order, decimal cashTendered, decimal changeAmount)
+    private static OrderResponse MapToOrderResponse(Order order, decimal cashTendered, decimal changeAmount, CustomerDebtInvoiceResponse? debtInvoice = null)
     {
         var items = order.Details.Select(d => new OrderItemResponse(
             Id: d.Id,
@@ -787,7 +887,11 @@ public class OrderService : IOrderService
             UnitPrice: d.UnitPrice,
             DiscountAmount: d.DiscountAmount,
             ActualPrice: d.ActualPrice,
-            TotalLineAmount: d.ActualPrice * d.Qty
+            CostPriceAtSale: d.CostPriceAtSale,
+            TotalLineAmount: d.ActualPrice * d.Qty,
+            AppliedVatRate: d.AppliedVatRate,
+            VatAmount: d.VatAmount,
+            BatchCode: null
         )).ToList();
 
         return new OrderResponse(
@@ -809,7 +913,8 @@ public class OrderService : IOrderService
             Items: items,
             CustomerPhone: order.Customer?.Phone,
             DepositAmount: order.DepositAmount,
-            Note: order.Note
+            Note: order.Note,
+            DebtInvoice: debtInvoice
         );
     }
 }

@@ -78,6 +78,7 @@ public static class DependencyInjection
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IInventoryRepository, InventoryRepository>();
         services.AddScoped<IOrderRepository, OrderRepository>();
+        services.AddScoped<Application.PosOrders.ISalesOrderRepository, SalesOrderRepository>();
         services.AddScoped<IProductRepository, ProductRepository>();
         services.AddScoped<ICategoryRepository, CategoryRepository>();
         services.AddScoped<IProductUnitRepository, ProductUnitRepository>();
@@ -87,6 +88,7 @@ public static class DependencyInjection
         services.AddScoped<Application.Debt.ICustomerDebtRepository, CustomerDebtRepository>();
         services.AddScoped<Application.Reports.IPnLReportRepository, PnLReportRepository>();
         services.AddScoped<Application.Tax.IHouseholdTaxRepository, HouseholdTaxRepository>();
+        services.AddScoped<Application.Tax.ITaxExportService, Services.TaxExportService>();
         services.AddScoped<Application.Tax.Security.IPinVerificationService, Services.PinVerificationService>();
         services.AddScoped<ISupplierRepository, SupplierRepository>();
         services.AddScoped<IBranchRepository, BranchRepository>();

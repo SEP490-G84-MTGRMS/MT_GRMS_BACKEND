@@ -2,6 +2,8 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
+using MT_GRMS.Api.Filters;
+using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.PosOrders.Dtos;
 
@@ -20,46 +22,29 @@ public class OrdersController : BaseApiController
     }
 
     /// <summary>
-    /// Tạo và thanh toán đơn hàng bán lẻ POS, tự động trừ kho FEFO, tích điểm và xử lý công nợ
+    /// Tạo đơn hàng bán lẻ POS (hỗ trợ Tiền mặt, Ngân hàng VietQR, và Bán nợ công nợ khách hàng)
+    /// Tự động trừ kho FEFO, chốt cứng giá vốn COGS và ghi nhận Sổ quỹ
     /// </summary>
     [HttpPost]
-    public async Task<IActionResult> CreateOrder([FromBody] OrderCreateRequest request, CancellationToken cancellationToken)
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<OrderResponse>>> CreateOrder([FromBody] OrderCreateRequest request, CancellationToken cancellationToken)
     {
-        try
-        {
-            var response = await _orderService.CreateOrderAsync(request, cancellationToken);
-            return CreatedAtAction(nameof(GetOrderById), new { id = response.Id }, response);
-        }
-        catch (FluentValidation.ValidationException valEx)
-        {
-            return BadRequest(new { message = "Dữ liệu đơn hàng không hợp lệ.", errors = valEx.Errors });
-        }
-        catch (UnauthorizedAccessException authEx)
-        {
-            return StatusCode(403, new { message = authEx.Message });
-        }
-        catch (InvalidOperationException opEx)
-        {
-            return BadRequest(new { message = opEx.Message });
-        }
-        catch (Exception ex)
-        {
-            return StatusCode(500, new { message = "Lỗi xử lý đơn hàng nội bộ.", detail = ex.Message });
-        }
+        var response = await _orderService.CreateOrderAsync(request, cancellationToken);
+        return Ok(ApiResponse<OrderResponse>.Ok(response, "Tạo đơn hàng POS thành công."));
     }
 
     /// <summary>
     /// Lấy thông tin chi tiết một đơn hàng theo ID
     /// </summary>
     [HttpGet("{id:guid}")]
-    public async Task<IActionResult> GetOrderById([FromRoute] Guid id, CancellationToken cancellationToken)
+    public async Task<ActionResult<ApiResponse<OrderResponse>>> GetOrderById([FromRoute] Guid id, CancellationToken cancellationToken)
     {
         var order = await _orderService.GetOrderByIdAsync(id, cancellationToken);
         if (order == null)
         {
-            return NotFound(new { message = $"Không tìm thấy đơn hàng với ID '{id}'." });
+            return NotFound(ApiResponse<OrderResponse>.Fail("ORDER_NOT_FOUND", $"Không tìm thấy đơn hàng với ID '{id}'."));
         }
-        return Ok(order);
+        return Ok(ApiResponse<OrderResponse>.Ok(order));
     }
 
     /// <summary>
@@ -263,6 +248,10 @@ public class OrdersController : BaseApiController
         catch (InvalidOperationException opEx)
         {
             return BadRequest(new { message = opEx.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Lỗi lấy luồng in ESC/POS.", detail = ex.Message });
         }
     }
 }

@@ -27,6 +27,63 @@ public static class DatabaseSeeder
     {
         try
         {
+            // Migration FE-10: Bổ sung cột CostPriceAtSale và Backfill giá vốn đơn hàng
+            try
+            {
+                await context.Database.ExecuteSqlRawAsync(
+                    "ALTER TABLE \"OrderDetails\" ADD COLUMN IF NOT EXISTS \"CostPriceAtSale\" numeric(18,4) NOT NULL DEFAULT 0.0000;",
+                    ct);
+
+                await context.Database.ExecuteSqlRawAsync(
+                    "UPDATE \"OrderDetails\" od " +
+                    "SET \"CostPriceAtSale\" = COALESCE(p.\"CostPrice\", od.\"UnitPrice\" * 0.70) " +
+                    "FROM \"Products\" p " +
+                    "WHERE od.\"ProductID\" = p.\"ProductID\" AND od.\"CostPriceAtSale\" = 0;",
+                    ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "CostPriceAtSale migration check passed or already applied.");
+            }
+
+            // 0. Seed SaaS Tenant & Default Branch for Grocery Store
+            if (!await context.Tenants.IgnoreQueryFilters().AnyAsync(t => t.Id == DefaultTenantId, ct))
+            {
+                logger.LogInformation("Seeding SaaS Tenant for Grocery Store...");
+                var groceryTenant = new Domain.Entities.SaaS.Tenant
+                {
+                    Id = DefaultTenantId,
+                    Name = "Hộ Kinh Doanh Tạp Hóa Siêu Thị MT-GRMS",
+                    Code = "GROCERY-001",
+                    Subdomain = "grocery001",
+                    TaxCode = "0318999888",
+                    Status = "ACTIVE",
+                    Address = "12 Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP.HCM",
+                    City = "Hồ Chí Minh",
+                    CurrentPlan = "PRO",
+                    SubscriptionExpiresAt = DateTime.UtcNow.AddYears(1)
+                };
+                await context.Tenants.AddAsync(groceryTenant, ct);
+                await context.SaveChangesAsync(ct);
+            }
+
+            var groceryBranchId = Guid.Parse("cd5e8d1b-b08b-448d-beff-b85ea5873d52");
+            if (!await context.Branches.IgnoreQueryFilters().AnyAsync(b => b.Id == groceryBranchId, ct))
+            {
+                logger.LogInformation("Seeding Default Branch for Grocery Store...");
+                var branch = new Domain.Entities.SaaS.Branch
+                {
+                    Id = groceryBranchId,
+                    TenantId = DefaultTenantId,
+                    BranchCode = "BR-Q1-GROCERY",
+                    Name = "Cửa hàng Tạp hóa Chi nhánh Quận 1",
+                    Address = "12 Nguyễn Huệ, Quận 1, TP.HCM",
+                    IsActive = true
+                };
+                await context.Branches.AddAsync(branch, ct);
+                await context.SaveChangesAsync(ct);
+            }
+
             // 1. Seed Users (Chủ tiệm với mã PIN 1234 đã băm PBKDF2)
             if (!await context.Users.IgnoreQueryFilters().AnyAsync(u => u.Id == "user-owner-001", ct))
             {
@@ -433,7 +490,193 @@ public static class DatabaseSeeder
             }
 
 
-            // 6. Seed Additional Products & Supplier Linkages for Order Matrix
+            // 6. Seed Default FinanceAccounts (Till, Safe, Bank) for Tenant if not present
+            if (!await context.FinanceAccounts.IgnoreQueryFilters().AnyAsync(t => t.TenantId == DefaultTenantId, ct))
+            {
+                logger.LogInformation("Seeding FinanceAccounts...");
+                var till = new FinanceAccount
+                {
+                    Id = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db"),
+                    TenantId = DefaultTenantId,
+                    BranchId = branchId,
+                    AccountType = FinanceAccountType.Till,
+                    AccountName = "Két tiền mặt quầy chính",
+                    CurrentBalance = 12500000m,
+                    IsActive = true
+                };
+                var safe = new FinanceAccount
+                {
+                    Id = Guid.Parse("01a19664-6492-7d10-9a82-54801db4f342"),
+                    TenantId = DefaultTenantId,
+                    BranchId = branchId,
+                    AccountType = FinanceAccountType.Safe,
+                    AccountName = "Két sắt chủ shop (Safe Deposit)",
+                    CurrentBalance = 150000000m,
+                    IsActive = true
+                };
+                var bank1 = new FinanceAccount
+                {
+                    Id = Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559"),
+                    TenantId = DefaultTenantId,
+                    AccountType = FinanceAccountType.Bank,
+                    AccountName = "Vietcombank (VCB)",
+                    BankName = "Vietcombank (VCB)",
+                    AccountNumber = "0071001234567",
+                    AccountHolderName = "CHỦ HỘ KINH DOANH",
+                    CurrentBalance = 145800000m,
+                    IsActive = true
+                };
+                var bank2 = new FinanceAccount
+                {
+                    Id = Guid.Parse("01a19664-6761-78c3-b60a-cc460c68c51c"),
+                    TenantId = DefaultTenantId,
+                    AccountType = FinanceAccountType.Bank,
+                    AccountName = "Techcombank (TCB)",
+                    BankName = "Techcombank (TCB)",
+                    AccountNumber = "19036789123011",
+                    AccountHolderName = "CHỦ HỘ KINH DOANH",
+                    CurrentBalance = 32450000m,
+                    IsActive = true
+                };
+                await context.FinanceAccounts.AddRangeAsync(new[] { till, safe, bank1, bank2 }, ct);
+                await context.SaveChangesAsync(ct);
+            }
+
+            // 7. Seed Customers, CustomerDebtProfiles & CustomerDebtInvoices (Công nợ FIFO & Phân loại nợ)
+            var customer1Id = Guid.Parse("11111111-aaaa-aaaa-aaaa-111111111111");
+            var customer2Id = Guid.Parse("22222222-aaaa-aaaa-aaaa-222222222222");
+            var customer3Id = Guid.Parse("33333333-aaaa-aaaa-aaaa-333333333333");
+            var customer4Id = Guid.Parse("44444444-aaaa-aaaa-aaaa-444444444444");
+
+            if (!await context.Customers.IgnoreQueryFilters().AnyAsync(c => c.Id == customer1Id, ct))
+            {
+                logger.LogInformation("Seeding Customers & Debt Profiles...");
+                var customers = new List<MT_GRMS.Domain.Entities.Sales.Customer>
+                {
+                    new MT_GRMS.Domain.Entities.Sales.Customer
+                    {
+                        Id = customer1Id,
+                        TenantId = DefaultTenantId,
+                        CustomerCode = "KH001",
+                        Name = "Nguyễn Văn An (Quán Ăn Gia Đình)",
+                        Phone = "0901234567",
+                        Email = "an.nguyen@example.com",
+                        Address = "12 Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP.HCM",
+                        MembershipTier = "Gold",
+                        RewardPoints = 1250,
+                        TotalSpending = 45000000m,
+                        TotalDebt = 8000000m,
+                        DebtLimit = 20000000m,
+                        AllowDebt = true,
+                        IsBlockedForDebt = false
+                    },
+                    new MT_GRMS.Domain.Entities.Sales.Customer
+                    {
+                        Id = customer2Id,
+                        TenantId = DefaultTenantId,
+                        CustomerCode = "KH002",
+                        Name = "Trần Thị Bích (Tạp Hóa Đầu Hẻm)",
+                        Phone = "0912345678",
+                        Email = "bich.tran@example.com",
+                        Address = "45/3 Hai Bà Trưng, Phường Đa Kao, Quận 1, TP.HCM",
+                        MembershipTier = "Silver",
+                        RewardPoints = 540,
+                        TotalSpending = 18000000m,
+                        TotalDebt = 12000000m,
+                        DebtLimit = 10000000m,
+                        AllowDebt = true,
+                        IsBlockedForDebt = true
+                    },
+                    new MT_GRMS.Domain.Entities.Sales.Customer
+                    {
+                        Id = customer3Id,
+                        TenantId = DefaultTenantId,
+                        CustomerCode = "KH003",
+                        Name = "Lê Hoàng Long (Tiệm Cà Phê Long)",
+                        Phone = "0987654321",
+                        Email = "long.le@example.com",
+                        Address = "88 Lê Lợi, Phường Bến Thành, Quận 1, TP.HCM",
+                        MembershipTier = "Platinum",
+                        RewardPoints = 3200,
+                        TotalSpending = 98000000m,
+                        TotalDebt = 0m,
+                        DebtLimit = 15000000m,
+                        AllowDebt = true,
+                        IsBlockedForDebt = false
+                    },
+                    new MT_GRMS.Domain.Entities.Sales.Customer
+                    {
+                        Id = customer4Id,
+                        TenantId = DefaultTenantId,
+                        CustomerCode = "KH004",
+                        Name = "Phạm Minh Đức (Khách Lẻ Tiềm Năng)",
+                        Phone = "0934567890",
+                        Email = "duc.pham@example.com",
+                        Address = "102 Pasteur, Phường Bến Nghé, Quận 1, TP.HCM",
+                        MembershipTier = "Standard",
+                        RewardPoints = 50,
+                        TotalSpending = 520000m,
+                        TotalDebt = 0m,
+                        DebtLimit = 0m,
+                        AllowDebt = false,
+                        IsBlockedForDebt = false
+                    }
+                };
+
+                await context.Customers.AddRangeAsync(customers, ct);
+                await context.SaveChangesAsync(ct);
+
+                var debtInvoices = new List<CustomerDebtInvoice>
+                {
+                    new CustomerDebtInvoice
+                    {
+                        Id = Guid.NewGuid(),
+                        TenantId = DefaultTenantId,
+                        CustomerId = customer1Id,
+                        OrderId = Guid.NewGuid(),
+                        OrderCode = "HD-20261001-001",
+                        BranchId = branchId,
+                        TotalDebtAmount = 5000000m,
+                        RemainingDebtAmount = 5000000m,
+                        DueDate = new DateTime(2026, 10, 31, 23, 59, 59, DateTimeKind.Utc),
+                        Status = DebtInvoiceStatus.Unpaid,
+                        Notes = "Đơn hàng bán nợ sỉ ngày 01/10/2026 (FIFO 1)"
+                    },
+                    new CustomerDebtInvoice
+                    {
+                        Id = Guid.NewGuid(),
+                        TenantId = DefaultTenantId,
+                        CustomerId = customer1Id,
+                        OrderId = Guid.NewGuid(),
+                        OrderCode = "HD-20261015-002",
+                        BranchId = branchId,
+                        TotalDebtAmount = 3000000m,
+                        RemainingDebtAmount = 3000000m,
+                        DueDate = new DateTime(2026, 11, 15, 23, 59, 59, DateTimeKind.Utc),
+                        Status = DebtInvoiceStatus.Unpaid,
+                        Notes = "Đơn hàng bán nợ sỉ ngày 15/10/2026 (FIFO 2)"
+                    },
+                    new CustomerDebtInvoice
+                    {
+                        Id = Guid.NewGuid(),
+                        TenantId = DefaultTenantId,
+                        CustomerId = customer2Id,
+                        OrderId = Guid.NewGuid(),
+                        OrderCode = "HD-20260901-003",
+                        BranchId = branchId,
+                        TotalDebtAmount = 12000000m,
+                        RemainingDebtAmount = 12000000m,
+                        DueDate = new DateTime(2026, 9, 30, 23, 59, 59, DateTimeKind.Utc),
+                        Status = DebtInvoiceStatus.Unpaid,
+                        Notes = "Đơn hàng quá hạn nợ"
+                    }
+                };
+
+                await context.CustomerDebtInvoices.AddRangeAsync(debtInvoices, ct);
+                await context.SaveChangesAsync(ct);
+            }
+
+            // 8. Seed Additional Products & Supplier Linkages for Order Matrix
             if (!await context.SupplierProducts.IgnoreQueryFilters().AnyAsync(sp => sp.SupplierProductCode == "SP-MI-HAOHAO-TC", ct))
             {
                 logger.LogInformation("Seeding 20 Additional Grocery Products with Suppliers and Stocks...");
@@ -565,6 +808,7 @@ public static class DatabaseSeeder
 
                 var fmcgCat = await context.Categories.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.CategoryCode == "FMCG", ct);
                 var fmcgCatId = fmcgCat?.Id ?? Guid.Parse("11111111-1111-1111-1111-111111111111");
+
 
                 var alcCat = await context.Categories.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.CategoryCode == "ALCOHOL", ct);
                 var alcCatId = alcCat?.Id ?? Guid.Parse("22222222-2222-2222-2222-222222222222");

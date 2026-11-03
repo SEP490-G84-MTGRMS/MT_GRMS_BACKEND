@@ -1,3 +1,4 @@
+using MT_GRMS.Domain.Entities.Sales;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Finance;
@@ -124,11 +125,14 @@ public class CustomerDebtDatabaseIntegrationTests
 
         using (var ctx1 = new AppDbContext(options, tenant1))
         {
-            ctx1.CustomerDebtProfiles.Add(new CustomerDebtProfile
+            ctx1.Customers.Add(new Customer
             {
-                CustomerId = customerId,
-                CreditLimit = 5_000_000m,
-                CurrentDebtBalance = 1_000_000m
+                Id = customerId,
+                CustomerCode = "KH-TEST-TENANT",
+                Name = "Khách Hàng Test Đa Tenant",
+                Phone = "0909999999",
+                DebtLimit = 5_000_000m,
+                TotalDebt = 1_000_000m
             });
             await ctx1.SaveChangesAsync();
         }
@@ -136,8 +140,8 @@ public class CustomerDebtDatabaseIntegrationTests
         // Tenant 2 truy vấn không được thấy profile của Tenant 1
         using (var ctx2 = new AppDbContext(options, tenant2))
         {
-            var profileForTenant2 = await ctx2.CustomerDebtProfiles.FirstOrDefaultAsync(p => p.CustomerId == customerId);
-            Assert.Null(profileForTenant2);
+            var customerForTenant2 = await ctx2.Customers.FirstOrDefaultAsync(p => p.Id == customerId);
+            Assert.Null(customerForTenant2);
         }
     }
 }

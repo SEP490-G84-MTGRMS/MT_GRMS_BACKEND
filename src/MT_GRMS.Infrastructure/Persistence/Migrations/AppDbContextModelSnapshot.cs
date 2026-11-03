@@ -105,6 +105,11 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasMaxLength(1000)
                         .HasColumnType("character varying(1000)");
 
+                    b.Property<bool>("EligibleForVatReduction")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
                     b.Property<bool>("HasBatches")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
@@ -916,6 +921,9 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .HasPrecision(18, 2)
                         .HasColumnType("numeric(18,2)");
 
+                    b.Property<int?>("AppliedPitMethod")
+                        .HasColumnType("integer");
+
                     b.Property<string>("AuditSignatureHash")
                         .HasMaxLength(256)
                         .HasColumnType("character varying(256)")
@@ -1003,6 +1011,61 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.ToTable("HouseholdTaxSnapshots", (string)null);
                 });
 
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Finance.HouseholdTaxYearSetting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("LockReason")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<DateTime>("LockedAtUtc")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("LockedBySystem")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<int>("LockedUntilYear")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("PitMethod")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<int>("Year")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TenantId", "Year")
+                        .IsUnique();
+
+                    b.ToTable("HouseholdTaxYearSettings", (string)null);
+                });
+
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Finance.IdempotencyRecord", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1040,6 +1103,13 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasDefaultValue("PENDING");
+
                     b.Property<int>("StatusCode")
                         .HasColumnType("integer");
 
@@ -1049,6 +1119,9 @@ namespace MT_GRMS.Infrastructure.Migrations
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid?>("UserId")
+                        .HasColumnType("uuid");
 
                     b.HasKey("Id");
 
@@ -1862,6 +1935,55 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.ToTable("Users", (string)null);
                 });
 
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Inventory.Batch", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("BatchCode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("ExpiryDate")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<decimal>("InitialQuantity")
+                        .HasColumnType("numeric");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<decimal>("LandedCostPerUnit")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime>("ManufactureDate")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("Batches");
+                });
+
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Inventory.BranchStock", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1945,6 +2067,51 @@ namespace MT_GRMS.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("BranchStocks", (string)null);
+                });
+
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Inventory.StockOnHand", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("BatchId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<decimal>("MinAlertThreshold")
+                        .HasColumnType("numeric");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Quantity")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal>("ReservedQuantity")
+                        .HasColumnType("numeric");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("StockOnHands");
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Inventory.Transfer", b =>
@@ -3863,6 +4030,163 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.ToTable("SupplierProducts", (string)null);
                 });
 
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.SupplierReturn", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AttachmentUrl")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CancellationReason")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("GoodsReceiptId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("HandedOverAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("HandedOverBy")
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("ReasonNotes")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("RespondedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("SubmittedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid>("SupplierId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SupplierResponseNote")
+                        .HasColumnType("text");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<decimal>("TotalApprovedQty")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal>("TotalEstimatedAmount")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal>("TotalHandedOverQty")
+                        .HasColumnType("numeric");
+
+                    b.Property<decimal>("TotalRequestedQty")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BranchId");
+
+                    b.HasIndex("GoodsReceiptId");
+
+                    b.HasIndex("SupplierId");
+
+                    b.ToTable("SupplierReturns");
+                });
+
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.SupplierReturnLine", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("ApprovedQty")
+                        .HasColumnType("numeric");
+
+                    b.Property<string>("BatchCode")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime?>("ExpiryDate")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid?>("GoodsReceiptLineId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("HandedOverQty")
+                        .HasColumnType("numeric");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Notes")
+                        .HasColumnType("text");
+
+                    b.Property<Guid>("ProductId")
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("RejectedQty")
+                        .HasColumnType("numeric");
+
+                    b.Property<string>("RejectionReason")
+                        .HasColumnType("text");
+
+                    b.Property<decimal>("RequestedQty")
+                        .HasColumnType("numeric");
+
+                    b.Property<Guid>("SupplierReturnId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<decimal>("UnitCost")
+                        .HasColumnType("numeric");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProductId");
+
+                    b.HasIndex("SupplierReturnId");
+
+                    b.ToTable("SupplierReturnLines");
+                });
+
             modelBuilder.Entity("MT_GRMS.Domain.Entities.System.AuditLog", b =>
                 {
                     b.Property<Guid>("Id")
@@ -4559,6 +4883,52 @@ namespace MT_GRMS.Infrastructure.Migrations
                     b.Navigation("Supplier");
                 });
 
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.SupplierReturn", b =>
+                {
+                    b.HasOne("MT_GRMS.Domain.Entities.SaaS.Branch", "Branch")
+                        .WithMany()
+                        .HasForeignKey("BranchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("MT_GRMS.Domain.Entities.Supplier.GoodsReceipt", "GoodsReceipt")
+                        .WithMany()
+                        .HasForeignKey("GoodsReceiptId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("MT_GRMS.Domain.Entities.Supplier.Supplier", "Supplier")
+                        .WithMany()
+                        .HasForeignKey("SupplierId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Branch");
+
+                    b.Navigation("GoodsReceipt");
+
+                    b.Navigation("Supplier");
+                });
+
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.SupplierReturnLine", b =>
+                {
+                    b.HasOne("MT_GRMS.Domain.Entities.Catalog.Product", "Product")
+                        .WithMany()
+                        .HasForeignKey("ProductId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("MT_GRMS.Domain.Entities.Supplier.SupplierReturn", "SupplierReturn")
+                        .WithMany("Lines")
+                        .HasForeignKey("SupplierReturnId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Product");
+
+                    b.Navigation("SupplierReturn");
+                });
+
             modelBuilder.Entity("MT_GRMS.Domain.Entities.System.AuditLog", b =>
                 {
                     b.HasOne("MT_GRMS.Domain.Entities.Identity.User", "Actor")
@@ -4685,6 +5055,11 @@ namespace MT_GRMS.Infrastructure.Migrations
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.SupplierDeliveryConfig", b =>
                 {
                     b.Navigation("BlackoutDates");
+                });
+
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Supplier.SupplierReturn", b =>
+                {
+                    b.Navigation("Lines");
                 });
 #pragma warning restore 612, 618
         }

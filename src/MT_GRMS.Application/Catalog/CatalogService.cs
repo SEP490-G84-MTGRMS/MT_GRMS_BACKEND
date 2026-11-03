@@ -58,7 +58,9 @@ public class CatalogService : ICatalogService
             p.CreatedAt,
             p.UpdatedAt,
             imageUrls,
-            hasOrders
+            hasOrders,
+            p.TaxCategory ?? "STANDARD_1PCT",
+            p.EligibleForVatReduction
         );
     }
 
@@ -179,7 +181,10 @@ public class CatalogService : ICatalogService
             Description = request.Description?.Trim(),
             InternalNote = request.InternalNote?.Trim(),
             HasBatches = request.HasBatches,
-            IsFavorite = request.IsFavorite
+            IsFavorite = request.IsFavorite,
+            IsActive = true,
+            TaxCategory = "STANDARD_1PCT",
+            EligibleForVatReduction = request.EligibleForVatReduction
         };
 
         await _productRepository.AddAsync(product, cancellationToken);
@@ -250,6 +255,8 @@ public class CatalogService : ICatalogService
         product.InternalNote = request.InternalNote?.Trim();
         product.HasBatches = request.HasBatches;
         product.IsFavorite = request.IsFavorite;
+        product.TaxCategory = request.TaxCategory ?? product.TaxCategory ?? "STANDARD_1PCT";
+        product.EligibleForVatReduction = request.EligibleForVatReduction;
         product.UpdatedAt = DateTime.UtcNow;
 
         if (request.ImageUrls != null)

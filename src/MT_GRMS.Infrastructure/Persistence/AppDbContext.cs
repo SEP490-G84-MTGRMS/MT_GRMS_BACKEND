@@ -37,7 +37,6 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<Tenant> Tenants { get; set; } = null!;
     public virtual DbSet<User> Users { get; set; } = null!;
     public virtual DbSet<TenantUser> TenantUsers { get; set; } = null!;
-    public virtual DbSet<TaxSnapshot> TaxSnapshots { get; set; } = null!;
     public virtual DbSet<AuditLog> AuditLogs { get; set; } = null!;
 
     // 2. Phân hệ Catalog & Hàng hóa
@@ -78,26 +77,21 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<Domain.Entities.Sales.Order> Orders { get; set; } = null!;
     public virtual DbSet<OrderDetail> OrderDetails { get; set; } = null!;
 
-    // 6. Phân hệ Tài chính, Sổ quỹ & Chi phí (FE-07, FE-17)
-    public virtual DbSet<CashBook> CashBooks { get; set; } = null!;
-    public virtual DbSet<ServiceExpense> ServiceExpenses { get; set; } = null!;
+    // 6. Phân hệ Tài chính, Sổ quỹ & Chi phí (FE-07, FE-17) - Đã hợp nhất FinanceAccounts
     public virtual DbSet<CashbookEntry> CashbookEntries { get; set; } = null!;
-    public virtual DbSet<BranchCashTill> BranchCashTills { get; set; } = null!;
-    public virtual DbSet<BranchSafe> BranchSafes { get; set; } = null!;
+    public virtual DbSet<FinanceAccount> FinanceAccounts { get; set; } = null!;
     public virtual DbSet<CashInTransit> CashInTransits { get; set; } = null!;
     public virtual DbSet<ShiftZReport> ShiftZReports { get; set; } = null!;
-    public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!;
-    public virtual DbSet<TenantBankAccount> TenantBankAccounts { get; set; } = null!;
+    public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!; 
     public virtual DbSet<IdempotencyRecord> IdempotencyRecords { get; set; } = null!;
 
-    // 7. Customer Debt Module (FE-08)
-    public virtual DbSet<CustomerDebtProfile> CustomerDebtProfiles { get; set; } = null!;
+    // 7. Customer Debt Module (FE-08) - Đã hợp nhất công nợ vào Customers
     public virtual DbSet<CustomerDebtInvoice> CustomerDebtInvoices { get; set; } = null!;
     public virtual DbSet<CustomerDebtEntry> CustomerDebtEntries { get; set; } = null!;
     public virtual DbSet<CustomerDebtAllocation> CustomerDebtAllocations { get; set; } = null!;
-
     // 8. Household Tax Module (FE-19 TT 152/2025/TT-BTC)
     public virtual DbSet<HouseholdTaxSnapshot> HouseholdTaxSnapshots { get; set; } = null!;
+    public virtual DbSet<HouseholdTaxYearSetting> HouseholdTaxYearSettings { get; set; } = null!;
 
     // 9. Phân hệ Nhân sự, Ca kíp & Tiền lương (4 bảng)
     public virtual DbSet<Employee> Employees { get; set; } = null!;

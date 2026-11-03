@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Reports;
 using MT_GRMS.Domain.Entities;
 using MT_GRMS.Domain.Entities.Finance;
@@ -25,7 +25,10 @@ public class PnLReportRepository : IPnLReportRepository
             query = query.Where(o => o.BranchId == branchId.Value);
         }
 
-        query = query.Where(o => o.CreatedAt >= fromDate && o.CreatedAt <= toDate && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"));
+        // Bao gồm cả đơn đã thanh toán (PAID) và đơn bán nợ (DEBT) theo nguyên tắc dồn tích doanh thu
+        query = query.Where(o => o.CreatedAt >= fromDate && o.CreatedAt <= toDate &&
+                                 (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid" || o.PaymentStatus == "DEBT" || o.PaymentStatus == "Debt") &&
+                                 o.Status != "Cancelled");
 
         var gross = await query.SumAsync(o => (decimal?)o.TotalAmount, ct) ?? 0m;
         var discounts = await query.SumAsync(o => (decimal?)o.DiscountAmount, ct) ?? 0m;
@@ -53,7 +56,9 @@ public class PnLReportRepository : IPnLReportRepository
         }
 
         var orders = await query
-            .Where(o => o.CreatedAt >= fromDate && o.CreatedAt <= toDate && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"))
+            .Where(o => o.CreatedAt >= fromDate && o.CreatedAt <= toDate &&
+                        (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid" || o.PaymentStatus == "DEBT" || o.PaymentStatus == "Debt") &&
+                        o.Status != "Cancelled")
             .ToListAsync(ct);
 
         var productIds = orders.SelectMany(o => o.Details).Select(i => i.ProductId).Distinct().ToList();
@@ -70,14 +75,30 @@ public class PnLReportRepository : IPnLReportRepository
             foreach (var item in order.Details)
             {
                 totalItemsCount++;
-                if (productCostDict.TryGetValue(item.ProductId, out var costPrice) && costPrice > 0)
+                decimal itemCost = 0m;
+                bool hasCost = false;
+
+                // Ưu tiên 1: Giá vốn đã chốt cứng tại thời điểm xuất bán (CostPriceAtSale)
+                if (item.CostPriceAtSale > 0)
                 {
-                    actualCogs += item.Quantity * costPrice;
+                    itemCost = item.CostPriceAtSale;
+                    hasCost = true;
+                }
+                // Ưu tiên 2: Fallback giá vốn trong danh mục sản phẩm hiện hành (nếu đơn cũ chưa có CostPriceAtSale)
+                else if (productCostDict.TryGetValue(item.ProductId, out var catalogCost) && catalogCost > 0)
+                {
+                    itemCost = catalogCost;
+                    hasCost = true;
+                }
+
+                if (hasCost)
+                {
+                    actualCogs += item.Quantity * itemCost;
                     itemsWithCost++;
                 }
                 else
                 {
-                    // Fallback 70% giá bán cho sản phẩm này
+                    // Ưu tiên 3: Fallback ước tính 70% giá bán nếu hoàn toàn chưa có giá vốn
                     actualCogs += item.Quantity * item.UnitPrice * 0.70m;
                 }
             }
@@ -156,7 +177,9 @@ public class PnLReportRepository : IPnLReportRepository
         if (branchId.HasValue) orderQuery = orderQuery.Where(o => o.BranchId == branchId.Value);
 
         var orders = await orderQuery
-            .Where(o => o.CreatedAt >= fromDate && o.CreatedAt <= toDate && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid"))
+            .Where(o => o.CreatedAt >= fromDate && o.CreatedAt <= toDate &&
+                        (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid" || o.PaymentStatus == "DEBT" || o.PaymentStatus == "Debt") &&
+                        o.Status != "Cancelled")
             .ToListAsync(ct);
 
         // Lấy bảng giá vốn cho các sản phẩm liên quan (1 query)
@@ -207,14 +230,21 @@ public class PnLReportRepository : IPnLReportRepository
                 {
                     foreach (var item in order.Details)
                     {
-                        if (productCostDict.TryGetValue(item.ProductId, out var cost) && cost > 0)
+                        decimal itemCost = 0m;
+                        if (item.CostPriceAtSale > 0)
                         {
-                            dayCogs += item.Quantity * cost;
+                            itemCost = item.CostPriceAtSale;
+                        }
+                        else if (productCostDict.TryGetValue(item.ProductId, out var cost) && cost > 0)
+                        {
+                            itemCost = cost;
                         }
                         else
                         {
-                            dayCogs += item.Quantity * item.UnitPrice * 0.70m;
+                            itemCost = item.UnitPrice * 0.70m;
                         }
+
+                        dayCogs += item.Quantity * itemCost;
                     }
                 }
             }

@@ -37,45 +37,34 @@ public class CashbookEntryConfiguration : IEntityTypeConfiguration<CashbookEntry
     }
 }
 
-public class BranchCashTillConfiguration : IEntityTypeConfiguration<BranchCashTill>
+public class FinanceAccountConfiguration : IEntityTypeConfiguration<FinanceAccount>
 {
-    public void Configure(EntityTypeBuilder<BranchCashTill> builder)
+    public void Configure(EntityTypeBuilder<FinanceAccount> builder)
     {
-        builder.ToTable("BranchCashTills");
+        builder.ToTable("FinanceAccounts");
 
-        builder.Property(t => t.TillName)
-            .HasMaxLength(100)
+        builder.Property(a => a.AccountName)
+            .HasMaxLength(150)
             .IsRequired();
 
-        builder.Property(t => t.CurrentBalance)
+        builder.Property(a => a.CurrentBalance)
             .HasColumnType("decimal(18,2)")
             .IsRequired();
 
-        builder.Property(t => t.RowVersion)
+        builder.Property(a => a.BankName)
+            .HasMaxLength(100);
+
+        builder.Property(a => a.AccountNumber)
+            .HasMaxLength(50);
+
+        builder.Property(a => a.AccountHolderName)
+            .HasMaxLength(200);
+
+        builder.Property(a => a.RowVersion)
             .IsRowVersion();
 
-        builder.HasIndex(t => new { t.TenantId, t.BranchId });
-    }
-}
-
-public class BranchSafeConfiguration : IEntityTypeConfiguration<BranchSafe>
-{
-    public void Configure(EntityTypeBuilder<BranchSafe> builder)
-    {
-        builder.ToTable("BranchSafes");
-
-        builder.Property(s => s.SafeName)
-            .HasMaxLength(100)
-            .IsRequired();
-
-        builder.Property(s => s.CurrentBalance)
-            .HasColumnType("decimal(18,2)")
-            .IsRequired();
-
-        builder.Property(s => s.RowVersion)
-            .IsRowVersion();
-
-        builder.HasIndex(s => new { s.TenantId, s.BranchId });
+        builder.HasIndex(a => new { a.TenantId, a.BranchId });
+        builder.HasIndex(a => new { a.TenantId, a.AccountType });
     }
 }
 
@@ -153,35 +142,6 @@ public class ExpenseVoucherConfiguration : IEntityTypeConfiguration<ExpenseVouch
 
         builder.HasIndex(e => new { e.TenantId, e.BranchId, e.ExpenseDate });
         builder.HasIndex(e => new { e.TenantId, e.Status });
-    }
-}
-
-public class TenantBankAccountConfiguration : IEntityTypeConfiguration<TenantBankAccount>
-{
-    public void Configure(EntityTypeBuilder<TenantBankAccount> builder)
-    {
-        builder.ToTable("TenantBankAccounts");
-
-        builder.Property(b => b.BankName)
-            .HasMaxLength(100)
-            .IsRequired();
-
-        builder.Property(b => b.AccountNumber)
-            .HasMaxLength(50)
-            .IsRequired();
-
-        builder.Property(b => b.AccountHolderName)
-            .HasMaxLength(200)
-            .IsRequired();
-
-        builder.Property(b => b.CurrentBalance)
-            .HasColumnType("decimal(18,2)")
-            .IsRequired();
-
-        builder.Property(b => b.RowVersion)
-            .IsRowVersion();
-
-        builder.HasIndex(b => new { b.TenantId, b.AccountNumber }).IsUnique();
     }
 }
 

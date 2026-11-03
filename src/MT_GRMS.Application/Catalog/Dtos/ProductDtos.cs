@@ -25,7 +25,9 @@ public record ProductResponse(
     DateTime CreatedAt,
     DateTime? UpdatedAt,
     List<string>? ImageUrls = null,
-    bool HasOrders = false
+    bool HasOrders = false,
+    string TaxCategory = "STANDARD_1PCT",
+    bool EligibleForVatReduction = false
 )
 {
     // Backward compatibility aliases
@@ -56,7 +58,9 @@ public record ProductCreateRequest(
     string? InternalNote = null,
     bool HasBatches = false,
     bool IsFavorite = false,
-    List<string>? ImageUrls = null
+    List<string>? ImageUrls = null,
+    bool EligibleForVatReduction = false,
+    string TaxCategory = "STANDARD_1PCT"
 )
 {
     // Backward compatibility constructor
@@ -68,7 +72,8 @@ public record ProductCreateRequest(
         decimal BasePrice,
         decimal CostPrice,
         string UnitName,
-        bool HasBatches) : this(
+        bool HasBatches,
+        bool EligibleForVatReduction = false) : this(
             ProductName,
             CategoryId ?? Guid.Empty,
             BasePrice,
@@ -76,7 +81,8 @@ public record ProductCreateRequest(
             Barcode,
             string.IsNullOrWhiteSpace(UnitName) ? "Cái" : UnitName,
             CostPrice,
-            HasBatches: HasBatches)
+            HasBatches: HasBatches,
+            EligibleForVatReduction: EligibleForVatReduction)
     {
     }
 }
@@ -97,7 +103,9 @@ public record ProductUpdateRequest(
     string? InternalNote = null,
     bool HasBatches = false,
     bool IsFavorite = false,
-    List<string>? ImageUrls = null
+    List<string>? ImageUrls = null,
+    bool EligibleForVatReduction = false,
+    string TaxCategory = "STANDARD_1PCT"
 );
 
 public class ProductQueryFilter

@@ -1,27 +1,35 @@
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Debt;
 using MT_GRMS.Domain.Entities.Finance;
+using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Infrastructure.Repositories;
 
-public class CustomerDebtRepository : GenericRepository<CustomerDebtProfile>, ICustomerDebtRepository
+public class CustomerDebtRepository : GenericRepository<Customer>, ICustomerDebtRepository
 {
     public CustomerDebtRepository(AppDbContext context) : base(context)
     {
     }
 
-    public async Task<CustomerDebtProfile?> GetProfileWithLockAsync(Guid customerId, CancellationToken ct = default)
+    public async Task<Customer?> GetCustomerWithLockAsync(Guid customerId, CancellationToken ct = default)
     {
         if (_context.Database.IsSqlServer())
         {
-            return await _context.CustomerDebtProfiles
-                .FromSqlInterpolated($"SELECT * FROM CustomerDebtProfiles WITH (UPDLOCK, ROWLOCK) WHERE CustomerId = {customerId}")
+            return await _context.Customers
+                .FromSqlInterpolated($"SELECT * FROM Customers WITH (UPDLOCK, ROWLOCK) WHERE CustomerID = {customerId}")
                 .SingleOrDefaultAsync(ct);
         }
 
-        return await _context.CustomerDebtProfiles.SingleOrDefaultAsync(p => p.CustomerId == customerId, ct);
+        if (_context.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            return await _context.Customers
+                .FromSqlInterpolated($"SELECT * FROM \"Customers\" WHERE \"CustomerID\" = {customerId} FOR UPDATE")
+                .SingleOrDefaultAsync(ct);
+        }
+
+        return await _context.Customers.SingleOrDefaultAsync(p => p.Id == customerId, ct);
     }
 
     public async Task<List<CustomerDebtInvoice>> GetOpenInvoicesAsync(Guid customerId, CancellationToken ct = default)

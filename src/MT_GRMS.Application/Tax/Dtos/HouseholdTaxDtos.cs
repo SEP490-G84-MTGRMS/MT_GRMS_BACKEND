@@ -1,4 +1,4 @@
-﻿using MT_GRMS.Domain.Enums;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Application.Tax.Dtos;
 
@@ -25,7 +25,9 @@ public class HouseholdTaxFilterDto
     public decimal? StandardVatRevenueInPeriod { get; set; } // Doanh thu hàng chịu 1.0% (bia, rượu, thuốc lá...)
     public decimal? CustomVatRate { get; set; }
     public decimal? CustomPitRate { get; set; }
-    public decimal? PriorDeclaredPitTaxOverride { get; set; } // Cho phép mock số thuế TNCN đã khai các kỳ trước khi test
+    public decimal? PriorDeclaredPitTaxOverride { get; set; }
+    public decimal? PriorDeclaredVatTaxOverride { get; set; } // Mock số thuế GTGT đã kê khai các kỳ trước // Cho phép mock số thuế TNCN đã khai các kỳ trước khi test
+    public string? VatOption { get; set; } = "PRUDENT_YTD"; // "PRUDENT_YTD" (Thận trọng - Dự phòng toàn bộ năm) hoặc "QUARTER_ONLY" (Chỉ tính quý vượt)
 }
 
 public class HouseholdTaxSummaryDto
@@ -45,9 +47,22 @@ public class HouseholdTaxSummaryDto
     public bool IsTaxExempt { get; set; }
     public decimal TaxExemptionThreshold { get; set; } = 1_000_000_000m; // 1 tỷ VNĐ theo NĐ 141/2026/NĐ-CP
 
+    // Cảnh báo Gross vượt nhưng Net chưa vượt ngưỡng (Doanh thu gộp vs Doanh thu thuần)
+    public decimal AnnualAccumulatedGrossRevenue { get; set; }
+    public bool IsGrossOver1BNetUnder1B { get; set; }
+    public bool IsGrossOver3BNetUnder3B { get; set; }
+    public string? NetVsGrossThresholdWarning { get; set; }
+    public decimal? GrossBasedEstimatedTaxAmount { get; set; }
+
     // Cảnh báo vượt ngưỡng miễn thuế giữa năm (từ <= 1 tỷ lên > 1 tỷ)
     public bool IsThresholdCrossedMidYear { get; set; }
     public string? ThresholdExceededNote { get; set; }
+
+    // Cảnh báo tiến trình ngưỡng 3 tỷ VNĐ (Điểm d Khoản 5 Điều 4 Nghị định 68/2026/NĐ-CP)
+    public bool IsApproaching3BThreshold { get; set; } // >= 2.7 tỷ (90% của 3 tỷ)
+    public bool IsExceeding3BThreshold { get; set; } // > 3 tỷ
+    public bool Is3BCrossedMidYear { get; set; } // Vừa vượt 3 tỷ giữa năm (giữ tỷ lệ % đến hết năm, năm sau mới chuyển)
+    public int? DeclarationMethodStartYear { get; set; } // Năm bắt buộc áp dụng phương pháp kê khai (ổn định 2 năm)
 
     // Cảnh báo tiến trình ngưỡng Nhóm 4 (toàn chuỗi Tenant)
     public bool IsApproachingGroup4Threshold { get; set; } // >= 40 tỷ (80% của 50 tỷ)
@@ -66,7 +81,14 @@ public class HouseholdTaxSummaryDto
     public bool IsVatReduced { get; set; } // Cờ xác nhận áp dụng chính sách giảm thuế GTGT 2026
     public decimal VatTaxableRevenue { get; set; }
     public decimal VatAmount { get; set; }
+    public decimal PriorDeclaredVatTax { get; set; } // Số thuế GTGT đã kê khai các kỳ trước trong năm
     public VatBreakdownDto VatBreakdown { get; set; } = new();
+
+    // Tùy chọn ước tính thuế GTGT khi vượt 1 tỷ giữa năm (Thận trọng YTD vs Tối thiểu theo kỳ)
+    public decimal QuarterlyVatAmount { get; set; }
+    public decimal RetrospectiveVatAmount { get; set; }
+    public string VatCalculationOption { get; set; } = "PRUDENT_YTD";
+    public decimal PeriodNetRevenue { get; set; }
 
     // Chi tiết thuế TNCN (Chỉ tính trên phần doanh thu lũy kế vượt 1 tỷ hoặc trên lợi nhuận)
     public decimal PitRate { get; set; } // 0.5% (tỷ lệ) hoặc 15-20% (kê khai)
@@ -130,6 +152,7 @@ public class CreateTaxSnapshotRequest
     public Guid? BranchId { get; set; }
     public TaxCalculationMethod CalculationMethod { get; set; } = TaxCalculationMethod.RevenuePercentage;
     public string? Tier2Method { get; set; } // "REVENUE_EXCESS" | "PROFIT_15"
+    public string? VatOption { get; set; } = "PRUDENT_YTD"; // "PRUDENT_YTD" | "QUARTER_ONLY"
     public string SecurityPin { get; set; } = string.Empty;
     public bool ApplyVatReduction2026 { get; set; } = false;
     public decimal? VatReductionPercentage { get; set; }
@@ -155,6 +178,7 @@ public class HouseholdTaxSnapshotDto
     public decimal AnnualAccumulatedRevenue { get; set; }
     public HouseholdTaxGroup HouseholdGroup { get; set; }
     public TaxCalculationMethod CalculationMethod { get; set; }
+    public TaxCalculationMethod? AppliedPitMethod { get; set; }
     public bool IsTaxExempt { get; set; }
     public decimal TaxableRevenueInPeriod { get; set; }
     public decimal VatRate { get; set; }
