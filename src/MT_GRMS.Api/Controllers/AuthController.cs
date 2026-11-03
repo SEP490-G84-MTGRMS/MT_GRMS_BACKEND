@@ -1,4 +1,4 @@
-using Microsoft.AspNetCore.Mvc;
+﻿using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Api.Controllers;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Auth.Dtos;
@@ -7,7 +7,6 @@ using MT_GRMS.Application.Common;
 namespace MT_GRMS.API.Controllers;
 
 [ApiController]
-[Route("api/v1/auth")]
 [Route("api/[controller]")]
 [Route("api/v1/[controller]")]
 public class AuthController : BaseApiController
