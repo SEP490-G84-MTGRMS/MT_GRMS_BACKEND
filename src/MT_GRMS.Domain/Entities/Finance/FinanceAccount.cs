@@ -20,3 +20,4 @@ public class FinanceAccount : BaseTenantEntity
     public bool IsActive { get; set; } = true;
     public byte[]? RowVersion { get; set; }
 }
+

@@ -46,10 +46,7 @@ public class BranchProductService : IBranchProductService
 
         var (items, totalCount) = await _repository.GetPagedBranchProductsAsync(
             branchId,
-            filter.SearchTerm,
-            filter.Category,
-            filter.Status,
-            filter.StockAlertFilter,
+            filter,
             pageIndex,
             pageSize,
             cancellationToken);
@@ -122,12 +119,25 @@ public class BranchProductService : IBranchProductService
                     product.MinStock = command.DefaultMinStock.Value;
                 }
 
+                var sp = await _repository.GetSupplierProductAsync(productId, null, cancellationToken);
+                var moq = sp != null && sp.MinimumOrderQuantity > 0 ? (int)sp.MinimumOrderQuantity : 1;
+                if (command.DefaultMinOrderQuantity.HasValue && command.DefaultMinOrderQuantity.Value >= 0)
+                {
+                    moq = command.DefaultMinOrderQuantity.Value;
+                    if (sp != null)
+                    {
+                        sp.MinimumOrderQuantity = command.DefaultMinOrderQuantity.Value;
+                        sp.UpdatedAt = DateTime.UtcNow;
+                    }
+                }
+
                 await _repository.AddBranchStockAsync(newStock, cancellationToken);
 
                 assignedList.Add(new BranchProductDto
                 {
                     Id = newStock.Id,
                     BranchId = branch.Id,
+                    BranchCode = branch.BranchCode,
                     BranchName = branch.Name,
                     ProductId = product.Id,
                     Name = product.Name,
@@ -136,10 +146,12 @@ public class BranchProductService : IBranchProductService
                     Category = product.Category?.Name ?? "Khác",
                     Unit = product.BaseUnit,
                     RetailPrice = product.SellingPrice,
-                    CostPrice = product.CostPrice ?? 0m,
+                    CostPrice = sp?.AgreedWholesalePrice ?? product.CostPrice ?? 0m,
                     CurrentStock = 0,
                     MinStockLevel = product.MinStock,
-                    PrimarySupplierName = "Nông Sản Tươi Sạch Khải Anh",
+                    PrimarySupplierCode = sp?.Supplier?.Code ?? string.Empty,
+                    PrimarySupplierName = sp?.Supplier?.Name ?? string.Empty,
+                    MinOrderQuantity = moq,
                     Status = product.Status,
                     ShelfLocation = newStock.ShelfLocation,
                     AssignedDate = DateTime.UtcNow
@@ -182,26 +194,56 @@ public class BranchProductService : IBranchProductService
             throw new NotFoundException($"Sản phẩm '{product.Name}' chưa được gán vào chi nhánh '{branch.Name}'.");
         }
 
-        // Cập nhật giá bán lẻ niêm yết và mức tồn tối thiểu
-        product.SellingPrice = command.RetailPrice;
-        product.MinStock = command.MinStockLevel;
-
-        if (!string.IsNullOrWhiteSpace(command.ShelfLocation))
+        // Cập nhật giá bán lẻ niêm yết và trạng thái trên từng bản ghi kho của chi nhánh
+        foreach (var stock in stocks)
         {
-            foreach (var stock in stocks)
+            stock.RetailPrice = command.RetailPrice;
+            if (!string.IsNullOrWhiteSpace(command.Status))
+            {
+                stock.Status = string.Equals(command.Status, "Active", StringComparison.OrdinalIgnoreCase) ? "Active" : "Inactive";
+            }
+            if (!string.IsNullOrWhiteSpace(command.ShelfLocation))
             {
                 stock.ShelfLocation = command.ShelfLocation.Trim();
+            }
+            stock.UpdatedAt = DateTime.UtcNow;
+        }
+
+        if (command.MinStockLevel >= 0)
+        {
+            product.MinStock = command.MinStockLevel;
+        }
+
+        // Cập nhật MOQ trên SupplierProduct tương ứng của nhà cung cấp đang thao tác
+        if (command.MinOrderQuantity.HasValue && command.MinOrderQuantity.Value > 0)
+        {
+            var targetSupplierId = command.SupplierId ?? stocks.FirstOrDefault(s => s.SupplierId.HasValue)?.SupplierId;
+            var sp = await _repository.GetSupplierProductAsync(productId, targetSupplierId, cancellationToken);
+            if (sp != null)
+            {
+                sp.MinimumOrderQuantity = command.MinOrderQuantity.Value;
+                sp.UpdatedAt = DateTime.UtcNow;
             }
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        var firstStock = stocks.First();
+        var spUpdated = await _repository.GetSupplierProductAsync(productId, firstStock.SupplierId, cancellationToken);
+        var costPrice = (spUpdated != null && spUpdated.AgreedWholesalePrice > 0)
+            ? spUpdated.AgreedWholesalePrice
+            : (product.CostPrice ?? 0m);
+        var moq = (spUpdated != null && spUpdated.MinimumOrderQuantity > 0)
+            ? (int)spUpdated.MinimumOrderQuantity
+            : (command.MinOrderQuantity ?? 1);
+
         var totalStock = stocks.Sum(s => s.QuantityOnHand);
 
         return new BranchProductDto
         {
-            Id = stocks.First().Id,
+            Id = firstStock.Id,
             BranchId = branch.Id,
+            BranchCode = branch.BranchCode,
             BranchName = branch.Name,
             ProductId = product.Id,
             Name = product.Name,
@@ -209,14 +251,17 @@ public class BranchProductService : IBranchProductService
             Barcode = product.Barcode,
             Category = product.Category?.Name ?? "Khác",
             Unit = product.BaseUnit,
-            RetailPrice = product.SellingPrice,
-            CostPrice = product.CostPrice ?? 0m,
+            RetailPrice = firstStock.RetailPrice ?? product.SellingPrice,
+            CostPrice = costPrice,
             CurrentStock = totalStock,
             MinStockLevel = product.MinStock,
-            PrimarySupplierName = "Nông Sản Tươi Sạch Khải Anh",
-            Status = product.Status,
-            ShelfLocation = stocks.First().ShelfLocation,
-            AssignedDate = DateTime.UtcNow
+            SupplierId = firstStock.SupplierId ?? spUpdated?.SupplierId,
+            PrimarySupplierCode = firstStock.Supplier?.Code ?? spUpdated?.Supplier?.Code ?? string.Empty,
+            PrimarySupplierName = firstStock.Supplier?.Name ?? spUpdated?.Supplier?.Name ?? string.Empty,
+            MinOrderQuantity = moq,
+            Status = firstStock.Status,
+            ShelfLocation = firstStock.ShelfLocation,
+            AssignedDate = firstStock.CreatedAt
         };
     }
 
@@ -245,14 +290,28 @@ public class BranchProductService : IBranchProductService
         }
 
         var normalizedStatus = string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase) ? "Active" : "Inactive";
-        product.Status = normalizedStatus;
+        foreach (var stock in stocks)
+        {
+            stock.Status = normalizedStatus;
+            stock.UpdatedAt = DateTime.UtcNow;
+        }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        var firstStock = stocks.First();
+        var sp = await _repository.GetSupplierProductAsync(productId, firstStock.SupplierId, cancellationToken);
+        var costPrice = (sp != null && sp.AgreedWholesalePrice > 0)
+            ? sp.AgreedWholesalePrice
+            : (product.CostPrice ?? 0m);
+        var moq = (sp != null && sp.MinimumOrderQuantity > 0)
+            ? (int)sp.MinimumOrderQuantity
+            : 10;
+
         return new BranchProductDto
         {
-            Id = stocks.First().Id,
+            Id = firstStock.Id,
             BranchId = branch.Id,
+            BranchCode = branch.BranchCode,
             BranchName = branch.Name,
             ProductId = product.Id,
             Name = product.Name,
@@ -260,14 +319,17 @@ public class BranchProductService : IBranchProductService
             Barcode = product.Barcode,
             Category = product.Category?.Name ?? "Khác",
             Unit = product.BaseUnit,
-            RetailPrice = product.SellingPrice,
-            CostPrice = product.CostPrice ?? 0m,
+            RetailPrice = firstStock.RetailPrice ?? product.SellingPrice,
+            CostPrice = costPrice,
             CurrentStock = stocks.Sum(s => s.QuantityOnHand),
             MinStockLevel = product.MinStock,
-            PrimarySupplierName = "Nông Sản Tươi Sạch Khải Anh",
-            Status = product.Status,
-            ShelfLocation = stocks.First().ShelfLocation,
-            AssignedDate = DateTime.UtcNow
+            SupplierId = firstStock.SupplierId ?? sp?.SupplierId,
+            PrimarySupplierCode = firstStock.Supplier?.Code ?? sp?.Supplier?.Code ?? string.Empty,
+            PrimarySupplierName = firstStock.Supplier?.Name ?? sp?.Supplier?.Name ?? string.Empty,
+            MinOrderQuantity = moq,
+            Status = firstStock.Status,
+            ShelfLocation = firstStock.ShelfLocation,
+            AssignedDate = firstStock.CreatedAt
         };
     }
 
@@ -300,6 +362,14 @@ public class BranchProductService : IBranchProductService
             throw new BusinessException(
                 "CANNOT_REMOVE_PRODUCT_WITH_STOCK",
                 $"Không thể gỡ sản phẩm '{product.Name}' khỏi chi nhánh '{branch.Name}' khi tồn kho thực tế vẫn còn ({totalCurrentStock} {product.BaseUnit}). Vui lòng điều chuyển hoặc xuất kho hết trước.");
+        }
+
+        var totalReserved = stocks.Sum(s => s.QuantityReserved);
+        if (totalReserved > 0)
+        {
+            throw new BusinessException(
+                "CANNOT_REMOVE_PRODUCT_WITH_RESERVED_STOCK",
+                $"Không thể gỡ sản phẩm '{product.Name}' khỏi chi nhánh '{branch.Name}' khi đang có {totalReserved} {product.BaseUnit} tạm giữ trong các đơn hàng chờ xuất.");
         }
 
         _repository.RemoveBranchStocks(stocks);

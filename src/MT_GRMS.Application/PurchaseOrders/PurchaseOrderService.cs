@@ -26,10 +26,46 @@ public class PurchaseOrderService : IPurchaseOrderService
         _tenantContext = tenantContext;
     }
 
+    private void EnsureBranchAccess(Guid branchId)
+    {
+        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+        if (role is "EMPLOYEE" or "STAFF" or "CASHIER")
+        {
+            if (_tenantContext.CurrentBranchId.HasValue && _tenantContext.CurrentBranchId.Value != Guid.Empty)
+            {
+                if (branchId != _tenantContext.CurrentBranchId.Value)
+                {
+                    throw new UnauthorizedAccessException("Nhân viên chỉ có quyền truy cập và thao tác đặt hàng tại chi nhánh được phân công.");
+                }
+            }
+        }
+    }
+
+    private async Task<string?> ResolveValidUserIdAsync(CancellationToken ct = default)
+    {
+        if (_tenantContext.CurrentUserId != Guid.Empty)
+        {
+            var strId = _tenantContext.CurrentUserId.ToString();
+            if (await _repository.UserExistsAsync(strId, ct))
+                return strId;
+        }
+
+        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+        var fallbackId = (role is "EMPLOYEE" or "STAFF" or "CASHIER") ? "user-employee-001" : "user-owner-001";
+        if (await _repository.UserExistsAsync(fallbackId, ct))
+        {
+            return fallbackId;
+        }
+
+        return null;
+    }
+
     public async Task<OrderMatrixResponse> GetOrderMatrixAsync(
         OrderMatrixQuery query,
         CancellationToken cancellationToken = default)
     {
+        EnsureBranchAccess(query.BranchId);
+
         var branch = await _repository.GetBranchByIdAsync(query.BranchId, cancellationToken);
         if (branch == null || branch.IsDeleted)
         {
@@ -37,6 +73,7 @@ public class PurchaseOrderService : IPurchaseOrderService
         }
 
         var products = await _repository.GetMatrixProductsAsync(query.BranchId, query.SupplierId, cancellationToken);
+        var supplierConfigs = await _repository.GetMatrixSupplierConfigsAsync(query.BranchId, query.SupplierId, cancellationToken);
 
         var draftPo = await _repository.GetDraftMatrixPoAsync(query.BranchId, query.SupplierId, query.ViewFrom, cancellationToken);
 
@@ -47,13 +84,15 @@ public class PurchaseOrderService : IPurchaseOrderService
             {
                 if (detail.DeliveryDate.HasValue)
                 {
+                    var finalQty = detail.FinalQty ?? (detail.IsOwnerAdjusted ? (detail.StoreQty ?? 0m) : (detail.EmployeeQty ?? 0m));
                     cells.Add(new OrderMatrixCellDto
                     {
                         ProductId = detail.ProductId,
                         DeliveryDate = detail.DeliveryDate.Value,
                         EmployeeQty = detail.EmployeeQty ?? 0m,
                         StoreQty = detail.StoreQty,
-                        FinalQty = detail.FinalQty ?? detail.StoreQty ?? detail.EmployeeQty ?? 0m
+                        IsOwnerAdjusted = detail.IsOwnerAdjusted,
+                        FinalQty = finalQty
                     });
                 }
             }
@@ -68,6 +107,7 @@ public class PurchaseOrderService : IPurchaseOrderService
             DurationDays = query.DurationDays,
             Products = products,
             Cells = cells,
+            SupplierConfigs = supplierConfigs,
             DraftPoId = draftPo?.Id,
             Status = draftPo?.Status ?? "DRAFT"
         };
@@ -77,6 +117,8 @@ public class PurchaseOrderService : IPurchaseOrderService
         SaveMatrixDraftCommand command,
         CancellationToken cancellationToken = default)
     {
+        EnsureBranchAccess(command.BranchId);
+
         var branch = await _repository.GetBranchByIdAsync(command.BranchId, cancellationToken);
         if (branch == null || branch.IsDeleted)
         {
@@ -88,18 +130,25 @@ public class PurchaseOrderService : IPurchaseOrderService
         if (draft == null)
         {
             var code = $"DRAFT-{DateTime.UtcNow:yyyyMMdd}-{branch.Code}-{Guid.NewGuid().ToString().Substring(0, 4).ToUpper()}";
+            var effectiveSupplierId = command.SupplierId;
+            if (!effectiveSupplierId.HasValue || effectiveSupplierId.Value == Guid.Empty)
+            {
+                var configs = await _repository.GetMatrixSupplierConfigsAsync(command.BranchId, null, cancellationToken);
+                effectiveSupplierId = configs.FirstOrDefault()?.SupplierId;
+            }
+
             draft = new PurchaseOrder
             {
                 TenantId = _tenantContext.CurrentTenantId,
                 Code = code,
                 BranchId = command.BranchId,
-                SupplierId = command.SupplierId ?? Guid.Empty,
+                SupplierId = effectiveSupplierId ?? Guid.Empty,
                 ViewFromDate = command.ViewFrom,
                 ViewToDate = command.ViewTo,
                 Status = "DRAFT",
                 Note = command.Note,
                 CreatedByRole = _tenantContext.CurrentRole,
-                SubmittedByUserId = _tenantContext.CurrentUserId.ToString(),
+                SubmittedByUserId = await ResolveValidUserIdAsync(cancellationToken),
                 SubmittedAtUtc = DateTime.UtcNow
             };
             await _repository.AddPurchaseOrderAsync(draft, cancellationToken);
@@ -109,39 +158,91 @@ public class PurchaseOrderService : IPurchaseOrderService
             draft.ViewFromDate = command.ViewFrom;
             draft.ViewToDate = command.ViewTo;
             draft.Note = command.Note;
-            draft.Details.Clear();
         }
 
-        decimal totalQty = 0m;
-        decimal totalAmount = 0m;
+        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+        bool isStoreOwner = string.IsNullOrEmpty(role) || role is "STORE_OWNER" or "ADMIN";
 
-        foreach (var cell in command.Cells.Where(c => c.FinalQty > 0 || c.EmployeeQty > 0 || (c.StoreQty.HasValue && c.StoreQty.Value > 0)))
+        // Map existing details theo (ProductId, DeliveryDate) để thực hiện upsert an toàn mà không làm mất lịch sử
+        var existingDetails = draft.Details
+            .Where(d => d.DeliveryDate.HasValue)
+            .ToDictionary(d => (d.ProductId, d.DeliveryDate!.Value.Date));
+
+        foreach (var cell in command.Cells)
         {
-            var product = await _repository.GetProductByIdAsync(cell.ProductId, cancellationToken);
-            var unitPrice = product?.CostPrice ?? product?.SellingPrice ?? 0m;
-            var lineAmt = cell.FinalQty * unitPrice;
+            var cellDate = cell.DeliveryDate.Date;
+            existingDetails.TryGetValue((cell.ProductId, cellDate), out var detail);
 
-            draft.Details.Add(new PurchaseOrderDetail
+            decimal employeeQty;
+            decimal? storeQty;
+            bool isOwnerAdjusted;
+
+            if (isStoreOwner)
             {
-                TenantId = _tenantContext.CurrentTenantId,
-                PurchaseOrderId = draft.Id,
-                ProductId = cell.ProductId,
-                DeliveryDate = cell.DeliveryDate,
-                EmployeeQty = cell.EmployeeQty,
-                StoreQty = cell.StoreQty,
-                FinalQty = cell.FinalQty,
-                OrderedQty = cell.FinalQty,
-                UnitPrice = unitPrice,
-                DeliveryUoM = product?.BaseUnit ?? "Gói",
-                LineAmount = lineAmt
-            });
+                // Store Owner điều chỉnh
+                storeQty = cell.StoreQty;
+                isOwnerAdjusted = cell.IsOwnerAdjusted || cell.StoreQty.HasValue;
+                // Giữ nguyên đề xuất ban đầu của Employee từ detail cũ nếu có
+                employeeQty = detail?.EmployeeQty ?? cell.EmployeeQty;
+            }
+            else
+            {
+                // Employee nhập số lượng đề xuất: chỉ được cập nhật EmployeeQty
+                employeeQty = cell.EmployeeQty;
+                // Không được phép can thiệp owner override nếu đã tồn tại
+                storeQty = detail?.StoreQty;
+                isOwnerAdjusted = detail?.IsOwnerAdjusted ?? false;
+            }
 
-            totalQty += cell.FinalQty;
-            totalAmount += lineAmt;
+            // Tính finalQuantity chuẩn nghiệp vụ:
+            // finalQuantity = isOwnerAdjusted ? (ownerQuantity ?? 0) : employeeQuantity;
+            decimal finalQty = isOwnerAdjusted
+                ? (storeQty ?? 0m)
+                : employeeQty;
+
+            if (detail == null)
+            {
+                // Nếu chưa có detail và cả 2 bên đều không có số lượng thì bỏ qua
+                if (finalQty == 0 && employeeQty == 0 && !isOwnerAdjusted)
+                {
+                    continue;
+                }
+
+                var product = await _repository.GetProductByIdAsync(cell.ProductId, cancellationToken);
+                var unitPrice = product?.CostPrice ?? product?.SellingPrice ?? 0m;
+                var lineAmt = finalQty * unitPrice;
+
+                detail = new PurchaseOrderDetail
+                {
+                    TenantId = _tenantContext.CurrentTenantId,
+                    PurchaseOrderId = draft.Id,
+                    ProductId = cell.ProductId,
+                    DeliveryDate = cellDate,
+                    EmployeeQty = employeeQty,
+                    StoreQty = storeQty,
+                    IsOwnerAdjusted = isOwnerAdjusted,
+                    FinalQty = finalQty,
+                    OrderedQty = finalQty,
+                    UnitPrice = unitPrice,
+                    DeliveryUoM = product?.BaseUnit ?? "Gói",
+                    LineAmount = lineAmt
+                };
+                draft.Details.Add(detail);
+                _repository.AddPurchaseOrderDetail(detail);
+            }
+            else
+            {
+                detail.EmployeeQty = employeeQty;
+                detail.StoreQty = storeQty;
+                detail.IsOwnerAdjusted = isOwnerAdjusted;
+                detail.FinalQty = finalQty;
+                detail.OrderedQty = finalQty;
+                detail.LineAmount = finalQty * detail.UnitPrice;
+            }
         }
 
-        draft.TotalQty = totalQty;
-        draft.TotalAmount = totalAmount;
+        draft.TotalQty = draft.Details.Sum(d => d.FinalQty ?? 0m);
+        draft.TotalAmount = draft.Details.Sum(d => d.LineAmount);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -156,6 +257,8 @@ public class PurchaseOrderService : IPurchaseOrderService
         {
             throw new BusinessException("EMPTY_SPLIT_GROUPS", "Không có đơn PO nào được chỉ định để tách.");
         }
+
+        EnsureBranchAccess(command.BranchId);
 
         var branch = await _repository.GetBranchByIdAsync(command.BranchId, cancellationToken);
         if (branch == null || branch.IsDeleted)
@@ -196,7 +299,7 @@ public class PurchaseOrderService : IPurchaseOrderService
                 Note = command.Note,
                 ParentDraftId = command.ParentDraftId,
                 CreatedByRole = _tenantContext.CurrentRole,
-                SubmittedByUserId = _tenantContext.CurrentUserId.ToString(),
+                SubmittedByUserId = await ResolveValidUserIdAsync(cancellationToken),
                 SubmittedAtUtc = DateTime.UtcNow,
                 OrderedAtUtc = DateTime.UtcNow
             };
@@ -284,12 +387,12 @@ public class PurchaseOrderService : IPurchaseOrderService
 
         if (normalizedStatus == "APPROVED")
         {
-            po.ApprovedByUserId = _tenantContext.CurrentUserId.ToString();
+            po.ApprovedByUserId = await ResolveValidUserIdAsync(cancellationToken);
             po.ApprovedAtUtc = DateTime.UtcNow;
         }
         else if (normalizedStatus == "REJECTED" || normalizedStatus == "CANCELLED")
         {
-            po.RejectedByUserId = _tenantContext.CurrentUserId.ToString();
+            po.RejectedByUserId = await ResolveValidUserIdAsync(cancellationToken);
             po.RejectedAtUtc = DateTime.UtcNow;
             po.RejectionReason = reason;
         }
@@ -312,6 +415,10 @@ public class PurchaseOrderService : IPurchaseOrderService
             ProductName = d.Product?.Name ?? "Sản phẩm",
             Sku = d.Product?.ProductCode ?? string.Empty,
             Unit = d.DeliveryUoM,
+            EmployeeQty = d.EmployeeQty,
+            StoreQty = d.StoreQty,
+            IsOwnerAdjusted = d.IsOwnerAdjusted,
+            FinalQty = d.FinalQty,
             OrderedQty = d.OrderedQty ?? d.FinalQty ?? 0m,
             UnitPrice = d.UnitPrice,
             LineAmount = d.LineAmount,

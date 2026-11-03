@@ -19,8 +19,10 @@ public static class DeliveryScheduleCalculator
     public static int DayNamesToMask(IEnumerable<string>? days)
     {
         if (days == null) return 127; // Mặc định tất cả các ngày 1+2+4+8+16+32+64 = 127
+        var dayList = days.ToList();
+        if (dayList.Count == 0) return 0;
         int mask = 0;
-        foreach (var d in days)
+        foreach (var d in dayList)
         {
             var clean = d.Trim().ToLowerInvariant();
             if (clean.StartsWith("mon") || clean == "2" || clean == "t2") mask |= 1;
@@ -31,7 +33,7 @@ public static class DeliveryScheduleCalculator
             else if (clean.StartsWith("sat") || clean == "7" || clean == "t7") mask |= 32;
             else if (clean.StartsWith("sun") || clean == "cn" || clean == "8") mask |= 64;
         }
-        return mask == 0 ? 127 : mask;
+        return mask;
     }
 
     public static List<string> MaskToDayNames(int mask)

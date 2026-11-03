@@ -33,20 +33,22 @@ public class SupplierSummaryDto
     public decimal CurrentDebt { get; set; }
     public int OpenPurchaseOrderCount { get; set; }
     public Guid? LinkedCustomerId { get; set; }
+    public string? Address { get; set; }
+    public string? Notes { get; set; }
+    public string? CompanyName { get; set; }
+    public string? InvoiceAddress { get; set; }
+    public string? BankName { get; set; }
+    public string? BankAccountNumber { get; set; }
+    public string? BankAccountHolder { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
 public class SupplierDetailDto : SupplierSummaryDto
 {
-    public string? Address { get; set; }
     public string? Ward { get; set; }
     public string? District { get; set; }
     public string? Province { get; set; }
     public string? ContactPhone { get; set; }
-    public string? BankName { get; set; }
-    public string? BankAccountNumber { get; set; }
-    public string? BankAccountHolder { get; set; }
-    public string? Notes { get; set; }
 
     public SupplierDeliveryConfigDto? DeliveryConfig { get; set; }
     public List<SupplierBlackoutDateDto> BlackoutDates { get; set; } = [];
@@ -58,6 +60,8 @@ public class CreateSupplierCommand
     public string Name { get; set; } = string.Empty;
     public SupplierType SupplierType { get; set; } = SupplierType.Goods;
     public Guid? CategoryId { get; set; }
+    public string CategoryCode { get; set; } = "FRESH";
+    public SupplierStatus Status { get; set; } = SupplierStatus.Active;
     public string? TaxCode { get; set; }
     public string Phone { get; set; } = string.Empty;
     public string? Email { get; set; }
@@ -76,11 +80,24 @@ public class CreateSupplierCommand
     public Guid? LinkedCustomerId { get; set; }
 }
 
+public class UpdateBasicSupplierCommand
+{
+    public string Name { get; set; } = string.Empty;
+    public string? ContactPerson { get; set; }
+    public string Phone { get; set; } = string.Empty;
+    public string? Email { get; set; }
+    public SupplierStatus Status { get; set; } = SupplierStatus.Active;
+    public string? TaxCode { get; set; }
+    public string? Address { get; set; }
+    public string? Notes { get; set; }
+}
+
 public class UpdateSupplierCommand
 {
     public string Name { get; set; } = string.Empty;
     public SupplierType SupplierType { get; set; }
     public Guid? CategoryId { get; set; }
+    public SupplierStatus? Status { get; set; }
     public string? TaxCode { get; set; }
     public string Phone { get; set; } = string.Empty;
     public string? Email { get; set; }
@@ -95,8 +112,24 @@ public class UpdateSupplierCommand
     public string? BankName { get; set; }
     public string? BankAccountNumber { get; set; }
     public string? BankAccountHolder { get; set; }
+    public string? CompanyName { get; set; }
+    public string? InvoiceAddress { get; set; }
     public string? Notes { get; set; }
     public Guid? LinkedCustomerId { get; set; }
+}
+
+public class UpdateSupplierBankCommand
+{
+    public string? BankName { get; set; }
+    public string? BankAccountNumber { get; set; }
+    public string? BankAccountHolder { get; set; }
+}
+
+public class UpdateSupplierVatCommand
+{
+    public string? CompanyName { get; set; }
+    public string? TaxCode { get; set; }
+    public string? InvoiceAddress { get; set; }
 }
 
 public class UpdateSupplierStatusRequest
@@ -220,6 +253,7 @@ public class SupplierQueryFilter
     public SupplierType? SupplierType { get; set; }
     public SupplierStatus? Status { get; set; }
     public Guid? CategoryId { get; set; }
+    public string? Category { get; set; }
     public List<Guid>? SupplierIds { get; set; }
     public List<Guid>? ProductIds { get; set; }
     public List<string>? Codes { get; set; }

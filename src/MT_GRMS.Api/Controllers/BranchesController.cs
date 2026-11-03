@@ -51,6 +51,19 @@ public class BranchesController : BaseApiController
     }
 
     /// <summary>
+    /// Lấy danh mục sản phẩm kinh doanh của tất cả chi nhánh hoặc lọc theo chi nhánh (REQ-BR-03)
+    /// </summary>
+    [HttpGet("products")]
+    public async Task<IActionResult> GetAllBranchProducts(
+        [FromQuery] Guid? branchId,
+        [FromQuery] BranchProductQueryFilter filter,
+        CancellationToken cancellationToken)
+    {
+        var result = await _branchProductService.GetBranchProductsAsync(branchId ?? Guid.Empty, filter, cancellationToken);
+        return Ok(ApiResponse<PagedResult<BranchProductDto>>.Ok(result));
+    }
+
+    /// <summary>
     /// Lấy danh mục sản phẩm kinh doanh thuộc một chi nhánh có phân trang & bộ lọc
     /// </summary>
     [HttpGet("{id:guid}/products")]
