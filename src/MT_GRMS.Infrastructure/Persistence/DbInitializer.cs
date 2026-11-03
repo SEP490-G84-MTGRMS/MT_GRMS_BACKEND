@@ -19,13 +19,29 @@ public static class DbInitializer
 {
     public static async Task InitializeAsync(AppDbContext context)
     {
-        // 1. Tự động áp dụng Migrations để tạo CSDL và toàn bộ 34 bảng nếu chưa có
-        if (context.Database.IsRelational())
+        // 1. Tự động áp dụng Migrations hoặc EnsureCreatedAsync để khởi tạo toàn bộ CSDL và 34 bảng nếu chưa có
+        try
         {
-            await context.Database.MigrateAsync();
+            if (context.Database.IsRelational())
+            {
+                var migrations = context.Database.GetMigrations();
+                if (migrations.Any())
+                {
+                    await context.Database.MigrateAsync();
+                }
+                else
+                {
+                    await context.Database.EnsureCreatedAsync();
+                }
+            }
+            else
+            {
+                await context.Database.EnsureCreatedAsync();
+            }
         }
-        else
+        catch (Exception)
         {
+            // Fallback an toàn khi merge code hoặc khi không có migrations: Tự động khởi tạo schema từ Domain Entities
             await context.Database.EnsureCreatedAsync();
         }
 
