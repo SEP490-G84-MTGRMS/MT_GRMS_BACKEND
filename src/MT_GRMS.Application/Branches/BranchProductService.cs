@@ -7,6 +7,7 @@ using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Application.Branches.Validators;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
+using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Exceptions;
 
@@ -115,8 +116,8 @@ public class BranchProductService : IBranchProductService
 
         foreach (var productId in command.ProductIds.Distinct())
         {
-            var existingStocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);
-            if (existingStocks.Any())
+            var existing = await _repository.GetBranchProductAsync(branchId, productId, cancellationToken);
+            if (existing != null)
             {
                 continue;
             }
@@ -154,26 +155,50 @@ public class BranchProductService : IBranchProductService
                 product.CostPrice);
             var moq = sp != null && sp.MinimumOrderQuantity > 0 ? (int)sp.MinimumOrderQuantity : eligible.Moq;
 
-            var newStock = new BranchStock
+            // Không copy cứng Master → SellingPriceOverride = null (hiệu lực = Master).
+            // Chỉ ghi override khi client gửi DefaultRetailPrice > 0 và khác Master.
+            decimal? sellingOverride = null;
+            if (command.DefaultRetailPrice is > 0 && command.DefaultRetailPrice.Value != product.SellingPrice)
+            {
+                sellingOverride = command.DefaultRetailPrice.Value;
+            }
+
+            var effectiveRetail = sellingOverride ?? product.SellingPrice;
+
+            var catalog = new BranchProduct
             {
                 TenantId = _tenantContext.CurrentTenantId,
                 BranchId = branchId,
                 ProductId = productId,
-                SupplierId = eligible.SupplierId,
-                QuantityOnHand = 0.000m,
-                QuantityReserved = 0.000m,
-                LandedCostPerUnit = effectiveCost,
-                RetailPrice = product.SellingPrice,
+                SellingPriceOverride = sellingOverride,
                 Status = "Active",
-                ShelfLocation = command.ShelfLocation ?? "Kệ hàng",
-                ZoneArea = "Khu vực trưng bày"
+                ShelfLocation = command.ShelfLocation ?? "Kệ hàng"
             };
+            await _repository.AddBranchProductAsync(catalog, cancellationToken);
 
-            await _repository.AddBranchStockAsync(newStock, cancellationToken);
+            // Seed tồn 0 để GRN/FEFO có chỗ gắn lô (không thay catalog).
+            var existingStocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);
+            if (!existingStocks.Any())
+            {
+                await _repository.AddBranchStockAsync(new BranchStock
+                {
+                    TenantId = _tenantContext.CurrentTenantId,
+                    BranchId = branchId,
+                    ProductId = productId,
+                    SupplierId = eligible.SupplierId,
+                    QuantityOnHand = 0.000m,
+                    QuantityReserved = 0.000m,
+                    LandedCostPerUnit = effectiveCost,
+                    RetailPrice = effectiveRetail,
+                    Status = "Active",
+                    ShelfLocation = catalog.ShelfLocation,
+                    ZoneArea = "Khu vực trưng bày"
+                }, cancellationToken);
+            }
 
             assignedList.Add(new BranchProductDto
             {
-                Id = newStock.Id,
+                Id = catalog.Id,
                 BranchId = branch.Id,
                 BranchCode = branch.BranchCode,
                 BranchName = branch.Name,
@@ -183,7 +208,7 @@ public class BranchProductService : IBranchProductService
                 Barcode = product.Barcode,
                 Category = product.Category?.Name ?? "Khác",
                 Unit = product.BaseUnit,
-                RetailPrice = newStock.RetailPrice ?? product.SellingPrice,
+                RetailPrice = effectiveRetail,
                 CostPrice = effectiveCost,
                 CurrentStock = 0,
                 MinStockLevel = product.MinStock,
@@ -191,8 +216,8 @@ public class BranchProductService : IBranchProductService
                 PrimarySupplierCode = eligible.SupplierCode,
                 PrimarySupplierName = eligible.SupplierName,
                 MinOrderQuantity = moq,
-                Status = newStock.Status,
-                ShelfLocation = newStock.ShelfLocation,
+                Status = catalog.Status,
+                ShelfLocation = catalog.ShelfLocation,
                 AssignedDate = DateTime.UtcNow
             });
         }
@@ -226,8 +251,8 @@ public class BranchProductService : IBranchProductService
             throw new NotFoundException("Sản phẩm", productId);
         }
 
-        var stocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);
-        if (!stocks.Any())
+        var catalog = await _repository.GetBranchProductAsync(branchId, productId, cancellationToken);
+        if (catalog == null)
         {
             throw new NotFoundException($"Sản phẩm '{product.Name}' chưa được gán vào chi nhánh '{branch.Name}'.");
         }
@@ -241,64 +266,46 @@ public class BranchProductService : IBranchProductService
                 "Không thể kích hoạt sản phẩm tại chi nhánh khi hàng hóa đang ngưng kinh doanh.");
         }
 
-        // Chỉ cập nhật thông tin riêng của chi nhánh. Không ghi MOQ / giá nhập sang SupplierProducts.
+        var productForUnits = catalog.Product ?? product;
+        ApplyUnitPriceOverrides(catalog, productForUnits, command.UnitPrices);
+
+        var retailToPersist = ResolveBranchRetailPrice(command, product.SellingPrice);
+        if (retailToPersist > 0)
+        {
+            // Giá ĐVT cơ sở: khác Master → override; trùng Master → NULL (dùng Master).
+            catalog.SellingPriceOverride = retailToPersist == product.SellingPrice ? null : retailToPersist;
+        }
+
+        if (!string.IsNullOrWhiteSpace(command.Status))
+        {
+            catalog.Status = string.Equals(command.Status, "Active", StringComparison.OrdinalIgnoreCase) ? "Active" : "Inactive";
+        }
+
+        if (!string.IsNullOrWhiteSpace(command.ShelfLocation))
+        {
+            catalog.ShelfLocation = command.ShelfLocation.Trim();
+        }
+
+        catalog.UpdatedAt = DateTime.UtcNow;
+
+        var effectiveRetail = catalog.SellingPriceOverride ?? product.SellingPrice;
+
+        // Đồng bộ RetailPrice trên các lô tồn (nếu có) để POS đọc nhất quán.
+        var stocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);
         foreach (var stock in stocks)
         {
-            stock.RetailPrice = command.RetailPrice;
-            if (!string.IsNullOrWhiteSpace(command.Status))
+            stock.RetailPrice = effectiveRetail;
+            stock.Status = catalog.Status;
+            if (!string.IsNullOrWhiteSpace(catalog.ShelfLocation))
             {
-                stock.Status = string.Equals(command.Status, "Active", StringComparison.OrdinalIgnoreCase) ? "Active" : "Inactive";
-            }
-            if (!string.IsNullOrWhiteSpace(command.ShelfLocation))
-            {
-                stock.ShelfLocation = command.ShelfLocation.Trim();
+                stock.ShelfLocation = catalog.ShelfLocation;
             }
             stock.UpdatedAt = DateTime.UtcNow;
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        var firstStock = stocks.First();
-        var uniqueLotSupplierIds = stocks
-            .Where(s => s.SupplierId.HasValue)
-            .Select(s => s.SupplierId!.Value)
-            .Distinct()
-            .ToList();
-        Guid? displaySupplierId = uniqueLotSupplierIds.Count == 1 ? uniqueLotSupplierIds[0] : null;
-        var spUpdated = await _repository.GetSupplierProductAsync(productId, displaySupplierId, cancellationToken);
-        var costPrice = SupplierProductPricing.GetEffectivePurchasePriceOrZero(
-            spUpdated?.AgreedWholesalePrice ?? 0m,
-            product.CostPrice);
-        var moq = spUpdated != null && spUpdated.MinimumOrderQuantity > 0
-            ? (int)spUpdated.MinimumOrderQuantity
-            : 0;
-
-        var totalStock = stocks.Sum(s => s.QuantityOnHand);
-
-        return new BranchProductDto
-        {
-            Id = firstStock.Id,
-            BranchId = branch.Id,
-            BranchCode = branch.BranchCode,
-            BranchName = branch.Name,
-            ProductId = product.Id,
-            Name = product.Name,
-            Sku = product.ProductCode,
-            Barcode = product.Barcode,
-            Category = product.Category?.Name ?? "Khác",
-            Unit = product.BaseUnit,
-            RetailPrice = firstStock.RetailPrice ?? product.SellingPrice,
-            CostPrice = costPrice,
-            CurrentStock = totalStock,
-            MinStockLevel = product.MinStock,
-            SupplierId = firstStock.SupplierId ?? spUpdated?.SupplierId,
-            PrimarySupplierCode = firstStock.Supplier?.Code ?? spUpdated?.Supplier?.Code ?? string.Empty,
-            PrimarySupplierName = firstStock.Supplier?.Name ?? spUpdated?.Supplier?.Name ?? string.Empty,
-            MinOrderQuantity = moq,
-            Status = firstStock.Status,
-            ShelfLocation = firstStock.ShelfLocation,
-            AssignedDate = firstStock.CreatedAt
-        };
+        return await BuildDtoAsync(branch, product, catalog, stocks, cancellationToken);
     }
 
     public async Task<BranchProductDto> ToggleStatusAsync(
@@ -319,8 +326,8 @@ public class BranchProductService : IBranchProductService
             throw new NotFoundException("Sản phẩm", productId);
         }
 
-        var stocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);
-        if (!stocks.Any())
+        var catalog = await _repository.GetBranchProductAsync(branchId, productId, cancellationToken);
+        if (catalog == null)
         {
             throw new NotFoundException($"Sản phẩm '{product.Name}' chưa được gán vào chi nhánh '{branch.Name}'.");
         }
@@ -334,6 +341,10 @@ public class BranchProductService : IBranchProductService
                 "Không thể kích hoạt sản phẩm tại chi nhánh khi hàng hóa đang ngưng kinh doanh.");
         }
 
+        catalog.Status = normalizedStatus;
+        catalog.UpdatedAt = DateTime.UtcNow;
+
+        var stocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);
         foreach (var stock in stocks)
         {
             stock.Status = normalizedStatus;
@@ -342,45 +353,7 @@ public class BranchProductService : IBranchProductService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        var firstStock = stocks.First();
-        var uniqueLotSupplierIds = stocks
-            .Where(s => s.SupplierId.HasValue)
-            .Select(s => s.SupplierId!.Value)
-            .Distinct()
-            .ToList();
-        Guid? displaySupplierId = uniqueLotSupplierIds.Count == 1 ? uniqueLotSupplierIds[0] : null;
-        var sp = await _repository.GetSupplierProductAsync(productId, displaySupplierId, cancellationToken);
-        var costPrice = SupplierProductPricing.GetEffectivePurchasePriceOrZero(
-            sp?.AgreedWholesalePrice ?? 0m,
-            product.CostPrice);
-        var moq = sp != null && sp.MinimumOrderQuantity > 0
-            ? (int)sp.MinimumOrderQuantity
-            : 0;
-
-        return new BranchProductDto
-        {
-            Id = firstStock.Id,
-            BranchId = branch.Id,
-            BranchCode = branch.BranchCode,
-            BranchName = branch.Name,
-            ProductId = product.Id,
-            Name = product.Name,
-            Sku = product.ProductCode,
-            Barcode = product.Barcode,
-            Category = product.Category?.Name ?? "Khác",
-            Unit = product.BaseUnit,
-            RetailPrice = firstStock.RetailPrice ?? product.SellingPrice,
-            CostPrice = costPrice,
-            CurrentStock = stocks.Sum(s => s.QuantityOnHand),
-            MinStockLevel = product.MinStock,
-            SupplierId = firstStock.SupplierId ?? sp?.SupplierId,
-            PrimarySupplierCode = firstStock.Supplier?.Code ?? sp?.Supplier?.Code ?? string.Empty,
-            PrimarySupplierName = firstStock.Supplier?.Name ?? sp?.Supplier?.Name ?? string.Empty,
-            MinOrderQuantity = moq,
-            Status = firstStock.Status,
-            ShelfLocation = firstStock.ShelfLocation,
-            AssignedDate = firstStock.CreatedAt
-        };
+        return await BuildDtoAsync(branch, product, catalog, stocks, cancellationToken);
     }
 
     public async Task RemoveProductAsync(
@@ -400,10 +373,12 @@ public class BranchProductService : IBranchProductService
             throw new NotFoundException("Sản phẩm", productId);
         }
 
+        var catalog = await _repository.GetBranchProductAsync(branchId, productId, cancellationToken);
         var stocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);
-        if (!stocks.Any())
+
+        if (catalog == null && !stocks.Any())
         {
-            return; // Đã không còn trong chi nhánh
+            return;
         }
 
         var totalCurrentStock = stocks.Sum(s => s.QuantityOnHand);
@@ -422,7 +397,155 @@ public class BranchProductService : IBranchProductService
                 $"Không thể gỡ sản phẩm '{product.Name}' khỏi chi nhánh '{branch.Name}' khi đang có {totalReserved} {product.BaseUnit} tạm giữ trong các đơn hàng chờ xuất.");
         }
 
-        _repository.RemoveBranchStocks(stocks);
+        if (catalog != null)
+        {
+            _repository.RemoveBranchProduct(catalog);
+        }
+
+        if (stocks.Any())
+        {
+            _repository.RemoveBranchStocks(stocks);
+        }
+
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task<BranchProductDto> BuildDtoAsync(
+        Domain.Entities.SaaS.Branch branch,
+        Product product,
+        BranchProduct catalog,
+        IReadOnlyList<BranchStock> stocks,
+        CancellationToken cancellationToken)
+    {
+        var uniqueLotSupplierIds = stocks
+            .Where(s => s.SupplierId.HasValue)
+            .Select(s => s.SupplierId!.Value)
+            .Distinct()
+            .ToList();
+        Guid? displaySupplierId = uniqueLotSupplierIds.Count == 1 ? uniqueLotSupplierIds[0] : null;
+        var sp = await _repository.GetSupplierProductAsync(product.Id, displaySupplierId, cancellationToken);
+        var costPrice = SupplierProductPricing.GetEffectivePurchasePriceOrZero(
+            sp?.AgreedWholesalePrice ?? 0m,
+            product.CostPrice);
+        var moq = sp != null && sp.MinimumOrderQuantity > 0
+            ? (int)sp.MinimumOrderQuantity
+            : 0;
+
+        var effectiveRetail = catalog.SellingPriceOverride ?? product.SellingPrice;
+
+        return new BranchProductDto
+        {
+            Id = catalog.Id,
+            BranchId = branch.Id,
+            BranchCode = branch.BranchCode,
+            BranchName = branch.Name,
+            ProductId = product.Id,
+            Name = product.Name,
+            Sku = product.ProductCode,
+            Barcode = product.Barcode,
+            Category = product.Category?.Name ?? "Khác",
+            Unit = product.BaseUnit,
+            RetailPrice = effectiveRetail,
+            CostPrice = costPrice,
+            CurrentStock = stocks.Sum(s => s.QuantityOnHand),
+            MinStockLevel = product.MinStock,
+            SupplierId = displaySupplierId ?? sp?.SupplierId,
+            PrimarySupplierCode = stocks.FirstOrDefault()?.Supplier?.Code ?? sp?.Supplier?.Code ?? string.Empty,
+            PrimarySupplierName = stocks.FirstOrDefault()?.Supplier?.Name ?? sp?.Supplier?.Name ?? string.Empty,
+            MinOrderQuantity = moq,
+            Status = catalog.Status,
+            ShelfLocation = catalog.ShelfLocation,
+            AssignedDate = catalog.CreatedAt
+        };
+    }
+
+    /// <summary>
+    /// Upsert override từng ĐVT: khác Master → lưu; trùng Master → xóa override.
+    /// </summary>
+    private void ApplyUnitPriceOverrides(
+        BranchProduct catalog,
+        Product product,
+        List<BranchProductUnitPriceDto>? unitPrices)
+    {
+        if (unitPrices is not { Count: > 0 })
+        {
+            return;
+        }
+
+        var masterById = (product.Units ?? [])
+            .Where(u => !u.IsDeleted)
+            .ToDictionary(u => u.Id, u => u);
+
+        var existing = catalog.UnitPriceOverrides?
+            .Where(o => !o.IsDeleted)
+            .ToDictionary(o => o.ProductUnitId)
+            ?? new Dictionary<Guid, BranchProductUnitPrice>();
+
+        foreach (var row in unitPrices)
+        {
+            if (!row.UnitId.HasValue || row.UnitId.Value == Guid.Empty || row.Price < 0)
+            {
+                continue;
+            }
+
+            var unitId = row.UnitId.Value;
+            if (!masterById.TryGetValue(unitId, out var masterUnit))
+            {
+                continue;
+            }
+
+            var matchesMaster = row.Price == masterUnit.Price;
+            existing.TryGetValue(unitId, out var current);
+
+            if (matchesMaster)
+            {
+                if (current != null)
+                {
+                    current.IsDeleted = true;
+                    current.UpdatedAt = DateTime.UtcNow;
+                }
+
+                continue;
+            }
+
+            if (current != null)
+            {
+                current.SellingPriceOverride = row.Price;
+                current.UpdatedAt = DateTime.UtcNow;
+            }
+            else
+            {
+                catalog.UnitPriceOverrides.Add(new BranchProductUnitPrice
+                {
+                    TenantId = catalog.TenantId,
+                    BranchProductId = catalog.Id,
+                    ProductUnitId = unitId,
+                    SellingPriceOverride = row.Price
+                });
+            }
+        }
+    }
+
+    /// <summary>
+    /// Giá ĐVT cơ sở: ưu tiên dòng base trong UnitPrices, không thì RetailPrice.
+    /// </summary>
+    private static decimal ResolveBranchRetailPrice(UpdateBranchProductCommand command, decimal masterSellingPrice)
+    {
+        if (command.UnitPrices is { Count: > 0 })
+        {
+            var baseRow = command.UnitPrices.FirstOrDefault(u => u.IsBaseUnit)
+                ?? command.UnitPrices.OrderBy(u => u.ConversionRate <= 0 ? 1m : u.ConversionRate).First();
+            if (baseRow.Price > 0)
+            {
+                return baseRow.Price;
+            }
+        }
+
+        if (command.RetailPrice > 0)
+        {
+            return command.RetailPrice;
+        }
+
+        return masterSellingPrice > 0 ? masterSellingPrice : 0m;
     }
 }

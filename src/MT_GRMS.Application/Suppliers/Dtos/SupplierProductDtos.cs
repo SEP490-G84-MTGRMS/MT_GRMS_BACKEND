@@ -100,6 +100,10 @@ public class SupplierProductQueryFilter
 {
     public string? SearchTerm { get; set; }
     public string? SupplierSearch { get; set; }
+    public List<string>? Skus { get; set; }
+    public List<string>? Names { get; set; }
+    public List<string>? SupplierCodes { get; set; }
+    public List<string>? SupplierNames { get; set; }
     public string? CategoryName { get; set; }
     public Guid? CategoryId { get; set; }
     public SupplierProductStatus? Status { get; set; }

@@ -401,6 +401,10 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         int pageSize,
         string? supplierSearch = null,
         string? categoryName = null,
+        IReadOnlyList<string>? skus = null,
+        IReadOnlyList<string>? names = null,
+        IReadOnlyList<string>? supplierCodes = null,
+        IReadOnlyList<string>? supplierNames = null,
         CancellationToken cancellationToken = default)
     {
         var query = _context.SupplierProducts
@@ -431,7 +435,18 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             query = query.Where(sp => sp.Status == status.Value);
         }
 
-        if (!string.IsNullOrWhiteSpace(searchTerm))
+        var skuTerms = CleanTerms(skus);
+        if (skuTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sp => sp.Product!.ProductCode, skuTerms, ignoreCase: true);
+        }
+
+        var nameTerms = CleanTerms(names);
+        if (nameTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sp => sp.Product!.Name, nameTerms, ignoreCase: true);
+        }
+        else if (!string.IsNullOrWhiteSpace(searchTerm))
         {
             var term = searchTerm.Trim().ToLower();
             query = query.Where(sp =>
@@ -441,7 +456,18 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
                 (sp.SupplierProductCode != null && sp.SupplierProductCode.ToLower().Contains(term)));
         }
 
-        if (!string.IsNullOrWhiteSpace(supplierSearch))
+        var supplierCodeTerms = CleanTerms(supplierCodes);
+        if (supplierCodeTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sp => sp.Supplier!.Code, supplierCodeTerms, ignoreCase: true);
+        }
+
+        var supplierNameTerms = CleanTerms(supplierNames);
+        if (supplierNameTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, sp => sp.Supplier!.Name, supplierNameTerms, ignoreCase: true);
+        }
+        else if (!string.IsNullOrWhiteSpace(supplierSearch) && supplierCodeTerms.Count == 0)
         {
             var supplierTerm = supplierSearch.Trim().ToLower();
             query = query.Where(sp =>

@@ -78,7 +78,17 @@ public class BranchProductManagementTests
             }
         });
 
-        // Seed initial Stock for Product 1
+        // Seed catalog + stock for Product 1
+        _repo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-test-1",
+            BranchId = _branchId,
+            ProductId = _prod1Id,
+            SellingPriceOverride = null,
+            Status = "Active",
+            ShelfLocation = "Kệ A1-02"
+        });
         _repo.BranchStocks.Add(new BranchStock
         {
             Id = Guid.NewGuid(),
@@ -312,6 +322,14 @@ public class BranchProductManagementTests
         // Branch 1 has Product 1. Let's create Branch 2 and assign Product 1 to Branch 2
         var branch2Id = Guid.NewGuid();
         _repo.Branches.Add(new Branch { Id = branch2Id, Code = "BR-02", Name = "Chi nhánh 2", IsActive = true });
+        _repo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branch2Id,
+            ProductId = _prod1Id,
+            SellingPriceOverride = 195000m,
+            Status = "Active"
+        });
         _repo.BranchStocks.Add(new BranchStock
         {
             Id = Guid.NewGuid(),
@@ -343,6 +361,13 @@ public class BranchProductManagementTests
         // Branch 1 has Product 1. Let's create Branch 2 and assign Product 1 to Branch 2
         var branch2Id = Guid.NewGuid();
         _repo.Branches.Add(new Branch { Id = branch2Id, Code = "BR-02", Name = "Chi nhánh 2", IsActive = true });
+        _repo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branch2Id,
+            ProductId = _prod1Id,
+            Status = "Active"
+        });
         _repo.BranchStocks.Add(new BranchStock
         {
             Id = Guid.NewGuid(),
@@ -443,6 +468,7 @@ public class BranchProductManagementTests
     {
         public List<Branch> Branches { get; } = new();
         public List<Product> Products { get; } = new();
+        public List<BranchProduct> BranchProducts { get; } = new();
         public List<BranchStock> BranchStocks { get; } = new();
         public List<SupplierProduct> SupplierProducts { get; } = new();
 
@@ -454,17 +480,15 @@ public class BranchProductManagementTests
             CancellationToken cancellationToken = default)
         {
             var branch = Branches.FirstOrDefault(b => b.Id == branchId);
-            var query = BranchStocks.Where(s => s.BranchId == branchId);
-
-            var items = query
-                .GroupBy(s => new { s.BranchId, s.ProductId })
-                .Select(g =>
+            var items = BranchProducts
+                .Where(bp => bp.BranchId == branchId && !bp.IsDeleted)
+                .Select(bp =>
             {
-                var s = g.First();
-                var prod = Products.FirstOrDefault(p => p.Id == s.ProductId);
-                var lotSupplierIds = g.Where(x => x.SupplierId.HasValue).Select(x => x.SupplierId!.Value).Distinct().ToList();
+                var prod = Products.FirstOrDefault(p => p.Id == bp.ProductId);
+                var stocks = BranchStocks.Where(s => s.BranchId == bp.BranchId && s.ProductId == bp.ProductId).ToList();
+                var lotSupplierIds = stocks.Where(x => x.SupplierId.HasValue).Select(x => x.SupplierId!.Value).Distinct().ToList();
                 Guid? displaySupplierId = lotSupplierIds.Count == 1 ? lotSupplierIds[0] : null;
-                var spMatches = SupplierProducts.Where(sp => sp.ProductId == s.ProductId).ToList();
+                var spMatches = SupplierProducts.Where(sp => sp.ProductId == bp.ProductId).ToList();
                 SupplierProduct? sp = null;
                 if (displaySupplierId.HasValue)
                 {
@@ -477,26 +501,26 @@ public class BranchProductManagementTests
 
                 return new BranchProductDto
                 {
-                    Id = s.Id,
-                    BranchId = s.BranchId,
+                    Id = bp.Id,
+                    BranchId = bp.BranchId,
                     BranchCode = branch?.BranchCode ?? "BR-01",
                     BranchName = branch?.Name ?? "Chi nhánh",
-                    ProductId = s.ProductId,
+                    ProductId = bp.ProductId,
                     Name = prod?.Name ?? "Sản phẩm",
                     Sku = prod?.ProductCode ?? "SKU",
                     Barcode = prod?.Barcode ?? "BARCODE",
                     Category = "Lương thực",
                     Unit = prod?.BaseUnit ?? "Gói",
-                    RetailPrice = g.Max(x => x.RetailPrice) ?? prod?.SellingPrice ?? 0m,
+                    RetailPrice = bp.SellingPriceOverride ?? prod?.SellingPrice ?? 0m,
                     CostPrice = sp != null && sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : (prod?.CostPrice ?? 0m),
-                    CurrentStock = g.Sum(x => x.QuantityOnHand),
+                    CurrentStock = stocks.Sum(x => x.QuantityOnHand),
                     MinStockLevel = prod?.MinStock ?? 0m,
                     SupplierId = sp?.SupplierId ?? displaySupplierId,
                     PrimarySupplierName = sp?.Supplier?.Name ?? string.Empty,
                     MinOrderQuantity = sp != null && sp.MinimumOrderQuantity > 0 ? (int)sp.MinimumOrderQuantity : 0,
-                    Status = g.Any(x => x.Status == "Active") ? "Active" : (s.Status ?? prod?.Status ?? "Active"),
-                    ShelfLocation = s.ShelfLocation,
-                    AssignedDate = DateTime.UtcNow
+                    Status = bp.Status,
+                    ShelfLocation = bp.ShelfLocation,
+                    AssignedDate = bp.CreatedAt
                 };
             }).ToList();
 
@@ -521,6 +545,7 @@ public class BranchProductManagementTests
         {
             var summaries = Branches.Select(b =>
             {
+                var bCatalog = BranchProducts.Where(s => s.BranchId == b.Id && !s.IsDeleted).ToList();
                 var bStocks = BranchStocks.Where(s => s.BranchId == b.Id).ToList();
                 return new BranchSummaryDto
                 {
@@ -530,7 +555,7 @@ public class BranchProductManagementTests
                     Address = b.Address ?? string.Empty,
                     ManagerName = b.ManagerName,
                     Phone = b.Phone,
-                    TotalProducts = bStocks.Select(s => s.ProductId).Distinct().Count(),
+                    TotalProducts = bCatalog.Select(s => s.ProductId).Distinct().Count(),
                     TotalStock = bStocks.Sum(s => s.QuantityOnHand),
                     LowStockCount = 0
                 };
@@ -539,12 +564,26 @@ public class BranchProductManagementTests
             return Task.FromResult((IReadOnlyList<BranchSummaryDto>)summaries);
         }
 
-        public Task<BranchStock?> GetBranchStockAsync(
+        public Task<BranchProduct?> GetBranchProductAsync(
             Guid branchId,
             Guid productId,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(BranchStocks.FirstOrDefault(s => s.BranchId == branchId && s.ProductId == productId));
+            return Task.FromResult(BranchProducts.FirstOrDefault(s =>
+                s.BranchId == branchId && s.ProductId == productId && !s.IsDeleted));
+        }
+
+        public Task AddBranchProductAsync(
+            BranchProduct branchProduct,
+            CancellationToken cancellationToken = default)
+        {
+            BranchProducts.Add(branchProduct);
+            return Task.CompletedTask;
+        }
+
+        public void RemoveBranchProduct(BranchProduct branchProduct)
+        {
+            branchProduct.IsDeleted = true;
         }
 
         public Task<IReadOnlyList<BranchStock>> GetBranchStocksByProductAsync(
@@ -639,7 +678,8 @@ public class BranchProductManagementTests
                         SupplierId = sp.SupplierId,
                         SupplierCode = sp.Supplier?.Code ?? string.Empty,
                         SupplierName = sp.Supplier?.Name ?? string.Empty,
-                        IsAlreadyAssigned = BranchStocks.Any(bs => bs.BranchId == branchId && bs.ProductId == sp.ProductId)
+                        IsAlreadyAssigned = BranchProducts.Any(bp =>
+                            bp.BranchId == branchId && bp.ProductId == sp.ProductId && !bp.IsDeleted)
                     };
                 })
                 .ToList();

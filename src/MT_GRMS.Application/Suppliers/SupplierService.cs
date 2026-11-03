@@ -1088,6 +1088,10 @@ public class SupplierService : ISupplierService
             filter.PageSize,
             filter.SupplierSearch,
             filter.CategoryName,
+            filter.Skus,
+            filter.Names,
+            filter.SupplierCodes,
+            filter.SupplierNames,
             cancellationToken);
 
         var dtos = items.Select(MapToSupplierProductDto).ToList();
@@ -1132,7 +1136,8 @@ public class SupplierService : ISupplierService
             throw new BusinessException("PRODUCT_ALREADY_ASSIGNED_TO_SUPPLIER", "Sản phẩm này đã được gán cho nhà cung cấp này trong hệ thống.");
         }
 
-        var effectivePrice = SupplierProductPricing.ResolveEffectivePurchasePrice(
+        // Giá nhập: client gửi > 0 thì lưu giá đó; = 0 thì mặc định lấy giá Master (CostPrice)
+        var purchasePrice = SupplierProductPricing.ResolvePurchasePriceToPersist(
             command.AgreedWholesalePrice,
             product.CostPrice);
 
@@ -1155,7 +1160,7 @@ public class SupplierService : ISupplierService
             Product = product,
             SupplierProductCode = command.SupplierProductCode,
             DeliveryUoM = deliveryUoM,
-            AgreedWholesalePrice = command.AgreedWholesalePrice,
+            AgreedWholesalePrice = purchasePrice,
             MinimumOrderQuantity = command.MinimumOrderQuantity,
             IsPrimarySupplier = command.IsPrimarySupplier,
             Status = SupplierProductStatus.Active
@@ -1180,8 +1185,8 @@ public class SupplierService : ISupplierService
                     SupplierId = supplierId,
                     QuantityOnHand = 0.000m,
                     QuantityReserved = 0.000m,
-                    LandedCostPerUnit = effectivePrice,
-                    RetailPrice = product.SellingPrice,
+                    LandedCostPerUnit = 0m,
+                    RetailPrice = null,
                     Status = "Active",
                     ShelfLocation = "Kệ hàng",
                     ZoneArea = "Khu vực trưng bày",
@@ -1214,7 +1219,7 @@ public class SupplierService : ISupplierService
 
         if (workItems.Any(x => x.AgreedWholesalePrice < 0))
         {
-            throw new BusinessException("VALIDATION_ERROR", "Giá sỉ thỏa thuận không được âm.");
+            throw new BusinessException("VALIDATION_ERROR", "Giá nhập không được âm.");
         }
 
         var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
@@ -1223,7 +1228,7 @@ public class SupplierService : ISupplierService
             throw new NotFoundException($"Không tìm thấy nhà cung cấp với ID: {supplierId}");
         }
 
-        var prepared = new List<(Domain.Entities.Catalog.Product Product, decimal AgreedPrice, int Moq, decimal EffectivePrice)>();
+        var prepared = new List<(Domain.Entities.Catalog.Product Product, decimal PurchasePrice, int Moq)>();
         foreach (var item in workItems)
         {
             var product = await _supplierRepository.GetProductByIdAsync(item.ProductId, cancellationToken);
@@ -1238,11 +1243,11 @@ public class SupplierService : ISupplierService
                 continue;
             }
 
-            var effectivePrice = SupplierProductPricing.ResolveEffectivePurchasePrice(
+            var purchasePrice = SupplierProductPricing.ResolvePurchasePriceToPersist(
                 item.AgreedWholesalePrice,
                 product.CostPrice);
 
-            prepared.Add((product, item.AgreedWholesalePrice, item.MinimumOrderQuantity, effectivePrice));
+            prepared.Add((product, purchasePrice, item.MinimumOrderQuantity));
         }
 
         var activeBranchIds = await _supplierRepository.GetActiveBranchIdsForSupplierAsync(supplierId, cancellationToken);
@@ -1251,7 +1256,7 @@ public class SupplierService : ISupplierService
         await _unitOfWork.BeginTransactionAsync(cancellationToken);
         try
         {
-            foreach (var (product, agreedPrice, moq, effectivePrice) in prepared)
+            foreach (var (product, purchasePrice, moq) in prepared)
             {
                 var deliveryUoM = !string.IsNullOrWhiteSpace(command.DeliveryUoM) && command.DeliveryUoM != "Theo ĐVT cơ sở"
                     ? command.DeliveryUoM
@@ -1266,7 +1271,7 @@ public class SupplierService : ISupplierService
                     Product = product,
                     SupplierProductCode = command.SupplierProductCode,
                     DeliveryUoM = deliveryUoM,
-                    AgreedWholesalePrice = agreedPrice,
+                    AgreedWholesalePrice = purchasePrice,
                     MinimumOrderQuantity = moq,
                     IsPrimarySupplier = false,
                     Status = SupplierProductStatus.Active
@@ -1288,8 +1293,8 @@ public class SupplierService : ISupplierService
                             SupplierId = supplierId,
                             QuantityOnHand = 0.000m,
                             QuantityReserved = 0.000m,
-                            LandedCostPerUnit = effectivePrice,
-                            RetailPrice = product.SellingPrice,
+                            LandedCostPerUnit = 0m,
+                            RetailPrice = null,
                             Status = "Active",
                             ShelfLocation = "Kệ hàng",
                             ZoneArea = "Khu vực trưng bày",
@@ -1345,7 +1350,9 @@ public class SupplierService : ISupplierService
         }
 
         var product = entity.Product ?? await _supplierRepository.GetProductByIdAsync(productId, cancellationToken);
-        SupplierProductPricing.ResolveEffectivePurchasePrice(command.AgreedWholesalePrice, product?.CostPrice);
+        var purchasePrice = SupplierProductPricing.ResolvePurchasePriceToPersist(
+            command.AgreedWholesalePrice,
+            product?.CostPrice);
 
         if (!string.IsNullOrWhiteSpace(command.DeliveryUoM))
         {
@@ -1356,7 +1363,7 @@ public class SupplierService : ISupplierService
             entity.DeliveryUoM = product.BaseUnit ?? entity.DeliveryUoM;
         }
 
-        entity.AgreedWholesalePrice = command.AgreedWholesalePrice;
+        entity.AgreedWholesalePrice = purchasePrice;
         entity.MinimumOrderQuantity = command.MinimumOrderQuantity;
         entity.IsPrimarySupplier = command.IsPrimarySupplier;
         entity.SupplierProductCode = command.SupplierProductCode;

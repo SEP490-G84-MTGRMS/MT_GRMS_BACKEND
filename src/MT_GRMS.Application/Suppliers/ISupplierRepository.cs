@@ -62,6 +62,10 @@ public interface ISupplierRepository : IRepository<Supplier>
         int pageSize,
         string? supplierSearch = null,
         string? categoryName = null,
+        IReadOnlyList<string>? skus = null,
+        IReadOnlyList<string>? names = null,
+        IReadOnlyList<string>? supplierCodes = null,
+        IReadOnlyList<string>? supplierNames = null,
         CancellationToken cancellationToken = default);
     Task AddSupplierProductAsync(SupplierProduct supplierProduct, CancellationToken cancellationToken = default);
     Task ClearPrimarySupplierFlagAsync(Guid productId, Guid? excludeSupplierId = null, CancellationToken cancellationToken = default);

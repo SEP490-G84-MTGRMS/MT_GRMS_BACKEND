@@ -6,6 +6,15 @@ namespace MT_GRMS.Application.Branches.Dtos;
 /// <summary>
 /// DTO đại diện cho một sản phẩm kinh doanh tại một Chi nhánh / Cửa hàng
 /// </summary>
+public class BranchProductUnitPriceDto
+{
+    public Guid? UnitId { get; set; }
+    public string UnitName { get; set; } = string.Empty;
+    public decimal ConversionRate { get; set; } = 1m;
+    public decimal Price { get; set; }
+    public bool IsBaseUnit { get; set; }
+}
+
 public class BranchProductDto
 {
     public Guid Id { get; set; }
@@ -18,6 +27,7 @@ public class BranchProductDto
     public string Barcode { get; set; } = string.Empty;
     public string Category { get; set; } = string.Empty;
     public string Unit { get; set; } = string.Empty;
+    public string? ImageUrl { get; set; }
     public decimal RetailPrice { get; set; }
     public decimal CostPrice { get; set; }
     public decimal CurrentStock { get; set; }
@@ -29,6 +39,7 @@ public class BranchProductDto
     public string Status { get; set; } = "Active";
     public string? ShelfLocation { get; set; }
     public DateTime AssignedDate { get; set; }
+    public List<BranchProductUnitPriceDto> UnitPrices { get; set; } = new();
 }
 
 /// <summary>
@@ -86,10 +97,16 @@ public class UpdateBranchProductCommand
 {
     public decimal RetailPrice { get; set; }
     public decimal? MinStockLevel { get; set; }
+    /// <summary>Bỏ qua — MOQ chỉ sửa ở màn SupplierProducts.</summary>
     public int? MinOrderQuantity { get; set; }
     public string? Status { get; set; }
     public Guid? SupplierId { get; set; }
     public string? ShelfLocation { get; set; }
+    /// <summary>
+    /// Giá bán theo từng ĐVT tại CN. Mỗi dòng có UnitId sẽ upsert vào BranchProductUnitPrices
+    /// (khác Master → lưu override; trùng Master → xóa override).
+    /// </summary>
+    public List<BranchProductUnitPriceDto>? UnitPrices { get; set; }
 }
 
 /// <summary>
@@ -111,10 +128,13 @@ public class AssignableBranchProductDto
     public string Name { get; set; } = string.Empty;
     public string CategoryName { get; set; } = string.Empty;
     public string BaseUoM { get; set; } = "Cái";
+    public string? ImageUrl { get; set; }
     public decimal CostPrice { get; set; }
+    public decimal SellingPrice { get; set; }
     public int Moq { get; set; } = 1;
     public Guid SupplierId { get; set; }
     public string SupplierCode { get; set; } = string.Empty;
     public string SupplierName { get; set; } = string.Empty;
     public bool IsAlreadyAssigned { get; set; }
+    public List<BranchProductUnitPriceDto> UnitPrices { get; set; } = new();
 }

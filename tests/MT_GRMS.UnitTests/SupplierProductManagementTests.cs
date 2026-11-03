@@ -400,7 +400,8 @@ public class SupplierProductManagementTests
             MinimumOrderQuantity = 3
         });
 
-        Assert.Equal(0m, result.AgreedWholesalePrice);
+        // Giá 0 từ client → backend mặc định lưu giá Master (CostPrice)
+        Assert.Equal(8000m, result.AgreedWholesalePrice);
         Assert.Equal(8000m, result.EffectivePurchasePrice);
         Assert.Equal(3, result.MinimumOrderQuantity);
     }
@@ -552,8 +553,8 @@ public class SupplierProductManagementTests
 
         var result = await _service.GetSupplierProductsAsync(Guid.Empty, new SupplierProductQueryFilter
         {
-            SearchTerm = "Cà",
-            SupplierSearch = "SUP-A-0001",
+            Names = ["Cà"],
+            SupplierCodes = ["SUP-A-0001"],
             PageIndex = 1,
             PageSize = 15
         });
@@ -732,12 +733,33 @@ public class SupplierProductManagementTests
         }
 
         public Task<(IReadOnlyList<SupplierProduct> Items, int TotalCount)> GetPagedSupplierProductsAsync(
-            Guid supplierId, string? searchTerm, Guid? categoryId, SupplierProductStatus? status, int pageIndex, int pageSize, string? supplierSearch = null, string? categoryName = null, CancellationToken cancellationToken = default)
+            Guid supplierId, string? searchTerm, Guid? categoryId, SupplierProductStatus? status, int pageIndex, int pageSize, string? supplierSearch = null, string? categoryName = null,
+            IReadOnlyList<string>? skus = null, IReadOnlyList<string>? names = null, IReadOnlyList<string>? supplierCodes = null, IReadOnlyList<string>? supplierNames = null,
+            CancellationToken cancellationToken = default)
         {
             var query = SupplierProducts.AsEnumerable();
             if (supplierId != Guid.Empty) query = query.Where(sp => sp.SupplierId == supplierId);
             if (status.HasValue) query = query.Where(sp => sp.Status == status.Value);
-            if (!string.IsNullOrWhiteSpace(searchTerm))
+
+            static List<string> Clean(IReadOnlyList<string>? values) =>
+                (values ?? Array.Empty<string>())
+                    .Where(v => !string.IsNullOrWhiteSpace(v))
+                    .Select(v => v.Trim().ToLowerInvariant())
+                    .Distinct()
+                    .ToList();
+
+            var skuTerms = Clean(skus);
+            if (skuTerms.Count > 0)
+            {
+                query = query.Where(sp => skuTerms.Any(term => (sp.Product?.SKU ?? string.Empty).ToLowerInvariant().Contains(term)));
+            }
+
+            var nameTerms = Clean(names);
+            if (nameTerms.Count > 0)
+            {
+                query = query.Where(sp => nameTerms.Any(term => (sp.Product?.Name ?? string.Empty).ToLowerInvariant().Contains(term)));
+            }
+            else if (!string.IsNullOrWhiteSpace(searchTerm))
             {
                 var term = searchTerm.Trim().ToLowerInvariant();
                 query = query.Where(sp =>
@@ -745,13 +767,26 @@ public class SupplierProductManagementTests
                     (sp.Product?.SKU ?? string.Empty).ToLowerInvariant().Contains(term) ||
                     (sp.Product?.Barcode ?? string.Empty).ToLowerInvariant().Contains(term));
             }
-            if (!string.IsNullOrWhiteSpace(supplierSearch))
+
+            var supplierCodeTerms = Clean(supplierCodes);
+            if (supplierCodeTerms.Count > 0)
+            {
+                query = query.Where(sp => supplierCodeTerms.Any(term => (sp.Supplier?.Code ?? string.Empty).ToLowerInvariant().Contains(term)));
+            }
+
+            var supplierNameTerms = Clean(supplierNames);
+            if (supplierNameTerms.Count > 0)
+            {
+                query = query.Where(sp => supplierNameTerms.Any(term => (sp.Supplier?.Name ?? string.Empty).ToLowerInvariant().Contains(term)));
+            }
+            else if (!string.IsNullOrWhiteSpace(supplierSearch) && supplierCodeTerms.Count == 0)
             {
                 var term = supplierSearch.Trim().ToLowerInvariant();
                 query = query.Where(sp =>
                     (sp.Supplier?.Code ?? string.Empty).ToLowerInvariant().Contains(term) ||
                     (sp.Supplier?.Name ?? string.Empty).ToLowerInvariant().Contains(term));
             }
+
             if (!string.IsNullOrWhiteSpace(categoryName) && !string.Equals(categoryName, "ALL", StringComparison.OrdinalIgnoreCase))
             {
                 var term = categoryName.Trim().ToLowerInvariant();

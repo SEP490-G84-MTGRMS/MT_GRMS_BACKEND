@@ -55,16 +55,15 @@ public class BranchProductRepository : IBranchProductRepository
         int pageSize,
         CancellationToken cancellationToken = default)
     {
-        var stockQuery = _context.BranchStocks
-            .Include(bs => bs.Product)
-                .ThenInclude(p => p!.Category)
-            .Include(bs => bs.Branch)
-            .Include(bs => bs.Supplier)
-            .AsNoTracking();
+        var query = _context.BranchProducts
+            .Include(bp => bp.Product)!.ThenInclude(p => p!.Category)
+            .Include(bp => bp.Branch)
+            .AsNoTracking()
+            .Where(bp => bp.Product != null && bp.Branch != null);
 
         if (branchId != Guid.Empty)
         {
-            stockQuery = stockQuery.Where(bs => bs.BranchId == branchId);
+            query = query.Where(bp => bp.BranchId == branchId);
         }
 
         if (!string.IsNullOrWhiteSpace(filter.SearchTerm))
@@ -79,180 +78,193 @@ public class BranchProductRepository : IBranchProductRepository
 
             var matchingProductIdsFromSP = await GetProductIdsForSuppliersAsync(matchingSupplierIds, cancellationToken);
 
-            stockQuery = stockQuery.Where(bs =>
-                (bs.Product != null && bs.Product.Name.ToLower().Contains(kw)) ||
-                (bs.Product != null && bs.Product.ProductCode.ToLower().Contains(kw)) ||
-                (bs.Product != null && bs.Product.Barcode.ToLower().Contains(kw)) ||
-                (bs.Branch != null && bs.Branch.BranchCode.ToLower().Contains(kw)) ||
-                (bs.Branch != null && bs.Branch.Name.ToLower().Contains(kw)) ||
-                (bs.SupplierId.HasValue && matchingSupplierIds.Contains(bs.SupplierId.Value)) ||
-                (!bs.SupplierId.HasValue && matchingProductIdsFromSP.Contains(bs.ProductId)));
+            query = query.Where(bp =>
+                (bp.Product != null && bp.Product.Name.ToLower().Contains(kw)) ||
+                (bp.Product != null && bp.Product.ProductCode.ToLower().Contains(kw)) ||
+                (bp.Product != null && bp.Product.Barcode.ToLower().Contains(kw)) ||
+                (bp.Branch != null && bp.Branch.BranchCode.ToLower().Contains(kw)) ||
+                (bp.Branch != null && bp.Branch.Name.ToLower().Contains(kw)) ||
+                matchingProductIdsFromSP.Contains(bp.ProductId));
         }
 
         var skuTerms = CleanTerms(filter.Skus);
         if (skuTerms.Count > 0)
         {
-            stockQuery = WhereAnyContains(stockQuery, bs => bs.Product!.ProductCode, skuTerms, true);
+            query = WhereAnyContains(query, bp => bp.Product!.ProductCode, skuTerms, true);
         }
 
         var nameTerms = CleanTerms(filter.Names);
         if (nameTerms.Count > 0)
         {
-            stockQuery = WhereAnyContains(stockQuery, bs => bs.Product!.Name, nameTerms, true);
+            query = WhereAnyContains(query, bp => bp.Product!.Name, nameTerms, true);
         }
 
         var branchCodeTerms = CleanTerms(filter.BranchCodes);
         if (branchCodeTerms.Count > 0)
         {
-            stockQuery = WhereAnyContains(stockQuery, bs => bs.Branch!.BranchCode, branchCodeTerms, true);
+            query = WhereAnyContains(query, bp => bp.Branch!.BranchCode, branchCodeTerms, true);
         }
         else if (!string.IsNullOrWhiteSpace(filter.BranchCode) && !string.Equals(filter.BranchCode, "all", StringComparison.OrdinalIgnoreCase))
         {
             var code = filter.BranchCode.Trim().ToLower();
-            stockQuery = stockQuery.Where(bs => bs.Branch != null && bs.Branch.BranchCode.ToLower().Contains(code));
+            query = query.Where(bp => bp.Branch != null && bp.Branch.BranchCode.ToLower().Contains(code));
         }
 
         var branchNameTerms = CleanTerms(filter.BranchNames);
         if (branchNameTerms.Count > 0)
         {
-            stockQuery = WhereAnyContains(stockQuery, bs => bs.Branch!.Name, branchNameTerms, true);
+            query = WhereAnyContains(query, bp => bp.Branch!.Name, branchNameTerms, true);
         }
 
         var supplierCodeTerms = CleanTerms(filter.SupplierCodes);
         if (supplierCodeTerms.Count > 0)
         {
-            var allSuppliers = await _context.Suppliers
+            var matchedSupplierIds = await _context.Suppliers
                 .AsNoTracking()
                 .Where(s => !s.IsDeleted)
                 .Select(s => new { s.Id, s.Code })
                 .ToListAsync(cancellationToken);
 
-            var matchedSupplierIds = allSuppliers
+            var ids = matchedSupplierIds
                 .Where(s => supplierCodeTerms.Any(term => !string.IsNullOrEmpty(s.Code) && s.Code.ToLower().Contains(term)))
                 .Select(s => s.Id)
                 .ToList();
-
-            var matchedProductIdsFromSP = await GetProductIdsForSuppliersAsync(matchedSupplierIds, cancellationToken);
-
-            stockQuery = FilterStocksBySupplier(
-                stockQuery,
-                matchedSupplierIds,
-                matchedProductIdsFromSP);
+            var productIds = await GetProductIdsForSuppliersAsync(ids, cancellationToken);
+            query = productIds.Count == 0
+                ? query.Where(_ => false)
+                : query.Where(bp => productIds.Contains(bp.ProductId));
         }
 
         var supplierNameTerms = CleanTerms(filter.SupplierNames);
         if (supplierNameTerms.Count > 0)
         {
-            var allSuppliers = await _context.Suppliers
+            var matchedSupplierIds = await _context.Suppliers
                 .AsNoTracking()
                 .Where(s => !s.IsDeleted)
                 .Select(s => new { s.Id, s.Name })
                 .ToListAsync(cancellationToken);
 
-            var matchedSupplierIds = allSuppliers
+            var ids = matchedSupplierIds
                 .Where(s => supplierNameTerms.Any(term => !string.IsNullOrEmpty(s.Name) && s.Name.ToLower().Contains(term)))
                 .Select(s => s.Id)
                 .ToList();
-
-            var matchedProductIdsFromSP = await GetProductIdsForSuppliersAsync(matchedSupplierIds, cancellationToken);
-
-            stockQuery = FilterStocksBySupplier(
-                stockQuery,
-                matchedSupplierIds,
-                matchedProductIdsFromSP);
+            var productIds = await GetProductIdsForSuppliersAsync(ids, cancellationToken);
+            query = productIds.Count == 0
+                ? query.Where(_ => false)
+                : query.Where(bp => productIds.Contains(bp.ProductId));
         }
 
         if (!string.IsNullOrWhiteSpace(filter.Category) && !string.Equals(filter.Category, "all", StringComparison.OrdinalIgnoreCase))
         {
-            stockQuery = stockQuery.Where(bs => bs.Product != null && bs.Product.Category != null && bs.Product.Category.Name == filter.Category);
+            query = query.Where(bp => bp.Product != null && bp.Product.Category != null && bp.Product.Category.Name == filter.Category);
         }
 
         if (!string.IsNullOrWhiteSpace(filter.Status) && !string.Equals(filter.Status, "all", StringComparison.OrdinalIgnoreCase))
         {
-            stockQuery = stockQuery.Where(bs => bs.Status == filter.Status || (string.IsNullOrEmpty(bs.Status) && bs.Product != null && bs.Product.Status == filter.Status));
+            query = query.Where(bp => bp.Status == filter.Status);
         }
 
-        // Nhóm theo từng cặp (BranchId, ProductId) — một dòng danh sách, không nhân bản vì lô / NCC.
-        var grouped = stockQuery
-            .Where(bs => bs.Product != null && bs.Branch != null)
-            .GroupBy(bs => new
-            {
-                bs.BranchId,
-                bs.ProductId,
-                BranchCode = bs.Branch!.BranchCode,
-                BranchName = bs.Branch!.Name,
-                ProductName = bs.Product!.Name,
-                ProductCode = bs.Product.ProductCode,
-                Barcode = bs.Product.Barcode,
-                CategoryName = bs.Product.Category != null ? bs.Product.Category.Name : "Khác",
-                Unit = bs.Product.BaseUnit,
-                MasterRetailPrice = bs.Product.SellingPrice,
-                CostPrice = bs.Product.CostPrice ?? 0m,
-                MinStock = bs.Product.MinStock,
-                MasterProductStatus = bs.Product.Status
-            })
-            .Select(g => new
-            {
-                g.Key.BranchId,
-                g.Key.ProductId,
-                g.Key.BranchCode,
-                g.Key.BranchName,
-                g.Key.ProductName,
-                g.Key.ProductCode,
-                g.Key.Barcode,
-                g.Key.CategoryName,
-                g.Key.Unit,
-                RetailPrice = g.Max(x => x.RetailPrice) ?? g.Key.MasterRetailPrice,
-                g.Key.CostPrice,
-                g.Key.MinStock,
-                ProductStatus = g.Any(x => x.Status == "Active") ? "Active" : (g.First().Status ?? g.Key.MasterProductStatus),
-                FirstStockId = g.First().Id,
-                FirstShelfLocation = g.First().ShelfLocation,
-                AssignedDate = g.Min(x => x.CreatedAt),
-                CurrentStock = g.Sum(x => x.QuantityOnHand)
-            });
-
-        // Áp dụng bộ lọc cảnh báo tồn kho
-        var stockAlert = filter.StockAlertFilter;
-        if (!string.IsNullOrWhiteSpace(stockAlert) && !string.Equals(stockAlert, "all", StringComparison.OrdinalIgnoreCase))
+        var projected = query.Select(bp => new
         {
-            if (string.Equals(stockAlert, "OUT_OF_STOCK", StringComparison.OrdinalIgnoreCase))
+            bp.Id,
+            bp.BranchId,
+            BranchCode = bp.Branch!.BranchCode,
+            BranchName = bp.Branch.Name,
+            bp.ProductId,
+            ProductName = bp.Product!.Name,
+            ProductCode = bp.Product.ProductCode,
+            Barcode = bp.Product.Barcode,
+            CategoryName = bp.Product.Category != null ? bp.Product.Category.Name : "Khác",
+            Unit = bp.Product.BaseUnit,
+            MasterRetailPrice = bp.Product.SellingPrice,
+            CostPrice = bp.Product.CostPrice ?? 0m,
+            MinStock = bp.Product.MinStock,
+            RetailPrice = bp.SellingPriceOverride ?? bp.Product.SellingPrice,
+            ProductStatus = bp.Status,
+            ShelfLocation = bp.ShelfLocation,
+            AssignedDate = bp.CreatedAt
+        });
+
+        // Stock alert cần QuantityOnHand từ BranchStocks — lọc sau khi join qty.
+        var stockAlert = filter.StockAlertFilter;
+        var needsStockFilter = !string.IsNullOrWhiteSpace(stockAlert)
+            && !string.Equals(stockAlert, "all", StringComparison.OrdinalIgnoreCase);
+
+        List<Guid> filteredIds;
+        int totalCount;
+        if (needsStockFilter)
+        {
+            var allRows = await projected.ToListAsync(cancellationToken);
+            var ids = allRows.Select(x => x.ProductId).Distinct().ToList();
+            var branchIds = allRows.Select(x => x.BranchId).Distinct().ToList();
+            var qtyRows = await _context.BranchStocks
+                .AsNoTracking()
+                .Where(bs => branchIds.Contains(bs.BranchId) && ids.Contains(bs.ProductId))
+                .GroupBy(bs => new { bs.BranchId, bs.ProductId })
+                .Select(g => new { g.Key.BranchId, g.Key.ProductId, Qty = g.Sum(x => x.QuantityOnHand) })
+                .ToListAsync(cancellationToken);
+            var qtyLookup = qtyRows.ToDictionary(x => (x.BranchId, x.ProductId), x => x.Qty);
+
+            var filtered = allRows.Where(x =>
             {
-                grouped = grouped.Where(x => x.CurrentStock == 0);
-            }
-            else if (string.Equals(stockAlert, "LOW", StringComparison.OrdinalIgnoreCase))
-            {
-                grouped = grouped.Where(x => x.CurrentStock > 0 && x.CurrentStock <= x.MinStock);
-            }
-            else if (string.Equals(stockAlert, "NORMAL", StringComparison.OrdinalIgnoreCase))
-            {
-                grouped = grouped.Where(x => x.CurrentStock > x.MinStock);
-            }
+                qtyLookup.TryGetValue((x.BranchId, x.ProductId), out var qty);
+                if (string.Equals(stockAlert, "OUT_OF_STOCK", StringComparison.OrdinalIgnoreCase))
+                    return qty == 0;
+                if (string.Equals(stockAlert, "LOW", StringComparison.OrdinalIgnoreCase))
+                    return qty > 0 && qty <= x.MinStock;
+                if (string.Equals(stockAlert, "NORMAL", StringComparison.OrdinalIgnoreCase))
+                    return qty > x.MinStock;
+                return true;
+            }).ToList();
+
+            totalCount = filtered.Count;
+            filteredIds = filtered
+                .OrderBy(x => x.ProductCode)
+                .Skip((Math.Max(1, pageIndex) - 1) * Math.Clamp(pageSize, 1, 100))
+                .Take(Math.Clamp(pageSize, 1, 100))
+                .Select(x => x.Id)
+                .ToList();
+        }
+        else
+        {
+            totalCount = await projected.CountAsync(cancellationToken);
+            var safePageIndex = Math.Max(1, pageIndex);
+            var safePageSize = Math.Clamp(pageSize, 1, 100);
+            filteredIds = await projected
+                .OrderBy(x => x.ProductCode)
+                .Skip((safePageIndex - 1) * safePageSize)
+                .Take(safePageSize)
+                .Select(x => x.Id)
+                .ToListAsync(cancellationToken);
         }
 
-        var totalCount = await grouped.CountAsync(cancellationToken);
+        if (filteredIds.Count == 0)
+        {
+            return (Array.Empty<BranchProductDto>(), totalCount);
+        }
 
-        var safePageIndex = Math.Max(1, pageIndex);
-        var safePageSize = Math.Clamp(pageSize, 1, 100);
-
-        var pagedData = await grouped
-            .OrderBy(x => x.ProductCode)
-            .Skip((safePageIndex - 1) * safePageSize)
-            .Take(safePageSize)
+        var pagedData = await projected
+            .Where(x => filteredIds.Contains(x.Id))
             .ToListAsync(cancellationToken);
+        pagedData = pagedData.OrderBy(x => filteredIds.IndexOf(x.Id)).ToList();
 
-        // Bổ sung thông tin Nhà cung cấp, MOQ và Giá vốn NCC từ SupplierProducts
         var pagedProductIds = pagedData.Select(x => x.ProductId).Distinct().ToList();
         var pagedBranchIds = pagedData.Select(x => x.BranchId).Distinct().ToList();
+
+        var stockQtys = await _context.BranchStocks
+            .AsNoTracking()
+            .Where(bs => pagedBranchIds.Contains(bs.BranchId) && pagedProductIds.Contains(bs.ProductId))
+            .GroupBy(bs => new { bs.BranchId, bs.ProductId })
+            .Select(g => new { g.Key.BranchId, g.Key.ProductId, Qty = g.Sum(x => x.QuantityOnHand) })
+            .ToListAsync(cancellationToken);
+        var stockLookup = stockQtys.ToDictionary(x => (x.BranchId, x.ProductId), x => x.Qty);
+
         var rawSp = await _context.SupplierProducts
             .Include(sp => sp.Supplier)
             .Where(sp => pagedProductIds.Contains(sp.ProductId) && !sp.IsDeleted && sp.Supplier != null && !sp.Supplier.IsDeleted)
             .OrderBy(sp => sp.CreatedAt)
             .ToListAsync(cancellationToken);
-
-        var spLookup = rawSp
-            .GroupBy(sp => sp.ProductId)
-            .ToDictionary(g => g.Key, g => g.ToList());
+        var spLookup = rawSp.GroupBy(sp => sp.ProductId).ToDictionary(g => g.Key, g => g.ToList());
 
         var lotSuppliers = await _context.BranchStocks
             .AsNoTracking()
@@ -270,10 +282,43 @@ public class BranchProductRepository : IBranchProductRepository
             })
             .Distinct()
             .ToListAsync(cancellationToken);
-
         var lotSupplierLookup = lotSuppliers
             .GroupBy(x => (x.BranchId, x.ProductId))
             .ToDictionary(g => g.Key, g => g.ToList());
+
+        var productExtras = await _context.Products
+            .AsNoTracking()
+            .Include(p => p.Units)
+            .Where(p => pagedProductIds.Contains(p.Id))
+            .Select(p => new
+            {
+                p.Id,
+                p.ImageUrl,
+                p.BaseUnit,
+                p.SellingPrice,
+                Units = p.Units.Select(u => new
+                {
+                    u.Id,
+                    u.UnitName,
+                    u.ConversionRate,
+                    u.Price,
+                    u.IsBaseUnit
+                }).ToList()
+            })
+            .ToListAsync(cancellationToken);
+        var productExtraLookup = productExtras.ToDictionary(p => p.Id);
+
+        var pagedBranchProductIds = pagedData.Select(x => x.Id).ToList();
+        var unitOverrideRows = await _context.BranchProductUnitPrices
+            .AsNoTracking()
+            .Where(u => pagedBranchProductIds.Contains(u.BranchProductId))
+            .Select(u => new { u.BranchProductId, u.ProductUnitId, u.SellingPriceOverride })
+            .ToListAsync(cancellationToken);
+        var unitOverrideLookup = unitOverrideRows
+            .GroupBy(u => u.BranchProductId)
+            .ToDictionary(
+                g => g.Key,
+                g => (IReadOnlyDictionary<Guid, decimal>)g.ToDictionary(x => x.ProductUnitId, x => x.SellingPriceOverride));
 
         var dtos = pagedData.Select(x =>
         {
@@ -309,9 +354,18 @@ public class BranchProductRepository : IBranchProductRepository
                 : 0;
             var finalSupplierId = matchedSp?.SupplierId ?? displaySupplierId;
 
+            productExtraLookup.TryGetValue(x.ProductId, out var extra);
+            stockLookup.TryGetValue((x.BranchId, x.ProductId), out var currentStock);
+            unitOverrideLookup.TryGetValue(x.Id, out var unitOverrides);
+            var unitPrices = BuildUnitPrices(
+                extra?.Units.Select(u => (u.Id, u.UnitName, u.ConversionRate, u.Price, u.IsBaseUnit)),
+                x.Unit,
+                x.RetailPrice,
+                unitOverrides);
+
             return new BranchProductDto
             {
-                Id = x.FirstStockId,
+                Id = x.Id,
                 BranchId = x.BranchId,
                 BranchCode = x.BranchCode,
                 BranchName = x.BranchName,
@@ -321,21 +375,73 @@ public class BranchProductRepository : IBranchProductRepository
                 Barcode = x.Barcode,
                 Category = x.CategoryName,
                 Unit = x.Unit,
+                ImageUrl = extra?.ImageUrl,
                 RetailPrice = x.RetailPrice,
                 CostPrice = finalCostPrice,
-                CurrentStock = x.CurrentStock,
+                CurrentStock = currentStock,
                 MinStockLevel = x.MinStock,
                 SupplierId = finalSupplierId,
                 PrimarySupplierCode = finalCode,
                 PrimarySupplierName = finalName,
                 MinOrderQuantity = finalMoq,
                 Status = x.ProductStatus,
-                ShelfLocation = x.FirstShelfLocation,
-                AssignedDate = x.AssignedDate
+                ShelfLocation = x.ShelfLocation,
+                AssignedDate = x.AssignedDate,
+                UnitPrices = unitPrices
             };
         }).ToList();
 
         return (dtos, totalCount);
+    }
+
+    /// <summary>
+    /// Giá ĐVT hiệu lực = override CN ?? giá Master ProductUnits.
+    /// </summary>
+    private static List<BranchProductUnitPriceDto> BuildUnitPrices(
+        IEnumerable<(Guid Id, string UnitName, decimal ConversionRate, decimal Price, bool IsBaseUnit)>? units,
+        string baseUnitName,
+        decimal fallbackBasePrice,
+        IReadOnlyDictionary<Guid, decimal>? overridesByUnitId = null)
+    {
+        var list = units?.ToList() ?? [];
+        overridesByUnitId ??= new Dictionary<Guid, decimal>();
+
+        if (list.Count == 0)
+        {
+            return
+            [
+                new BranchProductUnitPriceDto
+                {
+                    UnitName = string.IsNullOrWhiteSpace(baseUnitName) ? "Cái" : baseUnitName,
+                    ConversionRate = 1m,
+                    Price = fallbackBasePrice,
+                    IsBaseUnit = true
+                }
+            ];
+        }
+
+        return list
+            .OrderByDescending(u => u.IsBaseUnit)
+            .ThenBy(u => u.ConversionRate)
+            .Select(u =>
+            {
+                var rate = u.ConversionRate <= 0 ? 1m : u.ConversionRate;
+                var price = overridesByUnitId.TryGetValue(u.Id, out var ov) ? ov : u.Price;
+                if (price <= 0 && fallbackBasePrice > 0)
+                {
+                    price = Math.Round(fallbackBasePrice * rate, 0);
+                }
+
+                return new BranchProductUnitPriceDto
+                {
+                    UnitId = u.Id,
+                    UnitName = u.UnitName,
+                    ConversionRate = rate,
+                    Price = price,
+                    IsBaseUnit = u.IsBaseUnit || rate == 1m
+                };
+            })
+            .ToList();
     }
 
     private async Task<List<Guid>> GetProductIdsForSuppliersAsync(
@@ -353,21 +459,6 @@ public class BranchProductRepository : IBranchProductRepository
             .Select(sp => sp.ProductId)
             .Distinct()
             .ToListAsync(cancellationToken);
-    }
-
-    private static IQueryable<BranchStock> FilterStocksBySupplier(
-        IQueryable<BranchStock> stockQuery,
-        List<Guid> matchedSupplierIds,
-        List<Guid> matchedProductIdsFromSP)
-    {
-        if (matchedSupplierIds.Count == 0)
-        {
-            return stockQuery.Where(_ => false);
-        }
-
-        return stockQuery.Where(bs =>
-            (bs.SupplierId.HasValue && matchedSupplierIds.Contains(bs.SupplierId.Value))
-            || (!bs.SupplierId.HasValue && matchedProductIdsFromSP.Contains(bs.ProductId)));
     }
 
     private static List<string> CleanTerms(IReadOnlyList<string>? values)
@@ -418,30 +509,31 @@ public class BranchProductRepository : IBranchProductRepository
             .Where(b => !b.IsDeleted)
             .ToListAsync(cancellationToken);
 
+        var catalog = await _context.BranchProducts
+            .AsNoTracking()
+            .Where(bp => bp.Product != null)
+            .Select(bp => new { bp.BranchId, bp.ProductId })
+            .ToListAsync(cancellationToken);
+
         var stocks = await _context.BranchStocks
             .Include(bs => bs.Product)
             .AsNoTracking()
-            .Where(bs => bs.Product != null && !bs.IsDeleted)
+            .Where(bs => bs.Product != null)
             .ToListAsync(cancellationToken);
 
         var result = new List<BranchSummaryDto>();
 
         foreach (var b in branches)
         {
+            var productIds = catalog.Where(c => c.BranchId == b.Id).Select(c => c.ProductId).Distinct().ToList();
             var branchStocks = stocks.Where(s => s.BranchId == b.Id).ToList();
-
-            var distinctProducts = branchStocks
-                .GroupBy(s => s.ProductId)
-                .Select(g => new
-                {
-                    ProductId = g.Key,
-                    TotalStock = g.Sum(x => x.QuantityOnHand),
-                    MinStock = g.First().Product?.MinStock ?? 0m
-                })
-                .ToList();
-
             var totalStock = branchStocks.Sum(s => s.QuantityOnHand);
-            var lowStockCount = distinctProducts.Count(p => p.TotalStock <= p.MinStock);
+            var lowStockCount = productIds.Count(pid =>
+            {
+                var qty = branchStocks.Where(s => s.ProductId == pid).Sum(s => s.QuantityOnHand);
+                var min = branchStocks.FirstOrDefault(s => s.ProductId == pid)?.Product?.MinStock ?? 0m;
+                return qty <= min;
+            });
 
             result.Add(new BranchSummaryDto
             {
@@ -451,7 +543,7 @@ public class BranchProductRepository : IBranchProductRepository
                 Address = b.Address ?? "Hồ Chí Minh, Việt Nam",
                 ManagerName = b.ManagerName ?? "Quản lý chi nhánh",
                 Phone = b.Phone ?? "0901 234 567",
-                TotalProducts = distinctProducts.Count,
+                TotalProducts = productIds.Count,
                 TotalStock = totalStock,
                 LowStockCount = lowStockCount
             });
@@ -460,15 +552,30 @@ public class BranchProductRepository : IBranchProductRepository
         return result;
     }
 
-    public async Task<BranchStock?> GetBranchStockAsync(
+    public async Task<BranchProduct?> GetBranchProductAsync(
         Guid branchId,
         Guid productId,
         CancellationToken cancellationToken = default)
     {
-        return await _context.BranchStocks
-            .Include(bs => bs.Product)
-            .Include(bs => bs.Branch)
-            .FirstOrDefaultAsync(bs => bs.BranchId == branchId && bs.ProductId == productId, cancellationToken);
+        return await _context.BranchProducts
+            .Include(bp => bp.Product)!.ThenInclude(p => p!.Category)
+            .Include(bp => bp.Product)!.ThenInclude(p => p!.Units)
+            .Include(bp => bp.Branch)
+            .Include(bp => bp.UnitPriceOverrides)
+            .FirstOrDefaultAsync(bp => bp.BranchId == branchId && bp.ProductId == productId, cancellationToken);
+    }
+
+    public async Task AddBranchProductAsync(
+        BranchProduct branchProduct,
+        CancellationToken cancellationToken = default)
+    {
+        await _context.BranchProducts.AddAsync(branchProduct, cancellationToken);
+    }
+
+    public void RemoveBranchProduct(BranchProduct branchProduct)
+    {
+        branchProduct.IsDeleted = true;
+        branchProduct.UpdatedAt = DateTime.UtcNow;
     }
 
     public async Task<IReadOnlyList<BranchStock>> GetBranchStocksByProductAsync(
@@ -479,6 +586,7 @@ public class BranchProductRepository : IBranchProductRepository
         return await _context.BranchStocks
             .Include(bs => bs.Product)
             .Include(bs => bs.Branch)
+            .Include(bs => bs.Supplier)
             .Where(bs => bs.BranchId == branchId && bs.ProductId == productId)
             .ToListAsync(cancellationToken);
     }
@@ -549,10 +657,10 @@ public class BranchProductRepository : IBranchProductRepository
             return Array.Empty<AssignableBranchProductDto>();
         }
 
-        var alreadyAssignedIds = await _context.BranchStocks
+        var alreadyAssignedIds = await _context.BranchProducts
             .AsNoTracking()
-            .Where(bs => bs.BranchId == branchId && !bs.IsDeleted)
-            .Select(bs => bs.ProductId)
+            .Where(bp => bp.BranchId == branchId)
+            .Select(bp => bp.ProductId)
             .Distinct()
             .ToListAsync(cancellationToken);
         var alreadyAssigned = alreadyAssignedIds.ToHashSet();
@@ -560,6 +668,7 @@ public class BranchProductRepository : IBranchProductRepository
         var supplierProducts = await _context.SupplierProducts
             .AsNoTracking()
             .Include(sp => sp.Product)!.ThenInclude(p => p!.Category)
+            .Include(sp => sp.Product)!.ThenInclude(p => p!.Units)
             .Include(sp => sp.Supplier)
             .Where(sp =>
                 supplierIds.Contains(sp.SupplierId)
@@ -589,6 +698,11 @@ public class BranchProductRepository : IBranchProductRepository
             var cost = agreed > 0
                 ? agreed
                 : (sp.Product.CostPrice ?? 0m);
+            var selling = sp.Product.SellingPrice;
+            var unitPrices = BuildUnitPrices(
+                sp.Product.Units.Select(u => (u.Id, u.UnitName, u.ConversionRate, u.Price, u.IsBaseUnit)),
+                sp.Product.BaseUnit ?? "Cái",
+                selling);
 
             result.Add(new AssignableBranchProductDto
             {
@@ -598,12 +712,15 @@ public class BranchProductRepository : IBranchProductRepository
                 Name = sp.Product.Name,
                 CategoryName = sp.Product.Category?.Name ?? "Khác",
                 BaseUoM = sp.Product.BaseUnit ?? "Cái",
+                ImageUrl = sp.Product.ImageUrl,
                 CostPrice = cost,
+                SellingPrice = selling,
                 Moq = sp.MinimumOrderQuantity > 0 ? sp.MinimumOrderQuantity : 1,
                 SupplierId = sp.SupplierId,
                 SupplierCode = sp.Supplier?.Code ?? string.Empty,
                 SupplierName = sp.Supplier?.Name ?? string.Empty,
-                IsAlreadyAssigned = alreadyAssigned.Contains(sp.ProductId)
+                IsAlreadyAssigned = alreadyAssigned.Contains(sp.ProductId),
+                UnitPrices = unitPrices
             });
         }
 
@@ -618,6 +735,7 @@ public class BranchProductRepository : IBranchProductRepository
     {
         return await _context.Products
             .Include(p => p.Category)
+            .Include(p => p.Units)
             .FirstOrDefaultAsync(p => p.Id == productId, cancellationToken);
     }
 

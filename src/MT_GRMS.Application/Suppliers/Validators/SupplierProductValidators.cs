@@ -15,7 +15,7 @@ public class AssignSupplierProductValidator : AbstractValidator<AssignSupplierPr
             .When(x => !string.IsNullOrWhiteSpace(x.DeliveryUoM));
 
         RuleFor(x => x.AgreedWholesalePrice)
-            .GreaterThanOrEqualTo(0).WithMessage("Giá sỉ thỏa thuận không được âm.");
+            .GreaterThanOrEqualTo(0).WithMessage("Giá nhập không được âm.");
 
         RuleFor(x => x.MinimumOrderQuantity)
             .GreaterThan(0).WithMessage("Số lượng đặt hàng tối thiểu (MOQ) phải lớn hơn 0.");
@@ -35,7 +35,7 @@ public class UpdateSupplierProductValidator : AbstractValidator<UpdateSupplierPr
             .When(x => !string.IsNullOrWhiteSpace(x.DeliveryUoM));
 
         RuleFor(x => x.AgreedWholesalePrice)
-            .GreaterThanOrEqualTo(0).WithMessage("Giá sỉ thỏa thuận không được âm.");
+            .GreaterThanOrEqualTo(0).WithMessage("Giá nhập không được âm.");
 
         RuleFor(x => x.MinimumOrderQuantity)
             .GreaterThan(0).WithMessage("Số lượng đặt hàng tối thiểu (MOQ) phải lớn hơn 0.");
