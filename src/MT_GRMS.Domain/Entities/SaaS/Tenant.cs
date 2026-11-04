@@ -21,6 +21,7 @@ public class Tenant : BaseEntity<string>
     public string? Address { get; set; }
     public string? City { get; set; }
     public string Status { get; set; } = "ACTIVE";
+    public decimal WalletBalance { get; set; } = 0;
     public string? CurrentPlan { get; set; }
     public DateTime? SubscriptionExpiresAt { get; set; }
     public DateTime? GracePeriodExpiresAt { get; set; }
@@ -33,4 +34,6 @@ public class Tenant : BaseEntity<string>
     public SubscriptionPlan? SubscriptionPlan { get; set; }
     public ICollection<TenantUser> TenantUsers { get; set; } = new List<TenantUser>();
     public ICollection<Branch> Branches { get; set; } = new List<Branch>();
+    public ICollection<WalletTransaction> WalletTransactions { get; set; } = new List<WalletTransaction>();
+    public ICollection<WalletTopupOrder> WalletTopupOrders { get; set; } = new List<WalletTopupOrder>();
 }
