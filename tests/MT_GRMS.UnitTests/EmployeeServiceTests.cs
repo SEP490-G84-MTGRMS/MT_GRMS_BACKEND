@@ -116,7 +116,15 @@ public class EmployeeServiceTests
                 var kw = filter.Keyword.ToLower();
                 query = query.Where(e => e.FullName.ToLower().Contains(kw) || e.EmployeeCode.ToLower().Contains(kw) || e.Phone.Contains(kw));
             }
-            if (filter.BranchId.HasValue && filter.BranchId.Value != Guid.Empty)
+            if (filter.BranchIds != null && filter.BranchIds.Count > 0)
+            {
+                var validBranchIds = filter.BranchIds.Where(id => id != Guid.Empty).ToList();
+                if (validBranchIds.Count > 0)
+                {
+                    query = query.Where(e => validBranchIds.Contains(e.BranchId));
+                }
+            }
+            else if (filter.BranchId.HasValue && filter.BranchId.Value != Guid.Empty)
             {
                 query = query.Where(e => e.BranchId == filter.BranchId.Value);
             }
@@ -648,5 +656,60 @@ public class EmployeeServiceTests
         Assert.Single(result.Items);
         Assert.Equal("NV0002", result.Items.First().EmployeeCode);
         Assert.Equal("shift", result.Items.First().SalaryType);
+    }
+
+    [Fact]
+    public async Task GetEmployeesPagedAsync_WithMultipleBranchIds_ShouldFilterCorrectly()
+    {
+        // Arrange
+        var branch1 = Guid.NewGuid();
+        var branch2 = Guid.NewGuid();
+        var branch3 = Guid.NewGuid();
+        var empRepo = new FakeEmployeeRepository();
+        empRepo.Employees.Add(new Employee
+        {
+            Id = Guid.NewGuid(),
+            EmployeeCode = "NV0001",
+            FullName = "NV Chi Nhanh 1",
+            CitizenId = "001200000001",
+            Phone = "0987000001",
+            BranchId = branch1,
+            SalaryType = SalaryType.Monthly
+        });
+        empRepo.Employees.Add(new Employee
+        {
+            Id = Guid.NewGuid(),
+            EmployeeCode = "NV0002",
+            FullName = "NV Chi Nhanh 2",
+            CitizenId = "001200000002",
+            Phone = "0987000002",
+            BranchId = branch2,
+            SalaryType = SalaryType.Shift
+        });
+        empRepo.Employees.Add(new Employee
+        {
+            Id = Guid.NewGuid(),
+            EmployeeCode = "NV0003",
+            FullName = "NV Chi Nhanh 3",
+            CitizenId = "001200000003",
+            Phone = "0987000003",
+            BranchId = branch3,
+            SalaryType = SalaryType.Hourly
+        });
+
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        // Act - Filter by branch1 and branch2
+        var filter = new EmployeeQueryFilter(BranchIds: new List<Guid> { branch1, branch2 });
+        var result = await service.GetEmployeesPagedAsync(filter);
+
+        // Assert
+        Assert.Equal(2, result.Items.Count);
+        Assert.Contains(result.Items, e => e.EmployeeCode == "NV0001");
+        Assert.Contains(result.Items, e => e.EmployeeCode == "NV0002");
+        Assert.DoesNotContain(result.Items, e => e.EmployeeCode == "NV0003");
     }
 }

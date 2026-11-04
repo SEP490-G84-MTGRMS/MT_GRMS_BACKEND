@@ -50,9 +50,13 @@ public class ShiftConfigServiceTests
             return Task.FromResult(ShiftConfigs.FirstOrDefault(s => s.Id == id && !s.IsDeleted));
         }
 
-        public Task<IReadOnlyList<ShiftConfig>> GetByBranchIdAsync(Guid branchId, bool? isActive = null, CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<ShiftConfig>> GetByBranchIdAsync(Guid? branchId, bool? isActive = null, CancellationToken cancellationToken = default)
         {
-            var query = ShiftConfigs.Where(s => s.BranchId == branchId && !s.IsDeleted);
+            var query = ShiftConfigs.Where(s => !s.IsDeleted);
+            if (branchId.HasValue && branchId.Value != Guid.Empty)
+            {
+                query = query.Where(s => s.BranchId == branchId.Value);
+            }
             if (isActive.HasValue)
             {
                 query = query.Where(s => s.IsActive == isActive.Value);

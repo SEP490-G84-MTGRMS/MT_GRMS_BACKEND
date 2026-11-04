@@ -7,17 +7,13 @@ public class CreateShiftConfigRequestValidator : AbstractValidator<CreateShiftCo
 {
     public CreateShiftConfigRequestValidator()
     {
-        RuleFor(x => x.BranchId)
-            .NotEmpty().WithMessage("Chi nhánh là bắt buộc.");
-
-        RuleFor(x => x.ShiftCode)
-            .NotEmpty().WithMessage("Mã ca không được để trống.")
-            .Length(2, 20).WithMessage("Mã ca phải từ 2 đến 20 ký tự.")
-            .Matches(@"^[A-Za-z0-9_]+$").WithMessage("Mã ca chỉ được chứa chữ cái, số và dấu gạch dưới (_).");
-
         RuleFor(x => x.ShiftName)
             .NotEmpty().WithMessage("Tên ca không được để trống.")
-            .Length(2, 100).WithMessage("Tên ca phải từ 2 đến 100 ký tự.");
+            .Length(1, 100).WithMessage("Tên ca phải từ 1 đến 100 ký tự.");
+
+        RuleFor(x => x)
+            .Must(x => (x.BranchIds != null && x.BranchIds.Count > 0) || (x.BranchId.HasValue && x.BranchId.Value != Guid.Empty))
+            .WithMessage("Phạm vi áp dụng (chi nhánh) là bắt buộc.");
 
         RuleFor(x => x.StartTime)
             .Must(t => t >= TimeSpan.Zero && t < TimeSpan.FromDays(1))
@@ -26,6 +22,12 @@ public class CreateShiftConfigRequestValidator : AbstractValidator<CreateShiftCo
         RuleFor(x => x.EndTime)
             .Must(t => t >= TimeSpan.Zero && t < TimeSpan.FromDays(1))
             .WithMessage("Giờ kết thúc không hợp lệ (phải trong khoảng 00:00 - 23:59).");
+
+        When(x => !string.IsNullOrEmpty(x.ShiftCode), () =>
+        {
+            RuleFor(x => x.ShiftCode!)
+                .Length(2, 30).WithMessage("Mã ca phải từ 2 đến 30 ký tự.");
+        });
 
         When(x => x.DurationHours.HasValue, () =>
         {
@@ -62,7 +64,7 @@ public class UpdateShiftConfigRequestValidator : AbstractValidator<UpdateShiftCo
     {
         RuleFor(x => x.ShiftName)
             .NotEmpty().WithMessage("Tên ca không được để trống.")
-            .Length(2, 100).WithMessage("Tên ca phải từ 2 đến 100 ký tự.");
+            .Length(1, 100).WithMessage("Tên ca phải từ 1 đến 100 ký tự.");
 
         RuleFor(x => x.StartTime)
             .Must(t => t >= TimeSpan.Zero && t < TimeSpan.FromDays(1))
@@ -71,6 +73,12 @@ public class UpdateShiftConfigRequestValidator : AbstractValidator<UpdateShiftCo
         RuleFor(x => x.EndTime)
             .Must(t => t >= TimeSpan.Zero && t < TimeSpan.FromDays(1))
             .WithMessage("Giờ kết thúc không hợp lệ (phải trong khoảng 00:00 - 23:59).");
+
+        When(x => !string.IsNullOrEmpty(x.ShiftCode), () =>
+        {
+            RuleFor(x => x.ShiftCode!)
+                .Length(2, 30).WithMessage("Mã ca phải từ 2 đến 30 ký tự.");
+        });
 
         When(x => x.DurationHours.HasValue, () =>
         {
@@ -100,4 +108,3 @@ public class UpdateShiftConfigRequestValidator : AbstractValidator<UpdateShiftCo
         });
     }
 }
-

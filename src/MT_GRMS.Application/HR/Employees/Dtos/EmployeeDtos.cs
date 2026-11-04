@@ -59,6 +59,7 @@ public record CreateIdentityAccountRequest(
 public record EmployeeQueryFilter(
     string? Keyword = null,
     Guid? BranchId = null,
+    List<Guid>? BranchIds = null,
     string? Status = null,
     string? SalaryType = null,
     int Page = 1,

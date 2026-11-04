@@ -1804,6 +1804,10 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("BranchID");
 
+                    b.Property<string>("BranchIds")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp without time zone");
 
@@ -1817,7 +1821,7 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<decimal>("DurationHours")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(4,2)")
-                        .HasDefaultValue(8.00m);
+                        .HasDefaultValue(4.00m);
 
                     b.Property<TimeSpan>("EndTime")
                         .HasColumnType("interval");
@@ -1826,6 +1830,11 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
                         .HasDefaultValue(true);
+
+                    b.Property<bool>("IsCheckInNextDay")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");

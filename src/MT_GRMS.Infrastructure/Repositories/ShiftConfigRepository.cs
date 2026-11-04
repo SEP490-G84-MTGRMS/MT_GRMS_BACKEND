@@ -25,11 +25,17 @@ public class ShiftConfigRepository : IShiftConfigRepository
     }
 
     public async Task<IReadOnlyList<ShiftConfig>> GetByBranchIdAsync(
-        Guid branchId,
+        Guid? branchId,
         bool? isActive = null,
         CancellationToken cancellationToken = default)
     {
-        var query = _dbSet.Where(s => s.BranchId == branchId);
+        var query = _dbSet.Include(s => s.Branch).AsQueryable();
+
+        if (branchId.HasValue && branchId.Value != Guid.Empty)
+        {
+            var branchStr = branchId.Value.ToString();
+            query = query.Where(s => s.BranchId == branchId.Value || (s.BranchIds != null && s.BranchIds.Contains(branchStr)));
+        }
 
         if (isActive.HasValue)
         {

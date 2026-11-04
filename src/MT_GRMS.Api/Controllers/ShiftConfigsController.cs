@@ -27,12 +27,7 @@ public class ShiftConfigsController : BaseApiController
         [FromQuery] bool? isActive,
         CancellationToken cancellationToken)
     {
-        if (!branchId.HasValue || branchId.Value == Guid.Empty)
-        {
-            return BadRequest(ApiResponse<object>.Fail("INVALID_BRANCH_ID", "BranchId là tham số bắt buộc."));
-        }
-
-        var result = await _shiftConfigService.GetShiftConfigsByBranchAsync(branchId.Value, isActive, cancellationToken);
+        var result = await _shiftConfigService.GetShiftConfigsByBranchAsync(branchId, isActive, cancellationToken);
         return Ok(ApiResponse<IReadOnlyList<ShiftConfigResponse>>.Ok(result));
     }
 

@@ -76,7 +76,15 @@ public class EmployeeRepository : IEmployeeRepository
                 (e.Email != null && e.Email.ToLower().Contains(kw)));
         }
 
-        if (filter.BranchId.HasValue && filter.BranchId.Value != Guid.Empty)
+        if (filter.BranchIds != null && filter.BranchIds.Count > 0)
+        {
+            var validBranchIds = filter.BranchIds.Where(id => id != Guid.Empty).ToList();
+            if (validBranchIds.Count > 0)
+            {
+                query = query.Where(e => validBranchIds.Contains(e.BranchId));
+            }
+        }
+        else if (filter.BranchId.HasValue && filter.BranchId.Value != Guid.Empty)
         {
             query = query.Where(e => e.BranchId == filter.BranchId.Value);
         }

@@ -18,7 +18,9 @@ public class ShiftConfigConfiguration : IEntityTypeConfiguration<ShiftConfig>
 
         builder.Property(x => x.ShiftCode).HasMaxLength(30).IsRequired();
         builder.Property(x => x.ShiftName).HasMaxLength(100).IsRequired();
-        builder.Property(x => x.DurationHours).HasColumnType("decimal(4,2)").HasDefaultValue(8.00m);
+        builder.Property(x => x.BranchIds).HasMaxLength(2000);
+        builder.Property(x => x.DurationHours).HasColumnType("decimal(4,2)").HasDefaultValue(4.00m);
+        builder.Property(x => x.IsCheckInNextDay).HasDefaultValue(false);
         builder.Property(x => x.Description).HasMaxLength(255);
         builder.Property(x => x.IsActive).HasDefaultValue(true);
 
