@@ -32,24 +32,28 @@ public class EmployeeRepository : IEmployeeRepository
     {
         var normalizedCode = code.Trim().ToUpper();
         return await _dbSet
+            .Include(e => e.User)
             .FirstOrDefaultAsync(e => e.EmployeeCode.ToUpper() == normalizedCode, cancellationToken);
     }
 
     public async Task<Employee?> GetByPhoneAsync(string phone, CancellationToken cancellationToken = default)
     {
         return await _dbSet
-            .FirstOrDefaultAsync(e => e.Phone == phone, cancellationToken);
+            .Include(e => e.User)
+            .FirstOrDefaultAsync(e => e.User.Phone == phone, cancellationToken);
     }
 
     public async Task<Employee?> GetByCitizenIdAsync(string citizenId, CancellationToken cancellationToken = default)
     {
         return await _dbSet
+            .Include(e => e.User)
             .FirstOrDefaultAsync(e => e.CitizenId == citizenId, cancellationToken);
     }
 
     public async Task<Employee?> GetByUserIdAsync(string userId, CancellationToken cancellationToken = default)
     {
         return await _dbSet
+            .Include(e => e.User)
             .FirstOrDefaultAsync(e => e.UserId == userId, cancellationToken);
     }
 
@@ -67,9 +71,9 @@ public class EmployeeRepository : IEmployeeRepository
         {
             var kw = filter.Keyword.Trim().ToLower();
             query = query.Where(e =>
-                e.FullName.ToLower().Contains(kw) ||
+                e.User.FullName.ToLower().Contains(kw) ||
                 e.EmployeeCode.ToLower().Contains(kw) ||
-                e.Phone.Contains(kw));
+                (e.User.Phone != null && e.User.Phone.Contains(kw)));
         }
 
         if (filter.BranchId.HasValue && filter.BranchId.Value != Guid.Empty)
@@ -88,12 +92,12 @@ public class EmployeeRepository : IEmployeeRepository
 
         var totalCount = await query.CountAsync(cancellationToken);
 
-        var page = filter.Page > 0 ? filter.Page : 1;
-        var pageSize = filter.PageSize > 0 ? filter.PageSize : 20;
+        var pageIndex = Math.Max(1, filter.Page);
+        var pageSize = Math.Clamp(filter.PageSize, 1, 100);
 
         var items = await query
             .OrderByDescending(e => e.CreatedAt)
-            .Skip((page - 1) * pageSize)
+            .Skip((pageIndex - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(cancellationToken);
 
@@ -102,10 +106,9 @@ public class EmployeeRepository : IEmployeeRepository
 
     public async Task<string?> GetMaxSequentialCodeAsync(string prefix, int totalLength, CancellationToken cancellationToken = default)
     {
-        var normalizedPrefix = prefix.Trim().ToUpper();
+        var prefixUpper = prefix.ToUpper();
         return await _dbSet
-            .IgnoreQueryFilters()
-            .Where(e => e.EmployeeCode.StartsWith(normalizedPrefix) && e.EmployeeCode.Length == totalLength)
+            .Where(e => e.EmployeeCode.StartsWith(prefixUpper) && e.EmployeeCode.Length == totalLength)
             .OrderByDescending(e => e.EmployeeCode)
             .Select(e => e.EmployeeCode)
             .FirstOrDefaultAsync(cancellationToken);

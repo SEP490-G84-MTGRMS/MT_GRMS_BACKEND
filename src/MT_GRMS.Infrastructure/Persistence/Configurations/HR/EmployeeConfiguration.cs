@@ -17,14 +17,10 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
 
         builder.Property(x => x.TenantId).HasColumnName("TenantID").HasMaxLength(50).IsRequired();
         builder.Property(x => x.BranchId).HasColumnName("BranchID").IsRequired();
-        builder.Property(x => x.UserId).HasColumnName("UserID").HasMaxLength(50);
+        builder.Property(x => x.UserId).HasColumnName("UserID").HasMaxLength(50).IsRequired();
         builder.Property(x => x.EmployeeCode).HasMaxLength(30).IsRequired();
-        builder.Property(x => x.FullName).HasMaxLength(100).IsRequired();
         builder.Property(x => x.CitizenId).HasMaxLength(20).IsRequired();
         builder.Property(x => x.Gender).HasMaxLength(10);
-        builder.Property(x => x.Phone).HasMaxLength(20).IsRequired();
-        builder.Property(x => x.Email).HasMaxLength(100);
-        builder.Property(x => x.AvatarUrl).HasMaxLength(255);
         builder.Property(x => x.JobTitle).HasMaxLength(100);
         builder.Property(x => x.SalaryType).HasMaxLength(30).HasDefaultValue("monthly");
         builder.Property(x => x.BaseRate).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
@@ -47,6 +43,7 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
 
         builder.HasIndex(x => new { x.TenantId, x.CitizenId }).IsUnique().HasFilter("\"IsDeleted\" = false");
         builder.HasIndex(x => new { x.TenantId, x.EmployeeCode }).IsUnique().HasFilter("\"IsDeleted\" = false");
+        builder.HasIndex(x => new { x.TenantId, x.UserId }).IsUnique().HasFilter("\"IsDeleted\" = false");
 
         builder.HasOne(x => x.Branch)
             .WithMany()
@@ -56,6 +53,6 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
         builder.HasOne(x => x.User)
             .WithMany()
             .HasForeignKey(x => x.UserId)
-            .OnDelete(DeleteBehavior.SetNull);
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }

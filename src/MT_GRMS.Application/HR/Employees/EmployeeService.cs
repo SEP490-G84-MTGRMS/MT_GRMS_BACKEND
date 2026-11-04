@@ -99,7 +99,7 @@ public class EmployeeService : IEmployeeService
 
         if (request.BaseRate < 0)
         {
-            throw new ArgumentException("Mức lương cơ bản không được nhỏ hơn 0.");
+            throw new ArgumentException("Mức lương cơ sở không được âm.");
         }
 
         var normalizedCitizenId = request.CitizenId.Trim();
@@ -117,7 +117,7 @@ public class EmployeeService : IEmployeeService
 
         // 2. Kiểm tra trùng SĐT trong cùng Tenant
         var phoneExists = await _employeeRepository.ExistsAsync(
-            e => e.Phone == normalizedPhone,
+            e => e.User.Phone == normalizedPhone,
             cancellationToken);
 
         if (phoneExists)
@@ -143,19 +143,43 @@ public class EmployeeService : IEmployeeService
         }
 
         var currentTenantId = _tenantContext.CurrentTenantId ?? "tenant_mt_mart_01";
+        var normalizedEmail = request.Email?.Trim();
+        var defaultUsername = employeeCode.ToLower();
+
+        // Khởi tạo tài khoản User định danh tương ứng (quan hệ 1-1, tránh trùng lặp thông tin)
+        var user = new User
+        {
+            Id = Uuid7.NewString(),
+            UserName = defaultUsername,
+            FullName = request.FullName.Trim(),
+            Phone = normalizedPhone,
+            Email = !string.IsNullOrWhiteSpace(normalizedEmail) ? normalizedEmail : $"{defaultUsername}@mtgrms.vn",
+            AvatarUrl = request.AvatarUrl?.Trim(),
+            IsActive = true
+        };
+
+        var tenantUser = new TenantUser
+        {
+            TenantId = currentTenantId,
+            UserId = user.Id,
+            Role = "Cashier",
+            IsActive = true,
+            AssignedAt = DateTime.UtcNow
+        };
+        user.TenantUsers.Add(tenantUser);
+
+        await _userRepository.AddAsync(user, cancellationToken);
 
         var employee = new Employee
         {
             TenantId = currentTenantId,
             BranchId = request.BranchId,
+            UserId = user.Id,
+            User = user,
             EmployeeCode = employeeCode,
-            FullName = request.FullName.Trim(),
             CitizenId = normalizedCitizenId,
             DateOfBirth = request.DateOfBirth,
             Gender = request.Gender,
-            Phone = normalizedPhone,
-            Email = request.Email?.Trim(),
-            AvatarUrl = request.AvatarUrl?.Trim(),
             JobTitle = request.JobTitle?.Trim(),
             SalaryType = string.IsNullOrWhiteSpace(request.SalaryType) ? "monthly" : request.SalaryType.Trim().ToLower(),
             BaseRate = request.BaseRate,
@@ -169,7 +193,7 @@ public class EmployeeService : IEmployeeService
         await _employeeRepository.AddAsync(employee, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        // Nạp lại chi tiết để có Branch name
+        // Nạp lại chi tiết để có Branch name và User
         var created = await _employeeRepository.GetByIdAsync(employee.Id, cancellationToken);
         return MapToResponse(created ?? employee);
     }
@@ -205,7 +229,7 @@ public class EmployeeService : IEmployeeService
         if (!string.Equals(employee.Phone, normalizedPhone, StringComparison.OrdinalIgnoreCase))
         {
             var phoneExists = await _employeeRepository.ExistsAsync(
-                e => e.Id != id && e.Phone == normalizedPhone,
+                e => e.Id != id && e.User.Phone == normalizedPhone,
                 cancellationToken);
 
             if (phoneExists)
@@ -214,11 +238,21 @@ public class EmployeeService : IEmployeeService
             }
         }
 
-        employee.FullName = request.FullName.Trim();
+        // Cập nhật thông tin định danh trên User liên kết
+        if (employee.User != null)
+        {
+            employee.User.FullName = request.FullName.Trim();
+            employee.User.Phone = normalizedPhone;
+            employee.User.Email = request.Email?.Trim() ?? employee.User.Email;
+            if (!string.IsNullOrWhiteSpace(request.AvatarUrl))
+            {
+                employee.User.AvatarUrl = request.AvatarUrl.Trim();
+            }
+            _userRepository.Update(employee.User);
+        }
+
         employee.CitizenId = normalizedCitizenId;
-        employee.Phone = normalizedPhone;
         employee.BranchId = request.BranchId;
-        employee.Email = request.Email?.Trim();
         employee.JobTitle = request.JobTitle?.Trim();
         employee.DateOfBirth = request.DateOfBirth;
         employee.Gender = request.Gender;
@@ -228,10 +262,6 @@ public class EmployeeService : IEmployeeService
         employee.BankAccountNumber = request.BankAccountNumber?.Trim();
         employee.BankName = request.BankName?.Trim();
         employee.BankAccountHolder = request.BankAccountHolder?.Trim();
-        if (!string.IsNullOrWhiteSpace(request.AvatarUrl))
-        {
-            employee.AvatarUrl = request.AvatarUrl.Trim();
-        }
         employee.UpdatedAt = DateTime.UtcNow;
 
         _employeeRepository.Update(employee);
@@ -253,16 +283,17 @@ public class EmployeeService : IEmployeeService
         }
 
         var normalizedStatus = status.Trim().ToLower();
-        if (normalizedStatus is not ("active" or "inactive"))
+        if (!Enum.TryParse<EmployeeStatus>(normalizedStatus, true, out var parsedStatus))
         {
-            throw new ArgumentException("Trạng thái nhân viên chỉ chấp nhận 'active' hoặc 'inactive'.");
+            throw new ArgumentException($"Trạng thái không hợp lệ: {status}. Chấp nhận: active, onleave, resigned, terminated.");
         }
 
-        employee.Status = normalizedStatus == "active" ? EmployeeStatus.Active : EmployeeStatus.Inactive;
+        employee.Status = parsedStatus;
         employee.UpdatedAt = DateTime.UtcNow;
 
         _employeeRepository.Update(employee);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
         return true;
     }
 
@@ -281,8 +312,15 @@ public class EmployeeService : IEmployeeService
         employee.Status = EmployeeStatus.Inactive;
         employee.UpdatedAt = DateTime.UtcNow;
 
+        if (employee.User != null)
+        {
+            employee.User.IsActive = false;
+            _userRepository.Update(employee.User);
+        }
+
         _employeeRepository.Update(employee);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
         return true;
     }
 
@@ -307,14 +345,14 @@ public class EmployeeService : IEmployeeService
             throw new NotFoundException($"Không tìm thấy nhân viên với ID: {employeeId}");
         }
 
-        if (!string.IsNullOrEmpty(employee.UserId))
+        if (!string.IsNullOrEmpty(employee.UserId) && (employee.User == null || !string.IsNullOrEmpty(employee.User.PasswordHash)))
         {
             throw new BusinessException("CONFLICT", "Nhân viên này đã được cấp tài khoản đăng nhập trước đó.");
         }
 
         var normalizedUsername = request.Username.Trim();
         var existingUser = await _userRepository.GetByUsernameAsync(normalizedUsername, cancellationToken);
-        if (existingUser != null)
+        if (existingUser != null && existingUser.Id != employee.UserId)
         {
             throw new BusinessException("DUPLICATE_USERNAME", $"Tên đăng nhập '{normalizedUsername}' đã tồn tại trong hệ thống.");
         }
@@ -322,37 +360,64 @@ public class EmployeeService : IEmployeeService
         var currentTenantId = _tenantContext.CurrentTenantId ?? "tenant_mt_mart_01";
         var role = request.Role.Trim().ToUpper();
 
-        var newUser = new User
+        if (employee.User != null)
         {
-            Id = Uuid7.NewString(),
-            UserName = normalizedUsername,
-            PasswordHash = request.Password,
-            FullName = employee.FullName,
-            Email = string.IsNullOrWhiteSpace(employee.Email) ? $"{normalizedUsername}@mtgrms.vn" : employee.Email,
-            Phone = employee.Phone,
-            IsActive = true
-        };
+            employee.User.UserName = normalizedUsername;
+            employee.User.PasswordHash = request.Password;
+            employee.User.IsActive = true;
 
-        var tenantUser = new TenantUser
+            var existingTenantUser = employee.User.TenantUsers.FirstOrDefault(tu => tu.TenantId == currentTenantId);
+            if (existingTenantUser != null)
+            {
+                existingTenantUser.Role = role;
+            }
+            else
+            {
+                employee.User.TenantUsers.Add(new TenantUser
+                {
+                    TenantId = currentTenantId,
+                    UserId = employee.User.Id,
+                    Role = role,
+                    IsActive = true,
+                    AssignedAt = DateTime.UtcNow
+                });
+            }
+            _userRepository.Update(employee.User);
+        }
+        else
         {
-            TenantId = currentTenantId,
-            UserId = newUser.Id,
-            Role = role,
-            IsActive = true,
-            AssignedAt = DateTime.UtcNow
-        };
+            var newUser = new User
+            {
+                Id = Uuid7.NewString(),
+                UserName = normalizedUsername,
+                PasswordHash = request.Password,
+                FullName = employee.FullName,
+                Email = string.IsNullOrWhiteSpace(employee.Email) ? $"{normalizedUsername}@mtgrms.vn" : employee.Email,
+                Phone = employee.Phone,
+                IsActive = true
+            };
 
-        newUser.TenantUsers.Add(tenantUser);
+            var tenantUser = new TenantUser
+            {
+                TenantId = currentTenantId,
+                UserId = newUser.Id,
+                Role = role,
+                IsActive = true,
+                AssignedAt = DateTime.UtcNow
+            };
+            newUser.TenantUsers.Add(tenantUser);
 
-        await _userRepository.AddAsync(newUser, cancellationToken);
+            await _userRepository.AddAsync(newUser, cancellationToken);
 
-        employee.UserId = newUser.Id;
+            employee.UserId = newUser.Id;
+            employee.User = newUser;
+            _employeeRepository.Update(employee);
+        }
+
         employee.UpdatedAt = DateTime.UtcNow;
-        _employeeRepository.Update(employee);
-
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return newUser.Id;
+        return employee.UserId;
     }
 
     private static EmployeeResponse MapToResponse(Employee e)
