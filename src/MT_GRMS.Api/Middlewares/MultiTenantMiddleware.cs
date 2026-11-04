@@ -26,6 +26,35 @@ public class MultiTenantMiddleware
             if (!string.IsNullOrWhiteSpace(tenantId))
             {
                 tenantContext.SetContext(tenantId, userId, branchId);
+                var role = context.User.FindFirst(ClaimTypes.Role)?.Value
+                    ?? context.User.FindFirst("role")?.Value
+                    ?? context.User.FindFirst("RoleName")?.Value;
+                tenantContext.SetRole(role);
+            }
+        }
+
+        // Hỗ trợ header X-Tenant-Id hoặc fallback tenant cho môi trường dev/standalone
+        if (string.IsNullOrWhiteSpace(tenantContext.CurrentTenantId) ||
+            tenantContext.CurrentTenantId == "default-tenant" ||
+            tenantContext.CurrentTenantId == "DEFAULT" ||
+            tenantContext.CurrentTenantId == "TENANT-HCM-01")
+        {
+            var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
+            var fallbackTenant = !string.IsNullOrWhiteSpace(headerTenantId) ? headerTenantId : "tenant_mt_mart_01";
+            if (fallbackTenant is "default-tenant" or "DEFAULT" or "TENANT-HCM-01")
+            {
+                fallbackTenant = "tenant_mt_mart_01";
+            }
+            tenantContext.SetContext(fallbackTenant, Guid.Empty, null);
+
+            var headerRole = context.Request.Headers["X-User-Role"].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(headerRole))
+            {
+                tenantContext.SetRole(headerRole);
+            }
+            else if (string.IsNullOrWhiteSpace(tenantContext.CurrentRole))
+            {
+                tenantContext.SetRole("StoreOwner");
             }
         }
 

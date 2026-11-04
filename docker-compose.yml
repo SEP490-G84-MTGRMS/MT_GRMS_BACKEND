@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mtgrms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: mtgrms_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: mtgrms_secret_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mtgrms_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mtgrms_network
+
+  pgweb:
+    image: sosedoff/pgweb:latest
+    container_name: mtgrms-pgweb
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      - PGWEB_DATABASE_URL=postgres://postgres:mtgrms_secret_password@postgres:5432/mtgrms_db?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - mtgrms_network
+
+networks:
+  mtgrms_network:
+    name: mtgrms_network
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local

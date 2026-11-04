@@ -4,7 +4,33 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ---
 
-## [Unreleased] - 2026-09-30
+## [Unreleased] - 2026-11-03
+
+### Changed
+- Cấu hình explicit bridge network mtgrms_network và PGWEB_DATABASE_URL trong docker-compose.yml, triệt tiêu hoàn toàn lỗi crash-loop DNS lookup postgres trên container mtgrms-pgweb (cổng 8081) [BE-DOCKER] [worklog: docs/worklogs/2026-11-04_BE-DOCKER_AI_fix-pgweb-network-crashloop.md].
+- Cấu hình `.gitignore` bỏ qua toàn bộ thư mục `**/Migrations/`, `AppDbContextModelSnapshot.cs` và untrack các migration cũ khỏi Git nhằm triệt tiêu hoàn toàn lỗi merge conflicts khi hợp nhất mã nguồn giữa các nhánh [BE-CONFIG] [worklog: docs/worklogs/2026-11-03_BE-CONFIG_AI_ignore-migrations-to-prevent-merge-conflicts.md].
+- Nâng cấp `DbInitializer.cs` với cơ chế fallback tự động `EnsureCreatedAsync()`, đảm bảo khởi tạo CSDL 34 bảng và dữ liệu mẫu an toàn kể cả khi repository không còn track migrations.
+
+## [0.1.1] - 2026-10-27
+
+### Added
+
+- Chuẩn hóa toàn bộ 34 Domain Entities và EF Core DbContext/Configurations mapping khớp 100% CSDL 34 bảng (7 phân hệ chuẩn 3NF) từ `MT_GRMS_Full_Database.sql` [FE-ENTITIES].
+- Tách biệt `BaseEntity` (Global SaaS Root) và `BaseTenantEntity` (Tenant-scoped Multi-tenancy Isolation) [FE-ENTITIES].
+- Tích hợp bộ sinh `Uuid7` chuẩn RFC 9562 tuần tự theo thời gian thay thế UUIDv4 ngẫu nhiên nhằm triệt tiêu phân mảnh chỉ mục B+Tree (Page Splits) [FE-ENTITIES].
+- Chuẩn hóa HTTP Status Codes: 200 OK, 400 Bad Request, 401 Unauthorized đóng gói qua `ApiResponse<T>` [BE-AUTH].
+- Loại bỏ hoàn toàn fallback mock ngầm, xác thực nghiêm ngặt 100% dựa trên database PostgreSQL [BE-AUTH].
+- Hỗ trợ route kép `[Route("api/v1/[controller]")]` và `[Route("api/[controller]")]` trên `AuthController` tương thích frontend [BE-AUTH].
+- Bổ sung xác thực mật khẩu tài khoản trong `AuthService` và mã lỗi 401 qua `ExceptionHandlingMiddleware` [BE-AUTH].
+- Mở rộng `UserInfo` record với thuộc tính ánh xạ `Role => RoleName` [BE-AUTH].
+- Bổ sung bộ kiểm thử đơn vị `UserAuthenticationTests` (10/10 tests PASS) [BE-AUTH].
+- Triển khai hạ tầng PostgreSQL 16 qua Docker Compose (`docker-compose.yml`, `init-db.sql`).
+- Tối giản hóa thực thể và bảng `users` (`Id` string Uid, `Username`, `Password`) phục vụ đăng nhập độc lập.
+- Khởi tạo EF Core Initial Migration `InitialCreate_UsersOnly` và seed data `admin` [BE-AUTH].
+- Triển khai endpoints `POST /api/auth/login`, `POST /api/auth/refresh`, `POST /api/auth/logout` [BE-AUTH].
+- Cung cấp `IAuthService` và `AuthService` xử lý xác thực tenant và sinh JWT token / Refresh Token.
+
+## [0.1.0] - 2026-09-30
 
 ### Added
 
@@ -18,4 +44,3 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 - Lỗ hổng cô lập người thuê đa tầng (Multi-Tenant Isolation) trong `AppDbContext.cs`: chuyển sang đánh giá động runtime trong `HasQueryFilter`.
 - Biên dịch 0 Warning, 0 Error.
-  ádasd

@@ -14,14 +14,18 @@ public record LoginResponse(
 );
 
 public record UserInfo(
-    Guid Id,
+    string Id,
     string Username,
     string FullName,
     string Email,
     string RoleName,
     Guid? BranchId,
-    string TenantId
-);
+    string TenantId,
+    bool IsAdmin = false
+)
+{
+    public string Role => RoleName;
+}
 
 public record RefreshTokenRequest(
     string RefreshToken
