@@ -1253,8 +1253,7 @@ public class SupplierService : ISupplierService
         var activeBranchIds = await _supplierRepository.GetActiveBranchIdsForSupplierAsync(supplierId, cancellationToken);
         var resultItems = new List<SupplierProductDto>();
 
-        await _unitOfWork.BeginTransactionAsync(cancellationToken);
-        try
+        await _unitOfWork.ExecuteInTransactionAsync(async ct =>
         {
             foreach (var (product, purchasePrice, moq) in prepared)
             {
@@ -1277,11 +1276,11 @@ public class SupplierService : ISupplierService
                     Status = SupplierProductStatus.Active
                 };
 
-                await _supplierRepository.AddSupplierProductAsync(entity, cancellationToken);
+                await _supplierRepository.AddSupplierProductAsync(entity, ct);
 
                 foreach (var branchId in activeBranchIds)
                 {
-                    var exists = await _supplierRepository.BranchStockExistsAsync(branchId, product.Id, cancellationToken);
+                    var exists = await _supplierRepository.BranchStockExistsAsync(branchId, product.Id, ct);
                     if (!exists)
                     {
                         var newStock = new MT_GRMS.Domain.Entities.Inventory.BranchStock
@@ -1300,21 +1299,15 @@ public class SupplierService : ISupplierService
                             ZoneArea = "Khu vực trưng bày",
                             CreatedAt = DateTime.UtcNow
                         };
-                        await _supplierRepository.AddBranchStockAsync(newStock, cancellationToken);
+                        await _supplierRepository.AddBranchStockAsync(newStock, ct);
                     }
                 }
 
                 resultItems.Add(MapToSupplierProductDto(entity, activeBranchIds.Count));
             }
 
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
-            await _unitOfWork.CommitTransactionAsync(cancellationToken);
-        }
-        catch
-        {
-            await _unitOfWork.RollbackTransactionAsync(cancellationToken);
-            throw;
-        }
+            await _unitOfWork.SaveChangesAsync(ct);
+        }, cancellationToken);
 
         return new BatchAssignSupplierProductsResultDto
         {

@@ -47,6 +47,16 @@ public class PurchaseOrdersController : BaseApiController
     }
 
     /// <summary>
+    /// Hub chốt đơn với nhà cung cấp — gom từ PurchaseOrders + PurchaseOrderDetails theo Scope (NEAREST / WEEK / ALL)
+    /// </summary>
+    [HttpGet("dispatch-hub")]
+    public async Task<IActionResult> GetDispatchHub([FromQuery] DispatchHubQuery query, CancellationToken cancellationToken)
+    {
+        var result = await _poService.GetDispatchHubAsync(query, cancellationToken);
+        return Ok(ApiResponse<DispatchHubResponse>.Ok(result));
+    }
+
+    /// <summary>
     /// Lưu bản thảo kế hoạch đặt hàng ma trận (DRAFT)
     /// </summary>
     [HttpPost("matrix/draft")]
@@ -57,13 +67,24 @@ public class PurchaseOrdersController : BaseApiController
     }
 
     /// <summary>
-    /// Chốt ma trận và tự động tách thành các đơn PO độc lập theo từng Ngày giao hàng và Nhà cung cấp (FE-05)
+    /// Xem trước kết quả chốt PO theo phạm vi (NEAREST / WEEK / ALL) không ghi DB (Dùng cho Modal Preview)
+    /// </summary>
+    [HttpPost("matrix/split/preview")]
+    public async Task<IActionResult> PreviewSplitMatrixPo([FromBody] SplitMatrixPoCommand command, CancellationToken cancellationToken)
+    {
+        var result = await _poService.PreviewSplitMatrixPoAsync(command, cancellationToken);
+        return Ok(ApiResponse<SplitMatrixBatchResultDto>.Ok(result, "Xem trước kết quả chốt PO thành công."));
+    }
+
+    /// <summary>
+    /// Chốt ma trận và tự động phát hành các đơn PO độc lập theo từng Ngày giao hàng và NCC (FE-05 / P0 Engine)
     /// </summary>
     [HttpPost("matrix/split")]
     public async Task<IActionResult> SplitMatrixPo([FromBody] SplitMatrixPoCommand command, CancellationToken cancellationToken)
     {
-        var result = await _poService.SplitMatrixPoAsync(command, cancellationToken);
-        return Ok(ApiResponse<IReadOnlyList<PurchaseOrderDto>>.Ok(result, $"Đã phát hành thành công {result.Count} đơn PO độc lập!"));
+        var result = await _poService.SplitMatrixPoBatchAsync(command, cancellationToken);
+        var msg = $"Đã xử lý chốt đơn: {result.SuccessCount} thành công, {result.FailedCount} lỗi, {result.SkippedCount} bỏ qua.";
+        return Ok(ApiResponse<SplitMatrixBatchResultDto>.Ok(result, msg));
     }
 
     /// <summary>

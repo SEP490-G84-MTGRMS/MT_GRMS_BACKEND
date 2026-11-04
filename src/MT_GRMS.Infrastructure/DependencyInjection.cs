@@ -59,7 +59,7 @@ public static class DependencyInjection
             }
         });
 
-        if (isInMemory || string.IsNullOrWhiteSpace(connectionString))
+        if (string.IsNullOrWhiteSpace(connectionString))
         {
             Console.WriteLine("[MT-GRMS] Database: InMemory (không dùng Postgres local).");
         }

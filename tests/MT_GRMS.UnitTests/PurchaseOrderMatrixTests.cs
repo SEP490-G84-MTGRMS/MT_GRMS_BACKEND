@@ -28,6 +28,11 @@ public class PurchaseOrderMatrixTests
     private readonly Guid _prod1Id = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
     private readonly Guid _prod2Id = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
 
+    // Ngày giao tương lai để vượt LeadTime/Cutoff khi chạy test bất kỳ ngày nào
+    private readonly DateTime _viewFrom = DateTime.Today.AddDays(1);
+    private readonly DateTime _deliveryA = DateTime.Today.AddDays(2);
+    private readonly DateTime _deliveryB = DateTime.Today.AddDays(4);
+
     public PurchaseOrderMatrixTests()
     {
         _repo = new FakePurchaseOrderRepository();
@@ -74,7 +79,7 @@ public class PurchaseOrderMatrixTests
         var res = await _service.GetOrderMatrixAsync(new OrderMatrixQuery
         {
             BranchId = _branchId,
-            ViewFrom = new DateTime(2026, 11, 2),
+            ViewFrom = _viewFrom,
             DurationDays = 7
         });
 
@@ -82,9 +87,11 @@ public class PurchaseOrderMatrixTests
         Assert.NotNull(res);
         Assert.Equal(_branchId, res.BranchId);
         Assert.Equal("Chi nhánh Nguyễn Trãi", res.BranchName);
+        Assert.True(res.BranchIsActive);
         Assert.Equal(2, res.Products.Count);
         Assert.NotNull(res.SupplierConfigs);
         Assert.Equal(2, res.SupplierConfigs.Count);
+        Assert.NotEmpty(res.DayStatuses);
     }
 
     [Fact]
@@ -112,7 +119,7 @@ public class PurchaseOrderMatrixTests
         var res = await _service.GetOrderMatrixAsync(new OrderMatrixQuery
         {
             BranchId = _branchId,
-            ViewFrom = new DateTime(2026, 11, 2),
+            ViewFrom = _viewFrom,
             DurationDays = 7
         });
 
@@ -128,6 +135,7 @@ public class PurchaseOrderMatrixTests
         Assert.True(supConfig.IsActive);
         Assert.Contains(1, supConfig.ActiveDeliveryDays); // Thứ 2
         Assert.Contains(2, supConfig.ActiveDeliveryDays); // Thứ 3
+        Assert.NotEmpty(res.DayStatuses);
     }
 
     [Fact]
@@ -138,17 +146,18 @@ public class PurchaseOrderMatrixTests
         {
             BranchId = _branchId,
             SupplierId = _supplier1Id,
-            ViewFrom = new DateTime(2026, 11, 2),
-            ViewTo = new DateTime(2026, 11, 8),
-            Note = "Kế hoạch tuần 1 tháng 11",
+            ViewFrom = _viewFrom,
+            ViewTo = _viewFrom.AddDays(7),
+            Note = "Kế hoạch tuần đặt hàng",
             Cells = new List<OrderMatrixCellDto>
             {
                 new OrderMatrixCellDto
                 {
                     ProductId = _prod1Id,
-                    DeliveryDate = new DateTime(2026, 11, 3),
+                    DeliveryDate = _deliveryA,
                     EmployeeQty = 10m,
                     StoreQty = 15m,
+                    IsOwnerAdjusted = true,
                     FinalQty = 15m
                 }
             }
@@ -167,38 +176,35 @@ public class PurchaseOrderMatrixTests
     [Fact]
     public async Task REQ_PO_03_SplitMatrixPo_GeneratesDistinctPoPerDeliveryDateAndSupplier()
     {
-        // Arrange: 2 delivery dates (T3 03/11, T5 05/11) with 2 suppliers -> Expected 3 distinct POs
+        // Arrange: 2 delivery dates × 2 suppliers -> Expected 3 distinct POs
         var command = new SplitMatrixPoCommand
         {
             BranchId = _branchId,
             Note = "Chốt đơn từ ma trận",
             Groups = new List<SplitMatrixPoGroupCommand>
             {
-                // Group 1: NCC 1 - Date 03/11
                 new SplitMatrixPoGroupCommand
                 {
                     SupplierId = _supplier1Id,
-                    DeliveryDate = new DateTime(2026, 11, 3),
+                    DeliveryDate = _deliveryA,
                     Items = new List<SplitMatrixPoItemCommand>
                     {
                         new SplitMatrixPoItemCommand { ProductId = _prod1Id, Quantity = 20m, UnitPrice = 160000m, Unit = "Túi" }
                     }
                 },
-                // Group 2: NCC 1 - Date 05/11
                 new SplitMatrixPoGroupCommand
                 {
                     SupplierId = _supplier1Id,
-                    DeliveryDate = new DateTime(2026, 11, 5),
+                    DeliveryDate = _deliveryB,
                     Items = new List<SplitMatrixPoItemCommand>
                     {
                         new SplitMatrixPoItemCommand { ProductId = _prod1Id, Quantity = 15m, UnitPrice = 160000m, Unit = "Túi" }
                     }
                 },
-                // Group 3: NCC 2 - Date 03/11
                 new SplitMatrixPoGroupCommand
                 {
                     SupplierId = _supplier2Id,
-                    DeliveryDate = new DateTime(2026, 11, 3),
+                    DeliveryDate = _deliveryA,
                     Items = new List<SplitMatrixPoItemCommand>
                     {
                         new SplitMatrixPoItemCommand { ProductId = _prod2Id, Quantity = 50m, UnitPrice = 12000m, Unit = "Gói" }
@@ -251,7 +257,7 @@ public class PurchaseOrderMatrixTests
     {
         // 1. Employee nhập số lượng đề xuất 20
         _tenantContext.SetRole("EMPLOYEE");
-        var cellDate = new DateTime(2026, 11, 3);
+        var cellDate = _deliveryA;
         var empCommand = new SaveMatrixDraftCommand
         {
             BranchId = _branchId,
@@ -369,7 +375,7 @@ public class PurchaseOrderMatrixTests
     {
         // Arrange: Employee đề xuất 20, Owner chủ động gán 0
         _tenantContext.SetRole("STORE_OWNER");
-        var cellDate = new DateTime(2026, 11, 3);
+        var cellDate = _deliveryA;
         var command = new SaveMatrixDraftCommand
         {
             BranchId = _branchId,
@@ -405,7 +411,7 @@ public class PurchaseOrderMatrixTests
     {
         // Arrange
         _tenantContext.SetRole("EMPLOYEE");
-        var cellDate = new DateTime(2026, 11, 3);
+        var cellDate = _deliveryA;
         var command1 = new SaveMatrixDraftCommand
         {
             BranchId = _branchId,
@@ -455,6 +461,218 @@ public class PurchaseOrderMatrixTests
         Assert.Equal(18m * 160000m, draft2.TotalAmount);
     }
 
+    [Fact]
+    public async Task REQ_PO_09_DispatchHub_ScopeNearest_SelectsEarliestDeliveryDateWithQty()
+    {
+        // Arrange
+        var nearDate = DateTime.Today.AddDays(3);
+        var farDate = DateTime.Today.AddDays(7);
+        var zeroDate = DateTime.Today.AddDays(2);
+
+        await _service.SaveMatrixDraftAsync(new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier1Id,
+            ViewFrom = zeroDate,
+            ViewTo = farDate.AddDays(1),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = zeroDate, FinalQty = 0m },
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = nearDate, FinalQty = 10m },
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = farDate, FinalQty = 20m }
+            }
+        });
+
+        // Act
+        var result = await _service.SplitMatrixPoBatchAsync(new SplitMatrixPoCommand
+        {
+            BranchId = _branchId,
+            Scope = OrderMatrixRules.ScopeNearest
+        });
+
+        // Assert
+        Assert.Equal(1, result.TotalGroups);
+        Assert.Equal(1, result.SuccessCount);
+        var group = result.Results.Single();
+        Assert.Equal(nearDate.Date, group.DeliveryDate.Date);
+        Assert.Equal(OrderMatrixRules.ResultSuccess, group.Status);
+        Assert.NotNull(group.PurchaseOrderId);
+    }
+
+    [Fact]
+    public async Task REQ_PO_10_DispatchHub_ScopeWeek_ProcessesAllDaysInMondayToSundayWeek()
+    {
+        // Arrange: Chọn tuần tới bắt đầu từ Monday
+        var nextMonday = OrderMatrixRules.NormalizeToMonday(DateTime.Today.AddDays(7));
+        var tuesday = nextMonday.AddDays(1);
+        var thursday = nextMonday.AddDays(3);
+        var nextWeekMonday = nextMonday.AddDays(7);
+
+        await _service.SaveMatrixDraftAsync(new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier1Id,
+            ViewFrom = nextMonday,
+            ViewTo = nextWeekMonday.AddDays(2),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = tuesday, FinalQty = 5m },
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = thursday, FinalQty = 8m },
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = nextWeekMonday, FinalQty = 12m }
+            }
+        });
+
+        // Act
+        var result = await _service.SplitMatrixPoBatchAsync(new SplitMatrixPoCommand
+        {
+            BranchId = _branchId,
+            Scope = OrderMatrixRules.ScopeWeek,
+            WeekStartDate = nextMonday.ToString("yyyy-MM-dd")
+        });
+
+        // Assert
+        Assert.Equal(2, result.TotalGroups);
+        Assert.Equal(2, result.SuccessCount);
+        var dates = result.Results.Select(g => g.DeliveryDate.Date).OrderBy(d => d).ToList();
+        Assert.Equal(tuesday.Date, dates[0]);
+        Assert.Equal(thursday.Date, dates[1]);
+    }
+
+    [Fact]
+    public async Task REQ_PO_11_DispatchHub_PartialSuccess_OneGroupFailsMoqOthersSucceed()
+    {
+        // Arrange: Matrix product 1 có Moq = 50, nhưng đặt FinalQty = 5 -> Vi phạm MOQ -> FAIL
+        var p1 = _repo.MatrixProducts.First(p => p.Id == _prod1Id);
+        p1.Moq = 50;
+
+        var deliveryDate = DateTime.Today.AddDays(4);
+
+        await _service.SaveMatrixDraftAsync(new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            ViewFrom = deliveryDate,
+            ViewTo = deliveryDate.AddDays(2),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = deliveryDate, FinalQty = 5m },  // 5 < 50 MOQ -> FAILED
+                new OrderMatrixCellDto { ProductId = _prod2Id, DeliveryDate = deliveryDate, FinalQty = 10m }  // Hợp lệ -> SUCCESS
+            }
+        });
+
+        // Act
+        var result = await _service.SplitMatrixPoBatchAsync(new SplitMatrixPoCommand
+        {
+            BranchId = _branchId,
+            Scope = OrderMatrixRules.ScopeNearest
+        });
+
+        // Assert: Group 1 FAILED, Group 2 SUCCESS
+        var sup1Result = result.Results.FirstOrDefault(g => g.SupplierId == _supplier1Id);
+        var sup2Result = result.Results.FirstOrDefault(g => g.SupplierId == _supplier2Id);
+
+        Assert.NotNull(sup1Result);
+        Assert.Equal(OrderMatrixRules.ResultFailed, sup1Result.Status);
+        Assert.Equal("NO_VALID_LINES", sup1Result.ErrorCode);
+
+        Assert.NotNull(sup2Result);
+        Assert.Equal(OrderMatrixRules.ResultSuccess, sup2Result.Status);
+        Assert.NotNull(sup2Result.PurchaseOrderId);
+
+        // Teardown
+        p1.Moq = 1;
+    }
+
+    [Fact]
+    public async Task REQ_PO_12_DispatchHub_AlreadyFinalized_ReturnsExistingPoAndStatus()
+    {
+        // Arrange
+        var deliveryDate = DateTime.Today.AddDays(5);
+        await _service.SaveMatrixDraftAsync(new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier2Id,
+            ViewFrom = deliveryDate,
+            ViewTo = deliveryDate.AddDays(1),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto { ProductId = _prod2Id, DeliveryDate = deliveryDate, FinalQty = 5m }
+            }
+        });
+
+        // Act 1: Chốt lần 1
+        var res1 = await _service.SplitMatrixPoBatchAsync(new SplitMatrixPoCommand
+        {
+            BranchId = _branchId,
+            Scope = OrderMatrixRules.ScopeNearest
+        });
+        Assert.Equal(1, res1.SuccessCount);
+        var firstPoId = res1.Results.First().PurchaseOrderId;
+        var firstPoCode = res1.Results.First().PurchaseOrderCode;
+
+        // Act 2: Chốt lại lần 2
+        var res2 = await _service.SplitMatrixPoBatchAsync(new SplitMatrixPoCommand
+        {
+            BranchId = _branchId,
+            Scope = OrderMatrixRules.ScopeNearest
+        });
+
+        // Assert
+        Assert.Equal(1, res2.AlreadyFinalizedCount);
+        var group2 = res2.Results.First();
+        Assert.Equal(OrderMatrixRules.ResultAlreadyFinalized, group2.Status);
+        Assert.Equal(firstPoId, group2.PurchaseOrderId);
+        Assert.Equal(firstPoCode, group2.PurchaseOrderCode);
+    }
+
+    [Fact]
+    public async Task REQ_PO_13_DispatchHub_CutoffExpired_SkipsExpiredGroup()
+    {
+        // Arrange: LeadTime = 5 ngày, nên deliveryDate = ngày mai sẽ bị CUTOFF_EXPIRED
+        var tomorrow = DateTime.Today.AddDays(1);
+        _repo.CustomSupplierConfigs = new List<OrderMatrixSupplierDeliveryConfigDto>
+        {
+            new OrderMatrixSupplierDeliveryConfigDto
+            {
+                SupplierId = _supplier1Id,
+                SupplierCode = "SUP-01",
+                SupplierName = "Công ty Hải Nam",
+                IsActive = true,
+                IsAssignedToBranch = true,
+                LeadTimeDays = 5,
+                CutoffTime = "00:00",
+                BlackoutDates = new List<string>(),
+                ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 }
+            }
+        };
+
+        await _service.SaveMatrixDraftAsync(new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier1Id,
+            ViewFrom = tomorrow,
+            ViewTo = tomorrow.AddDays(2),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = tomorrow, FinalQty = 10m }
+            }
+        });
+
+        // Act
+        var result = await _service.SplitMatrixPoBatchAsync(new SplitMatrixPoCommand
+        {
+            BranchId = _branchId,
+            Scope = OrderMatrixRules.ScopeNearest
+        });
+
+        // Assert
+        Assert.Equal(1, result.SkippedCount);
+        var group = result.Results.Single();
+        Assert.Equal(OrderMatrixRules.ResultSkipped, group.Status);
+        Assert.Equal("CUTOFF_EXPIRED", group.ErrorCode);
+
+        _repo.CustomSupplierConfigs = null;
+    }
+
     // =========================================================================
     // FAKE REPOSITORY
     // =========================================================================
@@ -462,6 +680,7 @@ public class PurchaseOrderMatrixTests
     private class FakePurchaseOrderRepository : IPurchaseOrderRepository
     {
         public List<Branch> Branches { get; } = new();
+        public List<OrderMatrixSupplierDeliveryConfigDto>? CustomSupplierConfigs { get; set; }
         public List<Supplier> Suppliers { get; } = new();
         public List<Product> Products { get; } = new();
         public List<OrderMatrixProductDto> MatrixProducts { get; } = new();
@@ -501,6 +720,10 @@ public class PurchaseOrderMatrixTests
             Guid? supplierId,
             CancellationToken cancellationToken = default)
         {
+            if (CustomSupplierConfigs != null)
+            {
+                return Task.FromResult((IReadOnlyList<OrderMatrixSupplierDeliveryConfigDto>)CustomSupplierConfigs);
+            }
             var query = Suppliers.AsEnumerable();
             if (supplierId.HasValue && supplierId.Value != Guid.Empty)
             {
@@ -514,13 +737,64 @@ public class PurchaseOrderMatrixTests
                 SupplierName = s.Name,
                 IsActive = s.Status == SupplierStatus.Active,
                 IsAssignedToBranch = true,
-                ActiveDeliveryDays = new List<int> { 1, 2, 3, 4, 5, 6 },
-                LeadTimeDays = 1,
-                CutoffTime = "15:00",
-                BlackoutDates = new List<string>()
+                LeadTimeDays = 0,
+                CutoffTime = "23:59",
+                BlackoutDates = new List<string>(),
+                ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 }
             }).ToList();
 
             return Task.FromResult((IReadOnlyList<OrderMatrixSupplierDeliveryConfigDto>)list);
+        }
+
+        public Task<PurchaseOrder?> FindCommittedPoAsync(
+            Guid branchId,
+            Guid supplierId,
+            DateTime deliveryDate,
+            CancellationToken cancellationToken = default)
+        {
+            var day = deliveryDate.Date;
+            var po = PurchaseOrders.FirstOrDefault(p =>
+                p.BranchId == branchId
+                && p.SupplierId == supplierId
+                && p.Status != "DRAFT"
+                && p.Status != "CANCELLED"
+                && p.Status != "REJECTED"
+                && p.DeliveryDate.HasValue
+                && p.DeliveryDate.Value.Date == day);
+            return Task.FromResult(po);
+        }
+
+        public Task<IReadOnlyList<PurchaseOrder>> GetCommittedPosInRangeAsync(
+            Guid branchId,
+            Guid? supplierId,
+            DateTime viewFrom,
+            int durationDays,
+            CancellationToken cancellationToken = default)
+        {
+            var from = viewFrom.Date;
+            var to = from.AddDays(Math.Clamp(durationDays, 1, 31));
+            var query = PurchaseOrders.Where(p =>
+                p.BranchId == branchId
+                && p.Status != "DRAFT"
+                && p.Status != "CANCELLED"
+                && p.Status != "REJECTED"
+                && p.DeliveryDate.HasValue
+                && p.DeliveryDate.Value.Date >= from
+                && p.DeliveryDate.Value.Date < to);
+            if (supplierId.HasValue && supplierId.Value != Guid.Empty)
+            {
+                query = query.Where(p => p.SupplierId == supplierId.Value);
+            }
+
+            return Task.FromResult((IReadOnlyList<PurchaseOrder>)query.ToList());
+        }
+
+        public Task<SupplierProduct?> GetSupplierProductAsync(
+            Guid supplierId,
+            Guid productId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult<SupplierProduct?>(null);
         }
 
         public Task<PurchaseOrder?> GetDraftMatrixPoAsync(
