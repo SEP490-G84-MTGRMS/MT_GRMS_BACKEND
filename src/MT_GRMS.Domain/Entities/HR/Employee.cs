@@ -26,23 +26,14 @@ public class Employee : BaseTenantEntity
     public string? BankAccountNumber { get; set; }
     public string? BankName { get; set; }
     public string? BankAccountHolder { get; set; }
-    public List<EmployeeAllowance> Allowances { get; set; } = new();
     public decimal DebtAmount { get; set; } = 0.00m;
     public EmployeeStatus Status { get; set; } = EmployeeStatus.Active;
 
     // Navigations
     public Branch? Branch { get; set; }
     public User? User { get; set; }
+    public ICollection<EmployeeAllowance> Allowances { get; set; } = new List<EmployeeAllowance>();
     public ICollection<Payslip> Payslips { get; set; } = new List<Payslip>();
     public ICollection<EmployeeSchedule> Schedules { get; set; } = new List<EmployeeSchedule>();
     public ICollection<EmployeeBonusViolation> BonusViolations { get; set; } = new List<EmployeeBonusViolation>();
-}
-
-/// <summary>
-/// Khoản phụ cấp nhân viên (Lưu trữ dạng JSONB trong bảng Employees)
-/// </summary>
-public class EmployeeAllowance
-{
-    public string Name { get; set; } = string.Empty;
-    public decimal Amount { get; set; } = 0.00m;
 }

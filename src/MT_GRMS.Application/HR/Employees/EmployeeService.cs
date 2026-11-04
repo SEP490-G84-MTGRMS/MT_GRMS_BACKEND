@@ -159,12 +159,13 @@ public class EmployeeService : IEmployeeService
             JobTitle = request.JobTitle?.Trim(),
             SalaryType = string.IsNullOrWhiteSpace(request.SalaryType) ? "monthly" : request.SalaryType.Trim().ToLower(),
             BaseRate = request.BaseRate,
-            Allowances = MapAllowances(request.Allowances),
             BankAccountNumber = request.BankAccountNumber?.Trim(),
             BankName = request.BankName?.Trim(),
             BankAccountHolder = request.BankAccountHolder?.Trim(),
             Status = EmployeeStatus.Active
         };
+
+        employee.Allowances = MapAllowances(request.Allowances, employee.Id, currentTenantId);
 
         await _employeeRepository.AddAsync(employee, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -224,7 +225,14 @@ public class EmployeeService : IEmployeeService
         employee.Gender = request.Gender;
         employee.SalaryType = string.IsNullOrWhiteSpace(request.SalaryType) ? "monthly" : request.SalaryType.Trim().ToLower();
         employee.BaseRate = request.BaseRate;
-        employee.Allowances = MapAllowances(request.Allowances);
+        if (request.Allowances != null)
+        {
+            employee.Allowances.Clear();
+            foreach (var allowance in MapAllowances(request.Allowances, employee.Id, employee.TenantId))
+            {
+                employee.Allowances.Add(allowance);
+            }
+        }
         employee.BankAccountNumber = request.BankAccountNumber?.Trim();
         employee.BankName = request.BankName?.Trim();
         employee.BankAccountHolder = request.BankAccountHolder?.Trim();
@@ -389,7 +397,7 @@ public class EmployeeService : IEmployeeService
         );
     }
 
-    private static List<EmployeeAllowance> MapAllowances(List<EmployeeAllowanceDto>? allowances)
+    private static List<EmployeeAllowance> MapAllowances(List<EmployeeAllowanceDto>? allowances, Guid employeeId = default, string tenantId = "")
     {
         if (allowances == null || allowances.Count == 0)
         {
@@ -400,6 +408,8 @@ public class EmployeeService : IEmployeeService
             .Where(a => !string.IsNullOrWhiteSpace(a.Name))
             .Select(a => new EmployeeAllowance
             {
+                EmployeeId = employeeId,
+                TenantId = tenantId,
                 Name = a.Name.Trim(),
                 Amount = Math.Max(0, a.Amount)
             })

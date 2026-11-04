@@ -23,6 +23,7 @@ public class EmployeeRepository : IEmployeeRepository
     {
         return await _dbSet
             .Include(e => e.Branch)
+            .Include(e => e.Allowances)
             .Include(e => e.User)
                 .ThenInclude(u => u!.TenantUsers)
             .FirstOrDefaultAsync(e => e.Id == id, cancellationToken);
@@ -60,6 +61,7 @@ public class EmployeeRepository : IEmployeeRepository
         var query = _dbSet
             .AsNoTracking()
             .Include(e => e.Branch)
+            .Include(e => e.Allowances)
             .Include(e => e.User)
             .Where(e => !e.IsDeleted);
 

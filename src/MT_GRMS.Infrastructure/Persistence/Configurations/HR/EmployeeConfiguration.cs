@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using MT_GRMS.Domain.Entities.HR;
@@ -31,12 +30,6 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
         builder.Property(x => x.BankAccountNumber).HasMaxLength(30);
         builder.Property(x => x.BankName).HasMaxLength(100);
         builder.Property(x => x.BankAccountHolder).HasMaxLength(100);
-        builder.Property(x => x.Allowances)
-            .HasColumnType("jsonb")
-            .HasConversion(
-                v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
-                v => JsonSerializer.Deserialize<List<EmployeeAllowance>>(v, (JsonSerializerOptions?)null) ?? new List<EmployeeAllowance>()
-            );
         builder.Property(x => x.DebtAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.Status)
             .HasConversion(
@@ -57,5 +50,10 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
             .WithMany()
             .HasForeignKey(x => x.UserId)
             .OnDelete(DeleteBehavior.SetNull);
+
+        builder.HasMany(x => x.Allowances)
+            .WithOne(x => x.Employee)
+            .HasForeignKey(x => x.EmployeeId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }
