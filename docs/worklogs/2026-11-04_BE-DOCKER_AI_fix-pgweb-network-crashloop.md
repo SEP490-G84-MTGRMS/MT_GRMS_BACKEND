@@ -52,3 +52,4 @@
 - Để tránh lỗi khi mở máy tính hoặc khởi động Docker Desktop:
   - Nên chạy lệnh tại thư mục backend: `docker compose up -d`
   - Tránh bấm nút bật/tắt từng container lẻ trong UI Docker Desktop vì có thể khiến container bị văng khỏi network dùng chung.
+
