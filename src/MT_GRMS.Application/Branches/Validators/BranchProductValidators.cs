@@ -21,9 +21,6 @@ public class AssignBranchProductsValidator : AbstractValidator<AssignBranchProdu
             .GreaterThanOrEqualTo(0).When(x => x.DefaultMinStock.HasValue)
             .WithMessage("Định mức tồn tối thiểu mặc định không thể nhỏ hơn 0.");
 
-        RuleFor(x => x.DefaultMinOrderQuantity)
-            .GreaterThanOrEqualTo(0).When(x => x.DefaultMinOrderQuantity.HasValue)
-            .WithMessage("Số lượng đặt hàng tối thiểu (MOQ) mặc định không thể nhỏ hơn 0.");
     }
 }
 
@@ -35,11 +32,8 @@ public class UpdateBranchProductValidator : AbstractValidator<UpdateBranchProduc
             .GreaterThan(0).WithMessage("Giá bán lẻ niêm yết phải lớn hơn 0 VNĐ.");
 
         RuleFor(x => x.MinStockLevel)
-            .GreaterThanOrEqualTo(0).WithMessage("Định mức tồn an toàn tối thiểu không thể nhỏ hơn 0.");
-
-        RuleFor(x => x.MinOrderQuantity)
-            .GreaterThanOrEqualTo(1).When(x => x.MinOrderQuantity.HasValue)
-            .WithMessage("Số lượng đặt hàng tối thiểu (MOQ) phải từ 1 trở lên.");
+            .GreaterThanOrEqualTo(0).When(x => x.MinStockLevel.HasValue)
+            .WithMessage("Định mức tồn an toàn tối thiểu không thể nhỏ hơn 0.");
 
         RuleFor(x => x.Status)
             .Must(s => string.IsNullOrEmpty(s) || s == "Active" || s == "Inactive")

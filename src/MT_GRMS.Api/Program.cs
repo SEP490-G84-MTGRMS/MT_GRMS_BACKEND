@@ -124,7 +124,7 @@ using (var scope = app.Services.CreateScope())
         var dbContext = services.GetRequiredService<AppDbContext>();
         if (dbContext.Database.IsRelational())
         {
-            logger.LogInformation("Applying EF Core migrations to Neon PostgreSQL database...");
+            logger.LogInformation("Applying EF Core migrations to local PostgreSQL (localhost:5432/mtgrms_db)...");
             await dbContext.Database.MigrateAsync();
             logger.LogInformation("Database migrations applied successfully.");
         }

@@ -267,7 +267,7 @@ public class CatalogService : ICatalogService
         {
             if (string.IsNullOrWhiteSpace(request.ImageUrl))
             {
-                product.ImageUrls.Clear();
+                product.ImageUrls = new List<string>();
             }
             else if (!product.ImageUrls.Contains(request.ImageUrl.Trim()))
             {

@@ -32,10 +32,16 @@ public interface IBranchProductRepository
     Task<IReadOnlyList<BranchSummaryDto>> GetBranchSummariesAsync(
         CancellationToken cancellationToken = default);
 
-    Task<BranchStock?> GetBranchStockAsync(
+    Task<BranchProduct?> GetBranchProductAsync(
         Guid branchId,
         Guid productId,
         CancellationToken cancellationToken = default);
+
+    Task AddBranchProductAsync(
+        BranchProduct branchProduct,
+        CancellationToken cancellationToken = default);
+
+    void RemoveBranchProduct(BranchProduct branchProduct);
 
     Task<IReadOnlyList<BranchStock>> GetBranchStocksByProductAsync(
         Guid branchId,
@@ -60,5 +66,13 @@ public interface IBranchProductRepository
     Task<SupplierProduct?> GetSupplierProductAsync(
         Guid productId,
         Guid? supplierId,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<AssignableBranchProductDto>> GetAssignableProductsForBranchAsync(
+        Guid branchId,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<Guid>> GetActiveSupplierIdsForBranchAsync(
+        Guid branchId,
         CancellationToken cancellationToken = default);
 }
