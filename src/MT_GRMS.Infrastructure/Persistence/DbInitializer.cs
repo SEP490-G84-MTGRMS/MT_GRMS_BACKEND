@@ -22,45 +22,20 @@ public static class DbInitializer
         // 1. Tự động áp dụng Migrations để tạo CSDL và toàn bộ 34 bảng nếu chưa có
         if (context.Database.IsRelational())
         {
-            // Đảm bảo bảng supplier_branch_assignments tồn tại trước khi chạy Migrations
-            // để tránh lỗi 42P01: relation "supplier_branch_assignments" does not exist khi migration thực hiện ALTER TABLE
-            await context.Database.ExecuteSqlRawAsync(@"
-                CREATE TABLE IF NOT EXISTS supplier_branch_assignments (
-                    ""Id"" uuid NOT NULL PRIMARY KEY,
-                    ""BranchId"" uuid NOT NULL,
-                    ""SupplierId"" uuid NOT NULL,
-                    ""TenantId"" text NOT NULL,
-                    ""CreatedBy"" uuid,
-                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    ""UpdatedAt"" timestamp without time zone,
-                    ""IsDeleted"" boolean NOT NULL DEFAULT false
-                );
-            ");
-
             await context.Database.MigrateAsync();
-
-            // Đảm bảo đồng bộ cấu trúc cột và bảng sau migration RemoveDisplayOrderAndProductCombos
-            await context.Database.ExecuteSqlRawAsync(@"
-                ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];
-                ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
-                ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
-                ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
-                DROP TABLE IF EXISTS ""ProductCombos"";
-                DROP INDEX IF EXISTS ""IX_Products_TenantID_ProductCode"";
-                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_TenantID_ProductCode"" ON ""Products"" (""TenantID"", ""ProductCode"") WHERE ""IsDeleted"" = false;
-                DROP INDEX IF EXISTS ""IX_Products_Barcode"";
-                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_Barcode"" ON ""Products"" (""Barcode"") WHERE ""IsDeleted"" = false AND ""Barcode"" IS NOT NULL;
-            ");
         }
         else
         {
             await context.Database.EnsureCreatedAsync();
         }
 
-        // 2. Kiểm tra nếu đã có dữ liệu mẫu thì đảm bảo seed Orders cho chủ tiệm
-        if (await context.SubscriptionPlans.AnyAsync())
+        var defaultTenantId = "tenant_mt_mart_01";
+
+        // 2. Kiểm tra nếu đã có dữ liệu mẫu thì đảm bảo đồng bộ Catalog, Employees, Orders
+        if (await context.Tenants.IgnoreQueryFilters().AnyAsync(t => t.Id == defaultTenantId))
         {
-            await CatalogSeedData.SeedAsync(context, "tenant_mt_mart_01");
+            await CatalogSeedData.SeedAsync(context, defaultTenantId);
+            await EmployeeSeedData.SeedAsync(context, defaultTenantId);
             await SeedOrdersAndPreOrdersAsync(context);
             return;
         }
@@ -96,11 +71,13 @@ public static class DbInitializer
             IsActive = true
         };
 
-        await context.SubscriptionPlans.AddRangeAsync(planFree, planPro);
-        await context.SaveChangesAsync();
+        if (!await context.SubscriptionPlans.AnyAsync())
+        {
+            await context.SubscriptionPlans.AddRangeAsync(planFree, planPro);
+            await context.SaveChangesAsync();
+        }
 
         // Doanh nghiệp thuê SaaS mẫu (Default Tenant)
-        var defaultTenantId = "tenant_mt_mart_01";
         var demoTenant = new Tenant
         {
             Id = defaultTenantId,
@@ -161,7 +138,7 @@ public static class DbInitializer
             PasswordHash = "123456",
             FullName = "Tran Van Chu (Chu cua hang)",
             Email = "chucuahang@mtmart.vn",
-            Phone = "0901234567",
+            Phone = "0902345678",
             IsActive = true,
             IsEmailVerified = true
         };
@@ -607,52 +584,7 @@ public static class DbInitializer
         // =========================================================================
         // PHÂN HỆ 6: NHÂN SỰ & TÀI CHÍNH
         // =========================================================================
-        var employeeManager = new Employee
-        {
-            TenantId = defaultTenantId,
-            BranchId = branchQ1.Id,
-            UserId = userStoreManager.Id,
-            EmployeeCode = "NV-001",
-            FullName = userStoreManager.FullName,
-            CitizenId = "079095001234",
-            DateOfBirth = new DateTime(1995, 5, 20),
-            Gender = "Nam",
-            Phone = userStoreManager.Phone!,
-            Email = userStoreManager.Email,
-            JobTitle = "Cửa Hàng Trưởng",
-            SalaryType = "monthly",
-            BaseRate = 15000000.00m,
-            Allowances = new List<EmployeeAllowance>
-            {
-                new() { Name = "Phụ cấp ăn trưa", Amount = 730000.00m },
-                new() { Name = "Phụ cấp xăng xe", Amount = 500000.00m }
-            },
-            Status = EmployeeStatus.Active
-        };
-
-        var employeeCashier = new Employee
-        {
-            TenantId = defaultTenantId,
-            BranchId = branchQ1.Id,
-            UserId = userCashier.Id,
-            EmployeeCode = "NV-002",
-            FullName = userCashier.FullName,
-            CitizenId = "079098005678",
-            DateOfBirth = new DateTime(1998, 10, 12),
-            Gender = "Nữ",
-            Phone = userCashier.Phone!,
-            Email = userCashier.Email,
-            JobTitle = "Nhân Viên Thu Ngân POS",
-            SalaryType = "monthly",
-            BaseRate = 8500000.00m,
-            Allowances = new List<EmployeeAllowance>
-            {
-                new() { Name = "Phụ cấp ăn trưa", Amount = 730000.00m }
-            },
-            Status = EmployeeStatus.Active
-        };
-
-        await context.Employees.AddRangeAsync(employeeManager, employeeCashier);
+        await EmployeeSeedData.SeedAsync(context, defaultTenantId);
 
         // Sổ quỹ tiền mặt ban đầu
         var initialCashBook = new CashBook

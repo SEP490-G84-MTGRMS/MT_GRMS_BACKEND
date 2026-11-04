@@ -23,9 +23,18 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
         builder.Property(x => x.Gender).HasMaxLength(10);
         builder.Property(x => x.Phone).HasMaxLength(20).IsRequired();
         builder.Property(x => x.Email).HasMaxLength(100);
+        builder.Property(x => x.Address).HasMaxLength(255);
+        builder.Property(x => x.StartDate);
+        builder.Property(x => x.Note).HasMaxLength(500);
         builder.Property(x => x.AvatarUrl).HasMaxLength(255);
-        builder.Property(x => x.JobTitle).HasMaxLength(100);
-        builder.Property(x => x.SalaryType).HasMaxLength(30).HasDefaultValue("monthly");
+        builder.Property(x => x.OtWeekday).HasMaxLength(20);
+        builder.Property(x => x.OtSunday).HasMaxLength(20);
+        builder.Property(x => x.SalaryType)
+            .HasConversion(
+                v => v.ToString().ToLower(),
+                v => Enum.Parse<SalaryType>(v, true))
+            .HasMaxLength(30)
+            .HasDefaultValue(SalaryType.Monthly);
         builder.Property(x => x.BaseRate).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.BankAccountNumber).HasMaxLength(30);
         builder.Property(x => x.BankName).HasMaxLength(100);

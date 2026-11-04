@@ -19,10 +19,14 @@ public class Employee : BaseTenantEntity
     public string? Gender { get; set; }
     public string Phone { get; set; } = string.Empty;
     public string? Email { get; set; }
+    public string? Address { get; set; }
+    public DateTime? StartDate { get; set; }
+    public string? Note { get; set; }
     public string? AvatarUrl { get; set; }
-    public string? JobTitle { get; set; }
-    public string SalaryType { get; set; } = "monthly";
+    public SalaryType SalaryType { get; set; } = SalaryType.Monthly;
     public decimal BaseRate { get; set; } = 0.00m;
+    public string? OtWeekday { get; set; }
+    public string? OtSunday { get; set; }
     public string? BankAccountNumber { get; set; }
     public string? BankName { get; set; }
     public string? BankAccountHolder { get; set; }

@@ -71,7 +71,9 @@ public class EmployeeRepository : IEmployeeRepository
             query = query.Where(e =>
                 e.FullName.ToLower().Contains(kw) ||
                 e.EmployeeCode.ToLower().Contains(kw) ||
-                e.Phone.Contains(kw));
+                e.Phone.Contains(kw) ||
+                e.CitizenId.Contains(kw) ||
+                (e.Email != null && e.Email.ToLower().Contains(kw)));
         }
 
         if (filter.BranchId.HasValue && filter.BranchId.Value != Guid.Empty)
@@ -85,6 +87,15 @@ public class EmployeeRepository : IEmployeeRepository
             if (Enum.TryParse<EmployeeStatus>(st, true, out var parsedStatus))
             {
                 query = query.Where(e => e.Status == parsedStatus);
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(filter.SalaryType))
+        {
+            var st = filter.SalaryType.Trim().ToLower();
+            if (Enum.TryParse<SalaryType>(st, true, out var parsedSalaryType))
+            {
+                query = query.Where(e => e.SalaryType == parsedSalaryType);
             }
         }
 

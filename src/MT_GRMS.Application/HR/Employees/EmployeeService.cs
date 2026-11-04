@@ -40,12 +40,18 @@ public class EmployeeService : IEmployeeService
             e.FullName,
             e.Phone,
             e.Email,
+            e.AvatarUrl,
+            e.Address,
+            e.StartDate,
+            e.Note,
             e.BranchId,
             e.Branch?.Name ?? "Chưa gán",
-            e.JobTitle,
             e.Status.ToString().ToLower(),
-            e.SalaryType,
+            e.SalaryType.ToString().ToLower(),
             e.BaseRate,
+            e.OtWeekday,
+            e.OtSunday,
+            e.DebtAmount,
             e.UserId,
             e.User?.UserName,
             e.CreatedAt
@@ -156,8 +162,12 @@ public class EmployeeService : IEmployeeService
             Phone = normalizedPhone,
             Email = request.Email?.Trim(),
             AvatarUrl = request.AvatarUrl?.Trim(),
-            JobTitle = request.JobTitle?.Trim(),
-            SalaryType = string.IsNullOrWhiteSpace(request.SalaryType) ? "monthly" : request.SalaryType.Trim().ToLower(),
+            Address = request.Address?.Trim(),
+            StartDate = request.StartDate,
+            Note = request.Note?.Trim(),
+            OtWeekday = request.OtWeekday?.Trim(),
+            OtSunday = request.OtSunday?.Trim(),
+            SalaryType = ParseSalaryType(request.SalaryType),
             BaseRate = request.BaseRate,
             BankAccountNumber = request.BankAccountNumber?.Trim(),
             BankName = request.BankName?.Trim(),
@@ -220,10 +230,14 @@ public class EmployeeService : IEmployeeService
         employee.Phone = normalizedPhone;
         employee.BranchId = request.BranchId;
         employee.Email = request.Email?.Trim();
-        employee.JobTitle = request.JobTitle?.Trim();
+        employee.Address = request.Address?.Trim();
+        employee.StartDate = request.StartDate;
+        employee.Note = request.Note?.Trim();
+        employee.OtWeekday = request.OtWeekday?.Trim();
+        employee.OtSunday = request.OtSunday?.Trim();
         employee.DateOfBirth = request.DateOfBirth;
         employee.Gender = request.Gender;
-        employee.SalaryType = string.IsNullOrWhiteSpace(request.SalaryType) ? "monthly" : request.SalaryType.Trim().ToLower();
+        employee.SalaryType = ParseSalaryType(request.SalaryType);
         employee.BaseRate = request.BaseRate;
         if (request.Allowances != null)
         {
@@ -236,9 +250,9 @@ public class EmployeeService : IEmployeeService
         employee.BankAccountNumber = request.BankAccountNumber?.Trim();
         employee.BankName = request.BankName?.Trim();
         employee.BankAccountHolder = request.BankAccountHolder?.Trim();
-        if (!string.IsNullOrWhiteSpace(request.AvatarUrl))
+        if (request.AvatarUrl != null)
         {
-            employee.AvatarUrl = request.AvatarUrl.Trim();
+            employee.AvatarUrl = string.IsNullOrWhiteSpace(request.AvatarUrl) ? null : request.AvatarUrl.Trim();
         }
         employee.UpdatedAt = DateTime.UtcNow;
 
@@ -377,15 +391,19 @@ public class EmployeeService : IEmployeeService
             e.Gender,
             e.Phone,
             e.Email,
+            e.Address,
+            e.StartDate,
+            e.Note,
             e.AvatarUrl,
-            e.JobTitle,
             e.BranchId,
             e.Branch?.Name ?? "Chưa gán",
             e.UserId,
             e.User?.UserName,
             role,
-            e.SalaryType,
+            e.SalaryType.ToString().ToLower(),
             e.BaseRate,
+            e.OtWeekday,
+            e.OtSunday,
             e.Allowances.Select(a => new EmployeeAllowanceDto(a.Name, a.Amount)).ToList(),
             e.DebtAmount,
             e.Status.ToString().ToLower(),
@@ -414,5 +432,22 @@ public class EmployeeService : IEmployeeService
                 Amount = Math.Max(0, a.Amount)
             })
             .ToList();
+    }
+
+    private static SalaryType ParseSalaryType(string? salaryType)
+    {
+        if (string.IsNullOrWhiteSpace(salaryType))
+            return SalaryType.Monthly;
+
+        if (Enum.TryParse<SalaryType>(salaryType, true, out var result))
+            return result;
+
+        return salaryType.Trim().ToLower() switch
+        {
+            "theothang" or "thang" or "monthly" => SalaryType.Monthly,
+            "theogio" or "gio" or "hourly" => SalaryType.Hourly,
+            "theoca" or "ca" or "shift" => SalaryType.Shift,
+            _ => SalaryType.Monthly
+        };
     }
 }

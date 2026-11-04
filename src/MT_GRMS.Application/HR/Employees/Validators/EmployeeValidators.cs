@@ -38,6 +38,54 @@ public class CreateEmployeeRequestValidator : AbstractValidator<CreateEmployeeRe
                 .EmailAddress().WithMessage("Địa chỉ email không đúng định dạng.")
                 .MaximumLength(100).WithMessage("Email không vượt quá 100 ký tự.");
         });
+
+        When(x => !string.IsNullOrWhiteSpace(x.Address), () =>
+        {
+            RuleFor(x => x.Address)
+                .MaximumLength(255).WithMessage("Địa chỉ không vượt quá 255 ký tự.");
+        });
+
+        When(x => !string.IsNullOrWhiteSpace(x.Note), () =>
+        {
+            RuleFor(x => x.Note)
+                .MaximumLength(500).WithMessage("Ghi chú không vượt quá 500 ký tự.");
+        });
+
+        When(x => !string.IsNullOrWhiteSpace(x.OtWeekday), () =>
+        {
+            RuleFor(x => x.OtWeekday)
+                .MaximumLength(20).WithMessage("Hệ số làm thêm ngày thường không vượt quá 20 ký tự.");
+        });
+
+        When(x => !string.IsNullOrWhiteSpace(x.OtSunday), () =>
+        {
+            RuleFor(x => x.OtSunday)
+                .MaximumLength(20).WithMessage("Hệ số làm thêm Chủ nhật không vượt quá 20 ký tự.");
+        });
+
+        When(x => !string.IsNullOrWhiteSpace(x.BankAccountNumber), () =>
+        {
+            RuleFor(x => x.BankAccountNumber)
+                .MaximumLength(30).WithMessage("Số tài khoản ngân hàng không vượt quá 30 ký tự.");
+        });
+
+        When(x => !string.IsNullOrWhiteSpace(x.BankName), () =>
+        {
+            RuleFor(x => x.BankName)
+                .MaximumLength(100).WithMessage("Tên ngân hàng không vượt quá 100 ký tự.");
+        });
+
+        When(x => !string.IsNullOrWhiteSpace(x.BankAccountHolder), () =>
+        {
+            RuleFor(x => x.BankAccountHolder)
+                .MaximumLength(100).WithMessage("Chủ tài khoản ngân hàng không vượt quá 100 ký tự.");
+        });
+
+        When(x => !string.IsNullOrWhiteSpace(x.AvatarUrl), () =>
+        {
+            RuleFor(x => x.AvatarUrl)
+                .MaximumLength(255).WithMessage("Đường dẫn ảnh đại diện không vượt quá 255 ký tự.");
+        });
     }
 }
 
@@ -69,6 +117,54 @@ public class UpdateEmployeeRequestValidator : AbstractValidator<UpdateEmployeeRe
                 .EmailAddress().WithMessage("Địa chỉ email không đúng định dạng.")
                 .MaximumLength(100).WithMessage("Email không vượt quá 100 ký tự.");
         });
+
+        When(x => !string.IsNullOrWhiteSpace(x.Address), () =>
+        {
+            RuleFor(x => x.Address)
+                .MaximumLength(255).WithMessage("Địa chỉ không vượt quá 255 ký tự.");
+        });
+
+        When(x => !string.IsNullOrWhiteSpace(x.Note), () =>
+        {
+            RuleFor(x => x.Note)
+                .MaximumLength(500).WithMessage("Ghi chú không vượt quá 500 ký tự.");
+        });
+
+        When(x => !string.IsNullOrWhiteSpace(x.OtWeekday), () =>
+        {
+            RuleFor(x => x.OtWeekday)
+                .MaximumLength(20).WithMessage("Hệ số làm thêm ngày thường không vượt quá 20 ký tự.");
+        });
+
+        When(x => !string.IsNullOrWhiteSpace(x.OtSunday), () =>
+        {
+            RuleFor(x => x.OtSunday)
+                .MaximumLength(20).WithMessage("Hệ số làm thêm Chủ nhật không vượt quá 20 ký tự.");
+        });
+
+        When(x => !string.IsNullOrWhiteSpace(x.BankAccountNumber), () =>
+        {
+            RuleFor(x => x.BankAccountNumber)
+                .MaximumLength(30).WithMessage("Số tài khoản ngân hàng không vượt quá 30 ký tự.");
+        });
+
+        When(x => !string.IsNullOrWhiteSpace(x.BankName), () =>
+        {
+            RuleFor(x => x.BankName)
+                .MaximumLength(100).WithMessage("Tên ngân hàng không vượt quá 100 ký tự.");
+        });
+
+        When(x => !string.IsNullOrWhiteSpace(x.BankAccountHolder), () =>
+        {
+            RuleFor(x => x.BankAccountHolder)
+                .MaximumLength(100).WithMessage("Chủ tài khoản ngân hàng không vượt quá 100 ký tự.");
+        });
+
+        When(x => !string.IsNullOrWhiteSpace(x.AvatarUrl), () =>
+        {
+            RuleFor(x => x.AvatarUrl)
+                .MaximumLength(255).WithMessage("Đường dẫn ảnh đại diện không vượt quá 255 ký tự.");
+        });
     }
 }
 
@@ -91,4 +187,3 @@ public class CreateIdentityAccountRequestValidator : AbstractValidator<CreateIde
             .WithMessage("Vai trò không hợp lệ (hỗ trợ CASHIER, STAFF, BRANCH_MANAGER, STORE_OWNER).");
     }
 }
-

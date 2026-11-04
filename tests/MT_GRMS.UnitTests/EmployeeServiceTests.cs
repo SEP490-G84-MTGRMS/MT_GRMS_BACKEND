@@ -103,6 +103,11 @@ public class EmployeeServiceTests
             return Task.FromResult(Employees.FirstOrDefault(e => e.Phone == phone && !e.IsDeleted));
         }
 
+        public Task<Employee?> GetByUserIdAsync(string userId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Employees.FirstOrDefault(e => e.UserId == userId && !e.IsDeleted));
+        }
+
         public Task<(IReadOnlyList<Employee> Items, int TotalCount)> GetPagedListAsync(EmployeeQueryFilter filter, CancellationToken cancellationToken = default)
         {
             var query = Employees.Where(e => !e.IsDeleted);
@@ -118,6 +123,10 @@ public class EmployeeServiceTests
             if (!string.IsNullOrWhiteSpace(filter.Status))
             {
                 query = query.Where(e => string.Equals(e.Status.ToString(), filter.Status, StringComparison.OrdinalIgnoreCase));
+            }
+            if (!string.IsNullOrWhiteSpace(filter.SalaryType))
+            {
+                query = query.Where(e => string.Equals(e.SalaryType.ToString(), filter.SalaryType, StringComparison.OrdinalIgnoreCase));
             }
 
             var list = query.ToList();
@@ -486,5 +495,158 @@ public class EmployeeServiceTests
 
         // Act & Assert
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateIdentityAccountAsync(Guid.NewGuid(), request));
+    }
+
+    [Fact]
+    public async Task CreateEmployee_WithNewFields_ShouldMapAllFieldsCorrectly()
+    {
+        // Arrange
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var startDate = new DateTime(2025, 3, 1, 0, 0, 0, DateTimeKind.Utc);
+        var request = new CreateEmployeeRequest(
+            FullName: "Lê Văn Hùng",
+            CitizenId: "001202008888",
+            Phone: "0987654888",
+            BranchId: Guid.NewGuid(),
+            Email: "hung.le@mtgrms.vn",
+            Address: "123 Đường Số 7, Q. Bình Tân, TP.HCM",
+            StartDate: startDate,
+            Note: "Nhân viên bán hàng chính thức",
+            SalaryType: "shift",
+            BaseRate: 250000m,
+            OtWeekday: "150%",
+            OtSunday: "200%",
+            BankAccountNumber: "0123456789",
+            BankName: "Vietcombank",
+            BankAccountHolder: "LE VAN HUNG",
+            AvatarUrl: "https://example.com/avatar.jpg"
+        );
+
+        // Act
+        var result = await service.CreateEmployeeAsync(request);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("123 Đường Số 7, Q. Bình Tân, TP.HCM", result.Address);
+        Assert.Equal(startDate, result.StartDate);
+        Assert.Equal("Nhân viên bán hàng chính thức", result.Note);
+        Assert.Equal("shift", result.SalaryType);
+        Assert.Equal(250000m, result.BaseRate);
+        Assert.Equal("150%", result.OtWeekday);
+        Assert.Equal("200%", result.OtSunday);
+        Assert.Equal("0123456789", result.BankAccountNumber);
+        Assert.Equal("Vietcombank", result.BankName);
+        Assert.Equal("LE VAN HUNG", result.BankAccountHolder);
+        Assert.Equal("https://example.com/avatar.jpg", result.AvatarUrl);
+    }
+
+    [Fact]
+    public async Task UpdateEmployee_WithNewFields_ShouldUpdateSuccessfully()
+    {
+        // Arrange
+        var branchId = Guid.NewGuid();
+        var existing = new Employee
+        {
+            Id = Guid.NewGuid(),
+            EmployeeCode = "NV0010",
+            FullName = "Nguyễn Văn Ban Đầu",
+            CitizenId = "001202007777",
+            Phone = "0987654777",
+            BranchId = branchId,
+            SalaryType = SalaryType.Monthly,
+            BaseRate = 8000000m
+        };
+
+        var empRepo = new FakeEmployeeRepository();
+        empRepo.Employees.Add(existing);
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var updatedDate = new DateTime(2025, 4, 15, 0, 0, 0, DateTimeKind.Utc);
+        var updateRequest = new UpdateEmployeeRequest(
+            FullName: "Nguyễn Văn Đã Đổi",
+            CitizenId: "001202007777",
+            Phone: "0987654777",
+            BranchId: branchId,
+            Address: "456 CMT8, Q.3, TP.HCM",
+            StartDate: updatedDate,
+            Note: "Chuyển sang ca làm việc linh hoạt",
+            SalaryType: "shift",
+            BaseRate: 280000m,
+            OtWeekday: "160%",
+            OtSunday: "220%",
+            BankAccountNumber: "9876543210",
+            BankName: "MBBank",
+            BankAccountHolder: "NGUYEN VAN DA DOI",
+            AvatarUrl: "https://example.com/new-avatar.jpg"
+        );
+
+        // Act
+        var result = await service.UpdateEmployeeAsync(existing.Id, updateRequest);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal("Nguyễn Văn Đã Đổi", result.FullName);
+        Assert.Equal("456 CMT8, Q.3, TP.HCM", result.Address);
+        Assert.Equal(updatedDate, result.StartDate);
+        Assert.Equal("Chuyển sang ca làm việc linh hoạt", result.Note);
+        Assert.Equal("shift", result.SalaryType);
+        Assert.Equal(280000m, result.BaseRate);
+        Assert.Equal("160%", result.OtWeekday);
+        Assert.Equal("220%", result.OtSunday);
+        Assert.Equal("9876543210", result.BankAccountNumber);
+        Assert.Equal("MBBank", result.BankName);
+        Assert.Equal("NGUYEN VAN DA DOI", result.BankAccountHolder);
+    }
+
+    [Fact]
+    public async Task GetEmployeesPagedAsync_WithSalaryTypeFilter_ShouldReturnFilteredResults()
+    {
+        // Arrange
+        var branchId = Guid.NewGuid();
+        var empRepo = new FakeEmployeeRepository();
+        empRepo.Employees.Add(new Employee
+        {
+            Id = Guid.NewGuid(),
+            EmployeeCode = "NV0001",
+            FullName = "NV Theo Thang",
+            CitizenId = "001200000001",
+            Phone = "0987000001",
+            BranchId = branchId,
+            SalaryType = SalaryType.Monthly,
+            BaseRate = 9000000m
+        });
+        empRepo.Employees.Add(new Employee
+        {
+            Id = Guid.NewGuid(),
+            EmployeeCode = "NV0002",
+            FullName = "NV Theo Ca",
+            CitizenId = "001200000002",
+            Phone = "0987000002",
+            BranchId = branchId,
+            SalaryType = SalaryType.Shift,
+            BaseRate = 250000m
+        });
+
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        // Act - Filter by Shift
+        var filter = new EmployeeQueryFilter(SalaryType: "Shift");
+        var result = await service.GetEmployeesPagedAsync(filter);
+
+        // Assert
+        Assert.Single(result.Items);
+        Assert.Equal("NV0002", result.Items.First().EmployeeCode);
+        Assert.Equal("shift", result.Items.First().SalaryType);
     }
 }

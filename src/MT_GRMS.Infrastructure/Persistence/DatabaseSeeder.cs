@@ -25,6 +25,26 @@ public static class DatabaseSeeder
     {
         try
         {
+            // 0. Đảm bảo Tenant mẫu tồn tại cho DefaultTenantId
+            if (!await context.Tenants.IgnoreQueryFilters().AnyAsync(t => t.Id == DefaultTenantId, ct))
+            {
+                logger.LogInformation("Seeding Tenant {TenantId}...", DefaultTenantId);
+                await context.Tenants.AddAsync(new Domain.Entities.SaaS.Tenant
+                {
+                    Id = DefaultTenantId,
+                    Name = "Cửa Hàng Thực Phẩm Sạch Grocery 001",
+                    Subdomain = "grocery001",
+                    Code = "GROCERY001",
+                    TaxCode = "0109998888",
+                    Hotline = "1900 9999",
+                    Address = "123 Xuân Thủy, Cầu Giấy, Hà Nội",
+                    City = "Hà Nội",
+                    Status = "ACTIVE",
+                    CurrentPlan = "PRO"
+                }, ct);
+                await context.SaveChangesAsync(ct);
+            }
+
             // 1. Seed Users (Chủ tiệm với mã PIN 1234 đã băm PBKDF2)
             if (!await context.Users.IgnoreQueryFilters().AnyAsync(u => u.Id == "user-owner-001", ct))
             {
