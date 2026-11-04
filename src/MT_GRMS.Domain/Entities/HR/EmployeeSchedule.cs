@@ -4,7 +4,7 @@ using MT_GRMS.Domain.Enums;
 namespace MT_GRMS.Domain.Entities.HR;
 
 /// <summary>
-/// Bảng EmployeeSchedules (Lịch làm việc & Chấm công GPS Inline)
+/// Bảng EmployeeSchedules (Lịch làm việc & Chấm công nhận diện khuôn mặt AI FaceID / Chủ cửa hàng duyệt)
 /// </summary>
 public class EmployeeSchedule : BaseEntity
 {
@@ -20,9 +20,14 @@ public class EmployeeSchedule : BaseEntity
     public TimeSpan AllowedCheckInEnd { get; set; }
     public DateTime? CheckInTime { get; set; }
     public DateTime? CheckOutTime { get; set; }
-    public decimal? CheckInLatitude { get; set; }
-    public decimal? CheckInLongitude { get; set; }
-    public bool IsGpsValid { get; set; } = true;
+
+    // Chấm công nhận diện khuôn mặt (AI FaceID) & Phương thức điểm danh
+    public string? CheckInMethod { get; set; }       // "FACE_ID", "MANUAL"
+    public string? CheckInFaceImageUrl { get; set; } // URL ảnh chụp camera khi check-in
+    public decimal? FaceMatchScore { get; set; }     // Độ khớp khuôn mặt (0.00 - 100.00%)
+    public string? CheckOutMethod { get; set; }      // "FACE_ID", "MANUAL"
+    public string? CheckOutFaceImageUrl { get; set; } // URL ảnh chụp camera khi check-out
+
     public int LateMinutes { get; set; } = 0;
     public decimal ActualWorkHours { get; set; } = 0.00m;
     public ScheduleStatus Status { get; set; } = ScheduleStatus.Scheduled;
