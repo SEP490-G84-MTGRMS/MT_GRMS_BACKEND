@@ -35,6 +35,25 @@ public class CatalogService : ICatalogService
         var imageUrls = p.ImageUrls ?? new List<string>();
         var avatar = imageUrls.FirstOrDefault();
 
+        var unitDtos = p.Units != null
+            ? p.Units.Where(u => !u.IsDeleted).Select(u => new ProductUnitResponse
+            {
+                Id = u.Id,
+                ProductId = u.ProductId,
+                UnitName = u.UnitName,
+                ConversionRate = u.ConversionRate,
+                Price = u.Price,
+                Barcode = u.Barcode,
+                IsBaseUnit = u.IsBaseUnit,
+                CreatedAt = u.CreatedAt,
+                UpdatedAt = u.UpdatedAt
+            }).ToList()
+            : new List<ProductUnitResponse>();
+
+        var totalUnits = unitDtos.Any()
+            ? unitDtos.Select(u => u.UnitName).Append(p.BaseUnit).Distinct(StringComparer.OrdinalIgnoreCase).Count()
+            : 1;
+
         return new ProductResponse(
             p.Id,
             p.ProductCode,
@@ -53,7 +72,9 @@ public class CatalogService : ICatalogService
             p.CreatedAt,
             p.UpdatedAt,
             imageUrls,
-            hasOrders
+            hasOrders,
+            unitDtos,
+            totalUnits
         );
     }
 

@@ -20,7 +20,9 @@ public record ProductResponse(
     DateTime CreatedAt,
     DateTime? UpdatedAt,
     List<string>? ImageUrls = null,
-    bool HasOrders = false
+    bool HasOrders = false,
+    List<ProductUnitResponse>? Units = null,
+    int? TotalUnits = null
 )
 {
     // Backward compatibility aliases
@@ -30,6 +32,7 @@ public record ProductResponse(
     public string UnitName => BaseUnit;
     public bool IsActive => Status == "Active";
     public bool HasTransactions => HasOrders;
+    public List<ProductUnitResponse>? UomConversions => Units;
 }
 
 [method: JsonConstructor]
