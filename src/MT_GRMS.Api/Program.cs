@@ -83,27 +83,22 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// 6. Cấu hình Swagger trong môi trường Development
-if (app.Environment.IsDevelopment())
+// 6. Cấu hình Swagger (Bật ở cả Development và Production để test API trên Render/Cloud)
+app.UseSwagger();
+app.UseSwaggerUI(c =>
 {
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
-    {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "MT_GRMS API v1");
-        c.RoutePrefix = "swagger";
-    });
-}
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "MT_GRMS API v1");
+    c.RoutePrefix = "swagger";
+});
+
+// Chuyển hướng trang chủ "/" sang "/swagger" để khi vào domain là mở Swagger ngay
+app.MapGet("/", () => Results.Redirect("/swagger"));
 
 // 7. Cấu hình HTTP Pipeline theo thứ tự chuẩn
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 // CORS đặt trước để xử lý preflight OPTIONS request tránh 307 Redirect
 app.UseCors("AllowFrontend");
-
-if (!app.Environment.IsDevelopment())
-{
-    app.UseHttpsRedirection();
-}
 
 app.UseRouting();
 
@@ -122,14 +117,8 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var dbContext = services.GetRequiredService<AppDbContext>();
-        if (dbContext.Database.IsRelational())
-        {
-            logger.LogInformation("Applying EF Core migrations to local PostgreSQL (localhost:5432/mtgrms_db)...");
-            await dbContext.Database.MigrateAsync();
-            logger.LogInformation("Database migrations applied successfully.");
-        }
 
-        logger.LogInformation("Initializing standard database baseline seed data...");
+        logger.LogInformation("Initializing database schema and seed data...");
         await DbInitializer.InitializeAsync(dbContext);
 
         logger.LogInformation("Seeding tax & finance sample data into database...");
