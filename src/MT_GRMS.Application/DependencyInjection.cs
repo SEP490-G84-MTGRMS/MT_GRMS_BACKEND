@@ -8,6 +8,7 @@ using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.ShiftConfigs;
 using MT_GRMS.Application.HR.AttendancePolicies;
+using MT_GRMS.Application.HR.Schedules;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders;
 
@@ -49,6 +50,7 @@ public static class DependencyInjection
         services.AddScoped<IEmployeeService, EmployeeService>();
         services.AddScoped<IShiftConfigService, ShiftConfigService>();
         services.AddScoped<IBranchAttendancePolicyService, BranchAttendancePolicyService>();
+        services.AddScoped<IScheduleService, ScheduleService>();
 
         return services;
     }

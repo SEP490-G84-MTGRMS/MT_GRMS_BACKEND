@@ -18,9 +18,12 @@ public enum EmployeeStatus
 
 public enum ScheduleStatus
 {
+    Draft = 0,
     Scheduled = 1,
-    Completed = 2,
-    Cancelled = 3
+    Published = 2,
+    InProgress = 3,
+    Completed = 4,
+    Cancelled = 5
 }
 
 public enum ScheduleApprovalStatus

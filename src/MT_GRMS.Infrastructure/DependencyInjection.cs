@@ -11,6 +11,7 @@ using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.ShiftConfigs;
 using MT_GRMS.Application.HR.AttendancePolicies;
+using MT_GRMS.Application.HR.Schedules;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.Suppliers;
@@ -92,6 +93,7 @@ public static class DependencyInjection
         services.AddScoped<IEmployeeRepository, EmployeeRepository>();
         services.AddScoped<IShiftConfigRepository, ShiftConfigRepository>();
         services.AddScoped<IBranchAttendancePolicyRepository, BranchAttendancePolicyRepository>();
+        services.AddScoped<IScheduleRepository, ScheduleRepository>();
 
         // Đăng ký dịch vụ máy in nhiệt hóa đơn POS-58 (khổ in 43mm siêu thị mini)
         services.AddScoped<IThermalPrintService, ThermalPrintService>();
