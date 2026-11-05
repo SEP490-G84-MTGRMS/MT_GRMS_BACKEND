@@ -34,7 +34,8 @@ public class TenantStoreControllerTests
             Subdomain = "hanoi-mart",
             Code = "HN-MART",
             Status = "ACTIVE",
-            CurrentPlan = "PRO"
+            CurrentPlan = "PRO",
+            WalletBalance = 20000000m
         });
         _dbContext.SaveChanges();
 
