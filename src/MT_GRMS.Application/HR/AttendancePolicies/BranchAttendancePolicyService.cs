@@ -47,7 +47,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
                 StandardDayHours: 8.00m,
                 IsConvertHoursToDays: true,
                 ConversionRulesJson: DefaultConversionRulesJson,
-                RecordLateEarlyIfHalfDay: false,
                 EnableLateThreshold: true,
                 LateThresholdMinutes: 0,
                 EnableEarlyLeaveThreshold: true,
@@ -56,7 +55,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
                 OtBeforeShiftMinutes: 0,
                 EnableOtAfterShift: true,
                 OtAfterShiftMinutes: 0,
-                EnableOtAllActualTime: false,
                 IsCustomized: false
             );
         }
@@ -86,7 +84,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
                 StandardDayHours = request.StandardDayHours,
                 IsConvertHoursToDays = request.IsConvertHoursToDays,
                 ConversionRulesJson = string.IsNullOrWhiteSpace(request.ConversionRulesJson) ? DefaultConversionRulesJson : request.ConversionRulesJson,
-                RecordLateEarlyIfHalfDay = request.RecordLateEarlyIfHalfDay,
                 EnableLateThreshold = request.EnableLateThreshold,
                 LateThresholdMinutes = request.LateThresholdMinutes,
                 EnableEarlyLeaveThreshold = request.EnableEarlyLeaveThreshold,
@@ -94,8 +91,7 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
                 EnableOtBeforeShift = request.EnableOtBeforeShift,
                 OtBeforeShiftMinutes = request.OtBeforeShiftMinutes,
                 EnableOtAfterShift = request.EnableOtAfterShift,
-                OtAfterShiftMinutes = request.OtAfterShiftMinutes,
-                EnableOtAllActualTime = request.EnableOtAllActualTime
+                OtAfterShiftMinutes = request.OtAfterShiftMinutes
             };
 
             await _repository.AddAsync(policy, cancellationToken);
@@ -105,7 +101,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
             policy.StandardDayHours = request.StandardDayHours;
             policy.IsConvertHoursToDays = request.IsConvertHoursToDays;
             policy.ConversionRulesJson = string.IsNullOrWhiteSpace(request.ConversionRulesJson) ? DefaultConversionRulesJson : request.ConversionRulesJson;
-            policy.RecordLateEarlyIfHalfDay = request.RecordLateEarlyIfHalfDay;
             policy.EnableLateThreshold = request.EnableLateThreshold;
             policy.LateThresholdMinutes = request.LateThresholdMinutes;
             policy.EnableEarlyLeaveThreshold = request.EnableEarlyLeaveThreshold;
@@ -114,7 +109,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
             policy.OtBeforeShiftMinutes = request.OtBeforeShiftMinutes;
             policy.EnableOtAfterShift = request.EnableOtAfterShift;
             policy.OtAfterShiftMinutes = request.OtAfterShiftMinutes;
-            policy.EnableOtAllActualTime = request.EnableOtAllActualTime;
 
             _repository.Update(policy);
         }
@@ -140,7 +134,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
         var standardDayHours = sourcePolicy?.StandardDayHours ?? 8.00m;
         var isConvertHoursToDays = sourcePolicy?.IsConvertHoursToDays ?? true;
         var conversionRulesJson = sourcePolicy?.ConversionRulesJson ?? DefaultConversionRulesJson;
-        var recordLateEarlyIfHalfDay = sourcePolicy?.RecordLateEarlyIfHalfDay ?? false;
         var enableLateThreshold = sourcePolicy?.EnableLateThreshold ?? true;
         var lateThresholdMinutes = sourcePolicy?.LateThresholdMinutes ?? 0;
         var enableEarlyLeaveThreshold = sourcePolicy?.EnableEarlyLeaveThreshold ?? true;
@@ -149,7 +142,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
         var otBeforeShiftMinutes = sourcePolicy?.OtBeforeShiftMinutes ?? 0;
         var enableOtAfterShift = sourcePolicy?.EnableOtAfterShift ?? true;
         var otAfterShiftMinutes = sourcePolicy?.OtAfterShiftMinutes ?? 0;
-        var enableOtAllActualTime = sourcePolicy?.EnableOtAllActualTime ?? false;
 
         var copiedTargetIds = new List<Guid>();
 
@@ -174,7 +166,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
                     StandardDayHours = standardDayHours,
                     IsConvertHoursToDays = isConvertHoursToDays,
                     ConversionRulesJson = conversionRulesJson,
-                    RecordLateEarlyIfHalfDay = recordLateEarlyIfHalfDay,
                     EnableLateThreshold = enableLateThreshold,
                     LateThresholdMinutes = lateThresholdMinutes,
                     EnableEarlyLeaveThreshold = enableEarlyLeaveThreshold,
@@ -182,8 +173,7 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
                     EnableOtBeforeShift = enableOtBeforeShift,
                     OtBeforeShiftMinutes = otBeforeShiftMinutes,
                     EnableOtAfterShift = enableOtAfterShift,
-                    OtAfterShiftMinutes = otAfterShiftMinutes,
-                    EnableOtAllActualTime = enableOtAllActualTime
+                    OtAfterShiftMinutes = otAfterShiftMinutes
                 };
 
                 await _repository.AddAsync(targetPolicy, cancellationToken);
@@ -193,7 +183,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
                 targetPolicy.StandardDayHours = standardDayHours;
                 targetPolicy.IsConvertHoursToDays = isConvertHoursToDays;
                 targetPolicy.ConversionRulesJson = conversionRulesJson;
-                targetPolicy.RecordLateEarlyIfHalfDay = recordLateEarlyIfHalfDay;
                 targetPolicy.EnableLateThreshold = enableLateThreshold;
                 targetPolicy.LateThresholdMinutes = lateThresholdMinutes;
                 targetPolicy.EnableEarlyLeaveThreshold = enableEarlyLeaveThreshold;
@@ -202,7 +191,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
                 targetPolicy.OtBeforeShiftMinutes = otBeforeShiftMinutes;
                 targetPolicy.EnableOtAfterShift = enableOtAfterShift;
                 targetPolicy.OtAfterShiftMinutes = otAfterShiftMinutes;
-                targetPolicy.EnableOtAllActualTime = enableOtAllActualTime;
 
                 _repository.Update(targetPolicy);
             }
@@ -229,7 +217,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
             StandardDayHours: policy.StandardDayHours,
             IsConvertHoursToDays: policy.IsConvertHoursToDays,
             ConversionRulesJson: policy.ConversionRulesJson ?? DefaultConversionRulesJson,
-            RecordLateEarlyIfHalfDay: policy.RecordLateEarlyIfHalfDay,
             EnableLateThreshold: policy.EnableLateThreshold,
             LateThresholdMinutes: policy.LateThresholdMinutes,
             EnableEarlyLeaveThreshold: policy.EnableEarlyLeaveThreshold,
@@ -238,7 +225,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
             OtBeforeShiftMinutes: policy.OtBeforeShiftMinutes,
             EnableOtAfterShift: policy.EnableOtAfterShift,
             OtAfterShiftMinutes: policy.OtAfterShiftMinutes,
-            EnableOtAllActualTime: policy.EnableOtAllActualTime,
             IsCustomized: isCustomized
         );
     }

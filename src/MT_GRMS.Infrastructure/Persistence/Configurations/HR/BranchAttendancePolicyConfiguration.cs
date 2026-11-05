@@ -20,7 +20,6 @@ public class BranchAttendancePolicyConfiguration : IEntityTypeConfiguration<Bran
         builder.Property(x => x.StandardDayHours).HasColumnType("decimal(4,2)").HasDefaultValue(8.00m);
         builder.Property(x => x.IsConvertHoursToDays).HasDefaultValue(true);
         builder.Property(x => x.ConversionRulesJson).HasColumnType("text");
-        builder.Property(x => x.RecordLateEarlyIfHalfDay).HasDefaultValue(false);
 
         // 2. Đi muộn - Về sớm
         builder.Property(x => x.EnableLateThreshold).HasDefaultValue(true);
@@ -33,7 +32,6 @@ public class BranchAttendancePolicyConfiguration : IEntityTypeConfiguration<Bran
         builder.Property(x => x.OtBeforeShiftMinutes).HasDefaultValue(0);
         builder.Property(x => x.EnableOtAfterShift).HasDefaultValue(true);
         builder.Property(x => x.OtAfterShiftMinutes).HasDefaultValue(0);
-        builder.Property(x => x.EnableOtAllActualTime).HasDefaultValue(false);
 
         // Index đảm bảo mỗi Chi nhánh chỉ có 1 chính sách chấm công duy nhất
         builder.HasIndex(x => new { x.TenantId, x.BranchId })

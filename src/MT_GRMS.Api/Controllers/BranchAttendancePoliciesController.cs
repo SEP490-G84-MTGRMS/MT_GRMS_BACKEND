@@ -8,7 +8,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/attendance-policies")]
-[Route("api/attendance-policies")]
 public class BranchAttendancePoliciesController : BaseApiController
 {
     private readonly IBranchAttendancePolicyService _policyService;

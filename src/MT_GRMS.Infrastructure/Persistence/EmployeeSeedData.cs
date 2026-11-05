@@ -1,3 +1,5 @@
+using System.Text.Json;
+using MT_GRMS.Domain.Entities.SaaS;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Entities.HR;
@@ -61,7 +63,13 @@ public static class EmployeeSeedData
         var hnBranch1 = branches.FirstOrDefault(b => b.BranchCode == "BR-HN-01") ?? defaultBranch;
         var hnBranch2 = branches.FirstOrDefault(b => b.BranchCode == "BR-HN-02") ?? defaultBranch;
 
-        // 2. Danh sách 12 nhân viên mẫu thực tế
+        // 2. Khởi tạo Chính sách Chấm công Chi nhánh (BranchAttendancePolicy)
+        await SeedBranchAttendancePoliciesAsync(context, tenantId, branches);
+
+        // 3. Khởi tạo Danh mục Ca làm việc chuẩn (ShiftConfig)
+        await SeedShiftConfigsAsync(context, tenantId, branches);
+
+        // 4. Danh sách 12 nhân viên mẫu thực tế
         var templates = new List<SeedEmployeeItem>
         {
             // --- Chi nhánh Quận 1 (TP.HCM) ---
@@ -390,7 +398,7 @@ public static class EmployeeSeedData
             }
         };
 
-        // 3. Tiến hành kiểm tra và chèn / đồng bộ nhân viên
+        // 5. Tiến hành kiểm tra và chèn / đồng bộ nhân viên
         foreach (var tpl in templates)
         {
             var existing = await context.Employees
@@ -473,5 +481,177 @@ public static class EmployeeSeedData
         }
 
         await context.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Khởi tạo chính sách chấm công (BranchAttendancePolicy) cho từng chi nhánh
+    /// </summary>
+    public static async Task SeedBranchAttendancePoliciesAsync(
+        AppDbContext context,
+        string tenantId,
+        List<Branch> branches)
+    {
+        const string defaultConversionRulesJson =
+            "[{\"id\":\"rule-1\",\"type\":\"range\",\"fromHours\":1,\"fromMinutes\":0,\"toHours\":4,\"toMinutes\":30,\"workUnits\":0.5,\"workUnitsLabel\":\"nửa công\"},{\"id\":\"rule-2\",\"type\":\"gte\",\"fromHours\":4,\"fromMinutes\":30,\"workUnits\":1,\"workUnitsLabel\":\"1 công\"}]";
+
+        var hasChanges = false;
+
+        foreach (var branch in branches)
+        {
+            var existingPolicy = await context.BranchAttendancePolicies
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(p => p.TenantId == tenantId && p.BranchId == branch.Id);
+
+            if (existingPolicy == null)
+            {
+                var policy = new BranchAttendancePolicy
+                {
+                    Id = Uuid7.NewGuid(),
+                    TenantId = tenantId,
+                    BranchId = branch.Id,
+                    StandardDayHours = 8.00m,
+                    IsConvertHoursToDays = true,
+                    ConversionRulesJson = defaultConversionRulesJson,
+                    EnableLateThreshold = true,
+                    LateThresholdMinutes = 15,
+                    EnableEarlyLeaveThreshold = true,
+                    EarlyLeaveThresholdMinutes = 15,
+                    EnableOtBeforeShift = true,
+                    OtBeforeShiftMinutes = 30,
+                    EnableOtAfterShift = true,
+                    OtAfterShiftMinutes = 30,
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                await context.BranchAttendancePolicies.AddAsync(policy);
+                hasChanges = true;
+            }
+        }
+
+        if (hasChanges)
+        {
+            await context.SaveChangesAsync();
+        }
+    }
+
+    /// <summary>
+    /// Khởi tạo danh mục ca làm việc chuẩn (ShiftConfig) cho chuỗi bán lẻ siêu thị
+    /// </summary>
+    public static async Task SeedShiftConfigsAsync(
+        AppDbContext context,
+        string tenantId,
+        List<Branch> branches)
+    {
+        var defaultBranch = branches.FirstOrDefault(b => b.BranchCode == "BR-HCM-01") ?? branches[0];
+        var allBranchIds = branches.Select(b => b.Id.ToString()).ToList();
+        var allBranchIdsJson = JsonSerializer.Serialize(allBranchIds);
+
+        var shiftTemplates = new[]
+        {
+            new
+            {
+                ShiftCode = "CA-SANG",
+                ShiftName = "Ca sáng",
+                StartTime = new TimeSpan(6, 0, 0),
+                EndTime = new TimeSpan(14, 15, 0),
+                DurationHours = 8.25m,
+                AllowedCheckInStart = new TimeSpan(5, 30, 0),
+                AllowedCheckInEnd = new TimeSpan(7, 0, 0),
+                IsCheckInNextDay = false,
+                Description = "Ca sáng: Tiếp nhận thực phẩm tươi sống, trưng bày quầy kệ & phục vụ bán hàng",
+                IsActive = true
+            },
+            new
+            {
+                ShiftCode = "CA-CHIEU",
+                ShiftName = "Ca chiều",
+                StartTime = new TimeSpan(14, 0, 0),
+                EndTime = new TimeSpan(22, 15, 0),
+                DurationHours = 8.25m,
+                AllowedCheckInStart = new TimeSpan(13, 30, 0),
+                AllowedCheckInEnd = new TimeSpan(15, 0, 0),
+                IsCheckInNextDay = false,
+                Description = "Ca chiều: Phục vụ khách hàng giờ cao điểm tối & kết ca kiểm đếm quỹ tiền mặt",
+                IsActive = true
+            },
+            new
+            {
+                ShiftCode = "CA-DEM",
+                ShiftName = "Ca đêm",
+                StartTime = new TimeSpan(22, 0, 0),
+                EndTime = new TimeSpan(6, 15, 0),
+                DurationHours = 8.25m,
+                AllowedCheckInStart = new TimeSpan(21, 30, 0),
+                AllowedCheckInEnd = new TimeSpan(23, 0, 0),
+                IsCheckInNextDay = true,
+                Description = "Ca trực đêm: Kiểm kê hàng hóa định kỳ, vệ sinh quầy kệ & nhập kho hàng lạnh",
+                IsActive = true
+            },
+            new
+            {
+                ShiftCode = "CA-HANHCHINH",
+                ShiftName = "Ca hành chính",
+                StartTime = new TimeSpan(8, 0, 0),
+                EndTime = new TimeSpan(17, 0, 0),
+                DurationHours = 8.00m,
+                AllowedCheckInStart = new TimeSpan(7, 30, 0),
+                AllowedCheckInEnd = new TimeSpan(9, 0, 0),
+                IsCheckInNextDay = false,
+                Description = "Ca làm việc hành chính: Quản trị chi nhánh, kế toán kho & nhân sự",
+                IsActive = true
+            },
+            new
+            {
+                ShiftCode = "CA-TOI",
+                ShiftName = "Ca tối",
+                StartTime = new TimeSpan(18, 0, 0),
+                EndTime = new TimeSpan(22, 0, 0),
+                DurationHours = 4.00m,
+                AllowedCheckInStart = new TimeSpan(17, 30, 0),
+                AllowedCheckInEnd = new TimeSpan(18, 30, 0),
+                IsCheckInNextDay = false,
+                Description = "Ca tối 4 tiếng: Tăng cường thu ngân & tiếp thực phục vụ giờ cao điểm",
+                IsActive = true
+            }
+        };
+
+        var hasChanges = false;
+
+        foreach (var tpl in shiftTemplates)
+        {
+            var existing = await context.ShiftConfigs
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(s => s.TenantId == tenantId && s.BranchId == defaultBranch.Id && s.ShiftCode == tpl.ShiftCode);
+
+            if (existing == null)
+            {
+                var shift = new ShiftConfig
+                {
+                    Id = Uuid7.NewGuid(),
+                    TenantId = tenantId,
+                    BranchId = defaultBranch.Id,
+                    BranchIds = allBranchIdsJson,
+                    ShiftCode = tpl.ShiftCode,
+                    ShiftName = tpl.ShiftName,
+                    StartTime = tpl.StartTime,
+                    EndTime = tpl.EndTime,
+                    DurationHours = tpl.DurationHours,
+                    AllowedCheckInStart = tpl.AllowedCheckInStart,
+                    AllowedCheckInEnd = tpl.AllowedCheckInEnd,
+                    IsCheckInNextDay = tpl.IsCheckInNextDay,
+                    Description = tpl.Description,
+                    IsActive = tpl.IsActive,
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                await context.ShiftConfigs.AddAsync(shift);
+                hasChanges = true;
+            }
+        }
+
+        if (hasChanges)
+        {
+            await context.SaveChangesAsync();
+        }
     }
 }

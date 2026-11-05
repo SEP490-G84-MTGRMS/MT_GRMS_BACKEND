@@ -31,7 +31,7 @@ public static class DbInitializer
 
         var defaultTenantId = "tenant_mt_mart_01";
 
-        // 2. Kiểm tra nếu đã có dữ liệu mẫu thì đảm bảo đồng bộ Catalog, Employees, Orders
+        // 2. Kiểm tra nếu đã có dữ liệu mẫu thì đảm bảo đồng bộ Catalog, Nhân sự (Employees, ShiftConfigs, BranchAttendancePolicies), Orders
         if (await context.Tenants.IgnoreQueryFilters().AnyAsync(t => t.Id == defaultTenantId))
         {
             await CatalogSeedData.SeedAsync(context, defaultTenantId);
@@ -582,7 +582,7 @@ public static class DbInitializer
         await context.Promotions.AddAsync(promoOpening);
 
         // =========================================================================
-        // PHÂN HỆ 6: NHÂN SỰ & TÀI CHÍNH
+        // PHÂN HỆ 6: NHÂN SỰ (Hồ sơ, Ca làm việc, Chính sách chấm công) & TÀI CHÍNH
         // =========================================================================
         await EmployeeSeedData.SeedAsync(context, defaultTenantId);
 

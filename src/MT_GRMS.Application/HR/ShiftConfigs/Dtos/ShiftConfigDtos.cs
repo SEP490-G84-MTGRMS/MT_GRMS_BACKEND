@@ -34,6 +34,15 @@ public record UpdateShiftConfigStatusRequest(
     bool IsActive
 );
 
+public record ShiftConfigQueryFilter(
+    string? Keyword = null,
+    Guid? BranchId = null,
+    List<Guid>? BranchIds = null,
+    bool? IsActive = null,
+    int Page = 1,
+    int PageSize = 20
+);
+
 public record ShiftConfigResponse(
     Guid Id,
     Guid BranchId,

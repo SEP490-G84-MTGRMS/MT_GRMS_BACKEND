@@ -8,6 +8,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/shift-configs")]
+[Route("api/v1/hr/shift-configs")]
 public class ShiftConfigsController : BaseApiController
 {
     private readonly IShiftConfigService _shiftConfigService;
@@ -18,16 +19,15 @@ public class ShiftConfigsController : BaseApiController
     }
 
     /// <summary>
-    /// Lấy danh sách các ca làm việc mẫu theo chi nhánh (có thể lọc theo isActive)
+    /// Lấy danh sách cấu hình ca làm việc có phân trang, tìm kiếm và lọc theo chi nhánh, trạng thái
     /// </summary>
     [HttpGet]
-    public async Task<IActionResult> GetByBranch(
-        [FromQuery] Guid? branchId,
-        [FromQuery] bool? isActive,
+    public async Task<IActionResult> GetShiftConfigs(
+        [FromQuery] ShiftConfigQueryFilter filter,
         CancellationToken cancellationToken)
     {
-        var result = await _shiftConfigService.GetShiftConfigsByBranchAsync(branchId, isActive, cancellationToken);
-        return Ok(ApiResponse<IReadOnlyList<ShiftConfigResponse>>.Ok(result));
+        var result = await _shiftConfigService.GetShiftConfigsPagedAsync(filter, cancellationToken);
+        return Ok(ApiResponse<PagedResult<ShiftConfigResponse>>.Ok(result));
     }
 
     /// <summary>

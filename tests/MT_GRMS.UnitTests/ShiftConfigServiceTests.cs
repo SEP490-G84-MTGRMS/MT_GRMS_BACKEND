@@ -64,6 +64,36 @@ public class ShiftConfigServiceTests
             return Task.FromResult<IReadOnlyList<ShiftConfig>>(query.OrderBy(s => s.StartTime).ToList());
         }
 
+        public Task<(IReadOnlyList<ShiftConfig> Items, int TotalCount)> GetPagedListAsync(ShiftConfigQueryFilter filter, CancellationToken cancellationToken = default)
+        {
+            var query = ShiftConfigs.Where(s => !s.IsDeleted);
+            if (!string.IsNullOrWhiteSpace(filter.Keyword))
+            {
+                var kw = filter.Keyword.Trim().ToLower();
+                query = query.Where(s => s.ShiftCode.ToLower().Contains(kw) || s.ShiftName.ToLower().Contains(kw));
+            }
+            if (filter.BranchIds != null && filter.BranchIds.Count > 0)
+            {
+                var bStrs = filter.BranchIds.Select(b => b.ToString()).ToList();
+                query = query.Where(s => filter.BranchIds.Contains(s.BranchId) || (s.BranchIds != null && bStrs.Any(bStr => s.BranchIds.Contains(bStr))));
+            }
+            else if (filter.BranchId.HasValue && filter.BranchId.Value != Guid.Empty)
+            {
+                var bStr = filter.BranchId.Value.ToString();
+                query = query.Where(s => s.BranchId == filter.BranchId.Value || (s.BranchIds != null && s.BranchIds.Contains(bStr)));
+            }
+            if (filter.IsActive.HasValue)
+            {
+                query = query.Where(s => s.IsActive == filter.IsActive.Value);
+            }
+
+            var totalCount = query.Count();
+            var page = filter.Page > 0 ? filter.Page : 1;
+            var pageSize = filter.PageSize > 0 ? filter.PageSize : 20;
+            var items = query.OrderBy(s => s.StartTime).ThenBy(s => s.ShiftCode).Skip((page - 1) * pageSize).Take(pageSize).ToList();
+            return Task.FromResult<(IReadOnlyList<ShiftConfig> Items, int TotalCount)>((items, totalCount));
+        }
+
         public Task<ShiftConfig?> GetByCodeAsync(Guid branchId, string shiftCode, CancellationToken cancellationToken = default)
         {
             var normalized = shiftCode.Trim().ToUpper();
@@ -269,6 +299,48 @@ public class ShiftConfigServiceTests
         // Act - lấy toàn bộ
         var allShifts = await service.GetShiftConfigsByBranchAsync(branchId, isActive: null);
         Assert.Equal(3, allShifts.Count);
+    }
+
+    [Fact]
+    public async Task GetShiftConfigsPagedAsync_ShouldReturnPagedResultWithCorrectCountAndPaging()
+    {
+        // Arrange
+        var repo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        var service = new ShiftConfigService(repo, uow, tenantContext);
+
+        var branchId = Guid.NewGuid();
+        for (int i = 1; i <= 25; i++)
+        {
+            repo.ShiftConfigs.Add(new ShiftConfig
+            {
+                Id = Guid.NewGuid(),
+                TenantId = "tenant_test_01",
+                BranchId = branchId,
+                ShiftCode = $"CA-{i:D2}",
+                ShiftName = $"Ca làm việc số {i}",
+                StartTime = TimeSpan.FromHours(i % 24),
+                EndTime = TimeSpan.FromHours((i + 4) % 24),
+                IsActive = i % 2 == 0
+            });
+        }
+
+        // Act - Page 1 with PageSize 10
+        var filterPage1 = new ShiftConfigQueryFilter(BranchId: branchId, Page: 1, PageSize: 10);
+        var paged1 = await service.GetShiftConfigsPagedAsync(filterPage1);
+
+        // Assert
+        Assert.Equal(25, paged1.TotalItems);
+        Assert.Equal(10, paged1.Items.Count);
+        Assert.Equal(1, paged1.Page);
+        Assert.Equal(10, paged1.PageSize);
+
+        // Act - Filter with IsActive = true
+        var filterActive = new ShiftConfigQueryFilter(BranchId: branchId, IsActive: true, Page: 1, PageSize: 50);
+        var pagedActive = await service.GetShiftConfigsPagedAsync(filterActive);
+        Assert.Equal(12, pagedActive.TotalItems);
+        Assert.All(pagedActive.Items, item => Assert.True(item.IsActive));
     }
 
     [Fact]

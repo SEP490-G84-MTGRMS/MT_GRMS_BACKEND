@@ -237,7 +237,6 @@ public class BranchAttendancePolicyServiceTests
             StandardDayHours: 8.00m,
             IsConvertHoursToDays: true,
             ConversionRulesJson: null,
-            RecordLateEarlyIfHalfDay: false,
             EnableLateThreshold: true,
             LateThresholdMinutes: 10,
             EnableEarlyLeaveThreshold: true,
@@ -245,8 +244,7 @@ public class BranchAttendancePolicyServiceTests
             EnableOtBeforeShift: true,
             OtBeforeShiftMinutes: 20,
             EnableOtAfterShift: true,
-            OtAfterShiftMinutes: 30,
-            EnableOtAllActualTime: false
+            OtAfterShiftMinutes: 30
         );
 
         // Act

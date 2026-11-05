@@ -22,6 +22,21 @@ public class ShiftConfigService : IShiftConfigService
         _tenantContext = tenantContext;
     }
 
+    public async Task<PagedResult<ShiftConfigResponse>> GetShiftConfigsPagedAsync(
+        ShiftConfigQueryFilter filter,
+        CancellationToken cancellationToken = default)
+    {
+        var (items, totalCount) = await _repository.GetPagedListAsync(filter, cancellationToken);
+
+        return new PagedResult<ShiftConfigResponse>
+        {
+            Items = items.Select(MapToResponse).ToList(),
+            Page = filter.Page > 0 ? filter.Page : 1,
+            PageSize = filter.PageSize > 0 ? filter.PageSize : 20,
+            TotalItems = totalCount
+        };
+    }
+
     public async Task<IReadOnlyList<ShiftConfigResponse>> GetShiftConfigsByBranchAsync(
         Guid? branchId,
         bool? isActive = null,

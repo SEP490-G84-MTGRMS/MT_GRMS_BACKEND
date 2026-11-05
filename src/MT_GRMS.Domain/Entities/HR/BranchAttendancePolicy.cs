@@ -10,27 +10,19 @@ public class BranchAttendancePolicy : BaseTenantEntity
 {
     public Guid BranchId { get; set; }                                   // Chi nhánh áp dụng chính sách
 
-    #region 1. Thiết lập Số giờ & Quy đổi Ngày công
     public decimal StandardDayHours { get; set; } = 8.00m;               // Số giờ của 1 ngày công chuẩn (VD: 8.0)
     public bool IsConvertHoursToDays { get; set; } = true;               // Quy đổi số giờ làm thành số ngày công
     public string? ConversionRulesJson { get; set; }                     // JSON danh sách các mức quy đổi giờ -> ngày công
-    public bool RecordLateEarlyIfHalfDay { get; set; } = false;          // Ghi nhận đi muộn - về sớm nếu nhân viên làm nửa công
-    #endregion
 
-    #region 2. Cài đặt Đi muộn - Về sớm
     public bool EnableLateThreshold { get; set; } = true;                // Bật tính đi muộn
     public int LateThresholdMinutes { get; set; } = 0;                   // Tính đi muộn sau X phút
     public bool EnableEarlyLeaveThreshold { get; set; } = true;          // Bật tính về sớm
     public int EarlyLeaveThresholdMinutes { get; set; } = 0;             // Tính về sớm trước X phút
-    #endregion
 
-    #region 3. Cài đặt Làm thêm giờ (OT)
     public bool EnableOtBeforeShift { get; set; } = true;                // Bật tính làm thêm giờ trước ca
     public int OtBeforeShiftMinutes { get; set; } = 0;                   // Ngưỡng tính làm thêm giờ trước ca (phút)
     public bool EnableOtAfterShift { get; set; } = true;                 // Bật tính làm thêm giờ sau ca
     public int OtAfterShiftMinutes { get; set; } = 0;                    // Ngưỡng tính làm thêm giờ sau ca (phút)
-    public bool EnableOtAllActualTime { get; set; } = false;             // Tính toàn bộ thời gian làm thêm thực tế
-    #endregion
 
     // Navigation
     public Branch? Branch { get; set; }

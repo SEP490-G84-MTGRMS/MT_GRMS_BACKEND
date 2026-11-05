@@ -4,7 +4,6 @@ public record UpsertAttendancePolicyRequest(
     decimal StandardDayHours = 8.00m,
     bool IsConvertHoursToDays = true,
     string? ConversionRulesJson = null,
-    bool RecordLateEarlyIfHalfDay = false,
     bool EnableLateThreshold = true,
     int LateThresholdMinutes = 0,
     bool EnableEarlyLeaveThreshold = true,
@@ -12,8 +11,7 @@ public record UpsertAttendancePolicyRequest(
     bool EnableOtBeforeShift = true,
     int OtBeforeShiftMinutes = 0,
     bool EnableOtAfterShift = true,
-    int OtAfterShiftMinutes = 0,
-    bool EnableOtAllActualTime = false
+    int OtAfterShiftMinutes = 0
 );
 
 public record CopyAttendancePolicyRequest(
@@ -35,7 +33,6 @@ public record AttendancePolicyResponse(
     decimal StandardDayHours,
     bool IsConvertHoursToDays,
     string? ConversionRulesJson,
-    bool RecordLateEarlyIfHalfDay,
     bool EnableLateThreshold,
     int LateThresholdMinutes,
     bool EnableEarlyLeaveThreshold,
@@ -44,7 +41,6 @@ public record AttendancePolicyResponse(
     int OtBeforeShiftMinutes,
     bool EnableOtAfterShift,
     int OtAfterShiftMinutes,
-    bool EnableOtAllActualTime,
     bool IsCustomized
 );
 
