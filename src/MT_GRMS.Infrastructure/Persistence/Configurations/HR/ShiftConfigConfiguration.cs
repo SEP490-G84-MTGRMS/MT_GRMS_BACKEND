@@ -36,4 +36,3 @@ public class ShiftConfigConfiguration : IEntityTypeConfiguration<ShiftConfig>
             .OnDelete(DeleteBehavior.Restrict);
     }
 }
-

@@ -1,4 +1,4 @@
-using System.Linq.Expressions;
+﻿using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Employees.Dtos;
@@ -182,6 +182,10 @@ public class EmployeeRepository : IEmployeeRepository
         if (toDelete.Count > 0)
         {
             _context.EmployeeAllowances.RemoveRange(toDelete);
+            foreach (var del in toDelete)
+            {
+                employee.Allowances.Remove(del);
+            }
         }
 
         // 2. Cập nhật (Update) & 3. Thêm mới (Insert)
@@ -209,6 +213,10 @@ public class EmployeeRepository : IEmployeeRepository
                     };
                     _context.EmployeeAllowances.Add(newAllowance);
                     _context.Entry(newAllowance).State = EntityState.Added;
+                    if (!employee.Allowances.Contains(newAllowance))
+                    {
+                        employee.Allowances.Add(newAllowance);
+                    }
                 }
             }
             else
