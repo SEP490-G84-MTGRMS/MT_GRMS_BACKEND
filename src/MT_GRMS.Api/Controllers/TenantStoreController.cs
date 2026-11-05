@@ -124,6 +124,39 @@ public class TenantStoreController : BaseApiController
         var vatAmount = Math.Round(subTotal * 0.1m, 0);
         var grandTotal = subTotal + vatAmount;
 
+        // 2. Xử lý thanh toán nếu chọn phương thức Ví gian hàng
+        var isWalletPayment = string.Equals(request.PaymentMethod, "WALLET", StringComparison.OrdinalIgnoreCase) ||
+                              string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase) ||
+                              request.PaymentMethod.Contains("Ví", StringComparison.OrdinalIgnoreCase);
+
+        if (isWalletPayment)
+        {
+            if (tenant.WalletBalance < grandTotal)
+            {
+                return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
+                    "INSUFFICIENT_WALLET_BALANCE",
+                    $"Số dư ví không đủ (hiện có {tenant.WalletBalance:N0} đ, cần {grandTotal:N0} đ). Vui lòng nạp thêm tiền hoặc chọn Quét mã VietQR."));
+            }
+
+            var balanceBefore = tenant.WalletBalance;
+            tenant.WalletBalance -= grandTotal;
+            var balanceAfter = tenant.WalletBalance;
+
+            var walletTx = new MT_GRMS.Domain.Entities.SaaS.WalletTransaction
+            {
+                TenantId = tenant.Id,
+                TransactionCode = $"SUB-{DateTime.UtcNow:yyyyMMdd}-{Random.Shared.Next(1000, 9999)}",
+                Type = "PURCHASE_PLAN",
+                Amount = grandTotal,
+                BalanceBefore = balanceBefore,
+                BalanceAfter = balanceAfter,
+                Description = $"Thanh toán gói dịch vụ {plan.PlanName} ({months} tháng)",
+                PaymentMethod = "WALLET",
+                Status = "SUCCESS"
+            };
+            _context.WalletTransactions.Add(walletTx);
+        }
+
         // 2. Tính số tháng gia hạn (Khuyến mãi thêm tháng)
         var bonusMonths = months >= 24 ? 3 : (months >= 12 ? 1 : 0);
         var totalMonthsAdded = months + bonusMonths;

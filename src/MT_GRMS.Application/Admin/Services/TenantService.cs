@@ -119,7 +119,8 @@ public class TenantService : ITenantService
             MaxStaff: t.SubscriptionPlan?.MaxStaff ?? 5,
             Branches: branches,
             CreatedAt: t.CreatedAt,
-            UpdatedAt: t.UpdatedAt
+            UpdatedAt: t.UpdatedAt,
+            WalletBalance: t.WalletBalance
         );
     }
 

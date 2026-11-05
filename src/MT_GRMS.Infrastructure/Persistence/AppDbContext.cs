@@ -38,6 +38,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<User> Users { get; set; } = null!;
     public virtual DbSet<TenantUser> TenantUsers { get; set; } = null!;
     public virtual DbSet<AuditLog> AuditLogs { get; set; } = null!;
+    public virtual DbSet<WalletTransaction> WalletTransactions { get; set; } = null!;
+    public virtual DbSet<WalletTopupOrder> WalletTopupOrders { get; set; } = null!;
 
     // 2. Phân hệ Catalog & Hàng hóa
     public virtual DbSet<Category> Categories { get; set; } = null!;

@@ -59,7 +59,7 @@ public static class DependencyInjection
             }
         });
 
-        if (isInMemory || string.IsNullOrWhiteSpace(connectionString))
+        if (string.IsNullOrWhiteSpace(connectionString))
         {
             Console.WriteLine("[MT-GRMS] Database: InMemory (không dùng Postgres local).");
         }
@@ -104,6 +104,10 @@ public static class DependencyInjection
         // Cấu hình & Đăng ký dịch vụ lưu trữ đám mây Cloudinary
         services.Configure<CloudinarySettings>(configuration.GetSection(CloudinarySettings.SectionName));
         services.AddScoped<ICloudinaryService, CloudinaryService>();
+
+        // Cấu hình SePay & Dịch vụ Ví gian hàng
+        services.Configure<MT_GRMS.Application.Common.SePaySettings>(configuration.GetSection(MT_GRMS.Application.Common.SePaySettings.SectionName));
+        services.AddScoped<MT_GRMS.Application.SaaS.Services.IWalletService, Services.WalletService>();
 
         return services;
     }
