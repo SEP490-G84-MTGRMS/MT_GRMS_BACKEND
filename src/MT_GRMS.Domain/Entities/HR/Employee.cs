@@ -39,5 +39,4 @@ public class Employee : BaseTenantEntity
     public ICollection<EmployeeAllowance> Allowances { get; set; } = new List<EmployeeAllowance>();
     public ICollection<Payslip> Payslips { get; set; } = new List<Payslip>();
     public ICollection<EmployeeSchedule> Schedules { get; set; } = new List<EmployeeSchedule>();
-    public ICollection<EmployeeBonusViolation> BonusViolations { get; set; } = new List<EmployeeBonusViolation>();
 }

@@ -57,7 +57,7 @@ public class BranchAttendancePoliciesController : BaseApiController
         }
         catch (BusinessException ex)
         {
-            return BadRequest(ApiResponse<object>.Fail(ex.Code ?? "BAD_REQUEST", ex.Message));
+            return BadRequest(ApiResponse<object>.Fail(ex.ErrorCode ?? "BAD_REQUEST", ex.Message));
         }
     }
 
@@ -80,7 +80,7 @@ public class BranchAttendancePoliciesController : BaseApiController
         }
         catch (BusinessException ex)
         {
-            return BadRequest(ApiResponse<object>.Fail(ex.Code ?? "BAD_REQUEST", ex.Message));
+            return BadRequest(ApiResponse<object>.Fail(ex.ErrorCode ?? "BAD_REQUEST", ex.Message));
         }
     }
 }

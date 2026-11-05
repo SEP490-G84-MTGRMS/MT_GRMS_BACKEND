@@ -33,5 +33,4 @@ public class Payslip : BaseEntity
     // Navigations
     public Employee? Employee { get; set; }
     public ICollection<EmployeeSchedule> Schedules { get; set; } = new List<EmployeeSchedule>();
-    public ICollection<EmployeeBonusViolation> BonusViolations { get; set; } = new List<EmployeeBonusViolation>();
 }
