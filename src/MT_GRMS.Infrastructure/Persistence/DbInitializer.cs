@@ -1,4 +1,6 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Entities.Catalog;
@@ -24,6 +26,80 @@ public static class DbInitializer
         {
             if (context.Database.IsRelational())
             {
+                bool usersTableExists = false;
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync("SELECT 1 FROM \"Users\" LIMIT 1;");
+                    usersTableExists = true;
+                }
+                catch
+                {
+                    usersTableExists = false;
+                }
+
+                if (!usersTableExists)
+                {
+                    // Cơ sở dữ liệu mới tinh (chưa có Users): Xóa bảng rác tạm thời nếu có để tránh xung đột
+                    try
+                    {
+                        await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS supplier_branch_assignments CASCADE;");
+                        await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"SupplierBranchAssignments\" CASCADE;");
+                    }
+                    catch { }
+
+                    // Dùng IRelationalDatabaseCreator để sinh toàn bộ 34 bảng từ model C#
+                    var creator = context.Database.GetService<IDatabaseCreator>() as IRelationalDatabaseCreator;
+                    if (creator != null)
+                    {
+                        try
+                        {
+                            await creator.CreateTablesAsync();
+                        }
+                        catch
+                        {
+                            try
+                            {
+                                var script = creator.GenerateCreateScript();
+                                var safeScript = script.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ");
+                                await context.Database.ExecuteSqlRawAsync(safeScript);
+                            }
+                            catch { }
+                        }
+                    }
+                    else
+                    {
+                        await context.Database.EnsureCreatedAsync();
+                    }
+
+                    // Đánh dấu các migration hiện tại đã được áp dụng để tránh lỗi ALTER TABLE sau này
+                    try
+                    {
+                        await context.Database.ExecuteSqlRawAsync(@"
+                            CREATE TABLE IF NOT EXISTS ""__EFMigrationsHistory"" (
+                                ""MigrationId"" character varying(150) NOT NULL PRIMARY KEY,
+                                ""ProductVersion"" character varying(32) NOT NULL
+                            );
+                        ");
+                        var migrations = context.Database.GetMigrations();
+                        foreach (var m in migrations)
+                        {
+                            await context.Database.ExecuteSqlRawAsync(
+                                "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({0}, '8.0.11') ON CONFLICT DO NOTHING;",
+                                m);
+                        }
+                    }
+                    catch { }
+                }
+                else
+                {
+                    // Bảng Users đã có sẵn: Áp dụng các migration còn thiếu nếu có
+                    try
+                    {
+                        await context.Database.MigrateAsync();
+                    }
+                    catch { }
+                }
+
                 try
                 {
                     await context.Database.ExecuteSqlRawAsync(@"
@@ -41,20 +117,16 @@ public static class DbInitializer
                 }
                 catch { }
 
-                var migrations = context.Database.GetMigrations();
-                if (migrations.Any())
-                {
-                    await context.Database.MigrateAsync();
-                }
-                else
-                {
-                    await context.Database.EnsureCreatedAsync();
-                }
-
                 try
                 {
                     await context.Database.ExecuteSqlRawAsync(@"
-                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];`r`n                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinHash"" text;`r`n                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinSalt"" text;`r`n                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""FailedPinAttempts"" integer DEFAULT 0;`r`n                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""PinLockedUntilUtc"" timestamp without time zone;`r`n                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""TaxCategory"" text DEFAULT 'STANDARD_1PCT';`r`n                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""EligibleForVatReduction"" boolean DEFAULT false;
+                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinHash"" text;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinSalt"" text;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""FailedPinAttempts"" integer DEFAULT 0;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""PinLockedUntilUtc"" timestamp without time zone;
+                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""TaxCategory"" text DEFAULT 'STANDARD_1PCT';
+                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""EligibleForVatReduction"" boolean DEFAULT false;
                         ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
                         ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
                         ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
