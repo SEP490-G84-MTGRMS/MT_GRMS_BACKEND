@@ -134,6 +134,16 @@ public class ExpenseVoucherConfiguration : IEntityTypeConfiguration<ExpenseVouch
             .HasColumnType("decimal(18,2)")
             .IsRequired();
 
+        builder.Property(e => e.RefundedAmount)
+            .HasColumnType("decimal(18,2)")
+            .HasDefaultValue(0);
+
+        builder.Property(e => e.IsSettled)
+            .HasDefaultValue(false);
+
+        builder.Property(e => e.ReferenceCode)
+            .HasMaxLength(100);
+
         builder.Property(e => e.InvoiceNumber)
             .HasMaxLength(100);
 
@@ -142,6 +152,8 @@ public class ExpenseVoucherConfiguration : IEntityTypeConfiguration<ExpenseVouch
 
         builder.HasIndex(e => new { e.TenantId, e.BranchId, e.ExpenseDate });
         builder.HasIndex(e => new { e.TenantId, e.Status });
+        builder.HasIndex(e => new { e.TenantId, e.ReferenceCode });
+        builder.HasIndex(e => new { e.TenantId, e.Nature });
     }
 }
 

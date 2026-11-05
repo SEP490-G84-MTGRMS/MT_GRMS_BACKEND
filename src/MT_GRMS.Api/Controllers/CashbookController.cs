@@ -3,16 +3,21 @@ using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Cashbook.Dtos;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Expenses;
+using MT_GRMS.Application.Expenses.Dtos;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Api.Controllers;
 
 public class CashbookController : BaseApiController
 {
     private readonly ICashbookService _cashbookService;
+    private readonly IExpenseService _expenseService;
 
-    public CashbookController(ICashbookService cashbookService)
+    public CashbookController(ICashbookService cashbookService, IExpenseService expenseService)
     {
         _cashbookService = cashbookService;
+        _expenseService = expenseService;
     }
 
     [HttpPost("shifts/open")]
@@ -60,11 +65,14 @@ public class CashbookController : BaseApiController
         [FromQuery] Guid? branchId,
         [FromQuery] DateTime? fromDate,
         [FromQuery] DateTime? toDate,
+        [FromQuery] CashbookEntryType? entryType,
+        [FromQuery] string? sourceType,
+        [FromQuery] string? keyword,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50,
         CancellationToken ct = default)
     {
-        var result = await _cashbookService.GetEntriesAsync(accountId, branchId, fromDate, toDate, page, pageSize, ct);
+        var result = await _cashbookService.GetEntriesAsync(accountId, branchId, fromDate, toDate, page, pageSize, entryType, sourceType, keyword, ct);
         return Ok(ApiResponse<List<CashbookEntryResponse>>.Ok(result));
     }
 
@@ -142,5 +150,56 @@ public class CashbookController : BaseApiController
     {
         var result = await _cashbookService.VoidTransactionAsync(id, request, ct);
         return Ok(ApiResponse<CashbookEntryResponse>.Ok(result, "Đã tạo bút toán bù trừ gạch bỏ phiếu thành công."));
+    }
+
+    [HttpGet("deposits/search")]
+    public async Task<ActionResult<ApiResponse<List<DepositSearchResponse>>>> SearchDeposits(
+        [FromQuery] string? keyword,
+        [FromQuery] Guid? branchId,
+        CancellationToken ct = default)
+    {
+        var result = await _expenseService.SearchDepositsAsync(keyword, branchId, ct);
+        return Ok(ApiResponse<List<DepositSearchResponse>>.Ok(result));
+    }
+
+    [HttpPost("deposits")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<ExpenseVoucherResponse>>> CreateDeposit(
+        [FromBody] CreateDepositRequest request,
+        CancellationToken ct = default)
+    {
+        var result = await _expenseService.CreateDepositAsync(request, ct);
+        return Ok(ApiResponse<ExpenseVoucherResponse>.Ok(result, "Ghi nhận phiếu thu cọc thành công."));
+    }
+
+    [HttpPost("deposits/{id:guid}/refund")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<ExpenseVoucherResponse>>> RefundDeposit(
+        [FromRoute] Guid id,
+        [FromBody] RefundDepositRequest request,
+        CancellationToken ct = default)
+    {
+        var result = await _expenseService.RefundDepositAsync(id, request, ct);
+        return Ok(ApiResponse<ExpenseVoucherResponse>.Ok(result, "Hoàn trả tiền cọc thành công."));
+    }
+
+    [HttpGet("triage/pending")]
+    public async Task<ActionResult<ApiResponse<List<ExpenseVoucherResponse>>>> GetPendingTriage(
+        [FromQuery] Guid? branchId,
+        CancellationToken ct = default)
+    {
+        var result = await _expenseService.GetPendingTriageAsync(branchId, ct);
+        return Ok(ApiResponse<List<ExpenseVoucherResponse>>.Ok(result));
+    }
+
+    [HttpPost("triage/{id:guid}/resolve")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<ExpenseVoucherResponse>>> ResolveTriage(
+        [FromRoute] Guid id,
+        [FromBody] ResolveTriageRequest request,
+        CancellationToken ct = default)
+    {
+        var result = await _expenseService.ResolveTriageAsync(id, request, ct);
+        return Ok(ApiResponse<ExpenseVoucherResponse>.Ok(result, "Xử lý mục tài chính trong Triage Inbox thành công."));
     }
 }

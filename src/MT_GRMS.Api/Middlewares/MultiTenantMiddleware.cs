@@ -40,10 +40,10 @@ public class MultiTenantMiddleware
             tenantContext.CurrentTenantId == "TENANT-HCM-01")
         {
             var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
-            var fallbackTenant = !string.IsNullOrWhiteSpace(headerTenantId) ? headerTenantId : "tenant_mt_mart_01";
+            var fallbackTenant = !string.IsNullOrWhiteSpace(headerTenantId) ? headerTenantId : "tenant-grocery-001";
             if (fallbackTenant is "default-tenant" or "DEFAULT" or "TENANT-HCM-01")
             {
-                fallbackTenant = "tenant_mt_mart_01";
+                fallbackTenant = "tenant-grocery-001";
             }
             tenantContext.SetContext(fallbackTenant, Guid.Empty, null);
 

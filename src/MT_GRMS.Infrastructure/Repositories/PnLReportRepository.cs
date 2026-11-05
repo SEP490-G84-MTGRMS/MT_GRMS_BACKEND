@@ -146,7 +146,8 @@ public class PnLReportRepository : IPnLReportRepository
         }
 
         query = query.Where(e => e.CreatedAt >= fromDate && e.CreatedAt <= toDate &&
-                                 (e.Status == ExpenseVoucherStatus.Approved || e.Status == ExpenseVoucherStatus.Paid));
+                                 (e.Status == ExpenseVoucherStatus.Approved || e.Status == ExpenseVoucherStatus.Paid) &&
+                                 e.Nature == FinancialNature.OperatingExpense);
 
         var groups = await query
             .GroupBy(e => e.Category)
@@ -193,7 +194,8 @@ public class PnLReportRepository : IPnLReportRepository
         if (branchId.HasValue) expenseQuery = expenseQuery.Where(e => e.BranchId == branchId.Value);
         var expenses = await expenseQuery
             .Where(e => e.CreatedAt >= fromDate && e.CreatedAt <= toDate &&
-                        (e.Status == ExpenseVoucherStatus.Approved || e.Status == ExpenseVoucherStatus.Paid))
+                        (e.Status == ExpenseVoucherStatus.Approved || e.Status == ExpenseVoucherStatus.Paid) &&
+                        e.Nature == FinancialNature.OperatingExpense)
             .ToListAsync(ct);
 
         // 3. Gom nợ xấu và hoàn hàng trong toàn kỳ (1 query)

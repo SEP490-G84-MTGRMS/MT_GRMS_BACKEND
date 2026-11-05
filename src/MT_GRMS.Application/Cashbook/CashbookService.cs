@@ -262,13 +262,34 @@ public class CashbookService : ICashbookService
         return MapEntryResponse(entry);
     }
 
-    public async Task<List<CashbookEntryResponse>> GetEntriesAsync(Guid? accountId, Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CancellationToken ct = default)
+    public async Task<List<CashbookEntryResponse>> GetEntriesAsync(
+        Guid? accountId,
+        Guid? branchId,
+        DateTime? fromDate,
+        DateTime? toDate,
+        int page = 1,
+        int pageSize = 50,
+        CashbookEntryType? entryType = null,
+        string? sourceType = null,
+        string? keyword = null,
+        CancellationToken ct = default)
     {
+        var kw = keyword?.Trim().ToLowerInvariant();
+        var isGuid = Guid.TryParse(kw, out var searchGuid);
+
         var entries = await _cashbookRepo.FindAsync(e =>
             (!accountId.HasValue || e.AccountId == accountId.Value) &&
             (!branchId.HasValue || e.BranchId == branchId.Value) &&
             (!fromDate.HasValue || e.OccurredAtUtc >= fromDate.Value) &&
-            (!toDate.HasValue || e.OccurredAtUtc <= toDate.Value), ct);
+            (!toDate.HasValue || e.OccurredAtUtc <= toDate.Value) &&
+            (!entryType.HasValue || e.EntryType == entryType.Value) &&
+            (string.IsNullOrEmpty(sourceType) || e.SourceType == sourceType) &&
+            (string.IsNullOrEmpty(kw) ||
+             e.Description.ToLower().Contains(kw) ||
+             e.ReferenceCode.ToLower().Contains(kw) ||
+             e.EntryCode.ToLower().Contains(kw) ||
+             (isGuid && e.SourceId == searchGuid)),
+            ct);
 
         return entries
             .OrderByDescending(e => e.OccurredAtUtc)
@@ -412,7 +433,7 @@ public class CashbookService : ICashbookService
             ));
         }
 
-        foreach (var bank in accounts.Where(a => a.AccountType == FinanceAccountType.Bank))
+        foreach (var bank in accounts.Where(a => a.AccountType == FinanceAccountType.Bank && a.IsActive && a.Id != Guid.Parse("01a19664-6761-78c3-b60a-cc460c68c51c")))
         {
             results.Add(new CashAccountResponse(
                 bank.Id,
