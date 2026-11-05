@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Api.Controllers;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Auth.Dtos;
@@ -40,6 +40,30 @@ public class AuthController : BaseApiController
         catch (UnauthorizedAccessException ex)
         {
             return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", ex.Message, StatusCodes.Status401Unauthorized));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+        }
+    }
+
+    /// <summary>
+    /// Đăng ký tài khoản chủ cửa hàng và khởi tạo gian hàng mới
+    /// </summary>
+    [HttpPost("register")]
+    [ProducesResponseType(typeof(ApiResponse<LoginResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> Register([FromBody] RegisterTenantRequest request, CancellationToken cancellationToken)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.FullName) || string.IsNullOrWhiteSpace(request.Phone) || string.IsNullOrWhiteSpace(request.Password))
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Vui lòng nhập đầy đủ họ tên, số điện thoại và mật khẩu.", StatusCodes.Status400BadRequest));
+        }
+
+        try
+        {
+            var result = await _authService.RegisterTenantAsync(request, cancellationToken);
+            return Ok(ApiResponse<LoginResponse>.Ok(result, "Đăng ký tài khoản và cửa hàng thành công.", StatusCodes.Status200OK));
         }
         catch (ArgumentException ex)
         {

@@ -4,9 +4,16 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ---
 
+## [Unreleased] - 2026-11-06
+
+### Refactored
+- Tái cấu trúc hợp nhất `DatabaseSeeder.cs` vào `DbInitializer.cs`: di chuyển toàn bộ dữ liệu mẫu Thuế HKD (NQ 204), doanh thu mẫu Q3 (385 triệu VNĐ), sổ quỹ (`FinanceAccounts`: Till, Safe, Bank), công nợ khách hàng FIFO và ma trận nhà cung cấp (PO Matrix) vào các hàm mô-đun trong `DbInitializer.cs`. Xóa bỏ hoàn toàn tệp `DatabaseSeeder.cs` và tinh gọn `Program.cs` chỉ gọi một điểm khởi tạo duy nhất `await DbInitializer.InitializeAsync(dbContext, logger);` [BE-DB] [worklog: docs/worklogs/2026-11-06_BE-DB_AI_consolidate-database-seeders.md].
+
 ## [Unreleased] - 2026-11-05
 
 ### Added
+- Triển khai API đăng ký tài khoản chủ cửa hàng nguyên tử `POST /api/v1/auth/register` (hỗ trợ cả `/api/auth/register`), tự động tạo `Tenant`, `User` (Role `STORE_OWNER`), `TenantUser` và `Branch` mặc định trong một Database Transaction duy nhất [BE-AUTH] [worklog: docs/worklogs/2026-11-05_BE-AUTH_AI_tenant-registration-and-modular-seeder.md].
+- Cơ chế nạp dữ liệu mẫu dạng mô-đun lũy đẳng (Modular Idempotent Seeder) trong `DbInitializer.cs`: kiểm tra độc lập từng bảng, loại bỏ early return, sửa lỗi trùng lặp số điện thoại `IX_Users_Phone` và băm mật khẩu mẫu bằng BCrypt [BE-DB].
 - Cấu hình Kestrel tự động nhận biến môi trường `$PORT` trên Render/Cloud, kích hoạt Swagger UI trong môi trường Production và tự động redirect trang chủ `/` sang `/swagger` trên cùng 1 cổng duy nhất [BE-DEPLOY] [worklog: docs/worklogs/2026-11-05_BE-DEPLOY_AI_render-swagger-single-port.md].
 - Cơ chế khởi tạo CSDL tự động chống sập trên Cloud: Tự động phát hiện cơ sở dữ liệu mới và khởi tạo toàn bộ 34 bảng trực tiếp từ DbContext model, khắc phục triệt để lỗi `relation "Users" does not exist` khi chạy trên database trống [BE-DEPLOY].
 

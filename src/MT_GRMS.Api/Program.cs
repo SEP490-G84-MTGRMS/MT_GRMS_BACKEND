@@ -119,10 +119,7 @@ using (var scope = app.Services.CreateScope())
         var dbContext = services.GetRequiredService<AppDbContext>();
 
         logger.LogInformation("Initializing database schema and seed data...");
-        await DbInitializer.InitializeAsync(dbContext);
-
-        logger.LogInformation("Seeding tax & finance sample data into database...");
-        await DatabaseSeeder.SeedAsync(dbContext, logger);
+        await DbInitializer.InitializeAsync(dbContext, logger);
         logger.LogInformation("Database seeded successfully.");
     }
     catch (Exception ex)
