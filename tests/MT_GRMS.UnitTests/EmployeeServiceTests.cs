@@ -166,6 +166,22 @@ public class EmployeeServiceTests
 
         public void Update(Employee employee) { }
         public void Delete(Employee employee) { Employees.Remove(employee); }
+
+        public List<EmployeeAllowance> RemovedAllowances { get; } = new();
+
+        public void RemoveAllowances(IEnumerable<EmployeeAllowance> allowances)
+        {
+            RemovedAllowances.AddRange(allowances);
+        }
+
+        public void SyncAllowances(Employee employee, IEnumerable<EmployeeAllowanceDto> newAllowances, string tenantId) { }
+
+        public HashSet<Guid> EmployeesWithWorkHistory { get; } = new();
+
+        public Task<bool> HasWorkOrPayrollHistoryAsync(Guid employeeId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(EmployeesWithWorkHistory.Contains(employeeId));
+        }
     }
 
     [Fact]
@@ -711,5 +727,85 @@ public class EmployeeServiceTests
         Assert.Contains(result.Items, e => e.EmployeeCode == "NV0001");
         Assert.Contains(result.Items, e => e.EmployeeCode == "NV0002");
         Assert.DoesNotContain(result.Items, e => e.EmployeeCode == "NV0003");
+    }
+
+    [Fact]
+    public async Task DeleteEmployee_WhenHasWorkOrPayrollHistory_ShouldThrowBusinessException()
+    {
+        // Arrange
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee
+        {
+            Id = employeeId,
+            TenantId = "tenant_test_01",
+            EmployeeCode = "NV0001",
+            FullName = "Nguyễn Văn Đã Đi Làm",
+            CitizenId = "001202009988",
+            Phone = "0987654321",
+            BranchId = Guid.NewGuid(),
+            Status = EmployeeStatus.Active
+        };
+        await empRepo.AddAsync(employee);
+        empRepo.EmployeesWithWorkHistory.Add(employeeId);
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.DeleteEmployeeAsync(employeeId));
+
+        Assert.Equal("EMPLOYEE_HAS_WORK_HISTORY", ex.ErrorCode);
+        Assert.Contains("không thể xóa", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.False(employee.IsDeleted);
+    }
+
+    [Fact]
+    public async Task DeleteEmployee_WhenNoWorkHistory_ShouldSoftDeleteSuccessfully()
+    {
+        // Arrange
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var employeeId = Guid.NewGuid();
+        var employee = new Employee
+        {
+            Id = employeeId,
+            TenantId = "tenant_test_01",
+            EmployeeCode = "NV0002",
+            FullName = "Trần Thị Mới Đăng Ký",
+            CitizenId = "001202009977",
+            Phone = "0912345678",
+            BranchId = Guid.NewGuid(),
+            Status = EmployeeStatus.Active,
+            Allowances = new List<EmployeeAllowance>
+            {
+                new()
+                {
+                    EmployeeId = employeeId,
+                    TenantId = "tenant_test_01",
+                    Name = "Phụ cấp ăn trưa",
+                    Amount = 650000m
+                }
+            }
+        };
+        await empRepo.AddAsync(employee);
+
+        // Act
+        var result = await service.DeleteEmployeeAsync(employeeId);
+
+        // Assert
+        Assert.True(result);
+        Assert.True(employee.IsDeleted);
+        Assert.Equal(EmployeeStatus.Inactive, employee.Status);
+        Assert.Single(empRepo.RemovedAllowances);
+        Assert.Equal("Phụ cấp ăn trưa", empRepo.RemovedAllowances[0].Name);
+        Assert.True(uow.SaveChangesCalled);
     }
 }

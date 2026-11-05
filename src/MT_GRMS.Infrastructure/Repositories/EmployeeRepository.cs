@@ -144,11 +144,106 @@ public class EmployeeRepository : IEmployeeRepository
 
     public void Update(Employee employee)
     {
-        _dbSet.Update(employee);
+        var entry = _context.Entry(employee);
+        if (entry.State == EntityState.Detached)
+        {
+            _dbSet.Update(employee);
+        }
+    }
+
+    public void RemoveAllowances(IEnumerable<EmployeeAllowance> allowances)
+    {
+        _context.EmployeeAllowances.RemoveRange(allowances);
+    }
+
+    /// <summary>
+    /// Cách 1: So sánh và Đồng bộ hóa (Sync & Diffing) cho EmployeeAllowance
+    /// - Thêm mới (Insert): Các phụ cấp chưa có Id hoặc Id = Guid.Empty -> _context.EmployeeAllowances.Add + State = Added
+    /// - Cập nhật (Update): Các phụ cấp có Id tồn tại trong cả NewList và OldList -> Update properties + State = Modified
+    /// - Xóa (Delete): Các phụ cấp có trong OldList nhưng không xuất hiện trong NewList -> _context.EmployeeAllowances.RemoveRange (không gọi employee.Allowances.Remove để tránh severed relationship)
+    /// </summary>
+    public void SyncAllowances(Employee employee, IEnumerable<EmployeeAllowanceDto> newAllowances, string tenantId)
+    {
+        var oldAllowances = employee.Allowances.ToList();
+        var incoming = (newAllowances ?? Enumerable.Empty<EmployeeAllowanceDto>())
+            .Where(a => !string.IsNullOrWhiteSpace(a.Name))
+            .ToList();
+
+        // 1. Xóa (Delete): Các phụ cấp có trong OldList nhưng không xuất hiện trong NewList
+        var incomingIds = incoming
+            .Where(a => a.Id.HasValue && a.Id.Value != Guid.Empty)
+            .Select(a => a.Id!.Value)
+            .ToHashSet();
+
+        var toDelete = oldAllowances
+            .Where(old => !incomingIds.Contains(old.Id))
+            .ToList();
+
+        if (toDelete.Count > 0)
+        {
+            _context.EmployeeAllowances.RemoveRange(toDelete);
+        }
+
+        // 2. Cập nhật (Update) & 3. Thêm mới (Insert)
+        foreach (var dto in incoming)
+        {
+            if (dto.Id.HasValue && dto.Id.Value != Guid.Empty)
+            {
+                var existing = oldAllowances.FirstOrDefault(a => a.Id == dto.Id.Value);
+                if (existing != null)
+                {
+                    // Cập nhật phụ cấp cũ
+                    existing.Name = dto.Name.Trim();
+                    existing.Amount = Math.Max(0, dto.Amount);
+                    _context.Entry(existing).State = EntityState.Modified;
+                }
+                else
+                {
+                    // Nếu Id gửi lên không tìm thấy trong OldList, INSERT mới
+                    var newAllowance = new EmployeeAllowance
+                    {
+                        EmployeeId = employee.Id,
+                        TenantId = tenantId,
+                        Name = dto.Name.Trim(),
+                        Amount = Math.Max(0, dto.Amount)
+                    };
+                    _context.EmployeeAllowances.Add(newAllowance);
+                    _context.Entry(newAllowance).State = EntityState.Added;
+                }
+            }
+            else
+            {
+                // Thêm mới (Insert): Các phụ cấp chưa có Id hoặc Id = 0 / Guid.Empty
+                var newAllowance = new EmployeeAllowance
+                {
+                    EmployeeId = employee.Id,
+                    TenantId = tenantId,
+                    Name = dto.Name.Trim(),
+                    Amount = Math.Max(0, dto.Amount)
+                };
+                _context.EmployeeAllowances.Add(newAllowance);
+                _context.Entry(newAllowance).State = EntityState.Added;
+            }
+        }
     }
 
     public void Delete(Employee employee)
     {
         _dbSet.Remove(employee);
+    }
+
+    /// <summary>
+    /// Kiểm tra nhân viên đã phát sinh lịch làm việc (EmployeeSchedule) hoặc phiếu lương (Payslip) chưa.
+    /// Theo Business Rule: Chỉ được phép xóa nhân viên khi chưa lưu trữ bất kỳ ca làm việc hoặc phiếu lương nào.
+    /// </summary>
+    public async Task<bool> HasWorkOrPayrollHistoryAsync(Guid employeeId, CancellationToken cancellationToken = default)
+    {
+        var hasSchedules = await _context.EmployeeSchedules
+            .AnyAsync(s => s.EmployeeId == employeeId, cancellationToken);
+        if (hasSchedules) return true;
+
+        var hasPayslips = await _context.Payslips
+            .AnyAsync(p => p.EmployeeId == employeeId, cancellationToken);
+        return hasPayslips;
     }
 }

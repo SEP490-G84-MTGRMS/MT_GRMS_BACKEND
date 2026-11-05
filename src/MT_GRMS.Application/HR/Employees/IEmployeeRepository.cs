@@ -17,4 +17,7 @@ public interface IEmployeeRepository
     Task AddAsync(Employee employee, CancellationToken cancellationToken = default);
     void Update(Employee employee);
     void Delete(Employee employee);
+    void RemoveAllowances(IEnumerable<EmployeeAllowance> allowances);
+    void SyncAllowances(Employee employee, IEnumerable<EmployeeAllowanceDto> newAllowances, string tenantId);
+    Task<bool> HasWorkOrPayrollHistoryAsync(Guid employeeId, CancellationToken cancellationToken = default);
 }

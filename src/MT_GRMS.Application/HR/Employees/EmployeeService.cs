@@ -241,11 +241,7 @@ public class EmployeeService : IEmployeeService
         employee.BaseRate = request.BaseRate;
         if (request.Allowances != null)
         {
-            employee.Allowances.Clear();
-            foreach (var allowance in MapAllowances(request.Allowances, employee.Id, employee.TenantId))
-            {
-                employee.Allowances.Add(allowance);
-            }
+            _employeeRepository.SyncAllowances(employee, request.Allowances, employee.TenantId);
         }
         employee.BankAccountNumber = request.BankAccountNumber?.Trim();
         employee.BankName = request.BankName?.Trim();
@@ -298,7 +294,22 @@ public class EmployeeService : IEmployeeService
             throw new NotFoundException($"Không tìm thấy nhân viên với ID: {id}");
         }
 
-        // Soft delete
+        // Business Rule: Chỉ được phép xóa nhân viên khi chưa lưu trữ dữ liệu ca làm việc hoặc phiếu lương
+        var hasWorkHistory = await _employeeRepository.HasWorkOrPayrollHistoryAsync(id, cancellationToken);
+        if (hasWorkHistory)
+        {
+            throw new BusinessException(
+                "EMPLOYEE_HAS_WORK_HISTORY",
+                $"Không thể xóa nhân viên \"{employee.FullName}\" ({employee.EmployeeCode}) vì đã có dữ liệu ca làm việc hoặc phiếu lương trong hệ thống. Bạn có thể chuyển trạng thái nhân viên sang \"Ngừng làm việc\" thay vì xóa.");
+        }
+
+        // 1. Xóa toàn bộ các khoản phụ cấp (EmployeeAllowances) của nhân viên
+        if (employee.Allowances != null && employee.Allowances.Count > 0)
+        {
+            _employeeRepository.RemoveAllowances(employee.Allowances.ToList());
+        }
+
+        // 2. Soft delete hồ sơ nhân viên
         employee.IsDeleted = true;
         employee.Status = EmployeeStatus.Inactive;
         employee.UpdatedAt = DateTime.UtcNow;
@@ -404,7 +415,7 @@ public class EmployeeService : IEmployeeService
             e.BaseRate,
             e.OtWeekday,
             e.OtSunday,
-            e.Allowances.Select(a => new EmployeeAllowanceDto(a.Name, a.Amount)).ToList(),
+            e.Allowances.Select(a => new EmployeeAllowanceDto(a.Name, a.Amount, a.Id)).ToList(),
             e.DebtAmount,
             e.Status.ToString().ToLower(),
             e.BankAccountNumber,

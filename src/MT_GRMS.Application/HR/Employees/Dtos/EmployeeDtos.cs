@@ -1,6 +1,6 @@
 namespace MT_GRMS.Application.HR.Employees.Dtos;
 
-public record EmployeeAllowanceDto(string Name, decimal Amount);
+public record EmployeeAllowanceDto(string Name, decimal Amount, Guid? Id = null);
 
 public record CreateEmployeeRequest(
     string FullName,
