@@ -253,7 +253,7 @@ public class ScheduleServiceTests
     }
 
     [Fact]
-    public async Task BatchCreateAsync_ShouldThrowConflictException_WhenIntraBatchOverlapForSameEmployee()
+    public async Task BatchCreateAsync_ShouldAllow_MultipleShiftsPerDay_WhenOverlapUnder12Hours()
     {
         // Arrange
         var scheduleRepo = new FakeScheduleRepository();
@@ -270,7 +270,7 @@ public class ScheduleServiceTests
 
         var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
 
-        // Ca 1: 06:00 - 14:00, Ca 2: 12:00 - 18:00 (Trùng nhau 12:00 - 14:00)
+        // Ca 1: 06:00 - 14:00, Ca 2: 12:00 - 18:00 (Trùng nhau 2 giờ <= 12 giờ -> HỢP LỆ)
         var request = new BatchCreateScheduleRequest(
             branchId,
             new List<CreateScheduleItemRequest>
@@ -280,13 +280,50 @@ public class ScheduleServiceTests
             }
         );
 
-        // Act & Assert
-        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.BatchCreateAsync(request));
-        Assert.Contains("trùng lặp thời gian làm việc", ex.Message);
+        // Act
+        var result = await service.BatchCreateAsync(request);
+
+        // Assert
+        Assert.Equal(2, result.Count);
+        Assert.Equal(2, scheduleRepo.Schedules.Count);
     }
 
     [Fact]
-    public async Task BatchCreateAsync_ShouldThrowConflictException_WhenOverlappingWithExistingDatabaseSchedule()
+    public async Task BatchCreateAsync_ShouldThrowConflictException_WhenOverlapExceeds12Hours()
+    {
+        // Arrange
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var emp = new Employee { Id = Guid.NewGuid(), FullName = "Nguyen Van A", EmployeeCode = "NV0001" };
+        employeeRepo.Employees.Add(emp);
+
+        var branchId = Guid.NewGuid();
+        var workDate = new DateTime(2026, 11, 10);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        // Ca 1: 00:00 - 16:00, Ca 2: 02:00 - 18:00 (Trùng nhau 14 giờ > 12 giờ -> BÁO LỖI)
+        var request = new BatchCreateScheduleRequest(
+            branchId,
+            new List<CreateScheduleItemRequest>
+            {
+                new(emp.Id, branchId, workDate, null, "CA_DAI_1", "Ca Dài 1", TimeSpan.FromHours(0), TimeSpan.FromHours(16)),
+                new(emp.Id, branchId, workDate, null, "CA_DAI_2", "Ca Dài 2", TimeSpan.FromHours(2), TimeSpan.FromHours(18))
+            }
+        );
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.BatchCreateAsync(request));
+        Assert.Equal("SCHEDULE_OVERLAP_EXCEEDED", ex.ErrorCode);
+        Assert.Contains("vượt quá 12 giờ", ex.Message);
+    }
+
+    [Fact]
+    public async Task BatchCreateAsync_ShouldAllow_OverlappingDatabaseSchedule_WhenOverlapUnder12Hours()
     {
         // Arrange
         var scheduleRepo = new FakeScheduleRepository();
@@ -316,7 +353,7 @@ public class ScheduleServiceTests
 
         var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
 
-        // Gửi xếp thêm ca: 12:00 - 18:00 (Giao thoa)
+        // Gửi xếp thêm ca: 12:00 - 18:00 (Giao thoa 2 giờ <= 12 giờ -> Cho phép)
         var request = new BatchCreateScheduleRequest(
             branchId,
             new List<CreateScheduleItemRequest>
@@ -325,9 +362,165 @@ public class ScheduleServiceTests
             }
         );
 
+        // Act
+        var result = await service.BatchCreateAsync(request);
+
+        // Assert
+        Assert.Single(result);
+        Assert.Equal(2, scheduleRepo.Schedules.Count);
+    }
+
+    [Fact]
+    public async Task BatchCreateAsync_ShouldThrowConflictException_WhenOverlappingWithDatabaseScheduleExceeds12Hours()
+    {
+        // Arrange
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var emp = new Employee { Id = Guid.NewGuid(), FullName = "Nguyen Van A", EmployeeCode = "NV0001" };
+        employeeRepo.Employees.Add(emp);
+
+        var branchId = Guid.NewGuid();
+        var workDate = new DateTime(2026, 11, 5);
+
+        // Đã có ca sẵn trong DB: 00:00 - 16:00
+        scheduleRepo.Schedules.Add(new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = emp.Id,
+            BranchId = branchId,
+            WorkDate = workDate,
+            ShiftName = "Ca Dài 1",
+            PlannedStartTime = TimeSpan.FromHours(0),
+            PlannedEndTime = TimeSpan.FromHours(16),
+            Status = ScheduleStatus.Draft
+        });
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        // Gửi xếp thêm ca: 02:00 - 18:00 (Giao thoa 14 giờ > 12 giờ -> Ném ngoại lệ)
+        var request = new BatchCreateScheduleRequest(
+            branchId,
+            new List<CreateScheduleItemRequest>
+            {
+                new(emp.Id, branchId, workDate, null, "CA_DAI_2", "Ca Dài 2", TimeSpan.FromHours(2), TimeSpan.FromHours(18))
+            }
+        );
+
         // Act & Assert
         var ex = await Assert.ThrowsAsync<BusinessException>(() => service.BatchCreateAsync(request));
-        Assert.Contains("trùng lặp thời gian làm việc", ex.Message);
+        Assert.Equal("SCHEDULE_OVERLAP_EXCEEDED", ex.ErrorCode);
+        Assert.Contains("vượt quá 12 giờ", ex.Message);
+    }
+
+    [Fact]
+    public async Task CreateRecurringAsync_ShouldThrow_WhenEndDateBeforeStartDate()
+    {
+        // Arrange
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var emp = new Employee { Id = Guid.NewGuid(), FullName = "Nguyen Van A", EmployeeCode = "NV0001" };
+        employeeRepo.Employees.Add(emp);
+        var branchId = Guid.NewGuid();
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var startDate = new DateTime(2026, 11, 10);
+        var endDate = new DateTime(2026, 11, 5); // Trước ngày bắt đầu
+
+        var request = new CreateRecurringScheduleRequest(
+            emp.Id,
+            branchId,
+            startDate,
+            HasEndDate: true,
+            EndDate: endDate,
+            RepeatDays: new[] { "T2", "T4", "T6" }
+        );
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateRecurringAsync(request));
+        Assert.Equal("INVALID_DATE_RANGE", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreateRecurringAsync_ShouldGenerateUntilEndDate_WhenEndDateSpecified()
+    {
+        // Arrange
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var emp = new Employee { Id = Guid.NewGuid(), FullName = "Nguyen Van A", EmployeeCode = "NV0001" };
+        employeeRepo.Employees.Add(emp);
+        var branchId = Guid.NewGuid();
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var startDate = new DateTime(2026, 11, 1);
+        var endDate = new DateTime(2026, 11, 20); // Ngày kết thúc chỉ định
+
+        var request = new CreateRecurringScheduleRequest(
+            emp.Id,
+            branchId,
+            startDate,
+            HasEndDate: true,
+            EndDate: endDate,
+            RepeatDays: new[] { "CN" }
+        );
+
+        // Act
+        var result = await service.CreateRecurringAsync(request);
+
+        // Assert
+        Assert.NotEmpty(result);
+        Assert.All(result, s => Assert.True(s.WorkDate <= endDate));
+    }
+
+    [Fact]
+    public async Task CreateRecurringAsync_ShouldGenerateUntilEndOfNextMonth_WhenNoEndDateSpecified()
+    {
+        // Arrange
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var emp = new Employee { Id = Guid.NewGuid(), FullName = "Nguyen Van A", EmployeeCode = "NV0001" };
+        employeeRepo.Employees.Add(emp);
+        var branchId = Guid.NewGuid();
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var startDate = new DateTime(2026, 11, 6); // Tháng 11/2026 -> hết tháng sau là 31/12/2026
+
+        var request = new CreateRecurringScheduleRequest(
+            emp.Id,
+            branchId,
+            startDate,
+            HasEndDate: false,
+            EndDate: null,
+            RepeatDays: new[] { "CN" } // Lặp Chủ nhật
+        );
+
+        // Act
+        var result = await service.CreateRecurringAsync(request);
+
+        // Assert: Các ca phải được tạo đến hết tháng 12/2026 (31/12/2026)
+        Assert.NotEmpty(result);
+        var maxWorkDate = result.Max(s => s.WorkDate);
+        Assert.True(maxWorkDate <= new DateTime(2026, 12, 31));
+        Assert.True(maxWorkDate >= new DateTime(2026, 12, 25)); // Ca Chủ nhật cuối cùng trong tháng 12/2026
+        Assert.All(result, s => Assert.True(s.WorkDate <= new DateTime(2026, 12, 31)));
     }
 
     [Fact]

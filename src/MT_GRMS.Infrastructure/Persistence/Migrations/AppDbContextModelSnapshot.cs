@@ -1596,6 +1596,10 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("BranchID");
+
                     b.Property<string>("CheckInFaceImageUrl")
                         .HasMaxLength(255)
                         .HasColumnType("character varying(255)");
@@ -1621,10 +1625,18 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp without time zone");
 
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
                     b.Property<decimal>("DurationHours")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(4,2)")
-                        .HasDefaultValue(8.00m);
+                        .HasDefaultValue(4.00m);
+
+                    b.Property<int>("EarlyLeaveMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
 
                     b.Property<Guid>("EmployeeId")
                         .HasColumnType("uuid")
@@ -1637,10 +1649,18 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<decimal?>("FaceMatchScore")
                         .HasColumnType("decimal(5,2)");
 
+                    b.Property<bool>("IsCheckInNextDay")
+                        .HasColumnType("boolean");
+
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
 
                     b.Property<int>("LateMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<int>("OvertimeMinutes")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
                         .HasDefaultValue(0);
@@ -1660,6 +1680,10 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)");
 
+                    b.Property<Guid?>("ShiftConfigId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("ShiftConfigID");
+
                     b.Property<string>("ShiftName")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -1670,7 +1694,11 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)")
-                        .HasDefaultValue("scheduled");
+                        .HasDefaultValue("draft");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp without time zone");
@@ -1680,9 +1708,17 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BranchId");
+
                     b.HasIndex("EmployeeId");
 
                     b.HasIndex("PayslipId");
+
+                    b.HasIndex("ShiftConfigId");
+
+                    b.HasIndex("TenantId", "BranchId", "WorkDate");
+
+                    b.HasIndex("TenantId", "EmployeeId", "WorkDate");
 
                     b.ToTable("EmployeeSchedules", (string)null);
                 });
@@ -4578,6 +4614,12 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.EmployeeSchedule", b =>
                 {
+                    b.HasOne("MT_GRMS.Domain.Entities.SaaS.Branch", "Branch")
+                        .WithMany()
+                        .HasForeignKey("BranchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
                     b.HasOne("MT_GRMS.Domain.Entities.HR.Employee", "Employee")
                         .WithMany("Schedules")
                         .HasForeignKey("EmployeeId")
@@ -4589,9 +4631,18 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasForeignKey("PayslipId")
                         .OnDelete(DeleteBehavior.SetNull);
 
+                    b.HasOne("MT_GRMS.Domain.Entities.HR.ShiftConfig", "ShiftConfig")
+                        .WithMany()
+                        .HasForeignKey("ShiftConfigId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Branch");
+
                     b.Navigation("Employee");
 
                     b.Navigation("Payslip");
+
+                    b.Navigation("ShiftConfig");
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.Payslip", b =>

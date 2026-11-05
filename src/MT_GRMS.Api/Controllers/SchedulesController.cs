@@ -120,6 +120,29 @@ public class SchedulesController : BaseApiController
     }
 
     /// <summary>
+    /// Đặt lịch lặp lại cho nhân viên (khi không có ngày kết thúc: tự động tạo lịch đến hết tháng hiện tại và tháng sau; khi có ngày kết thúc: tạo lịch đến ngày chỉ định)
+    /// </summary>
+    [HttpPost("recurring")]
+    public async Task<IActionResult> CreateRecurring(
+        [FromBody] CreateRecurringScheduleRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _scheduleService.CreateRecurringAsync(request, cancellationToken);
+            return StatusCode(201, ApiResponse<IReadOnlyList<ScheduleResponse>>.Ok(result, $"Đăng ký lịch lặp lại thành công {result.Count} ca làm việc."));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
+        }
+        catch (BusinessException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail(ex.ErrorCode ?? "SCHEDULE_CONFLICT", ex.Message));
+        }
+    }
+
+    /// <summary>
     /// Cập nhật thông tin ca làm việc
     /// </summary>
     [HttpPut("{id:guid}")]

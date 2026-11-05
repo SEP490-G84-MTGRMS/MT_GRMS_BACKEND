@@ -67,6 +67,28 @@ public class BatchCreateScheduleRequestValidator : AbstractValidator<BatchCreate
     }
 }
 
+public class CreateRecurringScheduleRequestValidator : AbstractValidator<CreateRecurringScheduleRequest>
+{
+    public CreateRecurringScheduleRequestValidator()
+    {
+        RuleFor(x => x.EmployeeId)
+            .NotEmpty().WithMessage("Nhân viên không được để trống.");
+
+        RuleFor(x => x.BranchId)
+            .NotEmpty().WithMessage("Chi nhánh không được để trống.");
+
+        RuleFor(x => x.StartDate)
+            .Must(d => d != default).WithMessage("Ngày bắt đầu không hợp lệ.");
+
+        When(x => x.HasEndDate && x.EndDate.HasValue, () =>
+        {
+            RuleFor(x => x.EndDate!.Value)
+                .GreaterThanOrEqualTo(x => x.StartDate)
+                .WithMessage("Ngày kết thúc phải lớn hơn hoặc bằng ngày bắt đầu.");
+        });
+    }
+}
+
 public class PublishSchedulesRequestValidator : AbstractValidator<PublishSchedulesRequest>
 {
     public PublishSchedulesRequestValidator()

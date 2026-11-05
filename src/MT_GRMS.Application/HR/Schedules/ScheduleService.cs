@@ -92,7 +92,29 @@ public class ScheduleService : IScheduleService
             return Array.Empty<ScheduleResponse>();
         }
 
-        var employeeIds = request.Schedules.Select(s => s.EmployeeId).Distinct().ToList();
+        var minDate = request.Schedules.Min(s => s.WorkDate).Date;
+        var maxDate = request.Schedules.Max(s => s.WorkDate).Date;
+
+        var schedulesToProcess = request.Schedules.ToList();
+
+        // Xử lý kiểm tra ngày kết thúc
+        if (request.HasEndDate == true && request.EndDate.HasValue)
+        {
+            var endDate = request.EndDate.Value.Date;
+            if (endDate < minDate)
+            {
+                throw new BusinessException("INVALID_DATE_RANGE", "Ngày kết thúc không được nhỏ hơn ngày bắt đầu.");
+            }
+
+            // Ngừng tạo lịch sau thời gian này (ngày = input)
+            schedulesToProcess = schedulesToProcess.Where(s => s.WorkDate.Date <= endDate).ToList();
+            if (schedulesToProcess.Count == 0)
+            {
+                return Array.Empty<ScheduleResponse>();
+            }
+        }
+
+        var employeeIds = schedulesToProcess.Select(s => s.EmployeeId).Distinct().ToList();
         var employees = new Dictionary<Guid, Employee>();
         foreach (var empId in employeeIds)
         {
@@ -101,7 +123,7 @@ public class ScheduleService : IScheduleService
             employees[empId] = emp;
         }
 
-        var shiftConfigIds = request.Schedules
+        var shiftConfigIds = schedulesToProcess
             .Where(s => s.ShiftConfigId.HasValue)
             .Select(s => s.ShiftConfigId!.Value)
             .Distinct()
@@ -115,19 +137,19 @@ public class ScheduleService : IScheduleService
             shiftConfigs[scId] = sc;
         }
 
-        var minDate = request.Schedules.Min(s => s.WorkDate).Date;
-        var maxDate = request.Schedules.Max(s => s.WorkDate).Date;
+        var effectiveMinDate = schedulesToProcess.Min(s => s.WorkDate).Date;
+        var effectiveMaxDate = schedulesToProcess.Max(s => s.WorkDate).Date;
 
         var existingSchedules = (await _scheduleRepository.GetActiveSchedulesForEmployeesAsync(
             employeeIds,
-            minDate.AddDays(-1),
-            maxDate.AddDays(1),
+            effectiveMinDate.AddDays(-1),
+            effectiveMaxDate.AddDays(1),
             cancellationToken)).ToList();
 
         var newSchedules = new List<EmployeeSchedule>();
         var batchIntervals = new List<(Guid EmployeeId, string ShiftName, DateTime Start, DateTime End, DateTime WorkDate)>();
 
-        foreach (var item in request.Schedules)
+        foreach (var item in schedulesToProcess)
         {
             var employee = employees[item.EmployeeId];
             ShiftConfig? shiftConfig = item.ShiftConfigId.HasValue ? shiftConfigs[item.ShiftConfigId.Value] : null;
@@ -137,19 +159,33 @@ public class ScheduleService : IScheduleService
             var startDateTime = GetStartDateTime(workDate, resolved.StartTime);
             var endDateTime = GetEndDateTime(workDate, resolved.StartTime, resolved.EndTime, resolved.IsNextDay);
 
-            // 1. Kiểm tra xung đột với nội bộ danh sách batch gửi lên
+            // 1. Kiểm tra xung đột với nội bộ danh sách batch gửi lên (cho phép nhiều ca, miễn trùng không quá 12 giờ)
+            var intraBatchOverlap = TimeSpan.Zero;
             foreach (var b in batchIntervals.Where(b => b.EmployeeId == item.EmployeeId && b.WorkDate >= workDate.AddDays(-1) && b.WorkDate <= workDate.AddDays(1)))
             {
-                if (IsOverlapping(startDateTime, endDateTime, b.Start, b.End))
+                var overlap = CalculateOverlap(startDateTime, endDateTime, b.Start, b.End);
+                if (overlap > TimeSpan.Zero)
                 {
-                    throw new BusinessException(
-                        $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) bị trùng lặp thời gian làm việc ngày {workDate:dd/MM/yyyy} giữa ca [{resolved.ShiftName} {resolved.StartTime:hh\\:mm}-{resolved.EndTime:hh\\:mm}] và ca [{b.ShiftName} {b.Start:HH:mm}-{b.End:HH:mm}].");
+                    if (overlap.TotalHours > 12)
+                    {
+                        throw new BusinessException(
+                            "SCHEDULE_OVERLAP_EXCEEDED",
+                            $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) bị trùng lặp thời gian làm việc vượt quá 12 giờ vào ngày {workDate:dd/MM/yyyy} ({overlap.TotalHours:0.#} giờ) giữa ca [{resolved.ShiftName} {resolved.StartTime:hh\\:mm}-{resolved.EndTime:hh\\:mm}] và ca [{b.ShiftName} {b.Start:HH:mm}-{b.End:HH:mm}].");
+                    }
+                    intraBatchOverlap += overlap;
                 }
+            }
+
+            if (intraBatchOverlap.TotalHours > 12)
+            {
+                throw new BusinessException(
+                    "SCHEDULE_OVERLAP_EXCEEDED",
+                    $"Tổng thời gian trùng lặp các ca trong ngày {workDate:dd/MM/yyyy} của nhân viên {employee.FullName} ({employee.EmployeeCode}) trong danh sách phân ca vượt quá 12 giờ ({intraBatchOverlap.TotalHours:0.#} giờ).");
             }
 
             // 2. Kiểm tra xung đột với dữ liệu hiện có trong CSDL
             var empDbSchedules = existingSchedules.Where(s => s.EmployeeId == item.EmployeeId).ToList();
-            CheckConflict(employee, resolved.ShiftName, startDateTime, endDateTime, workDate, empDbSchedules);
+            CheckConflict(employee, resolved.ShiftName, startDateTime, endDateTime, workDate, empDbSchedules, intraBatchOverlap);
 
             batchIntervals.Add((item.EmployeeId, resolved.ShiftName, startDateTime, endDateTime, workDate));
 
@@ -181,6 +217,83 @@ public class ScheduleService : IScheduleService
         return newSchedules.Select(MapToResponse).ToList();
     }
 
+    public async Task<IReadOnlyList<ScheduleResponse>> CreateRecurringAsync(
+        CreateRecurringScheduleRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var startDate = request.StartDate.Date;
+        DateTime targetEndDate;
+
+        if (request.HasEndDate && request.EndDate.HasValue)
+        {
+            // Nếu input != null thì sẽ tạo lịch đến ngày = input
+            targetEndDate = request.EndDate.Value.Date;
+            if (targetEndDate < startDate)
+            {
+                throw new BusinessException("INVALID_DATE_RANGE", "Ngày kết thúc không được nhỏ hơn ngày bắt đầu.");
+            }
+        }
+        else
+        {
+            // Nếu input bằng null thì sẽ tự động tạo lịch đến hết tháng hiện tại và tháng sau
+            var currentMonth = new DateTime(startDate.Year, startDate.Month, 1);
+            var nextMonth = currentMonth.AddMonths(1);
+            var daysInNextMonth = DateTime.DaysInMonth(nextMonth.Year, nextMonth.Month);
+            targetEndDate = new DateTime(nextMonth.Year, nextMonth.Month, daysInNextMonth);
+        }
+
+        var repeatDays = ParseDaysOfWeek(request.RepeatDays);
+        if (repeatDays.Count == 0)
+        {
+            repeatDays.Add(startDate.DayOfWeek);
+        }
+
+        var allEmpIds = new List<Guid> { request.EmployeeId };
+        if (request.AdditionalEmployeeIds != null && request.AdditionalEmployeeIds.Count > 0)
+        {
+            allEmpIds.AddRange(request.AdditionalEmployeeIds.Where(id => id != request.EmployeeId).Distinct());
+        }
+
+        var scheduleItems = new List<CreateScheduleItemRequest>();
+        for (var date = startDate; date <= targetEndDate; date = date.AddDays(1))
+        {
+            if (repeatDays.Contains(date.DayOfWeek))
+            {
+                foreach (var empId in allEmpIds)
+                {
+                    scheduleItems.Add(new CreateScheduleItemRequest(
+                        empId,
+                        request.BranchId,
+                        date,
+                        request.ShiftConfigId,
+                        request.ShiftCode,
+                        request.ShiftName,
+                        request.PlannedStartTime,
+                        request.PlannedEndTime,
+                        request.DurationHours,
+                        request.AllowedCheckInStart,
+                        request.AllowedCheckInEnd,
+                        request.IsCheckInNextDay
+                    ));
+                }
+            }
+        }
+
+        if (scheduleItems.Count == 0)
+        {
+            return Array.Empty<ScheduleResponse>();
+        }
+
+        var batchRequest = new BatchCreateScheduleRequest(
+            request.BranchId,
+            scheduleItems,
+            request.HasEndDate,
+            request.EndDate
+        );
+
+        return await BatchCreateAsync(batchRequest, cancellationToken);
+    }
+
     public async Task<ScheduleResponse> UpdateAsync(
         Guid id,
         UpdateScheduleRequest request,
@@ -210,7 +323,10 @@ public class ScheduleService : IScheduleService
         var endTime = request.PlannedEndTime ?? (shiftConfig != null ? shiftConfig.EndTime : schedule.PlannedEndTime);
         var isNextDay = request.IsCheckInNextDay ?? (shiftConfig != null ? shiftConfig.IsCheckInNextDay : schedule.IsCheckInNextDay);
         var shiftName = request.ShiftName ?? (shiftConfig != null ? shiftConfig.ShiftName : schedule.ShiftName);
-        var shiftCode = request.ShiftCode ?? (shiftConfig != null ? shiftConfig.ShiftCode : schedule.ShiftCode);
+        var shiftCode = (shiftConfig != null && !string.IsNullOrWhiteSpace(shiftConfig.ShiftCode))
+            ? shiftConfig.ShiftCode
+            : (request.ShiftCode ?? schedule.ShiftCode);
+        if (!string.IsNullOrEmpty(shiftCode) && shiftCode.Length > 30) shiftCode = shiftCode[..30];
 
         var startDateTime = GetStartDateTime(workDate, startTime);
         var endDateTime = GetEndDateTime(workDate, startTime, endTime, isNextDay);
@@ -390,7 +506,10 @@ public class ScheduleService : IScheduleService
     {
         if (config != null)
         {
-            var code = !string.IsNullOrWhiteSpace(item.ShiftCode) ? item.ShiftCode : config.ShiftCode;
+            var code = (config != null && !string.IsNullOrWhiteSpace(config.ShiftCode))
+                ? config.ShiftCode
+                : (!string.IsNullOrWhiteSpace(item.ShiftCode) ? item.ShiftCode : "SHIFT");
+            if (code.Length > 30) code = code[..30];
             var name = !string.IsNullOrWhiteSpace(item.ShiftName) ? item.ShiftName : config.ShiftName;
             var start = item.PlannedStartTime ?? config.StartTime;
             var end = item.PlannedEndTime ?? config.EndTime;
@@ -403,6 +522,7 @@ public class ScheduleService : IScheduleService
         else
         {
             var code = !string.IsNullOrWhiteSpace(item.ShiftCode) ? item.ShiftCode : "CUSTOM";
+            if (code.Length > 30) code = code[..30];
             var name = !string.IsNullOrWhiteSpace(item.ShiftName) ? item.ShiftName : "Ca tùy chỉnh";
             var start = item.PlannedStartTime ?? TimeSpan.FromHours(8);
             var end = item.PlannedEndTime ?? TimeSpan.FromHours(17);
@@ -431,14 +551,28 @@ public class ScheduleService : IScheduleService
         return startA < endB && endA > startB;
     }
 
+    private static TimeSpan CalculateOverlap(DateTime startA, DateTime endA, DateTime startB, DateTime endB)
+    {
+        var overlapStart = startA > startB ? startA : startB;
+        var overlapEnd = endA < endB ? endA : endB;
+        if (overlapEnd > overlapStart)
+        {
+            return overlapEnd - overlapStart;
+        }
+        return TimeSpan.Zero;
+    }
+
     private static void CheckConflict(
         Employee employee,
         string newShiftName,
         DateTime newStart,
         DateTime newEnd,
         DateTime workDate,
-        IEnumerable<EmployeeSchedule> existingSchedules)
+        IEnumerable<EmployeeSchedule> existingSchedules,
+        TimeSpan existingOverlapOffset = default)
     {
+        var totalOverlap = existingOverlapOffset;
+
         foreach (var ex in existingSchedules)
         {
             if (ex.Status == ScheduleStatus.Cancelled) continue;
@@ -446,12 +580,107 @@ public class ScheduleService : IScheduleService
             var exStart = GetStartDateTime(ex.WorkDate, ex.PlannedStartTime);
             var exEnd = GetEndDateTime(ex.WorkDate, ex.PlannedStartTime, ex.PlannedEndTime, ex.IsCheckInNextDay);
 
-            if (IsOverlapping(newStart, newEnd, exStart, exEnd))
+            var overlap = CalculateOverlap(newStart, newEnd, exStart, exEnd);
+            if (overlap > TimeSpan.Zero)
             {
-                throw new BusinessException(
-                    $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) bị trùng lặp thời gian làm việc ngày {workDate:dd/MM/yyyy} với ca đã xếp [{ex.ShiftName} {ex.PlannedStartTime:hh\\:mm}-{ex.PlannedEndTime:hh\\:mm}].");
+                if (overlap.TotalHours > 12)
+                {
+                    throw new BusinessException(
+                        "SCHEDULE_OVERLAP_EXCEEDED",
+                        $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) có thời gian trùng giữa các ca ngày {workDate:dd/MM/yyyy} vượt quá 12 giờ ({overlap.TotalHours:0.#} giờ) giữa ca [{newShiftName} {newStart:HH:mm}-{newEnd:HH:mm}] và ca [{ex.ShiftName} {ex.PlannedStartTime:hh\\:mm}-{ex.PlannedEndTime:hh\\:mm}].");
+                }
+
+                totalOverlap += overlap;
             }
         }
+
+        if (totalOverlap.TotalHours > 12)
+        {
+            throw new BusinessException(
+                "SCHEDULE_OVERLAP_EXCEEDED",
+                $"Tổng thời gian trùng lặp các ca trong ngày {workDate:dd/MM/yyyy} của nhân viên {employee.FullName} ({employee.EmployeeCode}) vượt quá 12 giờ ({totalOverlap.TotalHours:0.#} giờ).");
+        }
+    }
+
+    private static HashSet<DayOfWeek> ParseDaysOfWeek(IEnumerable<string>? days)
+    {
+        var result = new HashSet<DayOfWeek>();
+        if (days == null) return result;
+
+        foreach (var raw in days)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+            var d = raw.Trim().ToUpperInvariant();
+            switch (d)
+            {
+                case "T2":
+                case "THỨ 2":
+                case "THU 2":
+                case "MONDAY":
+                case "MON":
+                case "2":
+                    result.Add(DayOfWeek.Monday);
+                    break;
+                case "T3":
+                case "THỨ 3":
+                case "THU 3":
+                case "TUESDAY":
+                case "TUE":
+                case "3":
+                    result.Add(DayOfWeek.Tuesday);
+                    break;
+                case "T4":
+                case "THỨ 4":
+                case "THU 4":
+                case "WEDNESDAY":
+                case "WED":
+                case "4":
+                    result.Add(DayOfWeek.Wednesday);
+                    break;
+                case "T5":
+                case "THỨ 5":
+                case "THU 5":
+                case "THURSDAY":
+                case "THU":
+                case "5":
+                    result.Add(DayOfWeek.Thursday);
+                    break;
+                case "T6":
+                case "THỨ 6":
+                case "THU 6":
+                case "FRIDAY":
+                case "FRI":
+                case "6":
+                    result.Add(DayOfWeek.Friday);
+                    break;
+                case "T7":
+                case "THỨ 7":
+                case "THU 7":
+                case "SATURDAY":
+                case "SAT":
+                case "7":
+                    result.Add(DayOfWeek.Saturday);
+                    break;
+                case "CN":
+                case "CHỦ NHẬT":
+                case "CHU NHAT":
+                case "SUNDAY":
+                case "SUN":
+                case "8":
+                case "0":
+                case "CNHAT":
+                    result.Add(DayOfWeek.Sunday);
+                    break;
+                default:
+                    if (Enum.TryParse<DayOfWeek>(raw, true, out var parsed))
+                    {
+                        result.Add(parsed);
+                    }
+                    break;
+            }
+        }
+
+        return result;
     }
 
     private static ScheduleResponse MapToResponse(EmployeeSchedule s)

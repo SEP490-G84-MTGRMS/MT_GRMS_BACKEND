@@ -35,7 +35,28 @@ public record UpdateScheduleRequest(
 
 public record BatchCreateScheduleRequest(
     Guid BranchId,
-    IReadOnlyList<CreateScheduleItemRequest> Schedules
+    IReadOnlyList<CreateScheduleItemRequest> Schedules,
+    bool? HasEndDate = null,
+    DateTime? EndDate = null
+);
+
+public record CreateRecurringScheduleRequest(
+    Guid EmployeeId,
+    Guid BranchId,
+    DateTime StartDate,
+    bool HasEndDate = false,
+    DateTime? EndDate = null,
+    IReadOnlyList<string>? RepeatDays = null,
+    IReadOnlyList<Guid>? AdditionalEmployeeIds = null,
+    Guid? ShiftConfigId = null,
+    string? ShiftCode = null,
+    string? ShiftName = null,
+    TimeSpan? PlannedStartTime = null,
+    TimeSpan? PlannedEndTime = null,
+    decimal? DurationHours = null,
+    TimeSpan? AllowedCheckInStart = null,
+    TimeSpan? AllowedCheckInEnd = null,
+    bool? IsCheckInNextDay = null
 );
 
 public record PublishSchedulesRequest(
