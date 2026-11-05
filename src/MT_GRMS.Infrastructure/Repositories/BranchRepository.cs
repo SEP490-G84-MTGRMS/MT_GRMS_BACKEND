@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Branches;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Infrastructure.Persistence;
@@ -14,6 +14,11 @@ public class BranchRepository : GenericRepository<Branch>, IBranchRepository
     public async Task<bool> ExistsByCodeAsync(string code, CancellationToken cancellationToken = default)
     {
         return await _context.Branches.AnyAsync(b => b.BranchCode == code, cancellationToken);
+    }
+
+    public async Task<int> CountActiveAsync(CancellationToken cancellationToken = default)
+    {
+        return await _context.Branches.CountAsync(b => b.IsActive && !b.IsDeleted, cancellationToken);
     }
 
     public async Task<(IReadOnlyList<Branch> Items, int TotalCount)> GetPagedListAsync(
@@ -43,8 +48,15 @@ public class BranchRepository : GenericRepository<Branch>, IBranchRepository
 
         if (!string.IsNullOrWhiteSpace(status) && !string.Equals(status, "all", StringComparison.OrdinalIgnoreCase))
         {
-            var isActive = string.Equals(status.Trim(), "active", StringComparison.OrdinalIgnoreCase);
-            query = query.Where(b => b.IsActive == isActive);
+            var normalizedStatus = status.Trim().ToLower();
+            if (normalizedStatus == "active")
+            {
+                query = query.Where(b => b.IsActive);
+            }
+            else if (normalizedStatus == "inactive")
+            {
+                query = query.Where(b => !b.IsActive);
+            }
         }
 
         var totalCount = await query.CountAsync(cancellationToken);

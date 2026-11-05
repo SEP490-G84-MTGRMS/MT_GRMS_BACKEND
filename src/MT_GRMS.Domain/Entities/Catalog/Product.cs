@@ -21,7 +21,7 @@ public class Product : BaseTenantEntity
     public string TaxCategory { get; set; } = "STANDARD_1PCT";
     public string ProductType { get; set; } = "STANDARD";
     public string Status { get; set; } = "Active";
-    public List<string> ImageUrls { get; set; } = new();
+    public string? ImageUrl { get; set; }
     public string? Description { get; set; }
     public string? InternalNote { get; set; }
     public bool HasBatches { get; set; } = false;
@@ -34,9 +34,33 @@ public class Product : BaseTenantEntity
     /// </summary>
     public bool EligibleForVatReduction { get; set; } = false;
 
-    // Backward compatibility aliases
+    private List<string> _imageUrls = new();
+
+    /// <summary>
+    /// Tương thích API nhiều ảnh. DB local hiện lưu 1 ảnh tại cột ImageUrl.
+    /// </summary>
     [NotMapped]
-    public string? ImageUrl => ImageUrls.FirstOrDefault();
+    public List<string> ImageUrls
+    {
+        get
+        {
+            if (_imageUrls.Count == 0 && !string.IsNullOrWhiteSpace(ImageUrl))
+            {
+                _imageUrls.Add(ImageUrl);
+            }
+            return _imageUrls;
+        }
+        set
+        {
+            _imageUrls = value?
+                .Where(u => !string.IsNullOrWhiteSpace(u))
+                .Select(u => u.Trim())
+                .ToList() ?? new List<string>();
+            ImageUrl = _imageUrls.FirstOrDefault();
+        }
+    }
+
+    // Backward compatibility aliases
     [NotMapped]
     public string SKU { get => ProductCode; set => ProductCode = value; }
     [NotMapped]

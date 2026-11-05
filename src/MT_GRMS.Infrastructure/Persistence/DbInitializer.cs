@@ -1,4 +1,7 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Storage;
+using MT_GRMS.Application.Auth;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Finance;
@@ -18,47 +21,169 @@ public static class DbInitializer
 {
     public static async Task InitializeAsync(AppDbContext context)
     {
-        // 1. Tự động áp dụng Migrations để tạo CSDL và toàn bộ 34 bảng nếu chưa có
-        if (context.Database.IsRelational())
+        // 1. Tự động áp dụng Migrations hoặc EnsureCreatedAsync để khởi tạo toàn bộ CSDL và 34 bảng nếu chưa có
+        try
         {
-            // Đảm bảo bảng supplier_branch_assignments tồn tại trước khi chạy Migrations
-            // để tránh lỗi 42P01: relation "supplier_branch_assignments" does not exist khi migration thực hiện ALTER TABLE
-            await context.Database.ExecuteSqlRawAsync(@"
-                CREATE TABLE IF NOT EXISTS supplier_branch_assignments (
-                    ""Id"" uuid NOT NULL PRIMARY KEY,
-                    ""BranchId"" uuid NOT NULL,
-                    ""SupplierId"" uuid NOT NULL,
-                    ""TenantId"" text NOT NULL,
-                    ""CreatedBy"" uuid,
-                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    ""UpdatedAt"" timestamp without time zone,
-                    ""IsDeleted"" boolean NOT NULL DEFAULT false
-                );
-            ");
+            if (context.Database.IsRelational())
+            {
+                bool usersTableExists = false;
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync("SELECT 1 FROM \"Users\" LIMIT 1;");
+                    usersTableExists = true;
+                }
+                catch
+                {
+                    usersTableExists = false;
+                }
 
-            await context.Database.MigrateAsync();
+                if (!usersTableExists)
+                {
+                    // Cơ sở dữ liệu mới tinh (chưa có Users): Xóa bảng rác tạm thời nếu có để tránh xung đột
+                    try
+                    {
+                        await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS supplier_branch_assignments CASCADE;");
+                        await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"SupplierBranchAssignments\" CASCADE;");
+                    }
+                    catch { }
 
-            // Đảm bảo đồng bộ cấu trúc cột và bảng sau migration RemoveDisplayOrderAndProductCombos
-            await context.Database.ExecuteSqlRawAsync(@"
-                ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];
-                ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
-                ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
-                ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
-                DROP TABLE IF EXISTS ""ProductCombos"";
-                DROP INDEX IF EXISTS ""IX_Products_TenantID_ProductCode"";
-                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_TenantID_ProductCode"" ON ""Products"" (""TenantID"", ""ProductCode"") WHERE ""IsDeleted"" = false;
-                DROP INDEX IF EXISTS ""IX_Products_Barcode"";
-                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_Barcode"" ON ""Products"" (""Barcode"") WHERE ""IsDeleted"" = false AND ""Barcode"" IS NOT NULL;
-            ");
+                    // Dùng IRelationalDatabaseCreator để sinh toàn bộ 34 bảng từ model C#
+                    var creator = context.Database.GetService<IDatabaseCreator>() as IRelationalDatabaseCreator;
+                    if (creator != null)
+                    {
+                        try
+                        {
+                            await creator.CreateTablesAsync();
+                        }
+                        catch
+                        {
+                            try
+                            {
+                                var script = creator.GenerateCreateScript();
+                                var safeScript = script.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ");
+                                await context.Database.ExecuteSqlRawAsync(safeScript);
+                            }
+                            catch { }
+                        }
+                    }
+                    else
+                    {
+                        await context.Database.EnsureCreatedAsync();
+                    }
+
+                    // Đánh dấu các migration hiện tại đã được áp dụng để tránh lỗi ALTER TABLE sau này
+                    try
+                    {
+                        await context.Database.ExecuteSqlRawAsync(@"
+                            CREATE TABLE IF NOT EXISTS ""__EFMigrationsHistory"" (
+                                ""MigrationId"" character varying(150) NOT NULL PRIMARY KEY,
+                                ""ProductVersion"" character varying(32) NOT NULL
+                            );
+                        ");
+                        var migrations = context.Database.GetMigrations();
+                        foreach (var m in migrations)
+                        {
+                            await context.Database.ExecuteSqlRawAsync(
+                                "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({0}, '8.0.11') ON CONFLICT DO NOTHING;",
+                                m);
+                        }
+                    }
+                    catch { }
+                }
+                else
+                {
+                    // Bảng Users đã có sẵn: Áp dụng các migration còn thiếu nếu có
+                    try
+                    {
+                        await context.Database.MigrateAsync();
+                    }
+                    catch { }
+                }
+
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        CREATE TABLE IF NOT EXISTS supplier_branch_assignments (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""BranchId"" uuid NOT NULL,
+                            ""SupplierId"" uuid NOT NULL,
+                            ""TenantId"" text NOT NULL,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+                    ");
+                }
+                catch { }
+
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinHash"" text;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinSalt"" text;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""FailedPinAttempts"" integer DEFAULT 0;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""PinLockedUntilUtc"" timestamp without time zone;
+                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""TaxCategory"" text DEFAULT 'STANDARD_1PCT';
+                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""EligibleForVatReduction"" boolean DEFAULT false;
+                        ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
+                        ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
+                        ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
+                        DROP TABLE IF EXISTS ""ProductCombos"";
+                        DROP INDEX IF EXISTS ""IX_Products_TenantID_ProductCode"";
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_TenantID_ProductCode"" ON ""Products"" (""TenantID"", ""ProductCode"") WHERE ""IsDeleted"" = false;
+                        DROP INDEX IF EXISTS ""IX_Products_Barcode"";
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_Barcode"" ON ""Products"" (""Barcode"") WHERE ""IsDeleted"" = false AND ""Barcode"" IS NOT NULL;
+                    ");
+                }
+                catch { }
+            }
+            else
+            {
+                await context.Database.EnsureCreatedAsync();
+            }
+
         }
-        else
+        catch (Exception)
         {
+            // Fallback an toàn khi merge code hoặc khi không có migrations: Tự động khởi tạo schema từ Domain Entities
             await context.Database.EnsureCreatedAsync();
         }
 
-        // 2. Kiểm tra nếu đã có dữ liệu mẫu thì đảm bảo seed Orders cho chủ tiệm
+        // 2. Kiểm tra nếu đã có dữ liệu mẫu
         if (await context.SubscriptionPlans.AnyAsync())
         {
+            if (!await context.SubscriptionPlans.AnyAsync(p => p.PlanCode == "SUPPORT"))
+            {
+                var pSupport = new SubscriptionPlan
+                {
+                    Id = "plan_support",
+                    PlanCode = "SUPPORT",
+                    PlanName = "Gói Hỗ Trợ",
+                    PriceMonthly = 270000.00m,
+                    PriceYearly = 2700000.00m,
+                    MaxBranches = 1,
+                    MaxStaff = 3,
+                    EnabledModulesJson = "[\"Catalog\",\"Pos\"]",
+                    IsActive = true
+                };
+                var pVip = new SubscriptionPlan
+                {
+                    Id = "plan_vip",
+                    PlanCode = "VIP",
+                    PlanName = "Gói Cao Cấp",
+                    PriceMonthly = 490000.00m,
+                    PriceYearly = 4900000.00m,
+                    MaxBranches = 10,
+                    MaxStaff = 100,
+                    EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\"]",
+                    IsActive = true
+                };
+                await context.SubscriptionPlans.AddRangeAsync(pSupport, pVip);
+                await context.SaveChangesAsync();
+            }
+
             await CatalogSeedData.SeedAsync(context, "tenant_mt_mart_01");
             await SeedOrdersAndPreOrdersAsync(context);
             return;
@@ -121,11 +246,12 @@ public static class DbInitializer
         {
             Id = "usr_super_admin",
             UserName = "admin",
-            PasswordHash = "Admin@123",
+            PasswordHash = PasswordHasher.Hash("Admin@123"),
             FullName = "Hệ Thống Super Admin",
             Email = "admin@mtgrms.vn",
             Phone = "0901234567",
             IsActive = true,
+            IsAdmin = true,
             IsEmailVerified = true
         };
 
@@ -133,11 +259,12 @@ public static class DbInitializer
         {
             Id = "usr_store_manager",
             UserName = "manager01",
-            PasswordHash = "Manager@123",
+            PasswordHash = PasswordHasher.Hash("Manager@123"),
             FullName = "Nguyễn Văn Hùng (Quản Lý Cửa Hàng)",
             Email = "hung.nguyen@mtmart.vn",
             Phone = "0909876543",
             IsActive = true,
+            IsAdmin = false,
             IsEmailVerified = true
         };
 
@@ -145,11 +272,12 @@ public static class DbInitializer
         {
             Id = "usr_cashier",
             UserName = "cashier01",
-            PasswordHash = "Cashier@123",
+            PasswordHash = PasswordHasher.Hash("Cashier@123"),
             FullName = "Lê Thị Thảo (Thu Ngân POS)",
             Email = "thao.le@mtmart.vn",
             Phone = "0912345678",
             IsActive = true,
+            IsAdmin = false,
             IsEmailVerified = true
         };
 

@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using MT_GRMS.Application.Admin.Repositories;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Batches;
 using MT_GRMS.Application.Branches;
@@ -39,12 +40,9 @@ public static class DependencyInjection
             connectionString = ParsePostgreSqlUri(connectionString);
         }
 
-        var isInMemory = configuration.GetValue<bool>("UseInMemoryDatabase")
-            || string.Equals(configuration["DatabaseProvider"], "InMemory", StringComparison.OrdinalIgnoreCase);
-
-        services.AddDbContext<AppDbContext>((serviceProvider, options) =>
+        services.AddDbContext<AppDbContext>(options =>
         {
-            if (isInMemory || string.IsNullOrWhiteSpace(connectionString))
+            if (string.IsNullOrWhiteSpace(connectionString))
             {
                 options.UseInMemoryDatabase("MT_GRMS_DevDb");
             }
@@ -60,6 +58,15 @@ public static class DependencyInjection
                 });
             }
         });
+
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            Console.WriteLine("[MT-GRMS] Database: InMemory (không dùng Postgres local).");
+        }
+        else
+        {
+            Console.WriteLine("[MT-GRMS] Database: PostgreSQL local Host=localhost;Port=5432;Database=mtgrms_db");
+        }
 
         // Đăng ký Unit of Work & Repositories
         services.AddScoped<IUnitOfWork, UnitOfWork>();
@@ -88,6 +95,8 @@ public static class DependencyInjection
         services.AddScoped<MT_GRMS.Application.GoodsReceipts.IGoodsReceiptRepository, GoodsReceiptRepository>();
         services.AddScoped<MT_GRMS.Application.SupplierReturns.ISupplierReturnRepository, SupplierReturnRepository>();
         services.AddScoped<Application.Promotions.IPromotionRepository, PromotionRepository>();
+        services.AddScoped<ISubscriptionPlanRepository, SubscriptionPlanRepository>();
+        services.AddScoped<ITenantRepository, TenantRepository>();
 
         // Đăng ký dịch vụ máy in nhiệt hóa đơn POS-58 (khổ in 43mm siêu thị mini)
         services.AddScoped<IThermalPrintService, ThermalPrintService>();
@@ -95,6 +104,10 @@ public static class DependencyInjection
         // Cấu hình & Đăng ký dịch vụ lưu trữ đám mây Cloudinary
         services.Configure<CloudinarySettings>(configuration.GetSection(CloudinarySettings.SectionName));
         services.AddScoped<ICloudinaryService, CloudinaryService>();
+
+        // Cấu hình SePay & Dịch vụ Ví gian hàng
+        services.Configure<MT_GRMS.Application.Common.SePaySettings>(configuration.GetSection(MT_GRMS.Application.Common.SePaySettings.SectionName));
+        services.AddScoped<MT_GRMS.Application.SaaS.Services.IWalletService, Services.WalletService>();
 
         return services;
     }

@@ -24,6 +24,13 @@ public interface IBranchProductService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Lấy sản phẩm khả dụng để gán vào chi nhánh (chỉ SP của NCC đang liên kết chi nhánh)
+    /// </summary>
+    Task<IReadOnlyList<AssignableBranchProductDto>> GetAssignableProductsAsync(
+        Guid branchId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gán một hoặc nhiều sản phẩm từ Master Catalog vào một chi nhánh
     /// </summary>
     Task<IReadOnlyList<BranchProductDto>> AssignProductsAsync(

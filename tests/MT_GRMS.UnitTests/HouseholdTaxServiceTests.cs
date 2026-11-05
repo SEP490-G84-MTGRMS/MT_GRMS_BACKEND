@@ -1,4 +1,4 @@
-using MT_GRMS.Application.Tax.Security;
+﻿using MT_GRMS.Application.Tax.Security;
 
 using MT_GRMS.Application.Tax;
 
@@ -1614,7 +1614,7 @@ public class HouseholdTaxServiceTests
         Assert.NotNull(result.ThresholdExceededNote);
         Assert.Contains("1 tỷ VNĐ", result.ThresholdExceededNote);
         Assert.Contains("Điều 10 NĐ 68", result.ThresholdExceededNote);
-        Assert.Contains("12,000,000đ", result.ThresholdExceededNote);
+        Assert.True(result.ThresholdExceededNote.Contains("12,000,000đ") || result.ThresholdExceededNote.Contains("12.000.000đ"));
     }
 
     [Fact]

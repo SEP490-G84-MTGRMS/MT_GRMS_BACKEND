@@ -17,6 +17,8 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - mtgrms_network
 
   pgweb:
     image: sosedoff/pgweb:latest
@@ -25,10 +27,17 @@ services:
     ports:
       - "8081:8081"
     environment:
-      - DATABASE_URL=postgres://postgres:mtgrms_secret_password@postgres:5432/mtgrms_db?sslmode=disable
+      - PGWEB_DATABASE_URL=postgres://postgres:mtgrms_secret_password@postgres:5432/mtgrms_db?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - mtgrms_network
+
+networks:
+  mtgrms_network:
+    name: mtgrms_network
+    driver: bridge
 
 volumes:
   postgres_data:

@@ -20,6 +20,7 @@ public class User : BaseEntity<string>
     public string? Phone { get; set; }
     public string? AvatarUrl { get; set; }
     public bool IsActive { get; set; } = true;
+    public bool IsAdmin { get; set; } = false;
     public bool IsEmailVerified { get; set; } = false;
     public bool MustChangePassword { get; set; } = false;
     public DateTime? LastLoginAt { get; set; }

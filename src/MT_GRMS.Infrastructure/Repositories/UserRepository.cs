@@ -25,24 +25,30 @@ public class UserRepository : IUserRepository
     public async Task<User?> GetByUsernameAsync(string username, CancellationToken cancellationToken = default)
     {
         var clean = username.Trim().ToLower();
-        var compact = clean.Replace(" ", "");
+        var phoneClean = clean.Replace(" ", "").Replace(".", "").Replace("-", "");
+
         return await _context.Users
             .Include(u => u.TenantUsers)
             .FirstOrDefaultAsync(u =>
                 u.UserName.ToLower() == clean
                 || u.Email.ToLower() == clean
-                || (u.Phone != null && (u.Phone.ToLower() == clean || u.Phone.Replace(" ", "") == compact)),
+                || (u.Phone != null && (u.Phone.ToLower() == clean || u.Phone.Replace(" ", "").Replace(".", "").Replace("-", "") == phoneClean)),
                 cancellationToken);
     }
 
     public async Task<IReadOnlyList<User>> FindAsync(Expression<Func<User, bool>> predicate, CancellationToken cancellationToken = default)
     {
-        return await _context.Users.Where(predicate).ToListAsync(cancellationToken);
+        return await _context.Users
+            .Include(u => u.TenantUsers)
+            .Where(predicate)
+            .ToListAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<User>> GetAllAsync(CancellationToken cancellationToken = default)
     {
-        return await _context.Users.ToListAsync(cancellationToken);
+        return await _context.Users
+            .Include(u => u.TenantUsers)
+            .ToListAsync(cancellationToken);
     }
 
     public async Task AddAsync(User user, CancellationToken cancellationToken = default)
@@ -58,5 +64,10 @@ public class UserRepository : IUserRepository
     public void Delete(User user)
     {
         _context.Users.Remove(user);
+    }
+
+    public async Task SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        await _context.SaveChangesAsync(cancellationToken);
     }
 }
