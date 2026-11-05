@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PurchaseOrders;
+using MT_GRMS.Application.PurchaseOrders.Dispatch;
 using MT_GRMS.Application.PurchaseOrders.Dtos;
 
 namespace MT_GRMS.Api.Controllers;
@@ -10,10 +11,14 @@ namespace MT_GRMS.Api.Controllers;
 public class PurchaseOrdersController : BaseApiController
 {
     private readonly IPurchaseOrderService _poService;
+    private readonly ISupplierDispatchPackageService _dispatchPackageService;
 
-    public PurchaseOrdersController(IPurchaseOrderService poService)
+    public PurchaseOrdersController(
+        IPurchaseOrderService poService,
+        ISupplierDispatchPackageService dispatchPackageService)
     {
         _poService = poService;
+        _dispatchPackageService = dispatchPackageService;
     }
 
     /// <summary>
@@ -54,6 +59,37 @@ public class PurchaseOrdersController : BaseApiController
     {
         var result = await _poService.GetDispatchHubAsync(query, cancellationToken);
         return Ok(ApiResponse<DispatchHubResponse>.Ok(result));
+    }
+
+    /// <summary>
+    /// Hub theo NCC (multi-branch): list toàn bộ NCC + tóm tắt theo cửa hàng.
+    /// </summary>
+    [HttpGet("dispatch-hub/suppliers")]
+    public async Task<IActionResult> GetDispatchSupplierHub(
+        [FromQuery] DispatchSupplierHubQuery query,
+        CancellationToken cancellationToken)
+    {
+        var result = await _poService.GetDispatchSupplierHubAsync(query, cancellationToken);
+        return Ok(ApiResponse<DispatchSupplierHubResponse>.Ok(result));
+    }
+
+    /// <summary>
+    /// Chi tiết chốt đơn 1 NCC — dòng hàng nhóm theo cửa hàng.
+    /// </summary>
+    [HttpGet("dispatch-hub/suppliers/{supplierId:guid}")]
+    public async Task<IActionResult> GetDispatchSupplierDetail(
+        Guid supplierId,
+        [FromQuery] int durationDays = 14,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _poService.GetDispatchSupplierDetailAsync(
+            new DispatchSupplierDetailQuery
+            {
+                SupplierId = supplierId,
+                DurationDays = durationDays
+            },
+            cancellationToken);
+        return Ok(ApiResponse<DispatchSupplierDetailResponse>.Ok(result));
     }
 
     /// <summary>
@@ -99,5 +135,54 @@ public class PurchaseOrdersController : BaseApiController
     {
         var result = await _poService.UpdatePurchaseOrderStatusAsync(id, status, reason, cancellationToken);
         return Ok(ApiResponse<PurchaseOrderDto>.Ok(result, $"Cập nhật trạng thái đơn PO sang {status} thành công."));
+    }
+
+    [HttpGet("dispatch-packages")]
+    public async Task<IActionResult> ListDispatchPackages(
+        [FromQuery] Guid? supplierId,
+        [FromQuery] int take = 50,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _dispatchPackageService.ListAsync(supplierId, take, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<SupplierDispatchPackageDto>>.Ok(result));
+    }
+
+    [HttpGet("dispatch-packages/{packageId:guid}")]
+    public async Task<IActionResult> GetDispatchPackage(Guid packageId, CancellationToken cancellationToken)
+    {
+        var result = await _dispatchPackageService.GetByIdAsync(packageId, cancellationToken);
+        if (result == null) return NotFound(ApiResponse<object>.Fail("NOT_FOUND", "Không tìm thấy package."));
+        return Ok(ApiResponse<SupplierDispatchPackageDto>.Ok(result));
+    }
+
+    [HttpGet("dispatch-packages/{packageId:guid}/download")]
+    public async Task<IActionResult> DownloadDispatchPackage(Guid packageId, CancellationToken cancellationToken)
+    {
+        var (content, fileName, contentType) = await _dispatchPackageService.DownloadAsync(packageId, cancellationToken);
+        return File(content, contentType, fileName);
+    }
+
+    [HttpPost("dispatch-packages/{packageId:guid}/retry-generation")]
+    public async Task<IActionResult> RetryPackageGeneration(Guid packageId, CancellationToken cancellationToken)
+    {
+        await _dispatchPackageService.RetryGenerationAsync(packageId, cancellationToken);
+        var result = await _dispatchPackageService.GetByIdAsync(packageId, cancellationToken);
+        return Ok(ApiResponse<SupplierDispatchPackageDto?>.Ok(result, "Đã xếp hàng tạo lại file Excel."));
+    }
+
+    [HttpPost("dispatch-packages/{packageId:guid}/retry-email")]
+    public async Task<IActionResult> RetryPackageEmail(Guid packageId, CancellationToken cancellationToken)
+    {
+        await _dispatchPackageService.RetryEmailAsync(packageId, cancellationToken);
+        var result = await _dispatchPackageService.GetByIdAsync(packageId, cancellationToken);
+        return Ok(ApiResponse<SupplierDispatchPackageDto?>.Ok(result, "Đã xếp hàng gửi lại email."));
+    }
+
+    [HttpPost("dispatch-packages/{packageId:guid}/cancel-schedule")]
+    public async Task<IActionResult> CancelPackageSchedule(Guid packageId, CancellationToken cancellationToken)
+    {
+        await _dispatchPackageService.CancelScheduledAsync(packageId, cancellationToken);
+        var result = await _dispatchPackageService.GetByIdAsync(packageId, cancellationToken);
+        return Ok(ApiResponse<SupplierDispatchPackageDto?>.Ok(result, "Đã hủy lịch gửi email."));
     }
 }

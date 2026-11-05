@@ -17,6 +17,92 @@ namespace MT_GRMS.Infrastructure.Persistence;
 /// </summary>
 public static class DbInitializer
 {
+    private static async Task EnsureSupplierDispatchSchemaAsync(AppDbContext context)
+    {
+        await context.Database.ExecuteSqlRawAsync(@"
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchPackageId"" uuid NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchBatchId"" uuid NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierCodeSnapshot"" character varying(50) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierNameSnapshot"" character varying(250) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierEmailSnapshot"" character varying(200) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreCodeSnapshot"" character varying(50) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreNameSnapshot"" character varying(250) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreAddressSnapshot"" character varying(500) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StorePhoneSnapshot"" character varying(50) NULL;
+
+ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductCodeSnapshot"" character varying(50) NULL;
+ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductNameSnapshot"" character varying(250) NULL;
+ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""PurchaseUnitNameSnapshot"" character varying(50) NULL;
+
+CREATE TABLE IF NOT EXISTS ""SupplierDispatchPackages"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""DispatchBatchId"" uuid NOT NULL,
+    ""SupplierId"" uuid NOT NULL,
+    ""SupplierCodeSnapshot"" character varying(50) NOT NULL,
+    ""SupplierNameSnapshot"" character varying(250) NOT NULL,
+    ""EmailTo"" character varying(200) NOT NULL,
+    ""EmailCcJson"" text NOT NULL DEFAULT '[]',
+    ""EmailSendMode"" character varying(30) NOT NULL,
+    ""ScheduledSendAtUtc"" timestamp without time zone NULL,
+    ""EmailStatus"" character varying(30) NOT NULL,
+    ""GenerationStatus"" character varying(30) NOT NULL,
+    ""FileName"" character varying(255) NULL,
+    ""FileStorageKey"" character varying(500) NULL,
+    ""FileSize"" bigint NULL,
+    ""FileChecksum"" character varying(128) NULL,
+    ""AttemptCount"" integer NOT NULL DEFAULT 0,
+    ""LastError"" character varying(2000) NULL,
+    ""GeneratedAtUtc"" timestamp without time zone NULL,
+    ""SentAtUtc"" timestamp without time zone NULL,
+    ""Note"" character varying(500) NULL,
+    ""IdempotencyKey"" character varying(100) NULL,
+    ""ProcessingLeaseUntilUtc"" timestamp without time zone NULL,
+    ""ProcessingLockedBy"" character varying(100) NULL,
+    ""CreatedBy"" uuid NULL,
+    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp without time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false
+);
+
+CREATE TABLE IF NOT EXISTS ""SupplierDispatchPackageItems"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""PackageId"" uuid NOT NULL,
+    ""PurchaseOrderId"" uuid NOT NULL,
+    ""CreatedBy"" uuid NULL,
+    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp without time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId""
+    ON ""SupplierDispatchPackageItems"" (""PurchaseOrderId"");
+
+CREATE TABLE IF NOT EXISTS ""OutboxMessages"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""Type"" character varying(100) NOT NULL,
+    ""PayloadJson"" text NOT NULL,
+    ""IdempotencyKey"" character varying(120) NOT NULL,
+    ""Status"" character varying(30) NOT NULL,
+    ""AttemptCount"" integer NOT NULL DEFAULT 0,
+    ""NextAttemptAtUtc"" timestamp without time zone NULL,
+    ""ProcessedAtUtc"" timestamp without time zone NULL,
+    ""LockedUntilUtc"" timestamp without time zone NULL,
+    ""LockedBy"" character varying(100) NULL,
+    ""LastError"" character varying(2000) NULL,
+    ""CreatedBy"" uuid NULL,
+    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp without time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
+    ON ""OutboxMessages"" (""TenantId"", ""IdempotencyKey"");
+");
+    }
+
     public static async Task InitializeAsync(AppDbContext context)
     {
         // 1. Tự động áp dụng Migrations hoặc EnsureCreatedAsync để khởi tạo toàn bộ CSDL và 34 bảng nếu chưa có
@@ -54,7 +140,13 @@ public static class DbInitializer
                 try
                 {
                     await context.Database.ExecuteSqlRawAsync(@"
-                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];`r`n                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinHash"" text;`r`n                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinSalt"" text;`r`n                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""FailedPinAttempts"" integer DEFAULT 0;`r`n                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""PinLockedUntilUtc"" timestamp without time zone;`r`n                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""TaxCategory"" text DEFAULT 'STANDARD_1PCT';`r`n                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""EligibleForVatReduction"" boolean DEFAULT false;
+                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinHash"" text;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinSalt"" text;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""FailedPinAttempts"" integer DEFAULT 0;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""PinLockedUntilUtc"" timestamp without time zone;
+                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""TaxCategory"" text DEFAULT 'STANDARD_1PCT';
+                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""EligibleForVatReduction"" boolean DEFAULT false;
                         ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
                         ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
                         ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
@@ -64,6 +156,12 @@ public static class DbInitializer
                         DROP INDEX IF EXISTS ""IX_Products_Barcode"";
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_Barcode"" ON ""Products"" (""Barcode"") WHERE ""IsDeleted"" = false AND ""Barcode"" IS NOT NULL;
                     ");
+                }
+                catch { }
+
+                try
+                {
+                    await EnsureSupplierDispatchSchemaAsync(context);
                 }
                 catch { }
             }

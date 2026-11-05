@@ -27,7 +27,22 @@ public class PurchaseOrderConfiguration : IEntityTypeConfiguration<PurchaseOrder
         builder.Property(x => x.RejectionReason).HasMaxLength(500);
         builder.Property(x => x.RowVersion).IsConcurrencyToken().HasDefaultValue(1);
 
+        builder.Property(x => x.SupplierCodeSnapshot).HasMaxLength(50);
+        builder.Property(x => x.SupplierNameSnapshot).HasMaxLength(250);
+        builder.Property(x => x.SupplierEmailSnapshot).HasMaxLength(200);
+        builder.Property(x => x.StoreCodeSnapshot).HasMaxLength(50);
+        builder.Property(x => x.StoreNameSnapshot).HasMaxLength(250);
+        builder.Property(x => x.StoreAddressSnapshot).HasMaxLength(500);
+        builder.Property(x => x.StorePhoneSnapshot).HasMaxLength(50);
+
         builder.HasIndex(x => new { x.TenantId, x.Code }).IsUnique();
+        builder.HasIndex(x => x.DispatchPackageId);
+        builder.HasIndex(x => x.DispatchBatchId);
+
+        builder.HasOne(x => x.DispatchPackage)
+            .WithMany()
+            .HasForeignKey(x => x.DispatchPackageId)
+            .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasOne(x => x.Supplier)
             .WithMany()

@@ -144,6 +144,15 @@ public class SplitMatrixPoCommand
 
     /// <summary>Danh sách groups chỉ định thủ công (hỗ trợ backward compatibility)</summary>
     public List<SplitMatrixPoGroupCommand> Groups { get; set; } = new();
+
+    /// <summary>SEND_NOW | SCHEDULED_SEND — null = không tạo package/email (preview hoặc legacy).</summary>
+    public string? EmailSendMode { get; set; }
+
+    /// <summary>Thời điểm gửi (ISO / local VN). Bắt buộc khi SCHEDULED_SEND.</summary>
+    public DateTime? ScheduledSendAt { get; set; }
+
+    /// <summary>CC emails do Store Owner nhập.</summary>
+    public List<string> CcEmails { get; set; } = new();
 }
 
 public class SplitGroupResultDto
@@ -164,7 +173,21 @@ public class SplitGroupResultDto
     public int InvalidLineCount { get; set; }
     public decimal TotalQuantity { get; set; }
     public decimal TotalAmount { get; set; }
+    public bool HasMissingPrice { get; set; }
+    public List<SplitGroupLineDto> Lines { get; set; } = new();
     public List<string> Warnings { get; set; } = new();
+}
+
+public class SplitGroupLineDto
+{
+    public Guid ProductId { get; set; }
+    public string ProductName { get; set; } = string.Empty;
+    public string Sku { get; set; } = string.Empty;
+    public string Unit { get; set; } = string.Empty;
+    public decimal Quantity { get; set; }
+    public decimal UnitPrice { get; set; }
+    public decimal LineAmount { get; set; }
+    public bool HasMissingPrice { get; set; }
 }
 
 public class SplitMatrixBatchResultDto
@@ -179,6 +202,35 @@ public class SplitMatrixBatchResultDto
     public int AlreadyFinalizedCount { get; set; }
     public IReadOnlyList<SplitGroupResultDto> Results { get; set; } = new List<SplitGroupResultDto>();
     public IReadOnlyList<PurchaseOrderDto> CreatedPurchaseOrders { get; set; } = new List<PurchaseOrderDto>();
+    public SupplierDispatchPackageDto? DispatchPackage { get; set; }
+}
+
+public class SupplierDispatchPackageDto
+{
+    public Guid Id { get; set; }
+    public Guid DispatchBatchId { get; set; }
+    public Guid SupplierId { get; set; }
+    public string SupplierCode { get; set; } = string.Empty;
+    public string SupplierName { get; set; } = string.Empty;
+    public string EmailTo { get; set; } = string.Empty;
+    public IReadOnlyList<string> EmailCc { get; set; } = Array.Empty<string>();
+    public string EmailSendMode { get; set; } = string.Empty;
+    public DateTime? ScheduledSendAtUtc { get; set; }
+    public string EmailStatus { get; set; } = string.Empty;
+    public string GenerationStatus { get; set; } = string.Empty;
+    public string? FileName { get; set; }
+    public long? FileSize { get; set; }
+    public int AttemptCount { get; set; }
+    public string? LastError { get; set; }
+    public DateTime? GeneratedAtUtc { get; set; }
+    public DateTime? SentAtUtc { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public int PurchaseOrderCount { get; set; }
+    public IReadOnlyList<string> PurchaseOrderCodes { get; set; } = Array.Empty<string>();
+    public bool CanDownload { get; set; }
+    public bool CanCancelSchedule { get; set; }
+    public bool CanRetryGeneration { get; set; }
+    public bool CanRetryEmail { get; set; }
 }
 
 public class PurchaseOrderDetailDto
@@ -204,8 +256,10 @@ public class PurchaseOrderDto
     public string Code { get; set; } = string.Empty;
     public Guid BranchId { get; set; }
     public string BranchName { get; set; } = string.Empty;
+    public string BranchCode { get; set; } = string.Empty;
     public Guid SupplierId { get; set; }
     public string SupplierName { get; set; } = string.Empty;
+    public string SupplierCode { get; set; } = string.Empty;
     public DateTime? DeliveryDate { get; set; }
     public string Status { get; set; } = "DRAFT";
     public decimal TotalQty { get; set; }
@@ -386,6 +440,7 @@ public class DispatchSupplierDetailResponse
     public Guid SupplierId { get; set; }
     public string Code { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+    public string? Email { get; set; }
     public DateTime ServerNow { get; set; }
     public DateTime ViewFrom { get; set; }
     public int DurationDays { get; set; }

@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PurchaseOrders;
+using MT_GRMS.Application.PurchaseOrders.Dispatch;
 using MT_GRMS.Application.PurchaseOrders.Dtos;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.SaaS;
@@ -38,7 +39,7 @@ public class PurchaseOrderMatrixTests
         _repo = new FakePurchaseOrderRepository();
         _uow = new FakeUnitOfWork();
         _tenantContext = new FakeTenantContext("tenant-test-1");
-        _service = new PurchaseOrderService(_repo, _uow, _tenantContext);
+        _service = new PurchaseOrderService(_repo, _uow, _tenantContext, new FakeSupplierDispatchPackageService());
 
         // Seed Branch
         _repo.Branches.Add(new Branch
@@ -851,6 +852,47 @@ public class PurchaseOrderMatrixTests
         {
             // No-op in memory test
         }
+
+        public Task<IReadOnlyList<Branch>> GetActiveBranchesAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult((IReadOnlyList<Branch>)Branches.Where(b => b.IsActive && !b.IsDeleted).ToList());
+        }
+
+        public Task<IReadOnlyList<Guid>> GetActiveBranchIdsForSupplierAsync(
+            Guid supplierId,
+            CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult((IReadOnlyList<Guid>)Branches.Where(b => b.IsActive && !b.IsDeleted).Select(b => b.Id).ToList());
+        }
+    }
+
+    private class FakeSupplierDispatchPackageService : ISupplierDispatchPackageService
+    {
+        public Task<SupplierDispatchPackageDto?> CreatePackageForDispatchAsync(
+            SplitMatrixPoCommand command,
+            SplitMatrixBatchResultDto batchResult,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<SupplierDispatchPackageDto?>(null);
+
+        public Task<SupplierDispatchPackageDto?> GetByIdAsync(Guid packageId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<SupplierDispatchPackageDto?>(null);
+
+        public Task<IReadOnlyList<SupplierDispatchPackageDto>> ListAsync(
+            Guid? supplierId,
+            int take = 50,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<SupplierDispatchPackageDto>>(Array.Empty<SupplierDispatchPackageDto>());
+
+        public Task RetryGenerationAsync(Guid packageId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RetryEmailAsync(Guid packageId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task CancelScheduledAsync(Guid packageId, CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<(byte[] Content, string FileName, string ContentType)> DownloadAsync(
+            Guid packageId,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult((Array.Empty<byte>(), "empty.xlsx", "application/octet-stream"));
+
+        public Task ProcessPackageAsync(Guid packageId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private class FakeUnitOfWork : IUnitOfWork
@@ -860,6 +902,17 @@ public class PurchaseOrderMatrixTests
         {
             HasSaved = true;
             return Task.FromResult(1);
+        }
+
+        public Task BeginTransactionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task CommitTransactionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task RollbackTransactionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public async Task ExecuteInTransactionAsync(
+            Func<CancellationToken, Task> action,
+            CancellationToken cancellationToken = default)
+        {
+            await action(cancellationToken);
         }
     }
 

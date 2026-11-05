@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.PurchaseOrders.Dispatch;
 using MT_GRMS.Application.PurchaseOrders.Dtos;
 using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Domain.Exceptions;
@@ -15,15 +16,18 @@ public class PurchaseOrderService : IPurchaseOrderService
     private readonly IPurchaseOrderRepository _repository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
+    private readonly ISupplierDispatchPackageService _dispatchPackageService;
 
     public PurchaseOrderService(
         IPurchaseOrderRepository repository,
         IUnitOfWork unitOfWork,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        ISupplierDispatchPackageService dispatchPackageService)
     {
         _repository = repository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
+        _dispatchPackageService = dispatchPackageService;
     }
 
     private void EnsureBranchAccess(Guid branchId)
@@ -77,33 +81,56 @@ public class PurchaseOrderService : IPurchaseOrderService
 
         var draftPo = await _repository.GetDraftMatrixPoAsync(query.BranchId, query.SupplierId, query.ViewFrom, cancellationToken);
 
-        var cells = new List<OrderMatrixCellDto>();
+        var cellMap = new Dictionary<(Guid ProductId, DateTime Date), OrderMatrixCellDto>();
         if (draftPo != null && draftPo.Details != null)
         {
             foreach (var detail in draftPo.Details)
             {
-                if (detail.DeliveryDate.HasValue)
+                if (!detail.DeliveryDate.HasValue) continue;
+
+                var finalQty = detail.FinalQty
+                    ?? (detail.IsOwnerAdjusted ? (detail.StoreQty ?? 0m) : (detail.EmployeeQty ?? 0m));
+                cellMap[(detail.ProductId, detail.DeliveryDate.Value.Date)] = new OrderMatrixCellDto
                 {
-                    var finalQty = detail.FinalQty ?? (detail.IsOwnerAdjusted ? (detail.StoreQty ?? 0m) : (detail.EmployeeQty ?? 0m));
-                    cells.Add(new OrderMatrixCellDto
-                    {
-                        ProductId = detail.ProductId,
-                        DeliveryDate = detail.DeliveryDate.Value,
-                        EmployeeQty = detail.EmployeeQty ?? 0m,
-                        StoreQty = detail.StoreQty,
-                        IsOwnerAdjusted = detail.IsOwnerAdjusted,
-                        FinalQty = finalQty
-                    });
-                }
+                    ProductId = detail.ProductId,
+                    DeliveryDate = detail.DeliveryDate.Value.Date,
+                    EmployeeQty = detail.EmployeeQty ?? 0m,
+                    StoreQty = detail.StoreQty,
+                    IsOwnerAdjusted = detail.IsOwnerAdjusted,
+                    FinalQty = finalQty
+                };
             }
         }
 
         var now = OrderMatrixRules.GetVietnamNow();
-        var committedList = await _repository.GetCommittedPosInRangeAsync(query.BranchId, query.SupplierId, query.ViewFrom, query.DurationDays, cancellationToken);
+        var committedList = await _repository.GetCommittedPosInRangeAsync(
+            query.BranchId, query.SupplierId, query.ViewFrom, query.DurationDays, cancellationToken);
         var committedDict = committedList
             .Where(p => p.DeliveryDate.HasValue)
             .GroupBy(p => (p.SupplierId, p.DeliveryDate!.Value.Date))
             .ToDictionary(g => g.Key, g => (g.First().Id, g.First().Code));
+
+        // Overlay SL đã chốt từ PO thật (draft đã zero sau split) — FE vẫn gray ô FINALIZED.
+        foreach (var po in committedList)
+        {
+            if (!po.DeliveryDate.HasValue || po.Details == null || po.Details.Count == 0) continue;
+            var date = po.DeliveryDate.Value.Date;
+            foreach (var detail in po.Details)
+            {
+                var qty = detail.OrderedQty ?? detail.FinalQty ?? 0m;
+                if (qty <= 0) continue;
+
+                cellMap[(detail.ProductId, date)] = new OrderMatrixCellDto
+                {
+                    ProductId = detail.ProductId,
+                    DeliveryDate = date,
+                    EmployeeQty = detail.EmployeeQty ?? qty,
+                    StoreQty = detail.StoreQty ?? qty,
+                    IsOwnerAdjusted = detail.IsOwnerAdjusted || detail.StoreQty.HasValue,
+                    FinalQty = qty
+                };
+            }
+        }
 
         var dayStatuses = OrderMatrixRules.BuildDayStatuses(supplierConfigs, query.ViewFrom, query.DurationDays, now, committedDict);
 
@@ -116,7 +143,7 @@ public class PurchaseOrderService : IPurchaseOrderService
             ViewFrom = query.ViewFrom,
             DurationDays = query.DurationDays,
             Products = products,
-            Cells = cells,
+            Cells = cellMap.Values.ToList(),
             SupplierConfigs = supplierConfigs,
             DayStatuses = dayStatuses,
             ServerNow = now,
@@ -789,6 +816,7 @@ public class PurchaseOrderService : IPurchaseOrderService
             SupplierId = query.SupplierId,
             Code = supplier.Code,
             Name = supplier.Name,
+            Email = supplier.Email,
             ServerNow = now,
             ViewFrom = viewFrom,
             DurationDays = duration,
@@ -818,28 +846,52 @@ public class PurchaseOrderService : IPurchaseOrderService
         SplitMatrixPoCommand command,
         CancellationToken cancellationToken = default)
     {
+        SplitMatrixBatchResultDto result;
         if (command.SupplierId.HasValue
             && command.SupplierId.Value != Guid.Empty
             && command.BranchId == Guid.Empty)
         {
-            return await SplitSupplierAcrossBranchesAsync(command, isDryRun: false, cancellationToken);
+            result = await SplitSupplierAcrossBranchesAsync(command, isDryRun: false, cancellationToken);
+        }
+        else
+        {
+            result = await ProcessMatrixSplitEngineAsync(command, isDryRun: false, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(command.EmailSendMode) && result.SuccessCount > 0)
+            {
+                result.DispatchPackage = await _dispatchPackageService.CreatePackageForDispatchAsync(
+                    command,
+                    result,
+                    cancellationToken);
+            }
         }
 
-        return await ProcessMatrixSplitEngineAsync(command, isDryRun: false, cancellationToken);
+        return result;
     }
 
     public async Task<SplitMatrixBatchResultDto> PreviewSplitMatrixPoAsync(
         SplitMatrixPoCommand command,
         CancellationToken cancellationToken = default)
     {
-        if (command.SupplierId.HasValue
-            && command.SupplierId.Value != Guid.Empty
-            && command.BranchId == Guid.Empty)
+        // Preview: không tạo package/email
+        var previewCommand = new SplitMatrixPoCommand
         {
-            return await SplitSupplierAcrossBranchesAsync(command, isDryRun: true, cancellationToken);
+            BranchId = command.BranchId,
+            SupplierId = command.SupplierId,
+            ParentDraftId = command.ParentDraftId,
+            Note = command.Note,
+            Scope = command.Scope,
+            WeekStartDate = command.WeekStartDate,
+            Groups = command.Groups
+        };
+
+        if (previewCommand.SupplierId.HasValue
+            && previewCommand.SupplierId.Value != Guid.Empty
+            && previewCommand.BranchId == Guid.Empty)
+        {
+            return await SplitSupplierAcrossBranchesAsync(previewCommand, isDryRun: true, cancellationToken);
         }
 
-        return await ProcessMatrixSplitEngineAsync(command, isDryRun: true, cancellationToken);
+        return await ProcessMatrixSplitEngineAsync(previewCommand, isDryRun: true, cancellationToken);
     }
 
     /// <summary>
@@ -875,7 +927,7 @@ public class PurchaseOrderService : IPurchaseOrderService
             created.AddRange(perBranch.CreatedPurchaseOrders);
         }
 
-        return new SplitMatrixBatchResultDto
+        var result = new SplitMatrixBatchResultDto
         {
             BranchId = Guid.Empty,
             Scope = command.Scope,
@@ -888,6 +940,18 @@ public class PurchaseOrderService : IPurchaseOrderService
             Results = merged,
             CreatedPurchaseOrders = created
         };
+
+        if (!isDryRun
+            && !string.IsNullOrWhiteSpace(command.EmailSendMode)
+            && result.SuccessCount > 0)
+        {
+            result.DispatchPackage = await _dispatchPackageService.CreatePackageForDispatchAsync(
+                command,
+                result,
+                cancellationToken);
+        }
+
+        return result;
     }
 
     private async Task<SplitMatrixBatchResultDto> ProcessMatrixSplitEngineAsync(
@@ -1220,10 +1284,23 @@ public class PurchaseOrderService : IPurchaseOrderService
 
             var totalQty = validLines.Sum(l => l.Qty);
             var totalAmount = validLines.Sum(l => l.Qty * l.UnitPrice);
+            var hasMissingPrice = validLines.Any(l => l.UnitPrice <= 0);
 
             result.ValidLineCount = validLines.Count;
             result.TotalQuantity = totalQty;
             result.TotalAmount = totalAmount;
+            result.HasMissingPrice = hasMissingPrice;
+            result.Lines = validLines.Select(l => new SplitGroupLineDto
+            {
+                ProductId = l.Product.Id,
+                ProductName = l.Product.Name,
+                Sku = l.Product.Sku,
+                Unit = l.Unit,
+                Quantity = l.Qty,
+                UnitPrice = l.UnitPrice,
+                LineAmount = l.Qty * l.UnitPrice,
+                HasMissingPrice = l.UnitPrice <= 0
+            }).ToList();
 
             if (isDryRun)
             {
@@ -1252,11 +1329,19 @@ public class PurchaseOrderService : IPurchaseOrderService
                     CreatedByRole = _tenantContext.CurrentRole,
                     SubmittedByUserId = await ResolveValidUserIdAsync(cancellationToken),
                     SubmittedAtUtc = DateTime.UtcNow,
-                    OrderedAtUtc = DateTime.UtcNow
+                    OrderedAtUtc = DateTime.UtcNow,
+                    SupplierCodeSnapshot = supplier.Code,
+                    SupplierNameSnapshot = supplier.Name,
+                    SupplierEmailSnapshot = supplier.Email,
+                    StoreCodeSnapshot = branch.BranchCode,
+                    StoreNameSnapshot = branch.Name,
+                    StoreAddressSnapshot = branch.Address,
+                    StorePhoneSnapshot = branch.Phone
                 };
 
                 foreach (var line in validLines)
                 {
+                    var unit = string.IsNullOrWhiteSpace(line.Unit) ? "Gói" : line.Unit;
                     po.Details.Add(new PurchaseOrderDetail
                     {
                         TenantId = _tenantContext.CurrentTenantId,
@@ -1269,13 +1354,26 @@ public class PurchaseOrderService : IPurchaseOrderService
                         OrderedQty = line.Qty,
                         FinalQty = line.Qty,
                         UnitPrice = line.UnitPrice,
-                        DeliveryUoM = string.IsNullOrWhiteSpace(line.Unit) ? "Gói" : line.Unit,
-                        LineAmount = line.Qty * line.UnitPrice
+                        DeliveryUoM = unit,
+                        LineAmount = line.Qty * line.UnitPrice,
+                        ProductCodeSnapshot = line.Product.Sku,
+                        ProductNameSnapshot = line.Product.Name,
+                        PurchaseUnitNameSnapshot = unit
                     });
                 }
 
                 await _repository.AddPurchaseOrderAsync(po, cancellationToken);
                 createdPos.Add(po);
+
+                // Consume draft lines for this delivery day so hub marks day as done (no leftover open qty).
+                foreach (var line in validLines)
+                {
+                    if (line.DraftDetail == null) continue;
+                    line.DraftDetail.EmployeeQty = 0m;
+                    line.DraftDetail.StoreQty = 0m;
+                    line.DraftDetail.FinalQty = 0m;
+                    line.DraftDetail.IsOwnerAdjusted = false;
+                }
 
                 result.Status = OrderMatrixRules.ResultSuccess;
                 result.PurchaseOrderId = po.Id;
@@ -1286,6 +1384,17 @@ public class PurchaseOrderService : IPurchaseOrderService
 
         if (!isDryRun && createdPos.Count > 0)
         {
+            if (draft != null)
+            {
+                draft.TotalQty = draft.Details.Sum(d =>
+                    OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted));
+                draft.TotalAmount = draft.Details.Sum(d =>
+                {
+                    var q = OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted);
+                    return q * d.UnitPrice;
+                });
+            }
+
             await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
@@ -1406,8 +1515,10 @@ public class PurchaseOrderService : IPurchaseOrderService
             Code = po.Code,
             BranchId = po.BranchId,
             BranchName = branchName,
+            BranchCode = po.StoreCodeSnapshot ?? po.Branch?.Code ?? string.Empty,
             SupplierId = po.SupplierId,
             SupplierName = supplierName,
+            SupplierCode = po.SupplierCodeSnapshot ?? po.Supplier?.Code ?? string.Empty,
             DeliveryDate = po.DeliveryDate,
             Status = po.Status,
             TotalQty = po.TotalQty,

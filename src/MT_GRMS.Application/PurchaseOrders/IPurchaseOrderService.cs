@@ -24,6 +24,20 @@ public interface IPurchaseOrderService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Hub theo NCC (multi-branch): danh sách toàn bộ NCC có liên kết cửa hàng.
+    /// </summary>
+    Task<DispatchSupplierHubResponse> GetDispatchSupplierHubAsync(
+        DispatchSupplierHubQuery query,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Chi tiết 1 NCC — sản phẩm nhóm theo cửa hàng.
+    /// </summary>
+    Task<DispatchSupplierDetailResponse> GetDispatchSupplierDetailAsync(
+        DispatchSupplierDetailQuery query,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Lưu bản thảo kế hoạch đặt hàng ma trận (DRAFT PO)
     /// </summary>
     Task<PurchaseOrderDto> SaveMatrixDraftAsync(

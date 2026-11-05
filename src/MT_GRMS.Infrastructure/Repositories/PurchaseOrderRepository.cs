@@ -525,6 +525,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         var to = from.AddDays(Math.Clamp(durationDays, 1, 31));
         var query = _context.PurchaseOrders
             .AsNoTracking()
+            .Include(po => po.Details)
             .Where(po => !po.IsDeleted
                          && po.BranchId == branchId
                          && po.Status != "DRAFT"

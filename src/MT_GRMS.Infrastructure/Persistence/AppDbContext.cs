@@ -64,10 +64,13 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<SupplierBranchAssignment> SupplierBranchAssignments { get; set; } = null!;
     public virtual DbSet<PurchaseOrder> PurchaseOrders { get; set; } = null!;
     public virtual DbSet<PurchaseOrderDetail> PurchaseOrderDetails { get; set; } = null!;
+    public virtual DbSet<SupplierDispatchPackage> SupplierDispatchPackages { get; set; } = null!;
+    public virtual DbSet<SupplierDispatchPackageItem> SupplierDispatchPackageItems { get; set; } = null!;
     public virtual DbSet<GoodsReceipt> GoodsReceipts { get; set; } = null!;
     public virtual DbSet<GoodsReceiptLine> GoodsReceiptLines { get; set; } = null!;
     public virtual DbSet<SupplierReturn> SupplierReturns { get; set; } = null!;
     public virtual DbSet<SupplierReturnLine> SupplierReturnLines { get; set; } = null!;
+    public virtual DbSet<OutboxMessage> OutboxMessages { get; set; } = null!;
 
     // 5. Phân hệ Khách hàng, Khuyến mãi & Bán lẻ POS (4 bảng)
     public virtual DbSet<Customer> Customers { get; set; } = null!;
