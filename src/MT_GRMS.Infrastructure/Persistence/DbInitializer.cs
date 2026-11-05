@@ -151,210 +151,209 @@ public static class DbInitializer
             await context.Database.EnsureCreatedAsync();
         }
 
-        // 2. Kiểm tra nếu đã có dữ liệu mẫu
-        if (await context.SubscriptionPlans.AnyAsync())
+        // 2. PHÂN HỆ SAAS: Nạp danh sách các gói cước SubscriptionPlans (Idempotent)
+        if (!await context.SubscriptionPlans.AnyAsync(p => p.PlanCode == "FREE"))
         {
-            if (!await context.SubscriptionPlans.AnyAsync(p => p.PlanCode == "SUPPORT"))
+            var planFree = new SubscriptionPlan
             {
-                var pSupport = new SubscriptionPlan
-                {
-                    Id = "plan_support",
-                    PlanCode = "SUPPORT",
-                    PlanName = "Gói Hỗ Trợ",
-                    PriceMonthly = 270000.00m,
-                    PriceYearly = 2700000.00m,
-                    MaxBranches = 1,
-                    MaxStaff = 3,
-                    EnabledModulesJson = "[\"Catalog\",\"Pos\"]",
-                    IsActive = true
-                };
-                var pVip = new SubscriptionPlan
-                {
-                    Id = "plan_vip",
-                    PlanCode = "VIP",
-                    PlanName = "Gói Cao Cấp",
-                    PriceMonthly = 490000.00m,
-                    PriceYearly = 4900000.00m,
-                    MaxBranches = 10,
-                    MaxStaff = 100,
-                    EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\"]",
-                    IsActive = true
-                };
-                await context.SubscriptionPlans.AddRangeAsync(pSupport, pVip);
-                await context.SaveChangesAsync();
-            }
+                Id = "plan_free",
+                PlanCode = "FREE",
+                PlanName = "Gói Cơ Bản (Miễn Phí)",
+                PriceMonthly = 0.00m,
+                PriceYearly = 0.00m,
+                MaxBranches = 1,
+                MaxStaff = 3,
+                EnabledModulesJson = "[\"Catalog\",\"Pos\"]",
+                IsActive = true
+            };
 
-            await CatalogSeedData.SeedAsync(context, "tenant_mt_mart_01");
-            await SeedOrdersAndPreOrdersAsync(context);
-            return;
+            var planPro = new SubscriptionPlan
+            {
+                Id = "plan_pro",
+                PlanCode = "PRO",
+                PlanName = "Gói Doanh Nghiệp (Toàn Năng)",
+                PriceMonthly = 999000.00m,
+                PriceYearly = 9990000.00m,
+                MaxBranches = 10,
+                MaxStaff = 100,
+                EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\"]",
+                IsActive = true
+            };
+
+            await context.SubscriptionPlans.AddRangeAsync(planFree, planPro);
+            await context.SaveChangesAsync();
+        }
+
+        if (!await context.SubscriptionPlans.AnyAsync(p => p.PlanCode == "SUPPORT"))
+        {
+            var pSupport = new SubscriptionPlan
+            {
+                Id = "plan_support",
+                PlanCode = "SUPPORT",
+                PlanName = "Gói Hỗ Trợ",
+                PriceMonthly = 270000.00m,
+                PriceYearly = 2700000.00m,
+                MaxBranches = 1,
+                MaxStaff = 3,
+                EnabledModulesJson = "[\"Catalog\",\"Pos\"]",
+                IsActive = true
+            };
+            var pVip = new SubscriptionPlan
+            {
+                Id = "plan_vip",
+                PlanCode = "VIP",
+                PlanName = "Gói Cao Cấp",
+                PriceMonthly = 490000.00m,
+                PriceYearly = 4900000.00m,
+                MaxBranches = 10,
+                MaxStaff = 100,
+                EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\"]",
+                IsActive = true
+            };
+            await context.SubscriptionPlans.AddRangeAsync(pSupport, pVip);
+            await context.SaveChangesAsync();
+        }
+
+        // 3. PHÂN HỆ IDENTITY & DOANH NGHIỆP MẪU (TENANT)
+        var defaultTenantId = "tenant_mt_mart_01";
+        if (!await context.Tenants.AnyAsync(t => t.Id == defaultTenantId))
+        {
+            var demoTenant = new Tenant
+            {
+                Id = defaultTenantId,
+                Name = "Chuỗi Siêu Thị Thực Phẩm Sạch MT-Mart",
+                Subdomain = "mtmart",
+                Code = "MTMART",
+                TaxCode = "0314567890",
+                Hotline = "1900 6868",
+                Address = "Số 123 Đường Nguyễn Huệ, Phường Bến Nghé",
+                City = "Hồ Chí Minh",
+                Status = "ACTIVE",
+                CurrentPlan = "PRO",
+                SubscriptionExpiresAt = DateTime.UtcNow.AddYears(1)
+            };
+            await context.Tenants.AddAsync(demoTenant);
+            await context.SaveChangesAsync();
+        }
+
+        // 4. TÀI KHOẢN NGƯỜI DÙNG & PHÂN QUYỀN
+        if (!await context.Users.AnyAsync(u => u.UserName == "admin"))
+        {
+            var userAdmin = new User
+            {
+                Id = "usr_super_admin",
+                UserName = "admin",
+                PasswordHash = PasswordHasher.Hash("Admin@123"),
+                FullName = "Hệ Thống Super Admin",
+                Email = "admin@mtgrms.vn",
+                Phone = "0901234567",
+                IsActive = true,
+                IsAdmin = true,
+                IsEmailVerified = true
+            };
+
+            var userStoreManager = new User
+            {
+                Id = "usr_store_manager",
+                UserName = "manager01",
+                PasswordHash = PasswordHasher.Hash("Manager@123"),
+                FullName = "Nguyễn Văn Hùng (Quản Lý Cửa Hàng)",
+                Email = "hung.nguyen@mtmart.vn",
+                Phone = "0909876543",
+                IsActive = true,
+                IsAdmin = false,
+                IsEmailVerified = true
+            };
+
+            var userCashier = new User
+            {
+                Id = "usr_cashier",
+                UserName = "cashier01",
+                PasswordHash = PasswordHasher.Hash("Cashier@123"),
+                FullName = "Lê Thị Thảo (Thu Ngân POS)",
+                Email = "thao.le@mtmart.vn",
+                Phone = "0912345678",
+                IsActive = true,
+                IsAdmin = false,
+                IsEmailVerified = true
+            };
+
+            var userStoreOwner = new User
+            {
+                Id = "usr_store_owner",
+                UserName = "chucuahang",
+                PasswordHash = PasswordHasher.Hash("123456"),
+                FullName = "Tran Van Chu (Chu cua hang)",
+                Email = "chucuahang@mtmart.vn",
+                Phone = "0901234568", // Đổi số điện thoại tránh trùng lặp với admin
+                IsActive = true,
+                IsEmailVerified = true
+            };
+
+            var userStaff = new User
+            {
+                Id = "usr_staff_cashier",
+                UserName = "nhanvien",
+                PasswordHash = PasswordHasher.Hash("123456"),
+                FullName = "Le Thi Thu Ngan (Nhan vien ban hang)",
+                Email = "nhanvien@mtmart.vn",
+                Phone = "0988765432",
+                IsActive = true,
+                IsEmailVerified = true
+            };
+
+            await context.Users.AddRangeAsync(userAdmin, userStoreManager, userCashier, userStoreOwner, userStaff);
+
+            var tenantUserAdmin = new TenantUser
+            {
+                TenantId = defaultTenantId,
+                UserId = userAdmin.Id,
+                Role = "SUPER_ADMIN",
+                IsActive = true
+            };
+
+            var tenantUserManager = new TenantUser
+            {
+                TenantId = defaultTenantId,
+                UserId = userStoreManager.Id,
+                Role = "BRANCH_MANAGER",
+                IsActive = true
+            };
+
+            var tenantUserCashier = new TenantUser
+            {
+                TenantId = defaultTenantId,
+                UserId = userCashier.Id,
+                Role = "CASHIER",
+                IsActive = true
+            };
+
+            var tenantUserOwner = new TenantUser
+            {
+                TenantId = defaultTenantId,
+                UserId = userStoreOwner.Id,
+                Role = "STORE_OWNER",
+                IsActive = true
+            };
+
+            var tenantUserStaff = new TenantUser
+            {
+                TenantId = defaultTenantId,
+                UserId = userStaff.Id,
+                Role = "CASHIER",
+                IsActive = true
+            };
+
+            await context.TenantUsers.AddRangeAsync(tenantUserAdmin, tenantUserManager, tenantUserCashier, tenantUserOwner, tenantUserStaff);
+            await context.SaveChangesAsync();
         }
 
         // =========================================================================
-        // PHÂN HỆ 1: SAAS, MULTI-TENANCY & IDENTITY
+        // PHÂN HỆ 2: CHI NHÁNH & KHO & CATALOG MẪU
         // =========================================================================
-
-        // Gói cước SaaS
-        var planFree = new SubscriptionPlan
+        if (!await context.Branches.AnyAsync(b => b.TenantId == defaultTenantId))
         {
-            Id = "plan_free",
-            PlanCode = "FREE",
-            PlanName = "Gói Cơ Bản (Miễn Phí)",
-            PriceMonthly = 0.00m,
-            PriceYearly = 0.00m,
-            MaxBranches = 1,
-            MaxStaff = 3,
-            EnabledModulesJson = "[\"Catalog\",\"Pos\"]",
-            IsActive = true
-        };
-
-        var planPro = new SubscriptionPlan
-        {
-            Id = "plan_pro",
-            PlanCode = "PRO",
-            PlanName = "Gói Doanh Nghiệp (Toàn Năng)",
-            PriceMonthly = 999000.00m,
-            PriceYearly = 9990000.00m,
-            MaxBranches = 10,
-            MaxStaff = 100,
-            EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\"]",
-            IsActive = true
-        };
-
-        await context.SubscriptionPlans.AddRangeAsync(planFree, planPro);
-        await context.SaveChangesAsync();
-
-        // Doanh nghiệp thuê SaaS mẫu (Default Tenant)
-        var defaultTenantId = "tenant_mt_mart_01";
-        var demoTenant = new Tenant
-        {
-            Id = defaultTenantId,
-            Name = "Chuỗi Siêu Thị Thực Phẩm Sạch MT-Mart",
-            Subdomain = "mtmart",
-            Code = "MTMART",
-            TaxCode = "0314567890",
-            Hotline = "1900 6868",
-            Address = "Số 123 Đường Nguyễn Huệ, Phường Bến Nghé",
-            City = "Hồ Chí Minh",
-            Status = "ACTIVE",
-            CurrentPlan = planPro.PlanCode,
-            SubscriptionExpiresAt = DateTime.UtcNow.AddYears(1)
-        };
-        await context.Tenants.AddAsync(demoTenant);
-
-        // Tài khoản người dùng mẫu
-        var userAdmin = new User
-        {
-            Id = "usr_super_admin",
-            UserName = "admin",
-            PasswordHash = PasswordHasher.Hash("Admin@123"),
-            FullName = "Hệ Thống Super Admin",
-            Email = "admin@mtgrms.vn",
-            Phone = "0901234567",
-            IsActive = true,
-            IsAdmin = true,
-            IsEmailVerified = true
-        };
-
-        var userStoreManager = new User
-        {
-            Id = "usr_store_manager",
-            UserName = "manager01",
-            PasswordHash = PasswordHasher.Hash("Manager@123"),
-            FullName = "Nguyễn Văn Hùng (Quản Lý Cửa Hàng)",
-            Email = "hung.nguyen@mtmart.vn",
-            Phone = "0909876543",
-            IsActive = true,
-            IsAdmin = false,
-            IsEmailVerified = true
-        };
-
-        var userCashier = new User
-        {
-            Id = "usr_cashier",
-            UserName = "cashier01",
-            PasswordHash = PasswordHasher.Hash("Cashier@123"),
-            FullName = "Lê Thị Thảo (Thu Ngân POS)",
-            Email = "thao.le@mtmart.vn",
-            Phone = "0912345678",
-            IsActive = true,
-            IsAdmin = false,
-            IsEmailVerified = true
-        };
-
-        var userStoreOwner = new User
-        {
-            Id = "usr_store_owner",
-            UserName = "chucuahang",
-            PasswordHash = "123456",
-            FullName = "Tran Van Chu (Chu cua hang)",
-            Email = "chucuahang@mtmart.vn",
-            Phone = "0901234567",
-            IsActive = true,
-            IsEmailVerified = true
-        };
-
-        var userStaff = new User
-        {
-            Id = "usr_staff_cashier",
-            UserName = "nhanvien",
-            PasswordHash = "123456",
-            FullName = "Le Thi Thu Ngan (Nhan vien ban hang)",
-            Email = "nhanvien@mtmart.vn",
-            Phone = "0988765432",
-            IsActive = true,
-            IsEmailVerified = true
-        };
-
-        await context.Users.AddRangeAsync(userAdmin, userStoreManager, userCashier, userStoreOwner, userStaff);
-
-        // Phân quyền TenantUser
-        var tenantUserAdmin = new TenantUser
-        {
-            TenantId = defaultTenantId,
-            UserId = userAdmin.Id,
-            Role = "SUPER_ADMIN",
-            IsActive = true
-        };
-
-        var tenantUserManager = new TenantUser
-        {
-            TenantId = defaultTenantId,
-            UserId = userStoreManager.Id,
-            Role = "BRANCH_MANAGER",
-            IsActive = true
-        };
-
-        var tenantUserCashier = new TenantUser
-        {
-            TenantId = defaultTenantId,
-            UserId = userCashier.Id,
-            Role = "CASHIER",
-            IsActive = true
-        };
-
-        var tenantUserOwner = new TenantUser
-        {
-            TenantId = defaultTenantId,
-            UserId = userStoreOwner.Id,
-            Role = "STORE_OWNER",
-            IsActive = true
-        };
-
-        var tenantUserStaff = new TenantUser
-        {
-            TenantId = defaultTenantId,
-            UserId = userStaff.Id,
-            Role = "CASHIER",
-            IsActive = true
-        };
-
-        await context.TenantUsers.AddRangeAsync(tenantUserAdmin, tenantUserManager, tenantUserCashier, tenantUserOwner, tenantUserStaff);
-        await context.SaveChangesAsync();
-
-        // =========================================================================
-        // PHÂN HỆ 2: CHI NHÁNH & KHO
-        // =========================================================================
-        var branchQ1 = new Branch
+            var branchQ1 = new Branch
         {
             TenantId = defaultTenantId,
             BranchCode = "BR-HCM-01",
@@ -738,14 +737,14 @@ public static class DbInitializer
         {
             TenantId = defaultTenantId,
             BranchId = branchQ1.Id,
-            UserId = userStoreManager.Id,
+            UserId = "usr_store_manager",
             EmployeeCode = "NV-001",
-            FullName = userStoreManager.FullName,
+            FullName = "Nguyễn Văn Hùng (Quản Lý Cửa Hàng)",
             CitizenId = "079095001234",
             DateOfBirth = new DateTime(1995, 5, 20),
             Gender = "Nam",
-            Phone = userStoreManager.Phone!,
-            Email = userStoreManager.Email,
+            Phone = "0909876543",
+            Email = "hung.nguyen@mtmart.vn",
             JobTitle = "Cửa Hàng Trưởng",
             SalaryType = "monthly",
             BaseRate = 15000000.00m,
@@ -758,14 +757,14 @@ public static class DbInitializer
         {
             TenantId = defaultTenantId,
             BranchId = branchQ1.Id,
-            UserId = userCashier.Id,
+            UserId = "usr_cashier",
             EmployeeCode = "NV-002",
-            FullName = userCashier.FullName,
+            FullName = "Lê Thị Thảo (Thu Ngân POS)",
             CitizenId = "079098005678",
             DateOfBirth = new DateTime(1998, 10, 12),
             Gender = "Nữ",
-            Phone = userCashier.Phone!,
-            Email = userCashier.Email,
+            Phone = "0912345678",
+            Email = "thao.le@mtmart.vn",
             JobTitle = "Nhân Viên Thu Ngân POS",
             SalaryType = "monthly",
             BaseRate = 8500000.00m,
@@ -781,6 +780,7 @@ public static class DbInitializer
         // Lưu toàn bộ dữ liệu mẫu vào CSDL
         await context.SaveChangesAsync();
         await SeedOrdersAndPreOrdersAsync(context);
+        }
     }
 
     public static async Task SeedOrdersAndPreOrdersAsync(AppDbContext context)

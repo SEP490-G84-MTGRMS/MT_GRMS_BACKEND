@@ -45,6 +45,17 @@ public class UserAuthenticationTests
 
         public void Update(User user) { }
         public Task SaveChangesAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<bool> ExistsByPhoneOrEmailAsync(string phone, string? email, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(_users.Any(u => u.Phone == phone || (!string.IsNullOrEmpty(email) && u.Email == email)));
+        }
+
+        public Task<User> RegisterStoreOwnerAsync(User user, MT_GRMS.Domain.Entities.SaaS.Tenant tenant, MT_GRMS.Domain.Entities.SaaS.Branch branch, CancellationToken cancellationToken = default)
+        {
+            _users.Add(user);
+            return Task.FromResult(user);
+        }
     }
 
     [Fact]
