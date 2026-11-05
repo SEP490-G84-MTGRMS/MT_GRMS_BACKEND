@@ -84,32 +84,22 @@ public class UserRepository : IUserRepository
 
     public async Task<User> RegisterStoreOwnerAsync(User user, MT_GRMS.Domain.Entities.SaaS.Tenant tenant, MT_GRMS.Domain.Entities.SaaS.Branch branch, CancellationToken cancellationToken = default)
     {
-        using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
-        try
+        await _context.Tenants.AddAsync(tenant, cancellationToken);
+        await _context.Users.AddAsync(user, cancellationToken);
+
+        var tenantUser = new TenantUser
         {
-            await _context.Tenants.AddAsync(tenant, cancellationToken);
-            await _context.Users.AddAsync(user, cancellationToken);
+            TenantId = tenant.Id,
+            UserId = user.Id,
+            Role = "STORE_OWNER",
+            IsActive = true
+        };
+        await _context.TenantUsers.AddAsync(tenantUser, cancellationToken);
 
-            var tenantUser = new TenantUser
-            {
-                TenantId = tenant.Id,
-                UserId = user.Id,
-                Role = "STORE_OWNER",
-                IsActive = true
-            };
-            await _context.TenantUsers.AddAsync(tenantUser, cancellationToken);
+        await _context.Branches.AddAsync(branch, cancellationToken);
 
-            await _context.Branches.AddAsync(branch, cancellationToken);
+        await _context.SaveChangesAsync(cancellationToken);
 
-            await _context.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
-
-            return user;
-        }
-        catch
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            throw;
-        }
+        return user;
     }
 }

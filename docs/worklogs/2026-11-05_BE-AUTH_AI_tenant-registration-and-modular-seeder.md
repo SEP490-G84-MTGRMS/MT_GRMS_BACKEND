@@ -35,7 +35,7 @@
   - Tự động sinh `Tenant` (mã ngẫu nhiên, slug, plan FREE), sinh `User` (role `STORE_OWNER`, hash password), tạo `TenantUser` liên kết và tạo `Branch` mặc định ("Chi nhánh chính").
 - **Repository (`IUserRepository.cs`, `UserRepository.cs`)**:
   - `ExistsByPhoneOrEmailAsync`: kiểm tra trùng SĐT/Email.
-  - `RegisterStoreOwnerAsync`: thực thi lưu `Tenant`, `User`, `TenantUser`, `Branch` trong một Database Transaction nguyên tử (`BeginTransactionAsync`).
+  - `RegisterStoreOwnerAsync`: thực thi lưu `Tenant`, `User`, `TenantUser`, `Branch` trong một đơn vị công việc (Unit of Work) nguyên tử thông qua `SaveChangesAsync`. Khắc phục triệt để lỗi xung đột giao dịch thủ công với `NpgsqlRetryingExecutionStrategy` trên PostgreSQL.
 - **Controller (`AuthController.cs`)**:
   - Thêm endpoint `POST /api/v1/auth/register`, trả về `ApiResponse<LoginResponse>` chứa JWT Token và thông tin User để frontend đăng nhập ngay.
 - **Tests (`TenantStoreControllerTests.cs`, `AuthControllerTests.cs`, `UserAuthenticationTests.cs`)**:
