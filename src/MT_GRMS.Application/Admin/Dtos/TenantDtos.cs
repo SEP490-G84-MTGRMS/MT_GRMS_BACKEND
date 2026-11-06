@@ -101,3 +101,14 @@ public record PurchaseSubscriptionResponse(
     string PaymentMethod,
     string Message
 );
+
+public record SubscriptionOrderHistoryDto(
+    string Code,
+    string PlanName,
+    string StartDate,
+    string EndDate,
+    decimal TotalAmount,
+    string PaymentMethod,
+    string Status,
+    DateTime CreatedAt
+);

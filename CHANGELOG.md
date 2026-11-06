@@ -8,6 +8,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ### Changed
 - Cải thiện API cập nhật thông tin gian hàng `PUT /api/tenant/store-info`: hỗ trợ cơ chế fallback `X-Tenant-Id` header và an toàn null-safety khi lưu tên chuỗi cửa hàng, bảo vệ toàn vẹn dữ liệu khách thuê [FE-STORE] [worklog: docs/worklogs/2026-11-06_FE-STORE_AI_tenant-store-update-enhancement.md].
+- Bổ sung API `GET /api/tenant/subscriptions/history` và DTO `SubscriptionOrderHistoryDto`: trả về danh sách lịch sử hợp đồng và giao dịch gói dịch vụ của gian hàng (kết hợp các giao dịch mua/gia hạn từ `WalletTransactions` và gói khởi tạo ban đầu), chấm dứt tình trạng frontend phải dùng dữ liệu giả định [FE-STORE] [worklog: docs/worklogs/2026-11-06_FE-STORE_AI_tenant-store-update-enhancement.md].
 
 ### Security
 - Chuẩn hóa an toàn bảo mật cấu hình: di chuyển toàn bộ credentials (ConnectionStrings, JWT Key, Cloudinary Secrets, SePay ApiKey, Gmail SMTP) từ `appsettings.json` sang `.env` (được bảo vệ bởi `.gitignore`), ngăn chặn triệt để nguy cơ rò rỉ secret key khi push mã nguồn lên Git [BE-CONFIG] [worklog: docs/worklogs/2026-11-06_FE-AUTH_AI_forgot-password-email-otp.md].
