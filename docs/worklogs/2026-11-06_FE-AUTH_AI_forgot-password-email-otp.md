@@ -27,7 +27,8 @@
 - `src/MT_GRMS.Infrastructure/Services/EmailService.cs`: Triển khai gửi email HTML OTP bằng `System.Net.Mail` kèm Dev Console Logger fallback.
 - `src/MT_GRMS.Application/Auth/IAuthService.cs` & `AuthService.cs`: Thêm 3 phương thức xử lý OTP và đặt lại mật khẩu mới.
 - `src/MT_GRMS.Api/Controllers/AuthController.cs`: Thêm 3 API endpoints `POST /api/auth/forgot-password`, `POST /api/auth/verify-otp`, `POST /api/auth/reset-password`.
-- `src/MT_GRMS.Api/appsettings.json`: Thêm block `EmailSettings`.
+- `src/MT_GRMS.Api/appsettings.json`: Thêm block `EmailSettings`, đồng thời rút trích toàn bộ secrets (JWT Key, Cloudinary, SePay, Gmail SMTP, ConnectionStrings) sang `.env` để bảo mật khi push lên Git.
+- `.env.example`: Cập nhật đầy đủ toàn bộ template biến môi trường mẫu cho toàn dự án.
 - `src/MT_GRMS.Infrastructure/DependencyInjection.cs`: Đăng ký `EmailSettings` và `IEmailService`.
 - `tests/MT_GRMS.UnitTests/UserAuthenticationTests.cs`: Bổ sung 4 unit tests kiểm thử luồng forgot password (100% PASS).
 - `tests/MT_GRMS.IntegrationTests/PnLReportDatabaseIntegrationTests.cs` & `HouseholdTaxDatabaseIntegrationTests.cs`: Thêm `using MT_GRMS.Domain.Entities.Sales;`.
