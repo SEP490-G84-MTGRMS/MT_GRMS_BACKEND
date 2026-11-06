@@ -91,9 +91,10 @@ public class OrderService : IOrderService
             }
         }
 
-        // 3. Tải danh mục sản phẩm tương ứng
+        // 3. Tải danh mục sản phẩm tương ứng và cấu hình giá chi nhánh (BranchProducts)
         var productIds = request.Items.Select(i => i.ProductId).Distinct();
         var products = await _orderRepository.GetProductsByIdsAsync(productIds, cancellationToken);
+        var branchProducts = await _orderRepository.GetBranchProductsByProductIdsAsync(branchId, productIds, cancellationToken);
 
         foreach (var item in request.Items)
         {
@@ -103,23 +104,46 @@ public class OrderService : IOrderService
             }
         }
 
-        // 4. Trừ tồn kho BranchStocks theo FEFO (Hạn dùng sớm nhất trừ trước)
-        var itemGroups = request.Items.GroupBy(i => i.ProductId);
-        foreach (var group in itemGroups)
+        // 4. Trừ tồn kho BranchStocks theo FEFO (Hạn dùng sớm nhất trừ trước) quy đổi theo ĐVT (REQ-POS-11)
+        var productRequiredBaseQty = new Dictionary<Guid, decimal>();
+        foreach (var item in request.Items)
         {
-            var pId = group.Key;
-            var requiredQty = group.Sum(x => x.Quantity);
+            decimal rate = 1.00m;
+            if (item.UnitId.HasValue && item.UnitId.Value != Guid.Empty)
+            {
+                var prod = products[item.ProductId];
+                var matchedUnit = prod.Units?.FirstOrDefault(u => u.Id == item.UnitId.Value && !u.IsDeleted);
+                if (matchedUnit != null && matchedUnit.ConversionRate > 0)
+                {
+                    rate = matchedUnit.ConversionRate;
+                }
+            }
+            var baseQty = item.Quantity * rate;
+            if (productRequiredBaseQty.ContainsKey(item.ProductId))
+            {
+                productRequiredBaseQty[item.ProductId] += baseQty;
+            }
+            else
+            {
+                productRequiredBaseQty[item.ProductId] = baseQty;
+            }
+        }
+
+        foreach (var kvp in productRequiredBaseQty)
+        {
+            var pId = kvp.Key;
+            var requiredBaseQty = kvp.Value;
             var prod = products[pId];
 
             var branchStocks = await _orderRepository.GetBranchStocksForProductFefoAsync(branchId, pId, cancellationToken);
 
             var totalOnHand = branchStocks.Sum(s => s.QuantityOnHand);
-            if (totalOnHand < requiredQty)
+            if (totalOnHand < requiredBaseQty)
             {
-                throw new InvalidOperationException($"Sản phẩm '{prod.Name}' không đủ tồn kho tại chi nhánh (Hiện còn: {totalOnHand:0.##}, Cần bán: {requiredQty:0.##}).");
+                throw new InvalidOperationException($"Sản phẩm '{prod.Name}' không đủ tồn kho tại chi nhánh (Hiện còn: {totalOnHand:0.##}, Cần bán: {requiredBaseQty:0.##}).");
             }
 
-            var remainingToDeduct = requiredQty;
+            var remainingToDeduct = requiredBaseQty;
             foreach (var stock in branchStocks)
             {
                 if (remainingToDeduct <= 0) break;
@@ -131,7 +155,7 @@ public class OrderService : IOrderService
             }
         }
 
-        // 5. Tính toán chi tiết đơn hàng
+        // 5. Tính toán chi tiết đơn hàng (Phân giải giá BranchProduct & BranchProductUnitPrice) (REQ-POS-09, REQ-POS-10)
         decimal totalAmount = 0m;
         decimal itemDiscountTotal = 0m;
         var orderDetails = new List<OrderDetail>();
@@ -140,9 +164,65 @@ public class OrderService : IOrderService
         foreach (var item in request.Items)
         {
             var prod = products[item.ProductId];
-            decimal lineTotal = item.Quantity * item.UnitPrice;
+            branchProducts.TryGetValue(item.ProductId, out var bp);
+
+            decimal resolvedUnitPrice;
+            string? unitName = null;
+
+            if (item.UnitId.HasValue && item.UnitId.Value != Guid.Empty)
+            {
+                var matchedUnit = prod.Units?.FirstOrDefault(u => u.Id == item.UnitId.Value && !u.IsDeleted);
+                if (matchedUnit != null)
+                {
+                    unitName = matchedUnit.UnitName;
+                }
+
+                var unitOverride = bp?.UnitPriceOverrides?.FirstOrDefault(o => o.ProductUnitId == item.UnitId.Value && !o.IsDeleted);
+                if (unitOverride != null && unitOverride.SellingPriceOverride > 0)
+                {
+                    resolvedUnitPrice = unitOverride.SellingPriceOverride;
+                }
+                else if (matchedUnit != null && matchedUnit.Price > 0)
+                {
+                    resolvedUnitPrice = matchedUnit.Price;
+                }
+                else
+                {
+                    var baseSelling = (bp?.SellingPriceOverride > 0) ? bp.SellingPriceOverride.Value : prod.SellingPrice;
+                    var conversion = matchedUnit?.ConversionRate > 0 ? matchedUnit.ConversionRate : 1.00m;
+                    resolvedUnitPrice = baseSelling * conversion;
+                }
+            }
+            else
+            {
+                if (bp?.SellingPriceOverride > 0)
+                {
+                    resolvedUnitPrice = bp.SellingPriceOverride.Value;
+                }
+                else
+                {
+                    resolvedUnitPrice = prod.SellingPrice;
+                }
+                unitName = prod.BaseUnit;
+            }
+
+            decimal effectiveUnitPrice;
+            if (item.UnitId.HasValue && item.UnitId.Value != Guid.Empty)
+            {
+                effectiveUnitPrice = (item.UnitPrice > 0 && item.UnitPrice != prod.SellingPrice) ? item.UnitPrice : resolvedUnitPrice;
+            }
+            else if (bp?.SellingPriceOverride > 0 && (item.UnitPrice <= 0 || item.UnitPrice == prod.SellingPrice))
+            {
+                effectiveUnitPrice = bp.SellingPriceOverride.Value;
+            }
+            else
+            {
+                effectiveUnitPrice = item.UnitPrice > 0 ? item.UnitPrice : resolvedUnitPrice;
+            }
+
+            decimal lineTotal = item.Quantity * effectiveUnitPrice;
             decimal itemDiscount = item.DiscountAmount ?? 0m;
-            decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : item.UnitPrice;
+            decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : effectiveUnitPrice;
 
             // Tính VAT theo tỷ lệ của sản phẩm (hoặc mặc định 1% cho tạp hóa)
             decimal vatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m;
@@ -157,13 +237,13 @@ public class OrderService : IOrderService
                 ProductId = item.ProductId,
                 LineNumber = lineNumber++,
                 Qty = item.Quantity,
-                UnitPrice = item.UnitPrice,
+                UnitPrice = effectiveUnitPrice,
                 DiscountAmount = itemDiscount,
                 ActualPrice = actualPrice,
                 CostPriceAtSale = prod.CostPrice ?? 0m, // Chốt cứng giá vốn COGS (FE-10)
                 AppliedVatRate = vatRate,
                 VatAmount = vatAmount,
-                ProductName = prod.Name,
+                ProductName = !string.IsNullOrWhiteSpace(item.ProductName) ? item.ProductName : prod.Name,
                 Product = prod
             };
             orderDetails.Add(detail);
@@ -252,6 +332,12 @@ public class OrderService : IOrderService
         // 7. Tích điểm thưởng cho khách hàng
         if (customer != null)
         {
+            if (request.PointsRedeemed.HasValue && request.PointsRedeemed.Value > 0)
+            {
+                int pointsToDeduct = Math.Min(customer.RewardPoints, request.PointsRedeemed.Value);
+                customer.RewardPoints -= pointsToDeduct;
+            }
+
             int earnedPoints = (int)(finalAmount / 10000m); // 10.000đ = 1 điểm
             customer.RewardPoints += earnedPoints;
             customer.TotalSpending += finalAmount;
@@ -270,7 +356,7 @@ public class OrderService : IOrderService
             TotalAmount = totalAmount,
             DiscountAmount = totalDiscount,
             FinalAmount = finalAmount,
-            DepositAmount = (paymentMethodUpper == "CASH") ? cashTendered : finalAmount,
+            DepositAmount = (paymentMethodUpper == "CASH") ? cashTendered : (paymentMethodUpper == "CREDIT" ? 0m : finalAmount),
             PaymentMethod = paymentMethodUpper,
             PaymentStatus = paymentStatus,
             Status = "Completed",
@@ -292,8 +378,9 @@ public class OrderService : IOrderService
         {
             if (paymentMethodUpper == "CASH")
             {
+                var till = await _cashbookService.GetOrCreateTillAsync(order.BranchId, "Két quầy chính", cancellationToken);
                 await _cashbookService.ReceiveCashAsync(
-                    DefaultTillId,
+                    till.Id,
                     FinanceAccountType.Till,
                     finalAmount,
                     "POS_SALE",
@@ -305,8 +392,11 @@ public class OrderService : IOrderService
             }
             else if (paymentMethodUpper != "CREDIT" && paymentMethodUpper != "DEBT")
             {
+                var accounts = await _cashbookService.GetAccountsAsync(order.BranchId, cancellationToken);
+                var bank = accounts.FirstOrDefault(a => string.Equals(a.AccountType, "Bank", StringComparison.OrdinalIgnoreCase));
+                var bankId = bank?.Id ?? DefaultBankId;
                 await _cashbookService.ReceiveCashAsync(
-                    DefaultBankId,
+                    bankId,
                     FinanceAccountType.Bank,
                     finalAmount,
                     "POS_SALE",
@@ -391,10 +481,10 @@ public class OrderService : IOrderService
         decimal? cash = printRequest?.CashTendered ?? (order.PaymentMethod == "CASH" ? order.DepositAmount : null);
         decimal? change = cash.HasValue ? Math.Max(0, cash.Value - order.FinalAmount) : null;
 
-        return _thermalPrintService.PrintOrderInvoice(order, printer, cash, change);
+        return _thermalPrintService.PrintOrderInvoice(order, printer, cash, change, printRequest?.CashierName);
     }
 
-    public async Task<byte[]> GetOrderReceiptEscPosBytesAsync(Guid orderId, decimal? cashReceived = null, CancellationToken cancellationToken = default)
+    public async Task<byte[]> GetOrderReceiptEscPosBytesAsync(Guid orderId, decimal? cashReceived = null, string? cashierName = null, CancellationToken cancellationToken = default)
     {
         var order = await _orderRepository.GetOrderWithDetailsAsync(orderId, cancellationToken);
         if (order == null)
@@ -405,7 +495,7 @@ public class OrderService : IOrderService
         decimal? cash = cashReceived ?? (order.PaymentMethod == "CASH" ? order.DepositAmount : null);
         decimal? change = cash.HasValue ? Math.Max(0, cash.Value - order.FinalAmount) : null;
 
-        return _thermalPrintService.BuildEscPosReceipt(order, cash, change);
+        return _thermalPrintService.BuildEscPosReceipt(order, cash, change, cashierName);
     }
 
     public async Task<OrderResponse> CreatePreOrderAsync(PreOrderCreateRequest request, CancellationToken cancellationToken = default)

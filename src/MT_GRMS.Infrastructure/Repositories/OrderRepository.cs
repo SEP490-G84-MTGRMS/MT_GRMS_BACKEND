@@ -33,8 +33,18 @@ public class OrderRepository : GenericRepository<Order>, IOrderRepository
     {
         var idList = productIds.Distinct().ToList();
         return await _context.Products
+            .Include(p => p.Units)
             .Where(p => idList.Contains(p.Id) && !p.IsDeleted)
             .ToDictionaryAsync(p => p.Id, cancellationToken);
+    }
+
+    public async Task<Dictionary<Guid, BranchProduct>> GetBranchProductsByProductIdsAsync(Guid branchId, IEnumerable<Guid> productIds, CancellationToken cancellationToken = default)
+    {
+        var idList = productIds.Distinct().ToList();
+        return await _context.BranchProducts
+            .Include(bp => bp.UnitPriceOverrides)
+            .Where(bp => bp.BranchId == branchId && idList.Contains(bp.ProductId) && !bp.IsDeleted)
+            .ToDictionaryAsync(bp => bp.ProductId, cancellationToken);
     }
 
     public async Task<IReadOnlyList<BranchStock>> GetBranchStocksForProductFefoAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
