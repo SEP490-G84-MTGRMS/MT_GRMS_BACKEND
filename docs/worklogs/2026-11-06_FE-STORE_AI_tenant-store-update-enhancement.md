@@ -38,3 +38,4 @@
 ## 5. Ghi chú cho Manager (Manager Merge Notes)
 - **Mức độ rủi ro**: Thấp (Low).
 - **Lưu ý**: Thay đổi an toàn, tương thích ngược 100% với các client hiện hành.
+
