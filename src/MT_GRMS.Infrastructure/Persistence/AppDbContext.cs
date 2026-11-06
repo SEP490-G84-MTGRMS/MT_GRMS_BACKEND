@@ -64,6 +64,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<SupplierBranchAssignment> SupplierBranchAssignments { get; set; } = null!;
     public virtual DbSet<PurchaseOrder> PurchaseOrders { get; set; } = null!;
     public virtual DbSet<PurchaseOrderDetail> PurchaseOrderDetails { get; set; } = null!;
+    public virtual DbSet<PurchaseOrderRevision> PurchaseOrderRevisions { get; set; } = null!;
     public virtual DbSet<SupplierDispatchPackage> SupplierDispatchPackages { get; set; } = null!;
     public virtual DbSet<SupplierDispatchPackageItem> SupplierDispatchPackageItems { get; set; } = null!;
     public virtual DbSet<GoodsReceipt> GoodsReceipts { get; set; } = null!;

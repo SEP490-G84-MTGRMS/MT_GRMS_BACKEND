@@ -25,6 +25,8 @@ public static class OrderMatrixRules
     public const string ResultFailed = "FAILED";
     public const string ResultSkipped = "SKIPPED";
     public const string ResultAlreadyFinalized = "ALREADY_FINALIZED";
+    public const string ResultAmended = "AMENDED";
+    public const string ResultNoChanges = "NO_CHANGES";
 
     private static readonly Lazy<TimeZoneInfo> VietnamTimeZoneLazy = new(() =>
     {
@@ -150,20 +152,6 @@ public static class OrderMatrixRules
     {
         var cutoff = GetCutoffDateTime(deliveryDate, config.LeadTimeDays, config.CutoffTime);
 
-        if (!string.IsNullOrWhiteSpace(committedPoCode) || committedPoId.HasValue)
-        {
-            return new OrderMatrixDayStatusDto
-            {
-                SupplierId = supplierId,
-                DeliveryDate = deliveryDate.Date,
-                DeliveryDateStatus = StatusFinalized,
-                CutoffDateTime = cutoff,
-                PrimaryReasonCode = "PO_ALREADY_COMMITTED",
-                PoCode = committedPoCode,
-                PoId = committedPoId
-            };
-        }
-
         if (!config.IsActive)
         {
             return Off(supplierId, deliveryDate, cutoff, "SUPPLIER_INACTIVE");
@@ -192,6 +180,23 @@ public static class OrderMatrixRules
             return Off(supplierId, deliveryDate, cutoff, "LEAD_TIME_VIOLATION");
         }
 
+        var hasCommittedPo = !string.IsNullOrWhiteSpace(committedPoCode) || committedPoId.HasValue;
+
+        // PO đã tồn tại nhưng đã qua cutoff → khóa cứng (FINALIZED).
+        if (hasCommittedPo && now >= cutoff)
+        {
+            return new OrderMatrixDayStatusDto
+            {
+                SupplierId = supplierId,
+                DeliveryDate = deliveryDate.Date,
+                DeliveryDateStatus = StatusFinalized,
+                CutoffDateTime = cutoff,
+                PrimaryReasonCode = "PO_COMMITTED_CUTOFF_PASSED",
+                PoCode = committedPoCode,
+                PoId = committedPoId
+            };
+        }
+
         if (now >= cutoff)
         {
             return new OrderMatrixDayStatusDto
@@ -204,7 +209,7 @@ public static class OrderMatrixRules
             };
         }
 
-        // Cảnh báo khi còn ≤ 24h đến cutoff
+        // Trước cutoff: vẫn OPEN/CUTOFF_DUE kể cả khi đã có PO (cho phép amend).
         var status = (cutoff - now) <= TimeSpan.FromHours(24) ? StatusCutoffDue : StatusOpen;
         return new OrderMatrixDayStatusDto
         {
@@ -212,7 +217,9 @@ public static class OrderMatrixRules
             DeliveryDate = deliveryDate.Date,
             DeliveryDateStatus = status,
             CutoffDateTime = cutoff,
-            PrimaryReasonCode = null
+            PrimaryReasonCode = hasCommittedPo ? "PO_EXISTED_EDITABLE" : null,
+            PoCode = committedPoCode,
+            PoId = committedPoId
         };
     }
 

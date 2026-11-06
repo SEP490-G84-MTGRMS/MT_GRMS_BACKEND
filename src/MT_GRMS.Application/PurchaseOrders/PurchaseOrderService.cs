@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MT_GRMS.Application.Common;
@@ -364,8 +365,8 @@ public class PurchaseOrderService : IPurchaseOrderService
                 var qty = cell?.FinalQty ?? 0m;
                 if (qty <= 0) continue;
 
-                var isFinalized = status == OrderMatrixRules.StatusFinalized
-                                  || !string.IsNullOrWhiteSpace(dayStatus?.PoCode);
+                // Chỉ FINALIZED (đã qua cutoff) mới coi là khóa cứng — PO tồn tại trước cutoff vẫn editable.
+                var isFinalized = status == OrderMatrixRules.StatusFinalized;
                 var isEditable = OrderMatrixRules.IsEditableStatus(status);
 
                 if (!isFinalized && !isEditable) continue;
@@ -856,7 +857,8 @@ public class PurchaseOrderService : IPurchaseOrderService
         else
         {
             result = await ProcessMatrixSplitEngineAsync(command, isDryRun: false, cancellationToken);
-            if (!string.IsNullOrWhiteSpace(command.EmailSendMode) && result.SuccessCount > 0)
+            if (!string.IsNullOrWhiteSpace(command.EmailSendMode)
+                && (result.SuccessCount > 0 || result.AmendedCount > 0))
             {
                 result.DispatchPackage = await _dispatchPackageService.CreatePackageForDispatchAsync(
                     command,
@@ -934,6 +936,8 @@ public class PurchaseOrderService : IPurchaseOrderService
             ServerNow = now,
             TotalGroups = merged.Count,
             SuccessCount = merged.Count(r => r.Status == OrderMatrixRules.ResultSuccess),
+            AmendedCount = merged.Count(r => r.Status == OrderMatrixRules.ResultAmended),
+            NoChangesCount = merged.Count(r => r.Status == OrderMatrixRules.ResultNoChanges),
             FailedCount = merged.Count(r => r.Status == OrderMatrixRules.ResultFailed),
             SkippedCount = merged.Count(r => r.Status == OrderMatrixRules.ResultSkipped),
             AlreadyFinalizedCount = merged.Count(r => r.Status == OrderMatrixRules.ResultAlreadyFinalized),
@@ -943,7 +947,7 @@ public class PurchaseOrderService : IPurchaseOrderService
 
         if (!isDryRun
             && !string.IsNullOrWhiteSpace(command.EmailSendMode)
-            && result.SuccessCount > 0)
+            && (result.SuccessCount > 0 || result.AmendedCount > 0))
         {
             result.DispatchPackage = await _dispatchPackageService.CreatePackageForDispatchAsync(
                 command,
@@ -1137,20 +1141,24 @@ public class PurchaseOrderService : IPurchaseOrderService
                 continue;
             }
 
-            // Chống trùng: Kiểm tra đã có PO committed cho (BranchId, SupplierId, DeliveryDate)
+            // PO đã tồn tại: trước cutoff → AMEND; sau cutoff → ALREADY_FINALIZED (khóa).
             var existingPo = await _repository.FindCommittedPoAsync(command.BranchId, supplierId, deliveryDate, cancellationToken);
-            if (existingPo != null)
+
+            var dayStatus = OrderMatrixRules.EvaluateDayStatus(
+                supplierId, deliveryDate, cfg, now, existingPo?.Code, existingPo?.Id);
+
+            if (dayStatus.DeliveryDateStatus == OrderMatrixRules.StatusFinalized)
             {
                 result.Status = OrderMatrixRules.ResultAlreadyFinalized;
-                result.PurchaseOrderId = existingPo.Id;
-                result.PurchaseOrderCode = existingPo.Code;
-                result.ErrorMessage = $"Ngày giao hàng này đã được phát hành với mã đơn {existingPo.Code}.";
+                result.PurchaseOrderId = existingPo?.Id;
+                result.PurchaseOrderCode = existingPo?.Code;
+                result.RevisionNumber = existingPo?.RevisionNumber;
+                result.ErrorCode = "CUTOFF_PASSED";
+                result.ErrorMessage =
+                    $"Đơn {existingPo?.Code} đã khóa vì quá giờ cutoff ({dayStatus.CutoffDateTime:HH:mm dd/MM/yyyy}). Không thể amend.";
                 groupResults.Add(result);
                 continue;
             }
-
-            // Kiểm tra trạng thái ngày giao & Cutoff
-            var dayStatus = OrderMatrixRules.EvaluateDayStatus(supplierId, deliveryDate, cfg, now);
 
             if (now >= dayStatus.CutoffDateTime || dayStatus.DeliveryDateStatus == OrderMatrixRules.StatusLocked)
             {
@@ -1304,13 +1312,130 @@ public class PurchaseOrderService : IPurchaseOrderService
 
             if (isDryRun)
             {
-                result.Status = OrderMatrixRules.ResultSuccess;
-                result.PurchaseOrderCode = $"(Dự kiến PO {deliveryDate:yyyyMMdd})";
+                result.Status = existingPo != null ? OrderMatrixRules.ResultAmended : OrderMatrixRules.ResultSuccess;
+                result.PurchaseOrderId = existingPo?.Id;
+                result.PurchaseOrderCode = existingPo?.Code ?? $"(Dự kiến PO {deliveryDate:yyyyMMdd})";
+                result.RevisionNumber = existingPo != null ? existingPo.RevisionNumber + 1 : 1;
+                groupResults.Add(result);
+            }
+            else if (existingPo != null)
+            {
+                var previousSnapshot = BuildPoLinesSnapshot(existingPo);
+                var newQtyByProduct = validLines.ToDictionary(l => l.Product.Id, l => l.Qty);
+                var oldQtyByProduct = existingPo.Details
+                    .Where(d => !d.IsDeleted)
+                    .GroupBy(d => d.ProductId)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.Sum(d => d.OrderedQty ?? d.FinalQty ?? 0m));
+
+                var changed = newQtyByProduct.Count != oldQtyByProduct.Count
+                    || newQtyByProduct.Any(kv =>
+                        !oldQtyByProduct.TryGetValue(kv.Key, out var oldQty) || oldQty != kv.Value)
+                    || oldQtyByProduct.Keys.Any(id => !newQtyByProduct.ContainsKey(id));
+
+                if (!changed)
+                {
+                    result.Status = OrderMatrixRules.ResultNoChanges;
+                    result.PurchaseOrderId = existingPo.Id;
+                    result.PurchaseOrderCode = existingPo.Code;
+                    result.RevisionNumber = existingPo.RevisionNumber;
+                    result.ErrorMessage = "Không có thay đổi số lượng so với PO hiện tại.";
+                    groupResults.Add(result);
+                    continue;
+                }
+
+                var expectedRowVersion = existingPo.RowVersion;
+                var actor = await ResolveValidUserIdAsync(cancellationToken);
+
+                // Soft-delete dòng không còn trong validLines
+                foreach (var detail in existingPo.Details.Where(d => !d.IsDeleted).ToList())
+                {
+                    if (!newQtyByProduct.ContainsKey(detail.ProductId))
+                    {
+                        detail.IsDeleted = true;
+                        detail.OrderedQty = 0m;
+                        detail.FinalQty = 0m;
+                        detail.LineAmount = 0m;
+                    }
+                }
+
+                foreach (var line in validLines)
+                {
+                    var unit = string.IsNullOrWhiteSpace(line.Unit) ? "Gói" : line.Unit;
+                    var detail = existingPo.Details.FirstOrDefault(d => !d.IsDeleted && d.ProductId == line.Product.Id);
+                    if (detail == null)
+                    {
+                        detail = new PurchaseOrderDetail
+                        {
+                            TenantId = _tenantContext.CurrentTenantId,
+                            PurchaseOrderId = existingPo.Id,
+                            ProductId = line.Product.Id,
+                            DeliveryDate = deliveryDate,
+                            UnitPrice = line.UnitPrice,
+                            DeliveryUoM = unit,
+                            ProductCodeSnapshot = line.Product.Sku,
+                            ProductNameSnapshot = line.Product.Name,
+                            PurchaseUnitNameSnapshot = unit
+                        };
+                        existingPo.Details.Add(detail);
+                        _repository.AddPurchaseOrderDetail(detail);
+                    }
+
+                    detail.EmployeeQty = line.DraftDetail?.EmployeeQty ?? line.Qty;
+                    detail.StoreQty = line.DraftDetail?.StoreQty;
+                    detail.IsOwnerAdjusted = line.DraftDetail?.IsOwnerAdjusted ?? false;
+                    detail.OrderedQty = line.Qty;
+                    detail.FinalQty = line.Qty;
+                    detail.LineAmount = line.Qty * detail.UnitPrice;
+                    detail.DeliveryDate = deliveryDate;
+                    detail.IsDeleted = false;
+                    // Giữ snapshot giá/đơn vị đã chốt; chỉ set nếu thiếu
+                    if (string.IsNullOrWhiteSpace(detail.ProductCodeSnapshot))
+                        detail.ProductCodeSnapshot = line.Product.Sku;
+                    if (string.IsNullOrWhiteSpace(detail.ProductNameSnapshot))
+                        detail.ProductNameSnapshot = line.Product.Name;
+                    if (string.IsNullOrWhiteSpace(detail.PurchaseUnitNameSnapshot))
+                        detail.PurchaseUnitNameSnapshot = unit;
+                }
+
+                existingPo.TotalQty = totalQty;
+                existingPo.TotalAmount = existingPo.Details
+                    .Where(d => !d.IsDeleted)
+                    .Sum(d => d.LineAmount);
+                existingPo.Note = command.Note ?? existingPo.Note;
+                existingPo.RevisionNumber = Math.Max(1, existingPo.RevisionNumber) + 1;
+                existingPo.LastAmendedAtUtc = DateTime.UtcNow;
+                existingPo.LastAmendedByUserId = actor;
+                existingPo.RowVersion = expectedRowVersion + 1;
+                existingPo.OrderedAtUtc ??= DateTime.UtcNow;
+                existingPo.SubmittedAtUtc = DateTime.UtcNow;
+                existingPo.SubmittedByUserId = actor ?? existingPo.SubmittedByUserId;
+
+                _repository.AddPurchaseOrderRevision(new PurchaseOrderRevision
+                {
+                    TenantId = _tenantContext.CurrentTenantId,
+                    PurchaseOrderId = existingPo.Id,
+                    RevisionNumber = existingPo.RevisionNumber,
+                    PreviousDataSnapshotJson = previousSnapshot,
+                    NewDataSnapshotJson = BuildPoLinesSnapshot(existingPo),
+                    ChangedByUserId = actor,
+                    ChangedAtUtc = DateTime.UtcNow,
+                    ChangeReason = "AMEND_BEFORE_CUTOFF"
+                });
+
+                createdPos.Add(existingPo);
+
+                result.Status = OrderMatrixRules.ResultAmended;
+                result.PurchaseOrderId = existingPo.Id;
+                result.PurchaseOrderCode = existingPo.Code;
+                result.RevisionNumber = existingPo.RevisionNumber;
                 groupResults.Add(result);
             }
             else
             {
                 var poCode = await _repository.GeneratePoCodeAsync(deliveryDate, cancellationToken);
+                var actor = await ResolveValidUserIdAsync(cancellationToken);
 
                 var po = new PurchaseOrder
                 {
@@ -1327,12 +1452,13 @@ public class PurchaseOrderService : IPurchaseOrderService
                     Note = command.Note,
                     ParentDraftId = command.ParentDraftId ?? draft?.Id,
                     CreatedByRole = _tenantContext.CurrentRole,
-                    SubmittedByUserId = await ResolveValidUserIdAsync(cancellationToken),
+                    SubmittedByUserId = actor,
                     SubmittedAtUtc = DateTime.UtcNow,
                     OrderedAtUtc = DateTime.UtcNow,
-                    SupplierCodeSnapshot = supplier.Code,
-                    SupplierNameSnapshot = supplier.Name,
-                    SupplierEmailSnapshot = supplier.Email,
+                    RevisionNumber = 1,
+                    SupplierCodeSnapshot = supplier?.Code ?? supCode,
+                    SupplierNameSnapshot = supplier?.Name ?? supName,
+                    SupplierEmailSnapshot = supplier?.Email,
                     StoreCodeSnapshot = branch.BranchCode,
                     StoreNameSnapshot = branch.Name,
                     StoreAddressSnapshot = branch.Address,
@@ -1365,19 +1491,11 @@ public class PurchaseOrderService : IPurchaseOrderService
                 await _repository.AddPurchaseOrderAsync(po, cancellationToken);
                 createdPos.Add(po);
 
-                // Consume draft lines for this delivery day so hub marks day as done (no leftover open qty).
-                foreach (var line in validLines)
-                {
-                    if (line.DraftDetail == null) continue;
-                    line.DraftDetail.EmployeeQty = 0m;
-                    line.DraftDetail.StoreQty = 0m;
-                    line.DraftDetail.FinalQty = 0m;
-                    line.DraftDetail.IsOwnerAdjusted = false;
-                }
-
+                // Giữ draft qty để còn amend trước cutoff; hub dùng DayStatus + PoCode để phân biệt.
                 result.Status = OrderMatrixRules.ResultSuccess;
                 result.PurchaseOrderId = po.Id;
                 result.PurchaseOrderCode = po.Code;
+                result.RevisionNumber = po.RevisionNumber;
                 groupResults.Add(result);
             }
         }
@@ -1405,12 +1523,39 @@ public class PurchaseOrderService : IPurchaseOrderService
             ServerNow = now,
             TotalGroups = groupResults.Count,
             SuccessCount = groupResults.Count(r => r.Status == OrderMatrixRules.ResultSuccess),
+            AmendedCount = groupResults.Count(r => r.Status == OrderMatrixRules.ResultAmended),
+            NoChangesCount = groupResults.Count(r => r.Status == OrderMatrixRules.ResultNoChanges),
             FailedCount = groupResults.Count(r => r.Status == OrderMatrixRules.ResultFailed),
             SkippedCount = groupResults.Count(r => r.Status == OrderMatrixRules.ResultSkipped),
             AlreadyFinalizedCount = groupResults.Count(r => r.Status == OrderMatrixRules.ResultAlreadyFinalized),
             Results = groupResults,
             CreatedPurchaseOrders = createdPos.Select(po => MapToDto(po, branch.Name, po.Supplier?.Name ?? "NCC")).ToList()
         };
+    }
+
+    private static string BuildPoLinesSnapshot(PurchaseOrder po)
+    {
+        var lines = (po.Details ?? Array.Empty<PurchaseOrderDetail>())
+            .Where(d => !d.IsDeleted)
+            .Select(d => new
+            {
+                d.ProductId,
+                ProductCode = d.ProductCodeSnapshot,
+                Qty = d.OrderedQty ?? d.FinalQty ?? 0m,
+                d.UnitPrice,
+                d.LineAmount
+            })
+            .OrderBy(x => x.ProductCode)
+            .ToList();
+
+        return JsonSerializer.Serialize(new
+        {
+            po.Code,
+            po.RevisionNumber,
+            po.TotalQty,
+            po.TotalAmount,
+            Lines = lines
+        });
     }
 
     public async Task<PagedResult<PurchaseOrderDto>> GetPagedPurchaseOrdersAsync(
@@ -1521,6 +1666,8 @@ public class PurchaseOrderService : IPurchaseOrderService
             SupplierCode = po.SupplierCodeSnapshot ?? po.Supplier?.Code ?? string.Empty,
             DeliveryDate = po.DeliveryDate,
             Status = po.Status,
+            RevisionNumber = po.RevisionNumber <= 0 ? 1 : po.RevisionNumber,
+            LastAmendedAtUtc = po.LastAmendedAtUtc,
             TotalQty = po.TotalQty,
             TotalAmount = po.TotalAmount,
             Note = po.Note,

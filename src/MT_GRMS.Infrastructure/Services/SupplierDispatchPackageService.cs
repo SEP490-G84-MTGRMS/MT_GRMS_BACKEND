@@ -44,7 +44,11 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(command.EmailSendMode)) return null;
-        if (batchResult.SuccessCount <= 0 || batchResult.CreatedPurchaseOrders.Count == 0) return null;
+        if ((batchResult.SuccessCount <= 0 && batchResult.AmendedCount <= 0)
+            || batchResult.CreatedPurchaseOrders.Count == 0)
+        {
+            return null;
+        }
 
         var mode = command.EmailSendMode.Trim().ToUpperInvariant();
         if (mode is not (EmailSendModes.SendNow or EmailSendModes.ScheduledSend))
@@ -104,6 +108,31 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
             .Where(p => poIds.Contains(p.Id) && !p.IsDeleted)
             .ToListAsync(cancellationToken);
 
+        var maxPackageRev = await _db.SupplierDispatchPackages
+            .Where(p => p.SupplierId == supplierId && !p.IsDeleted)
+            .Select(p => (int?)p.PackageRevisionNumber)
+            .MaxAsync(cancellationToken) ?? 0;
+        var nextPackageRev = Math.Max(1, maxPackageRev + 1);
+
+        // Soft-delete package items cũ của các PO này để unique active index cho phép gắn package mới.
+        var oldItems = await _db.SupplierDispatchPackageItems
+            .Where(i => poIds.Contains(i.PurchaseOrderId) && !i.IsDeleted)
+            .ToListAsync(cancellationToken);
+        foreach (var item in oldItems)
+        {
+            item.IsDeleted = true;
+        }
+
+        // Supersede package chưa gửi / chưa xong của cùng NCC (tránh worker gửi revision cũ).
+        var pendingPkgs = await _db.SupplierDispatchPackages
+            .Where(p => p.SupplierId == supplierId
+                        && !p.IsDeleted
+                        && p.EmailStatus != PackageEmailStatuses.Sent
+                        && p.EmailStatus != PackageEmailStatuses.Sending
+                        && p.EmailStatus != PackageEmailStatuses.Cancelled
+                        && p.EmailStatus != PackageEmailStatuses.Superseded)
+            .ToListAsync(cancellationToken);
+
         var package = new SupplierDispatchPackage
         {
             TenantId = _tenantContext.CurrentTenantId,
@@ -119,9 +148,17 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
                 ? PackageEmailStatuses.Scheduled
                 : PackageEmailStatuses.Pending,
             GenerationStatus = PackageGenerationStatuses.Pending,
+            PackageRevisionNumber = nextPackageRev,
             Note = command.Note,
-            IdempotencyKey = $"pkg-{dispatchBatchId:N}-{supplierId:N}"
+            IdempotencyKey = $"pkg-{dispatchBatchId:N}-{supplierId:N}-r{nextPackageRev}"
         };
+
+        foreach (var old in pendingPkgs)
+        {
+            old.EmailStatus = PackageEmailStatuses.Superseded;
+            old.SupersededByPackageId = package.Id;
+            old.LastError = $"Superseded by package revision {nextPackageRev}.";
+        }
 
         foreach (var po in pos)
         {
@@ -204,6 +241,10 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
     public async Task RetryEmailAsync(Guid packageId, CancellationToken cancellationToken = default)
     {
         var pkg = await RequirePackageAsync(packageId, cancellationToken);
+        if (pkg.EmailStatus == PackageEmailStatuses.Superseded)
+        {
+            throw new BusinessException("PACKAGE_SUPERSEDED", "Package đã bị thay thế bởi revision mới hơn — không gửi lại.");
+        }
         if (pkg.GenerationStatus != PackageGenerationStatuses.Generated || string.IsNullOrWhiteSpace(pkg.FileStorageKey))
         {
             throw new BusinessException("FILE_REQUIRED", "Chưa có file Excel hợp lệ để gửi lại email.");
@@ -275,6 +316,7 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
             .Include(p => p.Items)
             .FirstOrDefaultAsync(p => p.Id == packageId && !p.IsDeleted, cancellationToken);
         if (pkg == null) return;
+        if (pkg.EmailStatus == PackageEmailStatuses.Superseded) return;
 
         // Claim lease
         var now = DateTime.UtcNow;
@@ -289,6 +331,9 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
 
         try
         {
+            await _db.Entry(pkg).ReloadAsync(cancellationToken);
+            if (pkg.EmailStatus == PackageEmailStatuses.Superseded) return;
+
             // GENERATING = stuck mid-run (e.g. previous crash) — treat as retryable.
             if (pkg.GenerationStatus is PackageGenerationStatuses.Pending
                 or PackageGenerationStatuses.Failed
@@ -299,7 +344,7 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
 
             await _db.Entry(pkg).ReloadAsync(cancellationToken);
 
-            if (pkg.EmailStatus == PackageEmailStatuses.Cancelled) return;
+            if (pkg.EmailStatus is PackageEmailStatuses.Cancelled or PackageEmailStatuses.Superseded) return;
             if (pkg.GenerationStatus != PackageGenerationStatuses.Generated) return;
 
             if (pkg.EmailStatus == PackageEmailStatuses.Scheduled)
@@ -367,7 +412,8 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
         var bytes = await _excelGenerator.GenerateAsync(pkg, pos, ct);
         var datePart = DateTime.UtcNow.AddHours(7).ToString("yyyyMMdd");
         var safeCode = SanitizeFilePart(pkg.SupplierCodeSnapshot);
-        var fileName = $"PO_{safeCode}_{datePart}_{pkg.DispatchBatchId:N}.xlsx";
+        var rev = Math.Max(1, pkg.PackageRevisionNumber);
+        var fileName = $"PO_{safeCode}_{datePart}_R{rev}_{pkg.DispatchBatchId:N}.xlsx";
         var storageKey =
             $"supplier-orders/{pkg.TenantId}/{pkg.DispatchBatchId:N}/{pkg.SupplierId:N}/{fileName}";
 
@@ -390,9 +436,9 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
 
     private async Task SendEmailInternalAsync(SupplierDispatchPackage pkg, CancellationToken ct)
     {
-        // Re-check cancel / status right before send
+        // Re-check cancel / superseded / status right before send
         await _db.Entry(pkg).ReloadAsync(ct);
-        if (pkg.EmailStatus == PackageEmailStatuses.Cancelled) return;
+        if (pkg.EmailStatus is PackageEmailStatuses.Cancelled or PackageEmailStatuses.Superseded) return;
         if (pkg.EmailStatus == PackageEmailStatuses.Sent) return;
         if (pkg.GenerationStatus != PackageGenerationStatuses.Generated || string.IsNullOrWhiteSpace(pkg.FileStorageKey))
         {
@@ -415,7 +461,7 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
             using var ms = new MemoryStream();
             await stream.CopyToAsync(ms, ct);
 
-            var poIds = pkg.Items.Select(i => i.PurchaseOrderId).ToList();
+            var poIds = pkg.Items.Where(i => !i.IsDeleted).Select(i => i.PurchaseOrderId).ToList();
             var pos = await _db.PurchaseOrders.AsNoTracking()
                 .Where(p => poIds.Contains(p.Id))
                 .ToListAsync(ct);
@@ -432,11 +478,16 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
 
             var cc = EmailCcHelper.FromJson(pkg.EmailCcJson);
             var dispatchDate = DateTime.UtcNow.AddHours(7).ToString("dd/MM/yyyy");
+            var rev = Math.Max(1, pkg.PackageRevisionNumber);
+            var isUpdate = rev > 1;
             var body = new StringBuilder();
             body.AppendLine($"Kính gửi {pkg.SupplierNameSnapshot},");
             body.AppendLine();
-            body.AppendLine("MT-GRMS gửi đơn đặt hàng đính kèm.");
+            body.AppendLine(isUpdate
+                ? "MT-GRMS gửi bản CẬP NHẬT đơn đặt hàng (thay thế bản trước)."
+                : "MT-GRMS gửi đơn đặt hàng đính kèm.");
             body.AppendLine($"Mã NCC: {pkg.SupplierCodeSnapshot}");
+            body.AppendLine($"Revision package: {rev}");
             body.AppendLine($"Số PO trong file: {pos.Count}");
             body.AppendLine($"Cửa hàng: {string.Join(", ", stores)}");
             body.AppendLine($"Ngày giao: {string.Join(", ", dates)}");
@@ -447,24 +498,30 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
             }
 
             body.AppendLine();
-            body.AppendLine("Vui lòng xem file Excel đính kèm.");
+            body.AppendLine(isUpdate
+                ? "Vui lòng sử dụng file Excel đính kèm mới nhất và bỏ qua bản cũ."
+                : "Vui lòng xem file Excel đính kèm.");
             body.AppendLine("Trân trọng,");
             body.AppendLine("MT-GRMS");
+
+            var subject = isUpdate
+                ? $"[UPDATED ORDER] {pkg.SupplierNameSnapshot} - {dispatchDate} - Revision {rev}"
+                : $"Đơn đặt hàng từ MT-GRMS - {pkg.SupplierCodeSnapshot} - {dispatchDate}";
 
             await _emailSender.SendSupplierOrderAsync(new SupplierOrderEmailMessage
             {
                 To = pkg.EmailTo,
                 Cc = cc,
-                Subject = $"Đơn đặt hàng từ MT-GRMS - {pkg.SupplierCodeSnapshot} - {dispatchDate}",
+                Subject = subject,
                 BodyText = body.ToString(),
                 AttachmentFileName = pkg.FileName ?? "don-hang.xlsx",
                 AttachmentBytes = ms.ToArray()
             }, ct);
 
             await _db.Entry(pkg).ReloadAsync(ct);
-            if (pkg.EmailStatus == PackageEmailStatuses.Cancelled)
+            if (pkg.EmailStatus is PackageEmailStatuses.Cancelled or PackageEmailStatuses.Superseded)
             {
-                // Race: cancelled while sending — keep cancelled, do not mark SENT
+                // Race: cancelled/superseded while sending — keep that status, do not mark SENT
                 return;
             }
 
@@ -521,6 +578,7 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
             ScheduledSendAtUtc = pkg.ScheduledSendAtUtc,
             EmailStatus = pkg.EmailStatus,
             GenerationStatus = pkg.GenerationStatus,
+            PackageRevisionNumber = pkg.PackageRevisionNumber <= 0 ? 1 : pkg.PackageRevisionNumber,
             FileName = pkg.FileName,
             FileSize = pkg.FileSize,
             AttemptCount = pkg.AttemptCount,

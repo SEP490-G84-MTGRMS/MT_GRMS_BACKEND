@@ -26,6 +26,8 @@ public class PurchaseOrderConfiguration : IEntityTypeConfiguration<PurchaseOrder
         builder.Property(x => x.RejectedByUserId).HasMaxLength(50);
         builder.Property(x => x.RejectionReason).HasMaxLength(500);
         builder.Property(x => x.RowVersion).IsConcurrencyToken().HasDefaultValue(1);
+        builder.Property(x => x.RevisionNumber).HasDefaultValue(1);
+        builder.Property(x => x.LastAmendedByUserId).HasMaxLength(50);
 
         builder.Property(x => x.SupplierCodeSnapshot).HasMaxLength(50);
         builder.Property(x => x.SupplierNameSnapshot).HasMaxLength(250);

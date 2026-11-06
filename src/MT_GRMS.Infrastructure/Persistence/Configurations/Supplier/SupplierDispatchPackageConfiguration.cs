@@ -19,6 +19,7 @@ public class SupplierDispatchPackageConfiguration : IEntityTypeConfiguration<Sup
         builder.Property(x => x.EmailSendMode).HasMaxLength(30).IsRequired();
         builder.Property(x => x.EmailStatus).HasMaxLength(30).IsRequired();
         builder.Property(x => x.GenerationStatus).HasMaxLength(30).IsRequired();
+        builder.Property(x => x.PackageRevisionNumber).HasDefaultValue(1);
         builder.Property(x => x.FileName).HasMaxLength(255);
         builder.Property(x => x.FileStorageKey).HasMaxLength(500);
         builder.Property(x => x.FileChecksum).HasMaxLength(128);
@@ -53,7 +54,10 @@ public class SupplierDispatchPackageItemConfiguration : IEntityTypeConfiguration
 
         builder.Property(x => x.TenantId).HasMaxLength(50).IsRequired();
 
-        builder.HasIndex(x => x.PurchaseOrderId).IsUnique();
+        // Một PO chỉ thuộc 1 package item active; package cũ soft-delete item khi amend.
+        builder.HasIndex(x => x.PurchaseOrderId)
+            .IsUnique()
+            .HasFilter("\"IsDeleted\" = false");
         builder.HasIndex(x => new { x.PackageId, x.PurchaseOrderId }).IsUnique();
 
         builder.HasOne(x => x.PurchaseOrder)

@@ -24,11 +24,17 @@ public class SupplierDispatchPackage : BaseTenantEntity
 
     public DateTime? ScheduledSendAtUtc { get; set; }
 
-    /// <summary>PENDING | SCHEDULED | SENDING | SENT | FAILED | CANCELLED</summary>
+    /// <summary>PENDING | SCHEDULED | SENDING | SENT | FAILED | CANCELLED | SUPERSEDED</summary>
     public string EmailStatus { get; set; } = "PENDING";
 
     /// <summary>PENDING | GENERATING | GENERATED | FAILED</summary>
     public string GenerationStatus { get; set; } = "PENDING";
+
+    /// <summary>Revision của package (workbook) gửi NCC. Package mới = 1.</summary>
+    public int PackageRevisionNumber { get; set; } = 1;
+
+    /// <summary>Package bị thay thế bởi package mới hơn (cùng supplier + batch liên quan).</summary>
+    public Guid? SupersededByPackageId { get; set; }
 
     public string? FileName { get; set; }
     public string? FileStorageKey { get; set; }

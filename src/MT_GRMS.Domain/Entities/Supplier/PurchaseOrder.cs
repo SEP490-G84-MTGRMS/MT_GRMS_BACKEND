@@ -33,6 +33,11 @@ public class PurchaseOrder : BaseTenantEntity
     public string? RejectionReason { get; set; }
     public int RowVersion { get; set; } = 1;
 
+    /// <summary>Số revision hiện tại. PO mới = 1; mỗi lần amend có thay đổi +1.</summary>
+    public int RevisionNumber { get; set; } = 1;
+    public DateTime? LastAmendedAtUtc { get; set; }
+    public string? LastAmendedByUserId { get; set; }
+
     /// <summary>Gói dispatch/email chứa PO này (nullable — PO cũ chưa có package).</summary>
     public Guid? DispatchPackageId { get; set; }
     public Guid? DispatchBatchId { get; set; }

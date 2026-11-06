@@ -34,6 +34,39 @@ ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductCodeSnaps
 ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductNameSnapshot"" character varying(250) NULL;
 ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""PurchaseUnitNameSnapshot"" character varying(50) NULL;
 
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""RevisionNumber"" integer NOT NULL DEFAULT 1;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""LastAmendedAtUtc"" timestamp without time zone NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""LastAmendedByUserId"" character varying(50) NULL;
+
+ALTER TABLE ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""PackageRevisionNumber"" integer NOT NULL DEFAULT 1;
+ALTER TABLE ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""SupersededByPackageId"" uuid NULL;
+
+CREATE TABLE IF NOT EXISTS ""PurchaseOrderRevisions"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""PurchaseOrderId"" uuid NOT NULL,
+    ""RevisionNumber"" integer NOT NULL,
+    ""PreviousDataSnapshotJson"" text NULL,
+    ""NewDataSnapshotJson"" text NULL,
+    ""ChangedByUserId"" character varying(50) NULL,
+    ""ChangedAtUtc"" timestamp without time zone NOT NULL,
+    ""ChangeReason"" character varying(500) NULL,
+    ""CreatedBy"" uuid NULL,
+    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp without time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ""IX_PurchaseOrderRevisions_Tenant_Po_Rev""
+    ON ""PurchaseOrderRevisions"" (""TenantId"", ""PurchaseOrderId"", ""RevisionNumber"");
+
+DROP INDEX IF EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId"";
+CREATE UNIQUE INDEX IF NOT EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId_Active""
+    ON ""SupplierDispatchPackageItems"" (""PurchaseOrderId"") WHERE ""IsDeleted"" = false;
+
+ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryDaysJson"" character varying(500) NULL;
+ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryWeekdaysMask"" integer NULL;
+
 CREATE TABLE IF NOT EXISTS ""SupplierDispatchPackages"" (
     ""Id"" uuid NOT NULL PRIMARY KEY,
     ""TenantId"" character varying(50) NOT NULL,

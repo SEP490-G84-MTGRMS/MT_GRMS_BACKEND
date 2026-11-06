@@ -478,9 +478,9 @@ public class PurchaseOrderMatrixTests
             ViewTo = farDate.AddDays(1),
             Cells = new List<OrderMatrixCellDto>
             {
-                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = zeroDate, FinalQty = 0m },
-                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = nearDate, FinalQty = 10m },
-                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = farDate, FinalQty = 20m }
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = zeroDate, EmployeeQty = 0m, FinalQty = 0m },
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = nearDate, EmployeeQty = 10m, FinalQty = 10m },
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = farDate, EmployeeQty = 20m, FinalQty = 20m }
             }
         });
 
@@ -517,9 +517,9 @@ public class PurchaseOrderMatrixTests
             ViewTo = nextWeekMonday.AddDays(2),
             Cells = new List<OrderMatrixCellDto>
             {
-                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = tuesday, FinalQty = 5m },
-                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = thursday, FinalQty = 8m },
-                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = nextWeekMonday, FinalQty = 12m }
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = tuesday, EmployeeQty = 5m, FinalQty = 5m },
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = thursday, EmployeeQty = 8m, FinalQty = 8m },
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = nextWeekMonday, EmployeeQty = 12m, FinalQty = 12m }
             }
         });
 
@@ -555,8 +555,8 @@ public class PurchaseOrderMatrixTests
             ViewTo = deliveryDate.AddDays(2),
             Cells = new List<OrderMatrixCellDto>
             {
-                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = deliveryDate, FinalQty = 5m },  // 5 < 50 MOQ -> FAILED
-                new OrderMatrixCellDto { ProductId = _prod2Id, DeliveryDate = deliveryDate, FinalQty = 10m }  // Hợp lệ -> SUCCESS
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = deliveryDate, EmployeeQty = 5m, FinalQty = 5m },  // 5 < 50 MOQ -> FAILED
+                new OrderMatrixCellDto { ProductId = _prod2Id, DeliveryDate = deliveryDate, EmployeeQty = 20m, FinalQty = 20m }  // MOQ 20 -> SUCCESS
             }
         });
 
@@ -573,7 +573,7 @@ public class PurchaseOrderMatrixTests
 
         Assert.NotNull(sup1Result);
         Assert.Equal(OrderMatrixRules.ResultFailed, sup1Result.Status);
-        Assert.Equal("NO_VALID_LINES", sup1Result.ErrorCode);
+        Assert.Equal("VALIDATION_FAILED", sup1Result.ErrorCode);
 
         Assert.NotNull(sup2Result);
         Assert.Equal(OrderMatrixRules.ResultSuccess, sup2Result.Status);
@@ -584,7 +584,7 @@ public class PurchaseOrderMatrixTests
     }
 
     [Fact]
-    public async Task REQ_PO_12_DispatchHub_AlreadyFinalized_ReturnsExistingPoAndStatus()
+    public async Task REQ_PO_12_BeforeCutoff_ReSplitSameQty_ReturnsNoChanges()
     {
         // Arrange
         var deliveryDate = DateTime.Today.AddDays(5);
@@ -596,7 +596,7 @@ public class PurchaseOrderMatrixTests
             ViewTo = deliveryDate.AddDays(1),
             Cells = new List<OrderMatrixCellDto>
             {
-                new OrderMatrixCellDto { ProductId = _prod2Id, DeliveryDate = deliveryDate, FinalQty = 5m }
+                new OrderMatrixCellDto { ProductId = _prod2Id, DeliveryDate = deliveryDate, EmployeeQty = 20m, FinalQty = 20m }
             }
         });
 
@@ -609,27 +609,163 @@ public class PurchaseOrderMatrixTests
         Assert.Equal(1, res1.SuccessCount);
         var firstPoId = res1.Results.First().PurchaseOrderId;
         var firstPoCode = res1.Results.First().PurchaseOrderCode;
+        Assert.Equal(1, res1.Results.First().RevisionNumber);
 
-        // Act 2: Chốt lại lần 2
+        // Act 2: Chốt lại cùng số lượng → NO_CHANGES (không tạo PO mới)
         var res2 = await _service.SplitMatrixPoBatchAsync(new SplitMatrixPoCommand
         {
             BranchId = _branchId,
             Scope = OrderMatrixRules.ScopeNearest
         });
 
-        // Assert
-        Assert.Equal(1, res2.AlreadyFinalizedCount);
+        Assert.Equal(1, res2.NoChangesCount);
         var group2 = res2.Results.First();
-        Assert.Equal(OrderMatrixRules.ResultAlreadyFinalized, group2.Status);
+        Assert.Equal(OrderMatrixRules.ResultNoChanges, group2.Status);
         Assert.Equal(firstPoId, group2.PurchaseOrderId);
         Assert.Equal(firstPoCode, group2.PurchaseOrderCode);
+        Assert.Equal(1, _repo.PurchaseOrders.Count(p => p.Status != "DRAFT"));
+    }
+
+    [Fact]
+    public async Task REQ_PO_12b_BeforeCutoff_AmendQty_UpdatesSamePoAndBumpsRevision()
+    {
+        var deliveryDate = DateTime.Today.AddDays(5);
+        await _service.SaveMatrixDraftAsync(new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier2Id,
+            ViewFrom = deliveryDate,
+            ViewTo = deliveryDate.AddDays(1),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto { ProductId = _prod2Id, DeliveryDate = deliveryDate, EmployeeQty = 20m, FinalQty = 20m }
+            }
+        });
+
+        var res1 = await _service.SplitMatrixPoBatchAsync(new SplitMatrixPoCommand
+        {
+            BranchId = _branchId,
+            Scope = OrderMatrixRules.ScopeNearest
+        });
+        var poId = res1.Results.First().PurchaseOrderId!.Value;
+
+        await _service.SaveMatrixDraftAsync(new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier2Id,
+            ViewFrom = deliveryDate,
+            ViewTo = deliveryDate.AddDays(1),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto
+                {
+                    ProductId = _prod2Id,
+                    DeliveryDate = deliveryDate,
+                    StoreQty = 40m,
+                    IsOwnerAdjusted = true,
+                    FinalQty = 40m
+                }
+            }
+        });
+
+        var res2 = await _service.SplitMatrixPoBatchAsync(new SplitMatrixPoCommand
+        {
+            BranchId = _branchId,
+            Scope = OrderMatrixRules.ScopeNearest
+        });
+
+        Assert.Equal(1, res2.AmendedCount);
+        var group = res2.Results.First();
+        Assert.Equal(OrderMatrixRules.ResultAmended, group.Status);
+        Assert.Equal(poId, group.PurchaseOrderId);
+        Assert.Equal(2, group.RevisionNumber);
+        Assert.Equal(1, _repo.PurchaseOrders.Count(p => p.Status != "DRAFT"));
+        Assert.Single(_repo.Revisions);
+        var po = _repo.PurchaseOrders.First(p => p.Id == poId);
+        Assert.Equal(2, po.RevisionNumber);
+        Assert.Equal(40m, po.Details.Where(d => !d.IsDeleted).Sum(d => d.OrderedQty ?? 0m));
+    }
+
+    [Fact]
+    public async Task REQ_PO_12c_AfterCutoff_ExistingPo_ReturnsAlreadyFinalized()
+    {
+        // Cutoff = (Delivery - LeadTime) @ 00:00 = hôm nay 00:00 → đã qua
+        var deliveryDate = DateTime.Today.AddDays(1);
+        _repo.CustomSupplierConfigs = new List<OrderMatrixSupplierDeliveryConfigDto>
+        {
+            new OrderMatrixSupplierDeliveryConfigDto
+            {
+                SupplierId = _supplier2Id,
+                SupplierCode = "NCC-02",
+                SupplierName = "Bánh Kẹo SnackVN",
+                IsActive = true,
+                IsAssignedToBranch = true,
+                LeadTimeDays = 1,
+                CutoffTime = "00:00",
+                BlackoutDates = new List<string>(),
+                ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 }
+            }
+        };
+
+        // Seed committed PO trực tiếp (đã quá cutoff 00:00 hôm nay cho delivery ngày mai với lead 0)
+        var po = new PurchaseOrder
+        {
+            TenantId = "tenant-test-1",
+            Code = "PO-LOCKED-001",
+            BranchId = _branchId,
+            SupplierId = _supplier2Id,
+            DeliveryDate = deliveryDate,
+            Status = "PENDING_APPROVAL",
+            RevisionNumber = 1,
+            TotalQty = 20m,
+            Details =
+            {
+                new PurchaseOrderDetail
+                {
+                    TenantId = "tenant-test-1",
+                    ProductId = _prod2Id,
+                    DeliveryDate = deliveryDate,
+                    OrderedQty = 20m,
+                    FinalQty = 20m,
+                    UnitPrice = 12000m,
+                    LineAmount = 240000m
+                }
+            }
+        };
+        _repo.PurchaseOrders.Add(po);
+
+        await _service.SaveMatrixDraftAsync(new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier2Id,
+            ViewFrom = deliveryDate,
+            ViewTo = deliveryDate.AddDays(1),
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new OrderMatrixCellDto { ProductId = _prod2Id, DeliveryDate = deliveryDate, EmployeeQty = 30m, FinalQty = 30m }
+            }
+        });
+
+        var res = await _service.SplitMatrixPoBatchAsync(new SplitMatrixPoCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier2Id,
+            Groups = new List<SplitMatrixPoGroupCommand>
+            {
+                new SplitMatrixPoGroupCommand { SupplierId = _supplier2Id, DeliveryDate = deliveryDate }
+            }
+        });
+
+        Assert.Equal(1, res.AlreadyFinalizedCount);
+        Assert.Equal(OrderMatrixRules.ResultAlreadyFinalized, res.Results.First().Status);
+        Assert.Equal(20m, po.Details.Sum(d => d.OrderedQty ?? 0m));
     }
 
     [Fact]
     public async Task REQ_PO_13_DispatchHub_CutoffExpired_SkipsExpiredGroup()
     {
-        // Arrange: LeadTime = 5 ngày, nên deliveryDate = ngày mai sẽ bị CUTOFF_EXPIRED
-        var tomorrow = DateTime.Today.AddDays(1);
+        // Cutoff = hôm nay 00:00 (LeadTime 0) → LOCKED / CUTOFF_EXPIRED
+        var today = DateTime.Today;
         _repo.CustomSupplierConfigs = new List<OrderMatrixSupplierDeliveryConfigDto>
         {
             new OrderMatrixSupplierDeliveryConfigDto
@@ -639,7 +775,7 @@ public class PurchaseOrderMatrixTests
                 SupplierName = "Công ty Hải Nam",
                 IsActive = true,
                 IsAssignedToBranch = true,
-                LeadTimeDays = 5,
+                LeadTimeDays = 0,
                 CutoffTime = "00:00",
                 BlackoutDates = new List<string>(),
                 ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 }
@@ -650,19 +786,23 @@ public class PurchaseOrderMatrixTests
         {
             BranchId = _branchId,
             SupplierId = _supplier1Id,
-            ViewFrom = tomorrow,
-            ViewTo = tomorrow.AddDays(2),
+            ViewFrom = today,
+            ViewTo = today.AddDays(2),
             Cells = new List<OrderMatrixCellDto>
             {
-                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = tomorrow, FinalQty = 10m }
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = today, EmployeeQty = 10m, FinalQty = 10m }
             }
         });
 
-        // Act
+        // Act — Groups buộc đưa ngày đã cutoff vào engine (NEAREST sẽ bỏ qua ngày LOCKED)
         var result = await _service.SplitMatrixPoBatchAsync(new SplitMatrixPoCommand
         {
             BranchId = _branchId,
-            Scope = OrderMatrixRules.ScopeNearest
+            SupplierId = _supplier1Id,
+            Groups = new List<SplitMatrixPoGroupCommand>
+            {
+                new SplitMatrixPoGroupCommand { SupplierId = _supplier1Id, DeliveryDate = today }
+            }
         });
 
         // Assert
@@ -851,6 +991,13 @@ public class PurchaseOrderMatrixTests
         public void AddPurchaseOrderDetail(PurchaseOrderDetail detail)
         {
             // No-op in memory test
+        }
+
+        public List<PurchaseOrderRevision> Revisions { get; } = new();
+
+        public void AddPurchaseOrderRevision(PurchaseOrderRevision revision)
+        {
+            Revisions.Add(revision);
         }
 
         public Task<IReadOnlyList<Branch>> GetActiveBranchesAsync(CancellationToken cancellationToken = default)

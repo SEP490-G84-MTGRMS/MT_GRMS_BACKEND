@@ -35,7 +35,7 @@ public class SupplierOrderExcelGenerator : ISupplierOrderExcelGenerator
         var ws = workbook.Worksheets.Add("TONG_HOP");
         var headers = new[]
         {
-            "STT", "Mã PO", "Mã cửa hàng", "Tên cửa hàng", "Ngày giao",
+            "STT", "Mã PO", "Revision", "Mã cửa hàng", "Tên cửa hàng", "Ngày giao",
             "Mã sản phẩm", "Tên sản phẩm", "Đơn vị đặt hàng", "Số lượng đặt", "Đơn giá", "Thành tiền"
         };
 
@@ -50,9 +50,12 @@ public class SupplierOrderExcelGenerator : ISupplierOrderExcelGenerator
         }
 
         var rows = purchaseOrders
-            .SelectMany(po => (po.Details ?? Array.Empty<PurchaseOrderDetail>()).Select(d => new
+            .SelectMany(po => (po.Details ?? Array.Empty<PurchaseOrderDetail>())
+                .Where(d => !d.IsDeleted)
+                .Select(d => new
             {
                 PoCode = po.Code,
+                Revision = po.RevisionNumber <= 0 ? 1 : po.RevisionNumber,
                 StoreCode = po.StoreCodeSnapshot ?? string.Empty,
                 StoreName = po.StoreNameSnapshot ?? string.Empty,
                 DeliveryDate = d.DeliveryDate ?? po.DeliveryDate,
@@ -78,13 +81,13 @@ public class SupplierOrderExcelGenerator : ISupplierOrderExcelGenerator
         {
             if (currentStore == null) return;
             ws.Cell(row, 1).Value = "";
-            ws.Range(row, 1, row, 10).Merge();
+            ws.Range(row, 1, row, 11).Merge();
             ws.Cell(row, 1).Value = $"Cộng cửa hàng {currentStore}";
             ws.Cell(row, 1).Style.Font.Bold = true;
-            ws.Cell(row, 11).Value = storeSubtotal;
-            ws.Cell(row, 11).Style.NumberFormat.Format = "#,##0";
-            ws.Cell(row, 11).Style.Font.Bold = true;
-            ws.Range(row, 1, row, 11).Style.Fill.BackgroundColor = SubtotalBg;
+            ws.Cell(row, 12).Value = storeSubtotal;
+            ws.Cell(row, 12).Style.NumberFormat.Format = "#,##0";
+            ws.Cell(row, 12).Style.Font.Bold = true;
+            ws.Range(row, 1, row, 12).Style.Fill.BackgroundColor = SubtotalBg;
             row++;
             storeSubtotal = 0m;
         }
@@ -99,26 +102,27 @@ public class SupplierOrderExcelGenerator : ISupplierOrderExcelGenerator
             currentStore = r.StoreCode;
             ws.Cell(row, 1).Value = stt++;
             ws.Cell(row, 2).Value = r.PoCode;
-            ws.Cell(row, 3).Value = r.StoreCode;
-            ws.Cell(row, 4).Value = r.StoreName;
+            ws.Cell(row, 3).Value = r.Revision;
+            ws.Cell(row, 4).Value = r.StoreCode;
+            ws.Cell(row, 5).Value = r.StoreName;
             if (r.DeliveryDate.HasValue)
             {
-                ws.Cell(row, 5).Value = r.DeliveryDate.Value;
-                ws.Cell(row, 5).Style.DateFormat.Format = "dd/MM/yyyy";
+                ws.Cell(row, 6).Value = r.DeliveryDate.Value;
+                ws.Cell(row, 6).Style.DateFormat.Format = "dd/MM/yyyy";
             }
 
-            ws.Cell(row, 6).Value = r.ProductCode;
-            ws.Cell(row, 7).Value = r.ProductName;
-            ws.Cell(row, 8).Value = r.Unit;
-            ws.Cell(row, 9).Value = r.Qty;
-            ws.Cell(row, 9).Style.NumberFormat.Format = "#,##0.###";
-            ws.Cell(row, 9).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
-            ws.Cell(row, 10).Value = r.UnitPrice;
-            ws.Cell(row, 10).Style.NumberFormat.Format = "#,##0";
+            ws.Cell(row, 7).Value = r.ProductCode;
+            ws.Cell(row, 8).Value = r.ProductName;
+            ws.Cell(row, 9).Value = r.Unit;
+            ws.Cell(row, 10).Value = r.Qty;
+            ws.Cell(row, 10).Style.NumberFormat.Format = "#,##0.###";
             ws.Cell(row, 10).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
-            ws.Cell(row, 11).Value = r.LineTotal;
+            ws.Cell(row, 11).Value = r.UnitPrice;
             ws.Cell(row, 11).Style.NumberFormat.Format = "#,##0";
             ws.Cell(row, 11).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
+            ws.Cell(row, 12).Value = r.LineTotal;
+            ws.Cell(row, 12).Style.NumberFormat.Format = "#,##0";
+            ws.Cell(row, 12).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
 
             storeSubtotal += r.LineTotal;
             grandTotal += r.LineTotal;
@@ -127,26 +131,24 @@ public class SupplierOrderExcelGenerator : ISupplierOrderExcelGenerator
 
         WriteStoreSubtotal();
 
-        ws.Range(row, 1, row, 10).Merge();
+        ws.Range(row, 1, row, 11).Merge();
         ws.Cell(row, 1).Value = "TỔNG GIÁ TRỊ TOÀN BỘ ĐƠN HÀNG";
         ws.Cell(row, 1).Style.Font.Bold = true;
-        ws.Cell(row, 11).Value = grandTotal;
-        ws.Cell(row, 11).Style.NumberFormat.Format = "#,##0 \"đ\"";
-        ws.Cell(row, 11).Style.Font.Bold = true;
-        ws.Range(row, 1, row, 11).Style.Fill.BackgroundColor = TotalBg;
+        ws.Cell(row, 12).Value = grandTotal;
+        ws.Cell(row, 12).Style.NumberFormat.Format = "#,##0 \"đ\"";
+        ws.Cell(row, 12).Style.Font.Bold = true;
+        ws.Range(row, 1, row, 12).Style.Fill.BackgroundColor = TotalBg;
 
-        var dataLastRow = Math.Max(1, row - 1);
         if (rows.Count > 0)
         {
-            var filterEnd = row - 2; // trước dòng tổng nếu có subtotal; fallback
-            filterEnd = Math.Max(1, rows.Count + 1);
-            ws.Range(1, 1, filterEnd, 11).SetAutoFilter();
+            var filterEnd = Math.Max(1, rows.Count + 1);
+            ws.Range(1, 1, filterEnd, 12).SetAutoFilter();
         }
 
         ws.SheetView.FreezeRows(1);
         ws.Columns().AdjustToContents(1, 40);
         ws.RangeUsed()?.Style.Border.SetOutsideBorder(XLBorderStyleValues.Thin);
-        ws.Range(1, 1, Math.Max(1, rows.Count + 1), 11).Style.Border.SetInsideBorder(XLBorderStyleValues.Thin);
+        ws.Range(1, 1, Math.Max(1, rows.Count + 1), 12).Style.Border.SetInsideBorder(XLBorderStyleValues.Thin);
     }
 
     private static void BuildStoreSheet(

@@ -19,6 +19,8 @@ public class SupplierBranchAssignmentConfiguration : IEntityTypeConfiguration<Su
             .HasDefaultValue(SupplierStatus.Active);
 
         builder.Property(x => x.InactiveReason).HasMaxLength(500);
+        builder.Property(x => x.DeliveryDaysJson).HasMaxLength(500);
+        builder.Property(x => x.DeliveryWeekdaysMask);
 
         builder.HasIndex(x => new { x.TenantId, x.SupplierId, x.BranchId }).IsUnique();
 

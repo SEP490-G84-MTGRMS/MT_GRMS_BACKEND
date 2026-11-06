@@ -163,10 +163,11 @@ public class SplitGroupResultDto
     public string SupplierName { get; set; } = string.Empty;
     public string SupplierCode { get; set; } = string.Empty;
     public DateTime DeliveryDate { get; set; }
-    /// <summary>SUCCESS | FAILED | SKIPPED | ALREADY_FINALIZED</summary>
+    /// <summary>SUCCESS | AMENDED | NO_CHANGES | FAILED | SKIPPED | ALREADY_FINALIZED</summary>
     public string Status { get; set; } = "SUCCESS";
     public Guid? PurchaseOrderId { get; set; }
     public string? PurchaseOrderCode { get; set; }
+    public int? RevisionNumber { get; set; }
     public string? ErrorCode { get; set; }
     public string? ErrorMessage { get; set; }
     public int ValidLineCount { get; set; }
@@ -197,6 +198,8 @@ public class SplitMatrixBatchResultDto
     public DateTime ServerNow { get; set; }
     public int TotalGroups { get; set; }
     public int SuccessCount { get; set; }
+    public int AmendedCount { get; set; }
+    public int NoChangesCount { get; set; }
     public int FailedCount { get; set; }
     public int SkippedCount { get; set; }
     public int AlreadyFinalizedCount { get; set; }
@@ -218,6 +221,7 @@ public class SupplierDispatchPackageDto
     public DateTime? ScheduledSendAtUtc { get; set; }
     public string EmailStatus { get; set; } = string.Empty;
     public string GenerationStatus { get; set; } = string.Empty;
+    public int PackageRevisionNumber { get; set; } = 1;
     public string? FileName { get; set; }
     public long? FileSize { get; set; }
     public int AttemptCount { get; set; }
@@ -262,6 +266,8 @@ public class PurchaseOrderDto
     public string SupplierCode { get; set; } = string.Empty;
     public DateTime? DeliveryDate { get; set; }
     public string Status { get; set; } = "DRAFT";
+    public int RevisionNumber { get; set; } = 1;
+    public DateTime? LastAmendedAtUtc { get; set; }
     public decimal TotalQty { get; set; }
     public decimal TotalAmount { get; set; }
     public string? Note { get; set; }

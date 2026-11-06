@@ -61,6 +61,8 @@ public interface IPurchaseOrderRepository
 
     void AddPurchaseOrderDetail(PurchaseOrderDetail detail);
 
+    void AddPurchaseOrderRevision(PurchaseOrderRevision revision);
+
     Task<PurchaseOrder?> FindCommittedPoAsync(
         Guid branchId,
         Guid supplierId,

@@ -279,7 +279,19 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                         ? asg.InactiveReason ?? "NCC tạm ngưng phân bổ tới chi nhánh này"
                         : null));
 
-            var activeDays = ParseDeliveryDays(dc?.DeliveryDaysJson, dc?.DeliveryWeekdaysMask ?? 127);
+            // Ưu tiên lịch giao override trên assignment (cửa hàng × NCC); không có thì dùng base Supplier.
+            List<int> activeDays;
+            if (asg != null
+                && (!string.IsNullOrWhiteSpace(asg.DeliveryDaysJson) || asg.DeliveryWeekdaysMask is > 0))
+            {
+                activeDays = ParseDeliveryDays(
+                    asg.DeliveryDaysJson,
+                    asg.DeliveryWeekdaysMask ?? 0);
+            }
+            else
+            {
+                activeDays = ParseDeliveryDays(dc?.DeliveryDaysJson, dc?.DeliveryWeekdaysMask ?? 127);
+            }
 
             var blackoutDates = new HashSet<string>();
             if (s.BlackoutDates != null)
@@ -463,6 +475,11 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         await _context.PurchaseOrders.AddAsync(purchaseOrder, cancellationToken);
     }
 
+    public void AddPurchaseOrderRevision(PurchaseOrderRevision revision)
+    {
+        _context.PurchaseOrderRevisions.Add(revision);
+    }
+
     public async Task<string> GeneratePoCodeAsync(
         DateTime deliveryDate,
         CancellationToken cancellationToken = default)
@@ -500,8 +517,9 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         CancellationToken cancellationToken = default)
     {
         var day = deliveryDate.Date;
+        // Tracked + Details — phục vụ CREATE vs AMEND (optimistic concurrency qua RowVersion).
         return await _context.PurchaseOrders
-            .AsNoTracking()
+            .Include(po => po.Details)
             .Where(po => !po.IsDeleted
                          && po.BranchId == branchId
                          && po.SupplierId == supplierId

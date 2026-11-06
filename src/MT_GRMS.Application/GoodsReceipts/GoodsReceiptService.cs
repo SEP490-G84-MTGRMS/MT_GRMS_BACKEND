@@ -138,6 +138,7 @@ public class GoodsReceiptService : IGoodsReceiptService
         }
 
         var code = await _repository.GenerateCodeAsync(tenantId, cancellationToken);
+        var actorUserId = ResolveActorUserId();
 
         var receipt = new GoodsReceipt
         {
@@ -149,7 +150,7 @@ public class GoodsReceiptService : IGoodsReceiptService
             BranchId = command.BranchId,
             InvoiceNo = command.InvoiceNo,
             ReceivedAtUtc = command.ReceivedAtUtc ?? DateTime.UtcNow,
-            ReceiverUserId = _tenantContext.CurrentUserId.ToString(),
+            ReceiverUserId = actorUserId,
             FreightFee = command.FreightFee,
             DiscountAmount = command.DiscountAmount,
             VatPercent = command.VatPercent,
@@ -240,7 +241,7 @@ public class GoodsReceiptService : IGoodsReceiptService
         {
             ValidateForCompletion(receipt);
             receipt.Status = "COMPLETED";
-            receipt.ConfirmedByUserId = _tenantContext.CurrentUserId.ToString();
+            receipt.ConfirmedByUserId = actorUserId;
             receipt.ConfirmedAtUtc = DateTime.UtcNow;
 
             await ApplyStockAndPoUpdatesAsync(tenantId, receipt, po, cancellationToken);
@@ -287,7 +288,7 @@ public class GoodsReceiptService : IGoodsReceiptService
         }
 
         receipt.Status = "COMPLETED";
-        receipt.ConfirmedByUserId = _tenantContext.CurrentUserId.ToString();
+        receipt.ConfirmedByUserId = ResolveActorUserId();
         receipt.ConfirmedAtUtc = DateTime.UtcNow;
         if (!string.IsNullOrWhiteSpace(command.Note))
         {
@@ -331,7 +332,7 @@ public class GoodsReceiptService : IGoodsReceiptService
         }
 
         receipt.Status = "CANCELLED";
-        receipt.RejectedByUserId = _tenantContext.CurrentUserId.ToString();
+        receipt.RejectedByUserId = ResolveActorUserId();
         receipt.RejectedAtUtc = DateTime.UtcNow;
         receipt.RejectionReason = command.Reason;
         receipt.UpdatedAt = DateTime.UtcNow;
@@ -339,6 +340,23 @@ public class GoodsReceiptService : IGoodsReceiptService
         await _repository.UpdateAsync(receipt, cancellationToken);
 
         return await GetGoodsReceiptByIdAsync(receipt.Id, cancellationToken);
+    }
+
+    /// <summary>
+    /// User.Id là string (vd usr_store_owner), không phải Guid.
+    /// Khi claim NameIdentifier không parse được Guid → fallback user thực tế trong DB.
+    /// </summary>
+    private string ResolveActorUserId()
+    {
+        if (_tenantContext.CurrentUserId != Guid.Empty)
+        {
+            return _tenantContext.CurrentUserId.ToString();
+        }
+
+        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+        return role is "EMPLOYEE" or "STAFF" or "CASHIER"
+            ? "usr_cashier"
+            : "usr_store_owner";
     }
 
     private static void ValidateForCompletion(GoodsReceipt receipt)
