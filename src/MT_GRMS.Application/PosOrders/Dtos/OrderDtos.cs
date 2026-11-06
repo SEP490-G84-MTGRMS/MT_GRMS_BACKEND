@@ -16,7 +16,8 @@ public record OrderCreateRequest(
     string? Note = null,
     string? CreatorRole = null,
     string? CashierName = null,
-    int? PointsRedeemed = null
+    int? PointsRedeemed = null,
+    Guid? ShiftId = null
 )
 {
     // Hỗ trợ tương thích ngược cho StoreId
@@ -53,7 +54,8 @@ public record OrderResponse(
     string? CustomerPhone = null,
     decimal DepositAmount = 0m,
     string? Note = null,
-    CustomerDebtInvoiceResponse? DebtInvoice = null
+    CustomerDebtInvoiceResponse? DebtInvoice = null,
+    Guid? ShiftId = null
 )
 {
     public Guid StoreId => BranchId;

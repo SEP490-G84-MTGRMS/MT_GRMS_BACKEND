@@ -1,4 +1,5 @@
-﻿using MT_GRMS.Domain.Common;
+using MT_GRMS.Domain.Common;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Domain.Entities.Finance;
@@ -8,18 +9,39 @@ namespace MT_GRMS.Domain.Entities.Finance;
 /// </summary>
 public class ShiftZReport : BaseTenantEntity
 {
+    public Guid BranchId { get; set; }
     public Guid TillId { get; set; }
+    public string ShiftCode { get; set; } = string.Empty;
+    public string ShiftName { get; set; } = string.Empty;
     public Guid CashierUserId { get; set; }
+    public string? ReceiverUserId { get; set; }
+    public Guid? PrevShiftId { get; set; }
+
     public DateTime OpenedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime? ClosedAtUtc { get; set; }
-    public decimal OpeningFloat { get; set; } // Inherited from previous shift's RetainedFloat
-    public decimal TotalCashIn { get; set; }
-    public decimal TotalCashOut { get; set; }
-    public decimal ExpectedCash { get; set; }
-    public decimal? ActualCashCounted { get; set; }
-    public decimal Discrepancy { get; set; }
-    public decimal RetainedFloatAmount { get; set; } // Left for next shift
-    public decimal DroppedToSafeAmount { get; set; } // Transferred to BranchSafe via Cash Drop
+
+    public decimal OpeningFloatExpected { get; set; } = 0.00m; // Số tiền ca trước để lại (prevShift.RetainedFloatAmount)
+    public decimal OpeningFloat { get; set; } = 0.00m;         // Số tiền thực đếm khi mở ca
+    public decimal OpeningDiscrepancy { get; set; } = 0.00m;   // Chênh lệch mở ca = OpeningFloat - OpeningFloatExpected
+
+    public decimal TotalCashIn { get; set; } = 0.00m;          // Tổng tiền vào két trong ca (nạp tiền lẻ, thu nợ...)
+    public decimal TotalCashOut { get; set; } = 0.00m;         // Tổng tiền ra két trong ca (chi vặt, rút nộp chủ...)
+    public decimal TotalBankRevenue { get; set; } = 0.00m;     // Doanh thu ngân hàng/VietQR (không tính vào két tiền mặt)
+    public int TotalOrdersCount { get; set; } = 0;             // Tổng số hóa đơn phát sinh trong ca
+
+    public decimal ExpectedCash { get; set; } = 0.00m;         // Tiền lý thuyết theo sổ sách (G)
+    public decimal? ActualCashCounted { get; set; }            // Tiền mặt thực tế đếm cuối ca (H)
+    public decimal? Discrepancy { get; set; }                  // Chênh lệch chốt ca = H - G (null khi ca đang mở)
+
+    public decimal RetainedFloatAmount { get; set; } = 0.00m;  // Số tiền giữ lại két cho ca kế tiếp
+    public decimal DroppedToSafeAmount { get; set; } = 0.00m;  // Số tiền rút nộp vào két an toàn (BranchSafe)
+
+    public HandoverStatus HandoverStatus { get; set; } = HandoverStatus.PENDING;
     public ShiftState Status { get; set; } = ShiftState.Open;
     public string? Notes { get; set; }
+
+    // Navigations
+    public Branch? Branch { get; set; }
+    public ShiftZReport? PrevShift { get; set; }
+    public ICollection<ShiftCashMovement> CashMovements { get; set; } = new List<ShiftCashMovement>();
 }

@@ -23,6 +23,7 @@ public static class DependencyInjection
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IInventoryService, InventoryService>();
         services.AddScoped<IOrderService, OrderService>();
+        services.AddScoped<PosShifts.IShiftService, PosShifts.ShiftService>();
         services.AddScoped<ICatalogService, CatalogService>();
         services.AddScoped<ICategoryService, CategoryService>();
         services.AddScoped<IProductUnitService, ProductUnitService>();

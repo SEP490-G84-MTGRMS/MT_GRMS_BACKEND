@@ -1993,6 +1993,99 @@ public static class DbInitializer
 
         await context.Orders.AddRangeAsync(order1, preOrder1);
         await context.SaveChangesAsync();
+
+        // 13. Seed Ca làm việc POS (ShiftZReport) và phiếu thu chi lẻ (ShiftCashMovement)
+        var shift1Id = Guid.Parse("01944321-ca01-7000-8000-000000000001");
+        var shift2Id = Guid.Parse("01944321-ca02-7000-8000-000000000002");
+        var tillId = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db");
+        var staffGuid = Guid.TryParse(staffUser.Id, out var parsedStaffGuid) ? parsedStaffGuid : Guid.NewGuid();
+
+        if (!await context.ShiftZReports.IgnoreQueryFilters().AnyAsync(s => s.Id == shift1Id))
+        {
+            var shift1 = new ShiftZReport
+            {
+                Id = shift1Id,
+                TenantId = tenantId,
+                BranchId = branch.Id,
+                TillId = tillId,
+                ShiftCode = "CA-20261105-01",
+                ShiftName = "Ca Sáng 05/11",
+                CashierUserId = staffGuid,
+                ReceiverUserId = "usr_employee_annhien_03",
+                OpenedAtUtc = now.AddDays(-1).AddHours(-8),
+                ClosedAtUtc = now.AddDays(-1).AddHours(-1),
+                OpeningFloatExpected = 1500000m,
+                OpeningFloat = 1500000m,
+                OpeningDiscrepancy = 0m,
+                TotalCashIn = 500000m,
+                TotalCashOut = 200000m,
+                TotalBankRevenue = 360000m,
+                TotalOrdersCount = 5,
+                ExpectedCash = 2800000m,
+                ActualCashCounted = 2800000m,
+                Discrepancy = 0m,
+                RetainedFloatAmount = 1500000m,
+                DroppedToSafeAmount = 1300000m,
+                HandoverStatus = HandoverStatus.CONFIRMED,
+                Status = ShiftState.Closed,
+                Notes = "Bàn giao ca đầy đủ, không chênh lệch."
+            };
+
+            shift1.CashMovements.Add(new ShiftCashMovement
+            {
+                TenantId = tenantId,
+                ShiftId = shift1Id,
+                MovementType = CashMovementType.IN,
+                Category = CashMovementCategory.CASH_DEPOSIT,
+                Amount = 500000m,
+                Reason = "Nạp tiền lẻ đầu ca",
+                CreatedByName = "Phạm Thị Yến",
+                OccurredAtUtc = now.AddDays(-1).AddHours(-7)
+            });
+
+            shift1.CashMovements.Add(new ShiftCashMovement
+            {
+                TenantId = tenantId,
+                ShiftId = shift1Id,
+                MovementType = CashMovementType.OUT,
+                Category = CashMovementCategory.EXPENSE,
+                Amount = 200000m,
+                Reason = "Chi tiền rác và túi đựng",
+                CreatedByName = "Phạm Thị Yến",
+                OccurredAtUtc = now.AddDays(-1).AddHours(-4)
+            });
+
+            var shift2 = new ShiftZReport
+            {
+                Id = shift2Id,
+                TenantId = tenantId,
+                BranchId = branch.Id,
+                TillId = tillId,
+                ShiftCode = "CA-20261106-01",
+                ShiftName = "Ca Sáng 06/11",
+                CashierUserId = staffGuid,
+                PrevShiftId = shift1Id,
+                OpenedAtUtc = now.AddHours(-3),
+                OpeningFloatExpected = 1500000m,
+                OpeningFloat = 1500000m,
+                OpeningDiscrepancy = 0m,
+                TotalCashIn = 0m,
+                TotalCashOut = 0m,
+                TotalBankRevenue = 0m,
+                TotalOrdersCount = 1,
+                ExpectedCash = 1584000m,
+                RetainedFloatAmount = 0m,
+                DroppedToSafeAmount = 0m,
+                HandoverStatus = HandoverStatus.PENDING,
+                Status = ShiftState.Open,
+                Notes = "Ca bán hàng đang mở."
+            };
+
+            order1.ShiftId = shift2Id;
+
+            await context.ShiftZReports.AddRangeAsync(shift1, shift2);
+            await context.SaveChangesAsync();
+        }
     }
 
     // =========================================================================

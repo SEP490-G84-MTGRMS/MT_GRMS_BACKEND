@@ -94,13 +94,14 @@ public class CashbookService : ICashbookService
         shift.Notes = request.Notes;
 
         // Xử lý chênh lệch ngoài dung sai (+- 2000đ)
-        if (shift.Discrepancy > 2000)
+        decimal discrepancy = shift.Discrepancy ?? 0m;
+        if (discrepancy > 2000)
         {
-            await RecordEntryInternalAsync(till.Id, FinanceAccountType.Till, till.BranchId, CashbookEntryType.Receipt, shift.Discrepancy, "CASH_OVER_SUSPENSE", shift.Id, "SHF-" + shift.Id.ToString()[..8], "Thừa tiền chốt ca chờ chủ xử lý", ct);
+            await RecordEntryInternalAsync(till.Id, FinanceAccountType.Till, till.BranchId, CashbookEntryType.Receipt, discrepancy, "CASH_OVER_SUSPENSE", shift.Id, "SHF-" + shift.Id.ToString()[..8], "Thừa tiền chốt ca chờ chủ xử lý", ct);
         }
-        else if (shift.Discrepancy < -2000)
+        else if (discrepancy < -2000)
         {
-            await RecordEntryInternalAsync(till.Id, FinanceAccountType.Till, till.BranchId, CashbookEntryType.Payment, Math.Abs(shift.Discrepancy), "CASH_SHORTAGE_PENDING", shift.Id, "SHF-" + shift.Id.ToString()[..8], "Thiếu tiền chốt ca chờ xử lý bồi hoàn", ct);
+            await RecordEntryInternalAsync(till.Id, FinanceAccountType.Till, till.BranchId, CashbookEntryType.Payment, Math.Abs(discrepancy), "CASH_SHORTAGE_PENDING", shift.Id, "SHF-" + shift.Id.ToString()[..8], "Thiếu tiền chốt ca chờ xử lý bồi hoàn", ct);
         }
 
         till.ActiveShiftId = null;

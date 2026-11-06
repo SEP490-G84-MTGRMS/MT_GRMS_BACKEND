@@ -24,6 +24,7 @@ public class OrderService : IOrderService
     private readonly ICustomerDebtService? _debtService;
     private readonly ICashbookService? _cashbookService;
     private readonly IValidator<OrderCreateRequest>? _validator;
+    private readonly PosShifts.IShiftRepository? _shiftRepository;
 
     private static readonly Guid DefaultTillId = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db");
     private static readonly Guid DefaultBankId = Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559");
@@ -34,7 +35,8 @@ public class OrderService : IOrderService
         IThermalPrintService thermalPrintService,
         ICustomerDebtService? debtService = null,
         ICashbookService? cashbookService = null,
-        IValidator<OrderCreateRequest>? validator = null)
+        IValidator<OrderCreateRequest>? validator = null,
+        PosShifts.IShiftRepository? shiftRepository = null)
     {
         _orderRepository = orderRepository;
         _unitOfWork = unitOfWork;
@@ -42,6 +44,7 @@ public class OrderService : IOrderService
         _debtService = debtService;
         _cashbookService = cashbookService;
         _validator = validator;
+        _shiftRepository = shiftRepository;
     }
 
     public OrderService(
@@ -49,7 +52,7 @@ public class OrderService : IOrderService
         IUnitOfWork unitOfWork,
         IThermalPrintService thermalPrintService,
         IValidator<OrderCreateRequest>? validator)
-        : this(orderRepository, unitOfWork, thermalPrintService, null, null, validator)
+        : this(orderRepository, unitOfWork, thermalPrintService, null, null, validator, null)
     {
     }
 
@@ -345,12 +348,20 @@ public class OrderService : IOrderService
         }
 
         // 8. Lưu Order Entity
+        Guid? shiftId = request.ShiftId;
+        if (!shiftId.HasValue && _shiftRepository != null)
+        {
+            var activeShift = await _shiftRepository.GetActiveShiftAsync(branchId, cancellationToken: cancellationToken);
+            shiftId = activeShift?.Id;
+        }
+
         string orderCode = debtInvoiceResponse != null ? debtInvoiceResponse.OrderCode : $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
         var order = new Order
         {
             Id = debtInvoiceResponse != null ? debtInvoiceResponse.OrderId : Guid.NewGuid(),
             BranchId = branchId,
             CustomerId = request.CustomerId,
+            ShiftId = shiftId,
             OrderCode = orderCode,
             OrderDate = DateTime.UtcNow,
             TotalAmount = totalAmount,
@@ -612,11 +623,16 @@ public class OrderService : IOrderService
             throw new InvalidOperationException($"Tiền đặt cọc tối thiểu phải bằng 10% tổng giá trị đơn hàng (Tối thiểu: {minDeposit:N0} đ, Thực tế: {request.DepositAmount:N0} đ).");
         }
 
+        Guid? preOrderShiftId = _shiftRepository != null
+            ? (await _shiftRepository.GetActiveShiftAsync(request.BranchId, cancellationToken: cancellationToken))?.Id
+            : null;
+
         var order = new Order
         {
             Id = Guid.NewGuid(),
             BranchId = request.BranchId,
             CustomerId = request.CustomerId,
+            ShiftId = preOrderShiftId,
             OrderCode = "PO" + DateTime.UtcNow.ToString("yyMMddHHmmssfff"),
             OrderDate = DateTime.UtcNow,
             TotalAmount = totalAmount,
@@ -1004,7 +1020,8 @@ public class OrderService : IOrderService
             CustomerPhone: order.Customer?.Phone,
             DepositAmount: order.DepositAmount,
             Note: order.Note,
-            DebtInvoice: debtInvoice
+            DebtInvoice: debtInvoice,
+            ShiftId: order.ShiftId
         );
     }
 }

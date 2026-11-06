@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations.Schema;
 using MT_GRMS.Domain.Common;
+using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Enums;
 
@@ -12,6 +13,7 @@ public class Order : BaseTenantEntity
 {
     public Guid BranchId { get; set; }
     public Guid? CustomerId { get; set; }
+    public Guid? ShiftId { get; set; }
     public string OrderCode { get; set; } = string.Empty;
     public DateTime OrderDate { get; set; } = DateTime.UtcNow;
     public decimal TotalAmount { get; set; } = 0.00m;
@@ -47,5 +49,6 @@ public class Order : BaseTenantEntity
     // Navigations
     public Branch? Branch { get; set; }
     public Customer? Customer { get; set; }
+    public ShiftZReport? Shift { get; set; }
     public ICollection<OrderDetail> Details { get; set; } = new List<OrderDetail>();
 }

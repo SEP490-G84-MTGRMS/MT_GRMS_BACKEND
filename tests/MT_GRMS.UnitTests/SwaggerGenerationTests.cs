@@ -24,7 +24,10 @@ public class SwaggerGenerationTests
         services.AddControllers()
             .AddApplicationPart(typeof(MT_GRMS.Api.Controllers.MediaController).Assembly);
         services.AddEndpointsApiExplorer();
-        services.AddSwaggerGen();
+        services.AddSwaggerGen(options =>
+        {
+            options.CustomSchemaIds(type => type.FullName?.Replace("+", ".") ?? type.Name);
+        });
 
         var serviceProvider = services.BuildServiceProvider();
 
