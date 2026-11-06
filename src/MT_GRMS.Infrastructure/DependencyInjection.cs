@@ -9,6 +9,10 @@ using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Interfaces;
+using MT_GRMS.Application.HR.Employees;
+using MT_GRMS.Application.HR.ShiftConfigs;
+using MT_GRMS.Application.HR.AttendancePolicies;
+using MT_GRMS.Application.HR.Schedules;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.Suppliers;
@@ -95,6 +99,10 @@ public static class DependencyInjection
         services.AddScoped<MT_GRMS.Application.GoodsReceipts.IGoodsReceiptRepository, GoodsReceiptRepository>();
         services.AddScoped<MT_GRMS.Application.SupplierReturns.ISupplierReturnRepository, SupplierReturnRepository>();
         services.AddScoped<Application.Promotions.IPromotionRepository, PromotionRepository>();
+        services.AddScoped<IEmployeeRepository, EmployeeRepository>();
+        services.AddScoped<IShiftConfigRepository, ShiftConfigRepository>();
+        services.AddScoped<IBranchAttendancePolicyRepository, BranchAttendancePolicyRepository>();
+        services.AddScoped<IScheduleRepository, ScheduleRepository>();
         services.AddScoped<ISubscriptionPlanRepository, SubscriptionPlanRepository>();
         services.AddScoped<ITenantRepository, TenantRepository>();
 

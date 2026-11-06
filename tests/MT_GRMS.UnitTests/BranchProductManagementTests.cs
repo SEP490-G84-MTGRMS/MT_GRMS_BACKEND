@@ -61,7 +61,7 @@ public class BranchProductManagementTests
                 CostPrice = 160000m,
                 SellingPrice = 195000m,
                 MinStock = 10m,
-                Status = "Active"
+                Status = ProductStatus.Active
             },
             new Product
             {
@@ -74,7 +74,7 @@ public class BranchProductManagementTests
                 CostPrice = 30000m,
                 SellingPrice = 38000m,
                 MinStock = 20m,
-                Status = "Active"
+                Status = ProductStatus.Active
             }
         });
 

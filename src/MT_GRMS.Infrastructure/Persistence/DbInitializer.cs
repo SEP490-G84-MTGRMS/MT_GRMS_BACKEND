@@ -20,6 +20,7 @@ using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Entities.Supplier;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Infrastructure.Persistence;
 
@@ -156,8 +157,10 @@ public static class DbInitializer
         }
         catch (Exception)
         {
-            // Fallback an toàn khi merge code hoặc khi không có migrations: Tự động khởi tạo schema từ Domain Entities
-            await context.Database.EnsureCreatedAsync();
+            await CatalogSeedData.SeedAsync(context, "tenant_mt_mart_01");
+            await EmployeeSeedData.SeedAsync(context, "tenant_mt_mart_01");
+            await SeedOrdersAndPreOrdersAsync(context);
+            return;
         }
 
         // 2. PHÂN HỆ SAAS: Nạp danh sách các gói cước SubscriptionPlans (Idempotent)
@@ -193,37 +196,7 @@ public static class DbInitializer
             await context.SaveChangesAsync();
         }
 
-        if (!await context.SubscriptionPlans.AnyAsync(p => p.PlanCode == "SUPPORT"))
-        {
-            var pSupport = new SubscriptionPlan
-            {
-                Id = "plan_support",
-                PlanCode = "SUPPORT",
-                PlanName = "Gói Hỗ Trợ",
-                PriceMonthly = 270000.00m,
-                PriceYearly = 2700000.00m,
-                MaxBranches = 1,
-                MaxStaff = 3,
-                EnabledModulesJson = "[\"Catalog\",\"Pos\"]",
-                IsActive = true
-            };
-            var pVip = new SubscriptionPlan
-            {
-                Id = "plan_vip",
-                PlanCode = "VIP",
-                PlanName = "Gói Cao Cấp",
-                PriceMonthly = 490000.00m,
-                PriceYearly = 4900000.00m,
-                MaxBranches = 10,
-                MaxStaff = 100,
-                EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\"]",
-                IsActive = true
-            };
-            await context.SubscriptionPlans.AddRangeAsync(pSupport, pVip);
-            await context.SaveChangesAsync();
-        }
-
-        // 3. PHÂN HỆ IDENTITY & DOANH NGHIỆP MẪU (TENANT)
+        // Doanh nghiệp thuê SaaS mẫu (Default Tenant)
         var defaultTenantId = "tenant_mt_mart_01";
         if (!await context.Tenants.AnyAsync(t => t.Id == defaultTenantId))
         {
@@ -449,7 +422,7 @@ public static class DbInitializer
             MaxStock = 500.00m,
             VatRate = 0.00m,
             ProductType = "STANDARD",
-            Status = "Active",
+            Status = ProductStatus.Active,
             HasBatches = true,
             IsFavorite = true
         };
@@ -468,7 +441,7 @@ public static class DbInitializer
             MaxStock = 1000.00m,
             VatRate = 8.00m,
             ProductType = "STANDARD",
-            Status = "Active",
+            Status = ProductStatus.Active,
             HasBatches = true,
             IsFavorite = true
         };
@@ -487,7 +460,7 @@ public static class DbInitializer
             MaxStock = 300.00m,
             VatRate = 8.00m,
             ProductType = "STANDARD",
-            Status = "Active"
+            Status = ProductStatus.Active
         };
 
         var prodG7 = new Product
@@ -504,7 +477,7 @@ public static class DbInitializer
             MaxStock = 200.00m,
             VatRate = 1.00m,
             ProductType = "STANDARD",
-            Status = "Active",
+            Status = ProductStatus.Active,
             HasBatches = true,
             IsFavorite = true
         };
@@ -523,7 +496,7 @@ public static class DbInitializer
             MaxStock = 200.00m,
             VatRate = 1.00m,
             ProductType = "STANDARD",
-            Status = "Active",
+            Status = ProductStatus.Active,
             HasBatches = true,
             IsFavorite = true
         };
@@ -542,7 +515,7 @@ public static class DbInitializer
             MaxStock = 300.00m,
             VatRate = 1.00m,
             ProductType = "STANDARD",
-            Status = "Active",
+            Status = ProductStatus.Active,
             HasBatches = false,
             IsFavorite = true
         };
@@ -561,7 +534,7 @@ public static class DbInitializer
             MaxStock = 500.00m,
             VatRate = 1.00m,
             ProductType = "STANDARD",
-            Status = "Active",
+            Status = ProductStatus.Active,
             HasBatches = true,
             IsFavorite = true
         };
@@ -740,48 +713,21 @@ public static class DbInitializer
         await context.Promotions.AddAsync(promoOpening);
 
         // =========================================================================
-        // PHÂN HỆ 6: NHÂN SỰ & TÀI CHÍNH
+        // PHÂN HỆ 6: SỔ QUỸ & TÀI CHÍNH BAN ĐẦU
         // =========================================================================
-        var employeeManager = new Employee
+        // Sổ quỹ tiền mặt ban đầu
+        var initialCashBook = new CashBook
         {
-            TenantId = defaultTenantId,
             BranchId = branchQ1.Id,
-            UserId = "usr_store_manager",
-            EmployeeCode = "NV-001",
-            FullName = "Nguyễn Văn Hùng (Quản Lý Cửa Hàng)",
-            CitizenId = "079095001234",
-            DateOfBirth = new DateTime(1995, 5, 20),
-            Gender = "Nam",
-            Phone = "0909876543",
-            Email = "hung.nguyen@mtmart.vn",
-            JobTitle = "Cửa Hàng Trưởng",
-            SalaryType = "monthly",
-            BaseRate = 15000000.00m,
-            LunchAllowance = 730000.00m,
-            TravelAllowance = 500000.00m,
-            Status = "active"
+            TransactionCode = "CB-INIT-2026",
+            SourceDocType = "OPENING_BALANCE",
+            TransactionType = "RECEIPT",
+            Amount = 10000000.00m,
+            OpeningBalance = 0.00m,
+            CurrentBalance = 10000000.00m,
+            Description = "Nạp tiền lẻ quỹ đầu ca phục vụ thanh toán POS"
         };
-
-        var employeeCashier = new Employee
-        {
-            TenantId = defaultTenantId,
-            BranchId = branchQ1.Id,
-            UserId = "usr_cashier",
-            EmployeeCode = "NV-002",
-            FullName = "Lê Thị Thảo (Thu Ngân POS)",
-            CitizenId = "079098005678",
-            DateOfBirth = new DateTime(1998, 10, 12),
-            Gender = "Nữ",
-            Phone = "0912345678",
-            Email = "thao.le@mtmart.vn",
-            JobTitle = "Nhân Viên Thu Ngân POS",
-            SalaryType = "monthly",
-            BaseRate = 8500000.00m,
-            LunchAllowance = 730000.00m,
-            Status = "active"
-        };
-
-        await context.Employees.AddRangeAsync(employeeManager, employeeCashier);
+        await context.CashBooks.AddAsync(initialCashBook);
 
         // Nạp 15 danh mục và 5-8 sản phẩm mỗi danh mục
         await CatalogSeedData.SeedAsync(context, defaultTenantId);
@@ -792,6 +738,11 @@ public static class DbInitializer
         await SeedTaxAndFinanceAsync(context, logger);
         await SeedNewStoreOwnerAnNhienAsync(context);
         }
+
+        // =========================================================================
+        // PHÂN HỆ 6: NHÂN SỰ (Hồ sơ, Ca làm việc, Chính sách chấm công, Phân ca & Bảng lương)
+        // =========================================================================
+        await EmployeeSeedData.SeedAsync(context, defaultTenantId);
     }
 
     public static async Task SeedOrdersAndPreOrdersAsync(AppDbContext context)

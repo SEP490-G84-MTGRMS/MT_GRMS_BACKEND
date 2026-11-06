@@ -1,7 +1,7 @@
 using System.Net;
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
-using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Api.Middlewares;
@@ -31,10 +31,7 @@ public class ExceptionHandlingMiddleware
 
     private async Task HandleExceptionAsync(HttpContext context, Exception exception)
     {
-        var response = context.Response;
-        response.ContentType = "application/json";
-
-        int statusCode;
+        var statusCode = (int)HttpStatusCode.InternalServerError;
         ApiResponse<object> apiResponse;
 
         switch (exception)
@@ -42,7 +39,7 @@ public class ExceptionHandlingMiddleware
             case BusinessException businessEx:
                 statusCode = businessEx.ErrorCode switch
                 {
-                    "PRODUCT_ALREADY_ASSIGNED_TO_SUPPLIER" => (int)HttpStatusCode.Conflict,
+                    "CONFLICT" or "DUPLICATE_KEY" or "DUPLICATE_CODE" or "DUPLICATE_BARCODE" or "DUPLICATE_CITIZEN_ID" or "DUPLICATE_PHONE" or "DUPLICATE_USERNAME" or "PRODUCT_ALREADY_ASSIGNED_TO_SUPPLIER" => (int)HttpStatusCode.Conflict,
                     "FORBIDDEN" => (int)HttpStatusCode.Forbidden,
                     _ => (int)HttpStatusCode.UnprocessableEntity
                 };
@@ -68,16 +65,10 @@ public class ExceptionHandlingMiddleware
                 _logger.LogWarning(unauthEx, "Unauthorized access: {Message}", unauthEx.Message);
                 break;
 
-            case Microsoft.EntityFrameworkCore.DbUpdateException dbUpdateEx when dbUpdateEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505":
+            case DbUpdateException dbUpdateEx when dbUpdateEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505":
                 statusCode = (int)HttpStatusCode.Conflict;
-                var constraintName = pgEx.ConstraintName ?? string.Empty;
-                var friendlyMsg = constraintName.Contains("ProductCode", StringComparison.OrdinalIgnoreCase)
-                    ? "Mã sản phẩm đã tồn tại trong hệ thống. Vui lòng nhập mã khác."
-                    : constraintName.Contains("Barcode", StringComparison.OrdinalIgnoreCase)
-                        ? "Mã vạch đã được sử dụng bởi sản phẩm khác."
-                        : "Dữ liệu bị trùng lặp trong hệ thống (vi phạm ràng buộc duy nhất).";
-                apiResponse = ApiResponse<object>.Fail("DUPLICATE_KEY", friendlyMsg);
-                _logger.LogWarning(dbUpdateEx, "Unique constraint violation: {ConstraintName}", constraintName);
+                apiResponse = ApiResponse<object>.Fail("DUPLICATE_KEY", "Dữ liệu bị trùng lặp trong hệ thống (vi phạm ràng buộc duy nhất).");
+                _logger.LogWarning(dbUpdateEx, "Postgres unique constraint 23505: {Constraint}", pgEx.ConstraintName);
                 break;
 
             case NotFoundException notFoundEx:
@@ -93,8 +84,14 @@ public class ExceptionHandlingMiddleware
                 break;
         }
 
-        response.StatusCode = statusCode;
-        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-        await response.WriteAsync(JsonSerializer.Serialize(apiResponse, jsonOptions));
+        context.Response.ContentType = "application/json";
+        context.Response.StatusCode = statusCode;
+
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
+
+        await context.Response.WriteAsync(JsonSerializer.Serialize(apiResponse, options));
     }
 }

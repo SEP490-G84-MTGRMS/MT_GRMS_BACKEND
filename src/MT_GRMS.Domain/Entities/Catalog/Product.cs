@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations.Schema;
 using MT_GRMS.Domain.Common;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Domain.Entities.Catalog;
 
@@ -70,7 +71,7 @@ public class Product : BaseTenantEntity
     [NotMapped]
     public string UnitName { get => BaseUnit; set => BaseUnit = value; }
     [NotMapped]
-    public bool IsActive { get => Status == "Active"; set => Status = value ? "Active" : "Inactive"; }
+    public bool IsActive { get => Status == ProductStatus.Active; set => Status = value ? ProductStatus.Active : ProductStatus.Inactive; }
 
     // Navigations
     public Category? Category { get; set; }

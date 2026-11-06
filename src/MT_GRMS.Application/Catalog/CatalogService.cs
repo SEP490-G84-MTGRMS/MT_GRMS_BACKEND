@@ -1,6 +1,7 @@
 using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Catalog;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.Catalog;
@@ -24,15 +25,9 @@ public class CatalogService : ICatalogService
         _tenantContext = tenantContext;
     }
 
-    private bool CanViewCostPrice()
+    private static ProductResponse MapToResponse(Product p, bool canViewCostPrice = true, bool hasOrders = false)
     {
-        var role = _tenantContext.CurrentRole;
-        return role is "SUPER_ADMIN" or "STORE_OWNER" or "BRANCH_MANAGER" or "StoreOwner" or "Manager";
-    }
-
-    private static ProductResponse MapToResponse(Product p, bool canViewCostPrice, bool hasOrders = false)
-    {
-        var imageUrls = p.ImageUrls ?? new List<string>();
+        var imageUrls = p.ImageUrls != null && p.ImageUrls.Any() ? p.ImageUrls : new List<string>();
         var avatar = imageUrls.FirstOrDefault();
 
         return new ProductResponse(
@@ -49,7 +44,7 @@ public class CatalogService : ICatalogService
             p.MaxStock,
             p.VatRate,
             p.ProductType,
-            p.Status,
+            p.Status.ToString(),
             avatar,
             p.Description,
             p.InternalNote,
@@ -161,9 +156,14 @@ public class CatalogService : ICatalogService
             imageUrls.Add(request.ImageUrl.Trim());
         }
 
+        var productStatus = !string.IsNullOrWhiteSpace(request.Status) && Enum.TryParse<ProductStatus>(request.Status, true, out var parsedStatus)
+            ? parsedStatus
+            : ProductStatus.Active;
+
         var product = new Product
         {
             Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
             Name = request.Name.Trim(),
             CategoryId = request.CategoryId,
             Category = category,
@@ -176,7 +176,7 @@ public class CatalogService : ICatalogService
             MaxStock = request.MaxStock,
             VatRate = request.VatRate,
             ProductType = string.IsNullOrWhiteSpace(request.ProductType) ? "STANDARD" : request.ProductType,
-            Status = string.IsNullOrWhiteSpace(request.Status) ? "Active" : request.Status,
+            Status = productStatus,
             ImageUrls = imageUrls,
             Description = request.Description?.Trim(),
             InternalNote = request.InternalNote?.Trim(),
@@ -250,7 +250,10 @@ public class CatalogService : ICatalogService
         product.MinStock = request.MinStock;
         product.MaxStock = request.MaxStock;
         product.VatRate = request.VatRate;
-        product.Status = string.IsNullOrWhiteSpace(request.Status) ? product.Status : request.Status;
+        if (!string.IsNullOrWhiteSpace(request.Status) && Enum.TryParse<ProductStatus>(request.Status, true, out var updatedStatus))
+        {
+            product.Status = updatedStatus;
+        }
         product.Description = request.Description?.Trim();
         product.InternalNote = request.InternalNote?.Trim();
         product.HasBatches = request.HasBatches;
@@ -316,5 +319,11 @@ public class CatalogService : ICatalogService
         var itemIds = items.Select(x => x.Id).ToList();
         var productIdsWithOrders = await _productRepository.GetProductIdsWithOrdersAsync(itemIds, cancellationToken);
         return items.Select(p => MapToResponse(p, canSeeCost, productIdsWithOrders.Contains(p.Id))).ToList();
+    }
+
+    private bool CanViewCostPrice()
+    {
+        var role = _tenantContext.CurrentRole;
+        return role is "SUPER_ADMIN" or "STORE_OWNER" or "BRANCH_MANAGER" or "StoreOwner" or "Manager";
     }
 }

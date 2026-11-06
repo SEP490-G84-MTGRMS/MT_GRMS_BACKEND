@@ -9,6 +9,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.Branches;
@@ -232,13 +233,6 @@ public class BranchProductService : IBranchProductService
         UpdateBranchProductCommand command,
         CancellationToken cancellationToken = default)
     {
-        var validator = new UpdateBranchProductValidator();
-        var validationResult = await validator.ValidateAsync(command, cancellationToken);
-        if (!validationResult.IsValid)
-        {
-            throw new BusinessException("VALIDATION_ERROR", validationResult.Errors.First().ErrorMessage);
-        }
-
         var branch = await _repository.GetBranchByIdAsync(branchId, cancellationToken);
         if (branch == null || branch.IsDeleted)
         {
