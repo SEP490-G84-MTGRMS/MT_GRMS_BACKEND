@@ -1,16 +1,15 @@
 using System.Text.Json;
-using MT_GRMS.Domain.Entities.SaaS;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Entities.HR;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Infrastructure.Persistence;
 
 /// <summary>
-/// Dữ liệu mẫu hồ sơ nhân viên (Employee Seed Data) cho MT-GRMS:
-/// Khởi tạo 12 nhân viên thực tế phủ kín các vị trí công việc trong chuỗi siêu thị bán lẻ:
-/// Cửa hàng trưởng, Quản lý ca, Thu ngân trưởng, Thu ngân POS, Kiểm kho, Tiếp thực, Bảo vệ, Nhân viên thời vụ part-time.
+/// Dữ liệu mẫu hồ sơ nhân viên, cấu hình lương, chính sách chấm công, ca làm việc,
+/// phân ca và bảng lương (Payslip) cho hệ thống quản lý bán lẻ MT-GRMS.
 /// </summary>
 public static class EmployeeSeedData
 {
@@ -51,11 +50,10 @@ public static class EmployeeSeedData
 
         if (branches.Count == 0)
         {
-            // Fallback: Lấy bất kỳ chi nhánh nào đang có trong DB nếu tenant chưa có
             branches = await context.Branches.IgnoreQueryFilters().Where(b => !b.IsDeleted).ToListAsync();
             if (branches.Count == 0)
             {
-                return; // Chưa có chi nhánh nào để gán nhân viên
+                return;
             }
         }
 
@@ -63,16 +61,16 @@ public static class EmployeeSeedData
         var hnBranch1 = branches.FirstOrDefault(b => b.BranchCode == "BR-HN-01") ?? defaultBranch;
         var hnBranch2 = branches.FirstOrDefault(b => b.BranchCode == "BR-HN-02") ?? defaultBranch;
 
-        // 2. Khởi tạo Chính sách Chấm công Chi nhánh (BranchAttendancePolicy)
+        // 2. YÊU CẦU 1: Khởi tạo Chính sách Chấm công Chi nhánh (BranchAttendancePolicy)
         await SeedBranchAttendancePoliciesAsync(context, tenantId, branches);
 
-        // 3. Khởi tạo Danh mục Ca làm việc chuẩn (ShiftConfig)
+        // 3. YÊU CẦU 3: Khởi tạo Danh mục Ca làm việc chuẩn 8 tiếng (ShiftConfig)
         await SeedShiftConfigsAsync(context, tenantId, branches);
 
-        // 4. Danh sách 12 nhân viên mẫu thực tế
+        // 4. YÊU CẦU 2: Danh sách nhân viên (Mô hình tinh gọn: Toàn bộ hệ thống chỉ có Chủ cửa hàng + Nhân viên gộp chung)
         var templates = new List<SeedEmployeeItem>
         {
-            // --- Chi nhánh Quận 1 (TP.HCM) ---
+            // --- Chi nhánh Quận 1 (BR-HCM-01): 3 Nhân viên với 3 cơ chế lương khác nhau ---
             new()
             {
                 EmployeeCode = "NV001",
@@ -84,9 +82,9 @@ public static class EmployeeSeedData
                 Email = "an.nguyen@mtgrms.vn",
                 Address = "123 Hai Bà Trưng, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh",
                 StartDate = new DateTime(2022, 1, 15),
-                Note = "Cửa hàng trưởng - Quản lý chung vận hành chi nhánh Quận 1",
+                Note = "Nhân viên (Lương theo tháng - Monthly)",
                 SalaryType = SalaryType.Monthly,
-                BaseRate = 16000000.00m,
+                BaseRate = 10000000.00m, // 10.000.000 VNĐ/tháng
                 OtWeekday = "150%",
                 OtSunday = "200%",
                 BankAccountNumber = "1903456789012",
@@ -94,11 +92,11 @@ public static class EmployeeSeedData
                 BankAccountHolder = "NGUYEN VAN AN",
                 Status = EmployeeStatus.Active,
                 BranchCodePreference = "BR-HCM-01",
-                PreferredUserId = "usr_store_manager",
+                PreferredUserId = "usr_staff",
                 Allowances = new()
                 {
-                    ("Phụ cấp trách nhiệm", 2000000.00m),
                     ("Phụ cấp ăn trưa", 730000.00m),
+                    ("Phụ cấp trách nhiệm", 1000000.00m),
                     ("Phụ cấp xăng xe", 500000.00m)
                 }
             },
@@ -113,9 +111,9 @@ public static class EmployeeSeedData
                 Email = "bich.tran@mtgrms.vn",
                 Address = "45/2 Nguyễn Thị Minh Khai, Phường Đa Kao, Quận 1, TP. Hồ Chí Minh",
                 StartDate = new DateTime(2022, 3, 1),
-                Note = "Thu ngân trưởng ca sáng và trưa",
-                SalaryType = SalaryType.Monthly,
-                BaseRate = 9500000.00m,
+                Note = "Nhân viên (Lương theo ca - Shift)",
+                SalaryType = SalaryType.Shift,
+                BaseRate = 150000.00m, // 150.000 VNĐ/ca
                 OtWeekday = "150%",
                 OtSunday = "200%",
                 BankAccountNumber = "0071001234567",
@@ -123,11 +121,9 @@ public static class EmployeeSeedData
                 BankAccountHolder = "TRAN THI THU BICH",
                 Status = EmployeeStatus.Active,
                 BranchCodePreference = "BR-HCM-01",
-                PreferredUserId = "usr_cashier",
                 Allowances = new()
                 {
-                    ("Phụ cấp ăn trưa", 730000.00m),
-                    ("Phụ cấp trách nhiệm quầy thu ngân", 600000.00m)
+                    ("Phụ cấp ăn trưa", 730000.00m)
                 }
             },
             new()
@@ -141,20 +137,19 @@ public static class EmployeeSeedData
                 Email = "ha.le@mtgrms.vn",
                 Address = "78 Trần Đình Xu, Phường Cô Giang, Quận 1, TP. Hồ Chí Minh",
                 StartDate = new DateTime(2023, 6, 10),
-                Note = "Thu ngân quầy POS ca chiều tối",
-                SalaryType = SalaryType.Monthly,
-                BaseRate = 8000000.00m,
+                Note = "Nhân viên (Lương theo giờ - Hourly)",
+                SalaryType = SalaryType.Hourly,
+                BaseRate = 25000.00m, // 25.000 VNĐ/giờ
                 OtWeekday = "150%",
                 OtSunday = "200%",
                 BankAccountNumber = "1903456789013",
-                BankName = "Techcombank",
+                BankName = "MB Bank",
                 BankAccountHolder = "LE HOANG HA",
                 Status = EmployeeStatus.Active,
                 BranchCodePreference = "BR-HCM-01",
                 Allowances = new()
                 {
-                    ("Phụ cấp ăn trưa", 730000.00m),
-                    ("Phụ cấp đi lại", 300000.00m)
+                    ("Phụ cấp ăn trưa", 500000.00m)
                 }
             },
             new()
@@ -168,7 +163,7 @@ public static class EmployeeSeedData
                 Email = "hung.pham@mtgrms.vn",
                 Address = "102 Lê Lai, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh",
                 StartDate = new DateTime(2022, 5, 20),
-                Note = "Phụ trách kho tổng, nhập xuất hàng đông lạnh và tươi sống",
+                Note = "Nhân viên (Lương theo tháng - Monthly)",
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 9000000.00m,
                 OtWeekday = "150%",
@@ -195,7 +190,7 @@ public static class EmployeeSeedData
                 Email = "tung.phan@mtgrms.vn",
                 Address = "56 Cống Quỳnh, Phường Phạm Ngũ Lão, Quận 1, TP. Hồ Chí Minh",
                 StartDate = new DateTime(2021, 11, 1),
-                Note = "Bảo vệ an ninh cửa hàng và trông xe ca tối",
+                Note = "Nhân viên (Lương theo tháng - Monthly)",
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 7500000.00m,
                 OtWeekday = "150%",
@@ -222,7 +217,7 @@ public static class EmployeeSeedData
                 Email = "mai.duong@mtgrms.vn",
                 Address = "89 Nguyễn Trãi, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh",
                 StartDate = new DateTime(2022, 2, 10),
-                Note = "Nhân viên đã bàn giao công việc và nghỉ việc từ tháng 08/2026",
+                Note = "Nhân viên đã nghỉ việc từ tháng 08/2026",
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 7200000.00m,
                 OtWeekday = "150%",
@@ -230,7 +225,7 @@ public static class EmployeeSeedData
                 BankAccountNumber = "060123456789",
                 BankName = "Sacombank",
                 BankAccountHolder = "DUONG THI MAI",
-                Status = EmployeeStatus.Inactive, // Đã thôi việc
+                Status = EmployeeStatus.Inactive,
                 BranchCodePreference = "BR-HCM-01",
                 Allowances = new()
             },
@@ -247,7 +242,7 @@ public static class EmployeeSeedData
                 Email = "nam.hoang@mtgrms.vn",
                 Address = "12 Hoàng Quốc Việt, Phường Nghĩa Đô, Quận Cầu Giấy, Hà Nội",
                 StartDate = new DateTime(2022, 8, 1),
-                Note = "Quản lý điều hành toàn diện chi nhánh Cầu Giấy",
+                Note = "Nhân viên (Lương theo tháng - Monthly)",
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 14500000.00m,
                 OtWeekday = "150%",
@@ -260,8 +255,7 @@ public static class EmployeeSeedData
                 Allowances = new()
                 {
                     ("Phụ cấp trách nhiệm", 1500000.00m),
-                    ("Phụ cấp ăn trưa", 730000.00m),
-                    ("Phụ cấp điện thoại", 400000.00m)
+                    ("Phụ cấp ăn trưa", 730000.00m)
                 }
             },
             new()
@@ -275,7 +269,7 @@ public static class EmployeeSeedData
                 Email = "linh.do@mtgrms.vn",
                 Address = "45 Trần Thái Tông, Phường Dịch Vọng Hậu, Quận Cầu Giấy, Hà Nội",
                 StartDate = new DateTime(2023, 2, 15),
-                Note = "Thu ngân và hỗ trợ trưng bày kệ hàng tiêu dùng",
+                Note = "Nhân viên (Lương theo tháng - Monthly)",
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 8200000.00m,
                 OtWeekday = "150%",
@@ -301,7 +295,7 @@ public static class EmployeeSeedData
                 Email = "tuan.vu@mtgrms.vn",
                 Address = "88 Cầu Giấy, Phường Quan Hoa, Quận Cầu Giấy, Hà Nội",
                 StartDate = new DateTime(2022, 10, 5),
-                Note = "Sơ chế và đóng gói thực phẩm tươi sống",
+                Note = "Nhân viên (Lương theo tháng - Monthly)",
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 8500000.00m,
                 OtWeekday = "150%",
@@ -330,7 +324,7 @@ public static class EmployeeSeedData
                 Email = "trang.bui@mtgrms.vn",
                 Address = "15 Nguyễn Trãi, Phường Thượng Đình, Quận Thanh Xuân, Hà Nội",
                 StartDate = new DateTime(2022, 4, 1),
-                Note = "Cửa hàng phó phụ trách kinh doanh và chăm sóc khách hàng",
+                Note = "Nhân viên (Lương theo tháng - Monthly)",
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 12000000.00m,
                 OtWeekday = "150%",
@@ -343,8 +337,7 @@ public static class EmployeeSeedData
                 Allowances = new()
                 {
                     ("Phụ cấp trách nhiệm", 1200000.00m),
-                    ("Phụ cấp ăn trưa", 730000.00m),
-                    ("Phụ cấp xăng xe", 500000.00m)
+                    ("Phụ cấp ăn trưa", 730000.00m)
                 }
             },
             new()
@@ -358,9 +351,9 @@ public static class EmployeeSeedData
                 Email = "huy.dang@mtgrms.vn",
                 Address = "234 Khuất Duy Tiến, Phường Nhân Chính, Quận Thanh Xuân, Hà Nội",
                 StartDate = new DateTime(2024, 1, 10),
-                Note = "Sinh viên làm thêm part-time theo giờ ca tối",
+                Note = "Nhân viên (Lương theo giờ - Hourly)",
                 SalaryType = SalaryType.Hourly,
-                BaseRate = 28000.00m, // 28.000đ/giờ
+                BaseRate = 28000.00m,
                 OtWeekday = "150%",
                 OtSunday = "200%",
                 BankAccountNumber = "03567890120",
@@ -384,9 +377,9 @@ public static class EmployeeSeedData
                 Email = "phuong.ngo@mtgrms.vn",
                 Address = "67 Lê Văn Lương, Phường Nhân Chính, Quận Thanh Xuân, Hà Nội",
                 StartDate = new DateTime(2024, 3, 1),
-                Note = "Nhân viên thời vụ ca linh hoạt cuối tuần",
+                Note = "Nhân viên (Lương theo ca - Shift)",
                 SalaryType = SalaryType.Shift,
-                BaseRate = 250000.00m, // 250.000đ/ca
+                BaseRate = 250000.00m,
                 OtWeekday = "150%",
                 OtSunday = "200%",
                 BankAccountNumber = "1567890123",
@@ -398,25 +391,35 @@ public static class EmployeeSeedData
             }
         };
 
-        // 5. Tiến hành kiểm tra và chèn / đồng bộ nhân viên
+        // 5. Kiểm tra và chèn / đồng bộ hồ sơ nhân viên
         foreach (var tpl in templates)
         {
             var existing = await context.Employees
+                .Include(e => e.Allowances)
                 .IgnoreQueryFilters()
                 .FirstOrDefaultAsync(e => e.TenantId == tenantId && (e.EmployeeCode == tpl.EmployeeCode || e.CitizenId == tpl.CitizenId));
 
             if (existing != null)
             {
-                // Đồng bộ cập nhật các trường mới nếu đang để trống
                 if (string.IsNullOrEmpty(existing.Address)) existing.Address = tpl.Address;
                 if (!existing.StartDate.HasValue) existing.StartDate = tpl.StartDate;
                 if (string.IsNullOrEmpty(existing.Note)) existing.Note = tpl.Note;
                 if (string.IsNullOrEmpty(existing.OtWeekday)) existing.OtWeekday = tpl.OtWeekday;
                 if (string.IsNullOrEmpty(existing.OtSunday)) existing.OtSunday = tpl.OtSunday;
+                if (string.IsNullOrEmpty(existing.BankAccountNumber)) existing.BankAccountNumber = tpl.BankAccountNumber;
+                if (string.IsNullOrEmpty(existing.BankName)) existing.BankName = tpl.BankName;
+                if (string.IsNullOrEmpty(existing.BankAccountHolder)) existing.BankAccountHolder = tpl.BankAccountHolder;
+
+                // Đồng bộ cấu hình lương cho NV001, NV002, NV003 chuẩn theo yêu cầu đề bài
+                if (tpl.EmployeeCode is "NV001" or "NV002" or "NV003")
+                {
+                    existing.SalaryType = tpl.SalaryType;
+                    existing.BaseRate = tpl.BaseRate;
+                    existing.BranchId = defaultBranch.Id;
+                }
             }
             else
             {
-                // Chọn branch phù hợp
                 var assignedBranch = tpl.BranchCodePreference switch
                 {
                     "BR-HN-01" => hnBranch1,
@@ -424,7 +427,6 @@ public static class EmployeeSeedData
                     _ => defaultBranch
                 };
 
-                // Kiểm tra User nếu có
                 string? matchedUserId = null;
                 if (!string.IsNullOrEmpty(tpl.PreferredUserId))
                 {
@@ -481,10 +483,13 @@ public static class EmployeeSeedData
         }
 
         await context.SaveChangesAsync();
+
+        // 6. YÊU CẦU 4 & 5: Phân ca, Chấm công giả lập & Tính toán Bảng lương (Payslip) Tháng 9 và Tháng 10 năm 2026
+        await SeedSchedulesAndPayslipsAsync(context, tenantId, defaultBranch.Id);
     }
 
     /// <summary>
-    /// Khởi tạo chính sách chấm công (BranchAttendancePolicy) cho từng chi nhánh
+    /// YÊU CẦU 1: Khởi tạo chính sách chấm công (BranchAttendancePolicy) cho chi nhánh
     /// </summary>
     public static async Task SeedBranchAttendancePoliciesAsync(
         AppDbContext context,
@@ -513,17 +518,30 @@ public static class EmployeeSeedData
                     IsConvertHoursToDays = true,
                     ConversionRulesJson = defaultConversionRulesJson,
                     EnableLateThreshold = true,
-                    LateThresholdMinutes = 15,
+                    LateThresholdMinutes = 15, // Đi muộn sau 15 phút
                     EnableEarlyLeaveThreshold = true,
-                    EarlyLeaveThresholdMinutes = 15,
+                    EarlyLeaveThresholdMinutes = 15, // Về sớm trước 15 phút
                     EnableOtBeforeShift = true,
                     OtBeforeShiftMinutes = 30,
                     EnableOtAfterShift = true,
-                    OtAfterShiftMinutes = 30,
+                    OtAfterShiftMinutes = 30, // Tính OT sau 30 phút
                     CreatedAt = DateTime.UtcNow
                 };
 
                 await context.BranchAttendancePolicies.AddAsync(policy);
+                hasChanges = true;
+            }
+            else
+            {
+                // Đồng bộ các thông số chuẩn nếu chưa khớp
+                existingPolicy.StandardDayHours = 8.00m;
+                existingPolicy.IsConvertHoursToDays = true;
+                existingPolicy.EnableLateThreshold = true;
+                existingPolicy.LateThresholdMinutes = 15;
+                existingPolicy.EnableEarlyLeaveThreshold = true;
+                existingPolicy.EarlyLeaveThresholdMinutes = 15;
+                existingPolicy.EnableOtAfterShift = true;
+                existingPolicy.OtAfterShiftMinutes = 30;
                 hasChanges = true;
             }
         }
@@ -535,7 +553,10 @@ public static class EmployeeSeedData
     }
 
     /// <summary>
-    /// Khởi tạo danh mục ca làm việc chuẩn (ShiftConfig) cho chuỗi bán lẻ siêu thị
+    /// YÊU CẦU 3: Khởi tạo danh mục Ca làm việc chuẩn 8 tiếng (ShiftConfig) phù hợp với mô hình siêu thị/tạp hóa
+    /// - Ca sáng: 6h - 14h
+    /// - Ca chiều: 14h - 22h
+    /// - Ca đêm: 22h - 6h (kết thúc hôm sau)
     /// </summary>
     public static async Task SeedShiftConfigsAsync(
         AppDbContext context,
@@ -551,10 +572,10 @@ public static class EmployeeSeedData
             new
             {
                 ShiftCode = "CA-SANG",
-                ShiftName = "Ca sáng",
+                ShiftName = "Ca sáng (6h - 14h)",
                 StartTime = new TimeSpan(6, 0, 0),
-                EndTime = new TimeSpan(14, 15, 0),
-                DurationHours = 8.25m,
+                EndTime = new TimeSpan(14, 0, 0),
+                DurationHours = 8.00m,
                 AllowedCheckInStart = new TimeSpan(5, 30, 0),
                 AllowedCheckInEnd = new TimeSpan(7, 0, 0),
                 IsCheckInNextDay = false,
@@ -564,10 +585,10 @@ public static class EmployeeSeedData
             new
             {
                 ShiftCode = "CA-CHIEU",
-                ShiftName = "Ca chiều",
+                ShiftName = "Ca chiều (14h - 22h)",
                 StartTime = new TimeSpan(14, 0, 0),
-                EndTime = new TimeSpan(22, 15, 0),
-                DurationHours = 8.25m,
+                EndTime = new TimeSpan(22, 0, 0),
+                DurationHours = 8.00m,
                 AllowedCheckInStart = new TimeSpan(13, 30, 0),
                 AllowedCheckInEnd = new TimeSpan(15, 0, 0),
                 IsCheckInNextDay = false,
@@ -577,10 +598,10 @@ public static class EmployeeSeedData
             new
             {
                 ShiftCode = "CA-DEM",
-                ShiftName = "Ca đêm",
+                ShiftName = "Ca đêm (22h - 6h)",
                 StartTime = new TimeSpan(22, 0, 0),
-                EndTime = new TimeSpan(6, 15, 0),
-                DurationHours = 8.25m,
+                EndTime = new TimeSpan(6, 0, 0),
+                DurationHours = 8.00m,
                 AllowedCheckInStart = new TimeSpan(21, 30, 0),
                 AllowedCheckInEnd = new TimeSpan(23, 0, 0),
                 IsCheckInNextDay = true,
@@ -603,7 +624,7 @@ public static class EmployeeSeedData
             new
             {
                 ShiftCode = "CA-TOI",
-                ShiftName = "Ca tối",
+                ShiftName = "Ca tối part-time",
                 StartTime = new TimeSpan(18, 0, 0),
                 EndTime = new TimeSpan(22, 0, 0),
                 DurationHours = 4.00m,
@@ -647,11 +668,489 @@ public static class EmployeeSeedData
                 await context.ShiftConfigs.AddAsync(shift);
                 hasChanges = true;
             }
+            else
+            {
+                // Đồng bộ giờ ca chuẩn 8 tiếng
+                existing.StartTime = tpl.StartTime;
+                existing.EndTime = tpl.EndTime;
+                existing.DurationHours = tpl.DurationHours;
+                existing.IsCheckInNextDay = tpl.IsCheckInNextDay;
+                hasChanges = true;
+            }
         }
 
         if (hasChanges)
         {
             await context.SaveChangesAsync();
         }
+    }
+
+    /// <summary>
+    /// YÊU CẦU 4 & 5:
+    /// - Quét qua 61 ngày (01/09/2026 - 31/10/2026) tạo EmployeeSchedule giả lập chấm công (đi muộn, về sớm, OT)
+    /// - Tính toán động tạo Payslip tháng 9 và tháng 10 dựa trên ConfigPolicy và dữ liệu chấm công thực tế
+    /// </summary>
+    public static async Task SeedSchedulesAndPayslipsAsync(
+        AppDbContext context,
+        string tenantId,
+        Guid branchId)
+    {
+        // 1. Lấy thông tin 3 nhân viên trọng tâm tại chi nhánh
+        var targetEmployees = await context.Employees
+            .Include(e => e.Allowances)
+            .IgnoreQueryFilters()
+            .Where(e => e.TenantId == tenantId && e.BranchId == branchId &&
+                        (e.EmployeeCode == "NV001" || e.EmployeeCode == "NV002" || e.EmployeeCode == "NV003"))
+            .ToListAsync();
+
+        if (targetEmployees.Count < 3)
+        {
+            return;
+        }
+
+        var empMonthly = targetEmployees.First(e => e.EmployeeCode == "NV001"); // Lương tháng 10.000.000
+        var empShift = targetEmployees.First(e => e.EmployeeCode == "NV002");   // Lương ca 150.000
+        var empHourly = targetEmployees.First(e => e.EmployeeCode == "NV003");  // Lương giờ 25.000
+
+        // 2. Lấy Policy chấm công của chi nhánh
+        var policy = await context.BranchAttendancePolicies
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(p => p.TenantId == tenantId && p.BranchId == branchId);
+
+        if (policy == null)
+        {
+            return;
+        }
+
+        // 3. Lấy các Ca làm việc chuẩn 8 tiếng
+        var shifts = await context.ShiftConfigs
+            .IgnoreQueryFilters()
+            .Where(s => s.TenantId == tenantId && s.BranchId == branchId)
+            .ToListAsync();
+
+        var shiftMorning = shifts.FirstOrDefault(s => s.ShiftCode == "CA-SANG") ?? shifts[0];
+        var shiftAfternoon = shifts.FirstOrDefault(s => s.ShiftCode == "CA-CHIEU") ?? shifts[0];
+
+        // 4. Kiểm tra xem đã seed lịch chấm công cho kỳ 01/09/2026 - 31/10/2026 chưa
+        var startDate = new DateTime(2026, 9, 1);
+        var endDate = new DateTime(2026, 10, 31);
+
+        var existingSchedulesCount = await context.EmployeeSchedules
+            .IgnoreQueryFilters()
+            .CountAsync(s => s.TenantId == tenantId && s.BranchId == branchId &&
+                             s.WorkDate >= startDate && s.WorkDate <= endDate &&
+                             (s.EmployeeId == empMonthly.Id || s.EmployeeId == empShift.Id || s.EmployeeId == empHourly.Id));
+
+        List<EmployeeSchedule> newSchedules = new();
+
+        if (existingSchedulesCount == 0)
+        {
+            // Quét qua 61 ngày (Tháng 9 có 30 ngày, Tháng 10 có 31 ngày)
+            for (var date = startDate; date <= endDate; date = date.AddDays(1))
+            {
+                var isSunday = date.DayOfWeek == DayOfWeek.Sunday;
+
+                // --- Nhân viên 1: NV001 (Monthly) - Làm Ca sáng (6h - 14h), Nghỉ Chủ Nhật ---
+                if (!isSunday)
+                {
+                    var (lateMin, earlyMin, otMin, actualHours, checkIn, checkOut) =
+                        SimulateAttendance(date, shiftMorning, date.Day switch
+                        {
+                            5 or 24 => AttendanceScenario.Late20Min,      // Đi muộn trễ 20 phút (vượt ngưỡng 15p)
+                            15 or 28 => AttendanceScenario.EarlyLeave20Min, // Về sớm 20 phút (vượt ngưỡng 15p)
+                            10 or 22 => AttendanceScenario.Overtime45Min,  // Làm thêm giờ 45 phút (vượt ngưỡng 30p)
+                            _ => AttendanceScenario.Normal
+                        });
+
+                    newSchedules.Add(CreateSchedule(tenantId, branchId, empMonthly.Id, shiftMorning, date,
+                        checkIn, checkOut, lateMin, earlyMin, otMin, actualHours));
+                }
+
+                // --- Nhân viên 2: NV002 (Shift) - Làm Ca chiều (14h - 22h), Nghỉ Chủ Nhật ---
+                if (!isSunday)
+                {
+                    var (lateMin, earlyMin, otMin, actualHours, checkIn, checkOut) =
+                        SimulateAttendance(date, shiftAfternoon, date.Day switch
+                        {
+                            8 or 19 => AttendanceScenario.Late20Min,       // Đi muộn trễ 20 phút
+                            12 or 27 => AttendanceScenario.EarlyLeave20Min, // Về sớm 20 phút
+                            16 or 25 => AttendanceScenario.Overtime45Min,  // Làm thêm giờ 45 phút
+                            _ => AttendanceScenario.Normal
+                        });
+
+                    newSchedules.Add(CreateSchedule(tenantId, branchId, empShift.Id, shiftAfternoon, date,
+                        checkIn, checkOut, lateMin, earlyMin, otMin, actualHours));
+                }
+
+                // --- Nhân viên 3: NV003 (Hourly) - Làm Ca sáng từ Thứ 2 - Thứ 6 + một vài ca thêm Chủ Nhật/Thứ 7 ---
+                var isSaturday = date.DayOfWeek == DayOfWeek.Saturday;
+                var shouldWorkHourly = (!isSunday && !isSaturday) || (isSaturday && date.Day % 2 == 0);
+
+                if (shouldWorkHourly)
+                {
+                    var (lateMin, earlyMin, otMin, actualHours, checkIn, checkOut) =
+                        SimulateAttendance(date, shiftMorning, date.Day switch
+                        {
+                            4 or 18 => AttendanceScenario.Late20Min,       // Đi muộn trễ 20 phút
+                            11 or 29 => AttendanceScenario.EarlyLeave20Min, // Về sớm 20 phút
+                            7 or 21 => AttendanceScenario.Overtime45Min,   // Làm thêm giờ 45 phút
+                            _ => AttendanceScenario.Normal
+                        });
+
+                    newSchedules.Add(CreateSchedule(tenantId, branchId, empHourly.Id, shiftMorning, date,
+                        checkIn, checkOut, lateMin, earlyMin, otMin, actualHours));
+                }
+            }
+
+            await context.EmployeeSchedules.AddRangeAsync(newSchedules);
+            await context.SaveChangesAsync();
+        }
+        else
+        {
+            newSchedules = await context.EmployeeSchedules
+                .IgnoreQueryFilters()
+                .Where(s => s.TenantId == tenantId && s.BranchId == branchId &&
+                            s.WorkDate >= startDate && s.WorkDate <= endDate &&
+                            (s.EmployeeId == empMonthly.Id || s.EmployeeId == empShift.Id || s.EmployeeId == empHourly.Id))
+                .ToListAsync();
+        }
+
+        // 5. YÊU CẦU 5: Tính toán Payslip cho Tháng 9 và Tháng 10 áp dụng ConfigPolicy
+        // Kiểm tra xem đã có Payslip của kỳ này chưa
+        var periods = new[] { "2026-09", "2026-10" };
+
+        foreach (var period in periods)
+        {
+            var year = int.Parse(period.Split('-')[0]);
+            var month = int.Parse(period.Split('-')[1]);
+            var periodStartDate = new DateTime(year, month, 1);
+            var periodEndDate = periodStartDate.AddMonths(1).AddDays(-1);
+
+            foreach (var emp in targetEmployees)
+            {
+                var existingPayslip = await context.Payslips
+                    .IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(p => p.TenantId == tenantId && p.BranchId == branchId &&
+                                              p.EmployeeId == emp.Id && p.PeriodMonth == period);
+
+                if (existingPayslip != null)
+                {
+                    continue; // Đã có phiếu lương cho nhân viên trong tháng này
+                }
+
+                // Lấy toàn bộ ca làm việc của nhân viên trong tháng
+                var monthSchedules = newSchedules
+                    .Where(s => s.EmployeeId == emp.Id && s.WorkDate >= periodStartDate && s.WorkDate <= periodEndDate)
+                    .ToList();
+
+                if (monthSchedules.Count == 0)
+                {
+                    continue;
+                }
+
+                // ─── THỰC HIỆN TÍNH TOÁN DỰA TRÊN POLICY (Dùng các biến tạm lưu trữ trong vòng lặp) ───
+                decimal totalActualHours = 0.00m;
+                decimal totalOtHours = 0.00m;
+                int totalShiftsCount = 0;
+                int totalLateMinutes = 0;
+                int totalEarlyLeaveMinutes = 0;
+                decimal violationDeduction = 0.00m;
+                decimal overtimePay = 0.00m;
+
+                // Đơn giá 1 giờ chuẩn để tính làm thêm giờ (OT)
+                decimal hourlyStandardRate = emp.SalaryType switch
+                {
+                    SalaryType.Monthly => Math.Round(emp.BaseRate / (26m * policy.StandardDayHours), 2),
+                    SalaryType.Shift => Math.Round(emp.BaseRate / policy.StandardDayHours, 2),
+                    SalaryType.Hourly => emp.BaseRate,
+                    _ => 0.00m
+                };
+
+                foreach (var sch in monthSchedules)
+                {
+                    totalActualHours += sch.ActualWorkHours;
+                    totalShiftsCount += 1;
+
+                    // Kiểm tra Đi muộn theo Policy
+                    if (policy.EnableLateThreshold && sch.LateMinutes > policy.LateThresholdMinutes)
+                    {
+                        totalLateMinutes += sch.LateMinutes;
+                        // Mức phạt vi phạm đi muộn: 50.000 VNĐ / lần vượt ngưỡng
+                        violationDeduction += 50000.00m;
+                    }
+
+                    // Kiểm tra Về sớm theo Policy
+                    if (policy.EnableEarlyLeaveThreshold && sch.EarlyLeaveMinutes > policy.EarlyLeaveThresholdMinutes)
+                    {
+                        totalEarlyLeaveMinutes += sch.EarlyLeaveMinutes;
+                        // Mức phạt vi phạm về sớm: 50.000 VNĐ / lần vượt ngưỡng
+                        violationDeduction += 50000.00m;
+                    }
+
+                    // Kiểm tra Làm thêm giờ (OT) theo Policy
+                    if (policy.EnableOtAfterShift && sch.OvertimeMinutes >= policy.OtAfterShiftMinutes)
+                    {
+                        decimal otHoursInShift = Math.Round((decimal)sch.OvertimeMinutes / 60.00m, 2);
+                        totalOtHours += otHoursInShift;
+
+                        // Hệ số OT: Chủ nhật 200%, Ngày thường 150%
+                        decimal otMultiplier = sch.WorkDate.DayOfWeek == DayOfWeek.Sunday ? 2.00m : 1.50m;
+                        overtimePay += Math.Round(otHoursInShift * hourlyStandardRate * otMultiplier, 2);
+                    }
+                }
+
+                // ─── TÍNH LƯƠNG CHÍNH (BaseSalaryEarned) & NGÀY CÔNG (WorkedDays) ───
+                decimal workedDays = 0.00m;
+                decimal baseSalaryEarned = 0.00m;
+
+                if (emp.SalaryType == SalaryType.Monthly)
+                {
+                    // Với nhân viên lương tháng: Nếu IsConvertHoursToDays = true, quy đổi giờ ra ngày công
+                    if (policy.IsConvertHoursToDays && policy.StandardDayHours > 0)
+                    {
+                        workedDays = Math.Round(totalActualHours / policy.StandardDayHours, 2);
+                    }
+                    else
+                    {
+                        workedDays = totalShiftsCount;
+                    }
+
+                    // Lương chính theo ngày công thực tế (chuẩn 26 ngày/tháng)
+                    baseSalaryEarned = Math.Round((workedDays / 26.00m) * emp.BaseRate, 2);
+                }
+                else if (emp.SalaryType == SalaryType.Shift)
+                {
+                    // Với nhân viên lương ca: Tính theo số ca hoàn thành
+                    workedDays = totalShiftsCount;
+                    baseSalaryEarned = Math.Round(totalShiftsCount * emp.BaseRate, 2);
+                }
+                else if (emp.SalaryType == SalaryType.Hourly)
+                {
+                    // Với nhân viên lương giờ: Tính theo tổng giờ làm việc thực tế
+                    workedDays = Math.Round(totalActualHours / policy.StandardDayHours, 2);
+                    baseSalaryEarned = Math.Round(totalActualHours * emp.BaseRate, 2);
+                }
+
+                // ─── PHỤ CẤP & THƯỞNG ───
+                decimal totalAllowance = emp.Allowances.Sum(a => a.Amount);
+                string? allowancesJson = emp.Allowances.Any()
+                    ? JsonSerializer.Serialize(emp.Allowances.Select(a => new { a.Name, a.Amount }))
+                    : null;
+
+                // Thưởng hiệu suất (ví dụ thưởng chuyên cần/doanh số tháng 9 cho NV lương tháng)
+                decimal bonus = (period == "2026-09" && emp.SalaryType == SalaryType.Monthly) ? 500000.00m : 0.00m;
+                decimal totalEarnings = baseSalaryEarned + overtimePay + totalAllowance + bonus;
+
+                // ─── CÁC KHOẢN GIẢM TRỪ ───
+                // Trừ BHXH 10.5% đối với nhân viên ký hợp đồng lương tháng chính thức
+                decimal socialInsurance = (emp.SalaryType == SalaryType.Monthly) ? Math.Round(emp.BaseRate * 0.105m, 2) : 0.00m;
+                decimal advanceDeduction = 0.00m; // Không có tạm ứng trong kỳ
+                decimal remainingDebt = emp.DebtAmount;
+                decimal totalDeductions = violationDeduction + socialInsurance + advanceDeduction;
+
+                // ─── LƯƠNG THỰC NHẬN (NetSalary) ───
+                decimal netSalary = totalEarnings - totalDeductions;
+
+                // Sinh mã phiếu lương: PL-YYMM-MãNV (VD: PL-2609-NV001)
+                var shortPeriodCode = period.Replace("-", "").Substring(2);
+                var payslipCode = $"PL-{shortPeriodCode}-{emp.EmployeeCode}";
+
+                // Tháng 9: Đã thanh toán chuyển khoản vào ngày 05/10/2026
+                // Tháng 10: Vừa chốt kỳ, trạng thái Chưa thanh toán (Unpaid)
+                var isPaid = period == "2026-09";
+
+                var payslip = new Payslip
+                {
+                    Id = Uuid7.NewGuid(),
+                    TenantId = tenantId,
+                    EmployeeId = emp.Id,
+                    BranchId = branchId,
+                    PayslipCode = payslipCode,
+                    PeriodMonth = period,
+
+                    // 1. Snapshot Cấu hình lương
+                    SalaryType = emp.SalaryType,
+                    BaseRate = emp.BaseRate,
+                    StandardDays = 26.00m,
+                    StandardDayHours = policy.StandardDayHours,
+
+                    // 2. Dữ liệu chấm công thực tế
+                    WorkedDays = workedDays,
+                    TotalWorkHours = totalActualHours,
+                    TotalShifts = totalShiftsCount,
+                    OtHours = totalOtHours,
+                    PaidLeaveDays = 0.00m,
+                    UnpaidLeaveDays = 0.00m,
+                    TotalLateMinutes = totalLateMinutes,
+                    TotalEarlyLeaveMinutes = totalEarlyLeaveMinutes,
+
+                    // 3. Thu nhập
+                    BaseSalaryEarned = baseSalaryEarned,
+                    OvertimePay = overtimePay,
+                    TotalAllowance = totalAllowance,
+                    AllowancesDetailJson = allowancesJson,
+                    Bonus = bonus,
+                    TotalEarnings = totalEarnings,
+
+                    // 4. Giảm trừ
+                    AdvanceDeduction = advanceDeduction,
+                    RemainingDebt = remainingDebt,
+                    SocialInsurance = socialInsurance,
+                    ViolationDeduction = violationDeduction,
+                    TotalDeductions = totalDeductions,
+
+                    // 5. Thực nhận & Trạng thái
+                    NetSalary = netSalary,
+                    Status = isPaid ? PayslipStatus.Paid : PayslipStatus.Unpaid,
+
+                    // 6. Thanh toán
+                    PaidAt = isPaid ? new DateTime(2026, 10, 5, 9, 30, 0) : null,
+                    PaymentMethod = isPaid ? "BANK_TRANSFER" : null,
+                    PaidBy = isPaid ? "usr_store_owner" : null,
+                    BankAccountNumber = emp.BankAccountNumber,
+                    BankName = emp.BankName,
+                    BankAccountHolder = emp.BankAccountHolder,
+
+                    // 7. Phê duyệt & ghi chú
+                    ApprovedBy = "usr_store_owner",
+                    ApprovedAt = periodEndDate.AddDays(1).AddHours(17),
+                    Note = isPaid
+                        ? $"Phiếu lương kỳ {period} đã quyết toán và chi trả qua Techcombank/Vietcombank"
+                        : $"Bảng lương kỳ {period} đã chốt công, đang chờ phê duyệt thanh toán",
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                await context.Payslips.AddAsync(payslip);
+
+                // Gắn liên kết PayslipId vào các ca làm việc tương ứng trong tháng
+                foreach (var sch in monthSchedules)
+                {
+                    sch.PayslipId = payslip.Id;
+                }
+            }
+
+            await context.SaveChangesAsync();
+        }
+    }
+
+    private enum AttendanceScenario
+    {
+        Normal,
+        Late20Min,
+        EarlyLeave20Min,
+        Overtime45Min
+    }
+
+    /// <summary>
+    /// Giả lập dữ liệu điểm danh check-in, check-out và tính toán dung sai (muộn, về sớm, OT)
+    /// </summary>
+    private static (int lateMin, int earlyMin, int otMin, decimal actualHours, DateTime checkIn, DateTime checkOut)
+        SimulateAttendance(DateTime workDate, ShiftConfig shift, AttendanceScenario scenario)
+    {
+        var plannedStart = workDate.Date + shift.StartTime;
+        var plannedEnd = shift.IsCheckInNextDay
+            ? workDate.Date.AddDays(1) + shift.EndTime
+            : workDate.Date + shift.EndTime;
+
+        int lateMin = 0;
+        int earlyMin = 0;
+        int otMin = 0;
+        DateTime checkIn;
+        DateTime checkOut;
+
+        switch (scenario)
+        {
+            case AttendanceScenario.Late20Min:
+                // CheckIn trễ 20 phút (vượt ngưỡng 15 phút)
+                lateMin = 20;
+                checkIn = plannedStart.AddMinutes(20);
+                checkOut = plannedEnd;
+                break;
+
+            case AttendanceScenario.EarlyLeave20Min:
+                // CheckOut sớm 20 phút (vượt ngưỡng 15 phút)
+                earlyMin = 20;
+                checkIn = plannedStart;
+                checkOut = plannedEnd.AddMinutes(-20);
+                break;
+
+            case AttendanceScenario.Overtime45Min:
+                // CheckOut trễ 45 phút (vượt ngưỡng 30 phút tính OT)
+                otMin = 45;
+                checkIn = plannedStart;
+                checkOut = plannedEnd.AddMinutes(45);
+                break;
+
+            case AttendanceScenario.Normal:
+            default:
+                // Đúng giờ (check-in trước 2 phút, check-out đúng giờ)
+                checkIn = plannedStart.AddMinutes(-2);
+                checkOut = plannedEnd.AddMinutes(2);
+                break;
+        }
+
+        // Số giờ làm việc thực tế = Giờ ca chuẩn - (muộn + về sớm) + OT
+        var baseHours = shift.DurationHours;
+        var actualHours = baseHours - Math.Round((decimal)(lateMin + earlyMin) / 60.00m, 2) + Math.Round((decimal)otMin / 60.00m, 2);
+
+        return (lateMin, earlyMin, otMin, actualHours, checkIn, checkOut);
+    }
+
+    /// <summary>
+    /// Khởi tạo một bản ghi EmployeeSchedule với đầy đủ dữ liệu điểm danh & phê duyệt
+    /// </summary>
+    private static EmployeeSchedule CreateSchedule(
+        string tenantId,
+        Guid branchId,
+        Guid employeeId,
+        ShiftConfig shift,
+        DateTime workDate,
+        DateTime checkIn,
+        DateTime checkOut,
+        int lateMin,
+        int earlyMin,
+        int otMin,
+        decimal actualHours)
+    {
+        return new EmployeeSchedule
+        {
+            Id = Uuid7.NewGuid(),
+            TenantId = tenantId,
+            BranchId = branchId,
+            EmployeeId = employeeId,
+            ShiftConfigId = shift.Id,
+            WorkDate = workDate.Date,
+
+            // Snapshot thông tin ca làm việc
+            ShiftCode = shift.ShiftCode,
+            ShiftName = shift.ShiftName,
+            PlannedStartTime = shift.StartTime,
+            PlannedEndTime = shift.EndTime,
+            DurationHours = shift.DurationHours,
+            AllowedCheckInStart = shift.AllowedCheckInStart,
+            AllowedCheckInEnd = shift.AllowedCheckInEnd,
+            IsCheckInNextDay = shift.IsCheckInNextDay,
+
+            // Chấm công thực tế
+            CheckInTime = checkIn,
+            CheckOutTime = checkOut,
+            CheckInMethod = "FACE_ID",
+            CheckOutMethod = "FACE_ID",
+            FaceMatchScore = 0.98m,
+
+            // Giờ công & vi phạm
+            LateMinutes = lateMin,
+            EarlyLeaveMinutes = earlyMin,
+            OvertimeMinutes = otMin,
+            ActualWorkHours = actualHours,
+
+            // Phê duyệt
+            Status = ScheduleStatus.Completed,
+            ApprovalStatus = ScheduleApprovalStatus.Approved,
+            ApprovedBy = "usr_store_owner",
+            ApprovedAt = workDate.Date.AddHours(23),
+
+            CreatedAt = DateTime.UtcNow
+        };
     }
 }

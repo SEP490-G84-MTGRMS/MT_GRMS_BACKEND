@@ -48,15 +48,26 @@ public class EmployeeSeedDataTests
 
         Assert.Equal(12, employees.Count);
 
-        // Kiểm tra nhân viên NV001 (Cửa hàng trưởng)
+        // Kiểm tra nhân viên NV001 (Cửa hàng trưởng - Lương tháng)
         var manager = employees.FirstOrDefault(e => e.EmployeeCode == "NV001");
         Assert.NotNull(manager);
         Assert.Equal("Nguyễn Văn An", manager.FullName);
-        Assert.Equal("Nguyễn Văn An", manager.FullName);
-        Assert.Equal(16000000.00m, manager.BaseRate);
+        Assert.Equal(10000000.00m, manager.BaseRate);
         Assert.Equal(SalaryType.Monthly, manager.SalaryType);
         Assert.Equal(EmployeeStatus.Active, manager.Status);
         Assert.Equal(3, manager.Allowances.Count);
+
+        // Kiểm tra nhân viên NV002 (Thu ngân - Lương theo ca)
+        var shiftCashier = employees.FirstOrDefault(e => e.EmployeeCode == "NV002");
+        Assert.NotNull(shiftCashier);
+        Assert.Equal(SalaryType.Shift, shiftCashier.SalaryType);
+        Assert.Equal(150000.00m, shiftCashier.BaseRate);
+
+        // Kiểm tra nhân viên NV003 (Bán hàng - Lương theo giờ)
+        var hourlyStaff = employees.FirstOrDefault(e => e.EmployeeCode == "NV003");
+        Assert.NotNull(hourlyStaff);
+        Assert.Equal(SalaryType.Hourly, hourlyStaff.SalaryType);
+        Assert.Equal(25000.00m, hourlyStaff.BaseRate);
 
         // Kiểm tra nhân viên NV009 (Lương theo giờ - Part-time)
         var partTime = employees.FirstOrDefault(e => e.EmployeeCode == "NV009");
@@ -74,6 +85,26 @@ public class EmployeeSeedDataTests
         var resigned = employees.FirstOrDefault(e => e.EmployeeCode == "NV012");
         Assert.NotNull(resigned);
         Assert.Equal(EmployeeStatus.Inactive, resigned.Status);
+
+        // Kiểm tra Schedules được tạo trong kỳ 01/09/2026 - 31/10/2026
+        var schedules = await context.EmployeeSchedules
+            .IgnoreQueryFilters()
+            .Where(s => s.TenantId == tenantId)
+            .ToListAsync();
+        Assert.True(schedules.Count > 100); // 3 nhân viên x 61 ngày (trừ ngày nghỉ)
+
+        // Kiểm tra Payslips được tính toán và tạo cho tháng 9 và tháng 10
+        var payslips = await context.Payslips
+            .IgnoreQueryFilters()
+            .Where(p => p.TenantId == tenantId)
+            .ToListAsync();
+        Assert.Equal(6, payslips.Count); // 3 nhân viên x 2 tháng (Tháng 9 & Tháng 10)
+
+        // Kiểm tra trạng thái thanh toán
+        var sepPayslips = payslips.Where(p => p.PeriodMonth == "2026-09").ToList();
+        var octPayslips = payslips.Where(p => p.PeriodMonth == "2026-10").ToList();
+        Assert.All(sepPayslips, p => Assert.Equal(PayslipStatus.Paid, p.Status));
+        Assert.All(octPayslips, p => Assert.Equal(PayslipStatus.Unpaid, p.Status));
     }
 
     [Fact]
