@@ -47,14 +47,12 @@ public class PayslipConfiguration : IEntityTypeConfiguration<Payslip>
         builder.Property(x => x.OvertimePay).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.TotalAllowance).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.AllowancesDetailJson).HasColumnType("text");
-        builder.Property(x => x.Bonus).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.TotalEarnings).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
 
         // Giảm trừ
         builder.Property(x => x.AdvanceDeduction).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.RemainingDebt).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.SocialInsurance).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
-        builder.Property(x => x.ViolationDeduction).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.TotalDeductions).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
 
         // Thực nhận & trạng thái

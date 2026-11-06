@@ -36,15 +36,13 @@ public class Payslip : BaseTenantEntity
     public decimal OvertimePay { get; set; } = 0.00m;                   // Tiền làm thêm giờ
     public decimal TotalAllowance { get; set; } = 0.00m;                // Tổng các khoản phụ cấp
     public string? AllowancesDetailJson { get; set; }                   // Snapshot chi tiết các khoản phụ cấp
-    public decimal Bonus { get; set; } = 0.00m;                         // Thưởng hiệu suất / thưởng doanh số
-    public decimal TotalEarnings { get; set; } = 0.00m;                 // Tổng thu nhập trước giảm trừ
+    public decimal TotalEarnings { get; set; } = 0.00m;                 // Tổng thu nhập trước giảm trừ = BaseSalaryEarned + OvertimePay + TotalAllowance
 
     // ─── 4. Các khoản giảm trừ (Deductions) ───
     public decimal AdvanceDeduction { get; set; } = 0.00m;              // Khấu trừ tạm ứng lương trong kỳ
     public decimal RemainingDebt { get; set; } = 0.00m;                 // Số tiền tạm ứng còn nợ lại sau kỳ này
     public decimal SocialInsurance { get; set; } = 0.00m;               // Trừ bảo hiểm xã hội (nếu có)
-    public decimal ViolationDeduction { get; set; } = 0.00m;            // Trừ phạt vi phạm (đi muộn, lỗi ca...)
-    public decimal TotalDeductions { get; set; } = 0.00m;               // Tổng các khoản giảm trừ
+    public decimal TotalDeductions { get; set; } = 0.00m;               // Tổng các khoản giảm trừ = AdvanceDeduction + SocialInsurance
 
     // ─── 5. Lương thực nhận & Trạng thái ───
     public decimal NetSalary { get; set; } = 0.00m;                     // Lương thực nhận = TotalEarnings - TotalDeductions

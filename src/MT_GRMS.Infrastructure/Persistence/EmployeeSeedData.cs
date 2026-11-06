@@ -854,7 +854,6 @@ public static class EmployeeSeedData
                 int totalShiftsCount = 0;
                 int totalLateMinutes = 0;
                 int totalEarlyLeaveMinutes = 0;
-                decimal violationDeduction = 0.00m;
                 decimal overtimePay = 0.00m;
 
                 // Đơn giá 1 giờ chuẩn để tính làm thêm giờ (OT)
@@ -871,20 +870,16 @@ public static class EmployeeSeedData
                     totalActualHours += sch.ActualWorkHours;
                     totalShiftsCount += 1;
 
-                    // Kiểm tra Đi muộn theo Policy
+                    // Theo dõi số phút Đi muộn theo Policy
                     if (policy.EnableLateThreshold && sch.LateMinutes > policy.LateThresholdMinutes)
                     {
                         totalLateMinutes += sch.LateMinutes;
-                        // Mức phạt vi phạm đi muộn: 50.000 VNĐ / lần vượt ngưỡng
-                        violationDeduction += 50000.00m;
                     }
 
-                    // Kiểm tra Về sớm theo Policy
+                    // Theo dõi số phút Về sớm theo Policy
                     if (policy.EnableEarlyLeaveThreshold && sch.EarlyLeaveMinutes > policy.EarlyLeaveThresholdMinutes)
                     {
                         totalEarlyLeaveMinutes += sch.EarlyLeaveMinutes;
-                        // Mức phạt vi phạm về sớm: 50.000 VNĐ / lần vượt ngưỡng
-                        violationDeduction += 50000.00m;
                     }
 
                     // Kiểm tra Làm thêm giờ (OT) theo Policy
@@ -931,22 +926,20 @@ public static class EmployeeSeedData
                     baseSalaryEarned = Math.Round(totalActualHours * emp.BaseRate, 2);
                 }
 
-                // ─── PHỤ CẤP & THƯỞNG ───
+                // ─── PHỤ CẤP ───
                 decimal totalAllowance = emp.Allowances.Sum(a => a.Amount);
                 string? allowancesJson = emp.Allowances.Any()
                     ? JsonSerializer.Serialize(emp.Allowances.Select(a => new { a.Name, a.Amount }))
                     : null;
 
-                // Thưởng hiệu suất (ví dụ thưởng chuyên cần/doanh số tháng 9 cho NV lương tháng)
-                decimal bonus = (period == "2026-09" && emp.SalaryType == SalaryType.Monthly) ? 500000.00m : 0.00m;
-                decimal totalEarnings = baseSalaryEarned + overtimePay + totalAllowance + bonus;
+                decimal totalEarnings = baseSalaryEarned + overtimePay + totalAllowance;
 
                 // ─── CÁC KHOẢN GIẢM TRỪ ───
                 // Trừ BHXH 10.5% đối với nhân viên ký hợp đồng lương tháng chính thức
                 decimal socialInsurance = (emp.SalaryType == SalaryType.Monthly) ? Math.Round(emp.BaseRate * 0.105m, 2) : 0.00m;
                 decimal advanceDeduction = 0.00m; // Không có tạm ứng trong kỳ
                 decimal remainingDebt = emp.DebtAmount;
-                decimal totalDeductions = violationDeduction + socialInsurance + advanceDeduction;
+                decimal totalDeductions = socialInsurance + advanceDeduction;
 
                 // ─── LƯƠNG THỰC NHẬN (NetSalary) ───
                 decimal netSalary = totalEarnings - totalDeductions;
@@ -989,14 +982,12 @@ public static class EmployeeSeedData
                     OvertimePay = overtimePay,
                     TotalAllowance = totalAllowance,
                     AllowancesDetailJson = allowancesJson,
-                    Bonus = bonus,
                     TotalEarnings = totalEarnings,
 
                     // 4. Giảm trừ
                     AdvanceDeduction = advanceDeduction,
                     RemainingDebt = remainingDebt,
                     SocialInsurance = socialInsurance,
-                    ViolationDeduction = violationDeduction,
                     TotalDeductions = totalDeductions,
 
                     // 5. Thực nhận & Trạng thái
