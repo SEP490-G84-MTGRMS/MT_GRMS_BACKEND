@@ -57,7 +57,52 @@ public record ShiftCashMovementDto(
     decimal Amount,
     string Reason,
     string? CreatedByName,
-    DateTime OccurredAtUtc
+    DateTime OccurredAtUtc,
+    CashMovementStatus Status = CashMovementStatus.Recorded,
+    string? ApprovedBy = null,
+    DateTime? ApprovedAtUtc = null,
+    string? RejectionReason = null,
+    bool IsConfirmedByOwner = false,
+    DateTime? ConfirmedByOwnerAtUtc = null
+);
+
+/// <summary>
+/// Yêu cầu phê duyệt phiếu chi vượt hạn mức từ Chủ cửa hàng.
+/// </summary>
+public record ApproveCashMovementRequest(
+    string? Note = null
+);
+
+/// <summary>
+/// Yêu cầu từ chối phiếu chi từ Chủ cửa hàng kèm lý do bắt buộc.
+/// </summary>
+public record RejectCashMovementRequest(
+    string Reason
+);
+
+/// <summary>
+/// Cấu hình hạn mức phê duyệt thu chi tiền két POS.
+/// </summary>
+public record CashMovementSettingsDto(
+    decimal CashOutApprovalThreshold,
+    decimal CashOutShiftTotalLimit
+);
+
+/// <summary>
+/// Cập nhật cấu hình hạn mức phê duyệt thu chi két POS.
+/// </summary>
+public record UpdateCashMovementSettingsRequest(
+    decimal CashOutApprovalThreshold,
+    decimal CashOutShiftTotalLimit
+);
+
+/// <summary>
+/// Danh sách các yêu cầu chờ chủ xử lý (duyệt chi hoặc xác nhận nhận tiền rút két).
+/// </summary>
+public record PendingMovementsSummaryResponse(
+    int PendingApprovalsCount,
+    int UnconfirmedDropsCount,
+    IReadOnlyList<ShiftCashMovementDto> Movements
 );
 
 /// <summary>

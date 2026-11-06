@@ -106,6 +106,37 @@ public class ShiftManagementServiceTests
         {
             return Task.FromResult($"CA-{DateTime.UtcNow:yyyyMMdd}-{Shifts.Count + 1:D2}");
         }
+
+        public StorePaymentConfig? PaymentConfig { get; set; }
+
+        public Task<ShiftCashMovement?> GetCashMovementByIdAsync(Guid movementId, CancellationToken cancellationToken = default)
+        {
+            var movement = CashMovements.FirstOrDefault(m => m.Id == movementId);
+            if (movement != null && movement.Shift == null)
+            {
+                movement.Shift = Shifts.FirstOrDefault(s => s.Id == movement.ShiftId);
+            }
+            return Task.FromResult(movement);
+        }
+
+        public Task<IReadOnlyList<ShiftCashMovement>> GetPendingMovementsAsync(Guid branchId, CancellationToken cancellationToken = default)
+        {
+            var list = CashMovements
+                .Where(m => (m.Status == CashMovementStatus.PendingApproval || (m.Category == CashMovementCategory.CASH_DRAW && !m.IsConfirmedByOwner)))
+                .ToList();
+            return Task.FromResult<IReadOnlyList<ShiftCashMovement>>(list);
+        }
+
+        public Task<StorePaymentConfig?> GetPaymentConfigAsync(string tenantId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(PaymentConfig);
+        }
+
+        public Task SavePaymentConfigAsync(StorePaymentConfig config, CancellationToken cancellationToken = default)
+        {
+            PaymentConfig = config;
+            return Task.CompletedTask;
+        }
     }
 
     private readonly FakeTenantContext _tenantContext;
@@ -485,6 +516,177 @@ public class ShiftManagementServiceTests
         Assert.Equal(3_700_000m, report.ActualCashCounted);
         Assert.Equal(0m, report.Discrepancy);
         Assert.Single(report.CashMovements);
+    }
+
+    [Fact]
+    public async Task AddCashMovement_WhenExpenseExceedsThreshold_SetsStatusPendingApprovalAndDoesNotAffectExpectedCash()
+    {
+        // Arrange
+        var shiftId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            OpeningFloat = 1_000_000m,
+            ExpectedCash = 1_000_000m,
+            Status = ShiftState.Open
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        // Act: Chi 350.000đ (vượt hạn mức mặc định 200.000đ)
+        var request = new CashMovementRequest(
+            CashMovementType.OUT,
+            CashMovementCategory.EXPENSE,
+            350_000m,
+            "Sửa bóng đèn quầy thu ngân",
+            "Thu ngân A"
+        );
+        var result = await _service.AddCashMovementAsync(shiftId, request);
+
+        // Assert
+        Assert.Equal(CashMovementStatus.PendingApproval, result.Status);
+        Assert.Equal(0m, shift.TotalCashOut);
+        Assert.Equal(1_000_000m, shift.ExpectedCash); // Chưa bị trừ
+    }
+
+    [Fact]
+    public async Task AddCashMovement_WhenExpenseWithinThreshold_SetsStatusRecordedAndReducesExpectedCash()
+    {
+        // Arrange
+        var shiftId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            OpeningFloat = 1_000_000m,
+            ExpectedCash = 1_000_000m,
+            Status = ShiftState.Open
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        // Act: Chi 150.000đ (nhỏ hơn hạn mức mặc định 200.000đ)
+        var request = new CashMovementRequest(
+            CashMovementType.OUT,
+            CashMovementCategory.EXPENSE,
+            150_000m,
+            "Mua giấy in bill",
+            "Thu ngân A"
+        );
+        var result = await _service.AddCashMovementAsync(shiftId, request);
+
+        // Assert
+        Assert.Equal(CashMovementStatus.Recorded, result.Status);
+        Assert.Equal(150_000m, shift.TotalCashOut);
+        Assert.Equal(850_000m, shift.ExpectedCash); // Đã trừ
+    }
+
+    [Fact]
+    public async Task ApproveCashMovement_WhenPending_UpdatesStatusToRecordedAndDeductsCash()
+    {
+        // Arrange
+        var shiftId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            OpeningFloat = 1_000_000m,
+            ExpectedCash = 1_000_000m,
+            Status = ShiftState.Open
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        var movementId = Guid.NewGuid();
+        var movement = new ShiftCashMovement
+        {
+            Id = movementId,
+            ShiftId = shiftId,
+            Shift = shift,
+            MovementType = CashMovementType.OUT,
+            Category = CashMovementCategory.EXPENSE,
+            Amount = 350_000m,
+            Reason = "Sửa đèn",
+            Status = CashMovementStatus.PendingApproval
+        };
+        _shiftRepository.CashMovements.Add(movement);
+
+        // Act
+        var result = await _service.ApproveCashMovementAsync(movementId, "Chủ shop Nguyễn Văn A");
+
+        // Assert
+        Assert.Equal(CashMovementStatus.Recorded, result.Status);
+        Assert.Equal("Chủ shop Nguyễn Văn A", result.ApprovedBy);
+        Assert.Equal(350_000m, shift.TotalCashOut);
+        Assert.Equal(650_000m, shift.ExpectedCash);
+    }
+
+    [Fact]
+    public async Task RejectCashMovement_WhenPending_UpdatesStatusToRejectedAndKeepsReason()
+    {
+        // Arrange
+        var shiftId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            OpeningFloat = 1_000_000m,
+            ExpectedCash = 1_000_000m,
+            Status = ShiftState.Open
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        var movementId = Guid.NewGuid();
+        var movement = new ShiftCashMovement
+        {
+            Id = movementId,
+            ShiftId = shiftId,
+            Shift = shift,
+            MovementType = CashMovementType.OUT,
+            Category = CashMovementCategory.EXPENSE,
+            Amount = 500_000m,
+            Reason = "Mua đồ không rõ nguồn gốc",
+            Status = CashMovementStatus.PendingApproval
+        };
+        _shiftRepository.CashMovements.Add(movement);
+
+        // Act
+        var result = await _service.RejectCashMovementAsync(movementId, "Chủ Shop", "Chi không hợp lệ");
+
+        // Assert
+        Assert.Equal(CashMovementStatus.Rejected, result.Status);
+        Assert.Equal("Chi không hợp lệ", result.RejectionReason);
+        Assert.Equal(0m, shift.TotalCashOut); // Không trừ két
+    }
+
+    [Fact]
+    public async Task CloseShift_WhenShiftHasPendingCashMovement_ThrowsBusinessException()
+    {
+        // Arrange
+        var shiftId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            OpeningFloat = 1_000_000m,
+            ExpectedCash = 1_000_000m,
+            Status = ShiftState.Open
+        };
+        shift.CashMovements.Add(new ShiftCashMovement
+        {
+            Id = Guid.NewGuid(),
+            ShiftId = shiftId,
+            MovementType = CashMovementType.OUT,
+            Category = CashMovementCategory.EXPENSE,
+            Amount = 400_000m,
+            Reason = "Sửa máy in",
+            Status = CashMovementStatus.PendingApproval
+        });
+        _shiftRepository.Shifts.Add(shift);
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.CloseShiftAsync(shiftId, new CloseShiftRequest(1_000_000m, 500_000m, 500_000m)));
+
+        Assert.Equal("PENDING_CASH_MOVEMENTS", ex.ErrorCode);
     }
 }
 

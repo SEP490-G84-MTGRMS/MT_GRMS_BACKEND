@@ -160,5 +160,120 @@ public class ShiftsController : BaseApiController
         var list = await _shiftService.GetShiftHistoryAsync(targetBranchId, fromDate, toDate, cancellationToken);
         return Ok(ApiResponse<IReadOnlyList<ShiftDetailResponse>>.Ok(list));
     }
+
+    /// <summary>
+    /// Chủ cửa hàng duyệt phiếu chi vượt hạn mức.
+    /// </summary>
+    [HttpPost("/api/pos/cash-movements/{id:guid}/approve")]
+    [HttpPost("/api/v1/pos/cash-movements/{id:guid}/approve")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<ShiftCashMovementDto>>> ApproveCashMovement(
+        [FromRoute] Guid id,
+        [FromBody] ApproveCashMovementRequest? request,
+        CancellationToken cancellationToken)
+    {
+        var approverName = !string.IsNullOrWhiteSpace(User.Identity?.Name)
+            ? User.Identity.Name
+            : "Chủ cửa hàng";
+
+        var result = await _shiftService.ApproveCashMovementAsync(id, approverName, cancellationToken);
+        return Ok(ApiResponse<ShiftCashMovementDto>.Ok(result, "Phê duyệt phiếu chi thành công."));
+    }
+
+    /// <summary>
+    /// Chủ cửa hàng từ chối phiếu chi.
+    /// </summary>
+    [HttpPost("/api/pos/cash-movements/{id:guid}/reject")]
+    [HttpPost("/api/v1/pos/cash-movements/{id:guid}/reject")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<ShiftCashMovementDto>>> RejectCashMovement(
+        [FromRoute] Guid id,
+        [FromBody] RejectCashMovementRequest request,
+        CancellationToken cancellationToken)
+    {
+        var approverName = !string.IsNullOrWhiteSpace(User.Identity?.Name)
+            ? User.Identity.Name
+            : "Chủ cửa hàng";
+
+        var result = await _shiftService.RejectCashMovementAsync(id, approverName, request.Reason, cancellationToken);
+        return Ok(ApiResponse<ShiftCashMovementDto>.Ok(result, "Đã từ chối phiếu chi."));
+    }
+
+    /// <summary>
+    /// Thu ngân tự hủy phiếu chi đang chờ duyệt.
+    /// </summary>
+    [HttpPost("/api/pos/cash-movements/{id:guid}/cancel")]
+    [HttpPost("/api/v1/pos/cash-movements/{id:guid}/cancel")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<ShiftCashMovementDto>>> CancelCashMovement(
+        [FromRoute] Guid id,
+        CancellationToken cancellationToken)
+    {
+        var result = await _shiftService.CancelCashMovementAsync(id, _tenantContext.CurrentUserId, cancellationToken);
+        return Ok(ApiResponse<ShiftCashMovementDto>.Ok(result, "Đã hủy phiếu chi."));
+    }
+
+    /// <summary>
+    /// Chủ cửa hàng xác nhận đã nhận tiền mặt từ phiếu rút két (CashDrop).
+    /// </summary>
+    [HttpPost("/api/pos/cash-movements/{id:guid}/confirm-drop")]
+    [HttpPost("/api/v1/pos/cash-movements/{id:guid}/confirm-drop")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<ShiftCashMovementDto>>> ConfirmCashDrop(
+        [FromRoute] Guid id,
+        CancellationToken cancellationToken)
+    {
+        var approverName = !string.IsNullOrWhiteSpace(User.Identity?.Name)
+            ? User.Identity.Name
+            : "Chủ cửa hàng";
+
+        var result = await _shiftService.ConfirmCashDropAsync(id, approverName, cancellationToken);
+        return Ok(ApiResponse<ShiftCashMovementDto>.Ok(result, "Đã xác nhận nhận tiền rút két."));
+    }
+
+    /// <summary>
+    /// Lấy danh sách các phiếu chờ chủ xử lý (duyệt chi hoặc xác nhận nhận tiền rút két).
+    /// </summary>
+    [HttpGet("/api/pos/cash-movements/pending")]
+    [HttpGet("/api/v1/pos/cash-movements/pending")]
+    public async Task<ActionResult<ApiResponse<PendingMovementsSummaryResponse>>> GetPendingMovements(
+        [FromQuery] Guid branchId,
+        CancellationToken cancellationToken)
+    {
+        var targetBranchId = branchId != Guid.Empty ? branchId : (_tenantContext.CurrentBranchId ?? Guid.Empty);
+        if (targetBranchId == Guid.Empty)
+        {
+            return BadRequest(ApiResponse<PendingMovementsSummaryResponse>.Fail("REQUIRED_BRANCH_ID", "Vui lòng cung cấp branchId chi nhánh."));
+        }
+
+        var result = await _shiftService.GetPendingMovementsSummaryAsync(targetBranchId, cancellationToken);
+        return Ok(ApiResponse<PendingMovementsSummaryResponse>.Ok(result));
+    }
+
+    /// <summary>
+    /// Lấy cấu hình hạn mức duyệt chi két POS.
+    /// </summary>
+    [HttpGet("/api/pos/settings/cash-movement")]
+    [HttpGet("/api/v1/pos/settings/cash-movement")]
+    public async Task<ActionResult<ApiResponse<CashMovementSettingsDto>>> GetCashMovementSettings(
+        CancellationToken cancellationToken)
+    {
+        var result = await _shiftService.GetCashMovementSettingsAsync(cancellationToken);
+        return Ok(ApiResponse<CashMovementSettingsDto>.Ok(result));
+    }
+
+    /// <summary>
+    /// Cập nhật cấu hình hạn mức duyệt chi két POS.
+    /// </summary>
+    [HttpPut("/api/pos/settings/cash-movement")]
+    [HttpPut("/api/v1/pos/settings/cash-movement")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<CashMovementSettingsDto>>> UpdateCashMovementSettings(
+        [FromBody] UpdateCashMovementSettingsRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _shiftService.UpdateCashMovementSettingsAsync(request, cancellationToken);
+        return Ok(ApiResponse<CashMovementSettingsDto>.Ok(result, "Cập nhật hạn mức duyệt chi két thành công."));
+    }
 }
 

@@ -15,6 +15,12 @@ public class ShiftCashMovement : BaseTenantEntity
     public string Reason { get; set; } = string.Empty;
     public string? CreatedByName { get; set; }
     public DateTime OccurredAtUtc { get; set; } = DateTime.UtcNow;
+    public CashMovementStatus Status { get; set; } = CashMovementStatus.Recorded;
+    public string? ApprovedBy { get; set; }
+    public DateTime? ApprovedAtUtc { get; set; }
+    public string? RejectionReason { get; set; }
+    public bool IsConfirmedByOwner { get; set; } = false;
+    public DateTime? ConfirmedByOwnerAtUtc { get; set; }
 
     // Navigation
     public ShiftZReport? Shift { get; set; }

@@ -88,3 +88,14 @@ public enum HandoverStatus
     CONFIRMED = 2,  // Ca sau xác nhận khớp tiền
     DISPUTED = 3    // Ca sau khiếu nại thiếu/sai tiền
 }
+
+/// <summary>
+/// Trạng thái phê duyệt của phiếu thu/chi ca POS.
+/// </summary>
+public enum CashMovementStatus
+{
+    Recorded = 1,        // Đã ghi nhận hiệu lực ngay (phiếu thu hoặc phiếu chi <= hạn mức, hoặc sau khi chủ duyệt)
+    PendingApproval = 2, // Đang chờ chủ duyệt (phiếu chi > hạn mức)
+    Rejected = 3,        // Chủ từ chối duyệt
+    Cancelled = 4        // Nhân viên tự hủy khi đang pending
+}

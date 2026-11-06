@@ -128,6 +128,40 @@ public class ShiftService : IShiftService
             throw new BusinessException("SHIFT_NOT_OPEN", "Chỉ có thể ghi nhận phiếu thu/chi khi ca đang mở.");
         }
 
+        // 1. Kiểm tra cấu hình hạn mức chi của tenant
+        var paymentConfig = await _shiftRepository.GetPaymentConfigAsync(_tenantContext.CurrentTenantId, cancellationToken);
+        decimal threshold = paymentConfig?.CashOutApprovalThreshold ?? 200000m;
+
+        CashMovementStatus initialStatus = CashMovementStatus.Recorded;
+
+        if (request.MovementType == CashMovementType.IN)
+        {
+            initialStatus = CashMovementStatus.Recorded;
+            shift.TotalCashIn += request.Amount;
+        }
+        else // OUT
+        {
+            if (request.Category == CashMovementCategory.CASH_DRAW)
+            {
+                // Rút két nộp chủ: trừ tiền ngay, nhưng cần chủ xác nhận đã nhận
+                initialStatus = CashMovementStatus.Recorded;
+                shift.TotalCashOut += request.Amount;
+            }
+            else // EXPENSE
+            {
+                if (request.Amount > threshold)
+                {
+                    // Vượt hạn mức: Cần chủ duyệt, chưa trừ vào két (chưa ảnh hưởng G)
+                    initialStatus = CashMovementStatus.PendingApproval;
+                }
+                else
+                {
+                    initialStatus = CashMovementStatus.Recorded;
+                    shift.TotalCashOut += request.Amount;
+                }
+            }
+        }
+
         var movement = new ShiftCashMovement
         {
             TenantId = _tenantContext.CurrentTenantId,
@@ -137,17 +171,10 @@ public class ShiftService : IShiftService
             Amount = request.Amount,
             Reason = request.Reason.Trim(),
             CreatedByName = request.CreatedByName,
-            OccurredAtUtc = DateTime.UtcNow
+            OccurredAtUtc = DateTime.UtcNow,
+            Status = initialStatus,
+            IsConfirmedByOwner = false
         };
-
-        if (request.MovementType == CashMovementType.IN)
-        {
-            shift.TotalCashIn += request.Amount;
-        }
-        else
-        {
-            shift.TotalCashOut += request.Amount;
-        }
 
         // Cập nhật lại ExpectedCash tạm tính
         var (cashSales, _, _) = await _shiftRepository.GetShiftSalesMetricsAsync(shiftId, cancellationToken);
@@ -156,16 +183,7 @@ public class ShiftService : IShiftService
         await _shiftRepository.AddCashMovementAsync(movement, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return new ShiftCashMovementDto(
-            movement.Id,
-            movement.ShiftId,
-            movement.MovementType,
-            movement.Category,
-            movement.Amount,
-            movement.Reason,
-            movement.CreatedByName,
-            movement.OccurredAtUtc
-        );
+        return MapToMovementDto(movement);
     }
 
     public async Task<ShiftDetailResponse> CloseShiftAsync(
@@ -197,6 +215,15 @@ public class ShiftService : IShiftService
         if (shift.Status != ShiftState.Open)
         {
             throw new BusinessException("SHIFT_ALREADY_CLOSED", "Ca làm việc này đã được chốt trước đó.");
+        }
+
+        // Bắt buộc: Chặn chốt ca nếu còn phiếu chi PendingApproval
+        var hasPending = shift.CashMovements.Any(m => m.Status == CashMovementStatus.PendingApproval);
+        if (hasPending)
+        {
+            throw new BusinessException(
+                "PENDING_CASH_MOVEMENTS",
+                "Ca làm việc vẫn còn phiếu chi đang chờ Chủ cửa hàng phê duyệt. Vui lòng phê duyệt hoặc hủy các phiếu này trước khi chốt ca.");
         }
 
         // Truy vấn số liệu bán hàng gắn với ShiftId từ Orders
@@ -271,15 +298,7 @@ public class ShiftService : IShiftService
 
         var movements = shift.CashMovements
             .OrderBy(m => m.OccurredAtUtc)
-            .Select(m => new ShiftCashMovementDto(
-                m.Id,
-                m.ShiftId,
-                m.MovementType,
-                m.Category,
-                m.Amount,
-                m.Reason,
-                m.CreatedByName,
-                m.OccurredAtUtc))
+            .Select(MapToMovementDto)
             .ToList();
 
         return new ZReportResponse(
@@ -319,19 +338,191 @@ public class ShiftService : IShiftService
         return list.Select(MapToDetailResponse).ToList();
     }
 
+    public async Task<ShiftCashMovementDto> ApproveCashMovementAsync(
+        Guid movementId,
+        string approverName,
+        CancellationToken cancellationToken = default)
+    {
+        var movement = await _shiftRepository.GetCashMovementByIdAsync(movementId, cancellationToken);
+        if (movement == null)
+        {
+            throw new BusinessException("MOVEMENT_NOT_FOUND", "Không tìm thấy phiếu thu/chi két.");
+        }
+
+        if (movement.Status != CashMovementStatus.PendingApproval)
+        {
+            throw new BusinessException("INVALID_STATUS", "Chỉ có thể phê duyệt các phiếu đang ở trạng thái chờ duyệt.");
+        }
+
+        movement.Status = CashMovementStatus.Recorded;
+        movement.ApprovedBy = approverName;
+        movement.ApprovedAtUtc = DateTime.UtcNow;
+
+        if (movement.Shift != null)
+        {
+            // Trừ tiền chi vào ca
+            movement.Shift.TotalCashOut += movement.Amount;
+            var (cashSales, _, _) = await _shiftRepository.GetShiftSalesMetricsAsync(movement.ShiftId, cancellationToken);
+            movement.Shift.ExpectedCash = movement.Shift.OpeningFloat + cashSales + movement.Shift.TotalCashIn - movement.Shift.TotalCashOut;
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapToMovementDto(movement);
+    }
+
+    public async Task<ShiftCashMovementDto> RejectCashMovementAsync(
+        Guid movementId,
+        string approverName,
+        string reason,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            throw new BusinessException("REQUIRED_REASON", "Vui lòng nhập lý do từ chối phiếu chi.");
+        }
+
+        var movement = await _shiftRepository.GetCashMovementByIdAsync(movementId, cancellationToken);
+        if (movement == null)
+        {
+            throw new BusinessException("MOVEMENT_NOT_FOUND", "Không tìm thấy phiếu thu/chi két.");
+        }
+
+        if (movement.Status != CashMovementStatus.PendingApproval)
+        {
+            throw new BusinessException("INVALID_STATUS", "Chỉ có thể từ chối các phiếu đang ở trạng thái chờ duyệt.");
+        }
+
+        movement.Status = CashMovementStatus.Rejected;
+        movement.ApprovedBy = approverName;
+        movement.RejectionReason = reason.Trim();
+        movement.ApprovedAtUtc = DateTime.UtcNow;
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapToMovementDto(movement);
+    }
+
+    public async Task<ShiftCashMovementDto> CancelCashMovementAsync(
+        Guid movementId,
+        Guid currentUserId,
+        CancellationToken cancellationToken = default)
+    {
+        var movement = await _shiftRepository.GetCashMovementByIdAsync(movementId, cancellationToken);
+        if (movement == null)
+        {
+            throw new BusinessException("MOVEMENT_NOT_FOUND", "Không tìm thấy phiếu thu/chi két.");
+        }
+
+        if (movement.Status != CashMovementStatus.PendingApproval)
+        {
+            throw new BusinessException("INVALID_STATUS", "Chỉ có thể hủy phiếu đang ở trạng thái chờ duyệt.");
+        }
+
+        movement.Status = CashMovementStatus.Cancelled;
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapToMovementDto(movement);
+    }
+
+    public async Task<ShiftCashMovementDto> ConfirmCashDropAsync(
+        Guid movementId,
+        string ownerName,
+        CancellationToken cancellationToken = default)
+    {
+        var movement = await _shiftRepository.GetCashMovementByIdAsync(movementId, cancellationToken);
+        if (movement == null)
+        {
+            throw new BusinessException("MOVEMENT_NOT_FOUND", "Không tìm thấy phiếu thu/chi két.");
+        }
+
+        if (movement.Category != CashMovementCategory.CASH_DRAW)
+        {
+            throw new BusinessException("INVALID_CATEGORY", "Chỉ phiếu rút két nộp chủ mới cần xác nhận nhận tiền.");
+        }
+
+        movement.IsConfirmedByOwner = true;
+        movement.ConfirmedByOwnerAtUtc = DateTime.UtcNow;
+        movement.ApprovedBy = ownerName;
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapToMovementDto(movement);
+    }
+
+    public async Task<PendingMovementsSummaryResponse> GetPendingMovementsSummaryAsync(
+        Guid branchId,
+        CancellationToken cancellationToken = default)
+    {
+        var list = await _shiftRepository.GetPendingMovementsAsync(branchId, cancellationToken);
+        var dtos = list.Select(MapToMovementDto).ToList();
+        int pendingApprovals = dtos.Count(m => m.Status == CashMovementStatus.PendingApproval);
+        int unconfirmedDrops = dtos.Count(m => m.Category == CashMovementCategory.CASH_DRAW && !m.IsConfirmedByOwner);
+
+        return new PendingMovementsSummaryResponse(pendingApprovals, unconfirmedDrops, dtos);
+    }
+
+    public async Task<CashMovementSettingsDto> GetCashMovementSettingsAsync(CancellationToken cancellationToken = default)
+    {
+        var config = await _shiftRepository.GetPaymentConfigAsync(_tenantContext.CurrentTenantId, cancellationToken);
+        return new CashMovementSettingsDto(
+            config?.CashOutApprovalThreshold ?? 200000m,
+            config?.CashOutShiftTotalLimit ?? 0m
+        );
+    }
+
+    public async Task<CashMovementSettingsDto> UpdateCashMovementSettingsAsync(
+        UpdateCashMovementSettingsRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request.CashOutApprovalThreshold < 0)
+        {
+            throw new BusinessException("INVALID_THRESHOLD", "Hạn mức duyệt chi không được âm.");
+        }
+
+        var config = await _shiftRepository.GetPaymentConfigAsync(_tenantContext.CurrentTenantId, cancellationToken)
+            ?? new StorePaymentConfig
+            {
+                Id = Guid.NewGuid(),
+                TenantId = _tenantContext.CurrentTenantId,
+                BankCode = "MB",
+                BankName = "MBBank",
+                BankAccountNumber = "0918889999",
+                BankAccountName = "STORE OWNER",
+                CreatedAt = DateTime.UtcNow
+            };
+
+        config.CashOutApprovalThreshold = request.CashOutApprovalThreshold;
+        config.CashOutShiftTotalLimit = request.CashOutShiftTotalLimit;
+        config.UpdatedAt = DateTime.UtcNow;
+
+        await _shiftRepository.SavePaymentConfigAsync(config, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return new CashMovementSettingsDto(config.CashOutApprovalThreshold, config.CashOutShiftTotalLimit);
+    }
+
+    private static ShiftCashMovementDto MapToMovementDto(ShiftCashMovement movement)
+    {
+        return new ShiftCashMovementDto(
+            movement.Id,
+            movement.ShiftId,
+            movement.MovementType,
+            movement.Category,
+            movement.Amount,
+            movement.Reason,
+            movement.CreatedByName,
+            movement.OccurredAtUtc,
+            movement.Status,
+            movement.ApprovedBy,
+            movement.ApprovedAtUtc,
+            movement.RejectionReason,
+            movement.IsConfirmedByOwner,
+            movement.ConfirmedByOwnerAtUtc
+        );
+    }
+
     private static ShiftDetailResponse MapToDetailResponse(ShiftZReport shift)
     {
         var movements = shift.CashMovements
             .OrderBy(m => m.OccurredAtUtc)
-            .Select(m => new ShiftCashMovementDto(
-                m.Id,
-                m.ShiftId,
-                m.MovementType,
-                m.Category,
-                m.Amount,
-                m.Reason,
-                m.CreatedByName,
-                m.OccurredAtUtc))
+            .Select(MapToMovementDto)
             .ToList();
 
         return new ShiftDetailResponse(

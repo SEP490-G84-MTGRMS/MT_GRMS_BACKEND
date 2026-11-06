@@ -16,5 +16,9 @@ public interface IShiftRepository
     Task AddCashMovementAsync(ShiftCashMovement movement, CancellationToken cancellationToken = default);
     Task<(decimal CashSales, decimal BankRevenue, int OrdersCount)> GetShiftSalesMetricsAsync(Guid shiftId, CancellationToken cancellationToken = default);
     Task<string> GenerateNextShiftCodeAsync(Guid branchId, CancellationToken cancellationToken = default);
+    Task<ShiftCashMovement?> GetCashMovementByIdAsync(Guid movementId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ShiftCashMovement>> GetPendingMovementsAsync(Guid branchId, CancellationToken cancellationToken = default);
+    Task<StorePaymentConfig?> GetPaymentConfigAsync(string tenantId, CancellationToken cancellationToken = default);
+    Task SavePaymentConfigAsync(StorePaymentConfig config, CancellationToken cancellationToken = default);
 }
 

@@ -49,5 +49,40 @@ public interface IShiftService
     /// Lấy lịch sử các ca làm việc của chi nhánh.
     /// </summary>
     Task<IReadOnlyList<ShiftDetailResponse>> GetShiftHistoryAsync(Guid branchId, DateTime? fromUtc = null, DateTime? toUtc = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Chủ cửa hàng phê duyệt phiếu chi vượt hạn mức.
+    /// </summary>
+    Task<ShiftCashMovementDto> ApproveCashMovementAsync(Guid movementId, string approverName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Chủ cửa hàng từ chối phiếu chi.
+    /// </summary>
+    Task<ShiftCashMovementDto> RejectCashMovementAsync(Guid movementId, string approverName, string reason, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Nhân viên tự hủy phiếu chi của chính mình khi còn chờ duyệt (PendingApproval).
+    /// </summary>
+    Task<ShiftCashMovementDto> CancelCashMovementAsync(Guid movementId, Guid currentUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Chủ cửa hàng xác nhận đã nhận tiền mặt từ phiếu rút két nộp chủ (CashDrop).
+    /// </summary>
+    Task<ShiftCashMovementDto> ConfirmCashDropAsync(Guid movementId, string ownerName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lấy danh sách các phiếu chờ duyệt chi và phiếu rút két chờ chủ xác nhận.
+    /// </summary>
+    Task<PendingMovementsSummaryResponse> GetPendingMovementsSummaryAsync(Guid branchId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Đọc cấu hình hạn mức duyệt chi két của cửa hàng.
+    /// </summary>
+    Task<CashMovementSettingsDto> GetCashMovementSettingsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Cập nhật cấu hình hạn mức duyệt chi két của cửa hàng.
+    /// </summary>
+    Task<CashMovementSettingsDto> UpdateCashMovementSettingsAsync(UpdateCashMovementSettingsRequest request, CancellationToken cancellationToken = default);
 }
 

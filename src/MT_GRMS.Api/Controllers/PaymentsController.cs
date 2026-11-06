@@ -61,6 +61,8 @@ public class PaymentsController : BaseApiController
                 bankAccountName = "NGUYEN AN NHIEN",
                 sepayApiKeyMasked = "sepay_apikey_••••••••••••9999",
                 webhookUrl = $"{Request.Scheme}://{Request.Host}/api/v1/payments/sepay-webhook",
+                cashOutApprovalThreshold = 200000m,
+                cashOutShiftTotalLimit = 0m,
                 isActive = true
             });
         }
@@ -80,6 +82,8 @@ public class PaymentsController : BaseApiController
             bankAccountName = config.BankAccountName,
             sepayApiKeyMasked = maskedKey,
             webhookUrl = $"{Request.Scheme}://{Request.Host}/api/v1/payments/sepay-webhook",
+            cashOutApprovalThreshold = config.CashOutApprovalThreshold,
+            cashOutShiftTotalLimit = config.CashOutShiftTotalLimit,
             isActive = config.IsActive
         });
     }
@@ -109,6 +113,8 @@ public class PaymentsController : BaseApiController
                 BankAccountName = request.BankAccountName.ToUpperInvariant(),
                 SepayApiKeyEncrypted = request.SepayApiKey ?? "",
                 SepayWebhookSecret = Guid.NewGuid().ToString("N"),
+                CashOutApprovalThreshold = request.CashOutApprovalThreshold > 0 ? request.CashOutApprovalThreshold : 200000m,
+                CashOutShiftTotalLimit = request.CashOutShiftTotalLimit,
                 IsActive = request.IsActive,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow
@@ -124,6 +130,14 @@ public class PaymentsController : BaseApiController
             if (!string.IsNullOrWhiteSpace(request.SepayApiKey) && !request.SepayApiKey.Contains("••"))
             {
                 config.SepayApiKeyEncrypted = request.SepayApiKey;
+            }
+            if (request.CashOutApprovalThreshold >= 0)
+            {
+                config.CashOutApprovalThreshold = request.CashOutApprovalThreshold;
+            }
+            if (request.CashOutShiftTotalLimit >= 0)
+            {
+                config.CashOutShiftTotalLimit = request.CashOutShiftTotalLimit;
             }
             config.IsActive = request.IsActive;
             config.UpdatedAt = DateTime.UtcNow;
@@ -325,6 +339,8 @@ public class SavePaymentConfigRequest
     public string BankAccountNumber { get; set; } = "";
     public string BankAccountName { get; set; } = "";
     public string? SepayApiKey { get; set; }
+    public decimal CashOutApprovalThreshold { get; set; } = 200000m;
+    public decimal CashOutShiftTotalLimit { get; set; } = 0m;
     public bool IsActive { get; set; } = true;
 }
 

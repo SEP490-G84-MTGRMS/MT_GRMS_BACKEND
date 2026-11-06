@@ -120,4 +120,44 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
 
         return $"CA-{datePrefix}-{(countToday + 1):D2}";
     }
+
+    public async Task<ShiftCashMovement?> GetCashMovementByIdAsync(Guid movementId, CancellationToken cancellationToken = default)
+    {
+        return await _context.ShiftCashMovements
+            .Include(m => m.Shift)
+            .FirstOrDefaultAsync(m => m.Id == movementId, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<ShiftCashMovement>> GetPendingMovementsAsync(Guid branchId, CancellationToken cancellationToken = default)
+    {
+        return await _context.ShiftCashMovements
+            .Include(m => m.Shift)
+            .Where(m => m.Shift != null && m.Shift.BranchId == branchId &&
+                        (m.Status == CashMovementStatus.PendingApproval ||
+                         (m.Category == CashMovementCategory.CASH_DRAW && !m.IsConfirmedByOwner)))
+            .OrderByDescending(m => m.OccurredAtUtc)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<StorePaymentConfig?> GetPaymentConfigAsync(string tenantId, CancellationToken cancellationToken = default)
+    {
+        return await _context.StorePaymentConfigs
+            .FirstOrDefaultAsync(c => c.TenantId == tenantId && !c.IsDeleted, cancellationToken);
+    }
+
+    public async Task SavePaymentConfigAsync(StorePaymentConfig config, CancellationToken cancellationToken = default)
+    {
+        var existing = await _context.StorePaymentConfigs
+            .FirstOrDefaultAsync(c => c.TenantId == config.TenantId && !c.IsDeleted, cancellationToken);
+        if (existing == null)
+        {
+            await _context.StorePaymentConfigs.AddAsync(config, cancellationToken);
+        }
+        else
+        {
+            existing.CashOutApprovalThreshold = config.CashOutApprovalThreshold;
+            existing.CashOutShiftTotalLimit = config.CashOutShiftTotalLimit;
+            existing.UpdatedAt = DateTime.UtcNow;
+        }
+    }
 }

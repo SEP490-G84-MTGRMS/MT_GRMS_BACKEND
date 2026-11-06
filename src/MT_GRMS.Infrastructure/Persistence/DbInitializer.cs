@@ -188,6 +188,15 @@ public static class DbInitializer
                             ""IsDeleted"" boolean NOT NULL DEFAULT false
                         );
 
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""Status"" integer DEFAULT 1;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ApprovedBy"" text;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ApprovedAtUtc"" timestamp without time zone;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""RejectionReason"" text;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""IsConfirmedByOwner"" boolean DEFAULT false;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ConfirmedByOwnerAtUtc"" timestamp without time zone;
+                        ALTER TABLE ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutApprovalThreshold"" numeric(18,2) DEFAULT 200000;
+                        ALTER TABLE ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutShiftTotalLimit"" numeric(18,2) DEFAULT 0;
+
                         ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""TaxCategory"" text DEFAULT 'STANDARD_1PCT';
                         ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""EligibleForVatReduction"" boolean DEFAULT false;
                         ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
