@@ -348,7 +348,6 @@ public class CashbookService : ICashbookService
         {
             var initTill = new FinanceAccount
             {
-                Id = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db"),
                 BranchId = defaultBranchId,
                 AccountType = FinanceAccountType.Till,
                 AccountName = "Két tiền mặt quầy chính",
@@ -357,7 +356,6 @@ public class CashbookService : ICashbookService
             };
             var initSafe = new FinanceAccount
             {
-                Id = Guid.Parse("01a19664-6492-7d10-9a82-54801db4f342"),
                 BranchId = defaultBranchId,
                 AccountType = FinanceAccountType.Safe,
                 AccountName = "Két sắt chủ shop (Safe Deposit)",
@@ -366,7 +364,6 @@ public class CashbookService : ICashbookService
             };
             var initBank = new FinanceAccount
             {
-                Id = Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559"),
                 AccountType = FinanceAccountType.Bank,
                 AccountName = "Vietcombank (VCB)",
                 BankName = "Vietcombank (VCB)",
@@ -375,22 +372,10 @@ public class CashbookService : ICashbookService
                 CurrentBalance = 145800000m,
                 IsActive = true
             };
-            var initBank2 = new FinanceAccount
-            {
-                Id = Guid.Parse("01a19664-6761-78c3-b60a-cc460c68c51c"),
-                AccountType = FinanceAccountType.Bank,
-                AccountName = "Techcombank (TCB)",
-                BankName = "Techcombank (TCB)",
-                AccountNumber = "19036789123011",
-                AccountHolderName = "CHỦ HỘ KINH DOANH",
-                CurrentBalance = 32450000m,
-                IsActive = true
-            };
 
             await _accountRepo.AddAsync(initTill, ct);
             await _accountRepo.AddAsync(initSafe, ct);
             await _accountRepo.AddAsync(initBank, ct);
-            await _accountRepo.AddAsync(initBank2, ct);
             await _unitOfWork.SaveChangesAsync(ct);
             accounts = await _accountRepo.GetAllAsync(ct);
         }
@@ -433,7 +418,7 @@ public class CashbookService : ICashbookService
             ));
         }
 
-        foreach (var bank in accounts.Where(a => a.AccountType == FinanceAccountType.Bank && a.IsActive && a.Id != Guid.Parse("01a19664-6761-78c3-b60a-cc460c68c51c")))
+        foreach (var bank in accounts.Where(a => a.AccountType == FinanceAccountType.Bank && a.IsActive))
         {
             results.Add(new CashAccountResponse(
                 bank.Id,
