@@ -10,6 +10,7 @@ using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Entities.Supplier;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 using Xunit;
 
@@ -190,7 +191,7 @@ public class BranchProductManagementTests
             CostPrice = 90000m,
             SellingPrice = 120000m,
             MinStock = 5m,
-            Status = "Active"
+            Status = ProductStatus.Active
         });
         var sp = new SupplierProduct
         {
@@ -388,7 +389,7 @@ public class BranchProductManagementTests
 
         Assert.Equal("Inactive", b1Stocks.First().Status);
         Assert.Equal("Active", b2Stocks.First().Status);
-        Assert.Equal("Active", masterProd!.Status);
+        Assert.Equal(ProductStatus.Active, masterProd!.Status);
     }
 
     [Fact]

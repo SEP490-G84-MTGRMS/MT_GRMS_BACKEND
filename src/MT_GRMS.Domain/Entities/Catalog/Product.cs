@@ -21,7 +21,7 @@ public class Product : BaseTenantEntity
     public decimal VatRate { get; set; } = 0.00m;
     public string TaxCategory { get; set; } = "STANDARD_1PCT";
     public string ProductType { get; set; } = "STANDARD";
-    public string Status { get; set; } = "Active";
+    public ProductStatus Status { get; set; } = ProductStatus.Active;
     public string? ImageUrl { get; set; }
     public string? Description { get; set; }
     public string? InternalNote { get; set; }

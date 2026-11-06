@@ -20,7 +20,6 @@ using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Entities.Supplier;
-using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Infrastructure.Persistence;
 
@@ -39,8 +38,15 @@ public static class DbInitializer
                 bool usersTableExists = false;
                 try
                 {
-                    await context.Database.ExecuteSqlRawAsync("SELECT 1 FROM \"Users\" LIMIT 1;");
-                    usersTableExists = true;
+                    var conn = context.Database.GetDbConnection();
+                    if (conn.State != System.Data.ConnectionState.Open)
+                    {
+                        await conn.OpenAsync();
+                    }
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Users');";
+                    var result = await cmd.ExecuteScalarAsync();
+                    usersTableExists = result is bool b && b;
                 }
                 catch
                 {
@@ -328,7 +334,7 @@ public static class DbInitializer
 
             await context.TenantUsers.AddRangeAsync(tenantUserAdmin, tenantUserManager, tenantUserCashier, tenantUserOwner, tenantUserStaff);
             await context.SaveChangesAsync();
-}
+        }
 
         // =========================================================================
         // PHÂN HỆ 2: CHI NHÁNH & KHO & CATALOG MẪU
@@ -336,407 +342,399 @@ public static class DbInitializer
         if (!await context.Branches.AnyAsync(b => b.TenantId == defaultTenantId))
         {
             var branchQ1 = new Branch
-        {
-            TenantId = defaultTenantId,
-            BranchCode = "BR-HCM-01",
-            Name = "MT-Mart Chi Nhánh Quận 1",
-            Address = "Số 45 Lê Duẩn, Bến Nghé, Quận 1",
-            Phone = "028 3822 5566",
-            Latitude = 10.7769m,
-            Longitude = 106.7009m,
-            CheckinRadiusMeters = 100,
-            IsActive = true
-        };
+            {
+                TenantId = defaultTenantId,
+                BranchCode = "BR-HCM-01",
+                Name = "MT-Mart Chi Nhánh Quận 1",
+                Address = "Số 45 Lê Duẩn, Bến Nghé, Quận 1",
+                Phone = "028 3822 5566",
+                Latitude = 10.7769m,
+                Longitude = 106.7009m,
+                CheckinRadiusMeters = 100,
+                IsActive = true
+            };
 
-        var branchHN = new Branch
-        {
-            TenantId = defaultTenantId,
-            BranchCode = "BR-HN-01",
-            Name = "MT-Mart Chi Nhánh Cầu Giấy",
-            Address = "Số 88 Cầu Giấy, Quan Hoa, Cầu Giấy",
-            Phone = "024 3766 8899",
-            Latitude = 21.0333m,
-            Longitude = 105.7833m,
-            CheckinRadiusMeters = 150,
-            IsActive = true
-        };
+            var branchHN = new Branch
+            {
+                TenantId = defaultTenantId,
+                BranchCode = "BR-HN-01",
+                Name = "MT-Mart Chi Nhánh Cầu Giấy",
+                Address = "Số 88 Cầu Giấy, Quan Hoa, Cầu Giấy",
+                Phone = "024 3766 8899",
+                Latitude = 21.0333m,
+                Longitude = 105.7833m,
+                CheckinRadiusMeters = 150,
+                IsActive = true
+            };
 
-        var branchTX = new Branch
-        {
-            TenantId = defaultTenantId,
-            BranchCode = "BR-HN-02",
-            Name = "MT-Mart Chi Nhánh Thanh Xuân",
-            Address = "Số 129 Nguyễn Trãi, Thượng Đình, Thanh Xuân",
-            Phone = "024 3858 6677",
-            Latitude = 20.9998m,
-            Longitude = 105.8144m,
-            CheckinRadiusMeters = 100,
-            IsActive = true
-        };
+            var branchTX = new Branch
+            {
+                TenantId = defaultTenantId,
+                BranchCode = "BR-HN-02",
+                Name = "MT-Mart Chi Nhánh Thanh Xuân",
+                Address = "Số 129 Nguyễn Trãi, Thượng Đình, Thanh Xuân",
+                Phone = "024 3858 6677",
+                Latitude = 20.9998m,
+                Longitude = 105.8144m,
+                CheckinRadiusMeters = 100,
+                IsActive = true
+            };
 
-        await context.Branches.AddRangeAsync(branchQ1, branchHN, branchTX);
-        await context.SaveChangesAsync();
+            await context.Branches.AddRangeAsync(branchQ1, branchHN, branchTX);
+            await context.SaveChangesAsync();
 
-        // =========================================================================
-        // PHÂN HỆ 3: DANH MỤC & SẢN PHẨM (CATALOG)
-        // =========================================================================
-        var catFresh = new Category
-        {
-            TenantId = defaultTenantId,
-            CategoryCode = "FRESH",
-            Name = "Thực Phẩm & Nông Sản Tươi Sống",
-            Description = "Rau, củ, quả, thịt cá tươi đạt chuẩn VietGAP"
-        };
+            // =========================================================================
+            // PHÂN HỆ 3: DANH MỤC & SẢN PHẨM (CATALOG)
+            // =========================================================================
+            var catFresh = new Category
+            {
+                TenantId = defaultTenantId,
+                CategoryCode = "FRESH",
+                Name = "Thực Phẩm & Nông Sản Tươi Sống",
+                Description = "Rau, củ, quả, thịt cá tươi đạt chuẩn VietGAP"
+            };
 
-        var catDry = new Category
-        {
-            TenantId = defaultTenantId,
-            CategoryCode = "DRY",
-            Name = "Bách Hóa Tiêu Dùng & Gạo Hạt",
-            Description = "Gạo, gia vị, dầu ăn, thực phẩm khô đóng gói"
-        };
+            var catDry = new Category
+            {
+                TenantId = defaultTenantId,
+                CategoryCode = "DRY",
+                Name = "Bách Hóa Tiêu Dùng & Gạo Hạt",
+                Description = "Gạo, gia vị, dầu ăn, thực phẩm khô đóng gói"
+            };
 
-        var catBeverage = new Category
-        {
-            TenantId = defaultTenantId,
-            CategoryCode = "BEV",
-            Name = "Sữa & Đồ Uống Giải Khát",
-            Description = "Sữa tươi tiệt trùng, nước khoáng, nước trái cây"
-        };
+            var catBeverage = new Category
+            {
+                TenantId = defaultTenantId,
+                CategoryCode = "BEV",
+                Name = "Sữa & Đồ Uống Giải Khát",
+                Description = "Sữa tươi tiệt trùng, nước khoáng, nước trái cây"
+            };
 
-        await context.Categories.AddRangeAsync(catFresh, catDry, catBeverage);
-        await context.SaveChangesAsync();
+            await context.Categories.AddRangeAsync(catFresh, catDry, catBeverage);
+            await context.SaveChangesAsync();
 
-        // Sản phẩm
-        var prodRice = new Product
-        {
-            TenantId = defaultTenantId,
-            CategoryId = catDry.Id,
-            ProductCode = "SP-GAO-ST25",
-            Barcode = "893850123401",
-            Name = "Gạo Thơm ST25 Ông Cua Túi 5kg",
-            BaseUnit = "Túi",
-            CostPrice = 160000.00m,
-            SellingPrice = 195000.00m,
-            MinStock = 10.00m,
-            MaxStock = 500.00m,
-            VatRate = 0.00m,
-            ProductType = "STANDARD",
-            Status = ProductStatus.Active,
-            HasBatches = true,
-            IsFavorite = true
-        };
+            // Sản phẩm
+            var prodRice = new Product
+            {
+                TenantId = defaultTenantId,
+                CategoryId = catDry.Id,
+                ProductCode = "SP-GAO-ST25",
+                Barcode = "893850123401",
+                Name = "Gạo Thơm ST25 Ông Cua Túi 5kg",
+                BaseUnit = "Túi",
+                CostPrice = 160000.00m,
+                SellingPrice = 195000.00m,
+                MinStock = 10.00m,
+                MaxStock = 500.00m,
+                VatRate = 0.00m,
+                ProductType = "STANDARD",
+                Status = ProductStatus.Active,
+                HasBatches = true,
+                IsFavorite = true
+            };
 
-        var prodMilk = new Product
-        {
-            TenantId = defaultTenantId,
-            CategoryId = catBeverage.Id,
-            ProductCode = "SP-SUA-VNM-1L",
-            Barcode = "893850123402",
-            Name = "Sữa Tươi Tiệt Trùng Vinamilk Có Đường 1L",
-            BaseUnit = "Hộp",
-            CostPrice = 30000.00m,
-            SellingPrice = 38000.00m,
-            MinStock = 20.00m,
-            MaxStock = 1000.00m,
-            VatRate = 8.00m,
-            ProductType = "STANDARD",
-            Status = ProductStatus.Active,
-            HasBatches = true,
-            IsFavorite = true
-        };
+            var prodMilk = new Product
+            {
+                TenantId = defaultTenantId,
+                CategoryId = catBeverage.Id,
+                ProductCode = "SP-SUA-VNM-1L",
+                Barcode = "893850123402",
+                Name = "Sữa Tươi Tiệt Trùng Vinamilk Có Đường 1L",
+                BaseUnit = "Hộp",
+                CostPrice = 30000.00m,
+                SellingPrice = 38000.00m,
+                MinStock = 20.00m,
+                MaxStock = 1000.00m,
+                VatRate = 8.00m,
+                ProductType = "STANDARD",
+                Status = ProductStatus.Active,
+                HasBatches = true,
+                IsFavorite = true
+            };
 
-        var prodSauce = new Product
-        {
-            TenantId = defaultTenantId,
-            CategoryId = catDry.Id,
-            ProductCode = "SP-NUOCMAM-NAMNGU",
-            Barcode = "893850123403",
-            Name = "Nước Mắm Nam Ngư Đệ Nhị Chai 900ml",
-            BaseUnit = "Chai",
-            CostPrice = 22000.00m,
-            SellingPrice = 28500.00m,
-            MinStock = 15.00m,
-            MaxStock = 300.00m,
-            VatRate = 8.00m,
-            ProductType = "STANDARD",
-            Status = ProductStatus.Active
-        };
+            var prodSauce = new Product
+            {
+                TenantId = defaultTenantId,
+                CategoryId = catDry.Id,
+                ProductCode = "SP-NUOCMAM-NAMNGU",
+                Barcode = "893850123403",
+                Name = "Nước Mắm Nam Ngư Đệ Nhị Chai 900ml",
+                BaseUnit = "Chai",
+                CostPrice = 22000.00m,
+                SellingPrice = 28500.00m,
+                MinStock = 15.00m,
+                MaxStock = 300.00m,
+                VatRate = 8.00m,
+                ProductType = "STANDARD",
+                Status = ProductStatus.Active
+            };
 
-        var prodG7 = new Product
-        {
-            TenantId = defaultTenantId,
-            CategoryId = catBeverage.Id,
-            ProductCode = "G7-3IN1-18G",
-            Barcode = "8935024122310",
-            Name = "Cà phê hòa tan G7 3in1 Hộp 18 gói",
-            BaseUnit = "Hộp",
-            CostPrice = 45000.00m,
-            SellingPrice = 58000.00m,
-            MinStock = 10.00m,
-            MaxStock = 200.00m,
-            VatRate = 1.00m,
-            ProductType = "STANDARD",
-            Status = ProductStatus.Active,
-            HasBatches = true,
-            IsFavorite = true
-        };
+            var prodG7 = new Product
+            {
+                TenantId = defaultTenantId,
+                CategoryId = catBeverage.Id,
+                ProductCode = "G7-3IN1-18G",
+                Barcode = "8935024122310",
+                Name = "Cà phê hòa tan G7 3in1 Hộp 18 gói",
+                BaseUnit = "Hộp",
+                CostPrice = 45000.00m,
+                SellingPrice = 58000.00m,
+                MinStock = 10.00m,
+                MaxStock = 200.00m,
+                VatRate = 1.00m,
+                ProductType = "STANDARD",
+                Status = ProductStatus.Active,
+                HasBatches = true,
+                IsFavorite = true
+            };
 
-        var prodChoco = new Product
-        {
-            TenantId = defaultTenantId,
-            CategoryId = catDry.Id,
-            ProductCode = "CHOCO-12P",
-            Barcode = "8936036020380",
-            Name = "Bánh Orion Choco-Pie truyền thống Hộp 12 cái",
-            BaseUnit = "Hộp",
-            CostPrice = 42000.00m,
-            SellingPrice = 55000.00m,
-            MinStock = 10.00m,
-            MaxStock = 200.00m,
-            VatRate = 1.00m,
-            ProductType = "STANDARD",
-            Status = ProductStatus.Active,
-            HasBatches = true,
-            IsFavorite = true
-        };
+            var prodChoco = new Product
+            {
+                TenantId = defaultTenantId,
+                CategoryId = catDry.Id,
+                ProductCode = "CHOCO-12P",
+                Barcode = "8936036020380",
+                Name = "Bánh Orion Choco-Pie truyền thống Hộp 12 cái",
+                BaseUnit = "Hộp",
+                CostPrice = 42000.00m,
+                SellingPrice = 55000.00m,
+                MinStock = 10.00m,
+                MaxStock = 200.00m,
+                VatRate = 1.00m,
+                ProductType = "STANDARD",
+                Status = ProductStatus.Active,
+                HasBatches = true,
+                IsFavorite = true
+            };
 
-        var prodMuoi = new Product
-        {
-            TenantId = defaultTenantId,
-            CategoryId = catDry.Id,
-            ProductCode = "MHH-TOMCHUA-120G",
-            Barcode = "8934563065249",
-            Name = "Muối chấm Hảo Hảo tôm chua cay Hũ 120g",
-            BaseUnit = "Hũ",
-            CostPrice = 12000.00m,
-            SellingPrice = 16000.00m,
-            MinStock = 20.00m,
-            MaxStock = 300.00m,
-            VatRate = 1.00m,
-            ProductType = "STANDARD",
-            Status = ProductStatus.Active,
-            HasBatches = false,
-            IsFavorite = true
-        };
+            var prodMuoi = new Product
+            {
+                TenantId = defaultTenantId,
+                CategoryId = catDry.Id,
+                ProductCode = "MHH-TOMCHUA-120G",
+                Barcode = "8934563065249",
+                Name = "Muối chấm Hảo Hảo tôm chua cay Hũ 120g",
+                BaseUnit = "Hũ",
+                CostPrice = 12000.00m,
+                SellingPrice = 16000.00m,
+                MinStock = 20.00m,
+                MaxStock = 300.00m,
+                VatRate = 1.00m,
+                ProductType = "STANDARD",
+                Status = ProductStatus.Active,
+                HasBatches = false,
+                IsFavorite = true
+            };
 
-        var prodBia = new Product
-        {
-            TenantId = defaultTenantId,
-            CategoryId = catBeverage.Id,
-            ProductCode = "BIA-HANOI-SLEEK",
-            Barcode = "8936000440824",
-            Name = "Bia Hà Nội Sleek Lon cao 330ml",
-            BaseUnit = "Lon",
-            CostPrice = 10500.00m,
-            SellingPrice = 14000.00m,
-            MinStock = 24.00m,
-            MaxStock = 500.00m,
-            VatRate = 1.00m,
-            ProductType = "STANDARD",
-            Status = ProductStatus.Active,
-            HasBatches = true,
-            IsFavorite = true
-        };
+            var prodBia = new Product
+            {
+                TenantId = defaultTenantId,
+                CategoryId = catBeverage.Id,
+                ProductCode = "BIA-HANOI-SLEEK",
+                Barcode = "8936000440824",
+                Name = "Bia Hà Nội Sleek Lon cao 330ml",
+                BaseUnit = "Lon",
+                CostPrice = 10500.00m,
+                SellingPrice = 14000.00m,
+                MinStock = 24.00m,
+                MaxStock = 500.00m,
+                VatRate = 1.00m,
+                ProductType = "STANDARD",
+                Status = ProductStatus.Active,
+                HasBatches = true,
+                IsFavorite = true
+            };
 
-        await context.Products.AddRangeAsync(prodRice, prodMilk, prodSauce, prodG7, prodChoco, prodMuoi, prodBia);
-        await context.SaveChangesAsync();
+            await context.Products.AddRangeAsync(prodRice, prodMilk, prodSauce, prodG7, prodChoco, prodMuoi, prodBia);
+            await context.SaveChangesAsync();
 
-        // Đơn vị quy đổi (1 Thùng = 12 Hộp sữa)
-        var unitCartonMilk = new ProductUnit(prodMilk.Id, "Thùng", 12.00m, 445000.00m, "893850123499", false);
-        await context.ProductUnits.AddAsync(unitCartonMilk);
+            // Đơn vị quy đổi (1 Thùng = 12 Hộp sữa)
+            var unitCartonMilk = new ProductUnit(prodMilk.Id, "Thùng", 12.00m, 445000.00m, "893850123499", false);
+            await context.ProductUnits.AddAsync(unitCartonMilk);
 
-        // =========================================================================
-        // PHÂN HỆ 4: NHÀ CUNG CẤP & CHÍNH SÁCH GIÁ
-        // =========================================================================
-        var supplierVinamilk = new Domain.Entities.Supplier.Supplier
-        {
-            TenantId = defaultTenantId,
-            Code = "SUP-VINAMILK",
-            Name = "Công Ty Cổ Phần Sữa Việt Nam (Vinamilk)",
-            SupplierType = Domain.Enums.SupplierType.Goods,
-            Status = Domain.Enums.SupplierStatus.Active,
-            TaxCode = "0300588569",
-            Phone = "02854155555",
-            Email = "contact@vinamilk.com.vn",
-            Address = "Số 10 Tân Trào, Tân Phú, Quận 7, TP.HCM",
-            ContactPerson = "Nguyễn Anh Tuấn",
-            PaymentTermDays = 30,
-            CreditLimit = 200000000.00m
-        };
+            // =========================================================================
+            // PHÂN HỆ 4: NHÀ CUNG CẤP & CHÍNH SÁCH GIÁ
+            // =========================================================================
+            var supplierVinamilk = new Domain.Entities.Supplier.Supplier
+            {
+                TenantId = defaultTenantId,
+                Code = "SUP-VINAMILK",
+                Name = "Công Ty Cổ Phần Sữa Việt Nam (Vinamilk)",
+                SupplierType = Domain.Enums.SupplierType.Goods,
+                Status = Domain.Enums.SupplierStatus.Active,
+                TaxCode = "0300588569",
+                Phone = "02854155555",
+                Email = "contact@vinamilk.com.vn",
+                Address = "Số 10 Tân Trào, Tân Phú, Quận 7, TP.HCM",
+                ContactPerson = "Nguyễn Anh Tuấn",
+                PaymentTermDays = 30,
+                CreditLimit = 200000000.00m
+            };
 
-        var supplierRice = new Domain.Entities.Supplier.Supplier
-        {
-            TenantId = defaultTenantId,
-            Code = "SUP-HOCUA",
-            Name = "Doanh Nghiệp Tư Nhân Hồ Quang Cua (Gạo ST25)",
-            SupplierType = Domain.Enums.SupplierType.Goods,
-            Status = Domain.Enums.SupplierStatus.Active,
-            TaxCode = "2200123456",
-            Phone = "02993888999",
-            Email = "gaost25@soc-trang.vn",
-            Address = "Tỉnh Sóc Trăng",
-            ContactPerson = "Hồ Quang Cua",
-            PaymentTermDays = 15,
-            CreditLimit = 100000000.00m
-        };
+            var supplierRice = new Domain.Entities.Supplier.Supplier
+            {
+                TenantId = defaultTenantId,
+                Code = "SUP-HOCUA",
+                Name = "Doanh Nghiệp Tư Nhân Hồ Quang Cua (Gạo ST25)",
+                SupplierType = Domain.Enums.SupplierType.Goods,
+                Status = Domain.Enums.SupplierStatus.Active,
+                TaxCode = "2200123456",
+                Phone = "02993888999",
+                Email = "gaost25@soc-trang.vn",
+                Address = "Tỉnh Sóc Trăng",
+                ContactPerson = "Hồ Quang Cua",
+                PaymentTermDays = 15,
+                CreditLimit = 100000000.00m
+            };
 
-        await context.Suppliers.AddRangeAsync(supplierVinamilk, supplierRice);
-        await context.SaveChangesAsync();
+            await context.Suppliers.AddRangeAsync(supplierVinamilk, supplierRice);
+            await context.SaveChangesAsync();
 
-        // Tồn kho chi nhánh (BranchStocks theo lô FEFO)
-        var stockRice = new BranchStock
-        {
-            TenantId = defaultTenantId,
-            BranchId = branchQ1.Id,
-            ProductId = prodRice.Id,
-            SupplierId = supplierRice.Id,
-            BatchCode = "BATCH-ST25-20261001",
-            ManufactureDate = DateTime.UtcNow.AddMonths(-1),
-            ExpiryDate = DateTime.UtcNow.AddMonths(11),
-            QuantityOnHand = 150.000m,
-            QuantityReserved = 5.000m,
-            LandedCostPerUnit = 160000.00m,
-            ShelfLocation = "A1-03",
-            ZoneArea = "Kho Khô"
-        };
+            // Tồn kho chi nhánh (BranchStocks theo lô FEFO)
+            var stockRice = new BranchStock
+            {
+                TenantId = defaultTenantId,
+                BranchId = branchQ1.Id,
+                ProductId = prodRice.Id,
+                SupplierId = supplierRice.Id,
+                BatchCode = "BATCH-ST25-20261001",
+                ManufactureDate = DateTime.UtcNow.AddMonths(-1),
+                ExpiryDate = DateTime.UtcNow.AddMonths(11),
+                QuantityOnHand = 150.000m,
+                QuantityReserved = 5.000m,
+                LandedCostPerUnit = 160000.00m,
+                ShelfLocation = "A1-03",
+                ZoneArea = "Kho Khô"
+            };
 
-        var stockMilk = new BranchStock
-        {
-            TenantId = defaultTenantId,
-            BranchId = branchQ1.Id,
-            ProductId = prodMilk.Id,
-            SupplierId = supplierVinamilk.Id,
-            BatchCode = "BATCH-VNM-20261015",
-            ManufactureDate = DateTime.UtcNow.AddDays(-12),
-            ExpiryDate = DateTime.UtcNow.AddMonths(5),
-            QuantityOnHand = 320.000m,
-            QuantityReserved = 0.000m,
-            LandedCostPerUnit = 30000.00m,
-            ShelfLocation = "B2-01",
-            ZoneArea = "Kho Mát"
-        };
+            var stockMilk = new BranchStock
+            {
+                TenantId = defaultTenantId,
+                BranchId = branchQ1.Id,
+                ProductId = prodMilk.Id,
+                SupplierId = supplierVinamilk.Id,
+                BatchCode = "BATCH-VNM-20261015",
+                ManufactureDate = DateTime.UtcNow.AddDays(-12),
+                ExpiryDate = DateTime.UtcNow.AddMonths(5),
+                QuantityOnHand = 320.000m,
+                QuantityReserved = 0.000m,
+                LandedCostPerUnit = 30000.00m,
+                ShelfLocation = "B2-01",
+                ZoneArea = "Kho Mát"
+            };
 
-        var stockSauce = new BranchStock
-        {
-            TenantId = defaultTenantId,
-            BranchId = branchQ1.Id,
-            ProductId = prodSauce.Id,
-            BatchCode = "BATCH-SAUCE-2026",
-            ExpiryDate = DateTime.UtcNow.AddYears(1),
-            QuantityOnHand = 100.000m,
-            QuantityReserved = 0.000m,
-            LandedCostPerUnit = 22000.00m
-        };
+            var stockSauce = new BranchStock
+            {
+                TenantId = defaultTenantId,
+                BranchId = branchQ1.Id,
+                ProductId = prodSauce.Id,
+                BatchCode = "BATCH-SAUCE-2026",
+                ExpiryDate = DateTime.UtcNow.AddYears(1),
+                QuantityOnHand = 100.000m,
+                QuantityReserved = 0.000m,
+                LandedCostPerUnit = 22000.00m
+            };
 
-        var stockG7 = new BranchStock
-        {
-            TenantId = defaultTenantId,
-            BranchId = branchQ1.Id,
-            ProductId = prodG7.Id,
-            BatchCode = "BATCH-G7-2026",
-            ExpiryDate = DateTime.UtcNow.AddYears(2),
-            QuantityOnHand = 80.000m,
-            QuantityReserved = 0.000m,
-            LandedCostPerUnit = 45000.00m
-        };
+            var stockG7 = new BranchStock
+            {
+                TenantId = defaultTenantId,
+                BranchId = branchQ1.Id,
+                ProductId = prodG7.Id,
+                BatchCode = "BATCH-G7-2026",
+                ExpiryDate = DateTime.UtcNow.AddYears(2),
+                QuantityOnHand = 80.000m,
+                QuantityReserved = 0.000m,
+                LandedCostPerUnit = 45000.00m
+            };
 
-        var stockChoco = new BranchStock
-        {
-            TenantId = defaultTenantId,
-            BranchId = branchQ1.Id,
-            ProductId = prodChoco.Id,
-            BatchCode = "BATCH-CP-2026",
-            ExpiryDate = DateTime.UtcNow.AddMonths(8),
-            QuantityOnHand = 60.000m,
-            QuantityReserved = 0.000m,
-            LandedCostPerUnit = 42000.00m
-        };
+            var stockChoco = new BranchStock
+            {
+                TenantId = defaultTenantId,
+                BranchId = branchQ1.Id,
+                ProductId = prodChoco.Id,
+                BatchCode = "BATCH-CP-2026",
+                ExpiryDate = DateTime.UtcNow.AddMonths(8),
+                QuantityOnHand = 60.000m,
+                QuantityReserved = 0.000m,
+                LandedCostPerUnit = 42000.00m
+            };
 
-        var stockMuoi = new BranchStock
-        {
-            TenantId = defaultTenantId,
-            BranchId = branchQ1.Id,
-            ProductId = prodMuoi.Id,
-            BatchCode = "BATCH-MHH-2026",
-            ExpiryDate = DateTime.UtcNow.AddYears(1),
-            QuantityOnHand = 150.000m,
-            QuantityReserved = 0.000m,
-            LandedCostPerUnit = 12000.00m
-        };
+            var stockMuoi = new BranchStock
+            {
+                TenantId = defaultTenantId,
+                BranchId = branchQ1.Id,
+                ProductId = prodMuoi.Id,
+                BatchCode = "BATCH-MHH-2026",
+                ExpiryDate = DateTime.UtcNow.AddYears(1),
+                QuantityOnHand = 150.000m,
+                QuantityReserved = 0.000m,
+                LandedCostPerUnit = 12000.00m
+            };
 
-        var stockBia = new BranchStock
-        {
-            TenantId = defaultTenantId,
-            BranchId = branchQ1.Id,
-            ProductId = prodBia.Id,
-            BatchCode = "BATCH-BIA-2026",
-            ExpiryDate = DateTime.UtcNow.AddMonths(6),
-            QuantityOnHand = 120.000m,
-            QuantityReserved = 0.000m,
-            LandedCostPerUnit = 10500.00m
-        };
+            var stockBia = new BranchStock
+            {
+                TenantId = defaultTenantId,
+                BranchId = branchQ1.Id,
+                ProductId = prodBia.Id,
+                BatchCode = "BATCH-BIA-2026",
+                ExpiryDate = DateTime.UtcNow.AddMonths(6),
+                QuantityOnHand = 120.000m,
+                QuantityReserved = 0.000m,
+                LandedCostPerUnit = 10500.00m
+            };
 
-        await context.BranchStocks.AddRangeAsync(stockRice, stockMilk, stockSauce, stockG7, stockChoco, stockMuoi, stockBia);
+            await context.BranchStocks.AddRangeAsync(stockRice, stockMilk, stockSauce, stockG7, stockChoco, stockMuoi, stockBia);
 
-        // =========================================================================
-        // PHÂN HỆ 5: KHÁCH HÀNG & CHƯƠNG TRÌNH KHUYẾN MÃI
-        // =========================================================================
-        var customerVip = new Customer
-        {
-            TenantId = defaultTenantId,
-            CustomerCode = "KH-0001",
-            Name = "Nguyễn Văn Hưng",
-            Phone = "0903112233",
-            Email = "hung.nguyen@gmail.com",
-            Address = "24 Đường số 5, Phường Đa Kao, Quận 1",
-            MembershipTier = "Gold",
-            RewardPoints = 250,
-            TotalSpending = 12500000.00m,
-            AllowDebt = true,
-            DebtLimit = 5000000.00m
-        };
+            // =========================================================================
+            // PHÂN HỆ 5: KHÁCH HÀNG & CHƯƠNG TRÌNH KHUYẾN MÃI
+            // =========================================================================
+            var customerVip = new Customer
+            {
+                TenantId = defaultTenantId,
+                CustomerCode = "KH-0001",
+                Name = "Nguyễn Văn Hưng",
+                Phone = "0903112233",
+                Email = "hung.nguyen@gmail.com",
+                Address = "24 Đường số 5, Phường Đa Kao, Quận 1",
+                MembershipTier = "Gold",
+                RewardPoints = 250,
+                TotalSpending = 12500000.00m,
+                AllowDebt = true,
+                DebtLimit = 5000000.00m
+            };
 
-        var promoOpening = new Promotion
-        {
-            TenantId = defaultTenantId,
-            PromotionCode = "KM-KHAITRUONG-10K",
-            PromotionName = "Giảm 10,000đ Mừng Tuần Lễ Mua Sắm",
-            Type = "FIXED_AMOUNT",
-            DiscountValue = 10000.00m,
-            StartDate = DateTime.UtcNow.AddDays(-7),
-            EndDate = DateTime.UtcNow.AddDays(30),
-            IsActive = true
-        };
+            var promoOpening = new Promotion
+            {
+                TenantId = defaultTenantId,
+                PromotionCode = "KM-KHAITRUONG-10K",
+                PromotionName = "Giảm 10,000đ Mừng Tuần Lễ Mua Sắm",
+                Type = "FIXED_AMOUNT",
+                DiscountValue = 10000.00m,
+                StartDate = DateTime.UtcNow.AddDays(-7),
+                EndDate = DateTime.UtcNow.AddDays(30),
+                IsActive = true
+            };
 
-        await context.Customers.AddAsync(customerVip);
-        await context.Promotions.AddAsync(promoOpening);
+            if (!await context.Customers.AnyAsync(c => c.TenantId == defaultTenantId && (c.CustomerCode == "KH-0001" || c.Phone == "0903112233")))
+            {
+                await context.Customers.AddAsync(customerVip);
+            }
+            if (!await context.Promotions.AnyAsync(p => p.TenantId == defaultTenantId && p.PromotionCode == "KM-KHAITRUONG-10K"))
+            {
+                await context.Promotions.AddAsync(promoOpening);
+            }
 
-        // =========================================================================
-        // PHÂN HỆ 6: SỔ QUỸ & TÀI CHÍNH BAN ĐẦU
-        // =========================================================================
-        // Sổ quỹ tiền mặt ban đầu
-        var initialCashBook = new CashBook
-        {
-            BranchId = branchQ1.Id,
-            TransactionCode = "CB-INIT-2026",
-            SourceDocType = "OPENING_BALANCE",
-            TransactionType = "RECEIPT",
-            Amount = 10000000.00m,
-            OpeningBalance = 0.00m,
-            CurrentBalance = 10000000.00m,
-            Description = "Nạp tiền lẻ quỹ đầu ca phục vụ thanh toán POS"
-        };
-        await context.CashBooks.AddAsync(initialCashBook);
+            // =========================================================================
+            // PHÂN HỆ 6: CATALOG & SẢN PHẨM MẪU
+            // =========================================================================
+            // Nạp 15 danh mục và 5-8 sản phẩm mỗi danh mục
+            await CatalogSeedData.SeedAsync(context, defaultTenantId);
 
-        // Nạp 15 danh mục và 5-8 sản phẩm mỗi danh mục
-        await CatalogSeedData.SeedAsync(context, defaultTenantId);
-
-        // Lưu toàn bộ dữ liệu mẫu vào CSDL
-        await context.SaveChangesAsync();
-        await SeedOrdersAndPreOrdersAsync(context);
-        await SeedTaxAndFinanceAsync(context, logger);
-        await SeedNewStoreOwnerAnNhienAsync(context);
+            // Lưu toàn bộ dữ liệu mẫu vào CSDL
+            await context.SaveChangesAsync();
+            await SeedOrdersAndPreOrdersAsync(context);
+            await SeedTaxAndFinanceAsync(context, logger);
+            await SeedNewStoreOwnerAnNhienAsync(context);
         }
 
         // =========================================================================
@@ -887,7 +885,7 @@ public static class DbInitializer
         }
 
         // Đảm bảo có các khách hàng mẫu thân thiết
-        var custHung = await context.Customers.FirstOrDefaultAsync(c => c.TenantId == tenantId && c.Phone == "0903112233");
+        var custHung = await context.Customers.FirstOrDefaultAsync(c => c.TenantId == tenantId && (c.Phone == "0903112233" || c.CustomerCode == "KH-0001"));
         if (custHung == null)
         {
             custHung = new Customer
@@ -907,7 +905,7 @@ public static class DbInitializer
             await context.Customers.AddAsync(custHung);
         }
 
-        var custKhach = await context.Customers.FirstOrDefaultAsync(c => c.TenantId == tenantId && c.Phone == "0912345678");
+        var custKhach = await context.Customers.FirstOrDefaultAsync(c => c.TenantId == tenantId && (c.Phone == "0912345678" || c.CustomerCode == "KH-POS-001"));
         if (custKhach == null)
         {
             custKhach = new Customer
@@ -927,7 +925,7 @@ public static class DbInitializer
             await context.Customers.AddAsync(custKhach);
         }
 
-        var custLan = await context.Customers.FirstOrDefaultAsync(c => c.TenantId == tenantId && c.Phone == "0987654321");
+        var custLan = await context.Customers.FirstOrDefaultAsync(c => c.TenantId == tenantId && (c.Phone == "0987654321" || c.CustomerCode == "KH-POS-002"));
         if (custLan == null)
         {
             custLan = new Customer
@@ -1418,10 +1416,9 @@ public static class DbInitializer
                 FullName = "Phạm Thị Yến (Nhân viên Ba Đình)",
                 Phone = "0917778888",
                 Email = "nhanvien.annhien@gmail.com",
-                JobTitle = "Thu ngân / Nhân viên bán hàng",
-                SalaryType = "monthly",
+                SalaryType = SalaryType.Monthly,
                 BaseRate = 7500000m,
-                Status = "active"
+                Status = EmployeeStatus.Active
             };
             await context.Employees.AddAsync(empYen);
         }
@@ -1478,10 +1475,9 @@ public static class DbInitializer
                 FullName = "Lê Hoàng Nam (Nhân viên Cầu Giấy)",
                 Phone = "0916667777",
                 Email = "nam.le@annhienmart.vn",
-                JobTitle = "Thu ngân / Nhân viên bán hàng",
-                SalaryType = "monthly",
+                SalaryType = SalaryType.Monthly,
                 BaseRate = 7500000m,
-                Status = "active"
+                Status = EmployeeStatus.Active
             };
             await context.Employees.AddAsync(empNam);
         }
@@ -1538,7 +1534,7 @@ public static class DbInitializer
                 MaxStock = 200,
                 VatRate = 0.05m,
                 ProductType = "STANDARD",
-                Status = "Active",
+                Status = ProductStatus.Active,
                 HasBatches = true,
                 IsFavorite = true
             };
@@ -1562,7 +1558,7 @@ public static class DbInitializer
                 MaxStock = 300,
                 VatRate = 0.05m,
                 ProductType = "STANDARD",
-                Status = "Active",
+                Status = ProductStatus.Active,
                 HasBatches = true,
                 IsFavorite = true
             };
@@ -1586,7 +1582,7 @@ public static class DbInitializer
                 MaxStock = 150,
                 VatRate = 0.08m,
                 ProductType = "STANDARD",
-                Status = "Active",
+                Status = ProductStatus.Active,
                 HasBatches = false,
                 IsFavorite = false
             };
@@ -1610,7 +1606,7 @@ public static class DbInitializer
                 MaxStock = 100,
                 VatRate = 0.05m,
                 ProductType = "STANDARD",
-                Status = "Active",
+                Status = ProductStatus.Active,
                 HasBatches = true,
                 IsFavorite = true
             };
@@ -1634,7 +1630,7 @@ public static class DbInitializer
                 MaxStock = 150,
                 VatRate = 0.08m,
                 ProductType = "STANDARD",
-                Status = "Active",
+                Status = ProductStatus.Active,
                 HasBatches = true,
                 IsFavorite = true
             };
@@ -2487,7 +2483,7 @@ public static class DbInitializer
                         TenantId = DefaultTenantId,
                         CustomerCode = "KH001",
                         Name = "Nguyễn Văn An (Quán Ăn Gia Đình)",
-                        Phone = "0901234567",
+                        Phone = "0909111222",
                         Email = "an.nguyen@example.com",
                         Address = "12 Nguyễn Huệ, Phường Bến Nghé, Quận 1, TP.HCM",
                         MembershipTier = "Gold",
@@ -2504,7 +2500,7 @@ public static class DbInitializer
                         TenantId = DefaultTenantId,
                         CustomerCode = "KH002",
                         Name = "Trần Thị Bích (Tạp Hóa Đầu Hẻm)",
-                        Phone = "0912345678",
+                        Phone = "0909222333",
                         Email = "bich.tran@example.com",
                         Address = "45/3 Hai Bà Trưng, Phường Đa Kao, Quận 1, TP.HCM",
                         MembershipTier = "Silver",
@@ -2521,7 +2517,7 @@ public static class DbInitializer
                         TenantId = DefaultTenantId,
                         CustomerCode = "KH003",
                         Name = "Lê Hoàng Long (Tiệm Cà Phê Long)",
-                        Phone = "0987654321",
+                        Phone = "0909333444",
                         Email = "long.le@example.com",
                         Address = "88 Lê Lợi, Phường Bến Thành, Quận 1, TP.HCM",
                         MembershipTier = "Platinum",
@@ -2538,7 +2534,7 @@ public static class DbInitializer
                         TenantId = DefaultTenantId,
                         CustomerCode = "KH004",
                         Name = "Phạm Minh Đức (Khách Lẻ Tiềm Năng)",
-                        Phone = "0934567890",
+                        Phone = "0909444555",
                         Email = "duc.pham@example.com",
                         Address = "102 Pasteur, Phường Bến Nghé, Quận 1, TP.HCM",
                         MembershipTier = "Standard",
@@ -2551,7 +2547,13 @@ public static class DbInitializer
                     }
                 };
 
-                await context.Customers.AddRangeAsync(customers, ct);
+                foreach (var cust in customers)
+                {
+                    if (!await context.Customers.IgnoreQueryFilters().AnyAsync(c => c.TenantId == DefaultTenantId && (c.Id == cust.Id || c.CustomerCode == cust.CustomerCode || c.Phone == cust.Phone), ct))
+                    {
+                        await context.Customers.AddAsync(cust, ct);
+                    }
+                }
                 await context.SaveChangesAsync(ct);
 
                 var debtInvoices = new List<CustomerDebtInvoice>
@@ -2756,7 +2758,7 @@ public static class DbInitializer
                             SellingPrice = 135000m,
                             MinStock = 10m,
                             MaxStock = 200m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supAcecook.Id, 108000m, 5
                     ),
@@ -2773,7 +2775,7 @@ public static class DbInitializer
                             SellingPrice = 235000m,
                             MinStock = 5m,
                             MaxStock = 150m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supMasan.Id, 192000m, 3
                     ),
@@ -2790,7 +2792,7 @@ public static class DbInitializer
                             SellingPrice = 62000m,
                             MinStock = 15m,
                             MaxStock = 300m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supOrion.Id, 46000m, 10
                     ),
@@ -2807,7 +2809,7 @@ public static class DbInitializer
                             SellingPrice = 68000m,
                             MinStock = 12m,
                             MaxStock = 250m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supOrion.Id, 50000m, 10
                     ),
@@ -2824,7 +2826,7 @@ public static class DbInitializer
                             SellingPrice = 56000m,
                             MinStock = 15m,
                             MaxStock = 300m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supAcecook.Id, 43000m, 5
                     ),
@@ -2841,7 +2843,7 @@ public static class DbInitializer
                             SellingPrice = 55000m,
                             MinStock = 15m,
                             MaxStock = 300m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supMasan.Id, 42000m, 5
                     ),
@@ -2858,7 +2860,7 @@ public static class DbInitializer
                             SellingPrice = 390000m,
                             MinStock = 10m,
                             MaxStock = 100m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supAcecook.Id, 340000m, 2
                     ),
@@ -2875,7 +2877,7 @@ public static class DbInitializer
                             SellingPrice = 450000m,
                             MinStock = 10m,
                             MaxStock = 100m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supAcecook.Id, 395000m, 2
                     ),
@@ -2892,7 +2894,7 @@ public static class DbInitializer
                             SellingPrice = 39000m,
                             MinStock = 20m,
                             MaxStock = 400m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supOrion.Id, 30000m, 8
                     ),
@@ -2909,7 +2911,7 @@ public static class DbInitializer
                             SellingPrice = 35000m,
                             MinStock = 20m,
                             MaxStock = 400m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supOrion.Id, 27000m, 8
                     ),
@@ -2926,7 +2928,7 @@ public static class DbInitializer
                             SellingPrice = 58000m,
                             MinStock = 12m,
                             MaxStock = 200m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supMasan.Id, 46000m, 6
                     ),
@@ -2943,7 +2945,7 @@ public static class DbInitializer
                             SellingPrice = 65000m,
                             MinStock = 12m,
                             MaxStock = 200m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supMasan.Id, 51000m, 6
                     ),
@@ -2960,7 +2962,7 @@ public static class DbInitializer
                             SellingPrice = 48000m,
                             MinStock = 15m,
                             MaxStock = 250m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supMasan.Id, 37500m, 6
                     ),
@@ -2977,7 +2979,7 @@ public static class DbInitializer
                             SellingPrice = 79000m,
                             MinStock = 10m,
                             MaxStock = 200m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supUnilever.Id, 62000m, 5
                     ),
@@ -2994,7 +2996,7 @@ public static class DbInitializer
                             SellingPrice = 198000m,
                             MinStock = 8m,
                             MaxStock = 100m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supUnilever.Id, 158000m, 3
                     ),
@@ -3011,7 +3013,7 @@ public static class DbInitializer
                             SellingPrice = 215000m,
                             MinStock = 8m,
                             MaxStock = 100m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supUnilever.Id, 170000m, 3
                     ),
@@ -3028,7 +3030,7 @@ public static class DbInitializer
                             SellingPrice = 33000m,
                             MinStock = 20m,
                             MaxStock = 300m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supUnilever.Id, 25000m, 10
                     ),
@@ -3045,7 +3047,7 @@ public static class DbInitializer
                             SellingPrice = 42000m,
                             MinStock = 20m,
                             MaxStock = 300m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supUnilever.Id, 31000m, 12
                     ),
@@ -3062,7 +3064,7 @@ public static class DbInitializer
                             SellingPrice = 22000m,
                             MinStock = 30m,
                             MaxStock = 500m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supOrion.Id, 16000m, 15
                     ),
@@ -3079,7 +3081,7 @@ public static class DbInitializer
                             SellingPrice = 54000m,
                             MinStock = 15m,
                             MaxStock = 200m,
-                            Status = "Active"
+                            Status = ProductStatus.Active
                         },
                         supAcecook.Id, 40000m, 10
                     )
@@ -3415,7 +3417,13 @@ public static class DbInitializer
                     IsBlockedForDebt = true
                 }
             };
-            await context.Customers.AddRangeAsync(customers, ct);
+            foreach (var cust in customers)
+            {
+                if (!await context.Customers.IgnoreQueryFilters().AnyAsync(c => c.TenantId == DefaultTenantId && (c.Id == cust.Id || c.CustomerCode == cust.CustomerCode || c.Phone == cust.Phone), ct))
+                {
+                    await context.Customers.AddAsync(cust, ct);
+                }
+            }
             await context.SaveChangesAsync(ct);
         }
 
@@ -3454,7 +3462,7 @@ public static class DbInitializer
                     BaseUnit = item.Unit,
                     VatRate = item.Vat,
                     TaxCategory = "STANDARD_1PCT",
-                    Status = "Active"
+                    Status = ProductStatus.Active
                 };
                 await context.Products.AddAsync(newP, ct);
             }
@@ -3513,5 +3521,5 @@ public static class DbInitializer
         }
         await context.SaveChangesAsync(ct);
         logger?.LogInformation("Seeded POS Retail Products and FEFO BranchStocks successfully.");
-}
+    }
 }

@@ -97,7 +97,7 @@ public class AuthService : IAuthService
                          ?? user.TenantUsers?.FirstOrDefault();
 
         var tenantId = tenantUser?.TenantId ?? (!string.IsNullOrWhiteSpace(request.TenantCode) ? request.TenantCode : "DEFAULT");
-        if (tenantId is "default-tenant" or "TENANT-HCM-01" or "TENANT-DEFAULT")
+        if (tenantId is "default-tenant" or "TENANT-HCM-01" or "TENANT-DEFAULT" or "DEFAULT")
         {
             tenantId = "tenant_mt_mart_01";
         }

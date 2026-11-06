@@ -143,7 +143,7 @@ public class BranchProductService : IBranchProductService
                 continue;
             }
 
-            if (!string.Equals(product.Status, "Active", StringComparison.OrdinalIgnoreCase))
+            if (product.Status != ProductStatus.Active)
             {
                 throw new BusinessException(
                     "PRODUCT_INACTIVE",
@@ -253,7 +253,7 @@ public class BranchProductService : IBranchProductService
 
         if (!string.IsNullOrWhiteSpace(command.Status)
             && string.Equals(command.Status, "Active", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(product.Status, "Active", StringComparison.OrdinalIgnoreCase))
+            && product.Status != ProductStatus.Active)
         {
             throw new BusinessException(
                 "PRODUCT_INACTIVE",
@@ -328,7 +328,7 @@ public class BranchProductService : IBranchProductService
 
         var normalizedStatus = string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase) ? "Active" : "Inactive";
         if (normalizedStatus == "Active"
-            && !string.Equals(product.Status, "Active", StringComparison.OrdinalIgnoreCase))
+            && product.Status != ProductStatus.Active)
         {
             throw new BusinessException(
                 "PRODUCT_INACTIVE",

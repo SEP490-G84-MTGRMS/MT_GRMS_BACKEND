@@ -5,6 +5,7 @@ using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Employees.Dtos;
 using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Entities.Identity;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 using Xunit;
@@ -77,6 +78,16 @@ public class EmployeeServiceTests
 
         public void Update(User user) { }
         public void Delete(User user) { Users.Remove(user); }
+        public Task<bool> ExistsByPhoneOrEmailAsync(string phone, string? email, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Users.Any(u => u.Phone == phone || (!string.IsNullOrEmpty(email) && u.Email == email)));
+        }
+        public Task<User> RegisterStoreOwnerAsync(User user, Tenant tenant, Branch branch, CancellationToken cancellationToken = default)
+        {
+            Users.Add(user);
+            return Task.FromResult(user);
+        }
+        public Task SaveChangesAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private class FakeEmployeeRepository : IEmployeeRepository

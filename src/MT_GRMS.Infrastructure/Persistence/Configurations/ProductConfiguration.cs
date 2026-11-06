@@ -26,7 +26,10 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(x => x.MaxStock).HasColumnType("decimal(12,2)").HasDefaultValue(1000.00m);
         builder.Property(x => x.VatRate).HasColumnType("decimal(5,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.ProductType).HasMaxLength(30).HasDefaultValue("STANDARD");
-        builder.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("Active");
+        builder.Property(x => x.Status)
+            .HasConversion<string>()
+            .HasMaxLength(30)
+            .HasDefaultValue(ProductStatus.Active);
         builder.Property(x => x.ImageUrl).HasMaxLength(500);
         builder.Ignore(x => x.ImageUrls);
         builder.Property(x => x.Description).HasMaxLength(1000);
