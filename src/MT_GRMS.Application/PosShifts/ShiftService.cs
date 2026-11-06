@@ -91,7 +91,14 @@ public class ShiftService : IShiftService
         CancellationToken cancellationToken = default)
     {
         var shift = await _shiftRepository.GetActiveShiftAsync(branchId, tillId, cancellationToken);
-        return shift == null ? null : MapToDetailResponse(shift);
+        if (shift == null) return null;
+
+        var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shift.Id, cancellationToken);
+        shift.TotalBankRevenue = bankRevenue;
+        shift.TotalOrdersCount = ordersCount;
+        shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
+
+        return MapToDetailResponse(shift);
     }
 
     public async Task<ShiftDetailResponse?> GetShiftByIdAsync(
@@ -99,7 +106,17 @@ public class ShiftService : IShiftService
         CancellationToken cancellationToken = default)
     {
         var shift = await _shiftRepository.GetByIdAsync(shiftId, cancellationToken);
-        return shift == null ? null : MapToDetailResponse(shift);
+        if (shift == null) return null;
+
+        if (shift.Status == ShiftState.Open)
+        {
+            var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shift.Id, cancellationToken);
+            shift.TotalBankRevenue = bankRevenue;
+            shift.TotalOrdersCount = ordersCount;
+            shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
+        }
+
+        return MapToDetailResponse(shift);
     }
 
     public async Task<ShiftCashMovementDto> AddCashMovementAsync(
