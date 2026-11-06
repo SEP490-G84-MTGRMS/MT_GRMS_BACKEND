@@ -9,6 +9,7 @@ using MT_GRMS.Application.Inventory.Dtos;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
+[Route("api/inventory")]
 [Route("api/v1/inventory")]
 public class InventoryController : BaseApiController
 {

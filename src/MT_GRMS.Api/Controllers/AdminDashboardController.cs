@@ -7,6 +7,7 @@ using MT_GRMS.Application.Common;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
+[Route("api/admin/dashboard")]
 [Route("api/v1/admin/dashboard")]
 [Authorize(Roles = "ADMIN")]
 public class AdminDashboardController : BaseApiController

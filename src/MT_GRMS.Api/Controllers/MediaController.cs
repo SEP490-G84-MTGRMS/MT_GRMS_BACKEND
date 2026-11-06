@@ -13,6 +13,7 @@ public class ImageUploadRequest
 }
 
 [ApiController]
+[Route("api/media")]
 [Route("api/v1/media")]
 public class MediaController : BaseApiController
 {

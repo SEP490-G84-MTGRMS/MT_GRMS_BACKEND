@@ -6,6 +6,7 @@ using MT_GRMS.Application.Suppliers.Dtos;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
+[Route("api/suppliers")]
 [Route("api/v1/suppliers")]
 public class SuppliersController : BaseApiController
 {

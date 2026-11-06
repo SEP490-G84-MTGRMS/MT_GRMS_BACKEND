@@ -6,6 +6,7 @@ using MT_GRMS.Application.Common;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
+[Route("api")]
 [Route("api/v1")]
 public class ProductUnitsController : BaseApiController
 {

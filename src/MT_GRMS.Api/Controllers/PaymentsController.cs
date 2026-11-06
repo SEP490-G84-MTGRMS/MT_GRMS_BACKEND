@@ -18,6 +18,7 @@ using MT_GRMS.Infrastructure.Persistence;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
+[Route("api/payments")]
 [Route("api/v1/payments")]
 public class PaymentsController : BaseApiController
 {

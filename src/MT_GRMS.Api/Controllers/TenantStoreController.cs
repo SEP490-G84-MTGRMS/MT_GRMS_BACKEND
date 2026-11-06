@@ -9,6 +9,7 @@ using MT_GRMS.Infrastructure.Persistence;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
+[Route("api/tenant")]
 [Route("api/v1/tenant")]
 [Authorize]
 public class TenantStoreController : BaseApiController

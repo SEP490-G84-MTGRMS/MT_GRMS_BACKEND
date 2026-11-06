@@ -9,6 +9,7 @@ using MT_GRMS.Application.SupplierReturns.Dtos;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
+[Route("api/supplier-returns")]
 [Route("api/v1/supplier-returns")]
 public class SupplierReturnsController : BaseApiController
 {

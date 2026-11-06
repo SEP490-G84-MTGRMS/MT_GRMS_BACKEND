@@ -6,6 +6,7 @@ using MT_GRMS.Application.Promotions.Dtos;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
+[Route("api/vouchers")]
 [Route("api/v1/vouchers")]
 public class VouchersController : BaseApiController
 {
