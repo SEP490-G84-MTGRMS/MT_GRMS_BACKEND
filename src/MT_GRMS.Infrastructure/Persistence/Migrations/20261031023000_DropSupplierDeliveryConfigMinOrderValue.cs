@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace MT_GRMS.Infrastructure.Persistence.Migrations
 {
+    [Microsoft.EntityFrameworkCore.Infrastructure.DbContext(typeof(AppDbContext))]
     [Migration("20261031023000_DropSupplierDeliveryConfigMinOrderValue")]
     public partial class DropSupplierDeliveryConfigMinOrderValue : Migration
     {

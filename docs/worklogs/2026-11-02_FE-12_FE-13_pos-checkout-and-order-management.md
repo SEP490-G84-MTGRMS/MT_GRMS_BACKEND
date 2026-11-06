@@ -52,3 +52,4 @@
 ### 5. Ghi Chú Cho PM & Frontend
 - Frontend đã có nhánh tương ứng `add/ui-pos-v3` đồng bộ 100% với các endpoint trên.
 - Hệ thống hỗ trợ đa chi nhánh: khi gọi API cần gửi kèm `X-Tenant-Id` hoặc thông tin đăng nhập hợp lệ.
+
