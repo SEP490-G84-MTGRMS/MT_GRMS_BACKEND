@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using MT_GRMS.Application.Admin.Repositories;
@@ -42,6 +43,8 @@ public static class DependencyInjection
 
         services.AddDbContext<AppDbContext>(options =>
         {
+            options.ConfigureWarnings(w => w.Ignore(CoreEventId.PossibleIncorrectRequiredNavigationWithQueryFilterInteractionWarning));
+
             if (string.IsNullOrWhiteSpace(connectionString))
             {
                 options.UseInMemoryDatabase("MT_GRMS_DevDb");

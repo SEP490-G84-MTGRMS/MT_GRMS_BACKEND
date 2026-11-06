@@ -8,6 +8,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ### Fixed
 - Khắc phục lỗi `fail: Microsoft.EntityFrameworkCore.Database.Command[20102]` khi khởi động Backend: tự động phát hiện các cột PIN bảo mật đã tồn tại trong bảng `Users` và đồng bộ vào bảng lịch sử `__EFMigrationsHistory`, ngăn chặn hoàn toàn việc chạy lại lệnh `ALTER TABLE "Users" ADD "FailedPinAttempts"` gây trùng lặp cột [BUG-DB] [worklog: docs/worklogs/2026-11-06_BUG-DB_AI_fix-duplicate-column-migration-error.md].
+- Khắc phục toàn bộ các cảnh báo Model Validation `warn: Microsoft.EntityFrameworkCore.Model.Validation[10622]` (QueryFilter tương tác với Required Navigation) và `[20601]` (Sentinel Value cho enum mặc định `CustomerDebtStatus` và `SupplierStatus`), làm sạch 100% console log khi khởi động ứng dụng [BUG-DB] [worklog: docs/worklogs/2026-11-06_BUG-DB_AI_fix-duplicate-column-migration-error.md].
 
 ### Changed
 - Cải thiện API cập nhật thông tin gian hàng `PUT /api/tenant/store-info`: hỗ trợ cơ chế fallback `X-Tenant-Id` header và an toàn null-safety khi lưu tên chuỗi cửa hàng, bảo vệ toàn vẹn dữ liệu khách thuê [FE-STORE] [worklog: docs/worklogs/2026-11-06_FE-STORE_AI_tenant-store-update-enhancement.md].
