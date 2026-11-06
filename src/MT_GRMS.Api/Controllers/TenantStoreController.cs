@@ -34,6 +34,14 @@ public class TenantStoreController : BaseApiController
     public async Task<IActionResult> GetStoreInfo(CancellationToken cancellationToken)
     {
         var tenantId = User.FindFirst("tenant_id")?.Value;
+        if (string.IsNullOrWhiteSpace(tenantId) || tenantId == "DEFAULT")
+        {
+            var headerTenant = Request.Headers["X-Tenant-Id"].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(headerTenant) && headerTenant != "DEFAULT")
+            {
+                tenantId = headerTenant;
+            }
+        }
 
         // Nếu không có tenantId hoặc là DEFAULT, fallback lấy tenant đầu tiên trong DB
         var tenant = !string.IsNullOrWhiteSpace(tenantId) && tenantId != "DEFAULT"
@@ -56,6 +64,14 @@ public class TenantStoreController : BaseApiController
     public async Task<IActionResult> UpdateStoreInfo([FromBody] UpdateTenantRequest request, CancellationToken cancellationToken)
     {
         var tenantId = User.FindFirst("tenant_id")?.Value;
+        if (string.IsNullOrWhiteSpace(tenantId) || tenantId == "DEFAULT")
+        {
+            var headerTenant = Request.Headers["X-Tenant-Id"].FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(headerTenant) && headerTenant != "DEFAULT")
+            {
+                tenantId = headerTenant;
+            }
+        }
 
         var tenant = !string.IsNullOrWhiteSpace(tenantId) && tenantId != "DEFAULT"
             ? await _context.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId || t.Subdomain == tenantId, cancellationToken)

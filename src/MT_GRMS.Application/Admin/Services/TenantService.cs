@@ -132,7 +132,10 @@ public class TenantService : ITenantService
             throw new KeyNotFoundException($"Không tìm thấy khách thuê với mã định danh '{id}'.");
         }
 
-        tenant.Name = request.Name.Trim();
+        if (!string.IsNullOrWhiteSpace(request.Name))
+        {
+            tenant.Name = request.Name.Trim();
+        }
         tenant.TaxCode = request.TaxCode?.Trim();
         tenant.Hotline = request.Hotline?.Trim();
         tenant.Address = request.Address?.Trim();
