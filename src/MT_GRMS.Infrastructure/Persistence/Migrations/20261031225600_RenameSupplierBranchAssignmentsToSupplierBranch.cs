@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace MT_GRMS.Infrastructure.Persistence.Migrations
 {
+    [Microsoft.EntityFrameworkCore.Infrastructure.DbContext(typeof(AppDbContext))]
     [Migration("20261031225600_RenameSupplierBranchAssignmentsToSupplierBranch")]
     public partial class RenameSupplierBranchAssignmentsToSupplierBranch : Migration
     {

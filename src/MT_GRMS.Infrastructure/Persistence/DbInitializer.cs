@@ -355,7 +355,7 @@ public static class DbInitializer
 
             await context.TenantUsers.AddRangeAsync(tenantUserAdmin, tenantUserManager, tenantUserCashier, tenantUserOwner, tenantUserStaff);
             await context.SaveChangesAsync();
-        }
+}
 
         // =========================================================================
         // PHÂN HỆ 2: CHI NHÁNH & KHO & CATALOG MẪU
@@ -790,6 +790,7 @@ public static class DbInitializer
         await context.SaveChangesAsync();
         await SeedOrdersAndPreOrdersAsync(context);
         await SeedTaxAndFinanceAsync(context, logger);
+        await SeedNewStoreOwnerAnNhienAsync(context);
         }
     }
 
@@ -1296,6 +1297,701 @@ public static class DbInitializer
         }
 
         await context.Orders.AddRangeAsync(order1, order2, order3, order4, preOrder1, preOrder2, preOrder3);
+        await context.SaveChangesAsync();
+    }
+
+    public static async Task SeedNewStoreOwnerAnNhienAsync(AppDbContext context)
+    {
+        var tenantId = "tenant_an_nhien_02";
+
+        // 1. Kiểm tra / Tạo mới Tenant "An Nhiên Mart"
+        var tenant = await context.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId);
+        if (tenant == null)
+        {
+            tenant = new Tenant
+            {
+                Id = tenantId,
+                Name = "Cửa Hàng Thực Phẩm Sạch An Nhiên (An Nhiên Mart)",
+                Subdomain = "annhien",
+                Code = "ANNHIEN",
+                TaxCode = "0109887766",
+                Hotline = "0918889999",
+                Address = "Số 120 Hoàng Hoa Thám, Phường Thụy Khuê, Quận Tây Hồ",
+                City = "Hà Nội",
+                Status = "ACTIVE",
+                CurrentPlan = "plan_pro"
+            };
+            await context.Tenants.AddAsync(tenant);
+            await context.SaveChangesAsync();
+        }
+
+        // 2. Kiểm tra / Tạo mới Users & TenantUsers (STORE_OWNER và EMPLOYEE)
+        var ownerUser = await context.Users.FirstOrDefaultAsync(u => u.Id == "usr_owner_annhien_02" || u.UserName == "0918889999");
+        if (ownerUser == null)
+        {
+            ownerUser = new User
+            {
+                Id = "usr_owner_annhien_02",
+                UserName = "0918889999",
+                Password = "123456",
+                FullName = "Trần Quốc An (Chủ tiệm An Nhiên)",
+                Email = "chucuahang.annhien@gmail.com",
+                Phone = "0918889999",
+                IsActive = true,
+                IsEmailVerified = true
+            };
+            await context.Users.AddAsync(ownerUser);
+            await context.SaveChangesAsync();
+        }
+
+        var staffUser = await context.Users.FirstOrDefaultAsync(u => u.Id == "usr_employee_annhien_02" || u.UserName == "0917778888");
+        if (staffUser == null)
+        {
+            staffUser = new User
+            {
+                Id = "usr_employee_annhien_02",
+                UserName = "0917778888",
+                Password = "123456",
+                FullName = "Phạm Thị Yến (Nhân viên bán hàng An Nhiên)",
+                Email = "nhanvien.annhien@gmail.com",
+                Phone = "0917778888",
+                IsActive = true,
+                IsEmailVerified = true
+            };
+            await context.Users.AddAsync(staffUser);
+            await context.SaveChangesAsync();
+        }
+
+        // Đảm bảo gán quyền TenantUser đúng vai trò STORE_OWNER và EMPLOYEE
+        var tuOwner = await context.TenantUsers.FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == ownerUser.Id);
+        if (tuOwner == null)
+        {
+            await context.TenantUsers.AddAsync(new TenantUser
+            {
+                TenantId = tenantId,
+                UserId = ownerUser.Id,
+                Role = "STORE_OWNER",
+                IsActive = true
+            });
+        }
+        else
+        {
+            tuOwner.Role = "STORE_OWNER";
+        }
+
+        var tuStaff = await context.TenantUsers.FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == staffUser.Id);
+        if (tuStaff == null)
+        {
+            await context.TenantUsers.AddAsync(new TenantUser
+            {
+                TenantId = tenantId,
+                UserId = staffUser.Id,
+                Role = "EMPLOYEE",
+                IsActive = true
+            });
+        }
+        else
+        {
+            tuStaff.Role = "EMPLOYEE";
+        }
+        await context.SaveChangesAsync();
+
+        // 3. Các chi nhánh của An Nhiên Mart (Đa chi nhánh: Ba Đình, Cầu Giấy, Đống Đa)
+        var branch = await context.Branches.FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-AN-01");
+        if (branch == null)
+        {
+            branch = new Branch
+            {
+                TenantId = tenantId,
+                BranchCode = "BR-AN-01",
+                Name = "An Nhiên Mart - Chi nhánh Ba Đình",
+                Address = "120 Hoàng Hoa Thám, Tây Hồ, Hà Nội",
+                Phone = "024 3822 9988",
+                Latitude = 21.0422m,
+                Longitude = 105.8194m,
+                CheckinRadiusMeters = 100,
+                IsActive = true
+            };
+            await context.Branches.AddAsync(branch);
+            await context.SaveChangesAsync();
+        }
+
+        var branchCauGiay = await context.Branches.FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-AN-02");
+        if (branchCauGiay == null)
+        {
+            branchCauGiay = new Branch
+            {
+                TenantId = tenantId,
+                BranchCode = "BR-AN-02",
+                Name = "An Nhiên Mart - Chi nhánh Cầu Giấy",
+                Address = "268 Cầu Giấy, Q. Cầu Giấy, Hà Nội",
+                Phone = "024 3833 7766",
+                Latitude = 21.0333m,
+                Longitude = 105.7950m,
+                CheckinRadiusMeters = 100,
+                IsActive = true
+            };
+            await context.Branches.AddAsync(branchCauGiay);
+            await context.SaveChangesAsync();
+        }
+
+        var branchDongDa = await context.Branches.FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-AN-03");
+        if (branchDongDa == null)
+        {
+            branchDongDa = new Branch
+            {
+                TenantId = tenantId,
+                BranchCode = "BR-AN-03",
+                Name = "An Nhiên Mart - Chi nhánh Đống Đa",
+                Address = "85 Chùa Bộc, Q. Đống Đa, Hà Nội",
+                Phone = "024 3855 6655",
+                Latitude = 21.0080m,
+                Longitude = 105.8280m,
+                CheckinRadiusMeters = 100,
+                IsActive = true
+            };
+            await context.Branches.AddAsync(branchDongDa);
+            await context.SaveChangesAsync();
+        }
+
+        // Hồ sơ nhân viên gán chi nhánh cố định (Employee)
+        var empYen = await context.Employees.FirstOrDefaultAsync(e => e.TenantId == tenantId && e.EmployeeCode == "NV-AN-01");
+        if (empYen == null)
+        {
+            empYen = new Employee
+            {
+                TenantId = tenantId,
+                BranchId = branch.Id,
+                UserId = staffUser.Id,
+                EmployeeCode = "NV-AN-01",
+                FullName = "Phạm Thị Yến (Nhân viên Ba Đình)",
+                Phone = "0917778888",
+                Email = "nhanvien.annhien@gmail.com",
+                JobTitle = "Thu ngân / Nhân viên bán hàng",
+                SalaryType = "monthly",
+                BaseRate = 7500000m,
+                Status = "active"
+            };
+            await context.Employees.AddAsync(empYen);
+        }
+        else
+        {
+            empYen.BranchId = branch.Id;
+            empYen.UserId = staffUser.Id;
+        }
+
+        // Nhân viên 2: Lê Hoàng Nam gắn cố định tại Chi nhánh Cầu Giấy (BR-AN-02)
+        var staffUser2 = await context.Users.FirstOrDefaultAsync(u => u.Id == "usr_employee_annhien_03" || u.UserName == "0916667777");
+        if (staffUser2 == null)
+        {
+            staffUser2 = new User
+            {
+                Id = "usr_employee_annhien_03",
+                UserName = "0916667777",
+                Password = "123456",
+                FullName = "Lê Hoàng Nam (Nhân viên Cầu Giấy)",
+                Email = "nam.le@annhienmart.vn",
+                Phone = "0916667777",
+                IsActive = true,
+                IsEmailVerified = true
+            };
+            await context.Users.AddAsync(staffUser2);
+            await context.SaveChangesAsync();
+        }
+
+        var tuStaff2 = await context.TenantUsers.FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == staffUser2.Id);
+        if (tuStaff2 == null)
+        {
+            await context.TenantUsers.AddAsync(new TenantUser
+            {
+                TenantId = tenantId,
+                UserId = staffUser2.Id,
+                Role = "EMPLOYEE",
+                IsActive = true
+            });
+        }
+        else
+        {
+            tuStaff2.Role = "EMPLOYEE";
+        }
+
+        var empNam = await context.Employees.FirstOrDefaultAsync(e => e.TenantId == tenantId && e.EmployeeCode == "NV-AN-02");
+        if (empNam == null)
+        {
+            empNam = new Employee
+            {
+                TenantId = tenantId,
+                BranchId = branchCauGiay.Id,
+                UserId = staffUser2.Id,
+                EmployeeCode = "NV-AN-02",
+                FullName = "Lê Hoàng Nam (Nhân viên Cầu Giấy)",
+                Phone = "0916667777",
+                Email = "nam.le@annhienmart.vn",
+                JobTitle = "Thu ngân / Nhân viên bán hàng",
+                SalaryType = "monthly",
+                BaseRate = 7500000m,
+                Status = "active"
+            };
+            await context.Employees.AddAsync(empNam);
+        }
+        else
+        {
+            empNam.BranchId = branchCauGiay.Id;
+            empNam.UserId = staffUser2.Id;
+        }
+        await context.SaveChangesAsync();
+
+        // 4. Danh mục sản phẩm của An Nhiên Mart
+        var catRau = await context.Categories.FirstOrDefaultAsync(c => c.TenantId == tenantId && c.CategoryCode == "CAT-AN-RAU");
+        if (catRau == null)
+        {
+            catRau = new Category
+            {
+                TenantId = tenantId,
+                CategoryCode = "CAT-AN-RAU",
+                Name = "Rau Củ & Trái Cây Sạch",
+                Description = "Rau củ quả tươi sạch hữu cơ tiêu chuẩn VietGAP"
+            };
+            await context.Categories.AddAsync(catRau);
+        }
+
+        var catThucPham = await context.Categories.FirstOrDefaultAsync(c => c.TenantId == tenantId && c.CategoryCode == "CAT-AN-THUC-PHAM");
+        if (catThucPham == null)
+        {
+            catThucPham = new Category
+            {
+                TenantId = tenantId,
+                CategoryCode = "CAT-AN-THUC-PHAM",
+                Name = "Thực Phẩm & Đồ Uống Hữu Cơ",
+                Description = "Thực phẩm khô organic, gia vị và sữa tươi sạch"
+            };
+            await context.Categories.AddAsync(catThucPham);
+        }
+        await context.SaveChangesAsync();
+
+        // 5. Sản phẩm cơ bản của cửa hàng An Nhiên
+        var prodGao = await context.Products.FirstOrDefaultAsync(p => p.TenantId == tenantId && p.ProductCode == "AN-GAO-01");
+        if (prodGao == null)
+        {
+            prodGao = new Product
+            {
+                TenantId = tenantId,
+                CategoryId = catThucPham.Id,
+                ProductCode = "AN-GAO-01",
+                Barcode = "8936012340011",
+                Name = "Gạo lứt huyết rồng organic 2kg",
+                BaseUnit = "Túi",
+                CostPrice = 38000m,
+                SellingPrice = 55000m,
+                MinStock = 10,
+                MaxStock = 200,
+                VatRate = 0.05m,
+                ProductType = "STANDARD",
+                Status = "Active",
+                HasBatches = true,
+                IsFavorite = true
+            };
+            await context.Products.AddAsync(prodGao);
+        }
+
+        var prodTrung = await context.Products.FirstOrDefaultAsync(p => p.TenantId == tenantId && p.ProductCode == "AN-TRUNG-01");
+        if (prodTrung == null)
+        {
+            prodTrung = new Product
+            {
+                TenantId = tenantId,
+                CategoryId = catThucPham.Id,
+                ProductCode = "AN-TRUNG-01",
+                Barcode = "8936012340028",
+                Name = "Trứng gà thảo mộc vỉ 10 quả",
+                BaseUnit = "Vỉ",
+                CostPrice = 32000m,
+                SellingPrice = 45000m,
+                MinStock = 20,
+                MaxStock = 300,
+                VatRate = 0.05m,
+                ProductType = "STANDARD",
+                Status = "Active",
+                HasBatches = true,
+                IsFavorite = true
+            };
+            await context.Products.AddAsync(prodTrung);
+        }
+
+        var prodMam = await context.Products.FirstOrDefaultAsync(p => p.TenantId == tenantId && p.ProductCode == "AN-MAM-01");
+        if (prodMam == null)
+        {
+            prodMam = new Product
+            {
+                TenantId = tenantId,
+                CategoryId = catThucPham.Id,
+                ProductCode = "AN-MAM-01",
+                Barcode = "8936012340035",
+                Name = "Nước mắm cá cơm cốt nhĩ 500ml",
+                BaseUnit = "Chai",
+                CostPrice = 62000m,
+                SellingPrice = 85000m,
+                MinStock = 15,
+                MaxStock = 150,
+                VatRate = 0.08m,
+                ProductType = "STANDARD",
+                Status = "Active",
+                HasBatches = false,
+                IsFavorite = false
+            };
+            await context.Products.AddAsync(prodMam);
+        }
+
+        var prodTao = await context.Products.FirstOrDefaultAsync(p => p.TenantId == tenantId && p.ProductCode == "AN-TAO-01");
+        if (prodTao == null)
+        {
+            prodTao = new Product
+            {
+                TenantId = tenantId,
+                CategoryId = catRau.Id,
+                ProductCode = "AN-TAO-01",
+                Barcode = "8936012340042",
+                Name = "Táo Envy New Zealand Organic",
+                BaseUnit = "Kg",
+                CostPrice = 90000m,
+                SellingPrice = 125000m,
+                MinStock = 10,
+                MaxStock = 100,
+                VatRate = 0.05m,
+                ProductType = "STANDARD",
+                Status = "Active",
+                HasBatches = true,
+                IsFavorite = true
+            };
+            await context.Products.AddAsync(prodTao);
+        }
+
+        var prodSua = await context.Products.FirstOrDefaultAsync(p => p.TenantId == tenantId && p.ProductCode == "AN-SUA-01");
+        if (prodSua == null)
+        {
+            prodSua = new Product
+            {
+                TenantId = tenantId,
+                CategoryId = catThucPham.Id,
+                ProductCode = "AN-SUA-01",
+                Barcode = "8936012340059",
+                Name = "Sữa tươi thanh trùng Mộc Châu 900ml",
+                BaseUnit = "Chai",
+                CostPrice = 28000m,
+                SellingPrice = 39000m,
+                MinStock = 20,
+                MaxStock = 150,
+                VatRate = 0.08m,
+                ProductType = "STANDARD",
+                Status = "Active",
+                HasBatches = true,
+                IsFavorite = true
+            };
+            await context.Products.AddAsync(prodSua);
+        }
+        await context.SaveChangesAsync();
+
+        // 6. Tồn kho BranchStock tại BR-AN-01
+        var anStocks = await context.BranchStocks.Where(s => s.BranchId == branch.Id).ToListAsync();
+        if (!anStocks.Any())
+        {
+            context.BranchStocks.AddRange(
+                new BranchStock
+                {
+                    TenantId = tenantId,
+                    BranchId = branch.Id,
+                    ProductId = prodGao.Id,
+                    BatchCode = "BATCH-AN-GAO-2611",
+                    ExpiryDate = DateTime.UtcNow.AddMonths(12),
+                    QuantityOnHand = 80,
+                    QuantityReserved = 2,
+                    LandedCostPerUnit = 38000m
+                },
+                new BranchStock
+                {
+                    TenantId = tenantId,
+                    BranchId = branch.Id,
+                    ProductId = prodTrung.Id,
+                    BatchCode = "BATCH-AN-TRUNG-2611",
+                    ExpiryDate = DateTime.UtcNow.AddDays(25),
+                    QuantityOnHand = 120,
+                    QuantityReserved = 0,
+                    LandedCostPerUnit = 32000m
+                },
+                new BranchStock
+                {
+                    TenantId = tenantId,
+                    BranchId = branch.Id,
+                    ProductId = prodMam.Id,
+                    BatchCode = "BATCH-AN-MAM-2611",
+                    ExpiryDate = DateTime.UtcNow.AddYears(2),
+                    QuantityOnHand = 65,
+                    QuantityReserved = 0,
+                    LandedCostPerUnit = 62000m
+                },
+                new BranchStock
+                {
+                    TenantId = tenantId,
+                    BranchId = branch.Id,
+                    ProductId = prodTao.Id,
+                    BatchCode = "BATCH-AN-TAO-2611",
+                    ExpiryDate = DateTime.UtcNow.AddDays(18),
+                    QuantityOnHand = 50,
+                    QuantityReserved = 2,
+                    LandedCostPerUnit = 90000m
+                },
+                new BranchStock
+                {
+                    TenantId = tenantId,
+                    BranchId = branch.Id,
+                    ProductId = prodSua.Id,
+                    BatchCode = "BATCH-AN-SUA-2611",
+                    ExpiryDate = DateTime.UtcNow.AddDays(10),
+                    QuantityOnHand = 90,
+                    QuantityReserved = 0,
+                    LandedCostPerUnit = 28000m
+                }
+            );
+            await context.SaveChangesAsync();
+        }
+
+        // 6b. Tồn kho BranchStock tại BR-AN-02 (Cầu Giấy)
+        var cgStocks = await context.BranchStocks.Where(s => s.BranchId == branchCauGiay.Id).ToListAsync();
+        if (!cgStocks.Any())
+        {
+            context.BranchStocks.AddRange(
+                new BranchStock
+                {
+                    TenantId = tenantId,
+                    BranchId = branchCauGiay.Id,
+                    ProductId = prodGao.Id,
+                    BatchCode = "BATCH-AN-GAO-2611-CG",
+                    ExpiryDate = DateTime.UtcNow.AddMonths(10),
+                    QuantityOnHand = 60,
+                    QuantityReserved = 0,
+                    LandedCostPerUnit = 38000m
+                },
+                new BranchStock
+                {
+                    TenantId = tenantId,
+                    BranchId = branchCauGiay.Id,
+                    ProductId = prodTrung.Id,
+                    BatchCode = "BATCH-AN-TRUNG-2611-CG",
+                    ExpiryDate = DateTime.UtcNow.AddDays(20),
+                    QuantityOnHand = 85,
+                    QuantityReserved = 0,
+                    LandedCostPerUnit = 32000m
+                },
+                new BranchStock
+                {
+                    TenantId = tenantId,
+                    BranchId = branchCauGiay.Id,
+                    ProductId = prodMam.Id,
+                    BatchCode = "BATCH-AN-MAM-2611-CG",
+                    ExpiryDate = DateTime.UtcNow.AddYears(2),
+                    QuantityOnHand = 40,
+                    QuantityReserved = 0,
+                    LandedCostPerUnit = 62000m
+                },
+                new BranchStock
+                {
+                    TenantId = tenantId,
+                    BranchId = branchCauGiay.Id,
+                    ProductId = prodTao.Id,
+                    BatchCode = "BATCH-AN-TAO-2611-CG",
+                    ExpiryDate = DateTime.UtcNow.AddDays(14),
+                    QuantityOnHand = 35,
+                    QuantityReserved = 0,
+                    LandedCostPerUnit = 90000m
+                },
+                new BranchStock
+                {
+                    TenantId = tenantId,
+                    BranchId = branchCauGiay.Id,
+                    ProductId = prodSua.Id,
+                    BatchCode = "BATCH-AN-SUA-2611-CAN-DATE",
+                    ExpiryDate = DateTime.UtcNow.AddDays(5),
+                    QuantityOnHand = 30,
+                    QuantityReserved = 0,
+                    LandedCostPerUnit = 28000m
+                },
+                new BranchStock
+                {
+                    TenantId = tenantId,
+                    BranchId = branchCauGiay.Id,
+                    ProductId = prodSua.Id,
+                    BatchCode = "BATCH-AN-SUA-2611-MOI",
+                    ExpiryDate = DateTime.UtcNow.AddDays(25),
+                    QuantityOnHand = 50,
+                    QuantityReserved = 0,
+                    LandedCostPerUnit = 28000m
+                }
+            );
+            await context.SaveChangesAsync();
+        }
+
+        // 6c. Tồn kho BranchStock tại BR-AN-03 (Đống Đa)
+        var ddStocks = await context.BranchStocks.Where(s => s.BranchId == branchDongDa.Id).ToListAsync();
+        if (!ddStocks.Any())
+        {
+            context.BranchStocks.AddRange(
+                new BranchStock
+                {
+                    TenantId = tenantId,
+                    BranchId = branchDongDa.Id,
+                    ProductId = prodGao.Id,
+                    BatchCode = "BATCH-AN-GAO-2611-DD",
+                    ExpiryDate = DateTime.UtcNow.AddMonths(11),
+                    QuantityOnHand = 45,
+                    QuantityReserved = 0,
+                    LandedCostPerUnit = 38000m
+                },
+                new BranchStock
+                {
+                    TenantId = tenantId,
+                    BranchId = branchDongDa.Id,
+                    ProductId = prodTao.Id,
+                    BatchCode = "BATCH-AN-TAO-2611-DD",
+                    ExpiryDate = DateTime.UtcNow.AddDays(16),
+                    QuantityOnHand = 25,
+                    QuantityReserved = 0,
+                    LandedCostPerUnit = 90000m
+                },
+                new BranchStock
+                {
+                    TenantId = tenantId,
+                    BranchId = branchDongDa.Id,
+                    ProductId = prodSua.Id,
+                    BatchCode = "BATCH-AN-SUA-2611-DD",
+                    ExpiryDate = DateTime.UtcNow.AddDays(18),
+                    QuantityOnHand = 40,
+                    QuantityReserved = 0,
+                    LandedCostPerUnit = 28000m
+                }
+            );
+            await context.SaveChangesAsync();
+        }
+
+        // 7. Khách hàng của An Nhiên Mart
+        var custMinh = await context.Customers.FirstOrDefaultAsync(c => c.TenantId == tenantId && c.Phone == "0934567890");
+        if (custMinh == null)
+        {
+            custMinh = new Customer
+            {
+                TenantId = tenantId,
+                CustomerCode = "KH-AN-001",
+                Name = "Bác Minh (Khách quen Ba Đình)",
+                Phone = "0934567890",
+                Email = "minh.bac@gmail.com",
+                Address = "15 Hoàng Hoa Thám, Ba Đình, Hà Nội",
+                MembershipTier = "Gold",
+                RewardPoints = 150,
+                TotalSpending = 4500000m,
+                AllowDebt = true,
+                TotalDebt = 0m
+            };
+            await context.Customers.AddAsync(custMinh);
+        }
+
+        var custHa = await context.Customers.FirstOrDefaultAsync(c => c.TenantId == tenantId && c.Phone == "0976543210");
+        if (custHa == null)
+        {
+            custHa = new Customer
+            {
+                TenantId = tenantId,
+                CustomerCode = "KH-AN-002",
+                Name = "Chị Thu Hà (Khách đặt trước)",
+                Phone = "0976543210",
+                Email = "thuha.hn@gmail.com",
+                Address = "28 Ngọc Hà, Ba Đình, Hà Nội",
+                MembershipTier = "Silver",
+                RewardPoints = 80,
+                TotalSpending = 2800000m,
+                AllowDebt = true,
+                TotalDebt = 250000m
+            };
+            await context.Customers.AddAsync(custHa);
+        }
+        await context.SaveChangesAsync();
+
+        // 8. Đơn hàng mẫu của An Nhiên Mart
+        if (await context.Orders.AnyAsync(o => o.TenantId == tenantId)) return;
+
+        var now = DateTime.UtcNow;
+
+        // Đơn 1: Bán lẻ tại quầy đã thanh toán tiền mặt
+        var order1 = new Order
+        {
+            TenantId = tenantId,
+            BranchId = branch.Id,
+            CustomerId = custMinh.Id,
+            OrderCode = "HD-AN-20261102-001",
+            OrderDate = now.AddHours(-2),
+            TotalAmount = 84000m,
+            DiscountAmount = 0m,
+            FinalAmount = 84000m,
+            DepositAmount = 100000m,
+            PaymentMethod = "CASH",
+            PaymentStatus = "PAID",
+            Status = "Completed",
+            Note = "Khách thanh toán tiền mặt tại quầy An Nhiên Mart"
+        };
+        order1.Details.Add(new OrderDetail
+        {
+            OrderId = order1.Id,
+            ProductId = prodSua.Id,
+            LineNumber = 1,
+            Qty = 1,
+            UnitPrice = 39000m,
+            ActualPrice = 39000m
+        });
+        order1.Details.Add(new OrderDetail
+        {
+            OrderId = order1.Id,
+            ProductId = prodTrung.Id,
+            LineNumber = 2,
+            Qty = 1,
+            UnitPrice = 45000m,
+            ActualPrice = 45000m
+        });
+
+        // Đơn 2: Đơn đặt trước giữ kho FEFO, đã cọc 100k VietQR
+        var preOrder1 = new Order
+        {
+            TenantId = tenantId,
+            BranchId = branch.Id,
+            CustomerId = custHa.Id,
+            OrderCode = "PO-AN-20261102-001",
+            OrderDate = now.AddHours(-1),
+            TotalAmount = 360000m,
+            DiscountAmount = 0m,
+            FinalAmount = 360000m,
+            DepositAmount = 100000m,
+            PaymentMethod = "VIETQR",
+            PaymentStatus = "PARTIAL",
+            Status = "PreOrder",
+            Note = "Hẹn nhận hàng 18:30 tối nay. Đã cọc 100k qua VietQR SePay."
+        };
+        preOrder1.Details.Add(new OrderDetail
+        {
+            OrderId = preOrder1.Id,
+            ProductId = prodGao.Id,
+            LineNumber = 1,
+            Qty = 2,
+            UnitPrice = 55000m,
+            ActualPrice = 55000m
+        });
+        preOrder1.Details.Add(new OrderDetail
+        {
+            OrderId = preOrder1.Id,
+            ProductId = prodTao.Id,
+            LineNumber = 2,
+            Qty = 2,
+            UnitPrice = 125000m,
+            ActualPrice = 125000m
+        });
+
+        await context.Orders.AddRangeAsync(order1, preOrder1);
         await context.SaveChangesAsync();
     }
 
@@ -2866,5 +3562,5 @@ public static class DbInitializer
         }
         await context.SaveChangesAsync(ct);
         logger?.LogInformation("Seeded POS Retail Products and FEFO BranchStocks successfully.");
-    }
+}
 }

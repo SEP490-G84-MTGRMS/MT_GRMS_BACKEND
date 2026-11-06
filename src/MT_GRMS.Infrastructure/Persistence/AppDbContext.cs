@@ -84,7 +84,9 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<FinanceAccount> FinanceAccounts { get; set; } = null!;
     public virtual DbSet<CashInTransit> CashInTransits { get; set; } = null!;
     public virtual DbSet<ShiftZReport> ShiftZReports { get; set; } = null!;
-    public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!; 
+    public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!;
+    public virtual DbSet<StorePaymentConfig> StorePaymentConfigs { get; set; } = null!;
+    public virtual DbSet<PaymentTransaction> PaymentTransactions { get; set; } = null!;
     public virtual DbSet<IdempotencyRecord> IdempotencyRecords { get; set; } = null!;
 
     // 7. Customer Debt Module (FE-08) - Đã hợp nhất công nợ vào Customers
