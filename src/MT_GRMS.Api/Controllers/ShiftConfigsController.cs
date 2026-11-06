@@ -7,8 +7,7 @@ using MT_GRMS.Domain.Exceptions;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/shift-configs")]
-[Route("api/v1/hr/shift-configs")]
+[Route("api/shift-configs")]
 public class ShiftConfigsController : BaseApiController
 {
     private readonly IShiftConfigService _shiftConfigService;

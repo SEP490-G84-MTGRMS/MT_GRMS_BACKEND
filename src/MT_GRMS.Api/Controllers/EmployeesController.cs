@@ -9,7 +9,7 @@ using MT_GRMS.Domain.Exceptions;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/employees")]
+[Route("api/employees")]
 public class EmployeesController : BaseApiController
 {
     private readonly IEmployeeService _employeeService;

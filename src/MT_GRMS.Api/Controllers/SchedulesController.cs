@@ -8,7 +8,7 @@ using MT_GRMS.Domain.Exceptions;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/schedules")]
+[Route("api/schedules")]
 public class SchedulesController : BaseApiController
 {
     private readonly IScheduleService _scheduleService;
