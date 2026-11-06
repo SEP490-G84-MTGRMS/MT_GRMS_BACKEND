@@ -1,4 +1,5 @@
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Schedules.Dtos;
 using MT_GRMS.Application.HR.ShiftConfigs;
@@ -13,6 +14,7 @@ public class ScheduleService : IScheduleService
     private readonly IScheduleRepository _scheduleRepository;
     private readonly IEmployeeRepository _employeeRepository;
     private readonly IShiftConfigRepository _shiftConfigRepository;
+    private readonly IBranchAttendancePolicyRepository? _policyRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
 
@@ -21,13 +23,15 @@ public class ScheduleService : IScheduleService
         IEmployeeRepository employeeRepository,
         IShiftConfigRepository shiftConfigRepository,
         IUnitOfWork unitOfWork,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        IBranchAttendancePolicyRepository? policyRepository = null)
     {
         _scheduleRepository = scheduleRepository;
         _employeeRepository = employeeRepository;
         _shiftConfigRepository = shiftConfigRepository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
+        _policyRepository = policyRepository;
     }
 
     public async Task<ScheduleResponse> CreateAsync(
@@ -723,5 +727,206 @@ public class ScheduleService : IScheduleService
             s.ApprovedAt,
             s.CreatedAt
         );
+    }
+
+    public async Task<ScheduleResponse> RecordManualAttendanceAsync(
+        Guid id,
+        ManualAttendanceRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var schedule = await _scheduleRepository.GetByIdAsync(id, cancellationToken)
+            ?? throw new NotFoundException($"Lịch làm việc với ID {id} không tồn tại.");
+
+        BranchAttendancePolicy? policy = null;
+        if (_policyRepository != null)
+        {
+            policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
+        }
+
+        switch (request.AttendanceType)
+        {
+            case ManualAttendanceType.Working:
+                ApplyWorkingAttendance(schedule, request, policy);
+                break;
+
+            case ManualAttendanceType.PaidLeave:
+                ApplyPaidLeaveAttendance(schedule, request);
+                break;
+
+            case ManualAttendanceType.UnpaidLeave:
+                ApplyUnpaidLeaveAttendance(schedule, request);
+                break;
+
+            default:
+                throw new BusinessException("INVALID_ATTENDANCE_TYPE", "Loại chấm công không hợp lệ.");
+        }
+
+        schedule.ApprovedBy = _tenantContext.CurrentUserId != Guid.Empty
+            ? _tenantContext.CurrentUserId.ToString()
+            : "Manager";
+        schedule.ApprovedAt = DateTime.UtcNow;
+
+        _scheduleRepository.Update(schedule);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        if (schedule.Employee == null)
+        {
+            schedule.Employee = await _employeeRepository.GetByIdAsync(schedule.EmployeeId, cancellationToken);
+        }
+
+        return MapToResponse(schedule);
+    }
+
+    private static void ApplyWorkingAttendance(
+        EmployeeSchedule schedule,
+        ManualAttendanceRequest request,
+        BranchAttendancePolicy? policy)
+    {
+        var inTime = request.CheckInTime ?? schedule.PlannedStartTime;
+        var outTime = request.CheckOutTime ?? schedule.PlannedEndTime;
+
+        var workDate = schedule.WorkDate.Date;
+        var checkInDateTime = workDate.Add(inTime);
+        var checkOutDateTime = workDate.Add(outTime);
+
+        if (schedule.IsCheckInNextDay || outTime < inTime)
+        {
+            checkOutDateTime = checkOutDateTime.AddDays(1);
+        }
+
+        if (checkOutDateTime < checkInDateTime)
+        {
+            throw new BusinessException("INVALID_TIME_RANGE", "Thời gian ra ca không thể trước thời gian vào ca.");
+        }
+
+        var plannedStartDateTime = workDate.Add(schedule.PlannedStartTime);
+        var plannedEndDateTime = workDate.Add(schedule.PlannedEndTime);
+        if (schedule.IsCheckInNextDay || schedule.PlannedEndTime < schedule.PlannedStartTime)
+        {
+            plannedEndDateTime = plannedEndDateTime.AddDays(1);
+        }
+
+        // Tính số phút đi muộn
+        var lateMinutes = 0;
+        if (checkInDateTime > plannedStartDateTime)
+        {
+            var rawLate = (int)(checkInDateTime - plannedStartDateTime).TotalMinutes;
+            if (policy != null)
+            {
+                if (policy.EnableLateThreshold && rawLate > policy.LateThresholdMinutes)
+                {
+                    lateMinutes = rawLate;
+                }
+            }
+            else
+            {
+                lateMinutes = rawLate;
+            }
+        }
+
+        // Tính số phút về sớm
+        var earlyLeaveMinutes = 0;
+        if (checkOutDateTime < plannedEndDateTime)
+        {
+            var rawEarly = (int)(plannedEndDateTime - checkOutDateTime).TotalMinutes;
+            if (policy != null)
+            {
+                if (policy.EnableEarlyLeaveThreshold && rawEarly > policy.EarlyLeaveThresholdMinutes)
+                {
+                    earlyLeaveMinutes = rawEarly;
+                }
+            }
+            else
+            {
+                earlyLeaveMinutes = rawEarly;
+            }
+        }
+
+        // Tính số phút làm thêm trước ca (OT Before)
+        var otBefore = 0;
+        if (checkInDateTime < plannedStartDateTime)
+        {
+            var rawBefore = (int)(plannedStartDateTime - checkInDateTime).TotalMinutes;
+            if (policy != null)
+            {
+                if (policy.EnableOtBeforeShift && rawBefore >= policy.OtBeforeShiftMinutes)
+                {
+                    otBefore = rawBefore;
+                }
+            }
+            else
+            {
+                otBefore = rawBefore;
+            }
+        }
+
+        // Tính số phút làm thêm sau ca (OT After)
+        var otAfter = 0;
+        if (checkOutDateTime > plannedEndDateTime)
+        {
+            var rawAfter = (int)(checkOutDateTime - plannedEndDateTime).TotalMinutes;
+            if (policy != null)
+            {
+                if (policy.EnableOtAfterShift && rawAfter >= policy.OtAfterShiftMinutes)
+                {
+                    otAfter = rawAfter;
+                }
+            }
+            else
+            {
+                otAfter = rawAfter;
+            }
+        }
+
+        var actualHours = Math.Max(0, Math.Round((decimal)(checkOutDateTime - checkInDateTime).TotalHours, 2));
+
+        schedule.CheckInTime = checkInDateTime;
+        schedule.CheckOutTime = checkOutDateTime;
+        schedule.CheckInMethod = "MANUAL";
+        schedule.CheckOutMethod = "MANUAL";
+        schedule.LateMinutes = lateMinutes;
+        schedule.EarlyLeaveMinutes = earlyLeaveMinutes;
+        schedule.OvertimeMinutes = otBefore + otAfter;
+        schedule.ActualWorkHours = actualHours;
+        schedule.Status = ScheduleStatus.Completed;
+        schedule.ApprovalType = "WORKING";
+        schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
+        schedule.ApprovalReason = request.Note;
+    }
+
+    private static void ApplyPaidLeaveAttendance(
+        EmployeeSchedule schedule,
+        ManualAttendanceRequest request)
+    {
+        schedule.CheckInTime = null;
+        schedule.CheckOutTime = null;
+        schedule.CheckInMethod = "MANUAL_PAID_LEAVE";
+        schedule.CheckOutMethod = "MANUAL_PAID_LEAVE";
+        schedule.LateMinutes = 0;
+        schedule.EarlyLeaveMinutes = 0;
+        schedule.OvertimeMinutes = 0;
+        schedule.ActualWorkHours = schedule.DurationHours;
+        schedule.Status = ScheduleStatus.Completed;
+        schedule.ApprovalType = "PAID_LEAVE";
+        schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
+        schedule.ApprovalReason = request.Note;
+    }
+
+    private static void ApplyUnpaidLeaveAttendance(
+        EmployeeSchedule schedule,
+        ManualAttendanceRequest request)
+    {
+        schedule.CheckInTime = null;
+        schedule.CheckOutTime = null;
+        schedule.CheckInMethod = "MANUAL_UNPAID_LEAVE";
+        schedule.CheckOutMethod = "MANUAL_UNPAID_LEAVE";
+        schedule.LateMinutes = 0;
+        schedule.EarlyLeaveMinutes = 0;
+        schedule.OvertimeMinutes = 0;
+        schedule.ActualWorkHours = 0.00m;
+        schedule.Status = ScheduleStatus.Cancelled;
+        schedule.ApprovalType = "UNPAID_LEAVE";
+        schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
+        schedule.ApprovalReason = request.Note;
     }
 }

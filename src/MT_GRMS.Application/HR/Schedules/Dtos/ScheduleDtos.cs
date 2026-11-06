@@ -2,6 +2,20 @@ using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Application.HR.Schedules.Dtos;
 
+public enum ManualAttendanceType
+{
+    Working = 1,      // Đi làm
+    PaidLeave = 2,    // Nghỉ phép có lương
+    UnpaidLeave = 3   // Nghỉ phép không lương
+}
+
+public record ManualAttendanceRequest(
+    ManualAttendanceType AttendanceType,
+    TimeSpan? CheckInTime = null,
+    TimeSpan? CheckOutTime = null,
+    string? Note = null
+);
+
 public record CreateScheduleItemRequest(
     Guid EmployeeId,
     Guid BranchId,

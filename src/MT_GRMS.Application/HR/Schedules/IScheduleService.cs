@@ -13,5 +13,6 @@ public interface IScheduleService
     Task<IReadOnlyList<ScheduleResponse>> GetListAsync(ScheduleQueryFilter filter, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ScheduleResponse>> GetMySchedulesAsync(string userId, DateTime? fromDate, DateTime? toDate, CancellationToken cancellationToken = default);
     Task<PublishSchedulesResponse> PublishAsync(PublishSchedulesRequest request, CancellationToken cancellationToken = default);
+    Task<ScheduleResponse> RecordManualAttendanceAsync(Guid id, ManualAttendanceRequest request, CancellationToken cancellationToken = default);
 }
 

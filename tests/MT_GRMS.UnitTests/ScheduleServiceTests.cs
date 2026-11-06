@@ -1,4 +1,5 @@
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Employees.Dtos;
 using MT_GRMS.Application.HR.Schedules;
@@ -211,6 +212,35 @@ public class ScheduleServiceTests
 
         public void Update(ShiftConfig shiftConfig) { }
         public void Delete(ShiftConfig shiftConfig) => shiftConfig.IsDeleted = true;
+    }
+
+    private class FakeBranchAttendancePolicyRepository : IBranchAttendancePolicyRepository
+    {
+        public List<BranchAttendancePolicy> Policies { get; } = new();
+
+        public Task<BranchAttendancePolicy?> GetByBranchIdAsync(Guid branchId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Policies.FirstOrDefault(p => p.BranchId == branchId && !p.IsDeleted));
+        }
+
+        public Task<IReadOnlyList<BranchAttendancePolicy>> GetByBranchIdsAsync(IEnumerable<Guid> branchIds, CancellationToken cancellationToken = default)
+        {
+            var idSet = branchIds.ToHashSet();
+            var list = Policies.Where(p => idSet.Contains(p.BranchId) && !p.IsDeleted).ToList();
+            return Task.FromResult((IReadOnlyList<BranchAttendancePolicy>)list);
+        }
+
+        public Task AddAsync(BranchAttendancePolicy policy, CancellationToken cancellationToken = default)
+        {
+            Policies.Add(policy);
+            return Task.CompletedTask;
+        }
+
+        public void Update(BranchAttendancePolicy policy)
+        {
+            var index = Policies.FindIndex(p => p.Id == policy.Id);
+            if (index >= 0) Policies[index] = policy;
+        }
     }
 
     [Fact]
@@ -612,6 +642,209 @@ public class ScheduleServiceTests
         // Assert
         Assert.Single(result);
         Assert.Equal(emp.Id, result[0].EmployeeId);
+    }
+
+    [Fact]
+    public async Task RecordManualAttendanceAsync_Working_ShouldCalculateLateAndHoursCorrectly()
+    {
+        // Arrange
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var policyRepo = new FakeBranchAttendancePolicyRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var branchId = Guid.NewGuid();
+        var emp = new Employee { Id = Guid.NewGuid(), FullName = "Nguyen Van B", EmployeeCode = "NV001" };
+        employeeRepo.Employees.Add(emp);
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = emp.Id,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 6),
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(12, 0, 0),
+            DurationHours = 4.00m,
+            Employee = emp
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        // Branch policy: Bật tính trễ sau 15 phút
+        policyRepo.Policies.Add(new BranchAttendancePolicy
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            EnableLateThreshold = true,
+            LateThresholdMinutes = 15,
+            EnableEarlyLeaveThreshold = true,
+            EarlyLeaveThresholdMinutes = 10
+        });
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext, policyRepo);
+
+        // Chấm công vào lúc 08:20 (trễ 20 phút > 15 phút ngưỡng => late 20 phút), ra đúng 12:00
+        var request = new ManualAttendanceRequest(
+            AttendanceType: ManualAttendanceType.Working,
+            CheckInTime: new TimeSpan(8, 20, 0),
+            CheckOutTime: new TimeSpan(12, 0, 0),
+            Note: "Đi muộn do kẹt xe"
+        );
+
+        // Act
+        var result = await service.RecordManualAttendanceAsync(schedule.Id, request);
+
+        // Assert
+        Assert.Equal(ScheduleStatus.Completed, result.Status);
+        Assert.Equal("WORKING", result.ApprovalType);
+        Assert.Equal(ScheduleApprovalStatus.Approved, result.ApprovalStatus);
+        Assert.Equal(20, result.LateMinutes);
+        Assert.Equal(0, result.EarlyLeaveMinutes);
+        Assert.Equal(3.67m, result.ActualWorkHours);
+        Assert.Equal("Đi muộn do kẹt xe", result.ApprovalReason);
+        Assert.True(uow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task RecordManualAttendanceAsync_Working_ShouldDefaultToPlannedTimesWhenNull()
+    {
+        // Arrange
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var policyRepo = new FakeBranchAttendancePolicyRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var branchId = Guid.NewGuid();
+        var emp = new Employee { Id = Guid.NewGuid(), FullName = "Tran Thi C", EmployeeCode = "NV002" };
+        employeeRepo.Employees.Add(emp);
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = emp.Id,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 6),
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(16, 0, 0),
+            DurationHours = 8.00m,
+            Employee = emp
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext, policyRepo);
+
+        // Không ghi giờ vào / ra => mặc định khớp ca làm ban đầu
+        var request = new ManualAttendanceRequest(
+            AttendanceType: ManualAttendanceType.Working,
+            CheckInTime: null,
+            CheckOutTime: null,
+            Note: "Đủ công cả ngày"
+        );
+
+        // Act
+        var result = await service.RecordManualAttendanceAsync(schedule.Id, request);
+
+        // Assert
+        Assert.Equal(ScheduleStatus.Completed, result.Status);
+        Assert.Equal(new DateTime(2026, 11, 6, 8, 0, 0), result.CheckInTime);
+        Assert.Equal(new DateTime(2026, 11, 6, 16, 0, 0), result.CheckOutTime);
+        Assert.Equal(0, result.LateMinutes);
+        Assert.Equal(0, result.EarlyLeaveMinutes);
+        Assert.Equal(8.00m, result.ActualWorkHours);
+    }
+
+    [Fact]
+    public async Task RecordManualAttendanceAsync_PaidLeave_ShouldGrantFullHoursAndCompletedStatus()
+    {
+        // Arrange
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var emp = new Employee { Id = Guid.NewGuid(), FullName = "Le Van D", EmployeeCode = "NV003" };
+        employeeRepo.Employees.Add(emp);
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = emp.Id,
+            BranchId = Guid.NewGuid(),
+            WorkDate = new DateTime(2026, 11, 6),
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(12, 0, 0),
+            DurationHours = 4.00m,
+            Employee = emp
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var request = new ManualAttendanceRequest(
+            AttendanceType: ManualAttendanceType.PaidLeave,
+            Note: "Nghỉ phép năm có lương"
+        );
+
+        // Act
+        var result = await service.RecordManualAttendanceAsync(schedule.Id, request);
+
+        // Assert
+        Assert.Equal(ScheduleStatus.Completed, result.Status);
+        Assert.Equal("PAID_LEAVE", result.ApprovalType);
+        Assert.Null(result.CheckInTime);
+        Assert.Null(result.CheckOutTime);
+        Assert.Equal(4.00m, result.ActualWorkHours);
+        Assert.Equal("Nghỉ phép năm có lương", result.ApprovalReason);
+    }
+
+    [Fact]
+    public async Task RecordManualAttendanceAsync_UnpaidLeave_ShouldSetZeroHoursAndCancelledStatus()
+    {
+        // Arrange
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var emp = new Employee { Id = Guid.NewGuid(), FullName = "Pham Van E", EmployeeCode = "NV004" };
+        employeeRepo.Employees.Add(emp);
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = emp.Id,
+            BranchId = Guid.NewGuid(),
+            WorkDate = new DateTime(2026, 11, 6),
+            PlannedStartTime = new TimeSpan(13, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            DurationHours = 4.00m,
+            Employee = emp
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var request = new ManualAttendanceRequest(
+            AttendanceType: ManualAttendanceType.UnpaidLeave,
+            Note: "Nghỉ việc riêng không lương"
+        );
+
+        // Act
+        var result = await service.RecordManualAttendanceAsync(schedule.Id, request);
+
+        // Assert
+        Assert.Equal(ScheduleStatus.Cancelled, result.Status);
+        Assert.Equal("UNPAID_LEAVE", result.ApprovalType);
+        Assert.Null(result.CheckInTime);
+        Assert.Null(result.CheckOutTime);
+        Assert.Equal(0.00m, result.ActualWorkHours);
+        Assert.Equal("Nghỉ việc riêng không lương", result.ApprovalReason);
     }
 }
 

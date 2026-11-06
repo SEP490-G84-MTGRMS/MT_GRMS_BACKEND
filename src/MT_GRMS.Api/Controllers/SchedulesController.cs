@@ -211,5 +211,34 @@ public class SchedulesController : BaseApiController
             return BadRequest(ApiResponse<object>.Fail(ex.ErrorCode ?? "BAD_REQUEST", ex.Message));
         }
     }
+
+    /// <summary>
+    /// Chấm công thủ công (Đi làm, Nghỉ phép có lương, Nghỉ phép không lương)
+    /// </summary>
+    [HttpPost("{id:guid}/attendance")]
+    [HttpPut("{id:guid}/attendance")]
+    public async Task<IActionResult> RecordAttendance(
+        Guid id,
+        [FromBody] ManualAttendanceRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _scheduleService.RecordManualAttendanceAsync(id, request, cancellationToken);
+            return Ok(ApiResponse<ScheduleResponse>.Ok(result));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
+        }
+        catch (BusinessException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail(ex.ErrorCode ?? "BAD_REQUEST", ex.Message));
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, ApiResponse<object>.Fail("INTERNAL_SERVER_ERROR", ex.Message));
+        }
+    }
 }
 
