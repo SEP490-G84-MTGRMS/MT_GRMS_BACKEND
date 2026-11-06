@@ -12,5 +12,6 @@ public interface IEmployeeService
     Task<bool> UpdateStatusAsync(Guid id, string status, CancellationToken cancellationToken = default);
     Task<bool> DeleteEmployeeAsync(Guid id, CancellationToken cancellationToken = default);
     Task<string> CreateIdentityAccountAsync(Guid employeeId, CreateIdentityAccountRequest request, CancellationToken cancellationToken = default);
+    Task<string> UpdateIdentityAccountAsync(Guid employeeId, CreateIdentityAccountRequest request, CancellationToken cancellationToken = default);
 }
 

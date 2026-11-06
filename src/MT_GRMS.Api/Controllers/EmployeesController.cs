@@ -199,6 +199,43 @@ public class EmployeesController : BaseApiController
     }
 
     /// <summary>
+    /// Cập nhật tài khoản đăng nhập Identity cho nhân viên
+    /// </summary>
+    [HttpPut("{id:guid}/identity-account")]
+    public async Task<IActionResult> UpdateIdentityAccount(
+        Guid id,
+        [FromBody] CreateIdentityAccountRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var userId = await _employeeService.UpdateIdentityAccountAsync(id, request, cancellationToken);
+            return Ok(ApiResponse<object>.Ok(new
+            {
+                userId,
+                username = request.Username,
+                role = request.Role,
+                message = "Cập nhật tài khoản đăng nhập cho nhân viên thành công."
+            }));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
+        }
+        catch (BusinessException ex)
+        {
+            var status = ex.ErrorCode.StartsWith("DUPLICATE") || ex.ErrorCode == "CONFLICT"
+                ? StatusCodes.Status409Conflict
+                : StatusCodes.Status422UnprocessableEntity;
+            return StatusCode(status, ApiResponse<object>.Fail(ex.ErrorCode, ex.Message));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message));
+        }
+    }
+
+    /// <summary>
     /// Xóa hoặc ngưng hoạt động nhân viên (Soft-delete)
     /// </summary>
     [HttpDelete("{id:guid}")]

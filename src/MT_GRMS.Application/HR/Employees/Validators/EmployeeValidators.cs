@@ -178,12 +178,16 @@ public class CreateIdentityAccountRequestValidator : AbstractValidator<CreateIde
             .MaximumLength(50).WithMessage("Tên đăng nhập không vượt quá 50 ký tự.");
 
         RuleFor(x => x.Password)
-            .NotEmpty().WithMessage("Mật khẩu không được để trống.")
-            .MinimumLength(6).WithMessage("Mật khẩu tối thiểu 6 ký tự.");
+            .MinimumLength(6).When(x => !string.IsNullOrEmpty(x.Password))
+            .WithMessage("Mật khẩu tối thiểu 6 ký tự.");
 
         RuleFor(x => x.Role)
             .NotEmpty().WithMessage("Vai trò phân quyền không được để trống.")
-            .Must(r => r is "CASHIER" or "STAFF" or "BRANCH_MANAGER" or "STORE_OWNER")
-            .WithMessage("Vai trò không hợp lệ (hỗ trợ CASHIER, STAFF, BRANCH_MANAGER, STORE_OWNER).");
+            .Must(r => r.Equals("CASHIER", StringComparison.OrdinalIgnoreCase) ||
+                       r.Equals("STAFF", StringComparison.OrdinalIgnoreCase) ||
+                       r.Equals("EMPLOYEE", StringComparison.OrdinalIgnoreCase) ||
+                       r.Equals("BRANCH_MANAGER", StringComparison.OrdinalIgnoreCase) ||
+                       r.Equals("STORE_OWNER", StringComparison.OrdinalIgnoreCase))
+            .WithMessage("Vai trò không hợp lệ (hỗ trợ CASHIER, STAFF, BRANCH_MANAGER, STORE_OWNER, EMPLOYEE).");
     }
 }

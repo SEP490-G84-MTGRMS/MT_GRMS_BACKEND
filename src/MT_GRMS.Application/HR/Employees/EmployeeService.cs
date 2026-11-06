@@ -177,6 +177,51 @@ public class EmployeeService : IEmployeeService
 
         employee.Allowances = MapAllowances(request.Allowances, employee.Id, currentTenantId);
 
+        // Tạo hoặc liên kết tài khoản Identity nếu có cung cấp UserName/UserId
+        if (!string.IsNullOrWhiteSpace(request.UserName))
+        {
+            var normalizedUsername = request.UserName.Trim();
+            var existingUser = await _userRepository.GetByUsernameAsync(normalizedUsername, cancellationToken);
+            if (existingUser != null)
+            {
+                throw new BusinessException("DUPLICATE_USERNAME", $"Tên đăng nhập '{normalizedUsername}' đã tồn tại trong hệ thống.");
+            }
+
+            var role = !string.IsNullOrWhiteSpace(request.Role) ? request.Role.Trim().ToUpper() : "STAFF";
+            if (role == "EMPLOYEE")
+            {
+                role = "STAFF";
+            }
+
+            var newUser = new User
+            {
+                Id = Uuid7.NewString(),
+                UserName = normalizedUsername,
+                PasswordHash = !string.IsNullOrWhiteSpace(request.Password) ? request.Password : "Staff@123456",
+                FullName = employee.FullName,
+                Email = string.IsNullOrWhiteSpace(employee.Email) ? $"{normalizedUsername}@mtgrms.vn" : employee.Email,
+                Phone = employee.Phone,
+                IsActive = true
+            };
+
+            var tenantUser = new TenantUser
+            {
+                TenantId = currentTenantId,
+                UserId = newUser.Id,
+                Role = role,
+                IsActive = true,
+                AssignedAt = DateTime.UtcNow
+            };
+            newUser.TenantUsers.Add(tenantUser);
+
+            await _userRepository.AddAsync(newUser, cancellationToken);
+            employee.UserId = newUser.Id;
+        }
+        else if (!string.IsNullOrWhiteSpace(request.UserId))
+        {
+            employee.UserId = request.UserId.Trim();
+        }
+
         await _employeeRepository.AddAsync(employee, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -251,6 +296,114 @@ public class EmployeeService : IEmployeeService
             employee.AvatarUrl = string.IsNullOrWhiteSpace(request.AvatarUrl) ? null : request.AvatarUrl.Trim();
         }
         employee.UpdatedAt = DateTime.UtcNow;
+
+        // Tạo hoặc cập nhật tài khoản Identity nếu có cung cấp UserName/UserId
+        if (!string.IsNullOrWhiteSpace(request.UserName))
+        {
+            var normalizedUsername = request.UserName.Trim();
+            if (string.IsNullOrEmpty(employee.UserId))
+            {
+                var existingUser = await _userRepository.GetByUsernameAsync(normalizedUsername, cancellationToken);
+                if (existingUser != null)
+                {
+                    throw new BusinessException("DUPLICATE_USERNAME", $"Tên đăng nhập '{normalizedUsername}' đã tồn tại trong hệ thống.");
+                }
+
+                var role = !string.IsNullOrWhiteSpace(request.Role) ? request.Role.Trim().ToUpper() : "STAFF";
+                if (role == "EMPLOYEE")
+                {
+                    role = "STAFF";
+                }
+
+                var newUser = new User
+                {
+                    Id = Uuid7.NewString(),
+                    UserName = normalizedUsername,
+                    PasswordHash = !string.IsNullOrWhiteSpace(request.Password) ? request.Password : "Staff@123456",
+                    FullName = employee.FullName,
+                    Email = string.IsNullOrWhiteSpace(employee.Email) ? $"{normalizedUsername}@mtgrms.vn" : employee.Email,
+                    Phone = employee.Phone,
+                    IsActive = true
+                };
+
+                var tenantUser = new TenantUser
+                {
+                    TenantId = employee.TenantId,
+                    UserId = newUser.Id,
+                    Role = role,
+                    IsActive = true,
+                    AssignedAt = DateTime.UtcNow
+                };
+                newUser.TenantUsers.Add(tenantUser);
+
+                await _userRepository.AddAsync(newUser, cancellationToken);
+                employee.UserId = newUser.Id;
+            }
+            else
+            {
+                var user = await _userRepository.GetByIdAsync(employee.UserId, cancellationToken);
+                if (user != null)
+                {
+                    if (!string.Equals(user.UserName, normalizedUsername, StringComparison.OrdinalIgnoreCase))
+                    {
+                        var existingUser = await _userRepository.GetByUsernameAsync(normalizedUsername, cancellationToken);
+                        if (existingUser != null && existingUser.Id != user.Id)
+                        {
+                            throw new BusinessException("DUPLICATE_USERNAME", $"Tên đăng nhập '{normalizedUsername}' đã tồn tại trong hệ thống.");
+                        }
+                        user.UserName = normalizedUsername;
+                    }
+                    if (!string.IsNullOrWhiteSpace(request.Password))
+                    {
+                        user.PasswordHash = request.Password;
+                    }
+                    user.FullName = employee.FullName;
+                    _userRepository.Update(user);
+                }
+                else
+                {
+                    var existingUser = await _userRepository.GetByUsernameAsync(normalizedUsername, cancellationToken);
+                    if (existingUser != null)
+                    {
+                        throw new BusinessException("DUPLICATE_USERNAME", $"Tên đăng nhập '{normalizedUsername}' đã tồn tại trong hệ thống.");
+                    }
+
+                    var role = !string.IsNullOrWhiteSpace(request.Role) ? request.Role.Trim().ToUpper() : "STAFF";
+                    if (role == "EMPLOYEE")
+                    {
+                        role = "STAFF";
+                    }
+
+                    var newUser = new User
+                    {
+                        Id = Uuid7.NewString(),
+                        UserName = normalizedUsername,
+                        PasswordHash = !string.IsNullOrWhiteSpace(request.Password) ? request.Password : "Staff@123456",
+                        FullName = employee.FullName,
+                        Email = string.IsNullOrWhiteSpace(employee.Email) ? $"{normalizedUsername}@mtgrms.vn" : employee.Email,
+                        Phone = employee.Phone,
+                        IsActive = true
+                    };
+
+                    var tenantUser = new TenantUser
+                    {
+                        TenantId = employee.TenantId,
+                        UserId = newUser.Id,
+                        Role = role,
+                        IsActive = true,
+                        AssignedAt = DateTime.UtcNow
+                    };
+                    newUser.TenantUsers.Add(tenantUser);
+
+                    await _userRepository.AddAsync(newUser, cancellationToken);
+                    employee.UserId = newUser.Id;
+                }
+            }
+        }
+        else if (!string.IsNullOrWhiteSpace(request.UserId))
+        {
+            employee.UserId = request.UserId.Trim();
+        }
 
         _employeeRepository.Update(employee);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -354,13 +507,21 @@ public class EmployeeService : IEmployeeService
 
         var currentTenantId = _tenantContext.CurrentTenantId ?? "tenant_mt_mart_01";
         var role = request.Role.Trim().ToUpper();
+        if (role == "EMPLOYEE")
+        {
+            role = "STAFF";
+        }
+
+        var displayName = !string.IsNullOrWhiteSpace(request.DisplayName)
+            ? request.DisplayName.Trim()
+            : employee.FullName;
 
         var newUser = new User
         {
             Id = Uuid7.NewString(),
             UserName = normalizedUsername,
             PasswordHash = request.Password,
-            FullName = employee.FullName,
+            FullName = displayName,
             Email = string.IsNullOrWhiteSpace(employee.Email) ? $"{normalizedUsername}@mtgrms.vn" : employee.Email,
             Phone = employee.Phone,
             IsActive = true
@@ -386,6 +547,60 @@ public class EmployeeService : IEmployeeService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return newUser.Id;
+    }
+
+    public async Task<string> UpdateIdentityAccountAsync(
+        Guid employeeId,
+        CreateIdentityAccountRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.Username))
+        {
+            throw new ArgumentException("Tên đăng nhập không được để trống.");
+        }
+
+        var employee = await _employeeRepository.GetByIdAsync(employeeId, cancellationToken);
+        if (employee == null)
+        {
+            throw new NotFoundException($"Không tìm thấy nhân viên với ID: {employeeId}");
+        }
+
+        if (string.IsNullOrEmpty(employee.UserId))
+        {
+            throw new NotFoundException("Nhân viên này chưa được cấp tài khoản để cập nhật.");
+        }
+
+        var user = await _userRepository.GetByIdAsync(employee.UserId, cancellationToken);
+        if (user == null)
+        {
+            throw new NotFoundException("Không tìm thấy tài khoản người dùng tương ứng.");
+        }
+
+        var normalizedUsername = request.Username.Trim();
+        if (!string.Equals(user.UserName, normalizedUsername, StringComparison.OrdinalIgnoreCase))
+        {
+            var existingUser = await _userRepository.GetByUsernameAsync(normalizedUsername, cancellationToken);
+            if (existingUser != null && existingUser.Id != user.Id)
+            {
+                throw new BusinessException("DUPLICATE_USERNAME", $"Tên đăng nhập '{normalizedUsername}' đã tồn tại trong hệ thống.");
+            }
+            user.UserName = normalizedUsername;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Password))
+        {
+            user.PasswordHash = request.Password;
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.DisplayName))
+        {
+            user.FullName = request.DisplayName.Trim();
+        }
+
+        _userRepository.Update(user);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return user.Id;
     }
 
     private static EmployeeResponse MapToResponse(Employee e)

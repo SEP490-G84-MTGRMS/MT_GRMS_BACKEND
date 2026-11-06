@@ -21,7 +21,11 @@ public record CreateEmployeeRequest(
     string? BankAccountNumber = null,
     string? BankName = null,
     string? BankAccountHolder = null,
-    string? AvatarUrl = null
+    string? AvatarUrl = null,
+    string? UserId = null,
+    string? UserName = null,
+    string? Password = null,
+    string? Role = null
 );
 
 public record UpdateEmployeeRequest(
@@ -43,7 +47,11 @@ public record UpdateEmployeeRequest(
     string? BankAccountNumber = null,
     string? BankName = null,
     string? BankAccountHolder = null,
-    string? AvatarUrl = null
+    string? AvatarUrl = null,
+    string? UserId = null,
+    string? UserName = null,
+    string? Password = null,
+    string? Role = null
 );
 
 public record UpdateEmployeeStatusRequest(
@@ -53,7 +61,8 @@ public record UpdateEmployeeStatusRequest(
 public record CreateIdentityAccountRequest(
     string Username,
     string Password,
-    string Role = "STAFF"
+    string Role = "STAFF",
+    string? DisplayName = null
 );
 
 public record EmployeeQueryFilter(
