@@ -1,10 +1,12 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using MT_GRMS.Application.Auth.Dtos;
+using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
@@ -19,12 +21,18 @@ public class AuthService : IAuthService
     private readonly IUserRepository _userRepository;
     private readonly IConfiguration? _configuration;
     private readonly IPasswordHasher _passwordHasher;
+    private readonly IEmailService? _emailService;
 
-    public AuthService(IUserRepository userRepository, IConfiguration? configuration = null, IPasswordHasher? passwordHasher = null)
+    public AuthService(
+        IUserRepository userRepository,
+        IConfiguration? configuration = null,
+        IPasswordHasher? passwordHasher = null,
+        IEmailService? emailService = null)
     {
         _userRepository = userRepository;
         _configuration = configuration;
         _passwordHasher = passwordHasher ?? new PasswordHasher();
+        _emailService = emailService;
     }
 
     public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
@@ -301,5 +309,104 @@ public class AuthService : IAuthService
         );
 
         return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    public async Task ForgotPasswordAsync(ForgotPasswordRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.Email))
+        {
+            throw new ArgumentException("Vui lòng nhập địa chỉ email hợp lệ.");
+        }
+
+        var cleanInput = request.Email.Trim().ToLowerInvariant();
+
+        // Tìm user theo email hoặc username/phone
+        var user = await _userRepository.GetByUsernameAsync(cleanInput, cancellationToken);
+        if (user == null)
+        {
+            throw new KeyNotFoundException("Không tìm thấy tài khoản với thông tin đã cung cấp.");
+        }
+
+        var targetEmail = string.IsNullOrWhiteSpace(user.Email) ? cleanInput : user.Email;
+
+        // Sinh mã OTP 6 chữ số ngẫu nhiên an toàn bằng RandomNumberGenerator
+        var otpCode = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
+
+        user.PasswordResetOtp = otpCode;
+        user.OtpExpiry = DateTime.UtcNow.AddMinutes(10);
+
+        _userRepository.Update(user);
+        await _userRepository.SaveChangesAsync(cancellationToken);
+
+        // Gửi email OTP
+        if (_emailService != null)
+        {
+            await _emailService.SendPasswordResetOtpAsync(targetEmail, user.FullName, otpCode, cancellationToken);
+        }
+    }
+
+    public async Task<bool> VerifyOtpAsync(VerifyOtpRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.OtpCode))
+        {
+            throw new ArgumentException("Email và mã OTP không được để trống.");
+        }
+
+        var cleanInput = request.Email.Trim().ToLowerInvariant();
+        var user = await _userRepository.GetByUsernameAsync(cleanInput, cancellationToken);
+        if (user == null)
+        {
+            throw new KeyNotFoundException("Không tìm thấy tài khoản với thông tin đã cung cấp.");
+        }
+
+        if (string.IsNullOrWhiteSpace(user.PasswordResetOtp) || user.OtpExpiry == null)
+        {
+            throw new ArgumentException("Mã OTP không tồn tại hoặc chưa được yêu cầu.");
+        }
+
+        if (user.OtpExpiry < DateTime.UtcNow)
+        {
+            throw new ArgumentException("Mã OTP đã hết hạn sử dụng (quá 10 phút). Vui lòng yêu cầu mã mới.");
+        }
+
+        if (user.PasswordResetOtp.Trim() != request.OtpCode.Trim())
+        {
+            throw new ArgumentException("Mã OTP không chính xác. Vui lòng kiểm tra lại.");
+        }
+
+        return true;
+    }
+
+    public async Task ResetPasswordAsync(ResetPasswordRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.OtpCode) || string.IsNullOrWhiteSpace(request.NewPassword))
+        {
+            throw new ArgumentException("Vui lòng điền đầy đủ email, mã OTP và mật khẩu mới.");
+        }
+
+        if (request.NewPassword.Length < 8)
+        {
+            throw new ArgumentException("Mật khẩu mới phải có tối thiểu 8 ký tự.");
+        }
+
+        // Xác thực lại OTP
+        await VerifyOtpAsync(new VerifyOtpRequest(request.Email, request.OtpCode), cancellationToken);
+
+        var cleanInput = request.Email.Trim().ToLowerInvariant();
+        var user = await _userRepository.GetByUsernameAsync(cleanInput, cancellationToken);
+        if (user == null)
+        {
+            throw new KeyNotFoundException("Không tìm thấy tài khoản người dùng.");
+        }
+
+        // Băm mật khẩu mới bằng PBKDF2 PasswordHasher
+        user.PasswordHash = _passwordHasher.HashPassword(request.NewPassword);
+
+        // Hủy mã OTP sau khi sử dụng thành công
+        user.PasswordResetOtp = null;
+        user.OtpExpiry = null;
+
+        _userRepository.Update(user);
+        await _userRepository.SaveChangesAsync(cancellationToken);
     }
 }

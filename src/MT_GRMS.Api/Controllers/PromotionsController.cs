@@ -6,7 +6,7 @@ using MT_GRMS.Application.Promotions.Dtos;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/promotions")]
+[Route("api/promotions")]
 public class PromotionsController : BaseApiController
 {
     private readonly IPromotionService _promotionService;

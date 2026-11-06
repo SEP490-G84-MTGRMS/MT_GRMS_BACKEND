@@ -10,7 +10,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Route("api/v1/[controller]")]
 public class CustomersController : BaseApiController
 {
     private readonly AppDbContext _context;

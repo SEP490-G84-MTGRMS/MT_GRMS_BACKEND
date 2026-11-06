@@ -108,10 +108,41 @@ public static class DbInitializer
                 }
                 else
                 {
-                    // Bảng Users đã có sẵn: Áp dụng các migration còn thiếu nếu có
+                    // Bảng Users đã có sẵn: Nếu các cột bảo mật PIN đã tồn tại trong Users thì đánh dấu các migrations đã hoàn tất để tránh lỗi ALTER TABLE trùng lặp
                     try
                     {
-                        await context.Database.MigrateAsync();
+                        await context.Database.ExecuteSqlRawAsync(@"
+                            CREATE TABLE IF NOT EXISTS ""__EFMigrationsHistory"" (
+                                ""MigrationId"" character varying(150) NOT NULL PRIMARY KEY,
+                                ""ProductVersion"" character varying(32) NOT NULL
+                            );
+                        ");
+
+                        bool pinColumnExists = false;
+                        try
+                        {
+                            await context.Database.ExecuteSqlRawAsync("SELECT \"FailedPinAttempts\" FROM \"Users\" LIMIT 1;");
+                            pinColumnExists = true;
+                        }
+                        catch
+                        {
+                            pinColumnExists = false;
+                        }
+
+                        if (pinColumnExists)
+                        {
+                            var migrations = context.Database.GetMigrations();
+                            foreach (var m in migrations)
+                            {
+                                await context.Database.ExecuteSqlRawAsync(
+                                    "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({0}, '8.0.11') ON CONFLICT DO NOTHING;",
+                                    m);
+                            }
+                        }
+                        else
+                        {
+                            await context.Database.MigrateAsync();
+                        }
                     }
                     catch { }
                 }

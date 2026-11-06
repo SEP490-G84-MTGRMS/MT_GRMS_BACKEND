@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using MT_GRMS.Application.Admin.Repositories;
@@ -46,6 +47,8 @@ public static class DependencyInjection
 
         services.AddDbContext<AppDbContext>(options =>
         {
+            options.ConfigureWarnings(w => w.Ignore(CoreEventId.PossibleIncorrectRequiredNavigationWithQueryFilterInteractionWarning));
+
             if (string.IsNullOrWhiteSpace(connectionString))
             {
                 options.UseInMemoryDatabase("MT_GRMS_DevDb");
@@ -116,6 +119,10 @@ public static class DependencyInjection
         // Cấu hình SePay & Dịch vụ Ví gian hàng
         services.Configure<MT_GRMS.Application.Common.SePaySettings>(configuration.GetSection(MT_GRMS.Application.Common.SePaySettings.SectionName));
         services.AddScoped<MT_GRMS.Application.SaaS.Services.IWalletService, Services.WalletService>();
+
+        // Cấu hình Email & Dịch vụ gửi thư điện tử OTP
+        services.Configure<EmailSettings>(configuration.GetSection(EmailSettings.SectionName));
+        services.AddScoped<IEmailService, EmailService>();
 
         return services;
     }

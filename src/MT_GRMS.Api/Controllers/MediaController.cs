@@ -13,7 +13,7 @@ public class ImageUploadRequest
 }
 
 [ApiController]
-[Route("api/v1/media")]
+[Route("api/media")]
 public class MediaController : BaseApiController
 {
     private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)

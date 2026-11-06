@@ -7,7 +7,6 @@ using MT_GRMS.Application.Debt.Dtos;
 namespace MT_GRMS.Api.Controllers;
 
 [Route("api/customers/debt")]
-[Route("api/v1/customers/debt")]
 public class CustomerDebtController : BaseApiController
 {
     private readonly ICustomerDebtService _debtService;

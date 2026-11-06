@@ -10,7 +10,7 @@ using MT_GRMS.Application.GoodsReceipts.Dtos;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/goods-receipts")]
+[Route("api/goods-receipts")]
 public class GoodsReceiptsController : BaseApiController
 {
     private readonly IGoodsReceiptService _goodsReceiptService;
