@@ -10,7 +10,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/batches")]
-[Route("api/v1/batches")]
 public class BatchesController : BaseApiController
 {
     private readonly IBatchService _batchService;

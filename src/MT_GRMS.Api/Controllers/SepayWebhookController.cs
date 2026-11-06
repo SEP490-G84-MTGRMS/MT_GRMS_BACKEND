@@ -8,7 +8,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/webhooks/sepay")]
-[Route("api/v1/webhooks/sepay")]
 public class SepayWebhookController : ControllerBase
 {
     private readonly IWalletService _walletService;

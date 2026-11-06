@@ -11,7 +11,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/orders")]
-[Route("api/v1/orders")]
 public class OrdersController : BaseApiController
 {
     private readonly IOrderService _orderService;

@@ -7,7 +7,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/purchase-orders")]
-[Route("api/v1/purchase-orders")]
 public class PurchaseOrdersController : BaseApiController
 {
     private readonly IPurchaseOrderService _poService;

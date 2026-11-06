@@ -10,7 +10,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/supplier-returns")]
-[Route("api/v1/supplier-returns")]
 public class SupplierReturnsController : BaseApiController
 {
     private readonly ISupplierReturnService _service;

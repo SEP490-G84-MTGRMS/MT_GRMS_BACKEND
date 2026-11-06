@@ -7,7 +7,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/promotions")]
-[Route("api/v1/promotions")]
 public class PromotionsController : BaseApiController
 {
     private readonly IPromotionService _promotionService;

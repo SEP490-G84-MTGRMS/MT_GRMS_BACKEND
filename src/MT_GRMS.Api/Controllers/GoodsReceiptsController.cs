@@ -11,7 +11,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/goods-receipts")]
-[Route("api/v1/goods-receipts")]
 public class GoodsReceiptsController : BaseApiController
 {
     private readonly IGoodsReceiptService _goodsReceiptService;

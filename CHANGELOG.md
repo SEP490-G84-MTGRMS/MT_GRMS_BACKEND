@@ -10,7 +10,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - Chuẩn hóa an toàn bảo mật cấu hình: di chuyển toàn bộ credentials (ConnectionStrings, JWT Key, Cloudinary Secrets, SePay ApiKey, Gmail SMTP) từ `appsettings.json` sang `.env` (được bảo vệ bởi `.gitignore`), ngăn chặn triệt để nguy cơ rò rỉ secret key khi push mã nguồn lên Git [BE-CONFIG] [worklog: docs/worklogs/2026-11-06_FE-AUTH_AI_forgot-password-email-otp.md].
 
 ### Added
-- Triển khai định tuyến kép (Dual Route `[Route("api/...")]` & `[Route("api/v1/...")]`) cho toàn bộ 19 Controller trong hệ thống (`TenantStore`, `Branches`, `Wallet`, `Inventory`, `Categories`, `Admin...`), đảm bảo tương thích 100% khi frontend chuẩn hóa gọi qua `/api` [BE-API] [worklog: docs/worklogs/2026-11-06_FE-AUTH_AI_forgot-password-email-otp.md].
+- Chuẩn hóa đồng bộ duy nhất một tiền tố route `/api` (loại bỏ hoàn toàn `/v1`) trên toàn bộ 24 Controller trong hệ thống (`TenantStore`, `Branches`, `Wallet`, `Inventory`, `Categories`, `Admin...`), làm sạch và triệt tiêu trùng lặp endpoint trên Swagger UI [BE-API] [worklog: docs/worklogs/2026-11-06_FE-AUTH_AI_forgot-password-email-otp.md].
 - Triển khai luồng khôi phục mật khẩu hoàn chỉnh qua Email OTP: bổ sung các API `POST /api/auth/forgot-password`, `POST /api/auth/verify-otp`, `POST /api/auth/reset-password`, dịch vụ `IEmailService` gửi email HTML SMTP (kèm Dev Console Logger fallback), sinh OTP ngẫu nhiên 6 chữ số với thời hạn 10 phút, và chuẩn hóa tiền tố route toàn hệ thống về `/api` (loại bỏ `/v1`) [FE-AUTH] [worklog: docs/worklogs/2026-11-06_FE-AUTH_AI_forgot-password-email-otp.md].
 
 ### Refactored

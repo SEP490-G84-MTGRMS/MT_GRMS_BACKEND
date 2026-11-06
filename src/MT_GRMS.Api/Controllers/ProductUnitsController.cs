@@ -7,7 +7,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api")]
-[Route("api/v1")]
 public class ProductUnitsController : BaseApiController
 {
     private readonly IProductUnitService _productUnitService;

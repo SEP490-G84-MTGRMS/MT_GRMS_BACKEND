@@ -8,7 +8,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/tenant/wallet")]
-[Route("api/v1/tenant/wallet")]
 [Authorize]
 public class WalletController : BaseApiController
 {

@@ -7,7 +7,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/vouchers")]
-[Route("api/v1/vouchers")]
 public class VouchersController : BaseApiController
 {
     private readonly IPromotionService _promotionService;

@@ -30,8 +30,8 @@
 - `src/MT_GRMS.Api/appsettings.json`: Thêm block `EmailSettings`, đồng thời rút trích toàn bộ secrets (JWT Key, Cloudinary, SePay, Gmail SMTP, ConnectionStrings) sang `.env` để bảo mật khi push lên Git.
 - `.env.example`: Cập nhật đầy đủ toàn bộ template biến môi trường mẫu cho toàn dự án.
 - `src/MT_GRMS.Infrastructure/DependencyInjection.cs`: Đăng ký `EmailSettings` và `IEmailService`.
-- `src/MT_GRMS.Api/Controllers/*Controller.cs`: Cấu hình định tuyến kép (Dual Route: `[Route("api/...")]` và `[Route("api/v1/...")]`) trên toàn bộ 19 API Controllers (TenantStore, Branches, Wallet, Inventory, Categories, Batches, GoodsReceipts, Admin...), tương thích tuyệt đối 100% với Frontend khi chuyển sang `/api`.
-- `tests/MT_GRMS.UnitTests/UserAuthenticationTests.cs`: Bổ sung 4 unit tests kiểm thử luồng forgot password (100% PASS).
+- `src/MT_GRMS.Api/Controllers/*Controller.cs`: Loại bỏ hoàn toàn tiền tố `api/v1`, chuẩn hóa duy nhất tiền tố `api` trên toàn bộ 24 API Controllers trong hệ thống và tài liệu Swagger, triệt tiêu trùng lặp endpoint.
+- `tests/MT_GRMS.UnitTests/SwaggerGenerationTests.cs`: Cập nhật assertion kiểm tra endpoint `/api/media/upload`.
 - `tests/MT_GRMS.IntegrationTests/PnLReportDatabaseIntegrationTests.cs` & `HouseholdTaxDatabaseIntegrationTests.cs`: Thêm `using MT_GRMS.Domain.Entities.Sales;`.
 
 #### Frontend (`project/MT_GRMS_FRONTEND`):

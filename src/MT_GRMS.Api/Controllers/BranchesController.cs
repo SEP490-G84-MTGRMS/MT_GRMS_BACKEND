@@ -8,7 +8,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/branches")]
-[Route("api/v1/branches")]
 public class BranchesController : BaseApiController
 {
     private readonly IBranchService _branchService;
