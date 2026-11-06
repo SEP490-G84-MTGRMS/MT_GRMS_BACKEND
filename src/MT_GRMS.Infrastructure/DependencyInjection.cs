@@ -109,6 +109,10 @@ public static class DependencyInjection
         services.Configure<MT_GRMS.Application.Common.SePaySettings>(configuration.GetSection(MT_GRMS.Application.Common.SePaySettings.SectionName));
         services.AddScoped<MT_GRMS.Application.SaaS.Services.IWalletService, Services.WalletService>();
 
+        // Cấu hình Email & Dịch vụ gửi thư điện tử OTP
+        services.Configure<EmailSettings>(configuration.GetSection(EmailSettings.SectionName));
+        services.AddScoped<IEmailService, EmailService>();
+
         return services;
     }
 
