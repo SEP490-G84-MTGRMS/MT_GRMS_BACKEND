@@ -43,7 +43,14 @@ public class SupplierReturnService : ISupplierReturnService
         if (entity == null)
             throw new NotFoundException($"Không tìm thấy phiếu trả hàng nhà cung cấp với ID {id}.");
 
-        return MapToDetailDto(entity);
+        List<GrnReturnableLineDto>? returnableLines = null;
+        try
+        {
+            returnableLines = await _repository.GetGrnReturnableLinesAsync(tenantId, entity.GoodsReceiptId, cancellationToken);
+        }
+        catch { }
+
+        return MapToDetailDto(entity, returnableLines);
     }
 
     public async Task<List<EligibleGrnLookupDto>> GetEligibleGrnsAsync(
@@ -142,6 +149,19 @@ public class SupplierReturnService : ISupplierReturnService
         };
 
         await _repository.AddAsync(supplierReturn, cancellationToken);
+
+        if (command.AutoSubmit)
+        {
+            foreach (var line in linesToCreate)
+            {
+                var stock = await _repository.GetBranchStockAsync(tenantId, grnInfo.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+                if (stock != null)
+                {
+                    stock.QuantityReserved += line.RequestedQty;
+                }
+            }
+        }
+
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return await GetByIdAsync(supplierReturn.Id, cancellationToken);
@@ -165,6 +185,16 @@ public class SupplierReturnService : ISupplierReturnService
         if (!string.IsNullOrWhiteSpace(notes))
         {
             entity.ReasonNotes = string.IsNullOrWhiteSpace(entity.ReasonNotes) ? notes : $"{entity.ReasonNotes} | {notes}";
+        }
+
+        // Khóa tồn kho sang trạng thái chờ trả
+        foreach (var line in entity.Lines)
+        {
+            var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+            if (stock != null)
+            {
+                stock.QuantityReserved += line.RequestedQty;
+            }
         }
 
         await _repository.UpdateAsync(entity, cancellationToken);
@@ -215,6 +245,16 @@ public class SupplierReturnService : ISupplierReturnService
                     line.ApprovedQty = resp.ApprovedQty;
                     line.RejectedQty = Math.Max(0, line.RequestedQty - resp.ApprovedQty);
                     line.RejectionReason = resp.RejectionReason;
+
+                    // Giảm bớt số lượng khóa đối với phần bị từ chối
+                    if (line.RejectedQty > 0)
+                    {
+                        var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+                        if (stock != null)
+                        {
+                            stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - line.RejectedQty);
+                        }
+                    }
                 }
                 else
                 {
@@ -232,6 +272,13 @@ public class SupplierReturnService : ISupplierReturnService
             {
                 line.ApprovedQty = 0;
                 line.RejectedQty = line.RequestedQty;
+
+                // Giải phóng toàn bộ số lượng đã khóa
+                var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+                if (stock != null)
+                {
+                    stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - line.RequestedQty);
+                }
             }
             entity.TotalApprovedQty = 0;
         }
@@ -274,12 +321,13 @@ public class SupplierReturnService : ISupplierReturnService
             line.HandedOverQty = handedOverQty;
             totalHandedOver += handedOverQty;
 
-            // Giảm tồn kho chi nhánh đúng bằng số lượng thực tế bàn giao
+            // Giảm tồn kho chi nhánh đúng bằng số lượng thực tế bàn giao và giải phóng tồn đã khóa
             if (handedOverQty > 0)
             {
                 var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
                 if (stock != null)
                 {
+                    stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - line.ApprovedQty);
                     stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - handedOverQty);
                 }
             }
@@ -312,6 +360,23 @@ public class SupplierReturnService : ISupplierReturnService
         if (string.IsNullOrWhiteSpace(command.Reason))
             throw new BusinessException("Bắt buộc phải nhập lý do khi hủy phiếu trả hàng.");
 
+        // Giải phóng tồn kho đã khóa nếu phiếu đang chờ NCC hoặc đã duyệt
+        if (entity.Status is "PENDING_SUPPLIER" or "APPROVED")
+        {
+            foreach (var line in entity.Lines)
+            {
+                var unreserveQty = entity.Status == "APPROVED" ? line.ApprovedQty : line.RequestedQty;
+                if (unreserveQty > 0)
+                {
+                    var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+                    if (stock != null)
+                    {
+                        stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - unreserveQty);
+                    }
+                }
+            }
+        }
+
         entity.Status = "CANCELLED";
         entity.CancellationReason = command.Reason.Trim();
 
@@ -321,7 +386,9 @@ public class SupplierReturnService : ISupplierReturnService
         return await GetByIdAsync(entity.Id, cancellationToken);
     }
 
-    private static SupplierReturnDetailDto MapToDetailDto(SupplierReturn entity)
+    private static SupplierReturnDetailDto MapToDetailDto(
+        SupplierReturn entity,
+        List<GrnReturnableLineDto>? returnableLines = null)
     {
         return new SupplierReturnDetailDto(
             entity.Id,
@@ -349,28 +416,40 @@ public class SupplierReturnService : ISupplierReturnService
             entity.RespondedAt,
             entity.HandedOverAt,
             entity.HandedOverBy,
-            entity.Lines.Select(l => new SupplierReturnLineDto(
-                l.Id,
-                l.ProductId,
-                l.Product != null ? l.Product.ProductCode : string.Empty,
-                l.Product != null ? l.Product.Name : "Sản phẩm",
-                l.Product != null ? l.Product.BaseUnit : "Cái",
-                l.GoodsReceiptLineId,
-                l.BatchCode,
-                l.ExpiryDate,
-                0, // ReceivedQty
-                0, // ReturnedQty
-                0, // PendingReturnQty
-                0, // AvailableReturnQty
-                l.RequestedQty,
-                l.ApprovedQty,
-                l.RejectedQty,
-                l.HandedOverQty,
-                l.UnitCost,
-                l.LineTotal,
-                l.RejectionReason,
-                l.Notes
-            )).ToList()
+            entity.Lines.Select(l =>
+            {
+                var source = returnableLines?.FirstOrDefault(rl =>
+                    (l.GoodsReceiptLineId.HasValue && rl.GoodsReceiptLineId == l.GoodsReceiptLineId.Value) ||
+                    (rl.ProductId == l.ProductId && rl.BatchCode == l.BatchCode));
+
+                var receivedQty = source?.ReceivedQty ?? l.RequestedQty;
+                var returnedQty = source?.ReturnedQty ?? 0;
+                var pendingReturnQty = source?.PendingReturnQty ?? 0;
+                var availableReturnQty = source?.AvailableReturnQty ?? 0;
+
+                return new SupplierReturnLineDto(
+                    l.Id,
+                    l.ProductId,
+                    l.Product != null ? l.Product.ProductCode : string.Empty,
+                    l.Product != null ? l.Product.Name : "Sản phẩm",
+                    l.Product != null ? l.Product.BaseUnit : "Cái",
+                    l.GoodsReceiptLineId,
+                    l.BatchCode,
+                    l.ExpiryDate,
+                    receivedQty,
+                    returnedQty,
+                    pendingReturnQty,
+                    availableReturnQty,
+                    l.RequestedQty,
+                    l.ApprovedQty,
+                    l.RejectedQty,
+                    l.HandedOverQty,
+                    l.UnitCost,
+                    l.LineTotal,
+                    l.RejectionReason,
+                    l.Notes
+                );
+            }).ToList()
         );
     }
 }

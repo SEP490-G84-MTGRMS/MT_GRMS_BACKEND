@@ -131,6 +131,8 @@ public class CreateGoodsReceiptLineCommand
     public string? BatchCode { get; set; }
     public DateTime? ManufactureDate { get; set; }
     public DateTime? ExpiryDate { get; set; }
+    /// <summary>User tick quản lý batch trên dòng → bắt buộc MFG + EXP.</summary>
+    public bool ManageBatch { get; set; }
     public string QualityStatus { get; set; } = "ACCEPTED";
     public string? RejectionReason { get; set; }
     public string? RejectionNote { get; set; }
