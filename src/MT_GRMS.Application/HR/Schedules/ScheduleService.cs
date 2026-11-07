@@ -725,7 +725,8 @@ public class ScheduleService : IScheduleService
             s.EvidenceImageUrl,
             s.ApprovedBy,
             s.ApprovedAt,
-            s.CreatedAt
+            s.CreatedAt,
+            s.Employee?.UserId
         );
     }
 

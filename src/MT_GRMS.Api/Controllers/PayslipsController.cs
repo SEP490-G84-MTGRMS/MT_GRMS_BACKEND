@@ -1,27 +1,33 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.HR.Payslips;
 using MT_GRMS.Application.HR.Payslips.Dtos;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Api.Controllers;
 
-[Authorize]
+[Authorize(Roles = SystemRoles.AllStaffAndOwner)]
 [Route("api/payslips")]
 public class PayslipsController : BaseApiController
 {
     private readonly IPayslipService _payslipService;
+    private readonly ITenantContext? _tenantContext;
 
-    public PayslipsController(IPayslipService payslipService)
+    public PayslipsController(IPayslipService payslipService, ITenantContext? tenantContext = null)
     {
         _payslipService = payslipService;
+        _tenantContext = tenantContext;
     }
 
     /// <summary>
     /// GET /api/v1/payslips
     /// Lấy danh sách phiếu lương có phân trang và bộ lọc (kỳ tháng, chi nhánh, trạng thái, từ khóa).
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpGet]
     public async Task<ActionResult<ApiResponse<PagedResult<PayslipSummaryDto>>>> GetPayslipsPaged(
         [FromQuery] string? keyword,
@@ -49,12 +55,34 @@ public class PayslipsController : BaseApiController
     /// GET /api/v1/payslips/{id}
     /// Lấy thông tin chi tiết một phiếu lương.
     /// </summary>
+    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<ApiResponse<PayslipResponse>>> GetPayslipById(
         Guid id,
         CancellationToken ct = default)
     {
         var result = await _payslipService.GetPayslipByIdAsync(id, ct);
+
+        var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                         ?? User.FindFirst("sub")?.Value
+                         ?? (_tenantContext != null && _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : null);
+
+        var currentRole = User.FindFirst(ClaimTypes.Role)?.Value
+                       ?? User.FindFirst("role")?.Value
+                       ?? _tenantContext?.CurrentRole;
+
+        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner) || User.IsInRole(SystemRoles.Admin)
+                          || string.Equals(currentRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase)
+                          || string.Equals(currentRole, SystemRoles.Admin, StringComparison.OrdinalIgnoreCase);
+
+        if (!isOwnerOrAdmin)
+        {
+            if (string.IsNullOrWhiteSpace(currentUserId) || result.UserId != currentUserId)
+            {
+                return StatusCode(StatusCodes.Status403Forbidden, ApiResponse<object>.Fail(ErrorCodes.Forbidden, "Bạn không có quyền truy cập phiếu lương của nhân sự khác."));
+            }
+        }
+
         return Ok(ApiResponse<PayslipResponse>.Ok(result));
     }
 
@@ -62,6 +90,7 @@ public class PayslipsController : BaseApiController
     /// POST /api/v1/payslips/generate-batch
     /// Tự động tổng hợp dữ liệu chấm công và khởi tạo/cập nhật bảng lương tháng theo lô.
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost("generate-batch")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<PayslipResponse>>>> GeneratePayrollBatch(
         [FromBody] GeneratePayrollBatchRequest request,
@@ -75,6 +104,7 @@ public class PayslipsController : BaseApiController
     /// POST /api/payslips/recalculate
     /// Tính toán lại bảng lương cho kỳ tháng (bảo lưu các phiếu đã chi trả, chỉ tính lại các phiếu chưa thanh toán).
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost("recalculate")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<PayslipResponse>>>> RecalculatePayroll(
         [FromBody] GeneratePayrollBatchRequest request,
@@ -88,6 +118,7 @@ public class PayslipsController : BaseApiController
     /// POST /api/v1/payslips/{id}/pay
     /// Thực hiện chi trả một phiếu lương đơn lẻ, tự động sinh phiếu chi Sổ quỹ.
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost("{id:guid}/pay")]
     public async Task<ActionResult<ApiResponse<PayslipResponse>>> PayPayslip(
         Guid id,
@@ -102,6 +133,7 @@ public class PayslipsController : BaseApiController
     /// POST /api/v1/payslips/batch-pay
     /// Chi trả lương hàng loạt cho danh sách phiếu lương chưa thanh toán.
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost("batch-pay")]
     public async Task<ActionResult<ApiResponse<BatchPayResultDto>>> BatchPayPayslips(
         [FromBody] BatchPayPayslipsRequest request,
@@ -115,6 +147,7 @@ public class PayslipsController : BaseApiController
     /// DELETE /api/v1/payslips/{id}
     /// Xóa phiếu lương (chỉ cho phép xóa khi phiếu chưa thanh toán).
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpDelete("{id:guid}")]
     public async Task<ActionResult<ApiResponse<bool>>> DeletePayslip(
         Guid id,

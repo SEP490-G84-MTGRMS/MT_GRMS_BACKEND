@@ -105,6 +105,7 @@ public record PayslipResponse(
     string? Note,
     string? ApprovedBy,
     DateTime? ApprovedAt,
-    DateTime CreatedAt
+    DateTime CreatedAt,
+    string? UserId = null
 );
 

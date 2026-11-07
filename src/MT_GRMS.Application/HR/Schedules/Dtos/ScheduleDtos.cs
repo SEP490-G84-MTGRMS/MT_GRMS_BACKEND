@@ -132,6 +132,7 @@ public record ScheduleResponse(
     string? EvidenceImageUrl,
     string? ApprovedBy,
     DateTime? ApprovedAt,
-    DateTime CreatedAt
+    DateTime CreatedAt,
+    string? UserId = null
 );
 

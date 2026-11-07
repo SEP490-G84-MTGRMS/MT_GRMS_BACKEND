@@ -1,11 +1,14 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.HR.ShiftConfigs;
 using MT_GRMS.Application.HR.ShiftConfigs.Dtos;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Api.Controllers;
 
+[Authorize(Roles = SystemRoles.AllStaffAndOwner)]
 [ApiController]
 [Route("api/shift-configs")]
 public class ShiftConfigsController : BaseApiController
@@ -51,6 +54,7 @@ public class ShiftConfigsController : BaseApiController
     /// <summary>
     /// Tạo mới một ca làm việc mẫu cho chi nhánh
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost]
     public async Task<IActionResult> Create(
         [FromBody] CreateShiftConfigRequest request,
@@ -74,6 +78,7 @@ public class ShiftConfigsController : BaseApiController
     /// <summary>
     /// Cập nhật thông tin cấu hình ca làm việc
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(
         Guid id,
@@ -98,6 +103,7 @@ public class ShiftConfigsController : BaseApiController
     /// <summary>
     /// Bật/Tắt trạng thái hoạt động (IsActive) của ca làm việc
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPatch("{id:guid}/status")]
     public async Task<IActionResult> UpdateStatus(
         Guid id,
@@ -118,6 +124,7 @@ public class ShiftConfigsController : BaseApiController
     /// <summary>
     /// Xóa mềm một ca làm việc
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(
         Guid id,

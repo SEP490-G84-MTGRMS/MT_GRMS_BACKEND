@@ -1,12 +1,16 @@
 using System.Security.Claims;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.HR.Schedules;
 using MT_GRMS.Application.HR.Schedules.Dtos;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Api.Controllers;
 
+[Authorize(Roles = SystemRoles.AllStaffAndOwner)]
 [ApiController]
 [Route("api/schedules")]
 public class SchedulesController : BaseApiController
@@ -23,6 +27,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Tra cứu danh sách lịch làm việc theo chi nhánh, nhân viên, dải ngày và trạng thái
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpGet]
     public async Task<IActionResult> GetSchedules(
         [FromQuery] ScheduleQueryFilter filter,
@@ -35,6 +40,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Tra cứu lịch làm việc cá nhân của tài khoản nhân viên đang đăng nhập
     /// </summary>
+    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
     [HttpGet("my-schedule")]
     public async Task<IActionResult> GetMySchedule(
         [FromQuery] DateTime? fromDate,
@@ -57,6 +63,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Lấy chi tiết lịch làm việc theo ID
     /// </summary>
+    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(
         Guid id,
@@ -65,6 +72,27 @@ public class SchedulesController : BaseApiController
         try
         {
             var result = await _scheduleService.GetByIdAsync(id, cancellationToken);
+
+            var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                             ?? User.FindFirst("sub")?.Value
+                             ?? (_tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : null);
+
+            var currentRole = User.FindFirst(ClaimTypes.Role)?.Value
+                           ?? User.FindFirst("role")?.Value
+                           ?? _tenantContext.CurrentRole;
+
+            var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner) || User.IsInRole(SystemRoles.Admin)
+                              || string.Equals(currentRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase)
+                              || string.Equals(currentRole, SystemRoles.Admin, StringComparison.OrdinalIgnoreCase);
+
+            if (!isOwnerOrAdmin)
+            {
+                if (string.IsNullOrWhiteSpace(currentUserId) || result.UserId != currentUserId)
+                {
+                    return StatusCode(StatusCodes.Status403Forbidden, ApiResponse<object>.Fail(ErrorCodes.Forbidden, "Bạn không có quyền truy cập ca làm việc của nhân sự khác."));
+                }
+            }
+
             return Ok(ApiResponse<ScheduleResponse>.Ok(result));
         }
         catch (NotFoundException ex)
@@ -76,6 +104,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Phân ca làm việc đơn lẻ cho nhân viên
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost]
     public async Task<IActionResult> Create(
         [FromBody] CreateScheduleItemRequest request,
@@ -99,6 +128,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Phân ca làm việc hàng loạt (Batch) theo tuần/tháng có kiểm tra chống xung đột thời gian
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost("batch")]
     public async Task<IActionResult> BatchCreate(
         [FromBody] BatchCreateScheduleRequest request,
@@ -122,6 +152,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Đặt lịch lặp lại cho nhân viên (khi không có ngày kết thúc: tự động tạo lịch đến hết tháng hiện tại và tháng sau; khi có ngày kết thúc: tạo lịch đến ngày chỉ định)
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost("recurring")]
     public async Task<IActionResult> CreateRecurring(
         [FromBody] CreateRecurringScheduleRequest request,
@@ -145,6 +176,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Cập nhật thông tin ca làm việc
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(
         Guid id,
@@ -169,6 +201,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Xóa ca làm việc (chỉ xóa được ca chưa hoàn thành và chưa chấm công)
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(
         Guid id,
@@ -192,6 +225,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Ban hành ca làm việc (Publish) theo tuần cho chi nhánh
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost("publish")]
     public async Task<IActionResult> Publish(
         [FromBody] PublishSchedulesRequest request,
@@ -215,6 +249,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Chấm công thủ công (Đi làm, Nghỉ phép có lương, Nghỉ phép không lương)
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost("{id:guid}/attendance")]
     [HttpPut("{id:guid}/attendance")]
     public async Task<IActionResult> RecordAttendance(

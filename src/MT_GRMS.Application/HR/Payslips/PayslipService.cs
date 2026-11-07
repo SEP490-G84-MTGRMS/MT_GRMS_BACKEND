@@ -519,7 +519,8 @@ public class PayslipService : IPayslipService
             Note: p.Note,
             ApprovedBy: p.ApprovedBy,
             ApprovedAt: p.ApprovedAt,
-            CreatedAt: p.CreatedAt
+            CreatedAt: p.CreatedAt,
+            UserId: p.Employee?.UserId
         );
     }
 }
