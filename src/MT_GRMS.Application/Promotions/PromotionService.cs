@@ -165,6 +165,7 @@ public class PromotionService : IPromotionService
         decimal totalDiscount = 0.00m;
         var appliedPromos = new List<string>();
         var giftItems = new List<CartGiftItemDto>();
+        var itemDiscounts = new List<CartItemDiscountDto>();
 
         foreach (var promo in activePromos)
         {
@@ -243,9 +244,52 @@ public class PromotionService : IPromotionService
                     }
                 }
             }
+            // 3. PRODUCT_DISCOUNT (Giảm giá theo từng sản phẩm/mặt hàng)
+            else if (promo.Type == "PRODUCT_DISCOUNT" && promo.Conditions.Count > 0)
+            {
+                var discountConds = promo.Conditions.Where(c => c.ProductRole is "DISCOUNT" or "BUY").ToList();
+                decimal promoItemDiscountTotal = 0m;
+
+                foreach (var cond in discountConds)
+                {
+                    var cartItem = request.Items.FirstOrDefault(i => i.ProductId == cond.ProductId);
+                    if (cartItem == null || cartItem.Quantity < cond.MinQty)
+                        continue;
+
+                    decimal discountPerItem = cond.DiscountValue ?? promo.DiscountValue;
+                    decimal lineDiscount = 0m;
+
+                    if (discountPerItem <= 100m)
+                    {
+                        lineDiscount = Math.Round(cartItem.UnitPrice * (discountPerItem / 100.00m) * cartItem.Quantity, 2);
+                    }
+                    else
+                    {
+                        lineDiscount = discountPerItem * cartItem.Quantity;
+                    }
+
+                    if (promo.MaxDiscountAmount.HasValue && lineDiscount > promo.MaxDiscountAmount.Value)
+                    {
+                        lineDiscount = promo.MaxDiscountAmount.Value;
+                    }
+
+                    lineDiscount = Math.Min(lineDiscount, Math.Max(0, request.SubTotal - totalDiscount));
+                    if (lineDiscount > 0)
+                    {
+                        totalDiscount += lineDiscount;
+                        promoItemDiscountTotal += lineDiscount;
+                        itemDiscounts.Add(new CartItemDiscountDto(cartItem.ProductId, lineDiscount));
+                    }
+                }
+
+                if (promoItemDiscountTotal > 0)
+                {
+                    appliedPromos.Add($"{promo.PromotionName} (-{promoItemDiscountTotal:N0} đ)");
+                }
+            }
         }
 
-        // 3. Thẩm định Voucher Coupon nếu có nhập mã
+        // 4. Thẩm định Voucher Coupon nếu có nhập mã
         ValidateVoucherResponse? voucherResult = null;
         if (!string.IsNullOrWhiteSpace(request.CouponCode))
         {
@@ -272,7 +316,8 @@ public class PromotionService : IPromotionService
             FinalAmount: finalAmount,
             AppliedPromotions: appliedPromos,
             GiftItems: giftItems,
-            VoucherResult: voucherResult
+            VoucherResult: voucherResult,
+            ItemDiscounts: itemDiscounts
         );
     }
     #endregion

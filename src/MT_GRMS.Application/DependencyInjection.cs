@@ -50,6 +50,7 @@ public static class DependencyInjection
         services.AddScoped<SupplierReturns.ISupplierReturnService, SupplierReturns.SupplierReturnService>();
         services.AddScoped<AiPipeline.IAiRecommendationService, AiPipeline.AiRecommendationService>();
         services.AddScoped<Promotions.IPromotionService, Promotions.PromotionService>();
+        services.AddScoped<Promotions.ILoyaltyService, Promotions.LoyaltyService>();
         services.AddScoped<IEmployeeService, EmployeeService>();
         services.AddScoped<IShiftConfigService, ShiftConfigService>();
         services.AddScoped<IBranchAttendancePolicyService, BranchAttendancePolicyService>();

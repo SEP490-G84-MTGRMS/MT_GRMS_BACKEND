@@ -17,7 +17,8 @@ public record OrderCreateRequest(
     string? CreatorRole = null,
     string? CashierName = null,
     int? PointsRedeemed = null,
-    Guid? ShiftId = null
+    Guid? ShiftId = null,
+    string? VoucherCode = null
 )
 {
     // Hỗ trợ tương thích ngược cho StoreId

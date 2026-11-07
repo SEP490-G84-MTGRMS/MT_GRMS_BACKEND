@@ -25,6 +25,7 @@ public class OrderService : IOrderService
     private readonly ICashbookService? _cashbookService;
     private readonly IValidator<OrderCreateRequest>? _validator;
     private readonly PosShifts.IShiftRepository? _shiftRepository;
+    private readonly Promotions.IPromotionRepository? _promotionRepository;
 
     private static readonly Guid DefaultTillId = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db");
     private static readonly Guid DefaultBankId = Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559");
@@ -36,7 +37,8 @@ public class OrderService : IOrderService
         ICustomerDebtService? debtService = null,
         ICashbookService? cashbookService = null,
         IValidator<OrderCreateRequest>? validator = null,
-        PosShifts.IShiftRepository? shiftRepository = null)
+        PosShifts.IShiftRepository? shiftRepository = null,
+        Promotions.IPromotionRepository? promotionRepository = null)
     {
         _orderRepository = orderRepository;
         _unitOfWork = unitOfWork;
@@ -45,6 +47,7 @@ public class OrderService : IOrderService
         _cashbookService = cashbookService;
         _validator = validator;
         _shiftRepository = shiftRepository;
+        _promotionRepository = promotionRepository;
     }
 
     public OrderService(
@@ -52,7 +55,7 @@ public class OrderService : IOrderService
         IUnitOfWork unitOfWork,
         IThermalPrintService thermalPrintService,
         IValidator<OrderCreateRequest>? validator)
-        : this(orderRepository, unitOfWork, thermalPrintService, null, null, validator, null)
+        : this(orderRepository, unitOfWork, thermalPrintService, null, null, validator, null, null)
     {
     }
 
@@ -335,13 +338,25 @@ public class OrderService : IOrderService
         // 7. Tích điểm thưởng cho khách hàng
         if (customer != null)
         {
+            decimal earningRate = 10000m;
+            int earningPoints = 1;
+            if (_promotionRepository != null)
+            {
+                var loyaltySetting = await _promotionRepository.GetLoyaltySettingAsync(customer.TenantId, cancellationToken);
+                if (loyaltySetting != null && loyaltySetting.IsEnabled)
+                {
+                    earningRate = loyaltySetting.EarningRateAmount > 0 ? loyaltySetting.EarningRateAmount : 10000m;
+                    earningPoints = loyaltySetting.EarningPoints > 0 ? loyaltySetting.EarningPoints : 1;
+                }
+            }
+
             if (request.PointsRedeemed.HasValue && request.PointsRedeemed.Value > 0)
             {
                 int pointsToDeduct = Math.Min(customer.RewardPoints, request.PointsRedeemed.Value);
                 customer.RewardPoints -= pointsToDeduct;
             }
 
-            int earnedPoints = (int)(finalAmount / 10000m); // 10.000đ = 1 điểm
+            int earnedPoints = (int)(finalAmount / earningRate) * earningPoints;
             customer.RewardPoints += earnedPoints;
             customer.TotalSpending += finalAmount;
             customer.UpdatedAt = DateTime.UtcNow;
@@ -421,6 +436,20 @@ public class OrderService : IOrderService
 
         await _orderRepository.AddAsync(order, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        // 9. Đổi mã voucher (Redeem) nguyên tử nếu có áp dụng
+        if (!string.IsNullOrWhiteSpace(request.VoucherCode) && _promotionRepository != null)
+        {
+            await _promotionRepository.RedeemVoucherCodeAtomicAsync(
+                request.VoucherCode.Trim().ToUpper(),
+                order.Id,
+                order.OrderCode,
+                customer?.Id,
+                customer?.Name,
+                customer?.Phone,
+                cancellationToken
+            );
+        }
 
         return MapToOrderResponse(order, cashTendered, changeAmount, debtInvoiceResponse);
     }
@@ -686,7 +715,18 @@ public class OrderService : IOrderService
             var customer = await _orderRepository.GetCustomerByIdAsync(order.CustomerId.Value, cancellationToken);
             if (customer != null)
             {
-                int pointsEarned = (int)(order.FinalAmount / 10000m);
+                decimal earningRate = 10000m;
+                int earningPoints = 1;
+                if (_promotionRepository != null)
+                {
+                    var loyaltySetting = await _promotionRepository.GetLoyaltySettingAsync(customer.TenantId, cancellationToken);
+                    if (loyaltySetting != null && loyaltySetting.IsEnabled)
+                    {
+                        earningRate = loyaltySetting.EarningRateAmount > 0 ? loyaltySetting.EarningRateAmount : 10000m;
+                        earningPoints = loyaltySetting.EarningPoints > 0 ? loyaltySetting.EarningPoints : 1;
+                    }
+                }
+                int pointsEarned = (int)(order.FinalAmount / earningRate) * earningPoints;
                 customer.RewardPoints += pointsEarned;
                 customer.TotalSpending += order.FinalAmount;
             }

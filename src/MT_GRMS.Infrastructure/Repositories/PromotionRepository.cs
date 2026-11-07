@@ -209,5 +209,35 @@ public class PromotionRepository : GenericRepository<Promotion>, IPromotionRepos
         await _context.SaveChangesAsync(cancellationToken);
         return true;
     }
+
+    public async Task<LoyaltySetting?> GetLoyaltySettingAsync(string tenantId, CancellationToken cancellationToken = default)
+    {
+        return await _context.LoyaltySettings
+            .FirstOrDefaultAsync(s => s.TenantId == tenantId && !s.IsDeleted, cancellationToken);
+    }
+
+    public async Task SaveLoyaltySettingAsync(LoyaltySetting setting, CancellationToken cancellationToken = default)
+    {
+        var existing = await _context.LoyaltySettings
+            .FirstOrDefaultAsync(s => s.TenantId == setting.TenantId && !s.IsDeleted, cancellationToken);
+
+        if (existing == null)
+        {
+            await _context.LoyaltySettings.AddAsync(setting, cancellationToken);
+        }
+        else
+        {
+            existing.IsEnabled = setting.IsEnabled;
+            existing.EarningRateAmount = setting.EarningRateAmount;
+            existing.EarningPoints = setting.EarningPoints;
+            existing.RedemptionRatePoints = setting.RedemptionRatePoints;
+            existing.RedemptionRateAmount = setting.RedemptionRateAmount;
+            existing.MinRedemptionPoints = setting.MinRedemptionPoints;
+            existing.AllowPointsWithPromotions = setting.AllowPointsWithPromotions;
+            existing.UpdatedAt = DateTime.UtcNow;
+        }
+
+        await _context.SaveChangesAsync(cancellationToken);
+    }
 }
 

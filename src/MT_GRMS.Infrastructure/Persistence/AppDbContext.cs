@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Common;
@@ -78,6 +78,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<VoucherCode> VoucherCodes { get; set; } = null!;
     public virtual DbSet<Domain.Entities.Sales.Order> Orders { get; set; } = null!;
     public virtual DbSet<OrderDetail> OrderDetails { get; set; } = null!;
+    public virtual DbSet<LoyaltySetting> LoyaltySettings { get; set; } = null!;
 
     // 6. Phân hệ Tài chính, Sổ quỹ & Chi phí (FE-07, FE-17) - Đã hợp nhất FinanceAccounts
     public virtual DbSet<CashbookEntry> CashbookEntries { get; set; } = null!;
