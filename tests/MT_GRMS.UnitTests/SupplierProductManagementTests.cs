@@ -658,7 +658,6 @@ public class SupplierProductManagementTests
         public List<SupplierProduct> SupplierProducts { get; } = new();
         public List<Product> Products { get; } = new();
         public List<SupplierAPLedger> Ledgers { get; } = new();
-        public List<SupplierDeliveryConfig> DeliveryConfigs { get; } = new();
         public List<SupplierBlackoutDate> BlackoutDates { get; } = new();
 
         public Task AddAsync(Supplier entity, CancellationToken cancellationToken = default)
@@ -722,10 +721,8 @@ public class SupplierProductManagementTests
             return Task.FromResult(((IReadOnlyList<SupplierAPLedger>)Ledgers, Ledgers.Count));
         }
 
-        public Task<SupplierDeliveryConfig?> GetDeliveryConfigAsync(Guid supplierId, CancellationToken cancellationToken = default) => Task.FromResult<SupplierDeliveryConfig?>(null);
-        public Task AddDeliveryConfigAsync(SupplierDeliveryConfig config, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default) => Task.FromResult((IReadOnlyList<SupplierBlackoutDate>)BlackoutDates);
-        public Task ReplaceBlackoutDatesAsync(Guid supplierId, Guid configId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ReplaceBlackoutDatesAsync(Guid supplierId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task<SupplierProduct?> GetSupplierProductAsync(Guid supplierId, Guid productId, CancellationToken cancellationToken = default)
         {

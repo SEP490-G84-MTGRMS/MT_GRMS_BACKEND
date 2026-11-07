@@ -46,10 +46,8 @@ public interface ISupplierRepository : IRepository<Supplier>
         int pageSize,
         CancellationToken cancellationToken = default);
 
-    Task<SupplierDeliveryConfig?> GetDeliveryConfigAsync(Guid supplierId, CancellationToken cancellationToken = default);
-    Task AddDeliveryConfigAsync(SupplierDeliveryConfig config, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default);
-    Task ReplaceBlackoutDatesAsync(Guid supplierId, Guid configId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default);
+    Task ReplaceBlackoutDatesAsync(Guid supplierId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default);
 
     // Supplier Product Management (REQ-SP01 đến REQ-SP06)
     Task<SupplierProduct?> GetSupplierProductAsync(Guid supplierId, Guid productId, CancellationToken cancellationToken = default);

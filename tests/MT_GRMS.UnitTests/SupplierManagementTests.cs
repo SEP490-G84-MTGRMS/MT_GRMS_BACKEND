@@ -41,7 +41,6 @@ public class SupplierManagementTests
     {
         public List<Supplier> Suppliers { get; } = new();
         public List<SupplierAPLedger> Ledgers { get; } = new();
-        public List<SupplierDeliveryConfig> DeliveryConfigs { get; } = new();
         public List<SupplierBlackoutDate> BlackoutDates { get; } = new();
 
         public Task AddAsync(Supplier entity, CancellationToken cancellationToken = default)
@@ -83,7 +82,6 @@ public class SupplierManagementTests
             var supplier = Suppliers.FirstOrDefault(s => s.Id == id && !s.IsDeleted);
             if (supplier != null)
             {
-                supplier.DeliveryConfig = DeliveryConfigs.FirstOrDefault(c => c.SupplierId == id);
                 supplier.BlackoutDates = BlackoutDates.Where(b => b.SupplierId == id).ToList();
             }
             return Task.FromResult(supplier);
@@ -189,24 +187,13 @@ public class SupplierManagementTests
             return Task.FromResult(((IReadOnlyList<SupplierAPLedger>)paged, list.Count));
         }
 
-        public Task<SupplierDeliveryConfig?> GetDeliveryConfigAsync(Guid supplierId, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(DeliveryConfigs.FirstOrDefault(c => c.SupplierId == supplierId));
-        }
-
-        public Task AddDeliveryConfigAsync(SupplierDeliveryConfig config, CancellationToken cancellationToken = default)
-        {
-            DeliveryConfigs.Add(config);
-            return Task.CompletedTask;
-        }
-
         public Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default)
         {
             IReadOnlyList<SupplierBlackoutDate> list = BlackoutDates.Where(b => b.SupplierId == supplierId).ToList();
             return Task.FromResult(list);
         }
 
-        public Task ReplaceBlackoutDatesAsync(Guid supplierId, Guid configId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default)
+        public Task ReplaceBlackoutDatesAsync(Guid supplierId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default)
         {
             BlackoutDates.RemoveAll(b => b.SupplierId == supplierId);
             BlackoutDates.AddRange(blackoutDates);

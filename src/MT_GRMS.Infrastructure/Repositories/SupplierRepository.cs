@@ -23,7 +23,6 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
     public async Task<Supplier?> GetByIdWithDetailsAsync(Guid id, CancellationToken cancellationToken = default)
     {
         return await _context.Suppliers
-            .Include(s => s.DeliveryConfig)
             .Include(s => s.BlackoutDates)
             .Include(s => s.BranchAssignments)
             .FirstOrDefaultAsync(s => s.Id == id, cancellationToken);
@@ -342,18 +341,6 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         return (items, totalCount);
     }
 
-    public async Task<SupplierDeliveryConfig?> GetDeliveryConfigAsync(Guid supplierId, CancellationToken cancellationToken = default)
-    {
-        return await _context.SupplierDeliveryConfigs
-            .Include(c => c.BlackoutDates)
-            .FirstOrDefaultAsync(c => c.SupplierId == supplierId, cancellationToken);
-    }
-
-    public async Task AddDeliveryConfigAsync(SupplierDeliveryConfig config, CancellationToken cancellationToken = default)
-    {
-        await _context.SupplierDeliveryConfigs.AddAsync(config, cancellationToken);
-    }
-
     public async Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default)
     {
         return await _context.SupplierBlackoutDates
@@ -364,7 +351,6 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
 
     public async Task ReplaceBlackoutDatesAsync(
         Guid supplierId,
-        Guid configId,
         IEnumerable<SupplierBlackoutDate> blackoutDates,
         CancellationToken cancellationToken = default)
     {
@@ -376,7 +362,7 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
 
         foreach (var bo in blackoutDates)
         {
-            bo.SupplierDeliveryConfigId = configId;
+            bo.SupplierId = supplierId;
             await _context.SupplierBlackoutDates.AddAsync(bo, cancellationToken);
         }
     }
@@ -554,7 +540,6 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
     {
         var query = _context.SupplierBranchAssignments
             .Include(sba => sba.Supplier!)
-                .ThenInclude(s => s.DeliveryConfig)
             .Include(sba => sba.Branch)
             .AsNoTracking();
 

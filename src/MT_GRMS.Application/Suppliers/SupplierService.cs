@@ -100,7 +100,7 @@ public class SupplierService : ISupplierService
                 DateTime.UtcNow,
                 dto.DeliveryConfig.CutoffTime,
                 dto.DeliveryConfig.DeliveryWeekdaysMask,
-                supplier.BlackoutDates ?? supplier.DeliveryConfig?.BlackoutDates);
+                supplier.BlackoutDates);
         }
 
         return dto;
@@ -151,19 +151,15 @@ public class SupplierService : ISupplierService
             LinkedCustomerId = command.LinkedCustomerId?.ToString()
         };
 
-        // Mặc định tạo DeliveryConfig cơ bản
-        var deliveryConfig = new SupplierDeliveryConfig
-        {
-            Supplier = supplier,
-            CutoffDayOffset = 1,
-            CutoffTime = "17:00",
-            OrderCutoffTime = "17:00",
-            DeliveryWeekdaysMask = 63, // Mon-Sat
-            DeliveryDaysJson = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]",
-            MinOrderQuantity = 0,
-            AllowUrgent = false
-        };
-        supplier.DeliveryConfig = deliveryConfig;
+        // Mặc định cấu hình DeliveryConfig cơ bản trên Supplier
+        supplier.CutoffDayOffset = 1;
+        supplier.CutoffTime = "17:00";
+        supplier.DeliveryWeekdaysMask = 63; // Mon-Sat
+        supplier.DeliveryDaysJson = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]";
+        supplier.MinOrderQuantity = 0;
+        supplier.AllowUrgent = false;
+        supplier.UrgentLeadTimeHours = 4;
+        supplier.UrgentFeePercent = 0;
 
         await _supplierRepository.AddAsync(supplier, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -357,30 +353,12 @@ public class SupplierService : ISupplierService
 
     public async Task<SupplierDeliveryConfigDto> GetDeliveryConfigAsync(Guid supplierId, CancellationToken cancellationToken = default)
     {
-        var config = await _supplierRepository.GetDeliveryConfigAsync(supplierId, cancellationToken);
-
-        if (config == null)
-        {
-            var exists = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
-            if (exists == null) throw new NotFoundException("Nhà cung cấp", supplierId);
-
-            // Tạo config mặc định nếu chưa có
-            config = new SupplierDeliveryConfig
-            {
-                SupplierId = supplierId,
-                CutoffDayOffset = 1,
-                CutoffTime = "17:00",
-                OrderCutoffTime = "17:00",
-                DeliveryWeekdaysMask = 63,
-                DeliveryDaysJson = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]"
-            };
-            await _supplierRepository.AddDeliveryConfigAsync(config, cancellationToken);
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
-        }
+        var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
+        if (supplier == null) throw new NotFoundException("Nhà cung cấp", supplierId);
 
         var blackoutDates = await _supplierRepository.GetBlackoutDatesAsync(supplierId, cancellationToken);
 
-        var dto = MapToDeliveryConfigDto(config, blackoutDates);
+        var dto = MapToDeliveryConfigDto(supplier, blackoutDates);
         dto.EarliestDeliveryDate = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
             DateTime.UtcNow,
             dto.CutoffTime,
@@ -409,26 +387,17 @@ public class SupplierService : ISupplierService
             throw new BusinessException("INVALID_CUTOFF_TIME", "Giờ chốt đơn (Cutoff Time) không đúng định dạng HH:mm (từ 00:00 đến 23:59).");
         }
 
-        var config = await _supplierRepository.GetDeliveryConfigAsync(supplierId, cancellationToken);
+        var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
+        if (supplier == null) throw new NotFoundException("Nhà cung cấp", supplierId);
 
-        if (config == null)
-        {
-            var exists = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
-            if (exists == null) throw new NotFoundException("Nhà cung cấp", supplierId);
-
-            config = new SupplierDeliveryConfig { SupplierId = supplierId };
-            await _supplierRepository.AddDeliveryConfigAsync(config, cancellationToken);
-        }
-
-        config.CutoffDayOffset = command.CutoffDayOffset >= 0 ? command.CutoffDayOffset : 1;
-        config.CutoffTime = string.IsNullOrWhiteSpace(command.CutoffTime) ? "17:00" : command.CutoffTime.Trim();
-        config.OrderCutoffTime = string.IsNullOrWhiteSpace(command.OrderCutoffTime) ? config.CutoffTime : command.OrderCutoffTime.Trim();
-        config.DeliveryWeekdaysMask = DeliveryScheduleCalculator.DayNamesToMask(command.DeliveryDays);
-        config.DeliveryDaysJson = System.Text.Json.JsonSerializer.Serialize(command.DeliveryDays ?? []);
-        config.MinOrderQuantity = command.MinOrderQuantity;
-        config.AllowUrgent = command.AllowUrgent;
-        config.UrgentLeadTimeHours = command.UrgentLeadTimeHours;
-        config.UrgentFeePercent = command.UrgentFeePercent;
+        supplier.CutoffDayOffset = command.CutoffDayOffset >= 0 ? command.CutoffDayOffset : 1;
+        supplier.CutoffTime = string.IsNullOrWhiteSpace(command.CutoffTime) ? "17:00" : command.CutoffTime.Trim();
+        supplier.DeliveryWeekdaysMask = DeliveryScheduleCalculator.DayNamesToMask(command.DeliveryDays);
+        supplier.DeliveryDaysJson = System.Text.Json.JsonSerializer.Serialize(command.DeliveryDays ?? []);
+        supplier.MinOrderQuantity = command.MinOrderQuantity;
+        supplier.AllowUrgent = command.AllowUrgent;
+        supplier.UrgentLeadTimeHours = command.UrgentLeadTimeHours;
+        supplier.UrgentFeePercent = command.UrgentFeePercent;
 
         // Xử lý Blackout Dates nếu có
         if (command.BlackoutDates != null)
@@ -436,21 +405,20 @@ public class SupplierService : ISupplierService
             var newBlackouts = command.BlackoutDates.Select(boDto => new SupplierBlackoutDate
             {
                 SupplierId = supplierId,
-                SupplierDeliveryConfigId = config.Id,
                 StartDate = boDto.StartDate,
                 EndDate = boDto.EndDate,
                 Reason = boDto.Reason,
                 IsRecurringAnnual = boDto.IsRecurringAnnual
             }).ToList();
 
-            await _supplierRepository.ReplaceBlackoutDatesAsync(supplierId, config.Id, newBlackouts, cancellationToken);
+            await _supplierRepository.ReplaceBlackoutDatesAsync(supplierId, newBlackouts, cancellationToken);
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         var updatedBlackouts = await _supplierRepository.GetBlackoutDatesAsync(supplierId, cancellationToken);
 
-        var resDto = MapToDeliveryConfigDto(config, updatedBlackouts);
+        var resDto = MapToDeliveryConfigDto(supplier, updatedBlackouts);
         resDto.EarliestDeliveryDate = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
             DateTime.UtcNow,
             resDto.CutoffTime,
@@ -799,7 +767,7 @@ public class SupplierService : ISupplierService
         foreach (var sup in suppliers)
         {
             itemsBySupplier.TryGetValue(sup.Id, out var requestedDays);
-            var deliveryDays = NormalizeAssignmentDeliveryDays(requestedDays, sup.DeliveryConfig);
+            var deliveryDays = NormalizeAssignmentDeliveryDays(requestedDays, sup);
 
             var existing = await _supplierRepository.GetBranchAssignmentAsync(sup.Id, command.BranchId, cancellationToken);
             if (existing != null)
@@ -936,7 +904,7 @@ public class SupplierService : ISupplierService
         }
 
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(supplierId, cancellationToken);
-        var days = NormalizeAssignmentDeliveryDays(request.DeliveryDays, supplier?.DeliveryConfig);
+        var days = NormalizeAssignmentDeliveryDays(request.DeliveryDays, supplier);
         ApplyAssignmentDeliveryDays(assignment, days);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -953,7 +921,7 @@ public class SupplierService : ISupplierService
 
     private static SupplierBranchAssignmentDetailDto MapToBranchAssignmentDetailDto(SupplierBranchAssignment assignment)
     {
-        var days = ResolveAssignmentDeliveryDayNames(assignment, assignment.Supplier?.DeliveryConfig);
+        var days = ResolveAssignmentDeliveryDayNames(assignment, assignment.Supplier);
         return new SupplierBranchAssignmentDetailDto
         {
             Id = assignment.Id,
@@ -975,7 +943,7 @@ public class SupplierService : ISupplierService
 
     private static List<string> NormalizeAssignmentDeliveryDays(
         IReadOnlyList<string>? requested,
-        SupplierDeliveryConfig? supplierConfig)
+        Supplier? supplier)
     {
         if (requested != null && requested.Count > 0)
         {
@@ -989,21 +957,21 @@ public class SupplierService : ISupplierService
             return normalized;
         }
 
-        return ResolveSupplierBaseDeliveryDays(supplierConfig);
+        return ResolveSupplierBaseDeliveryDays(supplier);
     }
 
-    private static List<string> ResolveSupplierBaseDeliveryDays(SupplierDeliveryConfig? config)
+    private static List<string> ResolveSupplierBaseDeliveryDays(Supplier? supplier)
     {
-        if (config == null)
+        if (supplier == null)
         {
             return new List<string> { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
         }
 
-        if (!string.IsNullOrWhiteSpace(config.DeliveryDaysJson))
+        if (!string.IsNullOrWhiteSpace(supplier.DeliveryDaysJson))
         {
             try
             {
-                var days = System.Text.Json.JsonSerializer.Deserialize<List<string>>(config.DeliveryDaysJson);
+                var days = System.Text.Json.JsonSerializer.Deserialize<List<string>>(supplier.DeliveryDaysJson);
                 if (days != null && days.Count > 0)
                 {
                     return DeliveryScheduleCalculator.MaskToDayNames(
@@ -1016,7 +984,7 @@ public class SupplierService : ISupplierService
             }
         }
 
-        var fromMask = DeliveryScheduleCalculator.MaskToDayNames(config.DeliveryWeekdaysMask);
+        var fromMask = DeliveryScheduleCalculator.MaskToDayNames(supplier.DeliveryWeekdaysMask);
         return fromMask.Count > 0
             ? fromMask
             : new List<string> { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
@@ -1024,7 +992,7 @@ public class SupplierService : ISupplierService
 
     private static List<string> ResolveAssignmentDeliveryDayNames(
         SupplierBranchAssignment assignment,
-        SupplierDeliveryConfig? supplierConfig)
+        Supplier? supplier)
     {
         if (!string.IsNullOrWhiteSpace(assignment.DeliveryDaysJson))
         {
@@ -1049,7 +1017,7 @@ public class SupplierService : ISupplierService
             if (fromMask.Count > 0) return fromMask;
         }
 
-        return ResolveSupplierBaseDeliveryDays(supplierConfig);
+        return ResolveSupplierBaseDeliveryDays(supplier);
     }
 
     private static void ApplyAssignmentDeliveryDays(SupplierBranchAssignment assignment, List<string> deliveryDays)
@@ -1100,7 +1068,7 @@ public class SupplierService : ISupplierService
 
     private static SupplierDetailDto MapToDetailDto(Supplier s)
     {
-        var blackoutList = s.BlackoutDates ?? s.DeliveryConfig?.BlackoutDates ?? new List<SupplierBlackoutDate>();
+        var blackoutList = s.BlackoutDates ?? new List<SupplierBlackoutDate>();
 
         var dto = new SupplierDetailDto
         {
@@ -1140,46 +1108,43 @@ public class SupplierService : ISupplierService
             }).ToList()
         };
 
-        if (s.DeliveryConfig != null)
-        {
-            dto.DeliveryConfig = MapToDeliveryConfigDto(s.DeliveryConfig, blackoutList);
-        }
+        dto.DeliveryConfig = MapToDeliveryConfigDto(s, blackoutList);
 
         return dto;
     }
 
-    private static SupplierDeliveryConfigDto MapToDeliveryConfigDto(SupplierDeliveryConfig config, IEnumerable<SupplierBlackoutDate>? blackoutDates)
+    private static SupplierDeliveryConfigDto MapToDeliveryConfigDto(Supplier supplier, IEnumerable<SupplierBlackoutDate>? blackoutDates)
     {
         var days = new List<string>();
-        if (!string.IsNullOrWhiteSpace(config.DeliveryDaysJson))
+        if (!string.IsNullOrWhiteSpace(supplier.DeliveryDaysJson))
         {
             try
             {
-                days = System.Text.Json.JsonSerializer.Deserialize<List<string>>(config.DeliveryDaysJson) ?? [];
+                days = System.Text.Json.JsonSerializer.Deserialize<List<string>>(supplier.DeliveryDaysJson) ?? [];
             }
             catch
             {
-                days = DeliveryScheduleCalculator.MaskToDayNames(config.DeliveryWeekdaysMask);
+                days = DeliveryScheduleCalculator.MaskToDayNames(supplier.DeliveryWeekdaysMask);
             }
         }
         else
         {
-            days = DeliveryScheduleCalculator.MaskToDayNames(config.DeliveryWeekdaysMask);
+            days = DeliveryScheduleCalculator.MaskToDayNames(supplier.DeliveryWeekdaysMask);
         }
 
         return new SupplierDeliveryConfigDto
         {
-            Id = config.Id,
-            SupplierId = config.SupplierId,
-            CutoffDayOffset = config.CutoffDayOffset,
-            CutoffTime = config.CutoffTime,
-            OrderCutoffTime = string.IsNullOrWhiteSpace(config.OrderCutoffTime) ? config.CutoffTime : config.OrderCutoffTime,
-            DeliveryWeekdaysMask = config.DeliveryWeekdaysMask,
+            Id = supplier.Id,
+            SupplierId = supplier.Id,
+            CutoffDayOffset = supplier.CutoffDayOffset,
+            CutoffTime = supplier.CutoffTime,
+            OrderCutoffTime = supplier.CutoffTime,
+            DeliveryWeekdaysMask = supplier.DeliveryWeekdaysMask,
             DeliveryDays = days,
-            MinOrderQuantity = config.MinOrderQuantity,
-            AllowUrgent = config.AllowUrgent,
-            UrgentLeadTimeHours = config.UrgentLeadTimeHours,
-            UrgentFeePercent = config.UrgentFeePercent,
+            MinOrderQuantity = supplier.MinOrderQuantity,
+            AllowUrgent = supplier.AllowUrgent,
+            UrgentLeadTimeHours = supplier.UrgentLeadTimeHours,
+            UrgentFeePercent = supplier.UrgentFeePercent,
             BlackoutDates = blackoutDates?.Select(b => new SupplierBlackoutDateDto
             {
                 Id = b.Id,

@@ -35,7 +35,6 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
     public async Task<Domain.Entities.Supplier.Supplier?> GetSupplierByIdAsync(Guid supplierId, CancellationToken cancellationToken = default)
     {
         return await _context.Suppliers
-            .Include(s => s.DeliveryConfig)
             .FirstOrDefaultAsync(s => s.Id == supplierId, cancellationToken);
     }
 
@@ -251,8 +250,6 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         }
 
         var supQuery = _context.Suppliers
-            .Include(s => s.DeliveryConfig)
-                .ThenInclude(dc => dc!.BlackoutDates)
             .Include(s => s.BlackoutDates)
             .Include(s => s.BranchAssignments)
             .Where(s => !s.IsDeleted && assignedSupplierIds.Contains(s.Id))
@@ -268,7 +265,6 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
 
         foreach (var s in suppliers)
         {
-            var dc = s.DeliveryConfig;
             var asg = s.BranchAssignments.FirstOrDefault(b => b.BranchId == branchId && !b.IsDeleted);
             var isAssigned = asg != null && asg.Status == SupplierStatus.Active;
             var isSupActive = s.Status == SupplierStatus.Active && isAssigned;
@@ -291,23 +287,13 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             }
             else
             {
-                activeDays = ParseDeliveryDays(dc?.DeliveryDaysJson, dc?.DeliveryWeekdaysMask ?? 127);
+                activeDays = ParseDeliveryDays(s.DeliveryDaysJson, s.DeliveryWeekdaysMask);
             }
 
             var blackoutDates = new HashSet<string>();
             if (s.BlackoutDates != null)
             {
                 foreach (var bo in s.BlackoutDates)
-                {
-                    for (var dt = bo.StartDate.Date; dt <= bo.EndDate.Date; dt = dt.AddDays(1))
-                    {
-                        blackoutDates.Add(dt.ToString("yyyy-MM-dd"));
-                    }
-                }
-            }
-            if (dc?.BlackoutDates != null)
-            {
-                foreach (var bo in dc.BlackoutDates)
                 {
                     for (var dt = bo.StartDate.Date; dt <= bo.EndDate.Date; dt = dt.AddDays(1))
                     {
@@ -324,7 +310,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 IsActive = isSupActive,
                 IsAssignedToBranch = isAssigned,
                 InactiveReason = inactiveReason,
-                CutoffTime = !string.IsNullOrWhiteSpace(dc?.CutoffTime) ? dc.CutoffTime : "15:00",
+                CutoffTime = !string.IsNullOrWhiteSpace(s.CutoffTime) ? s.CutoffTime : "15:00",
                 ActiveDeliveryDays = activeDays,
                 BlackoutDates = blackoutDates.OrderBy(x => x).ToList()
             });
