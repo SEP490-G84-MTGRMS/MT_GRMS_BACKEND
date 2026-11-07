@@ -9,6 +9,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.Branches;
@@ -142,7 +143,7 @@ public class BranchProductService : IBranchProductService
                 continue;
             }
 
-            if (!string.Equals(product.Status, "Active", StringComparison.OrdinalIgnoreCase))
+            if (product.Status != ProductStatus.Active)
             {
                 throw new BusinessException(
                     "PRODUCT_INACTIVE",
@@ -232,13 +233,6 @@ public class BranchProductService : IBranchProductService
         UpdateBranchProductCommand command,
         CancellationToken cancellationToken = default)
     {
-        var validator = new UpdateBranchProductValidator();
-        var validationResult = await validator.ValidateAsync(command, cancellationToken);
-        if (!validationResult.IsValid)
-        {
-            throw new BusinessException("VALIDATION_ERROR", validationResult.Errors.First().ErrorMessage);
-        }
-
         var branch = await _repository.GetBranchByIdAsync(branchId, cancellationToken);
         if (branch == null || branch.IsDeleted)
         {
@@ -259,7 +253,7 @@ public class BranchProductService : IBranchProductService
 
         if (!string.IsNullOrWhiteSpace(command.Status)
             && string.Equals(command.Status, "Active", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(product.Status, "Active", StringComparison.OrdinalIgnoreCase))
+            && product.Status != ProductStatus.Active)
         {
             throw new BusinessException(
                 "PRODUCT_INACTIVE",
@@ -334,7 +328,7 @@ public class BranchProductService : IBranchProductService
 
         var normalizedStatus = string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase) ? "Active" : "Inactive";
         if (normalizedStatus == "Active"
-            && !string.Equals(product.Status, "Active", StringComparison.OrdinalIgnoreCase))
+            && product.Status != ProductStatus.Active)
         {
             throw new BusinessException(
                 "PRODUCT_INACTIVE",

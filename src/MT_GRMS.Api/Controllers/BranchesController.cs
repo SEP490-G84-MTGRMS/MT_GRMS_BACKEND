@@ -7,7 +7,7 @@ using MT_GRMS.Application.Common;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/branches")]
+[Route("api/branches")]
 public class BranchesController : BaseApiController
 {
     private readonly IBranchService _branchService;

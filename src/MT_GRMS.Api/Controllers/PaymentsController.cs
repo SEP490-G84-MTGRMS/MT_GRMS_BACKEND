@@ -18,7 +18,7 @@ using MT_GRMS.Infrastructure.Persistence;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/payments")]
+[Route("api/payments")]
 public class PaymentsController : BaseApiController
 {
     private readonly AppDbContext _context;
@@ -60,7 +60,7 @@ public class PaymentsController : BaseApiController
                 bankAccountNumber = "0918889999",
                 bankAccountName = "NGUYEN AN NHIEN",
                 sepayApiKeyMasked = "sepay_apikey_••••••••••••9999",
-                webhookUrl = $"{Request.Scheme}://{Request.Host}/api/v1/payments/sepay-webhook",
+                webhookUrl = $"{Request.Scheme}://{Request.Host}/api/payments/sepay-webhook",
                 cashOutApprovalThreshold = 200000m,
                 cashOutShiftTotalLimit = 0m,
                 isActive = true
@@ -81,7 +81,7 @@ public class PaymentsController : BaseApiController
             bankAccountNumber = config.BankAccountNumber,
             bankAccountName = config.BankAccountName,
             sepayApiKeyMasked = maskedKey,
-            webhookUrl = $"{Request.Scheme}://{Request.Host}/api/v1/payments/sepay-webhook",
+            webhookUrl = $"{Request.Scheme}://{Request.Host}/api/payments/sepay-webhook",
             cashOutApprovalThreshold = config.CashOutApprovalThreshold,
             cashOutShiftTotalLimit = config.CashOutShiftTotalLimit,
             isActive = config.IsActive
@@ -149,7 +149,7 @@ public class PaymentsController : BaseApiController
         {
             success = true,
             message = "Đã lưu cấu hình tài khoản thanh toán thành công!",
-            webhookUrl = $"{Request.Scheme}://{Request.Host}/api/v1/payments/sepay-webhook"
+            webhookUrl = $"{Request.Scheme}://{Request.Host}/api/payments/sepay-webhook"
         });
     }
 

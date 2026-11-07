@@ -1400,7 +1400,7 @@ public class SupplierService : ISupplierService
             }
 
             var product = entity.Product ?? await _supplierRepository.GetProductByIdAsync(productId, cancellationToken);
-            if (product == null || !string.Equals(product.Status, "Active", StringComparison.OrdinalIgnoreCase))
+            if (product == null || product.Status != ProductStatus.Active)
             {
                 throw new BusinessException(
                     "PRODUCT_INACTIVE",

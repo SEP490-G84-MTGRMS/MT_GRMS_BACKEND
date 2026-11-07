@@ -8,7 +8,7 @@ using MT_GRMS.Application.Common;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/admin/tenants")]
+[Route("api/admin/tenants")]
 [Authorize(Roles = "ADMIN")]
 public class AdminTenantsController : BaseApiController
 {

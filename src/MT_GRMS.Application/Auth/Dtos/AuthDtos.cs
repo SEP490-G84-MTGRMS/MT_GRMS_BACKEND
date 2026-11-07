@@ -39,3 +39,18 @@ public record RegisterTenantRequest(
     string Password,
     bool AgreeTerms = true
 );
+
+public record ForgotPasswordRequest(
+    string Email
+);
+
+public record VerifyOtpRequest(
+    string Email,
+    string OtpCode
+);
+
+public record ResetPasswordRequest(
+    string Email,
+    string OtpCode,
+    string NewPassword
+);
