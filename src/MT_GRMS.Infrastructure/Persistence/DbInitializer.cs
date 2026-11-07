@@ -1603,6 +1603,66 @@ public static class DbInitializer
             empNam.BranchId = branchCauGiay.Id;
             empNam.UserId = staffUser2.Id;
         }
+
+        // Nhân viên 3: Nguyễn Văn Minh gắn cố định tại Chi nhánh Ba Đình (b1000000-0000-0000-0000-000000000001)
+        var staffUser3 = await context.Users.FirstOrDefaultAsync(u => u.Id == "usr_employee_annhien_04" || u.UserName == "0915556666");
+        if (staffUser3 == null)
+        {
+            staffUser3 = new User
+            {
+                Id = "usr_employee_annhien_04",
+                UserName = "0915556666",
+                Password = "123456",
+                FullName = "Nguyễn Văn Minh (Nhân viên Ba Đình)",
+                Email = "minh.nguyen@annhienmart.vn",
+                Phone = "0915556666",
+                IsActive = true,
+                IsEmailVerified = true
+            };
+            await context.Users.AddAsync(staffUser3);
+            await context.SaveChangesAsync();
+        }
+
+        var tuStaff3 = await context.TenantUsers.FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == staffUser3.Id);
+        if (tuStaff3 == null)
+        {
+            await context.TenantUsers.AddAsync(new TenantUser
+            {
+                TenantId = tenantId,
+                UserId = staffUser3.Id,
+                Role = "EMPLOYEE",
+                IsActive = true
+            });
+        }
+        else
+        {
+            tuStaff3.Role = "EMPLOYEE";
+        }
+
+        var empMinh = await context.Employees.FirstOrDefaultAsync(e => e.TenantId == tenantId && e.EmployeeCode == "NV-AN-03");
+        if (empMinh == null)
+        {
+            empMinh = new Employee
+            {
+                TenantId = tenantId,
+                BranchId = branch.Id,
+                UserId = staffUser3.Id,
+                EmployeeCode = "NV-AN-03",
+                FullName = "Nguyễn Văn Minh (Nhân viên Ba Đình)",
+                Phone = "0915556666",
+                Email = "minh.nguyen@annhienmart.vn",
+                JobTitle = "Thu ngân / Nhân viên bán hàng",
+                SalaryType = "monthly",
+                BaseRate = 7500000m,
+                Status = "active"
+            };
+            await context.Employees.AddAsync(empMinh);
+        }
+        else
+        {
+            empMinh.BranchId = branch.Id;
+            empMinh.UserId = staffUser3.Id;
+        }
         await context.SaveChangesAsync();
 
         // 4. Danh mục sản phẩm của An Nhiên Mart
