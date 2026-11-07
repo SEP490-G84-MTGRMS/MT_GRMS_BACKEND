@@ -8,7 +8,7 @@ using MT_GRMS.Domain.Enums;
 namespace MT_GRMS.Api.Controllers;
 
 [Authorize]
-[Route("api/v1/payslips")]
+[Route("api/payslips")]
 public class PayslipsController : BaseApiController
 {
     private readonly IPayslipService _payslipService;
@@ -69,6 +69,19 @@ public class PayslipsController : BaseApiController
     {
         var result = await _payslipService.GenerateMonthlyPayrollAsync(request, ct);
         return Ok(ApiResponse<IReadOnlyList<PayslipResponse>>.Ok(result, "Khởi tạo bảng lương thành công."));
+    }
+
+    /// <summary>
+    /// POST /api/payslips/recalculate
+    /// Tính toán lại bảng lương cho kỳ tháng (bảo lưu các phiếu đã chi trả, chỉ tính lại các phiếu chưa thanh toán).
+    /// </summary>
+    [HttpPost("recalculate")]
+    public async Task<ActionResult<ApiResponse<IReadOnlyList<PayslipResponse>>>> RecalculatePayroll(
+        [FromBody] GeneratePayrollBatchRequest request,
+        CancellationToken ct = default)
+    {
+        var result = await _payslipService.GenerateMonthlyPayrollAsync(request, ct);
+        return Ok(ApiResponse<IReadOnlyList<PayslipResponse>>.Ok(result, "Tính toán lại bảng lương thành công."));
     }
 
     /// <summary>
