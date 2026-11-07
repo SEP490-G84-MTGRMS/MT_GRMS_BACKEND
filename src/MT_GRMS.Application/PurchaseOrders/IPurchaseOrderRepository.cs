@@ -60,6 +60,32 @@ public interface IPurchaseOrderRepository
         CancellationToken cancellationToken = default);
 
     void AddPurchaseOrderDetail(PurchaseOrderDetail detail);
+
+    void AddPurchaseOrderRevision(PurchaseOrderRevision revision);
+
+    Task<PurchaseOrder?> FindCommittedPoAsync(
+        Guid branchId,
+        Guid supplierId,
+        DateTime deliveryDate,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<PurchaseOrder>> GetCommittedPosInRangeAsync(
+        Guid branchId,
+        Guid? supplierId,
+        DateTime viewFrom,
+        int durationDays,
+        CancellationToken cancellationToken = default);
+
+    Task<SupplierProduct?> GetSupplierProductAsync(
+        Guid supplierId,
+        Guid productId,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<Branch>> GetActiveBranchesAsync(CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<Guid>> GetActiveBranchIdsForSupplierAsync(
+        Guid supplierId,
+        CancellationToken cancellationToken = default);
 }
 
 

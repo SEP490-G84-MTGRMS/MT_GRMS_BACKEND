@@ -17,6 +17,27 @@ public interface IPurchaseOrderService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Hub chốt đơn NCC: gom nhóm theo NCC từ draft PO + trạng thái ngày (PurchaseOrders / Details).
+    /// </summary>
+    Task<DispatchHubResponse> GetDispatchHubAsync(
+        DispatchHubQuery query,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Hub theo NCC (multi-branch): danh sách toàn bộ NCC có liên kết cửa hàng.
+    /// </summary>
+    Task<DispatchSupplierHubResponse> GetDispatchSupplierHubAsync(
+        DispatchSupplierHubQuery query,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Chi tiết 1 NCC — sản phẩm nhóm theo cửa hàng.
+    /// </summary>
+    Task<DispatchSupplierDetailResponse> GetDispatchSupplierDetailAsync(
+        DispatchSupplierDetailQuery query,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Lưu bản thảo kế hoạch đặt hàng ma trận (DRAFT PO)
     /// </summary>
     Task<PurchaseOrderDto> SaveMatrixDraftAsync(
@@ -24,9 +45,23 @@ public interface IPurchaseOrderService
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Chốt & Tách ma trận thành các đơn PO độc lập theo từng Ngày giao hàng và từng Nhà cung cấp (FE-05)
+    /// Chốt & Tách ma trận thành các đơn PO độc lập theo từng Ngày giao hàng và từng Nhà cung cấp (FE-05) (Legacy)
     /// </summary>
     Task<IReadOnlyList<PurchaseOrderDto>> SplitMatrixPoAsync(
+        SplitMatrixPoCommand command,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Chốt đơn theo phạm vi (NEAREST / WEEK / ALL) với Partial Success độc lập từng group (P0 Business Engine)
+    /// </summary>
+    Task<SplitMatrixBatchResultDto> SplitMatrixPoBatchAsync(
+        SplitMatrixPoCommand command,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Tính toán trước kết quả chốt đơn ma trận (Preview) không ghi DB, phục vụ UI Hub Preview Modal
+    /// </summary>
+    Task<SplitMatrixBatchResultDto> PreviewSplitMatrixPoAsync(
         SplitMatrixPoCommand command,
         CancellationToken cancellationToken = default);
 

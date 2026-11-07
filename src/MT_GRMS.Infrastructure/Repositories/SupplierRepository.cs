@@ -554,7 +554,8 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         CancellationToken cancellationToken = default)
     {
         var query = _context.SupplierBranchAssignments
-            .Include(sba => sba.Supplier)
+            .Include(sba => sba.Supplier!)
+                .ThenInclude(s => s.DeliveryConfig)
             .Include(sba => sba.Branch)
             .AsNoTracking();
 

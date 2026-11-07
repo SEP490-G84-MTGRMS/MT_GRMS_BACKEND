@@ -7,6 +7,8 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-06
 
 ### Fixed
+- Khắc phục lỗi lặp liên tục `42P01: relation "OutboxMessages" does not exist` từ worker `SupplierOrderDispatchWorker`: chuẩn hóa thứ tự thực thi câu lệnh DDL trong `DbInitializer.cs` bằng cách đưa các lệnh `CREATE TABLE IF NOT EXISTS` cho 4 bảng (`OutboxMessages`, `SupplierDispatchPackages`, `SupplierDispatchPackageItems`, `PurchaseOrderRevisions`) lên trước các lệnh `ALTER TABLE`, loại bỏ xung đột phụ thuộc bảng khi khởi động [BUG-DB] [worklog: docs/worklogs/2026-11-07_BUG-DB_AI_fix-outboxmessages-ddl-order.md].
+- Khắc phục lỗi `42P01: relation "BranchAttendancePolicies" does not exist` và `relation "ShiftConfigs" does not exist` khi khởi động Backend sau khi merge code phân hệ Nhân sự (HR): tự động khởi tạo an toàn và lũy đẳng (`CREATE TABLE IF NOT EXISTS`) cho toàn bộ 6 bảng HR (`BranchAttendancePolicies`, `ShiftConfigs`, `Employees`, `EmployeeAllowances`, `EmployeeSchedules`, `Payslips`, `CashbookTransaction`) và cập nhật các cột mới còn thiếu trong `DbInitializer.cs` [BUG-DB] [worklog: docs/worklogs/2026-11-06_BUG-DB_AI_fix-missing-hr-attendance-tables.md].
 - Khắc phục lỗi `fail: Microsoft.EntityFrameworkCore.Database.Command[20102]` khi khởi động Backend: tự động phát hiện các cột PIN bảo mật đã tồn tại trong bảng `Users` và đồng bộ vào bảng lịch sử `__EFMigrationsHistory`, ngăn chặn hoàn toàn việc chạy lại lệnh `ALTER TABLE "Users" ADD "FailedPinAttempts"` gây trùng lặp cột [BUG-DB] [worklog: docs/worklogs/2026-11-06_BUG-DB_AI_fix-duplicate-column-migration-error.md].
 - Khắc phục toàn bộ các cảnh báo Model Validation `warn: Microsoft.EntityFrameworkCore.Model.Validation[10622]` (QueryFilter tương tác với Required Navigation) và `[20601]` (Sentinel Value cho enum mặc định `CustomerDebtStatus` và `SupplierStatus`), làm sạch 100% console log khi khởi động ứng dụng [BUG-DB] [worklog: docs/worklogs/2026-11-06_BUG-DB_AI_fix-duplicate-column-migration-error.md].
 
@@ -72,6 +74,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - Thư mục quản lý worklog nội bộ: `docs/worklogs/`.
 
 ### Fixed
+- Khắc phục lỗi lặp liên tục `42P01: relation "OutboxMessages" does not exist` từ worker `SupplierOrderDispatchWorker`: chuẩn hóa thứ tự thực thi câu lệnh DDL trong `DbInitializer.cs` bằng cách đưa các lệnh `CREATE TABLE IF NOT EXISTS` cho 4 bảng (`OutboxMessages`, `SupplierDispatchPackages`, `SupplierDispatchPackageItems`, `PurchaseOrderRevisions`) lên trước các lệnh `ALTER TABLE`, loại bỏ xung đột phụ thuộc bảng khi khởi động [BUG-DB] [worklog: docs/worklogs/2026-11-07_BUG-DB_AI_fix-outboxmessages-ddl-order.md].
 
 - Lỗ hổng cô lập người thuê đa tầng (Multi-Tenant Isolation) trong `AppDbContext.cs`: chuyển sang đánh giá động runtime trong `HasQueryFilter`.
 - Biên dịch 0 Warning, 0 Error.
