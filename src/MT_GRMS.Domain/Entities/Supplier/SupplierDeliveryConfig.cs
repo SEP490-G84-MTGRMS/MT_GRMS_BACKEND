@@ -7,8 +7,6 @@ public class SupplierDeliveryConfig : BaseTenantEntity
     public Guid SupplierId { get; set; }
     public Supplier? Supplier { get; set; }
 
-    public int LeadTimeHours { get; set; } = 24;
-    public int LeadTimeDays { get; set; } = 1;
     public int CutoffDayOffset { get; set; } = 1;
     public string CutoffTime { get; set; } = "17:00";
     public string OrderCutoffTime { get; set; } = "17:00";

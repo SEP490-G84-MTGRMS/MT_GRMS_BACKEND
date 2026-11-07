@@ -402,7 +402,7 @@ public class PurchaseOrderService : IPurchaseOrderService
                 }
 
                 var cutoff = dayStatus?.CutoffDateTime
-                             ?? OrderMatrixRules.GetCutoffDateTime(date, cfg.LeadTimeDays, cfg.CutoffTime);
+                             ?? OrderMatrixRules.GetCutoffDateTime(date, cfg.CutoffTime);
                 var remaining = (int)Math.Floor((cutoff - now).TotalMinutes);
 
                 if (group.RemainingMinutes == null || remaining < group.RemainingMinutes)
@@ -448,7 +448,7 @@ public class PurchaseOrderService : IPurchaseOrderService
                     if (!g.Items.Any(it => it.DeliveryDate.Date == date)) continue;
                     if (!configsBySupplier.TryGetValue(g.SupplierId, out var cfg)) continue;
                     dayBySupplierDate.TryGetValue((g.SupplierId, date), out var ds);
-                    var cutoff = ds?.CutoffDateTime ?? OrderMatrixRules.GetCutoffDateTime(date, cfg.LeadTimeDays, cfg.CutoffTime);
+                    var cutoff = ds?.CutoffDateTime ?? OrderMatrixRules.GetCutoffDateTime(date, cfg.CutoffTime);
                     var st = ds?.DeliveryDateStatus ?? OrderMatrixRules.StatusOpen;
 
                     if (OrderMatrixRules.IsEditableStatus(st) && now < cutoff)

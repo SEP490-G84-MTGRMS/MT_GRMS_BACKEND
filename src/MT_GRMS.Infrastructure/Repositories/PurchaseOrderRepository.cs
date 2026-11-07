@@ -324,7 +324,6 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 IsActive = isSupActive,
                 IsAssignedToBranch = isAssigned,
                 InactiveReason = inactiveReason,
-                LeadTimeDays = dc?.LeadTimeDays > 0 ? dc.LeadTimeDays : 1,
                 CutoffTime = !string.IsNullOrWhiteSpace(dc?.CutoffTime) ? dc.CutoffTime : "15:00",
                 ActiveDeliveryDays = activeDays,
                 BlackoutDates = blackoutDates.OrderBy(x => x).ToList()

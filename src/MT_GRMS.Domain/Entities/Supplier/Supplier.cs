@@ -11,10 +11,6 @@ public class Supplier : BaseTenantEntity
     public string? TradeName { get; set; }
     public SupplierType SupplierType { get; set; } = SupplierType.Goods;
 
-    public Guid? CategoryId { get; set; }
-    public SupplierCategory? Category { get; set; }
-    public string CategoryCode { get; set; } = "FRESH";
-
     public string ContactPerson { get; set; } = string.Empty;
     public string Phone { get; set; } = string.Empty;
     [NotMapped]

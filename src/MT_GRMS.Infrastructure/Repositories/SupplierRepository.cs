@@ -23,7 +23,6 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
     public async Task<Supplier?> GetByIdWithDetailsAsync(Guid id, CancellationToken cancellationToken = default)
     {
         return await _context.Suppliers
-            .Include(s => s.Category)
             .Include(s => s.DeliveryConfig)
             .Include(s => s.BlackoutDates)
             .Include(s => s.BranchAssignments)
@@ -63,8 +62,11 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         string? category = null,
         CancellationToken cancellationToken = default)
     {
+        // categoryId / category giữ signature tương thích API cũ nhưng không còn lọc (đã bỏ SupplierCategories)
+        _ = categoryId;
+        _ = category;
+
         var query = _context.Suppliers
-            .Include(s => s.Category)
             .Include(s => s.BranchAssignments)
             .AsNoTracking();
 
@@ -168,21 +170,13 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             query = query.Where(s => s.Status == status.Value);
         }
 
-        if (categoryId.HasValue)
-        {
-            query = query.Where(s => s.CategoryId == categoryId.Value);
-        }
-
-        if (!string.IsNullOrWhiteSpace(category))
-        {
-            var catTerm = category.Trim().ToLower();
-            query = query.Where(s =>
-                (s.CategoryCode != null && s.CategoryCode.ToLower().Contains(catTerm)) ||
-                (s.Category != null && (s.Category.Code.ToLower().Contains(catTerm) || s.Category.Name.ToLower().Contains(catTerm))));
-        }
-
-        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
-        var isStoreOwner = string.IsNullOrEmpty(role) || role is "STORE_OWNER" or "ADMIN";
+        var role = (_tenantContext.CurrentRole ?? string.Empty)
+            .Trim()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .ToUpperInvariant();
+        var isStoreOwner = string.IsNullOrEmpty(role) || role is "STOREOWNER" or "ADMIN";
         if (!isStoreOwner && _tenantContext.CurrentBranchId is Guid branchId)
         {
             query = query.Where(s =>
@@ -210,8 +204,13 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         if (string.IsNullOrWhiteSpace(query)) return result;
 
         var term = query.Trim().ToLower();
-        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
-        var isStoreOwner = string.IsNullOrEmpty(role) || role is "STORE_OWNER" or "ADMIN";
+        var role = (_tenantContext.CurrentRole ?? string.Empty)
+            .Trim()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .ToUpperInvariant();
+        var isStoreOwner = string.IsNullOrEmpty(role) || role is "STOREOWNER" or "ADMIN";
         var branchId = _tenantContext.CurrentBranchId;
 
         // Base Supplier query with branch isolation

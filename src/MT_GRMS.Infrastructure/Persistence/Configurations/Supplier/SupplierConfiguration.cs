@@ -16,7 +16,6 @@ public class SupplierConfiguration : IEntityTypeConfiguration<Domain.Entities.Su
         builder.Property(x => x.Name).HasMaxLength(255).IsRequired();
         builder.Property(x => x.TradeName).HasMaxLength(255);
         builder.Property(x => x.SupplierType).HasConversion<int>().IsRequired();
-        builder.Property(x => x.CategoryCode).HasMaxLength(50).HasDefaultValue("FRESH");
 
         builder.Property(x => x.ContactPerson).HasMaxLength(150).IsRequired();
         builder.Property(x => x.Phone).HasMaxLength(30).IsRequired();
@@ -45,11 +44,6 @@ public class SupplierConfiguration : IEntityTypeConfiguration<Domain.Entities.Su
         builder.HasIndex(x => new { x.TenantId, x.Status });
 
         // Relationships
-        builder.HasOne(x => x.Category)
-            .WithMany(c => c.Suppliers)
-            .HasForeignKey(x => x.CategoryId)
-            .OnDelete(DeleteBehavior.SetNull);
-
         builder.HasOne(x => x.DeliveryConfig)
             .WithOne(d => d.Supplier)
             .HasForeignKey<SupplierDeliveryConfig>(d => d.SupplierId)

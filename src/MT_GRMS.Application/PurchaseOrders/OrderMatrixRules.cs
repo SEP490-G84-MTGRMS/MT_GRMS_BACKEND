@@ -103,15 +103,18 @@ public static class OrderMatrixRules
     }
 
     /// <summary>
-    /// Cutoff của ngày giao D = (D - LeadTimeDays) ở giờ CutoffTime (local/unspecified).
+    /// Cutoff của ngày giao D = cùng ngày D ở giờ CutoffTime (local/unspecified).
     /// </summary>
-    public static DateTime GetCutoffDateTime(DateTime deliveryDate, int leadTimeDays, string? cutoffTime)
+    public static DateTime GetCutoffDateTime(DateTime deliveryDate, string? cutoffTime)
     {
         var (hour, minute) = ParseCutoffTime(cutoffTime);
-        var lead = Math.Max(0, leadTimeDays);
-        var cutoffDay = deliveryDate.Date.AddDays(-lead);
+        var cutoffDay = deliveryDate.Date;
         return new DateTime(cutoffDay.Year, cutoffDay.Month, cutoffDay.Day, hour, minute, 0, DateTimeKind.Unspecified);
     }
+
+    /// <summary>Giữ overload cũ — lead time luôn bỏ qua (0).</summary>
+    public static DateTime GetCutoffDateTime(DateTime deliveryDate, int leadTimeDays, string? cutoffTime)
+        => GetCutoffDateTime(deliveryDate, cutoffTime);
 
     public static bool IsSupplierDeliveryDay(OrderMatrixSupplierDeliveryConfigDto config, DateTime deliveryDate)
     {
@@ -136,12 +139,6 @@ public static class OrderMatrixRules
         return true;
     }
 
-    public static bool IsLeadTimeSatisfied(DateTime now, DateTime deliveryDate, int leadTimeDays)
-    {
-        var earliest = now.Date.AddDays(Math.Max(0, leadTimeDays));
-        return deliveryDate.Date >= earliest;
-    }
-
     public static OrderMatrixDayStatusDto EvaluateDayStatus(
         Guid supplierId,
         DateTime deliveryDate,
@@ -150,7 +147,7 @@ public static class OrderMatrixRules
         string? committedPoCode = null,
         Guid? committedPoId = null)
     {
-        var cutoff = GetCutoffDateTime(deliveryDate, config.LeadTimeDays, config.CutoffTime);
+        var cutoff = GetCutoffDateTime(deliveryDate, config.CutoffTime);
 
         if (!config.IsActive)
         {
@@ -175,9 +172,10 @@ public static class OrderMatrixRules
             return Off(supplierId, deliveryDate, cutoff, "HOLIDAY_BLACKOUT");
         }
 
-        if (!IsLeadTimeSatisfied(now, deliveryDate, config.LeadTimeDays))
+        // Không cho đặt giao ngày quá khứ
+        if (deliveryDate.Date < now.Date)
         {
-            return Off(supplierId, deliveryDate, cutoff, "LEAD_TIME_VIOLATION");
+            return Off(supplierId, deliveryDate, cutoff, "PAST_DELIVERY_DATE");
         }
 
         var hasCommittedPo = !string.IsNullOrWhiteSpace(committedPoCode) || committedPoId.HasValue;

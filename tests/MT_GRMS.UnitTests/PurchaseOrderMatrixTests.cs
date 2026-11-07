@@ -689,8 +689,8 @@ public class PurchaseOrderMatrixTests
     [Fact]
     public async Task REQ_PO_12c_AfterCutoff_ExistingPo_ReturnsAlreadyFinalized()
     {
-        // Cutoff = (Delivery - LeadTime) @ 00:00 = hôm nay 00:00 → đã qua
-        var deliveryDate = DateTime.Today.AddDays(1);
+        // Cutoff cùng ngày giao @ 00:00 hôm nay → đã qua
+        var deliveryDate = DateTime.Today;
         _repo.CustomSupplierConfigs = new List<OrderMatrixSupplierDeliveryConfigDto>
         {
             new OrderMatrixSupplierDeliveryConfigDto
@@ -700,14 +700,12 @@ public class PurchaseOrderMatrixTests
                 SupplierName = "Bánh Kẹo SnackVN",
                 IsActive = true,
                 IsAssignedToBranch = true,
-                LeadTimeDays = 1,
                 CutoffTime = "00:00",
                 BlackoutDates = new List<string>(),
                 ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 }
             }
         };
 
-        // Seed committed PO trực tiếp (đã quá cutoff 00:00 hôm nay cho delivery ngày mai với lead 0)
         var po = new PurchaseOrder
         {
             TenantId = "tenant-test-1",
@@ -775,7 +773,6 @@ public class PurchaseOrderMatrixTests
                 SupplierName = "Công ty Hải Nam",
                 IsActive = true,
                 IsAssignedToBranch = true,
-                LeadTimeDays = 0,
                 CutoffTime = "00:00",
                 BlackoutDates = new List<string>(),
                 ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 }
@@ -878,7 +875,6 @@ public class PurchaseOrderMatrixTests
                 SupplierName = s.Name,
                 IsActive = s.Status == SupplierStatus.Active,
                 IsAssignedToBranch = true,
-                LeadTimeDays = 0,
                 CutoffTime = "23:59",
                 BlackoutDates = new List<string>(),
                 ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 }

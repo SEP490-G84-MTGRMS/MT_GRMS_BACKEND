@@ -137,8 +137,6 @@ public class SupplierManagementTests
             }
             if (supplierType.HasValue) query = query.Where(s => s.SupplierType == supplierType.Value);
             if (status.HasValue) query = query.Where(s => s.Status == status.Value);
-            if (categoryId.HasValue) query = query.Where(s => s.CategoryId == categoryId.Value);
-
             var list = query.ToList();
             var paged = list.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
             return Task.FromResult(((IReadOnlyList<Supplier>)paged, list.Count));
@@ -691,44 +689,31 @@ public class SupplierManagementTests
     }
 
     [Fact]
-    public void REQDEL01_CalculateEarliestDeliveryDate_AfterCutoffOnFriday_SkipsSundayAndSelectsNextMonday()
+    public void REQDEL01_CalculateEarliestDeliveryDate_AfterCutoffOnFriday_SelectsSaturday()
     {
-        // ARRANGE:
-        // Đơn tạo vào Thứ Sáu 2026-10-16 lúc 16:30 (vượt Cutoff 16:00)
-        // LeadTime: 24h
-        // Giao hàng Thứ 2 - Thứ 7 (nghỉ Chủ nhật)
+        // Đơn Thứ Sáu 16:30 (vượt Cutoff 16:00), giao T2–T7
         var orderTime = new DateTime(2026, 10, 16, 16, 30, 0, DateTimeKind.Utc); // Friday
-        int leadTimeHours = 24;
         string cutoffTime = "16:00";
-        int weekdaysMask = 63; // Mon (1) + Tue (2) + Wed (4) + Thu (8) + Fri (16) + Sat (32) = 63 (Sun = 64 là nghỉ)
+        int weekdaysMask = 63; // Mon–Sat
 
-        // ACT
         var earliest = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
             orderTime,
-            leadTimeHours,
             cutoffTime,
             weekdaysMask,
             blackoutDates: null);
 
-        // ASSERT:
-        // Vượt Cutoff Thứ 6 -> tính từ Thứ 7 (2026-10-17).
-        // +24h Lead time -> Chủ nhật (2026-10-18), nhưng Chủ nhật nghỉ giao hàng!
-        // -> Ngày giao sớm nhất hợp lệ là Thứ 2 tuần kế tiếp (2026-10-19).
-        Assert.Equal(DayOfWeek.Monday, earliest.DayOfWeek);
-        Assert.Equal(new DateTime(2026, 10, 19), earliest.Date);
+        // Quá cutoff → từ Thứ 7; Thứ 7 vẫn giao → 2026-10-17
+        Assert.Equal(DayOfWeek.Saturday, earliest.DayOfWeek);
+        Assert.Equal(new DateTime(2026, 10, 17), earliest.Date);
     }
 
     [Fact]
     public void REQDEL02_CalculateEarliestDeliveryDate_WhenHolidayBlackoutDatesExist_SkipsHolidays()
     {
-        // ARRANGE:
-        // Đặt hàng Thứ 2 (2026-08-31) lúc 10:00 (trước Cutoff 17:00)
-        // LeadTime: 24h -> Đến Thứ 3 (2026-09-01)
-        // Blackout Date: Lễ Quốc khánh 2026-09-01 đến 2026-09-03
-        var orderTime = new DateTime(2026, 8, 31, 10, 0, 0, DateTimeKind.Utc); // Monday
-        int leadTimeHours = 24;
+        // Đặt sau cutoff Thứ 2 → bắt đầu Thứ 3 01/09 nhưng blackout 1–3/9 → 04/09
+        var orderTime = new DateTime(2026, 8, 31, 18, 0, 0, DateTimeKind.Utc); // Monday after cutoff
         string cutoffTime = "17:00";
-        int weekdaysMask = 127; // Nhận giao tất cả các ngày
+        int weekdaysMask = 127;
 
         var blackoutDates = new List<SupplierBlackoutDate>
         {
@@ -741,16 +726,12 @@ public class SupplierManagementTests
             }
         };
 
-        // ACT
         var earliest = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
             orderTime,
-            leadTimeHours,
             cutoffTime,
             weekdaysMask,
             blackoutDates);
 
-        // ASSERT:
-        // Sau nghỉ lễ là ngày 2026-09-04 (Thứ Sáu)
         Assert.Equal(new DateTime(2026, 9, 4), earliest.Date);
         Assert.Equal(DayOfWeek.Friday, earliest.DayOfWeek);
     }
@@ -758,62 +739,50 @@ public class SupplierManagementTests
     [Fact]
     public void REQDEL03_CalculateEarliestDeliveryDate_CutoffBoundary_ExactAtCutoff_Vs_AfterCutoff()
     {
-        // 1. Đặt chính xác vào thời điểm Cutoff (17:00) -> Không bị tính sang ngày kế tiếp
         var exactOrderTime = new DateTime(2026, 11, 2, 17, 0, 0, DateTimeKind.Utc); // Monday 17:00
         var earliestExact = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
             exactOrderTime,
-            leadTimeHours: 24,
             cutoffTimeStr: "17:00",
             deliveryWeekdaysMask: 127,
             blackoutDates: null);
 
-        // 17:00 Thứ 2 + 24h = 17:00 Thứ 3 (2026-11-03)
-        Assert.Equal(new DateTime(2026, 11, 3), earliestExact.Date);
+        // Đúng giờ cutoff → vẫn cùng ngày
+        Assert.Equal(new DateTime(2026, 11, 2), earliestExact.Date);
 
-        // 2. Đặt sau Cutoff 1 phút (17:01) -> Bị đẩy sang 00:00 ngày hôm sau (Thứ 3)
         var afterCutoffOrderTime = new DateTime(2026, 11, 2, 17, 1, 0, DateTimeKind.Utc); // Monday 17:01
         var earliestAfter = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
             afterCutoffOrderTime,
-            leadTimeHours: 24,
             cutoffTimeStr: "17:00",
             deliveryWeekdaysMask: 127,
             blackoutDates: null);
 
-        // Tính từ Thứ 3 (2026-11-03 00:00) + 24h = Thứ 4 (2026-11-04)
-        Assert.Equal(new DateTime(2026, 11, 4), earliestAfter.Date);
+        Assert.Equal(new DateTime(2026, 11, 3), earliestAfter.Date);
     }
 
     [Fact]
     public void REQDEL04_CalculateEarliestDeliveryDate_ConsecutiveNonDeliveryDays_SkipsToNextActiveDay()
     {
-        // NCC chỉ nhận giao hàng vào Thứ 2 (mask = 1)
-        // Đặt hàng vào Thứ 3 (2026-11-03) lúc 09:00 sáng
         var orderTime = new DateTime(2026, 11, 3, 9, 0, 0, DateTimeKind.Utc); // Tuesday
         var earliest = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
             orderTime,
-            leadTimeHours: 24,
             cutoffTimeStr: "17:00",
             deliveryWeekdaysMask: 1, // Only Monday
             blackoutDates: null);
 
-        // Bỏ qua Thứ 4, 5, 6, 7, CN -> Chuyển sang Thứ 2 tuần sau (2026-11-09)
         Assert.Equal(DayOfWeek.Monday, earliest.DayOfWeek);
         Assert.Equal(new DateTime(2026, 11, 9), earliest.Date);
     }
 
     [Fact]
-    public void REQDEL05_CalculateEarliestDeliveryDate_LeadTimeZero_SameDayDelivery()
+    public void REQDEL05_CalculateEarliestDeliveryDate_BeforeCutoff_SameDayDelivery()
     {
-        // Lead Time = 0h, Đặt trước Cutoff vào ngày được nhận giao
         var orderTime = new DateTime(2026, 11, 2, 10, 0, 0, DateTimeKind.Utc); // Monday 10:00 AM
         var earliest = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
             orderTime,
-            leadTimeHours: 0,
             cutoffTimeStr: "17:00",
             deliveryWeekdaysMask: 127,
             blackoutDates: null);
 
-        // Giao ngay trong ngày Thứ 2
         Assert.Equal(new DateTime(2026, 11, 2), earliest.Date);
         Assert.Equal(DayOfWeek.Monday, earliest.DayOfWeek);
     }
@@ -830,7 +799,6 @@ public class SupplierManagementTests
 
         var command = new UpdateSupplierDeliveryConfigCommand
         {
-            LeadTimeDays = 1,
             CutoffTime = "17:00",
             DeliveryDays = [] // Không chọn ngày nào
         };
@@ -853,7 +821,6 @@ public class SupplierManagementTests
 
         var command = new UpdateSupplierDeliveryConfigCommand
         {
-            LeadTimeDays = 1,
             CutoffTime = "25:99", // Giờ không hợp lệ
             DeliveryDays = ["Mon", "Tue"]
         };
@@ -876,7 +843,6 @@ public class SupplierManagementTests
 
         var command = new UpdateSupplierDeliveryConfigCommand
         {
-            LeadTimeDays = 1,
             MinOrderQuantity = -10, // Âm
             CutoffTime = "17:00",
             DeliveryDays = ["Mon"]
@@ -900,8 +866,6 @@ public class SupplierManagementTests
 
         var command = new UpdateSupplierDeliveryConfigCommand
         {
-            LeadTimeDays = 2,
-            LeadTimeHours = 48,
             MinOrderQuantity = 15,
             CutoffTime = "16:30",
             DeliveryDays = ["Mon", "Wed", "Fri"]
@@ -910,7 +874,6 @@ public class SupplierManagementTests
         var result = await service.UpdateDeliveryConfigAsync(supplierId, command);
 
         Assert.NotNull(result);
-        Assert.Equal(2, result.LeadTimeDays);
         Assert.Equal(15, result.MinOrderQuantity);
         Assert.Equal("16:30", result.CutoffTime);
         Assert.Contains("Mon", result.DeliveryDays);
@@ -1244,8 +1207,7 @@ public class SupplierManagementTests
         {
             Name = "NCC Active Test",
             Phone = "0912345678",
-            Status = SupplierStatus.Active,
-            CategoryCode = "FRESH"
+            Status = SupplierStatus.Active
         };
 
         // ACT
@@ -1269,8 +1231,7 @@ public class SupplierManagementTests
         {
             Name = "NCC Inactive Test",
             Phone = "0912345679",
-            Status = SupplierStatus.Inactive,
-            CategoryCode = "AMBIENT"
+            Status = SupplierStatus.Inactive
         };
 
         // ACT
@@ -1308,8 +1269,7 @@ public class SupplierManagementTests
             AccountHolder = "NGUYEN VAN A",
             CreditLimit = 100000000,
             PaymentTermDays = 45,
-            Note = "Ghi chú đặc biệt không được mất",
-            CategoryCode = "FROZEN"
+            Note = "Ghi chú đặc biệt không được mất"
         };
         await repo.AddAsync(existing);
 

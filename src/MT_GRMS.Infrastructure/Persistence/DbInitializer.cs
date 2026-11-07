@@ -296,6 +296,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
                         ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
                         ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
+                        ALTER TABLE ""Suppliers"" DROP COLUMN IF EXISTS ""CategoryId"";
+                        ALTER TABLE ""Suppliers"" DROP COLUMN IF EXISTS ""CategoryCode"";
+                        ALTER TABLE ""SupplierDeliveryConfigs"" DROP COLUMN IF EXISTS ""LeadTimeHours"";
+                        ALTER TABLE ""SupplierDeliveryConfigs"" DROP COLUMN IF EXISTS ""LeadTimeDays"";
+                        DROP TABLE IF EXISTS ""SupplierCategories"" CASCADE;
                         DROP TABLE IF EXISTS ""ProductCombos"";
                         DROP INDEX IF EXISTS ""IX_Products_TenantID_ProductCode"";
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_TenantID_ProductCode"" ON ""Products"" (""TenantID"", ""ProductCode"") WHERE ""IsDeleted"" = false;
@@ -2864,8 +2869,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         {
                             TenantId = DefaultTenantId,
                             SupplierId = sup.Id,
-                            LeadTimeHours = 24,
-                            LeadTimeDays = 1,
                             CutoffTime = "17:00",
                             DeliveryWeekdaysMask = 127,
                             DeliveryDaysJson = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]"

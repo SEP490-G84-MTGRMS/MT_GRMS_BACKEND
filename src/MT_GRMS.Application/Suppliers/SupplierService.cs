@@ -57,8 +57,6 @@ public class SupplierService : ISupplierService
             ContactPerson = s.ContactPerson,
             TaxCode = s.TaxCode,
             Email = s.Email,
-            CategoryId = s.CategoryId,
-            CategoryName = s.Category?.CategoryName,
             Status = s.Status,
             PaymentTermDays = s.PaymentTermDays,
             CreditLimit = s.CreditLimit,
@@ -100,7 +98,6 @@ public class SupplierService : ISupplierService
         {
             dto.DeliveryConfig.EarliestDeliveryDate = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
                 DateTime.UtcNow,
-                dto.DeliveryConfig.LeadTimeHours,
                 dto.DeliveryConfig.CutoffTime,
                 dto.DeliveryConfig.DeliveryWeekdaysMask,
                 supplier.BlackoutDates ?? supplier.DeliveryConfig?.BlackoutDates);
@@ -134,8 +131,6 @@ public class SupplierService : ISupplierService
             Code = code,
             Name = command.Name.Trim(),
             SupplierType = command.SupplierType,
-            CategoryId = command.CategoryId,
-            CategoryCode = !string.IsNullOrWhiteSpace(command.CategoryCode) ? command.CategoryCode.Trim() : "FRESH",
             TaxCode = command.TaxCode?.Trim(),
             Phone = command.Phone.Trim(),
             Email = command.Email?.Trim(),
@@ -160,8 +155,6 @@ public class SupplierService : ISupplierService
         var deliveryConfig = new SupplierDeliveryConfig
         {
             Supplier = supplier,
-            LeadTimeHours = 24,
-            LeadTimeDays = 1,
             CutoffDayOffset = 1,
             CutoffTime = "17:00",
             OrderCutoffTime = "17:00",
@@ -214,7 +207,6 @@ public class SupplierService : ISupplierService
 
         supplier.Name = command.Name.Trim();
         supplier.SupplierType = command.SupplierType;
-        supplier.CategoryId = command.CategoryId;
         supplier.TaxCode = command.TaxCode?.Trim();
         supplier.Phone = command.Phone.Trim();
         supplier.Email = command.Email?.Trim();
@@ -376,8 +368,6 @@ public class SupplierService : ISupplierService
             config = new SupplierDeliveryConfig
             {
                 SupplierId = supplierId,
-                LeadTimeHours = 24,
-                LeadTimeDays = 1,
                 CutoffDayOffset = 1,
                 CutoffTime = "17:00",
                 OrderCutoffTime = "17:00",
@@ -393,7 +383,6 @@ public class SupplierService : ISupplierService
         var dto = MapToDeliveryConfigDto(config, blackoutDates);
         dto.EarliestDeliveryDate = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
             DateTime.UtcNow,
-            dto.LeadTimeHours,
             dto.CutoffTime,
             dto.DeliveryWeekdaysMask,
             blackoutDates);
@@ -408,11 +397,6 @@ public class SupplierService : ISupplierService
         if (command.DeliveryDays == null || command.DeliveryDays.Count == 0)
         {
             throw new BusinessException("INVALID_DELIVERY_DAYS", "Phải chọn ít nhất một ngày giao hàng hoạt động trong tuần (Active Delivery Days).");
-        }
-
-        if (command.LeadTimeDays < 0 || command.LeadTimeDays > 30)
-        {
-            throw new BusinessException("INVALID_LEAD_TIME", "Thời gian chuẩn bị (Lead Time) phải từ 0 đến 30 ngày.");
         }
 
         if (command.MinOrderQuantity < 0)
@@ -436,8 +420,6 @@ public class SupplierService : ISupplierService
             await _supplierRepository.AddDeliveryConfigAsync(config, cancellationToken);
         }
 
-        config.LeadTimeHours = command.LeadTimeHours;
-        config.LeadTimeDays = command.LeadTimeDays > 0 ? command.LeadTimeDays : 1;
         config.CutoffDayOffset = command.CutoffDayOffset >= 0 ? command.CutoffDayOffset : 1;
         config.CutoffTime = string.IsNullOrWhiteSpace(command.CutoffTime) ? "17:00" : command.CutoffTime.Trim();
         config.OrderCutoffTime = string.IsNullOrWhiteSpace(command.OrderCutoffTime) ? config.CutoffTime : command.OrderCutoffTime.Trim();
@@ -471,7 +453,6 @@ public class SupplierService : ISupplierService
         var resDto = MapToDeliveryConfigDto(config, updatedBlackouts);
         resDto.EarliestDeliveryDate = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
             DateTime.UtcNow,
-            resDto.LeadTimeHours,
             resDto.CutoffTime,
             resDto.DeliveryWeekdaysMask,
             updatedBlackouts);
@@ -1129,8 +1110,6 @@ public class SupplierService : ISupplierService
             SupplierType = s.SupplierType,
             Phone = s.Phone,
             Email = s.Email,
-            CategoryId = s.CategoryId,
-            CategoryName = s.Category?.CategoryName,
             Status = s.Status,
             PaymentTermDays = s.PaymentTermDays,
             CreditLimit = s.CreditLimit,
@@ -1192,8 +1171,6 @@ public class SupplierService : ISupplierService
         {
             Id = config.Id,
             SupplierId = config.SupplierId,
-            LeadTimeHours = config.LeadTimeHours,
-            LeadTimeDays = config.LeadTimeDays,
             CutoffDayOffset = config.CutoffDayOffset,
             CutoffTime = config.CutoffTime,
             OrderCutoffTime = string.IsNullOrWhiteSpace(config.OrderCutoffTime) ? config.CutoffTime : config.OrderCutoffTime,

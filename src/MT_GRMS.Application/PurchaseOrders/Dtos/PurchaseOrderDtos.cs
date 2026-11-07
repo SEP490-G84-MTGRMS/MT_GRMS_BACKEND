@@ -58,7 +58,6 @@ public class OrderMatrixSupplierDeliveryConfigDto
     public bool IsAssignedToBranch { get; set; } = true;
     public string? InactiveReason { get; set; }
 
-    public int LeadTimeDays { get; set; } = 1;
     public string CutoffTime { get; set; } = "15:00";
     public List<int> ActiveDeliveryDays { get; set; } = new() { 1, 2, 3, 4, 5, 6 };
     public List<string> BlackoutDates { get; set; } = new();
