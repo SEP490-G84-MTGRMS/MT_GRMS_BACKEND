@@ -27,12 +27,6 @@ public class BranchAttendancePolicyConfiguration : IEntityTypeConfiguration<Bran
         builder.Property(x => x.EnableEarlyLeaveThreshold).HasDefaultValue(true);
         builder.Property(x => x.EarlyLeaveThresholdMinutes).HasDefaultValue(0);
 
-        // 3. Làm thêm giờ (OT)
-        builder.Property(x => x.EnableOtBeforeShift).HasDefaultValue(true);
-        builder.Property(x => x.OtBeforeShiftMinutes).HasDefaultValue(0);
-        builder.Property(x => x.EnableOtAfterShift).HasDefaultValue(true);
-        builder.Property(x => x.OtAfterShiftMinutes).HasDefaultValue(0);
-
         // Index đảm bảo mỗi Chi nhánh chỉ có 1 chính sách chấm công duy nhất
         builder.HasIndex(x => new { x.TenantId, x.BranchId })
             .IsUnique()

@@ -115,6 +115,15 @@ public class ScheduleServiceTests
             return Task.FromResult((IReadOnlyList<EmployeeSchedule>)list);
         }
 
+        public Task<IReadOnlyList<EmployeeSchedule>> GetCompletedSchedulesInPeriodAsync(IEnumerable<Guid> employeeIds, DateTime fromDate, DateTime toDate, CancellationToken cancellationToken = default)
+        {
+            var set = employeeIds.ToHashSet();
+            var list = Schedules
+                .Where(s => !s.IsDeleted && set.Contains(s.EmployeeId) && s.WorkDate >= fromDate.Date && s.WorkDate <= toDate.Date && s.Status == Domain.Enums.ScheduleStatus.Completed)
+                .ToList();
+            return Task.FromResult<IReadOnlyList<EmployeeSchedule>>(list);
+        }
+
         public Task AddRangeAsync(IEnumerable<EmployeeSchedule> schedules, CancellationToken cancellationToken = default)
         {
             Schedules.AddRange(schedules);
@@ -145,6 +154,16 @@ public class ScheduleServiceTests
     private class FakeEmployeeRepository : IEmployeeRepository
     {
         public List<Employee> Employees { get; } = new();
+
+        public Task<IReadOnlyList<Employee>> GetActiveEmployeesAsync(Guid? branchId, CancellationToken cancellationToken = default)
+        {
+            var query = Employees.Where(e => !e.IsDeleted && e.Status == Domain.Enums.EmployeeStatus.Active);
+            if (branchId.HasValue && branchId.Value != Guid.Empty)
+            {
+                query = query.Where(e => e.BranchId == branchId.Value);
+            }
+            return Task.FromResult<IReadOnlyList<Employee>>(query.ToList());
+        }
 
         public Task<Employee?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
         {

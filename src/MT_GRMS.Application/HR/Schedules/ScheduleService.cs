@@ -842,40 +842,18 @@ public class ScheduleService : IScheduleService
             }
         }
 
-        // Tính số phút làm thêm trước ca (OT Before)
+        // Tính số phút làm thêm trước ca (OT Before) - Chỉ tính khi có đơn hoặc thực tế dôi ra
         var otBefore = 0;
         if (checkInDateTime < plannedStartDateTime)
         {
-            var rawBefore = (int)(plannedStartDateTime - checkInDateTime).TotalMinutes;
-            if (policy != null)
-            {
-                if (policy.EnableOtBeforeShift && rawBefore >= policy.OtBeforeShiftMinutes)
-                {
-                    otBefore = rawBefore;
-                }
-            }
-            else
-            {
-                otBefore = rawBefore;
-            }
+            otBefore = (int)(plannedStartDateTime - checkInDateTime).TotalMinutes;
         }
 
-        // Tính số phút làm thêm sau ca (OT After)
+        // Tính số phút làm thêm sau ca (OT After) - Chỉ tính khi có đơn hoặc thực tế dôi ra
         var otAfter = 0;
         if (checkOutDateTime > plannedEndDateTime)
         {
-            var rawAfter = (int)(checkOutDateTime - plannedEndDateTime).TotalMinutes;
-            if (policy != null)
-            {
-                if (policy.EnableOtAfterShift && rawAfter >= policy.OtAfterShiftMinutes)
-                {
-                    otAfter = rawAfter;
-                }
-            }
-            else
-            {
-                otAfter = rawAfter;
-            }
+            otAfter = (int)(checkOutDateTime - plannedEndDateTime).TotalMinutes;
         }
 
         var actualHours = Math.Max(0, Math.Round((decimal)(checkOutDateTime - checkInDateTime).TotalHours, 2));

@@ -521,10 +521,6 @@ public static class EmployeeSeedData
                     LateThresholdMinutes = 15, // Đi muộn sau 15 phút
                     EnableEarlyLeaveThreshold = true,
                     EarlyLeaveThresholdMinutes = 15, // Về sớm trước 15 phút
-                    EnableOtBeforeShift = true,
-                    OtBeforeShiftMinutes = 30,
-                    EnableOtAfterShift = true,
-                    OtAfterShiftMinutes = 30, // Tính OT sau 30 phút
                     CreatedAt = DateTime.UtcNow
                 };
 
@@ -540,8 +536,6 @@ public static class EmployeeSeedData
                 existingPolicy.LateThresholdMinutes = 15;
                 existingPolicy.EnableEarlyLeaveThreshold = true;
                 existingPolicy.EarlyLeaveThresholdMinutes = 15;
-                existingPolicy.EnableOtAfterShift = true;
-                existingPolicy.OtAfterShiftMinutes = 30;
                 hasChanges = true;
             }
         }
@@ -882,8 +876,8 @@ public static class EmployeeSeedData
                         totalEarlyLeaveMinutes += sch.EarlyLeaveMinutes;
                     }
 
-                    // Kiểm tra Làm thêm giờ (OT) theo Policy
-                    if (policy.EnableOtAfterShift && sch.OvertimeMinutes >= policy.OtAfterShiftMinutes)
+                    // Tính thời gian làm thêm ngoài giờ (OT) từ số phút thực tế
+                    if (sch.OvertimeMinutes > 0)
                     {
                         decimal otHoursInShift = Math.Round((decimal)sch.OvertimeMinutes / 60.00m, 2);
                         totalOtHours += otHoursInShift;

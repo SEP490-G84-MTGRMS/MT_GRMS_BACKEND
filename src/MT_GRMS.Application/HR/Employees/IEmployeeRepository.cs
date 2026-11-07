@@ -20,4 +20,5 @@ public interface IEmployeeRepository
     void RemoveAllowances(IEnumerable<EmployeeAllowance> allowances);
     void SyncAllowances(Employee employee, IEnumerable<EmployeeAllowanceDto> newAllowances, string tenantId);
     Task<bool> HasWorkOrPayrollHistoryAsync(Guid employeeId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<Employee>> GetActiveEmployeesAsync(Guid? branchId, CancellationToken cancellationToken = default);
 }
