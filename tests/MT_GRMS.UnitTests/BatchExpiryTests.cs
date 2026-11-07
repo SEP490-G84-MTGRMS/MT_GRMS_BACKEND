@@ -17,26 +17,8 @@ public class BatchExpiryTests
     private readonly FakeUnitOfWork _uow;
     private readonly BatchService _batchService;
 
-    [Fact]
-    public void TestEventIds()
+    public BatchExpiryTests()
     {
-        foreach (var f in typeof(Microsoft.EntityFrameworkCore.Diagnostics.CoreEventId).GetFields())
-        {
-            var val = (Microsoft.Extensions.Logging.EventId)f.GetValue(null)!;
-            if (val.Id == 10622 || val.Id == 20601)
-            {
-                throw new Exception($"FOUND: CoreEventId.{f.Name} = {val.Id}");
-            }
-        }
-        foreach (var f in typeof(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId).GetFields())
-        {
-            var val = (Microsoft.Extensions.Logging.EventId)f.GetValue(null)!;
-            if (val.Id == 10622 || val.Id == 20601)
-            {
-                throw new Exception($"FOUND: RelationalEventId.{f.Name} = {val.Id}");
-            }
-        }
-    }
         _repo = new FakeBatchRepository();
         _tenantContext = new FakeTenantContext("tenant-test-01");
         _uow = new FakeUnitOfWork();

@@ -1629,10 +1629,9 @@ public static class DbInitializer
                 FullName = "Nguyễn Văn Minh (Nhân viên Ba Đình)",
                 Phone = "0915556666",
                 Email = "minh.nguyen@annhienmart.vn",
-                JobTitle = "Thu ngân / Nhân viên bán hàng",
-                SalaryType = "monthly",
+                SalaryType = SalaryType.Monthly,
                 BaseRate = 7500000m,
-                Status = "active"
+                Status = EmployeeStatus.Active
             };
             await context.Employees.AddAsync(empMinh);
         }
