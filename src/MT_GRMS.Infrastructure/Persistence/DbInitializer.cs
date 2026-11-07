@@ -28,56 +28,12 @@ namespace MT_GRMS.Infrastructure.Persistence;
 /// </summary>
 public static class DbInitializer
 {
-    private static async Task EnsureSupplierDispatchSchemaAsync(AppDbContext context)
+    private static async Task EnsureSupplierDispatchSchemaAsync(AppDbContext context, ILogger? logger = null)
     {
-        await context.Database.ExecuteSqlRawAsync(@"
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchPackageId"" uuid NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchBatchId"" uuid NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierCodeSnapshot"" character varying(50) NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierNameSnapshot"" character varying(250) NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierEmailSnapshot"" character varying(200) NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreCodeSnapshot"" character varying(50) NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreNameSnapshot"" character varying(250) NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreAddressSnapshot"" character varying(500) NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StorePhoneSnapshot"" character varying(50) NULL;
-
-ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductCodeSnapshot"" character varying(50) NULL;
-ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductNameSnapshot"" character varying(250) NULL;
-ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""PurchaseUnitNameSnapshot"" character varying(50) NULL;
-
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""RevisionNumber"" integer NOT NULL DEFAULT 1;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""LastAmendedAtUtc"" timestamp without time zone NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""LastAmendedByUserId"" character varying(50) NULL;
-
-ALTER TABLE ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""PackageRevisionNumber"" integer NOT NULL DEFAULT 1;
-ALTER TABLE ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""SupersededByPackageId"" uuid NULL;
-
-CREATE TABLE IF NOT EXISTS ""PurchaseOrderRevisions"" (
-    ""Id"" uuid NOT NULL PRIMARY KEY,
-    ""TenantId"" character varying(50) NOT NULL,
-    ""PurchaseOrderId"" uuid NOT NULL,
-    ""RevisionNumber"" integer NOT NULL,
-    ""PreviousDataSnapshotJson"" text NULL,
-    ""NewDataSnapshotJson"" text NULL,
-    ""ChangedByUserId"" character varying(50) NULL,
-    ""ChangedAtUtc"" timestamp without time zone NOT NULL,
-    ""ChangeReason"" character varying(500) NULL,
-    ""CreatedBy"" uuid NULL,
-    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    ""UpdatedAt"" timestamp without time zone NULL,
-    ""IsDeleted"" boolean NOT NULL DEFAULT false
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS ""IX_PurchaseOrderRevisions_Tenant_Po_Rev""
-    ON ""PurchaseOrderRevisions"" (""TenantId"", ""PurchaseOrderId"", ""RevisionNumber"");
-
-DROP INDEX IF EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId"";
-CREATE UNIQUE INDEX IF NOT EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId_Active""
-    ON ""SupplierDispatchPackageItems"" (""PurchaseOrderId"") WHERE ""IsDeleted"" = false;
-
-ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryDaysJson"" character varying(500) NULL;
-ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryWeekdaysMask"" integer NULL;
-
+        // 1. Tạo các bảng độc lập trước (CREATE TABLE IF NOT EXISTS)
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
 CREATE TABLE IF NOT EXISTS ""SupplierDispatchPackages"" (
     ""Id"" uuid NOT NULL PRIMARY KEY,
     ""TenantId"" character varying(50) NOT NULL,
@@ -120,8 +76,21 @@ CREATE TABLE IF NOT EXISTS ""SupplierDispatchPackageItems"" (
     ""IsDeleted"" boolean NOT NULL DEFAULT false
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId""
-    ON ""SupplierDispatchPackageItems"" (""PurchaseOrderId"");
+CREATE TABLE IF NOT EXISTS ""PurchaseOrderRevisions"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""PurchaseOrderId"" uuid NOT NULL,
+    ""RevisionNumber"" integer NOT NULL,
+    ""PreviousDataSnapshotJson"" text NULL,
+    ""NewDataSnapshotJson"" text NULL,
+    ""ChangedByUserId"" character varying(50) NULL,
+    ""ChangedAtUtc"" timestamp without time zone NOT NULL,
+    ""ChangeReason"" character varying(500) NULL,
+    ""CreatedBy"" uuid NULL,
+    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp without time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false
+);
 
 CREATE TABLE IF NOT EXISTS ""OutboxMessages"" (
     ""Id"" uuid NOT NULL PRIMARY KEY,
@@ -141,10 +110,66 @@ CREATE TABLE IF NOT EXISTS ""OutboxMessages"" (
     ""UpdatedAt"" timestamp without time zone NULL,
     ""IsDeleted"" boolean NOT NULL DEFAULT false
 );
+");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogError(ex, "Lỗi khi tạo các bảng SupplierDispatch / OutboxMessages");
+        }
+
+        // 2. Bổ sung các cột mới vào các bảng đã tồn tại
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchPackageId"" uuid NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchBatchId"" uuid NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierCodeSnapshot"" character varying(50) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierNameSnapshot"" character varying(250) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierEmailSnapshot"" character varying(200) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreCodeSnapshot"" character varying(50) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreNameSnapshot"" character varying(250) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreAddressSnapshot"" character varying(500) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StorePhoneSnapshot"" character varying(50) NULL;
+
+ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductCodeSnapshot"" character varying(50) NULL;
+ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductNameSnapshot"" character varying(250) NULL;
+ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""PurchaseUnitNameSnapshot"" character varying(50) NULL;
+
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""RevisionNumber"" integer NOT NULL DEFAULT 1;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""LastAmendedAtUtc"" timestamp without time zone NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""LastAmendedByUserId"" character varying(50) NULL;
+
+ALTER TABLE ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""PackageRevisionNumber"" integer NOT NULL DEFAULT 1;
+ALTER TABLE ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""SupersededByPackageId"" uuid NULL;
+
+ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryDaysJson"" character varying(500) NULL;
+ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryWeekdaysMask"" integer NULL;
+");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi bổ sung cột bảng PurchaseOrders/SupplierDispatchPackages");
+        }
+
+        // 3. Tạo các chỉ mục Index
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+CREATE UNIQUE INDEX IF NOT EXISTS ""IX_PurchaseOrderRevisions_Tenant_Po_Rev""
+    ON ""PurchaseOrderRevisions"" (""TenantId"", ""PurchaseOrderId"", ""RevisionNumber"");
+
+DROP INDEX IF EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId"";
+CREATE UNIQUE INDEX IF NOT EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId_Active""
+    ON ""SupplierDispatchPackageItems"" (""PurchaseOrderId"") WHERE ""IsDeleted"" = false;
 
 CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
     ON ""OutboxMessages"" (""TenantId"", ""IdempotencyKey"");
 ");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi tạo index OutboxMessages / PurchaseOrderRevisions");
+        }
     }
 
     public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null)
@@ -304,211 +329,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_TenantID_ProductCode"" ON ""Products"" (""TenantID"", ""ProductCode"") WHERE ""IsDeleted"" = false;
                         DROP INDEX IF EXISTS ""IX_Products_Barcode"";
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_Barcode"" ON ""Products"" (""Barcode"") WHERE ""IsDeleted"" = false AND ""Barcode"" IS NOT NULL;
-
-                        -- Bảng Chính sách chấm công Chi nhánh (BranchAttendancePolicies)
-                        CREATE TABLE IF NOT EXISTS ""BranchAttendancePolicies"" (
-                            ""BranchAttendancePolicyID"" uuid NOT NULL PRIMARY KEY,
-                            ""BranchID"" uuid NOT NULL,
-                            ""TenantID"" character varying(50) NOT NULL,
-                            ""StandardDayHours"" numeric(4,2) NOT NULL DEFAULT 8.00,
-                            ""IsConvertHoursToDays"" boolean NOT NULL DEFAULT true,
-                            ""ConversionRulesJson"" text,
-                            ""EnableLateThreshold"" boolean NOT NULL DEFAULT true,
-                            ""LateThresholdMinutes"" integer NOT NULL DEFAULT 0,
-                            ""EnableEarlyLeaveThreshold"" boolean NOT NULL DEFAULT true,
-                            ""EarlyLeaveThresholdMinutes"" integer NOT NULL DEFAULT 0,
-                            ""EnableOtBeforeShift"" boolean NOT NULL DEFAULT true,
-                            ""OtBeforeShiftMinutes"" integer NOT NULL DEFAULT 0,
-                            ""EnableOtAfterShift"" boolean NOT NULL DEFAULT true,
-                            ""OtAfterShiftMinutes"" integer NOT NULL DEFAULT 0,
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
-                            ""CreatedBy"" uuid
-                        );
-
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BranchAttendancePolicies_TenantID_BranchID"" 
-                        ON ""BranchAttendancePolicies"" (""TenantID"", ""BranchID"") WHERE ""IsDeleted"" = false;
-
-                        CREATE INDEX IF NOT EXISTS ""IX_BranchAttendancePolicies_BranchID"" 
-                        ON ""BranchAttendancePolicies"" (""BranchID"");
-
-                        CREATE TABLE IF NOT EXISTS ""ShiftConfigs"" (
-                            ""ShiftConfigID"" uuid NOT NULL PRIMARY KEY,
-                            ""TenantID"" character varying(50) NOT NULL,
-                            ""BranchID"" uuid NOT NULL,
-                            ""ShiftCode"" character varying(30) NOT NULL,
-                            ""ShiftName"" character varying(100) NOT NULL,
-                            ""StartTime"" time without time zone NOT NULL,
-                            ""EndTime"" time without time zone NOT NULL,
-                            ""DurationHours"" numeric(4,2) NOT NULL DEFAULT 4.00,
-                            ""IsCheckInNextDay"" boolean NOT NULL DEFAULT false,
-                            ""BranchIds"" character varying(2000),
-                            ""Description"" character varying(255),
-                            ""IsActive"" boolean NOT NULL DEFAULT true,
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
-                            ""CreatedBy"" uuid
-                        );
-
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_ShiftConfigs_TenantID_BranchID_ShiftCode"" 
-                        ON ""ShiftConfigs"" (""TenantID"", ""BranchID"", ""ShiftCode"") WHERE ""IsDeleted"" = false;
-
-                        CREATE TABLE IF NOT EXISTS ""Employees"" (
-                            ""EmployeeID"" uuid NOT NULL PRIMARY KEY,
-                            ""TenantID"" character varying(50) NOT NULL,
-                            ""BranchID"" uuid NOT NULL,
-                            ""UserID"" character varying(50),
-                            ""EmployeeCode"" character varying(30) NOT NULL,
-                            ""FullName"" character varying(100) NOT NULL,
-                            ""CitizenId"" character varying(20) NOT NULL,
-                            ""Gender"" character varying(10),
-                            ""Phone"" character varying(20) NOT NULL,
-                            ""Email"" character varying(100),
-                            ""Address"" character varying(255),
-                            ""StartDate"" timestamp without time zone,
-                            ""Note"" character varying(500),
-                            ""AvatarUrl"" character varying(255),
-                            ""OtWeekday"" character varying(20),
-                            ""OtSunday"" character varying(20),
-                            ""SalaryType"" character varying(30) NOT NULL DEFAULT 'monthly',
-                            ""BaseRate"" numeric(18,2) NOT NULL DEFAULT 0.00,
-                            ""BankAccountNumber"" character varying(30),
-                            ""BankName"" character varying(100),
-                            ""BankAccountHolder"" character varying(100),
-                            ""DebtAmount"" numeric(18,2) NOT NULL DEFAULT 0.00,
-                            ""Status"" character varying(30) NOT NULL DEFAULT 'active',
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
-                            ""CreatedBy"" uuid
-                        );
-
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Employees_TenantID_CitizenId"" 
-                        ON ""Employees"" (""TenantID"", ""CitizenId"") WHERE ""IsDeleted"" = false;
-
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Employees_TenantID_EmployeeCode"" 
-                        ON ""Employees"" (""TenantID"", ""EmployeeCode"") WHERE ""IsDeleted"" = false;
-
-                        CREATE TABLE IF NOT EXISTS ""EmployeeAllowances"" (
-                            ""AllowanceID"" uuid NOT NULL PRIMARY KEY,
-                            ""TenantID"" character varying(50) NOT NULL,
-                            ""EmployeeID"" uuid NOT NULL,
-                            ""Name"" character varying(100) NOT NULL,
-                            ""Amount"" numeric(18,2) NOT NULL DEFAULT 0.00,
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
-                            ""CreatedBy"" uuid
-                        );
-
-                        CREATE TABLE IF NOT EXISTS ""EmployeeSchedules"" (
-                            ""ScheduleID"" uuid NOT NULL PRIMARY KEY,
-                            ""TenantID"" character varying(50) NOT NULL,
-                            ""BranchID"" uuid NOT NULL,
-                            ""EmployeeID"" uuid NOT NULL,
-                            ""ShiftConfigID"" uuid,
-                            ""PayslipID"" uuid,
-                            ""WorkDate"" date NOT NULL,
-                            ""ShiftCode"" character varying(30) NOT NULL,
-                            ""ShiftName"" character varying(100) NOT NULL,
-                            ""StartTime"" time without time zone NOT NULL,
-                            ""EndTime"" time without time zone NOT NULL,
-                            ""DurationHours"" numeric(4,2) NOT NULL DEFAULT 4.00,
-                            ""CheckInTime"" timestamp without time zone,
-                            ""CheckInMethod"" character varying(30),
-                            ""CheckInFaceImageUrl"" character varying(255),
-                            ""FaceMatchScore"" numeric(5,2),
-                            ""CheckOutTime"" timestamp without time zone,
-                            ""CheckOutMethod"" character varying(30),
-                            ""CheckOutFaceImageUrl"" character varying(255),
-                            ""LateMinutes"" integer NOT NULL DEFAULT 0,
-                            ""EarlyLeaveMinutes"" integer NOT NULL DEFAULT 0,
-                            ""OvertimeMinutes"" integer NOT NULL DEFAULT 0,
-                            ""ActualWorkHours"" numeric(4,2) NOT NULL DEFAULT 0.00,
-                            ""Status"" character varying(30) NOT NULL DEFAULT 'draft',
-                            ""ApprovalType"" character varying(30),
-                            ""ApprovalStatus"" character varying(30) NOT NULL DEFAULT 'NONE',
-                            ""ApprovalReason"" character varying(255),
-                            ""EvidenceImageUrl"" character varying(255),
-                            ""ApprovedBy"" character varying(100),
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
-                            ""CreatedBy"" uuid
-                        );
-
-                        CREATE INDEX IF NOT EXISTS ""IX_EmployeeSchedules_TenantID_BranchID_WorkDate"" 
-                        ON ""EmployeeSchedules"" (""TenantID"", ""BranchID"", ""WorkDate"");
-
-                        CREATE TABLE IF NOT EXISTS ""Payslips"" (
-                            ""PayslipID"" uuid NOT NULL PRIMARY KEY,
-                            ""TenantId"" character varying(64) NOT NULL,
-                            ""BranchID"" uuid NOT NULL,
-                            ""EmployeeID"" uuid NOT NULL,
-                            ""CashbookTransactionId"" uuid,
-                            ""PayslipCode"" character varying(50) NOT NULL,
-                            ""PeriodMonth"" character varying(7) NOT NULL,
-                            ""SalaryType"" character varying(30) NOT NULL DEFAULT 'MONTHLY',
-                            ""BaseRate"" numeric(18,2) NOT NULL DEFAULT 0.00,
-                            ""StandardDays"" numeric(5,2) NOT NULL DEFAULT 26.00,
-                            ""StandardDayHours"" numeric(5,2) NOT NULL DEFAULT 8.00,
-                            ""WorkedDays"" numeric(5,2) NOT NULL DEFAULT 0.00,
-                            ""TotalWorkHours"" numeric(7,2) NOT NULL DEFAULT 0.00,
-                            ""TotalShifts"" integer NOT NULL DEFAULT 0,
-                            ""OtHours"" numeric(5,2) NOT NULL DEFAULT 0.00,
-                            ""PaidLeaveDays"" numeric(5,2) NOT NULL DEFAULT 0.00,
-                            ""UnpaidLeaveDays"" numeric(5,2) NOT NULL DEFAULT 0.00,
-                            ""TotalLateMinutes"" integer NOT NULL DEFAULT 0,
-                            ""TotalEarlyLeaveMinutes"" integer NOT NULL DEFAULT 0,
-                            ""BaseSalaryEarned"" numeric(18,2) NOT NULL DEFAULT 0.00,
-                            ""OvertimePay"" numeric(18,2) NOT NULL DEFAULT 0.00,
-                            ""TotalAllowance"" numeric(18,2) NOT NULL DEFAULT 0.00,
-                            ""AllowancesDetailJson"" text,
-                            ""TotalEarnings"" numeric(18,2) NOT NULL DEFAULT 0.00,
-                            ""AdvanceDeduction"" numeric(18,2) NOT NULL DEFAULT 0.00,
-                            ""RemainingDebt"" numeric(18,2) NOT NULL DEFAULT 0.00,
-                            ""SocialInsurance"" numeric(18,2) NOT NULL DEFAULT 0.00,
-                            ""TotalDeductions"" numeric(18,2) NOT NULL DEFAULT 0.00,
-                            ""NetSalary"" numeric(18,2) NOT NULL DEFAULT 0.00,
-                            ""Status"" character varying(30) NOT NULL DEFAULT 'DRAFT',
-                            ""PaymentMethod"" character varying(30) NOT NULL DEFAULT 'CASH',
-                            ""PaidAt"" timestamp without time zone,
-                            ""Note"" character varying(500),
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
-                            ""CreatedBy"" uuid
-                        );
-
-                        CREATE INDEX IF NOT EXISTS ""IX_Payslips_TenantId_BranchID_PeriodMonth"" 
-                        ON ""Payslips"" (""TenantId"", ""BranchID"", ""PeriodMonth"");
-
-                        -- Bảng Giao dịch Sổ quỹ liên kết lương (CashbookTransaction)
-                        CREATE TABLE IF NOT EXISTS ""CashbookTransaction"" (
-                            ""Id"" uuid NOT NULL PRIMARY KEY,
-                            ""TransactionCode"" text NOT NULL,
-                            ""BranchId"" uuid NOT NULL,
-                            ""Type"" integer NOT NULL,
-                            ""Category"" text NOT NULL,
-                            ""Amount"" numeric NOT NULL,
-                            ""ReferenceCode"" text NOT NULL,
-                            ""Description"" text NOT NULL,
-                            ""CreatedByUserId"" uuid NOT NULL,
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
-                            ""TenantId"" text NOT NULL,
-                            ""CreatedBy"" uuid
-                        );
-
-                        -- Cập nhật cột mới trong Payslips nếu thiếu
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""UnpaidLeaveDays"" numeric(5,2) DEFAULT 0.00;
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookTransactionId"" uuid;
                     ");
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(ex, "Cảnh báo khi chạy DDL nâng cấp Products/Users/Categories");
+                }
 
                 // 1. Bảng Chính sách chấm công Chi nhánh (BranchAttendancePolicies)
                 try
@@ -833,9 +659,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
                 try
                 {
-                    await EnsureSupplierDispatchSchemaAsync(context);
+                    await EnsureSupplierDispatchSchemaAsync(context, logger);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    logger?.LogError(ex, "Lỗi khi chạy EnsureSupplierDispatchSchemaAsync");
+                }
             }
             else
             {
