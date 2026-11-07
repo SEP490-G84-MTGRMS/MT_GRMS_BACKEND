@@ -14,7 +14,9 @@ public record OrderCreateRequest(
     decimal? DiscountAmount = null,
     string? ManagerBypassCode = null,
     string? Note = null,
-    string? CreatorRole = null
+    string? CreatorRole = null,
+    string? CashierName = null,
+    int? PointsRedeemed = null
 )
 {
     // Hỗ trợ tương thích ngược cho StoreId
@@ -26,7 +28,9 @@ public record OrderItemCreateDto(
     decimal Quantity,
     decimal UnitPrice,
     decimal? DiscountAmount = null,
-    string? ProductName = null
+    string? ProductName = null,
+    Guid? UnitId = null,
+    string? UnitName = null
 );
 
 public record OrderResponse(
@@ -85,7 +89,8 @@ public record OrderFilterRequest(
 
 public record PrintOrderRequest(
     string? PrinterName = "POS-58",
-    decimal? CashTendered = null
+    decimal? CashTendered = null,
+    string? CashierName = null
 );
 
 public record PreOrderCreateRequest(

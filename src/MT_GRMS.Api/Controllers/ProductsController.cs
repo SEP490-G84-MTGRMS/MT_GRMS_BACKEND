@@ -2,18 +2,20 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Application.Suppliers.Dtos;
+using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/products")]
-[Route("api/v1/products")]
 public class ProductsController : BaseApiController
 {
     private readonly ICatalogService _catalogService;
@@ -69,8 +71,35 @@ public class ProductsController : BaseApiController
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] ProductCreateRequest request, CancellationToken cancellationToken)
     {
-        var result = await _catalogService.CreateProductAsync(request, cancellationToken);
-        return CreatedAtAction(nameof(GetById), new { id = result.Id }, ApiResponse<ProductResponse>.Ok(result, "Tạo sản phẩm thành công."));
+        try
+        {
+            var result = await _catalogService.CreateProductAsync(request, cancellationToken);
+            return CreatedAtAction(nameof(GetById), new { id = result.Id }, ApiResponse<ProductResponse>.Ok(result, "Tạo sản phẩm thành công."));
+        }
+        catch (DbUpdateException dbEx) when (dbEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505")
+        {
+            var constraint = pgEx.ConstraintName ?? string.Empty;
+            if (constraint.Contains("ProductCode", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_CODE", "Mã sản phẩm đã tồn tại trong hệ thống. Vui lòng nhập mã khác."));
+            }
+            if (constraint.Contains("Barcode", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_BARCODE", "Mã vạch (Barcode) đã tồn tại trong hệ thống. Vui lòng kiểm tra lại."));
+            }
+            return Conflict(ApiResponse<object>.Fail("DUPLICATE_KEY", "Dữ liệu sản phẩm bị trùng lặp trong hệ thống."));
+        }
+        catch (BusinessException ex)
+        {
+            var status = ex.ErrorCode.Contains("DUPLICATE") || ex.ErrorCode.Contains("CONFLICT")
+                ? StatusCodes.Status409Conflict
+                : StatusCodes.Status422UnprocessableEntity;
+            return StatusCode(status, ApiResponse<object>.Fail(ex.ErrorCode, ex.Message));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message));
+        }
     }
 
     /// <summary>
@@ -79,8 +108,39 @@ public class ProductsController : BaseApiController
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] ProductUpdateRequest request, CancellationToken cancellationToken)
     {
-        var result = await _catalogService.UpdateProductAsync(id, request, cancellationToken);
-        return Ok(ApiResponse<ProductResponse>.Ok(result, "Cập nhật sản phẩm thành công."));
+        try
+        {
+            var result = await _catalogService.UpdateProductAsync(id, request, cancellationToken);
+            return Ok(ApiResponse<ProductResponse>.Ok(result, "Cập nhật sản phẩm thành công."));
+        }
+        catch (DbUpdateException dbEx) when (dbEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505")
+        {
+            var constraint = pgEx.ConstraintName ?? string.Empty;
+            if (constraint.Contains("ProductCode", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_CODE", "Mã sản phẩm đã tồn tại trong hệ thống. Vui lòng nhập mã khác."));
+            }
+            if (constraint.Contains("Barcode", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_BARCODE", "Mã vạch (Barcode) đã tồn tại trong hệ thống. Vui lòng kiểm tra lại."));
+            }
+            return Conflict(ApiResponse<object>.Fail("DUPLICATE_KEY", "Dữ liệu sản phẩm bị trùng lặp trong hệ thống."));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
+        }
+        catch (BusinessException ex)
+        {
+            var status = ex.ErrorCode.Contains("DUPLICATE") || ex.ErrorCode.Contains("CONFLICT")
+                ? StatusCodes.Status409Conflict
+                : StatusCodes.Status422UnprocessableEntity;
+            return StatusCode(status, ApiResponse<object>.Fail(ex.ErrorCode, ex.Message));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message));
+        }
     }
 
     /// <summary>
@@ -89,8 +149,19 @@ public class ProductsController : BaseApiController
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
-        await _catalogService.DeleteProductAsync(id, cancellationToken);
-        return Ok(ApiResponse<object>.Ok(null!, "Xóa sản phẩm thành công."));
+        try
+        {
+            await _catalogService.DeleteProductAsync(id, cancellationToken);
+            return Ok(ApiResponse<object>.Ok(null!, "Xóa sản phẩm thành công."));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
+        }
+        catch (BusinessException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail(ex.ErrorCode, ex.Message));
+        }
     }
 
     /// <summary>

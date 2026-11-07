@@ -32,8 +32,8 @@ public class SwaggerGenerationTests
         var swaggerProvider = serviceProvider.GetRequiredService<ISwaggerProvider>();
         var doc = swaggerProvider.GetSwagger("v1");
 
-        // THEN: Không ném exception và document có endpoint /api/v1/media/upload
+        // THEN: Không ném exception và document có endpoint /api/media/upload
         Assert.NotNull(doc);
-        Assert.True(doc.Paths.ContainsKey("/api/v1/media/upload"));
+        Assert.True(doc.Paths.ContainsKey("/api/media/upload"));
     }
 }

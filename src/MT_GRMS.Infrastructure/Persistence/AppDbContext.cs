@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Common;
@@ -38,6 +38,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<User> Users { get; set; } = null!;
     public virtual DbSet<TenantUser> TenantUsers { get; set; } = null!;
     public virtual DbSet<AuditLog> AuditLogs { get; set; } = null!;
+    public virtual DbSet<WalletTransaction> WalletTransactions { get; set; } = null!;
+    public virtual DbSet<WalletTopupOrder> WalletTopupOrders { get; set; } = null!;
 
     // 2. Phân hệ Catalog & Hàng hóa
     public virtual DbSet<Category> Categories { get; set; } = null!;
@@ -86,7 +88,9 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<FinanceAccount> FinanceAccounts { get; set; } = null!;
     public virtual DbSet<CashInTransit> CashInTransits { get; set; } = null!;
     public virtual DbSet<ShiftZReport> ShiftZReports { get; set; } = null!;
-    public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!; 
+    public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!;
+    public virtual DbSet<StorePaymentConfig> StorePaymentConfigs { get; set; } = null!;
+    public virtual DbSet<PaymentTransaction> PaymentTransactions { get; set; } = null!;
     public virtual DbSet<IdempotencyRecord> IdempotencyRecords { get; set; } = null!;
 
     // 7. Customer Debt Module (FE-08) - Đã hợp nhất công nợ vào Customers
@@ -101,7 +105,9 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<Employee> Employees { get; set; } = null!;
     public virtual DbSet<Payslip> Payslips { get; set; } = null!;
     public virtual DbSet<EmployeeSchedule> EmployeeSchedules { get; set; } = null!;
-    public virtual DbSet<EmployeeBonusViolation> EmployeeBonusViolations { get; set; } = null!;
+    public virtual DbSet<EmployeeAllowance> EmployeeAllowances { get; set; } = null!;
+    public virtual DbSet<ShiftConfig> ShiftConfigs { get; set; } = null!;
+    public virtual DbSet<BranchAttendancePolicy> BranchAttendancePolicies { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -114,6 +120,10 @@ public partial class AppDbContext : DbContext
         // Dự án áp dụng Soft Delete (IsDeleted) toàn diện nên an toàn 100%
         foreach (var foreignKey in modelBuilder.Model.GetEntityTypes().SelectMany(e => e.GetForeignKeys()))
         {
+            if (foreignKey.DeclaringEntityType.ClrType == typeof(EmployeeAllowance))
+            {
+                continue;
+            }
             if (foreignKey.DeleteBehavior == DeleteBehavior.Cascade)
             {
                 foreignKey.DeleteBehavior = DeleteBehavior.Restrict;

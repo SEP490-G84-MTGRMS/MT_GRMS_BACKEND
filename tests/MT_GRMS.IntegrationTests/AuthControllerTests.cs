@@ -38,6 +38,17 @@ public class AuthControllerTests
         public void Update(User user) { }
         public void Delete(User user) => _users.Remove(user);
         public Task SaveChangesAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<bool> ExistsByPhoneOrEmailAsync(string phone, string? email, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(_users.Any(u => u.Phone == phone || (!string.IsNullOrEmpty(email) && u.Email == email)));
+        }
+
+        public Task<User> RegisterStoreOwnerAsync(User user, MT_GRMS.Domain.Entities.SaaS.Tenant tenant, MT_GRMS.Domain.Entities.SaaS.Branch branch, CancellationToken cancellationToken = default)
+        {
+            _users.Add(user);
+            return Task.FromResult(user);
+        }
     }
 
     [Fact]
@@ -108,5 +119,29 @@ public class AuthControllerTests
         var apiResponse = Assert.IsType<ApiResponse<string>>(okResult.Value);
         Assert.True(apiResponse.Success);
         Assert.Equal("Đăng xuất thành công.", apiResponse.Message);
+    }
+
+    [Fact]
+    public async Task AuthController_Register_Should_Return_Ok_200_When_Valid()
+    {
+        // GIVEN
+        var repo = new FakeUserRepository();
+        var authService = new AuthService(repo);
+        var controller = new AuthController(authService);
+        var request = new RegisterTenantRequest("Nguyễn Văn A", "Cửa hàng A", "0987654321", "owner_a@gmail.com", "Password@123", true);
+
+        // WHEN
+        var result = await controller.Register(request, CancellationToken.None);
+
+        // THEN
+        var okResult = Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(200, okResult.StatusCode);
+
+        var apiResponse = Assert.IsType<ApiResponse<LoginResponse>>(okResult.Value);
+        Assert.True(apiResponse.Success);
+        Assert.NotNull(apiResponse.Data);
+        Assert.Equal("Nguyễn Văn A", apiResponse.Data.User.FullName);
+        Assert.Equal("STORE_OWNER", apiResponse.Data.User.Role);
+        Assert.NotEmpty(apiResponse.Data.AccessToken);
     }
 }

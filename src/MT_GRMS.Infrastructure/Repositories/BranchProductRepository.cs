@@ -676,7 +676,7 @@ public class BranchProductRepository : IBranchProductRepository
                 && sp.Status == SupplierProductStatus.Active
                 && sp.Product != null
                 && !sp.Product.IsDeleted
-                && sp.Product.Status == "Active"
+                && sp.Product.Status == ProductStatus.Active
                 && sp.Supplier != null
                 && !sp.Supplier.IsDeleted
                 && sp.Supplier.Status == SupplierStatus.Active)

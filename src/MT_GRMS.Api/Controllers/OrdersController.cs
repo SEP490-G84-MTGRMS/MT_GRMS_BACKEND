@@ -11,7 +11,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/orders")]
-[Route("api/v1/orders")]
 public class OrdersController : BaseApiController
 {
     private readonly IOrderService _orderService;
@@ -234,11 +233,11 @@ public class OrdersController : BaseApiController
     /// Lấy mảng byte ESC/POS nhị phân (khổ in 43mm) của hóa đơn để kiểm thử hoặc in client-side
     /// </summary>
     [HttpGet("{id:guid}/receipt-bytes")]
-    public async Task<IActionResult> GetReceiptBytes([FromRoute] Guid id, [FromQuery] decimal? cashReceived, CancellationToken cancellationToken)
+    public async Task<IActionResult> GetReceiptBytes([FromRoute] Guid id, [FromQuery] decimal? cashReceived, [FromQuery] string? cashierName, CancellationToken cancellationToken)
     {
         try
         {
-            byte[] bytes = await _orderService.GetOrderReceiptEscPosBytesAsync(id, cashReceived, cancellationToken);
+            byte[] bytes = await _orderService.GetOrderReceiptEscPosBytesAsync(id, cashReceived, cashierName, cancellationToken);
             return File(bytes, "application/octet-stream", $"invoice_{id}.bin");
         }
         catch (UnauthorizedAccessException authEx)

@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Domain.Entities.Catalog;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Infrastructure.Persistence;
 
@@ -91,7 +92,7 @@ public static class CatalogSeedData
                     MaxStock = prodTpl.MaxStock,
                     VatRate = prodTpl.VatRate,
                     ProductType = "STANDARD",
-                    Status = "Active",
+                    Status = ProductStatus.Active,
                     HasBatches = prodTpl.HasBatches,
                     IsFavorite = prodTpl.IsFavorite
                 });

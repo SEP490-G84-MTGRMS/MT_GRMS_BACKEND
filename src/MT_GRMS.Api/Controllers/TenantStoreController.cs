@@ -4,12 +4,13 @@ using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Admin.Dtos;
 using MT_GRMS.Application.Admin.Services;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/tenant")]
+[Route("api/tenant")]
 [Authorize]
 public class TenantStoreController : BaseApiController
 {
@@ -27,19 +28,35 @@ public class TenantStoreController : BaseApiController
         _context = context;
     }
 
+    private async Task<Tenant?> ResolveCurrentTenantAsync(CancellationToken cancellationToken)
+    {
+        var tenantId = User.FindFirst("tenant_id")?.Value;
+        var headerTenant = Request.Headers["X-Tenant-Id"].FirstOrDefault();
+
+        if (!string.IsNullOrWhiteSpace(headerTenant) && headerTenant != "DEFAULT" && headerTenant != "tenant_mt_mart_01")
+        {
+            tenantId = headerTenant;
+        }
+        else if (string.IsNullOrWhiteSpace(tenantId) || tenantId == "DEFAULT")
+        {
+            if (!string.IsNullOrWhiteSpace(headerTenant) && headerTenant != "DEFAULT")
+            {
+                tenantId = headerTenant;
+            }
+        }
+
+        return !string.IsNullOrWhiteSpace(tenantId) && tenantId != "DEFAULT"
+            ? await _context.Tenants.Include(t => t.SubscriptionPlan).FirstOrDefaultAsync(t => t.Id == tenantId || t.Subdomain == tenantId, cancellationToken)
+            : await _context.Tenants.Include(t => t.SubscriptionPlan).FirstOrDefaultAsync(cancellationToken);
+    }
+
     /// <summary>
     /// Lấy thông tin chi tiết gian hàng và gói cước hiện tại của khách thuê đang đăng nhập
     /// </summary>
     [HttpGet("store-info")]
     public async Task<IActionResult> GetStoreInfo(CancellationToken cancellationToken)
     {
-        var tenantId = User.FindFirst("tenant_id")?.Value;
-
-        // Nếu không có tenantId hoặc là DEFAULT, fallback lấy tenant đầu tiên trong DB
-        var tenant = !string.IsNullOrWhiteSpace(tenantId) && tenantId != "DEFAULT"
-            ? await _context.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId || t.Subdomain == tenantId, cancellationToken)
-            : await _context.Tenants.FirstOrDefaultAsync(cancellationToken);
-
+        var tenant = await ResolveCurrentTenantAsync(cancellationToken);
         if (tenant == null)
         {
             return NotFound(ApiResponse<TenantDetailResponse>.Fail("TENANT_NOT_FOUND", "Không tìm thấy thông tin gian hàng trong hệ thống."));
@@ -55,12 +72,7 @@ public class TenantStoreController : BaseApiController
     [HttpPut("store-info")]
     public async Task<IActionResult> UpdateStoreInfo([FromBody] UpdateTenantRequest request, CancellationToken cancellationToken)
     {
-        var tenantId = User.FindFirst("tenant_id")?.Value;
-
-        var tenant = !string.IsNullOrWhiteSpace(tenantId) && tenantId != "DEFAULT"
-            ? await _context.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId || t.Subdomain == tenantId, cancellationToken)
-            : await _context.Tenants.FirstOrDefaultAsync(cancellationToken);
-
+        var tenant = await ResolveCurrentTenantAsync(cancellationToken);
         if (tenant == null)
         {
             return NotFound(ApiResponse<TenantDetailResponse>.Fail("TENANT_NOT_FOUND", "Không tìm thấy thông tin gian hàng để cập nhật."));
@@ -88,12 +100,7 @@ public class TenantStoreController : BaseApiController
         [FromBody] PurchaseSubscriptionRequest request,
         CancellationToken cancellationToken)
     {
-        var tenantId = User.FindFirst("tenant_id")?.Value;
-
-        var tenant = !string.IsNullOrWhiteSpace(tenantId) && tenantId != "DEFAULT"
-            ? await _context.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId || t.Subdomain == tenantId, cancellationToken)
-            : await _context.Tenants.FirstOrDefaultAsync(cancellationToken);
-
+        var tenant = await ResolveCurrentTenantAsync(cancellationToken);
         if (tenant == null)
         {
             return NotFound(ApiResponse<PurchaseSubscriptionResponse>.Fail("TENANT_NOT_FOUND", "Không tìm thấy thông tin gian hàng trong hệ thống."));
@@ -123,6 +130,39 @@ public class TenantStoreController : BaseApiController
         var subTotal = basePrice + branchAddonPrice + warehouseAddonPrice;
         var vatAmount = Math.Round(subTotal * 0.1m, 0);
         var grandTotal = subTotal + vatAmount;
+
+        // 2. Xử lý thanh toán nếu chọn phương thức Ví gian hàng
+        var isWalletPayment = string.Equals(request.PaymentMethod, "WALLET", StringComparison.OrdinalIgnoreCase) ||
+                              string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase) ||
+                              request.PaymentMethod.Contains("Ví", StringComparison.OrdinalIgnoreCase);
+
+        if (isWalletPayment)
+        {
+            if (tenant.WalletBalance < grandTotal)
+            {
+                return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
+                    "INSUFFICIENT_WALLET_BALANCE",
+                    $"Số dư ví không đủ (hiện có {tenant.WalletBalance:N0} đ, cần {grandTotal:N0} đ). Vui lòng nạp thêm tiền hoặc chọn Quét mã VietQR."));
+            }
+
+            var balanceBefore = tenant.WalletBalance;
+            tenant.WalletBalance -= grandTotal;
+            var balanceAfter = tenant.WalletBalance;
+
+            var walletTx = new MT_GRMS.Domain.Entities.SaaS.WalletTransaction
+            {
+                TenantId = tenant.Id,
+                TransactionCode = $"SUB-{DateTime.UtcNow:yyyyMMdd}-{Random.Shared.Next(1000, 9999)}",
+                Type = "PURCHASE_PLAN",
+                Amount = grandTotal,
+                BalanceBefore = balanceBefore,
+                BalanceAfter = balanceAfter,
+                Description = $"Thanh toán gói dịch vụ {plan.PlanName} ({months} tháng)",
+                PaymentMethod = "WALLET",
+                Status = "SUCCESS"
+            };
+            _context.WalletTransactions.Add(walletTx);
+        }
 
         // 2. Tính số tháng gia hạn (Khuyến mãi thêm tháng)
         var bonusMonths = months >= 24 ? 3 : (months >= 12 ? 1 : 0);
@@ -154,6 +194,60 @@ public class TenantStoreController : BaseApiController
         );
 
         return Ok(ApiResponse<PurchaseSubscriptionResponse>.Ok(response, "Thanh toán và gia hạn gói dịch vụ thành công."));
+    }
+
+    /// <summary>
+    /// Lấy danh sách lịch sử mua hàng, đăng ký và gia hạn các gói dịch vụ của gian hàng
+    /// </summary>
+    [HttpGet("subscriptions/history")]
+    public async Task<IActionResult> GetSubscriptionOrderHistory(CancellationToken cancellationToken)
+    {
+        var tenant = await ResolveCurrentTenantAsync(cancellationToken);
+        if (tenant == null)
+        {
+            return NotFound(ApiResponse<IReadOnlyList<SubscriptionOrderHistoryDto>>.Fail("TENANT_NOT_FOUND", "Không tìm thấy thông tin gian hàng trong hệ thống."));
+        }
+
+        var list = new List<SubscriptionOrderHistoryDto>();
+
+        // 1. Lấy các giao dịch mua gói dịch vụ từ WalletTransactions
+        var paidOrders = await _context.WalletTransactions
+            .Where(w => w.TenantId == tenant.Id && (w.Type == "PURCHASE_PLAN" || w.Type == "PURCHASE_ADDON"))
+            .OrderByDescending(w => w.CreatedAt)
+            .ToListAsync(cancellationToken);
+
+        foreach (var order in paidOrders)
+        {
+            var isPlanActive = tenant.SubscriptionExpiresAt.HasValue && tenant.SubscriptionExpiresAt.Value >= DateTime.UtcNow;
+            list.Add(new SubscriptionOrderHistoryDto(
+                Code: order.TransactionCode,
+                PlanName: order.Description.Replace("Thanh toán gói dịch vụ ", ""),
+                StartDate: order.CreatedAt.ToString("dd/MM/yyyy"),
+                EndDate: tenant.SubscriptionExpiresAt?.ToString("dd/MM/yyyy") ?? order.CreatedAt.AddYears(1).ToString("dd/MM/yyyy"),
+                TotalAmount: order.Amount,
+                PaymentMethod: order.PaymentMethod == "WALLET" ? "Ví MT-GRMS" : order.PaymentMethod,
+                Status: isPlanActive ? "Đang hiệu lực" : "Hết hạn",
+                CreatedAt: order.CreatedAt
+            ));
+        }
+
+        // 2. Luôn có bản ghi gói khởi tạo ban đầu (Gói miễn phí / dùng thử khi đăng ký tài khoản)
+        var initPlanName = tenant.SubscriptionPlan?.PlanName ?? (tenant.CurrentPlan == "FREE" ? "Gói Cơ Bản (Miễn Phí) 01" : "Gói Dùng Thử Trải Nghiệm");
+        var initEndDate = tenant.SubscriptionExpiresAt ?? tenant.CreatedAt.AddYears(1);
+        var isInitActive = list.Count == 0 && initEndDate >= DateTime.UtcNow;
+
+        list.Add(new SubscriptionOrderHistoryDto(
+            Code: $"SUB-{tenant.CreatedAt:yyyyMMdd}-001",
+            PlanName: initPlanName,
+            StartDate: tenant.CreatedAt.ToString("dd/MM/yyyy"),
+            EndDate: initEndDate.ToString("dd/MM/yyyy"),
+            TotalAmount: 0m,
+            PaymentMethod: "Gói hệ thống cấp",
+            Status: isInitActive ? "Đang hiệu lực" : "Hết hạn",
+            CreatedAt: tenant.CreatedAt
+        ));
+
+        return Ok(ApiResponse<IReadOnlyList<SubscriptionOrderHistoryDto>>.Ok(list));
     }
 }
 

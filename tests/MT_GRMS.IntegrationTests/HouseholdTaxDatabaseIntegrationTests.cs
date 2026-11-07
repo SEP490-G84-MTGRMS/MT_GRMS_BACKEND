@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities;
 using MT_GRMS.Domain.Entities.Finance;
+using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Infrastructure.Repositories;

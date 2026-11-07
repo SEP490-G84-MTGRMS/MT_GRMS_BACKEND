@@ -62,7 +62,8 @@ public record TenantDetailResponse(
     int MaxStaff,
     List<TenantDetailBranchSummaryDto> Branches,
     DateTime CreatedAt,
-    DateTime? UpdatedAt
+    DateTime? UpdatedAt,
+    decimal WalletBalance = 0
 );
 
 public record UpdateTenantRequest(
@@ -101,4 +102,13 @@ public record PurchaseSubscriptionResponse(
     string Message
 );
 
-
+public record SubscriptionOrderHistoryDto(
+    string Code,
+    string PlanName,
+    string StartDate,
+    string EndDate,
+    decimal TotalAmount,
+    string PaymentMethod,
+    string Status,
+    DateTime CreatedAt
+);

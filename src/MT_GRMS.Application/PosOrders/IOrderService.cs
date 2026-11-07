@@ -36,7 +36,7 @@ public interface IOrderService
     /// <summary>
     /// Lấy luồng byte nhị phân ESC/POS phục vụ kiểm thử hoặc in từ client
     /// </summary>
-    Task<byte[]> GetOrderReceiptEscPosBytesAsync(Guid orderId, decimal? cashReceived = null, CancellationToken cancellationToken = default);
+    Task<byte[]> GetOrderReceiptEscPosBytesAsync(Guid orderId, decimal? cashReceived = null, string? cashierName = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Tạo đơn đặt trước giữ kho cho khách hàng, nhận tiền cọc và giữ tồn kho FEFO

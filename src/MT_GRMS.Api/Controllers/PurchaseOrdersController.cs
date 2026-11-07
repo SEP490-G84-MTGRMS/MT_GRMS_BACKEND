@@ -7,7 +7,7 @@ using MT_GRMS.Application.PurchaseOrders.Dtos;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/purchase-orders")]
+[Route("api/purchase-orders")]
 public class PurchaseOrdersController : BaseApiController
 {
     private readonly IPurchaseOrderService _poService;

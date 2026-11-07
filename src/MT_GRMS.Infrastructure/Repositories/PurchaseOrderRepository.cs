@@ -103,6 +103,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                          && !sp.IsDeleted
                          && sp.Product != null
                          && !sp.Product.IsDeleted
+                         && sp.Product.Status == ProductStatus.Active
                          && allocatedProductIds.Contains(sp.ProductId));
 
         var rawSupplierProducts = await spQuery.AsNoTracking().ToListAsync(cancellationToken);
@@ -153,7 +154,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             var price = sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : (p.CostPrice ?? p.SellingPrice);
             var moq = sp.MinimumOrderQuantity > 0 ? sp.MinimumOrderQuantity : 1;
 
-            var isProdActive = string.Equals(p.Status, "Active", StringComparison.OrdinalIgnoreCase);
+            var isProdActive = p.Status == ProductStatus.Active;
             var prodInactiveReason = !isProdActive ? "Sản phẩm đang tạm ngưng kinh doanh" : null;
             var supInactiveReason = !isSupActive && resolvedSupplier != null
                 ? $"Nhà cung cấp {resolvedSupplier.Name} đang tạm ngừng hoạt động"
