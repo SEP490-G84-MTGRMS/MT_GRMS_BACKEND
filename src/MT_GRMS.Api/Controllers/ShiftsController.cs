@@ -12,7 +12,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/pos/shifts")]
-[Route("api/v1/pos/shifts")]
 [Route("api/shifts")]
 public class ShiftsController : BaseApiController
 {
@@ -165,7 +164,6 @@ public class ShiftsController : BaseApiController
     /// Chủ cửa hàng duyệt phiếu chi vượt hạn mức.
     /// </summary>
     [HttpPost("/api/pos/cash-movements/{id:guid}/approve")]
-    [HttpPost("/api/v1/pos/cash-movements/{id:guid}/approve")]
     [RequireIdempotency]
     public async Task<ActionResult<ApiResponse<ShiftCashMovementDto>>> ApproveCashMovement(
         [FromRoute] Guid id,
@@ -184,7 +182,6 @@ public class ShiftsController : BaseApiController
     /// Chủ cửa hàng từ chối phiếu chi.
     /// </summary>
     [HttpPost("/api/pos/cash-movements/{id:guid}/reject")]
-    [HttpPost("/api/v1/pos/cash-movements/{id:guid}/reject")]
     [RequireIdempotency]
     public async Task<ActionResult<ApiResponse<ShiftCashMovementDto>>> RejectCashMovement(
         [FromRoute] Guid id,
@@ -203,7 +200,6 @@ public class ShiftsController : BaseApiController
     /// Thu ngân tự hủy phiếu chi đang chờ duyệt.
     /// </summary>
     [HttpPost("/api/pos/cash-movements/{id:guid}/cancel")]
-    [HttpPost("/api/v1/pos/cash-movements/{id:guid}/cancel")]
     [RequireIdempotency]
     public async Task<ActionResult<ApiResponse<ShiftCashMovementDto>>> CancelCashMovement(
         [FromRoute] Guid id,
@@ -217,7 +213,6 @@ public class ShiftsController : BaseApiController
     /// Chủ cửa hàng xác nhận đã nhận tiền mặt từ phiếu rút két (CashDrop).
     /// </summary>
     [HttpPost("/api/pos/cash-movements/{id:guid}/confirm-drop")]
-    [HttpPost("/api/v1/pos/cash-movements/{id:guid}/confirm-drop")]
     [RequireIdempotency]
     public async Task<ActionResult<ApiResponse<ShiftCashMovementDto>>> ConfirmCashDrop(
         [FromRoute] Guid id,
@@ -235,7 +230,6 @@ public class ShiftsController : BaseApiController
     /// Lấy danh sách các phiếu chờ chủ xử lý (duyệt chi hoặc xác nhận nhận tiền rút két).
     /// </summary>
     [HttpGet("/api/pos/cash-movements/pending")]
-    [HttpGet("/api/v1/pos/cash-movements/pending")]
     public async Task<ActionResult<ApiResponse<PendingMovementsSummaryResponse>>> GetPendingMovements(
         [FromQuery] Guid branchId,
         CancellationToken cancellationToken)
@@ -254,7 +248,6 @@ public class ShiftsController : BaseApiController
     /// Lấy cấu hình hạn mức duyệt chi két POS.
     /// </summary>
     [HttpGet("/api/pos/settings/cash-movement")]
-    [HttpGet("/api/v1/pos/settings/cash-movement")]
     public async Task<ActionResult<ApiResponse<CashMovementSettingsDto>>> GetCashMovementSettings(
         CancellationToken cancellationToken)
     {
@@ -266,7 +259,6 @@ public class ShiftsController : BaseApiController
     /// Cập nhật cấu hình hạn mức duyệt chi két POS.
     /// </summary>
     [HttpPut("/api/pos/settings/cash-movement")]
-    [HttpPut("/api/v1/pos/settings/cash-movement")]
     [RequireIdempotency]
     public async Task<ActionResult<ApiResponse<CashMovementSettingsDto>>> UpdateCashMovementSettings(
         [FromBody] UpdateCashMovementSettingsRequest request,
