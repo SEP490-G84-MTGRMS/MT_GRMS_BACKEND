@@ -130,7 +130,9 @@ public class BranchService : IBranchService
             Name = request.Name.Trim(),
             Address = request.Address?.Trim() ?? string.Empty,
             Phone = request.Phone?.Trim(),
+            Email = request.Email?.Trim(),
             ManagerName = request.ManagerName?.Trim(),
+            IsHeadquarter = request.IsHeadquarter,
             IsActive = true,
             CreatedAt = DateTime.UtcNow
         };
@@ -155,7 +157,9 @@ public class BranchService : IBranchService
         branch.Name = request.Name.Trim();
         branch.Address = request.Address?.Trim() ?? string.Empty;
         branch.Phone = request.Phone?.Trim();
+        branch.Email = request.Email?.Trim();
         branch.ManagerName = request.ManagerName?.Trim();
+        branch.IsHeadquarter = request.IsHeadquarter;
         branch.UpdatedAt = DateTime.UtcNow;
 
         _branchRepo.Update(branch);
@@ -190,7 +194,9 @@ public class BranchService : IBranchService
             Name = branch.Name,
             Address = branch.Address ?? string.Empty,
             Phone = branch.Phone,
+            Email = branch.Email,
             ManagerName = branch.ManagerName,
+            IsHeadquarter = branch.IsHeadquarter,
             Status = branch.Status,
             PendingOrdersCount = branch.PendingOrdersCount,
             LastOrderDate = branch.LastOrderDate,

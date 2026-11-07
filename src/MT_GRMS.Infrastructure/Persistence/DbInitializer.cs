@@ -172,6 +172,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
     }
 
+    private static async Task EnsureBranchColumnsAsync(AppDbContext context, ILogger? logger = null)
+    {
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""Email"" character varying(150) NULL;
+                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""ManagerName"" character varying(150) NULL;
+                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""IsHeadquarter"" boolean NOT NULL DEFAULT false;
+            ");
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ các cột Email, ManagerName, IsHeadquarter cho bảng Branches.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ cột cho bảng Branches");
+        }
+    }
+
     public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null)
     {
         // 1. Tự động áp dụng Migrations hoặc EnsureCreatedAsync để khởi tạo toàn bộ CSDL và 34 bảng nếu chưa có
@@ -660,10 +677,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 try
                 {
                     await EnsureSupplierDispatchSchemaAsync(context, logger);
+                    await EnsureBranchColumnsAsync(context, logger);
                 }
                 catch (Exception ex)
                 {
-                    logger?.LogError(ex, "Lỗi khi chạy EnsureSupplierDispatchSchemaAsync");
+                    logger?.LogError(ex, "Lỗi khi chạy EnsureSupplierDispatchSchemaAsync / EnsureBranchColumnsAsync");
                 }
             }
             else

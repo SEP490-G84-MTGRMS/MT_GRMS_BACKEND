@@ -7,7 +7,9 @@ public class BranchDto
     public string Name { get; set; } = string.Empty;
     public string Address { get; set; } = string.Empty;
     public string? Phone { get; set; }
+    public string? Email { get; set; }
     public string? ManagerName { get; set; }
+    public bool IsHeadquarter { get; set; } = false;
     public string Status { get; set; } = "Active";
     public int PendingOrdersCount { get; set; } = 0;
     public DateTime? LastOrderDate { get; set; }
@@ -31,23 +33,73 @@ public record BranchQuotaDto(
     string CurrentPlanName
 );
 
-public record CreateBranchRequest(
-    string BranchCode,
-    string Name,
-    string Address,
-    string? Phone = null,
-    string? ManagerName = null,
-    bool IsHeadquarter = false
-);
+public class CreateBranchRequest
+{
+    public string BranchCode { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Address { get; set; } = string.Empty;
+    public string? Phone { get; set; }
+    public string? Email { get; set; }
+    public string? ManagerName { get; set; }
+    public bool IsHeadquarter { get; set; } = false;
 
-public record UpdateBranchRequest(
-    string Name,
-    string Address,
-    string? Phone = null,
-    string? ManagerName = null,
-    bool IsHeadquarter = false
-);
+    public CreateBranchRequest() { }
 
-public record UpdateBranchStatusRequest(
-    bool IsActive
-);
+    public CreateBranchRequest(
+        string branchCode,
+        string name,
+        string address,
+        string? phone = null,
+        string? managerName = null,
+        bool isHeadquarter = false,
+        string? email = null)
+    {
+        BranchCode = branchCode;
+        Name = name;
+        Address = address;
+        Phone = phone;
+        ManagerName = managerName;
+        IsHeadquarter = isHeadquarter;
+        Email = email;
+    }
+}
+
+public class UpdateBranchRequest
+{
+    public string Name { get; set; } = string.Empty;
+    public string Address { get; set; } = string.Empty;
+    public string? Phone { get; set; }
+    public string? Email { get; set; }
+    public string? ManagerName { get; set; }
+    public bool IsHeadquarter { get; set; } = false;
+
+    public UpdateBranchRequest() { }
+
+    public UpdateBranchRequest(
+        string name,
+        string address,
+        string? phone = null,
+        string? managerName = null,
+        bool isHeadquarter = false,
+        string? email = null)
+    {
+        Name = name;
+        Address = address;
+        Phone = phone;
+        ManagerName = managerName;
+        IsHeadquarter = isHeadquarter;
+        Email = email;
+    }
+}
+
+public class UpdateBranchStatusRequest
+{
+    public bool IsActive { get; set; }
+
+    public UpdateBranchStatusRequest() { }
+
+    public UpdateBranchStatusRequest(bool isActive)
+    {
+        IsActive = isActive;
+    }
+}
