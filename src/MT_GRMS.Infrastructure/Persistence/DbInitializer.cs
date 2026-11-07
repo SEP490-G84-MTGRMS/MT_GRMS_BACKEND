@@ -28,6 +28,125 @@ namespace MT_GRMS.Infrastructure.Persistence;
 /// </summary>
 public static class DbInitializer
 {
+    private static async Task EnsureSupplierDispatchSchemaAsync(AppDbContext context)
+    {
+        await context.Database.ExecuteSqlRawAsync(@"
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchPackageId"" uuid NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchBatchId"" uuid NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierCodeSnapshot"" character varying(50) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierNameSnapshot"" character varying(250) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierEmailSnapshot"" character varying(200) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreCodeSnapshot"" character varying(50) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreNameSnapshot"" character varying(250) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreAddressSnapshot"" character varying(500) NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StorePhoneSnapshot"" character varying(50) NULL;
+
+ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductCodeSnapshot"" character varying(50) NULL;
+ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductNameSnapshot"" character varying(250) NULL;
+ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""PurchaseUnitNameSnapshot"" character varying(50) NULL;
+
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""RevisionNumber"" integer NOT NULL DEFAULT 1;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""LastAmendedAtUtc"" timestamp without time zone NULL;
+ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""LastAmendedByUserId"" character varying(50) NULL;
+
+ALTER TABLE ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""PackageRevisionNumber"" integer NOT NULL DEFAULT 1;
+ALTER TABLE ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""SupersededByPackageId"" uuid NULL;
+
+CREATE TABLE IF NOT EXISTS ""PurchaseOrderRevisions"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""PurchaseOrderId"" uuid NOT NULL,
+    ""RevisionNumber"" integer NOT NULL,
+    ""PreviousDataSnapshotJson"" text NULL,
+    ""NewDataSnapshotJson"" text NULL,
+    ""ChangedByUserId"" character varying(50) NULL,
+    ""ChangedAtUtc"" timestamp without time zone NOT NULL,
+    ""ChangeReason"" character varying(500) NULL,
+    ""CreatedBy"" uuid NULL,
+    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp without time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ""IX_PurchaseOrderRevisions_Tenant_Po_Rev""
+    ON ""PurchaseOrderRevisions"" (""TenantId"", ""PurchaseOrderId"", ""RevisionNumber"");
+
+DROP INDEX IF EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId"";
+CREATE UNIQUE INDEX IF NOT EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId_Active""
+    ON ""SupplierDispatchPackageItems"" (""PurchaseOrderId"") WHERE ""IsDeleted"" = false;
+
+ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryDaysJson"" character varying(500) NULL;
+ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryWeekdaysMask"" integer NULL;
+
+CREATE TABLE IF NOT EXISTS ""SupplierDispatchPackages"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""DispatchBatchId"" uuid NOT NULL,
+    ""SupplierId"" uuid NOT NULL,
+    ""SupplierCodeSnapshot"" character varying(50) NOT NULL,
+    ""SupplierNameSnapshot"" character varying(250) NOT NULL,
+    ""EmailTo"" character varying(200) NOT NULL,
+    ""EmailCcJson"" text NOT NULL DEFAULT '[]',
+    ""EmailSendMode"" character varying(30) NOT NULL,
+    ""ScheduledSendAtUtc"" timestamp without time zone NULL,
+    ""EmailStatus"" character varying(30) NOT NULL,
+    ""GenerationStatus"" character varying(30) NOT NULL,
+    ""FileName"" character varying(255) NULL,
+    ""FileStorageKey"" character varying(500) NULL,
+    ""FileSize"" bigint NULL,
+    ""FileChecksum"" character varying(128) NULL,
+    ""AttemptCount"" integer NOT NULL DEFAULT 0,
+    ""LastError"" character varying(2000) NULL,
+    ""GeneratedAtUtc"" timestamp without time zone NULL,
+    ""SentAtUtc"" timestamp without time zone NULL,
+    ""Note"" character varying(500) NULL,
+    ""IdempotencyKey"" character varying(100) NULL,
+    ""ProcessingLeaseUntilUtc"" timestamp without time zone NULL,
+    ""ProcessingLockedBy"" character varying(100) NULL,
+    ""CreatedBy"" uuid NULL,
+    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp without time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false
+);
+
+CREATE TABLE IF NOT EXISTS ""SupplierDispatchPackageItems"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""PackageId"" uuid NOT NULL,
+    ""PurchaseOrderId"" uuid NOT NULL,
+    ""CreatedBy"" uuid NULL,
+    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp without time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId""
+    ON ""SupplierDispatchPackageItems"" (""PurchaseOrderId"");
+
+CREATE TABLE IF NOT EXISTS ""OutboxMessages"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""Type"" character varying(100) NOT NULL,
+    ""PayloadJson"" text NOT NULL,
+    ""IdempotencyKey"" character varying(120) NOT NULL,
+    ""Status"" character varying(30) NOT NULL,
+    ""AttemptCount"" integer NOT NULL DEFAULT 0,
+    ""NextAttemptAtUtc"" timestamp without time zone NULL,
+    ""ProcessedAtUtc"" timestamp without time zone NULL,
+    ""LockedUntilUtc"" timestamp without time zone NULL,
+    ""LockedBy"" character varying(100) NULL,
+    ""LastError"" character varying(2000) NULL,
+    ""CreatedBy"" uuid NULL,
+    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp without time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
+    ON ""OutboxMessages"" (""TenantId"", ""IdempotencyKey"");
+");
+    }
+
     public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null)
     {
         // 1. Tự động áp dụng Migrations hoặc EnsureCreatedAsync để khởi tạo toàn bộ CSDL và 34 bảng nếu chưa có
@@ -709,6 +828,12 @@ public static class DbInitializer
                             END IF;
                         END $$;
                     ");
+                }
+                catch { }
+
+                try
+                {
+                    await EnsureSupplierDispatchSchemaAsync(context);
                 }
                 catch { }
             }
@@ -4078,5 +4203,294 @@ public static class DbInitializer
         }
         await context.SaveChangesAsync(ct);
         logger?.LogInformation("Seeded POS Retail Products and FEFO BranchStocks successfully.");
+
+        // 5. Nạp dữ liệu mẫu cho Phiếu nhập kho (GRN) hoàn thành và Phiếu trả hàng NCC (Supplier Returns)
+        await SeedSupplierReturnsAndGrnsAsync(context, logger, ct);
+    }
+
+    private static async Task SeedSupplierReturnsAndGrnsAsync(AppDbContext context, ILogger? logger = null, CancellationToken ct = default)
+    {
+        var branch = await context.Branches.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.TenantId == DefaultTenantId, ct);
+        var supAcecook = await context.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Code == "SUP-ACECOOK", ct);
+        var supMasan = await context.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Code == "SUP-MASAN", ct);
+
+        if (branch == null || supAcecook == null || supMasan == null) return;
+
+        var prodHaoHao = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.ProductCode == "SP-MI-HAOHAO-TC", ct);
+        var prodOmachi = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.ProductCode == "SP-MI-OMACHI-BBQ", ct);
+        var prodHaoHaoGoi = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.ProductCode == "HH-TOM-CAY", ct);
+
+        if (prodHaoHao == null || prodOmachi == null) return;
+
+        // 1. Tạo 2 phiếu nhập kho hoàn thành (COMPLETED) làm nguồn cho trả hàng
+        var grn1 = await context.GoodsReceipts.IgnoreQueryFilters().FirstOrDefaultAsync(g => g.Code == "GRN-20261101-001", ct);
+        if (grn1 == null)
+        {
+            var grn1Id = Guid.NewGuid();
+            var line1Id = Guid.NewGuid();
+            var line2Id = Guid.NewGuid();
+
+            grn1 = new GoodsReceipt
+            {
+                Id = grn1Id,
+                TenantId = DefaultTenantId,
+                Code = "GRN-20261101-001",
+                SupplierId = supAcecook.Id,
+                BranchId = branch.Id,
+                Status = "COMPLETED",
+                InvoiceNo = "HD-AC-88991",
+                ReceiverUserId = "user-owner-001",
+                ReceivedAtUtc = DateTime.UtcNow.AddDays(-10),
+                SubTotal = 5760000m,
+                GrandTotal = 5760000m,
+                PaymentMethod = "AP",
+                Note = "Nhập hàng mì gói từ Acecook đã đối soát đủ",
+                Lines = new List<GoodsReceiptLine>
+                {
+                    new GoodsReceiptLine
+                    {
+                        Id = line1Id,
+                        TenantId = DefaultTenantId,
+                        GoodsReceiptId = grn1Id,
+                        ProductId = prodHaoHao.Id,
+                        OrderedQty = 50m,
+                        DeliveredQty = 50m,
+                        AcceptedQty = 50m,
+                        RejectedQty = 0m,
+                        UnitPrice = 108000m,
+                        LineAmount = 5400000m,
+                        BatchCode = "LOT-HAOHAO-2026A",
+                        ManufactureDate = DateTime.UtcNow.AddMonths(-5),
+                        ExpiryDate = DateTime.UtcNow.AddDays(25),
+                        QualityStatus = "ACCEPTED"
+                    },
+                    new GoodsReceiptLine
+                    {
+                        Id = line2Id,
+                        TenantId = DefaultTenantId,
+                        GoodsReceiptId = grn1Id,
+                        ProductId = prodHaoHaoGoi != null ? prodHaoHaoGoi.Id : prodHaoHao.Id,
+                        OrderedQty = 100m,
+                        DeliveredQty = 100m,
+                        AcceptedQty = 100m,
+                        RejectedQty = 0m,
+                        UnitPrice = 3600m,
+                        LineAmount = 360000m,
+                        BatchCode = "LOT-HH-TOM-CAY-EARLY",
+                        ManufactureDate = DateTime.UtcNow.AddMonths(-3),
+                        ExpiryDate = DateTime.UtcNow.AddDays(15),
+                        QualityStatus = "ACCEPTED"
+                    }
+                }
+            };
+            await context.GoodsReceipts.AddAsync(grn1, ct);
+        }
+
+        var grn2 = await context.GoodsReceipts.IgnoreQueryFilters().FirstOrDefaultAsync(g => g.Code == "GRN-20261102-002", ct);
+        if (grn2 == null)
+        {
+            var grn2Id = Guid.NewGuid();
+            var line3Id = Guid.NewGuid();
+
+            grn2 = new GoodsReceipt
+            {
+                Id = grn2Id,
+                TenantId = DefaultTenantId,
+                Code = "GRN-20261102-002",
+                SupplierId = supMasan.Id,
+                BranchId = branch.Id,
+                Status = "COMPLETED",
+                InvoiceNo = "HD-MS-44120",
+                ReceiverUserId = "user-owner-001",
+                ReceivedAtUtc = DateTime.UtcNow.AddDays(-7),
+                SubTotal = 7680000m,
+                GrandTotal = 7680000m,
+                PaymentMethod = "AP",
+                Note = "Nhập hàng thực phẩm Masan Consumer",
+                Lines = new List<GoodsReceiptLine>
+                {
+                    new GoodsReceiptLine
+                    {
+                        Id = line3Id,
+                        TenantId = DefaultTenantId,
+                        GoodsReceiptId = grn2Id,
+                        ProductId = prodOmachi.Id,
+                        OrderedQty = 40m,
+                        DeliveredQty = 40m,
+                        AcceptedQty = 40m,
+                        RejectedQty = 0m,
+                        UnitPrice = 192000m,
+                        LineAmount = 7680000m,
+                        BatchCode = "LOT-OMACHI-BBQ-26B",
+                        ManufactureDate = DateTime.UtcNow.AddMonths(-2),
+                        ExpiryDate = DateTime.UtcNow.AddMonths(6),
+                        QualityStatus = "ACCEPTED"
+                    }
+                }
+            };
+            await context.GoodsReceipts.AddAsync(grn2, ct);
+        }
+
+        await context.SaveChangesAsync(ct);
+
+        // 2. Nạp các phiếu trả hàng mẫu (Supplier Returns) theo từng trạng thái
+        if (!await context.SupplierReturns.IgnoreQueryFilters().AnyAsync(r => r.TenantId == DefaultTenantId, ct))
+        {
+            var rtv1Line = grn1.Lines.First(l => l.ProductId == prodHaoHao.Id);
+            var rtv1 = new SupplierReturn
+            {
+                Id = Guid.NewGuid(),
+                TenantId = DefaultTenantId,
+                Code = "RTV-20261103-001",
+                GoodsReceiptId = grn1.Id,
+                SupplierId = supAcecook.Id,
+                BranchId = branch.Id,
+                Status = "APPROVED",
+                Reason = "Hàng sắp hết hạn (Date cận < 30 ngày)",
+                ReasonNotes = "Lô mì Hảo Hảo còn dưới 25 ngày theo thỏa thuận đổi hàng cận date của Acecook",
+                SupplierResponseNote = "Acecook đồng ý đổi trả 10 thùng theo chính sách bảo hành date",
+                TotalRequestedQty = 10m,
+                TotalApprovedQty = 10m,
+                TotalHandedOverQty = 0m,
+                TotalEstimatedAmount = 1080000m,
+                SubmittedAt = DateTime.UtcNow.AddDays(-3),
+                RespondedAt = DateTime.UtcNow.AddDays(-2),
+                Lines = new List<SupplierReturnLine>
+                {
+                    new SupplierReturnLine
+                    {
+                        Id = Guid.NewGuid(),
+                        TenantId = DefaultTenantId,
+                        ProductId = prodHaoHao.Id,
+                        GoodsReceiptLineId = rtv1Line.Id,
+                        BatchCode = rtv1Line.BatchCode,
+                        ExpiryDate = rtv1Line.ExpiryDate,
+                        RequestedQty = 10m,
+                        ApprovedQty = 10m,
+                        RejectedQty = 0m,
+                        HandedOverQty = 0m,
+                        UnitCost = rtv1Line.UnitPrice,
+                        Notes = "Hàng date cận còn nguyên tem"
+                    }
+                }
+            };
+
+            var rtv2Line = grn2.Lines.First(l => l.ProductId == prodOmachi.Id);
+            var rtv2 = new SupplierReturn
+            {
+                Id = Guid.NewGuid(),
+                TenantId = DefaultTenantId,
+                Code = "RTV-20261104-002",
+                GoodsReceiptId = grn2.Id,
+                SupplierId = supMasan.Id,
+                BranchId = branch.Id,
+                Status = "PENDING_SUPPLIER",
+                Reason = "Hàng hư hỏng / Lỗi chất lượng",
+                ReasonNotes = "5 thùng Omachi bị móp méo rách vỏ do vận chuyển",
+                TotalRequestedQty = 5m,
+                TotalApprovedQty = 0m,
+                TotalHandedOverQty = 0m,
+                TotalEstimatedAmount = 960000m,
+                SubmittedAt = DateTime.UtcNow.AddDays(-1),
+                Lines = new List<SupplierReturnLine>
+                {
+                    new SupplierReturnLine
+                    {
+                        Id = Guid.NewGuid(),
+                        TenantId = DefaultTenantId,
+                        ProductId = prodOmachi.Id,
+                        GoodsReceiptLineId = rtv2Line.Id,
+                        BatchCode = rtv2Line.BatchCode,
+                        ExpiryDate = rtv2Line.ExpiryDate,
+                        RequestedQty = 5m,
+                        ApprovedQty = 0m,
+                        RejectedQty = 0m,
+                        HandedOverQty = 0m,
+                        UnitCost = rtv2Line.UnitPrice,
+                        Notes = "Thùng móp góc và rách băng keo niêm phong"
+                    }
+                }
+            };
+
+            var rtv3Line = grn1.Lines.FirstOrDefault(l => l.ProductId == (prodHaoHaoGoi != null ? prodHaoHaoGoi.Id : prodHaoHao.Id)) ?? grn1.Lines.First();
+            var rtv3 = new SupplierReturn
+            {
+                Id = Guid.NewGuid(),
+                TenantId = DefaultTenantId,
+                Code = "RTV-20261105-003",
+                GoodsReceiptId = grn1.Id,
+                SupplierId = supAcecook.Id,
+                BranchId = branch.Id,
+                Status = "COMPLETED",
+                Reason = "Hàng tồn đọng thỏa thuận thu hồi",
+                ReasonNotes = "Thu hồi gói dùng thử theo chương trình khuyến mãi kết thúc",
+                SupplierResponseNote = "Đã nhận đủ và cấn trừ vào đợt giao tiếp theo",
+                TotalRequestedQty = 15m,
+                TotalApprovedQty = 15m,
+                TotalHandedOverQty = 15m,
+                TotalEstimatedAmount = 54000m,
+                SubmittedAt = DateTime.UtcNow.AddDays(-5),
+                RespondedAt = DateTime.UtcNow.AddDays(-4),
+                HandedOverAt = DateTime.UtcNow.AddDays(-2),
+                HandedOverBy = "Nguyễn Văn Kho",
+                Lines = new List<SupplierReturnLine>
+                {
+                    new SupplierReturnLine
+                    {
+                        Id = Guid.NewGuid(),
+                        TenantId = DefaultTenantId,
+                        ProductId = rtv3Line.ProductId,
+                        GoodsReceiptLineId = rtv3Line.Id,
+                        BatchCode = rtv3Line.BatchCode,
+                        ExpiryDate = rtv3Line.ExpiryDate,
+                        RequestedQty = 15m,
+                        ApprovedQty = 15m,
+                        RejectedQty = 0m,
+                        HandedOverQty = 15m,
+                        UnitCost = rtv3Line.UnitPrice,
+                        Notes = "Bàn giao cho tài xế xe tải Acecook 59C-12345"
+                    }
+                }
+            };
+
+            var rtv4 = new SupplierReturn
+            {
+                Id = Guid.NewGuid(),
+                TenantId = DefaultTenantId,
+                Code = "RTV-20261106-004",
+                GoodsReceiptId = grn2.Id,
+                SupplierId = supMasan.Id,
+                BranchId = branch.Id,
+                Status = "DRAFT",
+                Reason = "Sai quy cách đóng gói",
+                ReasonNotes = "Kiểm đếm phát hiện tem phụ tiếng Việt bị mờ",
+                TotalRequestedQty = 2m,
+                TotalApprovedQty = 0m,
+                TotalHandedOverQty = 0m,
+                TotalEstimatedAmount = 384000m,
+                Lines = new List<SupplierReturnLine>
+                {
+                    new SupplierReturnLine
+                    {
+                        Id = Guid.NewGuid(),
+                        TenantId = DefaultTenantId,
+                        ProductId = prodOmachi.Id,
+                        GoodsReceiptLineId = rtv2Line.Id,
+                        BatchCode = rtv2Line.BatchCode,
+                        ExpiryDate = rtv2Line.ExpiryDate,
+                        RequestedQty = 2m,
+                        ApprovedQty = 0m,
+                        RejectedQty = 0m,
+                        HandedOverQty = 0m,
+                        UnitCost = rtv2Line.UnitPrice,
+                        Notes = "Tem phụ mờ khó quét mã QR"
+                    }
+                }
+            };
+
+            await context.SupplierReturns.AddRangeAsync(new[] { rtv1, rtv2, rtv3, rtv4 }, ct);
+            await context.SaveChangesAsync(ct);
+            logger?.LogInformation("Seeded completed GRNs and Supplier Returns sample data successfully.");
+        }
     }
 }
