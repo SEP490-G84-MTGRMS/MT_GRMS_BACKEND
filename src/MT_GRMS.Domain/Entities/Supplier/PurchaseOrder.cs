@@ -33,6 +33,24 @@ public class PurchaseOrder : BaseTenantEntity
     public string? RejectionReason { get; set; }
     public int RowVersion { get; set; } = 1;
 
+    /// <summary>Số revision hiện tại. PO mới = 1; mỗi lần amend có thay đổi +1.</summary>
+    public int RevisionNumber { get; set; } = 1;
+    public DateTime? LastAmendedAtUtc { get; set; }
+    public string? LastAmendedByUserId { get; set; }
+
+    /// <summary>Gói dispatch/email chứa PO này (nullable — PO cũ chưa có package).</summary>
+    public Guid? DispatchPackageId { get; set; }
+    public Guid? DispatchBatchId { get; set; }
+
+    // Snapshots tại thời điểm chốt — không ghi đè sau này
+    public string? SupplierCodeSnapshot { get; set; }
+    public string? SupplierNameSnapshot { get; set; }
+    public string? SupplierEmailSnapshot { get; set; }
+    public string? StoreCodeSnapshot { get; set; }
+    public string? StoreNameSnapshot { get; set; }
+    public string? StoreAddressSnapshot { get; set; }
+    public string? StorePhoneSnapshot { get; set; }
+
     // Navigations
     public Supplier? Supplier { get; set; }
     public Branch? Branch { get; set; }
@@ -40,6 +58,7 @@ public class PurchaseOrder : BaseTenantEntity
     public User? SubmittedByUser { get; set; }
     public User? ApprovedByUser { get; set; }
     public User? RejectedByUser { get; set; }
+    public SupplierDispatchPackage? DispatchPackage { get; set; }
     public ICollection<PurchaseOrderDetail> Details { get; set; } = new List<PurchaseOrderDetail>();
     public ICollection<GoodsReceipt> GoodsReceipts { get; set; } = new List<GoodsReceipt>();
 }

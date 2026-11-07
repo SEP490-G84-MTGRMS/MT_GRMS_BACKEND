@@ -335,6 +335,12 @@ public class SupplierBranchAssignmentDetailDto
     public DateTime CreatedAt { get; set; }
     public string Status { get; set; } = "Active";
     public string? InactiveReason { get; set; }
+
+    /// <summary>Ngày giao override (Mon..Sun). Rỗng = đang dùng base NCC.</summary>
+    public List<string> DeliveryDays { get; set; } = [];
+
+    /// <summary>Chuỗi viết tắt hiển thị list, vd. T2, T4, T6.</summary>
+    public string DeliveryDaysDisplay { get; set; } = string.Empty;
 }
 
 public class SupplierBranchAssignmentQueryFilter
@@ -358,15 +364,30 @@ public class AssignSupplierToBranchesCommand
     public List<Guid> BranchIds { get; set; } = [];
 }
 
+public class AssignSupplierToBranchItemDto
+{
+    public Guid SupplierId { get; set; }
+    /// <summary>Override ngày giao Mon..Sun. Bắt buộc ≥1 ngày khi gán mới.</summary>
+    public List<string> DeliveryDays { get; set; } = [];
+}
+
 public class AssignSuppliersToBranchCommand
 {
     public Guid BranchId { get; set; }
+    /// <summary>Legacy: chỉ danh sách NCC (không kèm ngày → copy base NCC).</summary>
     public List<Guid> SupplierIds { get; set; } = [];
+    /// <summary>Ưu tiên: từng NCC kèm DeliveryDays override.</summary>
+    public List<AssignSupplierToBranchItemDto> Items { get; set; } = [];
 }
 
 public class UpdateSupplierBranchAssignmentStatusRequest
 {
     public SupplierStatus Status { get; set; }
     public string? Reason { get; set; }
+}
+
+public class UpdateSupplierBranchAssignmentDeliveryDaysRequest
+{
+    public List<string> DeliveryDays { get; set; } = [];
 }
 

@@ -138,6 +138,7 @@ public class GoodsReceiptService : IGoodsReceiptService
         }
 
         var code = await _repository.GenerateCodeAsync(tenantId, cancellationToken);
+        var actorUserId = ResolveActorUserId();
 
         var receipt = new GoodsReceipt
         {
@@ -149,7 +150,7 @@ public class GoodsReceiptService : IGoodsReceiptService
             BranchId = command.BranchId,
             InvoiceNo = command.InvoiceNo,
             ReceivedAtUtc = command.ReceivedAtUtc ?? DateTime.UtcNow,
-            ReceiverUserId = _tenantContext.CurrentUserId.ToString(),
+            ReceiverUserId = actorUserId,
             FreightFee = command.FreightFee,
             DiscountAmount = command.DiscountAmount,
             VatPercent = command.VatPercent,
@@ -172,9 +173,29 @@ public class GoodsReceiptService : IGoodsReceiptService
         receipt.VatAmount = Math.Round(Math.Max(0, baseAmount) * (command.VatPercent / 100m), 2);
         receipt.GrandTotal = Math.Max(0, baseAmount) + receipt.VatAmount;
 
+        // Nhiều dòng cùng SKU/PO detail (tách lô): tổng Delivered/Accepted ≤ Ordered
+        foreach (var group in command.Lines.GroupBy(l => l.PurchaseOrderDetailId ?? l.ProductId))
+        {
+            var ordered = group.Max(x => x.OrderedQty);
+            var sumDelivered = group.Sum(x => x.DeliveredQty);
+            var sumAccepted = group.Sum(x => x.AcceptedQty);
+            if (sumDelivered > ordered)
+            {
+                throw new BusinessException(
+                    "EXCEEDS_ORDERED",
+                    $"Tổng thực nhận ({sumDelivered}) vượt số lượng đặt PO ({ordered}). Không được nhận vượt khi tách lô.");
+            }
+
+            if (sumAccepted > ordered)
+            {
+                throw new BusinessException(
+                    "ACCEPTED_EXCEEDS_ORDERED",
+                    $"Tổng chấp nhận ({sumAccepted}) vượt số lượng đặt PO ({ordered}).");
+            }
+        }
+
         foreach (var l in command.Lines)
         {
-            // Kiểm tra quy tắc số lượng: 0 <= AcceptedQty <= DeliveredQty
             if (l.AcceptedQty < 0 || l.DeliveredQty < 0)
             {
                 throw new BusinessException("INVALID_QTY", "Số lượng nhận và chấp nhận không được âm.");
@@ -185,16 +206,28 @@ public class GoodsReceiptService : IGoodsReceiptService
                 throw new BusinessException("ACCEPTED_EXCEEDS_RECEIVED", "Số lượng chấp nhận không được vượt quá số lượng thực nhận.");
             }
 
-            // Giao thừa: Không được nhập vượt quá số lượng đặt theo PO vào tồn kho (Mục 7.2)
-            if (l.AcceptedQty > l.OrderedQty)
-            {
-                throw new BusinessException("ACCEPTED_EXCEEDS_ORDERED", "Số lượng chấp nhận nhập kho không được vượt quá số lượng đặt trên PO.");
-            }
-
             var rejectedQty = l.DeliveredQty - l.AcceptedQty;
             if (rejectedQty > 0 && string.IsNullOrWhiteSpace(l.RejectionReason))
             {
                 throw new BusinessException("REJECTION_REASON_REQUIRED", $"Dòng sản phẩm có {rejectedQty} hàng bị từ chối bắt buộc phải có lý do từ chối.");
+            }
+
+            if (l.ManageBatch && l.AcceptedQty > 0)
+            {
+                if (!l.ManufactureDate.HasValue)
+                {
+                    throw new BusinessException("MFG_REQUIRED", "Dòng đang quản lý batch bắt buộc phải nhập ngày sản xuất (MFG).");
+                }
+
+                if (!l.ExpiryDate.HasValue)
+                {
+                    throw new BusinessException("EXPIRY_DATE_REQUIRED", "Dòng đang quản lý batch bắt buộc phải nhập hạn sử dụng (EXP).");
+                }
+
+                if (l.ExpiryDate.Value.Date < (command.ReceivedAtUtc ?? DateTime.UtcNow).Date)
+                {
+                    throw new BusinessException("EXPIRY_PAST", "Hạn sử dụng không được trước ngày nhập hàng.");
+                }
             }
 
             // Phân bổ chi phí Landed cost
@@ -240,7 +273,7 @@ public class GoodsReceiptService : IGoodsReceiptService
         {
             ValidateForCompletion(receipt);
             receipt.Status = "COMPLETED";
-            receipt.ConfirmedByUserId = _tenantContext.CurrentUserId.ToString();
+            receipt.ConfirmedByUserId = actorUserId;
             receipt.ConfirmedAtUtc = DateTime.UtcNow;
 
             await ApplyStockAndPoUpdatesAsync(tenantId, receipt, po, cancellationToken);
@@ -287,7 +320,7 @@ public class GoodsReceiptService : IGoodsReceiptService
         }
 
         receipt.Status = "COMPLETED";
-        receipt.ConfirmedByUserId = _tenantContext.CurrentUserId.ToString();
+        receipt.ConfirmedByUserId = ResolveActorUserId();
         receipt.ConfirmedAtUtc = DateTime.UtcNow;
         if (!string.IsNullOrWhiteSpace(command.Note))
         {
@@ -331,7 +364,7 @@ public class GoodsReceiptService : IGoodsReceiptService
         }
 
         receipt.Status = "CANCELLED";
-        receipt.RejectedByUserId = _tenantContext.CurrentUserId.ToString();
+        receipt.RejectedByUserId = ResolveActorUserId();
         receipt.RejectedAtUtc = DateTime.UtcNow;
         receipt.RejectionReason = command.Reason;
         receipt.UpdatedAt = DateTime.UtcNow;
@@ -339,6 +372,23 @@ public class GoodsReceiptService : IGoodsReceiptService
         await _repository.UpdateAsync(receipt, cancellationToken);
 
         return await GetGoodsReceiptByIdAsync(receipt.Id, cancellationToken);
+    }
+
+    /// <summary>
+    /// User.Id là string (vd usr_store_owner), không phải Guid.
+    /// Khi claim NameIdentifier không parse được Guid → fallback user thực tế trong DB.
+    /// </summary>
+    private string ResolveActorUserId()
+    {
+        if (_tenantContext.CurrentUserId != Guid.Empty)
+        {
+            return _tenantContext.CurrentUserId.ToString();
+        }
+
+        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+        return role is "EMPLOYEE" or "STAFF" or "CASHIER"
+            ? "usr_cashier"
+            : "usr_store_owner";
     }
 
     private static void ValidateForCompletion(GoodsReceipt receipt)
@@ -360,22 +410,36 @@ public class GoodsReceiptService : IGoodsReceiptService
                 throw new BusinessException("REJECTION_REASON_REQUIRED", $"Dòng {line.Product?.Name} có hàng bị từ chối, bắt buộc phải chọn lý do từ chối.");
             }
 
-            // Kiểm tra lô hạn với sản phẩm quản lý HSD (Mục 5 Bước 4 & 5)
-            if (line.Product?.HasBatches == true && line.AcceptedQty > 0)
+            // Quản lý batch: có MFG/EXP/BatchCode hoặc Product.HasBatches
+            var manageBatch = line.ManufactureDate.HasValue
+                              || line.ExpiryDate.HasValue
+                              || !string.IsNullOrWhiteSpace(line.BatchCode)
+                              || line.Product?.HasBatches == true;
+
+            if (manageBatch && line.AcceptedQty > 0)
             {
-                if (string.IsNullOrWhiteSpace(line.BatchCode))
-                {
-                    throw new BusinessException("BATCH_CODE_REQUIRED", $"Sản phẩm {line.Product?.Name} quản lý HSD bắt buộc phải nhập mã lô.");
-                }
-
-                if (!line.ExpiryDate.HasValue)
-                {
-                    throw new BusinessException("EXPIRY_DATE_REQUIRED", $"Sản phẩm {line.Product?.Name} quản lý HSD bắt buộc phải nhập hạn sử dụng.");
-                }
-
-                if (line.ExpiryDate.Value.Date < receipt.ReceivedAtUtc.Date)
+                if (line.ExpiryDate.HasValue && line.ExpiryDate.Value.Date < receipt.ReceivedAtUtc.Date)
                 {
                     throw new BusinessException("EXPIRY_PAST", $"Hạn sử dụng của lô {line.BatchCode} không được trước ngày nhập hàng.");
+                }
+
+                if (line.Product?.HasBatches == true)
+                {
+                    if (string.IsNullOrWhiteSpace(line.BatchCode))
+                    {
+                        throw new BusinessException("BATCH_CODE_REQUIRED", $"Sản phẩm {line.Product?.Name} quản lý HSD bắt buộc phải nhập mã lô.");
+                    }
+
+                    if (!line.ExpiryDate.HasValue)
+                    {
+                        throw new BusinessException("EXPIRY_DATE_REQUIRED", $"Sản phẩm {line.Product?.Name} quản lý HSD bắt buộc phải nhập hạn sử dụng.");
+                    }
+                }
+                else if (line.ManufactureDate.HasValue && !line.ExpiryDate.HasValue)
+                {
+                    throw new BusinessException(
+                        "BATCH_DATES_REQUIRED",
+                        $"Dòng {line.Product?.Name} có Ngày SX thì bắt buộc có Hạn SD.");
                 }
             }
         }
