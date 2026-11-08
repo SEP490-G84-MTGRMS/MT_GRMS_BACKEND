@@ -80,6 +80,18 @@ public class ShiftService : IShiftService
         };
 
         await _shiftRepository.AddShiftAsync(shift, cancellationToken);
+
+        // Ghi nhận nhân viên mở ca vào danh sách người tham gia ca
+        await _shiftRepository.AddParticipantAsync(new ShiftParticipant
+        {
+            TenantId = _tenantContext.CurrentTenantId,
+            ShiftId = shift.Id,
+            UserId = cashierUserId,
+            UserName = "Thu ngân mở ca",
+            JoinedAtUtc = DateTime.UtcNow,
+            LastActiveAtUtc = DateTime.UtcNow
+        }, cancellationToken);
+
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return MapToDetailResponse(shift);
@@ -229,7 +241,7 @@ public class ShiftService : IShiftService
             throw new BusinessException("SHIFT_NOT_FOUND", "Không tìm thấy ca làm việc.");
         }
 
-        if (shift.Status != ShiftState.Open)
+        if (shift.Status != ShiftState.Open && shift.Status != ShiftState.Closing)
         {
             throw new BusinessException("SHIFT_ALREADY_CLOSED", "Ca làm việc này đã được chốt trước đó.");
         }
@@ -515,6 +527,277 @@ public class ShiftService : IShiftService
         return new CashMovementSettingsDto(config.CashOutApprovalThreshold, config.CashOutShiftTotalLimit);
     }
 
+    public async Task<ShiftDetailResponse> StartClosingShiftAsync(
+        Guid shiftId,
+        Guid userId,
+        StartClosingShiftRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var shift = await _shiftRepository.GetByIdAsync(shiftId, cancellationToken);
+        if (shift == null)
+        {
+            throw new BusinessException("SHIFT_NOT_FOUND", "Không tìm thấy ca làm việc.");
+        }
+
+        if (shift.Status != ShiftState.Open)
+        {
+            throw new BusinessException("INVALID_SHIFT_STATE", "Chỉ có thể bắt đầu chốt ca khi ca đang mở (Open).");
+        }
+
+        var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shiftId, cancellationToken);
+        shift.TotalBankRevenue = bankRevenue;
+        shift.TotalOrdersCount = ordersCount;
+        shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
+
+        shift.Status = ShiftState.Closing;
+        shift.ClosingStartedByUserId = userId;
+        shift.ClosingStartedAtUtc = DateTime.UtcNow;
+
+        if (!string.IsNullOrWhiteSpace(request.Notes))
+        {
+            shift.Notes = string.IsNullOrWhiteSpace(shift.Notes) ? request.Notes : $"{shift.Notes} | {request.Notes}";
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapToDetailResponse(shift);
+    }
+
+    public async Task<ShiftDetailResponse> CancelClosingShiftAsync(
+        Guid shiftId,
+        Guid userId,
+        CancelClosingShiftRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var shift = await _shiftRepository.GetByIdAsync(shiftId, cancellationToken);
+        if (shift == null)
+        {
+            throw new BusinessException("SHIFT_NOT_FOUND", "Không tìm thấy ca làm việc.");
+        }
+
+        if (shift.Status != ShiftState.Closing)
+        {
+            throw new BusinessException("INVALID_SHIFT_STATE", "Chỉ có thể hủy chốt ca khi ca đang ở trạng thái kiểm đếm (Closing).");
+        }
+
+        shift.Status = ShiftState.Open;
+        shift.ClosingStartedByUserId = null;
+        shift.ClosingStartedAtUtc = null;
+        shift.ActualCashCounted = null;
+        shift.Discrepancy = null;
+
+        await _shiftRepository.ClearCloseConfirmationsAsync(shiftId, cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(request.Reason))
+        {
+            var cancelNote = $"[Hủy chốt ca lúc {DateTime.UtcNow:HH:mm dd/MM}: {request.Reason}]";
+            shift.Notes = string.IsNullOrWhiteSpace(shift.Notes) ? cancelNote : $"{shift.Notes} | {cancelNote}";
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapToDetailResponse(shift);
+    }
+
+    public async Task<ShiftDetailResponse> UpdateCountedCashAsync(
+        Guid shiftId,
+        Guid userId,
+        UpdateCountedCashRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var shift = await _shiftRepository.GetByIdAsync(shiftId, cancellationToken);
+        if (shift == null)
+        {
+            throw new BusinessException("SHIFT_NOT_FOUND", "Không tìm thấy ca làm việc.");
+        }
+
+        if (shift.Status != ShiftState.Closing)
+        {
+            throw new BusinessException("INVALID_SHIFT_STATE", "Chỉ có thể cập nhật số tiền đếm khi ca đang ở trạng thái kiểm đếm (Closing).");
+        }
+
+        if (request.CountedCash < 0)
+        {
+            throw new BusinessException("INVALID_ACTUAL_CASH", "Tiền kiểm đếm thực tế không được âm.");
+        }
+
+        var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shiftId, cancellationToken);
+        shift.TotalBankRevenue = bankRevenue;
+        shift.TotalOrdersCount = ordersCount;
+        shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
+
+        shift.ActualCashCounted = request.CountedCash;
+        shift.Discrepancy = shift.ActualCashCounted - shift.ExpectedCash;
+
+        await _shiftRepository.ClearCloseConfirmationsAsync(shiftId, cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(request.Notes))
+        {
+            shift.Notes = string.IsNullOrWhiteSpace(shift.Notes) ? request.Notes : $"{shift.Notes} | {request.Notes}";
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapToDetailResponse(shift);
+    }
+
+    public async Task<ShiftDetailResponse> ConfirmCloseShiftAsync(
+        Guid shiftId,
+        Guid userId,
+        string userName,
+        ConfirmCloseShiftRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var shift = await _shiftRepository.GetByIdAsync(shiftId, cancellationToken);
+        if (shift == null)
+        {
+            throw new BusinessException("SHIFT_NOT_FOUND", "Không tìm thấy ca làm việc.");
+        }
+
+        if (shift.Status != ShiftState.Closing && shift.Status != ShiftState.Open)
+        {
+            throw new BusinessException("INVALID_SHIFT_STATE", "Ca làm việc này đã được chốt trước đó.");
+        }
+
+        if (request.ActualCashCounted < 0)
+        {
+            throw new BusinessException("INVALID_ACTUAL_CASH", "Tiền kiểm đếm thực tế không được âm.");
+        }
+
+        decimal allocatedSum = request.RetainedFloatAmount + request.DroppedToSafeAmount;
+        if (Math.Abs(allocatedSum - request.ActualCashCounted) > 0.01m)
+        {
+            throw new BusinessException(
+                "INVALID_CASH_ALLOCATION",
+                $"Tổng tiền để lại két ({request.RetainedFloatAmount:N0}đ) và tiền nộp két an toàn ({request.DroppedToSafeAmount:N0}đ) " +
+                $"không khớp với tiền mặt thực đếm ({request.ActualCashCounted:N0}đ). Chênh lệch: {Math.Abs(allocatedSum - request.ActualCashCounted):N0}đ.");
+        }
+
+        var hasPending = shift.CashMovements.Any(m => m.Status == CashMovementStatus.PendingApproval);
+        if (hasPending)
+        {
+            throw new BusinessException(
+                "PENDING_CASH_MOVEMENTS",
+                "Không thể chốt ca do còn phiếu chi tiền đang chờ Chủ cửa hàng phê duyệt. Vui lòng duyệt hoặc từ chối phiếu chi trước khi đóng ca.");
+        }
+
+        await _shiftRepository.AddCloseConfirmationAsync(new ShiftCloseConfirmation
+        {
+            TenantId = _tenantContext.CurrentTenantId,
+            ShiftId = shiftId,
+            UserId = userId,
+            UserName = userName,
+            ConfirmedCountedCash = request.ActualCashCounted,
+            ConfirmedAtUtc = DateTime.UtcNow
+        }, cancellationToken);
+
+        var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shiftId, cancellationToken);
+        shift.TotalBankRevenue = bankRevenue;
+        shift.TotalOrdersCount = ordersCount;
+        shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
+
+        shift.ActualCashCounted = request.ActualCashCounted;
+        shift.Discrepancy = shift.ActualCashCounted - shift.ExpectedCash;
+        shift.RetainedFloatAmount = request.RetainedFloatAmount;
+        shift.DroppedToSafeAmount = request.DroppedToSafeAmount;
+        shift.ReceiverUserId = request.ReceiverUserId;
+        shift.ClosedAtUtc = DateTime.UtcNow;
+        shift.ClosedByUserId = userId;
+        shift.Status = ShiftState.Closed;
+        shift.HandoverStatus = HandoverStatus.PENDING;
+
+        if (!string.IsNullOrWhiteSpace(request.Notes))
+        {
+            shift.Notes = string.IsNullOrWhiteSpace(shift.Notes) ? request.Notes : $"{shift.Notes} | {request.Notes}";
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapToDetailResponse(shift);
+    }
+
+    public async Task<ShiftDetailResponse> ForceCloseShiftAsync(
+        Guid shiftId,
+        Guid ownerUserId,
+        ForceCloseShiftRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.Reason))
+        {
+            throw new BusinessException("REASON_REQUIRED", "Lý do đóng ca cưỡng bức là bắt buộc.");
+        }
+
+        if (request.ActualCashCounted < 0)
+        {
+            throw new BusinessException("INVALID_ACTUAL_CASH", "Tiền kiểm đếm thực tế không được âm.");
+        }
+
+        decimal allocatedSum = request.RetainedFloatAmount + request.DroppedToSafeAmount;
+        if (Math.Abs(allocatedSum - request.ActualCashCounted) > 0.01m)
+        {
+            throw new BusinessException(
+                "INVALID_CASH_ALLOCATION",
+                $"Tổng tiền để lại két ({request.RetainedFloatAmount:N0}đ) và tiền nộp két an toàn ({request.DroppedToSafeAmount:N0}đ) " +
+                $"không khớp với tiền mặt thực đếm ({request.ActualCashCounted:N0}đ). Chênh lệch: {Math.Abs(allocatedSum - request.ActualCashCounted):N0}đ.");
+        }
+
+        var shift = await _shiftRepository.GetByIdAsync(shiftId, cancellationToken);
+        if (shift == null)
+        {
+            throw new BusinessException("SHIFT_NOT_FOUND", "Không tìm thấy ca làm việc.");
+        }
+
+        if (shift.Status == ShiftState.Closed)
+        {
+            throw new BusinessException("SHIFT_ALREADY_CLOSED", "Ca làm việc này đã được chốt trước đó.");
+        }
+
+        var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shiftId, cancellationToken);
+        shift.TotalBankRevenue = bankRevenue;
+        shift.TotalOrdersCount = ordersCount;
+        shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
+
+        shift.ActualCashCounted = request.ActualCashCounted;
+        shift.Discrepancy = shift.ActualCashCounted - shift.ExpectedCash;
+        shift.RetainedFloatAmount = request.RetainedFloatAmount;
+        shift.DroppedToSafeAmount = request.DroppedToSafeAmount;
+        shift.ClosedAtUtc = DateTime.UtcNow;
+        shift.ClosedByUserId = ownerUserId;
+        shift.ForceCloseReason = request.Reason.Trim();
+        shift.Status = ShiftState.Closed;
+        shift.HandoverStatus = HandoverStatus.PENDING;
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapToDetailResponse(shift);
+    }
+
+    public async Task RecordParticipantAsync(
+        Guid shiftId,
+        Guid userId,
+        string? userName,
+        string? fullName,
+        CancellationToken cancellationToken = default)
+    {
+        var participant = await _shiftRepository.GetParticipantAsync(shiftId, userId, cancellationToken);
+        if (participant == null)
+        {
+            participant = new ShiftParticipant
+            {
+                TenantId = _tenantContext.CurrentTenantId,
+                ShiftId = shiftId,
+                UserId = userId,
+                UserName = userName,
+                FullName = fullName,
+                JoinedAtUtc = DateTime.UtcNow,
+                LastActiveAtUtc = DateTime.UtcNow
+            };
+            await _shiftRepository.AddParticipantAsync(participant, cancellationToken);
+        }
+        else
+        {
+            participant.LastActiveAtUtc = DateTime.UtcNow;
+            if (!string.IsNullOrWhiteSpace(userName)) participant.UserName = userName;
+            if (!string.IsNullOrWhiteSpace(fullName)) participant.FullName = fullName;
+        }
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
     private static ShiftCashMovementDto MapToMovementDto(ShiftCashMovement movement)
     {
         return new ShiftCashMovementDto(
@@ -540,6 +823,31 @@ public class ShiftService : IShiftService
         var movements = shift.CashMovements
             .OrderBy(m => m.OccurredAtUtc)
             .Select(MapToMovementDto)
+            .ToList();
+
+        var participants = shift.Participants
+            .OrderBy(p => p.JoinedAtUtc)
+            .Select(p => new ShiftParticipantDto(
+                p.Id,
+                p.ShiftId,
+                p.UserId,
+                p.UserName,
+                p.FullName,
+                p.JoinedAtUtc,
+                p.LastActiveAtUtc
+            ))
+            .ToList();
+
+        var confirmations = shift.CloseConfirmations
+            .OrderBy(c => c.ConfirmedAtUtc)
+            .Select(c => new ShiftCloseConfirmationDto(
+                c.Id,
+                c.ShiftId,
+                c.UserId,
+                c.UserName,
+                c.ConfirmedCountedCash,
+                c.ConfirmedAtUtc
+            ))
             .ToList();
 
         return new ShiftDetailResponse(
@@ -570,7 +878,13 @@ public class ShiftService : IShiftService
             shift.HandoverStatus,
             shift.Status,
             shift.Notes,
-            movements
+            movements,
+            shift.ClosingStartedByUserId,
+            shift.ClosingStartedAtUtc,
+            shift.ClosedByUserId,
+            shift.ForceCloseReason,
+            participants,
+            confirmations
         );
     }
 }

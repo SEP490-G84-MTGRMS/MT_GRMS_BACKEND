@@ -267,5 +267,108 @@ public class ShiftsController : BaseApiController
         var result = await _shiftService.UpdateCashMovementSettingsAsync(request, cancellationToken);
         return Ok(ApiResponse<CashMovementSettingsDto>.Ok(result, "Cập nhật hạn mức duyệt chi két thành công."));
     }
+
+    /// <summary>
+    /// Bắt đầu kiểm đếm chốt ca: Chuyển ca sang Closing, tạm thời khóa tạo đơn hàng và phiếu chi két trên toàn chi nhánh.
+    /// </summary>
+    [HttpPost("{id:guid}/start-closing")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<ShiftDetailResponse>>> StartClosingShift(
+        [FromRoute] Guid id,
+        [FromBody] StartClosingShiftRequest request,
+        CancellationToken cancellationToken)
+    {
+        var userId = _tenantContext.CurrentUserId != Guid.Empty
+            ? _tenantContext.CurrentUserId
+            : Guid.NewGuid();
+
+        var result = await _shiftService.StartClosingShiftAsync(id, userId, request, cancellationToken);
+        return Ok(ApiResponse<ShiftDetailResponse>.Ok(result, "Đã bắt đầu kiểm đếm chốt ca. Quầy đã tạm thời khóa bán hàng."));
+    }
+
+    /// <summary>
+    /// Hủy kiểm đếm chốt ca: Trả ca về trạng thái Open để tiếp tục bán hàng.
+    /// </summary>
+    [HttpPost("{id:guid}/cancel-closing")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<ShiftDetailResponse>>> CancelClosingShift(
+        [FromRoute] Guid id,
+        [FromBody] CancelClosingShiftRequest request,
+        CancellationToken cancellationToken)
+    {
+        var userId = _tenantContext.CurrentUserId != Guid.Empty
+            ? _tenantContext.CurrentUserId
+            : Guid.NewGuid();
+
+        var result = await _shiftService.CancelClosingShiftAsync(id, userId, request, cancellationToken);
+        return Ok(ApiResponse<ShiftDetailResponse>.Ok(result, "Đã hủy kiểm đếm chốt ca. Quầy đã mở lại để tiếp tục bán hàng."));
+    }
+
+    /// <summary>
+    /// Cập nhật số tiền thực đếm trong két khi ca đang Closing.
+    /// </summary>
+    [HttpPut("{id:guid}/counted-cash")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<ShiftDetailResponse>>> UpdateCountedCash(
+        [FromRoute] Guid id,
+        [FromBody] UpdateCountedCashRequest request,
+        CancellationToken cancellationToken)
+    {
+        var userId = _tenantContext.CurrentUserId != Guid.Empty
+            ? _tenantContext.CurrentUserId
+            : Guid.NewGuid();
+
+        var result = await _shiftService.UpdateCountedCashAsync(id, userId, request, cancellationToken);
+        return Ok(ApiResponse<ShiftDetailResponse>.Ok(result, "Cập nhật số tiền thực đếm thành công."));
+    }
+
+    /// <summary>
+    /// Nhân viên xác nhận số đếm và đóng ca chung của chi nhánh.
+    /// </summary>
+    [HttpPost("{id:guid}/confirm-close")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<ShiftDetailResponse>>> ConfirmCloseShift(
+        [FromRoute] Guid id,
+        [FromBody] ConfirmCloseShiftRequest request,
+        CancellationToken cancellationToken)
+    {
+        var userId = _tenantContext.CurrentUserId != Guid.Empty
+            ? _tenantContext.CurrentUserId
+            : Guid.NewGuid();
+
+        var userName = !string.IsNullOrWhiteSpace(User.Identity?.Name)
+            ? User.Identity.Name
+            : "Thu ngân";
+
+        var result = await _shiftService.ConfirmCloseShiftAsync(id, userId, userName, request, cancellationToken);
+        return Ok(ApiResponse<ShiftDetailResponse>.Ok(result, "Chốt ca bán hàng thành công."));
+    }
+
+    /// <summary>
+    /// Chủ cửa hàng đóng ca cưỡng bức từ xa khi nhân viên đã ra về mà chưa chốt ca.
+    /// </summary>
+    [HttpPost("{id:guid}/force-close")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<ShiftDetailResponse>>> ForceCloseShift(
+        [FromRoute] Guid id,
+        [FromBody] ForceCloseShiftRequest request,
+        CancellationToken cancellationToken)
+    {
+        var role = _tenantContext.CurrentRole;
+        if (!string.Equals(role, "STORE_OWNER", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase) &&
+            !User.IsInRole("STORE_OWNER") &&
+            !User.IsInRole("ADMIN"))
+        {
+            return Forbid();
+        }
+
+        var ownerId = _tenantContext.CurrentUserId != Guid.Empty
+            ? _tenantContext.CurrentUserId
+            : Guid.NewGuid();
+
+        var result = await _shiftService.ForceCloseShiftAsync(id, ownerId, request, cancellationToken);
+        return Ok(ApiResponse<ShiftDetailResponse>.Ok(result, "Đóng ca cưỡng bức thành công."));
+    }
 }
 

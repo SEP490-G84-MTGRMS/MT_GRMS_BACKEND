@@ -84,5 +84,35 @@ public interface IShiftService
     /// Cập nhật cấu hình hạn mức duyệt chi két của cửa hàng.
     /// </summary>
     Task<CashMovementSettingsDto> UpdateCashMovementSettingsAsync(UpdateCashMovementSettingsRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Bắt đầu kiểm đếm chốt ca (chuyển ca sang trạng thái Closing và khóa bán mọi máy).
+    /// </summary>
+    Task<ShiftDetailResponse> StartClosingShiftAsync(Guid shiftId, Guid userId, StartClosingShiftRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Hủy kiểm đếm chốt ca (trả ca về Open để tiếp tục bán hàng).
+    /// </summary>
+    Task<ShiftDetailResponse> CancelClosingShiftAsync(Guid shiftId, Guid userId, CancelClosingShiftRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Cập nhật số tiền thực đếm trong két khi ca đang Closing.
+    /// </summary>
+    Task<ShiftDetailResponse> UpdateCountedCashAsync(Guid shiftId, Guid userId, UpdateCountedCashRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Nhân viên xác nhận số đếm và hoàn tất đóng ca chung.
+    /// </summary>
+    Task<ShiftDetailResponse> ConfirmCloseShiftAsync(Guid shiftId, Guid userId, string userName, ConfirmCloseShiftRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Chủ cửa hàng đóng ca cưỡng bức từ xa kèm số đếm và lý do bắt buộc.
+    /// </summary>
+    Task<ShiftDetailResponse> ForceCloseShiftAsync(Guid shiftId, Guid ownerUserId, ForceCloseShiftRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Ghi nhận nhân viên tham gia ca bán hàng chung.
+    /// </summary>
+    Task RecordParticipantAsync(Guid shiftId, Guid userId, string? userName, string? fullName, CancellationToken cancellationToken = default);
 }
 

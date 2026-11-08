@@ -47,6 +47,75 @@ public record ConfirmHandoverRequest(
 );
 
 /// <summary>
+/// Yêu cầu bắt đầu kiểm đếm chốt ca (chuyển ca sang trạng thái Closing và khóa bán mọi máy).
+/// </summary>
+public record StartClosingShiftRequest(
+    string? Notes = null
+);
+
+/// <summary>
+/// Yêu cầu hủy kiểm đếm chốt ca (trả ca về Open để tiếp tục bán hàng).
+/// </summary>
+public record CancelClosingShiftRequest(
+    string? Reason = null
+);
+
+/// <summary>
+/// Cập nhật số tiền thực đếm trong két khi ca đang Closing.
+/// </summary>
+public record UpdateCountedCashRequest(
+    decimal CountedCash,
+    string? Notes = null
+);
+
+/// <summary>
+/// Yêu cầu xác nhận đóng ca chung giữa các nhân viên.
+/// </summary>
+public record ConfirmCloseShiftRequest(
+    decimal ActualCashCounted,
+    decimal RetainedFloatAmount,
+    decimal DroppedToSafeAmount,
+    string? ReceiverUserId = null,
+    string? Notes = null
+);
+
+/// <summary>
+/// Yêu cầu đóng ca cưỡng bức từ Chủ cửa hàng khi nhân viên đã về.
+/// </summary>
+public record ForceCloseShiftRequest(
+    decimal ActualCashCounted,
+    decimal RetainedFloatAmount,
+    decimal DroppedToSafeAmount,
+    string Reason,
+    string? Notes = null
+);
+
+/// <summary>
+/// Thông tin nhân viên tham gia ca bán hàng chung.
+/// </summary>
+public record ShiftParticipantDto(
+    Guid Id,
+    Guid ShiftId,
+    Guid UserId,
+    string? UserName,
+    string? FullName,
+    DateTime JoinedAtUtc,
+    DateTime LastActiveAtUtc
+);
+
+/// <summary>
+/// Xác nhận số đếm tiền khi chốt ca.
+/// </summary>
+public record ShiftCloseConfirmationDto(
+    Guid Id,
+    Guid ShiftId,
+    Guid UserId,
+    string? UserName,
+    decimal ConfirmedCountedCash,
+    DateTime ConfirmedAtUtc
+);
+
+/// <summary>
 /// Chi tiết một giao dịch thu/chi két lẻ trong ca.
 /// </summary>
 public record ShiftCashMovementDto(
@@ -136,7 +205,13 @@ public record ShiftDetailResponse(
     HandoverStatus HandoverStatus,
     ShiftState Status,
     string? Notes,
-    IReadOnlyList<ShiftCashMovementDto> CashMovements
+    IReadOnlyList<ShiftCashMovementDto> CashMovements,
+    Guid? ClosingStartedByUserId = null,
+    DateTime? ClosingStartedAtUtc = null,
+    Guid? ClosedByUserId = null,
+    string? ForceCloseReason = null,
+    IReadOnlyList<ShiftParticipantDto>? Participants = null,
+    IReadOnlyList<ShiftCloseConfirmationDto>? CloseConfirmations = null
 );
 
 /// <summary>
