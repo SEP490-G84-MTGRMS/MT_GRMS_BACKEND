@@ -74,6 +74,30 @@ public class PurchaseOrderMatrixTests
     }
 
     [Fact]
+    public void OrderMatrixRules_MinimumLeadTime_BlocksToday_AllowsTomorrow()
+    {
+        var supplierId = _supplier1Id;
+        var config = new OrderMatrixSupplierDeliveryConfigDto
+        {
+            SupplierId = supplierId,
+            IsActive = true,
+            IsAssignedToBranch = true,
+            CutoffTime = "23:59",
+            ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 },
+            BlackoutDates = new List<string>()
+        };
+        var now = new DateTime(2026, 11, 8, 10, 30, 0);
+
+        var todayStatus = OrderMatrixRules.EvaluateDayStatus(supplierId, now.Date, config, now);
+        Assert.Equal(OrderMatrixRules.StatusSupplierOff, todayStatus.DeliveryDateStatus);
+        Assert.Equal("LEAD_TIME_VIOLATION", todayStatus.PrimaryReasonCode);
+        Assert.False(OrderMatrixRules.IsEditableStatus(todayStatus.DeliveryDateStatus));
+
+        var tomorrowStatus = OrderMatrixRules.EvaluateDayStatus(supplierId, now.Date.AddDays(1), config, now);
+        Assert.True(OrderMatrixRules.IsEditableStatus(tomorrowStatus.DeliveryDateStatus));
+    }
+
+    [Fact]
     public async Task REQ_PO_01_GetOrderMatrix_ReturnsProductsAndBranchDetails()
     {
         // Act

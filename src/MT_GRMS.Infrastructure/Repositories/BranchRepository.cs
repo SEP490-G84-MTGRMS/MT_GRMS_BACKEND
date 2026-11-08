@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Branches;
 using MT_GRMS.Domain.Entities.SaaS;
@@ -25,6 +26,10 @@ public class BranchRepository : GenericRepository<Branch>, IBranchRepository
         string? keyword,
         string? branchCode,
         string? status,
+        IReadOnlyList<string>? branchCodes,
+        IReadOnlyList<string>? branchNames,
+        IReadOnlyList<string>? addresses,
+        IReadOnlyList<string>? phones,
         int pageIndex,
         int pageSize,
         CancellationToken cancellationToken = default)
@@ -41,9 +46,32 @@ public class BranchRepository : GenericRepository<Branch>, IBranchRepository
                 (b.Phone != null && b.Phone.ToLower().Contains(kw)));
         }
 
-        if (!string.IsNullOrWhiteSpace(branchCode) && !string.Equals(branchCode, "all", StringComparison.OrdinalIgnoreCase))
+        var codeTerms = CleanTerms(branchCodes);
+        if (codeTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, b => b.BranchCode, codeTerms, ignoreCase: true);
+        }
+        else if (!string.IsNullOrWhiteSpace(branchCode) && !string.Equals(branchCode, "all", StringComparison.OrdinalIgnoreCase))
         {
             query = query.Where(b => b.BranchCode == branchCode);
+        }
+
+        var nameTerms = CleanTerms(branchNames);
+        if (nameTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, b => b.Name, nameTerms, ignoreCase: true);
+        }
+
+        var addressTerms = CleanTerms(addresses);
+        if (addressTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, b => b.Address ?? string.Empty, addressTerms, ignoreCase: true);
+        }
+
+        var phoneTerms = CleanTerms(phones);
+        if (phoneTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, b => b.Phone ?? string.Empty, phoneTerms, ignoreCase: true);
         }
 
         if (!string.IsNullOrWhiteSpace(status) && !string.Equals(status, "all", StringComparison.OrdinalIgnoreCase))
@@ -71,5 +99,45 @@ public class BranchRepository : GenericRepository<Branch>, IBranchRepository
             .ToListAsync(cancellationToken);
 
         return (items, totalCount);
+    }
+
+    private static List<string> CleanTerms(IReadOnlyList<string>? values)
+    {
+        if (values == null || values.Count == 0) return [];
+        return values
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v.Trim().ToLower())
+            .Distinct()
+            .ToList();
+    }
+
+    private static IQueryable<T> WhereAnyContains<T>(
+        IQueryable<T> query,
+        Expression<Func<T, string>> selector,
+        IReadOnlyList<string> terms,
+        bool ignoreCase)
+    {
+        if (terms.Count == 0) return query;
+
+        var parameter = selector.Parameters[0];
+        Expression source = selector.Body;
+        if (ignoreCase)
+        {
+            source = Expression.Call(source, nameof(string.ToLower), Type.EmptyTypes);
+        }
+
+        Expression? body = null;
+        foreach (var term in terms)
+        {
+            var contains = Expression.Call(
+                source,
+                nameof(string.Contains),
+                Type.EmptyTypes,
+                Expression.Constant(term));
+            body = body is null ? contains : Expression.OrElse(body, contains);
+        }
+
+        var predicate = Expression.Lambda<Func<T, bool>>(body!, parameter);
+        return query.Where(predicate);
     }
 }

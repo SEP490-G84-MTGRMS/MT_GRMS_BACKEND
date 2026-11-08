@@ -343,6 +343,19 @@ public class SupplierManagementTests
             return Task.FromResult(Branches.FirstOrDefault(x => x.Id == branchId));
         }
 
+        public List<MT_GRMS.Domain.Entities.Catalog.BranchProduct> BranchProducts { get; } = new();
+
+        public Task<bool> BranchProductExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(BranchProducts.Any(bp => bp.BranchId == branchId && bp.ProductId == productId && !bp.IsDeleted));
+        }
+
+        public Task AddBranchProductAsync(MT_GRMS.Domain.Entities.Catalog.BranchProduct branchProduct, CancellationToken cancellationToken = default)
+        {
+            BranchProducts.Add(branchProduct);
+            return Task.CompletedTask;
+        }
+
         public List<MT_GRMS.Domain.Entities.Inventory.BranchStock> BranchStocks { get; } = new();
 
         public Task<IReadOnlyList<Guid>> GetActiveBranchIdsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
@@ -1609,6 +1622,70 @@ public class SupplierManagementTests
         // ASSERT: Employee cannot see debt information (CurrentDebt is masked to 0)
         Assert.NotNull(result);
         Assert.Equal(0m, result.CurrentDebt);
+    }
+
+    [Fact]
+    public async Task REQ_SBA_AssignSuppliersToBranch_AutoSyncsActiveProductsToBranchProducts()
+    {
+        // ARRANGE
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        tenantContext.SetRole("STORE_OWNER");
+        var service = new SupplierService(repo, uow, tenantContext);
+
+        var branchId = Guid.NewGuid();
+        repo.Branches.Add(new MT_GRMS.Domain.Entities.SaaS.Branch
+        {
+            Id = branchId,
+            BranchCode = "BR-HCM-01",
+            Name = "Chi nhánh Quận 1",
+            IsActive = true
+        });
+
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid(),
+            Code = "SUP-VNM-01",
+            Name = "Vinamilk",
+            Phone = "0901234567",
+            Status = SupplierStatus.Active
+        };
+        await repo.AddAsync(supplier);
+
+        var product1Id = Guid.NewGuid();
+        var product2Id = Guid.NewGuid();
+        repo.SupplierProducts.Add(new SupplierProduct
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            ProductId = product1Id,
+            Status = SupplierProductStatus.Active
+        });
+        repo.SupplierProducts.Add(new SupplierProduct
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            ProductId = product2Id,
+            Status = SupplierProductStatus.Active
+        });
+
+        var command = new AssignSuppliersToBranchCommand
+        {
+            BranchId = branchId,
+            SupplierIds = new List<Guid> { supplier.Id }
+        };
+
+        // ACT
+        var result = await service.AssignSuppliersToBranchAsync(command);
+
+        // ASSERT
+        Assert.Single(result);
+        Assert.Equal(2, repo.BranchProducts.Count);
+        Assert.Contains(repo.BranchProducts, bp => bp.BranchId == branchId && bp.ProductId == product1Id && bp.Status == "Active");
+        Assert.Contains(repo.BranchProducts, bp => bp.BranchId == branchId && bp.ProductId == product2Id && bp.Status == "Active");
+        // Ensure no dummy BranchStocks are created
+        Assert.Empty(repo.BranchStocks);
     }
 }
 

@@ -39,6 +39,10 @@ public class BranchService : IBranchService
             query.Keyword,
             query.BranchCode,
             query.Status,
+            query.BranchCodes,
+            query.BranchNames,
+            query.Addresses,
+            query.Phones,
             pageIndex,
             pageSize,
             cancellationToken);

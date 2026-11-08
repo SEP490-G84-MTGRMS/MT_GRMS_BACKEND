@@ -662,6 +662,17 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<bool> BranchProductExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
+    {
+        return await _context.BranchProducts
+            .AnyAsync(bp => bp.BranchId == branchId && bp.ProductId == productId && !bp.IsDeleted, cancellationToken);
+    }
+
+    public async Task AddBranchProductAsync(BranchProduct branchProduct, CancellationToken cancellationToken = default)
+    {
+        await _context.BranchProducts.AddAsync(branchProduct, cancellationToken);
+    }
+
     public async Task<bool> BranchStockExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
     {
         return await _context.BranchStocks
