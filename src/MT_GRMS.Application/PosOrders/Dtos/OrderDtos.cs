@@ -56,7 +56,10 @@ public record OrderResponse(
     decimal DepositAmount = 0m,
     string? Note = null,
     CustomerDebtInvoiceResponse? DebtInvoice = null,
-    Guid? ShiftId = null
+    Guid? ShiftId = null,
+    string? CashierName = null,
+    string? FulfilledByCashierName = null,
+    DateTime? FulfilledAtUtc = null
 )
 {
     public Guid StoreId => BranchId;
@@ -103,13 +106,17 @@ public record PreOrderCreateRequest(
     decimal DepositAmount,
     DateTime ExpectedPickupDate,
     string PaymentMethod = "CASH",
-    string? Note = null
+    string? Note = null,
+    string? CashierName = null,
+    Guid? ShiftId = null
 );
 
 public record PreOrderFulfillRequest(
     string PaymentMethod,
     decimal AmountPaid,
-    string? Note = null
+    string? Note = null,
+    string? CashierName = null,
+    Guid? ShiftId = null
 );
 
 public record CancelOrderRequest(
