@@ -23,12 +23,14 @@
 2. `src/MT_GRMS.Infrastructure/Persistence/Configurations/SaaS/TenantConfiguration.cs`:
    - Cấu hình EF Core mapping cho các cột mới của Entity Tenant.
 3. `src/MT_GRMS.Infrastructure/Persistence/DbInitializer.cs`:
-   - Bổ sung hàm `EnsureTenantSubscriptionColumnsAsync` tự động DDL schema idempotent (`ALTER TABLE "Tenants" ADD COLUMN IF NOT EXISTS...`).
-   - Cập nhật Seed Data: Nạp 2 gói `STANDARD` (99.000 đ) và `PRO` (249.000 đ), đánh dấu vô hiệu hóa gói `FREE` cũ và đồng bộ các tenant cũ sang gói chuẩn.
+   - Bổ sung hàm `EnsureTenantSubscriptionColumnsAsync` tự động DDL schema idempotent (`ALTER TABLE "Tenants" ADD COLUMN IF NOT EXISTS...`) và vô hiệu hóa tất cả gói cước cũ (`UPDATE "SubscriptionPlans" SET "IsActive" = false WHERE "PlanCode" NOT IN ('STANDARD', 'PRO')`).
+   - Cập nhật Seed Data: Nạp 2 gói `STANDARD` (99.000 đ) và `PRO` (249.000 đ), đánh dấu vô hiệu hóa các gói cũ (`FREE`, `SUPPORT`, `PREMIUM`...) và đồng bộ các tenant cũ sang gói chuẩn.
 4. `src/MT_GRMS.Application/Admin/Dtos/TenantDtos.cs`:
    - Cập nhật record `PurchaseSubscriptionRequest`: thêm `bool HasStaffManagementAddon = false`, giữ `ExtraWarehouses = 0` làm optional parameter.
 5. `src/MT_GRMS.Api/Controllers/TenantStoreController.cs`:
+   - Cập nhật action `GetPricingPlans`: Lọc nghiêm ngặt chỉ trả về duy nhất 2 gói cước chuẩn (`STANDARD` và `PRO`), loại bỏ hoàn toàn các gói cũ và tự động fallback tạo cấu trúc gói mặc định nếu CSDL trống.
    - Nâng cấp action `PurchaseSubscription`:
+     - Chuẩn hóa mã gói và tự động nạp `SubscriptionPlan` nếu chưa có trong DB.
      - Validate: Gói Thường không cho phép mua thêm chi nhánh.
      - Tính tiền: Gói Thường 99k/tháng (option NV +30k/tháng), Gói Pro 249k/tháng (chi nhánh thêm +80k/tháng), tính VAT 10%.
      - Kích hoạt gói: cập nhật `CurrentPlan`, `SubscriptionExpiresAt`, `SubscriptionStatus = "ACTIVE"`, cộng dồn `ExtraBranches` và bật `HasStaffManagementAddon`.
@@ -54,3 +56,4 @@
 ## 5. Ghi Chú Cho Manager Khi Duyệt & Merge (Manager Merge Notes)
 - **Mức độ rủi ro**: Thấp (Low).
 - **Thao tác hậu merge**: Khởi động backend API, `DbInitializer` sẽ tự động áp dụng DDL bổ sung cột và nạp seed data 2 gói mới mà không cần can thiệp thủ công vào database.
+

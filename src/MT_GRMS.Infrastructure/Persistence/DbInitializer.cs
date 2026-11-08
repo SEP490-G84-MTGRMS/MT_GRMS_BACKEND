@@ -197,8 +197,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""ExtraBranches"" integer NOT NULL DEFAULT 0;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""HasStaffManagementAddon"" boolean NOT NULL DEFAULT false;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""SubscriptionStatus"" character varying(30) NOT NULL DEFAULT 'TRIAL';
+                UPDATE ""SubscriptionPlans"" SET ""IsActive"" = false WHERE ""PlanCode"" NOT IN ('STANDARD', 'PRO');
             ");
-            logger?.LogInformation("[MT-GRMS] Đã đồng bộ các cột ExtraBranches, HasStaffManagementAddon, SubscriptionStatus cho bảng Tenants.");
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ các cột ExtraBranches, HasStaffManagementAddon, SubscriptionStatus cho bảng Tenants và vô hiệu hóa các gói cước cũ.");
         }
         catch (Exception ex)
         {
@@ -773,11 +774,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             planPro.IsActive = true;
         }
 
-        // Tắt gói FREE cũ nếu có
-        var oldFreePlan = await context.SubscriptionPlans.FirstOrDefaultAsync(p => p.PlanCode == "FREE");
-        if (oldFreePlan != null)
+        // Vô hiệu hóa tất cả các gói cũ (FREE, SUPPORT, PREMIUM...) chỉ giữ lại duy nhất 2 gói chuẩn: STANDARD và PRO
+        var outdatedPlans = await context.SubscriptionPlans
+            .Where(p => p.PlanCode != "STANDARD" && p.PlanCode != "PRO")
+            .ToListAsync();
+        foreach (var op in outdatedPlans)
         {
-            oldFreePlan.IsActive = false;
+            op.IsActive = false;
         }
 
         // Đồng bộ các tenant đang mang mã gói cũ

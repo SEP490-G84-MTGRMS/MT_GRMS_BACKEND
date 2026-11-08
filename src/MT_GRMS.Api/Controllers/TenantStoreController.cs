@@ -89,7 +89,50 @@ public class TenantStoreController : BaseApiController
     public async Task<IActionResult> GetPricingPlans(CancellationToken cancellationToken)
     {
         var plans = await _planService.GetPlansAsync(new PlanFilterRequest(Status: "ACTIVE"), cancellationToken);
-        return Ok(ApiResponse<IReadOnlyList<PlanSummaryResponse>>.Ok(plans));
+
+        // Chỉ lấy 2 gói cước chính thức của hệ thống SaaS bán lẻ: STANDARD (Gói Thường 99k) và PRO (Gói Pro 249k)
+        var officialPlans = plans
+            .Where(p => string.Equals(p.Code, "STANDARD", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(p.Code, "PRO", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(p => p.MonthlyPrice)
+            .ToList();
+
+        if (officialPlans.Count == 0)
+        {
+            var defaultStandard = new PlanSummaryResponse(
+                Id: "plan_standard",
+                Code: "STANDARD",
+                Name: "Gói Thường (Cửa Hàng Độc Lập)",
+                Description: "Dành cho tiệm tạp hóa, siêu thị mini độc lập (1 điểm bán kiêm kho tại chỗ).",
+                MonthlyPrice: 99000m,
+                YearlyPrice: 1188000m,
+                Status: "ACTIVE",
+                ActiveTenantCount: 0,
+                Quotas: new PlanQuotaDto(MaxBranches: 1, MaxEmployees: 1, MaxStorageGb: 5, BackupFrequency: "Daily"),
+                Features: new PlanFeatureDto(FefoExpiryAlert: true, MultiUnitConversion: true, VietQrDynamic: true, DebtZaloBook: false, BarcodeScanning: true, FinancialReporting: false),
+                CreatedAt: DateTime.UtcNow,
+                UpdatedAt: null
+            );
+
+            var defaultPro = new PlanSummaryResponse(
+                Id: "plan_pro",
+                Code: "PRO",
+                Name: "Gói Pro (Chuỗi Cửa Hàng)",
+                Description: "Dành cho chuỗi siêu thị bán lẻ, chuyên môn hóa quy trình và điều chuyển kho chuỗi.",
+                MonthlyPrice: 249000m,
+                YearlyPrice: 2988000m,
+                Status: "ACTIVE",
+                ActiveTenantCount: 0,
+                Quotas: new PlanQuotaDto(MaxBranches: 2, MaxEmployees: 100, MaxStorageGb: 50, BackupFrequency: "Hourly"),
+                Features: new PlanFeatureDto(FefoExpiryAlert: true, MultiUnitConversion: true, VietQrDynamic: true, DebtZaloBook: true, BarcodeScanning: true, FinancialReporting: true),
+                CreatedAt: DateTime.UtcNow,
+                UpdatedAt: null
+            );
+
+            officialPlans = new List<PlanSummaryResponse> { defaultStandard, defaultPro };
+        }
+
+        return Ok(ApiResponse<IReadOnlyList<PlanSummaryResponse>>.Ok(officialPlans));
     }
 
     /// <summary>
@@ -106,19 +149,43 @@ public class TenantStoreController : BaseApiController
             return NotFound(ApiResponse<PurchaseSubscriptionResponse>.Fail("TENANT_NOT_FOUND", "Không tìm thấy thông tin gian hàng trong hệ thống."));
         }
 
-        // Tìm gói cước theo PlanCode hoặc Id
+        // Chuẩn hóa mã gói: chỉ chấp nhận STANDARD hoặc PRO
+        var targetCode = (request.PlanCode ?? "").ToUpper();
+        if (targetCode != "STANDARD" && targetCode != "PRO")
+        {
+            targetCode = targetCode.Contains("PRO") ? "PRO" : "STANDARD";
+        }
+
+        // Tìm gói cước theo PlanCode
         var plan = await _context.SubscriptionPlans.FirstOrDefaultAsync(
-            p => (p.PlanCode == request.PlanCode || p.Id == request.PlanCode) && p.IsActive,
+            p => (p.PlanCode == targetCode || p.Id == request.PlanCode) && p.IsActive,
             cancellationToken);
 
         if (plan == null)
         {
-            // Fallback tìm gói bất kỳ đang active hoặc tạo gói tương ứng
-            plan = await _context.SubscriptionPlans.FirstOrDefaultAsync(p => p.IsActive, cancellationToken);
-            if (plan == null)
+            plan = await _context.SubscriptionPlans.FirstOrDefaultAsync(
+                p => p.PlanCode == targetCode,
+                cancellationToken);
+        }
+
+        if (plan == null)
+        {
+            plan = new SubscriptionPlan
             {
-                return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("PLAN_NOT_FOUND", "Gói dịch vụ không hợp lệ hoặc đã tạm ngưng."));
-            }
+                Id = targetCode == "PRO" ? "plan_pro" : "plan_standard",
+                PlanCode = targetCode,
+                PlanName = targetCode == "PRO" ? "Gói Pro (Chuỗi Cửa Hàng)" : "Gói Thường (Cửa Hàng Độc Lập)",
+                PriceMonthly = targetCode == "PRO" ? 249000.00m : 99000.00m,
+                PriceYearly = targetCode == "PRO" ? 2988000.00m : 1188000.00m,
+                MaxBranches = targetCode == "PRO" ? 2 : 1,
+                MaxStaff = targetCode == "PRO" ? 100 : 1,
+                EnabledModulesJson = targetCode == "PRO"
+                    ? "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\",\"MultiBranch\"]"
+                    : "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\"]",
+                IsActive = true
+            };
+            await _context.SubscriptionPlans.AddAsync(plan, cancellationToken);
+            await _context.SaveChangesAsync(cancellationToken);
         }
 
         var months = request.Months <= 0 ? 12 : request.Months;
