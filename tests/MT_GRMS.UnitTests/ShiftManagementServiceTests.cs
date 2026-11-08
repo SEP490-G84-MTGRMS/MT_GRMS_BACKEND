@@ -7,6 +7,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PosShifts;
 using MT_GRMS.Application.PosShifts.Dtos;
 using MT_GRMS.Domain.Entities.Finance;
+using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 using Xunit;
@@ -171,6 +172,59 @@ public class ShiftManagementServiceTests
             var shift = Shifts.FirstOrDefault(s => s.Id == shiftId);
             shift?.CloseConfirmations.Clear();
             return Task.CompletedTask;
+        }
+
+        public Task<Guid?> ResolveBranchIdAsync(string? branchIdOrCode, CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(branchIdOrCode))
+            {
+                return Task.FromResult<Guid?>(Guid.NewGuid());
+            }
+            if (Guid.TryParse(branchIdOrCode, out var g) && g != Guid.Empty)
+            {
+                return Task.FromResult<Guid?>(g);
+            }
+            return Task.FromResult<Guid?>(Guid.NewGuid());
+        }
+
+        public List<Employee> Employees { get; } = new();
+        public List<EmployeeSchedule> Schedules { get; } = new();
+        public bool AutoProvideValidSchedule { get; set; } = true;
+
+        public Task<Employee?> GetEmployeeByUserIdAsync(string userId, CancellationToken cancellationToken = default)
+        {
+            var emp = Employees.FirstOrDefault(e => e.UserId == userId || e.Id.ToString() == userId);
+            if (emp == null && AutoProvideValidSchedule)
+            {
+                emp = new Employee
+                {
+                    Id = Guid.NewGuid(),
+                    UserId = userId,
+                    FullName = "Test Cashier",
+                    Status = EmployeeStatus.Active
+                };
+            }
+            return Task.FromResult(emp);
+        }
+
+        public Task<IReadOnlyList<EmployeeSchedule>> GetCashierSchedulesAsync(Guid employeeId, Guid branchId, DateTime workDate, CancellationToken cancellationToken = default)
+        {
+            var matched = Schedules.Where(s => s.EmployeeId == employeeId).ToList();
+            if (matched.Count == 0 && AutoProvideValidSchedule)
+            {
+                matched.Add(new EmployeeSchedule
+                {
+                    EmployeeId = employeeId,
+                    BranchId = branchId,
+                    WorkDate = workDate.Date,
+                    PlannedStartTime = TimeSpan.Zero,
+                    PlannedEndTime = new TimeSpan(23, 59, 59),
+                    AllowedCheckInStart = TimeSpan.Zero,
+                    AllowedCheckInEnd = new TimeSpan(23, 59, 59),
+                    Status = ScheduleStatus.Scheduled
+                });
+            }
+            return Task.FromResult<IReadOnlyList<EmployeeSchedule>>(matched);
         }
     }
 
@@ -350,6 +404,34 @@ public class ShiftManagementServiceTests
         Assert.Equal(150_000m, shift.TotalCashOut);
         Assert.Equal(0m, shift.TotalCashIn);
         Assert.Equal(850_000m, shift.ExpectedCash);
+    }
+
+    [Fact]
+    public async Task AddCashMovement_WhenExpenseExceedsDrawerCash_ThrowsBusinessException()
+    {
+        // Arrange
+        var shiftId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            OpeningFloat = 200_000m,
+            ExpectedCash = 200_000m,
+            Status = ShiftState.Open
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        var request = new CashMovementRequest(
+            MovementType: CashMovementType.OUT,
+            Category: CashMovementCategory.EXPENSE,
+            Amount: 500_000m, // Vượt quá 200.000 đ
+            Reason: "Chi quá tiền két",
+            CreatedByName: "Thu ngân A"
+        );
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.AddCashMovementAsync(shiftId, request));
+        Assert.Equal("EXCEED_DRAWER_CASH", ex.ErrorCode);
     }
 
     [Fact]
@@ -970,6 +1052,215 @@ public class ShiftManagementServiceTests
 
         Assert.NotNull(p2);
         Assert.Equal("Thu Ngân Một Updated", p2.FullName);
+    }
+
+    [Fact]
+    public async Task GetShiftHistoryAsync_ReturnsShiftsWithParticipantsAndConfirmations()
+    {
+        // Arrange (REQ-SHIFT-HIST-01)
+        var branchId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_mart",
+            BranchId = branchId,
+            ShiftCode = "CA-20261108-01",
+            ShiftName = "Ca Sáng",
+            CashierUserId = Guid.NewGuid(),
+            Status = ShiftState.Closed,
+            OpenedAtUtc = DateTime.UtcNow.AddHours(-4),
+            ClosedAtUtc = DateTime.UtcNow,
+            OpeningFloat = 1_000_000m,
+            ActualCashCounted = 2_500_000m,
+            HandoverStatus = HandoverStatus.PENDING
+        };
+        shift.Participants.Add(new ShiftParticipant
+        {
+            Id = Guid.NewGuid(),
+            ShiftId = shift.Id,
+            UserId = Guid.NewGuid(),
+            UserName = "thu_ngan_1",
+            FullName = "Nguyễn Thu Ngân",
+            JoinedAtUtc = DateTime.UtcNow.AddHours(-4),
+            LastActiveAtUtc = DateTime.UtcNow.AddMinutes(-10)
+        });
+        shift.CloseConfirmations.Add(new ShiftCloseConfirmation
+        {
+            Id = Guid.NewGuid(),
+            ShiftId = shift.Id,
+            UserId = Guid.NewGuid(),
+            UserName = "thu_ngan_1",
+            ConfirmedCountedCash = 2_500_000m,
+            ConfirmedAtUtc = DateTime.UtcNow.AddMinutes(-5)
+        });
+        _shiftRepository.Shifts.Add(shift);
+
+        // Act
+        var result = await _service.GetShiftHistoryAsync(branchId);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Single(result);
+        var item = result.First();
+        Assert.Equal("CA-20261108-01", item.ShiftCode);
+        Assert.Single(item.Participants);
+        Assert.Equal("Nguyễn Thu Ngân", item.Participants[0].FullName);
+        Assert.Single(item.CloseConfirmations);
+        Assert.Equal(2_500_000m, item.CloseConfirmations[0].ConfirmedCountedCash);
+    }
+
+    [Fact]
+    public async Task ConfirmHandoverAsync_Confirmed_UpdatesStatusSuccessfully()
+    {
+        // Arrange (REQ-SHIFT-HIST-02)
+        var shift = new ShiftZReport
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_mart",
+            BranchId = Guid.NewGuid(),
+            ShiftCode = "CA-20261108-02",
+            ShiftName = "Ca Chiều",
+            CashierUserId = Guid.NewGuid(),
+            Status = ShiftState.Closed,
+            OpeningFloat = 1_000_000m,
+            ActualCashCounted = 3_000_000m,
+            HandoverStatus = HandoverStatus.PENDING
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        var request = new ConfirmHandoverRequest(HandoverStatus.CONFIRMED, null);
+
+        // Act
+        var result = await _service.ConfirmHandoverAsync(shift.Id, request, "cashier_next_user");
+
+        // Assert
+        Assert.Equal(HandoverStatus.CONFIRMED, result.HandoverStatus);
+        Assert.Equal("cashier_next_user", result.ReceiverUserId);
+    }
+
+    [Fact]
+    public async Task ConfirmHandoverAsync_Disputed_SetsStatusAndNotes()
+    {
+        // Arrange (REQ-SHIFT-HIST-02)
+        var shift = new ShiftZReport
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_mart",
+            BranchId = Guid.NewGuid(),
+            ShiftCode = "CA-20261108-03",
+            ShiftName = "Ca Tối",
+            CashierUserId = Guid.NewGuid(),
+            Status = ShiftState.Closed,
+            OpeningFloat = 1_000_000m,
+            ActualCashCounted = 2_800_000m,
+            HandoverStatus = HandoverStatus.PENDING
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        var request = new ConfirmHandoverRequest(HandoverStatus.DISPUTED, "Thiếu 200.000đ tiền mặt trong két");
+
+        // Act
+        var result = await _service.ConfirmHandoverAsync(shift.Id, request, "cashier_next_user");
+
+        // Assert
+        Assert.Equal(HandoverStatus.DISPUTED, result.HandoverStatus);
+        Assert.Equal("cashier_next_user", result.ReceiverUserId);
+        Assert.Contains("Thiếu 200.000đ tiền mặt trong két", result.Notes);
+    }
+
+    [Fact]
+    public async Task CheckCashierShiftEligibility_WhenStoreOwnerRole_ReturnsAllowedAndExempt()
+    {
+        // Arrange
+        var branchId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+
+        // Act
+        var result = await _service.CheckCashierShiftEligibilityAsync(branchId, userId, "STORE_OWNER");
+
+        // Assert
+        Assert.True(result.IsAllowed);
+        Assert.True(result.IsExempt);
+        Assert.Null(result.Reason);
+    }
+
+    [Fact]
+    public async Task CheckCashierShiftEligibility_WhenNoEmployeeProfile_ReturnsNotAllowed()
+    {
+        // Arrange
+        var branchId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        _shiftRepository.AutoProvideValidSchedule = false;
+
+        // Act
+        var result = await _service.CheckCashierShiftEligibilityAsync(branchId, userId, "EMPLOYEE");
+
+        // Assert
+        Assert.False(result.IsAllowed);
+        Assert.False(result.IsExempt);
+        Assert.Contains("Không tìm thấy hồ sơ nhân viên", result.Reason);
+    }
+
+    [Fact]
+    public async Task CheckCashierShiftEligibility_WhenNoScheduleToday_ReturnsNotAllowed()
+    {
+        // Arrange
+        var branchId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        _shiftRepository.AutoProvideValidSchedule = false;
+        var emp = new Employee
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId.ToString(),
+            FullName = "Nguyễn Văn Minh",
+            Status = EmployeeStatus.Active
+        };
+        _shiftRepository.Employees.Add(emp);
+
+        // Act
+        var result = await _service.CheckCashierShiftEligibilityAsync(branchId, userId, "EMPLOYEE");
+
+        // Assert
+        Assert.False(result.IsAllowed);
+        Assert.False(result.IsExempt);
+        Assert.Contains("Bạn không có lịch làm việc trong ca hiện tại", result.Reason);
+    }
+
+    [Fact]
+    public async Task CheckCashierShiftEligibility_WhenHasValidSchedule_ReturnsAllowed()
+    {
+        // Arrange
+        var branchId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        _shiftRepository.AutoProvideValidSchedule = false;
+        var emp = new Employee
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId.ToString(),
+            FullName = "Phạm Thị Yến",
+            Status = EmployeeStatus.Active
+        };
+        _shiftRepository.Employees.Add(emp);
+
+        var nowVn = DateTime.UtcNow.AddHours(7);
+        _shiftRepository.Schedules.Add(new EmployeeSchedule
+        {
+            EmployeeId = emp.Id,
+            BranchId = branchId,
+            WorkDate = nowVn.Date,
+            PlannedStartTime = TimeSpan.Zero,
+            PlannedEndTime = new TimeSpan(23, 59, 59),
+            Status = ScheduleStatus.Scheduled
+        });
+
+        // Act
+        var result = await _service.CheckCashierShiftEligibilityAsync(branchId, userId, "EMPLOYEE");
+
+        // Assert
+        Assert.True(result.IsAllowed);
+        Assert.False(result.IsExempt);
+        Assert.Null(result.Reason);
+        Assert.NotNull(result.ActiveSchedule);
     }
 }
 

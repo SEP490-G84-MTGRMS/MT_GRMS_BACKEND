@@ -1397,6 +1397,126 @@ public class PosOrderServiceTests
         Assert.True(targetStock.QuantityOnHand >= 0m, "Tồn kho không bao giờ được âm!");
         Assert.Equal(2m, targetStock.QuantityOnHand);
     }
+
+    [Fact]
+    public async Task CreateOrderAsync_WithCashierName_PersistsSnapshotAndReturnsInResponse()
+    {
+        // Arrange
+        var req = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            CashTendered: 50000m,
+            CashierName: "Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)",
+            Items: new List<OrderItemCreateDto>
+            {
+                new(_prodHaoHaoId, 2m, 4500m)
+            }
+        );
+
+        // Act
+        var res = await _orderService.CreateOrderAsync(req);
+
+        // Assert
+        Assert.NotNull(res);
+        Assert.Equal("Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)", res.CashierName);
+        var savedOrder = _orderRepo.Orders.FirstOrDefault(o => o.Id == res.Id);
+        Assert.NotNull(savedOrder);
+        Assert.Equal("Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)", savedOrder.CashierName);
+    }
+
+    [Fact]
+    public async Task GetOrdersAsync_ReturnsPersistedCashierName_WithoutOverwriting()
+    {
+        // Arrange
+        var order = new Order
+        {
+            Id = Guid.NewGuid(),
+            BranchId = _branchId,
+            OrderCode = "HD2611089999",
+            CashierName = "Nguyễn Văn Minh",
+            FinalAmount = 20000m,
+            PaymentMethod = "CASH",
+            PaymentStatus = "PAID",
+            Status = "Completed",
+            OrderDate = DateTime.UtcNow
+        };
+        _orderRepo.Orders.Add(order);
+
+        // Act
+        var (items, total) = await _orderService.GetOrdersAsync(new OrderFilterRequest());
+
+        // Assert
+        var found = items.FirstOrDefault(i => i.Id == order.Id);
+        Assert.NotNull(found);
+        Assert.Equal("Nguyễn Văn Minh", found.CashierName);
+    }
+
+    [Fact]
+    public async Task CreatePreOrderAsync_WithCashierName_PersistsCashierNameAndReturnsInResponse()
+    {
+        // Arrange
+        var req = new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            DepositAmount: 20000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(2),
+            PaymentMethod: "CASH",
+            CashierName: "Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)",
+            Items: new List<OrderItemCreateDto>
+            {
+                new(_prodHaoHaoId, 5m, 4500m)
+            }
+        );
+
+        // Act
+        var res = await _orderService.CreatePreOrderAsync(req);
+
+        // Assert
+        Assert.NotNull(res);
+        Assert.Equal("Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)", res.CashierName);
+        var savedOrder = _orderRepo.Orders.FirstOrDefault(o => o.Id == res.Id);
+        Assert.NotNull(savedOrder);
+        Assert.Equal("Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)", savedOrder.CashierName);
+        Assert.Equal("PendingPickup", savedOrder.Status);
+    }
+
+    [Fact]
+    public async Task FulfillPreOrderAsync_WithCashierName_RecordsFulfilledByCashierName()
+    {
+        // Arrange
+        var order = new Order
+        {
+            Id = Guid.NewGuid(),
+            BranchId = _branchId,
+            OrderCode = "PO2611080001",
+            CashierName = "Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)",
+            TotalAmount = 100000m,
+            FinalAmount = 100000m,
+            DepositAmount = 30000m,
+            PaymentMethod = "CASH",
+            PaymentStatus = "PARTIALLY_PAID",
+            Status = "PendingPickup",
+            OrderDate = DateTime.UtcNow
+        };
+        _orderRepo.Orders.Add(order);
+
+        var fulfillReq = new PreOrderFulfillRequest(
+            PaymentMethod: "CASH",
+            AmountPaid: 70000m,
+            CashierName: "Lê Thị Thu Ngân"
+        );
+
+        // Act
+        var res = await _orderService.FulfillPreOrderAsync(order.Id, fulfillReq);
+
+        // Assert
+        Assert.NotNull(res);
+        Assert.Equal("Completed", res.Status);
+        Assert.Equal("Lê Thị Thu Ngân", res.FulfilledByCashierName);
+        Assert.NotNull(res.FulfilledAtUtc);
+        Assert.Equal("Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)", res.CashierName);
+    }
 }
 
 // ----------------- FAKE IMPLEMENTATIONS DÀNH CHO UNIT TEST -----------------
