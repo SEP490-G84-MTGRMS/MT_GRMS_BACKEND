@@ -259,9 +259,18 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 schedule.IsLeave = true;
                 schedule.IsPaidLeave = dto.IsPaidLeave ?? request.IsPaidLeave;
                 request.IsPaidLeave = schedule.IsPaidLeave;
+                schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
+                schedule.ApprovalType = schedule.IsPaidLeave ? "PAID_LEAVE" : "UNPAID_LEAVE";
+                schedule.ApprovedBy = reviewerUserId;
+                schedule.ApprovedAt = DateTime.UtcNow;
                 break;
 
             case ScheduleRequestType.ShiftSwap:
+                schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
+                schedule.ApprovalType = "SHIFT_SWAP";
+                schedule.ApprovedBy = reviewerUserId;
+                schedule.ApprovedAt = DateTime.UtcNow;
+
                 if (request.SwapType == ShiftSwapType.CrossSwap && request.TargetScheduleId.HasValue)
                 {
                     var targetSchedule = request.TargetSchedule
@@ -272,6 +281,10 @@ public class ScheduleApprovalService : IScheduleApprovalService
                         var tempEmployeeId = schedule.EmployeeId;
                         schedule.EmployeeId = targetSchedule.EmployeeId;
                         targetSchedule.EmployeeId = tempEmployeeId;
+                        targetSchedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
+                        targetSchedule.ApprovalType = "SHIFT_SWAP";
+                        targetSchedule.ApprovedBy = reviewerUserId;
+                        targetSchedule.ApprovedAt = DateTime.UtcNow;
                         _scheduleRepository.Update(targetSchedule);
                     }
                 }
@@ -307,6 +320,11 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 {
                     var hours = (decimal)(schedule.CheckOutTime.Value - schedule.CheckInTime.Value).TotalHours;
                     schedule.ActualWorkHours = Math.Max(0, Math.Round(hours, 2));
+                    schedule.Status = ScheduleStatus.Completed;
+                    schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
+                    schedule.ApprovalType = "INCIDENT_RESOLVED";
+                    schedule.ApprovedBy = reviewerUserId;
+                    schedule.ApprovedAt = DateTime.UtcNow;
                 }
                 break;
 
@@ -314,6 +332,10 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 var overtimeMinutes = dto.ApprovedOvertimeMinutes ?? request.RequestedOvertimeMinutes ?? 0;
                 request.ApprovedOvertimeMinutes = overtimeMinutes;
                 schedule.OvertimeMinutes += overtimeMinutes;
+                schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
+                schedule.ApprovalType = "OVERTIME";
+                schedule.ApprovedBy = reviewerUserId;
+                schedule.ApprovedAt = DateTime.UtcNow;
                 break;
         }
 

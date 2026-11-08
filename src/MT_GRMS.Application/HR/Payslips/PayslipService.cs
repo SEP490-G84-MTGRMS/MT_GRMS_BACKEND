@@ -92,7 +92,7 @@ public class PayslipService : IPayslipService
             var standardDays = 26.00m;
 
             var totalWorkHours = empSchedules.Sum(s => s.ActualWorkHours);
-            var totalShifts = empSchedules.Count;
+            var totalShifts = empSchedules.Count(s => s.Status == ScheduleStatus.Completed);
             var workedDays = standardDayHours > 0 ? Math.Round(totalWorkHours / standardDayHours, 2) : 0m;
             var paidLeaveDays = empSchedules.Count(s => s.ApprovalType == "PAID_LEAVE");
             var unpaidLeaveDays = empSchedules.Count(s => s.ApprovalType == "UNPAID_LEAVE");
@@ -124,9 +124,9 @@ public class PayslipService : IPayslipService
 
             decimal baseSalaryEarned = emp.SalaryType switch
             {
-                SalaryType.Monthly => standardDays > 0 ? Math.Round((workedDays / standardDays) * emp.BaseRate, 0, MidpointRounding.AwayFromZero) : 0m,
-                SalaryType.Shift => Math.Round(totalShifts * emp.BaseRate, 0, MidpointRounding.AwayFromZero),
-                SalaryType.Hourly => Math.Round(totalWorkHours * emp.BaseRate, 0, MidpointRounding.AwayFromZero),
+                SalaryType.Monthly => standardDays > 0 ? Math.Round(((workedDays + paidLeaveDays) / standardDays) * emp.BaseRate, 0, MidpointRounding.AwayFromZero) : 0m,
+                SalaryType.Shift => Math.Round((totalShifts + paidLeaveDays) * emp.BaseRate, 0, MidpointRounding.AwayFromZero),
+                SalaryType.Hourly => Math.Round((totalWorkHours + (paidLeaveDays * standardDayHours)) * emp.BaseRate, 0, MidpointRounding.AwayFromZero),
                 _ => emp.BaseRate
             };
 

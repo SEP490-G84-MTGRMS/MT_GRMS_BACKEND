@@ -125,7 +125,7 @@ public class ScheduleRepository : IScheduleRepository
             .Where(s => idList.Contains(s.EmployeeId)
                         && s.WorkDate >= from
                         && s.WorkDate <= to
-                        && s.Status == ScheduleStatus.Completed
+                        && (s.Status == ScheduleStatus.Completed || (s.Status == ScheduleStatus.OnLeave && s.ApprovalStatus == ScheduleApprovalStatus.Approved))
                         && !s.IsDeleted)
             .ToListAsync(cancellationToken);
     }
