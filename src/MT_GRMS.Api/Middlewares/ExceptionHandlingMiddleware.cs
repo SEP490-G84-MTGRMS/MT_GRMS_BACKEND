@@ -40,7 +40,7 @@ public class ExceptionHandlingMiddleware
             case BusinessException businessEx:
                 statusCode = businessEx.ErrorCode switch
                 {
-                    "CONFLICT" or "DUPLICATE_KEY" or "DUPLICATE_CODE" or "DUPLICATE_BARCODE" or "DUPLICATE_CITIZEN_ID" or "DUPLICATE_PHONE" or "DUPLICATE_USERNAME" or "PRODUCT_ALREADY_ASSIGNED_TO_SUPPLIER" => (int)HttpStatusCode.Conflict,
+                    "CONFLICT" or "DUPLICATE_KEY" or "DUPLICATE_CODE" or "DUPLICATE_BARCODE" or "DUPLICATE_CITIZEN_ID" or "DUPLICATE_PHONE" or "DUPLICATE_USERNAME" or "PRODUCT_ALREADY_ASSIGNED_TO_SUPPLIER" or "SHIFT_ALREADY_OPEN" or "SHIFT_CLOSING_LOCKDOWN" => (int)HttpStatusCode.Conflict,
                     "FORBIDDEN" => (int)HttpStatusCode.Forbidden,
                     _ => (int)HttpStatusCode.UnprocessableEntity
                 };

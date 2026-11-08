@@ -27,6 +27,7 @@ public static class DependencyInjection
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IInventoryService, InventoryService>();
         services.AddScoped<IOrderService, OrderService>();
+        services.AddScoped<PosShifts.IShiftService, PosShifts.ShiftService>();
         services.AddScoped<ICatalogService, CatalogService>();
         services.AddScoped<ICategoryService, CategoryService>();
         services.AddScoped<IProductUnitService, ProductUnitService>();
@@ -49,6 +50,7 @@ public static class DependencyInjection
         services.AddScoped<SupplierReturns.ISupplierReturnService, SupplierReturns.SupplierReturnService>();
         services.AddScoped<AiPipeline.IAiRecommendationService, AiPipeline.AiRecommendationService>();
         services.AddScoped<Promotions.IPromotionService, Promotions.PromotionService>();
+        services.AddScoped<Promotions.ILoyaltyService, Promotions.LoyaltyService>();
         services.AddScoped<IEmployeeService, EmployeeService>();
         services.AddScoped<IShiftConfigService, ShiftConfigService>();
         services.AddScoped<IBranchAttendancePolicyService, BranchAttendancePolicyService>();

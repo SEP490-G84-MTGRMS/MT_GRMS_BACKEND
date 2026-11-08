@@ -22,12 +22,18 @@ public record CartGiftItemDto(
     string Reason
 );
 
+public record CartItemDiscountDto(
+    Guid ProductId,
+    decimal DiscountAmount
+);
+
 public record EvaluateCartResponse(
     decimal SubTotal,
     decimal TotalDiscountAmount,
     decimal FinalAmount,
     List<string> AppliedPromotions,
     List<CartGiftItemDto> GiftItems,
-    ValidateVoucherResponse? VoucherResult = null
+    ValidateVoucherResponse? VoucherResult = null,
+    List<CartItemDiscountDto>? ItemDiscounts = null
 );
 

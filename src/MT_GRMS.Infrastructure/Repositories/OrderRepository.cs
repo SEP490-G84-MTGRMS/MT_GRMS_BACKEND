@@ -49,6 +49,20 @@ public class OrderRepository : GenericRepository<Order>, IOrderRepository
 
     public async Task<IReadOnlyList<BranchStock>> GetBranchStocksForProductFefoAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
     {
+        if (_context.Database.IsNpgsql())
+        {
+            return await _context.BranchStocks
+                .FromSqlInterpolated($@"
+                    SELECT * FROM ""BranchStocks""
+                    WHERE ""BranchId"" = {branchId}
+                      AND ""ProductId"" = {productId}
+                      AND ""QuantityOnHand"" > 0
+                      AND NOT ""IsDeleted""
+                    ORDER BY ""ExpiryDate"" ASC NULLS LAST, ""ManufactureDate"" ASC NULLS LAST
+                    FOR UPDATE")
+                .ToListAsync(cancellationToken);
+        }
+
         return await _context.BranchStocks
             .Where(s => s.BranchId == branchId && s.ProductId == productId && s.QuantityOnHand > 0 && !s.IsDeleted)
             .OrderBy(s => s.ExpiryDate ?? DateTime.MaxValue)

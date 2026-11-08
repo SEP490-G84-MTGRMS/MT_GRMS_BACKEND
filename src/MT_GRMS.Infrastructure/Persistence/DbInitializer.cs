@@ -315,10 +315,112 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 {
                     await context.Database.ExecuteSqlRawAsync(@"
                         ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""IsAdmin"" boolean DEFAULT false;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""IsEmailVerified"" boolean DEFAULT false;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""MustChangePassword"" boolean DEFAULT false;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""LastLoginAt"" timestamp without time zone;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""LastLoginIp"" text;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityStamp"" text;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""PasswordResetOtp"" text;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""OtpExpiry"" timestamp without time zone;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""RefreshToken"" text;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""RefreshTokenExpiryTime"" timestamp without time zone;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""AccessFailedCount"" integer DEFAULT 0;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""LockoutEnd"" timestamp without time zone;
                         ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinHash"" text;
                         ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinSalt"" text;
                         ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""FailedPinAttempts"" integer DEFAULT 0;
                         ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""PinLockedUntilUtc"" timestamp without time zone;
+                        UPDATE ""Users"" SET ""IsAdmin"" = true WHERE LOWER(""UserName"") = 'admin';
+
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""ShiftID"" uuid;
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""CashierName"" character varying(150);
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""FulfilledByCashierName"" character varying(150);
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""FulfilledAtUtc"" timestamp without time zone;
+
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""BranchId"" uuid;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TillId"" uuid;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ShiftCode"" text;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ShiftName"" text;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""CashierUserId"" uuid;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ReceiverUserId"" text;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""PrevShiftId"" uuid;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpeningFloatExpected"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpeningFloat"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpeningDiscrepancy"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalCashIn"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalCashOut"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalBankRevenue"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalOrdersCount"" integer DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ExpectedCash"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ActualCashCounted"" numeric(18,2);
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""Discrepancy"" numeric(18,2);
+                        ALTER TABLE ""ShiftZReports"" ALTER COLUMN ""Discrepancy"" DROP NOT NULL;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""RetainedFloatAmount"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""DroppedToSafeAmount"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""HandoverStatus"" integer DEFAULT 1;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""Notes"" text;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosingStartedByUserId"" uuid;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosingStartedAtUtc"" timestamp without time zone;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosedByUserId"" uuid;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ForceCloseReason"" text;
+
+                        CREATE TABLE IF NOT EXISTS ""ShiftParticipants"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" text NOT NULL,
+                            ""ShiftId"" uuid NOT NULL,
+                            ""UserId"" uuid NOT NULL,
+                            ""UserName"" character varying(100),
+                            ""FullName"" character varying(150),
+                            ""JoinedAtUtc"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""LastActiveAtUtc"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+                        CREATE INDEX IF NOT EXISTS ""IX_ShiftParticipants_TenantId_ShiftId_UserId"" ON ""ShiftParticipants"" (""TenantId"", ""ShiftId"", ""UserId"");
+
+                        CREATE TABLE IF NOT EXISTS ""ShiftCloseConfirmations"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" text NOT NULL,
+                            ""ShiftId"" uuid NOT NULL,
+                            ""UserId"" uuid NOT NULL,
+                            ""UserName"" character varying(100),
+                            ""ConfirmedCountedCash"" numeric(18,2) NOT NULL DEFAULT 0,
+                            ""ConfirmedAtUtc"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+                        CREATE INDEX IF NOT EXISTS ""IX_ShiftCloseConfirmations_TenantId_ShiftId"" ON ""ShiftCloseConfirmations"" (""TenantId"", ""ShiftId"");
+
+                        CREATE TABLE IF NOT EXISTS ""ShiftCashMovements"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" text NOT NULL,
+                            ""ShiftId"" uuid NOT NULL,
+                            ""MovementType"" integer NOT NULL,
+                            ""Category"" integer NOT NULL,
+                            ""Amount"" numeric(18,2) NOT NULL,
+                            ""Reason"" character varying(500) NOT NULL,
+                            ""CreatedByName"" character varying(150),
+                            ""OccurredAtUtc"" timestamp without time zone NOT NULL,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""Status"" integer DEFAULT 1;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ApprovedBy"" text;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ApprovedAtUtc"" timestamp without time zone;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""RejectionReason"" text;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""IsConfirmedByOwner"" boolean DEFAULT false;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ConfirmedByOwnerAtUtc"" timestamp without time zone;
+                        ALTER TABLE ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutApprovalThreshold"" numeric(18,2) DEFAULT 200000;
+                        ALTER TABLE ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutShiftTotalLimit"" numeric(18,2) DEFAULT 0;
+
                         ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""TaxCategory"" text DEFAULT 'STANDARD_1PCT';
                         ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""EligibleForVatReduction"" boolean DEFAULT false;
                         ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
@@ -1997,6 +2099,117 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             empNam.BranchId = branchCauGiay.Id;
             empNam.UserId = staffUser2.Id;
         }
+
+        // Nhân viên 3: Nguyễn Văn Minh gắn cố định tại Chi nhánh Ba Đình (b1000000-0000-0000-0000-000000000001)
+        var staffUser3 = await context.Users.FirstOrDefaultAsync(u => u.Id == "usr_employee_annhien_04" || u.UserName == "0915556666");
+        if (staffUser3 == null)
+        {
+            staffUser3 = new User
+            {
+                Id = "usr_employee_annhien_04",
+                UserName = "0915556666",
+                Password = "123456",
+                FullName = "Nguyễn Văn Minh (Nhân viên Ba Đình)",
+                Email = "minh.nguyen@annhienmart.vn",
+                Phone = "0915556666",
+                IsActive = true,
+                IsEmailVerified = true
+            };
+            await context.Users.AddAsync(staffUser3);
+            await context.SaveChangesAsync();
+        }
+
+        var tuStaff3 = await context.TenantUsers.FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == staffUser3.Id);
+        if (tuStaff3 == null)
+        {
+            await context.TenantUsers.AddAsync(new TenantUser
+            {
+                TenantId = tenantId,
+                UserId = staffUser3.Id,
+                Role = "EMPLOYEE",
+                IsActive = true
+            });
+        }
+        else
+        {
+            tuStaff3.Role = "EMPLOYEE";
+        }
+
+        var empMinh = await context.Employees.FirstOrDefaultAsync(e => e.TenantId == tenantId && e.EmployeeCode == "NV-AN-03");
+        if (empMinh == null)
+        {
+            empMinh = new Employee
+            {
+                TenantId = tenantId,
+                BranchId = branch.Id,
+                UserId = staffUser3.Id,
+                EmployeeCode = "NV-AN-03",
+                FullName = "Nguyễn Văn Minh (Nhân viên Ba Đình)",
+                Phone = "0915556666",
+                Email = "minh.nguyen@annhienmart.vn",
+                SalaryType = SalaryType.Monthly,
+                BaseRate = 7500000m,
+                Status = EmployeeStatus.Active
+            };
+            await context.Employees.AddAsync(empMinh);
+        }
+        else
+        {
+            empMinh.BranchId = branch.Id;
+            empMinh.UserId = staffUser3.Id;
+        }
+        await context.SaveChangesAsync();
+
+        // 3b. Cấu hình ca làm việc mẫu & Lịch phân ca kiểm thử cho thu ngân Ba Đình (REQ-STRICT-SCHEDULE-VALIDATION)
+        var shiftConfigSang = await context.ShiftConfigs.FirstOrDefaultAsync(s => s.TenantId == tenantId && s.ShiftCode == "CA-AN-FULL");
+        if (shiftConfigSang == null)
+        {
+            shiftConfigSang = new ShiftConfig
+            {
+                TenantId = tenantId,
+                BranchId = branch.Id,
+                ShiftCode = "CA-AN-FULL",
+                ShiftName = "Ca Trực Bán Hàng Toàn Thời Gian (06:00 - 23:00)",
+                StartTime = new TimeSpan(6, 0, 0),
+                EndTime = new TimeSpan(23, 0, 0),
+                DurationHours = 17.00m,
+                AllowedCheckInStart = new TimeSpan(5, 30, 0),
+                AllowedCheckInEnd = new TimeSpan(23, 30, 0),
+                IsActive = true
+            };
+            await context.ShiftConfigs.AddAsync(shiftConfigSang);
+            await context.SaveChangesAsync();
+        }
+
+        // Tạo lịch phân ca cho Phạm Thị Yến (0917778888) cho ngày hôm nay và các ngày lân cận (-3 đến +7 ngày)
+        // Lưu ý: Không phân ca cho Nguyễn Văn Minh (0915556666) để dùng làm tài khoản test kịch bản bị chặn cứng ngoài ca
+        var todayVn = DateTime.UtcNow.AddHours(7).Date;
+        for (int dayOffset = -3; dayOffset <= 7; dayOffset++)
+        {
+            var targetDate = todayVn.AddDays(dayOffset);
+            var existingSchedule = await context.EmployeeSchedules
+                .FirstOrDefaultAsync(s => s.TenantId == tenantId && s.EmployeeId == empYen.Id && s.BranchId == branch.Id && s.WorkDate == targetDate);
+
+            if (existingSchedule == null)
+            {
+                await context.EmployeeSchedules.AddAsync(new EmployeeSchedule
+                {
+                    TenantId = tenantId,
+                    BranchId = branch.Id,
+                    EmployeeId = empYen.Id,
+                    ShiftConfigId = shiftConfigSang.Id,
+                    WorkDate = targetDate,
+                    ShiftCode = shiftConfigSang.ShiftCode,
+                    ShiftName = shiftConfigSang.ShiftName,
+                    PlannedStartTime = shiftConfigSang.StartTime,
+                    PlannedEndTime = shiftConfigSang.EndTime,
+                    DurationHours = shiftConfigSang.DurationHours,
+                    AllowedCheckInStart = shiftConfigSang.AllowedCheckInStart,
+                    AllowedCheckInEnd = shiftConfigSang.AllowedCheckInEnd,
+                    Status = ScheduleStatus.Scheduled
+                });
+            }
+        }
         await context.SaveChangesAsync();
 
         // 4. Danh mục sản phẩm của An Nhiên Mart
@@ -2451,6 +2664,99 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
         await context.Orders.AddRangeAsync(order1, preOrder1);
         await context.SaveChangesAsync();
+
+        // 13. Seed Ca làm việc POS (ShiftZReport) và phiếu thu chi lẻ (ShiftCashMovement)
+        var shift1Id = Guid.Parse("01944321-ca01-7000-8000-000000000001");
+        var shift2Id = Guid.Parse("01944321-ca02-7000-8000-000000000002");
+        var tillId = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db");
+        var staffGuid = Guid.TryParse(staffUser.Id, out var parsedStaffGuid) ? parsedStaffGuid : Guid.NewGuid();
+
+        if (!await context.ShiftZReports.IgnoreQueryFilters().AnyAsync(s => s.Id == shift1Id))
+        {
+            var shift1 = new ShiftZReport
+            {
+                Id = shift1Id,
+                TenantId = tenantId,
+                BranchId = branch.Id,
+                TillId = tillId,
+                ShiftCode = "CA-20261105-01",
+                ShiftName = "Ca Sáng 05/11",
+                CashierUserId = staffGuid,
+                ReceiverUserId = "usr_employee_annhien_03",
+                OpenedAtUtc = now.AddDays(-1).AddHours(-8),
+                ClosedAtUtc = now.AddDays(-1).AddHours(-1),
+                OpeningFloatExpected = 1500000m,
+                OpeningFloat = 1500000m,
+                OpeningDiscrepancy = 0m,
+                TotalCashIn = 500000m,
+                TotalCashOut = 200000m,
+                TotalBankRevenue = 360000m,
+                TotalOrdersCount = 5,
+                ExpectedCash = 2800000m,
+                ActualCashCounted = 2800000m,
+                Discrepancy = 0m,
+                RetainedFloatAmount = 1500000m,
+                DroppedToSafeAmount = 1300000m,
+                HandoverStatus = HandoverStatus.CONFIRMED,
+                Status = ShiftState.Closed,
+                Notes = "Bàn giao ca đầy đủ, không chênh lệch."
+            };
+
+            shift1.CashMovements.Add(new ShiftCashMovement
+            {
+                TenantId = tenantId,
+                ShiftId = shift1Id,
+                MovementType = CashMovementType.IN,
+                Category = CashMovementCategory.CASH_DEPOSIT,
+                Amount = 500000m,
+                Reason = "Nạp tiền lẻ đầu ca",
+                CreatedByName = "Phạm Thị Yến",
+                OccurredAtUtc = now.AddDays(-1).AddHours(-7)
+            });
+
+            shift1.CashMovements.Add(new ShiftCashMovement
+            {
+                TenantId = tenantId,
+                ShiftId = shift1Id,
+                MovementType = CashMovementType.OUT,
+                Category = CashMovementCategory.EXPENSE,
+                Amount = 200000m,
+                Reason = "Chi tiền rác và túi đựng",
+                CreatedByName = "Phạm Thị Yến",
+                OccurredAtUtc = now.AddDays(-1).AddHours(-4)
+            });
+
+            var shift2 = new ShiftZReport
+            {
+                Id = shift2Id,
+                TenantId = tenantId,
+                BranchId = branch.Id,
+                TillId = tillId,
+                ShiftCode = "CA-20261106-01",
+                ShiftName = "Ca Sáng 06/11",
+                CashierUserId = staffGuid,
+                PrevShiftId = shift1Id,
+                OpenedAtUtc = now.AddHours(-3),
+                OpeningFloatExpected = 1500000m,
+                OpeningFloat = 1500000m,
+                OpeningDiscrepancy = 0m,
+                TotalCashIn = 0m,
+                TotalCashOut = 0m,
+                TotalBankRevenue = 0m,
+                TotalOrdersCount = 1,
+                ExpectedCash = 1584000m,
+                RetainedFloatAmount = 0m,
+                DroppedToSafeAmount = 0m,
+                HandoverStatus = HandoverStatus.PENDING,
+                Status = ShiftState.Open,
+                Notes = "Ca bán hàng đang mở."
+            };
+
+            order1.ShiftId = shift2Id;
+
+            await context.ShiftZReports.AddRangeAsync(shift1, shift2);
+            await context.SaveChangesAsync();
+        }
     }
 
     // =========================================================================

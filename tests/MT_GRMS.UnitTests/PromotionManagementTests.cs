@@ -305,6 +305,10 @@ public class PromotionManagementTests
         public Task AddAsync(Promotion entity, CancellationToken cancellationToken = default) { Promotions.Add(entity); return Task.CompletedTask; }
         public void Update(Promotion entity) { }
         public void Delete(Promotion entity) => entity.IsDeleted = true;
+
+        private LoyaltySetting? _loyaltySetting;
+        public Task<LoyaltySetting?> GetLoyaltySettingAsync(string tenantId, CancellationToken cancellationToken = default) => Task.FromResult(_loyaltySetting);
+        public Task SaveLoyaltySettingAsync(LoyaltySetting setting, CancellationToken cancellationToken = default) { _loyaltySetting = setting; return Task.CompletedTask; }
     }
 
     private class FakeUnitOfWork : IUnitOfWork
