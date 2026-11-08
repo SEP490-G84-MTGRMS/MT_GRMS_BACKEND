@@ -40,8 +40,15 @@ public class ShiftZReport : BaseTenantEntity
     public ShiftState Status { get; set; } = ShiftState.Open;
     public string? Notes { get; set; }
 
+    public Guid? ClosingStartedByUserId { get; set; }
+    public DateTime? ClosingStartedAtUtc { get; set; }
+    public Guid? ClosedByUserId { get; set; }
+    public string? ForceCloseReason { get; set; }
+
     // Navigations
     public Branch? Branch { get; set; }
     public ShiftZReport? PrevShift { get; set; }
     public ICollection<ShiftCashMovement> CashMovements { get; set; } = new List<ShiftCashMovement>();
+    public ICollection<ShiftParticipant> Participants { get; set; } = new List<ShiftParticipant>();
+    public ICollection<ShiftCloseConfirmation> CloseConfirmations { get; set; } = new List<ShiftCloseConfirmation>();
 }
