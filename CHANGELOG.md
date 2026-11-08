@@ -4,6 +4,14 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ---
 
+## [Unreleased] - 2026-11-08
+
+### Added
+- Tái cấu trúc mô hình 2 gói cước SaaS: `STANDARD` (99.000 đ/tháng) và `PRO` (249.000 đ/tháng), xóa bỏ gói miễn phí vĩnh viễn (0đ), áp dụng dùng thử 3 ngày Gói Pro full tính năng cho tài khoản mới [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+- Bổ sung 3 cột vào bảng `Tenants`: `ExtraBranches` (chi nhánh mua thêm), `HasStaffManagementAddon` (cờ mua thêm nhân viên cho gói thường), `SubscriptionStatus` (trạng thái 'TRIAL', 'ACTIVE', 'EXPIRED'), tự động đồng bộ schema DDL qua `DbInitializer.cs` [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+- Nâng cấp API tính tiền và gia hạn `POST /api/tenant/subscriptions/purchase`: hỗ trợ tính thêm chi nhánh cho Gói Pro (+80k/tháng), option quản lý nhân viên cho Gói Thường (+30k/tháng), tính VAT 10% và cộng dồn hạn mức chi nhánh [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+- Cập nhật hàm kiểm tra hạn mức `BranchService.GetBranchQuotaAsync`: tính quota động theo `Plan.MaxBranches + Tenant.ExtraBranches` [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+
 ## [Unreleased] - 2026-11-07
 
 ### Added

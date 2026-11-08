@@ -123,11 +123,21 @@ public class TenantStoreController : BaseApiController
 
         var months = request.Months <= 0 ? 12 : request.Months;
 
-        // 1. Tính toán chi phí
+        // Validation nghiệp vụ theo gói
+        if (plan.PlanCode == "STANDARD" && request.ExtraBranches > 0)
+        {
+            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
+                "INVALID_PLAN_ADDON",
+                "Gói Thường cố định 1 chi nhánh và không hỗ trợ mua thêm chi nhánh. Vui lòng nâng cấp lên Gói Pro để mở rộng chuỗi cửa hàng."));
+        }
+
+        // 1. Tính toán chi phí chuẩn hóa
+        // - Gói Pro: mua thêm chi nhánh 80k/chi nhánh/tháng
+        // - Gói Thường: option quản lý nhân viên 30k/tháng
         var basePrice = plan.PriceMonthly * months;
-        var branchAddonPrice = request.ExtraBranches * 270000m * months;
-        var warehouseAddonPrice = request.ExtraWarehouses * 150000m * months;
-        var subTotal = basePrice + branchAddonPrice + warehouseAddonPrice;
+        var branchAddonPrice = (plan.PlanCode == "PRO" ? request.ExtraBranches * 80000m : 0m) * months;
+        var staffAddonPrice = (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon ? 30000m : 0m) * months;
+        var subTotal = basePrice + branchAddonPrice + staffAddonPrice;
         var vatAmount = Math.Round(subTotal * 0.1m, 0);
         var grandTotal = subTotal + vatAmount;
 
@@ -177,7 +187,18 @@ public class TenantStoreController : BaseApiController
 
         tenant.CurrentPlan = plan.PlanCode;
         tenant.SubscriptionExpiresAt = newExpiresAt;
+        tenant.SubscriptionStatus = "ACTIVE";
         tenant.Status = "ACTIVE";
+
+        if (plan.PlanCode == "PRO")
+        {
+            tenant.ExtraBranches += request.ExtraBranches;
+            tenant.HasStaffManagementAddon = true; // Gói Pro mặc định có sẵn tính năng quản lý nhân viên
+        }
+        else if (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon)
+        {
+            tenant.HasStaffManagementAddon = true;
+        }
 
         await _context.SaveChangesAsync(cancellationToken);
 

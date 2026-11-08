@@ -74,20 +74,37 @@ public class BranchService : IBranchService
 
         var usedBranches = await _branchRepo.CountActiveAsync(cancellationToken);
         var maxBranches = 1;
-        var planCode = tenant?.CurrentPlan ?? "FREE";
-        var planName = "Gói Cơ Bản (Miễn Phí)";
+        var planCode = tenant?.CurrentPlan ?? "STANDARD";
+        var planName = "Gói Thường (Cửa Hàng Độc Lập)";
 
         if (tenant != null && !string.IsNullOrWhiteSpace(tenant.CurrentPlan))
         {
             var plan = await _planRepo.GetByCodeAsync(tenant.CurrentPlan, cancellationToken);
             if (plan != null)
             {
-                maxBranches = plan.MaxBranches;
+                maxBranches = plan.MaxBranches + tenant.ExtraBranches;
                 planName = plan.PlanName;
             }
+            else
+            {
+                if (tenant.CurrentPlan.Equals("PRO", StringComparison.OrdinalIgnoreCase))
+                {
+                    maxBranches = 2 + tenant.ExtraBranches;
+                    planName = "Gói Pro (Chuỗi Cửa Hàng)";
+                }
+                else
+                {
+                    maxBranches = 1 + tenant.ExtraBranches;
+                    planName = "Gói Thường (Cửa Hàng Độc Lập)";
+                }
+            }
+        }
+        else if (tenant != null)
+        {
+            maxBranches = 1 + tenant.ExtraBranches;
         }
 
-        if (maxBranches <= 0) maxBranches = 10;
+        if (maxBranches <= 0) maxBranches = 1;
 
         return new BranchQuotaDto(
             UsedBranches: usedBranches,
