@@ -90,14 +90,35 @@ public class TenantStoreController : BaseApiController
     {
         var plans = await _planService.GetPlansAsync(new PlanFilterRequest(Status: "ACTIVE"), cancellationToken);
 
-        // Chỉ lấy 2 gói cước chính thức của hệ thống SaaS bán lẻ: STANDARD (Gói Thường 99k) và PRO (Gói Pro 249k)
+        // Lấy 3 gói cước chính thức của hệ thống SaaS bán lẻ: TRIAL (Trải nghiệm 0đ 3 ngày), STANDARD (Gói Thường 99k) và PRO (Gói Pro 249k)
         var officialPlans = plans
-            .Where(p => string.Equals(p.Code, "STANDARD", StringComparison.OrdinalIgnoreCase) ||
+            .Where(p => string.Equals(p.Code, "TRIAL", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(p.Code, "STANDARD", StringComparison.OrdinalIgnoreCase) ||
                         string.Equals(p.Code, "PRO", StringComparison.OrdinalIgnoreCase))
             .OrderBy(p => p.MonthlyPrice)
             .ToList();
 
-        if (officialPlans.Count == 0)
+        // Đảm bảo luôn có gói TRIAL ở đầu danh sách nếu CSDL chưa nạp
+        if (!officialPlans.Any(p => string.Equals(p.Code, "TRIAL", StringComparison.OrdinalIgnoreCase)))
+        {
+            var defaultTrial = new PlanSummaryResponse(
+                Id: "plan_trial",
+                Code: "TRIAL",
+                Name: "Gói Dùng Thử (Trải Nghiệm)",
+                Description: "Trải nghiệm toàn diện các tính năng cao cấp của MT-GRMS hoàn toàn miễn phí trong 3 ngày.",
+                MonthlyPrice: 0m,
+                YearlyPrice: 0m,
+                Status: "ACTIVE",
+                ActiveTenantCount: 0,
+                Quotas: new PlanQuotaDto(MaxBranches: 1, MaxEmployees: 5, MaxStorageGb: 5, BackupFrequency: "Daily"),
+                Features: new PlanFeatureDto(FefoExpiryAlert: true, MultiUnitConversion: true, VietQrDynamic: true, DebtZaloBook: false, BarcodeScanning: true, FinancialReporting: false),
+                CreatedAt: DateTime.UtcNow,
+                UpdatedAt: null
+            );
+            officialPlans.Insert(0, defaultTrial);
+        }
+
+        if (!officialPlans.Any(p => string.Equals(p.Code, "STANDARD", StringComparison.OrdinalIgnoreCase)))
         {
             var defaultStandard = new PlanSummaryResponse(
                 Id: "plan_standard",
@@ -113,7 +134,11 @@ public class TenantStoreController : BaseApiController
                 CreatedAt: DateTime.UtcNow,
                 UpdatedAt: null
             );
+            officialPlans.Add(defaultStandard);
+        }
 
+        if (!officialPlans.Any(p => string.Equals(p.Code, "PRO", StringComparison.OrdinalIgnoreCase)))
+        {
             var defaultPro = new PlanSummaryResponse(
                 Id: "plan_pro",
                 Code: "PRO",
@@ -128,9 +153,17 @@ public class TenantStoreController : BaseApiController
                 CreatedAt: DateTime.UtcNow,
                 UpdatedAt: null
             );
-
-            officialPlans = new List<PlanSummaryResponse> { defaultStandard, defaultPro };
+            officialPlans.Add(defaultPro);
         }
+
+        // Sắp xếp thứ tự: TRIAL (1, trái) -> STANDARD (2, giữa) -> PRO (3, phải)
+        var orderMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["TRIAL"] = 1,
+            ["STANDARD"] = 2,
+            ["PRO"] = 3
+        };
+        officialPlans = officialPlans.OrderBy(p => orderMap.TryGetValue(p.Code, out var o) ? o : 99).ToList();
 
         return Ok(ApiResponse<IReadOnlyList<PlanSummaryResponse>>.Ok(officialPlans));
     }
@@ -149,11 +182,11 @@ public class TenantStoreController : BaseApiController
             return NotFound(ApiResponse<PurchaseSubscriptionResponse>.Fail("TENANT_NOT_FOUND", "Không tìm thấy thông tin gian hàng trong hệ thống."));
         }
 
-        // Chuẩn hóa mã gói: chỉ chấp nhận STANDARD hoặc PRO
+        // Chuẩn hóa mã gói: chấp nhận TRIAL, STANDARD hoặc PRO
         var targetCode = (request.PlanCode ?? "").ToUpper();
-        if (targetCode != "STANDARD" && targetCode != "PRO")
+        if (targetCode != "TRIAL" && targetCode != "STANDARD" && targetCode != "PRO")
         {
-            targetCode = targetCode.Contains("PRO") ? "PRO" : "STANDARD";
+            targetCode = targetCode.Contains("PRO") ? "PRO" : (targetCode.Contains("TRIAL") ? "TRIAL" : "STANDARD");
         }
 
         // Tìm gói cước theo PlanCode
@@ -172,16 +205,16 @@ public class TenantStoreController : BaseApiController
         {
             plan = new SubscriptionPlan
             {
-                Id = targetCode == "PRO" ? "plan_pro" : "plan_standard",
+                Id = targetCode == "PRO" ? "plan_pro" : (targetCode == "TRIAL" ? "plan_trial" : "plan_standard"),
                 PlanCode = targetCode,
-                PlanName = targetCode == "PRO" ? "Gói Pro (Chuỗi Cửa Hàng)" : "Gói Thường (Cửa Hàng Độc Lập)",
-                PriceMonthly = targetCode == "PRO" ? 249000.00m : 99000.00m,
-                PriceYearly = targetCode == "PRO" ? 2988000.00m : 1188000.00m,
+                PlanName = targetCode == "PRO" ? "Gói Pro (Chuỗi Cửa Hàng)" : (targetCode == "TRIAL" ? "Gói Dùng Thử (Trải Nghiệm)" : "Gói Thường (Cửa Hàng Độc Lập)"),
+                PriceMonthly = targetCode == "PRO" ? 249000.00m : (targetCode == "TRIAL" ? 0m : 99000.00m),
+                PriceYearly = targetCode == "PRO" ? 2988000.00m : (targetCode == "TRIAL" ? 0m : 1188000.00m),
                 MaxBranches = targetCode == "PRO" ? 2 : 1,
-                MaxStaff = targetCode == "PRO" ? 100 : 1,
+                MaxStaff = targetCode == "PRO" ? 100 : (targetCode == "TRIAL" ? 5 : 1),
                 EnabledModulesJson = targetCode == "PRO"
                     ? "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\",\"MultiBranch\"]"
-                    : "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\"]",
+                    : (targetCode == "TRIAL" ? "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\",\"HR\"]" : "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\"]"),
                 IsActive = true
             };
             await _context.SubscriptionPlans.AddAsync(plan, cancellationToken);

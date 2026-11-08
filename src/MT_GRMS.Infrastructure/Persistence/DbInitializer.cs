@@ -197,7 +197,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""ExtraBranches"" integer NOT NULL DEFAULT 0;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""HasStaffManagementAddon"" boolean NOT NULL DEFAULT false;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""SubscriptionStatus"" character varying(30) NOT NULL DEFAULT 'TRIAL';
-                UPDATE ""SubscriptionPlans"" SET ""IsActive"" = false WHERE ""PlanCode"" NOT IN ('STANDARD', 'PRO');
+                UPDATE ""SubscriptionPlans"" SET ""IsActive"" = false WHERE ""PlanCode"" NOT IN ('TRIAL', 'STANDARD', 'PRO');
             ");
             logger?.LogInformation("[MT-GRMS] Đã đồng bộ các cột ExtraBranches, HasStaffManagementAddon, SubscriptionStatus cho bảng Tenants và vô hiệu hóa các gói cước cũ.");
         }
@@ -717,7 +717,35 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             return;
         }
 
-        // 2. PHÂN HỆ SAAS: Nạp danh sách các gói cước SubscriptionPlans (Idempotent: STANDARD 99k & PRO 249k)
+        // 2. PHÂN HỆ SAAS: Nạp danh sách các gói cước SubscriptionPlans (Idempotent: TRIAL 0k, STANDARD 99k & PRO 249k)
+        var planTrial = await context.SubscriptionPlans.FirstOrDefaultAsync(p => p.PlanCode == "TRIAL");
+        if (planTrial == null)
+        {
+            planTrial = new SubscriptionPlan
+            {
+                Id = "plan_trial",
+                PlanCode = "TRIAL",
+                PlanName = "Gói Dùng Thử (Trải Nghiệm)",
+                PriceMonthly = 0m,
+                PriceYearly = 0m,
+                MaxBranches = 1,
+                MaxStaff = 5,
+                EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\",\"HR\"]",
+                IsActive = true
+            };
+            await context.SubscriptionPlans.AddAsync(planTrial);
+        }
+        else
+        {
+            planTrial.PlanName = "Gói Dùng Thử (Trải Nghiệm)";
+            planTrial.PriceMonthly = 0m;
+            planTrial.PriceYearly = 0m;
+            planTrial.MaxBranches = 1;
+            planTrial.MaxStaff = 5;
+            planTrial.EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\",\"HR\"]";
+            planTrial.IsActive = true;
+        }
+
         var planStandard = await context.SubscriptionPlans.FirstOrDefaultAsync(p => p.PlanCode == "STANDARD");
         if (planStandard == null)
         {
@@ -774,9 +802,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             planPro.IsActive = true;
         }
 
-        // Vô hiệu hóa tất cả các gói cũ (FREE, SUPPORT, PREMIUM...) chỉ giữ lại duy nhất 2 gói chuẩn: STANDARD và PRO
+        // Vô hiệu hóa tất cả các gói cũ (FREE, SUPPORT, PREMIUM...) chỉ giữ lại 3 gói chuẩn: TRIAL, STANDARD và PRO
         var outdatedPlans = await context.SubscriptionPlans
-            .Where(p => p.PlanCode != "STANDARD" && p.PlanCode != "PRO")
+            .Where(p => p.PlanCode != "TRIAL" && p.PlanCode != "STANDARD" && p.PlanCode != "PRO")
             .ToListAsync();
         foreach (var op in outdatedPlans)
         {

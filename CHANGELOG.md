@@ -11,7 +11,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - Bổ sung 3 cột vào bảng `Tenants`: `ExtraBranches` (chi nhánh mua thêm), `HasStaffManagementAddon` (cờ mua thêm nhân viên cho gói thường), `SubscriptionStatus` (trạng thái 'TRIAL', 'ACTIVE', 'EXPIRED'), tự động đồng bộ schema DDL qua `DbInitializer.cs` [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
 - Nâng cấp API tính tiền và gia hạn `POST /api/tenant/subscriptions/purchase`: hỗ trợ tính thêm chi nhánh cho Gói Pro (+80k/tháng), option quản lý nhân viên cho Gói Thường (+30k/tháng), tính VAT 10% và cộng dồn hạn mức chi nhánh [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
 - Cập nhật hàm kiểm tra hạn mức `BranchService.GetBranchQuotaAsync`: tính quota động theo `Plan.MaxBranches + Tenant.ExtraBranches` [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
-- Cập nhật API `GET /api/tenant/pricing-plans`: Lọc nghiêm ngặt chỉ trả về 2 gói cước chuẩn `STANDARD` và `PRO`, vô hiệu hóa các gói cũ từ DB và đảm bảo dữ liệu đồng nhất [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+- Cập nhật API `GET /api/tenant/pricing-plans`: Lọc nghiêm ngặt và trả về 3 gói cước chuẩn: `TRIAL` (0 đ), `STANDARD` (99k) và `PRO` (249k), vô hiệu hóa các gói cũ từ DB và đảm bảo dữ liệu đồng nhất [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
 - Bổ sung API `POST /api/tenant/subscriptions/trial` và xử lý dùng thử miễn phí 3 ngày Full tính năng Gói Pro khi đăng ký mới hoặc kích hoạt trải nghiệm [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
 
 ## [Unreleased] - 2026-11-07
