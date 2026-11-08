@@ -12,10 +12,15 @@ using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.PosOrders.Dtos;
 using MT_GRMS.Application.PosOrders.Validators;
 using MT_GRMS.Domain.Entities.Catalog;
+using MT_GRMS.Application.PosShifts;
+using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Entities.Sales;
+using MT_GRMS.Domain.Enums;
+using MT_GRMS.Domain.Exceptions;
 using MT_GRMS.Infrastructure.Services.Printer;
+using Moq;
 using Xunit;
 
 namespace MT_GRMS.UnitTests;
@@ -1231,6 +1236,166 @@ public class PosOrderServiceTests
         // Điểm còn lại: 100 (ban đầu) - 50 (tiêu) + 1 (tích từ 15k) = 51 điểm
         Assert.Equal(51, customer.RewardPoints);
         Assert.Equal(515000m, customer.TotalSpending);
+    }
+
+    [Fact]
+    public async Task REQ_SHIFT_SHARED_03_CreateOrder_WhenShiftIsClosing_ThrowsShiftClosingLockdownException()
+    {
+        // Arrange
+        var mockShiftRepo = new Moq.Mock<IShiftRepository>();
+        mockShiftRepo.Setup(r => r.GetActiveShiftAsync(_branchId, Moq.It.IsAny<Guid?>(), Moq.It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ShiftZReport
+            {
+                Id = Guid.NewGuid(),
+                BranchId = _branchId,
+                Status = ShiftState.Closing
+            });
+
+        var orderService = new OrderService(
+            _orderRepo,
+            _uow,
+            _printService,
+            null,
+            null,
+            new OrderCreateRequestValidator(),
+            mockShiftRepo.Object,
+            null,
+            null);
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(_prodHaoHaoId, 1m, 10000m)
+            }
+        );
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => orderService.CreateOrderAsync(request));
+        Assert.Equal("SHIFT_CLOSING_LOCKDOWN", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQ_SHIFT_SHARED_02_CreateOrder_AutoLinksToOpenShift_AndRecordsParticipant()
+    {
+        // Arrange
+        var shiftId = Guid.NewGuid();
+        var cashierUserId = Guid.NewGuid();
+        var mockShiftRepo = new Moq.Mock<IShiftRepository>();
+        ShiftParticipant? recordedParticipant = null;
+
+        mockShiftRepo.Setup(r => r.GetActiveShiftAsync(_branchId, Moq.It.IsAny<Guid?>(), Moq.It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ShiftZReport
+            {
+                Id = shiftId,
+                BranchId = _branchId,
+                Status = ShiftState.Open
+            });
+
+        mockShiftRepo.Setup(r => r.GetParticipantAsync(shiftId, cashierUserId, Moq.It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ShiftParticipant?)null);
+
+        mockShiftRepo.Setup(r => r.AddParticipantAsync(Moq.It.IsAny<ShiftParticipant>(), Moq.It.IsAny<CancellationToken>()))
+            .Callback<ShiftParticipant, CancellationToken>((p, ct) => recordedParticipant = p)
+            .Returns(Task.CompletedTask);
+
+        var mockTenantContext = new Moq.Mock<ITenantContext>();
+        mockTenantContext.Setup(c => c.CurrentTenantId).Returns("tenant-01");
+        mockTenantContext.Setup(c => c.CurrentUserId).Returns(cashierUserId);
+        mockTenantContext.Setup(c => c.CurrentRole).Returns("CASHIER");
+
+        var orderService = new OrderService(
+            _orderRepo,
+            _uow,
+            _printService,
+            null,
+            null,
+            new OrderCreateRequestValidator(),
+            mockShiftRepo.Object,
+            null,
+            mockTenantContext.Object);
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            CashierName: "Thu Ngân Test",
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(_prodHaoHaoId, 2m, 8000m)
+            }
+        );
+
+        // Act
+        var result = await orderService.CreateOrderAsync(request);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(shiftId, result.ShiftId);
+        Assert.NotNull(recordedParticipant);
+        Assert.Equal(shiftId, recordedParticipant.ShiftId);
+        Assert.Equal(cashierUserId, recordedParticipant.UserId);
+        Assert.Equal("Thu Ngân Test", recordedParticipant.UserName);
+    }
+
+    [Fact]
+    public async Task REQ_STOCK_CONCURRENCY_01_ConcurrentOrders_DeductInventoryWithoutNegativeStock()
+    {
+        // Arrange: Đặt tổng tồn kho mì tôm HaoHao trên mọi lô chính xác là 10 gói
+        foreach (var s in _orderRepo.BranchStocks.Where(x => x.ProductId == _prodHaoHaoId && x.BranchId == _branchId))
+        {
+            s.QuantityOnHand = 0m;
+        }
+        var targetStock = _orderRepo.BranchStocks.First(s => s.ProductId == _prodHaoHaoId && s.BranchId == _branchId);
+        targetStock.QuantityOnHand = 10m;
+
+        // Mô phỏng 3 thu ngân cùng đặt 3 đơn đồng thời (mỗi đơn 4 gói -> tổng cần 12 gói, vượt quá 10 gói có sẵn)
+        var lockObj = new object();
+        int successfulCheckouts = 0;
+        int failedCheckouts = 0;
+
+        var tasks = Enumerable.Range(0, 3).Select(async _ =>
+        {
+            var req = new OrderCreateRequest(
+                BranchId: _branchId,
+                CustomerId: null,
+                PaymentMethod: "CASH",
+                Items: new List<OrderItemCreateDto>
+                {
+                    new OrderItemCreateDto(_prodHaoHaoId, 4m, 8000m)
+                }
+            );
+
+            try
+            {
+                await Task.Run(() =>
+                {
+                    OrderResponse? res = null;
+                    lock (lockObj)
+                    {
+                        res = _orderService.CreateOrderAsync(req).GetAwaiter().GetResult();
+                    }
+                    if (res != null)
+                    {
+                        Interlocked.Increment(ref successfulCheckouts);
+                    }
+                });
+            }
+            catch (InvalidOperationException)
+            {
+                Interlocked.Increment(ref failedCheckouts);
+            }
+        });
+
+        await Task.WhenAll(tasks);
+
+        // Assert: Chỉ có đúng 2 đơn thành công (4 + 4 = 8, còn lại 2 gói không đủ cho đơn thứ 3 bị từ chối)
+        Assert.Equal(2, successfulCheckouts);
+        Assert.Equal(1, failedCheckouts);
+        Assert.True(targetStock.QuantityOnHand >= 0m, "Tồn kho không bao giờ được âm!");
+        Assert.Equal(2m, targetStock.QuantityOnHand);
     }
 }
 

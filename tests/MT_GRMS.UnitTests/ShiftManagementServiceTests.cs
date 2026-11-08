@@ -60,7 +60,7 @@ public class ShiftManagementServiceTests
 
         public Task<ShiftZReport?> GetActiveShiftAsync(Guid branchId, Guid? tillId = null, CancellationToken cancellationToken = default)
         {
-            var shift = Shifts.FirstOrDefault(s => s.BranchId == branchId && s.Status == ShiftState.Open &&
+            var shift = Shifts.FirstOrDefault(s => s.BranchId == branchId && (s.Status == ShiftState.Open || s.Status == ShiftState.Closing) &&
                 (!tillId.HasValue || tillId.Value == Guid.Empty || s.TillId == tillId.Value));
             return Task.FromResult(shift);
         }
@@ -135,6 +135,41 @@ public class ShiftManagementServiceTests
         public Task SavePaymentConfigAsync(StorePaymentConfig config, CancellationToken cancellationToken = default)
         {
             PaymentConfig = config;
+            return Task.CompletedTask;
+        }
+
+        public List<ShiftParticipant> Participants { get; } = new();
+        public List<ShiftCloseConfirmation> CloseConfirmations { get; } = new();
+
+        public Task AddParticipantAsync(ShiftParticipant participant, CancellationToken cancellationToken = default)
+        {
+            if (participant.Id == Guid.Empty) participant.Id = Guid.NewGuid();
+            Participants.Add(participant);
+            var shift = Shifts.FirstOrDefault(s => s.Id == participant.ShiftId);
+            shift?.Participants.Add(participant);
+            return Task.CompletedTask;
+        }
+
+        public Task<ShiftParticipant?> GetParticipantAsync(Guid shiftId, Guid userId, CancellationToken cancellationToken = default)
+        {
+            var p = Participants.FirstOrDefault(x => x.ShiftId == shiftId && x.UserId == userId);
+            return Task.FromResult(p);
+        }
+
+        public Task AddCloseConfirmationAsync(ShiftCloseConfirmation confirmation, CancellationToken cancellationToken = default)
+        {
+            if (confirmation.Id == Guid.Empty) confirmation.Id = Guid.NewGuid();
+            CloseConfirmations.Add(confirmation);
+            var shift = Shifts.FirstOrDefault(s => s.Id == confirmation.ShiftId);
+            shift?.CloseConfirmations.Add(confirmation);
+            return Task.CompletedTask;
+        }
+
+        public Task ClearCloseConfirmationsAsync(Guid shiftId, CancellationToken cancellationToken = default)
+        {
+            CloseConfirmations.RemoveAll(c => c.ShiftId == shiftId);
+            var shift = Shifts.FirstOrDefault(s => s.Id == shiftId);
+            shift?.CloseConfirmations.Clear();
             return Task.CompletedTask;
         }
     }
@@ -687,6 +722,254 @@ public class ShiftManagementServiceTests
             _service.CloseShiftAsync(shiftId, new CloseShiftRequest(1_000_000m, 500_000m, 500_000m)));
 
         Assert.Equal("PENDING_CASH_MOVEMENTS", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task OpenShift_WhenActiveShiftAlreadyExists_ThrowsShiftAlreadyOpen()
+    {
+        // Arrange (REQ-SHIFT-SHARED-01)
+        var branchId = Guid.NewGuid();
+        _shiftRepository.Shifts.Add(new ShiftZReport
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            BranchId = branchId,
+            ShiftCode = "CA-20261107-01",
+            ShiftName = "Ca Sáng",
+            Status = ShiftState.Open
+        });
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.OpenShiftAsync(new OpenShiftRequest(branchId, Guid.Empty, "Ca Trưa", 1_500_000m), Guid.NewGuid()));
+
+        Assert.Equal("SHIFT_ALREADY_OPEN", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task StartClosingShift_WhenShiftIsOpen_SetsStatusToClosing_AndRecordsClosingUser()
+    {
+        // Arrange (REQ-SHIFT-SHARED-03)
+        var shiftId = Guid.NewGuid();
+        var closingUserId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            OpeningFloat = 2_000_000m,
+            ExpectedCash = 2_000_000m,
+            Status = ShiftState.Open
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        // Act
+        var result = await _service.StartClosingShiftAsync(shiftId, closingUserId, new StartClosingShiftRequest("Kiểm đếm chốt ca"));
+
+        // Assert
+        Assert.Equal(ShiftState.Closing, result.Status);
+        Assert.Equal(closingUserId, result.ClosingStartedByUserId);
+        Assert.NotNull(result.ClosingStartedAtUtc);
+    }
+
+    [Fact]
+    public async Task StartClosingShift_WhenShiftNotOpen_ThrowsInvalidShiftState()
+    {
+        // Arrange
+        var shiftId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            Status = ShiftState.Closing
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.StartClosingShiftAsync(shiftId, Guid.NewGuid(), new StartClosingShiftRequest()));
+
+        Assert.Equal("INVALID_SHIFT_STATE", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CancelClosingShift_WhenShiftIsClosing_RevertsToOpen_AndClearsClosingInfo()
+    {
+        // Arrange (REQ-SHIFT-SHARED-03)
+        var shiftId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            Status = ShiftState.Closing,
+            ClosingStartedByUserId = Guid.NewGuid(),
+            ClosingStartedAtUtc = DateTime.UtcNow,
+            ActualCashCounted = 3_000_000m,
+            Discrepancy = 1_000_000m
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        // Act
+        var result = await _service.CancelClosingShiftAsync(shiftId, Guid.NewGuid(), new CancelClosingShiftRequest("Có khách gấp cần bán"));
+
+        // Assert
+        Assert.Equal(ShiftState.Open, result.Status);
+        Assert.Null(result.ClosingStartedByUserId);
+        Assert.Null(result.ClosingStartedAtUtc);
+        Assert.Null(result.ActualCashCounted);
+    }
+
+    [Fact]
+    public async Task UpdateCountedCash_WhenShiftIsClosing_UpdatesCountedCashAndDiscrepancy()
+    {
+        // Arrange (REQ-SHIFT-SHARED-04)
+        var shiftId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            OpeningFloat = 2_000_000m,
+            ExpectedCash = 2_000_000m,
+            Status = ShiftState.Closing
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        // Act
+        var result = await _service.UpdateCountedCashAsync(shiftId, Guid.NewGuid(), new UpdateCountedCashRequest(2_200_000m));
+
+        // Assert
+        Assert.Equal(2_200_000m, result.ActualCashCounted);
+        Assert.Equal(200_000m, result.Discrepancy);
+    }
+
+    [Fact]
+    public async Task ConfirmCloseShift_WhenShiftHasPendingExpense_ThrowsPendingCashMovements()
+    {
+        // Arrange (REQ-SHIFT-SHARED-04)
+        var shiftId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            OpeningFloat = 1_000_000m,
+            ExpectedCash = 1_000_000m,
+            Status = ShiftState.Closing
+        };
+        shift.CashMovements.Add(new ShiftCashMovement
+        {
+            Id = Guid.NewGuid(),
+            ShiftId = shiftId,
+            MovementType = CashMovementType.OUT,
+            Category = CashMovementCategory.EXPENSE,
+            Amount = 300_000m,
+            Reason = "Chi mua rơm cuộn",
+            Status = CashMovementStatus.PendingApproval
+        });
+        _shiftRepository.Shifts.Add(shift);
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.ConfirmCloseShiftAsync(shiftId, Guid.NewGuid(), "Thu ngân A", new ConfirmCloseShiftRequest(1_000_000m, 500_000m, 500_000m)));
+
+        Assert.Equal("PENDING_CASH_MOVEMENTS", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ConfirmCloseShift_WhenValid_ClosesShift_AndRecordsConfirmation()
+    {
+        // Arrange (REQ-SHIFT-SHARED-04)
+        var shiftId = Guid.NewGuid();
+        var cashierUserId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            OpeningFloat = 2_000_000m,
+            ExpectedCash = 2_000_000m,
+            Status = ShiftState.Closing
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        // Act
+        var result = await _service.ConfirmCloseShiftAsync(
+            shiftId,
+            cashierUserId,
+            "Thu ngân A",
+            new ConfirmCloseShiftRequest(2_000_000m, 1_500_000m, 500_000m, "Thu ngân B"));
+
+        // Assert
+        Assert.Equal(ShiftState.Closed, result.Status);
+        Assert.Equal(2_000_000m, result.ActualCashCounted);
+        Assert.Equal(1_500_000m, result.RetainedFloatAmount);
+        Assert.Equal(500_000m, result.DroppedToSafeAmount);
+        Assert.Equal(cashierUserId, result.ClosedByUserId);
+        Assert.NotNull(result.CloseConfirmations);
+        Assert.Single(result.CloseConfirmations);
+    }
+
+    [Fact]
+    public async Task ForceCloseShift_ByOwnerWithReason_ClosesShift_AndSetsForceCloseReason()
+    {
+        // Arrange (REQ-SHIFT-SHARED-05)
+        var shiftId = Guid.NewGuid();
+        var ownerUserId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            OpeningFloat = 2_000_000m,
+            ExpectedCash = 2_000_000m,
+            Status = ShiftState.Open
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        // Act
+        var result = await _service.ForceCloseShiftAsync(
+            shiftId,
+            ownerUserId,
+            new ForceCloseShiftRequest(2_000_000m, 1_500_000m, 500_000m, "Nhân viên về hết, chủ kiểm đếm đóng ca"));
+
+        // Assert
+        Assert.Equal(ShiftState.Closed, result.Status);
+        Assert.Equal(ownerUserId, result.ClosedByUserId);
+        Assert.Equal("Nhân viên về hết, chủ kiểm đếm đóng ca", result.ForceCloseReason);
+    }
+
+    [Fact]
+    public async Task ForceCloseShift_WithoutReason_ThrowsReasonRequired()
+    {
+        // Arrange (REQ-SHIFT-SHARED-05)
+        var shiftId = Guid.NewGuid();
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.ForceCloseShiftAsync(
+                shiftId,
+                Guid.NewGuid(),
+                new ForceCloseShiftRequest(2_000_000m, 1_500_000m, 500_000m, "")));
+
+        Assert.Equal("REASON_REQUIRED", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task RecordParticipantAsync_AddsOrUpdatesParticipant()
+    {
+        // Arrange (REQ-SHIFT-SHARED-02)
+        var shiftId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+
+        // Act 1: Thêm mới người tham gia
+        await _service.RecordParticipantAsync(shiftId, userId, "cashier1", "Thu Ngân Một");
+        var p1 = await _shiftRepository.GetParticipantAsync(shiftId, userId);
+
+        Assert.NotNull(p1);
+        Assert.Equal("Thu Ngân Một", p1.FullName);
+
+        // Act 2: Cập nhật hoạt động
+        await _service.RecordParticipantAsync(shiftId, userId, "cashier1", "Thu Ngân Một Updated");
+        var p2 = await _shiftRepository.GetParticipantAsync(shiftId, userId);
+
+        Assert.NotNull(p2);
+        Assert.Equal("Thu Ngân Một Updated", p2.FullName);
     }
 }
 
