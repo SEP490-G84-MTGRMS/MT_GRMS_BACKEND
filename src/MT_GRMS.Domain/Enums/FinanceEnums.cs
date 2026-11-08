@@ -76,7 +76,8 @@ public enum CashMovementCategory
     EXPENSE = 1,       // Chi vặt (mua đá, văn phòng phẩm...)
     CASH_DRAW = 2,     // Rút két nộp chủ cửa hàng / chuyển két an toàn
     CASH_DEPOSIT = 3,  // Nạp thêm tiền lẻ vào két
-    DEBT_COLLECT = 4   // Thu nợ khách hàng bằng tiền mặt
+    DEBT_COLLECT = 4,  // Thu nợ khách hàng bằng tiền mặt
+    PREORDER_PICKUP = 5 // Thu tiền còn lại khi giao hàng đơn đặt trước
 }
 
 /// <summary>

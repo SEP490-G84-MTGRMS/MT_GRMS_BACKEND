@@ -23,6 +23,9 @@ public class Order : BaseTenantEntity
     public string PaymentMethod { get; set; } = "CASH";
     public string PaymentStatus { get; set; } = "PAID";
     public string Status { get; set; } = "Completed";
+    public string? CashierName { get; set; }
+    public string? FulfilledByCashierName { get; set; }
+    public DateTime? FulfilledAtUtc { get; set; }
 
     // Backward compatibility aliases
     [NotMapped]
