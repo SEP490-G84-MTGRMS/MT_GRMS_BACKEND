@@ -82,3 +82,20 @@
 3. **Kiểm thử**:
    - Chạy `dotnet build src/MT_GRMS.Api/MT_GRMS.Api.csproj` -> Build thành công 0 Error, 16 Warnings (cảnh báo nullability có từ trước).
 
+---
+
+### Bổ sung: API Chi tiết & Thông số tổng quát Chi nhánh (Branch Details & Metrics)
+1. **Mục đích**:
+   - Cung cấp dữ liệu chi tiết đầy đủ khi người dùng bấm vào một chi nhánh: ở trên là các thông tin cơ bản (Mã, Tên, Trụ sở chính, Địa chỉ, Hotline, Email, Quản lý phụ trách, Ngày tạo) và ở dưới là các thông số tổng quát vận hành (Tổng số lượng sản phẩm SKU, tổng tồn kho thực tế SOH, cảnh báo thiếu hàng, tổng số nhân viên, số nhân viên active, đơn hàng chờ).
+
+2. **Chi tiết tệp thay đổi**:
+   - `src/MT_GRMS.Application/Branches/Dtos/BranchDtos.cs`: Thêm `BranchDetailDto`, `BranchEmployeeSummaryItemDto`, `BranchProductSummaryItemDto`.
+   - `src/MT_GRMS.Application/Branches/IBranchRepository.cs` & `IBranchService.cs`: Khai báo phương thức `GetBranchDetailAsync(Guid id, CancellationToken cancellationToken)`.
+   - `src/MT_GRMS.Infrastructure/Repositories/BranchRepository.cs`: Triển khai truy vấn tổng hợp từ `Branches`, `BranchProducts`, `BranchStocks`, và `Employees`.
+   - `src/MT_GRMS.Application/Branches/BranchService.cs`: Kết nối nghiệp vụ `GetBranchDetailAsync`.
+   - `src/MT_GRMS.Api/Controllers/BranchesController.cs`: Bổ sung endpoint `GET /api/branches/{id}/detail`.
+
+3. **Kiểm thử**:
+   - Chạy `dotnet build src/MT_GRMS.Api/MT_GRMS.Api.csproj` -> Build thành công 0 Error.
+
+

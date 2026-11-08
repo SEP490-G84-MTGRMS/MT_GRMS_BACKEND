@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Branches;
+using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Infrastructure.Repositories;
@@ -76,5 +78,106 @@ public class BranchRepository : GenericRepository<Branch>, IBranchRepository
             .ToListAsync(cancellationToken);
 
         return (items, totalCount);
+    }
+
+    public async Task<BranchDetailDto?> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var branch = await _context.Branches
+            .AsNoTracking()
+            .FirstOrDefaultAsync(b => b.Id == id && !b.IsDeleted, cancellationToken);
+
+        if (branch == null) return null;
+
+        var totalProducts = await _context.BranchProducts
+            .AsNoTracking()
+            .CountAsync(bp => bp.BranchId == id && !bp.IsDeleted, cancellationToken);
+
+        var branchStocks = await _context.BranchStocks
+            .Include(s => s.Product)
+            .AsNoTracking()
+            .Where(s => s.BranchId == id && !s.IsDeleted)
+            .ToListAsync(cancellationToken);
+
+        var totalStock = branchStocks.Sum(s => s.QuantityOnHand);
+
+        // Tính số sản phẩm sắp hết hàng (tồn kho <= minStock)
+        var catalogProductIds = await _context.BranchProducts
+            .AsNoTracking()
+            .Where(bp => bp.BranchId == id && !bp.IsDeleted)
+            .Select(bp => bp.ProductId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        var lowStockCount = catalogProductIds.Count(pid =>
+        {
+            var qty = branchStocks.Where(s => s.ProductId == pid).Sum(s => s.QuantityOnHand);
+            var min = branchStocks.FirstOrDefault(s => s.ProductId == pid)?.Product?.MinStock ?? 0m;
+            return qty <= min;
+        });
+
+        var totalEmployees = await _context.Employees
+            .AsNoTracking()
+            .CountAsync(e => e.BranchId == id && !e.IsDeleted, cancellationToken);
+
+        var activeEmployees = await _context.Employees
+            .AsNoTracking()
+            .CountAsync(e => e.BranchId == id && !e.IsDeleted && e.Status == EmployeeStatus.Active, cancellationToken);
+
+        var recentEmployees = await _context.Employees
+            .AsNoTracking()
+            .Where(e => e.BranchId == id && !e.IsDeleted)
+            .OrderByDescending(e => e.CreatedAt)
+            .Take(5)
+            .Select(e => new BranchEmployeeSummaryItemDto
+            {
+                Id = e.Id,
+                EmployeeCode = e.EmployeeCode,
+                FullName = e.FullName,
+                Phone = e.Phone,
+                Status = e.Status.ToString(),
+                StartDate = e.StartDate
+            })
+            .ToListAsync(cancellationToken);
+
+        var recentProducts = await _context.BranchProducts
+            .AsNoTracking()
+            .Include(bp => bp.Product)
+            .Where(bp => bp.BranchId == id && !bp.IsDeleted && bp.Product != null)
+            .OrderByDescending(bp => bp.CreatedAt)
+            .Take(5)
+            .Select(bp => new BranchProductSummaryItemDto
+            {
+                ProductId = bp.ProductId,
+                Sku = bp.Product!.ProductCode,
+                Barcode = bp.Product.Barcode,
+                ProductName = bp.Product.Name,
+                Unit = bp.Product.BaseUnit,
+                SellingPrice = bp.SellingPriceOverride ?? bp.Product.SellingPrice,
+                Status = bp.Status
+            })
+            .ToListAsync(cancellationToken);
+
+        return new BranchDetailDto
+        {
+            Id = branch.Id,
+            Code = branch.BranchCode,
+            Name = branch.Name,
+            Address = branch.Address ?? string.Empty,
+            Phone = branch.Phone,
+            Email = branch.Email,
+            ManagerName = branch.ManagerName,
+            IsHeadquarter = branch.IsHeadquarter,
+            Status = branch.IsActive ? "Active" : "Inactive",
+            CreatedAt = branch.CreatedAt,
+            TotalProducts = totalProducts,
+            TotalStock = totalStock,
+            LowStockCount = lowStockCount,
+            TotalEmployees = totalEmployees,
+            ActiveEmployees = activeEmployees,
+            PendingOrdersCount = branch.PendingOrdersCount,
+            LastOrderDate = branch.LastOrderDate,
+            RecentEmployees = recentEmployees,
+            RecentProducts = recentProducts
+        };
     }
 }

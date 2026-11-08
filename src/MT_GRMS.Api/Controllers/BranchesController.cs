@@ -62,6 +62,16 @@ public class BranchesController : BaseApiController
     }
 
     /// <summary>
+    /// Lấy thông tin chi tiết đầy đủ kèm các thông số tổng quát (Sản phẩm, tồn kho, nhân sự) của chi nhánh
+    /// </summary>
+    [HttpGet("{id:guid}/detail")]
+    public async Task<IActionResult> GetDetail(Guid id, CancellationToken cancellationToken)
+    {
+        var result = await _branchService.GetBranchDetailAsync(id, cancellationToken);
+        return Ok(ApiResponse<BranchDetailDto>.Ok(result));
+    }
+
+    /// <summary>
     /// Tạo mới một chi nhánh trong chuỗi cửa hàng (REQ-BR-02)
     /// </summary>
     [HttpPost]

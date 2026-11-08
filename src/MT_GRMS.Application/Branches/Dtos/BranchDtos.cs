@@ -103,3 +103,55 @@ public class UpdateBranchStatusRequest
         IsActive = isActive;
     }
 }
+
+/// <summary>
+/// DTO chi tiết đầy đủ của một chi nhánh gồm thông tin cơ bản và các thông số tổng quát
+/// </summary>
+public class BranchDetailDto
+{
+    // 1. Thông tin cơ bản của chi nhánh
+    public Guid Id { get; set; }
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Address { get; set; } = string.Empty;
+    public string? Phone { get; set; }
+    public string? Email { get; set; }
+    public string? ManagerName { get; set; }
+    public bool IsHeadquarter { get; set; } = false;
+    public string Status { get; set; } = "Active";
+    public DateTime CreatedAt { get; set; }
+
+    // 2. Các thông số tổng quát
+    public int TotalProducts { get; set; }
+    public decimal TotalStock { get; set; }
+    public int LowStockCount { get; set; }
+    public int TotalEmployees { get; set; }
+    public int ActiveEmployees { get; set; }
+    public int PendingOrdersCount { get; set; } = 0;
+    public DateTime? LastOrderDate { get; set; }
+
+    // Danh sách tóm tắt xem nhanh
+    public List<BranchEmployeeSummaryItemDto> RecentEmployees { get; set; } = new();
+    public List<BranchProductSummaryItemDto> RecentProducts { get; set; } = new();
+}
+
+public class BranchEmployeeSummaryItemDto
+{
+    public Guid Id { get; set; }
+    public string EmployeeCode { get; set; } = string.Empty;
+    public string FullName { get; set; } = string.Empty;
+    public string Phone { get; set; } = string.Empty;
+    public string Status { get; set; } = "Active";
+    public DateTime? StartDate { get; set; }
+}
+
+public class BranchProductSummaryItemDto
+{
+    public Guid ProductId { get; set; }
+    public string Sku { get; set; } = string.Empty;
+    public string? Barcode { get; set; }
+    public string ProductName { get; set; } = string.Empty;
+    public string Unit { get; set; } = "Cái";
+    public decimal SellingPrice { get; set; }
+    public string Status { get; set; } = "Active";
+}

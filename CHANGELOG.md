@@ -15,6 +15,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - Bổ sung API `POST /api/tenant/subscriptions/trial` và xử lý dùng thử miễn phí 3 ngày Full tính năng Gói Pro khi đăng ký mới hoặc kích hoạt trải nghiệm [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
 - **Khắc phục lỗi logic bypass Quota chi nhánh (`BranchService.cs`, `BranchRepository.cs`)**: Thay đổi cơ chế đếm hạn mức từ `CountActiveAsync` sang `CountTotalAsync` (đếm tất cả chi nhánh sở hữu `!IsDeleted`), triệt tiêu lỗ hổng tắt chi nhánh để tạo thêm chi nhánh không giới hạn; đồng thời bổ sung chốt chặn kiểm tra Quota khi kích hoạt lại chi nhánh tại `ToggleBranchStatusAsync` [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
 - Bổ sung endpoint xóa chi nhánh `DELETE /api/branches/{id}` (Soft Delete) kết hợp bảo vệ chi nhánh chính `IsHeadquarter` không cho phép xóa, giúp giải phóng hạn mức chi nhánh đang sử dụng [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+- Bổ sung endpoint `GET /api/branches/{id}/detail` tổng hợp toàn diện thông tin cơ sở và các thông số hoạt động vận hành (SKU kinh doanh, tồn kho SOH, cảnh báo thiếu hàng, tổng nhân sự và đơn hàng) [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
 
 ## [Unreleased] - 2026-11-07
 

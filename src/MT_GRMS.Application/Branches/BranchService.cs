@@ -65,6 +65,17 @@ public class BranchService : IBranchService
         return MapToDto(branch);
     }
 
+    public async Task<BranchDetailDto> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var detail = await _branchRepo.GetBranchDetailAsync(id, cancellationToken);
+        if (detail == null)
+        {
+            throw new NotFoundException("Chi nhánh", id);
+        }
+
+        return detail;
+    }
+
     public async Task<BranchQuotaDto> GetBranchQuotaAsync(CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId;
