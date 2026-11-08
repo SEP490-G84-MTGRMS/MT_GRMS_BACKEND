@@ -66,3 +66,19 @@
 ## 5. Ghi Chú Cho Manager Khi Duyệt & Merge (Manager Merge Notes)
 - **Mức độ rủi ro**: Thấp (Low).
 - **Thao tác hậu merge**: Khởi động backend API, `DbInitializer` sẽ tự động áp dụng DDL bổ sung cột và nạp seed data 3 gói mới mà không cần can thiệp thủ công vào database.
+
+---
+
+### Bổ sung: Chức năng Xóa chi nhánh (Soft Delete) với cơ chế bảo vệ Trụ sở chính (Headquarter Protection)
+1. **Mục đích**:
+   - Cho phép chủ chuỗi cửa hàng xóa các chi nhánh thừa (soft delete) để đưa số lượng chi nhánh về đúng hạn mức gói cước (ví dụ: từ 4 chi nhánh về 2 chi nhánh).
+   - Bảo vệ tuyệt đối chi nhánh chính (Trụ sở chính `IsHeadquarter = true`), ngăn chặn hành vi xóa nhầm cơ sở vận hành đầu não của chuỗi.
+
+2. **Chi tiết tệp thay đổi**:
+   - `src/MT_GRMS.Application/Branches/IBranchService.cs`: Bổ sung interface method `Task DeleteBranchAsync(Guid id, CancellationToken cancellationToken = default)`.
+   - `src/MT_GRMS.Application/Branches/BranchService.cs`: Triển khai `DeleteBranchAsync`, kiểm tra `NotFoundException`, kiểm tra `IsHeadquarter` chặn ném `BusinessException("CANNOT_DELETE_HEADQUARTER")`, thực hiện gán `branch.IsDeleted = true`, `branch.IsActive = false`, `branch.UpdatedAt = DateTime.UtcNow`.
+   - `src/MT_GRMS.Api/Controllers/BranchesController.cs`: Bổ sung endpoint `[HttpDelete("{id:guid}")]` gọi xuống `_branchService.DeleteBranchAsync`.
+
+3. **Kiểm thử**:
+   - Chạy `dotnet build src/MT_GRMS.Api/MT_GRMS.Api.csproj` -> Build thành công 0 Error, 16 Warnings (cảnh báo nullability có từ trước).
+

@@ -11,4 +11,5 @@ public interface IBranchService
     Task<BranchDto> CreateBranchAsync(CreateBranchRequest request, CancellationToken cancellationToken = default);
     Task<BranchDto> UpdateBranchAsync(Guid id, UpdateBranchRequest request, CancellationToken cancellationToken = default);
     Task<BranchDto> ToggleBranchStatusAsync(Guid id, UpdateBranchStatusRequest request, CancellationToken cancellationToken = default);
+    Task DeleteBranchAsync(Guid id, CancellationToken cancellationToken = default);
 }

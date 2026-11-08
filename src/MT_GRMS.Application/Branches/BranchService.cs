@@ -213,6 +213,27 @@ public class BranchService : IBranchService
         return MapToDto(branch);
     }
 
+    public async Task DeleteBranchAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var branch = await _branchRepo.GetByIdAsync(id, cancellationToken);
+        if (branch == null || branch.IsDeleted)
+        {
+            throw new NotFoundException("Chi nhánh", id);
+        }
+
+        if (branch.IsHeadquarter)
+        {
+            throw new BusinessException("CANNOT_DELETE_HEADQUARTER", "Không thể xóa chi nhánh chính (Trụ sở chính) của chuỗi cửa hàng. Vui lòng chỉ định chi nhánh khác làm trụ sở chính trước khi xóa.");
+        }
+
+        branch.IsDeleted = true;
+        branch.IsActive = false;
+        branch.UpdatedAt = DateTime.UtcNow;
+
+        _branchRepo.Update(branch);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
     private static BranchDto MapToDto(Branch branch)
     {
         return new BranchDto

@@ -92,6 +92,16 @@ public class BranchesController : BaseApiController
     }
 
     /// <summary>
+    /// Xóa chi nhánh khỏi chuỗi cửa hàng (Soft Delete)
+    /// </summary>
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
+    {
+        await _branchService.DeleteBranchAsync(id, cancellationToken);
+        return Ok(ApiResponse<bool>.Ok(true, "Xóa chi nhánh thành công."));
+    }
+
+    /// <summary>
     /// Lấy danh mục sản phẩm kinh doanh của tất cả chi nhánh hoặc lọc theo chi nhánh (REQ-BR-03)
     /// </summary>
     [HttpGet("products")]
