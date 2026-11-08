@@ -188,7 +188,8 @@ public class TenantStoreController : BaseApiController
             await _context.SaveChangesAsync(cancellationToken);
         }
 
-        var months = request.Months <= 0 ? 12 : request.Months;
+        var isTrial = request.Months == 0 || string.Equals(request.PaymentMethod, "TRIAL", StringComparison.OrdinalIgnoreCase);
+        var months = isTrial ? 0 : (request.Months <= 0 ? 12 : request.Months);
 
         // Validation nghiệp vụ theo gói
         if (plan.PlanCode == "STANDARD" && request.ExtraBranches > 0)
@@ -199,72 +200,93 @@ public class TenantStoreController : BaseApiController
         }
 
         // 1. Tính toán chi phí chuẩn hóa
-        // - Gói Pro: mua thêm chi nhánh 80k/chi nhánh/tháng
-        // - Gói Thường: option quản lý nhân viên 30k/tháng
-        var basePrice = plan.PriceMonthly * months;
-        var branchAddonPrice = (plan.PlanCode == "PRO" ? request.ExtraBranches * 80000m : 0m) * months;
-        var staffAddonPrice = (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon ? 30000m : 0m) * months;
-        var subTotal = basePrice + branchAddonPrice + staffAddonPrice;
-        var vatAmount = Math.Round(subTotal * 0.1m, 0);
-        var grandTotal = subTotal + vatAmount;
-
-        // 2. Xử lý thanh toán nếu chọn phương thức Ví gian hàng
-        var isWalletPayment = string.Equals(request.PaymentMethod, "WALLET", StringComparison.OrdinalIgnoreCase) ||
-                              string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase) ||
-                              request.PaymentMethod.Contains("Ví", StringComparison.OrdinalIgnoreCase);
-
-        if (isWalletPayment)
+        decimal grandTotal = 0m;
+        if (!isTrial)
         {
-            if (tenant.WalletBalance < grandTotal)
+            var basePrice = plan.PriceMonthly * months;
+            var branchAddonPrice = (plan.PlanCode == "PRO" ? request.ExtraBranches * 80000m : 0m) * months;
+            var staffAddonPrice = (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon ? 30000m : 0m) * months;
+            var subTotal = basePrice + branchAddonPrice + staffAddonPrice;
+            var vatAmount = Math.Round(subTotal * 0.1m, 0);
+            grandTotal = subTotal + vatAmount;
+
+            // 2. Xử lý thanh toán nếu chọn phương thức Ví gian hàng
+            var isWalletPayment = string.Equals(request.PaymentMethod, "WALLET", StringComparison.OrdinalIgnoreCase) ||
+                                  string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase) ||
+                                  request.PaymentMethod.Contains("Ví", StringComparison.OrdinalIgnoreCase);
+
+            if (isWalletPayment)
             {
-                return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
-                    "INSUFFICIENT_WALLET_BALANCE",
-                    $"Số dư ví không đủ (hiện có {tenant.WalletBalance:N0} đ, cần {grandTotal:N0} đ). Vui lòng nạp thêm tiền hoặc chọn Quét mã VietQR."));
+                if (tenant.WalletBalance < grandTotal)
+                {
+                    return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
+                        "INSUFFICIENT_WALLET_BALANCE",
+                        $"Số dư ví không đủ (hiện có {tenant.WalletBalance:N0} đ, cần {grandTotal:N0} đ). Vui lòng nạp thêm tiền hoặc chọn Quét mã VietQR."));
+                }
+
+                var balanceBefore = tenant.WalletBalance;
+                tenant.WalletBalance -= grandTotal;
+                var balanceAfter = tenant.WalletBalance;
+
+                var walletTx = new MT_GRMS.Domain.Entities.SaaS.WalletTransaction
+                {
+                    TenantId = tenant.Id,
+                    TransactionCode = $"SUB-{DateTime.UtcNow:yyyyMMdd}-{Random.Shared.Next(1000, 9999)}",
+                    Type = "PURCHASE_PLAN",
+                    Amount = grandTotal,
+                    BalanceBefore = balanceBefore,
+                    BalanceAfter = balanceAfter,
+                    Description = $"Thanh toán gói dịch vụ {plan.PlanName} ({months} tháng)",
+                    PaymentMethod = "WALLET",
+                    Status = "SUCCESS"
+                };
+                _context.WalletTransactions.Add(walletTx);
+            }
+        }
+
+        DateTime newExpiresAt;
+        int totalMonthsAdded = 0;
+        string resultMessage;
+
+        if (isTrial)
+        {
+            newExpiresAt = DateTime.UtcNow.AddDays(3);
+            tenant.CurrentPlan = "PRO";
+            tenant.SubscriptionStatus = "TRIAL";
+            tenant.SubscriptionExpiresAt = newExpiresAt;
+            tenant.HasStaffManagementAddon = true; // Gói Pro dùng thử mở khóa full nhân viên
+            tenant.Status = "ACTIVE";
+            resultMessage = "Kích hoạt thành công 3 ngày dùng thử miễn phí Full tính năng Gói Pro.";
+        }
+        else
+        {
+            // Tính số tháng gia hạn (Khuyến mãi thêm tháng)
+            var bonusMonths = months >= 24 ? 3 : (months >= 12 ? 1 : 0);
+            totalMonthsAdded = months + bonusMonths;
+
+            // Gia hạn thời gian sử dụng
+            var baseDate = (tenant.SubscriptionExpiresAt.HasValue && tenant.SubscriptionExpiresAt.Value > DateTime.UtcNow)
+                ? tenant.SubscriptionExpiresAt.Value
+                : DateTime.UtcNow;
+
+            newExpiresAt = baseDate.AddMonths(totalMonthsAdded);
+
+            tenant.CurrentPlan = plan.PlanCode;
+            tenant.SubscriptionExpiresAt = newExpiresAt;
+            tenant.SubscriptionStatus = "ACTIVE";
+            tenant.Status = "ACTIVE";
+
+            if (plan.PlanCode == "PRO")
+            {
+                tenant.ExtraBranches += request.ExtraBranches;
+                tenant.HasStaffManagementAddon = true; // Gói Pro mặc định có sẵn tính năng quản lý nhân viên
+            }
+            else if (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon)
+            {
+                tenant.HasStaffManagementAddon = true;
             }
 
-            var balanceBefore = tenant.WalletBalance;
-            tenant.WalletBalance -= grandTotal;
-            var balanceAfter = tenant.WalletBalance;
-
-            var walletTx = new MT_GRMS.Domain.Entities.SaaS.WalletTransaction
-            {
-                TenantId = tenant.Id,
-                TransactionCode = $"SUB-{DateTime.UtcNow:yyyyMMdd}-{Random.Shared.Next(1000, 9999)}",
-                Type = "PURCHASE_PLAN",
-                Amount = grandTotal,
-                BalanceBefore = balanceBefore,
-                BalanceAfter = balanceAfter,
-                Description = $"Thanh toán gói dịch vụ {plan.PlanName} ({months} tháng)",
-                PaymentMethod = "WALLET",
-                Status = "SUCCESS"
-            };
-            _context.WalletTransactions.Add(walletTx);
-        }
-
-        // 2. Tính số tháng gia hạn (Khuyến mãi thêm tháng)
-        var bonusMonths = months >= 24 ? 3 : (months >= 12 ? 1 : 0);
-        var totalMonthsAdded = months + bonusMonths;
-
-        // 3. Gia hạn thời gian sử dụng
-        var baseDate = (tenant.SubscriptionExpiresAt.HasValue && tenant.SubscriptionExpiresAt.Value > DateTime.UtcNow)
-            ? tenant.SubscriptionExpiresAt.Value
-            : DateTime.UtcNow;
-
-        var newExpiresAt = baseDate.AddMonths(totalMonthsAdded);
-
-        tenant.CurrentPlan = plan.PlanCode;
-        tenant.SubscriptionExpiresAt = newExpiresAt;
-        tenant.SubscriptionStatus = "ACTIVE";
-        tenant.Status = "ACTIVE";
-
-        if (plan.PlanCode == "PRO")
-        {
-            tenant.ExtraBranches += request.ExtraBranches;
-            tenant.HasStaffManagementAddon = true; // Gói Pro mặc định có sẵn tính năng quản lý nhân viên
-        }
-        else if (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon)
-        {
-            tenant.HasStaffManagementAddon = true;
+            resultMessage = $"Gia hạn thành công {plan.PlanName} thêm {totalMonthsAdded} tháng.";
         }
 
         await _context.SaveChangesAsync(cancellationToken);
@@ -277,11 +299,27 @@ public class TenantStoreController : BaseApiController
             SubscriptionExpiresAt: newExpiresAt,
             DaysRemaining: daysRemaining,
             TotalAmount: grandTotal,
-            PaymentMethod: request.PaymentMethod,
-            Message: $"Gia hạn thành công {plan.PlanName} thêm {totalMonthsAdded} tháng."
+            PaymentMethod: isTrial ? "TRIAL" : request.PaymentMethod,
+            Message: resultMessage
         );
 
-        return Ok(ApiResponse<PurchaseSubscriptionResponse>.Ok(response, "Thanh toán và gia hạn gói dịch vụ thành công."));
+        return Ok(ApiResponse<PurchaseSubscriptionResponse>.Ok(response, isTrial ? "Kích hoạt dùng thử thành công." : "Thanh toán và gia hạn gói dịch vụ thành công."));
+    }
+
+    /// <summary>
+    /// Kích hoạt gói dùng thử 3 ngày miễn phí Full tính năng Gói Pro cho gian hàng
+    /// </summary>
+    [HttpPost("subscriptions/trial")]
+    public async Task<IActionResult> ActivateTrialSubscription(CancellationToken cancellationToken)
+    {
+        return await PurchaseSubscription(new PurchaseSubscriptionRequest(
+            PlanCode: "PRO",
+            Months: 0,
+            ExtraBranches: 0,
+            ExtraWarehouses: 0,
+            PaymentMethod: "TRIAL",
+            HasStaffManagementAddon: true
+        ), cancellationToken);
     }
 
     /// <summary>

@@ -12,6 +12,7 @@
 - Chuẩn hóa danh mục gói cước thành 2 gói:
   - **Gói Thường (STANDARD)**: 99.000 đ/tháng, 1 chi nhánh kiêm kho, 1 tài khoản chủ shop. Option Quản lý & Phân quyền nhân viên +30.000 đ/tháng.
   - **Gói Pro (PRO)**: 249.000 đ/tháng, sẵn 2 chi nhánh kiêm kho, full tính năng nhân viên không giới hạn. Mua thêm chi nhánh: +80.000 đ/chi nhánh/tháng.
+- Bổ sung luồng Dùng thử 3 ngày miễn phí Full tính năng Gói Pro cho mọi tài khoản mới hoặc gian hàng kích hoạt trải nghiệm.
 - Đồng bộ công thức tính Quota chi nhánh động: `MaxBranches = Plan.MaxBranches + Tenant.ExtraBranches`.
 
 ---
@@ -31,10 +32,14 @@
    - Cập nhật action `GetPricingPlans`: Lọc nghiêm ngặt chỉ trả về duy nhất 2 gói cước chuẩn (`STANDARD` và `PRO`), loại bỏ hoàn toàn các gói cũ và tự động fallback tạo cấu trúc gói mặc định nếu CSDL trống.
    - Nâng cấp action `PurchaseSubscription`:
      - Chuẩn hóa mã gói và tự động nạp `SubscriptionPlan` nếu chưa có trong DB.
+     - Bổ sung luồng Dùng thử 3 ngày miễn phí (`isTrial` khi `Months == 0` hoặc `PaymentMethod == "TRIAL"`): set thời hạn dùng thử 3 ngày (`DateTime.UtcNow.AddDays(3)`), mở khóa toàn bộ tính năng Gói Pro (`CurrentPlan = "PRO"`, `SubscriptionStatus = "TRIAL"`).
      - Validate: Gói Thường không cho phép mua thêm chi nhánh.
      - Tính tiền: Gói Thường 99k/tháng (option NV +30k/tháng), Gói Pro 249k/tháng (chi nhánh thêm +80k/tháng), tính VAT 10%.
      - Kích hoạt gói: cập nhật `CurrentPlan`, `SubscriptionExpiresAt`, `SubscriptionStatus = "ACTIVE"`, cộng dồn `ExtraBranches` và bật `HasStaffManagementAddon`.
-6. `src/MT_GRMS.Application/Branches/BranchService.cs`:
+   - Thêm action `ActivateTrialSubscription` (`POST /api/tenant/subscriptions/trial`): hỗ trợ kích hoạt nhanh 3 ngày dùng thử miễn phí Full tính năng Gói Pro.
+6. `src/MT_GRMS.Application/Auth/AuthService.cs`:
+   - Khi tài khoản mới đăng ký thành công: tự động cấp quyền Dùng thử 3 ngày Full tính năng Gói Pro (`CurrentPlan = "PRO"`, `SubscriptionStatus = "TRIAL"`, `SubscriptionExpiresAt = DateTime.UtcNow.AddDays(3)`).
+7. `src/MT_GRMS.Application/Branches/BranchService.cs`:
    - Cập nhật `GetBranchQuotaAsync`: tính hạn mức tối đa linh hoạt theo `Plan.MaxBranches + Tenant.ExtraBranches`.
 
 ---
@@ -42,6 +47,8 @@
 ## 3. Chi Tiết Kỹ Thuật (Technical Highlights)
 - **API Endpoints**:
   - `POST /api/tenant/subscriptions/purchase`: Request nhận `PlanCode`, `Months`, `ExtraBranches`, `HasStaffManagementAddon`, `PaymentMethod`.
+  - `POST /api/tenant/subscriptions/trial`: Kích hoạt 3 ngày dùng thử miễn phí Full tính năng Gói Pro.
+  - `GET /api/tenant/pricing-plans`: Lọc chuẩn xác 2 gói `STANDARD` và `PRO`.
   - `GET /api/branches/quota`: Trả về hạn mức chính xác theo `MaxBranches + ExtraBranches`.
 - **Database Schema**:
   - `Tenants`: thêm cột `ExtraBranches` (integer), `HasStaffManagementAddon` (boolean), `SubscriptionStatus` (varchar(30)).
@@ -56,4 +63,3 @@
 ## 5. Ghi Chú Cho Manager Khi Duyệt & Merge (Manager Merge Notes)
 - **Mức độ rủi ro**: Thấp (Low).
 - **Thao tác hậu merge**: Khởi động backend API, `DbInitializer` sẽ tự động áp dụng DDL bổ sung cột và nạp seed data 2 gói mới mà không cần can thiệp thủ công vào database.
-

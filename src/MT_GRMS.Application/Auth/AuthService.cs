@@ -216,9 +216,11 @@ public class AuthService : IAuthService
             Code = tenantCode.Length > 20 ? tenantCode.Substring(0, 20) : tenantCode,
             Hotline = request.Phone.Trim(),
             Status = "ACTIVE",
-            CurrentPlan = "FREE",
+            CurrentPlan = "PRO",
+            SubscriptionStatus = "TRIAL",
+            HasStaffManagementAddon = true,
             WalletBalance = 0m,
-            SubscriptionExpiresAt = DateTime.UtcNow.AddYears(1)
+            SubscriptionExpiresAt = DateTime.UtcNow.AddDays(3)
         };
 
         var userId = $"usr_{Guid.NewGuid():N}";
