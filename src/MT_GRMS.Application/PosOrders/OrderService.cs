@@ -10,6 +10,7 @@ using MT_GRMS.Application.Debt;
 using MT_GRMS.Application.Debt.Dtos;
 using MT_GRMS.Application.PosOrders.Dtos;
 using MT_GRMS.Domain.Entities.Catalog;
+using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
@@ -26,6 +27,7 @@ public class OrderService : IOrderService
     private readonly IValidator<OrderCreateRequest>? _validator;
     private readonly PosShifts.IShiftRepository? _shiftRepository;
     private readonly Promotions.IPromotionRepository? _promotionRepository;
+    private readonly ITenantContext? _tenantContext;
 
     private static readonly Guid DefaultTillId = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db");
     private static readonly Guid DefaultBankId = Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559");
@@ -38,7 +40,8 @@ public class OrderService : IOrderService
         ICashbookService? cashbookService = null,
         IValidator<OrderCreateRequest>? validator = null,
         PosShifts.IShiftRepository? shiftRepository = null,
-        Promotions.IPromotionRepository? promotionRepository = null)
+        Promotions.IPromotionRepository? promotionRepository = null,
+        ITenantContext? tenantContext = null)
     {
         _orderRepository = orderRepository;
         _unitOfWork = unitOfWork;
@@ -48,6 +51,7 @@ public class OrderService : IOrderService
         _validator = validator;
         _shiftRepository = shiftRepository;
         _promotionRepository = promotionRepository;
+        _tenantContext = tenantContext;
     }
 
     public OrderService(
@@ -55,7 +59,7 @@ public class OrderService : IOrderService
         IUnitOfWork unitOfWork,
         IThermalPrintService thermalPrintService,
         IValidator<OrderCreateRequest>? validator)
-        : this(orderRepository, unitOfWork, thermalPrintService, null, null, validator, null, null)
+        : this(orderRepository, unitOfWork, thermalPrintService, null, null, validator, null, null, null)
     {
     }
 
@@ -84,6 +88,19 @@ public class OrderService : IOrderService
         if (branch == null)
         {
             throw new InvalidOperationException($"Chi nhánh với ID '{branchId}' không tồn tại trong hệ thống.");
+        }
+
+        // 1b. Kiểm tra ca bán hàng của chi nhánh (REQ-SHIFT-SHARED-03)
+        ShiftZReport? activeShift = null;
+        if (_shiftRepository != null)
+        {
+            activeShift = await _shiftRepository.GetActiveShiftAsync(branchId, cancellationToken: cancellationToken);
+            if (activeShift != null && activeShift.Status == ShiftState.Closing)
+            {
+                throw new BusinessException(
+                    "SHIFT_CLOSING_LOCKDOWN",
+                    "Ca bán hàng của chi nhánh đang trong trạng thái kiểm đếm chốt ca (Closing). Không thể tạo đơn mới.");
+            }
         }
 
         // 2. Kiểm tra khách hàng (nếu có)
@@ -363,11 +380,11 @@ public class OrderService : IOrderService
         }
 
         // 8. Lưu Order Entity
-        Guid? shiftId = request.ShiftId;
-        if (!shiftId.HasValue && _shiftRepository != null)
+        Guid? shiftId = request.ShiftId ?? activeShift?.Id;
+        Guid? creatorId = null;
+        if (_tenantContext != null && _tenantContext.CurrentUserId != Guid.Empty)
         {
-            var activeShift = await _shiftRepository.GetActiveShiftAsync(branchId, cancellationToken: cancellationToken);
-            shiftId = activeShift?.Id;
+            creatorId = _tenantContext.CurrentUserId;
         }
 
         string orderCode = debtInvoiceResponse != null ? debtInvoiceResponse.OrderCode : $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
@@ -378,6 +395,7 @@ public class OrderService : IOrderService
             CustomerId = request.CustomerId,
             ShiftId = shiftId,
             OrderCode = orderCode,
+            CreatedBy = creatorId,
             OrderDate = DateTime.UtcNow,
             TotalAmount = totalAmount,
             DiscountAmount = totalDiscount,
@@ -435,6 +453,38 @@ public class OrderService : IOrderService
         }
 
         await _orderRepository.AddAsync(order, cancellationToken);
+
+        // Ghi nhận nhân viên tham gia ca bán hàng chung (REQ-SHIFT-SHARED-02)
+        if (activeShift != null && _shiftRepository != null)
+        {
+            var cashierId = creatorId ?? (activeShift.CashierUserId != Guid.Empty ? activeShift.CashierUserId : Guid.Empty);
+            if (cashierId != Guid.Empty)
+            {
+                var participant = await _shiftRepository.GetParticipantAsync(activeShift.Id, cashierId, cancellationToken);
+                if (participant == null)
+                {
+                    await _shiftRepository.AddParticipantAsync(new ShiftParticipant
+                    {
+                        TenantId = branch.TenantId ?? (_tenantContext?.CurrentTenantId ?? string.Empty),
+                        ShiftId = activeShift.Id,
+                        UserId = cashierId,
+                        UserName = request.CashierName ?? (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân"),
+                        FullName = request.CashierName ?? (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân"),
+                        JoinedAtUtc = DateTime.UtcNow,
+                        LastActiveAtUtc = DateTime.UtcNow
+                    }, cancellationToken);
+                }
+                else
+                {
+                    participant.LastActiveAtUtc = DateTime.UtcNow;
+                    if (!string.IsNullOrWhiteSpace(request.CashierName))
+                    {
+                        participant.UserName = request.CashierName;
+                    }
+                }
+            }
+        }
+
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         // 9. Đổi mã voucher (Redeem) nguyên tử nếu có áp dụng
