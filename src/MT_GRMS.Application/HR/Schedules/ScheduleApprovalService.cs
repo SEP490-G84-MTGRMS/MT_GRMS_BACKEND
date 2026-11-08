@@ -99,6 +99,38 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 throw new InvalidOperationException("Chỉ có thể xin nghỉ cho ca chưa kết thúc.");
             }
         }
+        else if (dto.RequestType == ScheduleRequestType.CheckInIncident)
+        {
+            // Tự động kích hoạt CheckInTime để nhân viên đủ điều kiện mở phiên bán hàng POS ngay lập tức
+            var checkIn = dto.RequestedCheckInTime ?? DateTime.UtcNow;
+            if (!schedule.CheckInTime.HasValue)
+            {
+                schedule.CheckInTime = checkIn;
+                schedule.CheckInMethod = "INCIDENT_PENDING";
+
+                var shiftStart = schedule.WorkDate.Date + schedule.PlannedStartTime;
+                schedule.LateMinutes = schedule.CheckInTime > shiftStart
+                    ? (int)(schedule.CheckInTime.Value - shiftStart).TotalMinutes
+                    : 0;
+            }
+
+            if (schedule.Status == ScheduleStatus.Scheduled || schedule.Status == ScheduleStatus.Published)
+            {
+                schedule.Status = ScheduleStatus.InProgress;
+            }
+
+            _scheduleRepository.Update(schedule);
+        }
+        else if (dto.RequestType == ScheduleRequestType.CheckOutIncident)
+        {
+            // Sự cố ra ca: Ghi nhận giờ ra đề xuất
+            if (dto.RequestedCheckOutTime.HasValue && !schedule.CheckOutTime.HasValue)
+            {
+                schedule.CheckOutTime = dto.RequestedCheckOutTime.Value;
+                schedule.CheckOutMethod = "INCIDENT_PENDING";
+                _scheduleRepository.Update(schedule);
+            }
+        }
 
         var imageUrls = new List<string>();
         if (dto.EvidenceImageUrls != null && dto.EvidenceImageUrls.Count > 0)
@@ -308,24 +340,42 @@ public class ScheduleApprovalService : IScheduleApprovalService
                         : 0;
                 }
 
-                var checkOut = dto.ApprovedCheckOutTime ?? request.RequestedCheckOutTime;
-                if (checkOut.HasValue)
-                {
-                    schedule.CheckOutTime = checkOut.Value;
-                    schedule.CheckOutMethod = "INCIDENT_EXPLAINED";
-                    request.ApprovedCheckOutTime = checkOut.Value;
-                }
+                schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
+                schedule.ApprovalType = "INCIDENT_RESOLVED";
+                schedule.ApprovedBy = reviewerUserId;
+                schedule.ApprovedAt = DateTime.UtcNow;
 
                 if (schedule.CheckInTime.HasValue && schedule.CheckOutTime.HasValue)
                 {
                     var hours = (decimal)(schedule.CheckOutTime.Value - schedule.CheckInTime.Value).TotalHours;
                     schedule.ActualWorkHours = Math.Max(0, Math.Round(hours, 2));
                     schedule.Status = ScheduleStatus.Completed;
-                    schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
-                    schedule.ApprovalType = "INCIDENT_RESOLVED";
-                    schedule.ApprovedBy = reviewerUserId;
-                    schedule.ApprovedAt = DateTime.UtcNow;
                 }
+                break;
+
+            case ScheduleRequestType.CheckOutIncident:
+                var checkOut = dto.ApprovedCheckOutTime ?? request.RequestedCheckOutTime ?? DateTime.UtcNow;
+                schedule.CheckOutTime = checkOut;
+                schedule.CheckOutMethod = "INCIDENT_EXPLAINED";
+                request.ApprovedCheckOutTime = checkOut;
+
+                if (!schedule.CheckInTime.HasValue)
+                {
+                    schedule.CheckInTime = schedule.WorkDate.Date + schedule.PlannedStartTime;
+                    schedule.CheckInMethod = "MANUAL";
+                }
+
+                if (schedule.CheckInTime.HasValue)
+                {
+                    var hours = (decimal)(schedule.CheckOutTime.Value - schedule.CheckInTime.Value).TotalHours;
+                    schedule.ActualWorkHours = Math.Max(0, Math.Round(hours, 2));
+                }
+
+                schedule.Status = ScheduleStatus.Completed;
+                schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
+                schedule.ApprovalType = "INCIDENT_RESOLVED";
+                schedule.ApprovedBy = reviewerUserId;
+                schedule.ApprovedAt = DateTime.UtcNow;
                 break;
 
             case ScheduleRequestType.Overtime:

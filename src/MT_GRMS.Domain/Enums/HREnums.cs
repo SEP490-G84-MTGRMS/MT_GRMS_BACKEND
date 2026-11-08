@@ -41,10 +41,11 @@ public enum ScheduleApprovalStatus
 /// </summary>
 public enum ScheduleRequestType
 {
-    Overtime = 1,        // Làm thêm giờ
-    CheckInIncident = 2, // Sự cố chấm công / FaceID / Mất mạng
-    ShiftSwap = 3,       // Đổi ca làm việc
-    LeaveRequest = 4     // Xin nghỉ ca làm việc
+    Overtime = 1,         // Làm thêm giờ
+    CheckInIncident = 2,  // Sự cố Check-in / Vào ca (Mở ca khẩn cấp)
+    ShiftSwap = 3,        // Đổi ca làm việc
+    LeaveRequest = 4,     // Xin nghỉ ca làm việc
+    CheckOutIncident = 5  // Sự cố Check-out / Ra ca
 }
 
 /// <summary>
