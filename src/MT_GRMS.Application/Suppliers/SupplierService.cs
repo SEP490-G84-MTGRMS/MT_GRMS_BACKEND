@@ -1258,6 +1258,7 @@ public class SupplierService : ISupplierService
             DeliveryUoM = deliveryUoM,
             AgreedWholesalePrice = purchasePrice,
             MinimumOrderQuantity = command.MinimumOrderQuantity,
+            AllowedShortageQuantity = Math.Max(0, command.AllowedShortageQuantity),
             IsPrimarySupplier = command.IsPrimarySupplier,
             Status = SupplierProductStatus.Active
         };
@@ -1313,6 +1314,11 @@ public class SupplierService : ISupplierService
             throw new BusinessException("VALIDATION_ERROR", "Số lượng đặt hàng tối thiểu (MOQ) phải lớn hơn 0.");
         }
 
+        if (workItems.Any(x => x.AllowedShortageQuantity < 0))
+        {
+            throw new BusinessException("VALIDATION_ERROR", "Số lượng thiếu hàng cho phép phải lớn hơn hoặc bằng 0.");
+        }
+
         if (workItems.Any(x => x.AgreedWholesalePrice < 0))
         {
             throw new BusinessException("VALIDATION_ERROR", "Giá nhập không được âm.");
@@ -1324,7 +1330,7 @@ public class SupplierService : ISupplierService
             throw new NotFoundException($"Không tìm thấy nhà cung cấp với ID: {supplierId}");
         }
 
-        var prepared = new List<(Domain.Entities.Catalog.Product Product, decimal PurchasePrice, int Moq)>();
+        var prepared = new List<(Domain.Entities.Catalog.Product Product, decimal PurchasePrice, int Moq, int AllowedShortage)>();
         foreach (var item in workItems)
         {
             var product = await _supplierRepository.GetProductByIdAsync(item.ProductId, cancellationToken);
@@ -1343,7 +1349,7 @@ public class SupplierService : ISupplierService
                 item.AgreedWholesalePrice,
                 product.CostPrice);
 
-            prepared.Add((product, purchasePrice, item.MinimumOrderQuantity));
+            prepared.Add((product, purchasePrice, item.MinimumOrderQuantity, Math.Max(0, item.AllowedShortageQuantity)));
         }
 
         var activeBranchIds = await _supplierRepository.GetActiveBranchIdsForSupplierAsync(supplierId, cancellationToken);
@@ -1351,7 +1357,7 @@ public class SupplierService : ISupplierService
 
         await _unitOfWork.ExecuteInTransactionAsync(async ct =>
         {
-            foreach (var (product, purchasePrice, moq) in prepared)
+            foreach (var (product, purchasePrice, moq, allowedShortage) in prepared)
             {
                 var deliveryUoM = !string.IsNullOrWhiteSpace(command.DeliveryUoM) && command.DeliveryUoM != "Theo ĐVT cơ sở"
                     ? command.DeliveryUoM
@@ -1368,6 +1374,7 @@ public class SupplierService : ISupplierService
                     DeliveryUoM = deliveryUoM,
                     AgreedWholesalePrice = purchasePrice,
                     MinimumOrderQuantity = moq,
+                    AllowedShortageQuantity = allowedShortage,
                     IsPrimarySupplier = false,
                     Status = SupplierProductStatus.Active
                 };
@@ -1454,6 +1461,7 @@ public class SupplierService : ISupplierService
 
         entity.AgreedWholesalePrice = purchasePrice;
         entity.MinimumOrderQuantity = command.MinimumOrderQuantity;
+        entity.AllowedShortageQuantity = Math.Max(0, command.AllowedShortageQuantity);
         entity.IsPrimarySupplier = command.IsPrimarySupplier;
         entity.SupplierProductCode = command.SupplierProductCode;
         if (product != null)
@@ -1549,6 +1557,7 @@ public class SupplierService : ISupplierService
             DeliveryUoM = sp.DeliveryUoM,
             AgreedWholesalePrice = sp.AgreedWholesalePrice,
             MinimumOrderQuantity = sp.MinimumOrderQuantity,
+            AllowedShortageQuantity = sp.AllowedShortageQuantity,
             IsPrimarySupplier = sp.IsPrimarySupplier,
             Status = sp.Status.ToString()
         }).ToList();
@@ -1601,7 +1610,8 @@ public class SupplierService : ISupplierService
             {
                 ProductId = id,
                 AgreedWholesalePrice = command.AgreedWholesalePrice ?? 0m,
-                MinimumOrderQuantity = command.MinimumOrderQuantity
+                MinimumOrderQuantity = command.MinimumOrderQuantity,
+                AllowedShortageQuantity = command.AllowedShortageQuantity
             })
             .ToList();
     }
@@ -1629,6 +1639,8 @@ public class SupplierService : ISupplierService
                 sp.AgreedWholesalePrice,
                 costPrice),
             MinimumOrderQuantity = sp.MinimumOrderQuantity,
+            AllowedShortageQuantity = sp.AllowedShortageQuantity,
+            ImageUrl = sp.Product?.ImageUrl,
             IsPrimarySupplier = sp.IsPrimarySupplier,
             Status = sp.Status.ToString(),
             SyncedBranchesCount = syncedBranchesCount,

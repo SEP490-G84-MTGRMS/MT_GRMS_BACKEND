@@ -20,6 +20,9 @@ public class AssignSupplierProductValidator : AbstractValidator<AssignSupplierPr
         RuleFor(x => x.MinimumOrderQuantity)
             .GreaterThan(0).WithMessage("Số lượng đặt hàng tối thiểu (MOQ) phải lớn hơn 0.");
 
+        RuleFor(x => x.AllowedShortageQuantity)
+            .GreaterThanOrEqualTo(0).WithMessage("Số lượng thiếu hàng cho phép phải lớn hơn hoặc bằng 0.");
+
         RuleFor(x => x.SupplierProductCode)
             .MaximumLength(50).WithMessage("Mã sản phẩm phía NCC không được vượt quá 50 ký tự.")
             .When(x => !string.IsNullOrEmpty(x.SupplierProductCode));
@@ -39,6 +42,9 @@ public class UpdateSupplierProductValidator : AbstractValidator<UpdateSupplierPr
 
         RuleFor(x => x.MinimumOrderQuantity)
             .GreaterThan(0).WithMessage("Số lượng đặt hàng tối thiểu (MOQ) phải lớn hơn 0.");
+
+        RuleFor(x => x.AllowedShortageQuantity)
+            .GreaterThanOrEqualTo(0).WithMessage("Số lượng thiếu hàng cho phép phải lớn hơn hoặc bằng 0.");
 
         RuleFor(x => x.SupplierProductCode)
             .MaximumLength(50).WithMessage("Mã sản phẩm phía NCC không được vượt quá 50 ký tự.")

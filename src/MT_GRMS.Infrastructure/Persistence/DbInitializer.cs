@@ -87,6 +87,8 @@ ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""AllowUrgent"" boolean NOT N
 ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""UrgentLeadTimeHours"" integer NOT NULL DEFAULT 4;
 ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""UrgentFeePercent"" numeric(5,2) NOT NULL DEFAULT 0;
 
+ALTER TABLE ""SupplierProducts"" ADD COLUMN IF NOT EXISTS ""AllowedShortageQuantity"" integer NOT NULL DEFAULT 0;
+
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'SupplierDeliveryConfigs') THEN
