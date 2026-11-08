@@ -72,7 +72,7 @@ public class BranchService : IBranchService
             ? await _tenantRepo.GetByIdAsync(tenantId, cancellationToken)
             : (await _tenantRepo.GetPagedAsync(pageSize: 1, cancellationToken: cancellationToken)).Items.FirstOrDefault();
 
-        var usedBranches = await _branchRepo.CountActiveAsync(cancellationToken);
+        var usedBranches = await _branchRepo.CountTotalAsync(cancellationToken);
         var maxBranches = 1;
         var planCode = tenant?.CurrentPlan ?? "STANDARD";
         var planName = "Gói Thường (Cửa Hàng Độc Lập)";
@@ -191,6 +191,17 @@ public class BranchService : IBranchService
         if (branch == null || branch.IsDeleted)
         {
             throw new NotFoundException("Chi nhánh", id);
+        }
+
+        // Kiểm tra hạn mức nếu kích hoạt lại chi nhánh
+        if (request.IsActive && !branch.IsActive)
+        {
+            var quota = await GetBranchQuotaAsync(cancellationToken);
+            if (quota.UsedBranches > quota.MaxBranches)
+            {
+                throw new BusinessException("QUOTA_EXCEEDED",
+                    $"Không thể kích hoạt chi nhánh '{branch.Name}'. Chuỗi cửa hàng của bạn hiện có {quota.UsedBranches}/{quota.MaxBranches} chi nhánh (đã vượt quá hạn mức gói {quota.CurrentPlanName}). Vui lòng nâng cấp gói cước.");
+            }
         }
 
         branch.IsActive = request.IsActive;

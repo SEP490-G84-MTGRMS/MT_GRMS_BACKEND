@@ -21,6 +21,11 @@ public class BranchRepository : GenericRepository<Branch>, IBranchRepository
         return await _context.Branches.CountAsync(b => b.IsActive && !b.IsDeleted, cancellationToken);
     }
 
+    public async Task<int> CountTotalAsync(CancellationToken cancellationToken = default)
+    {
+        return await _context.Branches.CountAsync(b => !b.IsDeleted, cancellationToken);
+    }
+
     public async Task<(IReadOnlyList<Branch> Items, int TotalCount)> GetPagedListAsync(
         string? keyword,
         string? branchCode,

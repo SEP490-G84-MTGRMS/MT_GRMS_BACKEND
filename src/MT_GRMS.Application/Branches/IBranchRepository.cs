@@ -16,4 +16,6 @@ public interface IBranchRepository : IRepository<Branch>
     Task<bool> ExistsByCodeAsync(string code, CancellationToken cancellationToken = default);
 
     Task<int> CountActiveAsync(CancellationToken cancellationToken = default);
+
+    Task<int> CountTotalAsync(CancellationToken cancellationToken = default);
 }

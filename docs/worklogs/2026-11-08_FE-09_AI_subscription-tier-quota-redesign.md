@@ -40,6 +40,10 @@
    - Khi tài khoản mới đăng ký thành công: tự động cấp quyền Dùng thử 3 ngày Full tính năng (`CurrentPlan = "PRO"`, `SubscriptionStatus = "TRIAL"`, `SubscriptionExpiresAt = DateTime.UtcNow.AddDays(3)`).
 7. `src/MT_GRMS.Application/Branches/BranchService.cs`:
    - Cập nhật `GetBranchQuotaAsync`: tính hạn mức tối đa linh hoạt theo `Plan.MaxBranches + Tenant.ExtraBranches`.
+   - **Khắc phục lỗ hổng bypass Quota**: Sửa `GetBranchQuotaAsync` chuyển từ đếm chi nhánh active sang đếm toàn bộ chi nhánh sở hữu (`_branchRepo.CountTotalAsync(!b.IsDeleted)`). Khắc phục triệt để lỗi tắt chi nhánh để tạo thêm chi nhánh mới không giới hạn.
+   - **Chốt chặn an toàn tại `ToggleBranchStatusAsync`**: Kiểm tra Quota khi người dùng bật lại chi nhánh (`request.IsActive && !branch.IsActive`), ném ngoại lệ `QUOTA_EXCEEDED` nếu tổng số chi nhánh đang vượt quá hạn mức gói cước.
+8. `src/MT_GRMS.Application/Branches/IBranchRepository.cs` & `src/MT_GRMS.Infrastructure/Repositories/BranchRepository.cs`:
+   - Bổ sung hàm `CountTotalAsync(CancellationToken ct)` đếm tổng số chi nhánh thuộc tenant chưa bị xóa (`!b.IsDeleted`).
 
 ---
 
