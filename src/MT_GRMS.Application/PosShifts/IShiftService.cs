@@ -114,5 +114,16 @@ public interface IShiftService
     /// Ghi nhận nhân viên tham gia ca bán hàng chung.
     /// </summary>
     Task RecordParticipantAsync(Guid shiftId, Guid userId, string? userName, string? fullName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Chuyển đổi mã chuỗi hoặc Guid chi nhánh sang GUID thật trong cơ sở dữ liệu.
+    /// </summary>
+    Task<Guid?> ResolveBranchIdAsync(string? branchIdOrCode, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Kiểm tra tính đủ điều kiện trực ca của nhân viên thu ngân để bán hàng POS (REQ-STRICT-SCHEDULE-VALIDATION).
+    /// Miễn trừ kiểm tra cho vai trò STORE_OWNER / ADMIN / MANAGER.
+    /// </summary>
+    Task<CashierShiftEligibilityDto> CheckCashierShiftEligibilityAsync(Guid branchId, Guid userId, string? userRole, CancellationToken cancellationToken = default);
 }
 

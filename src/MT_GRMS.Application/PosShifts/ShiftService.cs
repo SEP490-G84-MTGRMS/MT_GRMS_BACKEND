@@ -37,6 +37,15 @@ public class ShiftService : IShiftService
             throw new BusinessException("INVALID_OPENING_FLOAT", "Số tiền mặt ban đầu không được âm.");
         }
 
+        // 0. Kiểm tra điều kiện trực ca của thu ngân nếu là vai trò EMPLOYEE (REQ-STRICT-SCHEDULE-VALIDATION)
+        var eligibility = await CheckCashierShiftEligibilityAsync(request.BranchId, cashierUserId, _tenantContext.CurrentRole, cancellationToken);
+        if (!eligibility.IsAllowed)
+        {
+            throw new BusinessException(
+                "EMPLOYEE_NOT_SCHEDULED",
+                eligibility.Reason ?? "Bạn không có lịch làm việc trong ca hiện tại của chi nhánh.");
+        }
+
         // 1. Kiểm tra xem quầy/chi nhánh đã có ca nào đang mở chưa
         var activeShift = await _shiftRepository.GetActiveShiftAsync(request.BranchId, request.TillId, cancellationToken);
         if (activeShift != null)
@@ -157,6 +166,17 @@ public class ShiftService : IShiftService
             throw new BusinessException("SHIFT_NOT_OPEN", "Chỉ có thể ghi nhận phiếu thu/chi khi ca đang mở.");
         }
 
+        // Truy vấn doanh số bán hàng tiền mặt hiện tại để tính tiền mặt thực có trong két
+        var (cashSales, _, _) = await _shiftRepository.GetShiftSalesMetricsAsync(shiftId, cancellationToken);
+        decimal currentDrawerCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
+
+        if (request.MovementType == CashMovementType.OUT && request.Amount > currentDrawerCash)
+        {
+            throw new BusinessException(
+                "EXCEED_DRAWER_CASH",
+                $"Số tiền chi ({request.Amount:N0} đ) vượt quá số tiền mặt hiện có trong két quầy ({Math.Max(0, currentDrawerCash):N0} đ).");
+        }
+
         // 1. Kiểm tra cấu hình hạn mức chi của tenant
         var paymentConfig = await _shiftRepository.GetPaymentConfigAsync(_tenantContext.CurrentTenantId, cancellationToken);
         decimal threshold = paymentConfig?.CashOutApprovalThreshold ?? 200000m;
@@ -206,7 +226,6 @@ public class ShiftService : IShiftService
         };
 
         // Cập nhật lại ExpectedCash tạm tính
-        var (cashSales, _, _) = await _shiftRepository.GetShiftSalesMetricsAsync(shiftId, cancellationToken);
         shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
 
         await _shiftRepository.AddCashMovementAsync(movement, cancellationToken);
@@ -798,6 +817,11 @@ public class ShiftService : IShiftService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
+    public Task<Guid?> ResolveBranchIdAsync(string? branchIdOrCode, CancellationToken cancellationToken = default)
+    {
+        return _shiftRepository.ResolveBranchIdAsync(branchIdOrCode, cancellationToken);
+    }
+
     private static ShiftCashMovementDto MapToMovementDto(ShiftCashMovement movement)
     {
         return new ShiftCashMovementDto(
@@ -885,6 +909,112 @@ public class ShiftService : IShiftService
             shift.ForceCloseReason,
             participants,
             confirmations
+        );
+    }
+
+    public async Task<CashierShiftEligibilityDto> CheckCashierShiftEligibilityAsync(
+        Guid branchId,
+        Guid userId,
+        string? userRole,
+        CancellationToken cancellationToken = default)
+    {
+        var roleUpper = (userRole ?? _tenantContext.CurrentRole ?? string.Empty).ToUpperInvariant();
+
+        // 1. Miễn trừ cho Chủ cửa hàng / Quản lý / Admin
+        if (roleUpper.Contains("OWNER") || roleUpper.Contains("ADMIN") || roleUpper.Contains("MANAGER"))
+        {
+            return new CashierShiftEligibilityDto(
+                IsAllowed: true,
+                IsExempt: true,
+                Role: roleUpper,
+                EmployeeName: "Quản lý / Chủ cửa hàng",
+                Reason: null,
+                ActiveSchedule: null
+            );
+        }
+
+        // 2. Tra cứu hồ sơ nhân viên qua UserId
+        var employee = await _shiftRepository.GetEmployeeByUserIdAsync(userId.ToString(), cancellationToken);
+        if (employee == null)
+        {
+            return new CashierShiftEligibilityDto(
+                IsAllowed: false,
+                IsExempt: false,
+                Role: roleUpper,
+                EmployeeName: null,
+                Reason: "Không tìm thấy hồ sơ nhân viên tương ứng với tài khoản đăng nhập.",
+                ActiveSchedule: null
+            );
+        }
+
+        // 3. Lấy thời gian hiện tại theo múi giờ Việt Nam (UTC+7)
+        var nowVn = DateTime.UtcNow.AddHours(7);
+        var todayDate = nowVn.Date;
+        var currentTimeOfDay = nowVn.TimeOfDay;
+
+        // 4. Lấy lịch làm việc hôm nay của nhân viên tại chi nhánh
+        var schedules = await _shiftRepository.GetCashierSchedulesAsync(employee.Id, branchId, todayDate, cancellationToken);
+        if (schedules == null || schedules.Count == 0)
+        {
+            return new CashierShiftEligibilityDto(
+                IsAllowed: false,
+                IsExempt: false,
+                Role: roleUpper,
+                EmployeeName: employee.FullName,
+                Reason: "Bạn không có lịch làm việc trong ca hiện tại của chi nhánh.",
+                ActiveSchedule: null
+            );
+        }
+
+        // 5. Kiểm tra thời gian hiện tại có nằm trong ca trực nào (kèm dung sai 30 phút)
+        var buffer = TimeSpan.FromMinutes(30);
+        foreach (var s in schedules)
+        {
+            var startWindow = s.AllowedCheckInStart != TimeSpan.Zero
+                ? s.AllowedCheckInStart
+                : (s.PlannedStartTime > buffer ? s.PlannedStartTime.Subtract(buffer) : TimeSpan.Zero);
+
+            var endWindow = s.AllowedCheckInEnd != TimeSpan.Zero && s.AllowedCheckInEnd < new TimeSpan(23, 59, 59)
+                ? s.AllowedCheckInEnd
+                : s.PlannedEndTime.Add(buffer);
+
+            bool isInShift;
+            if (!s.IsCheckInNextDay && endWindow >= startWindow)
+            {
+                isInShift = currentTimeOfDay >= startWindow && currentTimeOfDay <= endWindow;
+            }
+            else
+            {
+                // Ca qua đêm vắt qua nửa đêm (VD: 22:00 -> 06:00)
+                isInShift = currentTimeOfDay >= startWindow || currentTimeOfDay <= endWindow;
+            }
+
+            if (isInShift)
+            {
+                return new CashierShiftEligibilityDto(
+                    IsAllowed: true,
+                    IsExempt: false,
+                    Role: roleUpper,
+                    EmployeeName: employee.FullName,
+                    Reason: null,
+                    ActiveSchedule: new CashierShiftInfo(
+                        s.Id,
+                        s.ShiftCode,
+                        s.ShiftName,
+                        s.PlannedStartTime,
+                        s.PlannedEndTime
+                    )
+                );
+            }
+        }
+
+        return new CashierShiftEligibilityDto(
+            IsAllowed: false,
+            IsExempt: false,
+            Role: roleUpper,
+            EmployeeName: employee.FullName,
+            Reason: "Bạn không có lịch làm việc trong ca hiện tại của chi nhánh.",
+            ActiveSchedule: null
         );
     }
 }

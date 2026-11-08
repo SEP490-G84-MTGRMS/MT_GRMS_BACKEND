@@ -243,3 +243,23 @@ public record ZReportResponse(
     IReadOnlyList<ShiftCashMovementDto> CashMovements
 );
 
+/// <summary>
+/// Kết quả kiểm tra tính đủ điều kiện trực ca của thu ngân để bán hàng POS (REQ-STRICT-SCHEDULE-VALIDATION)
+/// </summary>
+public record CashierShiftEligibilityDto(
+    bool IsAllowed,
+    bool IsExempt,
+    string? Role,
+    string? EmployeeName,
+    string? Reason,
+    CashierShiftInfo? ActiveSchedule
+);
+
+public record CashierShiftInfo(
+    Guid? ScheduleId,
+    string? ShiftCode,
+    string? ShiftName,
+    TimeSpan? PlannedStartTime,
+    TimeSpan? PlannedEndTime
+);
+
