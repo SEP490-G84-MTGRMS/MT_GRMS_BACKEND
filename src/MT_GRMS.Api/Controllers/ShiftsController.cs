@@ -46,14 +46,15 @@ public class ShiftsController : BaseApiController
     /// </summary>
     [HttpGet("current")]
     public async Task<ActionResult<ApiResponse<ShiftDetailResponse>>> GetCurrentShift(
-        [FromQuery] Guid branchId,
+        [FromQuery] string? branchId,
         [FromQuery] Guid? tillId,
         CancellationToken cancellationToken)
     {
-        var targetBranchId = branchId != Guid.Empty ? branchId : (_tenantContext.CurrentBranchId ?? Guid.Empty);
+        var resolved = await _shiftService.ResolveBranchIdAsync(branchId, cancellationToken);
+        var targetBranchId = resolved ?? (_tenantContext.CurrentBranchId ?? Guid.Empty);
         if (targetBranchId == Guid.Empty)
         {
-            return BadRequest(ApiResponse<ShiftDetailResponse>.Fail("REQUIRED_BRANCH_ID", "Vui lòng cung cấp branchId chi nhánh."));
+            return BadRequest(ApiResponse<ShiftDetailResponse>.Fail("REQUIRED_BRANCH_ID", "Vui lòng cung cấp branchId chi nhánh hợp lệ."));
         }
 
         var shift = await _shiftService.GetCurrentShiftAsync(targetBranchId, tillId, cancellationToken);
@@ -145,15 +146,16 @@ public class ShiftsController : BaseApiController
     /// </summary>
     [HttpGet("history")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<ShiftDetailResponse>>>> GetShiftHistory(
-        [FromQuery] Guid branchId,
+        [FromQuery] string? branchId,
         [FromQuery] DateTime? fromDate,
         [FromQuery] DateTime? toDate,
         CancellationToken cancellationToken)
     {
-        var targetBranchId = branchId != Guid.Empty ? branchId : (_tenantContext.CurrentBranchId ?? Guid.Empty);
+        var resolved = await _shiftService.ResolveBranchIdAsync(branchId, cancellationToken);
+        var targetBranchId = resolved ?? (_tenantContext.CurrentBranchId ?? Guid.Empty);
         if (targetBranchId == Guid.Empty)
         {
-            return BadRequest(ApiResponse<IReadOnlyList<ShiftDetailResponse>>.Fail("REQUIRED_BRANCH_ID", "Vui lòng cung cấp branchId chi nhánh."));
+            return BadRequest(ApiResponse<IReadOnlyList<ShiftDetailResponse>>.Fail("REQUIRED_BRANCH_ID", "Vui lòng cung cấp branchId chi nhánh hợp lệ."));
         }
 
         var list = await _shiftService.GetShiftHistoryAsync(targetBranchId, fromDate, toDate, cancellationToken);
@@ -369,6 +371,33 @@ public class ShiftsController : BaseApiController
 
         var result = await _shiftService.ForceCloseShiftAsync(id, ownerId, request, cancellationToken);
         return Ok(ApiResponse<ShiftDetailResponse>.Ok(result, "Đóng ca cưỡng bức thành công."));
+    }
+
+    /// <summary>
+    /// Kiểm tra xem thu ngân hiện tại có đủ điều kiện trực ca (có lịch làm việc hợp lệ) để bán hàng POS hay không (REQ-STRICT-SCHEDULE-VALIDATION)
+    /// </summary>
+    [HttpGet("cashier-eligibility")]
+    public async Task<ActionResult<ApiResponse<CashierShiftEligibilityDto>>> CheckCashierEligibility(
+        [FromQuery] string? branchId,
+        CancellationToken cancellationToken)
+    {
+        var resolvedBranchId = await _shiftService.ResolveBranchIdAsync(branchId, cancellationToken)
+            ?? _tenantContext.CurrentBranchId
+            ?? Guid.Empty;
+
+        var userId = _tenantContext.CurrentUserId != Guid.Empty
+            ? _tenantContext.CurrentUserId
+            : (Guid.TryParse(User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value, out var parsedId) ? parsedId : Guid.Empty);
+
+        var userRole = _tenantContext.CurrentRole;
+
+        var result = await _shiftService.CheckCashierShiftEligibilityAsync(
+            resolvedBranchId,
+            userId,
+            userRole,
+            cancellationToken);
+
+        return Ok(ApiResponse<CashierShiftEligibilityDto>.Ok(result));
     }
 }
 

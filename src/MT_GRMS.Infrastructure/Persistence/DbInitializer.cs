@@ -334,6 +334,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         UPDATE ""Users"" SET ""IsAdmin"" = true WHERE LOWER(""UserName"") = 'admin';
 
                         ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""ShiftID"" uuid;
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""CashierName"" character varying(150);
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""FulfilledByCashierName"" character varying(150);
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""FulfilledAtUtc"" timestamp without time zone;
 
                         ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""BranchId"" uuid;
                         ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TillId"" uuid;
@@ -2154,6 +2157,58 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         {
             empMinh.BranchId = branch.Id;
             empMinh.UserId = staffUser3.Id;
+        }
+        await context.SaveChangesAsync();
+
+        // 3b. Cấu hình ca làm việc mẫu & Lịch phân ca kiểm thử cho thu ngân Ba Đình (REQ-STRICT-SCHEDULE-VALIDATION)
+        var shiftConfigSang = await context.ShiftConfigs.FirstOrDefaultAsync(s => s.TenantId == tenantId && s.ShiftCode == "CA-AN-FULL");
+        if (shiftConfigSang == null)
+        {
+            shiftConfigSang = new ShiftConfig
+            {
+                TenantId = tenantId,
+                BranchId = branch.Id,
+                ShiftCode = "CA-AN-FULL",
+                ShiftName = "Ca Trực Bán Hàng Toàn Thời Gian (06:00 - 23:00)",
+                StartTime = new TimeSpan(6, 0, 0),
+                EndTime = new TimeSpan(23, 0, 0),
+                DurationHours = 17.00m,
+                AllowedCheckInStart = new TimeSpan(5, 30, 0),
+                AllowedCheckInEnd = new TimeSpan(23, 30, 0),
+                IsActive = true
+            };
+            await context.ShiftConfigs.AddAsync(shiftConfigSang);
+            await context.SaveChangesAsync();
+        }
+
+        // Tạo lịch phân ca cho Phạm Thị Yến (0917778888) cho ngày hôm nay và các ngày lân cận (-3 đến +7 ngày)
+        // Lưu ý: Không phân ca cho Nguyễn Văn Minh (0915556666) để dùng làm tài khoản test kịch bản bị chặn cứng ngoài ca
+        var todayVn = DateTime.UtcNow.AddHours(7).Date;
+        for (int dayOffset = -3; dayOffset <= 7; dayOffset++)
+        {
+            var targetDate = todayVn.AddDays(dayOffset);
+            var existingSchedule = await context.EmployeeSchedules
+                .FirstOrDefaultAsync(s => s.TenantId == tenantId && s.EmployeeId == empYen.Id && s.BranchId == branch.Id && s.WorkDate == targetDate);
+
+            if (existingSchedule == null)
+            {
+                await context.EmployeeSchedules.AddAsync(new EmployeeSchedule
+                {
+                    TenantId = tenantId,
+                    BranchId = branch.Id,
+                    EmployeeId = empYen.Id,
+                    ShiftConfigId = shiftConfigSang.Id,
+                    WorkDate = targetDate,
+                    ShiftCode = shiftConfigSang.ShiftCode,
+                    ShiftName = shiftConfigSang.ShiftName,
+                    PlannedStartTime = shiftConfigSang.StartTime,
+                    PlannedEndTime = shiftConfigSang.EndTime,
+                    DurationHours = shiftConfigSang.DurationHours,
+                    AllowedCheckInStart = shiftConfigSang.AllowedCheckInStart,
+                    AllowedCheckInEnd = shiftConfigSang.AllowedCheckInEnd,
+                    Status = ScheduleStatus.Scheduled
+                });
+            }
         }
         await context.SaveChangesAsync();
 

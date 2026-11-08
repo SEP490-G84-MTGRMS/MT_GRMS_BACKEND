@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using MT_GRMS.Domain.Entities.Finance;
+using MT_GRMS.Domain.Entities.HR;
 
 namespace MT_GRMS.Application.PosShifts;
 
@@ -24,5 +25,8 @@ public interface IShiftRepository
     Task<ShiftParticipant?> GetParticipantAsync(Guid shiftId, Guid userId, CancellationToken cancellationToken = default);
     Task AddCloseConfirmationAsync(ShiftCloseConfirmation confirmation, CancellationToken cancellationToken = default);
     Task ClearCloseConfirmationsAsync(Guid shiftId, CancellationToken cancellationToken = default);
+    Task<Guid?> ResolveBranchIdAsync(string? branchIdOrCode, CancellationToken cancellationToken = default);
+    Task<Employee?> GetEmployeeByUserIdAsync(string userId, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<EmployeeSchedule>> GetCashierSchedulesAsync(Guid employeeId, Guid branchId, DateTime workDate, CancellationToken cancellationToken = default);
 }
 

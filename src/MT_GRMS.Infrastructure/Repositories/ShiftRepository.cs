@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.PosShifts;
 using MT_GRMS.Domain.Entities.Finance;
+using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
 
@@ -67,6 +68,8 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
         var query = _context.ShiftZReports
             .Include(s => s.CashMovements)
             .Include(s => s.Branch)
+            .Include(s => s.Participants)
+            .Include(s => s.CloseConfirmations)
             .Where(s => s.BranchId == branchId);
 
         if (fromUtc.HasValue)
@@ -102,11 +105,11 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
 
         decimal cashSales = orders
             .Where(o => string.Equals(o.PaymentMethod, "CASH", StringComparison.OrdinalIgnoreCase))
-            .Sum(o => o.FinalAmount);
+            .Sum(o => o.Status == "PendingPickup" ? o.DepositAmount : o.FinalAmount);
 
         decimal bankRevenue = orders
             .Where(o => !string.Equals(o.PaymentMethod, "CASH", StringComparison.OrdinalIgnoreCase))
-            .Sum(o => o.FinalAmount);
+            .Sum(o => o.Status == "PendingPickup" ? o.DepositAmount : o.FinalAmount);
 
         int count = orders.Count;
 
@@ -187,5 +190,48 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
             .Where(c => c.ShiftId == shiftId)
             .ToListAsync(cancellationToken);
         _context.ShiftCloseConfirmations.RemoveRange(list);
+    }
+
+    public async Task<Guid?> ResolveBranchIdAsync(string? branchIdOrCode, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(branchIdOrCode))
+        {
+            var defaultBranch = await _context.Branches.FirstOrDefaultAsync(cancellationToken);
+            return defaultBranch?.Id;
+        }
+
+        if (Guid.TryParse(branchIdOrCode, out var guid) && guid != Guid.Empty)
+        {
+            return guid;
+        }
+
+        var branch = await _context.Branches
+            .FirstOrDefaultAsync(b => b.BranchCode == branchIdOrCode || b.Name.Contains(branchIdOrCode), cancellationToken);
+
+        if (branch != null) return branch.Id;
+
+        var fallback = await _context.Branches.FirstOrDefaultAsync(cancellationToken);
+        return fallback?.Id;
+    }
+
+    public async Task<Employee?> GetEmployeeByUserIdAsync(string userId, CancellationToken cancellationToken = default)
+    {
+        var employee = await _context.Employees
+            .FirstOrDefaultAsync(e => e.UserId == userId, cancellationToken);
+
+        if (employee == null && Guid.TryParse(userId, out var empId))
+        {
+            employee = await _context.Employees
+                .FirstOrDefaultAsync(e => e.Id == empId, cancellationToken);
+        }
+
+        return employee;
+    }
+
+    public async Task<IReadOnlyList<EmployeeSchedule>> GetCashierSchedulesAsync(Guid employeeId, Guid branchId, DateTime workDate, CancellationToken cancellationToken = default)
+    {
+        return await _context.EmployeeSchedules
+            .Where(s => s.EmployeeId == employeeId && s.BranchId == branchId && s.WorkDate.Date == workDate.Date && s.Status != ScheduleStatus.Cancelled)
+            .ToListAsync(cancellationToken);
     }
 }
