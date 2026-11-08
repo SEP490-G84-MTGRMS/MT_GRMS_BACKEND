@@ -39,6 +39,31 @@ public class EmployeesController : BaseApiController
     }
 
     /// <summary>
+    /// Lấy thông tin hồ sơ nhân viên của tài khoản người dùng đang đăng nhập
+    /// </summary>
+    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+    [HttpGet("me")]
+    public async Task<IActionResult> GetMyProfile(CancellationToken cancellationToken)
+    {
+        var currentUserId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+                         ?? User.FindFirst("sub")?.Value
+                         ?? (_tenantContext != null && _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : null);
+
+        if (string.IsNullOrWhiteSpace(currentUserId))
+        {
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", "Không xác định được danh tính người dùng hiện tại."));
+        }
+
+        var profile = await _employeeService.GetEmployeeByUserIdAsync(currentUserId, cancellationToken);
+        if (profile == null)
+        {
+            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", "Không tìm thấy hồ sơ nhân viên liên kết với tài khoản này."));
+        }
+
+        return Ok(ApiResponse<EmployeeResponse>.Ok(profile));
+    }
+
+    /// <summary>
     /// Lấy thông tin chi tiết một nhân viên theo ID
     /// </summary>
     [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
@@ -205,12 +230,17 @@ public class EmployeesController : BaseApiController
     {
         try
         {
-            var userId = await _employeeService.CreateIdentityAccountAsync(id, request, cancellationToken);
+            var role = string.IsNullOrWhiteSpace(request.Role) || string.Equals(request.Role, "EMPLOYEE", StringComparison.OrdinalIgnoreCase)
+                ? SystemRoles.Staff
+                : request.Role.Trim().ToUpper();
+
+            var normalizedRequest = request with { Role = role };
+            var userId = await _employeeService.CreateIdentityAccountAsync(id, normalizedRequest, cancellationToken);
             return Ok(ApiResponse<object>.Ok(new
             {
                 userId,
-                username = request.Username,
-                role = request.Role,
+                username = normalizedRequest.Username,
+                role = SystemRoles.Staff,
                 message = "Cấp tài khoản đăng nhập cho nhân viên thành công."
             }));
         }
@@ -243,12 +273,17 @@ public class EmployeesController : BaseApiController
     {
         try
         {
-            var userId = await _employeeService.UpdateIdentityAccountAsync(id, request, cancellationToken);
+            var role = string.IsNullOrWhiteSpace(request.Role) || string.Equals(request.Role, "EMPLOYEE", StringComparison.OrdinalIgnoreCase)
+                ? SystemRoles.Staff
+                : request.Role.Trim().ToUpper();
+
+            var normalizedRequest = request with { Role = role };
+            var userId = await _employeeService.UpdateIdentityAccountAsync(id, normalizedRequest, cancellationToken);
             return Ok(ApiResponse<object>.Ok(new
             {
                 userId,
-                username = request.Username,
-                role = request.Role,
+                username = normalizedRequest.Username,
+                role = SystemRoles.Staff,
                 message = "Cập nhật tài khoản đăng nhập cho nhân viên thành công."
             }));
         }

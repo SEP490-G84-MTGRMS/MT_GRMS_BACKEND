@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Payslips;
 using MT_GRMS.Application.HR.Payslips.Dtos;
 using MT_GRMS.Domain.Constants;
@@ -15,11 +16,16 @@ namespace MT_GRMS.Api.Controllers;
 public class PayslipsController : BaseApiController
 {
     private readonly IPayslipService _payslipService;
+    private readonly IEmployeeRepository _employeeRepository;
     private readonly ITenantContext? _tenantContext;
 
-    public PayslipsController(IPayslipService payslipService, ITenantContext? tenantContext = null)
+    public PayslipsController(
+        IPayslipService payslipService,
+        IEmployeeRepository employeeRepository,
+        ITenantContext? tenantContext = null)
     {
         _payslipService = payslipService;
+        _employeeRepository = employeeRepository;
         _tenantContext = tenantContext;
     }
 
@@ -27,7 +33,7 @@ public class PayslipsController : BaseApiController
     /// GET /api/v1/payslips
     /// Lấy danh sách phiếu lương có phân trang và bộ lọc (kỳ tháng, chi nhánh, trạng thái, từ khóa).
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
     [HttpGet]
     public async Task<ActionResult<ApiResponse<PagedResult<PayslipSummaryDto>>>> GetPayslipsPaged(
         [FromQuery] string? keyword,
@@ -38,13 +44,49 @@ public class PayslipsController : BaseApiController
         [FromQuery] int pageSize = 20,
         CancellationToken ct = default)
     {
+        var currentRole = User.FindFirst(ClaimTypes.Role)?.Value
+                       ?? User.FindFirst("role")?.Value
+                       ?? _tenantContext?.CurrentRole;
+
+        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner) || User.IsInRole(SystemRoles.Admin)
+                          || string.Equals(currentRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase)
+                          || string.Equals(currentRole, SystemRoles.Admin, StringComparison.OrdinalIgnoreCase);
+
+        Guid? employeeId = null;
+        if (!isOwnerOrAdmin)
+        {
+            var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                             ?? User.FindFirst("sub")?.Value
+                             ?? (_tenantContext != null && _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : null);
+
+            if (!string.IsNullOrWhiteSpace(currentUserId))
+            {
+                var emp = await _employeeRepository.GetByUserIdAsync(currentUserId, ct);
+                if (emp != null)
+                {
+                    employeeId = emp.Id;
+                }
+                else
+                {
+                    return Ok(ApiResponse<PagedResult<PayslipSummaryDto>>.Ok(new PagedResult<PayslipSummaryDto>
+                    {
+                        Items = Array.Empty<PayslipSummaryDto>(),
+                        Page = page,
+                        PageSize = pageSize,
+                        TotalItems = 0
+                    }));
+                }
+            }
+        }
+
         var filter = new PayslipQueryFilter(
             Keyword: keyword,
             PeriodMonth: periodMonth,
             BranchId: branchId,
             Status: status,
             Page: page,
-            PageSize: pageSize
+            PageSize: pageSize,
+            EmployeeId: employeeId
         );
 
         var result = await _payslipService.GetPayslipsPagedAsync(filter, ct);

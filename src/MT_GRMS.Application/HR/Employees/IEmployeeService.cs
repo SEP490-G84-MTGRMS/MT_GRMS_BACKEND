@@ -7,6 +7,7 @@ public interface IEmployeeService
 {
     Task<PagedResult<EmployeeSummaryDto>> GetEmployeesPagedAsync(EmployeeQueryFilter filter, CancellationToken cancellationToken = default);
     Task<EmployeeResponse> GetEmployeeByIdAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<EmployeeResponse?> GetEmployeeByUserIdAsync(string userId, CancellationToken cancellationToken = default);
     Task<EmployeeResponse> CreateEmployeeAsync(CreateEmployeeRequest request, CancellationToken cancellationToken = default);
     Task<EmployeeResponse> UpdateEmployeeAsync(Guid id, UpdateEmployeeRequest request, CancellationToken cancellationToken = default);
     Task<bool> UpdateStatusAsync(Guid id, string status, CancellationToken cancellationToken = default);

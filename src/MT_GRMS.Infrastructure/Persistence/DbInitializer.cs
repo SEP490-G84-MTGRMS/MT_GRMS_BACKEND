@@ -12,6 +12,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Domain.Common;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.HR;
@@ -280,7 +281,7 @@ public static class DbInitializer
             {
                 TenantId = defaultTenantId,
                 UserId = userCashier.Id,
-                Role = "CASHIER",
+                Role = SystemRoles.Staff,
                 IsActive = true
             };
 
@@ -288,7 +289,7 @@ public static class DbInitializer
             {
                 TenantId = defaultTenantId,
                 UserId = userStoreOwner.Id,
-                Role = "STORE_OWNER",
+                Role = SystemRoles.StoreOwner,
                 IsActive = true
             };
 
@@ -296,7 +297,7 @@ public static class DbInitializer
             {
                 TenantId = defaultTenantId,
                 UserId = userStaff.Id,
-                Role = "CASHIER",
+                Role = SystemRoles.Staff,
                 IsActive = true
             };
 
@@ -1363,13 +1364,13 @@ public static class DbInitializer
             {
                 TenantId = tenantId,
                 UserId = staffUser.Id,
-                Role = "EMPLOYEE",
+                Role = SystemRoles.Staff,
                 IsActive = true
             });
         }
         else
         {
-            tuStaff.Role = "EMPLOYEE";
+            tuStaff.Role = SystemRoles.Staff;
         }
         await context.SaveChangesAsync();
 
@@ -1488,13 +1489,13 @@ public static class DbInitializer
             {
                 TenantId = tenantId,
                 UserId = staffUser2.Id,
-                Role = "EMPLOYEE",
+                Role = SystemRoles.Staff,
                 IsActive = true
             });
         }
         else
         {
-            tuStaff2.Role = "EMPLOYEE";
+            tuStaff2.Role = SystemRoles.Staff;
         }
         await context.SaveChangesAsync();
 

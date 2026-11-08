@@ -57,6 +57,11 @@ public class PayslipRepository : IPayslipRepository
             query = query.Where(p => p.BranchId == filter.BranchId.Value);
         }
 
+        if (filter.EmployeeId.HasValue && filter.EmployeeId.Value != Guid.Empty)
+        {
+            query = query.Where(p => p.EmployeeId == filter.EmployeeId.Value);
+        }
+
         if (filter.Status.HasValue)
         {
             query = query.Where(p => p.Status == filter.Status.Value);

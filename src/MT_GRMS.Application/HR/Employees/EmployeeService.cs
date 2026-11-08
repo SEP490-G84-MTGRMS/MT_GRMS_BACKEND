@@ -2,6 +2,7 @@ using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.HR.Employees.Dtos;
 using MT_GRMS.Domain.Common;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Enums;
@@ -74,6 +75,23 @@ public class EmployeeService : IEmployeeService
         if (employee == null)
         {
             throw new NotFoundException($"Không tìm thấy nhân viên với ID: {id}");
+        }
+
+        return MapToResponse(employee);
+    }
+
+    public async Task<EmployeeResponse?> GetEmployeeByUserIdAsync(
+        string userId,
+        CancellationToken cancellationToken = default)
+    {
+        var employee = await _employeeRepository.GetByUserIdAsync(userId, cancellationToken);
+        if (employee == null && Guid.TryParse(userId, out var empGuid))
+        {
+            employee = await _employeeRepository.GetByIdAsync(empGuid, cancellationToken);
+        }
+        if (employee == null)
+        {
+            return null;
         }
 
         return MapToResponse(employee);
@@ -187,10 +205,10 @@ public class EmployeeService : IEmployeeService
                 throw new BusinessException("DUPLICATE_USERNAME", $"Tên đăng nhập '{normalizedUsername}' đã tồn tại trong hệ thống.");
             }
 
-            var role = !string.IsNullOrWhiteSpace(request.Role) ? request.Role.Trim().ToUpper() : "STAFF";
+            var role = !string.IsNullOrWhiteSpace(request.Role) ? request.Role.Trim().ToUpper() : SystemRoles.Staff;
             if (role == "EMPLOYEE")
             {
-                role = "STAFF";
+                role = SystemRoles.Staff;
             }
 
             var newUser = new User
@@ -309,10 +327,10 @@ public class EmployeeService : IEmployeeService
                     throw new BusinessException("DUPLICATE_USERNAME", $"Tên đăng nhập '{normalizedUsername}' đã tồn tại trong hệ thống.");
                 }
 
-                var role = !string.IsNullOrWhiteSpace(request.Role) ? request.Role.Trim().ToUpper() : "STAFF";
+                var role = !string.IsNullOrWhiteSpace(request.Role) ? request.Role.Trim().ToUpper() : SystemRoles.Staff;
                 if (role == "EMPLOYEE")
                 {
-                    role = "STAFF";
+                    role = SystemRoles.Staff;
                 }
 
                 var newUser = new User
@@ -506,10 +524,10 @@ public class EmployeeService : IEmployeeService
         }
 
         var currentTenantId = _tenantContext.CurrentTenantId ?? "tenant_mt_mart_01";
-        var role = request.Role.Trim().ToUpper();
+        var role = !string.IsNullOrWhiteSpace(request.Role) ? request.Role.Trim().ToUpper() : SystemRoles.Staff;
         if (role == "EMPLOYEE")
         {
-            role = "STAFF";
+            role = SystemRoles.Staff;
         }
 
         var displayName = !string.IsNullOrWhiteSpace(request.DisplayName)

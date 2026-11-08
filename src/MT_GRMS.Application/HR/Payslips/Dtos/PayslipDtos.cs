@@ -27,7 +27,8 @@ public record PayslipQueryFilter(
     Guid? BranchId = null,
     PayslipStatus? Status = null,
     int Page = 1,
-    int PageSize = 20
+    int PageSize = 20,
+    Guid? EmployeeId = null
 );
 
 public record BatchPayResultDto(
