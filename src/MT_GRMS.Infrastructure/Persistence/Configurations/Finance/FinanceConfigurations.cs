@@ -140,9 +140,43 @@ public class ShiftZReportConfiguration : IEntityTypeConfiguration<ShiftZReport>
             .HasForeignKey(m => m.ShiftId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        builder.HasMany(s => s.Participants)
+            .WithOne(p => p.Shift)
+            .HasForeignKey(p => p.ShiftId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasMany(s => s.CloseConfirmations)
+            .WithOne(c => c.Shift)
+            .HasForeignKey(c => c.ShiftId)
+            .OnDelete(DeleteBehavior.Cascade);
+
         builder.HasIndex(s => new { s.TenantId, s.BranchId, s.Status });
         builder.HasIndex(s => new { s.TenantId, s.TillId, s.Status });
         builder.HasIndex(s => new { s.TenantId, s.ShiftCode });
+    }
+}
+
+public class ShiftParticipantConfiguration : IEntityTypeConfiguration<ShiftParticipant>
+{
+    public void Configure(EntityTypeBuilder<ShiftParticipant> builder)
+    {
+        builder.ToTable("ShiftParticipants");
+        builder.HasKey(p => p.Id);
+        builder.Property(p => p.UserName).HasMaxLength(100);
+        builder.Property(p => p.FullName).HasMaxLength(150);
+        builder.HasIndex(p => new { p.TenantId, p.ShiftId, p.UserId });
+    }
+}
+
+public class ShiftCloseConfirmationConfiguration : IEntityTypeConfiguration<ShiftCloseConfirmation>
+{
+    public void Configure(EntityTypeBuilder<ShiftCloseConfirmation> builder)
+    {
+        builder.ToTable("ShiftCloseConfirmations");
+        builder.HasKey(c => c.Id);
+        builder.Property(c => c.UserName).HasMaxLength(100);
+        builder.Property(c => c.ConfirmedCountedCash).HasColumnType("decimal(18,2)");
+        builder.HasIndex(c => new { c.TenantId, c.ShiftId });
     }
 }
 

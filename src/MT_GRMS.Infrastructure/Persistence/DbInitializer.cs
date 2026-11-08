@@ -357,6 +357,41 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""DroppedToSafeAmount"" numeric(18,2) DEFAULT 0;
                         ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""HandoverStatus"" integer DEFAULT 1;
                         ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""Notes"" text;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosingStartedByUserId"" uuid;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosingStartedAtUtc"" timestamp without time zone;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosedByUserId"" uuid;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ForceCloseReason"" text;
+
+                        CREATE TABLE IF NOT EXISTS ""ShiftParticipants"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" text NOT NULL,
+                            ""ShiftId"" uuid NOT NULL,
+                            ""UserId"" uuid NOT NULL,
+                            ""UserName"" character varying(100),
+                            ""FullName"" character varying(150),
+                            ""JoinedAtUtc"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""LastActiveAtUtc"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+                        CREATE INDEX IF NOT EXISTS ""IX_ShiftParticipants_TenantId_ShiftId_UserId"" ON ""ShiftParticipants"" (""TenantId"", ""ShiftId"", ""UserId"");
+
+                        CREATE TABLE IF NOT EXISTS ""ShiftCloseConfirmations"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" text NOT NULL,
+                            ""ShiftId"" uuid NOT NULL,
+                            ""UserId"" uuid NOT NULL,
+                            ""UserName"" character varying(100),
+                            ""ConfirmedCountedCash"" numeric(18,2) NOT NULL DEFAULT 0,
+                            ""ConfirmedAtUtc"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+                        CREATE INDEX IF NOT EXISTS ""IX_ShiftCloseConfirmations_TenantId_ShiftId"" ON ""ShiftCloseConfirmations"" (""TenantId"", ""ShiftId"");
 
                         CREATE TABLE IF NOT EXISTS ""ShiftCashMovements"" (
                             ""Id"" uuid NOT NULL PRIMARY KEY,

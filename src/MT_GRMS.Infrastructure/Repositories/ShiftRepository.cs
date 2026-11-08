@@ -22,6 +22,8 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
         return await _context.ShiftZReports
             .Include(s => s.CashMovements)
             .Include(s => s.Branch)
+            .Include(s => s.Participants)
+            .Include(s => s.CloseConfirmations)
             .FirstOrDefaultAsync(s => s.Id == id, cancellationToken);
     }
 
@@ -30,7 +32,9 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
         var query = _context.ShiftZReports
             .Include(s => s.CashMovements)
             .Include(s => s.Branch)
-            .Where(s => s.BranchId == branchId && s.Status == ShiftState.Open);
+            .Include(s => s.Participants)
+            .Include(s => s.CloseConfirmations)
+            .Where(s => s.BranchId == branchId && (s.Status == ShiftState.Open || s.Status == ShiftState.Closing));
 
         if (tillId.HasValue && tillId.Value != Guid.Empty)
         {
@@ -159,5 +163,29 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
             existing.CashOutShiftTotalLimit = config.CashOutShiftTotalLimit;
             existing.UpdatedAt = DateTime.UtcNow;
         }
+    }
+
+    public async Task AddParticipantAsync(ShiftParticipant participant, CancellationToken cancellationToken = default)
+    {
+        await _context.ShiftParticipants.AddAsync(participant, cancellationToken);
+    }
+
+    public async Task<ShiftParticipant?> GetParticipantAsync(Guid shiftId, Guid userId, CancellationToken cancellationToken = default)
+    {
+        return await _context.ShiftParticipants
+            .FirstOrDefaultAsync(p => p.ShiftId == shiftId && p.UserId == userId, cancellationToken);
+    }
+
+    public async Task AddCloseConfirmationAsync(ShiftCloseConfirmation confirmation, CancellationToken cancellationToken = default)
+    {
+        await _context.ShiftCloseConfirmations.AddAsync(confirmation, cancellationToken);
+    }
+
+    public async Task ClearCloseConfirmationsAsync(Guid shiftId, CancellationToken cancellationToken = default)
+    {
+        var list = await _context.ShiftCloseConfirmations
+            .Where(c => c.ShiftId == shiftId)
+            .ToListAsync(cancellationToken);
+        _context.ShiftCloseConfirmations.RemoveRange(list);
     }
 }

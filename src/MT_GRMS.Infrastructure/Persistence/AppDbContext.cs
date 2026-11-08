@@ -90,6 +90,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<CashInTransit> CashInTransits { get; set; } = null!;
     public virtual DbSet<ShiftZReport> ShiftZReports { get; set; } = null!;
     public virtual DbSet<ShiftCashMovement> ShiftCashMovements { get; set; } = null!;
+    public virtual DbSet<ShiftParticipant> ShiftParticipants { get; set; } = null!;
+    public virtual DbSet<ShiftCloseConfirmation> ShiftCloseConfirmations { get; set; } = null!;
     public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!;
     public virtual DbSet<StorePaymentConfig> StorePaymentConfigs { get; set; } = null!;
     public virtual DbSet<PaymentTransaction> PaymentTransactions { get; set; } = null!;
