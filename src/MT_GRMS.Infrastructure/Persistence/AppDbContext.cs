@@ -102,6 +102,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<Employee> Employees { get; set; } = null!;
     public virtual DbSet<Payslip> Payslips { get; set; } = null!;
     public virtual DbSet<EmployeeSchedule> EmployeeSchedules { get; set; } = null!;
+    public virtual DbSet<ScheduleApprovalRequest> ScheduleApprovalRequests { get; set; } = null!;
     public virtual DbSet<EmployeeAllowance> EmployeeAllowances { get; set; } = null!;
     public virtual DbSet<ShiftConfig> ShiftConfigs { get; set; } = null!;
     public virtual DbSet<BranchAttendancePolicy> BranchAttendancePolicies { get; set; } = null!;

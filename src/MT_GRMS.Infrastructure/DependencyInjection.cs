@@ -107,6 +107,7 @@ public static class DependencyInjection
         services.AddScoped<IShiftConfigRepository, ShiftConfigRepository>();
         services.AddScoped<IBranchAttendancePolicyRepository, BranchAttendancePolicyRepository>();
         services.AddScoped<IScheduleRepository, ScheduleRepository>();
+        services.AddScoped<IScheduleApprovalRequestRepository, ScheduleApprovalRequestRepository>();
         services.AddScoped<IPayslipRepository, PayslipRepository>();
         services.AddScoped<ISubscriptionPlanRepository, SubscriptionPlanRepository>();
         services.AddScoped<ITenantRepository, TenantRepository>();

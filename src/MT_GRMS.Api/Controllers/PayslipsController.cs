@@ -16,12 +16,12 @@ namespace MT_GRMS.Api.Controllers;
 public class PayslipsController : BaseApiController
 {
     private readonly IPayslipService _payslipService;
-    private readonly IEmployeeRepository _employeeRepository;
+    private readonly IEmployeeRepository? _employeeRepository;
     private readonly ITenantContext? _tenantContext;
 
     public PayslipsController(
         IPayslipService payslipService,
-        IEmployeeRepository employeeRepository,
+        IEmployeeRepository? employeeRepository = null,
         ITenantContext? tenantContext = null)
     {
         _payslipService = payslipService;

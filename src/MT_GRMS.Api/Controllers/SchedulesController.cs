@@ -13,6 +13,7 @@ namespace MT_GRMS.Api.Controllers;
 [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
 [ApiController]
 [Route("api/schedules")]
+[Route("api/employee-schedules")]
 public class SchedulesController : BaseApiController
 {
     private readonly IScheduleService _scheduleService;
@@ -274,6 +275,40 @@ public class SchedulesController : BaseApiController
         {
             return StatusCode(500, ApiResponse<object>.Fail("INTERNAL_SERVER_ERROR", ex.Message));
         }
+    }
+
+    /// <summary>
+    /// Gửi phiếu yêu cầu (Xin nghỉ, Đổi ca, Chấm công sự cố, Xin OT) cho ca làm việc
+    /// </summary>
+    [HttpPost("{scheduleId:guid}/requests")]
+    public async Task<IActionResult> CreateScheduleRequest(
+        [FromRoute] Guid scheduleId,
+        [FromBody] CreateScheduleApprovalRequestDto dto,
+        [FromServices] IScheduleApprovalService approvalService,
+        CancellationToken cancellationToken)
+    {
+        var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+            ?? throw new UnauthorizedAccessException("Không tìm thấy thông tin người dùng.");
+
+        var result = await approvalService.CreateRequestAsync(scheduleId, currentUserId, dto, cancellationToken);
+        return StatusCode(StatusCodes.Status201Created, ApiResponse<ScheduleApprovalRequestDto>.Ok(result, "Gửi yêu cầu thành công."));
+    }
+
+    /// <summary>
+    /// Lấy danh sách toàn bộ các phiếu yêu cầu đã gửi của một ca làm việc
+    /// </summary>
+    [HttpGet("{scheduleId:guid}/requests")]
+    public async Task<IActionResult> GetScheduleRequests(
+        [FromRoute] Guid scheduleId,
+        [FromServices] IScheduleApprovalService approvalService,
+        CancellationToken cancellationToken)
+    {
+        var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+            ?? throw new UnauthorizedAccessException("Không tìm thấy thông tin người dùng.");
+
+        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner) || User.IsInRole(SystemRoles.Admin);
+        var result = await approvalService.GetRequestsByScheduleIdAsync(scheduleId, currentUserId, isOwnerOrAdmin, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<ScheduleApprovalRequestDto>>.Ok(result));
     }
 }
 

@@ -5,6 +5,7 @@ public static class SystemRoles
     public const string Admin = "ADMIN";
     public const string StoreOwner = "STORE_OWNER";
     public const string Staff = "STAFF";
+    public const string Employee = "EMPLOYEE";
 
     /// <summary>
     /// Quyền dành cho Quản trị viên và Chủ cửa hàng
