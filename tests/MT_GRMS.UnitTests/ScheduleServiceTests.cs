@@ -865,5 +865,158 @@ public class ScheduleServiceTests
         Assert.Equal(0.00m, result.ActualWorkHours);
         Assert.Equal("Nghỉ việc riêng không lương", result.ApprovalReason);
     }
+
+    [Fact]
+    public async Task GetTodayStaffDescriptorsAsync_ReturnsEmployeesWithFaceDescriptor()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var branchId = Guid.NewGuid();
+        var emp1 = new Employee { Id = Guid.NewGuid(), FullName = "NV Co FaceID", EmployeeCode = "NV01", BranchId = branchId, FaceDescriptor = "[0.1, 0.2]" };
+        var emp2 = new Employee { Id = Guid.NewGuid(), FullName = "NV Khong FaceID", EmployeeCode = "NV02", BranchId = branchId, FaceDescriptor = null };
+        employeeRepo.Employees.Add(emp1);
+        employeeRepo.Employees.Add(emp2);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var result = await service.GetTodayStaffDescriptorsAsync(branchId);
+
+        Assert.Single(result);
+        Assert.Equal("NV01", result[0].EmployeeCode);
+        Assert.Equal("[0.1, 0.2]", result[0].FaceDescriptor);
+    }
+
+    [Fact]
+    public async Task CheckInFaceIdAsync_ValidMatch_UpdatesCheckIn()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = empId,
+            BranchId = Guid.NewGuid(),
+            WorkDate = DateTime.UtcNow.Date,
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            DurationHours = 8.00m
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var request = new FaceIdCheckInRequest(schedule.Id, empId, 0.35m, null);
+        var result = await service.CheckInFaceIdAsync(request);
+
+        Assert.NotNull(result.CheckInTime);
+        Assert.Equal("FACE_ID", result.CheckInMethod);
+        Assert.Equal(0.35m, result.FaceMatchScore);
+        Assert.Equal(ScheduleStatus.InProgress, result.Status);
+        Assert.True(uow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task CheckInFaceIdAsync_ScoreBelowThreshold_ThrowsException()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = empId,
+            BranchId = Guid.NewGuid(),
+            WorkDate = DateTime.UtcNow.Date,
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            DurationHours = 8.00m
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var request = new FaceIdCheckInRequest(schedule.Id, empId, 0.75m, null);
+        await Assert.ThrowsAsync<BusinessException>(() => service.CheckInFaceIdAsync(request));
+    }
+
+    [Fact]
+    public async Task CheckOutFaceIdAsync_ValidMatch_UpdatesCheckOutAndCalculatesHours()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var checkInTime = DateTime.UtcNow.AddHours(-4);
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = empId,
+            BranchId = Guid.NewGuid(),
+            WorkDate = DateTime.UtcNow.Date,
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            CheckInTime = checkInTime,
+            CheckInMethod = "FACE_ID",
+            Status = ScheduleStatus.InProgress
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var request = new FaceIdCheckOutRequest(schedule.Id, empId, 0.38m, null);
+        var result = await service.CheckOutFaceIdAsync(request);
+
+        Assert.NotNull(result.CheckOutTime);
+        Assert.Equal("FACE_ID", result.CheckOutMethod);
+        Assert.Equal(ScheduleStatus.Completed, result.Status);
+        Assert.True(result.ActualWorkHours >= 3.9m);
+        Assert.True(uow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task CheckOutFaceIdAsync_DistanceExceedsThreshold_ThrowsException()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = empId,
+            BranchId = Guid.NewGuid(),
+            WorkDate = DateTime.UtcNow.Date,
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            CheckInTime = DateTime.UtcNow.AddHours(-4),
+            CheckInMethod = "FACE_ID",
+            Status = ScheduleStatus.InProgress
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var request = new FaceIdCheckOutRequest(schedule.Id, empId, 0.72m, null);
+        await Assert.ThrowsAsync<BusinessException>(() => service.CheckOutFaceIdAsync(request));
+    }
 }
 

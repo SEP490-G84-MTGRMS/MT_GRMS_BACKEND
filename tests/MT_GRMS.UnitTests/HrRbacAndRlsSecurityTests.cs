@@ -309,7 +309,7 @@ public class HrRbacAndRlsSecurityTests
     [InlineData(typeof(EmployeesController), "GetEmployees", SystemRoles.OwnerOrAdmin)]
     [InlineData(typeof(EmployeesController), "Create", SystemRoles.OwnerOrAdmin)]
     [InlineData(typeof(EmployeesController), "Delete", SystemRoles.OwnerOrAdmin)]
-    [InlineData(typeof(PayslipsController), "GetPayslipsPaged", SystemRoles.OwnerOrAdmin)]
+    [InlineData(typeof(PayslipsController), "GetPayslipsPaged", SystemRoles.AllStaffAndOwner)]
     [InlineData(typeof(PayslipsController), "GeneratePayrollBatch", SystemRoles.OwnerOrAdmin)]
     [InlineData(typeof(PayslipsController), "PayPayslip", SystemRoles.OwnerOrAdmin)]
     [InlineData(typeof(ShiftConfigsController), "Create", SystemRoles.OwnerOrAdmin)]

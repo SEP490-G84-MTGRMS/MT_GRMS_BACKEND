@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Employees.Dtos;
+using MT_GRMS.Application.HR.Schedules.Dtos;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Exceptions;
 
@@ -325,6 +326,36 @@ public class EmployeesController : BaseApiController
         catch (BusinessException ex)
         {
             return BadRequest(ApiResponse<object>.Fail(ex.ErrorCode, ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Đăng ký hoặc cập nhật vector khuôn mặt FaceID cho nhân viên
+    /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [HttpPost("{id:guid}/face-descriptor")]
+    public async Task<IActionResult> RegisterFaceDescriptor(
+        Guid id,
+        [FromBody] RegisterFaceDescriptorRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(request.FaceDescriptor))
+            {
+                return BadRequest(ApiResponse<bool>.Fail("INVALID_FACE_DESCRIPTOR", "Vector khuôn mặt không được để trống."));
+            }
+
+            var result = await _employeeService.RegisterFaceDescriptorAsync(id, request.FaceDescriptor, request.FaceImageUrls, cancellationToken);
+            return Ok(ApiResponse<bool>.Ok(result, "Cập nhật vector khuôn mặt FaceID thành công."));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(ApiResponse<bool>.Fail("NOT_FOUND", ex.Message));
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(ApiResponse<bool>.Fail("BAD_REQUEST", ex.Message));
         }
     }
 }

@@ -119,6 +119,13 @@ public static class DbInitializer
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_TenantID_ProductCode"" ON ""Products"" (""TenantID"", ""ProductCode"") WHERE ""IsDeleted"" = false;
                         DROP INDEX IF EXISTS ""IX_Products_Barcode"";
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_Barcode"" ON ""Products"" (""Barcode"") WHERE ""IsDeleted"" = false AND ""Barcode"" IS NOT NULL;
+                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceDescriptor"" text;
+                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceImageUrls"" text;
+                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceRegisteredAt"" timestamp without time zone;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckInFaceImageUrl"" text;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckOutFaceImageUrl"" text;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckInMethod"" text;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckOutMethod"" text;
                     ");
                 }
                 catch { }

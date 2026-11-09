@@ -55,7 +55,8 @@ public class EmployeeService : IEmployeeService
             e.DebtAmount,
             e.UserId,
             e.User?.UserName,
-            e.CreatedAt
+            e.CreatedAt,
+            !string.IsNullOrWhiteSpace(e.FaceDescriptor)
         )).ToList();
 
         return new PagedResult<EmployeeSummaryDto>
@@ -180,6 +181,9 @@ public class EmployeeService : IEmployeeService
             Phone = normalizedPhone,
             Email = request.Email?.Trim(),
             AvatarUrl = request.AvatarUrl?.Trim(),
+            FaceDescriptor = request.FaceDescriptor?.Trim(),
+            FaceImageUrls = request.FaceImageUrls?.Trim(),
+            FaceRegisteredAt = !string.IsNullOrWhiteSpace(request.FaceDescriptor) ? DateTime.UtcNow : null,
             Address = request.Address?.Trim(),
             StartDate = request.StartDate,
             Note = request.Note?.Trim(),
@@ -312,6 +316,15 @@ public class EmployeeService : IEmployeeService
         if (request.AvatarUrl != null)
         {
             employee.AvatarUrl = string.IsNullOrWhiteSpace(request.AvatarUrl) ? null : request.AvatarUrl.Trim();
+        }
+        if (request.FaceDescriptor != null)
+        {
+            employee.FaceDescriptor = string.IsNullOrWhiteSpace(request.FaceDescriptor) ? null : request.FaceDescriptor.Trim();
+            employee.FaceRegisteredAt = !string.IsNullOrWhiteSpace(request.FaceDescriptor) ? DateTime.UtcNow : null;
+        }
+        if (request.FaceImageUrls != null)
+        {
+            employee.FaceImageUrls = string.IsNullOrWhiteSpace(request.FaceImageUrls) ? null : request.FaceImageUrls.Trim();
         }
         employee.UpdatedAt = DateTime.UtcNow;
 
@@ -655,8 +668,36 @@ public class EmployeeService : IEmployeeService
             e.BankName,
             e.BankAccountHolder,
             e.CreatedAt,
-            e.UpdatedAt
+            e.UpdatedAt,
+            e.FaceDescriptor,
+            e.FaceImageUrls,
+            e.FaceRegisteredAt
         );
+    }
+
+    public async Task<bool> RegisterFaceDescriptorAsync(
+        Guid employeeId,
+        string faceDescriptor,
+        string? faceImageUrls = null,
+        CancellationToken cancellationToken = default)
+    {
+        var employee = await _employeeRepository.GetByIdAsync(employeeId, cancellationToken);
+        if (employee == null)
+        {
+            throw new NotFoundException($"Không tìm thấy nhân viên với ID '{employeeId}'.");
+        }
+
+        employee.FaceDescriptor = string.IsNullOrWhiteSpace(faceDescriptor) ? null : faceDescriptor.Trim();
+        if (faceImageUrls != null)
+        {
+            employee.FaceImageUrls = string.IsNullOrWhiteSpace(faceImageUrls) ? null : faceImageUrls.Trim();
+        }
+        employee.FaceRegisteredAt = !string.IsNullOrWhiteSpace(faceDescriptor) ? DateTime.UtcNow : null;
+        employee.UpdatedAt = DateTime.UtcNow;
+
+        _employeeRepository.Update(employee);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return true;
     }
 
     private static List<EmployeeAllowance> MapAllowances(List<EmployeeAllowanceDto>? allowances, Guid employeeId = default, string tenantId = "")

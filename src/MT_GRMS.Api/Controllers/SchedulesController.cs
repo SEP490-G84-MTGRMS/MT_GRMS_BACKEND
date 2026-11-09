@@ -310,5 +310,78 @@ public class SchedulesController : BaseApiController
         var result = await approvalService.GetRequestsByScheduleIdAsync(scheduleId, currentUserId, isOwnerOrAdmin, cancellationToken);
         return Ok(ApiResponse<IReadOnlyList<ScheduleApprovalRequestDto>>.Ok(result));
     }
+
+    /// <summary>
+    /// Lấy danh sách vector khuôn mặt nhân viên trực ca trong ngày theo chi nhánh (phục vụ FaceMatcher tại POS)
+    /// </summary>
+    [HttpGet("face-id/today-descriptors")]
+    public async Task<IActionResult> GetTodayStaffDescriptors(
+        [FromQuery] Guid branchId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _scheduleService.GetTodayStaffDescriptorsAsync(branchId, cancellationToken);
+            return Ok(ApiResponse<IReadOnlyList<TodayStaffDescriptorDto>>.Ok(result));
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, ApiResponse<object>.Fail("INTERNAL_SERVER_ERROR", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Điểm danh vào ca bằng FaceID từ Web POS
+    /// </summary>
+    [HttpPost("face-id/check-in")]
+    public async Task<IActionResult> CheckInFaceId(
+        [FromBody] FaceIdCheckInRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _scheduleService.CheckInFaceIdAsync(request, cancellationToken);
+            return Ok(ApiResponse<ScheduleResponse>.Ok(result, "Điểm danh vào ca FaceID thành công."));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
+        }
+        catch (BusinessException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail(ex.ErrorCode ?? "BAD_REQUEST", ex.Message));
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, ApiResponse<object>.Fail("INTERNAL_SERVER_ERROR", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Điểm danh ra ca bằng FaceID từ Web POS
+    /// </summary>
+    [HttpPost("face-id/check-out")]
+    public async Task<IActionResult> CheckOutFaceId(
+        [FromBody] FaceIdCheckOutRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _scheduleService.CheckOutFaceIdAsync(request, cancellationToken);
+            return Ok(ApiResponse<ScheduleResponse>.Ok(result, "Điểm danh ra ca FaceID thành công."));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
+        }
+        catch (BusinessException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail(ex.ErrorCode ?? "BAD_REQUEST", ex.Message));
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, ApiResponse<object>.Fail("INTERNAL_SERVER_ERROR", ex.Message));
+        }
+    }
 }
 

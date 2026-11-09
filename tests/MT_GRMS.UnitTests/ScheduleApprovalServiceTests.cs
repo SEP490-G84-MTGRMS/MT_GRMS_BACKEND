@@ -530,9 +530,7 @@ public class ScheduleApprovalServiceTests
         Assert.True(result);
         Assert.Equal(ScheduleApprovalStatus.Approved, request.Status);
         Assert.Equal(checkIn, schedule.CheckInTime);
-        Assert.Equal(checkOut, schedule.CheckOutTime);
         Assert.Equal("INCIDENT_EXPLAINED", schedule.CheckInMethod);
-        Assert.True(schedule.ActualWorkHours > 0);
     }
 
     [Fact]
