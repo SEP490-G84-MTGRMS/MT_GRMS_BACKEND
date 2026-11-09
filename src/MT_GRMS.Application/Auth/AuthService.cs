@@ -46,107 +46,19 @@ public class AuthService : IAuthService
         }
 
         // 2. Tìm user trong cơ sở dữ liệu
-        var user = await _userRepository.GetByUsernameAsync(request.UsernameOrEmail.Trim(), cancellationToken);
+        var user = await _userRepository.GetByUsernameAsync(request.UsernameOrEmail.Trim(), cancellationToken)
+            ?? throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
 
-        // 3. Kiểm tra mật khẩu (hỗ trợ PBKDF2 PasswordHasher, SHA256, Plaintext và demo password)
-        bool isPasswordValid = false;
-        bool rehashNeeded = false;
+        // 3. Xác thực mật khẩu và tự động nâng cấp hash nếu cần
+        await VerifyPasswordAsync(user, request.Password, cancellationToken);
 
-        if (user != null && !string.IsNullOrEmpty(user.PasswordHash))
-        {
-            isPasswordValid = _passwordHasher.VerifyPassword(user.PasswordHash, request.Password, out rehashNeeded);
+        // 4. Xác định Tenant và phân quyền theo UserRole enum (Admin, StoreOwner, Staff)
+        var (tenantId, tenantUser) = ResolveTenant(user, request.TenantCode);
+        var userRole = ResolveUserRole(user, tenantUser);
+        var role = userRole.ToStringRole();
+        var isAdmin = userRole == UserRole.Admin;
 
-            // Kiểm tra SHA256 hash nếu chưa khớp
-            if (!isPasswordValid)
-            {
-                try
-                {
-                    var hashedInput = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(request.Password))).ToLowerInvariant();
-                    if (string.Equals(user.PasswordHash, hashedInput, StringComparison.OrdinalIgnoreCase))
-                    {
-                        isPasswordValid = true;
-                        rehashNeeded = true;
-                    }
-                }
-                catch { }
-            }
-
-            // Kiểm tra plaintext trực tiếp
-            if (!isPasswordValid && string.Equals(user.PasswordHash, request.Password, StringComparison.Ordinal))
-            {
-                isPasswordValid = true;
-                rehashNeeded = true;
-            }
-
-            // Cho phép mật khẩu demo tiện lợi "password123" hoặc "123456" nếu là seed admin/manager/cashier
-            if (!isPasswordValid && (request.Password == "password123" || request.Password == "123456"))
-            {
-                if (user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase) ||
-                    user.UserName.Equals("manager01", StringComparison.OrdinalIgnoreCase) ||
-                    user.UserName.Equals("cashier01", StringComparison.OrdinalIgnoreCase))
-                {
-                    isPasswordValid = true;
-                }
-            }
-        }
-
-        if (user == null || !isPasswordValid)
-        {
-            throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
-        }
-
-        // Nếu mật khẩu cũ dạng plain text đã đăng nhập thành công -> tự động nâng cấp hash
-        if (rehashNeeded)
-        {
-            user.PasswordHash = _passwordHasher.HashPassword(request.Password);
-            _userRepository.Update(user);
-            await _userRepository.SaveChangesAsync(cancellationToken);
-        }
-
-        var tenantUser = user.TenantUsers?.FirstOrDefault(tu => !string.IsNullOrWhiteSpace(request.TenantCode) && tu.TenantId == request.TenantCode)
-                         ?? user.TenantUsers?.FirstOrDefault();
-
-        var tenantId = tenantUser?.TenantId ?? (!string.IsNullOrWhiteSpace(request.TenantCode) ? request.TenantCode : "DEFAULT");
-        if (tenantId is "default-tenant" or "TENANT-HCM-01" or "TENANT-DEFAULT" or "DEFAULT")
-        {
-            tenantId = "tenant_mt_mart_01";
-        }
-
-        // Xác định quyền hạn (Role) theo UserRole enum (Admin, StoreOwner, Staff)
-        var isAdmin = user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase);
-        string role;
-        if (isAdmin)
-        {
-            role = UserRoleNames.Admin;
-        }
-        else
-        {
-            var rawRole = tenantUser?.Role;
-            if (string.IsNullOrWhiteSpace(rawRole))
-            {
-                var uName = (user.UserName ?? "").ToUpperInvariant();
-                var email = (user.Email ?? "").ToUpperInvariant();
-                if (uName.Contains("EMPLOYEE") || email.Contains("EMPLOYEE") || uName.Contains("STAFF") || email.Contains("STAFF") || uName.Contains("CASHIER") || email.Contains("CASHIER") || uName.Contains("NHANVIEN"))
-                {
-                    role = UserRoleNames.Staff;
-                }
-                else if (uName.Contains("OWNER") || email.Contains("OWNER") || uName.Contains("CHUCUAHANG"))
-                {
-                    role = UserRoleNames.StoreOwner;
-                }
-                else
-                {
-                    // Mặc định tài khoản đăng ký chuỗi/cửa hàng là STORE_OWNER, tuyệt đối không gán ADMIN
-                    role = UserRoleNames.StoreOwner;
-                }
-            }
-            else
-            {
-                role = UserRoleNames.FromString(rawRole).ToStringRole();
-            }
-        }
-
-        // 4. Đăng nhập thành công với thông tin user từ database
+        // 5. Chuẩn bị thông tin người dùng và sinh JWT Token / RefreshToken
         var userInfo = new UserInfo(
             Id: user.Id,
             Username: user.Username,
@@ -178,6 +90,100 @@ public class AuthService : IAuthService
         );
     }
 
+    /// <summary>
+    /// Kiểm tra mật khẩu (hỗ trợ PBKDF2 PasswordHasher, SHA256, Plaintext và demo password tiện lợi)
+    /// Tự động nâng cấp hash lên PBKDF2 nếu đăng nhập bằng thuật toán cũ thành công
+    /// </summary>
+    private async Task VerifyPasswordAsync(User user, string requestPassword, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrEmpty(user.PasswordHash))
+        {
+            throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
+        }
+
+        bool isPasswordValid = _passwordHasher.VerifyPassword(user.PasswordHash, requestPassword, out var rehashNeeded);
+
+        // Fallback 1: Kiểm tra SHA256 hash từ dữ liệu seed cũ
+        if (!isPasswordValid)
+        {
+            try
+            {
+                var hashedInput = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(requestPassword))).ToLowerInvariant();
+                if (string.Equals(user.PasswordHash, hashedInput, StringComparison.OrdinalIgnoreCase))
+                {
+                    isPasswordValid = true;
+                    rehashNeeded = true;
+                }
+            }
+            catch { }
+        }
+
+        // Fallback 2: Kiểm tra plaintext trực tiếp
+        if (!isPasswordValid && string.Equals(user.PasswordHash, requestPassword, StringComparison.Ordinal))
+        {
+            isPasswordValid = true;
+            rehashNeeded = true;
+        }
+
+        // Fallback 3: Cho phép mật khẩu demo "password123" hoặc "123456" cho tài khoản seed
+        if (!isPasswordValid && (requestPassword is "password123" or "123456"))
+        {
+            if (user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase) ||
+                user.UserName.Equals("manager01", StringComparison.OrdinalIgnoreCase) ||
+                user.UserName.Equals("cashier01", StringComparison.OrdinalIgnoreCase))
+            {
+                isPasswordValid = true;
+            }
+        }
+
+        if (!isPasswordValid)
+        {
+            throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
+        }
+
+        // Tự động nâng cấp mật khẩu cũ sang PBKDF2 chuẩn bảo mật cao
+        if (rehashNeeded)
+        {
+            user.PasswordHash = _passwordHasher.HashPassword(requestPassword);
+            _userRepository.Update(user);
+            await _userRepository.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Xác định TenantId và đối tượng TenantUser liên kết của người dùng
+    /// </summary>
+    private static (string TenantId, TenantUser? TenantUser) ResolveTenant(User user, string? tenantCode)
+    {
+        var tenantUser = user.TenantUsers?.FirstOrDefault(tu => !string.IsNullOrWhiteSpace(tenantCode) && tu.TenantId == tenantCode)
+                         ?? user.TenantUsers?.FirstOrDefault();
+
+        var tenantId = tenantUser?.TenantId ?? (!string.IsNullOrWhiteSpace(tenantCode) ? tenantCode : "tenant_mt_mart_01");
+        if (tenantId is "default-tenant" or "TENANT-HCM-01" or "TENANT-DEFAULT" or "DEFAULT")
+        {
+            tenantId = "tenant_mt_mart_01";
+        }
+
+        return (tenantId, tenantUser);
+    }
+
+    private static string ResolveTenantId(User user, string? tenantCode) => ResolveTenant(user, tenantCode).TenantId;
+
+    /// <summary>
+    /// Xác định quyền hạn chuẩn hóa theo enum UserRole (Admin, StoreOwner, Staff)
+    /// </summary>
+    private static UserRole ResolveUserRole(User user, TenantUser? tenantUser)
+    {
+        // 1. Quản trị viên hệ thống
+        if (user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase))
+        {
+            return UserRole.Admin;
+        }
+
+        // 2. Lấy role trực tiếp từ database qua Enum parser (mặc định StoreOwner nếu mới tạo cửa hàng)
+        return UserRoleNames.FromString(tenantUser?.Role ?? UserRoleNames.StoreOwner);
+    }
+
     public async Task<LoginResponse> RefreshTokenAsync(RefreshTokenRequest request, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(request.RefreshToken))
@@ -194,12 +200,10 @@ public class AuthService : IAuthService
             throw new UnauthorizedAccessException("Phiên đăng nhập đã hết hạn hoặc RefreshToken không hợp lệ. Vui lòng đăng nhập lại.");
         }
 
-        var tenantUser = user.TenantUsers?.FirstOrDefault();
-        var tenantId = tenantUser?.TenantId ?? "tenant_mt_mart_01";
-        var isAdmin = user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase);
-        var role = isAdmin 
-            ? UserRoleNames.Admin 
-            : UserRoleNames.FromString(tenantUser?.Role ?? UserRoleNames.StoreOwner).ToStringRole();
+        var (tenantId, tenantUser) = ResolveTenant(user, null);
+        var userRole = ResolveUserRole(user, tenantUser);
+        var role = userRole.ToStringRole();
+        var isAdmin = userRole == UserRole.Admin;
 
         var userInfo = new UserInfo(
             Id: user.Id,
@@ -238,12 +242,10 @@ public class AuthService : IAuthService
         var user = await _userRepository.GetByIdAsync(userId, cancellationToken);
         if (user == null || !user.IsActive) return null;
 
-        var tenantUser = user.TenantUsers?.FirstOrDefault();
-        var tenantId = tenantUser?.TenantId ?? "tenant_mt_mart_01";
-        var isAdmin = user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase);
-        var role = isAdmin 
-            ? UserRoleNames.Admin 
-            : UserRoleNames.FromString(tenantUser?.Role ?? UserRoleNames.StoreOwner).ToStringRole();
+        var (tenantId, tenantUser) = ResolveTenant(user, null);
+        var userRole = ResolveUserRole(user, tenantUser);
+        var role = userRole.ToStringRole();
+        var isAdmin = userRole == UserRole.Admin;
 
         return new UserInfo(
             Id: user.Id,
