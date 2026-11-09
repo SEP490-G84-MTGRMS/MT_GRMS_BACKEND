@@ -308,7 +308,7 @@ public class AuthService : IAuthService
             Code = tenantCode.Length > 20 ? tenantCode.Substring(0, 20) : tenantCode,
             Hotline = request.Phone.Trim(),
             Status = "ACTIVE",
-            CurrentPlan = "PRO",
+            CurrentPlan = "TRIAL",
             SubscriptionStatus = "TRIAL",
             HasStaffManagementAddon = true,
             WalletBalance = 0m,
@@ -317,6 +317,7 @@ public class AuthService : IAuthService
 
         var userId = $"usr_{Guid.NewGuid():N}";
         var userEmail = string.IsNullOrWhiteSpace(request.Email) ? $"{request.Phone.Trim()}@mtgrms.vn" : request.Email.Trim();
+        var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
         var user = new User
         {
             Id = userId,
@@ -328,6 +329,8 @@ public class AuthService : IAuthService
             IsActive = true,
             IsAdmin = false,
             IsEmailVerified = true,
+            RefreshToken = refreshToken,
+            RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7),
             CreatedAt = DateTime.UtcNow
         };
 
@@ -346,7 +349,6 @@ public class AuthService : IAuthService
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
         var accessToken = GenerateJwtToken(user.Id, user.UserName, user.Email, UserRoleNames.StoreOwner, tenant.Id, false, expiresAt);
-        var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
 
         var userInfo = new UserInfo(
             Id: user.Id,
