@@ -953,12 +953,15 @@ public class OrderService : IOrderService
 
                 totalReturnAmount += retItem.Quantity * retItem.UnitPrice;
 
-                // Hoàn lại kho BranchStock
-                var stock = await _orderRepository.GetBranchStockAsync(originalOrder.BranchId, retItem.ProductId, null, cancellationToken);
-                if (stock != null)
+                // Hoàn lại kho BranchStock nếu tình trạng hàng là Restock (nguyên vẹn)
+                if (!string.Equals(retItem.Condition, "Damaged", StringComparison.OrdinalIgnoreCase))
                 {
-                    stock.QuantityOnHand += retItem.Quantity;
-                    stock.UpdatedAt = DateTime.UtcNow;
+                    var stock = await _orderRepository.GetBranchStockAsync(originalOrder.BranchId, retItem.ProductId, null, cancellationToken);
+                    if (stock != null)
+                    {
+                        stock.QuantityOnHand += retItem.Quantity;
+                        stock.UpdatedAt = DateTime.UtcNow;
+                    }
                 }
             }
         }
