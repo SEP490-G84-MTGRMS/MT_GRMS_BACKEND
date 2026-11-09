@@ -8,8 +8,14 @@ internal static class SupplierAccess
 {
     public static bool IsStoreOwner(ITenantContext tenantContext)
     {
-        var role = (tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
-        return string.IsNullOrEmpty(role) || role is "STORE_OWNER" or "ADMIN";
+        // Chuẩn hóa StoreOwner / STORE_OWNER / store-owner → STOREOWNER
+        var role = (tenantContext.CurrentRole ?? string.Empty)
+            .Trim()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .ToUpperInvariant();
+        return string.IsNullOrEmpty(role) || role is "STOREOWNER" or "ADMIN";
     }
 
     public static void EnsureStoreOwner(ITenantContext tenantContext)

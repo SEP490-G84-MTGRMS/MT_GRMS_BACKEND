@@ -241,10 +241,16 @@ public class BranchManagementTests
             return Task.FromResult(Branches.Count(b => b.TenantId == "tenant-test-1" && !b.IsDeleted));
         }
 
+        public Task<BranchDetailDto?> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<BranchDetailDto?>(null);
+
         public Task<(IReadOnlyList<Branch> Items, int TotalCount)> GetPagedListAsync(
             string? keyword,
             string? branchCode,
             string? status,
+            IReadOnlyList<string>? branchCodes,
+            IReadOnlyList<string>? branchNames,
+            IReadOnlyList<string>? addresses,
+            IReadOnlyList<string>? phones,
             int pageIndex,
             int pageSize,
             CancellationToken cancellationToken = default)
@@ -263,9 +269,32 @@ public class BranchManagementTests
                     (b.Phone != null && b.Phone.Contains(kw)));
             }
 
-            if (!string.IsNullOrWhiteSpace(branchCode) && !string.Equals(branchCode, "all", StringComparison.OrdinalIgnoreCase))
+            if (branchCodes != null && branchCodes.Any(c => !string.IsNullOrWhiteSpace(c)))
+            {
+                var terms = branchCodes.Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c.Trim().ToLower()).ToList();
+                query = query.Where(b => terms.Any(t => b.Code.ToLower().Contains(t)));
+            }
+            else if (!string.IsNullOrWhiteSpace(branchCode) && !string.Equals(branchCode, "all", StringComparison.OrdinalIgnoreCase))
             {
                 query = query.Where(b => b.Code == branchCode);
+            }
+
+            if (branchNames != null && branchNames.Any(n => !string.IsNullOrWhiteSpace(n)))
+            {
+                var terms = branchNames.Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim().ToLower()).ToList();
+                query = query.Where(b => terms.Any(t => b.Name.ToLower().Contains(t)));
+            }
+
+            if (addresses != null && addresses.Any(a => !string.IsNullOrWhiteSpace(a)))
+            {
+                var terms = addresses.Where(a => !string.IsNullOrWhiteSpace(a)).Select(a => a.Trim().ToLower()).ToList();
+                query = query.Where(b => terms.Any(t => (b.Address ?? string.Empty).ToLower().Contains(t)));
+            }
+
+            if (phones != null && phones.Any(p => !string.IsNullOrWhiteSpace(p)))
+            {
+                var terms = phones.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p.Trim().ToLower()).ToList();
+                query = query.Where(b => terms.Any(t => (b.Phone ?? string.Empty).ToLower().Contains(t)));
             }
 
             if (!string.IsNullOrWhiteSpace(status) && !string.Equals(status, "all", StringComparison.OrdinalIgnoreCase))

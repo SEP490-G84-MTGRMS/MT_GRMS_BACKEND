@@ -10,6 +10,10 @@ public interface IBranchRepository : IRepository<Branch>
         string? keyword,
         string? branchCode,
         string? status,
+        IReadOnlyList<string>? branchCodes,
+        IReadOnlyList<string>? branchNames,
+        IReadOnlyList<string>? addresses,
+        IReadOnlyList<string>? phones,
         int pageIndex,
         int pageSize,
         CancellationToken cancellationToken = default);

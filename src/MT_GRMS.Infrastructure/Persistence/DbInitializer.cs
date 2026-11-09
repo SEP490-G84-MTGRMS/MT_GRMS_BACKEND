@@ -145,11 +145,52 @@ ALTER TABLE ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""SupersededBy
 
 ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryDaysJson"" character varying(500) NULL;
 ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryWeekdaysMask"" integer NULL;
+
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""CutoffDayOffset"" integer NOT NULL DEFAULT 1;
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""CutoffTime"" character varying(10) NOT NULL DEFAULT '17:00';
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""DeliveryWeekdaysMask"" integer NOT NULL DEFAULT 127;
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""DeliveryDaysJson"" text NOT NULL DEFAULT '[""Mon"",""Tue"",""Wed"",""Thu"",""Fri"",""Sat""]';
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""MinOrderQuantity"" integer NOT NULL DEFAULT 0;
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""AllowUrgent"" boolean NOT NULL DEFAULT FALSE;
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""UrgentLeadTimeHours"" integer NOT NULL DEFAULT 4;
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""UrgentFeePercent"" numeric(5,2) NOT NULL DEFAULT 0;
+
+ALTER TABLE ""SupplierProducts"" ADD COLUMN IF NOT EXISTS ""AllowedShortageQuantity"" integer NOT NULL DEFAULT 0;
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'SupplierDeliveryConfigs') THEN
+        UPDATE ""Suppliers"" s
+        SET ""CutoffDayOffset"" = c.""CutoffDayOffset"",
+            ""CutoffTime"" = COALESCE(c.""CutoffTime"", '17:00'),
+            ""DeliveryWeekdaysMask"" = c.""DeliveryWeekdaysMask"",
+            ""DeliveryDaysJson"" = COALESCE(c.""DeliveryDaysJson"", '[""Mon"",""Tue"",""Wed"",""Thu"",""Fri"",""Sat""]'),
+            ""MinOrderQuantity"" = c.""MinOrderQuantity"",
+            ""AllowUrgent"" = c.""AllowUrgent"",
+            ""UrgentLeadTimeHours"" = c.""UrgentLeadTimeHours"",
+            ""UrgentFeePercent"" = c.""UrgentFeePercent""
+        FROM ""SupplierDeliveryConfigs"" c
+        WHERE s.""Id"" = c.""SupplierId"";
+
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'SupplierBlackoutDates' AND column_name = 'SupplierDeliveryConfigId') THEN
+            UPDATE ""SupplierBlackoutDates"" b
+            SET ""SupplierId"" = c.""SupplierId""
+            FROM ""SupplierDeliveryConfigs"" c
+            WHERE b.""SupplierDeliveryConfigId"" = c.""Id"" AND (b.""SupplierId"" IS NULL OR b.""SupplierId"" = '00000000-0000-0000-0000-000000000000');
+        END IF;
+
+        DROP TABLE IF EXISTS ""SupplierDeliveryConfigs"" CASCADE;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'SupplierBlackoutDates' AND column_name = 'SupplierDeliveryConfigId') THEN
+        ALTER TABLE ""SupplierBlackoutDates"" DROP COLUMN IF EXISTS ""SupplierDeliveryConfigId"";
+    END IF;
+END $$;
 ");
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "Cảnh báo khi bổ sung cột bảng PurchaseOrders/SupplierDispatchPackages");
+            logger?.LogWarning(ex, "Cảnh báo khi bổ sung cột bảng PurchaseOrders/SupplierDispatchPackages/Suppliers");
         }
 
         // 3. Tạo các chỉ mục Index
@@ -427,6 +468,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
                         ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
                         ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
+                        ALTER TABLE ""Suppliers"" DROP COLUMN IF EXISTS ""CategoryId"";
+                        ALTER TABLE ""Suppliers"" DROP COLUMN IF EXISTS ""CategoryCode"";
+                        ALTER TABLE ""SupplierDeliveryConfigs"" DROP COLUMN IF EXISTS ""LeadTimeHours"";
+                        ALTER TABLE ""SupplierDeliveryConfigs"" DROP COLUMN IF EXISTS ""LeadTimeDays"";
+                        DROP TABLE IF EXISTS ""SupplierCategories"" CASCADE;
                         DROP TABLE IF EXISTS ""ProductCombos"";
                         DROP INDEX IF EXISTS ""IX_Products_TenantID_ProductCode"";
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_TenantID_ProductCode"" ON ""Products"" (""TenantID"", ""ProductCode"") WHERE ""IsDeleted"" = false;
@@ -3681,23 +3727,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
                 await context.SaveChangesAsync(ct);
 
-                // Cấu hình Delivery Config cho các NCC
+                // Cấu hình Delivery Config cho các NCC (lưu trực tiếp trên Supplier)
                 var allSups = new[] { supAcecook, supMasan, supOrion, supUnilever };
                 foreach (var sup in allSups)
                 {
-                    if (!await context.SupplierDeliveryConfigs.IgnoreQueryFilters().AnyAsync(dc => dc.SupplierId == sup.Id, ct))
-                    {
-                        await context.SupplierDeliveryConfigs.AddAsync(new SupplierDeliveryConfig
-                        {
-                            TenantId = DefaultTenantId,
-                            SupplierId = sup.Id,
-                            LeadTimeHours = 24,
-                            LeadTimeDays = 1,
-                            CutoffTime = "17:00",
-                            DeliveryWeekdaysMask = 127,
-                            DeliveryDaysJson = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]"
-                        }, ct);
-                    }
+                    sup.CutoffTime = "17:00";
+                    sup.DeliveryWeekdaysMask = 127;
+                    sup.DeliveryDaysJson = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]";
                 }
 
                 // Lấy các Chi nhánh
@@ -4133,9 +4169,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
             var misalignedSba = await context.SupplierBranchAssignments.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId).ToListAsync(ct);
             foreach (var s in misalignedSba) { s.TenantId = DefaultTenantId; }
-
-            var misalignedSdc = await context.SupplierDeliveryConfigs.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId).ToListAsync(ct);
-            foreach (var s in misalignedSdc) { s.TenantId = DefaultTenantId; }
 
             await context.SaveChangesAsync(ct);
 

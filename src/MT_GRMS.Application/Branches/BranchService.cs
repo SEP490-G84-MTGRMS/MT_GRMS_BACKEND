@@ -39,6 +39,10 @@ public class BranchService : IBranchService
             query.Keyword,
             query.BranchCode,
             query.Status,
+            query.BranchCodes,
+            query.BranchNames,
+            query.Addresses,
+            query.Phones,
             pageIndex,
             pageSize,
             cancellationToken);
@@ -185,7 +189,7 @@ public class BranchService : IBranchService
         // Nếu đặt chi nhánh này làm Trụ sở chính, tự động gỡ cờ Trụ sở chính ở các chi nhánh khác
         if (request.IsHeadquarter && !branch.IsHeadquarter)
         {
-            var paged = await _branchRepo.GetPagedListAsync(null, null, null, 1, 100, cancellationToken);
+            var paged = await _branchRepo.GetPagedListAsync(null, null, null, null, null, null, null, 1, 100, cancellationToken);
             foreach (var other in paged.Items.Where(b => b.Id != id && b.IsHeadquarter))
             {
                 other.IsHeadquarter = false;

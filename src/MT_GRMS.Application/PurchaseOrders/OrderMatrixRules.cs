@@ -20,6 +20,24 @@ public static class OrderMatrixRules
     public const string ScopeNearest = "NEAREST";
     public const string ScopeWeek = "WEEK";
     public const string ScopeAll = "ALL";
+    /// <summary>Rolling window từ hôm nay: 7 / 14 / 21 / 31 ngày.</summary>
+    public const string ScopeDays7 = "DAYS_7";
+    public const string ScopeDays14 = "DAYS_14";
+    public const string ScopeDays21 = "DAYS_21";
+    public const string ScopeDays31 = "DAYS_31";
+
+    public static int? TryResolveRollingDurationDays(string? scope)
+    {
+        var s = (scope ?? string.Empty).Trim().ToUpperInvariant();
+        return s switch
+        {
+            ScopeDays7 => 7,
+            ScopeDays14 => 14,
+            ScopeDays21 => 21,
+            ScopeDays31 => 31,
+            _ => null
+        };
+    }
 
     public const string ResultSuccess = "SUCCESS";
     public const string ResultFailed = "FAILED";
@@ -102,16 +120,30 @@ public static class OrderMatrixRules
         return (hour, minute);
     }
 
+    /// <summary>Lead time tối thiểu (ngày): không cho đặt giao hôm nay / quá khứ.</summary>
+    public const int MinimumLeadTimeDays = 1;
+
     /// <summary>
-    /// Cutoff của ngày giao D = (D - LeadTimeDays) ở giờ CutoffTime (local/unspecified).
+    /// Cutoff của ngày giao D = (D − cutoffDayOffset) ở giờ CutoffTime.
+    /// offset=1 → chốt ngày trước ngày giao; offset=0 → chốt cùng ngày giao.
     /// </summary>
-    public static DateTime GetCutoffDateTime(DateTime deliveryDate, int leadTimeDays, string? cutoffTime)
+    public static DateTime GetCutoffDateTime(DateTime deliveryDate, string? cutoffTime, int cutoffDayOffset = 1)
     {
         var (hour, minute) = ParseCutoffTime(cutoffTime);
-        var lead = Math.Max(0, leadTimeDays);
-        var cutoffDay = deliveryDate.Date.AddDays(-lead);
+        var offset = Math.Max(0, cutoffDayOffset);
+        var cutoffDay = deliveryDate.Date.AddDays(-offset);
         return new DateTime(cutoffDay.Year, cutoffDay.Month, cutoffDay.Day, hour, minute, 0, DateTimeKind.Unspecified);
     }
+
+    /// <summary>Overload cũ: tham số giữa là cutoffDayOffset (không còn là leadTimeDays).</summary>
+    public static DateTime GetCutoffDateTime(DateTime deliveryDate, int cutoffDayOffset, string? cutoffTime)
+        => GetCutoffDateTime(deliveryDate, cutoffTime, cutoffDayOffset);
+
+    /// <summary>
+    /// Ngày giao sớm nhất được phép đặt = hôm nay + MinimumLeadTimeDays (theo lịch VN).
+    /// </summary>
+    public static DateTime GetEarliestAllowedDeliveryDate(DateTime now)
+        => now.Date.AddDays(MinimumLeadTimeDays);
 
     public static bool IsSupplierDeliveryDay(OrderMatrixSupplierDeliveryConfigDto config, DateTime deliveryDate)
     {
@@ -136,12 +168,6 @@ public static class OrderMatrixRules
         return true;
     }
 
-    public static bool IsLeadTimeSatisfied(DateTime now, DateTime deliveryDate, int leadTimeDays)
-    {
-        var earliest = now.Date.AddDays(Math.Max(0, leadTimeDays));
-        return deliveryDate.Date >= earliest;
-    }
-
     public static OrderMatrixDayStatusDto EvaluateDayStatus(
         Guid supplierId,
         DateTime deliveryDate,
@@ -150,7 +176,7 @@ public static class OrderMatrixRules
         string? committedPoCode = null,
         Guid? committedPoId = null)
     {
-        var cutoff = GetCutoffDateTime(deliveryDate, config.LeadTimeDays, config.CutoffTime);
+        var cutoff = GetCutoffDateTime(deliveryDate, config.CutoffTime, config.CutoffDayOffset);
 
         if (!config.IsActive)
         {
@@ -175,11 +201,6 @@ public static class OrderMatrixRules
             return Off(supplierId, deliveryDate, cutoff, "HOLIDAY_BLACKOUT");
         }
 
-        if (!IsLeadTimeSatisfied(now, deliveryDate, config.LeadTimeDays))
-        {
-            return Off(supplierId, deliveryDate, cutoff, "LEAD_TIME_VIOLATION");
-        }
-
         var hasCommittedPo = !string.IsNullOrWhiteSpace(committedPoCode) || committedPoId.HasValue;
 
         // PO đã tồn tại nhưng đã qua cutoff → khóa cứng (FINALIZED).
@@ -195,6 +216,18 @@ public static class OrderMatrixRules
                 PoCode = committedPoCode,
                 PoId = committedPoId
             };
+        }
+
+        // Không cho đặt giao ngày quá khứ
+        if (deliveryDate.Date < now.Date)
+        {
+            return Off(supplierId, deliveryDate, cutoff, "PAST_DELIVERY_DATE");
+        }
+
+        // Lead time ≥ 1 ngày: không cho đặt giao hôm nay (ngày giao sớm nhất = ngày mai)
+        if (deliveryDate.Date < GetEarliestAllowedDeliveryDate(now))
+        {
+            return Off(supplierId, deliveryDate, cutoff, "LEAD_TIME_VIOLATION");
         }
 
         if (now >= cutoff)

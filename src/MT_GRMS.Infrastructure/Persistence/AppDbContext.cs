@@ -56,10 +56,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<Batch> Batches { get; set; } = null!;
     public virtual DbSet<StockOnHand> StockOnHands { get; set; } = null!;
 
-    // 4. Phân hệ Nhà cung cấp, Mua hàng PO & Nhập kho GRN (10 bảng)
-    public virtual DbSet<SupplierCategory> SupplierCategories { get; set; } = null!;
+    // 4. Phân hệ Nhà cung cấp, Mua hàng PO & Nhập kho GRN
     public virtual DbSet<Domain.Entities.Supplier.Supplier> Suppliers { get; set; } = null!;
-    public virtual DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs { get; set; } = null!;
     public virtual DbSet<SupplierBlackoutDate> SupplierBlackoutDates { get; set; } = null!;
     public virtual DbSet<SupplierAPLedger> SupplierAPLedgers { get; set; } = null!;
     public virtual DbSet<SupplierProduct> SupplierProducts { get; set; } = null!;

@@ -119,7 +119,10 @@ public class PurchaseOrdersController : BaseApiController
     public async Task<IActionResult> SplitMatrixPo([FromBody] SplitMatrixPoCommand command, CancellationToken cancellationToken)
     {
         var result = await _poService.SplitMatrixPoBatchAsync(command, cancellationToken);
-        var msg = $"Đã xử lý chốt đơn: {result.SuccessCount} thành công, {result.FailedCount} lỗi, {result.SkippedCount} bỏ qua.";
+        var msg =
+            result.AmendedCount > 0 && result.SuccessCount == 0
+                ? $"Đã cập nhật PO thành công: {result.AmendedCount} đơn (Rev+), {result.NoChangesCount} không đổi SL."
+                : $"Đã xử lý chốt đơn: {result.SuccessCount} tạo mới, {result.AmendedCount} cập nhật, {result.FailedCount} lỗi, {result.SkippedCount} bỏ qua.";
         return Ok(ApiResponse<SplitMatrixBatchResultDto>.Ok(result, msg));
     }
 

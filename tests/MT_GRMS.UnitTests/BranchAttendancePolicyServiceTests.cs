@@ -67,6 +67,10 @@ public class BranchAttendancePolicyServiceTests
             string? keyword,
             string? branchCode,
             string? status,
+            IReadOnlyList<string>? branchCodes,
+            IReadOnlyList<string>? branchNames,
+            IReadOnlyList<string>? addresses,
+            IReadOnlyList<string>? phones,
             int pageIndex,
             int pageSize,
             CancellationToken cancellationToken = default)
@@ -106,6 +110,8 @@ public class BranchAttendancePolicyServiceTests
         {
             return Task.FromResult(Branches.Count(b => !b.IsDeleted));
         }
+
+        public Task<BranchDetailDto?> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<BranchDetailDto?>(null);
     }
 
     private class FakeBranchAttendancePolicyRepository : IBranchAttendancePolicyRepository

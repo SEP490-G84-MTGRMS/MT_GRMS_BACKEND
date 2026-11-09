@@ -30,7 +30,10 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 // 2. Cấu hình JWT Bearer Authentication
-var jwtKey = builder.Configuration["Jwt:Key"] ?? "MT_GRMS_Super_Secret_Key_For_JWT_Authentication_2026_FPTU_Capstone_Project!";
+// appsettings often has Jwt:Key="" — treat empty as missing so the fallback still applies
+var jwtKey = builder.Configuration["Jwt:Key"];
+if (string.IsNullOrWhiteSpace(jwtKey))
+    jwtKey = "MT_GRMS_Super_Secret_Key_For_JWT_Authentication_2026_FPTU_Capstone_Project!";
 var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "MTGRMS_API";
 var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "MTGRMS_CLIENT";
 

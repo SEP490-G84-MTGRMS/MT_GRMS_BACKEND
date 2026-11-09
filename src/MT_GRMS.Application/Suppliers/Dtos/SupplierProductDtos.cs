@@ -22,6 +22,8 @@ public class SupplierProductDto
     public decimal? CostPrice { get; set; }
     public decimal EffectivePurchasePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
+    public int AllowedShortageQuantity { get; set; } = 0;
+    public string? ImageUrl { get; set; }
     public bool IsPrimarySupplier { get; set; }
     public string Status { get; set; } = "Active";
     public int SyncedBranchesCount { get; set; }
@@ -36,6 +38,7 @@ public class AssignSupplierProductCommand
     public string DeliveryUoM { get; set; } = "Cái";
     public decimal AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
+    public int AllowedShortageQuantity { get; set; } = 0;
     public bool IsPrimarySupplier { get; set; } = false;
     public string? SupplierProductCode { get; set; }
 }
@@ -45,6 +48,7 @@ public class BatchAssignSupplierProductItemCommand
     public Guid ProductId { get; set; }
     public decimal AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
+    public int AllowedShortageQuantity { get; set; } = 0;
 }
 
 public class BatchAssignSupplierProductsCommand
@@ -54,6 +58,7 @@ public class BatchAssignSupplierProductsCommand
     public string? DeliveryUoM { get; set; }
     public decimal? AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
+    public int AllowedShortageQuantity { get; set; } = 0;
     public string? SupplierProductCode { get; set; }
 }
 
@@ -69,6 +74,7 @@ public class UpdateSupplierProductCommand
     public string DeliveryUoM { get; set; } = "Cái";
     public decimal AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
+    public int AllowedShortageQuantity { get; set; } = 0;
     public bool IsPrimarySupplier { get; set; } = false;
     public string? SupplierProductCode { get; set; }
 }
@@ -92,6 +98,7 @@ public class ProductSupplierMappingDto
     public string DeliveryUoM { get; set; } = "Cái";
     public decimal AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
+    public int AllowedShortageQuantity { get; set; } = 0;
     public bool IsPrimarySupplier { get; set; }
     public string Status { get; set; } = "Active";
 }

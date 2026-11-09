@@ -19,6 +19,12 @@ public class SupplierProduct : BaseTenantEntity
     public string DeliveryUoM { get; set; } = "Cái";
     public decimal AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
+
+    /// <summary>
+    /// Số lượng thiếu hàng cho phép khi nhận hàng từ NCC (0 = không cho thiếu).
+    /// </summary>
+    public int AllowedShortageQuantity { get; set; } = 0;
+
     public Guid? DeliveryUomId { get; set; }
     public decimal ConversionRate { get; set; } = 1.000m;
     public bool IsPrimarySupplier { get; set; } = false;
