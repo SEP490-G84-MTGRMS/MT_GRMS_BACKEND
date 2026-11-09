@@ -27,7 +27,8 @@ public record ProductResponse(
     List<string>? ImageUrls = null,
     bool HasOrders = false,
     string TaxCategory = "STANDARD_1PCT",
-    bool EligibleForVatReduction = false
+    bool EligibleForVatReduction = false,
+    List<ProductUnitResponse>? UnitPrices = null
 )
 {
     // Backward compatibility aliases

@@ -54,8 +54,14 @@ public record VoucherCodeDto(
 public record ValidateVoucherRequest(
     string Code,
     decimal CartTotal,
-    Guid? CustomerId = null
-);
+    string? CustomerId = null
+)
+{
+    public ValidateVoucherRequest(string code, decimal cartTotal, Guid? customerId)
+        : this(code, cartTotal, customerId?.ToString())
+    {
+    }
+}
 
 public record ValidateVoucherResponse(
     bool IsValid,

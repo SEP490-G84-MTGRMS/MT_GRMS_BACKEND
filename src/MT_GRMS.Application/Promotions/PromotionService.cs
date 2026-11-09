@@ -169,7 +169,7 @@ public class PromotionService : IPromotionService
     public async Task<EvaluateCartResponse> EvaluateCartAsync(EvaluateCartRequest request, CancellationToken cancellationToken = default)
     {
         var now = DateTime.UtcNow;
-        var activePromos = await _promotionRepository.GetActivePromotionsAsync(now, request.BranchId?.ToString(), cancellationToken);
+        var activePromos = await _promotionRepository.GetActivePromotionsAsync(now, request.BranchId, cancellationToken);
 
         decimal totalDiscount = 0.00m;
         var appliedPromos = new List<string>();
@@ -276,20 +276,27 @@ public class PromotionService : IPromotionService
 
                 foreach (var cond in discountConds)
                 {
-                    var cartItem = request.Items.FirstOrDefault(i => i.ProductId == cond.ProductId);
-                    if (cartItem == null || cartItem.Quantity < cond.MinQty)
+                    var matchingCartItems = request.Items.Where(i => i.ProductId == cond.ProductId).ToList();
+                    var totalBoughtBaseQty = matchingCartItems.Sum(i => GetCartItemBaseQty(i));
+                    if (matchingCartItems.Count == 0 || totalBoughtBaseQty < cond.MinQty)
                         continue;
 
                     decimal discountPerItem = cond.DiscountValue ?? promo.DiscountValue;
                     decimal lineDiscount = 0m;
 
-                    if (discountPerItem <= 100m)
+                    foreach (var cartItem in matchingCartItems)
                     {
-                        lineDiscount = Math.Round(cartItem.UnitPrice * (discountPerItem / 100.00m) * cartItem.Quantity, 2);
-                    }
-                    else
-                    {
-                        lineDiscount = discountPerItem * cartItem.Quantity;
+                        decimal itemLineDiscount = 0m;
+                        if (discountPerItem <= 100m)
+                        {
+                            itemLineDiscount = Math.Round(cartItem.UnitPrice * (discountPerItem / 100.00m) * cartItem.Quantity, 2);
+                        }
+                        else
+                        {
+                            var rate = cartItem.ConversionRate > 0m ? cartItem.ConversionRate : 1.00m;
+                            itemLineDiscount = discountPerItem * cartItem.Quantity * rate;
+                        }
+                        lineDiscount += itemLineDiscount;
                     }
 
                     if (promo.MaxDiscountAmount.HasValue && lineDiscount > promo.MaxDiscountAmount.Value)
@@ -301,7 +308,7 @@ public class PromotionService : IPromotionService
                     if (lineDiscount > 0)
                     {
                         promoItemDiscountTotal += lineDiscount;
-                        candidateItems.Add(new CartItemDiscountDto(cartItem.ProductId, lineDiscount));
+                        candidateItems.Add(new CartItemDiscountDto(cond.ProductId, lineDiscount));
                     }
                 }
 
@@ -436,6 +443,11 @@ public class PromotionService : IPromotionService
         return 0m;
     }
 
+    private static decimal GetCartItemBaseQty(CartItemDto item)
+    {
+        return item.Quantity * (item.ConversionRate > 0m ? item.ConversionRate : 1.00m);
+    }
+
     private static (List<CartGiftItemDto> Gifts, decimal TotalGiftValue) EvaluateBuyXGetYPromotion(
         Promotion promo,
         List<CartItemDto> cartItems,
@@ -459,8 +471,8 @@ public class PromotionService : IPromotionService
                 {
                     decimal reqQty = Math.Max(1m, t.RequiredQty ?? 1m);
                     decimal boughtQty = (t.BuyProductId.HasValue && t.BuyProductId.Value != Guid.Empty)
-                        ? cartItems.Where(i => i.ProductId == t.BuyProductId.Value).Sum(i => i.Quantity)
-                        : cartItems.Sum(i => i.Quantity);
+                        ? cartItems.Where(i => i.ProductId == t.BuyProductId.Value).Sum(i => GetCartItemBaseQty(i))
+                        : cartItems.Sum(i => GetCartItemBaseQty(i));
                     int mult = boughtQty >= reqQty ? (int)(boughtQty / reqQty) : 0;
                     return (Tier: t, ReqQty: reqQty, Multiple: mult);
                 })
@@ -521,21 +533,22 @@ public class PromotionService : IPromotionService
                 {
                     foreach (var buyCond in buyConditions)
                     {
-                        var matchingCartItem = cartItems.FirstOrDefault(i => i.ProductId == buyCond.ProductId);
+                        var matchingCartItems = cartItems.Where(i => i.ProductId == buyCond.ProductId).ToList();
+                        var boughtQty = matchingCartItems.Sum(i => GetCartItemBaseQty(i));
                         var reqMin = Math.Max(1m, buyCond.MinQty);
-                        if (matchingCartItem == null || matchingCartItem.Quantity < reqMin)
+                        if (matchingCartItems.Count == 0 || boughtQty < reqMin)
                         {
                             isEligible = false;
                             break;
                         }
 
-                        int multiple = (int)(matchingCartItem.Quantity / reqMin);
+                        int multiple = (int)(boughtQty / reqMin);
                         if (multiple < minMultiple) minMultiple = multiple;
                     }
                 }
                 else
                 {
-                    var totalCartQty = cartItems.Sum(i => i.Quantity);
+                    var totalCartQty = cartItems.Sum(i => GetCartItemBaseQty(i));
                     var reqMin = Math.Max(1m, giftConditions.Min(g => g.MinQty));
                     if (totalCartQty >= reqMin)
                     {
@@ -802,6 +815,16 @@ public class PromotionService : IPromotionService
         var endOfExpiry = promo.EndDate.Date.AddDays(1).AddTicks(-1);
         if (now > endOfExpiry && promo.EndDate > DateTime.MinValue)
             return new ValidateVoucherResponse(false, $"Voucher đã hết hạn từ ngày {promo.EndDate:dd/MM/yyyy}", 0, codeEntity.Code);
+
+        if (codeEntity.CustomerId.HasValue)
+        {
+            if (string.IsNullOrWhiteSpace(request.CustomerId) ||
+                !Guid.TryParse(request.CustomerId, out var parsedCustId) ||
+                parsedCustId != codeEntity.CustomerId.Value)
+            {
+                return new ValidateVoucherResponse(false, "Voucher này được cấp riêng cho khách hàng khác", 0, codeEntity.Code);
+            }
+        }
 
         if (request.CartTotal < promo.MinOrderValue)
             return new ValidateVoucherResponse(false, $"Đơn hàng chưa đạt giá trị tối thiểu {promo.MinOrderValue:N0} đ để dùng voucher này", 0, codeEntity.Code);

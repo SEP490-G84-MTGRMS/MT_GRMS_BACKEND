@@ -511,6 +511,93 @@ public class PromotionEvaluationTests
         Assert.Equal(10000m, result.GiftItems[0].EquivalentValue);
     }
 
+    [Fact]
+    public async Task REQ_FIX_PROMO_01_EvaluateCart_WithStringBranchAndCustomer_MatchesExactBranchAndAppliesDiscount()
+    {
+        var promoId = Guid.NewGuid();
+        _repo.Promotions.Add(new Promotion
+        {
+            Id = promoId,
+            TenantId = "tenant-test-1",
+            PromotionCode = "KM-BRANCH-AN01",
+            PromotionName = "Giảm 10k tại chi nhánh Ba Đình",
+            Type = "FIXED_AMOUNT",
+            DiscountValue = 10000m,
+            MinOrderValue = 50000m,
+            TargetBranches = "BR-AN-01,BR-AN-02",
+            StartDate = DateTime.UtcNow.AddDays(-1),
+            EndDate = DateTime.UtcNow.AddDays(10),
+            IsActive = true
+        });
+
+        // Act 1: String BranchId "BR-AN-01" và string CustomerId "kh_retail"
+        var request = new EvaluateCartRequest(
+            Items: new List<CartItemDto> { new(_productAId, "Sữa tươi", 50000, 1) },
+            SubTotal: 50000,
+            BranchId: "BR-AN-01",
+            CustomerId: "kh_retail"
+        );
+        var result = await _service.EvaluateCartAsync(request);
+
+        // Assert 1: Áp dụng thành công
+        Assert.Equal(10000m, result.TotalDiscountAmount);
+        Assert.Equal(40000m, result.FinalAmount);
+        Assert.Equal(promoId, result.AppliedPromotionId);
+
+        // Act 2: Chống khớp nhầm chuỗi con "BR-AN-010"
+        var requestSubstr = new EvaluateCartRequest(
+            Items: new List<CartItemDto> { new(_productAId, "Sữa tươi", 50000, 1) },
+            SubTotal: 50000,
+            BranchId: "BR-AN-010",
+            CustomerId: "kh_retail"
+        );
+        var resultSubstr = await _service.EvaluateCartAsync(requestSubstr);
+
+        // Assert 2: Không áp dụng vì BR-AN-010 không khớp BR-AN-01
+        Assert.Equal(0m, resultSubstr.TotalDiscountAmount);
+        Assert.Equal(50000m, resultSubstr.FinalAmount);
+        Assert.Null(resultSubstr.AppliedPromotionId);
+    }
+
+    [Fact]
+    public async Task REQ_FIX_PROMO_02_EvaluateCart_BOGO_CalculatesBoughtQuantityUsingConversionRate()
+    {
+        var promoId = Guid.NewGuid();
+        _repo.Promotions.Add(new Promotion
+        {
+            Id = promoId,
+            TenantId = "tenant-test-1",
+            PromotionCode = "KM-BOGO-LOC4",
+            PromotionName = "Mua 4 hộp sữa tặng 1 bánh Oreo",
+            Type = "BUY_X_GET_Y",
+            StartDate = DateTime.UtcNow.AddDays(-1),
+            EndDate = DateTime.UtcNow.AddDays(10),
+            IsActive = true,
+            Conditions = new List<PromotionCondition>
+            {
+                new() { Id = Guid.NewGuid(), PromotionId = promoId, ProductId = _productAId, ProductRole = "BUY", MinQty = 4 },
+                new() { Id = Guid.NewGuid(), PromotionId = promoId, ProductId = _productBId, Product = new Product { Id = _productBId, Name = "Bánh Oreo", SellingPrice = 12000m }, ProductRole = "GIFT", MinQty = 1 }
+            }
+        });
+
+        // Khách mua 1 lốc (Quantity = 1) nhưng đơn vị quy đổi ConversionRate = 4 (tổng 4 hộp cơ sở)
+        var request = new EvaluateCartRequest(
+            Items: new List<CartItemDto>
+            {
+                new(_productAId, "Lốc Sữa tươi 4 hộp", 40000, 1, 4.00m)
+            },
+            SubTotal: 40000
+        );
+
+        var result = await _service.EvaluateCartAsync(request);
+
+        // Assert: 1 lốc x 4 = 4 hộp thỏa mãn MinQty = 4 -> Nhận 1 Bánh Oreo
+        Assert.Single(result.GiftItems);
+        Assert.Equal(_productBId, result.GiftItems[0].ProductId);
+        Assert.Equal(1m, result.GiftItems[0].Quantity);
+        Assert.Equal(12000m, result.GiftItems[0].EquivalentValue);
+    }
+
     #region Fakes
     private class FakePromotionRepository : IPromotionRepository
     {
@@ -532,7 +619,18 @@ public class PromotionEvaluationTests
 
         public Task<IReadOnlyList<Promotion>> GetActivePromotionsAsync(DateTime atUtc, string? branchId = null, CancellationToken cancellationToken = default)
         {
-            var list = Promotions.Where(p => !p.IsDeleted && p.IsActive && p.StartDate <= atUtc && p.EndDate >= atUtc && p.Type != "VOUCHER").ToList();
+            var cleanBranch = branchId?.Trim();
+            var list = Promotions.Where(p => !p.IsDeleted && p.IsActive && p.StartDate <= atUtc && p.EndDate >= atUtc && p.Type != "VOUCHER")
+                .Where(p =>
+                    string.IsNullOrWhiteSpace(cleanBranch) ||
+                    string.Equals(cleanBranch, "ALL", StringComparison.OrdinalIgnoreCase) ||
+                    string.IsNullOrWhiteSpace(p.TargetBranches) ||
+                    string.Equals(p.TargetBranches, "ALL", StringComparison.OrdinalIgnoreCase) ||
+                    p.TargetBranches.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                        .Select(b => b.Trim())
+                        .Contains(cleanBranch, StringComparer.OrdinalIgnoreCase)
+                )
+                .ToList();
             return Task.FromResult((IReadOnlyList<Promotion>)list);
         }
 

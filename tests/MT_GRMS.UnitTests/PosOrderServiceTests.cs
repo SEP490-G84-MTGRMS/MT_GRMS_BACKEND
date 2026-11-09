@@ -854,10 +854,194 @@ public class PosOrderServiceTests
         // Lô 2 (date xa hơn) bị trừ 2 hộp còn lại -> còn 5 hộp
         Assert.Equal(5m, batchFarExpiry.QuantityOnHand);
 
-        // OrderDetails phải có đúng 2 dòng tương ứng với 2 lô được giữ kho
-        Assert.Equal(2, result.Items.Count);
-        Assert.Equal(3m, result.Items[0].Quantity);
-        Assert.Equal(2m, result.Items[1].Quantity);
+        // OrderDetails độc lập theo dòng đặt: đúng 1 dòng 5 hộp (không phân mảnh nhân sai thành tiền)
+        Assert.Single(result.Items);
+        Assert.Equal(5m, result.Items[0].Quantity);
+        Assert.Equal(30000m, result.Items[0].UnitPrice);
+        Assert.Equal(150000m, result.Items[0].TotalLineAmount);
+    }
+
+    [Fact]
+    public async Task REQ_FIX_PREUNIT_02_CreatePreOrder_WithConversionRate_DeductsFEFOBaseStockAndStoresUnitInfo()
+    {
+        // Arrange: Sản phẩm có 2 lô: Lô 1 (10 chai), Lô 2 (20 chai) -> Tổng 30 chai
+        var prodId = Guid.NewGuid();
+        var unitId = Guid.NewGuid();
+        var prod = new Product
+        {
+            Id = prodId,
+            TenantId = "tenant-01",
+            Name = "Nước Mắm Cá Cơm Phú Quốc",
+            SellingPrice = 25000m,
+            CostPrice = 18000m,
+            BaseUnit = "Chai",
+            Units = new List<ProductUnit>
+            {
+                new()
+                {
+                    Id = unitId,
+                    ProductId = prodId,
+                    UnitName = "Thùng",
+                    ConversionRate = 12m,
+                    Price = 280000m,
+                    IsBaseUnit = false
+                }
+            }
+        };
+        _orderRepo.Products.Add(prod);
+
+        var batch1 = new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            BranchId = _branchId,
+            ProductId = prodId,
+            BatchCode = "LOT-MAM-01",
+            ExpiryDate = DateTime.UtcNow.AddDays(10),
+            QuantityOnHand = 10m
+        };
+        var batch2 = new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            BranchId = _branchId,
+            ProductId = prodId,
+            BatchCode = "LOT-MAM-02",
+            ExpiryDate = DateTime.UtcNow.AddDays(30),
+            QuantityOnHand = 20m
+        };
+        _orderRepo.BranchStocks.Add(batch1);
+        _orderRepo.BranchStocks.Add(batch2);
+
+        // Khách đặt trước 2 Thùng (ConversionRate = 12 -> Tổng 24 chai). Giá thùng: 280.000đ. Cọc 100.000đ
+        var request = new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(prodId, 2m, 280000m, UnitName: "Thùng", UnitId: unitId, ConversionRate: 12m)
+            },
+            DepositAmount: 100000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(3),
+            PaymentMethod: "CASH",
+            Note: "Đơn đặt 2 thùng nước mắm giao nhà"
+        );
+
+        // Act
+        var result = await _orderService.CreatePreOrderAsync(request);
+
+        // Assert:
+        Assert.NotNull(result);
+        Assert.Equal("PendingPickup", result.Status);
+        Assert.Equal(560000m, result.FinalAmount);
+
+        // FEFO: Lô 1 (10 chai) bị trừ hết -> 0; Lô 2 (20 chai) bị trừ 14 chai -> còn 6 chai (tổng trừ 24 chai)
+        Assert.Equal(0m, batch1.QuantityOnHand);
+        Assert.Equal(6m, batch2.QuantityOnHand);
+
+        // OrderDetails: Đúng 1 dòng theo đơn đặt (2 Thùng)
+        Assert.Single(result.Items);
+        var item = result.Items[0];
+        Assert.Equal(2m, item.Quantity);
+        Assert.Equal(280000m, item.UnitPrice);
+        Assert.Equal(560000m, item.TotalLineAmount);
+        Assert.Equal("Thùng", item.UnitName);
+    }
+
+    [Fact]
+    public async Task REQ_FIX_PREUNIT_02_CancelPreOrder_RestoresBaseQuantityUsingConversionRate()
+    {
+        // Arrange: Tạo đơn đặt trước 2 Thùng (x12 = 24 chai)
+        var prodId = Guid.NewGuid();
+        var prod = new Product
+        {
+            Id = prodId,
+            TenantId = "tenant-01",
+            Name = "Bia Sài Gòn Lager",
+            SellingPrice = 12000m,
+            BaseUnit = "Lon"
+        };
+        _orderRepo.Products.Add(prod);
+
+        var batch = new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            BranchId = _branchId,
+            ProductId = prodId,
+            BatchCode = "LOT-BEER-01",
+            ExpiryDate = DateTime.UtcNow.AddDays(60),
+            QuantityOnHand = 30m
+        };
+        _orderRepo.BranchStocks.Add(batch);
+
+        var preOrder = await _orderService.CreatePreOrderAsync(new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(prodId, 2m, 250000m, UnitName: "Thùng", ConversionRate: 12m)
+            },
+            DepositAmount: 50000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(2),
+            PaymentMethod: "CASH"
+        ));
+
+        // Tồn kho sau khi đặt trước 2 Thùng (24 lon): 30 - 24 = 6 lon
+        Assert.Equal(6m, batch.QuantityOnHand);
+
+        // Act: Hủy đơn đặt trước
+        var cancelResult = await _orderService.CancelOrderAsync(preOrder.Id, new CancelOrderRequest(
+            Reason: "Khách bận không nhận hàng",
+            Note: "Hoàn cọc và hoàn kho",
+            UserRole: "STORE_OWNER"
+        ));
+
+        // Assert: Tồn kho được hoàn đủ 24 lon: 6 + 24 = 30 lon
+        Assert.Equal("Cancelled", cancelResult.Status);
+        Assert.Equal(30m, batch.QuantityOnHand);
+    }
+
+    [Fact]
+    public async Task REQ_FIX_PREUNIT_02_CreatePreOrder_AggregatedBaseQuantityExceedingStock_ThrowsInvalidOperationException()
+    {
+        // Arrange: Sản phẩm có tổng kho 15 chai
+        var prodId = Guid.NewGuid();
+        var prod = new Product
+        {
+            Id = prodId,
+            TenantId = "tenant-01",
+            Name = "Dầu Ăn Neptune",
+            SellingPrice = 45000m,
+            BaseUnit = "Chai"
+        };
+        _orderRepo.Products.Add(prod);
+
+        var batch = new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            BranchId = _branchId,
+            ProductId = prodId,
+            BatchCode = "LOT-OIL-01",
+            ExpiryDate = DateTime.UtcNow.AddDays(100),
+            QuantityOnHand = 15m
+        };
+        _orderRepo.BranchStocks.Add(batch);
+
+        // Khách đặt 1 Thùng (x12 = 12 chai) VÀ 5 Chai (x1 = 5 chai) -> Tổng 17 chai > 15 chai khả dụng
+        var request = new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(prodId, 1m, 500000m, UnitName: "Thùng", ConversionRate: 12m),
+                new(prodId, 5m, 45000m, UnitName: "Chai", ConversionRate: 1m)
+            },
+            DepositAmount: 100000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(2),
+            PaymentMethod: "CASH"
+        );
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(request));
+        Assert.Contains("không đủ tồn kho", ex.Message);
     }
 
     [Fact]

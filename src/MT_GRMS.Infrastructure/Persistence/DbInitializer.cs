@@ -388,6 +388,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""PointsRedeemed"" integer DEFAULT 0;
                         ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""PointsDiscountAmount"" numeric(18,2) DEFAULT 0;
 
+                        ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductUnitID"" uuid;
+                        ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitName"" character varying(50);
+                        ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""ConversionRate"" numeric(18,4) DEFAULT 1.00;
+
                         ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""BranchId"" uuid;
                         ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TillId"" uuid;
                         ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ShiftCode"" text;

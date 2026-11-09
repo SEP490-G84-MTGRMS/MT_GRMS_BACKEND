@@ -42,6 +42,38 @@ public class CatalogService : ICatalogService
         var imageUrls = p.ImageUrls != null && p.ImageUrls.Any() ? p.ImageUrls : new List<string>();
         var avatar = imageUrls.FirstOrDefault();
 
+        var unitPrices = new List<ProductUnitResponse>
+        {
+            new()
+            {
+                Id = Guid.Empty,
+                ProductId = p.Id,
+                UnitName = p.BaseUnit,
+                ConversionRate = 1.00m,
+                Price = p.SellingPrice,
+                Barcode = p.Barcode,
+                IsBaseUnit = true,
+                CreatedAt = p.CreatedAt,
+                UpdatedAt = p.UpdatedAt
+            }
+        };
+
+        if (p.Units != null && p.Units.Any())
+        {
+            unitPrices.AddRange(p.Units.Where(u => !u.IsDeleted).Select(u => new ProductUnitResponse
+            {
+                Id = u.Id,
+                ProductId = u.ProductId,
+                UnitName = u.UnitName,
+                ConversionRate = u.ConversionRate,
+                Price = u.Price,
+                Barcode = u.Barcode,
+                IsBaseUnit = false,
+                CreatedAt = u.CreatedAt,
+                UpdatedAt = u.UpdatedAt
+            }));
+        }
+
         return new ProductResponse(
             p.Id,
             p.ProductCode,
@@ -67,7 +99,8 @@ public class CatalogService : ICatalogService
             imageUrls,
             hasOrders,
             p.TaxCategory ?? "STANDARD_1PCT",
-            p.EligibleForVatReduction
+            p.EligibleForVatReduction,
+            unitPrices
         );
     }
 

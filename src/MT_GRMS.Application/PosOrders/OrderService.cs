@@ -296,6 +296,13 @@ public class OrderService : IOrderService
                 var refGiftValue = resolvedUnitPrice * actualGiftQty;
                 giftEquivalenceTotal += refGiftValue;
 
+                var giftConvRate = GetConversionRate(item);
+                var giftUnitName = !string.IsNullOrWhiteSpace(item.UnitName)
+                    ? item.UnitName
+                    : (item.UnitId.HasValue && item.UnitId.Value != Guid.Empty
+                        ? prod.Units?.FirstOrDefault(u => u.Id == item.UnitId.Value && !u.IsDeleted)?.UnitName ?? prod.BaseUnit
+                        : prod.BaseUnit);
+
                 orderDetails.Add(new OrderDetail
                 {
                     Id = Guid.NewGuid(),
@@ -306,11 +313,14 @@ public class OrderService : IOrderService
                     UnitPrice = resolvedUnitPrice,
                     DiscountAmount = refGiftValue,
                     ActualPrice = 0m,
-                    CostPriceAtSale = prod.CostPrice ?? 0m,
+                    CostPriceAtSale = (prod.CostPrice ?? 0m) * giftConvRate,
                     IsGift = true,
                     AppliedVatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m,
                     VatAmount = 0m,
                     ProductName = !string.IsNullOrWhiteSpace(item.ProductName) ? item.ProductName : prod.Name,
+                    ProductUnitId = item.UnitId,
+                    UnitName = giftUnitName,
+                    ConversionRate = giftConvRate,
                     Product = prod
                 });
                 continue;
@@ -341,6 +351,13 @@ public class OrderService : IOrderService
             totalAmount += lineTotal;
             itemDiscountTotal += itemDiscount;
 
+            var itemConvRate = GetConversionRate(item);
+            var itemUnitName = !string.IsNullOrWhiteSpace(item.UnitName)
+                ? item.UnitName
+                : (item.UnitId.HasValue && item.UnitId.Value != Guid.Empty
+                    ? prod.Units?.FirstOrDefault(u => u.Id == item.UnitId.Value && !u.IsDeleted)?.UnitName ?? prod.BaseUnit
+                    : prod.BaseUnit);
+
             var detail = new OrderDetail
             {
                 Id = Guid.NewGuid(),
@@ -351,11 +368,14 @@ public class OrderService : IOrderService
                 UnitPrice = effectiveUnitPrice,
                 DiscountAmount = itemDiscount,
                 ActualPrice = actualPrice,
-                CostPriceAtSale = prod.CostPrice ?? 0m, // Chốt cứng giá vốn COGS (FE-10)
+                CostPriceAtSale = (prod.CostPrice ?? 0m) * itemConvRate, // Chốt cứng giá vốn COGS (FE-10)
                 IsGift = false,
                 AppliedVatRate = vatRate,
                 VatAmount = vatAmount,
                 ProductName = !string.IsNullOrWhiteSpace(item.ProductName) ? item.ProductName : prod.Name,
+                ProductUnitId = item.UnitId,
+                UnitName = itemUnitName,
+                ConversionRate = itemConvRate,
                 Product = prod
             };
             orderDetails.Add(detail);
@@ -792,225 +812,322 @@ public class OrderService : IOrderService
             }
         }
 
-        var stockCache = new Dictionary<Guid, IReadOnlyList<Domain.Entities.Inventory.BranchStock>>();
-        async Task<IReadOnlyList<Domain.Entities.Inventory.BranchStock>> GetPreOrderStocksCachedAsync(Guid productId)
+        decimal ResolvePreOrderConversionRate(OrderItemCreateDto item)
         {
-            if (!stockCache.TryGetValue(productId, out var stocks))
+            if (item.ConversionRate > 0 && item.ConversionRate != 1.00m)
             {
-                stocks = await _orderRepository.GetBranchStocksForProductFefoAsync(request.BranchId, productId, cancellationToken);
-                stockCache[productId] = stocks;
+                return item.ConversionRate;
             }
-            return stocks;
+            if (item.UnitId.HasValue && item.UnitId.Value != Guid.Empty)
+            {
+                var prod = products[item.ProductId];
+                var matchedUnit = prod.Units?.FirstOrDefault(u => u.Id == item.UnitId.Value && !u.IsDeleted);
+                if (matchedUnit != null && matchedUnit.ConversionRate > 0)
+                {
+                    return matchedUnit.ConversionRate;
+                }
+            }
+            return item.ConversionRate > 0 ? item.ConversionRate : 1.00m;
         }
 
-        // 1. Trừ/giữ tồn kho FEFO ưu tiên hàng mua trả tiền trước (!IsGift)
-        var paidItems = request.Items.Where(i => !i.IsGift).ToList();
-        var orderDetails = new List<OrderDetail>();
-        decimal totalAmount = 0m;
-        decimal itemDiscountTotal = 0m;
-        decimal giftEquivalenceTotal = 0m;
-        var giftWarnings = new List<string>();
-
-        foreach (var group in paidItems.GroupBy(i => i.ProductId))
+        string ResolvePreOrderUnitName(OrderItemCreateDto item, Product prod)
         {
-            var pId = group.Key;
-            var requiredQty = group.Sum(x => x.Quantity);
-            var prod = products[pId];
-
-            var branchStocks = await GetPreOrderStocksCachedAsync(pId);
-            var totalOnHand = branchStocks.Where(s => s.QuantityOnHand > 0).Sum(s => s.QuantityOnHand);
-            if (totalOnHand < requiredQty)
+            if (!string.IsNullOrWhiteSpace(item.UnitName)) return item.UnitName;
+            if (item.UnitId.HasValue && item.UnitId.Value != Guid.Empty)
             {
-                throw new InvalidOperationException($"Sản phẩm '{prod.Name}' không đủ tồn kho để đặt trước (Hiện còn: {totalOnHand:0.##}, Cần đặt: {requiredQty:0.##}).");
+                var matchedUnit = prod.Units?.FirstOrDefault(u => u.Id == item.UnitId.Value && !u.IsDeleted);
+                if (!string.IsNullOrWhiteSpace(matchedUnit?.UnitName)) return matchedUnit.UnitName;
+            }
+            return prod.BaseUnit ?? "Cái";
+        }
+
+        Order? createdOrder = null;
+        string? createdGiftWarning = null;
+
+        await _unitOfWork.ExecuteInTransactionAsync(async ct =>
+        {
+            var stockCache = new Dictionary<Guid, IReadOnlyList<Domain.Entities.Inventory.BranchStock>>();
+            async Task<IReadOnlyList<Domain.Entities.Inventory.BranchStock>> GetPreOrderStocksCachedAsync(Guid productId)
+            {
+                if (!stockCache.TryGetValue(productId, out var stocks))
+                {
+                    stocks = await _orderRepository.GetBranchStocksForProductFefoAsync(request.BranchId, productId, ct);
+                    stockCache[productId] = stocks;
+                }
+                return stocks;
             }
 
-            var remainingToDeduct = requiredQty;
-            foreach (var stock in branchStocks)
+            // 1. Trừ/giữ tồn kho FEFO ưu tiên hàng mua trả tiền trước (!IsGift) theo tổng số lượng cơ sở quy đổi
+            var paidItems = request.Items.Where(i => !i.IsGift).ToList();
+            var productRequiredBaseQty = new Dictionary<Guid, decimal>();
+            foreach (var item in paidItems)
             {
-                if (remainingToDeduct <= 0) break;
-                if (stock.QuantityOnHand <= 0) continue;
+                var rate = ResolvePreOrderConversionRate(item);
+                var baseQty = item.Quantity * rate;
+                if (productRequiredBaseQty.ContainsKey(item.ProductId))
+                    productRequiredBaseQty[item.ProductId] += baseQty;
+                else
+                    productRequiredBaseQty[item.ProductId] = baseQty;
+            }
 
-                var deduct = Math.Min(stock.QuantityOnHand, remainingToDeduct);
-                stock.QuantityOnHand -= deduct;
-                remainingToDeduct -= deduct;
+            foreach (var kvp in productRequiredBaseQty)
+            {
+                var pId = kvp.Key;
+                var requiredBaseQty = kvp.Value;
+                var prod = products[pId];
 
-                var reqItem = group.First();
-                var itemDiscount = reqItem.DiscountAmount ?? 0m;
-                var discountPerUnit = itemDiscount > 0 && reqItem.Quantity > 0
-                    ? itemDiscount / reqItem.Quantity
-                    : 0m;
-                var actualUnitPrice = Math.Max(0, reqItem.UnitPrice - discountPerUnit);
+                var branchStocks = await GetPreOrderStocksCachedAsync(pId);
+                var totalOnHand = branchStocks.Where(s => s.QuantityOnHand > 0).Sum(s => s.QuantityOnHand);
+                if (totalOnHand < requiredBaseQty)
+                {
+                    throw new InvalidOperationException($"Sản phẩm '{prod.Name}' không đủ tồn kho để đặt trước (Hiện còn: {totalOnHand:0.##}, Cần đặt: {requiredBaseQty:0.##}).");
+                }
 
-                int lineNumber = orderDetails.Count + 1;
+                var remainingToDeduct = requiredBaseQty;
+                foreach (var stock in branchStocks)
+                {
+                    if (remainingToDeduct <= 0) break;
+                    if (stock.QuantityOnHand <= 0) continue;
+
+                    var deduct = Math.Min(stock.QuantityOnHand, remainingToDeduct);
+                    stock.QuantityOnHand -= deduct;
+                    stock.UpdatedAt = DateTime.UtcNow;
+                    remainingToDeduct -= deduct;
+                }
+            }
+
+            // 2. Tạo chi tiết đơn hàng (OrderDetails) độc lập theo từng dòng request.Items
+            var orderDetails = new List<OrderDetail>();
+            decimal totalAmount = 0m;
+            decimal itemDiscountTotal = 0m;
+            decimal giftEquivalenceTotal = 0m;
+            var giftWarnings = new List<string>();
+            int lineNumber = 1;
+
+            foreach (var item in request.Items)
+            {
+                var prod = products[item.ProductId];
+                branchProducts.TryGetValue(item.ProductId, out var bp);
+                var rate = ResolvePreOrderConversionRate(item);
+                var unitName = ResolvePreOrderUnitName(item, prod);
+
+                decimal resolvedUnitPrice;
+                if (item.UnitId.HasValue && item.UnitId.Value != Guid.Empty)
+                {
+                    var matchedUnit = prod.Units?.FirstOrDefault(u => u.Id == item.UnitId.Value && !u.IsDeleted);
+                    var unitOverride = bp?.UnitPriceOverrides?.FirstOrDefault(o => o.ProductUnitId == item.UnitId.Value && !o.IsDeleted);
+                    if (unitOverride != null && unitOverride.SellingPriceOverride > 0)
+                    {
+                        resolvedUnitPrice = unitOverride.SellingPriceOverride;
+                    }
+                    else if (matchedUnit != null && matchedUnit.Price > 0)
+                    {
+                        resolvedUnitPrice = matchedUnit.Price;
+                    }
+                    else
+                    {
+                        var baseSelling = (bp?.SellingPriceOverride > 0) ? bp.SellingPriceOverride.Value : prod.SellingPrice;
+                        resolvedUnitPrice = baseSelling * rate;
+                    }
+                }
+                else
+                {
+                    resolvedUnitPrice = (bp?.SellingPriceOverride > 0) ? bp.SellingPriceOverride.Value : prod.SellingPrice;
+                }
+
+                if (item.IsGift)
+                {
+                    var giftStocks = await GetPreOrderStocksCachedAsync(item.ProductId);
+                    var remainingBaseStock = giftStocks.Where(s => s.QuantityOnHand > 0).Sum(s => s.QuantityOnHand);
+                    var availableGiftUnits = Math.Floor(remainingBaseStock / rate);
+                    var actualGiftQty = Math.Min(item.Quantity, Math.Max(0m, availableGiftUnits));
+
+                    if (actualGiftQty < item.Quantity)
+                    {
+                        giftWarnings.Add(actualGiftQty <= 0m
+                            ? $"Quà tặng '{prod.Name}' tạm hết tồn kho để giữ cho đơn đặt trước (0/{item.Quantity:0.##})"
+                            : $"Quà tặng '{prod.Name}' chỉ giữ được {actualGiftQty:0.##}/{item.Quantity:0.##} do giới hạn tồn kho");
+                    }
+
+                    if (actualGiftQty <= 0m) continue;
+
+                    var remainingGiftBaseToDeduct = actualGiftQty * rate;
+                    foreach (var stock in giftStocks)
+                    {
+                        if (remainingGiftBaseToDeduct <= 0) break;
+                        if (stock.QuantityOnHand <= 0) continue;
+
+                        var deduct = Math.Min(stock.QuantityOnHand, remainingGiftBaseToDeduct);
+                        stock.QuantityOnHand -= deduct;
+                        stock.UpdatedAt = DateTime.UtcNow;
+                        remainingGiftBaseToDeduct -= deduct;
+                    }
+
+                    var refGiftValue = resolvedUnitPrice * actualGiftQty;
+                    giftEquivalenceTotal += refGiftValue;
+
+                    orderDetails.Add(new OrderDetail
+                    {
+                        Id = Guid.NewGuid(),
+                        ProductId = item.ProductId,
+                        PromotionId = item.PromotionId ?? request.AppliedPromotionId,
+                        LineNumber = lineNumber++,
+                        ProductName = !string.IsNullOrWhiteSpace(item.ProductName) ? item.ProductName : prod.Name,
+                        Qty = actualGiftQty,
+                        UnitPrice = resolvedUnitPrice,
+                        DiscountAmount = refGiftValue,
+                        ActualPrice = 0m,
+                        CostPriceAtSale = (prod.CostPrice ?? 0m) * rate,
+                        IsGift = true,
+                        AppliedVatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m,
+                        VatAmount = 0m,
+                        ProductUnitId = item.UnitId,
+                        UnitName = unitName,
+                        ConversionRate = rate,
+                        Product = prod
+                    });
+                    continue;
+                }
+
+                decimal effectiveUnitPrice;
+                if (item.UnitId.HasValue && item.UnitId.Value != Guid.Empty)
+                {
+                    effectiveUnitPrice = (item.UnitPrice > 0 && item.UnitPrice != prod.SellingPrice) ? item.UnitPrice : resolvedUnitPrice;
+                }
+                else if (bp?.SellingPriceOverride > 0 && (item.UnitPrice <= 0 || item.UnitPrice == prod.SellingPrice))
+                {
+                    effectiveUnitPrice = bp.SellingPriceOverride.Value;
+                }
+                else
+                {
+                    effectiveUnitPrice = item.UnitPrice > 0 ? item.UnitPrice : resolvedUnitPrice;
+                }
+
+                decimal lineTotal = item.Quantity * effectiveUnitPrice;
+                decimal itemDiscount = item.DiscountAmount ?? 0m;
+                decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : effectiveUnitPrice;
                 decimal vatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m;
-                decimal vatAmount = (actualUnitPrice * deduct) * vatRate;
+                decimal vatAmount = (actualPrice * item.Quantity) * vatRate;
 
-                var detail = new OrderDetail
+                totalAmount += lineTotal;
+                itemDiscountTotal += itemDiscount;
+
+                orderDetails.Add(new OrderDetail
                 {
                     Id = Guid.NewGuid(),
-                    ProductId = pId,
-                    PromotionId = reqItem.PromotionId,
-                    LineNumber = lineNumber,
-                    ProductName = !string.IsNullOrWhiteSpace(reqItem.ProductName) ? reqItem.ProductName : prod.Name,
-                    Qty = deduct,
-                    UnitPrice = reqItem.UnitPrice,
-                    DiscountAmount = discountPerUnit * deduct,
-                    ActualPrice = actualUnitPrice,
-                    CostPriceAtSale = prod.CostPrice ?? 0m,
+                    ProductId = item.ProductId,
+                    PromotionId = item.PromotionId,
+                    LineNumber = lineNumber++,
+                    ProductName = !string.IsNullOrWhiteSpace(item.ProductName) ? item.ProductName : prod.Name,
+                    Qty = item.Quantity,
+                    UnitPrice = effectiveUnitPrice,
+                    DiscountAmount = itemDiscount,
+                    ActualPrice = actualPrice,
+                    CostPriceAtSale = (prod.CostPrice ?? 0m) * rate,
                     IsGift = false,
                     AppliedVatRate = vatRate,
                     VatAmount = vatAmount,
+                    ProductUnitId = item.UnitId,
+                    UnitName = unitName,
+                    ConversionRate = rate,
                     Product = prod
-                };
-
-                orderDetails.Add(detail);
-                totalAmount += reqItem.UnitPrice * deduct;
-                itemDiscountTotal += discountPerUnit * deduct;
+                });
             }
-        }
 
-        // 2. Giữ tồn kho phần dư cho quà tặng 0đ (IsGift == true)
-        foreach (var giftItem in request.Items.Where(i => i.IsGift))
-        {
-            var prod = products[giftItem.ProductId];
-            branchProducts.TryGetValue(giftItem.ProductId, out var bp);
-            decimal resolvedPrice = (bp?.SellingPriceOverride > 0) ? bp.SellingPriceOverride.Value : prod.SellingPrice;
+            decimal orderDiscount = Math.Clamp(request.DiscountAmount ?? 0m, 0m, Math.Max(0m, totalAmount - itemDiscountTotal));
+            decimal totalDiscount = Math.Min(totalAmount, itemDiscountTotal + orderDiscount);
+            decimal finalAmount = Math.Max(0, totalAmount - totalDiscount);
+            string? giftStockWarning = giftWarnings.Count > 0 ? string.Join("; ", giftWarnings) : null;
 
-            var giftStocks = await GetPreOrderStocksCachedAsync(giftItem.ProductId);
-            var availableUnits = Math.Floor(giftStocks.Where(s => s.QuantityOnHand > 0).Sum(s => s.QuantityOnHand));
-            var actualGiftQty = Math.Min(giftItem.Quantity, Math.Max(0m, availableUnits));
-
-            if (actualGiftQty < giftItem.Quantity)
+            if (request.DepositAmount < 0)
             {
-                giftWarnings.Add(actualGiftQty <= 0m
-                    ? $"Quà tặng '{prod.Name}' tạm hết tồn kho để giữ cho đơn đặt trước (0/{giftItem.Quantity:0.##})"
-                    : $"Quà tặng '{prod.Name}' chỉ giữ được {actualGiftQty:0.##}/{giftItem.Quantity:0.##} do giới hạn tồn kho");
+                throw new InvalidOperationException("Tiền đặt cọc không được là số âm.");
             }
 
-            if (actualGiftQty <= 0m) continue;
-
-            var remainingGiftToDeduct = actualGiftQty;
-            foreach (var stock in giftStocks)
+            if (request.DepositAmount > finalAmount)
             {
-                if (remainingGiftToDeduct <= 0) break;
-                if (stock.QuantityOnHand <= 0) continue;
-
-                var deduct = Math.Min(stock.QuantityOnHand, remainingGiftToDeduct);
-                stock.QuantityOnHand -= deduct;
-                remainingGiftToDeduct -= deduct;
+                throw new InvalidOperationException($"Tiền đặt cọc ({request.DepositAmount:N0} đ) không được lớn hơn tổng giá trị đơn hàng ({finalAmount:N0} đ).");
             }
 
-            var refGiftValue = resolvedPrice * actualGiftQty;
-            giftEquivalenceTotal += refGiftValue;
+            decimal minDeposit = Math.Round(finalAmount * 0.10m, 2);
+            if (request.DepositAmount < minDeposit)
+            {
+                throw new InvalidOperationException($"Tiền đặt cọc tối thiểu phải bằng 10% tổng giá trị đơn hàng (Tối thiểu: {minDeposit:N0} đ, Thực tế: {request.DepositAmount:N0} đ).");
+            }
 
-            orderDetails.Add(new OrderDetail
+            Guid? preOrderShiftId = request.ShiftId ?? (_shiftRepository != null
+                ? (await _shiftRepository.GetActiveShiftAsync(request.BranchId, cancellationToken: cancellationToken))?.Id
+                : null);
+
+            string? preOrderCashierName = !string.IsNullOrWhiteSpace(request.CashierName)
+                ? request.CashierName.Trim()
+                : (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân POS");
+
+            bool hadPreOrderGiftRequest = request.Items.Any(i => i.IsGift);
+            bool hasDeliveredPreOrderGift = orderDetails.Any(d => d.IsGift);
+            Guid? effectivePromoId = (hadPreOrderGiftRequest && !hasDeliveredPreOrderGift && orderDiscount <= 0m)
+                ? null
+                : request.AppliedPromotionId;
+            string? effectivePromoSummary = (hadPreOrderGiftRequest && !hasDeliveredPreOrderGift && orderDiscount <= 0m)
+                ? null
+                : (!string.IsNullOrWhiteSpace(request.AppliedPromotionSummary) ? request.AppliedPromotionSummary.Trim() : null);
+            if (effectivePromoSummary != null && effectivePromoSummary.Length > 300)
+            {
+                effectivePromoSummary = effectivePromoSummary.Substring(0, 300);
+            }
+
+            var order = new Order
             {
                 Id = Guid.NewGuid(),
-                ProductId = giftItem.ProductId,
-                PromotionId = giftItem.PromotionId ?? request.AppliedPromotionId,
-                LineNumber = orderDetails.Count + 1,
-                ProductName = !string.IsNullOrWhiteSpace(giftItem.ProductName) ? giftItem.ProductName : prod.Name,
-                Qty = actualGiftQty,
-                UnitPrice = resolvedPrice,
-                DiscountAmount = refGiftValue,
-                ActualPrice = 0m,
-                CostPriceAtSale = prod.CostPrice ?? 0m,
-                IsGift = true,
-                AppliedVatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m,
-                VatAmount = 0m,
-                Product = prod
-            });
-        }
+                TenantId = branch.TenantId ?? (_tenantContext?.CurrentTenantId ?? string.Empty),
+                BranchId = request.BranchId,
+                CustomerId = request.CustomerId,
+                ShiftId = preOrderShiftId,
+                OrderCode = "PO" + DateTime.UtcNow.ToString("yyMMddHHmmssfff"),
+                CashierName = preOrderCashierName,
+                CreatedBy = _tenantContext != null && _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId : null,
+                OrderDate = DateTime.UtcNow,
+                TotalAmount = totalAmount,
+                DiscountAmount = totalDiscount,
+                FinalAmount = finalAmount,
+                DepositAmount = request.DepositAmount,
+                PaymentMethod = request.PaymentMethod,
+                PaymentStatus = request.DepositAmount >= finalAmount ? "PAID" : "PARTIALLY_PAID",
+                Status = "PendingPickup",
+                Note = $"Hẹn nhận: {request.ExpectedPickupDate:dd/MM/yyyy HH:mm}. {request.Note}".Trim(),
+                AppliedPromotionId = effectivePromoId,
+                AppliedPromotionSummary = effectivePromoSummary,
+                PromotionDiscountAmount = orderDiscount,
+                Details = orderDetails,
+                Branch = branch,
+                Customer = customer
+            };
 
-        decimal orderDiscount = Math.Clamp(request.DiscountAmount ?? 0m, 0m, Math.Max(0m, totalAmount - itemDiscountTotal));
-        decimal totalDiscount = Math.Min(totalAmount, itemDiscountTotal + orderDiscount);
-        decimal finalAmount = Math.Max(0, totalAmount - totalDiscount);
-        string? giftStockWarning = giftWarnings.Count > 0 ? string.Join("; ", giftWarnings) : null;
+            foreach (var d in orderDetails)
+            {
+                d.OrderId = order.Id;
+            }
 
-        if (request.DepositAmount < 0)
-        {
-            throw new InvalidOperationException("Tiền đặt cọc không được là số âm.");
-        }
+            await _orderRepository.AddAsync(order, cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        if (request.DepositAmount > finalAmount)
-        {
-            throw new InvalidOperationException($"Tiền đặt cọc ({request.DepositAmount:N0} đ) không được lớn hơn tổng giá trị đơn hàng ({finalAmount:N0} đ).");
-        }
+            if (_promotionRepository != null && order.AppliedPromotionId.HasValue)
+            {
+                await _promotionRepository.RecordPromotionUsageAsync(
+                    order.AppliedPromotionId,
+                    orderDiscount + giftEquivalenceTotal,
+                    null,
+                    0m,
+                    order.TenantId,
+                    ct
+                );
+            }
 
-        decimal minDeposit = Math.Round(finalAmount * 0.10m, 2);
-        if (request.DepositAmount < minDeposit)
-        {
-            throw new InvalidOperationException($"Tiền đặt cọc tối thiểu phải bằng 10% tổng giá trị đơn hàng (Tối thiểu: {minDeposit:N0} đ, Thực tế: {request.DepositAmount:N0} đ).");
-        }
+            createdOrder = order;
+            createdGiftWarning = giftStockWarning;
+        }, cancellationToken);
 
-        Guid? preOrderShiftId = request.ShiftId ?? (_shiftRepository != null
-            ? (await _shiftRepository.GetActiveShiftAsync(request.BranchId, cancellationToken: cancellationToken))?.Id
-            : null);
-
-        string? preOrderCashierName = !string.IsNullOrWhiteSpace(request.CashierName)
-            ? request.CashierName.Trim()
-            : (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân POS");
-
-        bool hadPreOrderGiftRequest = request.Items.Any(i => i.IsGift);
-        bool hasDeliveredPreOrderGift = orderDetails.Any(d => d.IsGift);
-        Guid? effectivePromoId = (hadPreOrderGiftRequest && !hasDeliveredPreOrderGift && orderDiscount <= 0m)
-            ? null
-            : request.AppliedPromotionId;
-        string? effectivePromoSummary = (hadPreOrderGiftRequest && !hasDeliveredPreOrderGift && orderDiscount <= 0m)
-            ? null
-            : (!string.IsNullOrWhiteSpace(request.AppliedPromotionSummary) ? request.AppliedPromotionSummary.Trim() : null);
-        if (effectivePromoSummary != null && effectivePromoSummary.Length > 300)
-        {
-            effectivePromoSummary = effectivePromoSummary.Substring(0, 300);
-        }
-
-        var order = new Order
-        {
-            Id = Guid.NewGuid(),
-            TenantId = branch.TenantId ?? (_tenantContext?.CurrentTenantId ?? string.Empty),
-            BranchId = request.BranchId,
-            CustomerId = request.CustomerId,
-            ShiftId = preOrderShiftId,
-            OrderCode = "PO" + DateTime.UtcNow.ToString("yyMMddHHmmssfff"),
-            CashierName = preOrderCashierName,
-            OrderDate = DateTime.UtcNow,
-            TotalAmount = totalAmount,
-            DiscountAmount = totalDiscount,
-            FinalAmount = finalAmount,
-            DepositAmount = request.DepositAmount,
-            PaymentMethod = request.PaymentMethod,
-            PaymentStatus = request.DepositAmount >= finalAmount ? "PAID" : "PARTIALLY_PAID",
-            Status = "PendingPickup",
-            Note = $"Hẹn nhận: {request.ExpectedPickupDate:dd/MM/yyyy HH:mm}. {request.Note}".Trim(),
-            AppliedPromotionId = effectivePromoId,
-            AppliedPromotionSummary = effectivePromoSummary,
-            PromotionDiscountAmount = orderDiscount,
-            Details = orderDetails,
-            Branch = branch,
-            Customer = customer
-        };
-
-        foreach (var d in orderDetails)
-        {
-            d.OrderId = order.Id;
-        }
-
-        await _orderRepository.AddAsync(order, cancellationToken);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
-
-        if (_promotionRepository != null && order.AppliedPromotionId.HasValue)
-        {
-            await _promotionRepository.RecordPromotionUsageAsync(
-                order.AppliedPromotionId,
-                orderDiscount + giftEquivalenceTotal,
-                null,
-                0m,
-                order.TenantId,
-                cancellationToken
-            );
-        }
-
-        return MapToOrderResponse(order, request.DepositAmount, 0m, null, giftStockWarning);
+        return MapToOrderResponse(createdOrder!, request.DepositAmount, 0m, null, createdGiftWarning);
     }
 
     public async Task<OrderResponse> FulfillPreOrderAsync(Guid orderId, PreOrderFulfillRequest request, CancellationToken cancellationToken = default)
@@ -1125,18 +1242,21 @@ public class OrderService : IOrderService
             throw new InvalidOperationException($"Đơn hàng '{order.OrderCode}' đã bị hủy trước đó.");
         }
 
-        if (order.Status == "Completed" && (string.Equals(request.UserRole, "CASHIER", StringComparison.OrdinalIgnoreCase) || string.Equals(request.UserRole, "EMPLOYEE", StringComparison.OrdinalIgnoreCase) || (request.UserRole != null && !string.Equals(request.UserRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase))))
+        var effectiveRole = _tenantContext?.CurrentRole ?? request.UserRole;
+        if (order.Status == "Completed" && (string.Equals(effectiveRole, "CASHIER", StringComparison.OrdinalIgnoreCase) || string.Equals(effectiveRole, "EMPLOYEE", StringComparison.OrdinalIgnoreCase) || (effectiveRole != null && !string.Equals(effectiveRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase))))
         {
             throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền hủy hóa đơn đã thanh toán. Nhân viên không được phép tự ý hủy.");
         }
 
-        // Hoàn trả tồn kho về BranchStocks
+        // Hoàn trả tồn kho về BranchStocks (quy đổi về ĐVT cơ sở)
         foreach (var detail in order.Details)
         {
             var stock = await _orderRepository.GetBranchStockAsync(order.BranchId, detail.ProductId, null, cancellationToken);
             if (stock != null)
             {
-                stock.QuantityOnHand += detail.Qty;
+                var restoreQty = detail.Qty * (detail.ConversionRate > 0m ? detail.ConversionRate : 1.00m);
+                stock.QuantityOnHand += restoreQty;
+                stock.UpdatedAt = DateTime.UtcNow;
             }
         }
 
@@ -1233,7 +1353,8 @@ public class OrderService : IOrderService
                     var stock = await _orderRepository.GetBranchStockAsync(originalOrder.BranchId, retItem.ProductId, null, cancellationToken);
                     if (stock != null)
                     {
-                        stock.QuantityOnHand += retItem.Quantity;
+                        var convRate = origDetail.ConversionRate > 0m ? origDetail.ConversionRate : 1.00m;
+                        stock.QuantityOnHand += retItem.Quantity * convRate;
                         stock.UpdatedAt = DateTime.UtcNow;
                     }
                 }
@@ -1260,8 +1381,8 @@ public class OrderService : IOrderService
             foreach (var group in itemGroups)
             {
                 var pId = group.Key;
-                var requiredQty = group.Sum(x => x.Quantity);
                 var prod = products[pId];
+                var requiredQty = group.Sum(x => x.Quantity * (x.ConversionRate > 0m ? x.ConversionRate : (prod.Units?.FirstOrDefault(u => u.Id == x.UnitId)?.ConversionRate ?? 1.00m)));
 
                 var branchStocks = await _orderRepository.GetBranchStocksForProductFefoAsync(originalOrder.BranchId, pId, cancellationToken);
                 var totalOnHand = branchStocks.Sum(s => s.QuantityOnHand);
@@ -1293,6 +1414,9 @@ public class OrderService : IOrderService
 
                 totalNewAmount += lineTotal - itemDiscount;
 
+                var rate = item.ConversionRate > 0m ? item.ConversionRate : (prod.Units?.FirstOrDefault(u => u.Id == item.UnitId)?.ConversionRate ?? 1.00m);
+                var uName = !string.IsNullOrWhiteSpace(item.UnitName) ? item.UnitName : (prod.Units?.FirstOrDefault(u => u.Id == item.UnitId)?.UnitName ?? prod.BaseUnit);
+
                 newOrderDetails.Add(new OrderDetail
                 {
                     Id = Guid.NewGuid(),
@@ -1302,10 +1426,13 @@ public class OrderService : IOrderService
                     UnitPrice = item.UnitPrice,
                     DiscountAmount = itemDiscount,
                     ActualPrice = actualPrice,
-                    CostPriceAtSale = prod.CostPrice ?? 0m,
+                    CostPriceAtSale = (prod.CostPrice ?? 0m) * rate,
                     AppliedVatRate = vatRate,
                     VatAmount = vatAmount,
                     ProductName = prod.Name,
+                    ProductUnitId = item.UnitId,
+                    UnitName = uName,
+                    ConversionRate = rate,
                     Product = prod
                 });
             }
@@ -1468,7 +1595,7 @@ public class OrderService : IOrderService
             ProductId: d.ProductId,
             ProductName: !string.IsNullOrWhiteSpace(d.ProductName) ? d.ProductName : (d.Product?.Name ?? "Sản phẩm"),
             Barcode: d.Product?.Barcode,
-            UnitName: d.Product?.BaseUnit,
+            UnitName: !string.IsNullOrWhiteSpace(d.UnitName) ? d.UnitName : d.Product?.BaseUnit,
             Quantity: d.Qty,
             UnitPrice: d.UnitPrice,
             DiscountAmount: d.DiscountAmount,
