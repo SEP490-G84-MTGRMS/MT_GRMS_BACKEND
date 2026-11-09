@@ -129,13 +129,15 @@ public record ReturnExchangeRequest(
     List<ReturnItemDto> ReturnedItems,
     List<OrderItemCreateDto> NewItems,
     string SettlementMethod = "CASH",
+    string? Reason = null,
     string? Note = null
 );
 
 public record ReturnItemDto(
     Guid ProductId,
     decimal Quantity,
-    decimal UnitPrice
+    decimal UnitPrice,
+    string? Condition = "Restock"
 );
 
 public record OrderSummaryResponse(
