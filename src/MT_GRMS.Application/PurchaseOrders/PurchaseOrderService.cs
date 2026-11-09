@@ -285,11 +285,17 @@ public class PurchaseOrderService : IPurchaseOrderService
             }
             else
             {
-                // Employee nhập số lượng đề xuất: chỉ được cập nhật EmployeeQty
+                // Employee: nếu Store Owner đã chốt ô này thì bỏ qua — không cho sửa gì thêm
+                var ownerLocked = detail != null
+                    && (detail.IsOwnerAdjusted || detail.StoreQty.HasValue);
+                if (ownerLocked)
+                {
+                    continue;
+                }
+
                 employeeQty = cell.EmployeeQty;
-                // Không được phép can thiệp owner override nếu đã tồn tại
-                storeQty = detail?.StoreQty;
-                isOwnerAdjusted = detail?.IsOwnerAdjusted ?? false;
+                storeQty = null;
+                isOwnerAdjusted = false;
             }
 
             // Tính finalQuantity chuẩn nghiệp vụ:
