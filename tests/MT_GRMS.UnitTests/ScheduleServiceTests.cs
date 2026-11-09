@@ -962,15 +962,16 @@ public class ScheduleServiceTests
         var tenantContext = new FakeTenantContext();
 
         var empId = Guid.NewGuid();
-        var checkInTime = DateTime.UtcNow.AddHours(-4);
+        var nowVn = DateTime.UtcNow.AddHours(7);
+        var checkInTime = nowVn.AddHours(-4);
         var schedule = new EmployeeSchedule
         {
             Id = Guid.NewGuid(),
             EmployeeId = empId,
             BranchId = Guid.NewGuid(),
-            WorkDate = DateTime.UtcNow.Date,
-            PlannedStartTime = new TimeSpan(8, 0, 0),
-            PlannedEndTime = new TimeSpan(17, 0, 0),
+            WorkDate = nowVn.Date,
+            PlannedStartTime = nowVn.TimeOfDay.Subtract(TimeSpan.FromHours(5)),
+            PlannedEndTime = nowVn.TimeOfDay.Add(TimeSpan.FromHours(5)),
             CheckInTime = checkInTime,
             CheckInMethod = "FACE_ID",
             Status = ScheduleStatus.InProgress
@@ -986,6 +987,7 @@ public class ScheduleServiceTests
         Assert.Equal("FACE_ID", result.CheckOutMethod);
         Assert.Equal(ScheduleStatus.Completed, result.Status);
         Assert.True(result.ActualWorkHours >= 3.9m);
+        Assert.Equal(0, result.OvertimeMinutes); // Không tự tiện tính OT nếu chưa có đơn duyệt OT
         Assert.True(uow.SaveChangesCalled);
     }
 
@@ -1017,6 +1019,52 @@ public class ScheduleServiceTests
 
         var request = new FaceIdCheckOutRequest(schedule.Id, empId, 0.72m, null);
         await Assert.ThrowsAsync<BusinessException>(() => service.CheckOutFaceIdAsync(request));
+    }
+
+    [Fact]
+    public async Task RecordManualAttendanceAsync_EarlyCheckInLateCheckOut_WithoutApprovedOt_DoesNotGrantOvertime()
+    {
+        // Arrange: ca 08:00 - 12:00 (4h). Nhân viên vào sớm 07:30 (-30p), ra muộn 12:30 (+30p) nhưng KHÔNG có đơn OT
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant1",
+            EmployeeId = empId,
+            WorkDate = new DateTime(2026, 11, 6),
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(12, 0, 0),
+            DurationHours = 4.0m,
+            Status = ScheduleStatus.Scheduled,
+            ApprovalType = null,
+            OvertimeMinutes = 0
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var request = new ManualAttendanceRequest(
+            AttendanceType: ManualAttendanceType.Working,
+            CheckInTime: new TimeSpan(7, 30, 0),
+            CheckOutTime: new TimeSpan(12, 30, 0),
+            Note: "Vào sớm ra muộn tự phát, không có đơn OT"
+        );
+
+        // Act
+        var result = await service.RecordManualAttendanceAsync(schedule.Id, request);
+
+        // Assert: Không tự tiện tính OT nếu chưa có đơn OT được duyệt. Giờ làm thực tế chỉ tính tối đa trong khung ca (4.00h)
+        Assert.Equal(0, result.OvertimeMinutes);
+        Assert.Equal(4.00m, result.ActualWorkHours);
+        Assert.Equal(0, result.LateMinutes);
+        Assert.Equal(0, result.EarlyLeaveMinutes);
+        Assert.Equal("WORKING", result.ApprovalType);
     }
 }
 

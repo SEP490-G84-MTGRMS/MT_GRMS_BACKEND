@@ -847,21 +847,21 @@ public class ScheduleService : IScheduleService
             }
         }
 
-        // Tính số phút làm thêm trước ca (OT Before) - Chỉ tính khi có đơn hoặc thực tế dôi ra
-        var otBefore = 0;
-        if (checkInDateTime < plannedStartDateTime)
+        // Không tự tiện tính OT khi check-in sớm hoặc về muộn khi chưa có đơn xin OT được duyệt (ScheduleRequestType.Overtime)
+        // Đơn OT bắt buộc phải được chấp thuận (ApprovalType == "OVERTIME") mới được ghi nhận giờ làm thêm
+        var approvedOtMinutes = 0;
+        if (schedule.ApprovalType == "OVERTIME" || (schedule.ApprovalStatus == ScheduleApprovalStatus.Approved && schedule.OvertimeMinutes > 0))
         {
-            otBefore = (int)(plannedStartDateTime - checkInDateTime).TotalMinutes;
+            approvedOtMinutes = schedule.OvertimeMinutes;
         }
 
-        // Tính số phút làm thêm sau ca (OT After) - Chỉ tính khi có đơn hoặc thực tế dôi ra
-        var otAfter = 0;
-        if (checkOutDateTime > plannedEndDateTime)
-        {
-            otAfter = (int)(checkOutDateTime - plannedEndDateTime).TotalMinutes;
-        }
-
-        var actualHours = Math.Max(0, Math.Round((decimal)(checkOutDateTime - checkInDateTime).TotalHours, 2));
+        // Thời gian làm việc thực tế chỉ tính trong khung ca kế hoạch, không tính dôi ra ngoài ca nếu không có đơn OT được duyệt
+        var effectiveStart = checkInDateTime < plannedStartDateTime ? plannedStartDateTime : checkInDateTime;
+        var effectiveEnd = checkOutDateTime > plannedEndDateTime ? plannedEndDateTime : checkOutDateTime;
+        var inShiftMinutes = Math.Max(0, (int)(effectiveEnd - effectiveStart).TotalMinutes);
+        var inShiftHours = Math.Round((decimal)inShiftMinutes / 60m, 2);
+        var otHours = Math.Round((decimal)approvedOtMinutes / 60m, 2);
+        var actualHours = inShiftHours + otHours;
 
         schedule.CheckInTime = checkInDateTime;
         schedule.CheckOutTime = checkOutDateTime;
@@ -869,10 +869,13 @@ public class ScheduleService : IScheduleService
         schedule.CheckOutMethod = "MANUAL";
         schedule.LateMinutes = lateMinutes;
         schedule.EarlyLeaveMinutes = earlyLeaveMinutes;
-        schedule.OvertimeMinutes = otBefore + otAfter;
+        schedule.OvertimeMinutes = approvedOtMinutes;
         schedule.ActualWorkHours = actualHours;
         schedule.Status = ScheduleStatus.Completed;
-        schedule.ApprovalType = "WORKING";
+        if (schedule.ApprovalType != "OVERTIME")
+        {
+            schedule.ApprovalType = "WORKING";
+        }
         schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
         schedule.ApprovalReason = request.Note;
     }
@@ -986,9 +989,9 @@ public class ScheduleService : IScheduleService
             throw new BusinessException("ALREADY_CHECKED_IN", "Ca làm việc này đã được điểm danh vào trước đó.");
         }
 
-        if (request.FaceMatchScore > 0.50m)
+        if (request.FaceMatchScore > 0.45m)
         {
-            throw new BusinessException("FACE_MATCH_FAILED", $"Khoảng cách nhận diện khuôn mặt ({request.FaceMatchScore:F2}) vượt quá ngưỡng khoảng cách cho phép (tối đa 0.50).");
+            throw new BusinessException("FACE_MATCH_FAILED", $"Khoảng cách nhận diện khuôn mặt ({request.FaceMatchScore:F2}) vượt quá ngưỡng khoảng cách cho phép (tối đa 0.45).");
         }
 
         string? snapshotUrl = null;
@@ -997,8 +1000,7 @@ public class ScheduleService : IScheduleService
             snapshotUrl = await UploadSnapshotAsync(request.SnapshotBase64, $"checkin_{schedule.EmployeeId}", cancellationToken);
         }
 
-        var now = DateTime.UtcNow;
-        var vnNow = now.AddHours(7);
+        var vnNow = DateTime.UtcNow.AddHours(7);
         var workDate = schedule.WorkDate;
         var plannedStartDateTime = workDate.Add(schedule.PlannedStartTime);
 
@@ -1019,13 +1021,13 @@ public class ScheduleService : IScheduleService
             }
         }
 
-        schedule.CheckInTime = now;
+        schedule.CheckInTime = vnNow;
         schedule.CheckInMethod = "FACE_ID";
         schedule.CheckInFaceImageUrl = snapshotUrl;
         schedule.FaceMatchScore = request.FaceMatchScore;
         schedule.LateMinutes = lateMinutes;
         schedule.Status = ScheduleStatus.InProgress;
-        schedule.UpdatedAt = now;
+        schedule.UpdatedAt = vnNow;
 
         _scheduleRepository.Update(schedule);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -1058,9 +1060,9 @@ public class ScheduleService : IScheduleService
             throw new BusinessException("ALREADY_CHECKED_OUT", "Ca làm việc này đã được điểm danh ra trước đó.");
         }
 
-        if (request.FaceMatchScore > 0.50m)
+        if (request.FaceMatchScore > 0.45m)
         {
-            throw new BusinessException("FACE_MATCH_FAILED", $"Khoảng cách nhận diện khuôn mặt ({request.FaceMatchScore:F2}) vượt quá ngưỡng khoảng cách cho phép (tối đa 0.50).");
+            throw new BusinessException("FACE_MATCH_FAILED", $"Khoảng cách nhận diện khuôn mặt ({request.FaceMatchScore:F2}) vượt quá ngưỡng khoảng cách cho phép (tối đa 0.45).");
         }
 
         string? snapshotUrl = null;
@@ -1069,9 +1071,9 @@ public class ScheduleService : IScheduleService
             snapshotUrl = await UploadSnapshotAsync(request.SnapshotBase64, $"checkout_{schedule.EmployeeId}", cancellationToken);
         }
 
-        var now = DateTime.UtcNow;
-        var vnNow = now.AddHours(7);
+        var vnNow = DateTime.UtcNow.AddHours(7);
         var workDate = schedule.WorkDate;
+        var plannedStartDateTime = workDate.Add(schedule.PlannedStartTime);
         var isNextDay = schedule.IsCheckInNextDay || schedule.PlannedEndTime < schedule.PlannedStartTime;
         var plannedEndDateTime = isNextDay ? workDate.AddDays(1).Add(schedule.PlannedEndTime) : workDate.Add(schedule.PlannedEndTime);
 
@@ -1092,29 +1094,34 @@ public class ScheduleService : IScheduleService
             }
         }
 
-        var overtimeMinutes = 0;
-        const int otThreshold = 15;
-        if (vnNow > plannedEndDateTime)
+        // Tăng ca (OT) bắt buộc phải có đơn xin OT được phê duyệt (ScheduleRequestType.Overtime)
+        // Khi check-out FaceID, không tự tiện tính OT khi check-in sớm hoặc về muộn nếu chưa có đơn OT được duyệt.
+        // Nếu không có đơn xin OT được chấp thuận, thời gian dôi ra ngoài ca không được tính là OT và nhân viên vẫn bị tính đi muộn / về sớm.
+        var approvedOtMinutes = 0;
+        if (schedule.ApprovalType == "OVERTIME" || (schedule.ApprovalStatus == ScheduleApprovalStatus.Approved && schedule.OvertimeMinutes > 0))
         {
-            var diff = (int)(vnNow - plannedEndDateTime).TotalMinutes;
-            if (diff >= otThreshold)
-            {
-                overtimeMinutes = diff;
-            }
+            approvedOtMinutes = schedule.OvertimeMinutes;
         }
 
-        var checkInUtc = schedule.CheckInTime.Value;
-        var actualHours = Math.Max(0, Math.Round((decimal)(now - checkInUtc).TotalHours, 2));
+        // Tính giờ làm việc thực tế chuẩn trong khung ca + OT đã duyệt (nếu có)
+        // CheckInTime đã được lưu theo giờ UTC+7
+        var checkInVn = schedule.CheckInTime.Value;
+        var effectiveStart = checkInVn < plannedStartDateTime ? plannedStartDateTime : checkInVn;
+        var effectiveEnd = vnNow > plannedEndDateTime ? plannedEndDateTime : vnNow;
+        var inShiftMinutes = Math.Max(0, (int)(effectiveEnd - effectiveStart).TotalMinutes);
+        var inShiftHours = Math.Round((decimal)inShiftMinutes / 60m, 2);
+        var approvedOtHours = Math.Round((decimal)approvedOtMinutes / 60m, 2);
+        var actualHours = inShiftHours + approvedOtHours;
 
-        schedule.CheckOutTime = now;
+        schedule.CheckOutTime = vnNow;
         schedule.CheckOutMethod = "FACE_ID";
         schedule.CheckOutFaceImageUrl = snapshotUrl;
         schedule.FaceMatchScore = request.FaceMatchScore;
         schedule.EarlyLeaveMinutes = earlyLeaveMinutes;
-        schedule.OvertimeMinutes = overtimeMinutes;
+        schedule.OvertimeMinutes = approvedOtMinutes;
         schedule.ActualWorkHours = actualHours;
         schedule.Status = ScheduleStatus.Completed;
-        schedule.UpdatedAt = now;
+        schedule.UpdatedAt = vnNow;
 
         _scheduleRepository.Update(schedule);
         await _unitOfWork.SaveChangesAsync(cancellationToken);

@@ -101,8 +101,8 @@ public class ScheduleApprovalService : IScheduleApprovalService
         }
         else if (dto.RequestType == ScheduleRequestType.CheckInIncident)
         {
-            // Tự động kích hoạt CheckInTime để nhân viên đủ điều kiện mở phiên bán hàng POS ngay lập tức
-            var checkIn = dto.RequestedCheckInTime ?? DateTime.UtcNow;
+            // Tự động kích hoạt CheckInTime theo giờ UTC+7 để nhân viên đủ điều kiện mở phiên bán hàng POS ngay lập tức
+            var checkIn = dto.RequestedCheckInTime ?? DateTime.UtcNow.AddHours(7);
             if (!schedule.CheckInTime.HasValue)
             {
                 schedule.CheckInTime = checkIn;
