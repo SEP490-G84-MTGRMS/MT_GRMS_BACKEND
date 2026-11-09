@@ -151,6 +151,17 @@ public class OrderService : IOrderService
             }
         }
 
+        // REQ-BRANCH-SCOPE-02: Chặn sản phẩm bán không thuộc danh mục Active của chi nhánh
+        foreach (var item in request.Items.Where(i => !i.IsGift))
+        {
+            var prod = products[item.ProductId];
+            if (!branchProducts.TryGetValue(item.ProductId, out var bp) ||
+                !string.Equals(bp.Status, "Active", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new BusinessException("PRODUCT_NOT_IN_BRANCH", $"Sản phẩm '{prod.Name}' chưa được kích hoạt hoặc không thuộc danh mục bán của chi nhánh.");
+            }
+        }
+
         if (!request.Items.Any(i => !i.IsGift))
         {
             throw new ValidationException("Đơn hàng bắt buộc phải có ít nhất 1 mặt hàng mua trả tiền (không thể chỉ gồm quà tặng khuyến mãi).");
@@ -263,6 +274,13 @@ public class OrderService : IOrderService
 
             if (item.IsGift)
             {
+                var hasActiveBp = bp != null && string.Equals(bp.Status, "Active", StringComparison.OrdinalIgnoreCase);
+                if (!hasActiveBp)
+                {
+                    giftWarnings.Add($"Quà tặng '{prod.Name}' chưa được kích hoạt tại chi nhánh nên tạm thời không áp dụng");
+                    continue;
+                }
+
                 var rate = GetConversionRate(item);
                 var giftStocks = await GetStocksCachedAsync(item.ProductId);
                 var remainingBaseStock = giftStocks.Where(s => s.QuantityOnHand > 0).Sum(s => s.QuantityOnHand);
@@ -812,6 +830,17 @@ public class OrderService : IOrderService
             }
         }
 
+        // REQ-BRANCH-SCOPE-02: Chặn sản phẩm đặt trước không thuộc danh mục Active của chi nhánh
+        foreach (var item in request.Items.Where(i => !i.IsGift))
+        {
+            var prod = products[item.ProductId];
+            if (!branchProducts.TryGetValue(item.ProductId, out var bp) ||
+                !string.Equals(bp.Status, "Active", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new BusinessException("PRODUCT_NOT_IN_BRANCH", $"Sản phẩm '{prod.Name}' chưa được kích hoạt hoặc không thuộc danh mục bán của chi nhánh.");
+            }
+        }
+
         decimal ResolvePreOrderConversionRate(OrderItemCreateDto item)
         {
             if (item.ConversionRate > 0 && item.ConversionRate != 1.00m)
@@ -937,6 +966,13 @@ public class OrderService : IOrderService
 
                 if (item.IsGift)
                 {
+                    var hasActiveBp = bp != null && string.Equals(bp.Status, "Active", StringComparison.OrdinalIgnoreCase);
+                    if (!hasActiveBp)
+                    {
+                        giftWarnings.Add($"Quà tặng '{prod.Name}' chưa được kích hoạt tại chi nhánh nên tạm thời không áp dụng");
+                        continue;
+                    }
+
                     var giftStocks = await GetPreOrderStocksCachedAsync(item.ProductId);
                     var remainingBaseStock = giftStocks.Where(s => s.QuantityOnHand > 0).Sum(s => s.QuantityOnHand);
                     var availableGiftUnits = Math.Floor(remainingBaseStock / rate);
@@ -1311,6 +1347,29 @@ public class OrderService : IOrderService
             throw new InvalidOperationException("Yêu cầu đổi trả phải có ít nhất một mặt hàng trả hoặc mặt hàng đổi mới.");
         }
 
+        // Tiền kiểm tra NewItems: Sản phẩm đổi mới phải tồn tại và thuộc danh mục Active của chi nhánh đơn gốc (REQ-BRANCH-SCOPE-02)
+        Dictionary<Guid, Product>? newProducts = null;
+        if (request.NewItems != null && request.NewItems.Count > 0)
+        {
+            var newProductIds = request.NewItems.Select(i => i.ProductId).Distinct().ToList();
+            newProducts = await _orderRepository.GetProductsByIdsAsync(newProductIds, cancellationToken);
+            var newBranchProducts = await _orderRepository.GetBranchProductsByProductIdsAsync(originalOrder.BranchId, newProductIds, cancellationToken);
+
+            foreach (var newItem in request.NewItems)
+            {
+                if (!newProducts.TryGetValue(newItem.ProductId, out var nProd))
+                {
+                    throw new InvalidOperationException($"Sản phẩm đổi mới với ID '{newItem.ProductId}' không tồn tại.");
+                }
+
+                if (!newBranchProducts.TryGetValue(newItem.ProductId, out var bp) ||
+                    !string.Equals(bp.Status, "Active", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new BusinessException("PRODUCT_NOT_IN_BRANCH", $"Sản phẩm '{nProd.Name}' chưa được kích hoạt hoặc không thuộc danh mục bán của chi nhánh.");
+                }
+            }
+        }
+
         // 1. Kiểm tra và hoàn kho các mặt hàng khách trả
         decimal totalReturnAmount = 0m;
         if (request.ReturnedItems != null && request.ReturnedItems.Count > 0)
@@ -1364,24 +1423,13 @@ public class OrderService : IOrderService
         // 2. Kiểm tra và trừ kho FEFO các mặt hàng khách đổi mới (nếu có)
         decimal totalNewAmount = 0m;
         var newOrderDetails = new List<OrderDetail>();
-        if (request.NewItems != null && request.NewItems.Count > 0)
+        if (request.NewItems != null && request.NewItems.Count > 0 && newProducts != null)
         {
-            var productIds = request.NewItems.Select(i => i.ProductId).Distinct();
-            var products = await _orderRepository.GetProductsByIdsAsync(productIds, cancellationToken);
-
-            foreach (var newItem in request.NewItems)
-            {
-                if (!products.TryGetValue(newItem.ProductId, out _))
-                {
-                    throw new InvalidOperationException($"Sản phẩm đổi mới với ID '{newItem.ProductId}' không tồn tại.");
-                }
-            }
-
             var itemGroups = request.NewItems.GroupBy(i => i.ProductId);
             foreach (var group in itemGroups)
             {
                 var pId = group.Key;
-                var prod = products[pId];
+                var prod = newProducts[pId];
                 var requiredQty = group.Sum(x => x.Quantity * (x.ConversionRate > 0m ? x.ConversionRate : (prod.Units?.FirstOrDefault(u => u.Id == x.UnitId)?.ConversionRate ?? 1.00m)));
 
                 var branchStocks = await _orderRepository.GetBranchStocksForProductFefoAsync(originalOrder.BranchId, pId, cancellationToken);
@@ -1405,7 +1453,7 @@ public class OrderService : IOrderService
             int line = 1;
             foreach (var item in request.NewItems)
             {
-                var prod = products[item.ProductId];
+                var prod = newProducts[item.ProductId];
                 decimal lineTotal = item.Quantity * item.UnitPrice;
                 decimal itemDiscount = item.DiscountAmount ?? 0m;
                 decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : item.UnitPrice;
