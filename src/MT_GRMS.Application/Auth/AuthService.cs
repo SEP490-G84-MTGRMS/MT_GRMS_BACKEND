@@ -10,6 +10,7 @@ using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Application.Auth;
 
@@ -110,24 +111,33 @@ public class AuthService : IAuthService
             tenantId = "tenant_mt_mart_01";
         }
 
-        // Xác định quyền hạn (Role)
+        // Xác định quyền hạn (Role) theo UserRole enum (Admin, StoreOwner, Staff)
         var isAdmin = user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase);
-        var role = isAdmin ? "ADMIN" : (tenantUser?.Role ?? "STORE_OWNER");
-        if (string.IsNullOrWhiteSpace(role))
+        string role;
+        if (isAdmin)
         {
-            var uName = (user.UserName ?? "").ToUpperInvariant();
-            var email = (user.Email ?? "").ToUpperInvariant();
-            if (uName.Contains("EMPLOYEE") || email.Contains("EMPLOYEE") || uName.Contains("STAFF") || email.Contains("STAFF"))
+            role = UserRoleNames.Admin;
+        }
+        else
+        {
+            var rawRole = tenantUser?.Role;
+            if (string.IsNullOrWhiteSpace(rawRole))
             {
-                role = "EMPLOYEE";
-            }
-            else if (uName.Contains("OWNER") || email.Contains("OWNER"))
-            {
-                role = "STORE_OWNER";
+                var uName = (user.UserName ?? "").ToUpperInvariant();
+                var email = (user.Email ?? "").ToUpperInvariant();
+                if (uName.Contains("EMPLOYEE") || email.Contains("EMPLOYEE") || uName.Contains("STAFF") || email.Contains("STAFF") || uName.Contains("CASHIER") || email.Contains("CASHIER"))
+                {
+                    role = UserRoleNames.Staff;
+                }
+                else
+                {
+                    // Mặc định tài khoản đăng ký chuỗi/cửa hàng là STORE_OWNER, tuyệt đối không gán ADMIN
+                    role = UserRoleNames.StoreOwner;
+                }
             }
             else
             {
-                role = "ADMIN";
+                role = UserRoleNames.FromString(rawRole).ToStringRole();
             }
         }
 
@@ -182,7 +192,9 @@ public class AuthService : IAuthService
         var tenantUser = user.TenantUsers?.FirstOrDefault();
         var tenantId = tenantUser?.TenantId ?? "tenant_mt_mart_01";
         var isAdmin = user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase);
-        var role = isAdmin ? "ADMIN" : (tenantUser?.Role ?? "STORE_OWNER");
+        var role = isAdmin 
+            ? UserRoleNames.Admin 
+            : UserRoleNames.FromString(tenantUser?.Role ?? UserRoleNames.StoreOwner).ToStringRole();
 
         var userInfo = new UserInfo(
             Id: user.Id,
@@ -224,7 +236,9 @@ public class AuthService : IAuthService
         var tenantUser = user.TenantUsers?.FirstOrDefault();
         var tenantId = tenantUser?.TenantId ?? "tenant_mt_mart_01";
         var isAdmin = user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase);
-        var role = isAdmin ? "ADMIN" : (tenantUser?.Role ?? "STORE_OWNER");
+        var role = isAdmin 
+            ? UserRoleNames.Admin 
+            : UserRoleNames.FromString(tenantUser?.Role ?? UserRoleNames.StoreOwner).ToStringRole();
 
         return new UserInfo(
             Id: user.Id,
@@ -324,7 +338,7 @@ public class AuthService : IAuthService
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
-        var accessToken = GenerateJwtToken(user.Id, user.UserName, user.Email, "STORE_OWNER", tenant.Id, false, expiresAt);
+        var accessToken = GenerateJwtToken(user.Id, user.UserName, user.Email, UserRoleNames.StoreOwner, tenant.Id, false, expiresAt);
         var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
 
         var userInfo = new UserInfo(
@@ -332,7 +346,7 @@ public class AuthService : IAuthService
             Username: user.UserName,
             FullName: user.FullName,
             Email: user.Email,
-            RoleName: "STORE_OWNER",
+            RoleName: UserRoleNames.StoreOwner,
             BranchId: branch.Id,
             TenantId: tenant.Id,
             IsAdmin: false

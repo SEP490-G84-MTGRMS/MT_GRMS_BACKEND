@@ -7,6 +7,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-09
 
 ### Added
+- Chuẩn hóa hệ thống phân quyền với enum `UserRole` gồm 3 giá trị: `Admin`, `StoreOwner`, `Staff`; bổ sung helper `UserRoleNames` và các thuộc tính `Role` / `UserRole` trên `User`, `TenantUser`, `UserInfo` DTO; loại bỏ triệt để nguy cơ fallback sai về quyền `ADMIN` trong `AuthService` [FE-AUTH] [worklog: docs/worklogs/2026-11-09_FE-AUTH_AI_user-role-enum-standardization.md].
 - Chuyển đổi toàn diện cơ chế xác thực sang HttpOnly Cookie: AccessToken và RefreshToken được lưu trong HttpOnly Cookie (chống XSS), loại bỏ token nhạy cảm khỏi response body, triển khai Token Rotation trong CSDL PostgreSQL bảng Users, bổ sung endpoint `GET /api/auth/me` và `POST /api/auth/refresh` đọc Cookie [FE-AUTH] [worklog: docs/worklogs/2026-11-09_FE-AUTH_AI_httponly-cookie-and-session-expiry.md].
 
 ### Fixed
