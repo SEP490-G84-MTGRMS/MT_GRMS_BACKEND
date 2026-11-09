@@ -7,6 +7,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-09
 
 ### Fixed
+- Khắc phục lỗi `InvalidOperationException` (NpgsqlRetryingExecutionStrategy không hỗ trợ user-initiated transaction) khi xử lý Webhook SePay nạp tiền ví trong `WalletService.cs`: bọc toàn bộ khối transaction cập nhật số dư ví trong `_context.Database.CreateExecutionStrategy().ExecuteAsync()`, đảm bảo luồng nạp tiền và thanh toán gói dịch vụ hoạt động hoàn hảo 100% [BE-WALLET] [worklog: docs/worklogs/2026-11-09_BE-BRANCH_AI_fix-branch-detail-schema-fallback.md].
 - Khắc phục lỗi `500 Internal Server Error` (`42P01: relation "BranchProducts" does not exist`) khi xem chi tiết chi nhánh: tự động khởi tạo bảng `"BranchProducts"` qua `EnsureBranchProductsSchemaAsync` trong `DbInitializer.cs`, bổ sung cơ chế fallback thống kê sản phẩm trực tiếp từ `BranchStocks` khi catalog rỗng, và phòng thủ try-catch cho nhân sự trong `BranchRepository.cs` [BE-BRANCH] [worklog: docs/worklogs/2026-11-09_BE-BRANCH_AI_fix-branch-detail-schema-fallback.md].
 
 ## [Unreleased] - 2026-11-08
