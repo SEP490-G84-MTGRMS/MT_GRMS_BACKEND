@@ -101,6 +101,11 @@ public class BranchAttendancePolicyServiceTests
         {
             return Task.FromResult(Branches.Count(b => !b.IsDeleted));
         }
+
+        public Task<int> CountTotalAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Branches.Count(b => !b.IsDeleted));
+        }
     }
 
     private class FakeBranchAttendancePolicyRepository : IBranchAttendancePolicyRepository

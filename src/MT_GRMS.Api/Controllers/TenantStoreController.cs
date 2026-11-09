@@ -89,7 +89,83 @@ public class TenantStoreController : BaseApiController
     public async Task<IActionResult> GetPricingPlans(CancellationToken cancellationToken)
     {
         var plans = await _planService.GetPlansAsync(new PlanFilterRequest(Status: "ACTIVE"), cancellationToken);
-        return Ok(ApiResponse<IReadOnlyList<PlanSummaryResponse>>.Ok(plans));
+
+        // Lấy 3 gói cước chính thức của hệ thống SaaS bán lẻ: TRIAL (Trải nghiệm 0đ 3 ngày), STANDARD (Gói Thường 99k) và PRO (Gói Pro 249k)
+        var officialPlans = plans
+            .Where(p => string.Equals(p.Code, "TRIAL", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(p.Code, "STANDARD", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(p.Code, "PRO", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(p => p.MonthlyPrice)
+            .ToList();
+
+        // Đảm bảo luôn có gói TRIAL ở đầu danh sách nếu CSDL chưa nạp
+        if (!officialPlans.Any(p => string.Equals(p.Code, "TRIAL", StringComparison.OrdinalIgnoreCase)))
+        {
+            var defaultTrial = new PlanSummaryResponse(
+                Id: "plan_trial",
+                Code: "TRIAL",
+                Name: "Gói Dùng Thử (Trải Nghiệm)",
+                Description: "Trải nghiệm toàn diện các tính năng cao cấp của MT-GRMS hoàn toàn miễn phí trong 3 ngày.",
+                MonthlyPrice: 0m,
+                YearlyPrice: 0m,
+                Status: "ACTIVE",
+                ActiveTenantCount: 0,
+                Quotas: new PlanQuotaDto(MaxBranches: 1, MaxEmployees: 5, MaxStorageGb: 5, BackupFrequency: "Daily"),
+                Features: new PlanFeatureDto(FefoExpiryAlert: true, MultiUnitConversion: true, VietQrDynamic: true, DebtZaloBook: false, BarcodeScanning: true, FinancialReporting: false),
+                CreatedAt: DateTime.UtcNow,
+                UpdatedAt: null
+            );
+            officialPlans.Insert(0, defaultTrial);
+        }
+
+        if (!officialPlans.Any(p => string.Equals(p.Code, "STANDARD", StringComparison.OrdinalIgnoreCase)))
+        {
+            var defaultStandard = new PlanSummaryResponse(
+                Id: "plan_standard",
+                Code: "STANDARD",
+                Name: "Gói Thường (Cửa Hàng Độc Lập)",
+                Description: "Dành cho tiệm tạp hóa, siêu thị mini độc lập (1 điểm bán kiêm kho tại chỗ).",
+                MonthlyPrice: 99000m,
+                YearlyPrice: 1188000m,
+                Status: "ACTIVE",
+                ActiveTenantCount: 0,
+                Quotas: new PlanQuotaDto(MaxBranches: 1, MaxEmployees: 1, MaxStorageGb: 5, BackupFrequency: "Daily"),
+                Features: new PlanFeatureDto(FefoExpiryAlert: true, MultiUnitConversion: true, VietQrDynamic: true, DebtZaloBook: false, BarcodeScanning: true, FinancialReporting: false),
+                CreatedAt: DateTime.UtcNow,
+                UpdatedAt: null
+            );
+            officialPlans.Add(defaultStandard);
+        }
+
+        if (!officialPlans.Any(p => string.Equals(p.Code, "PRO", StringComparison.OrdinalIgnoreCase)))
+        {
+            var defaultPro = new PlanSummaryResponse(
+                Id: "plan_pro",
+                Code: "PRO",
+                Name: "Gói Pro (Chuỗi Cửa Hàng)",
+                Description: "Dành cho chuỗi siêu thị bán lẻ, chuyên môn hóa quy trình và điều chuyển kho chuỗi.",
+                MonthlyPrice: 249000m,
+                YearlyPrice: 2988000m,
+                Status: "ACTIVE",
+                ActiveTenantCount: 0,
+                Quotas: new PlanQuotaDto(MaxBranches: 2, MaxEmployees: 100, MaxStorageGb: 50, BackupFrequency: "Hourly"),
+                Features: new PlanFeatureDto(FefoExpiryAlert: true, MultiUnitConversion: true, VietQrDynamic: true, DebtZaloBook: true, BarcodeScanning: true, FinancialReporting: true),
+                CreatedAt: DateTime.UtcNow,
+                UpdatedAt: null
+            );
+            officialPlans.Add(defaultPro);
+        }
+
+        // Sắp xếp thứ tự: TRIAL (1, trái) -> STANDARD (2, giữa) -> PRO (3, phải)
+        var orderMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["TRIAL"] = 1,
+            ["STANDARD"] = 2,
+            ["PRO"] = 3
+        };
+        officialPlans = officialPlans.OrderBy(p => orderMap.TryGetValue(p.Code, out var o) ? o : 99).ToList();
+
+        return Ok(ApiResponse<IReadOnlyList<PlanSummaryResponse>>.Ok(officialPlans));
     }
 
     /// <summary>
@@ -106,78 +182,145 @@ public class TenantStoreController : BaseApiController
             return NotFound(ApiResponse<PurchaseSubscriptionResponse>.Fail("TENANT_NOT_FOUND", "Không tìm thấy thông tin gian hàng trong hệ thống."));
         }
 
-        // Tìm gói cước theo PlanCode hoặc Id
+        // Chuẩn hóa mã gói: chấp nhận TRIAL, STANDARD hoặc PRO
+        var targetCode = (request.PlanCode ?? "").ToUpper();
+        if (targetCode != "TRIAL" && targetCode != "STANDARD" && targetCode != "PRO")
+        {
+            targetCode = targetCode.Contains("PRO") ? "PRO" : (targetCode.Contains("TRIAL") ? "TRIAL" : "STANDARD");
+        }
+
+        // Tìm gói cước theo PlanCode
         var plan = await _context.SubscriptionPlans.FirstOrDefaultAsync(
-            p => (p.PlanCode == request.PlanCode || p.Id == request.PlanCode) && p.IsActive,
+            p => (p.PlanCode == targetCode || p.Id == request.PlanCode) && p.IsActive,
             cancellationToken);
 
         if (plan == null)
         {
-            // Fallback tìm gói bất kỳ đang active hoặc tạo gói tương ứng
-            plan = await _context.SubscriptionPlans.FirstOrDefaultAsync(p => p.IsActive, cancellationToken);
-            if (plan == null)
-            {
-                return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("PLAN_NOT_FOUND", "Gói dịch vụ không hợp lệ hoặc đã tạm ngưng."));
-            }
+            plan = await _context.SubscriptionPlans.FirstOrDefaultAsync(
+                p => p.PlanCode == targetCode,
+                cancellationToken);
         }
 
-        var months = request.Months <= 0 ? 12 : request.Months;
-
-        // 1. Tính toán chi phí
-        var basePrice = plan.PriceMonthly * months;
-        var branchAddonPrice = request.ExtraBranches * 270000m * months;
-        var warehouseAddonPrice = request.ExtraWarehouses * 150000m * months;
-        var subTotal = basePrice + branchAddonPrice + warehouseAddonPrice;
-        var vatAmount = Math.Round(subTotal * 0.1m, 0);
-        var grandTotal = subTotal + vatAmount;
-
-        // 2. Xử lý thanh toán nếu chọn phương thức Ví gian hàng
-        var isWalletPayment = string.Equals(request.PaymentMethod, "WALLET", StringComparison.OrdinalIgnoreCase) ||
-                              string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase) ||
-                              request.PaymentMethod.Contains("Ví", StringComparison.OrdinalIgnoreCase);
-
-        if (isWalletPayment)
+        if (plan == null)
         {
-            if (tenant.WalletBalance < grandTotal)
+            plan = new SubscriptionPlan
             {
-                return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
-                    "INSUFFICIENT_WALLET_BALANCE",
-                    $"Số dư ví không đủ (hiện có {tenant.WalletBalance:N0} đ, cần {grandTotal:N0} đ). Vui lòng nạp thêm tiền hoặc chọn Quét mã VietQR."));
-            }
-
-            var balanceBefore = tenant.WalletBalance;
-            tenant.WalletBalance -= grandTotal;
-            var balanceAfter = tenant.WalletBalance;
-
-            var walletTx = new MT_GRMS.Domain.Entities.SaaS.WalletTransaction
-            {
-                TenantId = tenant.Id,
-                TransactionCode = $"SUB-{DateTime.UtcNow:yyyyMMdd}-{Random.Shared.Next(1000, 9999)}",
-                Type = "PURCHASE_PLAN",
-                Amount = grandTotal,
-                BalanceBefore = balanceBefore,
-                BalanceAfter = balanceAfter,
-                Description = $"Thanh toán gói dịch vụ {plan.PlanName} ({months} tháng)",
-                PaymentMethod = "WALLET",
-                Status = "SUCCESS"
+                Id = targetCode == "PRO" ? "plan_pro" : (targetCode == "TRIAL" ? "plan_trial" : "plan_standard"),
+                PlanCode = targetCode,
+                PlanName = targetCode == "PRO" ? "Gói Pro (Chuỗi Cửa Hàng)" : (targetCode == "TRIAL" ? "Gói Dùng Thử (Trải Nghiệm)" : "Gói Thường (Cửa Hàng Độc Lập)"),
+                PriceMonthly = targetCode == "PRO" ? 249000.00m : (targetCode == "TRIAL" ? 0m : 99000.00m),
+                PriceYearly = targetCode == "PRO" ? 2988000.00m : (targetCode == "TRIAL" ? 0m : 1188000.00m),
+                MaxBranches = targetCode == "PRO" ? 2 : 1,
+                MaxStaff = targetCode == "PRO" ? 100 : (targetCode == "TRIAL" ? 5 : 1),
+                EnabledModulesJson = targetCode == "PRO"
+                    ? "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\",\"MultiBranch\"]"
+                    : (targetCode == "TRIAL" ? "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\",\"HR\"]" : "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\"]"),
+                IsActive = true
             };
-            _context.WalletTransactions.Add(walletTx);
+            await _context.SubscriptionPlans.AddAsync(plan, cancellationToken);
+            await _context.SaveChangesAsync(cancellationToken);
         }
 
-        // 2. Tính số tháng gia hạn (Khuyến mãi thêm tháng)
-        var bonusMonths = months >= 24 ? 3 : (months >= 12 ? 1 : 0);
-        var totalMonthsAdded = months + bonusMonths;
+        var isTrial = request.Months == 0 || string.Equals(request.PaymentMethod, "TRIAL", StringComparison.OrdinalIgnoreCase);
+        var months = isTrial ? 0 : (request.Months <= 0 ? 12 : request.Months);
 
-        // 3. Gia hạn thời gian sử dụng
-        var baseDate = (tenant.SubscriptionExpiresAt.HasValue && tenant.SubscriptionExpiresAt.Value > DateTime.UtcNow)
-            ? tenant.SubscriptionExpiresAt.Value
-            : DateTime.UtcNow;
+        // Validation nghiệp vụ theo gói
+        if (plan.PlanCode == "STANDARD" && request.ExtraBranches > 0)
+        {
+            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
+                "INVALID_PLAN_ADDON",
+                "Gói Thường cố định 1 chi nhánh và không hỗ trợ mua thêm chi nhánh. Vui lòng nâng cấp lên Gói Pro để mở rộng chuỗi cửa hàng."));
+        }
 
-        var newExpiresAt = baseDate.AddMonths(totalMonthsAdded);
+        // 1. Tính toán chi phí chuẩn hóa
+        decimal grandTotal = 0m;
+        if (!isTrial)
+        {
+            var basePrice = plan.PriceMonthly * months;
+            var branchAddonPrice = (plan.PlanCode == "PRO" ? request.ExtraBranches * 80000m : 0m) * months;
+            var staffAddonPrice = (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon ? 30000m : 0m) * months;
+            var subTotal = basePrice + branchAddonPrice + staffAddonPrice;
+            var vatAmount = Math.Round(subTotal * 0.1m, 0);
+            grandTotal = subTotal + vatAmount;
 
-        tenant.CurrentPlan = plan.PlanCode;
-        tenant.SubscriptionExpiresAt = newExpiresAt;
-        tenant.Status = "ACTIVE";
+            // 2. Xử lý thanh toán nếu chọn phương thức Ví gian hàng
+            var isWalletPayment = string.Equals(request.PaymentMethod, "WALLET", StringComparison.OrdinalIgnoreCase) ||
+                                  string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase) ||
+                                  request.PaymentMethod.Contains("Ví", StringComparison.OrdinalIgnoreCase);
+
+            if (isWalletPayment)
+            {
+                if (tenant.WalletBalance < grandTotal)
+                {
+                    return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
+                        "INSUFFICIENT_WALLET_BALANCE",
+                        $"Số dư ví không đủ (hiện có {tenant.WalletBalance:N0} đ, cần {grandTotal:N0} đ). Vui lòng nạp thêm tiền hoặc chọn Quét mã VietQR."));
+                }
+
+                var balanceBefore = tenant.WalletBalance;
+                tenant.WalletBalance -= grandTotal;
+                var balanceAfter = tenant.WalletBalance;
+
+                var walletTx = new MT_GRMS.Domain.Entities.SaaS.WalletTransaction
+                {
+                    TenantId = tenant.Id,
+                    TransactionCode = $"SUB-{DateTime.UtcNow:yyyyMMdd}-{Random.Shared.Next(1000, 9999)}",
+                    Type = "PURCHASE_PLAN",
+                    Amount = grandTotal,
+                    BalanceBefore = balanceBefore,
+                    BalanceAfter = balanceAfter,
+                    Description = $"Thanh toán gói dịch vụ {plan.PlanName} ({months} tháng)",
+                    PaymentMethod = "WALLET",
+                    Status = "SUCCESS"
+                };
+                _context.WalletTransactions.Add(walletTx);
+            }
+        }
+
+        DateTime newExpiresAt;
+        int totalMonthsAdded = 0;
+        string resultMessage;
+
+        if (isTrial)
+        {
+            newExpiresAt = DateTime.UtcNow.AddDays(3);
+            tenant.CurrentPlan = "PRO";
+            tenant.SubscriptionStatus = "TRIAL";
+            tenant.SubscriptionExpiresAt = newExpiresAt;
+            tenant.HasStaffManagementAddon = true; // Gói Pro dùng thử mở khóa full nhân viên
+            tenant.Status = "ACTIVE";
+            resultMessage = "Kích hoạt thành công 3 ngày dùng thử miễn phí Full tính năng Gói Pro.";
+        }
+        else
+        {
+            // Tính số tháng gia hạn (Khuyến mãi thêm tháng)
+            var bonusMonths = months >= 24 ? 3 : (months >= 12 ? 1 : 0);
+            totalMonthsAdded = months + bonusMonths;
+
+            // Gia hạn thời gian sử dụng
+            var baseDate = (tenant.SubscriptionExpiresAt.HasValue && tenant.SubscriptionExpiresAt.Value > DateTime.UtcNow)
+                ? tenant.SubscriptionExpiresAt.Value
+                : DateTime.UtcNow;
+
+            newExpiresAt = baseDate.AddMonths(totalMonthsAdded);
+
+            tenant.CurrentPlan = plan.PlanCode;
+            tenant.SubscriptionExpiresAt = newExpiresAt;
+            tenant.SubscriptionStatus = "ACTIVE";
+            tenant.Status = "ACTIVE";
+
+            if (plan.PlanCode == "PRO")
+            {
+                tenant.ExtraBranches += request.ExtraBranches;
+                tenant.HasStaffManagementAddon = true; // Gói Pro mặc định có sẵn tính năng quản lý nhân viên
+            }
+            else if (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon)
+            {
+                tenant.HasStaffManagementAddon = true;
+            }
+
+            resultMessage = $"Gia hạn thành công {plan.PlanName} thêm {totalMonthsAdded} tháng.";
+        }
 
         await _context.SaveChangesAsync(cancellationToken);
 
@@ -189,11 +332,27 @@ public class TenantStoreController : BaseApiController
             SubscriptionExpiresAt: newExpiresAt,
             DaysRemaining: daysRemaining,
             TotalAmount: grandTotal,
-            PaymentMethod: request.PaymentMethod,
-            Message: $"Gia hạn thành công {plan.PlanName} thêm {totalMonthsAdded} tháng."
+            PaymentMethod: isTrial ? "TRIAL" : request.PaymentMethod,
+            Message: resultMessage
         );
 
-        return Ok(ApiResponse<PurchaseSubscriptionResponse>.Ok(response, "Thanh toán và gia hạn gói dịch vụ thành công."));
+        return Ok(ApiResponse<PurchaseSubscriptionResponse>.Ok(response, isTrial ? "Kích hoạt dùng thử thành công." : "Thanh toán và gia hạn gói dịch vụ thành công."));
+    }
+
+    /// <summary>
+    /// Kích hoạt gói dùng thử 3 ngày miễn phí Full tính năng Gói Pro cho gian hàng
+    /// </summary>
+    [HttpPost("subscriptions/trial")]
+    public async Task<IActionResult> ActivateTrialSubscription(CancellationToken cancellationToken)
+    {
+        return await PurchaseSubscription(new PurchaseSubscriptionRequest(
+            PlanCode: "PRO",
+            Months: 0,
+            ExtraBranches: 0,
+            ExtraWarehouses: 0,
+            PaymentMethod: "TRIAL",
+            HasStaffManagementAddon: true
+        ), cancellationToken);
     }
 
     /// <summary>

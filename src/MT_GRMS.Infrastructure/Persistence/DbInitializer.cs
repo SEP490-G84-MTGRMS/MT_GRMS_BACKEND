@@ -173,6 +173,70 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
     }
 
+    private static async Task EnsureBranchColumnsAsync(AppDbContext context, ILogger? logger = null)
+    {
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""Email"" character varying(150) NULL;
+                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""ManagerName"" character varying(150) NULL;
+                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""IsHeadquarter"" boolean NOT NULL DEFAULT false;
+            ");
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ các cột Email, ManagerName, IsHeadquarter cho bảng Branches.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ cột cho bảng Branches");
+        }
+    }
+
+    private static async Task EnsureBranchProductsSchemaAsync(AppDbContext context, ILogger? logger = null)
+    {
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+                CREATE TABLE IF NOT EXISTS ""BranchProducts"" (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""BranchId"" uuid NOT NULL,
+                    ""ProductId"" uuid NOT NULL,
+                    ""SellingPriceOverride"" numeric(18,2) NULL,
+                    ""Status"" character varying(20) NOT NULL DEFAULT 'Active',
+                    ""ShelfLocation"" character varying(50) NULL,
+                    ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
+                    ""UpdatedAt"" timestamp with time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT FALSE,
+                    ""CreatedBy"" uuid NULL
+                );
+                CREATE INDEX IF NOT EXISTS ""IX_BranchProducts_BranchId"" ON ""BranchProducts"" (""BranchId"");
+                CREATE INDEX IF NOT EXISTS ""IX_BranchProducts_ProductId"" ON ""BranchProducts"" (""ProductId"");
+            ");
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ bảng BranchProducts.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ bảng BranchProducts");
+        }
+    }
+
+    private static async Task EnsureTenantSubscriptionColumnsAsync(AppDbContext context, ILogger? logger = null)
+    {
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""ExtraBranches"" integer NOT NULL DEFAULT 0;
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""HasStaffManagementAddon"" boolean NOT NULL DEFAULT false;
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""SubscriptionStatus"" character varying(30) NOT NULL DEFAULT 'TRIAL';
+                UPDATE ""SubscriptionPlans"" SET ""IsActive"" = false WHERE ""PlanCode"" NOT IN ('TRIAL', 'STANDARD', 'PRO');
+            ");
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ các cột ExtraBranches, HasStaffManagementAddon, SubscriptionStatus cho bảng Tenants và vô hiệu hóa các gói cước cũ.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ cột subscription cho bảng Tenants");
+        }
+    }
+
     public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null)
     {
         // 1. Tự động áp dụng Migrations hoặc EnsureCreatedAsync để khởi tạo toàn bộ CSDL và các bảng nếu chưa có
@@ -706,10 +770,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 try
                 {
                     await EnsureSupplierDispatchSchemaAsync(context, logger);
+                    await EnsureBranchColumnsAsync(context, logger);
+                    await EnsureTenantSubscriptionColumnsAsync(context, logger);
+                    await EnsureBranchProductsSchemaAsync(context, logger);
                 }
                 catch (Exception ex)
                 {
-                    logger?.LogError(ex, "Lỗi khi chạy EnsureSupplierDispatchSchemaAsync");
+                    logger?.LogError(ex, "Lỗi khi chạy EnsureSupplierDispatchSchemaAsync / EnsureBranchColumnsAsync");
                 }
             }
             else
@@ -723,42 +790,114 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             logger?.LogWarning(ex, "Lỗi trong quá trình kiểm tra cấu trúc CSDL hoặc migrations (bỏ qua nếu bảng đã tồn tại).");
         }
 
-        // 2. PHÂN HỆ SAAS: Nạp danh sách các gói cước SubscriptionPlans (Idempotent)
-        if (!await context.SubscriptionPlans.AnyAsync(p => p.PlanCode == "FREE"))
+        // 2. PHÂN HỆ SAAS: Nạp danh sách các gói cước SubscriptionPlans (Idempotent: TRIAL 0k, STANDARD 99k & PRO 249k)
+        var planTrial = await context.SubscriptionPlans.FirstOrDefaultAsync(p => p.PlanCode == "TRIAL");
+        if (planTrial == null)
         {
-            var planFree = new SubscriptionPlan
+            planTrial = new SubscriptionPlan
             {
-                Id = "plan_free",
-                PlanCode = "FREE",
-                PlanName = "Gói Cơ Bản (Miễn Phí)",
-                PriceMonthly = 0.00m,
-                PriceYearly = 0.00m,
+                Id = "plan_trial",
+                PlanCode = "TRIAL",
+                PlanName = "Gói Dùng Thử (Trải Nghiệm)",
+                PriceMonthly = 0m,
+                PriceYearly = 0m,
                 MaxBranches = 1,
-                MaxStaff = 3,
-                EnabledModulesJson = "[\"Catalog\",\"Pos\"]",
+                MaxStaff = 5,
+                EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\",\"HR\"]",
                 IsActive = true
             };
-            await context.SubscriptionPlans.AddAsync(planFree);
-            await context.SaveChangesAsync();
+            await context.SubscriptionPlans.AddAsync(planTrial);
+        }
+        else
+        {
+            planTrial.PlanName = "Gói Dùng Thử (Trải Nghiệm)";
+            planTrial.PriceMonthly = 0m;
+            planTrial.PriceYearly = 0m;
+            planTrial.MaxBranches = 1;
+            planTrial.MaxStaff = 5;
+            planTrial.EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\",\"HR\"]";
+            planTrial.IsActive = true;
         }
 
-        if (!await context.SubscriptionPlans.AnyAsync(p => p.PlanCode == "PRO"))
+        var planStandard = await context.SubscriptionPlans.FirstOrDefaultAsync(p => p.PlanCode == "STANDARD");
+        if (planStandard == null)
         {
-            var planPro = new SubscriptionPlan
+            planStandard = new SubscriptionPlan
+            {
+                Id = "plan_standard",
+                PlanCode = "STANDARD",
+                PlanName = "Gói Thường (Cửa Hàng Độc Lập)",
+                PriceMonthly = 99000.00m,
+                PriceYearly = 1188000.00m,
+                MaxBranches = 1,
+                MaxStaff = 1,
+                EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\"]",
+                IsActive = true
+            };
+            await context.SubscriptionPlans.AddAsync(planStandard);
+        }
+        else
+        {
+            planStandard.PlanName = "Gói Thường (Cửa Hàng Độc Lập)";
+            planStandard.PriceMonthly = 99000.00m;
+            planStandard.PriceYearly = 1188000.00m;
+            planStandard.MaxBranches = 1;
+            planStandard.MaxStaff = 1;
+            planStandard.EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\"]";
+            planStandard.IsActive = true;
+        }
+
+        var planPro = await context.SubscriptionPlans.FirstOrDefaultAsync(p => p.PlanCode == "PRO");
+        if (planPro == null)
+        {
+            planPro = new SubscriptionPlan
             {
                 Id = "plan_pro",
                 PlanCode = "PRO",
-                PlanName = "Gói Doanh Nghiệp (Toàn Năng)",
-                PriceMonthly = 999000.00m,
-                PriceYearly = 9990000.00m,
-                MaxBranches = 10,
+                PlanName = "Gói Pro (Chuỗi Cửa Hàng)",
+                PriceMonthly = 249000.00m,
+                PriceYearly = 2988000.00m,
+                MaxBranches = 2,
                 MaxStaff = 100,
-                EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\"]",
+                EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\",\"MultiBranch\"]",
                 IsActive = true
             };
             await context.SubscriptionPlans.AddAsync(planPro);
-            await context.SaveChangesAsync();
         }
+        else
+        {
+            planPro.PlanName = "Gói Pro (Chuỗi Cửa Hàng)";
+            planPro.PriceMonthly = 249000.00m;
+            planPro.PriceYearly = 2988000.00m;
+            planPro.MaxBranches = 2;
+            planPro.MaxStaff = 100;
+            planPro.EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\",\"MultiBranch\"]";
+            planPro.IsActive = true;
+        }
+
+        // Vô hiệu hóa tất cả các gói cũ (FREE, SUPPORT, PREMIUM...) chỉ giữ lại 3 gói chuẩn: TRIAL, STANDARD và PRO
+        var outdatedPlans = await context.SubscriptionPlans
+            .Where(p => p.PlanCode != "TRIAL" && p.PlanCode != "STANDARD" && p.PlanCode != "PRO")
+            .ToListAsync();
+        foreach (var op in outdatedPlans)
+        {
+            op.IsActive = false;
+        }
+
+        // Đồng bộ các tenant đang mang mã gói cũ
+        var outdatedTenants = await context.Tenants
+            .Where(t => t.CurrentPlan == "FREE" || t.CurrentPlan == "SUPPORT" || string.IsNullOrEmpty(t.CurrentPlan))
+            .ToListAsync();
+        foreach (var ot in outdatedTenants)
+        {
+            ot.CurrentPlan = "PRO";
+            if (string.IsNullOrEmpty(ot.SubscriptionStatus) || ot.SubscriptionStatus == "ACTIVE")
+            {
+                ot.SubscriptionStatus = "ACTIVE";
+            }
+        }
+
+        await context.SaveChangesAsync();
 
         // Doanh nghiệp thuê SaaS mẫu (Default Tenant)
         var defaultTenantId = "tenant_mt_mart_01";

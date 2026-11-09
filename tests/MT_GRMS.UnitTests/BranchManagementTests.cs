@@ -236,6 +236,11 @@ public class BranchManagementTests
             return Task.FromResult(Branches.Count(b => b.TenantId == "tenant-test-1" && b.IsActive && !b.IsDeleted));
         }
 
+        public Task<int> CountTotalAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Branches.Count(b => b.TenantId == "tenant-test-1" && !b.IsDeleted));
+        }
+
         public Task<(IReadOnlyList<Branch> Items, int TotalCount)> GetPagedListAsync(
             string? keyword,
             string? branchCode,
