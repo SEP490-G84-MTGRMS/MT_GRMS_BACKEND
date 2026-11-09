@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Debt.Dtos;
+using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
@@ -38,7 +39,23 @@ public class CustomersController : BaseApiController
         if (!string.IsNullOrWhiteSpace(search))
         {
             var s = search.Trim().ToLower();
-            query = query.Where(c => c.Name.ToLower().Contains(s) || c.Phone.Contains(s) || c.CustomerCode.ToLower().Contains(s));
+
+            // Match debt repayment reference / entry code e.g. REC-xxx or DPR-xxx
+            var customerIdsFromDebt = await _context.CustomerDebtEntries
+                .AsNoTracking()
+                .Where(e => e.TenantId == tenantId && (e.EntryCode.ToLower().Contains(s) || e.ReferenceCode.ToLower().Contains(s) || (e.SourceId.HasValue && e.SourceId.Value.ToString().ToLower() == s)))
+                .Select(e => e.CustomerId)
+                .Distinct()
+                .ToListAsync(ct);
+
+            if (Guid.TryParse(s, out var guidId))
+            {
+                query = query.Where(c => c.Id == guidId || customerIdsFromDebt.Contains(c.Id) || c.Name.ToLower().Contains(s) || c.Phone.Contains(s) || c.CustomerCode.ToLower().Contains(s));
+            }
+            else
+            {
+                query = query.Where(c => c.Name.ToLower().Contains(s) || c.Phone.Contains(s) || c.CustomerCode.ToLower().Contains(s) || customerIdsFromDebt.Contains(c.Id));
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(tier) && !tier.Equals("ALL", StringComparison.OrdinalIgnoreCase))
