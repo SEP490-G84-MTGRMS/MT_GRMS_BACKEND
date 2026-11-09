@@ -9,7 +9,6 @@ using MT_GRMS.Domain.Constants;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/admin/tenants")]
 [Route("api/admin/tenants")]
 [Authorize(Roles = RoleConstants.AdminOnly)]
 public class AdminTenantsController : BaseApiController

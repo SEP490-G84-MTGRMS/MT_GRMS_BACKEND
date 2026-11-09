@@ -8,7 +8,6 @@ using MT_GRMS.Domain.Constants;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/admin/dashboard")]
 [Route("api/admin/dashboard")]
 [Authorize(Roles = RoleConstants.AdminOnly)]
 public class AdminDashboardController : BaseApiController

@@ -8,7 +8,6 @@ using MT_GRMS.Application.PurchaseOrders.Dtos;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/purchase-orders")]
 [Route("api/purchase-orders")]
 [Authorize]
 public class PurchaseOrdersController : BaseApiController

@@ -9,7 +9,6 @@ using MT_GRMS.Domain.Constants;
 namespace MT_GRMS.Api.Controllers;
 
 [Route("api/[controller]")]
-[Route("api/v1/[controller]")]
 [Authorize]
 public class ExpensesController : BaseApiController
 {

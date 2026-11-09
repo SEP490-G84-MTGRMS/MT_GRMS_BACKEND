@@ -11,7 +11,6 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-[Route("api/v1/[controller]")]
 [Authorize]
 public class CustomersController : BaseApiController
 {

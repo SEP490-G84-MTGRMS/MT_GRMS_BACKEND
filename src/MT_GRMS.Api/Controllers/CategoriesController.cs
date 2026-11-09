@@ -7,7 +7,6 @@ using MT_GRMS.Application.Common;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/categories")]
 [Route("api/categories")]
 [Authorize]
 public class CategoriesController : BaseApiController
