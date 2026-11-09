@@ -1,4 +1,4 @@
-using Order = MT_GRMS.Domain.Entities.Sales.Order;
+﻿using Order = MT_GRMS.Domain.Entities.Sales.Order;
 using OrderItem = MT_GRMS.Domain.Entities.Sales.OrderDetail;
 using System.Security.Cryptography;
 using System.Text;
@@ -9,6 +9,7 @@ using PromotionCondition = MT_GRMS.Domain.Entities.Sales.PromotionCondition;
 using VoucherCode = MT_GRMS.Domain.Entities.Sales.VoucherCode;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Metadata;
 using Microsoft.EntityFrameworkCore.Storage;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Domain.Common;
@@ -159,7 +160,8 @@ ALTER TABLE ""SupplierProducts"" ADD COLUMN IF NOT EXISTS ""AllowedShortageQuant
 
 DO $$
 BEGIN
-    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'SupplierDeliveryConfigs') THEN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'SupplierDeliveryConfigs')
+       AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'SupplierDeliveryConfigs' AND column_name = 'CutoffDayOffset') THEN
         UPDATE ""Suppliers"" s
         SET ""CutoffDayOffset"" = c.""CutoffDayOffset"",
             ""CutoffTime"" = COALESCE(c.""CutoffTime"", '17:00'),
@@ -223,6 +225,56 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         catch (Exception ex)
         {
             logger?.LogWarning(ex, "ExecuteSqlSafe warning: {Sql}", sql);
+        }
+    }
+
+    /// <summary>
+    /// Đồng bộ cột còn thiếu: với mỗi bảng đã tồn tại trong DB nhưng thiếu cột so với EF model
+    /// (do DB cũ chưa theo kịp code sau khi merge), tự động ADD COLUMN IF NOT EXISTS.
+    /// Cột NOT NULL được gán DEFAULT an toàn theo kiểu dữ liệu để không lỗi với dữ liệu hiện có.
+    /// </summary>
+    private static async Task SyncMissingColumnsAsync(AppDbContext context, ILogger? logger = null)
+    {
+        foreach (var entityType in context.Model.GetEntityTypes())
+        {
+            var table = entityType.GetTableName();
+            if (string.IsNullOrEmpty(table)) continue;
+            var store = StoreObjectIdentifier.Table(table, entityType.GetSchema());
+
+            foreach (var prop in entityType.GetProperties())
+            {
+                var column = prop.GetColumnName(store);
+                var type = prop.GetColumnType(store);
+                if (string.IsNullOrEmpty(column) || string.IsNullOrEmpty(type) || column == "xmin") continue;
+
+                var t = type.ToLowerInvariant();
+                string? defaultExpr = prop.GetDefaultValueSql(store);
+                if (defaultExpr == null)
+                {
+                    defaultExpr = t.StartsWith("uuid") ? "'00000000-0000-0000-0000-000000000000'"
+                        : t.StartsWith("bool") ? "false"
+                        : (t.StartsWith("int") || t.StartsWith("bigint") || t.StartsWith("smallint")
+                            || t.StartsWith("numeric") || t.StartsWith("decimal") || t.StartsWith("double") || t.StartsWith("real")) ? "0"
+                        : t.StartsWith("timestamp") ? "CURRENT_TIMESTAMP"
+                        : (t.StartsWith("text") || t.StartsWith("character")) ? "''"
+                        : null;
+                }
+
+                var nullable = prop.IsColumnNullable(store);
+                var ddl = nullable || defaultExpr == null
+                    ? $"ALTER TABLE \"{table}\" ADD COLUMN IF NOT EXISTS \"{column}\" {type} NULL;"
+                    : $"ALTER TABLE \"{table}\" ADD COLUMN IF NOT EXISTS \"{column}\" {type} NOT NULL DEFAULT {defaultExpr};";
+
+                try
+                {
+                    // Bảng chưa tồn tại sẽ báo 42P01 → bỏ qua; chỉ bổ sung cột cho bảng đã có
+                    await context.Database.ExecuteSqlRawAsync(ddl.Replace("{", "{{").Replace("}", "}}"));
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogDebug(ex, "SyncMissingColumns bỏ qua: {Ddl}", ddl);
+                }
+            }
         }
     }
 
@@ -428,7 +480,23 @@ ON CONFLICT DO NOTHING;
                             .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
                             .Replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ")
                             .Replace("CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ");
-                        await context.Database.ExecuteSqlRawAsync(safeScript);
+
+                        // Chạy TỪNG câu lệnh riêng lẻ: 1 câu lỗi (vd. index trên cột chưa tồn tại ở DB cũ)
+                        // không được làm hỏng toàn bộ script khiến các bảng phía sau không được tạo.
+                        var statements = System.Text.RegularExpressions.Regex
+                            .Split(safeScript, @";\s*\r?\n\s*\r?\n")
+                            .Select(s => s.Trim())
+                            .Where(s => s.Length > 0)
+                            .ToList();
+
+                        // Bước 1: tạo bảng thiếu → Bước 2: bổ sung cột thiếu ở bảng đã tồn tại → Bước 3: tạo index
+                        foreach (var stmt in statements.Where(s => s.StartsWith("CREATE TABLE", StringComparison.OrdinalIgnoreCase)))
+                            await ExecuteSqlSafeAsync(context, stmt.Replace("{", "{{").Replace("}", "}}"), logger);
+
+                        await SyncMissingColumnsAsync(context, logger);
+
+                        foreach (var stmt in statements.Where(s => !s.StartsWith("CREATE TABLE", StringComparison.OrdinalIgnoreCase)))
+                            await ExecuteSqlSafeAsync(context, stmt.Replace("{", "{{").Replace("}", "}}"), logger);
                     }
                     catch (Exception ex)
                     {
@@ -1046,7 +1114,7 @@ ON CONFLICT DO NOTHING;
         }
 
         // 2. PHÂN HỆ SAAS: Nạp danh sách các gói cước SubscriptionPlans (Idempotent: TRIAL 0k, STANDARD 99k & PRO 249k)
-        var planTrial = await context.SubscriptionPlans.FirstOrDefaultAsync(p => p.PlanCode == "TRIAL");
+        var planTrial = await context.SubscriptionPlans.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.PlanCode == "TRIAL");
         if (planTrial == null)
         {
             planTrial = new SubscriptionPlan
@@ -1074,7 +1142,7 @@ ON CONFLICT DO NOTHING;
             planTrial.IsActive = true;
         }
 
-        var planStandard = await context.SubscriptionPlans.FirstOrDefaultAsync(p => p.PlanCode == "STANDARD");
+        var planStandard = await context.SubscriptionPlans.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.PlanCode == "STANDARD");
         if (planStandard == null)
         {
             planStandard = new SubscriptionPlan
@@ -1102,7 +1170,7 @@ ON CONFLICT DO NOTHING;
             planStandard.IsActive = true;
         }
 
-        var planPro = await context.SubscriptionPlans.FirstOrDefaultAsync(p => p.PlanCode == "PRO");
+        var planPro = await context.SubscriptionPlans.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.PlanCode == "PRO");
         if (planPro == null)
         {
             planPro = new SubscriptionPlan
@@ -1156,7 +1224,7 @@ ON CONFLICT DO NOTHING;
 
         // Doanh nghiệp thuê SaaS mẫu (Default Tenant)
         var defaultTenantId = "tenant_mt_mart_01";
-        if (!await context.Tenants.AnyAsync(t => t.Id == defaultTenantId))
+        if (!await context.Tenants.IgnoreQueryFilters().AnyAsync(t => t.Id == defaultTenantId))
         {
             var demoTenant = new Tenant
             {
@@ -1177,7 +1245,7 @@ ON CONFLICT DO NOTHING;
         }
 
         // 4. TÀI KHOẢN NGƯỜI DÙNG & PHÂN QUYỀN
-        if (!await context.Users.AnyAsync(u => u.UserName == "admin"))
+        if (!await context.Users.IgnoreQueryFilters().AnyAsync(u => u.UserName == "admin"))
         {
             var userAdmin = new User
             {
@@ -1292,7 +1360,7 @@ ON CONFLICT DO NOTHING;
         // =========================================================================
         // PHÂN HỆ 2: CHI NHÁNH CỬA HÀNG (Branches)
         // =========================================================================
-        if (!await context.Branches.AnyAsync(b => b.TenantId == defaultTenantId))
+        if (!await context.Branches.IgnoreQueryFilters().AnyAsync(b => b.TenantId == defaultTenantId))
         {
             var branchQ1 = new Branch
             {
@@ -1344,8 +1412,8 @@ ON CONFLICT DO NOTHING;
         await CatalogSeedData.SeedAsync(context, defaultTenantId);
 
         // Bổ sung các sản phẩm mẫu đặc thù cho POS nếu chưa có
-        var catDry = await context.Categories.FirstOrDefaultAsync(c => c.TenantId == defaultTenantId && c.CategoryCode == "DRY");
-        var catBeverage = await context.Categories.FirstOrDefaultAsync(c => c.TenantId == defaultTenantId && c.CategoryCode == "BEV");
+        var catDry = await context.Categories.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.TenantId == defaultTenantId && c.CategoryCode == "DRY");
+        var catBeverage = await context.Categories.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.TenantId == defaultTenantId && c.CategoryCode == "BEV");
 
         if (catDry != null && catBeverage != null)
         {
@@ -1509,8 +1577,8 @@ ON CONFLICT DO NOTHING;
                 await context.SaveChangesAsync();
             }
 
-            var prodMilk = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && p.ProductCode == "SP-SUA-VNM-1L");
-            if (prodMilk != null && !await context.ProductUnits.AnyAsync(u => u.ProductId == prodMilk.Id && u.UnitName == "Thùng"))
+            var prodMilk = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && p.ProductCode == "SP-SUA-VNM-1L");
+            if (prodMilk != null && !await context.ProductUnits.IgnoreQueryFilters().AnyAsync(u => u.ProductId == prodMilk.Id && u.UnitName == "Thùng"))
             {
                 var unitCartonMilk = new ProductUnit(prodMilk.Id, "Thùng", 12.00m, 445000.00m, "893850123499", false);
                 await context.ProductUnits.AddAsync(unitCartonMilk);
@@ -1521,7 +1589,7 @@ ON CONFLICT DO NOTHING;
         // =========================================================================
         // PHÂN HỆ 4: NHÀ CUNG CẤP & TỒN KHO THEO LÔ FEFO (Suppliers & BranchStocks)
         // =========================================================================
-        if (!await context.Suppliers.AnyAsync(s => s.TenantId == defaultTenantId))
+        if (!await context.Suppliers.IgnoreQueryFilters().AnyAsync(s => s.TenantId == defaultTenantId))
         {
             var supplierVinamilk = new Domain.Entities.Supplier.Supplier
             {
@@ -1559,19 +1627,19 @@ ON CONFLICT DO NOTHING;
             await context.SaveChangesAsync();
         }
 
-        var bQ1 = await context.Branches.FirstOrDefaultAsync(b => b.TenantId == defaultTenantId && b.BranchCode == "BR-HCM-01");
-        if (bQ1 != null && !await context.BranchStocks.AnyAsync(s => s.TenantId == defaultTenantId && s.BranchId == bQ1.Id))
+        var bQ1 = await context.Branches.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.TenantId == defaultTenantId && b.BranchCode == "BR-HCM-01");
+        if (bQ1 != null && !await context.BranchStocks.IgnoreQueryFilters().AnyAsync(s => s.TenantId == defaultTenantId && s.BranchId == bQ1.Id))
         {
-            var pRice = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "SP-GAO-ST25" || p.ProductCode == "SP-DRY-001"));
-            var pMilk = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "SP-SUA-VNM-1L" || p.ProductCode == "SP-BEV-006"));
-            var pSauce = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "SP-NUOCMAM-NAMNGU" || p.ProductCode == "SP-SPC-001"));
-            var pG7 = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "G7-3IN1-18G" || p.ProductCode == "SP-BEV-004"));
-            var pChoco = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "CHOCO-12P" || p.ProductCode == "SP-DRY-006"));
-            var pMuoi = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "MHH-TOMCHUA-120G" || p.ProductCode == "SP-SPC-004"));
-            var pBia = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "BIA-HANOI-SLEEK" || p.ProductCode == "SP-BEV-001"));
+            var pRice = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "SP-GAO-ST25" || p.ProductCode == "SP-DRY-001"));
+            var pMilk = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "SP-SUA-VNM-1L" || p.ProductCode == "SP-BEV-006"));
+            var pSauce = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "SP-NUOCMAM-NAMNGU" || p.ProductCode == "SP-SPC-001"));
+            var pG7 = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "G7-3IN1-18G" || p.ProductCode == "SP-BEV-004"));
+            var pChoco = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "CHOCO-12P" || p.ProductCode == "SP-DRY-006"));
+            var pMuoi = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "MHH-TOMCHUA-120G" || p.ProductCode == "SP-SPC-004"));
+            var pBia = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "BIA-HANOI-SLEEK" || p.ProductCode == "SP-BEV-001"));
 
-            var supRice = await context.Suppliers.FirstOrDefaultAsync(s => s.TenantId == defaultTenantId && s.Code == "SUP-HOCUA");
-            var supVnm = await context.Suppliers.FirstOrDefaultAsync(s => s.TenantId == defaultTenantId && s.Code == "SUP-VINAMILK");
+            var supRice = await context.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.TenantId == defaultTenantId && s.Code == "SUP-HOCUA");
+            var supVnm = await context.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.TenantId == defaultTenantId && s.Code == "SUP-VINAMILK");
 
             var stocksToAdd = new List<BranchStock>();
             if (pRice != null)
@@ -1728,12 +1796,12 @@ ON CONFLICT DO NOTHING;
             IsActive = true
         };
 
-        if (!await context.Customers.AnyAsync(c => c.TenantId == defaultTenantId && (c.CustomerCode == "KH-0001" || c.Phone == "0903112233")))
+        if (!await context.Customers.IgnoreQueryFilters().AnyAsync(c => c.TenantId == defaultTenantId && (c.CustomerCode == "KH-0001" || c.Phone == "0903112233")))
         {
             await context.Customers.AddAsync(customerVip);
             await context.SaveChangesAsync();
         }
-        if (!await context.Promotions.AnyAsync(p => p.TenantId == defaultTenantId && p.PromotionCode == "KM-KHAITRUONG-10K"))
+        if (!await context.Promotions.IgnoreQueryFilters().AnyAsync(p => p.TenantId == defaultTenantId && p.PromotionCode == "KM-KHAITRUONG-10K"))
         {
             await context.Promotions.AddAsync(promoOpening);
             await context.SaveChangesAsync();
@@ -1760,9 +1828,9 @@ ON CONFLICT DO NOTHING;
         var tenantId = "tenant_mt_mart_01";
 
         // 1. Đảm bảo có đủ 3 chi nhánh trong hệ thống
-        var branchHN = await context.Branches.FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-HN-01");
-        var branchQ1 = await context.Branches.FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-HCM-01");
-        var branchTX = await context.Branches.FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-HN-02");
+        var branchHN = await context.Branches.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-HN-01");
+        var branchQ1 = await context.Branches.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-HCM-01");
+        var branchTX = await context.Branches.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-HN-02");
 
         if (branchHN == null)
         {
@@ -1822,7 +1890,7 @@ ON CONFLICT DO NOTHING;
         var q1Stocks = await context.BranchStocks.Where(s => s.BranchId == branchQ1.Id).ToListAsync();
         if (q1Stocks.Any())
         {
-            if (!await context.BranchStocks.AnyAsync(s => s.BranchId == branchHN.Id))
+            if (!await context.BranchStocks.IgnoreQueryFilters().AnyAsync(s => s.BranchId == branchHN.Id))
             {
                 foreach (var s in q1Stocks)
                 {
@@ -1844,7 +1912,7 @@ ON CONFLICT DO NOTHING;
                 }
             }
 
-            if (!await context.BranchStocks.AnyAsync(s => s.BranchId == branchTX.Id))
+            if (!await context.BranchStocks.IgnoreQueryFilters().AnyAsync(s => s.BranchId == branchTX.Id))
             {
                 foreach (var s in q1Stocks)
                 {
@@ -1869,27 +1937,27 @@ ON CONFLICT DO NOTHING;
         }
 
         // Kiểm tra nếu đã có orders thì cập nhật phân bổ chuẩn theo 3 chi nhánh
-        if (await context.Orders.AnyAsync(o => o.TenantId == tenantId))
+        if (await context.Orders.IgnoreQueryFilters().AnyAsync(o => o.TenantId == tenantId))
         {
-            var ord1 = await context.Orders.FirstOrDefaultAsync(o => o.OrderCode == "HD-20261101-001");
+            var ord1 = await context.Orders.IgnoreQueryFilters().FirstOrDefaultAsync(o => o.OrderCode == "HD-20261101-001");
             if (ord1 != null) ord1.BranchId = branchHN.Id;
 
-            var po1 = await context.Orders.FirstOrDefaultAsync(o => o.OrderCode == "PO-20261101-001");
+            var po1 = await context.Orders.IgnoreQueryFilters().FirstOrDefaultAsync(o => o.OrderCode == "PO-20261101-001");
             if (po1 != null) po1.BranchId = branchHN.Id;
 
-            var ord2 = await context.Orders.FirstOrDefaultAsync(o => o.OrderCode == "HD-20261101-002");
+            var ord2 = await context.Orders.IgnoreQueryFilters().FirstOrDefaultAsync(o => o.OrderCode == "HD-20261101-002");
             if (ord2 != null) ord2.BranchId = branchTX.Id;
 
-            var po2 = await context.Orders.FirstOrDefaultAsync(o => o.OrderCode == "PO-20261101-002");
+            var po2 = await context.Orders.IgnoreQueryFilters().FirstOrDefaultAsync(o => o.OrderCode == "PO-20261101-002");
             if (po2 != null) po2.BranchId = branchTX.Id;
 
-            var ord3 = await context.Orders.FirstOrDefaultAsync(o => o.OrderCode == "HD-20261101-003");
+            var ord3 = await context.Orders.IgnoreQueryFilters().FirstOrDefaultAsync(o => o.OrderCode == "HD-20261101-003");
             if (ord3 != null) ord3.BranchId = branchQ1.Id;
 
-            var ord4 = await context.Orders.FirstOrDefaultAsync(o => o.OrderCode == "HD-20261101-004");
+            var ord4 = await context.Orders.IgnoreQueryFilters().FirstOrDefaultAsync(o => o.OrderCode == "HD-20261101-004");
             if (ord4 != null) ord4.BranchId = branchQ1.Id;
 
-            var po3 = await context.Orders.FirstOrDefaultAsync(o => o.OrderCode == "PO-20261031-003");
+            var po3 = await context.Orders.IgnoreQueryFilters().FirstOrDefaultAsync(o => o.OrderCode == "PO-20261031-003");
             if (po3 != null) po3.BranchId = branchQ1.Id;
 
             await context.SaveChangesAsync();
@@ -1897,7 +1965,7 @@ ON CONFLICT DO NOTHING;
         }
 
         // Đảm bảo có các khách hàng mẫu thân thiết
-        var custHung = await context.Customers.FirstOrDefaultAsync(c => c.TenantId == tenantId && (c.Phone == "0903112233" || c.CustomerCode == "KH-0001"));
+        var custHung = await context.Customers.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.TenantId == tenantId && (c.Phone == "0903112233" || c.CustomerCode == "KH-0001"));
         if (custHung == null)
         {
             custHung = new Customer
@@ -1917,7 +1985,7 @@ ON CONFLICT DO NOTHING;
             await context.Customers.AddAsync(custHung);
         }
 
-        var custKhach = await context.Customers.FirstOrDefaultAsync(c => c.TenantId == tenantId && (c.Phone == "0912345678" || c.CustomerCode == "KH-POS-001"));
+        var custKhach = await context.Customers.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.TenantId == tenantId && (c.Phone == "0912345678" || c.CustomerCode == "KH-POS-001"));
         if (custKhach == null)
         {
             custKhach = new Customer
@@ -1937,7 +2005,7 @@ ON CONFLICT DO NOTHING;
             await context.Customers.AddAsync(custKhach);
         }
 
-        var custLan = await context.Customers.FirstOrDefaultAsync(c => c.TenantId == tenantId && (c.Phone == "0987654321" || c.CustomerCode == "KH-POS-002"));
+        var custLan = await context.Customers.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.TenantId == tenantId && (c.Phone == "0987654321" || c.CustomerCode == "KH-POS-002"));
         if (custLan == null)
         {
             custLan = new Customer
@@ -2266,7 +2334,7 @@ ON CONFLICT DO NOTHING;
         var tenantId = "tenant_an_nhien_02";
 
         // 1. Kiểm tra / Tạo mới Tenant "An Nhiên Mart"
-        var tenant = await context.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId);
+        var tenant = await context.Tenants.IgnoreQueryFilters().FirstOrDefaultAsync(t => t.Id == tenantId);
         if (tenant == null)
         {
             tenant = new Tenant
@@ -2287,7 +2355,7 @@ ON CONFLICT DO NOTHING;
         }
 
         // 2. Kiểm tra / Tạo mới Users & TenantUsers (STORE_OWNER và EMPLOYEE)
-        var ownerUser = await context.Users.FirstOrDefaultAsync(u => u.Id == "usr_owner_annhien_02" || u.UserName == "0918889999");
+        var ownerUser = await context.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.Id == "usr_owner_annhien_02" || u.UserName == "0918889999");
         if (ownerUser == null)
         {
             ownerUser = new User
@@ -2305,7 +2373,7 @@ ON CONFLICT DO NOTHING;
             await context.SaveChangesAsync();
         }
 
-        var staffUser = await context.Users.FirstOrDefaultAsync(u => u.Id == "usr_employee_annhien_02" || u.UserName == "0917778888");
+        var staffUser = await context.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.Id == "usr_employee_annhien_02" || u.UserName == "0917778888");
         if (staffUser == null)
         {
             staffUser = new User
@@ -2324,7 +2392,7 @@ ON CONFLICT DO NOTHING;
         }
 
         // Đảm bảo gán quyền TenantUser đúng vai trò STORE_OWNER và EMPLOYEE
-        var tuOwner = await context.TenantUsers.FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == ownerUser.Id);
+        var tuOwner = await context.TenantUsers.IgnoreQueryFilters().FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == ownerUser.Id);
         if (tuOwner == null)
         {
             await context.TenantUsers.AddAsync(new TenantUser
@@ -2340,7 +2408,7 @@ ON CONFLICT DO NOTHING;
             tuOwner.Role = "STORE_OWNER";
         }
 
-        var tuStaff = await context.TenantUsers.FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == staffUser.Id);
+        var tuStaff = await context.TenantUsers.IgnoreQueryFilters().FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == staffUser.Id);
         if (tuStaff == null)
         {
             await context.TenantUsers.AddAsync(new TenantUser
@@ -2358,7 +2426,7 @@ ON CONFLICT DO NOTHING;
         await context.SaveChangesAsync();
 
         // 3. Các chi nhánh của An Nhiên Mart (Đa chi nhánh: Ba Đình, Cầu Giấy, Đống Đa)
-        var branch = await context.Branches.FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-AN-01");
+        var branch = await context.Branches.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-AN-01");
         if (branch == null)
         {
             branch = new Branch
@@ -2377,7 +2445,7 @@ ON CONFLICT DO NOTHING;
             await context.SaveChangesAsync();
         }
 
-        var branchCauGiay = await context.Branches.FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-AN-02");
+        var branchCauGiay = await context.Branches.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-AN-02");
         if (branchCauGiay == null)
         {
             branchCauGiay = new Branch
@@ -2396,7 +2464,7 @@ ON CONFLICT DO NOTHING;
             await context.SaveChangesAsync();
         }
 
-        var branchDongDa = await context.Branches.FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-AN-03");
+        var branchDongDa = await context.Branches.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.TenantId == tenantId && b.BranchCode == "BR-AN-03");
         if (branchDongDa == null)
         {
             branchDongDa = new Branch
@@ -2447,7 +2515,7 @@ ON CONFLICT DO NOTHING;
         await context.SaveChangesAsync();
 
         // Nhân viên 2: Lê Hoàng Nam gắn cố định tại Chi nhánh Cầu Giấy (BR-AN-02)
-        var staffUser2 = await context.Users.FirstOrDefaultAsync(u => u.Id == "usr_employee_annhien_03" || u.UserName == "0916667777");
+        var staffUser2 = await context.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.Id == "usr_employee_annhien_03" || u.UserName == "0916667777");
         if (staffUser2 == null)
         {
             staffUser2 = new User
@@ -2465,7 +2533,7 @@ ON CONFLICT DO NOTHING;
             await context.SaveChangesAsync();
         }
 
-        var tuStaff2 = await context.TenantUsers.FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == staffUser2.Id);
+        var tuStaff2 = await context.TenantUsers.IgnoreQueryFilters().FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == staffUser2.Id);
         if (tuStaff2 == null)
         {
             await context.TenantUsers.AddAsync(new TenantUser
@@ -2512,7 +2580,7 @@ ON CONFLICT DO NOTHING;
         }
 
         // Nhân viên 3: Nguyễn Văn Minh gắn cố định tại Chi nhánh Ba Đình (b1000000-0000-0000-0000-000000000001)
-        var staffUser3 = await context.Users.FirstOrDefaultAsync(u => u.Id == "usr_employee_annhien_04" || u.UserName == "0915556666");
+        var staffUser3 = await context.Users.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.Id == "usr_employee_annhien_04" || u.UserName == "0915556666");
         if (staffUser3 == null)
         {
             staffUser3 = new User
@@ -2530,7 +2598,7 @@ ON CONFLICT DO NOTHING;
             await context.SaveChangesAsync();
         }
 
-        var tuStaff3 = await context.TenantUsers.FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == staffUser3.Id);
+        var tuStaff3 = await context.TenantUsers.IgnoreQueryFilters().FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == staffUser3.Id);
         if (tuStaff3 == null)
         {
             await context.TenantUsers.AddAsync(new TenantUser
@@ -2546,7 +2614,7 @@ ON CONFLICT DO NOTHING;
             tuStaff3.Role = "EMPLOYEE";
         }
 
-        var empMinh = await context.Employees.FirstOrDefaultAsync(e => e.TenantId == tenantId && e.EmployeeCode == "NV-AN-03");
+        var empMinh = await context.Employees.IgnoreQueryFilters().FirstOrDefaultAsync(e => e.TenantId == tenantId && e.EmployeeCode == "NV-AN-03");
         if (empMinh == null)
         {
             empMinh = new Employee
@@ -2572,7 +2640,7 @@ ON CONFLICT DO NOTHING;
         await context.SaveChangesAsync();
 
         // 3b. Cấu hình ca làm việc mẫu & Lịch phân ca kiểm thử cho thu ngân Ba Đình (REQ-STRICT-SCHEDULE-VALIDATION)
-        var shiftConfigSang = await context.ShiftConfigs.FirstOrDefaultAsync(s => s.TenantId == tenantId && s.ShiftCode == "CA-AN-FULL");
+        var shiftConfigSang = await context.ShiftConfigs.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.TenantId == tenantId && s.ShiftCode == "CA-AN-FULL");
         if (shiftConfigSang == null)
         {
             shiftConfigSang = new ShiftConfig
@@ -2625,7 +2693,7 @@ ON CONFLICT DO NOTHING;
         await context.SaveChangesAsync();
 
         // 4. Danh mục sản phẩm của An Nhiên Mart
-        var catRau = await context.Categories.FirstOrDefaultAsync(c => c.TenantId == tenantId && c.CategoryCode == "CAT-AN-RAU");
+        var catRau = await context.Categories.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.TenantId == tenantId && c.CategoryCode == "CAT-AN-RAU");
         if (catRau == null)
         {
             catRau = new Category
@@ -2638,7 +2706,7 @@ ON CONFLICT DO NOTHING;
             await context.Categories.AddAsync(catRau);
         }
 
-        var catThucPham = await context.Categories.FirstOrDefaultAsync(c => c.TenantId == tenantId && c.CategoryCode == "CAT-AN-THUC-PHAM");
+        var catThucPham = await context.Categories.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.TenantId == tenantId && c.CategoryCode == "CAT-AN-THUC-PHAM");
         if (catThucPham == null)
         {
             catThucPham = new Category
@@ -2956,7 +3024,7 @@ ON CONFLICT DO NOTHING;
         }
 
         // 7. Khách hàng của An Nhiên Mart
-        var custMinh = await context.Customers.FirstOrDefaultAsync(c => c.TenantId == tenantId && c.Phone == "0934567890");
+        var custMinh = await context.Customers.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.TenantId == tenantId && c.Phone == "0934567890");
         if (custMinh == null)
         {
             custMinh = new Customer
@@ -2976,7 +3044,7 @@ ON CONFLICT DO NOTHING;
             await context.Customers.AddAsync(custMinh);
         }
 
-        var custHa = await context.Customers.FirstOrDefaultAsync(c => c.TenantId == tenantId && c.Phone == "0976543210");
+        var custHa = await context.Customers.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.TenantId == tenantId && c.Phone == "0976543210");
         if (custHa == null)
         {
             custHa = new Customer
@@ -2998,7 +3066,7 @@ ON CONFLICT DO NOTHING;
         await context.SaveChangesAsync();
 
         // 8. Đơn hàng mẫu của An Nhiên Mart
-        if (await context.Orders.AnyAsync(o => o.TenantId == tenantId)) return;
+        if (await context.Orders.IgnoreQueryFilters().AnyAsync(o => o.TenantId == tenantId)) return;
 
         var now = DateTime.UtcNow;
 

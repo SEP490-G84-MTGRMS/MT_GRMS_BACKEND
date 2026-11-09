@@ -491,7 +491,8 @@ public static class EmployeeSeedData
                 {
                     if (!existing.Allowances.Any(a => a.Name == name))
                     {
-                        existing.Allowances.Add(new EmployeeAllowance
+                        // Thêm qua DbSet (state Added) - tránh EF coi entity có sẵn Id là Modified → UPDATE 0 dòng
+                        context.EmployeeAllowances.Add(new EmployeeAllowance
                         {
                             Id = Uuid7.NewGuid(),
                             TenantId = tenantId,
