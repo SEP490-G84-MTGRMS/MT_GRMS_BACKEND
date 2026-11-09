@@ -44,7 +44,10 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(command.EmailSendMode)) return null;
-        if ((batchResult.SuccessCount <= 0 && batchResult.AmendedCount <= 0)
+        // Cho phép tạo package khi tạo mới / amend / no-changes (gửi lại email cùng PO).
+        if ((batchResult.SuccessCount <= 0
+                && batchResult.AmendedCount <= 0
+                && batchResult.NoChangesCount <= 0)
             || batchResult.CreatedPurchaseOrders.Count == 0)
         {
             return null;
@@ -114,13 +117,19 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
             .MaxAsync(cancellationToken) ?? 0;
         var nextPackageRev = Math.Max(1, maxPackageRev + 1);
 
-        // Soft-delete package items cũ của các PO này để unique active index cho phép gắn package mới.
+        // Soft-delete package items cũ trước, rồi SaveChanges riêng —
+        // Postgres check unique partial index ngay (không deferred); insert cùng batch dễ 409.
         var oldItems = await _db.SupplierDispatchPackageItems
             .Where(i => poIds.Contains(i.PurchaseOrderId) && !i.IsDeleted)
             .ToListAsync(cancellationToken);
-        foreach (var item in oldItems)
+        if (oldItems.Count > 0)
         {
-            item.IsDeleted = true;
+            foreach (var item in oldItems)
+            {
+                item.IsDeleted = true;
+            }
+
+            await _db.SaveChangesAsync(cancellationToken);
         }
 
         // Supersede package chưa gửi / chưa xong của cùng NCC (tránh worker gửi revision cũ).

@@ -311,6 +311,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 IsAssignedToBranch = isAssigned,
                 InactiveReason = inactiveReason,
                 CutoffTime = !string.IsNullOrWhiteSpace(s.CutoffTime) ? s.CutoffTime : "15:00",
+                CutoffDayOffset = s.CutoffDayOffset >= 0 ? s.CutoffDayOffset : 1,
                 ActiveDeliveryDays = activeDays,
                 BlackoutDates = blackoutDates.OrderBy(x => x).ToList()
             });

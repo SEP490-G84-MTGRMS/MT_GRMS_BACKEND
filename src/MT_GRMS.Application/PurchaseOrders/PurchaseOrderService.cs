@@ -111,17 +111,33 @@ public class PurchaseOrderService : IPurchaseOrderService
             .GroupBy(p => (p.SupplierId, p.DeliveryDate!.Value.Date))
             .ToDictionary(g => g.Key, g => (g.First().Id, g.First().Code));
 
-        // Overlay SL đã chốt từ PO thật (draft đã zero sau split) — FE vẫn gray ô FINALIZED.
+        // Overlay SL từ PO đã chốt:
+        // - Ngày còn OPEN/CUTOFF_DUE + draft đã có ô → giữ draft (user vừa sửa để amend).
+        // - Ngày FINALIZED / chưa có draft → hiện SL từ PO.
+        var configBySupplierForOverlay = supplierConfigs.ToDictionary(c => c.SupplierId);
         foreach (var po in committedList)
         {
             if (!po.DeliveryDate.HasValue || po.Details == null || po.Details.Count == 0) continue;
             var date = po.DeliveryDate.Value.Date;
+            configBySupplierForOverlay.TryGetValue(po.SupplierId, out var overlayCfg);
+            var daySt = overlayCfg != null
+                ? OrderMatrixRules.EvaluateDayStatus(po.SupplierId, date, overlayCfg, now, po.Code, po.Id)
+                : null;
+            var dayStillEditable = daySt != null
+                && OrderMatrixRules.IsEditableStatus(daySt.DeliveryDateStatus);
+
             foreach (var detail in po.Details)
             {
                 var qty = detail.OrderedQty ?? detail.FinalQty ?? 0m;
                 if (qty <= 0) continue;
 
-                cellMap[(detail.ProductId, date)] = new OrderMatrixCellDto
+                var key = (detail.ProductId, date);
+                if (dayStillEditable && cellMap.ContainsKey(key))
+                {
+                    continue; // Giữ số lượng draft (đã lưu) — không đè bằng PO cũ
+                }
+
+                cellMap[key] = new OrderMatrixCellDto
                 {
                     ProductId = detail.ProductId,
                     DeliveryDate = date,
@@ -203,6 +219,28 @@ public class PurchaseOrderService : IPurchaseOrderService
         var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
         bool isStoreOwner = string.IsNullOrEmpty(role) || role is "STORE_OWNER" or "ADMIN";
 
+        // Gate cutoff: không ghi đè ô đã FINALIZED / LOCKED / OFF
+        var nowVn = OrderMatrixRules.GetVietnamNow();
+        var matrixProducts = await _repository.GetMatrixProductsAsync(command.BranchId, null, cancellationToken);
+        var productSupplier = matrixProducts
+            .GroupBy(p => p.Id)
+            .ToDictionary(g => g.Key, g => g.First().SupplierId);
+        var supplierConfigs = await _repository.GetMatrixSupplierConfigsAsync(command.BranchId, null, cancellationToken);
+        var configBySupplier = supplierConfigs.ToDictionary(c => c.SupplierId);
+        var dateFrom = command.Cells.Count > 0
+            ? command.Cells.Min(c => c.DeliveryDate.Date)
+            : nowVn.Date;
+        var dateTo = command.Cells.Count > 0
+            ? command.Cells.Max(c => c.DeliveryDate.Date)
+            : nowVn.Date;
+        var duration = Math.Max(1, (dateTo - dateFrom).Days + 1);
+        var committedList = await _repository.GetCommittedPosInRangeAsync(
+            command.BranchId, null, dateFrom, duration, cancellationToken);
+        var committedDict = committedList
+            .Where(p => p.DeliveryDate.HasValue)
+            .GroupBy(p => (p.SupplierId, p.DeliveryDate!.Value.Date))
+            .ToDictionary(g => g.Key, g => (g.First().Id, g.First().Code));
+
         // Map existing details theo (ProductId, DeliveryDate) để thực hiện upsert an toàn mà không làm mất lịch sử
         var existingDetails = draft.Details
             .Where(d => d.DeliveryDate.HasValue)
@@ -211,6 +249,26 @@ public class PurchaseOrderService : IPurchaseOrderService
         foreach (var cell in command.Cells)
         {
             var cellDate = cell.DeliveryDate.Date;
+
+            if (productSupplier.TryGetValue(cell.ProductId, out var cellSupplierId)
+                && configBySupplier.TryGetValue(cellSupplierId, out var cellCfg))
+            {
+                string? committedCode = null;
+                Guid? committedId = null;
+                if (committedDict.TryGetValue((cellSupplierId, cellDate), out var committed))
+                {
+                    committedId = committed.Id;
+                    committedCode = committed.Code;
+                }
+
+                var daySt = OrderMatrixRules.EvaluateDayStatus(
+                    cellSupplierId, cellDate, cellCfg, nowVn, committedCode, committedId);
+                if (!OrderMatrixRules.IsEditableStatus(daySt.DeliveryDateStatus))
+                {
+                    continue; // Bỏ qua ô đã khóa / off — PO trước cutoff vẫn OPEN/CUTOFF_DUE nên vẫn ghi được
+                }
+            }
+
             existingDetails.TryGetValue((cell.ProductId, cellDate), out var detail);
 
             decimal employeeQty;
@@ -348,6 +406,23 @@ public class PurchaseOrderService : IPurchaseOrderService
         var dayBySupplierDate = matrix.DayStatuses
             .ToDictionary(d => (d.SupplierId, d.DeliveryDate.Date), d => d);
 
+        // SL đã chốt trên PO (để so với draft → HasPendingChanges)
+        var committedPos = await _repository.GetCommittedPosInRangeAsync(
+            query.BranchId, null, viewFrom, duration, cancellationToken);
+        var committedQtyByKey = new Dictionary<(Guid SupplierId, Guid ProductId, DateTime Date), decimal>();
+        foreach (var po in committedPos)
+        {
+            if (!po.DeliveryDate.HasValue || po.Details == null) continue;
+            var dDate = po.DeliveryDate.Value.Date;
+            foreach (var detail in po.Details.Where(d => !d.IsDeleted))
+            {
+                var q = detail.OrderedQty ?? detail.FinalQty ?? 0m;
+                if (q <= 0) continue;
+                var key = (po.SupplierId, detail.ProductId, dDate);
+                committedQtyByKey[key] = committedQtyByKey.GetValueOrDefault(key) + q;
+            }
+        }
+
         var groups = new Dictionary<Guid, DispatchHubSupplierDto>();
 
         foreach (var product in matrix.Products)
@@ -381,18 +456,16 @@ public class PurchaseOrderService : IPurchaseOrderService
                         CutoffTimeStr = cfg.CutoffTime,
                         MinOrderValue = 0,
                         DraftPoId = matrix.DraftPoId,
-                        Status = isFinalized ? "dispatched" : "draft",
+                        Status = "draft",
                         PoCode = dayStatus?.PoCode,
                         Note = string.Empty
                     };
                     groups[product.SupplierId] = group;
                 }
 
-                if (isFinalized)
+                if (isFinalized && !string.IsNullOrWhiteSpace(dayStatus?.PoCode))
                 {
-                    group.Status = "dispatched";
-                    if (!string.IsNullOrWhiteSpace(dayStatus?.PoCode))
-                        group.PoCode = dayStatus.PoCode;
+                    group.PoCode ??= dayStatus.PoCode;
                 }
 
                 if (!string.IsNullOrWhiteSpace(product.Category)
@@ -402,30 +475,111 @@ public class PurchaseOrderService : IPurchaseOrderService
                 }
 
                 var cutoff = dayStatus?.CutoffDateTime
-                             ?? OrderMatrixRules.GetCutoffDateTime(date, cfg.CutoffTime);
+                             ?? OrderMatrixRules.GetCutoffDateTime(date, cfg.CutoffTime, cfg.CutoffDayOffset);
                 var remaining = (int)Math.Floor((cutoff - now).TotalMinutes);
 
-                if (group.RemainingMinutes == null || remaining < group.RemainingMinutes)
+                // Countdown / urgency chỉ theo ngày còn mở — không để ngày đã cutoff kéo cả NCC về "đã khóa"
+                if (!isFinalized && (group.RemainingMinutes == null || remaining < group.RemainingMinutes))
                 {
                     group.RemainingMinutes = remaining;
                     group.CutoffTimeStr = cutoff.ToString("HH:mm");
-                    group.CountdownDisplay = FormatCountdown(remaining, isFinalized);
-                    group.Urgency = ResolveUrgency(remaining, cutoff, now, isFinalized);
+                    group.CountdownDisplay = FormatCountdown(remaining, finalized: false);
+                    group.Urgency = ResolveUrgency(remaining, cutoff, now, finalized: false);
                     group.ExpectedDelivery = date.ToString("dd/MM/yyyy");
                 }
 
+                committedQtyByKey.TryGetValue((product.SupplierId, product.Id, date), out var poQty);
+
                 group.Items.Add(new DispatchHubItemDto
                 {
-                    Id = "${product.Id:N}_${date:yyyyMMdd}",
+                    Id = $"{product.Id:N}_{date:yyyyMMdd}",
                     ProductId = product.Id,
                     Name = product.Name,
                     Sku = product.Sku,
                     Unit = product.Unit,
                     Price = product.Price,
                     Qty = qty,
+                    CommittedQty = poQty,
                     DeliveryDate = date,
                     CutoffSchedule = $"{date:dd/MM} · cutoff {cutoff:HH:mm}"
                 });
+
+                // Đã có PO + draft ≠ PO → ghi nhận pending (EDITABLE hoặc LOCKED_CUTOFF)
+                if (!string.IsNullOrWhiteSpace(dayStatus?.PoCode))
+                {
+                    if (qty != poQty)
+                    {
+                        var updateStatus = isEditable ? "EDITABLE" : "LOCKED_CUTOFF";
+                        group.PendingChanges.Add(new DispatchPendingChangeLineDto
+                        {
+                            ProductId = product.Id,
+                            ProductName = product.Name,
+                            Sku = product.Sku,
+                            Unit = product.Unit,
+                            DeliveryDate = date,
+                            DraftQty = qty,
+                            CommittedQty = poQty,
+                            PoCode = dayStatus?.PoCode,
+                            UpdateStatus = updateStatus
+                        });
+
+                        if (isEditable)
+                        {
+                            group.PoCode = dayStatus.PoCode;
+                            group.CanAmend = true;
+                            group.HasPendingChanges = true;
+                            group.PendingChangeLineCount++;
+                        }
+                    }
+                    else if (isEditable)
+                    {
+                        group.PoCode = dayStatus.PoCode;
+                        group.CanAmend = true;
+                    }
+                }
+            }
+        }
+
+        var productsById = matrix.Products.ToDictionary(p => p.Id, p => p);
+
+        // PO còn dòng mà draft đã về 0 (không vào Items) → cũng là thay đổi
+        foreach (var kv in committedQtyByKey)
+        {
+            var (supplierId, productId, date) = kv.Key;
+            dayBySupplierDate.TryGetValue((supplierId, date), out var ds);
+            if (ds == null || string.IsNullOrWhiteSpace(ds.PoCode)) continue;
+
+            var isEditableDay = OrderMatrixRules.IsEditableStatus(ds.DeliveryDateStatus);
+            var isFinalizedDay = ds.DeliveryDateStatus == OrderMatrixRules.StatusFinalized;
+            if (!isEditableDay && !isFinalizedDay) continue;
+
+            cells.TryGetValue((productId, date), out var cell);
+            var draftQty = cell?.FinalQty ?? 0m;
+            if (draftQty == kv.Value) continue;
+            if (draftQty > 0) continue; // đã xử lý vòng trên
+
+            if (!groups.TryGetValue(supplierId, out var group)) continue;
+            productsById.TryGetValue(productId, out var pInfo);
+            var updateStatus = isEditableDay ? "EDITABLE" : "LOCKED_CUTOFF";
+            group.PendingChanges.Add(new DispatchPendingChangeLineDto
+            {
+                ProductId = productId,
+                ProductName = pInfo?.Name ?? "(Sản phẩm)",
+                Sku = pInfo?.Sku ?? string.Empty,
+                Unit = pInfo?.Unit ?? string.Empty,
+                DeliveryDate = date,
+                DraftQty = 0m,
+                CommittedQty = kv.Value,
+                PoCode = ds.PoCode,
+                UpdateStatus = updateStatus
+            });
+
+            if (isEditableDay)
+            {
+                group.CanAmend = true;
+                group.PoCode ??= ds.PoCode;
+                group.HasPendingChanges = true;
+                group.PendingChangeLineCount++;
             }
         }
 
@@ -448,7 +602,7 @@ public class PurchaseOrderService : IPurchaseOrderService
                     if (!g.Items.Any(it => it.DeliveryDate.Date == date)) continue;
                     if (!configsBySupplier.TryGetValue(g.SupplierId, out var cfg)) continue;
                     dayBySupplierDate.TryGetValue((g.SupplierId, date), out var ds);
-                    var cutoff = ds?.CutoffDateTime ?? OrderMatrixRules.GetCutoffDateTime(date, cfg.CutoffTime);
+                    var cutoff = ds?.CutoffDateTime ?? OrderMatrixRules.GetCutoffDateTime(date, cfg.CutoffTime, cfg.CutoffDayOffset);
                     var st = ds?.DeliveryDateStatus ?? OrderMatrixRules.StatusOpen;
 
                     if (OrderMatrixRules.IsEditableStatus(st) && now < cutoff)
@@ -481,7 +635,7 @@ public class PurchaseOrderService : IPurchaseOrderService
             }
         }
 
-        // Nếu nhóm vừa draft vừa có finalized items — ưu tiên draft nếu còn item editable
+        // Status NCC: chỉ "dispatched" khi mọi ngày còn qty đều đã FINALIZED
         foreach (var g in groups.Values)
         {
             var hasOpen = g.Items.Any(it =>
@@ -489,9 +643,18 @@ public class PurchaseOrderService : IPurchaseOrderService
                 dayBySupplierDate.TryGetValue((g.SupplierId, it.DeliveryDate.Date), out var ds);
                 return OrderMatrixRules.IsEditableStatus(ds?.DeliveryDateStatus);
             });
-            if (hasOpen && g.Status == "dispatched")
+            var hasFinalized = g.Items.Any(it =>
             {
-                g.Status = "draft";
+                dayBySupplierDate.TryGetValue((g.SupplierId, it.DeliveryDate.Date), out var ds);
+                return ds?.DeliveryDateStatus == OrderMatrixRules.StatusFinalized;
+            });
+
+            g.Status = hasOpen ? "draft" : (hasFinalized ? "dispatched" : "draft");
+
+            if (!hasOpen && hasFinalized)
+            {
+                g.CountdownDisplay = "Đã chốt PO";
+                g.Urgency = "later";
             }
         }
 
@@ -621,7 +784,7 @@ public class PurchaseOrderService : IPurchaseOrderService
                 var skuCount = s.Items.Count(it => it.Qty > 0);
                 var totalQty = s.Items.Sum(it => it.Qty);
                 var totalAmount = s.Items.Sum(it => it.Qty * it.Price);
-                if (skuCount > 0 || s.Status == "dispatched")
+                if (skuCount > 0 || s.Status == "dispatched" || s.HasPendingChanges)
                 {
                     row.Branches.Add(new DispatchSupplierBranchSummaryDto
                     {
@@ -631,7 +794,8 @@ public class PurchaseOrderService : IPurchaseOrderService
                         SkuCount = skuCount,
                         TotalQty = totalQty,
                         TotalAmount = totalAmount,
-                        Status = s.Status
+                        Status = s.Status,
+                        HasPendingChanges = s.HasPendingChanges
                     });
                 }
 
@@ -649,6 +813,41 @@ public class PurchaseOrderService : IPurchaseOrderService
                     row.CountdownDisplay = s.CountdownDisplay;
                     row.Urgency = s.Urgency;
                     row.ExpectedDelivery = s.ExpectedDelivery;
+                }
+
+                if (s.CanAmend)
+                {
+                    row.CanAmend = true;
+                    if (!string.IsNullOrWhiteSpace(s.PoCode))
+                        row.PoCode = s.PoCode;
+                }
+
+                if (s.PendingChanges.Count > 0)
+                {
+                    foreach (var line in s.PendingChanges)
+                    {
+                        row.PendingChanges.Add(new DispatchPendingChangeLineDto
+                        {
+                            ProductId = line.ProductId,
+                            ProductName = line.ProductName,
+                            Sku = line.Sku,
+                            Unit = line.Unit,
+                            DeliveryDate = line.DeliveryDate,
+                            DraftQty = line.DraftQty,
+                            CommittedQty = line.CommittedQty,
+                            PoCode = line.PoCode,
+                            UpdateStatus = line.UpdateStatus,
+                            BranchId = branch.Id,
+                            BranchCode = branch.Code,
+                            BranchName = branch.Name
+                        });
+                    }
+                }
+
+                if (s.HasPendingChanges)
+                {
+                    row.HasPendingChanges = true;
+                    row.PendingChangeLineCount += s.PendingChangeLineCount;
                 }
 
                 if (s.Status == "draft")
@@ -793,6 +992,7 @@ public class PurchaseOrderService : IPurchaseOrderService
                     Unit = it.Unit,
                     Price = it.Price,
                     Qty = it.Qty,
+                    CommittedQty = it.CommittedQty,
                     DeliveryDate = it.DeliveryDate,
                     CutoffSchedule = it.CutoffSchedule,
                     DayStatus = s.Status == "dispatched" ? "FINALIZED" : "OPEN"
@@ -858,7 +1058,7 @@ public class PurchaseOrderService : IPurchaseOrderService
         {
             result = await ProcessMatrixSplitEngineAsync(command, isDryRun: false, cancellationToken);
             if (!string.IsNullOrWhiteSpace(command.EmailSendMode)
-                && (result.SuccessCount > 0 || result.AmendedCount > 0))
+                && (result.SuccessCount > 0 || result.AmendedCount > 0 || result.NoChangesCount > 0))
             {
                 result.DispatchPackage = await _dispatchPackageService.CreatePackageForDispatchAsync(
                     command,
@@ -947,7 +1147,7 @@ public class PurchaseOrderService : IPurchaseOrderService
 
         if (!isDryRun
             && !string.IsNullOrWhiteSpace(command.EmailSendMode)
-            && (result.SuccessCount > 0 || result.AmendedCount > 0))
+            && (result.SuccessCount > 0 || result.AmendedCount > 0 || result.NoChangesCount > 0))
         {
             result.DispatchPackage = await _dispatchPackageService.CreatePackageForDispatchAsync(
                 command,
@@ -1083,6 +1283,28 @@ public class PurchaseOrderService : IPurchaseOrderService
                 .ThenBy(g => g.Item1)
                 .ToList();
         }
+        else if (OrderMatrixRules.TryResolveRollingDurationDays(scope).HasValue
+                 || string.Equals(scope, OrderMatrixRules.ScopeAll, StringComparison.OrdinalIgnoreCase))
+        {
+            var days = OrderMatrixRules.TryResolveRollingDurationDays(scope)
+                ?? Math.Clamp(command.DurationDays <= 0 ? 31 : command.DurationDays, 1, 31);
+            var rangeFrom = now.Date;
+            var rangeTo = rangeFrom.AddDays(days - 1);
+
+            targetGroups = draftDetails
+                .Where(d =>
+                {
+                    var date = d.DeliveryDate!.Value.Date;
+                    if (date < rangeFrom || date > rangeTo) return false;
+                    var fq = OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted);
+                    return fq > 0 && productById.TryGetValue(d.ProductId, out _);
+                })
+                .Select(d => (productById[d.ProductId].SupplierId, d.DeliveryDate!.Value.Date))
+                .Distinct()
+                .OrderBy(g => g.Item2)
+                .ThenBy(g => g.Item1)
+                .ToList();
+        }
         else if (command.Groups != null && command.Groups.Any())
         {
             targetGroups = command.Groups
@@ -1092,6 +1314,7 @@ public class PurchaseOrderService : IPurchaseOrderService
         }
         else
         {
+            // Không có Scope/Groups: lấy toàn bộ draft còn qty (legacy).
             targetGroups = draftDetails
                 .Where(d =>
                 {
@@ -1341,6 +1564,8 @@ public class PurchaseOrderService : IPurchaseOrderService
                     result.PurchaseOrderCode = existingPo.Code;
                     result.RevisionNumber = existingPo.RevisionNumber;
                     result.ErrorMessage = "Không có thay đổi số lượng so với PO hiện tại.";
+                    // Vẫn đưa vào danh sách để có thể gửi lại email / package.
+                    createdPos.Add(existingPo);
                     groupResults.Add(result);
                     continue;
                 }

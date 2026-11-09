@@ -83,6 +83,7 @@ public class PurchaseOrderMatrixTests
             IsActive = true,
             IsAssignedToBranch = true,
             CutoffTime = "23:59",
+            CutoffDayOffset = 1,
             ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 },
             BlackoutDates = new List<string>()
         };
@@ -95,6 +96,22 @@ public class PurchaseOrderMatrixTests
 
         var tomorrowStatus = OrderMatrixRules.EvaluateDayStatus(supplierId, now.Date.AddDays(1), config, now);
         Assert.True(OrderMatrixRules.IsEditableStatus(tomorrowStatus.DeliveryDateStatus));
+        // offset=1 → cutoff ngày giao mai = hôm nay 23:59
+        Assert.Equal(new DateTime(2026, 11, 8, 23, 59, 0), tomorrowStatus.CutoffDateTime);
+    }
+
+    [Fact]
+    public void OrderMatrixRules_GetCutoffDateTime_UsesDayOffsetBeforeDelivery()
+    {
+        var delivery = new DateTime(2026, 11, 9);
+        var cutoffOffset1 = OrderMatrixRules.GetCutoffDateTime(delivery, "16:00", cutoffDayOffset: 1);
+        Assert.Equal(new DateTime(2026, 11, 8, 16, 0, 0), cutoffOffset1);
+
+        var cutoffOffset0 = OrderMatrixRules.GetCutoffDateTime(delivery, "16:00", cutoffDayOffset: 0);
+        Assert.Equal(new DateTime(2026, 11, 9, 16, 0, 0), cutoffOffset0);
+
+        var cutoffOffset2 = OrderMatrixRules.GetCutoffDateTime(delivery, "16:00", cutoffDayOffset: 2);
+        Assert.Equal(new DateTime(2026, 11, 7, 16, 0, 0), cutoffOffset2);
     }
 
     [Fact]

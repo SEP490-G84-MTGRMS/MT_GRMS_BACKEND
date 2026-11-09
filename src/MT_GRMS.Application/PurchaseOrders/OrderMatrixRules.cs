@@ -20,6 +20,24 @@ public static class OrderMatrixRules
     public const string ScopeNearest = "NEAREST";
     public const string ScopeWeek = "WEEK";
     public const string ScopeAll = "ALL";
+    /// <summary>Rolling window từ hôm nay: 7 / 14 / 21 / 31 ngày.</summary>
+    public const string ScopeDays7 = "DAYS_7";
+    public const string ScopeDays14 = "DAYS_14";
+    public const string ScopeDays21 = "DAYS_21";
+    public const string ScopeDays31 = "DAYS_31";
+
+    public static int? TryResolveRollingDurationDays(string? scope)
+    {
+        var s = (scope ?? string.Empty).Trim().ToUpperInvariant();
+        return s switch
+        {
+            ScopeDays7 => 7,
+            ScopeDays14 => 14,
+            ScopeDays21 => 21,
+            ScopeDays31 => 31,
+            _ => null
+        };
+    }
 
     public const string ResultSuccess = "SUCCESS";
     public const string ResultFailed = "FAILED";
@@ -106,18 +124,20 @@ public static class OrderMatrixRules
     public const int MinimumLeadTimeDays = 1;
 
     /// <summary>
-    /// Cutoff của ngày giao D = cùng ngày D ở giờ CutoffTime (local/unspecified).
+    /// Cutoff của ngày giao D = (D − cutoffDayOffset) ở giờ CutoffTime.
+    /// offset=1 → chốt ngày trước ngày giao; offset=0 → chốt cùng ngày giao.
     /// </summary>
-    public static DateTime GetCutoffDateTime(DateTime deliveryDate, string? cutoffTime)
+    public static DateTime GetCutoffDateTime(DateTime deliveryDate, string? cutoffTime, int cutoffDayOffset = 1)
     {
         var (hour, minute) = ParseCutoffTime(cutoffTime);
-        var cutoffDay = deliveryDate.Date;
+        var offset = Math.Max(0, cutoffDayOffset);
+        var cutoffDay = deliveryDate.Date.AddDays(-offset);
         return new DateTime(cutoffDay.Year, cutoffDay.Month, cutoffDay.Day, hour, minute, 0, DateTimeKind.Unspecified);
     }
 
-    /// <summary>Giữ overload cũ — cutoff không phụ thuộc lead time (lead time chặn ở EvaluateDayStatus).</summary>
-    public static DateTime GetCutoffDateTime(DateTime deliveryDate, int leadTimeDays, string? cutoffTime)
-        => GetCutoffDateTime(deliveryDate, cutoffTime);
+    /// <summary>Overload cũ: tham số giữa là cutoffDayOffset (không còn là leadTimeDays).</summary>
+    public static DateTime GetCutoffDateTime(DateTime deliveryDate, int cutoffDayOffset, string? cutoffTime)
+        => GetCutoffDateTime(deliveryDate, cutoffTime, cutoffDayOffset);
 
     /// <summary>
     /// Ngày giao sớm nhất được phép đặt = hôm nay + MinimumLeadTimeDays (theo lịch VN).
@@ -156,7 +176,7 @@ public static class OrderMatrixRules
         string? committedPoCode = null,
         Guid? committedPoId = null)
     {
-        var cutoff = GetCutoffDateTime(deliveryDate, config.CutoffTime);
+        var cutoff = GetCutoffDateTime(deliveryDate, config.CutoffTime, config.CutoffDayOffset);
 
         if (!config.IsActive)
         {
