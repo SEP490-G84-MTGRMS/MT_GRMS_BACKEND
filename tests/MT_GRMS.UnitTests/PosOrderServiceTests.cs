@@ -670,6 +670,36 @@ public class PosOrderServiceTests
     }
 
     [Fact]
+    public async Task REQ_POS_RET_02_Damaged_Condition_Does_Not_Restock()
+    {
+        // Arrange: Đơn gốc mua 2 gói Hảo Hảo
+        var originalOrder = await _orderService.CreateOrderAsync(new OrderCreateRequest(
+            _branchId, _customerId, "CASH",
+            new List<OrderItemCreateDto> { new OrderItemCreateDto(_prodHaoHaoId, 2m, 5000m) },
+            CashTendered: 10000m
+        ));
+
+        var initialHaoHaoStock = _orderRepo.BranchStocks.First(s => s.ProductId == _prodHaoHaoId).QuantityOnHand;
+
+        // Trả 1 gói Hảo Hảo với tình trạng "Damaged" (hàng hỏng, không nhập lại kho bán)
+        var request = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new ReturnItemDto(_prodHaoHaoId, 1m, 5000m, Condition: "Damaged") },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH",
+            Reason: "DEFECTIVE",
+            Note: "Hàng rách bao bì từ trước"
+        );
+
+        // Act
+        var result = await _orderService.ProcessReturnExchangeAsync(originalOrder.Id, request);
+
+        // Assert
+        Assert.NotNull(result);
+        var currentStock = _orderRepo.BranchStocks.First(s => s.ProductId == _prodHaoHaoId).QuantityOnHand;
+        Assert.Equal(initialHaoHaoStock, currentStock); // Tồn kho bán lẻ KHÔNG tăng
+    }
+
+    [Fact]
     public async Task REQ_POS_RET_01_ProcessReturnExchange_ReduceDebt_Succeeds()
     {
         // Arrange: Khách nợ 200.000đ. Đơn gốc mua 4 gói Hảo Hảo (20.000đ)
