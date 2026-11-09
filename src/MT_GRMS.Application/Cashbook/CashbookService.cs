@@ -346,8 +346,8 @@ public class CashbookService : ICashbookService
 
     public async Task<FinanceAccount> GetOrCreateTillAsync(Guid branchId, string tillName, CancellationToken ct = default)
     {
-        var existingList = await _accountRepo.FindAsync(t => t.BranchId == branchId && t.AccountType == FinanceAccountType.Till && t.AccountName == tillName, ct);
-        var existing = existingList.FirstOrDefault();
+        var existingList = await _accountRepo.FindAsync(t => t.BranchId == branchId && t.AccountType == FinanceAccountType.Till, ct);
+        var existing = existingList.FirstOrDefault(t => t.AccountName == tillName) ?? existingList.FirstOrDefault();
         if (existing != null) return existing;
 
         var till = new FinanceAccount

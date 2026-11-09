@@ -173,10 +173,6 @@ public partial class AppDbContext : DbContext
     private void ApplyAuditAndTenantInfo()
     {
         var tenantId = _tenantContext?.CurrentTenantId;
-        if (string.IsNullOrWhiteSpace(tenantId))
-        {
-            tenantId = "default-tenant";
-        }
 
         foreach (var entry in ChangeTracker.Entries<BaseTenantEntity>())
         {
@@ -202,6 +198,10 @@ public partial class AppDbContext : DbContext
                 if (!string.IsNullOrWhiteSpace(tenantId))
                 {
                     entry.Entity.TenantId = tenantId;
+                }
+                else if (string.IsNullOrWhiteSpace(entry.Entity.TenantId))
+                {
+                    entry.Entity.TenantId = "default-tenant";
                 }
                 if (entry.Entity.CreatedAt == default)
                 {
