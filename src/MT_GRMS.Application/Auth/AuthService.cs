@@ -7,6 +7,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using MT_GRMS.Application.Auth.Dtos;
 using MT_GRMS.Application.Common.Interfaces;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
@@ -110,25 +111,44 @@ public class AuthService : IAuthService
             tenantId = "tenant_mt_mart_01";
         }
 
-        // Xác định quyền hạn (Role)
+        // Xác định quyền hạn (Role) - Chuẩn hóa về SystemRoles (ADMIN, STORE_OWNER, STAFF)
         var isAdmin = user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase);
-        var role = isAdmin ? "ADMIN" : (tenantUser?.Role ?? "STORE_OWNER");
-        if (string.IsNullOrWhiteSpace(role))
+        var rawRole = isAdmin ? SystemRoles.Admin : (tenantUser?.Role ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(rawRole))
         {
             var uName = (user.UserName ?? "").ToUpperInvariant();
             var email = (user.Email ?? "").ToUpperInvariant();
-            if (uName.Contains("EMPLOYEE") || email.Contains("EMPLOYEE") || uName.Contains("STAFF") || email.Contains("STAFF"))
+            if (uName.Contains("EMPLOYEE") || email.Contains("EMPLOYEE") || uName.Contains("STAFF") || email.Contains("STAFF") || uName.Contains("NHANVIEN"))
             {
-                role = "EMPLOYEE";
+                rawRole = SystemRoles.Staff;
             }
-            else if (uName.Contains("OWNER") || email.Contains("OWNER"))
+            else if (uName.Contains("OWNER") || email.Contains("OWNER") || uName.Contains("CHUCUAHANG"))
             {
-                role = "STORE_OWNER";
+                rawRole = SystemRoles.StoreOwner;
+            }
+            else if (isAdmin)
+            {
+                rawRole = SystemRoles.Admin;
             }
             else
             {
-                role = "ADMIN";
+                rawRole = SystemRoles.Staff;
             }
+        }
+
+        // Chuẩn hóa role về 3 role hệ thống hợp lệ
+        string role;
+        if (isAdmin || string.Equals(rawRole, SystemRoles.Admin, StringComparison.OrdinalIgnoreCase) || string.Equals(rawRole, "SUPER_ADMIN", StringComparison.OrdinalIgnoreCase))
+        {
+            role = SystemRoles.Admin;
+        }
+        else if (string.Equals(rawRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase) || string.Equals(rawRole, "OWNER", StringComparison.OrdinalIgnoreCase) || string.Equals(rawRole, "BRANCH_MANAGER", StringComparison.OrdinalIgnoreCase))
+        {
+            role = SystemRoles.StoreOwner;
+        }
+        else
+        {
+            role = SystemRoles.Staff;
         }
 
         // 4. Đăng nhập thành công với thông tin user từ database

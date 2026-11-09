@@ -12,6 +12,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Domain.Common;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.HR;
@@ -28,9 +29,99 @@ namespace MT_GRMS.Infrastructure.Persistence;
 /// </summary>
 public static class DbInitializer
 {
-    private static async Task EnsureSupplierDispatchSchemaAsync(AppDbContext context)
+    private static async Task EnsureSupplierDispatchSchemaAsync(AppDbContext context, ILogger? logger = null)
     {
-        await context.Database.ExecuteSqlRawAsync(@"
+        // 1. Tạo các bảng độc lập trước (CREATE TABLE IF NOT EXISTS)
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+CREATE TABLE IF NOT EXISTS ""SupplierDispatchPackages"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""DispatchBatchId"" uuid NOT NULL,
+    ""SupplierId"" uuid NOT NULL,
+    ""SupplierCodeSnapshot"" character varying(50) NOT NULL,
+    ""SupplierNameSnapshot"" character varying(250) NOT NULL,
+    ""EmailTo"" character varying(200) NOT NULL,
+    ""EmailCcJson"" text NOT NULL DEFAULT '[]',
+    ""EmailSendMode"" character varying(30) NOT NULL,
+    ""ScheduledSendAtUtc"" timestamp without time zone NULL,
+    ""EmailStatus"" character varying(30) NOT NULL,
+    ""GenerationStatus"" character varying(30) NOT NULL,
+    ""FileName"" character varying(255) NULL,
+    ""FileStorageKey"" character varying(500) NULL,
+    ""FileSize"" bigint NULL,
+    ""FileChecksum"" character varying(128) NULL,
+    ""AttemptCount"" integer NOT NULL DEFAULT 0,
+    ""LastError"" character varying(2000) NULL,
+    ""GeneratedAtUtc"" timestamp without time zone NULL,
+    ""SentAtUtc"" timestamp without time zone NULL,
+    ""Note"" character varying(500) NULL,
+    ""IdempotencyKey"" character varying(100) NULL,
+    ""ProcessingLeaseUntilUtc"" timestamp without time zone NULL,
+    ""ProcessingLockedBy"" character varying(100) NULL,
+    ""CreatedBy"" uuid NULL,
+    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp without time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false
+);
+
+CREATE TABLE IF NOT EXISTS ""SupplierDispatchPackageItems"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""PackageId"" uuid NOT NULL,
+    ""PurchaseOrderId"" uuid NOT NULL,
+    ""CreatedBy"" uuid NULL,
+    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp without time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false
+);
+
+CREATE TABLE IF NOT EXISTS ""PurchaseOrderRevisions"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""PurchaseOrderId"" uuid NOT NULL,
+    ""RevisionNumber"" integer NOT NULL,
+    ""PreviousDataSnapshotJson"" text NULL,
+    ""NewDataSnapshotJson"" text NULL,
+    ""ChangedByUserId"" character varying(50) NULL,
+    ""ChangedAtUtc"" timestamp without time zone NOT NULL,
+    ""ChangeReason"" character varying(500) NULL,
+    ""CreatedBy"" uuid NULL,
+    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp without time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false
+);
+
+CREATE TABLE IF NOT EXISTS ""OutboxMessages"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""Type"" character varying(100) NOT NULL,
+    ""PayloadJson"" text NOT NULL,
+    ""IdempotencyKey"" character varying(120) NOT NULL,
+    ""Status"" character varying(30) NOT NULL,
+    ""AttemptCount"" integer NOT NULL DEFAULT 0,
+    ""NextAttemptAtUtc"" timestamp without time zone NULL,
+    ""ProcessedAtUtc"" timestamp without time zone NULL,
+    ""LockedUntilUtc"" timestamp without time zone NULL,
+    ""LockedBy"" character varying(100) NULL,
+    ""LastError"" character varying(2000) NULL,
+    ""CreatedBy"" uuid NULL,
+    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp without time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false
+);
+");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogError(ex, "Lỗi khi tạo các bảng SupplierDispatch / OutboxMessages");
+        }
+
+        // 2. Bổ sung các cột mới vào các bảng đã tồn tại
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
 ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchPackageId"" uuid NULL;
 ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchBatchId"" uuid NULL;
 ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierCodeSnapshot"" character varying(50) NULL;
@@ -51,29 +142,6 @@ ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""LastAmendedByUserId"" 
 
 ALTER TABLE ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""PackageRevisionNumber"" integer NOT NULL DEFAULT 1;
 ALTER TABLE ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""SupersededByPackageId"" uuid NULL;
-
-CREATE TABLE IF NOT EXISTS ""PurchaseOrderRevisions"" (
-    ""Id"" uuid NOT NULL PRIMARY KEY,
-    ""TenantId"" character varying(50) NOT NULL,
-    ""PurchaseOrderId"" uuid NOT NULL,
-    ""RevisionNumber"" integer NOT NULL,
-    ""PreviousDataSnapshotJson"" text NULL,
-    ""NewDataSnapshotJson"" text NULL,
-    ""ChangedByUserId"" character varying(50) NULL,
-    ""ChangedAtUtc"" timestamp without time zone NOT NULL,
-    ""ChangeReason"" character varying(500) NULL,
-    ""CreatedBy"" uuid NULL,
-    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    ""UpdatedAt"" timestamp without time zone NULL,
-    ""IsDeleted"" boolean NOT NULL DEFAULT false
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS ""IX_PurchaseOrderRevisions_Tenant_Po_Rev""
-    ON ""PurchaseOrderRevisions"" (""TenantId"", ""PurchaseOrderId"", ""RevisionNumber"");
-
-DROP INDEX IF EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId"";
-CREATE UNIQUE INDEX IF NOT EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId_Active""
-    ON ""SupplierDispatchPackageItems"" (""PurchaseOrderId"") WHERE ""IsDeleted"" = false;
 
 ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryDaysJson"" character varying(500) NULL;
 ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryWeekdaysMask"" integer NULL;
@@ -118,194 +186,88 @@ BEGIN
         ALTER TABLE ""SupplierBlackoutDates"" DROP COLUMN IF EXISTS ""SupplierDeliveryConfigId"";
     END IF;
 END $$;
+");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi bổ sung cột bảng PurchaseOrders/SupplierDispatchPackages/Suppliers");
+        }
 
-CREATE TABLE IF NOT EXISTS ""SupplierDispatchPackages"" (
-    ""Id"" uuid NOT NULL PRIMARY KEY,
-    ""TenantId"" character varying(50) NOT NULL,
-    ""DispatchBatchId"" uuid NOT NULL,
-    ""SupplierId"" uuid NOT NULL,
-    ""SupplierCodeSnapshot"" character varying(50) NOT NULL,
-    ""SupplierNameSnapshot"" character varying(250) NOT NULL,
-    ""EmailTo"" character varying(200) NOT NULL,
-    ""EmailCcJson"" text NOT NULL DEFAULT '[]',
-    ""EmailSendMode"" character varying(30) NOT NULL,
-    ""ScheduledSendAtUtc"" timestamp without time zone NULL,
-    ""EmailStatus"" character varying(30) NOT NULL,
-    ""GenerationStatus"" character varying(30) NOT NULL,
-    ""FileName"" character varying(255) NULL,
-    ""FileStorageKey"" character varying(500) NULL,
-    ""FileSize"" bigint NULL,
-    ""FileChecksum"" character varying(128) NULL,
-    ""AttemptCount"" integer NOT NULL DEFAULT 0,
-    ""LastError"" character varying(2000) NULL,
-    ""GeneratedAtUtc"" timestamp without time zone NULL,
-    ""SentAtUtc"" timestamp without time zone NULL,
-    ""Note"" character varying(500) NULL,
-    ""IdempotencyKey"" character varying(100) NULL,
-    ""ProcessingLeaseUntilUtc"" timestamp without time zone NULL,
-    ""ProcessingLockedBy"" character varying(100) NULL,
-    ""CreatedBy"" uuid NULL,
-    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    ""UpdatedAt"" timestamp without time zone NULL,
-    ""IsDeleted"" boolean NOT NULL DEFAULT false
-);
+        // 3. Tạo các chỉ mục Index
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+CREATE UNIQUE INDEX IF NOT EXISTS ""IX_PurchaseOrderRevisions_Tenant_Po_Rev""
+    ON ""PurchaseOrderRevisions"" (""TenantId"", ""PurchaseOrderId"", ""RevisionNumber"");
 
-CREATE TABLE IF NOT EXISTS ""SupplierDispatchPackageItems"" (
-    ""Id"" uuid NOT NULL PRIMARY KEY,
-    ""TenantId"" character varying(50) NOT NULL,
-    ""PackageId"" uuid NOT NULL,
-    ""PurchaseOrderId"" uuid NOT NULL,
-    ""CreatedBy"" uuid NULL,
-    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    ""UpdatedAt"" timestamp without time zone NULL,
-    ""IsDeleted"" boolean NOT NULL DEFAULT false
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId""
-    ON ""SupplierDispatchPackageItems"" (""PurchaseOrderId"");
-
-CREATE TABLE IF NOT EXISTS ""OutboxMessages"" (
-    ""Id"" uuid NOT NULL PRIMARY KEY,
-    ""TenantId"" character varying(50) NOT NULL,
-    ""Type"" character varying(100) NOT NULL,
-    ""PayloadJson"" text NOT NULL,
-    ""IdempotencyKey"" character varying(120) NOT NULL,
-    ""Status"" character varying(30) NOT NULL,
-    ""AttemptCount"" integer NOT NULL DEFAULT 0,
-    ""NextAttemptAtUtc"" timestamp without time zone NULL,
-    ""ProcessedAtUtc"" timestamp without time zone NULL,
-    ""LockedUntilUtc"" timestamp without time zone NULL,
-    ""LockedBy"" character varying(100) NULL,
-    ""LastError"" character varying(2000) NULL,
-    ""CreatedBy"" uuid NULL,
-    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    ""UpdatedAt"" timestamp without time zone NULL,
-    ""IsDeleted"" boolean NOT NULL DEFAULT false
-);
+DROP INDEX IF EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId"";
+CREATE UNIQUE INDEX IF NOT EXISTS ""IX_SupplierDispatchPackageItems_PurchaseOrderId_Active""
+    ON ""SupplierDispatchPackageItems"" (""PurchaseOrderId"") WHERE ""IsDeleted"" = false;
 
 CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
     ON ""OutboxMessages"" (""TenantId"", ""IdempotencyKey"");
 ");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi tạo index OutboxMessages / PurchaseOrderRevisions");
+        }
     }
 
     public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null)
     {
-        // 1. Tự động áp dụng Migrations hoặc EnsureCreatedAsync để khởi tạo toàn bộ CSDL và 34 bảng nếu chưa có
+        // 1. Tự động áp dụng Migrations hoặc EnsureCreatedAsync để khởi tạo toàn bộ CSDL và các bảng nếu chưa có
         try
         {
             if (context.Database.IsRelational())
             {
-                bool usersTableExists = false;
+                // Đảm bảo bảng __EFMigrationsHistory tồn tại
                 try
                 {
-                    var conn = context.Database.GetDbConnection();
-                    if (conn.State != System.Data.ConnectionState.Open)
-                    {
-                        await conn.OpenAsync();
-                    }
-                    using var cmd = conn.CreateCommand();
-                    cmd.CommandText = "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'Users');";
-                    var result = await cmd.ExecuteScalarAsync();
-                    usersTableExists = result is bool b && b;
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        CREATE TABLE IF NOT EXISTS ""__EFMigrationsHistory"" (
+                            ""MigrationId"" character varying(150) NOT NULL PRIMARY KEY,
+                            ""ProductVersion"" character varying(32) NOT NULL
+                        );
+                    ");
                 }
-                catch
-                {
-                    usersTableExists = false;
-                }
+                catch { }
 
-                if (!usersTableExists)
+                // Sinh toàn bộ các bảng trong model nếu chưa tồn tại (CREATE TABLE IF NOT EXISTS)
+                var creator = context.Database.GetService<IDatabaseCreator>() as IRelationalDatabaseCreator;
+                if (creator != null)
                 {
-                    // Cơ sở dữ liệu mới tinh (chưa có Users): Xóa bảng rác tạm thời nếu có để tránh xung đột
                     try
                     {
-                        await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS supplier_branch_assignments CASCADE;");
-                        await context.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"SupplierBranchAssignments\" CASCADE;");
+                        var script = creator.GenerateCreateScript();
+                        var safeScript = script
+                            .Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
+                            .Replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ")
+                            .Replace("CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ");
+                        await context.Database.ExecuteSqlRawAsync(safeScript);
                     }
-                    catch { }
-
-                    // Dùng IRelationalDatabaseCreator để sinh toàn bộ 34 bảng từ model C#
-                    var creator = context.Database.GetService<IDatabaseCreator>() as IRelationalDatabaseCreator;
-                    if (creator != null)
+                    catch (Exception ex)
                     {
-                        try
-                        {
-                            await creator.CreateTablesAsync();
-                        }
-                        catch
-                        {
-                            try
-                            {
-                                var script = creator.GenerateCreateScript();
-                                var safeScript = script.Replace("CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ");
-                                await context.Database.ExecuteSqlRawAsync(safeScript);
-                            }
-                            catch { }
-                        }
+                        logger?.LogWarning(ex, "Lỗi khi chạy CreateTables safe script (có thể bảng đã tồn tại).");
                     }
-                    else
-                    {
-                        await context.Database.EnsureCreatedAsync();
-                    }
-
-                    // Đánh dấu các migration hiện tại đã được áp dụng để tránh lỗi ALTER TABLE sau này
-                    try
-                    {
-                        await context.Database.ExecuteSqlRawAsync(@"
-                            CREATE TABLE IF NOT EXISTS ""__EFMigrationsHistory"" (
-                                ""MigrationId"" character varying(150) NOT NULL PRIMARY KEY,
-                                ""ProductVersion"" character varying(32) NOT NULL
-                            );
-                        ");
-                        var migrations = context.Database.GetMigrations();
-                        foreach (var m in migrations)
-                        {
-                            await context.Database.ExecuteSqlRawAsync(
-                                "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({0}, '8.0.11') ON CONFLICT DO NOTHING;",
-                                m);
-                        }
-                    }
-                    catch { }
                 }
                 else
                 {
-                    // Bảng Users đã có sẵn: Nếu các cột bảo mật PIN đã tồn tại trong Users thì đánh dấu các migrations đã hoàn tất để tránh lỗi ALTER TABLE trùng lặp
-                    try
-                    {
-                        await context.Database.ExecuteSqlRawAsync(@"
-                            CREATE TABLE IF NOT EXISTS ""__EFMigrationsHistory"" (
-                                ""MigrationId"" character varying(150) NOT NULL PRIMARY KEY,
-                                ""ProductVersion"" character varying(32) NOT NULL
-                            );
-                        ");
-
-                        bool pinColumnExists = false;
-                        try
-                        {
-                            await context.Database.ExecuteSqlRawAsync("SELECT \"FailedPinAttempts\" FROM \"Users\" LIMIT 1;");
-                            pinColumnExists = true;
-                        }
-                        catch
-                        {
-                            pinColumnExists = false;
-                        }
-
-                        if (pinColumnExists)
-                        {
-                            var migrations = context.Database.GetMigrations();
-                            foreach (var m in migrations)
-                            {
-                                await context.Database.ExecuteSqlRawAsync(
-                                    "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({0}, '8.0.11') ON CONFLICT DO NOTHING;",
-                                    m);
-                            }
-                        }
-                        else
-                        {
-                            await context.Database.MigrateAsync();
-                        }
-                    }
-                    catch { }
+                    await context.Database.EnsureCreatedAsync();
                 }
+
+                // Đánh dấu các migration hiện tại đã được áp dụng để tránh lỗi ALTER TABLE sau này
+                try
+                {
+                    var migrations = context.Database.GetMigrations();
+                    foreach (var m in migrations)
+                    {
+                        await context.Database.ExecuteSqlRawAsync(
+                            "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({0}, '8.0.11') ON CONFLICT DO NOTHING;",
+                            m);
+                    }
+                }
+                catch { }
 
                 try
                 {
@@ -322,16 +284,121 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         );
                     ");
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    logger?.LogError(ex, "Lỗi khi chạy SQL DDL bổ sung bảng HR");
+                }
 
                 try
                 {
                     await context.Database.ExecuteSqlRawAsync(@"
                         ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""IsAdmin"" boolean DEFAULT false;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""IsEmailVerified"" boolean DEFAULT false;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""MustChangePassword"" boolean DEFAULT false;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""LastLoginAt"" timestamp without time zone;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""LastLoginIp"" text;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityStamp"" text;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""PasswordResetOtp"" text;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""OtpExpiry"" timestamp without time zone;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""RefreshToken"" text;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""RefreshTokenExpiryTime"" timestamp without time zone;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""AccessFailedCount"" integer DEFAULT 0;
+                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""LockoutEnd"" timestamp without time zone;
                         ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinHash"" text;
                         ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinSalt"" text;
                         ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""FailedPinAttempts"" integer DEFAULT 0;
                         ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""PinLockedUntilUtc"" timestamp without time zone;
+                        UPDATE ""Users"" SET ""IsAdmin"" = true WHERE LOWER(""UserName"") = 'admin';
+
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""ShiftID"" uuid;
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""CashierName"" character varying(150);
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""FulfilledByCashierName"" character varying(150);
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""FulfilledAtUtc"" timestamp without time zone;
+
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""BranchId"" uuid;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TillId"" uuid;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ShiftCode"" text;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ShiftName"" text;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""CashierUserId"" uuid;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ReceiverUserId"" text;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""PrevShiftId"" uuid;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpeningFloatExpected"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpeningFloat"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpeningDiscrepancy"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalCashIn"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalCashOut"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalBankRevenue"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalOrdersCount"" integer DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ExpectedCash"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ActualCashCounted"" numeric(18,2);
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""Discrepancy"" numeric(18,2);
+                        ALTER TABLE ""ShiftZReports"" ALTER COLUMN ""Discrepancy"" DROP NOT NULL;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""RetainedFloatAmount"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""DroppedToSafeAmount"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""HandoverStatus"" integer DEFAULT 1;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""Notes"" text;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosingStartedByUserId"" uuid;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosingStartedAtUtc"" timestamp without time zone;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosedByUserId"" uuid;
+                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ForceCloseReason"" text;
+
+                        CREATE TABLE IF NOT EXISTS ""ShiftParticipants"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" text NOT NULL,
+                            ""ShiftId"" uuid NOT NULL,
+                            ""UserId"" uuid NOT NULL,
+                            ""UserName"" character varying(100),
+                            ""FullName"" character varying(150),
+                            ""JoinedAtUtc"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""LastActiveAtUtc"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+                        CREATE INDEX IF NOT EXISTS ""IX_ShiftParticipants_TenantId_ShiftId_UserId"" ON ""ShiftParticipants"" (""TenantId"", ""ShiftId"", ""UserId"");
+
+                        CREATE TABLE IF NOT EXISTS ""ShiftCloseConfirmations"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" text NOT NULL,
+                            ""ShiftId"" uuid NOT NULL,
+                            ""UserId"" uuid NOT NULL,
+                            ""UserName"" character varying(100),
+                            ""ConfirmedCountedCash"" numeric(18,2) NOT NULL DEFAULT 0,
+                            ""ConfirmedAtUtc"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+                        CREATE INDEX IF NOT EXISTS ""IX_ShiftCloseConfirmations_TenantId_ShiftId"" ON ""ShiftCloseConfirmations"" (""TenantId"", ""ShiftId"");
+
+                        CREATE TABLE IF NOT EXISTS ""ShiftCashMovements"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" text NOT NULL,
+                            ""ShiftId"" uuid NOT NULL,
+                            ""MovementType"" integer NOT NULL,
+                            ""Category"" integer NOT NULL,
+                            ""Amount"" numeric(18,2) NOT NULL,
+                            ""Reason"" character varying(500) NOT NULL,
+                            ""CreatedByName"" character varying(150),
+                            ""OccurredAtUtc"" timestamp without time zone NOT NULL,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""Status"" integer DEFAULT 1;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ApprovedBy"" text;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ApprovedAtUtc"" timestamp without time zone;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""RejectionReason"" text;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""IsConfirmedByOwner"" boolean DEFAULT false;
+                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ConfirmedByOwnerAtUtc"" timestamp without time zone;
+                        ALTER TABLE ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutApprovalThreshold"" numeric(18,2) DEFAULT 200000;
+                        ALTER TABLE ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutShiftTotalLimit"" numeric(18,2) DEFAULT 0;
+
                         ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""TaxCategory"" text DEFAULT 'STANDARD_1PCT';
                         ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""EligibleForVatReduction"" boolean DEFAULT false;
                         ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
@@ -347,15 +414,349 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_TenantID_ProductCode"" ON ""Products"" (""TenantID"", ""ProductCode"") WHERE ""IsDeleted"" = false;
                         DROP INDEX IF EXISTS ""IX_Products_Barcode"";
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_Barcode"" ON ""Products"" (""Barcode"") WHERE ""IsDeleted"" = false AND ""Barcode"" IS NOT NULL;
+                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceDescriptor"" text;
+                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceImageUrls"" text;
+                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceRegisteredAt"" timestamp without time zone;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckInFaceImageUrl"" text;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckOutFaceImageUrl"" text;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckInMethod"" text;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckOutMethod"" text;
+                    ");
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(ex, "Cảnh báo khi chạy DDL nâng cấp Products/Users/Categories");
+                }
+
+                // 1. Bảng Chính sách chấm công Chi nhánh (BranchAttendancePolicies)
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        CREATE TABLE IF NOT EXISTS ""BranchAttendancePolicies"" (
+                            ""BranchAttendancePolicyID"" uuid NOT NULL PRIMARY KEY,
+                            ""BranchID"" uuid NOT NULL,
+                            ""TenantID"" character varying(50) NOT NULL,
+                            ""StandardDayHours"" numeric(4,2) NOT NULL DEFAULT 8.00,
+                            ""IsConvertHoursToDays"" boolean NOT NULL DEFAULT true,
+                            ""ConversionRulesJson"" text,
+                            ""EnableLateThreshold"" boolean NOT NULL DEFAULT true,
+                            ""LateThresholdMinutes"" integer NOT NULL DEFAULT 0,
+                            ""EnableEarlyLeaveThreshold"" boolean NOT NULL DEFAULT true,
+                            ""EarlyLeaveThresholdMinutes"" integer NOT NULL DEFAULT 0,
+                            ""EnableOtBeforeShift"" boolean NOT NULL DEFAULT true,
+                            ""OtBeforeShiftMinutes"" integer NOT NULL DEFAULT 0,
+                            ""EnableOtAfterShift"" boolean NOT NULL DEFAULT true,
+                            ""OtAfterShiftMinutes"" integer NOT NULL DEFAULT 0,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
+                            ""CreatedBy"" uuid
+                        );
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BranchAttendancePolicies_TenantID_BranchID"" 
+                        ON ""BranchAttendancePolicies"" (""TenantID"", ""BranchID"") WHERE ""IsDeleted"" = false;
+                        CREATE INDEX IF NOT EXISTS ""IX_BranchAttendancePolicies_BranchID"" 
+                        ON ""BranchAttendancePolicies"" (""BranchID"");
+                    ");
+                }
+                catch (Exception ex) { logger?.LogWarning(ex, "BranchAttendancePolicies DDL warning"); }
+
+                // 2. Bảng Danh mục ca làm việc (ShiftConfigs)
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        CREATE TABLE IF NOT EXISTS ""ShiftConfigs"" (
+                            ""ShiftConfigID"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantID"" character varying(50) NOT NULL,
+                            ""BranchID"" uuid NOT NULL,
+                            ""ShiftCode"" character varying(30) NOT NULL,
+                            ""ShiftName"" character varying(100) NOT NULL,
+                            ""StartTime"" time without time zone NOT NULL,
+                            ""EndTime"" time without time zone NOT NULL,
+                            ""DurationHours"" numeric(4,2) NOT NULL DEFAULT 4.00,
+                            ""AllowedCheckInStart"" time without time zone NOT NULL DEFAULT '00:00:00',
+                            ""AllowedCheckInEnd"" time without time zone NOT NULL DEFAULT '23:59:59',
+                            ""IsCheckInNextDay"" boolean NOT NULL DEFAULT false,
+                            ""BranchIds"" character varying(2000),
+                            ""Description"" character varying(255),
+                            ""IsActive"" boolean NOT NULL DEFAULT true,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
+                            ""CreatedBy"" uuid
+                        );
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_ShiftConfigs_TenantID_BranchID_ShiftCode"" 
+                        ON ""ShiftConfigs"" (""TenantID"", ""BranchID"", ""ShiftCode"") WHERE ""IsDeleted"" = false;
+                    ");
+                }
+                catch (Exception ex) { logger?.LogWarning(ex, "ShiftConfigs DDL warning"); }
+
+                // 3. Bảng Hồ sơ nhân viên (Employees)
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        CREATE TABLE IF NOT EXISTS ""Employees"" (
+                            ""EmployeeID"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantID"" character varying(50) NOT NULL,
+                            ""BranchID"" uuid NOT NULL,
+                            ""UserID"" character varying(50),
+                            ""EmployeeCode"" character varying(30) NOT NULL,
+                            ""FullName"" character varying(100) NOT NULL,
+                            ""CitizenId"" character varying(20) NOT NULL,
+                            ""DateOfBirth"" timestamp without time zone,
+                            ""Gender"" character varying(10),
+                            ""Phone"" character varying(20) NOT NULL,
+                            ""Email"" character varying(100),
+                            ""Address"" character varying(255),
+                            ""StartDate"" timestamp without time zone,
+                            ""Note"" character varying(500),
+                            ""AvatarUrl"" character varying(255),
+                            ""OtWeekday"" character varying(20),
+                            ""OtSunday"" character varying(20),
+                            ""SalaryType"" character varying(30) NOT NULL DEFAULT 'monthly',
+                            ""BaseRate"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                            ""BankAccountNumber"" character varying(30),
+                            ""BankName"" character varying(100),
+                            ""BankAccountHolder"" character varying(100),
+                            ""DebtAmount"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                            ""Status"" character varying(30) NOT NULL DEFAULT 'active',
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
+                            ""CreatedBy"" uuid
+                        );
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Employees_TenantID_CitizenId"" 
+                        ON ""Employees"" (""TenantID"", ""CitizenId"") WHERE ""IsDeleted"" = false;
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Employees_TenantID_EmployeeCode"" 
+                        ON ""Employees"" (""TenantID"", ""EmployeeCode"") WHERE ""IsDeleted"" = false;
+                    ");
+                }
+                catch (Exception ex) { logger?.LogWarning(ex, "Employees DDL warning"); }
+
+                // 4. Bảng Phụ cấp nhân viên (EmployeeAllowances)
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        CREATE TABLE IF NOT EXISTS ""EmployeeAllowances"" (
+                            ""AllowanceID"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantID"" character varying(50) NOT NULL,
+                            ""EmployeeID"" uuid NOT NULL,
+                            ""Name"" character varying(100) NOT NULL,
+                            ""Amount"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
+                            ""CreatedBy"" uuid
+                        );
+                    ");
+                }
+                catch (Exception ex) { logger?.LogWarning(ex, "EmployeeAllowances DDL warning"); }
+
+                // 5. Bảng Giao dịch Sổ quỹ liên kết lương (CashbookTransaction)
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        CREATE TABLE IF NOT EXISTS ""CashbookTransaction"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TransactionCode"" text NOT NULL,
+                            ""BranchId"" uuid NOT NULL,
+                            ""Type"" integer NOT NULL,
+                            ""Category"" text NOT NULL,
+                            ""Amount"" numeric NOT NULL,
+                            ""ReferenceCode"" text NOT NULL,
+                            ""Description"" text NOT NULL,
+                            ""CreatedByUserId"" uuid NOT NULL,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
+                            ""TenantId"" text NOT NULL,
+                            ""CreatedBy"" uuid
+                        );
+                    ");
+                }
+                catch (Exception ex) { logger?.LogWarning(ex, "CashbookTransaction DDL warning"); }
+
+                // 6. Bảng Phiếu lương (Payslips)
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        CREATE TABLE IF NOT EXISTS ""Payslips"" (
+                            ""PayslipID"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" character varying(64) NOT NULL,
+                            ""BranchID"" uuid NOT NULL,
+                            ""EmployeeID"" uuid NOT NULL,
+                            ""CashbookTransactionId"" uuid,
+                            ""CashbookVoucherCode"" character varying(50),
+                            ""PayslipCode"" character varying(50) NOT NULL,
+                            ""PeriodMonth"" character varying(7) NOT NULL,
+                            ""SalaryType"" character varying(30) NOT NULL DEFAULT 'MONTHLY',
+                            ""BaseRate"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                            ""StandardDays"" numeric(5,2) NOT NULL DEFAULT 26.00,
+                            ""StandardDayHours"" numeric(5,2) NOT NULL DEFAULT 8.00,
+                            ""WorkedDays"" numeric(5,2) NOT NULL DEFAULT 0.00,
+                            ""TotalWorkHours"" numeric(7,2) NOT NULL DEFAULT 0.00,
+                            ""TotalShifts"" integer NOT NULL DEFAULT 0,
+                            ""OtHours"" numeric(5,2) NOT NULL DEFAULT 0.00,
+                            ""PaidLeaveDays"" numeric(5,2) NOT NULL DEFAULT 0.00,
+                            ""UnpaidLeaveDays"" numeric(5,2) NOT NULL DEFAULT 0.00,
+                            ""TotalLateMinutes"" integer NOT NULL DEFAULT 0,
+                            ""TotalEarlyLeaveMinutes"" integer NOT NULL DEFAULT 0,
+                            ""BaseSalaryEarned"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                            ""OvertimePay"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                            ""TotalAllowance"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                            ""AllowancesDetailJson"" text,
+                            ""TotalEarnings"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                            ""AdvanceDeduction"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                            ""RemainingDebt"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                            ""SocialInsurance"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                            ""TotalDeductions"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                            ""NetSalary"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                            ""Status"" character varying(30) NOT NULL DEFAULT 'DRAFT',
+                            ""PaymentMethod"" character varying(30) NOT NULL DEFAULT 'CASH',
+                            ""PaidAt"" timestamp without time zone,
+                            ""PaidBy"" character varying(100),
+                            ""BankAccountNumber"" character varying(30),
+                            ""BankName"" character varying(100),
+                            ""BankAccountHolder"" character varying(100),
+                            ""Note"" character varying(500),
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
+                            ""CreatedBy"" uuid
+                        );
+                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(64);
+                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""TenantID"" character varying(64);
+                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""BranchID"" uuid;
+                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""PeriodMonth"" character varying(7);
+                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""UnpaidLeaveDays"" numeric(5,2) DEFAULT 0.00;
+                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookTransactionId"" uuid;
+
+                        DO $$
+                        BEGIN
+                            IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'Payslips' AND column_name = 'BranchID') THEN
+                                IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'Payslips' AND column_name = 'TenantId') THEN
+                                    CREATE INDEX IF NOT EXISTS ""IX_Payslips_TenantId_BranchID_PeriodMonth"" ON ""Payslips"" (""TenantId"", ""BranchID"", ""PeriodMonth"");
+                                ELSIF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'Payslips' AND column_name = 'TenantID') THEN
+                                    CREATE INDEX IF NOT EXISTS ""IX_Payslips_TenantID_BranchID_PeriodMonth"" ON ""Payslips"" (""TenantID"", ""BranchID"", ""PeriodMonth"");
+                                END IF;
+                            END IF;
+                        END $$;
+                    ");
+                }
+                catch (Exception ex) { logger?.LogWarning(ex, "Payslips DDL warning"); }
+
+                // 7. Bảng Lịch phân ca & Chấm công (EmployeeSchedules)
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        CREATE TABLE IF NOT EXISTS ""EmployeeSchedules"" (
+                            ""ScheduleID"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" character varying(50) NOT NULL,
+                            ""BranchID"" uuid NOT NULL,
+                            ""EmployeeID"" uuid NOT NULL,
+                            ""ShiftConfigID"" uuid,
+                            ""PayslipID"" uuid,
+                            ""WorkDate"" date NOT NULL,
+                            ""ShiftCode"" character varying(30) NOT NULL,
+                            ""ShiftName"" character varying(100) NOT NULL,
+                            ""PlannedStartTime"" time without time zone NOT NULL DEFAULT '08:00:00',
+                            ""PlannedEndTime"" time without time zone NOT NULL DEFAULT '17:00:00',
+                            ""DurationHours"" numeric(4,2) NOT NULL DEFAULT 4.00,
+                            ""AllowedCheckInStart"" time without time zone NOT NULL DEFAULT '00:00:00',
+                            ""AllowedCheckInEnd"" time without time zone NOT NULL DEFAULT '23:59:59',
+                            ""IsCheckInNextDay"" boolean NOT NULL DEFAULT false,
+                            ""CheckInTime"" timestamp without time zone,
+                            ""CheckInMethod"" character varying(30),
+                            ""CheckInFaceImageUrl"" character varying(255),
+                            ""FaceMatchScore"" numeric(5,2),
+                            ""CheckOutTime"" timestamp without time zone,
+                            ""CheckOutMethod"" character varying(30),
+                            ""CheckOutFaceImageUrl"" character varying(255),
+                            ""LateMinutes"" integer NOT NULL DEFAULT 0,
+                            ""EarlyLeaveMinutes"" integer NOT NULL DEFAULT 0,
+                            ""OvertimeMinutes"" integer NOT NULL DEFAULT 0,
+                            ""ActualWorkHours"" numeric(4,2) NOT NULL DEFAULT 0.00,
+                            ""Status"" character varying(30) NOT NULL DEFAULT 'draft',
+                            ""ApprovalType"" character varying(30),
+                            ""ApprovalStatus"" character varying(30) NOT NULL DEFAULT 'NONE',
+                            ""ApprovalReason"" character varying(255),
+                            ""EvidenceImageUrl"" character varying(255),
+                            ""ApprovedBy"" character varying(100),
+                            ""ApprovedAt"" timestamp without time zone,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
+                            ""CreatedBy"" uuid
+                        );
+                        CREATE INDEX IF NOT EXISTS ""IX_EmployeeSchedules_TenantId_BranchID_WorkDate"" 
+                        ON ""EmployeeSchedules"" (""TenantId"", ""BranchID"", ""WorkDate"");
+                    ");
+                }
+                catch (Exception ex) { logger?.LogWarning(ex, "EmployeeSchedules DDL warning"); }
+
+                // 8. Bổ sung các cột mới cho các bảng HR hiện hữu (nếu đã có bảng từ trước)
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""Address"" character varying(255);
+                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""Note"" character varying(500);
+                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""OtSunday"" character varying(20);
+                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""OtWeekday"" character varying(20);
+                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""StartDate"" timestamp without time zone;
+                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""DateOfBirth"" timestamp without time zone;
+
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""BranchID"" uuid;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""ShiftConfigID"" uuid;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""EarlyLeaveMinutes"" integer DEFAULT 0;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""OvertimeMinutes"" integer DEFAULT 0;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""IsCheckInNextDay"" boolean DEFAULT false;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""TenantId"" text;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""ApprovedAt"" timestamp without time zone;
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""PlannedStartTime"" time without time zone DEFAULT '08:00:00';
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""PlannedEndTime"" time without time zone DEFAULT '17:00:00';
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInStart"" time without time zone DEFAULT '00:00:00';
+                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInEnd"" time without time zone DEFAULT '23:59:59';
+
+                        ALTER TABLE ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""BranchIds"" character varying(2000);
+                        ALTER TABLE ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""IsCheckInNextDay"" boolean DEFAULT false;
+                        ALTER TABLE ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInStart"" time without time zone DEFAULT '00:00:00';
+                        ALTER TABLE ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInEnd"" time without time zone DEFAULT '23:59:59';
+
+                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""UnpaidLeaveDays"" numeric(5,2) DEFAULT 0.00;
+                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookTransactionId"" uuid;
+                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookVoucherCode"" character varying(50);
+                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""PaidBy"" character varying(100);
+                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""BankAccountNumber"" character varying(30);
+                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""BankName"" character varying(100);
+                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""BankAccountHolder"" character varying(100);
+                    ");
+                }
+                catch (Exception ex) { logger?.LogWarning(ex, "HR Column Alter DDL warning"); }
+
+                // 9. Khóa ngoại liên kết
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        DO $$
+                        BEGIN
+                            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'FK_BranchAttendancePolicies_Branches_BranchID') THEN
+                                ALTER TABLE ""BranchAttendancePolicies"" 
+                                ADD CONSTRAINT ""FK_BranchAttendancePolicies_Branches_BranchID"" 
+                                FOREIGN KEY (""BranchID"") REFERENCES ""Branches"" (""BranchID"") ON DELETE RESTRICT;
+                            END IF;
+                        END $$;
                     ");
                 }
                 catch { }
 
                 try
                 {
-                    await EnsureSupplierDispatchSchemaAsync(context);
+                    await EnsureSupplierDispatchSchemaAsync(context, logger);
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    logger?.LogError(ex, "Lỗi khi chạy EnsureSupplierDispatchSchemaAsync");
+                }
             }
             else
             {
@@ -363,12 +764,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             }
 
         }
-        catch (Exception)
+        catch (Exception ex)
         {
-            await CatalogSeedData.SeedAsync(context, "tenant_mt_mart_01");
-            await EmployeeSeedData.SeedAsync(context, "tenant_mt_mart_01");
-            await SeedOrdersAndPreOrdersAsync(context);
-            return;
+            logger?.LogWarning(ex, "Lỗi trong quá trình kiểm tra cấu trúc CSDL hoặc migrations (bỏ qua nếu bảng đã tồn tại).");
         }
 
         // 2. PHÂN HỆ SAAS: Nạp danh sách các gói cước SubscriptionPlans (Idempotent)
@@ -386,7 +784,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 EnabledModulesJson = "[\"Catalog\",\"Pos\"]",
                 IsActive = true
             };
+            await context.SubscriptionPlans.AddAsync(planFree);
+            await context.SaveChangesAsync();
+        }
 
+        if (!await context.SubscriptionPlans.AnyAsync(p => p.PlanCode == "PRO"))
+        {
             var planPro = new SubscriptionPlan
             {
                 Id = "plan_pro",
@@ -399,8 +802,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 EnabledModulesJson = "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\"]",
                 IsActive = true
             };
-
-            await context.SubscriptionPlans.AddRangeAsync(planFree, planPro);
+            await context.SubscriptionPlans.AddAsync(planPro);
             await context.SaveChangesAsync();
         }
 
@@ -514,7 +916,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             {
                 TenantId = defaultTenantId,
                 UserId = userCashier.Id,
-                Role = "CASHIER",
+                Role = SystemRoles.Staff,
                 IsActive = true
             };
 
@@ -522,7 +924,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             {
                 TenantId = defaultTenantId,
                 UserId = userStoreOwner.Id,
-                Role = "STORE_OWNER",
+                Role = SystemRoles.StoreOwner,
                 IsActive = true
             };
 
@@ -530,7 +932,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             {
                 TenantId = defaultTenantId,
                 UserId = userStaff.Id,
-                Role = "CASHIER",
+                Role = SystemRoles.Staff,
                 IsActive = true
             };
 
@@ -539,7 +941,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
 
         // =========================================================================
-        // PHÂN HỆ 2: CHI NHÁNH & KHO & CATALOG MẪU
+        // =========================================================================
+        // PHÂN HỆ 2: CHI NHÁNH CỬA HÀNG (Branches)
         // =========================================================================
         if (!await context.Branches.AnyAsync(b => b.TenantId == defaultTenantId))
         {
@@ -584,179 +987,194 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
             await context.Branches.AddRangeAsync(branchQ1, branchHN, branchTX);
             await context.SaveChangesAsync();
+        }
 
-            // =========================================================================
-            // PHÂN HỆ 3: DANH MỤC & SẢN PHẨM (CATALOG)
-            // =========================================================================
-            var catFresh = new Category
+        // =========================================================================
+        // PHÂN HỆ 3: DANH MỤC & SẢN PHẨM MẪU (Catalog & Products)
+        // =========================================================================
+        // Nạp 15 danh mục siêu thị chuẩn và các sản phẩm phong phú
+        await CatalogSeedData.SeedAsync(context, defaultTenantId);
+
+        // Bổ sung các sản phẩm mẫu đặc thù cho POS nếu chưa có
+        var catDry = await context.Categories.FirstOrDefaultAsync(c => c.TenantId == defaultTenantId && c.CategoryCode == "DRY");
+        var catBeverage = await context.Categories.FirstOrDefaultAsync(c => c.TenantId == defaultTenantId && c.CategoryCode == "BEV");
+
+        if (catDry != null && catBeverage != null)
+        {
+            var extraProducts = new List<Product>();
+
+            if (!await context.Products.IgnoreQueryFilters().AnyAsync(p => (p.TenantId == defaultTenantId && p.ProductCode == "SP-GAO-ST25") || p.Barcode == "893850123401"))
             {
-                TenantId = defaultTenantId,
-                CategoryCode = "FRESH",
-                Name = "Thực Phẩm & Nông Sản Tươi Sống",
-                Description = "Rau, củ, quả, thịt cá tươi đạt chuẩn VietGAP"
-            };
+                extraProducts.Add(new Product
+                {
+                    TenantId = defaultTenantId,
+                    CategoryId = catDry.Id,
+                    ProductCode = "SP-GAO-ST25",
+                    Barcode = "893850123401",
+                    Name = "Gạo Thơm ST25 Ông Cua Túi 5kg",
+                    BaseUnit = "Túi",
+                    CostPrice = 160000.00m,
+                    SellingPrice = 195000.00m,
+                    MinStock = 10.00m,
+                    MaxStock = 500.00m,
+                    VatRate = 0.00m,
+                    ProductType = "STANDARD",
+                    Status = ProductStatus.Active,
+                    HasBatches = true,
+                    IsFavorite = true
+                });
+            }
 
-            var catDry = new Category
+            if (!await context.Products.IgnoreQueryFilters().AnyAsync(p => (p.TenantId == defaultTenantId && p.ProductCode == "SP-SUA-VNM-1L") || p.Barcode == "893850123402"))
             {
-                TenantId = defaultTenantId,
-                CategoryCode = "DRY",
-                Name = "Bách Hóa Tiêu Dùng & Gạo Hạt",
-                Description = "Gạo, gia vị, dầu ăn, thực phẩm khô đóng gói"
-            };
+                extraProducts.Add(new Product
+                {
+                    TenantId = defaultTenantId,
+                    CategoryId = catBeverage.Id,
+                    ProductCode = "SP-SUA-VNM-1L",
+                    Barcode = "893850123402",
+                    Name = "Sữa Tươi Tiệt Trùng Vinamilk Có Đường 1L",
+                    BaseUnit = "Hộp",
+                    CostPrice = 30000.00m,
+                    SellingPrice = 38000.00m,
+                    MinStock = 20.00m,
+                    MaxStock = 1000.00m,
+                    VatRate = 8.00m,
+                    ProductType = "STANDARD",
+                    Status = ProductStatus.Active,
+                    HasBatches = true,
+                    IsFavorite = true
+                });
+            }
 
-            var catBeverage = new Category
+            if (!await context.Products.IgnoreQueryFilters().AnyAsync(p => (p.TenantId == defaultTenantId && p.ProductCode == "SP-NUOCMAM-NAMNGU") || p.Barcode == "893850123403"))
             {
-                TenantId = defaultTenantId,
-                CategoryCode = "BEV",
-                Name = "Sữa & Đồ Uống Giải Khát",
-                Description = "Sữa tươi tiệt trùng, nước khoáng, nước trái cây"
-            };
+                extraProducts.Add(new Product
+                {
+                    TenantId = defaultTenantId,
+                    CategoryId = catDry.Id,
+                    ProductCode = "SP-NUOCMAM-NAMNGU",
+                    Barcode = "893850123403",
+                    Name = "Nước Mắm Nam Ngư Đệ Nhị Chai 900ml",
+                    BaseUnit = "Chai",
+                    CostPrice = 22000.00m,
+                    SellingPrice = 28500.00m,
+                    MinStock = 15.00m,
+                    MaxStock = 300.00m,
+                    VatRate = 8.00m,
+                    ProductType = "STANDARD",
+                    Status = ProductStatus.Active
+                });
+            }
 
-            await context.Categories.AddRangeAsync(catFresh, catDry, catBeverage);
-            await context.SaveChangesAsync();
-
-            // Sản phẩm
-            var prodRice = new Product
+            if (!await context.Products.IgnoreQueryFilters().AnyAsync(p => (p.TenantId == defaultTenantId && p.ProductCode == "G7-3IN1-18G") || p.Barcode == "8935024122310"))
             {
-                TenantId = defaultTenantId,
-                CategoryId = catDry.Id,
-                ProductCode = "SP-GAO-ST25",
-                Barcode = "893850123401",
-                Name = "Gạo Thơm ST25 Ông Cua Túi 5kg",
-                BaseUnit = "Túi",
-                CostPrice = 160000.00m,
-                SellingPrice = 195000.00m,
-                MinStock = 10.00m,
-                MaxStock = 500.00m,
-                VatRate = 0.00m,
-                ProductType = "STANDARD",
-                Status = ProductStatus.Active,
-                HasBatches = true,
-                IsFavorite = true
-            };
+                extraProducts.Add(new Product
+                {
+                    TenantId = defaultTenantId,
+                    CategoryId = catBeverage.Id,
+                    ProductCode = "G7-3IN1-18G",
+                    Barcode = "8935024122310",
+                    Name = "Cà phê hòa tan G7 3in1 Hộp 18 gói",
+                    BaseUnit = "Hộp",
+                    CostPrice = 45000.00m,
+                    SellingPrice = 58000.00m,
+                    MinStock = 10.00m,
+                    MaxStock = 200.00m,
+                    VatRate = 1.00m,
+                    ProductType = "STANDARD",
+                    Status = ProductStatus.Active,
+                    HasBatches = true,
+                    IsFavorite = true
+                });
+            }
 
-            var prodMilk = new Product
+            if (!await context.Products.IgnoreQueryFilters().AnyAsync(p => (p.TenantId == defaultTenantId && p.ProductCode == "CHOCO-12P") || p.Barcode == "8936036020380"))
             {
-                TenantId = defaultTenantId,
-                CategoryId = catBeverage.Id,
-                ProductCode = "SP-SUA-VNM-1L",
-                Barcode = "893850123402",
-                Name = "Sữa Tươi Tiệt Trùng Vinamilk Có Đường 1L",
-                BaseUnit = "Hộp",
-                CostPrice = 30000.00m,
-                SellingPrice = 38000.00m,
-                MinStock = 20.00m,
-                MaxStock = 1000.00m,
-                VatRate = 8.00m,
-                ProductType = "STANDARD",
-                Status = ProductStatus.Active,
-                HasBatches = true,
-                IsFavorite = true
-            };
+                extraProducts.Add(new Product
+                {
+                    TenantId = defaultTenantId,
+                    CategoryId = catDry.Id,
+                    ProductCode = "CHOCO-12P",
+                    Barcode = "8936036020380",
+                    Name = "Bánh Orion Choco-Pie truyền thống Hộp 12 cái",
+                    BaseUnit = "Hộp",
+                    CostPrice = 42000.00m,
+                    SellingPrice = 55000.00m,
+                    MinStock = 10.00m,
+                    MaxStock = 200.00m,
+                    VatRate = 1.00m,
+                    ProductType = "STANDARD",
+                    Status = ProductStatus.Active,
+                    HasBatches = true,
+                    IsFavorite = true
+                });
+            }
 
-            var prodSauce = new Product
+            if (!await context.Products.IgnoreQueryFilters().AnyAsync(p => (p.TenantId == defaultTenantId && p.ProductCode == "MHH-TOMCHUA-120G") || p.Barcode == "8934563065249"))
             {
-                TenantId = defaultTenantId,
-                CategoryId = catDry.Id,
-                ProductCode = "SP-NUOCMAM-NAMNGU",
-                Barcode = "893850123403",
-                Name = "Nước Mắm Nam Ngư Đệ Nhị Chai 900ml",
-                BaseUnit = "Chai",
-                CostPrice = 22000.00m,
-                SellingPrice = 28500.00m,
-                MinStock = 15.00m,
-                MaxStock = 300.00m,
-                VatRate = 8.00m,
-                ProductType = "STANDARD",
-                Status = ProductStatus.Active
-            };
+                extraProducts.Add(new Product
+                {
+                    TenantId = defaultTenantId,
+                    CategoryId = catDry.Id,
+                    ProductCode = "MHH-TOMCHUA-120G",
+                    Barcode = "8934563065249",
+                    Name = "Muối chấm Hảo Hảo tôm chua cay Hũ 120g",
+                    BaseUnit = "Hũ",
+                    CostPrice = 12000.00m,
+                    SellingPrice = 16000.00m,
+                    MinStock = 20.00m,
+                    MaxStock = 300.00m,
+                    VatRate = 1.00m,
+                    ProductType = "STANDARD",
+                    Status = ProductStatus.Active,
+                    HasBatches = false,
+                    IsFavorite = true
+                });
+            }
 
-            var prodG7 = new Product
+            if (!await context.Products.IgnoreQueryFilters().AnyAsync(p => (p.TenantId == defaultTenantId && p.ProductCode == "BIA-HANOI-SLEEK") || p.Barcode == "8936000440824"))
             {
-                TenantId = defaultTenantId,
-                CategoryId = catBeverage.Id,
-                ProductCode = "G7-3IN1-18G",
-                Barcode = "8935024122310",
-                Name = "Cà phê hòa tan G7 3in1 Hộp 18 gói",
-                BaseUnit = "Hộp",
-                CostPrice = 45000.00m,
-                SellingPrice = 58000.00m,
-                MinStock = 10.00m,
-                MaxStock = 200.00m,
-                VatRate = 1.00m,
-                ProductType = "STANDARD",
-                Status = ProductStatus.Active,
-                HasBatches = true,
-                IsFavorite = true
-            };
+                extraProducts.Add(new Product
+                {
+                    TenantId = defaultTenantId,
+                    CategoryId = catBeverage.Id,
+                    ProductCode = "BIA-HANOI-SLEEK",
+                    Barcode = "8936000440824",
+                    Name = "Bia Hà Nội Sleek Lon cao 330ml",
+                    BaseUnit = "Lon",
+                    CostPrice = 10500.00m,
+                    SellingPrice = 14000.00m,
+                    MinStock = 24.00m,
+                    MaxStock = 500.00m,
+                    VatRate = 1.00m,
+                    ProductType = "STANDARD",
+                    Status = ProductStatus.Active,
+                    HasBatches = true,
+                    IsFavorite = true
+                });
+            }
 
-            var prodChoco = new Product
+            if (extraProducts.Any())
             {
-                TenantId = defaultTenantId,
-                CategoryId = catDry.Id,
-                ProductCode = "CHOCO-12P",
-                Barcode = "8936036020380",
-                Name = "Bánh Orion Choco-Pie truyền thống Hộp 12 cái",
-                BaseUnit = "Hộp",
-                CostPrice = 42000.00m,
-                SellingPrice = 55000.00m,
-                MinStock = 10.00m,
-                MaxStock = 200.00m,
-                VatRate = 1.00m,
-                ProductType = "STANDARD",
-                Status = ProductStatus.Active,
-                HasBatches = true,
-                IsFavorite = true
-            };
+                await context.Products.AddRangeAsync(extraProducts);
+                await context.SaveChangesAsync();
+            }
 
-            var prodMuoi = new Product
+            var prodMilk = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && p.ProductCode == "SP-SUA-VNM-1L");
+            if (prodMilk != null && !await context.ProductUnits.AnyAsync(u => u.ProductId == prodMilk.Id && u.UnitName == "Thùng"))
             {
-                TenantId = defaultTenantId,
-                CategoryId = catDry.Id,
-                ProductCode = "MHH-TOMCHUA-120G",
-                Barcode = "8934563065249",
-                Name = "Muối chấm Hảo Hảo tôm chua cay Hũ 120g",
-                BaseUnit = "Hũ",
-                CostPrice = 12000.00m,
-                SellingPrice = 16000.00m,
-                MinStock = 20.00m,
-                MaxStock = 300.00m,
-                VatRate = 1.00m,
-                ProductType = "STANDARD",
-                Status = ProductStatus.Active,
-                HasBatches = false,
-                IsFavorite = true
-            };
+                var unitCartonMilk = new ProductUnit(prodMilk.Id, "Thùng", 12.00m, 445000.00m, "893850123499", false);
+                await context.ProductUnits.AddAsync(unitCartonMilk);
+                await context.SaveChangesAsync();
+            }
+        }
 
-            var prodBia = new Product
-            {
-                TenantId = defaultTenantId,
-                CategoryId = catBeverage.Id,
-                ProductCode = "BIA-HANOI-SLEEK",
-                Barcode = "8936000440824",
-                Name = "Bia Hà Nội Sleek Lon cao 330ml",
-                BaseUnit = "Lon",
-                CostPrice = 10500.00m,
-                SellingPrice = 14000.00m,
-                MinStock = 24.00m,
-                MaxStock = 500.00m,
-                VatRate = 1.00m,
-                ProductType = "STANDARD",
-                Status = ProductStatus.Active,
-                HasBatches = true,
-                IsFavorite = true
-            };
-
-            await context.Products.AddRangeAsync(prodRice, prodMilk, prodSauce, prodG7, prodChoco, prodMuoi, prodBia);
-            await context.SaveChangesAsync();
-
-            // Đơn vị quy đổi (1 Thùng = 12 Hộp sữa)
-            var unitCartonMilk = new ProductUnit(prodMilk.Id, "Thùng", 12.00m, 445000.00m, "893850123499", false);
-            await context.ProductUnits.AddAsync(unitCartonMilk);
-
-            // =========================================================================
-            // PHÂN HỆ 4: NHÀ CUNG CẤP & CHÍNH SÁCH GIÁ
-            // =========================================================================
+        // =========================================================================
+        // PHÂN HỆ 4: NHÀ CUNG CẤP & TỒN KHO THEO LÔ FEFO (Suppliers & BranchStocks)
+        // =========================================================================
+        if (!await context.Suppliers.AnyAsync(s => s.TenantId == defaultTenantId))
+        {
             var supplierVinamilk = new Domain.Entities.Supplier.Supplier
             {
                 TenantId = defaultTenantId,
@@ -791,158 +1209,202 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
             await context.Suppliers.AddRangeAsync(supplierVinamilk, supplierRice);
             await context.SaveChangesAsync();
+        }
 
-            // Tồn kho chi nhánh (BranchStocks theo lô FEFO)
-            var stockRice = new BranchStock
+        var bQ1 = await context.Branches.FirstOrDefaultAsync(b => b.TenantId == defaultTenantId && b.BranchCode == "BR-HCM-01");
+        if (bQ1 != null && !await context.BranchStocks.AnyAsync(s => s.TenantId == defaultTenantId && s.BranchId == bQ1.Id))
+        {
+            var pRice = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "SP-GAO-ST25" || p.ProductCode == "SP-DRY-001"));
+            var pMilk = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "SP-SUA-VNM-1L" || p.ProductCode == "SP-BEV-006"));
+            var pSauce = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "SP-NUOCMAM-NAMNGU" || p.ProductCode == "SP-SPC-001"));
+            var pG7 = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "G7-3IN1-18G" || p.ProductCode == "SP-BEV-004"));
+            var pChoco = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "CHOCO-12P" || p.ProductCode == "SP-DRY-006"));
+            var pMuoi = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "MHH-TOMCHUA-120G" || p.ProductCode == "SP-SPC-004"));
+            var pBia = await context.Products.FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && (p.ProductCode == "BIA-HANOI-SLEEK" || p.ProductCode == "SP-BEV-001"));
+
+            var supRice = await context.Suppliers.FirstOrDefaultAsync(s => s.TenantId == defaultTenantId && s.Code == "SUP-HOCUA");
+            var supVnm = await context.Suppliers.FirstOrDefaultAsync(s => s.TenantId == defaultTenantId && s.Code == "SUP-VINAMILK");
+
+            var stocksToAdd = new List<BranchStock>();
+            if (pRice != null)
             {
-                TenantId = defaultTenantId,
-                BranchId = branchQ1.Id,
-                ProductId = prodRice.Id,
-                SupplierId = supplierRice.Id,
-                BatchCode = "BATCH-ST25-20261001",
-                ManufactureDate = DateTime.UtcNow.AddMonths(-1),
-                ExpiryDate = DateTime.UtcNow.AddMonths(11),
-                QuantityOnHand = 150.000m,
-                QuantityReserved = 5.000m,
-                LandedCostPerUnit = 160000.00m,
-                ShelfLocation = "A1-03",
-                ZoneArea = "Kho Khô"
-            };
-
-            var stockMilk = new BranchStock
-            {
-                TenantId = defaultTenantId,
-                BranchId = branchQ1.Id,
-                ProductId = prodMilk.Id,
-                SupplierId = supplierVinamilk.Id,
-                BatchCode = "BATCH-VNM-20261015",
-                ManufactureDate = DateTime.UtcNow.AddDays(-12),
-                ExpiryDate = DateTime.UtcNow.AddMonths(5),
-                QuantityOnHand = 320.000m,
-                QuantityReserved = 0.000m,
-                LandedCostPerUnit = 30000.00m,
-                ShelfLocation = "B2-01",
-                ZoneArea = "Kho Mát"
-            };
-
-            var stockSauce = new BranchStock
-            {
-                TenantId = defaultTenantId,
-                BranchId = branchQ1.Id,
-                ProductId = prodSauce.Id,
-                BatchCode = "BATCH-SAUCE-2026",
-                ExpiryDate = DateTime.UtcNow.AddYears(1),
-                QuantityOnHand = 100.000m,
-                QuantityReserved = 0.000m,
-                LandedCostPerUnit = 22000.00m
-            };
-
-            var stockG7 = new BranchStock
-            {
-                TenantId = defaultTenantId,
-                BranchId = branchQ1.Id,
-                ProductId = prodG7.Id,
-                BatchCode = "BATCH-G7-2026",
-                ExpiryDate = DateTime.UtcNow.AddYears(2),
-                QuantityOnHand = 80.000m,
-                QuantityReserved = 0.000m,
-                LandedCostPerUnit = 45000.00m
-            };
-
-            var stockChoco = new BranchStock
-            {
-                TenantId = defaultTenantId,
-                BranchId = branchQ1.Id,
-                ProductId = prodChoco.Id,
-                BatchCode = "BATCH-CP-2026",
-                ExpiryDate = DateTime.UtcNow.AddMonths(8),
-                QuantityOnHand = 60.000m,
-                QuantityReserved = 0.000m,
-                LandedCostPerUnit = 42000.00m
-            };
-
-            var stockMuoi = new BranchStock
-            {
-                TenantId = defaultTenantId,
-                BranchId = branchQ1.Id,
-                ProductId = prodMuoi.Id,
-                BatchCode = "BATCH-MHH-2026",
-                ExpiryDate = DateTime.UtcNow.AddYears(1),
-                QuantityOnHand = 150.000m,
-                QuantityReserved = 0.000m,
-                LandedCostPerUnit = 12000.00m
-            };
-
-            var stockBia = new BranchStock
-            {
-                TenantId = defaultTenantId,
-                BranchId = branchQ1.Id,
-                ProductId = prodBia.Id,
-                BatchCode = "BATCH-BIA-2026",
-                ExpiryDate = DateTime.UtcNow.AddMonths(6),
-                QuantityOnHand = 120.000m,
-                QuantityReserved = 0.000m,
-                LandedCostPerUnit = 10500.00m
-            };
-
-            await context.BranchStocks.AddRangeAsync(stockRice, stockMilk, stockSauce, stockG7, stockChoco, stockMuoi, stockBia);
-
-            // =========================================================================
-            // PHÂN HỆ 5: KHÁCH HÀNG & CHƯƠNG TRÌNH KHUYẾN MÃI
-            // =========================================================================
-            var customerVip = new Customer
-            {
-                TenantId = defaultTenantId,
-                CustomerCode = "KH-0001",
-                Name = "Nguyễn Văn Hưng",
-                Phone = "0903112233",
-                Email = "hung.nguyen@gmail.com",
-                Address = "24 Đường số 5, Phường Đa Kao, Quận 1",
-                MembershipTier = "Gold",
-                RewardPoints = 250,
-                TotalSpending = 12500000.00m,
-                AllowDebt = true,
-                DebtLimit = 5000000.00m
-            };
-
-            var promoOpening = new Promotion
-            {
-                TenantId = defaultTenantId,
-                PromotionCode = "KM-KHAITRUONG-10K",
-                PromotionName = "Giảm 10,000đ Mừng Tuần Lễ Mua Sắm",
-                Type = "FIXED_AMOUNT",
-                DiscountValue = 10000.00m,
-                StartDate = DateTime.UtcNow.AddDays(-7),
-                EndDate = DateTime.UtcNow.AddDays(30),
-                IsActive = true
-            };
-
-            if (!await context.Customers.AnyAsync(c => c.TenantId == defaultTenantId && (c.CustomerCode == "KH-0001" || c.Phone == "0903112233")))
-            {
-                await context.Customers.AddAsync(customerVip);
+                stocksToAdd.Add(new BranchStock
+                {
+                    TenantId = defaultTenantId,
+                    BranchId = bQ1.Id,
+                    ProductId = pRice.Id,
+                    SupplierId = supRice?.Id,
+                    BatchCode = "BATCH-ST25-20261001",
+                    ManufactureDate = DateTime.UtcNow.AddMonths(-1),
+                    ExpiryDate = DateTime.UtcNow.AddMonths(11),
+                    QuantityOnHand = 150.000m,
+                    QuantityReserved = 5.000m,
+                    LandedCostPerUnit = 160000.00m,
+                    ShelfLocation = "A1-03",
+                    ZoneArea = "Kho Khô"
+                });
             }
-            if (!await context.Promotions.AnyAsync(p => p.TenantId == defaultTenantId && p.PromotionCode == "KM-KHAITRUONG-10K"))
+            if (pMilk != null)
             {
-                await context.Promotions.AddAsync(promoOpening);
+                stocksToAdd.Add(new BranchStock
+                {
+                    TenantId = defaultTenantId,
+                    BranchId = bQ1.Id,
+                    ProductId = pMilk.Id,
+                    SupplierId = supVnm?.Id,
+                    BatchCode = "BATCH-VNM-20261015",
+                    ManufactureDate = DateTime.UtcNow.AddDays(-12),
+                    ExpiryDate = DateTime.UtcNow.AddMonths(5),
+                    QuantityOnHand = 320.000m,
+                    QuantityReserved = 0.000m,
+                    LandedCostPerUnit = 30000.00m,
+                    ShelfLocation = "B2-01",
+                    ZoneArea = "Kho Mát"
+                });
+            }
+            if (pSauce != null)
+            {
+                stocksToAdd.Add(new BranchStock
+                {
+                    TenantId = defaultTenantId,
+                    BranchId = bQ1.Id,
+                    ProductId = pSauce.Id,
+                    BatchCode = "BATCH-SAUCE-2026",
+                    ExpiryDate = DateTime.UtcNow.AddYears(1),
+                    QuantityOnHand = 100.000m,
+                    QuantityReserved = 0.000m,
+                    LandedCostPerUnit = 22000.00m
+                });
+            }
+            if (pG7 != null)
+            {
+                stocksToAdd.Add(new BranchStock
+                {
+                    TenantId = defaultTenantId,
+                    BranchId = bQ1.Id,
+                    ProductId = pG7.Id,
+                    BatchCode = "BATCH-G7-2026",
+                    ExpiryDate = DateTime.UtcNow.AddYears(2),
+                    QuantityOnHand = 80.000m,
+                    QuantityReserved = 0.000m,
+                    LandedCostPerUnit = 45000.00m
+                });
+            }
+            if (pChoco != null)
+            {
+                stocksToAdd.Add(new BranchStock
+                {
+                    TenantId = defaultTenantId,
+                    BranchId = bQ1.Id,
+                    ProductId = pChoco.Id,
+                    BatchCode = "BATCH-CP-2026",
+                    ExpiryDate = DateTime.UtcNow.AddMonths(8),
+                    QuantityOnHand = 60.000m,
+                    QuantityReserved = 0.000m,
+                    LandedCostPerUnit = 42000.00m
+                });
+            }
+            if (pMuoi != null)
+            {
+                stocksToAdd.Add(new BranchStock
+                {
+                    TenantId = defaultTenantId,
+                    BranchId = bQ1.Id,
+                    ProductId = pMuoi.Id,
+                    BatchCode = "BATCH-MHH-2026",
+                    ExpiryDate = DateTime.UtcNow.AddYears(1),
+                    QuantityOnHand = 150.000m,
+                    QuantityReserved = 0.000m,
+                    LandedCostPerUnit = 12000.00m
+                });
+            }
+            if (pBia != null)
+            {
+                stocksToAdd.Add(new BranchStock
+                {
+                    TenantId = defaultTenantId,
+                    BranchId = bQ1.Id,
+                    ProductId = pBia.Id,
+                    BatchCode = "BATCH-BIA-2026",
+                    ExpiryDate = DateTime.UtcNow.AddMonths(6),
+                    QuantityOnHand = 120.000m,
+                    QuantityReserved = 0.000m,
+                    LandedCostPerUnit = 10500.00m
+                });
             }
 
-            // =========================================================================
-            // PHÂN HỆ 6: CATALOG & SẢN PHẨM MẪU
-            // =========================================================================
-            // Nạp 15 danh mục và 5-8 sản phẩm mỗi danh mục
-            await CatalogSeedData.SeedAsync(context, defaultTenantId);
-
-            // Lưu toàn bộ dữ liệu mẫu vào CSDL
-            await context.SaveChangesAsync();
-            await SeedOrdersAndPreOrdersAsync(context);
-            await SeedTaxAndFinanceAsync(context, logger);
-            await SeedNewStoreOwnerAnNhienAsync(context);
+            if (stocksToAdd.Any())
+            {
+                await context.BranchStocks.AddRangeAsync(stocksToAdd);
+                await context.SaveChangesAsync();
+            }
         }
 
         // =========================================================================
-        // PHÂN HỆ 6: NHÂN SỰ (Hồ sơ, Ca làm việc, Chính sách chấm công, Phân ca & Bảng lương)
+        // PHÂN HỆ 5: NHÂN SỰ, CA LÀM VIỆC, CHẤM CÔNG & BẢNG LƯƠNG (EmployeeSeedData)
         // =========================================================================
+        // Nạp:
+        // 1. Chính sách chấm công chi nhánh (BranchAttendancePolicy)
+        // 2. Danh mục ca làm việc (ShiftConfig)
+        // 3. Hồ sơ nhân viên & phụ cấp (Employees & Allowances)
+        // 4. Lịch phân ca & Chấm công giả lập & Bảng lương (Schedules & Payslips)
         await EmployeeSeedData.SeedAsync(context, defaultTenantId);
+
+        // =========================================================================
+        // PHÂN HỆ 6: KHÁCH HÀNG & CHƯƠNG TRÌNH KHUYẾN MÃI (Customers & Promotions)
+        // =========================================================================
+        var customerVip = new Customer
+        {
+            TenantId = defaultTenantId,
+            CustomerCode = "KH-0001",
+            Name = "Nguyễn Văn Hưng",
+            Phone = "0903112233",
+            Email = "hung.nguyen@gmail.com",
+            Address = "24 Đường số 5, Phường Đa Kao, Quận 1",
+            MembershipTier = "Gold",
+            RewardPoints = 250,
+            TotalSpending = 12500000.00m,
+            AllowDebt = true,
+            DebtLimit = 5000000.00m
+        };
+
+        var promoOpening = new Promotion
+        {
+            TenantId = defaultTenantId,
+            PromotionCode = "KM-KHAITRUONG-10K",
+            PromotionName = "Giảm 10,000đ Mừng Tuần Lễ Mua Sắm",
+            Type = "FIXED_AMOUNT",
+            DiscountValue = 10000.00m,
+            StartDate = DateTime.UtcNow.AddDays(-7),
+            EndDate = DateTime.UtcNow.AddDays(30),
+            IsActive = true
+        };
+
+        if (!await context.Customers.AnyAsync(c => c.TenantId == defaultTenantId && (c.CustomerCode == "KH-0001" || c.Phone == "0903112233")))
+        {
+            await context.Customers.AddAsync(customerVip);
+            await context.SaveChangesAsync();
+        }
+        if (!await context.Promotions.AnyAsync(p => p.TenantId == defaultTenantId && p.PromotionCode == "KM-KHAITRUONG-10K"))
+        {
+            await context.Promotions.AddAsync(promoOpening);
+            await context.SaveChangesAsync();
+        }
+
+        // =========================================================================
+        // PHÂN HỆ 7: ĐƠN HÀNG BÁN LẺ & GIAO DỊCH POS (Orders & Pre-Orders)
+        // =========================================================================
+        await SeedOrdersAndPreOrdersAsync(context);
+
+        // =========================================================================
+        // PHÂN HỆ 8: TÀI CHÍNH, SỔ QUỸ & BÁO CÁO THUẾ (Tax & Finance)
+        // =========================================================================
+        await SeedTaxAndFinanceAsync(context, logger);
+
+        // =========================================================================
+        // PHÂN HỆ 9: KỊCH BẢN CHUỖI CỬA HÀNG MỚI (Store Owner An Nhiên)
+        // =========================================================================
+        await SeedNewStoreOwnerAnNhienAsync(context);
     }
 
     public static async Task SeedOrdersAndPreOrdersAsync(AppDbContext context)
@@ -1470,7 +1932,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 Address = "Số 120 Hoàng Hoa Thám, Phường Thụy Khuê, Quận Tây Hồ",
                 City = "Hà Nội",
                 Status = "ACTIVE",
-                CurrentPlan = "plan_pro"
+                CurrentPlan = "PRO"
             };
             await context.Tenants.AddAsync(tenant);
             await context.SaveChangesAsync();
@@ -1537,13 +1999,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             {
                 TenantId = tenantId,
                 UserId = staffUser.Id,
-                Role = "EMPLOYEE",
+                Role = SystemRoles.Staff,
                 IsActive = true
             });
         }
         else
         {
-            tuStaff.Role = "EMPLOYEE";
+            tuStaff.Role = SystemRoles.Staff;
         }
         await context.SaveChangesAsync();
 
@@ -1606,7 +2068,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
 
         // Hồ sơ nhân viên gán chi nhánh cố định (Employee)
-        var empYen = await context.Employees.FirstOrDefaultAsync(e => e.TenantId == tenantId && e.EmployeeCode == "NV-AN-01");
+        var empYen = await context.Employees.IgnoreQueryFilters().FirstOrDefaultAsync(e => e.TenantId == tenantId && (e.EmployeeCode == "NV-AN-01" || e.CitizenId == "001198007788"));
         if (empYen == null)
         {
             empYen = new Employee
@@ -1616,6 +2078,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 UserId = staffUser.Id,
                 EmployeeCode = "NV-AN-01",
                 FullName = "Phạm Thị Yến (Nhân viên Ba Đình)",
+                CitizenId = "001198007788",
                 Phone = "0917778888",
                 Email = "nhanvien.annhien@gmail.com",
                 SalaryType = SalaryType.Monthly,
@@ -1628,7 +2091,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         {
             empYen.BranchId = branch.Id;
             empYen.UserId = staffUser.Id;
+            if (string.IsNullOrEmpty(empYen.CitizenId))
+            {
+                empYen.CitizenId = "001198007788";
+            }
         }
+        await context.SaveChangesAsync();
 
         // Nhân viên 2: Lê Hoàng Nam gắn cố định tại Chi nhánh Cầu Giấy (BR-AN-02)
         var staffUser2 = await context.Users.FirstOrDefaultAsync(u => u.Id == "usr_employee_annhien_03" || u.UserName == "0916667777");
@@ -1656,16 +2124,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             {
                 TenantId = tenantId,
                 UserId = staffUser2.Id,
-                Role = "EMPLOYEE",
+                Role = SystemRoles.Staff,
                 IsActive = true
             });
         }
         else
         {
-            tuStaff2.Role = "EMPLOYEE";
+            tuStaff2.Role = SystemRoles.Staff;
         }
+        await context.SaveChangesAsync();
 
-        var empNam = await context.Employees.FirstOrDefaultAsync(e => e.TenantId == tenantId && e.EmployeeCode == "NV-AN-02");
+        var empNam = await context.Employees.IgnoreQueryFilters().FirstOrDefaultAsync(e => e.TenantId == tenantId && (e.EmployeeCode == "NV-AN-02" || e.CitizenId == "001197006655"));
         if (empNam == null)
         {
             empNam = new Employee
@@ -1675,6 +2144,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 UserId = staffUser2.Id,
                 EmployeeCode = "NV-AN-02",
                 FullName = "Lê Hoàng Nam (Nhân viên Cầu Giấy)",
+                CitizenId = "001197006655",
                 Phone = "0916667777",
                 Email = "nam.le@annhienmart.vn",
                 SalaryType = SalaryType.Monthly,
@@ -1687,7 +2157,123 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         {
             empNam.BranchId = branchCauGiay.Id;
             empNam.UserId = staffUser2.Id;
+            if (string.IsNullOrEmpty(empNam.CitizenId))
+            {
+                empNam.CitizenId = "001197006655";
+            }
         }
+
+        // Nhân viên 3: Nguyễn Văn Minh gắn cố định tại Chi nhánh Ba Đình (b1000000-0000-0000-0000-000000000001)
+        var staffUser3 = await context.Users.FirstOrDefaultAsync(u => u.Id == "usr_employee_annhien_04" || u.UserName == "0915556666");
+        if (staffUser3 == null)
+        {
+            staffUser3 = new User
+            {
+                Id = "usr_employee_annhien_04",
+                UserName = "0915556666",
+                Password = "123456",
+                FullName = "Nguyễn Văn Minh (Nhân viên Ba Đình)",
+                Email = "minh.nguyen@annhienmart.vn",
+                Phone = "0915556666",
+                IsActive = true,
+                IsEmailVerified = true
+            };
+            await context.Users.AddAsync(staffUser3);
+            await context.SaveChangesAsync();
+        }
+
+        var tuStaff3 = await context.TenantUsers.FirstOrDefaultAsync(tu => tu.TenantId == tenantId && tu.UserId == staffUser3.Id);
+        if (tuStaff3 == null)
+        {
+            await context.TenantUsers.AddAsync(new TenantUser
+            {
+                TenantId = tenantId,
+                UserId = staffUser3.Id,
+                Role = "EMPLOYEE",
+                IsActive = true
+            });
+        }
+        else
+        {
+            tuStaff3.Role = "EMPLOYEE";
+        }
+
+        var empMinh = await context.Employees.FirstOrDefaultAsync(e => e.TenantId == tenantId && e.EmployeeCode == "NV-AN-03");
+        if (empMinh == null)
+        {
+            empMinh = new Employee
+            {
+                TenantId = tenantId,
+                BranchId = branch.Id,
+                UserId = staffUser3.Id,
+                EmployeeCode = "NV-AN-03",
+                FullName = "Nguyễn Văn Minh (Nhân viên Ba Đình)",
+                Phone = "0915556666",
+                Email = "minh.nguyen@annhienmart.vn",
+                SalaryType = SalaryType.Monthly,
+                BaseRate = 7500000m,
+                Status = EmployeeStatus.Active
+            };
+            await context.Employees.AddAsync(empMinh);
+        }
+        else
+        {
+            empMinh.BranchId = branch.Id;
+            empMinh.UserId = staffUser3.Id;
+        }
+        await context.SaveChangesAsync();
+
+        // 3b. Cấu hình ca làm việc mẫu & Lịch phân ca kiểm thử cho thu ngân Ba Đình (REQ-STRICT-SCHEDULE-VALIDATION)
+        var shiftConfigSang = await context.ShiftConfigs.FirstOrDefaultAsync(s => s.TenantId == tenantId && s.ShiftCode == "CA-AN-FULL");
+        if (shiftConfigSang == null)
+        {
+            shiftConfigSang = new ShiftConfig
+            {
+                TenantId = tenantId,
+                BranchId = branch.Id,
+                ShiftCode = "CA-AN-FULL",
+                ShiftName = "Ca Trực Bán Hàng Toàn Thời Gian (06:00 - 23:00)",
+                StartTime = new TimeSpan(6, 0, 0),
+                EndTime = new TimeSpan(23, 0, 0),
+                DurationHours = 17.00m,
+                AllowedCheckInStart = new TimeSpan(5, 30, 0),
+                AllowedCheckInEnd = new TimeSpan(23, 30, 0),
+                IsActive = true
+            };
+            await context.ShiftConfigs.AddAsync(shiftConfigSang);
+            await context.SaveChangesAsync();
+        }
+
+        // Tạo lịch phân ca cho Phạm Thị Yến (0917778888) cho ngày hôm nay và các ngày lân cận (-3 đến +7 ngày)
+        // Lưu ý: Không phân ca cho Nguyễn Văn Minh (0915556666) để dùng làm tài khoản test kịch bản bị chặn cứng ngoài ca
+        var todayVn = DateTime.UtcNow.AddHours(7).Date;
+        for (int dayOffset = -3; dayOffset <= 7; dayOffset++)
+        {
+            var targetDate = todayVn.AddDays(dayOffset);
+            var existingSchedule = await context.EmployeeSchedules
+                .FirstOrDefaultAsync(s => s.TenantId == tenantId && s.EmployeeId == empYen.Id && s.BranchId == branch.Id && s.WorkDate == targetDate);
+
+            if (existingSchedule == null)
+            {
+                await context.EmployeeSchedules.AddAsync(new EmployeeSchedule
+                {
+                    TenantId = tenantId,
+                    BranchId = branch.Id,
+                    EmployeeId = empYen.Id,
+                    ShiftConfigId = shiftConfigSang.Id,
+                    WorkDate = targetDate,
+                    ShiftCode = shiftConfigSang.ShiftCode,
+                    ShiftName = shiftConfigSang.ShiftName,
+                    PlannedStartTime = shiftConfigSang.StartTime,
+                    PlannedEndTime = shiftConfigSang.EndTime,
+                    DurationHours = shiftConfigSang.DurationHours,
+                    AllowedCheckInStart = shiftConfigSang.AllowedCheckInStart,
+                    AllowedCheckInEnd = shiftConfigSang.AllowedCheckInEnd,
+                    Status = ScheduleStatus.Scheduled
+                });
+            }
+        }
+        await context.SaveChangesAsync();
         await context.SaveChangesAsync();
 
         // 4. Danh mục sản phẩm của An Nhiên Mart
@@ -1719,7 +2305,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         await context.SaveChangesAsync();
 
         // 5. Sản phẩm cơ bản của cửa hàng An Nhiên
-        var prodGao = await context.Products.FirstOrDefaultAsync(p => p.TenantId == tenantId && p.ProductCode == "AN-GAO-01");
+        var prodGao = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => (p.TenantId == tenantId && p.ProductCode == "AN-GAO-01") || p.Barcode == "8936012340011");
         if (prodGao == null)
         {
             prodGao = new Product
@@ -1743,7 +2329,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             await context.Products.AddAsync(prodGao);
         }
 
-        var prodTrung = await context.Products.FirstOrDefaultAsync(p => p.TenantId == tenantId && p.ProductCode == "AN-TRUNG-01");
+        var prodTrung = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => (p.TenantId == tenantId && p.ProductCode == "AN-TRUNG-01") || p.Barcode == "8936012340028");
         if (prodTrung == null)
         {
             prodTrung = new Product
@@ -1767,7 +2353,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             await context.Products.AddAsync(prodTrung);
         }
 
-        var prodMam = await context.Products.FirstOrDefaultAsync(p => p.TenantId == tenantId && p.ProductCode == "AN-MAM-01");
+        var prodMam = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => (p.TenantId == tenantId && p.ProductCode == "AN-MAM-01") || p.Barcode == "8936012340035");
         if (prodMam == null)
         {
             prodMam = new Product
@@ -1791,7 +2377,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             await context.Products.AddAsync(prodMam);
         }
 
-        var prodTao = await context.Products.FirstOrDefaultAsync(p => p.TenantId == tenantId && p.ProductCode == "AN-TAO-01");
+        var prodTao = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => (p.TenantId == tenantId && p.ProductCode == "AN-TAO-01") || p.Barcode == "8936012340042");
         if (prodTao == null)
         {
             prodTao = new Product
@@ -1815,7 +2401,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             await context.Products.AddAsync(prodTao);
         }
 
-        var prodSua = await context.Products.FirstOrDefaultAsync(p => p.TenantId == tenantId && p.ProductCode == "AN-SUA-01");
+        var prodSua = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => (p.TenantId == tenantId && p.ProductCode == "AN-SUA-01") || p.Barcode == "8936012340059");
         if (prodSua == null)
         {
             prodSua = new Product
@@ -2142,6 +2728,99 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
         await context.Orders.AddRangeAsync(order1, preOrder1);
         await context.SaveChangesAsync();
+
+        // 13. Seed Ca làm việc POS (ShiftZReport) và phiếu thu chi lẻ (ShiftCashMovement)
+        var shift1Id = Guid.Parse("01944321-ca01-7000-8000-000000000001");
+        var shift2Id = Guid.Parse("01944321-ca02-7000-8000-000000000002");
+        var tillId = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db");
+        var staffGuid = Guid.TryParse(staffUser.Id, out var parsedStaffGuid) ? parsedStaffGuid : Guid.NewGuid();
+
+        if (!await context.ShiftZReports.IgnoreQueryFilters().AnyAsync(s => s.Id == shift1Id))
+        {
+            var shift1 = new ShiftZReport
+            {
+                Id = shift1Id,
+                TenantId = tenantId,
+                BranchId = branch.Id,
+                TillId = tillId,
+                ShiftCode = "CA-20261105-01",
+                ShiftName = "Ca Sáng 05/11",
+                CashierUserId = staffGuid,
+                ReceiverUserId = "usr_employee_annhien_03",
+                OpenedAtUtc = now.AddDays(-1).AddHours(-8),
+                ClosedAtUtc = now.AddDays(-1).AddHours(-1),
+                OpeningFloatExpected = 1500000m,
+                OpeningFloat = 1500000m,
+                OpeningDiscrepancy = 0m,
+                TotalCashIn = 500000m,
+                TotalCashOut = 200000m,
+                TotalBankRevenue = 360000m,
+                TotalOrdersCount = 5,
+                ExpectedCash = 2800000m,
+                ActualCashCounted = 2800000m,
+                Discrepancy = 0m,
+                RetainedFloatAmount = 1500000m,
+                DroppedToSafeAmount = 1300000m,
+                HandoverStatus = HandoverStatus.CONFIRMED,
+                Status = ShiftState.Closed,
+                Notes = "Bàn giao ca đầy đủ, không chênh lệch."
+            };
+
+            shift1.CashMovements.Add(new ShiftCashMovement
+            {
+                TenantId = tenantId,
+                ShiftId = shift1Id,
+                MovementType = CashMovementType.IN,
+                Category = CashMovementCategory.CASH_DEPOSIT,
+                Amount = 500000m,
+                Reason = "Nạp tiền lẻ đầu ca",
+                CreatedByName = "Phạm Thị Yến",
+                OccurredAtUtc = now.AddDays(-1).AddHours(-7)
+            });
+
+            shift1.CashMovements.Add(new ShiftCashMovement
+            {
+                TenantId = tenantId,
+                ShiftId = shift1Id,
+                MovementType = CashMovementType.OUT,
+                Category = CashMovementCategory.EXPENSE,
+                Amount = 200000m,
+                Reason = "Chi tiền rác và túi đựng",
+                CreatedByName = "Phạm Thị Yến",
+                OccurredAtUtc = now.AddDays(-1).AddHours(-4)
+            });
+
+            var shift2 = new ShiftZReport
+            {
+                Id = shift2Id,
+                TenantId = tenantId,
+                BranchId = branch.Id,
+                TillId = tillId,
+                ShiftCode = "CA-20261106-01",
+                ShiftName = "Ca Sáng 06/11",
+                CashierUserId = staffGuid,
+                PrevShiftId = shift1Id,
+                OpenedAtUtc = now.AddHours(-3),
+                OpeningFloatExpected = 1500000m,
+                OpeningFloat = 1500000m,
+                OpeningDiscrepancy = 0m,
+                TotalCashIn = 0m,
+                TotalCashOut = 0m,
+                TotalBankRevenue = 0m,
+                TotalOrdersCount = 1,
+                ExpectedCash = 1584000m,
+                RetainedFloatAmount = 0m,
+                DroppedToSafeAmount = 0m,
+                HandoverStatus = HandoverStatus.PENDING,
+                Status = ShiftState.Open,
+                Notes = "Ca bán hàng đang mở."
+            };
+
+            order1.ShiftId = shift2Id;
+
+            await context.ShiftZReports.AddRangeAsync(shift1, shift2);
+            await context.SaveChangesAsync();
+        }
     }
 
     // =========================================================================
@@ -2378,8 +3057,17 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                     }
                 };
 
-                await context.Products.AddRangeAsync(products, ct);
-                await context.SaveChangesAsync(ct);
+                var existingProductIds = await context.Products.IgnoreQueryFilters().Select(p => p.Id).ToListAsync(ct);
+                var existingBarcodes = await context.Products.IgnoreQueryFilters().Where(p => p.Barcode != null).Select(p => p.Barcode!).ToListAsync(ct);
+                var productsToAdd = products
+                    .Where(p => !existingProductIds.Contains(p.Id) && (p.Barcode == null || !existingBarcodes.Contains(p.Barcode)))
+                    .ToList();
+
+                if (productsToAdd.Any())
+                {
+                    await context.Products.AddRangeAsync(productsToAdd, ct);
+                    await context.SaveChangesAsync(ct);
+                }
             }
 
             // Resolve default branch for Orders & Expenses foreign key
@@ -3281,7 +3969,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
                 foreach (var item in extraProducts)
                 {
-                    var existingProd = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.ProductCode == item.prod.ProductCode, ct);
+                    var existingProd = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.ProductCode == item.prod.ProductCode || (!string.IsNullOrEmpty(item.prod.Barcode) && p.Barcode == item.prod.Barcode), ct);
                     var targetProd = existingProd ?? item.prod;
                     if (existingProd == null)
                     {
@@ -3625,7 +4313,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             (Guid.Parse("e0000001-0000-0000-0000-000000000001"), "HH-TOM-CAY", "8934563138164", "Mì Hảo Hảo tôm chua cay 75g", 4500m, 3600m, "Gói", 0.01m),
             (Guid.Parse("e0000002-0000-0000-0000-000000000002"), "COCA-320ML", "8935049500123", "Nước ngọt Coca-Cola lon 320ml", 10000m, 7800m, "Lon", 0.01m),
             (Guid.Parse("e0000003-0000-0000-0000-000000000003"), "REDBULL-250", "8850228000153", "Nước tăng lực Redbull lon 250ml", 12000m, 9500m, "Lon", 0.01m),
-            (Guid.Parse("e0000004-0000-0000-0000-000000000004"), "LAVIE-500ML", "8936036010022", "Nước khoáng Lavie chai 500ml", 6000m, 4200m, "Chai", 0.01m),
+            (Guid.Parse("e0000004-0000-0000-0000-000000000004"), "LAVIE-500ML", "8935001700035", "Nước khoáng Lavie chai 500ml", 6000m, 4200m, "Chai", 0.01m),
             (Guid.Parse("e0000005-0000-0000-0000-000000000005"), "VNM-100PCT", "8934673123456", "Sữa tươi tiệt trùng Vinamilk 100% 180ml", 8500m, 6800m, "Hộp", 0.01m),
             (Guid.Parse("e0000006-0000-0000-0000-000000000006"), "KEN-330ML", "8934822212345", "Bia Heineken lon 330ml", 22000m, 18500m, "Lon", 0.01m),
             (Guid.Parse("e0000007-0000-0000-0000-000000000007"), "SIMPLY-1L", "8934561230018", "Dầu ăn đậu nành Simply chai 1 lít", 55000m, 45000m, "Chai", 0.01m),
@@ -3633,9 +4321,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             (Guid.Parse("e0000009-0000-0000-0000-000000000009"), "SUNLIGHT-750", "8934561234567", "Nước rửa chén Sunlight Chanh túi 750g", 30000m, 24000m, "Túi", 0.01m)
         };
 
+        // Tự động sửa barcode cho bản ghi LAVIE-500ML cũ nếu đã tồn tại để tránh xung đột với Bánh Custas (8936036010022)
+        var oldLavie = await context.Products.IgnoreQueryFilters()
+            .FirstOrDefaultAsync(p => (p.ProductCode == "LAVIE-500ML" || p.Id == Guid.Parse("e0000004-0000-0000-0000-000000000004")) && p.Barcode == "8936036010022", ct);
+        if (oldLavie != null)
+        {
+            oldLavie.Barcode = "8935001700035";
+            await context.SaveChangesAsync(ct);
+        }
+
         foreach (var item in posProducts)
         {
-            var existingProd = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == item.Id || p.Barcode == item.Barcode, ct);
+            var existingProd = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == item.Id || p.ProductCode == item.SKU || p.Barcode == item.Barcode, ct);
             if (existingProd == null)
             {
                 var newP = new Product

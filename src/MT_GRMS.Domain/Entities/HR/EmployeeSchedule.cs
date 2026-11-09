@@ -45,6 +45,8 @@ public class EmployeeSchedule : BaseTenantEntity
 
     // Trạng thái ca & Quy trình duyệt của Quản lý / Chủ cửa hàng
     public ScheduleStatus Status { get; set; } = ScheduleStatus.Scheduled;
+    public bool IsLeave { get; set; } = false;
+    public bool IsPaidLeave { get; set; } = false;
     public string? ApprovalType { get; set; }
     public ScheduleApprovalStatus ApprovalStatus { get; set; } = ScheduleApprovalStatus.None;
     public string? ApprovalReason { get; set; }
@@ -57,4 +59,7 @@ public class EmployeeSchedule : BaseTenantEntity
     public Branch? Branch { get; set; }
     public ShiftConfig? ShiftConfig { get; set; }
     public Payslip? Payslip { get; set; }
+
+    // Quan hệ 1 - N: Danh sách tất cả các yêu cầu phát sinh của ca này
+    public ICollection<ScheduleApprovalRequest> ApprovalRequests { get; set; } = new List<ScheduleApprovalRequest>();
 }

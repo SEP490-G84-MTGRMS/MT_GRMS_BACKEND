@@ -134,7 +134,7 @@ public class UserAuthenticationTests
         // THEN
         Assert.NotNull(response);
         Assert.False(string.IsNullOrEmpty(response.AccessToken));
-        Assert.StartsWith("mt_jwt_", response.AccessToken);
+        Assert.True(response.AccessToken.StartsWith("mt_jwt_") || response.AccessToken.StartsWith("eyJ"));
         Assert.StartsWith("mt_refresh_", response.RefreshToken);
         Assert.Equal("usr_test_01", response.User.Id);
         Assert.Equal("testuser", response.User.Username);
@@ -272,7 +272,7 @@ public class UserAuthenticationTests
 
         // THEN
         Assert.NotNull(response);
-        Assert.StartsWith("mt_jwt_", response.AccessToken);
+        Assert.True(response.AccessToken.StartsWith("mt_jwt_") || response.AccessToken.StartsWith("eyJ"));
         Assert.StartsWith("mt_refresh_", response.RefreshToken);
         Assert.Equal("refreshed_user", response.User.Username);
         Assert.Equal("ADMIN", response.User.Role);

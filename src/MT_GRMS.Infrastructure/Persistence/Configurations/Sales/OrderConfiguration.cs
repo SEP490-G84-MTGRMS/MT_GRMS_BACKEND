@@ -22,9 +22,16 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.Property(x => x.DepositAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.PaymentMethod).HasMaxLength(50).HasDefaultValue("CASH");
         builder.Property(x => x.PaymentStatus).HasMaxLength(30).HasDefaultValue("PAID");
+        builder.Property(x => x.ShiftId).HasColumnName("ShiftID");
         builder.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("Completed");
 
         builder.HasIndex(x => x.OrderCode).IsUnique();
+        builder.HasIndex(x => x.ShiftId);
+
+        builder.HasOne(x => x.Shift)
+            .WithMany()
+            .HasForeignKey(x => x.ShiftId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         builder.HasOne(x => x.Branch)
             .WithMany()

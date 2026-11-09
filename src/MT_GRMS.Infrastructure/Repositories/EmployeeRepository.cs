@@ -1,4 +1,4 @@
-﻿using System.Linq.Expressions;
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Employees.Dtos;
@@ -253,5 +253,20 @@ public class EmployeeRepository : IEmployeeRepository
         var hasPayslips = await _context.Payslips
             .AnyAsync(p => p.EmployeeId == employeeId, cancellationToken);
         return hasPayslips;
+    }
+
+    public async Task<IReadOnlyList<Employee>> GetActiveEmployeesAsync(Guid? branchId, CancellationToken cancellationToken = default)
+    {
+        var query = _dbSet
+            .Include(e => e.Allowances)
+            .Include(e => e.Branch)
+            .Where(e => e.Status == EmployeeStatus.Active);
+
+        if (branchId.HasValue && branchId.Value != Guid.Empty)
+        {
+            query = query.Where(e => e.BranchId == branchId.Value);
+        }
+
+        return await query.ToListAsync(cancellationToken);
     }
 }

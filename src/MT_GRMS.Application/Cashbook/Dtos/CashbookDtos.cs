@@ -1,4 +1,4 @@
-﻿using MT_GRMS.Domain.Enums;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Application.Cashbook.Dtos;
 
@@ -45,7 +45,7 @@ public record ShiftResponse(
     decimal TotalCashOut,
     decimal ExpectedCash,
     decimal? ActualCashCounted,
-    decimal Discrepancy,
+    decimal? Discrepancy,
     decimal RetainedFloatAmount,
     decimal DroppedToSafeAmount,
     string Status,

@@ -201,18 +201,6 @@ public static class OrderMatrixRules
             return Off(supplierId, deliveryDate, cutoff, "HOLIDAY_BLACKOUT");
         }
 
-        // Không cho đặt giao ngày quá khứ
-        if (deliveryDate.Date < now.Date)
-        {
-            return Off(supplierId, deliveryDate, cutoff, "PAST_DELIVERY_DATE");
-        }
-
-        // Lead time ≥ 1 ngày: không cho đặt giao hôm nay (ngày giao sớm nhất = ngày mai)
-        if (deliveryDate.Date < GetEarliestAllowedDeliveryDate(now))
-        {
-            return Off(supplierId, deliveryDate, cutoff, "LEAD_TIME_VIOLATION");
-        }
-
         var hasCommittedPo = !string.IsNullOrWhiteSpace(committedPoCode) || committedPoId.HasValue;
 
         // PO đã tồn tại nhưng đã qua cutoff → khóa cứng (FINALIZED).
@@ -228,6 +216,18 @@ public static class OrderMatrixRules
                 PoCode = committedPoCode,
                 PoId = committedPoId
             };
+        }
+
+        // Không cho đặt giao ngày quá khứ
+        if (deliveryDate.Date < now.Date)
+        {
+            return Off(supplierId, deliveryDate, cutoff, "PAST_DELIVERY_DATE");
+        }
+
+        // Lead time ≥ 1 ngày: không cho đặt giao hôm nay (ngày giao sớm nhất = ngày mai)
+        if (deliveryDate.Date < GetEarliestAllowedDeliveryDate(now))
+        {
+            return Off(supplierId, deliveryDate, cutoff, "LEAD_TIME_VIOLATION");
         }
 
         if (now >= cutoff)

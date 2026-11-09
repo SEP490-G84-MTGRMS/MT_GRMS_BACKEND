@@ -10,6 +10,7 @@ using MT_GRMS.Application.Debt;
 using MT_GRMS.Application.Debt.Dtos;
 using MT_GRMS.Application.PosOrders.Dtos;
 using MT_GRMS.Domain.Entities.Catalog;
+using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
@@ -24,6 +25,10 @@ public class OrderService : IOrderService
     private readonly ICustomerDebtService? _debtService;
     private readonly ICashbookService? _cashbookService;
     private readonly IValidator<OrderCreateRequest>? _validator;
+    private readonly PosShifts.IShiftRepository? _shiftRepository;
+    private readonly PosShifts.IShiftService? _shiftService;
+    private readonly Promotions.IPromotionRepository? _promotionRepository;
+    private readonly ITenantContext? _tenantContext;
 
     private static readonly Guid DefaultTillId = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db");
     private static readonly Guid DefaultBankId = Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559");
@@ -34,7 +39,11 @@ public class OrderService : IOrderService
         IThermalPrintService thermalPrintService,
         ICustomerDebtService? debtService = null,
         ICashbookService? cashbookService = null,
-        IValidator<OrderCreateRequest>? validator = null)
+        IValidator<OrderCreateRequest>? validator = null,
+        PosShifts.IShiftRepository? shiftRepository = null,
+        Promotions.IPromotionRepository? promotionRepository = null,
+        ITenantContext? tenantContext = null,
+        PosShifts.IShiftService? shiftService = null)
     {
         _orderRepository = orderRepository;
         _unitOfWork = unitOfWork;
@@ -42,6 +51,10 @@ public class OrderService : IOrderService
         _debtService = debtService;
         _cashbookService = cashbookService;
         _validator = validator;
+        _shiftRepository = shiftRepository;
+        _promotionRepository = promotionRepository;
+        _tenantContext = tenantContext;
+        _shiftService = shiftService;
     }
 
     public OrderService(
@@ -49,7 +62,7 @@ public class OrderService : IOrderService
         IUnitOfWork unitOfWork,
         IThermalPrintService thermalPrintService,
         IValidator<OrderCreateRequest>? validator)
-        : this(orderRepository, unitOfWork, thermalPrintService, null, null, validator)
+        : this(orderRepository, unitOfWork, thermalPrintService, null, null, validator, null, null, null, null)
     {
     }
 
@@ -78,6 +91,40 @@ public class OrderService : IOrderService
         if (branch == null)
         {
             throw new InvalidOperationException($"Chi nhánh với ID '{branchId}' không tồn tại trong hệ thống.");
+        }
+
+        // 1b. Kiểm tra ca bán hàng của chi nhánh (REQ-SHIFT-SHARED-03)
+        ShiftZReport? activeShift = null;
+        if (_shiftRepository != null)
+        {
+            activeShift = await _shiftRepository.GetActiveShiftAsync(branchId, cancellationToken: cancellationToken);
+            if (activeShift != null && activeShift.Status == ShiftState.Closing)
+            {
+                throw new BusinessException(
+                    "SHIFT_CLOSING_LOCKDOWN",
+                    "Ca bán hàng của chi nhánh đang trong trạng thái kiểm đếm chốt ca (Closing). Không thể tạo đơn mới.");
+            }
+        }
+
+        // 1c. Kiểm tra tính đủ điều kiện trực ca của nhân viên thu ngân (REQ-STRICT-SCHEDULE-VALIDATION)
+        if (_shiftService != null && _tenantContext != null)
+        {
+            var cashierId = _tenantContext.CurrentUserId;
+            if (cashierId != Guid.Empty)
+            {
+                var eligibility = await _shiftService.CheckCashierShiftEligibilityAsync(
+                    branchId,
+                    cashierId,
+                    _tenantContext.CurrentRole,
+                    cancellationToken);
+
+                if (!eligibility.IsAllowed)
+                {
+                    throw new BusinessException(
+                        "EMPLOYEE_NOT_SCHEDULED",
+                        eligibility.Reason ?? "Bạn không có lịch làm việc trong ca hiện tại của chi nhánh.");
+                }
+            }
         }
 
         // 2. Kiểm tra khách hàng (nếu có)
@@ -332,26 +379,52 @@ public class OrderService : IOrderService
         // 7. Tích điểm thưởng cho khách hàng
         if (customer != null)
         {
+            decimal earningRate = 10000m;
+            int earningPoints = 1;
+            if (_promotionRepository != null)
+            {
+                var loyaltySetting = await _promotionRepository.GetLoyaltySettingAsync(customer.TenantId, cancellationToken);
+                if (loyaltySetting != null && loyaltySetting.IsEnabled)
+                {
+                    earningRate = loyaltySetting.EarningRateAmount > 0 ? loyaltySetting.EarningRateAmount : 10000m;
+                    earningPoints = loyaltySetting.EarningPoints > 0 ? loyaltySetting.EarningPoints : 1;
+                }
+            }
+
             if (request.PointsRedeemed.HasValue && request.PointsRedeemed.Value > 0)
             {
                 int pointsToDeduct = Math.Min(customer.RewardPoints, request.PointsRedeemed.Value);
                 customer.RewardPoints -= pointsToDeduct;
             }
 
-            int earnedPoints = (int)(finalAmount / 10000m); // 10.000đ = 1 điểm
+            int earnedPoints = (int)(finalAmount / earningRate) * earningPoints;
             customer.RewardPoints += earnedPoints;
             customer.TotalSpending += finalAmount;
             customer.UpdatedAt = DateTime.UtcNow;
         }
 
         // 8. Lưu Order Entity
+        Guid? shiftId = request.ShiftId ?? activeShift?.Id;
+        Guid? creatorId = null;
+        if (_tenantContext != null && _tenantContext.CurrentUserId != Guid.Empty)
+        {
+            creatorId = _tenantContext.CurrentUserId;
+        }
+
+        string? resolvedCashierName = !string.IsNullOrWhiteSpace(request.CashierName)
+            ? request.CashierName.Trim()
+            : (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân POS");
+
         string orderCode = debtInvoiceResponse != null ? debtInvoiceResponse.OrderCode : $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
         var order = new Order
         {
             Id = debtInvoiceResponse != null ? debtInvoiceResponse.OrderId : Guid.NewGuid(),
             BranchId = branchId,
             CustomerId = request.CustomerId,
+            ShiftId = shiftId,
             OrderCode = orderCode,
+            CashierName = resolvedCashierName,
+            CreatedBy = creatorId,
             OrderDate = DateTime.UtcNow,
             TotalAmount = totalAmount,
             DiscountAmount = totalDiscount,
@@ -409,7 +482,53 @@ public class OrderService : IOrderService
         }
 
         await _orderRepository.AddAsync(order, cancellationToken);
+
+        // Ghi nhận nhân viên tham gia ca bán hàng chung (REQ-SHIFT-SHARED-02)
+        if (activeShift != null && _shiftRepository != null)
+        {
+            var cashierId = creatorId ?? (activeShift.CashierUserId != Guid.Empty ? activeShift.CashierUserId : Guid.Empty);
+            if (cashierId != Guid.Empty)
+            {
+                var participant = await _shiftRepository.GetParticipantAsync(activeShift.Id, cashierId, cancellationToken);
+                if (participant == null)
+                {
+                    await _shiftRepository.AddParticipantAsync(new ShiftParticipant
+                    {
+                        TenantId = branch.TenantId ?? (_tenantContext?.CurrentTenantId ?? string.Empty),
+                        ShiftId = activeShift.Id,
+                        UserId = cashierId,
+                        UserName = request.CashierName ?? (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân"),
+                        FullName = request.CashierName ?? (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân"),
+                        JoinedAtUtc = DateTime.UtcNow,
+                        LastActiveAtUtc = DateTime.UtcNow
+                    }, cancellationToken);
+                }
+                else
+                {
+                    participant.LastActiveAtUtc = DateTime.UtcNow;
+                    if (!string.IsNullOrWhiteSpace(request.CashierName))
+                    {
+                        participant.UserName = request.CashierName;
+                    }
+                }
+            }
+        }
+
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        // 9. Đổi mã voucher (Redeem) nguyên tử nếu có áp dụng
+        if (!string.IsNullOrWhiteSpace(request.VoucherCode) && _promotionRepository != null)
+        {
+            await _promotionRepository.RedeemVoucherCodeAtomicAsync(
+                request.VoucherCode.Trim().ToUpper(),
+                order.Id,
+                order.OrderCode,
+                customer?.Id,
+                customer?.Name,
+                customer?.Phone,
+                cancellationToken
+            );
+        }
 
         return MapToOrderResponse(order, cashTendered, changeAmount, debtInvoiceResponse);
     }
@@ -612,12 +731,21 @@ public class OrderService : IOrderService
             throw new InvalidOperationException($"Tiền đặt cọc tối thiểu phải bằng 10% tổng giá trị đơn hàng (Tối thiểu: {minDeposit:N0} đ, Thực tế: {request.DepositAmount:N0} đ).");
         }
 
+        Guid? preOrderShiftId = request.ShiftId ?? (_shiftRepository != null
+            ? (await _shiftRepository.GetActiveShiftAsync(request.BranchId, cancellationToken: cancellationToken))?.Id
+            : null);
+
+        string? preOrderCashierName = !string.IsNullOrWhiteSpace(request.CashierName)
+            ? request.CashierName.Trim()
+            : (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân POS");
         var order = new Order
         {
             Id = Guid.NewGuid(),
             BranchId = request.BranchId,
             CustomerId = request.CustomerId,
+            ShiftId = preOrderShiftId,
             OrderCode = "PO" + DateTime.UtcNow.ToString("yyMMddHHmmssfff"),
+            CashierName = preOrderCashierName,
             OrderDate = DateTime.UtcNow,
             TotalAmount = totalAmount,
             DiscountAmount = totalDiscount,
@@ -655,13 +783,55 @@ public class OrderService : IOrderService
             throw new InvalidOperationException($"Số tiền khách trả ({request.AmountPaid:N0} đ) không đủ để thanh toán phần còn lại của đơn hàng ({remainingAmount:N0} đ).");
         }
 
+        string? fulfillingCashierName = !string.IsNullOrWhiteSpace(request.CashierName)
+            ? request.CashierName.Trim()
+            : (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân POS");
+
         order.Status = "Completed";
         order.PaymentStatus = "PAID";
         order.PaymentMethod = request.PaymentMethod;
         order.DepositAmount = order.FinalAmount;
+        order.FulfilledByCashierName = fulfillingCashierName;
+        order.FulfilledAtUtc = DateTime.UtcNow;
         if (!string.IsNullOrWhiteSpace(request.Note))
         {
             order.Note = $"{order.Note} | Xuất hàng: {request.Note}".Trim();
+        }
+
+        // Tự động ghi nhận khoản thu phần còn lại vào ca làm việc đang mở của chi nhánh giao hàng
+        if (_shiftRepository != null && remainingAmount > 0)
+        {
+            var activeShift = request.ShiftId.HasValue && request.ShiftId.Value != Guid.Empty
+                ? await _shiftRepository.GetByIdAsync(request.ShiftId.Value, cancellationToken)
+                : await _shiftRepository.GetActiveShiftAsync(order.BranchId, cancellationToken: cancellationToken);
+
+            if (activeShift != null)
+            {
+                if (string.Equals(request.PaymentMethod, "CASH", StringComparison.OrdinalIgnoreCase))
+                {
+                    var movement = new ShiftCashMovement
+                    {
+                        Id = Guid.NewGuid(),
+                        TenantId = order.TenantId,
+                        ShiftId = activeShift.Id,
+                        MovementType = CashMovementType.IN,
+                        Category = CashMovementCategory.PREORDER_PICKUP,
+                        Amount = remainingAmount,
+                        Reason = $"Thu tiền còn lại giao hàng đơn đặt trước '{order.OrderCode}'",
+                        CreatedByName = fulfillingCashierName,
+                        OccurredAtUtc = DateTime.UtcNow,
+                        Status = CashMovementStatus.Recorded,
+                        IsConfirmedByOwner = true
+                    };
+                    await _shiftRepository.AddCashMovementAsync(movement, cancellationToken);
+                    activeShift.TotalCashIn += remainingAmount;
+                    activeShift.ExpectedCash += remainingAmount;
+                }
+                else
+                {
+                    activeShift.TotalBankRevenue += remainingAmount;
+                }
+            }
         }
 
         // Tích điểm thưởng cho khách hàng (10.000đ = 1 điểm)
@@ -670,7 +840,18 @@ public class OrderService : IOrderService
             var customer = await _orderRepository.GetCustomerByIdAsync(order.CustomerId.Value, cancellationToken);
             if (customer != null)
             {
-                int pointsEarned = (int)(order.FinalAmount / 10000m);
+                decimal earningRate = 10000m;
+                int earningPoints = 1;
+                if (_promotionRepository != null)
+                {
+                    var loyaltySetting = await _promotionRepository.GetLoyaltySettingAsync(customer.TenantId, cancellationToken);
+                    if (loyaltySetting != null && loyaltySetting.IsEnabled)
+                    {
+                        earningRate = loyaltySetting.EarningRateAmount > 0 ? loyaltySetting.EarningRateAmount : 10000m;
+                        earningPoints = loyaltySetting.EarningPoints > 0 ? loyaltySetting.EarningPoints : 1;
+                    }
+                }
+                int pointsEarned = (int)(order.FinalAmount / earningRate) * earningPoints;
                 customer.RewardPoints += pointsEarned;
                 customer.TotalSpending += order.FinalAmount;
             }
@@ -899,12 +1080,14 @@ public class OrderService : IOrderService
 
         // 4. Sinh đơn mới liên kết
         string exchangeCode = $"DT{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
+        string? exchangeCashierName = originalOrder.CashierName ?? (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân POS");
         var exchangeOrder = new Order
         {
             Id = Guid.NewGuid(),
             BranchId = originalOrder.BranchId,
             CustomerId = originalOrder.CustomerId,
             OrderCode = exchangeCode,
+            CashierName = exchangeCashierName,
             OrderDate = DateTime.UtcNow,
             TotalAmount = totalNewAmount,
             DiscountAmount = 0m,
@@ -1004,7 +1187,11 @@ public class OrderService : IOrderService
             CustomerPhone: order.Customer?.Phone,
             DepositAmount: order.DepositAmount,
             Note: order.Note,
-            DebtInvoice: debtInvoice
+            DebtInvoice: debtInvoice,
+            ShiftId: order.ShiftId,
+            CashierName: order.CashierName ?? (order.Shift != null ? "Thu ngân POS" : null),
+            FulfilledByCashierName: order.FulfilledByCashierName,
+            FulfilledAtUtc: order.FulfilledAtUtc
         );
     }
 }

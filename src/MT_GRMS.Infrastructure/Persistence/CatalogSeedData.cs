@@ -66,7 +66,8 @@ public static class CatalogSeedData
 
             var existingBarcodes = await context.Products
                 .IgnoreQueryFilters()
-                .Select(p => p.Barcode)
+                .Where(p => !p.IsDeleted && p.Barcode != null)
+                .Select(p => p.Barcode!)
                 .ToListAsync();
 
             var productsToAdd = new List<Product>();
@@ -96,6 +97,7 @@ public static class CatalogSeedData
                     HasBatches = prodTpl.HasBatches,
                     IsFavorite = prodTpl.IsFavorite
                 });
+                existingBarcodes.Add(prodTpl.Barcode);
             }
 
             if (productsToAdd.Any())
