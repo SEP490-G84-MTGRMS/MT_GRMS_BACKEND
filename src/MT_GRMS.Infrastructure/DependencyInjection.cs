@@ -33,14 +33,11 @@ public static class DependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        var connectionString = configuration.GetConnectionString("DefaultConnection");
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            connectionString = configuration["DATABASE_URL"]
-                ?? Environment.GetEnvironmentVariable("DATABASE_URL")
-                ?? Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection")
-                ?? Environment.GetEnvironmentVariable("DB_CONNECTION_STRING");
-        }
+        var connectionString = Environment.GetEnvironmentVariable("DB_CONNECTION_STRING")
+            ?? Environment.GetEnvironmentVariable("DATABASE_URL")
+            ?? configuration["DATABASE_URL"]
+            ?? configuration.GetConnectionString("DefaultConnection")
+            ?? Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection");
 
         if (!string.IsNullOrWhiteSpace(connectionString) &&
             (connectionString.StartsWith("postgres://") || connectionString.StartsWith("postgresql://")))
@@ -61,21 +58,19 @@ public static class DependencyInjection
                 options.UseNpgsql(connectionString, npgsqlOptions =>
                 {
                     npgsqlOptions.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName);
-                    npgsqlOptions.EnableRetryOnFailure(
-                        maxRetryCount: 3,
-                        maxRetryDelay: TimeSpan.FromSeconds(5),
-                        errorCodesToAdd: null);
                 });
             }
         });
 
         if (string.IsNullOrWhiteSpace(connectionString))
         {
-            Console.WriteLine("[MT-GRMS] Database: InMemory (không dùng Postgres local).");
+            Console.WriteLine("[MT-GRMS] Database: InMemory.");
         }
         else
         {
-            Console.WriteLine("[MT-GRMS] Database: PostgreSQL local Host=localhost;Port=5432;Database=mtgrms_db");
+            var isNeon = connectionString.Contains("neon.tech", StringComparison.OrdinalIgnoreCase);
+            var hostInfo = connectionString.Split(';').FirstOrDefault() ?? "PostgreSQL";
+            Console.WriteLine($"[MT-GRMS] Database: {(isNeon ? "Neon Cloud PostgreSQL" : "PostgreSQL Local")} ({hostInfo})");
         }
 
         // Đăng ký Unit of Work & Repositories
@@ -86,7 +81,6 @@ public static class DependencyInjection
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IInventoryRepository, InventoryRepository>();
         services.AddScoped<IOrderRepository, OrderRepository>();
-        services.AddScoped<Application.PosOrders.ISalesOrderRepository, SalesOrderRepository>();
         services.AddScoped<Application.PosShifts.IShiftRepository, ShiftRepository>();
         services.AddScoped<IProductRepository, ProductRepository>();
         services.AddScoped<IProductPriceHistoryRepository, ProductPriceHistoryRepository>();

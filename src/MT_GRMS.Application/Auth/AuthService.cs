@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using MT_GRMS.Application.Auth.Dtos;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Identity;
@@ -382,17 +383,38 @@ public class AuthService : IAuthService
         var issuer = _configuration?["Jwt:Issuer"] ?? "MTGRMS_API";
         var audience = _configuration?["Jwt:Audience"] ?? "MTGRMS_CLIENT";
 
-        var claims = new[]
+        var rolesToAdd = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { role };
+        if (role.Equals("STORE_OWNER", StringComparison.OrdinalIgnoreCase) || role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase))
+        {
+            rolesToAdd.Add("StoreOwner");
+            rolesToAdd.Add("STORE_OWNER");
+        }
+        else if (role.Equals("ADMIN", StringComparison.OrdinalIgnoreCase) || role.Equals("Admin", StringComparison.OrdinalIgnoreCase))
+        {
+            rolesToAdd.Add("Admin");
+            rolesToAdd.Add("ADMIN");
+        }
+        else
+        {
+            rolesToAdd.Add("Employee");
+            rolesToAdd.Add("EMPLOYEE");
+        }
+
+        var claims = new List<Claim>
         {
             new Claim(ClaimTypes.NameIdentifier, userId),
             new Claim(ClaimTypes.Name, username),
             new Claim(ClaimTypes.Email, email),
-            new Claim(ClaimTypes.Role, role),
             new Claim("role", role),
             new Claim("tenant_id", tenantId),
             new Claim("is_admin", isAdmin ? "true" : "false"),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
+
+        foreach (var r in rolesToAdd)
+        {
+            claims.Add(new Claim(ClaimTypes.Role, r));
+        }
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);

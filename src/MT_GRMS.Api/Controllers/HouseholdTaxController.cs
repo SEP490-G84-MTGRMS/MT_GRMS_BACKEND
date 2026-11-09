@@ -3,11 +3,13 @@ using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Tax;
 using MT_GRMS.Application.Tax.Dtos;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Api.Controllers;
 
 [Route("api/tax/household")]
+[Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
 public class HouseholdTaxController : BaseApiController
 {
     private readonly IHouseholdTaxService _taxService;
@@ -133,6 +135,7 @@ public class HouseholdTaxController : BaseApiController
         [FromQuery] TaxPeriodType? periodType,
         [FromQuery] int? periodNumber,
         [FromQuery] Guid? branchId,
+        [FromQuery] AccountingBookType? bookType,
         [FromQuery] TaxCalculationMethod? method,
         [FromQuery] TaxCalculationMethod? calculationMethod,
         [FromQuery] string? tier2Method,
@@ -147,15 +150,17 @@ public class HouseholdTaxController : BaseApiController
             PeriodType = periodType ?? TaxPeriodType.Quarter,
             PeriodNumber = periodNumber ?? 1,
             BranchId = branchId,
+            BookType = bookType,
             CalculationMethod = calculationMethod ?? method ?? TaxCalculationMethod.RevenuePercentage,
             Tier2Method = tier2Method ?? "REVENUE_EXCESS",
             ApplyVatReduction2026 = applyVatReduction ?? false,
             VatReductionPercentage = vatReductionPercentage
         };
 
-        var bytes = await exportService.ExportTaxSummaryToExcelAsync(filter, ct);
+        var bytes = await exportService.ExportTaxSummaryToExcelAsync(filter, bookType, ct);
         var pCode = filter.PeriodType == TaxPeriodType.Quarter ? $"Q{filter.PeriodNumber}" : $"T{filter.PeriodNumber}";
-        var fileName = $"BaoCaoThue_{filter.Year}_{pCode}.xlsx";
+        var bookSuffix = bookType.HasValue ? $"_{bookType.Value}" : "_Full152";
+        var fileName = $"BaoCaoThue_{filter.Year}_{pCode}{bookSuffix}.xlsx";
 
         return File(bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", fileName);
     }

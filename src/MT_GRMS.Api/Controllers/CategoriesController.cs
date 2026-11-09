@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Catalog.Dtos;
@@ -7,6 +8,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/categories")]
+[Authorize]
 public class CategoriesController : BaseApiController
 {
     private readonly ICategoryService _categoryService;
@@ -70,4 +72,5 @@ public class CategoriesController : BaseApiController
         return Ok(ApiResponse<object>.Ok(null!, "Xóa nhóm hàng thành công."));
     }
 }
+
 

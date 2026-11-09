@@ -214,6 +214,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
     }
 
+    private static async Task ExecuteSqlSafeAsync(AppDbContext context, string sql, ILogger? logger = null)
+    {
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(sql);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "ExecuteSqlSafe warning: {Sql}", sql);
+        }
+    }
+
     private static async Task EnsureBranchColumnsAsync(AppDbContext context, ILogger? logger = null)
     {
         try
@@ -280,6 +292,114 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
     public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null)
     {
+        // 0. Bổ sung các cột schema còn thiếu trên Cloud DB
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;", logger);
+
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;", logger);
+
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CostPriceAtSale"" numeric(18,4) NOT NULL DEFAULT 0.0000;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""AppliedVatRate"" numeric(5,2) NOT NULL DEFAULT 0.00;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""VatAmount"" numeric(18,2) NOT NULL DEFAULT 0.00;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""BatchCode"" character varying(100);", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitId"" uuid;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitName"" character varying(50);", logger);
+
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""VatDiscountAmount"" numeric(18,2) NOT NULL DEFAULT 0.00;", logger);
+
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""Status"" character varying(20) NOT NULL DEFAULT 'Active';", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""RetailPrice"" numeric(18,2) NULL;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""ZoneArea"" character varying(50) NULL;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""RowVersion"" integer NOT NULL DEFAULT 1;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid NULL;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;", logger);
+
+        // Đảm bảo bảng BranchProducts tồn tại
+        await ExecuteSqlSafeAsync(context, @"
+CREATE TABLE IF NOT EXISTS ""BranchProducts"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""BranchId"" uuid NOT NULL,
+    ""ProductId"" uuid NOT NULL,
+    ""SellingPriceOverride"" numeric(18,2) NULL,
+    ""Status"" character varying(20) NOT NULL DEFAULT 'Active',
+    ""ShelfLocation"" character varying(50) NULL,
+    ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp with time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false,
+    ""CreatedBy"" uuid NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BranchProducts_TenantId_BranchId_ProductId""
+    ON ""BranchProducts"" (""TenantId"", ""BranchId"", ""ProductId"")
+    WHERE ""IsDeleted"" = false;
+CREATE INDEX IF NOT EXISTS ""IX_BranchProducts_BranchId"" ON ""BranchProducts"" (""BranchId"");
+CREATE INDEX IF NOT EXISTS ""IX_BranchProducts_ProductId"" ON ""BranchProducts"" (""ProductId"");
+", logger);
+
+        // Đảm bảo bảng BranchProductUnitPrices tồn tại
+        await ExecuteSqlSafeAsync(context, @"
+CREATE TABLE IF NOT EXISTS ""BranchProductUnitPrices"" (
+    ""Id"" uuid NOT NULL PRIMARY KEY,
+    ""TenantId"" character varying(50) NOT NULL,
+    ""BranchProductId"" uuid NOT NULL,
+    ""ProductUnitId"" uuid NOT NULL,
+    ""SellingPriceOverride"" numeric(18,2) NOT NULL,
+    ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    ""UpdatedAt"" timestamp with time zone NULL,
+    ""IsDeleted"" boolean NOT NULL DEFAULT false,
+    ""CreatedBy"" uuid NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BranchProductUnitPrices_BranchProductId_ProductUnitId""
+    ON ""BranchProductUnitPrices"" (""BranchProductId"", ""ProductUnitId"")
+    WHERE ""IsDeleted"" = false;
+CREATE INDEX IF NOT EXISTS ""IX_BranchProductUnitPrices_ProductUnitId""
+    ON ""BranchProductUnitPrices"" (""ProductUnitId"");
+", logger);
+
+        // Backfill BranchProducts từ BranchStocks nếu trống
+        await ExecuteSqlSafeAsync(context, @"
+INSERT INTO ""BranchProducts"" (
+    ""Id"", ""TenantId"", ""BranchId"", ""ProductId"", ""SellingPriceOverride"",
+    ""Status"", ""ShelfLocation"", ""CreatedAt"", ""UpdatedAt"", ""IsDeleted"", ""CreatedBy""
+)
+SELECT
+    gen_random_uuid(),
+    src.""TenantId"",
+    src.""BranchId"",
+    src.""ProductId"",
+    NULL,
+    'Active',
+    src.""ShelfLocation"",
+    CURRENT_TIMESTAMP,
+    CURRENT_TIMESTAMP,
+    false,
+    NULL
+FROM (
+    SELECT DISTINCT ON (bs.""TenantId"", bs.""BranchId"", bs.""ProductId"")
+        bs.""TenantId"",
+        bs.""BranchId"",
+        bs.""ProductId"",
+        bs.""ShelfLocation""
+    FROM ""BranchStocks"" bs
+    WHERE bs.""IsDeleted"" = false
+) src
+ON CONFLICT DO NOTHING;
+", logger);
+
         // 1. Tự động áp dụng Migrations hoặc EnsureCreatedAsync để khởi tạo toàn bộ CSDL và các bảng nếu chưa có
         try
         {
@@ -468,6 +588,44 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""RejectionReason"" text;
                         ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""IsConfirmedByOwner"" boolean DEFAULT false;
                         ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ConfirmedByOwnerAtUtc"" timestamp without time zone;
+
+                        CREATE TABLE IF NOT EXISTS ""StorePaymentConfigs"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" text NOT NULL,
+                            ""BankCode"" character varying(50) NOT NULL DEFAULT 'MB',
+                            ""BankName"" character varying(150) NOT NULL DEFAULT 'MBBank - Ngân hàng Quân Đội',
+                            ""BankAccountNumber"" character varying(50) NOT NULL DEFAULT '',
+                            ""BankAccountName"" character varying(150) NOT NULL DEFAULT '',
+                            ""SepayApiKeyEncrypted"" text NOT NULL DEFAULT '',
+                            ""SepayWebhookSecret"" text NOT NULL DEFAULT '',
+                            ""IsActive"" boolean NOT NULL DEFAULT true,
+                            ""CashOutApprovalThreshold"" numeric(18,2) NOT NULL DEFAULT 200000,
+                            ""CashOutShiftTotalLimit"" numeric(18,2) NOT NULL DEFAULT 0,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+
+                        CREATE TABLE IF NOT EXISTS ""PaymentTransactions"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" text NOT NULL,
+                            ""OrderId"" uuid NULL,
+                            ""BankTransactionId"" character varying(100) NOT NULL DEFAULT '',
+                            ""Gateway"" character varying(50) NOT NULL DEFAULT '',
+                            ""AmountIn"" numeric(18,2) NOT NULL DEFAULT 0,
+                            ""Accumulated"" numeric(18,2) NULL,
+                            ""TransactionContent"" text NOT NULL DEFAULT '',
+                            ""ReferenceNumber"" character varying(100) NULL,
+                            ""TransactionDate"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""VerifiedBySepayApi"" boolean NOT NULL DEFAULT false,
+                            ""RawPayloadJson"" text NULL,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+
                         ALTER TABLE ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutApprovalThreshold"" numeric(18,2) DEFAULT 200000;
                         ALTER TABLE ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutShiftTotalLimit"" numeric(18,2) DEFAULT 0;
 
@@ -476,6 +634,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
                         ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
                         ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
+                        ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;
+                        ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);
+                        ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;
+                        ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;
+                        ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;
+
+                        ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;
+                        ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);
+                        ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;
+                        ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;
+                        ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;
+
+                        ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;
+                        ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);
+                        ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;
+                        ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;
+                        ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;
+
                         ALTER TABLE ""Suppliers"" DROP COLUMN IF EXISTS ""CategoryId"";
                         ALTER TABLE ""Suppliers"" DROP COLUMN IF EXISTS ""CategoryCode"";
                         ALTER TABLE ""SupplierDeliveryConfigs"" DROP COLUMN IF EXISTS ""LeadTimeHours"";

@@ -507,6 +507,14 @@ public class CashbookServiceTests
     }
 
     [Fact]
+    public async Task VerifyChainIntegrityAsync_WhenEmptyOrValid_ShouldReturnTrue()
+    {
+        var accountId = Guid.NewGuid();
+        var isValid = await _service.VerifyChainIntegrityAsync(accountId);
+        Assert.True(isValid);
+    }
+
+    [Fact]
     public async Task REQ_POS_BANK_01_GetAccountsAndReceiveBankTransfer_WhenTenantOnlyHasTill_ShouldAutoProvisionTenantBankAccount()
     {
         var branchId = Guid.NewGuid();
