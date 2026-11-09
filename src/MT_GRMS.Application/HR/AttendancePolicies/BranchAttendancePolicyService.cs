@@ -51,10 +51,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
                 LateThresholdMinutes: 0,
                 EnableEarlyLeaveThreshold: true,
                 EarlyLeaveThresholdMinutes: 0,
-                EnableOtBeforeShift: true,
-                OtBeforeShiftMinutes: 0,
-                EnableOtAfterShift: true,
-                OtAfterShiftMinutes: 0,
                 IsCustomized: false
             );
         }
@@ -87,11 +83,7 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
                 EnableLateThreshold = request.EnableLateThreshold,
                 LateThresholdMinutes = request.LateThresholdMinutes,
                 EnableEarlyLeaveThreshold = request.EnableEarlyLeaveThreshold,
-                EarlyLeaveThresholdMinutes = request.EarlyLeaveThresholdMinutes,
-                EnableOtBeforeShift = request.EnableOtBeforeShift,
-                OtBeforeShiftMinutes = request.OtBeforeShiftMinutes,
-                EnableOtAfterShift = request.EnableOtAfterShift,
-                OtAfterShiftMinutes = request.OtAfterShiftMinutes
+                EarlyLeaveThresholdMinutes = request.EarlyLeaveThresholdMinutes
             };
 
             await _repository.AddAsync(policy, cancellationToken);
@@ -105,10 +97,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
             policy.LateThresholdMinutes = request.LateThresholdMinutes;
             policy.EnableEarlyLeaveThreshold = request.EnableEarlyLeaveThreshold;
             policy.EarlyLeaveThresholdMinutes = request.EarlyLeaveThresholdMinutes;
-            policy.EnableOtBeforeShift = request.EnableOtBeforeShift;
-            policy.OtBeforeShiftMinutes = request.OtBeforeShiftMinutes;
-            policy.EnableOtAfterShift = request.EnableOtAfterShift;
-            policy.OtAfterShiftMinutes = request.OtAfterShiftMinutes;
 
             _repository.Update(policy);
         }
@@ -138,10 +126,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
         var lateThresholdMinutes = sourcePolicy?.LateThresholdMinutes ?? 0;
         var enableEarlyLeaveThreshold = sourcePolicy?.EnableEarlyLeaveThreshold ?? true;
         var earlyLeaveThresholdMinutes = sourcePolicy?.EarlyLeaveThresholdMinutes ?? 0;
-        var enableOtBeforeShift = sourcePolicy?.EnableOtBeforeShift ?? true;
-        var otBeforeShiftMinutes = sourcePolicy?.OtBeforeShiftMinutes ?? 0;
-        var enableOtAfterShift = sourcePolicy?.EnableOtAfterShift ?? true;
-        var otAfterShiftMinutes = sourcePolicy?.OtAfterShiftMinutes ?? 0;
 
         var copiedTargetIds = new List<Guid>();
 
@@ -169,11 +153,7 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
                     EnableLateThreshold = enableLateThreshold,
                     LateThresholdMinutes = lateThresholdMinutes,
                     EnableEarlyLeaveThreshold = enableEarlyLeaveThreshold,
-                    EarlyLeaveThresholdMinutes = earlyLeaveThresholdMinutes,
-                    EnableOtBeforeShift = enableOtBeforeShift,
-                    OtBeforeShiftMinutes = otBeforeShiftMinutes,
-                    EnableOtAfterShift = enableOtAfterShift,
-                    OtAfterShiftMinutes = otAfterShiftMinutes
+                    EarlyLeaveThresholdMinutes = earlyLeaveThresholdMinutes
                 };
 
                 await _repository.AddAsync(targetPolicy, cancellationToken);
@@ -187,10 +167,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
                 targetPolicy.LateThresholdMinutes = lateThresholdMinutes;
                 targetPolicy.EnableEarlyLeaveThreshold = enableEarlyLeaveThreshold;
                 targetPolicy.EarlyLeaveThresholdMinutes = earlyLeaveThresholdMinutes;
-                targetPolicy.EnableOtBeforeShift = enableOtBeforeShift;
-                targetPolicy.OtBeforeShiftMinutes = otBeforeShiftMinutes;
-                targetPolicy.EnableOtAfterShift = enableOtAfterShift;
-                targetPolicy.OtAfterShiftMinutes = otAfterShiftMinutes;
 
                 _repository.Update(targetPolicy);
             }
@@ -221,10 +197,6 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
             LateThresholdMinutes: policy.LateThresholdMinutes,
             EnableEarlyLeaveThreshold: policy.EnableEarlyLeaveThreshold,
             EarlyLeaveThresholdMinutes: policy.EarlyLeaveThresholdMinutes,
-            EnableOtBeforeShift: policy.EnableOtBeforeShift,
-            OtBeforeShiftMinutes: policy.OtBeforeShiftMinutes,
-            EnableOtAfterShift: policy.EnableOtAfterShift,
-            OtAfterShiftMinutes: policy.OtAfterShiftMinutes,
             IsCustomized: isCustomized
         );
     }

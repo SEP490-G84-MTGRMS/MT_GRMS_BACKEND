@@ -7,11 +7,7 @@ public record UpsertAttendancePolicyRequest(
     bool EnableLateThreshold = true,
     int LateThresholdMinutes = 0,
     bool EnableEarlyLeaveThreshold = true,
-    int EarlyLeaveThresholdMinutes = 0,
-    bool EnableOtBeforeShift = true,
-    int OtBeforeShiftMinutes = 0,
-    bool EnableOtAfterShift = true,
-    int OtAfterShiftMinutes = 0
+    int EarlyLeaveThresholdMinutes = 0
 );
 
 public record CopyAttendancePolicyRequest(
@@ -37,10 +33,6 @@ public record AttendancePolicyResponse(
     int LateThresholdMinutes,
     bool EnableEarlyLeaveThreshold,
     int EarlyLeaveThresholdMinutes,
-    bool EnableOtBeforeShift,
-    int OtBeforeShiftMinutes,
-    bool EnableOtAfterShift,
-    int OtAfterShiftMinutes,
     bool IsCustomized
 );
 
