@@ -30,3 +30,27 @@ public record UserInfo(
 public record RefreshTokenRequest(
     string RefreshToken
 );
+
+public record RegisterTenantRequest(
+    string FullName,
+    string StoreName,
+    string Phone,
+    string? Email,
+    string Password,
+    bool AgreeTerms = true
+);
+
+public record ForgotPasswordRequest(
+    string Email
+);
+
+public record VerifyOtpRequest(
+    string Email,
+    string OtpCode
+);
+
+public record ResetPasswordRequest(
+    string Email,
+    string OtpCode,
+    string NewPassword
+);

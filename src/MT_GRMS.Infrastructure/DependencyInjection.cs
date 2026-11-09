@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using MT_GRMS.Application.Admin.Repositories;
@@ -9,13 +10,19 @@ using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Interfaces;
+using MT_GRMS.Application.HR.Employees;
+using MT_GRMS.Application.HR.ShiftConfigs;
+using MT_GRMS.Application.HR.AttendancePolicies;
+using MT_GRMS.Application.HR.Schedules;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders;
+using MT_GRMS.Application.PurchaseOrders.Dispatch;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Infrastructure.Repositories;
 using MT_GRMS.Infrastructure.Services;
 using MT_GRMS.Infrastructure.Services.Printer;
+using MT_GRMS.Infrastructure.Workers;
 
 namespace MT_GRMS.Infrastructure;
 
@@ -39,6 +46,8 @@ public static class DependencyInjection
 
         services.AddDbContext<AppDbContext>(options =>
         {
+            options.ConfigureWarnings(w => w.Ignore(CoreEventId.PossibleIncorrectRequiredNavigationWithQueryFilterInteractionWarning));
+
             if (string.IsNullOrWhiteSpace(connectionString))
             {
                 options.UseInMemoryDatabase("MT_GRMS_DevDb");
@@ -73,6 +82,7 @@ public static class DependencyInjection
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IInventoryRepository, InventoryRepository>();
         services.AddScoped<IOrderRepository, OrderRepository>();
+        services.AddScoped<Application.PosShifts.IShiftRepository, ShiftRepository>();
         services.AddScoped<IProductRepository, ProductRepository>();
         services.AddScoped<ICategoryRepository, CategoryRepository>();
         services.AddScoped<IProductUnitRepository, ProductUnitRepository>();
@@ -91,6 +101,10 @@ public static class DependencyInjection
         services.AddScoped<MT_GRMS.Application.GoodsReceipts.IGoodsReceiptRepository, GoodsReceiptRepository>();
         services.AddScoped<MT_GRMS.Application.SupplierReturns.ISupplierReturnRepository, SupplierReturnRepository>();
         services.AddScoped<Application.Promotions.IPromotionRepository, PromotionRepository>();
+        services.AddScoped<IEmployeeRepository, EmployeeRepository>();
+        services.AddScoped<IShiftConfigRepository, ShiftConfigRepository>();
+        services.AddScoped<IBranchAttendancePolicyRepository, BranchAttendancePolicyRepository>();
+        services.AddScoped<IScheduleRepository, ScheduleRepository>();
         services.AddScoped<ISubscriptionPlanRepository, SubscriptionPlanRepository>();
         services.AddScoped<ITenantRepository, TenantRepository>();
 
@@ -101,9 +115,20 @@ public static class DependencyInjection
         services.Configure<CloudinarySettings>(configuration.GetSection(CloudinarySettings.SectionName));
         services.AddScoped<ICloudinaryService, CloudinaryService>();
 
+        // Supplier order Excel + email + local storage + package
+        services.AddScoped<IFileStorage, LocalFileStorage>();
+        services.AddScoped<ISupplierOrderExcelGenerator, SupplierOrderExcelGenerator>();
+        services.AddScoped<ISupplierOrderEmailSender, SmtpSupplierOrderEmailSender>();
+        services.AddScoped<ISupplierDispatchPackageService, SupplierDispatchPackageService>();
+        services.AddHostedService<SupplierOrderDispatchWorker>();
+
         // Cấu hình SePay & Dịch vụ Ví gian hàng
         services.Configure<MT_GRMS.Application.Common.SePaySettings>(configuration.GetSection(MT_GRMS.Application.Common.SePaySettings.SectionName));
         services.AddScoped<MT_GRMS.Application.SaaS.Services.IWalletService, Services.WalletService>();
+
+        // Cấu hình Email & Dịch vụ gửi thư điện tử OTP
+        services.Configure<EmailSettings>(configuration.GetSection(EmailSettings.SectionName));
+        services.AddScoped<IEmailService, EmailService>();
 
         return services;
     }

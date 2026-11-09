@@ -11,6 +11,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/inventory")]
+[Route("api/inventory")]
 [Authorize]
 public class InventoryController : BaseApiController
 {

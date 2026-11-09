@@ -63,8 +63,8 @@ public class EndToEndBusinessFlowIntegrationTests
 
     private class FakeThermalPrintService : IThermalPrintService
     {
-        public bool PrintOrderInvoice(Order order, string printerName = "POS-58", decimal? cashReceived = null, decimal? changeAmount = null) => true;
-        public byte[] BuildEscPosReceipt(Order order, decimal? cashReceived = null, decimal? changeAmount = null) => Array.Empty<byte>();
+        public bool PrintOrderInvoice(Order order, string printerName = "POS-58", decimal? cashReceived = null, decimal? changeAmount = null, string? cashierName = null) => true;
+        public byte[] BuildEscPosReceipt(Order order, decimal? cashReceived = null, decimal? changeAmount = null, string? cashierName = null) => Array.Empty<byte>();
     }
 
     private AppDbContext CreateDbContext(string dbName, FakeTenantContext? tenantContext = null)

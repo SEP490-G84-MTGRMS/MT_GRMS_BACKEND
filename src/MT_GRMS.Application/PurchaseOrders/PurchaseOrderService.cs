@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.PurchaseOrders.Dispatch;
 using MT_GRMS.Application.PurchaseOrders.Dtos;
 using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Domain.Exceptions;
@@ -15,15 +17,18 @@ public class PurchaseOrderService : IPurchaseOrderService
     private readonly IPurchaseOrderRepository _repository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
+    private readonly ISupplierDispatchPackageService _dispatchPackageService;
 
     public PurchaseOrderService(
         IPurchaseOrderRepository repository,
         IUnitOfWork unitOfWork,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        ISupplierDispatchPackageService dispatchPackageService)
     {
         _repository = repository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
+        _dispatchPackageService = dispatchPackageService;
     }
 
     private void EnsureBranchAccess(Guid branchId)
@@ -77,37 +82,72 @@ public class PurchaseOrderService : IPurchaseOrderService
 
         var draftPo = await _repository.GetDraftMatrixPoAsync(query.BranchId, query.SupplierId, query.ViewFrom, cancellationToken);
 
-        var cells = new List<OrderMatrixCellDto>();
+        var cellMap = new Dictionary<(Guid ProductId, DateTime Date), OrderMatrixCellDto>();
         if (draftPo != null && draftPo.Details != null)
         {
             foreach (var detail in draftPo.Details)
             {
-                if (detail.DeliveryDate.HasValue)
+                if (!detail.DeliveryDate.HasValue) continue;
+
+                var finalQty = detail.FinalQty
+                    ?? (detail.IsOwnerAdjusted ? (detail.StoreQty ?? 0m) : (detail.EmployeeQty ?? 0m));
+                cellMap[(detail.ProductId, detail.DeliveryDate.Value.Date)] = new OrderMatrixCellDto
                 {
-                    var finalQty = detail.FinalQty ?? (detail.IsOwnerAdjusted ? (detail.StoreQty ?? 0m) : (detail.EmployeeQty ?? 0m));
-                    cells.Add(new OrderMatrixCellDto
-                    {
-                        ProductId = detail.ProductId,
-                        DeliveryDate = detail.DeliveryDate.Value,
-                        EmployeeQty = detail.EmployeeQty ?? 0m,
-                        StoreQty = detail.StoreQty,
-                        IsOwnerAdjusted = detail.IsOwnerAdjusted,
-                        FinalQty = finalQty
-                    });
-                }
+                    ProductId = detail.ProductId,
+                    DeliveryDate = detail.DeliveryDate.Value.Date,
+                    EmployeeQty = detail.EmployeeQty ?? 0m,
+                    StoreQty = detail.StoreQty,
+                    IsOwnerAdjusted = detail.IsOwnerAdjusted,
+                    FinalQty = finalQty
+                };
             }
         }
+
+        var now = OrderMatrixRules.GetVietnamNow();
+        var committedList = await _repository.GetCommittedPosInRangeAsync(
+            query.BranchId, query.SupplierId, query.ViewFrom, query.DurationDays, cancellationToken);
+        var committedDict = committedList
+            .Where(p => p.DeliveryDate.HasValue)
+            .GroupBy(p => (p.SupplierId, p.DeliveryDate!.Value.Date))
+            .ToDictionary(g => g.Key, g => (g.First().Id, g.First().Code));
+
+        // Overlay SL đã chốt từ PO thật (draft đã zero sau split) — FE vẫn gray ô FINALIZED.
+        foreach (var po in committedList)
+        {
+            if (!po.DeliveryDate.HasValue || po.Details == null || po.Details.Count == 0) continue;
+            var date = po.DeliveryDate.Value.Date;
+            foreach (var detail in po.Details)
+            {
+                var qty = detail.OrderedQty ?? detail.FinalQty ?? 0m;
+                if (qty <= 0) continue;
+
+                cellMap[(detail.ProductId, date)] = new OrderMatrixCellDto
+                {
+                    ProductId = detail.ProductId,
+                    DeliveryDate = date,
+                    EmployeeQty = detail.EmployeeQty ?? qty,
+                    StoreQty = detail.StoreQty ?? qty,
+                    IsOwnerAdjusted = detail.IsOwnerAdjusted || detail.StoreQty.HasValue,
+                    FinalQty = qty
+                };
+            }
+        }
+
+        var dayStatuses = OrderMatrixRules.BuildDayStatuses(supplierConfigs, query.ViewFrom, query.DurationDays, now, committedDict);
 
         return new OrderMatrixResponse
         {
             BranchId = branch.Id,
             BranchName = branch.Name,
+            BranchIsActive = branch.IsActive,
             SupplierId = query.SupplierId,
             ViewFrom = query.ViewFrom,
             DurationDays = query.DurationDays,
             Products = products,
-            Cells = cells,
+            Cells = cellMap.Values.ToList(),
             SupplierConfigs = supplierConfigs,
+            DayStatuses = dayStatuses,
+            ServerNow = now,
             DraftPoId = draftPo?.Id,
             Status = draftPo?.Status ?? "DRAFT"
         };
@@ -249,15 +289,680 @@ public class PurchaseOrderService : IPurchaseOrderService
         return MapToDto(draft, branch.Name, "Nhiều nhà cung cấp");
     }
 
+    public async Task<DispatchHubResponse> GetDispatchHubAsync(
+        DispatchHubQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureBranchAccess(query.BranchId);
+
+        var now = OrderMatrixRules.GetVietnamNow();
+        var scope = (query.Scope ?? string.Empty).Trim().ToUpperInvariant();
+
+        DateTime viewFrom;
+        int duration;
+        DateTime? weekStartDate = null;
+        DateTime? weekEndDate = null;
+
+        if (scope == OrderMatrixRules.ScopeWeek)
+        {
+            DateTime monday;
+            DateTime sunday;
+            if (!string.IsNullOrWhiteSpace(query.WeekStartDate) && DateTime.TryParse(query.WeekStartDate, out var parsed))
+            {
+                (monday, sunday) = OrderMatrixRules.GetWeekRange(parsed);
+            }
+            else
+            {
+                (monday, sunday) = OrderMatrixRules.GetWeekRange(now);
+            }
+            viewFrom = monday;
+            duration = 7;
+            weekStartDate = monday;
+            weekEndDate = sunday;
+        }
+        else if (scope == OrderMatrixRules.ScopeNearest)
+        {
+            viewFrom = now.Date;
+            duration = 14;
+        }
+        else
+        {
+            viewFrom = (query.ViewFrom ?? DateTime.Today).Date;
+            duration = Math.Clamp(query.DurationDays <= 0 ? 14 : query.DurationDays, 1, 31);
+        }
+
+        var matrix = await GetOrderMatrixAsync(new OrderMatrixQuery
+        {
+            BranchId = query.BranchId,
+            ViewFrom = viewFrom,
+            DurationDays = duration
+        }, cancellationToken);
+
+        var configsBySupplier = matrix.SupplierConfigs.ToDictionary(c => c.SupplierId, c => c);
+
+        // Cell map: productId+date -> qty
+        var cells = matrix.Cells
+            .GroupBy(c => (c.ProductId, c.DeliveryDate.Date))
+            .ToDictionary(g => g.Key, g => g.First());
+
+        var dayBySupplierDate = matrix.DayStatuses
+            .ToDictionary(d => (d.SupplierId, d.DeliveryDate.Date), d => d);
+
+        var groups = new Dictionary<Guid, DispatchHubSupplierDto>();
+
+        foreach (var product in matrix.Products)
+        {
+            if (product.IsRowDisabled) continue;
+            if (!configsBySupplier.TryGetValue(product.SupplierId, out var cfg)) continue;
+
+            for (var i = 0; i < duration; i++)
+            {
+                var date = viewFrom.AddDays(i);
+                dayBySupplierDate.TryGetValue((product.SupplierId, date), out var dayStatus);
+                var status = dayStatus?.DeliveryDateStatus ?? OrderMatrixRules.StatusOpen;
+
+                cells.TryGetValue((product.Id, date), out var cell);
+                var qty = cell?.FinalQty ?? 0m;
+                if (qty <= 0) continue;
+
+                // Chỉ FINALIZED (đã qua cutoff) mới coi là khóa cứng — PO tồn tại trước cutoff vẫn editable.
+                var isFinalized = status == OrderMatrixRules.StatusFinalized;
+                var isEditable = OrderMatrixRules.IsEditableStatus(status);
+
+                if (!isFinalized && !isEditable) continue;
+
+                if (!groups.TryGetValue(product.SupplierId, out var group))
+                {
+                    group = new DispatchHubSupplierDto
+                    {
+                        SupplierId = product.SupplierId,
+                        Code = cfg.SupplierCode,
+                        Name = cfg.SupplierName,
+                        CutoffTimeStr = cfg.CutoffTime,
+                        MinOrderValue = 0,
+                        DraftPoId = matrix.DraftPoId,
+                        Status = isFinalized ? "dispatched" : "draft",
+                        PoCode = dayStatus?.PoCode,
+                        Note = string.Empty
+                    };
+                    groups[product.SupplierId] = group;
+                }
+
+                if (isFinalized)
+                {
+                    group.Status = "dispatched";
+                    if (!string.IsNullOrWhiteSpace(dayStatus?.PoCode))
+                        group.PoCode = dayStatus.PoCode;
+                }
+
+                if (!string.IsNullOrWhiteSpace(product.Category)
+                    && !group.CategoryTags.Contains(product.Category, StringComparer.OrdinalIgnoreCase))
+                {
+                    group.CategoryTags.Add(product.Category);
+                }
+
+                var cutoff = dayStatus?.CutoffDateTime
+                             ?? OrderMatrixRules.GetCutoffDateTime(date, cfg.LeadTimeDays, cfg.CutoffTime);
+                var remaining = (int)Math.Floor((cutoff - now).TotalMinutes);
+
+                if (group.RemainingMinutes == null || remaining < group.RemainingMinutes)
+                {
+                    group.RemainingMinutes = remaining;
+                    group.CutoffTimeStr = cutoff.ToString("HH:mm");
+                    group.CountdownDisplay = FormatCountdown(remaining, isFinalized);
+                    group.Urgency = ResolveUrgency(remaining, cutoff, now, isFinalized);
+                    group.ExpectedDelivery = date.ToString("dd/MM/yyyy");
+                }
+
+                group.Items.Add(new DispatchHubItemDto
+                {
+                    Id = "${product.Id:N}_${date:yyyyMMdd}",
+                    ProductId = product.Id,
+                    Name = product.Name,
+                    Sku = product.Sku,
+                    Unit = product.Unit,
+                    Price = product.Price,
+                    Qty = qty,
+                    DeliveryDate = date,
+                    CutoffSchedule = $"{date:dd/MM} · cutoff {cutoff:HH:mm}"
+                });
+            }
+        }
+
+        // Nếu Scope == NEAREST: Chỉ giữ lại ngày giao gần nhất có FinalQty > 0 và còn hợp lệ (now < cutoff & editable)
+        if (scope == OrderMatrixRules.ScopeNearest)
+        {
+            DateTime? nearestEligibleDate = null;
+            var allItems = groups.Values.SelectMany(g => g.Items).ToList();
+            var distinctDates = allItems
+                .Select(it => it.DeliveryDate.Date)
+                .Distinct()
+                .OrderBy(d => d)
+                .ToList();
+
+            foreach (var date in distinctDates)
+            {
+                var hasEligibleSupplier = false;
+                foreach (var g in groups.Values)
+                {
+                    if (!g.Items.Any(it => it.DeliveryDate.Date == date)) continue;
+                    if (!configsBySupplier.TryGetValue(g.SupplierId, out var cfg)) continue;
+                    dayBySupplierDate.TryGetValue((g.SupplierId, date), out var ds);
+                    var cutoff = ds?.CutoffDateTime ?? OrderMatrixRules.GetCutoffDateTime(date, cfg.LeadTimeDays, cfg.CutoffTime);
+                    var st = ds?.DeliveryDateStatus ?? OrderMatrixRules.StatusOpen;
+
+                    if (OrderMatrixRules.IsEditableStatus(st) && now < cutoff)
+                    {
+                        hasEligibleSupplier = true;
+                        break;
+                    }
+                }
+
+                if (hasEligibleSupplier)
+                {
+                    nearestEligibleDate = date;
+                    break;
+                }
+            }
+
+            if (nearestEligibleDate.HasValue)
+            {
+                var targetDate = nearestEligibleDate.Value;
+                foreach (var g in groups.Values)
+                {
+                    g.Items = g.Items.Where(it => it.DeliveryDate.Date == targetDate).ToList();
+                }
+                var emptyKeys = groups.Where(kvp => kvp.Value.Items.Count == 0).Select(kvp => kvp.Key).ToList();
+                foreach (var k in emptyKeys) groups.Remove(k);
+            }
+            else
+            {
+                groups.Clear();
+            }
+        }
+
+        // Nếu nhóm vừa draft vừa có finalized items — ưu tiên draft nếu còn item editable
+        foreach (var g in groups.Values)
+        {
+            var hasOpen = g.Items.Any(it =>
+            {
+                dayBySupplierDate.TryGetValue((g.SupplierId, it.DeliveryDate.Date), out var ds);
+                return OrderMatrixRules.IsEditableStatus(ds?.DeliveryDateStatus);
+            });
+            if (hasOpen && g.Status == "dispatched")
+            {
+                g.Status = "draft";
+            }
+        }
+
+        IEnumerable<DispatchHubSupplierDto> list = groups.Values;
+
+        var kw = query.Keyword?.Trim();
+        if (!string.IsNullOrWhiteSpace(kw))
+        {
+            list = list.Where(s =>
+                s.Name.Contains(kw, StringComparison.OrdinalIgnoreCase)
+                || s.Code.Contains(kw, StringComparison.OrdinalIgnoreCase)
+                || s.CategoryTags.Any(t => t.Contains(kw, StringComparison.OrdinalIgnoreCase))
+                || s.Items.Any(it =>
+                    it.Name.Contains(kw, StringComparison.OrdinalIgnoreCase)
+                    || it.Sku.Contains(kw, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        var urgency = (query.Urgency ?? "all").Trim().ToLowerInvariant();
+        list = urgency switch
+        {
+            "critical" => list.Where(s => s.Status != "dispatched" && s.Urgency == "critical"),
+            "today" => list.Where(s => s.Status != "dispatched" && (s.Urgency is "today" or "critical")),
+            "later" => list.Where(s => s.Status != "dispatched" && s.Urgency == "later"),
+            "completed" => list.Where(s => s.Status == "dispatched"),
+            _ => list
+        };
+
+        var allGroups = groups.Values.ToList();
+        var resultList = list
+            .OrderBy(s => s.Status == "dispatched" ? 1 : 0)
+            .ThenBy(s => s.RemainingMinutes ?? int.MaxValue)
+            .ThenBy(s => s.Name)
+            .ToList();
+
+        var draftItems = resultList.Where(s => s.Status != "dispatched").SelectMany(s => s.Items).ToList();
+        var expectedPoCount = draftItems.Select(it => (it.ProductId, it.DeliveryDate.Date)).Distinct().Any()
+            ? resultList.Where(s => s.Status != "dispatched")
+                .SelectMany(s => s.Items.Select(it => (s.SupplierId, it.DeliveryDate.Date)))
+                .Distinct()
+                .Count()
+            : 0;
+
+        return new DispatchHubResponse
+        {
+            BranchId = matrix.BranchId,
+            BranchName = matrix.BranchName,
+            ServerNow = now,
+            ViewFrom = viewFrom,
+            DurationDays = duration,
+            DraftPoId = matrix.DraftPoId,
+            Scope = string.IsNullOrWhiteSpace(query.Scope) ? "ALL" : query.Scope.ToUpperInvariant(),
+            WeekStartDate = weekStartDate,
+            WeekEndDate = weekEndDate,
+            ExpectedPoCount = expectedPoCount,
+            TotalDraftAmount = draftItems.Sum(it => it.Qty * it.Price),
+            TotalDraftLines = draftItems.Count,
+            Suppliers = resultList,
+            Counts = new DispatchHubCountsDto
+            {
+                All = allGroups.Count,
+                Critical = allGroups.Count(s => s.Status != "dispatched" && s.Urgency == "critical"),
+                Today = allGroups.Count(s => s.Status != "dispatched" && (s.Urgency is "today" or "critical")),
+                Later = allGroups.Count(s => s.Status != "dispatched" && s.Urgency == "later"),
+                Completed = allGroups.Count(s => s.Status == "dispatched")
+            }
+        };
+    }
+
+    private static string ResolveUrgency(int remainingMinutes, DateTime cutoff, DateTime now, bool finalized)
+    {
+        if (finalized) return "later";
+        if (remainingMinutes <= 60) return "critical";
+        if (cutoff.Date == now.Date) return "today";
+        return "later";
+    }
+
+    private static string FormatCountdown(int remainingMinutes, bool finalized)
+    {
+        if (finalized) return "Đã chốt PO";
+        if (remainingMinutes <= 0) return "Đã qua cutoff";
+        if (remainingMinutes < 60) return $"Còn {remainingMinutes} phút";
+        var hours = remainingMinutes / 60;
+        var mins = remainingMinutes % 60;
+        return mins > 0 ? $"Còn {hours}h {mins}p" : $"Còn {hours} giờ";
+    }
+
+    public async Task<DispatchSupplierHubResponse> GetDispatchSupplierHubAsync(
+        DispatchSupplierHubQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        var now = OrderMatrixRules.GetVietnamNow();
+        var duration = Math.Clamp(query.DurationDays <= 0 ? 14 : query.DurationDays, 1, 31);
+        var viewFrom = now.Date;
+        var branches = await _repository.GetActiveBranchesAsync(cancellationToken);
+
+        var bySupplier = new Dictionary<Guid, DispatchSupplierHubItemDto>();
+
+        foreach (var branch in branches)
+        {
+            var hub = await GetDispatchHubAsync(new DispatchHubQuery
+            {
+                BranchId = branch.Id,
+                ViewFrom = viewFrom,
+                DurationDays = duration,
+                Scope = "ALL"
+            }, cancellationToken);
+
+            foreach (var s in hub.Suppliers)
+            {
+                if (!bySupplier.TryGetValue(s.SupplierId, out var row))
+                {
+                    row = new DispatchSupplierHubItemDto
+                    {
+                        SupplierId = s.SupplierId,
+                        Code = s.Code,
+                        Name = s.Name,
+                        CutoffTimeStr = s.CutoffTimeStr,
+                        CountdownDisplay = s.CountdownDisplay,
+                        RemainingMinutes = s.RemainingMinutes,
+                        Urgency = s.Urgency,
+                        ExpectedDelivery = s.ExpectedDelivery,
+                        Status = s.Status
+                    };
+                    bySupplier[s.SupplierId] = row;
+                }
+
+                var skuCount = s.Items.Count(it => it.Qty > 0);
+                var totalQty = s.Items.Sum(it => it.Qty);
+                var totalAmount = s.Items.Sum(it => it.Qty * it.Price);
+                if (skuCount > 0 || s.Status == "dispatched")
+                {
+                    row.Branches.Add(new DispatchSupplierBranchSummaryDto
+                    {
+                        BranchId = branch.Id,
+                        BranchCode = branch.Code,
+                        BranchName = branch.Name,
+                        SkuCount = skuCount,
+                        TotalQty = totalQty,
+                        TotalAmount = totalAmount,
+                        Status = s.Status
+                    });
+                }
+
+                row.SkuCount += skuCount;
+                row.TotalQty += totalQty;
+                row.TotalAmount += totalAmount;
+                row.LinkedBranchCount = Math.Max(row.LinkedBranchCount, row.Branches.Count);
+                row.BranchesWithQty = row.Branches.Count(b => b.SkuCount > 0 || b.TotalQty > 0);
+
+                if (row.RemainingMinutes == null
+                    || (s.RemainingMinutes.HasValue && s.RemainingMinutes < row.RemainingMinutes))
+                {
+                    row.RemainingMinutes = s.RemainingMinutes;
+                    row.CutoffTimeStr = s.CutoffTimeStr;
+                    row.CountdownDisplay = s.CountdownDisplay;
+                    row.Urgency = s.Urgency;
+                    row.ExpectedDelivery = s.ExpectedDelivery;
+                }
+
+                if (s.Status == "draft")
+                {
+                    row.Status = "draft";
+                }
+                else if (row.Status != "draft" && s.Status == "dispatched")
+                {
+                    row.Status = "dispatched";
+                }
+            }
+        }
+
+        // Bổ sung NCC đã gán cửa hàng nhưng chưa có qty (vẫn hiện trong list)
+        foreach (var branch in branches)
+        {
+            var configs = await _repository.GetMatrixSupplierConfigsAsync(branch.Id, null, cancellationToken);
+            foreach (var cfg in configs.Where(c => c.IsAssignedToBranch && c.IsActive))
+            {
+                if (bySupplier.ContainsKey(cfg.SupplierId)) continue;
+                bySupplier[cfg.SupplierId] = new DispatchSupplierHubItemDto
+                {
+                    SupplierId = cfg.SupplierId,
+                    Code = cfg.SupplierCode,
+                    Name = cfg.SupplierName,
+                    CutoffTimeStr = cfg.CutoffTime,
+                    CountdownDisplay = "Chưa có số lượng",
+                    Urgency = "later",
+                    Status = "draft",
+                    LinkedBranchCount = 1,
+                    BranchesWithQty = 0
+                };
+            }
+        }
+
+        // Đếm LinkedBranchCount chính xác hơn
+        foreach (var row in bySupplier.Values)
+        {
+            var linked = await _repository.GetActiveBranchIdsForSupplierAsync(row.SupplierId, cancellationToken);
+            row.LinkedBranchCount = linked.Count;
+        }
+
+        IEnumerable<DispatchSupplierHubItemDto> list = bySupplier.Values;
+
+        var kw = query.Keyword?.Trim();
+        if (!string.IsNullOrWhiteSpace(kw))
+        {
+            list = list.Where(s =>
+                s.Name.Contains(kw, StringComparison.OrdinalIgnoreCase)
+                || s.Code.Contains(kw, StringComparison.OrdinalIgnoreCase));
+        }
+
+        var urgency = (query.Urgency ?? "all").Trim().ToLowerInvariant();
+        list = urgency switch
+        {
+            "critical" => list.Where(s => s.Status != "dispatched" && s.Urgency == "critical" && s.BranchesWithQty > 0),
+            "today" => list.Where(s => s.Status != "dispatched" && (s.Urgency is "today" or "critical") && s.BranchesWithQty > 0),
+            "later" => list.Where(s => s.Status != "dispatched" && s.Urgency == "later" && s.BranchesWithQty > 0),
+            "completed" => list.Where(s => s.Status == "dispatched"),
+            _ => list
+        };
+
+        var all = bySupplier.Values.ToList();
+        var resultList = list
+            .OrderByDescending(s => s.BranchesWithQty > 0)
+            .ThenBy(s => s.Status == "dispatched" ? 1 : 0)
+            .ThenBy(s => s.RemainingMinutes ?? int.MaxValue)
+            .ThenBy(s => s.Name)
+            .ToList();
+
+        return new DispatchSupplierHubResponse
+        {
+            ServerNow = now,
+            ViewFrom = viewFrom,
+            DurationDays = duration,
+            Suppliers = resultList,
+            Counts = new DispatchHubCountsDto
+            {
+                All = all.Count,
+                Critical = all.Count(s => s.Status != "dispatched" && s.Urgency == "critical" && s.BranchesWithQty > 0),
+                Today = all.Count(s => s.Status != "dispatched" && (s.Urgency is "today" or "critical") && s.BranchesWithQty > 0),
+                Later = all.Count(s => s.Status != "dispatched" && s.Urgency == "later" && s.BranchesWithQty > 0),
+                Completed = all.Count(s => s.Status == "dispatched")
+            }
+        };
+    }
+
+    public async Task<DispatchSupplierDetailResponse> GetDispatchSupplierDetailAsync(
+        DispatchSupplierDetailQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        if (query.SupplierId == Guid.Empty)
+        {
+            throw new BusinessException("SUPPLIER_REQUIRED", "Thiếu mã nhà cung cấp.");
+        }
+
+        var supplier = await _repository.GetSupplierByIdAsync(query.SupplierId, cancellationToken);
+        if (supplier == null || supplier.IsDeleted)
+        {
+            throw new NotFoundException("Nhà cung cấp", query.SupplierId);
+        }
+
+        var now = OrderMatrixRules.GetVietnamNow();
+        var duration = Math.Clamp(query.DurationDays <= 0 ? 14 : query.DurationDays, 1, 31);
+        var viewFrom = now.Date;
+        var branchIds = await _repository.GetActiveBranchIdsForSupplierAsync(query.SupplierId, cancellationToken);
+        var branches = new List<DispatchSupplierDetailBranchDto>();
+
+        int? minRemaining = null;
+        string cutoffStr = string.Empty;
+        string countdown = "Chưa có số lượng";
+        string urgency = "later";
+        var hasDraft = false;
+        var hasDispatched = false;
+
+        foreach (var branchId in branchIds)
+        {
+            var hub = await GetDispatchHubAsync(new DispatchHubQuery
+            {
+                BranchId = branchId,
+                ViewFrom = viewFrom,
+                DurationDays = duration,
+                Scope = "ALL"
+            }, cancellationToken);
+
+            var s = hub.Suppliers.FirstOrDefault(x => x.SupplierId == query.SupplierId);
+            if (s == null || s.Items.Count == 0) continue;
+
+            var branch = await _repository.GetBranchByIdAsync(branchId, cancellationToken);
+            branches.Add(new DispatchSupplierDetailBranchDto
+            {
+                BranchId = branchId,
+                BranchCode = branch?.Code ?? string.Empty,
+                BranchName = branch?.Name ?? hub.BranchName,
+                Status = s.Status,
+                Items = s.Items.Select(it => new DispatchSupplierDetailLineDto
+                {
+                    Id = it.Id,
+                    ProductId = it.ProductId,
+                    Name = it.Name,
+                    Sku = it.Sku,
+                    Unit = it.Unit,
+                    Price = it.Price,
+                    Qty = it.Qty,
+                    DeliveryDate = it.DeliveryDate,
+                    CutoffSchedule = it.CutoffSchedule,
+                    DayStatus = s.Status == "dispatched" ? "FINALIZED" : "OPEN"
+                }).OrderBy(it => it.DeliveryDate).ThenBy(it => it.Name).ToList()
+            });
+
+            if (s.Status == "draft") hasDraft = true;
+            if (s.Status == "dispatched") hasDispatched = true;
+
+            if (s.RemainingMinutes.HasValue
+                && (minRemaining == null || s.RemainingMinutes < minRemaining))
+            {
+                minRemaining = s.RemainingMinutes;
+                cutoffStr = s.CutoffTimeStr;
+                countdown = s.CountdownDisplay;
+                urgency = s.Urgency;
+            }
+        }
+
+        return new DispatchSupplierDetailResponse
+        {
+            SupplierId = query.SupplierId,
+            Code = supplier.Code,
+            Name = supplier.Name,
+            Email = supplier.Email,
+            ServerNow = now,
+            ViewFrom = viewFrom,
+            DurationDays = duration,
+            CutoffTimeStr = cutoffStr,
+            CountdownDisplay = countdown,
+            RemainingMinutes = minRemaining,
+            Urgency = urgency,
+            Status = hasDraft ? "draft" : (hasDispatched ? "dispatched" : "draft"),
+            Branches = branches.OrderBy(b => b.BranchCode).ToList()
+        };
+    }
+
     public async Task<IReadOnlyList<PurchaseOrderDto>> SplitMatrixPoAsync(
         SplitMatrixPoCommand command,
         CancellationToken cancellationToken = default)
     {
-        if (command.Groups == null || !command.Groups.Any())
+        var batchResult = await SplitMatrixPoBatchAsync(command, cancellationToken);
+        if (batchResult.SuccessCount == 0 && batchResult.FailedCount > 0)
         {
-            throw new BusinessException("EMPTY_SPLIT_GROUPS", "Không có đơn PO nào được chỉ định để tách.");
+            var firstErr = batchResult.Results.FirstOrDefault(r => r.Status == OrderMatrixRules.ResultFailed);
+            throw new BusinessException(firstErr?.ErrorCode ?? "SPLIT_FAILED", firstErr?.ErrorMessage ?? "Chốt PO thất bại.");
+        }
+        return batchResult.CreatedPurchaseOrders;
+    }
+
+    public async Task<SplitMatrixBatchResultDto> SplitMatrixPoBatchAsync(
+        SplitMatrixPoCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        SplitMatrixBatchResultDto result;
+        if (command.SupplierId.HasValue
+            && command.SupplierId.Value != Guid.Empty
+            && command.BranchId == Guid.Empty)
+        {
+            result = await SplitSupplierAcrossBranchesAsync(command, isDryRun: false, cancellationToken);
+        }
+        else
+        {
+            result = await ProcessMatrixSplitEngineAsync(command, isDryRun: false, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(command.EmailSendMode)
+                && (result.SuccessCount > 0 || result.AmendedCount > 0))
+            {
+                result.DispatchPackage = await _dispatchPackageService.CreatePackageForDispatchAsync(
+                    command,
+                    result,
+                    cancellationToken);
+            }
         }
 
+        return result;
+    }
+
+    public async Task<SplitMatrixBatchResultDto> PreviewSplitMatrixPoAsync(
+        SplitMatrixPoCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        // Preview: không tạo package/email
+        var previewCommand = new SplitMatrixPoCommand
+        {
+            BranchId = command.BranchId,
+            SupplierId = command.SupplierId,
+            ParentDraftId = command.ParentDraftId,
+            Note = command.Note,
+            Scope = command.Scope,
+            WeekStartDate = command.WeekStartDate,
+            Groups = command.Groups
+        };
+
+        if (previewCommand.SupplierId.HasValue
+            && previewCommand.SupplierId.Value != Guid.Empty
+            && previewCommand.BranchId == Guid.Empty)
+        {
+            return await SplitSupplierAcrossBranchesAsync(previewCommand, isDryRun: true, cancellationToken);
+        }
+
+        return await ProcessMatrixSplitEngineAsync(previewCommand, isDryRun: true, cancellationToken);
+    }
+
+    /// <summary>
+    /// Chốt 1 NCC trên mọi cửa hàng đang liên kết và có draft qty trong phạm vi NEAREST/WEEK.
+    /// </summary>
+    private async Task<SplitMatrixBatchResultDto> SplitSupplierAcrossBranchesAsync(
+        SplitMatrixPoCommand command,
+        bool isDryRun,
+        CancellationToken cancellationToken)
+    {
+        var supplierId = command.SupplierId!.Value;
+        var branchIds = await _repository.GetActiveBranchIdsForSupplierAsync(supplierId, cancellationToken);
+        var merged = new List<SplitGroupResultDto>();
+        var created = new List<PurchaseOrderDto>();
+        var now = OrderMatrixRules.GetVietnamNow();
+
+        foreach (var branchId in branchIds)
+        {
+            var perBranch = await ProcessMatrixSplitEngineAsync(
+                new SplitMatrixPoCommand
+                {
+                    BranchId = branchId,
+                    SupplierId = supplierId,
+                    Scope = command.Scope,
+                    WeekStartDate = command.WeekStartDate,
+                    Note = command.Note,
+                    ParentDraftId = command.ParentDraftId
+                },
+                isDryRun,
+                cancellationToken);
+
+            merged.AddRange(perBranch.Results);
+            created.AddRange(perBranch.CreatedPurchaseOrders);
+        }
+
+        var result = new SplitMatrixBatchResultDto
+        {
+            BranchId = Guid.Empty,
+            Scope = command.Scope,
+            ServerNow = now,
+            TotalGroups = merged.Count,
+            SuccessCount = merged.Count(r => r.Status == OrderMatrixRules.ResultSuccess),
+            AmendedCount = merged.Count(r => r.Status == OrderMatrixRules.ResultAmended),
+            NoChangesCount = merged.Count(r => r.Status == OrderMatrixRules.ResultNoChanges),
+            FailedCount = merged.Count(r => r.Status == OrderMatrixRules.ResultFailed),
+            SkippedCount = merged.Count(r => r.Status == OrderMatrixRules.ResultSkipped),
+            AlreadyFinalizedCount = merged.Count(r => r.Status == OrderMatrixRules.ResultAlreadyFinalized),
+            Results = merged,
+            CreatedPurchaseOrders = created
+        };
+
+        if (!isDryRun
+            && !string.IsNullOrWhiteSpace(command.EmailSendMode)
+            && (result.SuccessCount > 0 || result.AmendedCount > 0))
+        {
+            result.DispatchPackage = await _dispatchPackageService.CreatePackageForDispatchAsync(
+                command,
+                result,
+                cancellationToken);
+        }
+
+        return result;
+    }
+
+    private async Task<SplitMatrixBatchResultDto> ProcessMatrixSplitEngineAsync(
+        SplitMatrixPoCommand command,
+        bool isDryRun,
+        CancellationToken cancellationToken)
+    {
         EnsureBranchAccess(command.BranchId);
 
         var branch = await _repository.GetBranchByIdAsync(command.BranchId, cancellationToken);
@@ -266,67 +971,591 @@ public class PurchaseOrderService : IPurchaseOrderService
             throw new NotFoundException("Chi nhánh", command.BranchId);
         }
 
+        if (!branch.IsActive)
+        {
+            throw new BusinessException("BRANCH_INACTIVE", "Chi nhánh đang ngừng hoạt động. Không thể chốt PO.");
+        }
+
+        var products = await _repository.GetMatrixProductsAsync(command.BranchId, null, cancellationToken);
+        var productLookup = products
+            .GroupBy(p => (p.Id, p.SupplierId))
+            .ToDictionary(g => g.Key, g => g.First());
+        var productById = products.GroupBy(p => p.Id).ToDictionary(g => g.Key, g => g.First());
+
+        var supplierConfigs = await _repository.GetMatrixSupplierConfigsAsync(command.BranchId, null, cancellationToken);
+        var configBySupplier = supplierConfigs.ToDictionary(c => c.SupplierId);
+
+        var draft = command.ParentDraftId.HasValue
+            ? await _repository.GetPurchaseOrderByIdAsync(command.ParentDraftId.Value, cancellationToken)
+            : await _repository.GetDraftMatrixPoAsync(command.BranchId, null, DateTime.Today, cancellationToken);
+
+        var draftDetails = (draft?.Status == "DRAFT" ? draft.Details : null)?
+            .Where(d => d.DeliveryDate.HasValue)
+            .ToList()
+            ?? new List<PurchaseOrderDetail>();
+
+        var now = OrderMatrixRules.GetVietnamNow();
+        var scope = (command.Scope ?? string.Empty).Trim().ToUpperInvariant();
+
+        // 1. Resolve Target Groups (SupplierId, DeliveryDate)
+        var targetGroups = new List<(Guid SupplierId, DateTime DeliveryDate)>();
+
+        if (scope == OrderMatrixRules.ScopeNearest)
+        {
+            var detailsWithQty = draftDetails
+                .Where(d =>
+                {
+                    var fq = OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted);
+                    return fq > 0 && productById.TryGetValue(d.ProductId, out _);
+                })
+                .ToList();
+
+            DateTime? nearestEligibleDate = null;
+            var distinctDates = detailsWithQty
+                .Select(d => d.DeliveryDate!.Value.Date)
+                .Distinct()
+                .OrderBy(d => d)
+                .ToList();
+
+            foreach (var date in distinctDates)
+            {
+                var datesSuppliers = detailsWithQty
+                    .Where(d => d.DeliveryDate!.Value.Date == date && productById.TryGetValue(d.ProductId, out _))
+                    .Select(d => productById[d.ProductId].SupplierId)
+                    .Distinct();
+
+                var hasValidSupplierForDate = false;
+                foreach (var supId in datesSuppliers)
+                {
+                    if (!configBySupplier.TryGetValue(supId, out var cfg)) continue;
+                    var ds = OrderMatrixRules.EvaluateDayStatus(supId, date, cfg, now);
+                    if (OrderMatrixRules.IsEditableStatus(ds.DeliveryDateStatus) && now < ds.CutoffDateTime)
+                    {
+                        hasValidSupplierForDate = true;
+                        break;
+                    }
+                }
+
+                if (hasValidSupplierForDate)
+                {
+                    nearestEligibleDate = date;
+                    break;
+                }
+            }
+
+            if (nearestEligibleDate.HasValue)
+            {
+                var targetDate = nearestEligibleDate.Value;
+                targetGroups = detailsWithQty
+                    .Where(d => d.DeliveryDate!.Value.Date == targetDate && productById.TryGetValue(d.ProductId, out _))
+                    .Select(d => (productById[d.ProductId].SupplierId, targetDate))
+                    .Distinct()
+                    .ToList();
+            }
+        }
+        else if (scope == OrderMatrixRules.ScopeWeek)
+        {
+            DateTime monday;
+            DateTime sunday;
+            if (!string.IsNullOrWhiteSpace(command.WeekStartDate) && DateTime.TryParse(command.WeekStartDate, out var parsed))
+            {
+                (monday, sunday) = OrderMatrixRules.GetWeekRange(parsed);
+            }
+            else
+            {
+                (monday, sunday) = OrderMatrixRules.GetWeekRange(now);
+            }
+
+            var detailsInWeek = draftDetails
+                .Where(d =>
+                {
+                    var date = d.DeliveryDate!.Value.Date;
+                    if (date < monday || date > sunday) return false;
+                    var fq = OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted);
+                    return fq > 0 && productById.TryGetValue(d.ProductId, out _);
+                })
+                .ToList();
+
+            targetGroups = detailsInWeek
+                .Select(d => (productById[d.ProductId].SupplierId, d.DeliveryDate!.Value.Date))
+                .Distinct()
+                .OrderBy(g => g.Item2)
+                .ThenBy(g => g.Item1)
+                .ToList();
+        }
+        else if (command.Groups != null && command.Groups.Any())
+        {
+            targetGroups = command.Groups
+                .Select(g => (g.SupplierId, g.DeliveryDate.Date))
+                .Distinct()
+                .ToList();
+        }
+        else
+        {
+            targetGroups = draftDetails
+                .Where(d =>
+                {
+                    var fq = OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted);
+                    return fq > 0 && productById.TryGetValue(d.ProductId, out _);
+                })
+                .Select(d => (productById[d.ProductId].SupplierId, d.DeliveryDate!.Value.Date))
+                .Distinct()
+                .OrderBy(g => g.Item2)
+                .ToList();
+        }
+
+        if (command.SupplierId.HasValue && command.SupplierId.Value != Guid.Empty)
+        {
+            targetGroups = targetGroups
+                .Where(g => g.SupplierId == command.SupplierId.Value)
+                .ToList();
+        }
+
+        // 2. Chạy business engine xử lý từng group độc lập (Partial Success)
+        var groupResults = new List<SplitGroupResultDto>();
         var createdPos = new List<PurchaseOrder>();
 
-        foreach (var group in command.Groups)
+        foreach (var (supplierId, deliveryDate) in targetGroups)
         {
-            var validItems = group.Items.Where(i => i.Quantity > 0).ToList();
-            if (!validItems.Any())
+            configBySupplier.TryGetValue(supplierId, out var cfg);
+            var supplier = await _repository.GetSupplierByIdAsync(supplierId, cancellationToken);
+            var supName = supplier?.Name ?? cfg?.SupplierName ?? "NCC";
+            var supCode = supplier?.Code ?? cfg?.SupplierCode ?? "NCC";
+
+            var result = new SplitGroupResultDto
             {
+                BranchId = command.BranchId,
+                BranchName = branch.Name,
+                SupplierId = supplierId,
+                SupplierName = supName,
+                SupplierCode = supCode,
+                DeliveryDate = deliveryDate
+            };
+
+            if (cfg == null || !cfg.IsAssignedToBranch || !cfg.IsActive)
+            {
+                result.Status = OrderMatrixRules.ResultFailed;
+                result.ErrorCode = "SUPPLIER_BRANCH_INACTIVE";
+                result.ErrorMessage = $"Nhà cung cấp {supName} chưa được gán hoặc đang ngừng hoạt động tại chi nhánh.";
+                groupResults.Add(result);
                 continue;
             }
 
-            var supplier = await _repository.GetSupplierByIdAsync(group.SupplierId, cancellationToken);
-            var supplierName = supplier?.Name ?? "Nhà cung cấp";
+            // PO đã tồn tại: trước cutoff → AMEND; sau cutoff → ALREADY_FINALIZED (khóa).
+            var existingPo = await _repository.FindCommittedPoAsync(command.BranchId, supplierId, deliveryDate, cancellationToken);
 
-            var poCode = await _repository.GeneratePoCodeAsync(group.DeliveryDate, cancellationToken);
+            var dayStatus = OrderMatrixRules.EvaluateDayStatus(
+                supplierId, deliveryDate, cfg, now, existingPo?.Code, existingPo?.Id);
 
-            var totalQty = validItems.Sum(i => i.Quantity);
-            var totalAmount = validItems.Sum(i => i.Quantity * i.UnitPrice);
-
-            var po = new PurchaseOrder
+            if (dayStatus.DeliveryDateStatus == OrderMatrixRules.StatusFinalized)
             {
-                TenantId = _tenantContext.CurrentTenantId,
-                Code = poCode,
-                BranchId = command.BranchId,
-                Branch = branch,
-                SupplierId = group.SupplierId,
-                Supplier = supplier,
-                DeliveryDate = group.DeliveryDate,
-                Status = "PENDING_APPROVAL",
-                TotalQty = totalQty,
-                TotalAmount = totalAmount,
-                Note = command.Note,
-                ParentDraftId = command.ParentDraftId,
-                CreatedByRole = _tenantContext.CurrentRole,
-                SubmittedByUserId = await ResolveValidUserIdAsync(cancellationToken),
-                SubmittedAtUtc = DateTime.UtcNow,
-                OrderedAtUtc = DateTime.UtcNow
-            };
+                result.Status = OrderMatrixRules.ResultAlreadyFinalized;
+                result.PurchaseOrderId = existingPo?.Id;
+                result.PurchaseOrderCode = existingPo?.Code;
+                result.RevisionNumber = existingPo?.RevisionNumber;
+                result.ErrorCode = "CUTOFF_PASSED";
+                result.ErrorMessage =
+                    $"Đơn {existingPo?.Code} đã khóa vì quá giờ cutoff ({dayStatus.CutoffDateTime:HH:mm dd/MM/yyyy}). Không thể amend.";
+                groupResults.Add(result);
+                continue;
+            }
 
-            foreach (var item in validItems)
+            if (now >= dayStatus.CutoffDateTime || dayStatus.DeliveryDateStatus == OrderMatrixRules.StatusLocked)
             {
-                po.Details.Add(new PurchaseOrderDetail
+                result.Status = OrderMatrixRules.ResultSkipped;
+                result.ErrorCode = "CUTOFF_EXPIRED";
+                result.ErrorMessage = $"Đã quá giờ chốt đơn (Cutoff Time: {dayStatus.CutoffDateTime:HH:mm dd/MM/yyyy}) của NCC cho ngày giao này.";
+                groupResults.Add(result);
+                continue;
+            }
+
+            if (dayStatus.DeliveryDateStatus == OrderMatrixRules.StatusSupplierOff)
+            {
+                result.Status = OrderMatrixRules.ResultSkipped;
+                result.ErrorCode = dayStatus.PrimaryReasonCode ?? "SUPPLIER_OFF";
+                result.ErrorMessage = $"Nhà cung cấp không giao hàng vào ngày {deliveryDate:dd/MM/yyyy} ({dayStatus.PrimaryReasonCode}).";
+                groupResults.Add(result);
+                continue;
+            }
+
+            if (!OrderMatrixRules.IsEditableStatus(dayStatus.DeliveryDateStatus))
+            {
+                result.Status = OrderMatrixRules.ResultSkipped;
+                result.ErrorCode = dayStatus.PrimaryReasonCode ?? "NOT_EDITABLE";
+                result.ErrorMessage = $"Ngày giao hàng không ở trạng thái có thể chốt đơn ({dayStatus.DeliveryDateStatus}).";
+                groupResults.Add(result);
+                continue;
+            }
+
+            // Lấy các mặt hàng: Ưu tiên Draft DB (Single source of truth).
+            // Nếu không có trong Draft (chỉ xảy ra ở caller/test legacy gửi explicit Items), fallback items gửi lên.
+            var detailsForGroup = draftDetails
+                .Where(d => d.DeliveryDate!.Value.Date == deliveryDate
+                            && productById.TryGetValue(d.ProductId, out var mp)
+                            && mp.SupplierId == supplierId)
+                .ToList();
+
+            var legacyGroup = command.Groups?.FirstOrDefault(g => g.SupplierId == supplierId && g.DeliveryDate.Date == deliveryDate);
+            var useLegacyItems = detailsForGroup.Count == 0 && legacyGroup?.Items != null && legacyGroup.Items.Any();
+
+            var lineErrors = new List<string>();
+            var validLines = new List<(OrderMatrixProductDto Product, decimal Qty, string Unit, decimal UnitPrice, PurchaseOrderDetail? DraftDetail)>();
+
+            var candidateLines = new List<(Guid ProductId, decimal Qty, decimal? UnitPrice, string? Unit, PurchaseOrderDetail? DraftDetail)>();
+
+            if (detailsForGroup.Count > 0)
+            {
+                foreach (var detail in detailsForGroup)
+                {
+                    var qty = OrderMatrixRules.ComputeFinalQty(detail.EmployeeQty ?? 0m, detail.StoreQty, detail.IsOwnerAdjusted);
+                    if (qty > 0)
+                    {
+                        candidateLines.Add((detail.ProductId, qty, null, null, detail));
+                    }
+                }
+            }
+            else if (useLegacyItems)
+            {
+                foreach (var item in legacyGroup!.Items.Where(i => i.Quantity > 0))
+                {
+                    candidateLines.Add((item.ProductId, item.Quantity, item.UnitPrice > 0 ? item.UnitPrice : null, item.Unit, null));
+                }
+            }
+
+            foreach (var lineCandidate in candidateLines)
+            {
+                var productId = lineCandidate.ProductId;
+                var qty = lineCandidate.Qty;
+                var detail = lineCandidate.DraftDetail;
+
+                if (!productLookup.TryGetValue((productId, supplierId), out var mp)
+                    && !productById.TryGetValue(productId, out mp))
+                {
+                    lineErrors.Add($"Sản phẩm {productId} không thuộc danh mục ma trận.");
+                    continue;
+                }
+
+                if (mp.SupplierId != supplierId)
+                {
+                    lineErrors.Add($"Sản phẩm {mp.Sku} không thuộc NCC {supName}.");
+                    continue;
+                }
+
+                if (mp.IsRowDisabled)
+                {
+                    lineErrors.Add(mp.RowDisabledReason ?? $"Sản phẩm {mp.Sku} đang ngừng kinh doanh.");
+                    continue;
+                }
+
+                if (OrderMatrixRules.ViolatesMoq(qty, mp.Moq))
+                {
+                    lineErrors.Add($"Sản phẩm {mp.Sku}: SL đặt {qty} < MOQ ({mp.Moq}).");
+                    continue;
+                }
+
+                if (OrderMatrixRules.ViolatesOrderMultiple(qty, mp.OrderMultiple))
+                {
+                    lineErrors.Add($"Sản phẩm {mp.Sku}: SL đặt {qty} không chia hết cho bội số đặt ({mp.OrderMultiple}).");
+                    continue;
+                }
+
+                var sp = await _repository.GetSupplierProductAsync(supplierId, productId, cancellationToken);
+                var unitPrice = lineCandidate.UnitPrice.HasValue && lineCandidate.UnitPrice.Value > 0
+                    ? lineCandidate.UnitPrice.Value
+                    : (sp != null && sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : mp.Price);
+                var unit = !string.IsNullOrWhiteSpace(lineCandidate.Unit)
+                    ? lineCandidate.Unit
+                    : (!string.IsNullOrWhiteSpace(sp?.DeliveryUoM) ? sp!.DeliveryUoM : mp.Unit);
+
+                validLines.Add((mp, qty, unit, unitPrice, detail));
+            }
+
+            if (lineErrors.Count > 0)
+            {
+                result.Status = OrderMatrixRules.ResultFailed;
+                result.ErrorCode = "VALIDATION_FAILED";
+                result.ErrorMessage = string.Join(" | ", lineErrors.Take(5));
+                result.InvalidLineCount = lineErrors.Count;
+                result.ValidLineCount = validLines.Count;
+                groupResults.Add(result);
+                continue;
+            }
+
+            if (validLines.Count == 0)
+            {
+                result.Status = OrderMatrixRules.ResultSkipped;
+                result.ErrorCode = "EMPTY_LINES";
+                result.ErrorMessage = "Không có sản phẩm nào có số lượng đặt lớn hơn 0.";
+                groupResults.Add(result);
+                continue;
+            }
+
+            var totalQty = validLines.Sum(l => l.Qty);
+            var totalAmount = validLines.Sum(l => l.Qty * l.UnitPrice);
+            var hasMissingPrice = validLines.Any(l => l.UnitPrice <= 0);
+
+            result.ValidLineCount = validLines.Count;
+            result.TotalQuantity = totalQty;
+            result.TotalAmount = totalAmount;
+            result.HasMissingPrice = hasMissingPrice;
+            result.Lines = validLines.Select(l => new SplitGroupLineDto
+            {
+                ProductId = l.Product.Id,
+                ProductName = l.Product.Name,
+                Sku = l.Product.Sku,
+                Unit = l.Unit,
+                Quantity = l.Qty,
+                UnitPrice = l.UnitPrice,
+                LineAmount = l.Qty * l.UnitPrice,
+                HasMissingPrice = l.UnitPrice <= 0
+            }).ToList();
+
+            if (isDryRun)
+            {
+                result.Status = existingPo != null ? OrderMatrixRules.ResultAmended : OrderMatrixRules.ResultSuccess;
+                result.PurchaseOrderId = existingPo?.Id;
+                result.PurchaseOrderCode = existingPo?.Code ?? $"(Dự kiến PO {deliveryDate:yyyyMMdd})";
+                result.RevisionNumber = existingPo != null ? existingPo.RevisionNumber + 1 : 1;
+                groupResults.Add(result);
+            }
+            else if (existingPo != null)
+            {
+                var previousSnapshot = BuildPoLinesSnapshot(existingPo);
+                var newQtyByProduct = validLines.ToDictionary(l => l.Product.Id, l => l.Qty);
+                var oldQtyByProduct = existingPo.Details
+                    .Where(d => !d.IsDeleted)
+                    .GroupBy(d => d.ProductId)
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.Sum(d => d.OrderedQty ?? d.FinalQty ?? 0m));
+
+                var changed = newQtyByProduct.Count != oldQtyByProduct.Count
+                    || newQtyByProduct.Any(kv =>
+                        !oldQtyByProduct.TryGetValue(kv.Key, out var oldQty) || oldQty != kv.Value)
+                    || oldQtyByProduct.Keys.Any(id => !newQtyByProduct.ContainsKey(id));
+
+                if (!changed)
+                {
+                    result.Status = OrderMatrixRules.ResultNoChanges;
+                    result.PurchaseOrderId = existingPo.Id;
+                    result.PurchaseOrderCode = existingPo.Code;
+                    result.RevisionNumber = existingPo.RevisionNumber;
+                    result.ErrorMessage = "Không có thay đổi số lượng so với PO hiện tại.";
+                    groupResults.Add(result);
+                    continue;
+                }
+
+                var expectedRowVersion = existingPo.RowVersion;
+                var actor = await ResolveValidUserIdAsync(cancellationToken);
+
+                // Soft-delete dòng không còn trong validLines
+                foreach (var detail in existingPo.Details.Where(d => !d.IsDeleted).ToList())
+                {
+                    if (!newQtyByProduct.ContainsKey(detail.ProductId))
+                    {
+                        detail.IsDeleted = true;
+                        detail.OrderedQty = 0m;
+                        detail.FinalQty = 0m;
+                        detail.LineAmount = 0m;
+                    }
+                }
+
+                foreach (var line in validLines)
+                {
+                    var unit = string.IsNullOrWhiteSpace(line.Unit) ? "Gói" : line.Unit;
+                    var detail = existingPo.Details.FirstOrDefault(d => !d.IsDeleted && d.ProductId == line.Product.Id);
+                    if (detail == null)
+                    {
+                        detail = new PurchaseOrderDetail
+                        {
+                            TenantId = _tenantContext.CurrentTenantId,
+                            PurchaseOrderId = existingPo.Id,
+                            ProductId = line.Product.Id,
+                            DeliveryDate = deliveryDate,
+                            UnitPrice = line.UnitPrice,
+                            DeliveryUoM = unit,
+                            ProductCodeSnapshot = line.Product.Sku,
+                            ProductNameSnapshot = line.Product.Name,
+                            PurchaseUnitNameSnapshot = unit
+                        };
+                        existingPo.Details.Add(detail);
+                        _repository.AddPurchaseOrderDetail(detail);
+                    }
+
+                    detail.EmployeeQty = line.DraftDetail?.EmployeeQty ?? line.Qty;
+                    detail.StoreQty = line.DraftDetail?.StoreQty;
+                    detail.IsOwnerAdjusted = line.DraftDetail?.IsOwnerAdjusted ?? false;
+                    detail.OrderedQty = line.Qty;
+                    detail.FinalQty = line.Qty;
+                    detail.LineAmount = line.Qty * detail.UnitPrice;
+                    detail.DeliveryDate = deliveryDate;
+                    detail.IsDeleted = false;
+                    // Giữ snapshot giá/đơn vị đã chốt; chỉ set nếu thiếu
+                    if (string.IsNullOrWhiteSpace(detail.ProductCodeSnapshot))
+                        detail.ProductCodeSnapshot = line.Product.Sku;
+                    if (string.IsNullOrWhiteSpace(detail.ProductNameSnapshot))
+                        detail.ProductNameSnapshot = line.Product.Name;
+                    if (string.IsNullOrWhiteSpace(detail.PurchaseUnitNameSnapshot))
+                        detail.PurchaseUnitNameSnapshot = unit;
+                }
+
+                existingPo.TotalQty = totalQty;
+                existingPo.TotalAmount = existingPo.Details
+                    .Where(d => !d.IsDeleted)
+                    .Sum(d => d.LineAmount);
+                existingPo.Note = command.Note ?? existingPo.Note;
+                existingPo.RevisionNumber = Math.Max(1, existingPo.RevisionNumber) + 1;
+                existingPo.LastAmendedAtUtc = DateTime.UtcNow;
+                existingPo.LastAmendedByUserId = actor;
+                existingPo.RowVersion = expectedRowVersion + 1;
+                existingPo.OrderedAtUtc ??= DateTime.UtcNow;
+                existingPo.SubmittedAtUtc = DateTime.UtcNow;
+                existingPo.SubmittedByUserId = actor ?? existingPo.SubmittedByUserId;
+
+                _repository.AddPurchaseOrderRevision(new PurchaseOrderRevision
                 {
                     TenantId = _tenantContext.CurrentTenantId,
-                    PurchaseOrderId = po.Id,
-                    ProductId = item.ProductId,
-                    DeliveryDate = group.DeliveryDate,
-                    OrderedQty = item.Quantity,
-                    FinalQty = item.Quantity,
-                    UnitPrice = item.UnitPrice,
-                    DeliveryUoM = string.IsNullOrWhiteSpace(item.Unit) ? "Gói" : item.Unit,
-                    LineAmount = item.Quantity * item.UnitPrice
+                    PurchaseOrderId = existingPo.Id,
+                    RevisionNumber = existingPo.RevisionNumber,
+                    PreviousDataSnapshotJson = previousSnapshot,
+                    NewDataSnapshotJson = BuildPoLinesSnapshot(existingPo),
+                    ChangedByUserId = actor,
+                    ChangedAtUtc = DateTime.UtcNow,
+                    ChangeReason = "AMEND_BEFORE_CUTOFF"
+                });
+
+                createdPos.Add(existingPo);
+
+                result.Status = OrderMatrixRules.ResultAmended;
+                result.PurchaseOrderId = existingPo.Id;
+                result.PurchaseOrderCode = existingPo.Code;
+                result.RevisionNumber = existingPo.RevisionNumber;
+                groupResults.Add(result);
+            }
+            else
+            {
+                var poCode = await _repository.GeneratePoCodeAsync(deliveryDate, cancellationToken);
+                var actor = await ResolveValidUserIdAsync(cancellationToken);
+
+                var po = new PurchaseOrder
+                {
+                    TenantId = _tenantContext.CurrentTenantId,
+                    Code = poCode,
+                    BranchId = command.BranchId,
+                    Branch = branch,
+                    SupplierId = supplierId,
+                    Supplier = supplier,
+                    DeliveryDate = deliveryDate,
+                    Status = "PENDING_APPROVAL",
+                    TotalQty = totalQty,
+                    TotalAmount = totalAmount,
+                    Note = command.Note,
+                    ParentDraftId = command.ParentDraftId ?? draft?.Id,
+                    CreatedByRole = _tenantContext.CurrentRole,
+                    SubmittedByUserId = actor,
+                    SubmittedAtUtc = DateTime.UtcNow,
+                    OrderedAtUtc = DateTime.UtcNow,
+                    RevisionNumber = 1,
+                    SupplierCodeSnapshot = supplier?.Code ?? supCode,
+                    SupplierNameSnapshot = supplier?.Name ?? supName,
+                    SupplierEmailSnapshot = supplier?.Email,
+                    StoreCodeSnapshot = branch.BranchCode,
+                    StoreNameSnapshot = branch.Name,
+                    StoreAddressSnapshot = branch.Address,
+                    StorePhoneSnapshot = branch.Phone
+                };
+
+                foreach (var line in validLines)
+                {
+                    var unit = string.IsNullOrWhiteSpace(line.Unit) ? "Gói" : line.Unit;
+                    po.Details.Add(new PurchaseOrderDetail
+                    {
+                        TenantId = _tenantContext.CurrentTenantId,
+                        PurchaseOrderId = po.Id,
+                        ProductId = line.Product.Id,
+                        DeliveryDate = deliveryDate,
+                        EmployeeQty = line.DraftDetail?.EmployeeQty ?? line.Qty,
+                        StoreQty = line.DraftDetail?.StoreQty,
+                        IsOwnerAdjusted = line.DraftDetail?.IsOwnerAdjusted ?? false,
+                        OrderedQty = line.Qty,
+                        FinalQty = line.Qty,
+                        UnitPrice = line.UnitPrice,
+                        DeliveryUoM = unit,
+                        LineAmount = line.Qty * line.UnitPrice,
+                        ProductCodeSnapshot = line.Product.Sku,
+                        ProductNameSnapshot = line.Product.Name,
+                        PurchaseUnitNameSnapshot = unit
+                    });
+                }
+
+                await _repository.AddPurchaseOrderAsync(po, cancellationToken);
+                createdPos.Add(po);
+
+                // Giữ draft qty để còn amend trước cutoff; hub dùng DayStatus + PoCode để phân biệt.
+                result.Status = OrderMatrixRules.ResultSuccess;
+                result.PurchaseOrderId = po.Id;
+                result.PurchaseOrderCode = po.Code;
+                result.RevisionNumber = po.RevisionNumber;
+                groupResults.Add(result);
+            }
+        }
+
+        if (!isDryRun && createdPos.Count > 0)
+        {
+            if (draft != null)
+            {
+                draft.TotalQty = draft.Details.Sum(d =>
+                    OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted));
+                draft.TotalAmount = draft.Details.Sum(d =>
+                {
+                    var q = OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted);
+                    return q * d.UnitPrice;
                 });
             }
 
-            await _repository.AddPurchaseOrderAsync(po, cancellationToken);
-            createdPos.Add(po);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return new SplitMatrixBatchResultDto
+        {
+            BranchId = command.BranchId,
+            Scope = command.Scope,
+            ServerNow = now,
+            TotalGroups = groupResults.Count,
+            SuccessCount = groupResults.Count(r => r.Status == OrderMatrixRules.ResultSuccess),
+            AmendedCount = groupResults.Count(r => r.Status == OrderMatrixRules.ResultAmended),
+            NoChangesCount = groupResults.Count(r => r.Status == OrderMatrixRules.ResultNoChanges),
+            FailedCount = groupResults.Count(r => r.Status == OrderMatrixRules.ResultFailed),
+            SkippedCount = groupResults.Count(r => r.Status == OrderMatrixRules.ResultSkipped),
+            AlreadyFinalizedCount = groupResults.Count(r => r.Status == OrderMatrixRules.ResultAlreadyFinalized),
+            Results = groupResults,
+            CreatedPurchaseOrders = createdPos.Select(po => MapToDto(po, branch.Name, po.Supplier?.Name ?? "NCC")).ToList()
+        };
+    }
 
-        return createdPos.Select(po => MapToDto(po, branch.Name, po.Supplier?.Name ?? "NCC")).ToList();
+    private static string BuildPoLinesSnapshot(PurchaseOrder po)
+    {
+        var lines = (po.Details ?? Array.Empty<PurchaseOrderDetail>())
+            .Where(d => !d.IsDeleted)
+            .Select(d => new
+            {
+                d.ProductId,
+                ProductCode = d.ProductCodeSnapshot,
+                Qty = d.OrderedQty ?? d.FinalQty ?? 0m,
+                d.UnitPrice,
+                d.LineAmount
+            })
+            .OrderBy(x => x.ProductCode)
+            .ToList();
+
+        return JsonSerializer.Serialize(new
+        {
+            po.Code,
+            po.RevisionNumber,
+            po.TotalQty,
+            po.TotalAmount,
+            Lines = lines
+        });
     }
 
     public async Task<PagedResult<PurchaseOrderDto>> GetPagedPurchaseOrdersAsync(
@@ -435,13 +1664,15 @@ public class PurchaseOrderService : IPurchaseOrderService
             Id = po.Id,
             Code = po.Code,
             BranchId = po.BranchId,
-            BranchCode = po.Branch?.BranchCode ?? "BR",
+            BranchCode = po.Branch?.BranchCode ?? po.StoreCodeSnapshot ?? "BR",
             BranchName = branchName,
             SupplierId = po.SupplierId,
-            SupplierCode = po.Supplier?.Code ?? "SUP",
+            SupplierCode = po.Supplier?.Code ?? po.SupplierCodeSnapshot ?? "SUP",
             SupplierName = supplierName,
             DeliveryDate = po.DeliveryDate,
             Status = po.Status,
+            RevisionNumber = po.RevisionNumber <= 0 ? 1 : po.RevisionNumber,
+            LastAmendedAtUtc = po.LastAmendedAtUtc,
             TotalQty = po.TotalQty,
             TotalAmount = po.TotalAmount,
             Note = po.Note,

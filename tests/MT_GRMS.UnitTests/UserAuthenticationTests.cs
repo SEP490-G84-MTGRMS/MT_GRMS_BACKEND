@@ -1,6 +1,7 @@
 using System.Linq.Expressions;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Auth.Dtos;
+using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Domain.Entities.Identity;
 using Xunit;
 
@@ -40,11 +41,24 @@ public class UserAuthenticationTests
 
         public Task<User?> GetByUsernameAsync(string username, CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(_users.FirstOrDefault(u => u.Username == username));
+            return Task.FromResult(_users.FirstOrDefault(u =>
+                u.Username.Equals(username, StringComparison.OrdinalIgnoreCase)
+                || (!string.IsNullOrEmpty(u.Email) && u.Email.Equals(username, StringComparison.OrdinalIgnoreCase))));
         }
 
         public void Update(User user) { }
         public Task SaveChangesAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task<bool> ExistsByPhoneOrEmailAsync(string phone, string? email, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(_users.Any(u => u.Phone == phone || (!string.IsNullOrEmpty(email) && u.Email == email)));
+        }
+
+        public Task<User> RegisterStoreOwnerAsync(User user, MT_GRMS.Domain.Entities.SaaS.Tenant tenant, MT_GRMS.Domain.Entities.SaaS.Branch branch, CancellationToken cancellationToken = default)
+        {
+            _users.Add(user);
+            return Task.FromResult(user);
+        }
     }
 
     [Fact]
@@ -320,5 +334,100 @@ public class UserAuthenticationTests
 
         Assert.NotNull(res);
         Assert.Equal("user_hash", res.User.Username);
+    }
+
+    private class FakeEmailService : IEmailService
+    {
+        public string? LastToEmail { get; private set; }
+        public string? LastOtp { get; private set; }
+
+        public Task SendPasswordResetOtpAsync(string toEmail, string fullName, string otpCode, CancellationToken cancellationToken = default)
+        {
+            LastToEmail = toEmail;
+            LastOtp = otpCode;
+            return Task.CompletedTask;
+        }
+    }
+
+    [Fact]
+    public async Task AuthService_ForgotPasswordAsync_Should_Generate_Otp_And_Call_EmailService()
+    {
+        var repo = new FakeUserRepository();
+        var emailService = new FakeEmailService();
+        var user = new User { Id = "usr_forgot", Username = "user_forgot", Email = "owner@mtgrms.vn", FullName = "Nguyễn Chủ Tiệm" };
+        await repo.AddAsync(user);
+
+        var authService = new AuthService(repo, emailService: emailService);
+        await authService.ForgotPasswordAsync(new ForgotPasswordRequest("owner@mtgrms.vn"));
+
+        Assert.NotNull(user.PasswordResetOtp);
+        Assert.Equal(6, user.PasswordResetOtp.Length);
+        Assert.NotNull(user.OtpExpiry);
+        Assert.True(user.OtpExpiry > DateTime.UtcNow);
+        Assert.Equal("owner@mtgrms.vn", emailService.LastToEmail);
+        Assert.Equal(user.PasswordResetOtp, emailService.LastOtp);
+    }
+
+    [Fact]
+    public async Task AuthService_ForgotPasswordAsync_With_Nonexistent_Email_Should_Throw_KeyNotFoundException()
+    {
+        var repo = new FakeUserRepository();
+        var authService = new AuthService(repo);
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            authService.ForgotPasswordAsync(new ForgotPasswordRequest("nonexistent@domain.com")));
+    }
+
+    [Fact]
+    public async Task AuthService_VerifyOtpAsync_With_Correct_Otp_Should_Return_True()
+    {
+        var repo = new FakeUserRepository();
+        var user = new User
+        {
+            Id = "usr_verify",
+            Username = "user_verify",
+            Email = "verify@mtgrms.vn",
+            PasswordResetOtp = "849201",
+            OtpExpiry = DateTime.UtcNow.AddMinutes(5)
+        };
+        await repo.AddAsync(user);
+
+        var authService = new AuthService(repo);
+        var result = await authService.VerifyOtpAsync(new VerifyOtpRequest("verify@mtgrms.vn", "849201"));
+
+        Assert.True(result);
+
+        // Sai mã OTP
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            authService.VerifyOtpAsync(new VerifyOtpRequest("verify@mtgrms.vn", "000000")));
+
+        // OTP hết hạn
+        user.OtpExpiry = DateTime.UtcNow.AddMinutes(-1);
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            authService.VerifyOtpAsync(new VerifyOtpRequest("verify@mtgrms.vn", "849201")));
+    }
+
+    [Fact]
+    public async Task AuthService_ResetPasswordAsync_Should_Update_PasswordHash_And_Clear_Otp()
+    {
+        var repo = new FakeUserRepository();
+        var user = new User
+        {
+            Id = "usr_reset",
+            Username = "user_reset",
+            Email = "reset@mtgrms.vn",
+            PasswordHash = "OldHash",
+            PasswordResetOtp = "123456",
+            OtpExpiry = DateTime.UtcNow.AddMinutes(5)
+        };
+        await repo.AddAsync(user);
+
+        var authService = new AuthService(repo);
+        await authService.ResetPasswordAsync(new ResetPasswordRequest("reset@mtgrms.vn", "123456", "NewSuperPassword@2026"));
+
+        Assert.Null(user.PasswordResetOtp);
+        Assert.Null(user.OtpExpiry);
+        Assert.NotEqual("OldHash", user.PasswordHash);
+        Assert.True(PasswordHasher.Verify(user.PasswordHash, "NewSuperPassword@2026", out _));
     }
 }

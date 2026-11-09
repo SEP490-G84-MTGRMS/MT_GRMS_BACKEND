@@ -8,6 +8,7 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations;
 /// Catalog gán SP ↔ CN cho màn /store-owner/stores/products.
 /// Backfill từ Distinct(BranchId, ProductId) trên BranchStocks.
 /// </summary>
+[Microsoft.EntityFrameworkCore.Infrastructure.DbContext(typeof(AppDbContext))]
 [Migration("20261103230000_AddBranchProductsCatalog")]
 public partial class AddBranchProductsCatalog : Migration
 {
@@ -40,7 +41,7 @@ public partial class AddBranchProductsCatalog : Migration
             CREATE INDEX IF NOT EXISTS "IX_BranchProducts_ProductId" ON "BranchProducts" ("ProductId");
 
             -- Backfill: mỗi cặp CN–SP từ tồn kho hiện có → 1 dòng catalog.
-            -- SellingPriceOverride = RetailPrice của lô nếu khác Master; NULL nếu bằng Master hoặc chưa có.
+            -- SellingPriceOverride = NULL (mặc định dùng giá bán Master); Status = 'Active'.
             INSERT INTO "BranchProducts" (
                 "Id", "TenantId", "BranchId", "ProductId", "SellingPriceOverride",
                 "Status", "ShelfLocation", "CreatedAt", "UpdatedAt", "IsDeleted", "CreatedBy"
@@ -50,12 +51,8 @@ public partial class AddBranchProductsCatalog : Migration
                 src."TenantId",
                 src."BranchId",
                 src."ProductId",
-                CASE
-                    WHEN src."RetailPrice" IS NULL THEN NULL
-                    WHEN p."SellingPrice" IS NOT NULL AND src."RetailPrice" = p."SellingPrice" THEN NULL
-                    ELSE src."RetailPrice"
-                END,
-                COALESCE(NULLIF(src."Status", ''), 'Active'),
+                NULL,
+                'Active',
                 src."ShelfLocation",
                 COALESCE(src."AssignedAt", NOW() AT TIME ZONE 'UTC'),
                 NOW() AT TIME ZONE 'UTC',
@@ -66,8 +63,6 @@ public partial class AddBranchProductsCatalog : Migration
                     bs."TenantId",
                     bs."BranchId",
                     bs."ProductId",
-                    bs."RetailPrice",
-                    bs."Status",
                     bs."ShelfLocation",
                     bs."CreatedAt" AS "AssignedAt"
                 FROM "BranchStocks" bs

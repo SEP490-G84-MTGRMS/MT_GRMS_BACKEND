@@ -113,6 +113,12 @@ public class TenantStoreControllerTests
     [Fact]
     public async Task PurchaseSubscription_ValidRequest_ExtendsSubscriptionAndReturns200Ok()
     {
+        var tenant = await _dbContext.Tenants.FindAsync("tenant-01");
+        if (tenant != null)
+        {
+            tenant.WalletBalance = 10000000m;
+        }
+
         _dbContext.SubscriptionPlans.Add(new SubscriptionPlan
         {
             Id = "plan-pro",

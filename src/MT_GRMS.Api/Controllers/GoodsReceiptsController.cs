@@ -12,6 +12,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/goods-receipts")]
+[Route("api/goods-receipts")]
 [Authorize]
 public class GoodsReceiptsController : BaseApiController
 {

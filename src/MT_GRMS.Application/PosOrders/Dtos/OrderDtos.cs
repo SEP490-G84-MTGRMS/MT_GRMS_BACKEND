@@ -14,7 +14,11 @@ public record OrderCreateRequest(
     decimal? DiscountAmount = null,
     string? ManagerBypassCode = null,
     string? Note = null,
-    string? CreatorRole = null
+    string? CreatorRole = null,
+    string? CashierName = null,
+    int? PointsRedeemed = null,
+    Guid? ShiftId = null,
+    string? VoucherCode = null
 )
 {
     // Hỗ trợ tương thích ngược cho StoreId
@@ -26,7 +30,9 @@ public record OrderItemCreateDto(
     decimal Quantity,
     decimal UnitPrice,
     decimal? DiscountAmount = null,
-    string? ProductName = null
+    string? ProductName = null,
+    Guid? UnitId = null,
+    string? UnitName = null
 );
 
 public record OrderResponse(
@@ -49,7 +55,11 @@ public record OrderResponse(
     string? CustomerPhone = null,
     decimal DepositAmount = 0m,
     string? Note = null,
-    CustomerDebtInvoiceResponse? DebtInvoice = null
+    CustomerDebtInvoiceResponse? DebtInvoice = null,
+    Guid? ShiftId = null,
+    string? CashierName = null,
+    string? FulfilledByCashierName = null,
+    DateTime? FulfilledAtUtc = null
 )
 {
     public Guid StoreId => BranchId;
@@ -85,7 +95,8 @@ public record OrderFilterRequest(
 
 public record PrintOrderRequest(
     string? PrinterName = "POS-58",
-    decimal? CashTendered = null
+    decimal? CashTendered = null,
+    string? CashierName = null
 );
 
 public record PreOrderCreateRequest(
@@ -95,13 +106,17 @@ public record PreOrderCreateRequest(
     decimal DepositAmount,
     DateTime ExpectedPickupDate,
     string PaymentMethod = "CASH",
-    string? Note = null
+    string? Note = null,
+    string? CashierName = null,
+    Guid? ShiftId = null
 );
 
 public record PreOrderFulfillRequest(
     string PaymentMethod,
     decimal AmountPaid,
-    string? Note = null
+    string? Note = null,
+    string? CashierName = null,
+    Guid? ShiftId = null
 );
 
 public record CancelOrderRequest(

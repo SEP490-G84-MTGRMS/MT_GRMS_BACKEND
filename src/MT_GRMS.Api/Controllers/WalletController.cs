@@ -9,6 +9,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/tenant/wallet")]
+[Route("api/tenant/wallet")]
 [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
 public class WalletController : BaseApiController
 {

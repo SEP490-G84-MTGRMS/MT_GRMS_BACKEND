@@ -203,12 +203,14 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("Barcode")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("\"IsDeleted\" = false AND \"Barcode\" IS NOT NULL");
 
                     b.HasIndex("CategoryId");
 
                     b.HasIndex("TenantId", "ProductCode")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("\"IsDeleted\" = false");
 
                     b.ToTable("Products", (string)null);
                 });
@@ -635,6 +637,61 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.HasIndex("TenantId", "SourceType", "SourceId");
 
                     b.ToTable("CashbookEntries", (string)null);
+                });
+
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Finance.CashbookTransaction", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<decimal>("Amount")
+                        .HasColumnType("numeric");
+
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CreatedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("ReferenceCode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<string>("TransactionCode")
+                        .IsRequired()
+                        .HasColumnType("text");
+
+                    b.Property<int>("Type")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("CashbookTransaction");
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Finance.CustomerDebtAllocation", b =>
@@ -1403,12 +1460,109 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("TenantBankAccounts", (string)null);
                 });
 
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.BranchAttendancePolicy", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("BranchAttendancePolicyID");
+
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("BranchID");
+
+                    b.Property<string>("ConversionRulesJson")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("EarlyLeaveThresholdMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<bool>("EnableEarlyLeaveThreshold")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("EnableLateThreshold")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("EnableOtAfterShift")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("EnableOtBeforeShift")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("IsConvertHoursToDays")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("LateThresholdMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<int>("OtAfterShiftMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<int>("OtBeforeShiftMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<decimal>("StandardDayHours")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(4,2)")
+                        .HasDefaultValue(8.00m);
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("TenantID");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BranchId");
+
+                    b.HasIndex("TenantId", "BranchId")
+                        .IsUnique()
+                        .HasFilter("\"IsDeleted\" = false");
+
+                    b.ToTable("BranchAttendancePolicies", (string)null);
+                });
+
             modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.Employee", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid")
                         .HasColumnName("EmployeeID");
+
+                    b.Property<string>("Address")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
 
                     b.Property<string>("AvatarUrl")
                         .HasMaxLength(255)
@@ -1475,14 +1629,17 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
 
-                    b.Property<string>("JobTitle")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
+                    b.Property<string>("Note")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
 
-                    b.Property<decimal>("LunchAllowance")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(18,2)")
-                        .HasDefaultValue(0.00m);
+                    b.Property<string>("OtSunday")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("OtWeekday")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
 
                     b.Property<string>("Phone")
                         .IsRequired()
@@ -1495,6 +1652,9 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)")
                         .HasDefaultValue("monthly");
+
+                    b.Property<DateTime?>("StartDate")
+                        .HasColumnType("timestamp without time zone");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -1509,11 +1669,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(50)")
                         .HasColumnName("TenantID");
 
-                    b.Property<decimal>("TravelAllowance")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(18,2)")
-                        .HasDefaultValue(0.00m);
-
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp without time zone");
 
@@ -1526,23 +1681,25 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("BranchId");
 
-                    b.HasIndex("CitizenId")
-                        .IsUnique();
-
                     b.HasIndex("UserId");
 
+                    b.HasIndex("TenantId", "CitizenId")
+                        .IsUnique()
+                        .HasFilter("\"IsDeleted\" = false");
+
                     b.HasIndex("TenantId", "EmployeeCode")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("\"IsDeleted\" = false");
 
                     b.ToTable("Employees", (string)null);
                 });
 
-            modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.EmployeeBonusViolation", b =>
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.EmployeeAllowance", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid")
-                        .HasColumnName("BonusViolationID");
+                        .HasColumnName("AllowanceID");
 
                     b.Property<decimal>("Amount")
                         .ValueGeneratedOnAdd()
@@ -1559,35 +1716,19 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("EmployeeID");
 
-                    b.Property<string>("EvidenceUrl")
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
-
-                    b.Property<DateTime>("IncidentDate")
-                        .HasColumnType("timestamp without time zone");
-
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
 
-                    b.Property<Guid?>("PayslipId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("PayslipID");
-
-                    b.Property<string>("Reason")
+                    b.Property<string>("Name")
                         .IsRequired()
-                        .HasMaxLength(255)
-                        .HasColumnType("character varying(255)");
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
 
                     b.Property<string>("TenantId")
                         .IsRequired()
                         .HasMaxLength(50)
                         .HasColumnType("character varying(50)")
                         .HasColumnName("TenantID");
-
-                    b.Property<string>("Type")
-                        .IsRequired()
-                        .HasMaxLength(30)
-                        .HasColumnType("character varying(30)");
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp without time zone");
@@ -1596,9 +1737,7 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("EmployeeId");
 
-                    b.HasIndex("PayslipId");
-
-                    b.ToTable("EmployeeBonusViolations", (string)null);
+                    b.ToTable("EmployeeAllowances", (string)null);
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.EmployeeSchedule", b =>
@@ -1641,14 +1780,28 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
-                    b.Property<decimal?>("CheckInLatitude")
-                        .HasColumnType("decimal(10,7)");
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("BranchID");
 
-                    b.Property<decimal?>("CheckInLongitude")
-                        .HasColumnType("decimal(10,7)");
+                    b.Property<string>("CheckInFaceImageUrl")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("CheckInMethod")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<DateTime?>("CheckInTime")
                         .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("CheckOutFaceImageUrl")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<string>("CheckOutMethod")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
 
                     b.Property<DateTime?>("CheckOutTime")
                         .HasColumnType("timestamp without time zone");
@@ -1656,10 +1809,18 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp without time zone");
 
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
                     b.Property<decimal>("DurationHours")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(4,2)")
-                        .HasDefaultValue(8.00m);
+                        .HasDefaultValue(4.00m);
+
+                    b.Property<int>("EarlyLeaveMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
 
                     b.Property<Guid>("EmployeeId")
                         .HasColumnType("uuid")
@@ -1669,15 +1830,21 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(255)
                         .HasColumnType("character varying(255)");
 
+                    b.Property<decimal?>("FaceMatchScore")
+                        .HasColumnType("decimal(5,2)");
+
+                    b.Property<bool>("IsCheckInNextDay")
+                        .HasColumnType("boolean");
+
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
 
-                    b.Property<bool>("IsGpsValid")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(true);
-
                     b.Property<int>("LateMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<int>("OvertimeMinutes")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
                         .HasDefaultValue(0);
@@ -1697,6 +1864,10 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)");
 
+                    b.Property<Guid?>("ShiftConfigId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("ShiftConfigID");
+
                     b.Property<string>("ShiftName")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -1707,7 +1878,11 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)")
-                        .HasDefaultValue("scheduled");
+                        .HasDefaultValue("draft");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasColumnType("text");
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp without time zone");
@@ -1717,9 +1892,17 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BranchId");
+
                     b.HasIndex("EmployeeId");
 
                     b.HasIndex("PayslipId");
+
+                    b.HasIndex("ShiftConfigId");
+
+                    b.HasIndex("TenantId", "BranchId", "WorkDate");
+
+                    b.HasIndex("TenantId", "EmployeeId", "WorkDate");
 
                     b.ToTable("EmployeeSchedules", (string)null);
                 });
@@ -1736,23 +1919,54 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("decimal(18,2)")
                         .HasDefaultValue(0.00m);
 
+                    b.Property<string>("AllowancesDetailJson")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("ApprovedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("ApprovedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("BankAccountHolder")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("BankAccountNumber")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<string>("BankName")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<decimal>("BaseRate")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(18,2)")
+                        .HasDefaultValue(0.00m);
+
                     b.Property<decimal>("BaseSalaryEarned")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(18,2)")
                         .HasDefaultValue(0.00m);
 
-                    b.Property<decimal>("Bonus")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(18,2)")
-                        .HasDefaultValue(0.00m);
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("BranchID");
 
-                    b.Property<decimal>("ContractBaseSalary")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(18,2)")
-                        .HasDefaultValue(0.00m);
+                    b.Property<Guid?>("CashbookTransactionId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CashbookVoucherCode")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
 
                     b.Property<Guid>("EmployeeId")
                         .HasColumnType("uuid")
@@ -1761,15 +1975,14 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
 
-                    b.Property<decimal>("LunchAllowance")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(18,2)")
-                        .HasDefaultValue(0.00m);
-
                     b.Property<decimal>("NetSalary")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(18,2)")
                         .HasDefaultValue(0.00m);
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
 
                     b.Property<decimal>("OtHours")
                         .ValueGeneratedOnAdd()
@@ -1783,6 +1996,15 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTime?>("PaidAt")
                         .HasColumnType("timestamp without time zone");
+
+                    b.Property<string>("PaidBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<decimal>("PaidLeaveDays")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(5,2)")
+                        .HasDefaultValue(0.00m);
 
                     b.Property<string>("PaymentMethod")
                         .HasMaxLength(30)
@@ -1798,10 +2020,27 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(7)
                         .HasColumnType("character varying(7)");
 
+                    b.Property<decimal>("RemainingDebt")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(18,2)")
+                        .HasDefaultValue(0.00m);
+
+                    b.Property<string>("SalaryType")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasDefaultValue("MONTHLY");
+
                     b.Property<decimal>("SocialInsurance")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(18,2)")
                         .HasDefaultValue(0.00m);
+
+                    b.Property<decimal>("StandardDayHours")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(5,2)")
+                        .HasDefaultValue(8.00m);
 
                     b.Property<decimal>("StandardDays")
                         .ValueGeneratedOnAdd()
@@ -1815,28 +2054,53 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(30)")
                         .HasDefaultValue("UNPAID");
 
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<decimal>("TotalAllowance")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(18,2)")
+                        .HasDefaultValue(0.00m);
+
                     b.Property<decimal>("TotalDeductions")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(18,2)")
                         .HasDefaultValue(0.00m);
+
+                    b.Property<int>("TotalEarlyLeaveMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
 
                     b.Property<decimal>("TotalEarnings")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(18,2)")
                         .HasDefaultValue(0.00m);
 
-                    b.Property<decimal>("TravelAllowance")
+                    b.Property<int>("TotalLateMinutes")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(18,2)")
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<int>("TotalShifts")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.Property<decimal>("TotalWorkHours")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(7,2)")
+                        .HasDefaultValue(0.00m);
+
+                    b.Property<decimal>("UnpaidLeaveDays")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(5,2)")
                         .HasDefaultValue(0.00m);
 
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp without time zone");
-
-                    b.Property<decimal>("ViolationDeduction")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(18,2)")
-                        .HasDefaultValue(0.00m);
 
                     b.Property<decimal>("WorkedDays")
                         .ValueGeneratedOnAdd()
@@ -1845,12 +2109,103 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("BranchId");
+
+                    b.HasIndex("CashbookTransactionId");
+
                     b.HasIndex("EmployeeId");
 
                     b.HasIndex("PayslipCode")
                         .IsUnique();
 
+                    b.HasIndex("TenantId", "BranchId", "PeriodMonth");
+
                     b.ToTable("Payslips", (string)null);
+                });
+
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.ShiftConfig", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("ShiftConfigID");
+
+                    b.Property<TimeSpan>("AllowedCheckInEnd")
+                        .HasColumnType("interval");
+
+                    b.Property<TimeSpan>("AllowedCheckInStart")
+                        .HasColumnType("interval");
+
+                    b.Property<Guid>("BranchId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("BranchID");
+
+                    b.Property<string>("BranchIds")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.Property<Guid?>("CreatedBy")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(255)
+                        .HasColumnType("character varying(255)");
+
+                    b.Property<decimal>("DurationHours")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(4,2)")
+                        .HasDefaultValue(4.00m);
+
+                    b.Property<TimeSpan>("EndTime")
+                        .HasColumnType("interval");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("IsCheckInNextDay")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("ShiftCode")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)");
+
+                    b.Property<string>("ShiftName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<TimeSpan>("StartTime")
+                        .HasColumnType("interval");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("TenantID");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp without time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BranchId");
+
+                    b.HasIndex("TenantId", "BranchId", "ShiftCode")
+                        .IsUnique()
+                        .HasFilter("\"IsDeleted\" = false");
+
+                    b.ToTable("ShiftConfigs", (string)null);
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Identity.TenantUser", b =>
@@ -2305,6 +2660,13 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
+
+                    b.Property<string>("LineStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasDefaultValue("Pending");
 
                     b.Property<string>("Note")
                         .HasMaxLength(255)
@@ -4506,6 +4868,17 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Branch");
                 });
 
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.BranchAttendancePolicy", b =>
+                {
+                    b.HasOne("MT_GRMS.Domain.Entities.SaaS.Branch", "Branch")
+                        .WithMany()
+                        .HasForeignKey("BranchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Branch");
+                });
+
             modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.Employee", b =>
                 {
                     b.HasOne("MT_GRMS.Domain.Entities.SaaS.Branch", "Branch")
@@ -4524,26 +4897,25 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("User");
                 });
 
-            modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.EmployeeBonusViolation", b =>
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.EmployeeAllowance", b =>
                 {
                     b.HasOne("MT_GRMS.Domain.Entities.HR.Employee", "Employee")
-                        .WithMany("BonusViolations")
+                        .WithMany("Allowances")
                         .HasForeignKey("EmployeeId")
-                        .OnDelete(DeleteBehavior.Restrict)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.HasOne("MT_GRMS.Domain.Entities.HR.Payslip", "Payslip")
-                        .WithMany("BonusViolations")
-                        .HasForeignKey("PayslipId")
-                        .OnDelete(DeleteBehavior.SetNull);
-
                     b.Navigation("Employee");
-
-                    b.Navigation("Payslip");
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.EmployeeSchedule", b =>
                 {
+                    b.HasOne("MT_GRMS.Domain.Entities.SaaS.Branch", "Branch")
+                        .WithMany()
+                        .HasForeignKey("BranchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
                     b.HasOne("MT_GRMS.Domain.Entities.HR.Employee", "Employee")
                         .WithMany("Schedules")
                         .HasForeignKey("EmployeeId")
@@ -4555,20 +4927,55 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasForeignKey("PayslipId")
                         .OnDelete(DeleteBehavior.SetNull);
 
+                    b.HasOne("MT_GRMS.Domain.Entities.HR.ShiftConfig", "ShiftConfig")
+                        .WithMany()
+                        .HasForeignKey("ShiftConfigId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Branch");
+
                     b.Navigation("Employee");
 
                     b.Navigation("Payslip");
+
+                    b.Navigation("ShiftConfig");
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.Payslip", b =>
                 {
+                    b.HasOne("MT_GRMS.Domain.Entities.SaaS.Branch", "Branch")
+                        .WithMany()
+                        .HasForeignKey("BranchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("MT_GRMS.Domain.Entities.Finance.CashbookTransaction", "CashbookTransaction")
+                        .WithMany()
+                        .HasForeignKey("CashbookTransactionId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
                     b.HasOne("MT_GRMS.Domain.Entities.HR.Employee", "Employee")
                         .WithMany("Payslips")
                         .HasForeignKey("EmployeeId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.Navigation("Branch");
+
+                    b.Navigation("CashbookTransaction");
+
                     b.Navigation("Employee");
+                });
+
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.ShiftConfig", b =>
+                {
+                    b.HasOne("MT_GRMS.Domain.Entities.SaaS.Branch", "Branch")
+                        .WithMany()
+                        .HasForeignKey("BranchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Branch");
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Identity.TenantUser", b =>
@@ -5082,7 +5489,7 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.Employee", b =>
                 {
-                    b.Navigation("BonusViolations");
+                    b.Navigation("Allowances");
 
                     b.Navigation("Payslips");
 
@@ -5091,8 +5498,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.Payslip", b =>
                 {
-                    b.Navigation("BonusViolations");
-
                     b.Navigation("Schedules");
                 });
 

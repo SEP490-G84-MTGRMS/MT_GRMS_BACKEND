@@ -66,10 +66,14 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<SupplierBranchAssignment> SupplierBranchAssignments { get; set; } = null!;
     public virtual DbSet<PurchaseOrder> PurchaseOrders { get; set; } = null!;
     public virtual DbSet<PurchaseOrderDetail> PurchaseOrderDetails { get; set; } = null!;
+    public virtual DbSet<PurchaseOrderRevision> PurchaseOrderRevisions { get; set; } = null!;
+    public virtual DbSet<SupplierDispatchPackage> SupplierDispatchPackages { get; set; } = null!;
+    public virtual DbSet<SupplierDispatchPackageItem> SupplierDispatchPackageItems { get; set; } = null!;
     public virtual DbSet<GoodsReceipt> GoodsReceipts { get; set; } = null!;
     public virtual DbSet<GoodsReceiptLine> GoodsReceiptLines { get; set; } = null!;
     public virtual DbSet<SupplierReturn> SupplierReturns { get; set; } = null!;
     public virtual DbSet<SupplierReturnLine> SupplierReturnLines { get; set; } = null!;
+    public virtual DbSet<OutboxMessage> OutboxMessages { get; set; } = null!;
 
     // 5. Phân hệ Khách hàng, Khuyến mãi & Bán lẻ POS (4 bảng)
     public virtual DbSet<Customer> Customers { get; set; } = null!;
@@ -78,13 +82,19 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<VoucherCode> VoucherCodes { get; set; } = null!;
     public virtual DbSet<Domain.Entities.Sales.Order> Orders { get; set; } = null!;
     public virtual DbSet<OrderDetail> OrderDetails { get; set; } = null!;
+    public virtual DbSet<LoyaltySetting> LoyaltySettings { get; set; } = null!;
 
     // 6. Phân hệ Tài chính, Sổ quỹ & Chi phí (FE-07, FE-17) - Đã hợp nhất FinanceAccounts
     public virtual DbSet<CashbookEntry> CashbookEntries { get; set; } = null!;
     public virtual DbSet<FinanceAccount> FinanceAccounts { get; set; } = null!;
     public virtual DbSet<CashInTransit> CashInTransits { get; set; } = null!;
     public virtual DbSet<ShiftZReport> ShiftZReports { get; set; } = null!;
-    public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!; 
+    public virtual DbSet<ShiftCashMovement> ShiftCashMovements { get; set; } = null!;
+    public virtual DbSet<ShiftParticipant> ShiftParticipants { get; set; } = null!;
+    public virtual DbSet<ShiftCloseConfirmation> ShiftCloseConfirmations { get; set; } = null!;
+    public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!;
+    public virtual DbSet<StorePaymentConfig> StorePaymentConfigs { get; set; } = null!;
+    public virtual DbSet<PaymentTransaction> PaymentTransactions { get; set; } = null!;
     public virtual DbSet<IdempotencyRecord> IdempotencyRecords { get; set; } = null!;
 
     // 7. Customer Debt Module (FE-08) - Đã hợp nhất công nợ vào Customers
@@ -99,7 +109,9 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<Employee> Employees { get; set; } = null!;
     public virtual DbSet<Payslip> Payslips { get; set; } = null!;
     public virtual DbSet<EmployeeSchedule> EmployeeSchedules { get; set; } = null!;
-    public virtual DbSet<EmployeeBonusViolation> EmployeeBonusViolations { get; set; } = null!;
+    public virtual DbSet<EmployeeAllowance> EmployeeAllowances { get; set; } = null!;
+    public virtual DbSet<ShiftConfig> ShiftConfigs { get; set; } = null!;
+    public virtual DbSet<BranchAttendancePolicy> BranchAttendancePolicies { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -112,6 +124,10 @@ public partial class AppDbContext : DbContext
         // Dự án áp dụng Soft Delete (IsDeleted) toàn diện nên an toàn 100%
         foreach (var foreignKey in modelBuilder.Model.GetEntityTypes().SelectMany(e => e.GetForeignKeys()))
         {
+            if (foreignKey.DeclaringEntityType.ClrType == typeof(EmployeeAllowance))
+            {
+                continue;
+            }
             if (foreignKey.DeleteBehavior == DeleteBehavior.Cascade)
             {
                 foreignKey.DeleteBehavior = DeleteBehavior.Restrict;

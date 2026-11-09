@@ -781,10 +781,17 @@ public class SupplierService : ISupplierService
             throw new BusinessException("Cửa hàng / Chi nhánh này hiện đang tạm ngưng hoạt động, không thể phân bổ.");
         }
 
-        var uniqueSupplierIds = (command.SupplierIds ?? [])
-            .Where(id => id != Guid.Empty)
-            .Distinct()
-            .ToList();
+        var itemsBySupplier = (command.Items ?? [])
+            .Where(i => i.SupplierId != Guid.Empty)
+            .GroupBy(i => i.SupplierId)
+            .ToDictionary(g => g.Key, g => g.Last().DeliveryDays ?? []);
+
+        var uniqueSupplierIds = itemsBySupplier.Count > 0
+            ? itemsBySupplier.Keys.ToList()
+            : (command.SupplierIds ?? [])
+                .Where(id => id != Guid.Empty)
+                .Distinct()
+                .ToList();
 
         if (uniqueSupplierIds.Count == 0)
         {
@@ -795,7 +802,7 @@ public class SupplierService : ISupplierService
         var suppliers = new List<Supplier>();
         foreach (var supId in uniqueSupplierIds)
         {
-            var sup = await _supplierRepository.GetByIdAsync(supId, cancellationToken);
+            var sup = await _supplierRepository.GetByIdWithDetailsAsync(supId, cancellationToken);
             if (sup == null)
             {
                 throw new NotFoundException("Nhà cung cấp", supId);
@@ -810,6 +817,9 @@ public class SupplierService : ISupplierService
         var resultAssignments = new List<SupplierBranchAssignmentDetailDto>();
         foreach (var sup in suppliers)
         {
+            itemsBySupplier.TryGetValue(sup.Id, out var requestedDays);
+            var deliveryDays = NormalizeAssignmentDeliveryDays(requestedDays, sup.DeliveryConfig);
+
             var existing = await _supplierRepository.GetBranchAssignmentAsync(sup.Id, command.BranchId, cancellationToken);
             if (existing != null)
             {
@@ -820,6 +830,9 @@ public class SupplierService : ISupplierService
                     existing.InactiveReason = null;
                     existing.CreatedAt = DateTime.UtcNow;
                 }
+
+                ApplyAssignmentDeliveryDays(existing, deliveryDays);
+
                 var dto = MapToBranchAssignmentDetailDto(existing);
                 dto.SupplierCode = sup.Code;
                 dto.SupplierName = sup.Name;
@@ -839,6 +852,7 @@ public class SupplierService : ISupplierService
                     CreatedAt = DateTime.UtcNow,
                     Status = SupplierStatus.Active
                 };
+                ApplyAssignmentDeliveryDays(newAssignment, deliveryDays);
                 await _supplierRepository.AddBranchAssignmentAsync(newAssignment, cancellationToken);
                 var dto = MapToBranchAssignmentDetailDto(newAssignment);
                 dto.SupplierCode = sup.Code;
@@ -926,8 +940,39 @@ public class SupplierService : ISupplierService
         return MapToBranchAssignmentDetailDto(assignment);
     }
 
+    public async Task<SupplierBranchAssignmentDetailDto> UpdateBranchAssignmentDeliveryDaysAsync(
+        Guid supplierId,
+        Guid branchId,
+        UpdateSupplierBranchAssignmentDeliveryDaysRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        var assignment = await _supplierRepository.GetBranchAssignmentAsync(supplierId, branchId, cancellationToken);
+        if (assignment == null)
+        {
+            throw new NotFoundException("Phân bổ nhà cung cấp với cửa hàng", branchId);
+        }
+
+        var supplier = await _supplierRepository.GetByIdWithDetailsAsync(supplierId, cancellationToken);
+        var days = NormalizeAssignmentDeliveryDays(request.DeliveryDays, supplier?.DeliveryConfig);
+        ApplyAssignmentDeliveryDays(assignment, days);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        var dto = MapToBranchAssignmentDetailDto(assignment);
+        if (supplier != null)
+        {
+            dto.SupplierCode = supplier.Code;
+            dto.SupplierName = supplier.Name;
+            dto.SupplierType = supplier.SupplierType;
+        }
+
+        return dto;
+    }
+
     private static SupplierBranchAssignmentDetailDto MapToBranchAssignmentDetailDto(SupplierBranchAssignment assignment)
     {
+        var days = ResolveAssignmentDeliveryDayNames(assignment, assignment.Supplier?.DeliveryConfig);
         return new SupplierBranchAssignmentDetailDto
         {
             Id = assignment.Id,
@@ -941,8 +986,117 @@ public class SupplierService : ISupplierService
             BranchAddress = assignment.Branch?.Address ?? string.Empty,
             CreatedAt = assignment.CreatedAt,
             Status = assignment.Status == SupplierStatus.Active ? "Active" : "Inactive",
-            InactiveReason = assignment.InactiveReason
+            InactiveReason = assignment.InactiveReason,
+            DeliveryDays = days,
+            DeliveryDaysDisplay = FormatDeliveryDaysAbbrev(days)
         };
+    }
+
+    private static List<string> NormalizeAssignmentDeliveryDays(
+        IReadOnlyList<string>? requested,
+        SupplierDeliveryConfig? supplierConfig)
+    {
+        if (requested != null && requested.Count > 0)
+        {
+            var normalized = DeliveryScheduleCalculator.MaskToDayNames(
+                DeliveryScheduleCalculator.DayNamesToMask(requested));
+            if (normalized.Count == 0)
+            {
+                throw new BusinessException("Vui lòng chọn ít nhất 1 ngày giao hàng trong tuần.");
+            }
+
+            return normalized;
+        }
+
+        return ResolveSupplierBaseDeliveryDays(supplierConfig);
+    }
+
+    private static List<string> ResolveSupplierBaseDeliveryDays(SupplierDeliveryConfig? config)
+    {
+        if (config == null)
+        {
+            return new List<string> { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+        }
+
+        if (!string.IsNullOrWhiteSpace(config.DeliveryDaysJson))
+        {
+            try
+            {
+                var days = System.Text.Json.JsonSerializer.Deserialize<List<string>>(config.DeliveryDaysJson);
+                if (days != null && days.Count > 0)
+                {
+                    return DeliveryScheduleCalculator.MaskToDayNames(
+                        DeliveryScheduleCalculator.DayNamesToMask(days));
+                }
+            }
+            catch
+            {
+                // fall through
+            }
+        }
+
+        var fromMask = DeliveryScheduleCalculator.MaskToDayNames(config.DeliveryWeekdaysMask);
+        return fromMask.Count > 0
+            ? fromMask
+            : new List<string> { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+    }
+
+    private static List<string> ResolveAssignmentDeliveryDayNames(
+        SupplierBranchAssignment assignment,
+        SupplierDeliveryConfig? supplierConfig)
+    {
+        if (!string.IsNullOrWhiteSpace(assignment.DeliveryDaysJson))
+        {
+            try
+            {
+                var days = System.Text.Json.JsonSerializer.Deserialize<List<string>>(assignment.DeliveryDaysJson);
+                if (days != null && days.Count > 0)
+                {
+                    return DeliveryScheduleCalculator.MaskToDayNames(
+                        DeliveryScheduleCalculator.DayNamesToMask(days));
+                }
+            }
+            catch
+            {
+                // fall through
+            }
+        }
+
+        if (assignment.DeliveryWeekdaysMask is > 0)
+        {
+            var fromMask = DeliveryScheduleCalculator.MaskToDayNames(assignment.DeliveryWeekdaysMask.Value);
+            if (fromMask.Count > 0) return fromMask;
+        }
+
+        return ResolveSupplierBaseDeliveryDays(supplierConfig);
+    }
+
+    private static void ApplyAssignmentDeliveryDays(SupplierBranchAssignment assignment, List<string> deliveryDays)
+    {
+        var mask = DeliveryScheduleCalculator.DayNamesToMask(deliveryDays);
+        assignment.DeliveryWeekdaysMask = mask;
+        assignment.DeliveryDaysJson = System.Text.Json.JsonSerializer.Serialize(
+            DeliveryScheduleCalculator.MaskToDayNames(mask));
+    }
+
+    private static string FormatDeliveryDaysAbbrev(IReadOnlyList<string> days)
+    {
+        if (days == null || days.Count == 0) return "—";
+        var order = new[] { "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun" };
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Mon"] = "T2",
+            ["Tue"] = "T3",
+            ["Wed"] = "T4",
+            ["Thu"] = "T5",
+            ["Fri"] = "T6",
+            ["Sat"] = "T7",
+            ["Sun"] = "CN"
+        };
+
+        return string.Join(", ",
+            order.Where(d => days.Any(x => string.Equals(x, d, StringComparison.OrdinalIgnoreCase)))
+                .Select(d => map[d]));
     }
 
     public async Task<SupplierDetailDto> LinkCustomerAsync(Guid supplierId, LinkCustomerRequest request, CancellationToken cancellationToken = default)
@@ -1253,8 +1407,7 @@ public class SupplierService : ISupplierService
         var activeBranchIds = await _supplierRepository.GetActiveBranchIdsForSupplierAsync(supplierId, cancellationToken);
         var resultItems = new List<SupplierProductDto>();
 
-        await _unitOfWork.BeginTransactionAsync(cancellationToken);
-        try
+        await _unitOfWork.ExecuteInTransactionAsync(async ct =>
         {
             foreach (var (product, purchasePrice, moq) in prepared)
             {
@@ -1277,11 +1430,11 @@ public class SupplierService : ISupplierService
                     Status = SupplierProductStatus.Active
                 };
 
-                await _supplierRepository.AddSupplierProductAsync(entity, cancellationToken);
+                await _supplierRepository.AddSupplierProductAsync(entity, ct);
 
                 foreach (var branchId in activeBranchIds)
                 {
-                    var exists = await _supplierRepository.BranchStockExistsAsync(branchId, product.Id, cancellationToken);
+                    var exists = await _supplierRepository.BranchStockExistsAsync(branchId, product.Id, ct);
                     if (!exists)
                     {
                         var newStock = new MT_GRMS.Domain.Entities.Inventory.BranchStock
@@ -1300,21 +1453,15 @@ public class SupplierService : ISupplierService
                             ZoneArea = "Khu vực trưng bày",
                             CreatedAt = DateTime.UtcNow
                         };
-                        await _supplierRepository.AddBranchStockAsync(newStock, cancellationToken);
+                        await _supplierRepository.AddBranchStockAsync(newStock, ct);
                     }
                 }
 
                 resultItems.Add(MapToSupplierProductDto(entity, activeBranchIds.Count));
             }
 
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
-            await _unitOfWork.CommitTransactionAsync(cancellationToken);
-        }
-        catch
-        {
-            await _unitOfWork.RollbackTransactionAsync(cancellationToken);
-            throw;
-        }
+            await _unitOfWork.SaveChangesAsync(ct);
+        }, cancellationToken);
 
         return new BatchAssignSupplierProductsResultDto
         {
@@ -1400,7 +1547,7 @@ public class SupplierService : ISupplierService
             }
 
             var product = entity.Product ?? await _supplierRepository.GetProductByIdAsync(productId, cancellationToken);
-            if (product == null || !string.Equals(product.Status, "Active", StringComparison.OrdinalIgnoreCase))
+            if (product == null || product.Status != ProductStatus.Active)
             {
                 throw new BusinessException(
                     "PRODUCT_INACTIVE",

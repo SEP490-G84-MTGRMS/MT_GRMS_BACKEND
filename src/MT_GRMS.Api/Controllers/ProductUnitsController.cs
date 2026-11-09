@@ -8,6 +8,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1")]
+[Route("api")]
 [Authorize]
 public class ProductUnitsController : BaseApiController
 {

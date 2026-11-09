@@ -6,6 +6,10 @@ using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Batches;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Catalog;
+using MT_GRMS.Application.HR.Employees;
+using MT_GRMS.Application.HR.ShiftConfigs;
+using MT_GRMS.Application.HR.AttendancePolicies;
+using MT_GRMS.Application.HR.Schedules;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders;
 
@@ -23,6 +27,7 @@ public static class DependencyInjection
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IInventoryService, InventoryService>();
         services.AddScoped<IOrderService, OrderService>();
+        services.AddScoped<PosShifts.IShiftService, PosShifts.ShiftService>();
         services.AddScoped<ICatalogService, CatalogService>();
         services.AddScoped<ICategoryService, CategoryService>();
         services.AddScoped<IProductUnitService, ProductUnitService>();
@@ -44,6 +49,11 @@ public static class DependencyInjection
         services.AddScoped<GoodsReceipts.IGoodsReceiptService, GoodsReceipts.GoodsReceiptService>();
         services.AddScoped<SupplierReturns.ISupplierReturnService, SupplierReturns.SupplierReturnService>();
         services.AddScoped<Promotions.IPromotionService, Promotions.PromotionService>();
+        services.AddScoped<Promotions.ILoyaltyService, Promotions.LoyaltyService>();
+        services.AddScoped<IEmployeeService, EmployeeService>();
+        services.AddScoped<IShiftConfigService, ShiftConfigService>();
+        services.AddScoped<IBranchAttendancePolicyService, BranchAttendancePolicyService>();
+        services.AddScoped<IScheduleService, ScheduleService>();
 
         // 3. Đăng ký các Service cho Master Admin Portal
         services.AddScoped<ISubscriptionPlanService, SubscriptionPlanService>();
@@ -53,7 +63,3 @@ public static class DependencyInjection
         return services;
     }
 }
-
-
-
-

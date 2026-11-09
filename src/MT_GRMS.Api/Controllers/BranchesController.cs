@@ -9,6 +9,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/branches")]
+[Route("api/branches")]
 [Authorize]
 public class BranchesController : BaseApiController
 {

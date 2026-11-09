@@ -55,3 +55,7 @@ ehthumbs.db
 **/[Mm]igrations/
 **/AppDbContextModelSnapshot.cs
 *.Designer.cs
+
+## Supplier order Excel local storage
+**/storage/supplier-orders/
+storage/

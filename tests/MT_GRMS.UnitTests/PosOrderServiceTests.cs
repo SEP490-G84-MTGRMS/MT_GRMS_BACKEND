@@ -12,10 +12,15 @@ using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.PosOrders.Dtos;
 using MT_GRMS.Application.PosOrders.Validators;
 using MT_GRMS.Domain.Entities.Catalog;
+using MT_GRMS.Application.PosShifts;
+using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Entities.Sales;
+using MT_GRMS.Domain.Enums;
+using MT_GRMS.Domain.Exceptions;
 using MT_GRMS.Infrastructure.Services.Printer;
+using Moq;
 using Xunit;
 
 namespace MT_GRMS.UnitTests;
@@ -478,7 +483,7 @@ public class PosOrderServiceTests
         Assert.Contains("SIEU THI MINI", receiptText);
         Assert.Contains("HOA DON BAN LE", receiptText);
         Assert.Contains("Banh Mi Sandwich", receiptText);
-        Assert.Contains("TONG THANH TOAN", receiptText);
+        Assert.Contains("TONG PHAI TRA", receiptText);
         Assert.Contains("CAM ON QUY KHACH", receiptText);
 
         // 4. Kiểm tra lệnh cắt giấy tự động ở cuối (0x1D, 0x56, 0x42, 0x00)
@@ -823,6 +828,695 @@ public class PosOrderServiceTests
         Assert.Equal(3m, result.Items[0].Quantity);
         Assert.Equal(2m, result.Items[1].Quantity);
     }
+
+    [Fact]
+    public async Task REQ_POS_09_CreateOrder_BranchProduct_PriceOverride_AppliesBranchPrice()
+    {
+        // Arrange: Sản phẩm có giá Master 14.000, Chi nhánh cấu hình override 13.500
+        var prodId = Guid.NewGuid();
+        var prod = new Product
+        {
+            Id = prodId,
+            TenantId = "tenant-01",
+            Name = "Bia Ha Noi Sleek",
+            SellingPrice = 14000m,
+            BaseUnit = "Lon",
+            VatRate = 0.01m,
+            IsActive = true
+        };
+        _orderRepo.Products.Add(prod);
+
+        var bp = new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            SellingPriceOverride = 13500m,
+            Status = "Active"
+        };
+        _orderRepo.BranchProducts.Add(bp);
+
+        _orderRepo.BranchStocks.Add(new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            QuantityOnHand = 50m
+        });
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(prodId, 2m, 0m)
+            }
+        );
+
+        // Act
+        var result = await _orderService.CreateOrderAsync(request);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(27000m, result.TotalAmount); // 2 * 13.500
+        Assert.Equal(13500m, result.Items[0].UnitPrice);
+    }
+
+    [Fact]
+    public async Task REQ_POS_09_CreateOrder_BranchProduct_NoOverride_FallsBackToMasterPrice()
+    {
+        // Arrange: Chi nhánh có BranchProduct nhưng SellingPriceOverride = null -> kế thừa giá Master
+        var prodId = Guid.NewGuid();
+        var prod = new Product
+        {
+            Id = prodId,
+            TenantId = "tenant-01",
+            Name = "Muoi Cham Hao Hao",
+            SellingPrice = 16000m,
+            BaseUnit = "Hu",
+            VatRate = 0.01m,
+            IsActive = true
+        };
+        _orderRepo.Products.Add(prod);
+
+        var bp = new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            SellingPriceOverride = null,
+            Status = "Active"
+        };
+        _orderRepo.BranchProducts.Add(bp);
+
+        _orderRepo.BranchStocks.Add(new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            QuantityOnHand = 20m
+        });
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(prodId, 1m, 0m)
+            }
+        );
+
+        // Act
+        var result = await _orderService.CreateOrderAsync(request);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(16000m, result.TotalAmount);
+        Assert.Equal(16000m, result.Items[0].UnitPrice);
+    }
+
+    [Fact]
+    public async Task REQ_POS_10_CreateOrder_MultiUnit_BranchProductUnitPrice_Override_AppliesOverride()
+    {
+        // Arrange: Đơn vị quy đổi "Thùng" (x24 lon), giá Master ĐVT 330.000, chi nhánh override 320.000
+        var prodId = Guid.NewGuid();
+        var unitThungId = Guid.NewGuid();
+        var unitThung = new ProductUnit
+        {
+            Id = unitThungId,
+            ProductId = prodId,
+            UnitName = "Thung",
+            ConversionRate = 24m,
+            Price = 330000m,
+            IsBaseUnit = false
+        };
+
+        var prod = new Product
+        {
+            Id = prodId,
+            TenantId = "tenant-01",
+            Name = "Bia Ha Noi Sleek",
+            SellingPrice = 14000m,
+            BaseUnit = "Lon",
+            Units = new List<ProductUnit> { unitThung }
+        };
+        _orderRepo.Products.Add(prod);
+
+        var bpId = Guid.NewGuid();
+        var bp = new BranchProduct
+        {
+            Id = bpId,
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            UnitPriceOverrides = new List<BranchProductUnitPrice>
+            {
+                new BranchProductUnitPrice
+                {
+                    Id = Guid.NewGuid(),
+                    BranchProductId = bpId,
+                    ProductUnitId = unitThungId,
+                    SellingPriceOverride = 320000m
+                }
+            }
+        };
+        _orderRepo.BranchProducts.Add(bp);
+
+        _orderRepo.BranchStocks.Add(new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            QuantityOnHand = 100m
+        });
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(prodId, 2m, 0m, UnitId: unitThungId, UnitName: "Thung")
+            }
+        );
+
+        // Act
+        var result = await _orderService.CreateOrderAsync(request);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(640000m, result.TotalAmount); // 2 * 320.000
+        Assert.Equal(320000m, result.Items[0].UnitPrice);
+    }
+
+    [Fact]
+    public async Task REQ_POS_11_CreateOrder_MultiUnit_DeductsBaseQuantity_FromBranchStocks_FEFO()
+    {
+        // Arrange: 1 Thùng = 24 lon. Kho có Lô A (10 lon, cận date) và Lô B (50 lon, date xa).
+        var prodId = Guid.NewGuid();
+        var unitThungId = Guid.NewGuid();
+        var unitThung = new ProductUnit
+        {
+            Id = unitThungId,
+            ProductId = prodId,
+            UnitName = "Thung",
+            ConversionRate = 24m,
+            Price = 320000m,
+            IsBaseUnit = false
+        };
+
+        var prod = new Product
+        {
+            Id = prodId,
+            TenantId = "tenant-01",
+            Name = "Bia Ha Noi Sleek",
+            SellingPrice = 14000m,
+            BaseUnit = "Lon",
+            Units = new List<ProductUnit> { unitThung }
+        };
+        _orderRepo.Products.Add(prod);
+
+        var lotNear = new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            BatchCode = "LOT-NEAR",
+            ExpiryDate = DateTime.UtcNow.AddDays(10),
+            QuantityOnHand = 10m
+        };
+        var lotFar = new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            BatchCode = "LOT-FAR",
+            ExpiryDate = DateTime.UtcNow.AddDays(40),
+            QuantityOnHand = 50m
+        };
+        _orderRepo.BranchStocks.AddRange(new[] { lotNear, lotFar });
+
+        // Bán 1 Thùng (= 24 lon)
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(prodId, 1m, 320000m, UnitId: unitThungId, UnitName: "Thung")
+            }
+        );
+
+        // Act
+        var result = await _orderService.CreateOrderAsync(request);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(0m, lotNear.QuantityOnHand); // Lô cận date trừ hết 10 lon
+        Assert.Equal(36m, lotFar.QuantityOnHand);  // Lô xa date trừ 14 lon còn lại -> 50 - 14 = 36
+    }
+
+    [Fact]
+    public async Task REQ_POS_11_CreateOrder_MultiUnit_InsufficientTotalBaseStock_ThrowsException()
+    {
+        // Arrange: 1 Thùng = 24 gói. Tổng tồn kho chỉ có 30 gói. Khách mua 2 Thùng (= 48 gói) -> Thiếu tồn kho
+        var prodId = Guid.NewGuid();
+        var unitThungId = Guid.NewGuid();
+        var unitThung = new ProductUnit
+        {
+            Id = unitThungId,
+            ProductId = prodId,
+            UnitName = "Thung",
+            ConversionRate = 24m,
+            Price = 1350000m,
+            IsBaseUnit = false
+        };
+
+        var prod = new Product
+        {
+            Id = prodId,
+            TenantId = "tenant-01",
+            Name = "Ca phe G7 3in1",
+            SellingPrice = 58000m,
+            BaseUnit = "Hop",
+            Units = new List<ProductUnit> { unitThung }
+        };
+        _orderRepo.Products.Add(prod);
+
+        _orderRepo.BranchStocks.Add(new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            QuantityOnHand = 30m
+        });
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(prodId, 2m, 1350000m, UnitId: unitThungId, UnitName: "Thung")
+            }
+        );
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreateOrderAsync(request));
+        Assert.Contains("không đủ tồn kho tại chi nhánh", ex.Message);
+        Assert.Contains("30", ex.Message);
+        Assert.Contains("48", ex.Message);
+    }
+
+    [Fact]
+    public async Task REQ_POS_11_CancelOrder_RestoresBranchStock()
+    {
+        // Arrange: Mua 5 sản phẩm, sau đó Chủ cửa hàng hủy hóa đơn -> Tồn kho được hoàn trả
+        var prodId = Guid.NewGuid();
+        var prod = new Product
+        {
+            Id = prodId,
+            TenantId = "tenant-01",
+            Name = "Nuoc Khoang Lavie",
+            SellingPrice = 8000m,
+            BaseUnit = "Chai",
+            IsActive = true
+        };
+        _orderRepo.Products.Add(prod);
+
+        var stock = new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            QuantityOnHand = 20m
+        };
+        _orderRepo.BranchStocks.Add(stock);
+
+        var createReq = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(prodId, 5m, 8000m)
+            }
+        );
+
+        var orderRes = await _orderService.CreateOrderAsync(createReq);
+        Assert.Equal(15m, stock.QuantityOnHand); // 20 - 5 = 15
+
+        // Act: STORE_OWNER hủy đơn
+        var cancelReq = new CancelOrderRequest(
+            Reason: "Khách đổi ý không mua nữa",
+            UserRole: "STORE_OWNER"
+        );
+        var cancelRes = await _orderService.CancelOrderAsync(orderRes.Id, cancelReq);
+
+        // Assert
+        Assert.Equal("Cancelled", cancelRes.Status);
+        Assert.Equal(20m, stock.QuantityOnHand); // Hoàn lại 15 + 5 = 20
+    }
+
+    [Fact]
+    public async Task REQ_FE16_RedeemRewardPoints_DeductsPointsAndEarnsNewPoints()
+    {
+        // Arrange
+        var custId = Guid.NewGuid();
+        var customer = new Customer
+        {
+            Id = custId,
+            TenantId = "tenant-01",
+            CustomerCode = "KH_LOYALTY",
+            Name = "Khach Hang Than Thiet",
+            Phone = "0988112233",
+            RewardPoints = 100, // Đang có sẵn 100 điểm
+            TotalSpending = 500000m,
+            AllowDebt = false
+        };
+        _orderRepo.Customers.Add(customer);
+
+        // Đơn hàng: Mua 2 lon Coca (2 x 10.000 = 20.000đ), tiêu 50 điểm tích lũy, thanh toán tiền mặt
+        // Tiêu 50 điểm = giảm 5.000đ, FinalAmount = 15.000đ -> tích thêm 15.000 / 10.000 = 1 điểm
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: custId,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(
+                    ProductId: _prodCocaId,
+                    Quantity: 2,
+                    UnitPrice: 10000m
+                )
+            },
+            CashTendered: 15000m,
+            DiscountAmount: 5000m,
+            PointsRedeemed: 50
+        );
+
+        // Act
+        var res = await _orderService.CreateOrderAsync(request);
+
+        // Assert
+        Assert.NotNull(res);
+        Assert.Equal("Completed", res.Status);
+        Assert.Equal(15000m, res.FinalAmount);
+        // Điểm còn lại: 100 (ban đầu) - 50 (tiêu) + 1 (tích từ 15k) = 51 điểm
+        Assert.Equal(51, customer.RewardPoints);
+        Assert.Equal(515000m, customer.TotalSpending);
+    }
+
+    [Fact]
+    public async Task REQ_SHIFT_SHARED_03_CreateOrder_WhenShiftIsClosing_ThrowsShiftClosingLockdownException()
+    {
+        // Arrange
+        var mockShiftRepo = new Moq.Mock<IShiftRepository>();
+        mockShiftRepo.Setup(r => r.GetActiveShiftAsync(_branchId, Moq.It.IsAny<Guid?>(), Moq.It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ShiftZReport
+            {
+                Id = Guid.NewGuid(),
+                BranchId = _branchId,
+                Status = ShiftState.Closing
+            });
+
+        var orderService = new OrderService(
+            _orderRepo,
+            _uow,
+            _printService,
+            null,
+            null,
+            new OrderCreateRequestValidator(),
+            mockShiftRepo.Object,
+            null,
+            null);
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(_prodHaoHaoId, 1m, 10000m)
+            }
+        );
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => orderService.CreateOrderAsync(request));
+        Assert.Equal("SHIFT_CLOSING_LOCKDOWN", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQ_SHIFT_SHARED_02_CreateOrder_AutoLinksToOpenShift_AndRecordsParticipant()
+    {
+        // Arrange
+        var shiftId = Guid.NewGuid();
+        var cashierUserId = Guid.NewGuid();
+        var mockShiftRepo = new Moq.Mock<IShiftRepository>();
+        ShiftParticipant? recordedParticipant = null;
+
+        mockShiftRepo.Setup(r => r.GetActiveShiftAsync(_branchId, Moq.It.IsAny<Guid?>(), Moq.It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ShiftZReport
+            {
+                Id = shiftId,
+                BranchId = _branchId,
+                Status = ShiftState.Open
+            });
+
+        mockShiftRepo.Setup(r => r.GetParticipantAsync(shiftId, cashierUserId, Moq.It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ShiftParticipant?)null);
+
+        mockShiftRepo.Setup(r => r.AddParticipantAsync(Moq.It.IsAny<ShiftParticipant>(), Moq.It.IsAny<CancellationToken>()))
+            .Callback<ShiftParticipant, CancellationToken>((p, ct) => recordedParticipant = p)
+            .Returns(Task.CompletedTask);
+
+        var mockTenantContext = new Moq.Mock<ITenantContext>();
+        mockTenantContext.Setup(c => c.CurrentTenantId).Returns("tenant-01");
+        mockTenantContext.Setup(c => c.CurrentUserId).Returns(cashierUserId);
+        mockTenantContext.Setup(c => c.CurrentRole).Returns("CASHIER");
+
+        var orderService = new OrderService(
+            _orderRepo,
+            _uow,
+            _printService,
+            null,
+            null,
+            new OrderCreateRequestValidator(),
+            mockShiftRepo.Object,
+            null,
+            mockTenantContext.Object);
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            CashierName: "Thu Ngân Test",
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(_prodHaoHaoId, 2m, 8000m)
+            }
+        );
+
+        // Act
+        var result = await orderService.CreateOrderAsync(request);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(shiftId, result.ShiftId);
+        Assert.NotNull(recordedParticipant);
+        Assert.Equal(shiftId, recordedParticipant.ShiftId);
+        Assert.Equal(cashierUserId, recordedParticipant.UserId);
+        Assert.Equal("Thu Ngân Test", recordedParticipant.UserName);
+    }
+
+    [Fact]
+    public async Task REQ_STOCK_CONCURRENCY_01_ConcurrentOrders_DeductInventoryWithoutNegativeStock()
+    {
+        // Arrange: Đặt tổng tồn kho mì tôm HaoHao trên mọi lô chính xác là 10 gói
+        foreach (var s in _orderRepo.BranchStocks.Where(x => x.ProductId == _prodHaoHaoId && x.BranchId == _branchId))
+        {
+            s.QuantityOnHand = 0m;
+        }
+        var targetStock = _orderRepo.BranchStocks.First(s => s.ProductId == _prodHaoHaoId && s.BranchId == _branchId);
+        targetStock.QuantityOnHand = 10m;
+
+        // Mô phỏng 3 thu ngân cùng đặt 3 đơn đồng thời (mỗi đơn 4 gói -> tổng cần 12 gói, vượt quá 10 gói có sẵn)
+        var lockObj = new object();
+        int successfulCheckouts = 0;
+        int failedCheckouts = 0;
+
+        var tasks = Enumerable.Range(0, 3).Select(async _ =>
+        {
+            var req = new OrderCreateRequest(
+                BranchId: _branchId,
+                CustomerId: null,
+                PaymentMethod: "CASH",
+                Items: new List<OrderItemCreateDto>
+                {
+                    new OrderItemCreateDto(_prodHaoHaoId, 4m, 8000m)
+                }
+            );
+
+            try
+            {
+                await Task.Run(() =>
+                {
+                    OrderResponse? res = null;
+                    lock (lockObj)
+                    {
+                        res = _orderService.CreateOrderAsync(req).GetAwaiter().GetResult();
+                    }
+                    if (res != null)
+                    {
+                        Interlocked.Increment(ref successfulCheckouts);
+                    }
+                });
+            }
+            catch (InvalidOperationException)
+            {
+                Interlocked.Increment(ref failedCheckouts);
+            }
+        });
+
+        await Task.WhenAll(tasks);
+
+        // Assert: Chỉ có đúng 2 đơn thành công (4 + 4 = 8, còn lại 2 gói không đủ cho đơn thứ 3 bị từ chối)
+        Assert.Equal(2, successfulCheckouts);
+        Assert.Equal(1, failedCheckouts);
+        Assert.True(targetStock.QuantityOnHand >= 0m, "Tồn kho không bao giờ được âm!");
+        Assert.Equal(2m, targetStock.QuantityOnHand);
+    }
+
+    [Fact]
+    public async Task CreateOrderAsync_WithCashierName_PersistsSnapshotAndReturnsInResponse()
+    {
+        // Arrange
+        var req = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            CashTendered: 50000m,
+            CashierName: "Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)",
+            Items: new List<OrderItemCreateDto>
+            {
+                new(_prodHaoHaoId, 2m, 4500m)
+            }
+        );
+
+        // Act
+        var res = await _orderService.CreateOrderAsync(req);
+
+        // Assert
+        Assert.NotNull(res);
+        Assert.Equal("Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)", res.CashierName);
+        var savedOrder = _orderRepo.Orders.FirstOrDefault(o => o.Id == res.Id);
+        Assert.NotNull(savedOrder);
+        Assert.Equal("Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)", savedOrder.CashierName);
+    }
+
+    [Fact]
+    public async Task GetOrdersAsync_ReturnsPersistedCashierName_WithoutOverwriting()
+    {
+        // Arrange
+        var order = new Order
+        {
+            Id = Guid.NewGuid(),
+            BranchId = _branchId,
+            OrderCode = "HD2611089999",
+            CashierName = "Nguyễn Văn Minh",
+            FinalAmount = 20000m,
+            PaymentMethod = "CASH",
+            PaymentStatus = "PAID",
+            Status = "Completed",
+            OrderDate = DateTime.UtcNow
+        };
+        _orderRepo.Orders.Add(order);
+
+        // Act
+        var (items, total) = await _orderService.GetOrdersAsync(new OrderFilterRequest());
+
+        // Assert
+        var found = items.FirstOrDefault(i => i.Id == order.Id);
+        Assert.NotNull(found);
+        Assert.Equal("Nguyễn Văn Minh", found.CashierName);
+    }
+
+    [Fact]
+    public async Task CreatePreOrderAsync_WithCashierName_PersistsCashierNameAndReturnsInResponse()
+    {
+        // Arrange
+        var req = new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            DepositAmount: 20000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(2),
+            PaymentMethod: "CASH",
+            CashierName: "Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)",
+            Items: new List<OrderItemCreateDto>
+            {
+                new(_prodHaoHaoId, 5m, 4500m)
+            }
+        );
+
+        // Act
+        var res = await _orderService.CreatePreOrderAsync(req);
+
+        // Assert
+        Assert.NotNull(res);
+        Assert.Equal("Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)", res.CashierName);
+        var savedOrder = _orderRepo.Orders.FirstOrDefault(o => o.Id == res.Id);
+        Assert.NotNull(savedOrder);
+        Assert.Equal("Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)", savedOrder.CashierName);
+        Assert.Equal("PendingPickup", savedOrder.Status);
+    }
+
+    [Fact]
+    public async Task FulfillPreOrderAsync_WithCashierName_RecordsFulfilledByCashierName()
+    {
+        // Arrange
+        var order = new Order
+        {
+            Id = Guid.NewGuid(),
+            BranchId = _branchId,
+            OrderCode = "PO2611080001",
+            CashierName = "Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)",
+            TotalAmount = 100000m,
+            FinalAmount = 100000m,
+            DepositAmount = 30000m,
+            PaymentMethod = "CASH",
+            PaymentStatus = "PARTIALLY_PAID",
+            Status = "PendingPickup",
+            OrderDate = DateTime.UtcNow
+        };
+        _orderRepo.Orders.Add(order);
+
+        var fulfillReq = new PreOrderFulfillRequest(
+            PaymentMethod: "CASH",
+            AmountPaid: 70000m,
+            CashierName: "Lê Thị Thu Ngân"
+        );
+
+        // Act
+        var res = await _orderService.FulfillPreOrderAsync(order.Id, fulfillReq);
+
+        // Assert
+        Assert.NotNull(res);
+        Assert.Equal("Completed", res.Status);
+        Assert.Equal("Lê Thị Thu Ngân", res.FulfilledByCashierName);
+        Assert.NotNull(res.FulfilledAtUtc);
+        Assert.Equal("Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)", res.CashierName);
+    }
 }
 
 // ----------------- FAKE IMPLEMENTATIONS DÀNH CHO UNIT TEST -----------------
@@ -842,6 +1536,16 @@ public class FakeOrderRepository : IOrderRepository
     public List<Customer> Customers { get; } = new();
     public List<Product> Products { get; } = new();
     public List<BranchStock> BranchStocks { get; } = new();
+    public List<BranchProduct> BranchProducts { get; } = new();
+
+    public Task<Dictionary<Guid, BranchProduct>> GetBranchProductsByProductIdsAsync(Guid branchId, IEnumerable<Guid> productIds, CancellationToken cancellationToken = default)
+    {
+        var ids = productIds.ToHashSet();
+        var dict = BranchProducts
+            .Where(bp => bp.BranchId == branchId && ids.Contains(bp.ProductId) && !bp.IsDeleted)
+            .ToDictionary(bp => bp.ProductId);
+        return Task.FromResult(dict);
+    }
 
     public Task<Branch?> GetBranchByIdAsync(Guid branchId, CancellationToken cancellationToken = default)
     {

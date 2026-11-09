@@ -94,13 +94,14 @@ public class CashbookService : ICashbookService
         shift.Notes = request.Notes;
 
         // Xử lý chênh lệch ngoài dung sai (+- 2000đ)
-        if (shift.Discrepancy > 2000)
+        decimal discrepancy = shift.Discrepancy ?? 0m;
+        if (discrepancy > 2000)
         {
-            await RecordEntryInternalAsync(till.Id, FinanceAccountType.Till, till.BranchId, CashbookEntryType.Receipt, shift.Discrepancy, "CASH_OVER_SUSPENSE", shift.Id, "SHF-" + shift.Id.ToString()[..8], "Thừa tiền chốt ca chờ chủ xử lý", ct);
+            await RecordEntryInternalAsync(till.Id, FinanceAccountType.Till, till.BranchId, CashbookEntryType.Receipt, discrepancy, "CASH_OVER_SUSPENSE", shift.Id, "SHF-" + shift.Id.ToString()[..8], "Thừa tiền chốt ca chờ chủ xử lý", ct);
         }
-        else if (shift.Discrepancy < -2000)
+        else if (discrepancy < -2000)
         {
-            await RecordEntryInternalAsync(till.Id, FinanceAccountType.Till, till.BranchId, CashbookEntryType.Payment, Math.Abs(shift.Discrepancy), "CASH_SHORTAGE_PENDING", shift.Id, "SHF-" + shift.Id.ToString()[..8], "Thiếu tiền chốt ca chờ xử lý bồi hoàn", ct);
+            await RecordEntryInternalAsync(till.Id, FinanceAccountType.Till, till.BranchId, CashbookEntryType.Payment, Math.Abs(discrepancy), "CASH_SHORTAGE_PENDING", shift.Id, "SHF-" + shift.Id.ToString()[..8], "Thiếu tiền chốt ca chờ xử lý bồi hoàn", ct);
         }
 
         till.ActiveShiftId = null;
@@ -592,11 +593,11 @@ public class CashbookService : ICashbookService
         var firstId = request.FromAccountId.CompareTo(request.ToAccountId) < 0 ? request.FromAccountId : request.ToAccountId;
         var secondId = request.FromAccountId.CompareTo(request.ToAccountId) < 0 ? request.ToAccountId : request.FromAccountId;
 
-        await _unitOfWork.BeginTransactionAsync(ct);
-        try
+        TransferFundResponse? response = null;
+        await _unitOfWork.ExecuteInTransactionAsync(async token =>
         {
-            await LockAccountByIdAsync(firstId, ct);
-            await LockAccountByIdAsync(secondId, ct);
+            await LockAccountByIdAsync(firstId, token);
+            await LockAccountByIdAsync(secondId, token);
 
             var dateStr = DateTime.UtcNow.ToString("yyyyMMdd");
             var rand = Random.Shared.Next(100, 999);
@@ -604,17 +605,13 @@ public class CashbookService : ICashbookService
             var recRefCode = $"PT-TRF-{dateStr}-{rand}";
             var note = string.IsNullOrWhiteSpace(request.Note) ? "Chuyển tiền nội bộ" : request.Note.Trim();
 
-            var payEntry = await DisburseCashAsync(request.FromAccountId, fromType, request.Amount, "INTERNAL_TRANSFER", null, payRefCode, note, ct);
-            var recEntry = await ReceiveCashAsync(request.ToAccountId, toType, request.Amount, "INTERNAL_TRANSFER", payEntry.Id, recRefCode, note, ct);
+            var payEntry = await DisburseCashAsync(request.FromAccountId, fromType, request.Amount, "INTERNAL_TRANSFER", null, payRefCode, note, token);
+            var recEntry = await ReceiveCashAsync(request.ToAccountId, toType, request.Amount, "INTERNAL_TRANSFER", payEntry.Id, recRefCode, note, token);
 
-            await _unitOfWork.CommitTransactionAsync(ct);
-            return new TransferFundResponse(payEntry, recEntry);
-        }
-        catch
-        {
-            await _unitOfWork.RollbackTransactionAsync(ct);
-            throw;
-        }
+            response = new TransferFundResponse(payEntry, recEntry);
+        }, ct);
+
+        return response!;
     }
 
     public async Task<CashbookEntryResponse?> ReconcileCashAccountAsync(ReconcileAccountRequest request, CancellationToken ct = default)

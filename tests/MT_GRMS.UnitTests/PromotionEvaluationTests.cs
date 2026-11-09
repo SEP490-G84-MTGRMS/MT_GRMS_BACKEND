@@ -246,6 +246,58 @@ public class PromotionEvaluationTests
         Assert.Equal(20000, result.VoucherResult.DiscountAmount);
     }
 
+    [Fact]
+    public async Task REQ_PROMO_02_EvaluateCart_ProductDiscount_ComputesCorrectly()
+    {
+        // Arrange: Giảm 20.000đ mỗi sản phẩm A khi mua từ 2 sản phẩm trở lên
+        var promoId = Guid.NewGuid();
+        _repo.Promotions.Add(new Promotion
+        {
+            Id = promoId,
+            TenantId = "tenant-test-1",
+            PromotionCode = "KM-SP-A",
+            PromotionName = "Giảm 20k cho mỗi sản phẩm A khi mua từ 2 món",
+            Type = "PRODUCT_DISCOUNT",
+            DiscountValue = 20000,
+            MinOrderValue = 0,
+            StartDate = DateTime.UtcNow.AddDays(-1),
+            EndDate = DateTime.UtcNow.AddDays(10),
+            IsActive = true,
+            Conditions = new List<PromotionCondition>
+            {
+                new PromotionCondition
+                {
+                    Id = Guid.NewGuid(),
+                    PromotionId = promoId,
+                    ProductId = _productAId,
+                    ProductRole = "DISCOUNT",
+                    MinQty = 2,
+                    DiscountValue = 20000
+                }
+            }
+        });
+
+        var request = new EvaluateCartRequest(
+            Items: new List<CartItemDto>
+            {
+                new(_productAId, "Sản phẩm A", 100000, 3)
+            },
+            SubTotal: 300000
+        );
+
+        // Act
+        var result = await _service.EvaluateCartAsync(request);
+
+        // Assert: 3 * 20.000 = 60.000đ giảm giá
+        Assert.Equal(60000, result.TotalDiscountAmount);
+        Assert.Equal(240000, result.FinalAmount);
+        Assert.NotEmpty(result.AppliedPromotions);
+        Assert.NotNull(result.ItemDiscounts);
+        Assert.Single(result.ItemDiscounts);
+        Assert.Equal(_productAId, result.ItemDiscounts[0].ProductId);
+        Assert.Equal(60000, result.ItemDiscounts[0].DiscountAmount);
+    }
+
     #region Fakes
     private class FakePromotionRepository : IPromotionRepository
     {
@@ -306,6 +358,10 @@ public class PromotionEvaluationTests
         public Task AddAsync(Promotion entity, CancellationToken cancellationToken = default) { Promotions.Add(entity); return Task.CompletedTask; }
         public void Update(Promotion entity) { }
         public void Delete(Promotion entity) => entity.IsDeleted = true;
+
+        private LoyaltySetting? _loyaltySetting;
+        public Task<LoyaltySetting?> GetLoyaltySettingAsync(string tenantId, CancellationToken cancellationToken = default) => Task.FromResult(_loyaltySetting);
+        public Task SaveLoyaltySettingAsync(LoyaltySetting setting, CancellationToken cancellationToken = default) { _loyaltySetting = setting; return Task.CompletedTask; }
     }
 
     private class FakeUnitOfWork : IUnitOfWork

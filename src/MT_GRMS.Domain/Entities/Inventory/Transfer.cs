@@ -1,5 +1,6 @@
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Domain.Entities.Inventory;
 
@@ -11,7 +12,7 @@ public class Transfer : BaseTenantEntity
     public string TransferCode { get; set; } = string.Empty;
     public Guid FromBranchId { get; set; }
     public Guid ToBranchId { get; set; }
-    public string Status { get; set; } = "Draft";
+    public TransferStatus Status { get; set; } = TransferStatus.Draft;
     public DateTime? DispatchedAt { get; set; }
     public DateTime? ReceivedAt { get; set; }
     public DateTime? ExpectedDeliveryDate { get; set; }

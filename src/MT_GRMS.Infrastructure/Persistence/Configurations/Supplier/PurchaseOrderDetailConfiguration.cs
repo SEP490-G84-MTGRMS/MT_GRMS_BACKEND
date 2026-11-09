@@ -26,6 +26,9 @@ public class PurchaseOrderDetailConfiguration : IEntityTypeConfiguration<Purchas
         builder.Property(x => x.LineAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.RemainOption).HasMaxLength(20);
         builder.Property(x => x.IsClosed).HasDefaultValue(false);
+        builder.Property(x => x.ProductCodeSnapshot).HasMaxLength(50);
+        builder.Property(x => x.ProductNameSnapshot).HasMaxLength(250);
+        builder.Property(x => x.PurchaseUnitNameSnapshot).HasMaxLength(50);
 
         builder.HasOne(x => x.PurchaseOrder)
             .WithMany(p => p.Details)

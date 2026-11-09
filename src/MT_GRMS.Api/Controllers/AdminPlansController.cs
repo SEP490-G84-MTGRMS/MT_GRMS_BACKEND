@@ -10,6 +10,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/admin/plans")]
+[Route("api/admin/plans")]
 [Authorize(Roles = RoleConstants.AdminOnly)]
 public class AdminPlansController : BaseApiController
 {

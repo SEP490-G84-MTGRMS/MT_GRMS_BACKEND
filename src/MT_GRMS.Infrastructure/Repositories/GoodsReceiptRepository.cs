@@ -215,11 +215,13 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
             .Select(gr => gr.PurchaseOrderId!.Value)
             .ToListAsync(cancellationToken);
 
+        // PO đủ điều kiện nhận hàng: đã duyệt / đã gửi NCC / đã chốt sau cutoff.
+        // PENDING_APPROVAL chưa đủ để nhập kho (chưa chốt với NCC).
         var query = _context.PurchaseOrders
             .Include(po => po.Supplier)
             .Include(po => po.Branch)
             .Where(po => po.TenantId == tenantId && !po.IsDeleted &&
-                         (po.Status == "SENT" || po.Status == "CONFIRMED" || po.Status == "DISPATCHED" || po.Status == "APPROVED" || po.Status == "PARTIALLY_RECEIVED") &&
+                         (po.Status == "SENT" || po.Status == "CONFIRMED" || po.Status == "DISPATCHED" || po.Status == "APPROVED" || po.Status == "FINALIZED" || po.Status == "PARTIALLY_RECEIVED") &&
                          !activePoIdsWithReceipt.Contains(po.Id))
             .AsNoTracking();
 

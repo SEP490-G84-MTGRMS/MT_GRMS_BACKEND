@@ -8,6 +8,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/suppliers")]
+[Route("api/suppliers")]
 [Authorize]
 public class SuppliersController : BaseApiController
 {
@@ -259,6 +260,20 @@ public class SuppliersController : BaseApiController
             ? "Đã tạm ngưng phân bổ nhà cung cấp với cửa hàng."
             : "Đã kích hoạt phân bổ nhà cung cấp với cửa hàng.";
         return Ok(ApiResponse<SupplierBranchAssignmentDetailDto>.Ok(result, message));
+    }
+
+    /// <summary>
+    /// Cập nhật ngày giao hàng theo thứ (override) cho phân bổ NCC × cửa hàng.
+    /// </summary>
+    [HttpPatch("{id:guid}/branches/{branchId:guid}/delivery-days")]
+    public async Task<IActionResult> UpdateBranchAssignmentDeliveryDays(
+        Guid id,
+        Guid branchId,
+        [FromBody] UpdateSupplierBranchAssignmentDeliveryDaysRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.UpdateBranchAssignmentDeliveryDaysAsync(id, branchId, request, cancellationToken);
+        return Ok(ApiResponse<SupplierBranchAssignmentDetailDto>.Ok(result, "Đã cập nhật ngày giao hàng cho phân bổ."));
     }
 
     [HttpGet("{id:guid}/ap/ledger")]

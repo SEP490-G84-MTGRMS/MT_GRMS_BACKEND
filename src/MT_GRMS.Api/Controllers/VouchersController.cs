@@ -8,6 +8,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/vouchers")]
+[Route("api/vouchers")]
 [Authorize]
 public class VouchersController : BaseApiController
 {

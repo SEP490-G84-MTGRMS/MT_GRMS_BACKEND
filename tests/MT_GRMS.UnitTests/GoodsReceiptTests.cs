@@ -172,7 +172,97 @@ public class GoodsReceiptTests
         };
 
         var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.CreateGoodsReceiptAsync(command));
-        Assert.Equal("ACCEPTED_EXCEEDS_ORDERED", ex.ErrorCode);
+        Assert.Equal("EXCEEDS_ORDERED", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreateGoodsReceipt_SplitLotsSameSku_WithinOrdered_Succeeds()
+    {
+        var podId = _repo.PurchaseOrders[0].Details.First().Id;
+        var command = new CreateGoodsReceiptCommand
+        {
+            PurchaseOrderId = _poId,
+            SupplierId = _supplierId,
+            BranchId = _branchId,
+            AutoComplete = true,
+            Lines = new List<CreateGoodsReceiptLineCommand>
+            {
+                new()
+                {
+                    ProductId = _milkProdId,
+                    PurchaseOrderDetailId = podId,
+                    OrderedQty = 100,
+                    DeliveredQty = 40,
+                    AcceptedQty = 40,
+                    UnitPrice = 25000,
+                    ManageBatch = true,
+                    BatchCode = "LOT-A",
+                    ManufactureDate = DateTime.UtcNow.AddMonths(-2),
+                    ExpiryDate = DateTime.UtcNow.AddMonths(6)
+                },
+                new()
+                {
+                    ProductId = _milkProdId,
+                    PurchaseOrderDetailId = podId,
+                    OrderedQty = 100,
+                    DeliveredQty = 60,
+                    AcceptedQty = 60,
+                    UnitPrice = 25000,
+                    ManageBatch = true,
+                    BatchCode = "LOT-B",
+                    ManufactureDate = DateTime.UtcNow.AddMonths(-1),
+                    ExpiryDate = DateTime.UtcNow.AddMonths(10)
+                }
+            }
+        };
+
+        var result = await _service.CreateGoodsReceiptAsync(command);
+        Assert.Equal("COMPLETED", result.Status);
+        Assert.Equal(2, result.Lines.Count);
+        Assert.Equal(100, result.TotalAcceptedQty);
+        Assert.Equal(2, _repo.Stocks.Count);
+    }
+
+    [Fact]
+    public async Task CreateGoodsReceipt_SplitLotsExceedOrdered_Throws()
+    {
+        var podId = _repo.PurchaseOrders[0].Details.First().Id;
+        var command = new CreateGoodsReceiptCommand
+        {
+            PurchaseOrderId = _poId,
+            SupplierId = _supplierId,
+            BranchId = _branchId,
+            Lines = new List<CreateGoodsReceiptLineCommand>
+            {
+                new()
+                {
+                    ProductId = _milkProdId,
+                    PurchaseOrderDetailId = podId,
+                    OrderedQty = 100,
+                    DeliveredQty = 40,
+                    AcceptedQty = 40,
+                    UnitPrice = 25000,
+                    ManageBatch = true,
+                    ManufactureDate = DateTime.UtcNow.AddMonths(-1),
+                    ExpiryDate = DateTime.UtcNow.AddMonths(6)
+                },
+                new()
+                {
+                    ProductId = _milkProdId,
+                    PurchaseOrderDetailId = podId,
+                    OrderedQty = 100,
+                    DeliveredQty = 70,
+                    AcceptedQty = 70,
+                    UnitPrice = 25000,
+                    ManageBatch = true,
+                    ManufactureDate = DateTime.UtcNow.AddMonths(-1),
+                    ExpiryDate = DateTime.UtcNow.AddMonths(8)
+                }
+            }
+        };
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.CreateGoodsReceiptAsync(command));
+        Assert.Equal("EXCEEDS_ORDERED", ex.ErrorCode);
     }
 
     [Fact]

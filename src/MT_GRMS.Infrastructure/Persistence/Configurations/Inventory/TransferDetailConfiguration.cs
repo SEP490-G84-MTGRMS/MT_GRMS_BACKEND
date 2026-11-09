@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using MT_GRMS.Domain.Entities.Inventory;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Infrastructure.Persistence.Configurations.Inventory;
 
@@ -22,6 +23,7 @@ public class TransferDetailConfiguration : IEntityTypeConfiguration<TransferDeta
         builder.Property(x => x.BatchNumber).HasMaxLength(50);
         builder.Property(x => x.UnitPrice).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.Amount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
+        builder.Property(x => x.LineStatus).HasConversion<string>().HasMaxLength(20).HasDefaultValue(TransferLineStatus.Pending);
         builder.Property(x => x.DiscrepancyReason).HasMaxLength(255);
         builder.Property(x => x.Note).HasMaxLength(255);
 

@@ -19,7 +19,10 @@ var builder = WebApplication.CreateBuilder(args);
 // 1. Thêm Controllers & Cấu hình Swagger
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.CustomSchemaIds(type => type.FullName?.Replace("+", ".") ?? type.Name);
+});
 
 // 2. Cấu hình JWT Bearer Authentication
 var jwtKey = builder.Configuration["Jwt:Key"] ?? "MT_GRMS_Super_Secret_Key_For_JWT_Authentication_2026_FPTU_Capstone_Project!";
@@ -119,10 +122,7 @@ using (var scope = app.Services.CreateScope())
         var dbContext = services.GetRequiredService<AppDbContext>();
 
         logger.LogInformation("Initializing database schema and seed data...");
-        await DbInitializer.InitializeAsync(dbContext);
-
-        logger.LogInformation("Seeding tax & finance sample data into database...");
-        await DatabaseSeeder.SeedAsync(dbContext, logger);
+        await DbInitializer.InitializeAsync(dbContext, logger);
         logger.LogInformation("Database seeded successfully.");
     }
     catch (Exception ex)
