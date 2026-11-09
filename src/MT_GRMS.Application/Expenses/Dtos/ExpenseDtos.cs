@@ -13,7 +13,9 @@ public record CreateExpenseRequest(
     string? InvoiceNumber,
     string? SellerTaxCode,
     string? EvidenceAttachmentUrl,
-    string? Note
+    string? Note,
+    FinancialNature Nature = FinancialNature.OperatingExpense,
+    string? ReferenceCode = null
 );
 
 public record ApproveExpenseRequest(
@@ -58,7 +60,11 @@ public record ExpenseVoucherResponse(
     DateTime? ApprovedAtUtc,
     DateTime? PaidAtUtc,
     DateTime ExpenseDate,
-    string? Note
+    string? Note,
+    FinancialNature Nature = FinancialNature.OperatingExpense,
+    string? ReferenceCode = null,
+    decimal RefundedAmount = 0,
+    bool IsSettled = false
 );
 
 public record ExpenseSummaryResponse(
@@ -74,4 +80,39 @@ public record ExpenseSummaryResponse(
     int TaxDeductibleCount,
     decimal NonTaxDeductibleAmount,
     int NonTaxDeductibleCount
+);
+
+public record CreateDepositRequest(
+    Guid? BranchId,
+    string CustomerName,
+    decimal Amount,
+    FinanceAccountType PaymentSourceType,
+    Guid PaymentSourceAccountId,
+    string? Note
+);
+
+public record RefundDepositRequest(
+    decimal Amount,
+    FinanceAccountType PaymentSourceType,
+    Guid PaymentSourceAccountId,
+    string? Note
+);
+
+public record ResolveTriageRequest(
+    FinancialNature Nature,
+    bool IsTaxDeductible,
+    string? Category,
+    string ResolutionNote
+);
+
+public record DepositSearchResponse(
+    Guid Id,
+    string VoucherCode,
+    string CustomerName,
+    decimal OriginalAmount,
+    decimal RefundedAmount,
+    decimal RemainingAmount,
+    bool IsSettled,
+    DateTime CreatedAt,
+    string? Note
 );

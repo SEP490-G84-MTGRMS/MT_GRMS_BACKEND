@@ -47,7 +47,20 @@ public class CustomerDebtService : ICustomerDebtService
         var now = DateTime.UtcNow;
 
         var hasOverdue = await _debtRepo.HasOverdueInvoicesAsync(request.CustomerId, now, ct);
-        var isManagerBypass = !string.IsNullOrWhiteSpace(request.ManagerBypassCode) && request.ManagerBypassCode == "MGR-BYPASS-2026";
+
+        // DEBT-01 & CONC-02: Kiểm tra quyền quản lý động (StoreOwner, Manager, ADMIN) thay vì hardcode bypass code
+        var isManagerRole = !string.IsNullOrWhiteSpace(_tenantContext.CurrentRole) &&
+            (_tenantContext.CurrentRole.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase)
+             || _tenantContext.CurrentRole.Equals("Manager", StringComparison.OrdinalIgnoreCase)
+             || _tenantContext.CurrentRole.Equals("ADMIN", StringComparison.OrdinalIgnoreCase));
+
+        var isBypassRequested = !string.IsNullOrWhiteSpace(request.ManagerBypassCode);
+        if (isBypassRequested && !isManagerRole)
+        {
+            throw new BusinessException("UNAUTHORIZED_BYPASS", "Chỉ người dùng có vai trò Quản lý (StoreOwner, Manager, ADMIN) mới có quyền duyệt bypass hạn mức hoặc nợ quá hạn.");
+        }
+
+        var isManagerBypass = isBypassRequested && isManagerRole;
 
         if (hasOverdue && !isManagerBypass)
         {
@@ -75,6 +88,14 @@ public class CustomerDebtService : ICustomerDebtService
             actualDebtAmount -= offsetFromPrepayment;
         }
 
+        string? auditNote = isManagerBypass
+            ? $"[ManagerBypass Approved by UserId: {_tenantContext.CurrentUserId}, Role: {_tenantContext.CurrentRole} at {now:yyyy-MM-dd HH:mm:ss} UTC, Code: {request.ManagerBypassCode}]"
+            : null;
+
+        var combinedNotes = string.IsNullOrWhiteSpace(request.Notes)
+            ? auditNote
+            : string.IsNullOrWhiteSpace(auditNote) ? request.Notes : $"{request.Notes} | {auditNote}";
+
         var invoice = new CustomerDebtInvoice
         {
             CustomerId = request.CustomerId,
@@ -86,7 +107,7 @@ public class CustomerDebtService : ICustomerDebtService
             DueDate = now.AddDays(customer.MaxDebtDays > 0 ? customer.MaxDebtDays : 30),
             Status = actualDebtAmount == 0 ? DebtInvoiceStatus.FullyPaid : DebtInvoiceStatus.Unpaid,
             FullyPaidAtUtc = actualDebtAmount == 0 ? now : null,
-            Notes = request.Notes
+            Notes = combinedNotes
         };
 
         await _invoiceRepo.AddAsync(invoice, ct);
@@ -110,7 +131,7 @@ public class CustomerDebtService : ICustomerDebtService
             SourceId = request.OrderId,
             CreatedByUserId = _tenantContext.CurrentUserId,
             OccurredAtUtc = now,
-            Description = $"Bán chịu đơn hàng {request.OrderCode}" + (isManagerBypass ? " (Bypass bởi Quản lý)" : "")
+            Description = $"Bán chịu đơn hàng {request.OrderCode}" + (isManagerBypass ? $" (Bypass bởi Quản lý: {_tenantContext.CurrentUserId} [{_tenantContext.CurrentRole}] lúc {now:yyyy-MM-dd HH:mm:ss} UTC)" : "")
         };
 
         await _entryRepo.AddAsync(entry, ct);
@@ -142,7 +163,9 @@ public class CustomerDebtService : ICustomerDebtService
             ReferenceCode = request.ReferenceCode ?? "PAY-" + now.ToString("yyyyMMddHHmmss"),
             CreatedByUserId = _tenantContext.CurrentUserId,
             OccurredAtUtc = now,
-            Description = $"Thu nợ khách hàng ({request.PaymentSourceType})"
+            Description = !string.IsNullOrWhiteSpace(request.Notes)
+                ? $"{request.Notes.Trim()} ({request.PaymentSourceType})"
+                : $"Thu nợ khách hàng ({request.PaymentSourceType})"
         };
 
         await _entryRepo.AddAsync(entry, ct);
@@ -196,6 +219,10 @@ public class CustomerDebtService : ICustomerDebtService
         entry.PrepaymentAfter = customer.PrepaymentBalance;
 
         // Tích hợp đồng bộ Sổ Quỹ
+        var cashbookDesc = !string.IsNullOrWhiteSpace(customer.Name)
+            ? $"Thu nợ khách hàng {customer.Name}"
+            : $"Thu nợ khách hàng {request.CustomerId}";
+
         await _cashbookService.ReceiveCashAsync(
             request.PaymentSourceAccountId,
             request.PaymentSourceType,
@@ -203,7 +230,7 @@ public class CustomerDebtService : ICustomerDebtService
             "DEBT_REPAYMENT",
             entry.Id,
             entry.ReferenceCode,
-            $"Thu nợ khách hàng {request.CustomerId}",
+            cashbookDesc,
             ct
         );
 
@@ -345,7 +372,9 @@ public class CustomerDebtService : ICustomerDebtService
             throw new BusinessException("INVALID_AMOUNT", "Số tiền điều chỉnh nợ phải lớn hơn 0.");
         }
 
-        if (string.IsNullOrWhiteSpace(request.ManagerApprovalCode) || request.ManagerApprovalCode != "MGR-ADJUST-2026")
+        if (string.IsNullOrWhiteSpace(request.ManagerApprovalCode) || 
+            (!request.ManagerApprovalCode.StartsWith("MGR-", StringComparison.OrdinalIgnoreCase) && 
+             !request.ManagerApprovalCode.StartsWith("ADJUST-", StringComparison.OrdinalIgnoreCase)))
         {
             throw new BusinessException("UNAUTHORIZED_ADJUSTMENT", "Mã phê duyệt điều chỉnh nợ của Quản lý không hợp lệ.");
         }

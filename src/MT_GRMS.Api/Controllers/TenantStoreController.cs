@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Admin.Dtos;
 using MT_GRMS.Application.Admin.Services;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Infrastructure.Persistence;
 
@@ -70,6 +71,7 @@ public class TenantStoreController : BaseApiController
     /// Cập nhật thông tin gian hàng của khách thuê (Tên chuỗi, MST, Hotline, Địa chỉ, Thành phố)
     /// </summary>
     [HttpPut("store-info")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> UpdateStoreInfo([FromBody] UpdateTenantRequest request, CancellationToken cancellationToken)
     {
         var tenant = await ResolveCurrentTenantAsync(cancellationToken);
@@ -172,6 +174,7 @@ public class TenantStoreController : BaseApiController
     /// Đặt mua hoặc nâng cấp / gia hạn gói dịch vụ SaaS cho gian hàng
     /// </summary>
     [HttpPost("subscriptions/purchase")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> PurchaseSubscription(
         [FromBody] PurchaseSubscriptionRequest request,
         CancellationToken cancellationToken)

@@ -154,7 +154,9 @@ public partial class AppDbContext : DbContext
     {
         modelBuilder.Entity<T>().HasQueryFilter(e =>
             !e.IsDeleted &&
-            (_tenantContext == null || string.IsNullOrEmpty(_tenantContext.CurrentTenantId) || e.TenantId == _tenantContext.CurrentTenantId));
+            e.TenantId == (_tenantContext != null && !string.IsNullOrEmpty(_tenantContext.CurrentTenantId)
+                ? _tenantContext.CurrentTenantId
+                : "__FAIL_CLOSED_NO_ACTIVE_TENANT__"));
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
@@ -172,10 +174,6 @@ public partial class AppDbContext : DbContext
     private void ApplyAuditAndTenantInfo()
     {
         var tenantId = _tenantContext?.CurrentTenantId;
-        if (string.IsNullOrWhiteSpace(tenantId))
-        {
-            tenantId = "default-tenant";
-        }
 
         foreach (var entry in ChangeTracker.Entries<BaseTenantEntity>())
         {
@@ -197,9 +195,14 @@ public partial class AppDbContext : DbContext
 
             if (entry.State == EntityState.Added)
             {
-                if (string.IsNullOrWhiteSpace(entry.Entity.TenantId))
+                // INV-1: Gán TenantId từ ngữ cảnh xác thực, ngăn chặn client ghi đè TenantId (TEN-02)
+                if (!string.IsNullOrWhiteSpace(tenantId))
                 {
                     entry.Entity.TenantId = tenantId;
+                }
+                else if (string.IsNullOrWhiteSpace(entry.Entity.TenantId))
+                {
+                    entry.Entity.TenantId = "default-tenant";
                 }
                 if (entry.Entity.CreatedAt == default)
                 {
@@ -209,6 +212,11 @@ public partial class AppDbContext : DbContext
             else if (entry.State == EntityState.Modified)
             {
                 entry.Entity.UpdatedAt = DateTime.UtcNow;
+                if (entry.Entity is BranchStock branchStock)
+                {
+                    // CONC-03: Optimistic Concurrency token increment for BranchStock
+                    branchStock.RowVersion++;
+                }
             }
         }
 

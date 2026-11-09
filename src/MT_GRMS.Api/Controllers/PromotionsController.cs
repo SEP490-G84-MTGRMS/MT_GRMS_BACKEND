@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Promotions;
@@ -7,6 +8,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/promotions")]
+[Authorize]
 public class PromotionsController : BaseApiController
 {
     private readonly IPromotionService _promotionService;
@@ -96,4 +98,5 @@ public class PromotionsController : BaseApiController
         return Ok(ApiResponse<int>.Ok(addedCount, $"Đã nạp thành công {addedCount} chương trình khuyến mại/voucher mẫu vào hệ thống"));
     }
 }
+
 

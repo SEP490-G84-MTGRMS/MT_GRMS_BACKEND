@@ -23,12 +23,23 @@ public class MultiTenantMiddleware
             var userId = Guid.TryParse(userIdClaim, out var parsedUserId) ? parsedUserId : Guid.Empty;
             Guid? branchId = Guid.TryParse(branchIdClaim, out var parsedBranchId) ? parsedBranchId : null;
 
+            var role = context.User.FindFirst(ClaimTypes.Role)?.Value
+                ?? context.User.FindFirst("role")?.Value
+                ?? context.User.FindFirst("RoleName")?.Value;
+
+            // INV-1 & TEN-05: Chỉ System Admin mới có quyền switch tenant qua header X-Tenant-Id
+            if (string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase))
+            {
+                var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(headerTenantId))
+                {
+                    tenantId = headerTenantId;
+                }
+            }
+
             if (!string.IsNullOrWhiteSpace(tenantId))
             {
                 tenantContext.SetContext(tenantId, userId, branchId);
-                var role = context.User.FindFirst(ClaimTypes.Role)?.Value
-                    ?? context.User.FindFirst("role")?.Value
-                    ?? context.User.FindFirst("RoleName")?.Value;
                 tenantContext.SetRole(role);
             }
         }
@@ -57,7 +68,6 @@ public class MultiTenantMiddleware
                 tenantContext.SetRole("STORE_OWNER");
             }
         }
-
         await _next(context);
     }
 }

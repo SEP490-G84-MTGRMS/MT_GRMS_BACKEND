@@ -1,12 +1,15 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Debt;
 using MT_GRMS.Application.Debt.Dtos;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
 [Route("api/customers/debt")]
+[Authorize]
 public class CustomerDebtController : BaseApiController
 {
     private readonly ICustomerDebtService _debtService;
@@ -41,6 +44,7 @@ public class CustomerDebtController : BaseApiController
     }
 
     [HttpPost("adjust")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<CustomerDebtEntryResponse>>> AdjustDebt([FromBody] AdjustDebtRequest request, CancellationToken ct)
     {
         var result = await _debtService.AdjustDebtAsync(request, ct);
@@ -48,6 +52,7 @@ public class CustomerDebtController : BaseApiController
     }
 
     [HttpPost("write-off")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<CustomerDebtEntryResponse>>> WriteOffBadDebt([FromBody] WriteOffBadDebtRequest request, CancellationToken ct)
     {
         var result = await _debtService.WriteOffBadDebtAsync(request, ct);

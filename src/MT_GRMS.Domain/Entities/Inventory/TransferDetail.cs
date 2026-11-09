@@ -8,7 +8,7 @@ namespace MT_GRMS.Domain.Entities.Inventory;
 /// <summary>
 /// Bảng TransferDetails (Chi tiết mặt hàng điều chuyển kho)
 /// </summary>
-public class TransferDetail : BaseEntity
+public class TransferDetail : BaseTenantEntity
 {
     public Guid TransferId { get; set; }
     public Guid ProductId { get; set; }

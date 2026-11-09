@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
-using MT_GRMS.Domain.Entities;
+using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
@@ -397,6 +397,261 @@ public class HouseholdTaxDatabaseIntegrationTests
         // Lưu snapshot 2 trùng kỳ: EF Core In-Memory / Relational Unique Constraint bắt lỗi
         // Lưu ý: InMemory DB có thể không ép unique constraint tự động như PostgreSQL trừ khi configure key/index,
         // nhưng AddSnapshotAsync trong repo bọc DbUpdateException -> BusinessException.
+    }
+
+    [Fact]
+    public async Task HouseholdTaxRepository_GetBookEntriesAsync_TT152_SevenBooksCompliance()
+    {
+        // Arrange
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+
+        var branchId = Guid.NewGuid();
+        var fromDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var toDate = new DateTime(2026, 3, 31, 23, 59, 59, DateTimeKind.Utc);
+
+        // 1. Order với chiết khấu & OrderDetail
+        var order = new Order
+        {
+            OrderCode = "ORD-TT152-01",
+            BranchId = branchId,
+            TotalAmount = 10_000_000m,
+            DiscountAmount = 1_000_000m,
+            PaymentStatus = "PAID",
+            Status = "Completed",
+            CreatedAt = new DateTime(2026, 2, 1, 10, 0, 0, DateTimeKind.Utc),
+            Details = new List<OrderDetail>
+            {
+                new OrderDetail
+                {
+                    Qty = 10,
+                    UnitPrice = 1_000_000m,
+                    CostPriceAtSale = 700_000m
+                }
+            }
+        };
+        context.Orders.Add(order);
+
+        // 2. GoodsReceipt với Lines
+        var supplier = new MT_GRMS.Domain.Entities.Supplier.Supplier
+        {
+            Code = "NCC-01",
+            Name = "Nhà cung cấp Test"
+        };
+        context.Suppliers.Add(supplier);
+
+        var grn = new MT_GRMS.Domain.Entities.Supplier.GoodsReceipt
+        {
+            Code = "GRN-01",
+            BranchId = branchId,
+            Supplier = supplier,
+            SupplierId = supplier.Id,
+            Status = "CONFIRMED",
+            GrandTotal = 50_000_000m,
+            ReceivedAtUtc = new DateTime(2026, 1, 15, 8, 0, 0, DateTimeKind.Utc),
+            Lines = new List<MT_GRMS.Domain.Entities.Supplier.GoodsReceiptLine>
+            {
+                new MT_GRMS.Domain.Entities.Supplier.GoodsReceiptLine
+                {
+                    AcceptedQty = 100,
+                    DeliveredQty = 100,
+                    UnitPrice = 500_000m,
+                    LineAmount = 50_000_000m
+                }
+            }
+        };
+        context.GoodsReceipts.Add(grn);
+
+        // 3. Chi phí các nhóm
+        context.ExpenseVouchers.AddRange(
+            new ExpenseVoucher
+            {
+                VoucherCode = "PC-LUONG",
+                BranchId = branchId,
+                Category = "Chi lương nhân viên tháng 1",
+                Amount = 15_000_000m,
+                Status = ExpenseVoucherStatus.Paid,
+                ExpenseDate = new DateTime(2026, 1, 31, 0, 0, 0, DateTimeKind.Utc)
+            },
+            new ExpenseVoucher
+            {
+                VoucherCode = "PC-THUEMATBANG",
+                BranchId = branchId,
+                Category = "Tiền thuê mặt bằng kinh doanh",
+                Amount = 10_000_000m,
+                Status = ExpenseVoucherStatus.Paid,
+                ExpenseDate = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc)
+            },
+            new ExpenseVoucher
+            {
+                VoucherCode = "PC-DIEN",
+                BranchId = branchId,
+                Category = "Tiền điện nước và dịch vụ vệ sinh",
+                Amount = 3_000_000m,
+                Status = ExpenseVoucherStatus.Paid,
+                ExpenseDate = new DateTime(2026, 2, 15, 0, 0, 0, DateTimeKind.Utc)
+            },
+            new ExpenseVoucher
+            {
+                VoucherCode = "PC-BAOBI",
+                BranchId = branchId,
+                Category = "Bao bì đóng gói hàng hóa",
+                Amount = 2_000_000m,
+                Status = ExpenseVoucherStatus.Paid,
+                ExpenseDate = new DateTime(2026, 2, 20, 0, 0, 0, DateTimeKind.Utc)
+            },
+            new ExpenseVoucher
+            {
+                VoucherCode = "PC-THUE-NOP",
+                BranchId = branchId,
+                Category = "Nộp thuế GTGT vào kho bạc NSNN",
+                Amount = 1_000_000m,
+                Status = ExpenseVoucherStatus.Paid,
+                ExpenseDate = new DateTime(2026, 3, 10, 0, 0, 0, DateTimeKind.Utc)
+            }
+        );
+
+        // 4. Số quỹ tiền mặt và ngân hàng (trước kỳ và trong kỳ)
+        context.CashbookEntries.AddRange(
+            // Dư đầu kỳ
+            new CashbookEntry
+            {
+                EntryCode = "PT-DK-CASH",
+                AccountId = Guid.NewGuid(),
+                AccountType = FinanceAccountType.Till,
+                BranchId = branchId,
+                EntryType = CashbookEntryType.Receipt,
+                Amount = 20_000_000m,
+                OccurredAtUtc = new DateTime(2025, 12, 31, 10, 0, 0, DateTimeKind.Utc)
+            },
+            new CashbookEntry
+            {
+                EntryCode = "PT-DK-BANK",
+                AccountId = Guid.NewGuid(),
+                AccountType = FinanceAccountType.Bank,
+                BranchId = branchId,
+                EntryType = CashbookEntryType.Receipt,
+                Amount = 100_000_000m,
+                OccurredAtUtc = new DateTime(2025, 12, 31, 10, 0, 0, DateTimeKind.Utc)
+            },
+            // Phát sinh trong kỳ
+            new CashbookEntry
+            {
+                EntryCode = "PT-IN-CASH",
+                AccountId = Guid.NewGuid(),
+                AccountType = FinanceAccountType.Till,
+                BranchId = branchId,
+                EntryType = CashbookEntryType.Receipt,
+                Amount = 9_000_000m,
+                Description = "Thu tiền mặt bán hàng",
+                OccurredAtUtc = new DateTime(2026, 2, 1, 11, 0, 0, DateTimeKind.Utc)
+            },
+            new CashbookEntry
+            {
+                EntryCode = "PC-OUT-BANK",
+                AccountId = Guid.NewGuid(),
+                AccountType = FinanceAccountType.Bank,
+                BranchId = branchId,
+                EntryType = CashbookEntryType.Payment,
+                Amount = 5_000_000m,
+                Description = "Chuyển khoản thanh toán",
+                OccurredAtUtc = new DateTime(2026, 2, 5, 14, 0, 0, DateTimeKind.Utc)
+            }
+        );
+
+        // 5. Chốt thuế kỳ trước (Snapshot)
+        context.HouseholdTaxSnapshots.Add(new HouseholdTaxSnapshot
+        {
+            BranchId = branchId,
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            VatAmount = 2_000_000m,
+            PitAmount = 1_000_000m,
+            TotalTaxAmount = 3_000_000m,
+            CreatedAt = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc),
+            FinalizedBy = "admin"
+        });
+
+        await context.SaveChangesAsync();
+
+        // Act & Assert 1: S1a-HKD
+        var s1aEntries = await repo.GetBookEntriesAsync(fromDate, toDate, branchId, HouseholdTaxGroup.Group1_Under1B, TaxCalculationMethod.RevenuePercentage, AccountingBookType.S1a_RevenueGroup1);
+        Assert.Single(s1aEntries);
+        var s1a = s1aEntries.First();
+        Assert.Equal(9_000_000m, s1a.Amount); // 10tr - 1tr chiết khấu
+        Assert.Equal("Doanh thu bán lẻ", s1a.SectionGroup);
+        Assert.Equal("Doanh thu bán lẻ (Nhóm 1)", s1a.Category);
+
+        // Act & Assert 2: S2a-HKD
+        var s2aEntries = await repo.GetBookEntriesAsync(fromDate, toDate, branchId, HouseholdTaxGroup.Group2_1BTo3B, TaxCalculationMethod.RevenuePercentage, AccountingBookType.S2a_RevenueGroup2);
+        Assert.Single(s2aEntries);
+        var s2a = s2aEntries.First();
+        Assert.Equal(9_000_000m, s2a.Amount);
+        Assert.Equal("1. Phân phối, cung cấp hàng hóa", s2a.SectionGroup);
+        Assert.Equal(1.0m, s2a.TaxRate);
+        Assert.Equal(90_000m, s2a.TaxAmount);
+
+        // Act & Assert 3: S2b-HKD
+        var s2bEntries = await repo.GetBookEntriesAsync(fromDate, toDate, branchId, HouseholdTaxGroup.Group3_3BTo50B, TaxCalculationMethod.DeclarationBased, AccountingBookType.S2b_RevenueDeclaration);
+        Assert.Single(s2bEntries);
+        var s2b = s2bEntries.First();
+        Assert.Equal(9_000_000m, s2b.Amount);
+        Assert.Equal("1. Phân phối, cung cấp hàng hóa", s2b.SectionGroup);
+        Assert.Equal(1.0m, s2b.TaxRate);
+        Assert.DoesNotContain(s2bEntries, e => e.Description.Contains("TNCN"));
+
+        // Act & Assert 4: S2c-HKD
+        var s2cEntries = await repo.GetBookEntriesAsync(fromDate, toDate, branchId, HouseholdTaxGroup.Group3_3BTo50B, TaxCalculationMethod.DeclarationBased, AccountingBookType.S2c_RevenueAndExpense);
+        Assert.Contains(s2cEntries, e => e.SectionGroup == "1. Doanh thu" && e.Amount == 9_000_000m);
+        Assert.Contains(s2cEntries, e => e.Category == "Giá vốn hàng bán (COGS)" && e.SectionGroup == "2.a) Chi phí nguyên liệu, vật liệu, nhiên liệu, hàng hóa");
+        Assert.Contains(s2cEntries, e => e.SectionGroup == "2.b) Chi phí tiền lương, tiền công, thù lao" && e.Amount == 15_000_000m);
+        Assert.Contains(s2cEntries, e => e.SectionGroup == "2.c) Chi phí thuê mặt bằng, kho bãi, máy móc" && e.Amount == 10_000_000m);
+        Assert.Contains(s2cEntries, e => e.SectionGroup == "2.d) Chi phí dịch vụ mua ngoài" && e.Amount == 3_000_000m);
+
+        // Act & Assert 5: S2d-HKD
+        var s2dEntries = await repo.GetBookEntriesAsync(fromDate, toDate, branchId, HouseholdTaxGroup.Group3_3BTo50B, TaxCalculationMethod.DeclarationBased, AccountingBookType.S2d_MaterialsAndGoods);
+        var receiptEntry = s2dEntries.FirstOrDefault(e => e.SectionGroup == "Nhập kho trong kỳ");
+        Assert.NotNull(receiptEntry);
+        Assert.Equal(100m, receiptEntry.InQuantity);
+        Assert.Equal(50_000_000m, receiptEntry.InAmount);
+        Assert.Equal(500_000m, receiptEntry.UnitPrice);
+        Assert.Equal("Lô/Hàng", receiptEntry.Unit);
+
+        var orderEntry = s2dEntries.FirstOrDefault(e => e.SectionGroup == "Xuất kho trong kỳ");
+        Assert.NotNull(orderEntry);
+        Assert.Equal(10m, orderEntry.OutQuantity);
+        Assert.Equal(7_000_000m, orderEntry.OutAmount); // 10 * 700k
+        Assert.Equal(700_000m, orderEntry.UnitPrice);
+        Assert.Equal("Sản phẩm", orderEntry.Unit);
+
+        Assert.Contains(s2dEntries, e => e.SectionGroup == "Vật liệu, dụng cụ tiêu hao" && e.Amount == 2_000_000m);
+
+        // Act & Assert 6: S2e-HKD
+        var s2eEntries = await repo.GetBookEntriesAsync(fromDate, toDate, branchId, HouseholdTaxGroup.Group3_3BTo50B, TaxCalculationMethod.DeclarationBased, AccountingBookType.S2e_CashAndBank);
+        var cashOpening = s2eEntries.FirstOrDefault(e => e.SectionGroup == "Khối I - Quỹ Tiền mặt" && e.IsSummaryRow);
+        Assert.NotNull(cashOpening);
+        Assert.Equal(20_000_000m, cashOpening.BalanceAmount);
+
+        var cashIn = s2eEntries.FirstOrDefault(e => e.VoucherNumber == "PT-IN-CASH");
+        Assert.NotNull(cashIn);
+        Assert.Equal(9_000_000m, cashIn.InAmount);
+        Assert.Equal(0m, cashIn.OutAmount);
+
+        var bankOpening = s2eEntries.FirstOrDefault(e => e.SectionGroup == "Khối II - Tiền gửi Ngân hàng" && e.IsSummaryRow);
+        Assert.NotNull(bankOpening);
+        Assert.Equal(100_000_000m, bankOpening.BalanceAmount);
+
+        var bankOut = s2eEntries.FirstOrDefault(e => e.VoucherNumber == "PC-OUT-BANK");
+        Assert.NotNull(bankOut);
+        Assert.Equal(0m, bankOut.InAmount);
+        Assert.Equal(5_000_000m, bankOut.OutAmount);
+
+        // Act & Assert 7: S3a-HKD
+        var s3aEntries = await repo.GetBookEntriesAsync(fromDate, toDate, branchId, HouseholdTaxGroup.Group3_3BTo50B, TaxCalculationMethod.DeclarationBased, AccountingBookType.S3a_TaxObligation);
+        Assert.Contains(s3aEntries, e => e.SectionGroup == "1. Thuế Giá trị gia tăng (GTGT)" && e.InAmount == 2_000_000m);
+        Assert.Contains(s3aEntries, e => e.SectionGroup == "2. Thuế Thu nhập cá nhân (TNCN)" && e.InAmount == 1_000_000m);
+        Assert.Contains(s3aEntries, e => e.OutAmount == 1_000_000m); // PC-THUE-NOP
     }
 }
 
