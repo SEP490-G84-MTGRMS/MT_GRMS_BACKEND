@@ -1,4 +1,5 @@
 using MT_GRMS.Application.Branches;
+using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.AttendancePolicies.Dtos;
@@ -105,6 +106,25 @@ public class BranchAttendancePolicyServiceTests
         public Task<int> CountTotalAsync(CancellationToken cancellationToken = default)
         {
             return Task.FromResult(Branches.Count(b => !b.IsDeleted));
+        }
+
+        public Task<BranchDetailDto?> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default)
+        {
+            var branch = Branches.FirstOrDefault(b => b.Id == id && !b.IsDeleted);
+            if (branch == null) return Task.FromResult<BranchDetailDto?>(null);
+            return Task.FromResult<BranchDetailDto?>(new BranchDetailDto
+            {
+                Id = branch.Id,
+                Code = branch.BranchCode,
+                Name = branch.Name,
+                Address = branch.Address ?? string.Empty,
+                Phone = branch.Phone,
+                Email = branch.Email,
+                ManagerName = branch.ManagerName,
+                IsHeadquarter = branch.IsHeadquarter,
+                Status = branch.IsActive ? "Active" : "Inactive",
+                CreatedAt = branch.CreatedAt
+            });
         }
     }
 

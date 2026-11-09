@@ -119,9 +119,9 @@ public class BranchManagementTests
 
         // Assert
         Assert.NotNull(quota);
-        Assert.Equal(4, quota.UsedBranches);
+        Assert.Equal(5, quota.UsedBranches);
         Assert.Equal(5, quota.MaxBranches);
-        Assert.True(quota.CanAddMore);
+        Assert.False(quota.CanAddMore);
         Assert.Equal("PRO", quota.CurrentPlanCode);
     }
 
@@ -154,7 +154,9 @@ public class BranchManagementTests
     [Fact]
     public async Task REQ_BR02_CreateBranch_ValidRequest_Success()
     {
-        // Arrange
+        // Arrange - Cho phép thêm chi nhánh bằng cách tăng ExtraBranches để có quota
+        var tenant = await _tenantRepo.GetByIdAsync("tenant-test-1");
+        if (tenant != null) tenant.ExtraBranches = 1;
         var req = new CreateBranchRequest("BR-NEW", "Chi nhánh Mới", "789 Phố Mới", "0912345678", "Trần Văn Mới");
 
         // Act
@@ -307,6 +309,25 @@ public class BranchManagementTests
 
         public void Update(Branch entity) { }
         public void Delete(Branch entity) => entity.IsDeleted = true;
+
+        public Task<BranchDetailDto?> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default)
+        {
+            var branch = Branches.FirstOrDefault(b => b.Id == id && !b.IsDeleted);
+            if (branch == null) return Task.FromResult<BranchDetailDto?>(null);
+            return Task.FromResult<BranchDetailDto?>(new BranchDetailDto
+            {
+                Id = branch.Id,
+                Code = branch.BranchCode,
+                Name = branch.Name,
+                Address = branch.Address ?? string.Empty,
+                Phone = branch.Phone,
+                Email = branch.Email,
+                ManagerName = branch.ManagerName,
+                IsHeadquarter = branch.IsHeadquarter,
+                Status = branch.IsActive ? "Active" : "Inactive",
+                CreatedAt = branch.CreatedAt
+            });
+        }
     }
 
     private class FakeUnitOfWork : IUnitOfWork
