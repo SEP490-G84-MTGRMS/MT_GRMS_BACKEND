@@ -148,6 +148,13 @@ public class AuthService : IAuthService
         var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt);
         var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
 
+        // Lưu RefreshToken và thời hạn (7 ngày) vào CSDL
+        user.RefreshToken = refreshToken;
+        user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+        user.LastLoginAt = DateTime.UtcNow;
+        _userRepository.Update(user);
+        await _userRepository.SaveChangesAsync(cancellationToken);
+
         return new LoginResponse(
             AccessToken: accessToken,
             RefreshToken: refreshToken,
@@ -156,29 +163,93 @@ public class AuthService : IAuthService
         );
     }
 
-    public Task<LoginResponse> RefreshTokenAsync(RefreshTokenRequest request, CancellationToken cancellationToken = default)
+    public async Task<LoginResponse> RefreshTokenAsync(RefreshTokenRequest request, CancellationToken cancellationToken = default)
     {
-        var refreshedUser = new UserInfo(
-            Id: $"usr_{Guid.NewGuid():N}",
-            Username: "refreshed_user",
-            FullName: "Refreshed User",
-            Email: "user@mtgrms.vn",
-            RoleName: "ADMIN",
+        if (string.IsNullOrWhiteSpace(request.RefreshToken))
+        {
+            throw new ArgumentException("RefreshToken không được để trống.");
+        }
+
+        // Tìm user theo RefreshToken trong CSDL
+        var matchingUsers = await _userRepository.FindAsync(u => u.RefreshToken == request.RefreshToken, cancellationToken);
+        var user = matchingUsers.FirstOrDefault();
+
+        if (user == null || user.RefreshTokenExpiryTime == null || user.RefreshTokenExpiryTime <= DateTime.UtcNow)
+        {
+            throw new UnauthorizedAccessException("Phiên đăng nhập đã hết hạn hoặc RefreshToken không hợp lệ. Vui lòng đăng nhập lại.");
+        }
+
+        var tenantUser = user.TenantUsers?.FirstOrDefault();
+        var tenantId = tenantUser?.TenantId ?? "tenant_mt_mart_01";
+        var isAdmin = user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase);
+        var role = isAdmin ? "ADMIN" : (tenantUser?.Role ?? "STORE_OWNER");
+
+        var userInfo = new UserInfo(
+            Id: user.Id,
+            Username: user.Username,
+            FullName: string.IsNullOrWhiteSpace(user.FullName) ? user.Username : user.FullName,
+            Email: string.IsNullOrWhiteSpace(user.Email) ? $"{user.Username}@mtgrms.vn" : user.Email,
+            RoleName: role,
             BranchId: null,
-            TenantId: "TENANT-HCM-01",
-            IsAdmin: true
+            TenantId: tenantId,
+            IsAdmin: isAdmin
         );
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
-        var accessToken = GenerateJwtToken(refreshedUser.Id, refreshedUser.Username, refreshedUser.Email, refreshedUser.RoleName, refreshedUser.TenantId, true, expiresAt);
+        var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt);
 
-        return Task.FromResult(new LoginResponse(
+        // Token Rotation: Sinh RefreshToken mới và hủy token cũ
+        var newRefreshToken = $"mt_refresh_{Guid.NewGuid():N}";
+        user.RefreshToken = newRefreshToken;
+        user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+        _userRepository.Update(user);
+        await _userRepository.SaveChangesAsync(cancellationToken);
+
+        return new LoginResponse(
             AccessToken: accessToken,
-            RefreshToken: $"mt_refresh_{Guid.NewGuid():N}",
+            RefreshToken: newRefreshToken,
             ExpiresAt: expiresAt,
-            User: refreshedUser
-        ));
+            User: userInfo
+        );
+    }
+
+    public async Task<UserInfo?> GetCurrentUserAsync(string userId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId)) return null;
+
+        var user = await _userRepository.GetByIdAsync(userId, cancellationToken);
+        if (user == null || !user.IsActive) return null;
+
+        var tenantUser = user.TenantUsers?.FirstOrDefault();
+        var tenantId = tenantUser?.TenantId ?? "tenant_mt_mart_01";
+        var isAdmin = user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase);
+        var role = isAdmin ? "ADMIN" : (tenantUser?.Role ?? "STORE_OWNER");
+
+        return new UserInfo(
+            Id: user.Id,
+            Username: user.Username,
+            FullName: string.IsNullOrWhiteSpace(user.FullName) ? user.Username : user.FullName,
+            Email: string.IsNullOrWhiteSpace(user.Email) ? $"{user.Username}@mtgrms.vn" : user.Email,
+            RoleName: role,
+            BranchId: null,
+            TenantId: tenantId,
+            IsAdmin: isAdmin
+        );
+    }
+
+    public async Task RevokeRefreshTokenAsync(string userId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId)) return;
+
+        var user = await _userRepository.GetByIdAsync(userId, cancellationToken);
+        if (user != null)
+        {
+            user.RefreshToken = null;
+            user.RefreshTokenExpiryTime = null;
+            _userRepository.Update(user);
+            await _userRepository.SaveChangesAsync(cancellationToken);
+        }
     }
 
     public async Task<LoginResponse> RegisterTenantAsync(RegisterTenantRequest request, CancellationToken cancellationToken = default)

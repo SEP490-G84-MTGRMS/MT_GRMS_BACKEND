@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Api.Controllers;
 using MT_GRMS.Application.Auth;
@@ -8,6 +10,7 @@ namespace MT_GRMS.API.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Route("api/v1/[controller]")]
 public class AuthController : BaseApiController
 {
     private readonly IAuthService _authService;
@@ -18,10 +21,10 @@ public class AuthController : BaseApiController
     }
 
     /// <summary>
-    /// Đăng nhập hệ thống & cấp AccessToken + RefreshToken
+    /// Đăng nhập hệ thống & cấp AccessToken + RefreshToken qua HttpOnly Cookie
     /// </summary>
     [HttpPost("login")]
-    [ProducesResponseType(typeof(ApiResponse<LoginResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<UserInfo>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken cancellationToken)
@@ -34,7 +37,8 @@ public class AuthController : BaseApiController
         try
         {
             var result = await _authService.LoginAsync(request, cancellationToken);
-            return Ok(ApiResponse<LoginResponse>.Ok(result, "Đăng nhập thành công.", StatusCodes.Status200OK));
+            SetAuthCookies(result.AccessToken, result.RefreshToken, result.ExpiresAt);
+            return Ok(ApiResponse<UserInfo>.Ok(result.User, "Đăng nhập thành công.", StatusCodes.Status200OK));
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -50,7 +54,7 @@ public class AuthController : BaseApiController
     /// Đăng ký tài khoản chủ cửa hàng và khởi tạo gian hàng mới
     /// </summary>
     [HttpPost("register")]
-    [ProducesResponseType(typeof(ApiResponse<LoginResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<UserInfo>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Register([FromBody] RegisterTenantRequest request, CancellationToken cancellationToken)
     {
@@ -62,7 +66,8 @@ public class AuthController : BaseApiController
         try
         {
             var result = await _authService.RegisterTenantAsync(request, cancellationToken);
-            return Ok(ApiResponse<LoginResponse>.Ok(result, "Đăng ký tài khoản và cửa hàng thành công.", StatusCodes.Status200OK));
+            SetAuthCookies(result.AccessToken, result.RefreshToken, result.ExpiresAt);
+            return Ok(ApiResponse<UserInfo>.Ok(result.User, "Đăng ký tài khoản và cửa hàng thành công.", StatusCodes.Status200OK));
         }
         catch (ArgumentException ex)
         {
@@ -71,30 +76,129 @@ public class AuthController : BaseApiController
     }
 
     /// <summary>
-    /// Cấp mới AccessToken thông qua RefreshToken
+    /// Cấp mới AccessToken thông qua RefreshToken Cookie (Token Rotation)
     /// </summary>
     [HttpPost("refresh")]
-    [ProducesResponseType(typeof(ApiResponse<LoginResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<UserInfo>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> Refresh([FromBody] RefreshTokenRequest request, CancellationToken cancellationToken)
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> Refresh([FromBody(EmptyBodyBehavior = Microsoft.AspNetCore.Mvc.ModelBinding.EmptyBodyBehavior.Allow)] RefreshTokenRequest? request, CancellationToken cancellationToken)
     {
-        if (request == null || string.IsNullOrWhiteSpace(request.RefreshToken))
+        // 1. Ưu tiên đọc RefreshToken từ HttpOnly Cookie
+        string? refreshToken = null;
+        try
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "RefreshToken không được để trống.", StatusCodes.Status400BadRequest));
+            refreshToken = Request?.Cookies?["refresh_token"];
+        }
+        catch { }
+
+        if (string.IsNullOrWhiteSpace(refreshToken) && request != null)
+        {
+            refreshToken = request.RefreshToken;
         }
 
-        var result = await _authService.RefreshTokenAsync(request, cancellationToken);
-        return Ok(ApiResponse<LoginResponse>.Ok(result, "Làm mới token thành công.", StatusCodes.Status200OK));
+        if (string.IsNullOrWhiteSpace(refreshToken))
+        {
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", "RefreshToken không tồn tại hoặc đã hết hạn.", StatusCodes.Status401Unauthorized));
+        }
+
+        try
+        {
+            var result = await _authService.RefreshTokenAsync(new RefreshTokenRequest(refreshToken), cancellationToken);
+            SetAuthCookies(result.AccessToken, result.RefreshToken, result.ExpiresAt);
+            return Ok(ApiResponse<UserInfo>.Ok(result.User, "Làm mới phiên thành công.", StatusCodes.Status200OK));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            DeleteAuthCookies();
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", ex.Message, StatusCodes.Status401Unauthorized));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+        }
     }
 
     /// <summary>
-    /// Đăng xuất khỏi hệ thống
+    /// Lấy thông tin tài khoản người dùng hiện tại từ HttpOnly Cookie
+    /// </summary>
+    [HttpGet("me")]
+    [Authorize]
+    [ProducesResponseType(typeof(ApiResponse<UserInfo>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> GetMe(CancellationToken cancellationToken)
+    {
+        var userId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                     ?? User?.FindFirst("sub")?.Value
+                     ?? User?.FindFirst("userId")?.Value;
+
+        if (string.IsNullOrEmpty(userId))
+        {
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", "Chưa xác thực danh tính.", StatusCodes.Status401Unauthorized));
+        }
+
+        var user = await _authService.GetCurrentUserAsync(userId, cancellationToken);
+        if (user == null)
+        {
+            DeleteAuthCookies();
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", "Người dùng không tồn tại hoặc đã bị vô hiệu hóa.", StatusCodes.Status401Unauthorized));
+        }
+
+        return Ok(ApiResponse<UserInfo>.Ok(user, "Lấy thông tin người dùng thành công.", StatusCodes.Status200OK));
+    }
+
+    /// <summary>
+    /// Đăng xuất khỏi hệ thống & xóa HttpOnly Cookies
     /// </summary>
     [HttpPost("logout")]
-    [ProducesResponseType(typeof(ApiResponse<string>), StatusCodes.Status200OK)]
-    public IActionResult Logout()
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
+    public async Task<IActionResult> Logout(CancellationToken cancellationToken = default)
     {
-        return Ok(ApiResponse<string>.Ok(string.Empty, "Đăng xuất thành công.", StatusCodes.Status200OK));
+        var userId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                     ?? User?.FindFirst("sub")?.Value;
+
+        if (!string.IsNullOrEmpty(userId))
+        {
+            await _authService.RevokeRefreshTokenAsync(userId, cancellationToken);
+        }
+
+        DeleteAuthCookies();
+        return Ok(ApiResponse<object>.Ok(new { success = true }, "Đăng xuất thành công.", StatusCodes.Status200OK));
+    }
+
+    private void SetAuthCookies(string accessToken, string refreshToken, DateTime expiresAt)
+    {
+        if (Response?.Cookies == null) return;
+        var isHttps = Request?.IsHttps ?? false;
+
+        var accessCookieOptions = new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = isHttps,
+            SameSite = SameSiteMode.Lax,
+            Path = "/",
+            Expires = expiresAt,
+            IsEssential = true
+        };
+        Response.Cookies.Append("access_token", accessToken, accessCookieOptions);
+
+        var refreshCookieOptions = new CookieOptions
+        {
+            HttpOnly = true,
+            Secure = isHttps,
+            SameSite = SameSiteMode.Lax,
+            Path = "/api/auth",
+            Expires = DateTime.UtcNow.AddDays(7),
+            IsEssential = true
+        };
+        Response.Cookies.Append("refresh_token", refreshToken, refreshCookieOptions);
+    }
+
+    private void DeleteAuthCookies()
+    {
+        if (Response?.Cookies == null) return;
+        Response.Cookies.Delete("access_token", new CookieOptions { Path = "/" });
+        Response.Cookies.Delete("refresh_token", new CookieOptions { Path = "/api/auth" });
     }
 
     /// <summary>
