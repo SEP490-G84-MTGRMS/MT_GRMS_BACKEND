@@ -37,3 +37,4 @@
 ## 4. Ghi Chú Cho Manager Khi Duyệt & Merge (Manager Merge Notes)
 - **Mức độ rủi ro**: Thấp (Low).
 - Tái cấu trúc nội bộ hoàn toàn tương thích ngược với API contracts, không làm thay đổi response schema.
+
