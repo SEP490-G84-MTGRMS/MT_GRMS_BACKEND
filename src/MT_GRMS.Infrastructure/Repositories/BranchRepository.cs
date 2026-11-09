@@ -88,74 +88,133 @@ public class BranchRepository : GenericRepository<Branch>, IBranchRepository
 
         if (branch == null) return null;
 
-        var totalProducts = await _context.BranchProducts
-            .AsNoTracking()
-            .CountAsync(bp => bp.BranchId == id && !bp.IsDeleted, cancellationToken);
+        int totalProducts = 0;
+        decimal totalStock = 0;
+        int lowStockCount = 0;
+        var recentProducts = new List<BranchProductSummaryItemDto>();
 
-        var branchStocks = await _context.BranchStocks
-            .Include(s => s.Product)
-            .AsNoTracking()
-            .Where(s => s.BranchId == id && !s.IsDeleted)
-            .ToListAsync(cancellationToken);
-
-        var totalStock = branchStocks.Sum(s => s.QuantityOnHand);
-
-        // Tính số sản phẩm sắp hết hàng (tồn kho <= minStock)
-        var catalogProductIds = await _context.BranchProducts
-            .AsNoTracking()
-            .Where(bp => bp.BranchId == id && !bp.IsDeleted)
-            .Select(bp => bp.ProductId)
-            .Distinct()
-            .ToListAsync(cancellationToken);
-
-        var lowStockCount = catalogProductIds.Count(pid =>
+        try
         {
-            var qty = branchStocks.Where(s => s.ProductId == pid).Sum(s => s.QuantityOnHand);
-            var min = branchStocks.FirstOrDefault(s => s.ProductId == pid)?.Product?.MinStock ?? 0m;
-            return qty <= min;
-        });
+            var branchStocks = await _context.BranchStocks
+                .Include(s => s.Product)
+                .AsNoTracking()
+                .Where(s => s.BranchId == id && !s.IsDeleted)
+                .ToListAsync(cancellationToken);
 
-        var totalEmployees = await _context.Employees
-            .AsNoTracking()
-            .CountAsync(e => e.BranchId == id && !e.IsDeleted, cancellationToken);
+            totalStock = branchStocks.Sum(s => s.QuantityOnHand);
 
-        var activeEmployees = await _context.Employees
-            .AsNoTracking()
-            .CountAsync(e => e.BranchId == id && !e.IsDeleted && e.Status == EmployeeStatus.Active, cancellationToken);
+            List<Guid> catalogProductIds = new();
 
-        var recentEmployees = await _context.Employees
-            .AsNoTracking()
-            .Where(e => e.BranchId == id && !e.IsDeleted)
-            .OrderByDescending(e => e.CreatedAt)
-            .Take(5)
-            .Select(e => new BranchEmployeeSummaryItemDto
+            try
             {
-                Id = e.Id,
-                EmployeeCode = e.EmployeeCode,
-                FullName = e.FullName,
-                Phone = e.Phone,
-                Status = e.Status.ToString(),
-                StartDate = e.StartDate
-            })
-            .ToListAsync(cancellationToken);
+                totalProducts = await _context.BranchProducts
+                    .AsNoTracking()
+                    .CountAsync(bp => bp.BranchId == id && !bp.IsDeleted, cancellationToken);
 
-        var recentProducts = await _context.BranchProducts
-            .AsNoTracking()
-            .Include(bp => bp.Product)
-            .Where(bp => bp.BranchId == id && !bp.IsDeleted && bp.Product != null)
-            .OrderByDescending(bp => bp.CreatedAt)
-            .Take(5)
-            .Select(bp => new BranchProductSummaryItemDto
+                catalogProductIds = await _context.BranchProducts
+                    .AsNoTracking()
+                    .Where(bp => bp.BranchId == id && !bp.IsDeleted)
+                    .Select(bp => bp.ProductId)
+                    .Distinct()
+                    .ToListAsync(cancellationToken);
+
+                recentProducts = await _context.BranchProducts
+                    .AsNoTracking()
+                    .Include(bp => bp.Product)
+                    .Where(bp => bp.BranchId == id && !bp.IsDeleted && bp.Product != null)
+                    .OrderByDescending(bp => bp.CreatedAt)
+                    .Take(5)
+                    .Select(bp => new BranchProductSummaryItemDto
+                    {
+                        ProductId = bp.ProductId,
+                        Sku = bp.Product!.ProductCode,
+                        Barcode = bp.Product.Barcode,
+                        ProductName = bp.Product.Name,
+                        Unit = bp.Product.BaseUnit,
+                        SellingPrice = bp.SellingPriceOverride ?? bp.Product.SellingPrice,
+                        Status = bp.Status
+                    })
+                    .ToListAsync(cancellationToken);
+            }
+            catch
             {
-                ProductId = bp.ProductId,
-                Sku = bp.Product!.ProductCode,
-                Barcode = bp.Product.Barcode,
-                ProductName = bp.Product.Name,
-                Unit = bp.Product.BaseUnit,
-                SellingPrice = bp.SellingPriceOverride ?? bp.Product.SellingPrice,
-                Status = bp.Status
-            })
-            .ToListAsync(cancellationToken);
+                // Bỏ qua lỗi nếu bảng BranchProducts chưa tồn tại hoặc rỗng
+            }
+
+            // Fallback sang BranchStocks nếu catalog chưa có sản phẩm
+            if (totalProducts == 0 && branchStocks.Count > 0)
+            {
+                var distinctStockProducts = branchStocks.Select(s => s.ProductId).Distinct().ToList();
+                totalProducts = distinctStockProducts.Count;
+                catalogProductIds = distinctStockProducts;
+
+                if (recentProducts.Count == 0)
+                {
+                    recentProducts = branchStocks
+                        .Where(s => s.Product != null)
+                        .GroupBy(s => s.ProductId)
+                        .Select(g => g.First())
+                        .Take(5)
+                        .Select(s => new BranchProductSummaryItemDto
+                        {
+                            ProductId = s.ProductId,
+                            Sku = s.Product!.ProductCode,
+                            Barcode = s.Product.Barcode,
+                            ProductName = s.Product.Name,
+                            Unit = s.Product.BaseUnit,
+                            SellingPrice = s.RetailPrice ?? s.Product.SellingPrice,
+                            Status = s.Status
+                        })
+                        .ToList();
+                }
+            }
+
+            lowStockCount = catalogProductIds.Count(pid =>
+            {
+                var qty = branchStocks.Where(s => s.ProductId == pid).Sum(s => s.QuantityOnHand);
+                var min = branchStocks.FirstOrDefault(s => s.ProductId == pid)?.Product?.MinStock ?? 0m;
+                return qty <= min;
+            });
+        }
+        catch
+        {
+            // Bỏ qua lỗi thống kê tồn kho nếu có
+        }
+
+        int totalEmployees = 0;
+        int activeEmployees = 0;
+        var recentEmployees = new List<BranchEmployeeSummaryItemDto>();
+
+        try
+        {
+            totalEmployees = await _context.Employees
+                .AsNoTracking()
+                .CountAsync(e => e.BranchId == id && !e.IsDeleted, cancellationToken);
+
+            activeEmployees = await _context.Employees
+                .AsNoTracking()
+                .CountAsync(e => e.BranchId == id && !e.IsDeleted && e.Status == EmployeeStatus.Active, cancellationToken);
+
+            recentEmployees = await _context.Employees
+                .AsNoTracking()
+                .Where(e => e.BranchId == id && !e.IsDeleted)
+                .OrderByDescending(e => e.CreatedAt)
+                .Take(5)
+                .Select(e => new BranchEmployeeSummaryItemDto
+                {
+                    Id = e.Id,
+                    EmployeeCode = e.EmployeeCode,
+                    FullName = e.FullName,
+                    Phone = e.Phone,
+                    Status = e.Status.ToString(),
+                    StartDate = e.StartDate
+                })
+                .ToListAsync(cancellationToken);
+        }
+        catch
+        {
+            // Bỏ qua lỗi thống kê nhân sự nếu có
+        }
 
         return new BranchDetailDto
         {

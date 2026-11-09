@@ -189,6 +189,35 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
     }
 
+    private static async Task EnsureBranchProductsSchemaAsync(AppDbContext context, ILogger? logger = null)
+    {
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+                CREATE TABLE IF NOT EXISTS ""BranchProducts"" (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""BranchId"" uuid NOT NULL,
+                    ""ProductId"" uuid NOT NULL,
+                    ""SellingPriceOverride"" numeric(18,2) NULL,
+                    ""Status"" character varying(20) NOT NULL DEFAULT 'Active',
+                    ""ShelfLocation"" character varying(50) NULL,
+                    ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
+                    ""UpdatedAt"" timestamp with time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT FALSE,
+                    ""CreatedBy"" uuid NULL
+                );
+                CREATE INDEX IF NOT EXISTS ""IX_BranchProducts_BranchId"" ON ""BranchProducts"" (""BranchId"");
+                CREATE INDEX IF NOT EXISTS ""IX_BranchProducts_ProductId"" ON ""BranchProducts"" (""ProductId"");
+            ");
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ bảng BranchProducts.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ bảng BranchProducts");
+        }
+    }
+
     private static async Task EnsureTenantSubscriptionColumnsAsync(AppDbContext context, ILogger? logger = null)
     {
         try
@@ -697,6 +726,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                     await EnsureSupplierDispatchSchemaAsync(context, logger);
                     await EnsureBranchColumnsAsync(context, logger);
                     await EnsureTenantSubscriptionColumnsAsync(context, logger);
+                    await EnsureBranchProductsSchemaAsync(context, logger);
                 }
                 catch (Exception ex)
                 {
