@@ -101,6 +101,11 @@ public class BranchAttendancePolicyServiceTests
         {
             return Task.FromResult(Branches.Count(b => !b.IsDeleted));
         }
+
+        public Task<int> CountTotalAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Branches.Count(b => !b.IsDeleted));
+        }
     }
 
     private class FakeBranchAttendancePolicyRepository : IBranchAttendancePolicyRepository
@@ -199,9 +204,7 @@ public class BranchAttendancePolicyServiceTests
             StandardDayHours = 7.50m,
             IsConvertHoursToDays = true,
             LateThresholdMinutes = 15,
-            EarlyLeaveThresholdMinutes = 10,
-            EnableOtAfterShift = true,
-            OtAfterShiftMinutes = 30
+            EarlyLeaveThresholdMinutes = 10
         };
         _policyRepo.Policies.Add(policy);
 
@@ -214,7 +217,6 @@ public class BranchAttendancePolicyServiceTests
         Assert.True(result.IsCustomized);
         Assert.Equal(15, result.LateThresholdMinutes);
         Assert.Equal(10, result.EarlyLeaveThresholdMinutes);
-        Assert.Equal(30, result.OtAfterShiftMinutes);
     }
 
     [Fact]
@@ -245,11 +247,7 @@ public class BranchAttendancePolicyServiceTests
             EnableLateThreshold: true,
             LateThresholdMinutes: 10,
             EnableEarlyLeaveThreshold: true,
-            EarlyLeaveThresholdMinutes: 5,
-            EnableOtBeforeShift: true,
-            OtBeforeShiftMinutes: 20,
-            EnableOtAfterShift: true,
-            OtAfterShiftMinutes: 30
+            EarlyLeaveThresholdMinutes: 5
         );
 
         // Act
@@ -259,7 +257,6 @@ public class BranchAttendancePolicyServiceTests
         Assert.NotNull(result);
         Assert.True(result.IsCustomized);
         Assert.Equal(10, result.LateThresholdMinutes);
-        Assert.Equal(30, result.OtAfterShiftMinutes);
         Assert.Single(_policyRepo.Policies);
         Assert.True(_uow.SaveChangesCalled);
     }
@@ -319,8 +316,7 @@ public class BranchAttendancePolicyServiceTests
             TenantId = _tenantContext.CurrentTenantId,
             BranchId = sourceBranch.Id,
             StandardDayHours = 8.00m,
-            LateThresholdMinutes = 15,
-            OtAfterShiftMinutes = 45
+            LateThresholdMinutes = 15
         };
         _policyRepo.Policies.Add(sourcePolicy);
 
@@ -339,7 +335,6 @@ public class BranchAttendancePolicyServiceTests
         var target1Policy = _policyRepo.Policies.FirstOrDefault(p => p.BranchId == target1.Id);
         Assert.NotNull(target1Policy);
         Assert.Equal(15, target1Policy.LateThresholdMinutes);
-        Assert.Equal(45, target1Policy.OtAfterShiftMinutes);
 
         var target2Policy = _policyRepo.Policies.FirstOrDefault(p => p.BranchId == target2.Id);
         Assert.NotNull(target2Policy);

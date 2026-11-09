@@ -18,6 +18,9 @@ public class BranchConfiguration : IEntityTypeConfiguration<Branch>
         builder.Property(x => x.Name).HasMaxLength(150).IsRequired();
         builder.Property(x => x.Address).HasMaxLength(255);
         builder.Property(x => x.Phone).HasMaxLength(20);
+        builder.Property(x => x.Email).HasMaxLength(150);
+        builder.Property(x => x.ManagerName).HasMaxLength(150);
+        builder.Property(x => x.IsHeadquarter).HasDefaultValue(false);
         builder.Property(x => x.Latitude).HasColumnType("decimal(10,7)");
         builder.Property(x => x.Longitude).HasColumnType("decimal(10,7)");
         builder.Property(x => x.CheckinRadiusMeters).HasDefaultValue(100);

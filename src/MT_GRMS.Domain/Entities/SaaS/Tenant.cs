@@ -21,8 +21,11 @@ public class Tenant : BaseEntity<string>
     public string? Address { get; set; }
     public string? City { get; set; }
     public string Status { get; set; } = "ACTIVE";
+    public string SubscriptionStatus { get; set; } = "TRIAL";
     public decimal WalletBalance { get; set; } = 0;
     public string? CurrentPlan { get; set; }
+    public int ExtraBranches { get; set; } = 0;
+    public bool HasStaffManagementAddon { get; set; } = false;
     public DateTime? SubscriptionExpiresAt { get; set; }
     public DateTime? GracePeriodExpiresAt { get; set; }
     public string? LockType { get; set; }

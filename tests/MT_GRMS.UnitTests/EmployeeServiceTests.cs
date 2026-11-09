@@ -94,6 +94,16 @@ public class EmployeeServiceTests
     {
         public List<Employee> Employees { get; } = new();
 
+        public Task<IReadOnlyList<Employee>> GetActiveEmployeesAsync(Guid? branchId, CancellationToken cancellationToken = default)
+        {
+            var query = Employees.Where(e => !e.IsDeleted && e.Status == Domain.Enums.EmployeeStatus.Active);
+            if (branchId.HasValue && branchId.Value != Guid.Empty)
+            {
+                query = query.Where(e => e.BranchId == branchId.Value);
+            }
+            return Task.FromResult<IReadOnlyList<Employee>>(query.ToList());
+        }
+
         public Task<Employee?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(Employees.FirstOrDefault(e => e.Id == id && !e.IsDeleted));

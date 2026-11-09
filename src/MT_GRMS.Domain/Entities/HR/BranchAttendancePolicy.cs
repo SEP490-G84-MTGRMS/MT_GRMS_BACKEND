@@ -19,11 +19,6 @@ public class BranchAttendancePolicy : BaseTenantEntity
     public bool EnableEarlyLeaveThreshold { get; set; } = true;          // Bật tính về sớm
     public int EarlyLeaveThresholdMinutes { get; set; } = 0;             // Tính về sớm trước X phút
 
-    public bool EnableOtBeforeShift { get; set; } = true;                // Bật tính làm thêm giờ trước ca
-    public int OtBeforeShiftMinutes { get; set; } = 0;                   // Ngưỡng tính làm thêm giờ trước ca (phút)
-    public bool EnableOtAfterShift { get; set; } = true;                 // Bật tính làm thêm giờ sau ca
-    public int OtAfterShiftMinutes { get; set; } = 0;                    // Ngưỡng tính làm thêm giờ sau ca (phút)
-
     // Navigation
     public Branch? Branch { get; set; }
 }

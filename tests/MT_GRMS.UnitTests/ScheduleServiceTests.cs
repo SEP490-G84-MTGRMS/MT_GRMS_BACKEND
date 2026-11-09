@@ -115,6 +115,15 @@ public class ScheduleServiceTests
             return Task.FromResult((IReadOnlyList<EmployeeSchedule>)list);
         }
 
+        public Task<IReadOnlyList<EmployeeSchedule>> GetCompletedSchedulesInPeriodAsync(IEnumerable<Guid> employeeIds, DateTime fromDate, DateTime toDate, CancellationToken cancellationToken = default)
+        {
+            var set = employeeIds.ToHashSet();
+            var list = Schedules
+                .Where(s => !s.IsDeleted && set.Contains(s.EmployeeId) && s.WorkDate >= fromDate.Date && s.WorkDate <= toDate.Date && s.Status == Domain.Enums.ScheduleStatus.Completed)
+                .ToList();
+            return Task.FromResult<IReadOnlyList<EmployeeSchedule>>(list);
+        }
+
         public Task AddRangeAsync(IEnumerable<EmployeeSchedule> schedules, CancellationToken cancellationToken = default)
         {
             Schedules.AddRange(schedules);
@@ -145,6 +154,16 @@ public class ScheduleServiceTests
     private class FakeEmployeeRepository : IEmployeeRepository
     {
         public List<Employee> Employees { get; } = new();
+
+        public Task<IReadOnlyList<Employee>> GetActiveEmployeesAsync(Guid? branchId, CancellationToken cancellationToken = default)
+        {
+            var query = Employees.Where(e => !e.IsDeleted && e.Status == Domain.Enums.EmployeeStatus.Active);
+            if (branchId.HasValue && branchId.Value != Guid.Empty)
+            {
+                query = query.Where(e => e.BranchId == branchId.Value);
+            }
+            return Task.FromResult<IReadOnlyList<Employee>>(query.ToList());
+        }
 
         public Task<Employee?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
         {
@@ -845,6 +864,207 @@ public class ScheduleServiceTests
         Assert.Null(result.CheckOutTime);
         Assert.Equal(0.00m, result.ActualWorkHours);
         Assert.Equal("Nghỉ việc riêng không lương", result.ApprovalReason);
+    }
+
+    [Fact]
+    public async Task GetTodayStaffDescriptorsAsync_ReturnsEmployeesWithFaceDescriptor()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var branchId = Guid.NewGuid();
+        var emp1 = new Employee { Id = Guid.NewGuid(), FullName = "NV Co FaceID", EmployeeCode = "NV01", BranchId = branchId, FaceDescriptor = "[0.1, 0.2]" };
+        var emp2 = new Employee { Id = Guid.NewGuid(), FullName = "NV Khong FaceID", EmployeeCode = "NV02", BranchId = branchId, FaceDescriptor = null };
+        employeeRepo.Employees.Add(emp1);
+        employeeRepo.Employees.Add(emp2);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var result = await service.GetTodayStaffDescriptorsAsync(branchId);
+
+        Assert.Single(result);
+        Assert.Equal("NV01", result[0].EmployeeCode);
+        Assert.Equal("[0.1, 0.2]", result[0].FaceDescriptor);
+    }
+
+    [Fact]
+    public async Task CheckInFaceIdAsync_ValidMatch_UpdatesCheckIn()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = empId,
+            BranchId = Guid.NewGuid(),
+            WorkDate = DateTime.UtcNow.Date,
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            DurationHours = 8.00m
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var request = new FaceIdCheckInRequest(schedule.Id, empId, 0.35m, null);
+        var result = await service.CheckInFaceIdAsync(request);
+
+        Assert.NotNull(result.CheckInTime);
+        Assert.Equal("FACE_ID", result.CheckInMethod);
+        Assert.Equal(0.35m, result.FaceMatchScore);
+        Assert.Equal(ScheduleStatus.InProgress, result.Status);
+        Assert.True(uow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task CheckInFaceIdAsync_ScoreBelowThreshold_ThrowsException()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = empId,
+            BranchId = Guid.NewGuid(),
+            WorkDate = DateTime.UtcNow.Date,
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            DurationHours = 8.00m
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var request = new FaceIdCheckInRequest(schedule.Id, empId, 0.75m, null);
+        await Assert.ThrowsAsync<BusinessException>(() => service.CheckInFaceIdAsync(request));
+    }
+
+    [Fact]
+    public async Task CheckOutFaceIdAsync_ValidMatch_UpdatesCheckOutAndCalculatesHours()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var nowVn = DateTime.UtcNow.AddHours(7);
+        var checkInTime = nowVn.AddHours(-4);
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = empId,
+            BranchId = Guid.NewGuid(),
+            WorkDate = nowVn.Date,
+            PlannedStartTime = nowVn.TimeOfDay.Subtract(TimeSpan.FromHours(5)),
+            PlannedEndTime = nowVn.TimeOfDay.Add(TimeSpan.FromHours(5)),
+            CheckInTime = checkInTime,
+            CheckInMethod = "FACE_ID",
+            Status = ScheduleStatus.InProgress
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var request = new FaceIdCheckOutRequest(schedule.Id, empId, 0.38m, null);
+        var result = await service.CheckOutFaceIdAsync(request);
+
+        Assert.NotNull(result.CheckOutTime);
+        Assert.Equal("FACE_ID", result.CheckOutMethod);
+        Assert.Equal(ScheduleStatus.Completed, result.Status);
+        Assert.True(result.ActualWorkHours >= 3.9m);
+        Assert.Equal(0, result.OvertimeMinutes); // Không tự tiện tính OT nếu chưa có đơn duyệt OT
+        Assert.True(uow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task CheckOutFaceIdAsync_DistanceExceedsThreshold_ThrowsException()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = empId,
+            BranchId = Guid.NewGuid(),
+            WorkDate = DateTime.UtcNow.Date,
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            CheckInTime = DateTime.UtcNow.AddHours(-4),
+            CheckInMethod = "FACE_ID",
+            Status = ScheduleStatus.InProgress
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var request = new FaceIdCheckOutRequest(schedule.Id, empId, 0.72m, null);
+        await Assert.ThrowsAsync<BusinessException>(() => service.CheckOutFaceIdAsync(request));
+    }
+
+    [Fact]
+    public async Task RecordManualAttendanceAsync_EarlyCheckInLateCheckOut_WithoutApprovedOt_DoesNotGrantOvertime()
+    {
+        // Arrange: ca 08:00 - 12:00 (4h). Nhân viên vào sớm 07:30 (-30p), ra muộn 12:30 (+30p) nhưng KHÔNG có đơn OT
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant1",
+            EmployeeId = empId,
+            WorkDate = new DateTime(2026, 11, 6),
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(12, 0, 0),
+            DurationHours = 4.0m,
+            Status = ScheduleStatus.Scheduled,
+            ApprovalType = null,
+            OvertimeMinutes = 0
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var request = new ManualAttendanceRequest(
+            AttendanceType: ManualAttendanceType.Working,
+            CheckInTime: new TimeSpan(7, 30, 0),
+            CheckOutTime: new TimeSpan(12, 30, 0),
+            Note: "Vào sớm ra muộn tự phát, không có đơn OT"
+        );
+
+        // Act
+        var result = await service.RecordManualAttendanceAsync(schedule.Id, request);
+
+        // Assert: Không tự tiện tính OT nếu chưa có đơn OT được duyệt. Giờ làm thực tế chỉ tính tối đa trong khung ca (4.00h)
+        Assert.Equal(0, result.OvertimeMinutes);
+        Assert.Equal(4.00m, result.ActualWorkHours);
+        Assert.Equal(0, result.LateMinutes);
+        Assert.Equal(0, result.EarlyLeaveMinutes);
+        Assert.Equal("WORKING", result.ApprovalType);
     }
 }
 

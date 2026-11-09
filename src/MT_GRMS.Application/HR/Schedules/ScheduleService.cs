@@ -1,4 +1,5 @@
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Schedules.Dtos;
@@ -15,6 +16,7 @@ public class ScheduleService : IScheduleService
     private readonly IEmployeeRepository _employeeRepository;
     private readonly IShiftConfigRepository _shiftConfigRepository;
     private readonly IBranchAttendancePolicyRepository? _policyRepository;
+    private readonly ICloudinaryService? _cloudinaryService;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
 
@@ -24,7 +26,8 @@ public class ScheduleService : IScheduleService
         IShiftConfigRepository shiftConfigRepository,
         IUnitOfWork unitOfWork,
         ITenantContext tenantContext,
-        IBranchAttendancePolicyRepository? policyRepository = null)
+        IBranchAttendancePolicyRepository? policyRepository = null,
+        ICloudinaryService? cloudinaryService = null)
     {
         _scheduleRepository = scheduleRepository;
         _employeeRepository = employeeRepository;
@@ -32,6 +35,7 @@ public class ScheduleService : IScheduleService
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
         _policyRepository = policyRepository;
+        _cloudinaryService = cloudinaryService;
     }
 
     public async Task<ScheduleResponse> CreateAsync(
@@ -725,7 +729,8 @@ public class ScheduleService : IScheduleService
             s.EvidenceImageUrl,
             s.ApprovedBy,
             s.ApprovedAt,
-            s.CreatedAt
+            s.CreatedAt,
+            s.Employee?.UserId
         );
     }
 
@@ -842,43 +847,21 @@ public class ScheduleService : IScheduleService
             }
         }
 
-        // Tính số phút làm thêm trước ca (OT Before)
-        var otBefore = 0;
-        if (checkInDateTime < plannedStartDateTime)
+        // Không tự tiện tính OT khi check-in sớm hoặc về muộn khi chưa có đơn xin OT được duyệt (ScheduleRequestType.Overtime)
+        // Đơn OT bắt buộc phải được chấp thuận (ApprovalType == "OVERTIME") mới được ghi nhận giờ làm thêm
+        var approvedOtMinutes = 0;
+        if (schedule.ApprovalType == "OVERTIME" || (schedule.ApprovalStatus == ScheduleApprovalStatus.Approved && schedule.OvertimeMinutes > 0))
         {
-            var rawBefore = (int)(plannedStartDateTime - checkInDateTime).TotalMinutes;
-            if (policy != null)
-            {
-                if (policy.EnableOtBeforeShift && rawBefore >= policy.OtBeforeShiftMinutes)
-                {
-                    otBefore = rawBefore;
-                }
-            }
-            else
-            {
-                otBefore = rawBefore;
-            }
+            approvedOtMinutes = schedule.OvertimeMinutes;
         }
 
-        // Tính số phút làm thêm sau ca (OT After)
-        var otAfter = 0;
-        if (checkOutDateTime > plannedEndDateTime)
-        {
-            var rawAfter = (int)(checkOutDateTime - plannedEndDateTime).TotalMinutes;
-            if (policy != null)
-            {
-                if (policy.EnableOtAfterShift && rawAfter >= policy.OtAfterShiftMinutes)
-                {
-                    otAfter = rawAfter;
-                }
-            }
-            else
-            {
-                otAfter = rawAfter;
-            }
-        }
-
-        var actualHours = Math.Max(0, Math.Round((decimal)(checkOutDateTime - checkInDateTime).TotalHours, 2));
+        // Thời gian làm việc thực tế chỉ tính trong khung ca kế hoạch, không tính dôi ra ngoài ca nếu không có đơn OT được duyệt
+        var effectiveStart = checkInDateTime < plannedStartDateTime ? plannedStartDateTime : checkInDateTime;
+        var effectiveEnd = checkOutDateTime > plannedEndDateTime ? plannedEndDateTime : checkOutDateTime;
+        var inShiftMinutes = Math.Max(0, (int)(effectiveEnd - effectiveStart).TotalMinutes);
+        var inShiftHours = Math.Round((decimal)inShiftMinutes / 60m, 2);
+        var otHours = Math.Round((decimal)approvedOtMinutes / 60m, 2);
+        var actualHours = inShiftHours + otHours;
 
         schedule.CheckInTime = checkInDateTime;
         schedule.CheckOutTime = checkOutDateTime;
@@ -886,10 +869,13 @@ public class ScheduleService : IScheduleService
         schedule.CheckOutMethod = "MANUAL";
         schedule.LateMinutes = lateMinutes;
         schedule.EarlyLeaveMinutes = earlyLeaveMinutes;
-        schedule.OvertimeMinutes = otBefore + otAfter;
+        schedule.OvertimeMinutes = approvedOtMinutes;
         schedule.ActualWorkHours = actualHours;
         schedule.Status = ScheduleStatus.Completed;
-        schedule.ApprovalType = "WORKING";
+        if (schedule.ApprovalType != "OVERTIME")
+        {
+            schedule.ApprovalType = "WORKING";
+        }
         schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
         schedule.ApprovalReason = request.Note;
     }
@@ -928,5 +914,244 @@ public class ScheduleService : IScheduleService
         schedule.ApprovalType = "UNPAID_LEAVE";
         schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
         schedule.ApprovalReason = request.Note;
+    }
+
+    public async Task<IReadOnlyList<TodayStaffDescriptorDto>> GetTodayStaffDescriptorsAsync(
+        Guid branchId,
+        CancellationToken cancellationToken = default)
+    {
+        var vnNow = DateTime.UtcNow.AddHours(7);
+        var today = vnNow.Date;
+        var yesterday = today.AddDays(-1);
+
+        var filter = new ScheduleQueryFilter
+        {
+            BranchId = branchId,
+            FromDate = yesterday,
+            ToDate = today,
+            PageSize = 200
+        };
+
+        var schedules = await _scheduleRepository.GetListAsync(filter, cancellationToken);
+        var employees = await _employeeRepository.GetActiveEmployeesAsync(branchId, cancellationToken);
+
+        var scheduleDict = schedules
+            .Where(s => s.Status != ScheduleStatus.Cancelled)
+            .OrderByDescending(s => s.WorkDate)
+            .ThenBy(s => s.PlannedStartTime)
+            .GroupBy(s => s.EmployeeId)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        var result = employees
+            .Where(e => !string.IsNullOrWhiteSpace(e.FaceDescriptor))
+            .Select(e =>
+            {
+                scheduleDict.TryGetValue(e.Id, out var sch);
+                return new TodayStaffDescriptorDto(
+                    e.Id,
+                    e.EmployeeCode,
+                    e.FullName,
+                    e.AvatarUrl,
+                    e.FaceDescriptor,
+                    sch?.Id,
+                    sch?.ShiftCode,
+                    sch?.ShiftName,
+                    sch?.PlannedStartTime,
+                    sch?.PlannedEndTime,
+                    sch?.CheckInTime,
+                    sch?.CheckOutTime,
+                    sch?.Status.ToString(),
+                    e.FaceImageUrls
+                );
+            })
+            .ToList();
+
+        return result;
+    }
+
+    public async Task<ScheduleResponse> CheckInFaceIdAsync(
+        FaceIdCheckInRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var schedule = await _scheduleRepository.GetByIdAsync(request.ScheduleId, cancellationToken);
+        if (schedule == null)
+        {
+            throw new NotFoundException($"Không tìm thấy ca làm việc với ID '{request.ScheduleId}'.");
+        }
+
+        if (schedule.EmployeeId != request.EmployeeId)
+        {
+            throw new BusinessException("INVALID_EMPLOYEE", "Nhân viên nhận diện không trùng khớp với ca làm việc.");
+        }
+
+        if (schedule.CheckInTime.HasValue)
+        {
+            throw new BusinessException("ALREADY_CHECKED_IN", "Ca làm việc này đã được điểm danh vào trước đó.");
+        }
+
+        if (request.FaceMatchScore > 0.45m)
+        {
+            throw new BusinessException("FACE_MATCH_FAILED", $"Khoảng cách nhận diện khuôn mặt ({request.FaceMatchScore:F2}) vượt quá ngưỡng khoảng cách cho phép (tối đa 0.45).");
+        }
+
+        string? snapshotUrl = null;
+        if (!string.IsNullOrWhiteSpace(request.SnapshotBase64))
+        {
+            snapshotUrl = await UploadSnapshotAsync(request.SnapshotBase64, $"checkin_{schedule.EmployeeId}", cancellationToken);
+        }
+
+        var vnNow = DateTime.UtcNow.AddHours(7);
+        var workDate = schedule.WorkDate;
+        var plannedStartDateTime = workDate.Add(schedule.PlannedStartTime);
+
+        var lateMinutes = 0;
+        BranchAttendancePolicy? policy = null;
+        if (_policyRepository != null)
+        {
+            policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
+        }
+
+        var lateThreshold = policy?.LateThresholdMinutes ?? 0;
+        if (vnNow > plannedStartDateTime)
+        {
+            var diff = (int)(vnNow - plannedStartDateTime).TotalMinutes;
+            if (diff > lateThreshold)
+            {
+                lateMinutes = diff;
+            }
+        }
+
+        schedule.CheckInTime = vnNow;
+        schedule.CheckInMethod = "FACE_ID";
+        schedule.CheckInFaceImageUrl = snapshotUrl;
+        schedule.FaceMatchScore = request.FaceMatchScore;
+        schedule.LateMinutes = lateMinutes;
+        schedule.Status = ScheduleStatus.InProgress;
+        schedule.UpdatedAt = vnNow;
+
+        _scheduleRepository.Update(schedule);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return MapToResponse(schedule);
+    }
+
+    public async Task<ScheduleResponse> CheckOutFaceIdAsync(
+        FaceIdCheckOutRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var schedule = await _scheduleRepository.GetByIdAsync(request.ScheduleId, cancellationToken);
+        if (schedule == null)
+        {
+            throw new NotFoundException($"Không tìm thấy ca làm việc với ID '{request.ScheduleId}'.");
+        }
+
+        if (schedule.EmployeeId != request.EmployeeId)
+        {
+            throw new BusinessException("INVALID_EMPLOYEE", "Nhân viên nhận diện không trùng khớp với ca làm việc.");
+        }
+
+        if (!schedule.CheckInTime.HasValue)
+        {
+            throw new BusinessException("NOT_CHECKED_IN", "Ca làm việc chưa được điểm danh vào. Không thể điểm danh ra.");
+        }
+
+        if (schedule.CheckOutTime.HasValue)
+        {
+            throw new BusinessException("ALREADY_CHECKED_OUT", "Ca làm việc này đã được điểm danh ra trước đó.");
+        }
+
+        if (request.FaceMatchScore > 0.45m)
+        {
+            throw new BusinessException("FACE_MATCH_FAILED", $"Khoảng cách nhận diện khuôn mặt ({request.FaceMatchScore:F2}) vượt quá ngưỡng khoảng cách cho phép (tối đa 0.45).");
+        }
+
+        string? snapshotUrl = null;
+        if (!string.IsNullOrWhiteSpace(request.SnapshotBase64))
+        {
+            snapshotUrl = await UploadSnapshotAsync(request.SnapshotBase64, $"checkout_{schedule.EmployeeId}", cancellationToken);
+        }
+
+        var vnNow = DateTime.UtcNow.AddHours(7);
+        var workDate = schedule.WorkDate;
+        var plannedStartDateTime = workDate.Add(schedule.PlannedStartTime);
+        var isNextDay = schedule.IsCheckInNextDay || schedule.PlannedEndTime < schedule.PlannedStartTime;
+        var plannedEndDateTime = isNextDay ? workDate.AddDays(1).Add(schedule.PlannedEndTime) : workDate.Add(schedule.PlannedEndTime);
+
+        BranchAttendancePolicy? policy = null;
+        if (_policyRepository != null)
+        {
+            policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
+        }
+
+        var earlyLeaveThreshold = policy?.EarlyLeaveThresholdMinutes ?? 0;
+        var earlyLeaveMinutes = 0;
+        if (vnNow < plannedEndDateTime)
+        {
+            var diff = (int)(plannedEndDateTime - vnNow).TotalMinutes;
+            if (diff > earlyLeaveThreshold)
+            {
+                earlyLeaveMinutes = diff;
+            }
+        }
+
+        // Tăng ca (OT) bắt buộc phải có đơn xin OT được phê duyệt (ScheduleRequestType.Overtime)
+        // Khi check-out FaceID, không tự tiện tính OT khi check-in sớm hoặc về muộn nếu chưa có đơn OT được duyệt.
+        // Nếu không có đơn xin OT được chấp thuận, thời gian dôi ra ngoài ca không được tính là OT và nhân viên vẫn bị tính đi muộn / về sớm.
+        var approvedOtMinutes = 0;
+        if (schedule.ApprovalType == "OVERTIME" || (schedule.ApprovalStatus == ScheduleApprovalStatus.Approved && schedule.OvertimeMinutes > 0))
+        {
+            approvedOtMinutes = schedule.OvertimeMinutes;
+        }
+
+        // Tính giờ làm việc thực tế chuẩn trong khung ca + OT đã duyệt (nếu có)
+        // CheckInTime đã được lưu theo giờ UTC+7
+        var checkInVn = schedule.CheckInTime.Value;
+        var effectiveStart = checkInVn < plannedStartDateTime ? plannedStartDateTime : checkInVn;
+        var effectiveEnd = vnNow > plannedEndDateTime ? plannedEndDateTime : vnNow;
+        var inShiftMinutes = Math.Max(0, (int)(effectiveEnd - effectiveStart).TotalMinutes);
+        var inShiftHours = Math.Round((decimal)inShiftMinutes / 60m, 2);
+        var approvedOtHours = Math.Round((decimal)approvedOtMinutes / 60m, 2);
+        var actualHours = inShiftHours + approvedOtHours;
+
+        schedule.CheckOutTime = vnNow;
+        schedule.CheckOutMethod = "FACE_ID";
+        schedule.CheckOutFaceImageUrl = snapshotUrl;
+        schedule.FaceMatchScore = request.FaceMatchScore;
+        schedule.EarlyLeaveMinutes = earlyLeaveMinutes;
+        schedule.OvertimeMinutes = approvedOtMinutes;
+        schedule.ActualWorkHours = actualHours;
+        schedule.Status = ScheduleStatus.Completed;
+        schedule.UpdatedAt = vnNow;
+
+        _scheduleRepository.Update(schedule);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return MapToResponse(schedule);
+    }
+
+    private async Task<string?> UploadSnapshotAsync(string? base64Data, string prefix, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(base64Data) || _cloudinaryService == null)
+            return null;
+
+        try
+        {
+            var cleanBase64 = base64Data;
+            var commaIdx = cleanBase64.IndexOf(',');
+            if (commaIdx >= 0)
+            {
+                cleanBase64 = cleanBase64.Substring(commaIdx + 1);
+            }
+
+            var bytes = Convert.FromBase64String(cleanBase64);
+            using var stream = new MemoryStream(bytes);
+            var fileName = $"{prefix}_{Guid.NewGuid():N}.jpg";
+            var result = await _cloudinaryService.UploadImageAsync(stream, fileName, "mtgrms/attendance", cancellationToken);
+            return result?.Url;
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

@@ -2,6 +2,7 @@ using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.HR.Employees.Dtos;
 using MT_GRMS.Domain.Common;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Enums;
@@ -54,7 +55,8 @@ public class EmployeeService : IEmployeeService
             e.DebtAmount,
             e.UserId,
             e.User?.UserName,
-            e.CreatedAt
+            e.CreatedAt,
+            !string.IsNullOrWhiteSpace(e.FaceDescriptor)
         )).ToList();
 
         return new PagedResult<EmployeeSummaryDto>
@@ -74,6 +76,23 @@ public class EmployeeService : IEmployeeService
         if (employee == null)
         {
             throw new NotFoundException($"Không tìm thấy nhân viên với ID: {id}");
+        }
+
+        return MapToResponse(employee);
+    }
+
+    public async Task<EmployeeResponse?> GetEmployeeByUserIdAsync(
+        string userId,
+        CancellationToken cancellationToken = default)
+    {
+        var employee = await _employeeRepository.GetByUserIdAsync(userId, cancellationToken);
+        if (employee == null && Guid.TryParse(userId, out var empGuid))
+        {
+            employee = await _employeeRepository.GetByIdAsync(empGuid, cancellationToken);
+        }
+        if (employee == null)
+        {
+            return null;
         }
 
         return MapToResponse(employee);
@@ -162,6 +181,9 @@ public class EmployeeService : IEmployeeService
             Phone = normalizedPhone,
             Email = request.Email?.Trim(),
             AvatarUrl = request.AvatarUrl?.Trim(),
+            FaceDescriptor = request.FaceDescriptor?.Trim(),
+            FaceImageUrls = request.FaceImageUrls?.Trim(),
+            FaceRegisteredAt = !string.IsNullOrWhiteSpace(request.FaceDescriptor) ? DateTime.UtcNow : null,
             Address = request.Address?.Trim(),
             StartDate = request.StartDate,
             Note = request.Note?.Trim(),
@@ -187,10 +209,10 @@ public class EmployeeService : IEmployeeService
                 throw new BusinessException("DUPLICATE_USERNAME", $"Tên đăng nhập '{normalizedUsername}' đã tồn tại trong hệ thống.");
             }
 
-            var role = !string.IsNullOrWhiteSpace(request.Role) ? request.Role.Trim().ToUpper() : "STAFF";
+            var role = !string.IsNullOrWhiteSpace(request.Role) ? request.Role.Trim().ToUpper() : SystemRoles.Staff;
             if (role == "EMPLOYEE")
             {
-                role = "STAFF";
+                role = SystemRoles.Staff;
             }
 
             var newUser = new User
@@ -295,6 +317,15 @@ public class EmployeeService : IEmployeeService
         {
             employee.AvatarUrl = string.IsNullOrWhiteSpace(request.AvatarUrl) ? null : request.AvatarUrl.Trim();
         }
+        if (request.FaceDescriptor != null)
+        {
+            employee.FaceDescriptor = string.IsNullOrWhiteSpace(request.FaceDescriptor) ? null : request.FaceDescriptor.Trim();
+            employee.FaceRegisteredAt = !string.IsNullOrWhiteSpace(request.FaceDescriptor) ? DateTime.UtcNow : null;
+        }
+        if (request.FaceImageUrls != null)
+        {
+            employee.FaceImageUrls = string.IsNullOrWhiteSpace(request.FaceImageUrls) ? null : request.FaceImageUrls.Trim();
+        }
         employee.UpdatedAt = DateTime.UtcNow;
 
         // Tạo hoặc cập nhật tài khoản Identity nếu có cung cấp UserName/UserId
@@ -309,10 +340,10 @@ public class EmployeeService : IEmployeeService
                     throw new BusinessException("DUPLICATE_USERNAME", $"Tên đăng nhập '{normalizedUsername}' đã tồn tại trong hệ thống.");
                 }
 
-                var role = !string.IsNullOrWhiteSpace(request.Role) ? request.Role.Trim().ToUpper() : "STAFF";
+                var role = !string.IsNullOrWhiteSpace(request.Role) ? request.Role.Trim().ToUpper() : SystemRoles.Staff;
                 if (role == "EMPLOYEE")
                 {
-                    role = "STAFF";
+                    role = SystemRoles.Staff;
                 }
 
                 var newUser = new User
@@ -506,10 +537,10 @@ public class EmployeeService : IEmployeeService
         }
 
         var currentTenantId = _tenantContext.CurrentTenantId ?? "tenant_mt_mart_01";
-        var role = request.Role.Trim().ToUpper();
+        var role = !string.IsNullOrWhiteSpace(request.Role) ? request.Role.Trim().ToUpper() : SystemRoles.Staff;
         if (role == "EMPLOYEE")
         {
-            role = "STAFF";
+            role = SystemRoles.Staff;
         }
 
         var displayName = !string.IsNullOrWhiteSpace(request.DisplayName)
@@ -637,8 +668,36 @@ public class EmployeeService : IEmployeeService
             e.BankName,
             e.BankAccountHolder,
             e.CreatedAt,
-            e.UpdatedAt
+            e.UpdatedAt,
+            e.FaceDescriptor,
+            e.FaceImageUrls,
+            e.FaceRegisteredAt
         );
+    }
+
+    public async Task<bool> RegisterFaceDescriptorAsync(
+        Guid employeeId,
+        string faceDescriptor,
+        string? faceImageUrls = null,
+        CancellationToken cancellationToken = default)
+    {
+        var employee = await _employeeRepository.GetByIdAsync(employeeId, cancellationToken);
+        if (employee == null)
+        {
+            throw new NotFoundException($"Không tìm thấy nhân viên với ID '{employeeId}'.");
+        }
+
+        employee.FaceDescriptor = string.IsNullOrWhiteSpace(faceDescriptor) ? null : faceDescriptor.Trim();
+        if (faceImageUrls != null)
+        {
+            employee.FaceImageUrls = string.IsNullOrWhiteSpace(faceImageUrls) ? null : faceImageUrls.Trim();
+        }
+        employee.FaceRegisteredAt = !string.IsNullOrWhiteSpace(faceDescriptor) ? DateTime.UtcNow : null;
+        employee.UpdatedAt = DateTime.UtcNow;
+
+        _employeeRepository.Update(employee);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return true;
     }
 
     private static List<EmployeeAllowance> MapAllowances(List<EmployeeAllowanceDto>? allowances, Guid employeeId = default, string tenantId = "")

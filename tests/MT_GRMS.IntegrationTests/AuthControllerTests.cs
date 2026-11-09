@@ -92,17 +92,17 @@ public class AuthControllerTests
         var okResult = Assert.IsType<OkObjectResult>(result);
         Assert.Equal(200, okResult.StatusCode);
 
-        var apiResponse = Assert.IsType<ApiResponse<LoginResponse>>(okResult.Value);
+        var apiResponse = Assert.IsType<ApiResponse<UserInfo>>(okResult.Value);
         Assert.True(apiResponse.Success);
         Assert.NotNull(apiResponse.Data);
-        Assert.Equal("usr_super_admin_01", apiResponse.Data.User.Id);
-        Assert.Equal("admin", apiResponse.Data.User.Username);
-        Assert.Equal("ADMIN", apiResponse.Data.User.Role);
-        Assert.Equal("tenant_mt_mart_01", apiResponse.Data.User.TenantId);
+        Assert.Equal("usr_super_admin_01", apiResponse.Data.Id);
+        Assert.Equal("admin", apiResponse.Data.Username);
+        Assert.Equal("ADMIN", apiResponse.Data.Role);
+        Assert.Equal("tenant_mt_mart_01", apiResponse.Data.TenantId);
     }
 
     [Fact]
-    public void AuthController_Logout_Should_Return_Ok_200_With_Success_Message()
+    public async Task AuthController_Logout_Should_Return_Ok_200_With_Success_Message()
     {
         // GIVEN
         var repo = new FakeUserRepository();
@@ -110,13 +110,13 @@ public class AuthControllerTests
         var controller = new AuthController(authService);
 
         // ACT
-        var result = controller.Logout();
+        var result = await controller.Logout();
 
         // THEN (HTTP 200 OK)
         var okResult = Assert.IsType<OkObjectResult>(result);
         Assert.Equal(200, okResult.StatusCode);
 
-        var apiResponse = Assert.IsType<ApiResponse<string>>(okResult.Value);
+        var apiResponse = Assert.IsType<ApiResponse<object>>(okResult.Value);
         Assert.True(apiResponse.Success);
         Assert.Equal("Đăng xuất thành công.", apiResponse.Message);
     }
@@ -137,11 +137,84 @@ public class AuthControllerTests
         var okResult = Assert.IsType<OkObjectResult>(result);
         Assert.Equal(200, okResult.StatusCode);
 
-        var apiResponse = Assert.IsType<ApiResponse<LoginResponse>>(okResult.Value);
+        var apiResponse = Assert.IsType<ApiResponse<UserInfo>>(okResult.Value);
         Assert.True(apiResponse.Success);
         Assert.NotNull(apiResponse.Data);
-        Assert.Equal("Nguyễn Văn A", apiResponse.Data.User.FullName);
-        Assert.Equal("STORE_OWNER", apiResponse.Data.User.Role);
-        Assert.NotEmpty(apiResponse.Data.AccessToken);
+        Assert.Equal("Nguyễn Văn A", apiResponse.Data.FullName);
+        Assert.Equal("STORE_OWNER", apiResponse.Data.Role);
+    }
+
+    [Fact]
+    public async Task AuthController_Refresh_Should_Return_Ok_200_When_Valid_RefreshToken()
+    {
+        // GIVEN
+        var repo = new FakeUserRepository();
+        var user = new User
+        {
+            Id = "usr_test_refresh",
+            Username = "refresh_user",
+            Password = "Password@123",
+            RefreshToken = "valid_refresh_token_123",
+            RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(5)
+        };
+        await repo.AddAsync(user);
+        var authService = new AuthService(repo);
+        var controller = new AuthController(authService);
+
+        // WHEN
+        var result = await controller.Refresh(new RefreshTokenRequest("valid_refresh_token_123"), CancellationToken.None);
+
+        // THEN (HTTP 200 OK)
+        var okResult = Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(200, okResult.StatusCode);
+
+        var apiResponse = Assert.IsType<ApiResponse<UserInfo>>(okResult.Value);
+        Assert.True(apiResponse.Success);
+        Assert.Equal("usr_test_refresh", apiResponse.Data.Id);
+
+        // Verify Token Rotation
+        Assert.NotEqual("valid_refresh_token_123", user.RefreshToken);
+        Assert.StartsWith("mt_refresh_", user.RefreshToken);
+    }
+
+    [Fact]
+    public async Task AuthController_Refresh_Should_Return_Unauthorized_401_When_Token_Expired()
+    {
+        // GIVEN
+        var repo = new FakeUserRepository();
+        var user = new User
+        {
+            Id = "usr_expired",
+            Username = "expired_user",
+            Password = "Password@123",
+            RefreshToken = "expired_refresh_token",
+            RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(-2) // Đã quá hạn
+        };
+        await repo.AddAsync(user);
+        var authService = new AuthService(repo);
+        var controller = new AuthController(authService);
+
+        // WHEN
+        var result = await controller.Refresh(new RefreshTokenRequest("expired_refresh_token"), CancellationToken.None);
+
+        // THEN (HTTP 401 Unauthorized)
+        var unauthorizedResult = Assert.IsType<UnauthorizedObjectResult>(result);
+        Assert.Equal(401, unauthorizedResult.StatusCode);
+    }
+
+    [Fact]
+    public async Task AuthController_Refresh_Should_Return_Unauthorized_401_When_Token_Missing()
+    {
+        // GIVEN
+        var repo = new FakeUserRepository();
+        var authService = new AuthService(repo);
+        var controller = new AuthController(authService);
+
+        // WHEN
+        var result = await controller.Refresh(null, CancellationToken.None);
+
+        // THEN (HTTP 401 Unauthorized)
+        var unauthorizedResult = Assert.IsType<UnauthorizedObjectResult>(result);
+        Assert.Equal(401, unauthorizedResult.StatusCode);
     }
 }

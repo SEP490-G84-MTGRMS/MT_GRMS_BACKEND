@@ -26,6 +26,9 @@ public static class EmployeeSeedData
         public DateTime? StartDate { get; set; }
         public string? Note { get; set; }
         public string? AvatarUrl { get; set; }
+        public string? FaceDescriptor { get; set; }
+        public string? FaceImageUrls { get; set; }
+        public DateTime? FaceRegisteredAt { get; set; }
         public SalaryType SalaryType { get; set; } = SalaryType.Monthly;
         public decimal BaseRate { get; set; } = 0.00m;
         public string? OtWeekday { get; set; } = "150%";
@@ -38,6 +41,24 @@ public static class EmployeeSeedData
         public string BranchCodePreference { get; set; } = "BR-HCM-01";
         public string? PreferredUserId { get; set; }
         public List<(string Name, decimal Amount)> Allowances { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Tạo chuỗi JSON mảng vector 128 số float mẫu theo chuẩn face-api.js để seed dữ liệu FaceID
+    /// </summary>
+    private static string GenerateSampleFaceDescriptorJson(int seedOffset = 0, int sampleCount = 2)
+    {
+        var descriptors = new List<float[]>();
+        for (int s = 0; s < sampleCount; s++)
+        {
+            var vector = new float[128];
+            for (int i = 0; i < 128; i++)
+            {
+                vector[i] = (float)Math.Round(Math.Sin((i + seedOffset + s * 10) * 0.15) * 0.15, 6);
+            }
+            descriptors.Add(vector);
+        }
+        return JsonSerializer.Serialize(descriptors);
     }
 
     public static async Task SeedAsync(AppDbContext context, string tenantId = "tenant_mt_mart_01")
@@ -83,6 +104,10 @@ public static class EmployeeSeedData
                 Address = "123 Hai Bà Trưng, Phường Bến Nghé, Quận 1, TP. Hồ Chí Minh",
                 StartDate = new DateTime(2022, 1, 15),
                 Note = "Nhân viên (Lương theo tháng - Monthly)",
+                AvatarUrl = "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=300&q=80",
+                FaceDescriptor = GenerateSampleFaceDescriptorJson(seedOffset: 1, sampleCount: 2),
+                FaceImageUrls = JsonSerializer.Serialize(new[] { "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=300&q=80" }),
+                FaceRegisteredAt = DateTime.UtcNow.AddMonths(-2),
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 10000000.00m, // 10.000.000 VNĐ/tháng
                 OtWeekday = "150%",
@@ -112,6 +137,10 @@ public static class EmployeeSeedData
                 Address = "45/2 Nguyễn Thị Minh Khai, Phường Đa Kao, Quận 1, TP. Hồ Chí Minh",
                 StartDate = new DateTime(2022, 3, 1),
                 Note = "Nhân viên (Lương theo ca - Shift)",
+                AvatarUrl = "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=300&q=80",
+                FaceDescriptor = GenerateSampleFaceDescriptorJson(seedOffset: 2, sampleCount: 2),
+                FaceImageUrls = JsonSerializer.Serialize(new[] { "https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=300&q=80" }),
+                FaceRegisteredAt = DateTime.UtcNow.AddMonths(-2),
                 SalaryType = SalaryType.Shift,
                 BaseRate = 150000.00m, // 150.000 VNĐ/ca
                 OtWeekday = "150%",
@@ -138,6 +167,10 @@ public static class EmployeeSeedData
                 Address = "78 Trần Đình Xu, Phường Cô Giang, Quận 1, TP. Hồ Chí Minh",
                 StartDate = new DateTime(2023, 6, 10),
                 Note = "Nhân viên (Lương theo giờ - Hourly)",
+                AvatarUrl = "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&w=300&q=80",
+                FaceDescriptor = GenerateSampleFaceDescriptorJson(seedOffset: 3, sampleCount: 2),
+                FaceImageUrls = JsonSerializer.Serialize(new[] { "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=crop&w=300&q=80" }),
+                FaceRegisteredAt = DateTime.UtcNow.AddMonths(-2),
                 SalaryType = SalaryType.Hourly,
                 BaseRate = 25000.00m, // 25.000 VNĐ/giờ
                 OtWeekday = "150%",
@@ -164,6 +197,10 @@ public static class EmployeeSeedData
                 Address = "102 Lê Lai, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh",
                 StartDate = new DateTime(2022, 5, 20),
                 Note = "Nhân viên (Lương theo tháng - Monthly)",
+                AvatarUrl = "https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?auto=format&fit=crop&w=300&q=80",
+                FaceDescriptor = GenerateSampleFaceDescriptorJson(seedOffset: 4, sampleCount: 2),
+                FaceImageUrls = JsonSerializer.Serialize(new[] { "https://images.unsplash.com/photo-1570295999919-56ceb5ecca61?auto=format&fit=crop&w=300&q=80" }),
+                FaceRegisteredAt = DateTime.UtcNow.AddMonths(-2),
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 9000000.00m,
                 OtWeekday = "150%",
@@ -191,6 +228,10 @@ public static class EmployeeSeedData
                 Address = "56 Cống Quỳnh, Phường Phạm Ngũ Lão, Quận 1, TP. Hồ Chí Minh",
                 StartDate = new DateTime(2021, 11, 1),
                 Note = "Nhân viên (Lương theo tháng - Monthly)",
+                AvatarUrl = "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=300&q=80",
+                FaceDescriptor = GenerateSampleFaceDescriptorJson(seedOffset: 11, sampleCount: 2),
+                FaceImageUrls = JsonSerializer.Serialize(new[] { "https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=300&q=80" }),
+                FaceRegisteredAt = DateTime.UtcNow.AddMonths(-2),
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 7500000.00m,
                 OtWeekday = "150%",
@@ -218,6 +259,10 @@ public static class EmployeeSeedData
                 Address = "89 Nguyễn Trãi, Phường Bến Thành, Quận 1, TP. Hồ Chí Minh",
                 StartDate = new DateTime(2022, 2, 10),
                 Note = "Nhân viên đã nghỉ việc từ tháng 08/2026",
+                AvatarUrl = "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=300&q=80",
+                FaceDescriptor = GenerateSampleFaceDescriptorJson(seedOffset: 12, sampleCount: 2),
+                FaceImageUrls = JsonSerializer.Serialize(new[] { "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=300&q=80" }),
+                FaceRegisteredAt = DateTime.UtcNow.AddMonths(-2),
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 7200000.00m,
                 OtWeekday = "150%",
@@ -243,6 +288,10 @@ public static class EmployeeSeedData
                 Address = "12 Hoàng Quốc Việt, Phường Nghĩa Đô, Quận Cầu Giấy, Hà Nội",
                 StartDate = new DateTime(2022, 8, 1),
                 Note = "Nhân viên (Lương theo tháng - Monthly)",
+                AvatarUrl = "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80",
+                FaceDescriptor = GenerateSampleFaceDescriptorJson(seedOffset: 5, sampleCount: 2),
+                FaceImageUrls = JsonSerializer.Serialize(new[] { "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=300&q=80" }),
+                FaceRegisteredAt = DateTime.UtcNow.AddMonths(-2),
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 14500000.00m,
                 OtWeekday = "150%",
@@ -270,6 +319,10 @@ public static class EmployeeSeedData
                 Address = "45 Trần Thái Tông, Phường Dịch Vọng Hậu, Quận Cầu Giấy, Hà Nội",
                 StartDate = new DateTime(2023, 2, 15),
                 Note = "Nhân viên (Lương theo tháng - Monthly)",
+                AvatarUrl = "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=300&q=80",
+                FaceDescriptor = GenerateSampleFaceDescriptorJson(seedOffset: 6, sampleCount: 2),
+                FaceImageUrls = JsonSerializer.Serialize(new[] { "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=300&q=80" }),
+                FaceRegisteredAt = DateTime.UtcNow.AddMonths(-2),
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 8200000.00m,
                 OtWeekday = "150%",
@@ -296,6 +349,10 @@ public static class EmployeeSeedData
                 Address = "88 Cầu Giấy, Phường Quan Hoa, Quận Cầu Giấy, Hà Nội",
                 StartDate = new DateTime(2022, 10, 5),
                 Note = "Nhân viên (Lương theo tháng - Monthly)",
+                AvatarUrl = "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=300&q=80",
+                FaceDescriptor = GenerateSampleFaceDescriptorJson(seedOffset: 7, sampleCount: 2),
+                FaceImageUrls = JsonSerializer.Serialize(new[] { "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=300&q=80" }),
+                FaceRegisteredAt = DateTime.UtcNow.AddMonths(-2),
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 8500000.00m,
                 OtWeekday = "150%",
@@ -325,6 +382,10 @@ public static class EmployeeSeedData
                 Address = "15 Nguyễn Trãi, Phường Thượng Đình, Quận Thanh Xuân, Hà Nội",
                 StartDate = new DateTime(2022, 4, 1),
                 Note = "Nhân viên (Lương theo tháng - Monthly)",
+                AvatarUrl = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80",
+                FaceDescriptor = GenerateSampleFaceDescriptorJson(seedOffset: 8, sampleCount: 2),
+                FaceImageUrls = JsonSerializer.Serialize(new[] { "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80" }),
+                FaceRegisteredAt = DateTime.UtcNow.AddMonths(-2),
                 SalaryType = SalaryType.Monthly,
                 BaseRate = 12000000.00m,
                 OtWeekday = "150%",
@@ -352,6 +413,10 @@ public static class EmployeeSeedData
                 Address = "234 Khuất Duy Tiến, Phường Nhân Chính, Quận Thanh Xuân, Hà Nội",
                 StartDate = new DateTime(2024, 1, 10),
                 Note = "Nhân viên (Lương theo giờ - Hourly)",
+                AvatarUrl = "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&w=300&q=80",
+                FaceDescriptor = GenerateSampleFaceDescriptorJson(seedOffset: 9, sampleCount: 2),
+                FaceImageUrls = JsonSerializer.Serialize(new[] { "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=crop&w=300&q=80" }),
+                FaceRegisteredAt = DateTime.UtcNow.AddMonths(-2),
                 SalaryType = SalaryType.Hourly,
                 BaseRate = 28000.00m,
                 OtWeekday = "150%",
@@ -378,6 +443,10 @@ public static class EmployeeSeedData
                 Address = "67 Lê Văn Lương, Phường Nhân Chính, Quận Thanh Xuân, Hà Nội",
                 StartDate = new DateTime(2024, 3, 1),
                 Note = "Nhân viên (Lương theo ca - Shift)",
+                AvatarUrl = "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=300&q=80",
+                FaceDescriptor = GenerateSampleFaceDescriptorJson(seedOffset: 10, sampleCount: 2),
+                FaceImageUrls = JsonSerializer.Serialize(new[] { "https://images.unsplash.com/photo-1517841905240-472988babdf9?auto=format&fit=crop&w=300&q=80" }),
+                FaceRegisteredAt = DateTime.UtcNow.AddMonths(-2),
                 SalaryType = SalaryType.Shift,
                 BaseRate = 250000.00m,
                 OtWeekday = "150%",
@@ -391,7 +460,7 @@ public static class EmployeeSeedData
             }
         };
 
-        // 5. Kiểm tra và chèn / đồng bộ hồ sơ nhân viên
+        // 5. Kiểm tra và chèn / đồng bộ hồ sơ nhân viên (Kiểm tra Exist không thì mới add)
         foreach (var tpl in templates)
         {
             var existing = await context.Employees
@@ -409,6 +478,30 @@ public static class EmployeeSeedData
                 if (string.IsNullOrEmpty(existing.BankAccountNumber)) existing.BankAccountNumber = tpl.BankAccountNumber;
                 if (string.IsNullOrEmpty(existing.BankName)) existing.BankName = tpl.BankName;
                 if (string.IsNullOrEmpty(existing.BankAccountHolder)) existing.BankAccountHolder = tpl.BankAccountHolder;
+                if (string.IsNullOrEmpty(existing.AvatarUrl) && !string.IsNullOrEmpty(tpl.AvatarUrl)) existing.AvatarUrl = tpl.AvatarUrl;
+                if (string.IsNullOrEmpty(existing.FaceDescriptor) && !string.IsNullOrEmpty(tpl.FaceDescriptor))
+                {
+                    existing.FaceDescriptor = tpl.FaceDescriptor;
+                    existing.FaceRegisteredAt = tpl.FaceRegisteredAt ?? DateTime.UtcNow;
+                }
+                if (string.IsNullOrEmpty(existing.FaceImageUrls) && !string.IsNullOrEmpty(tpl.FaceImageUrls)) existing.FaceImageUrls = tpl.FaceImageUrls;
+
+                // Đồng bộ phụ cấp: Kiểm tra từng phụ cấp trong template, nếu chưa Exist thì mới add
+                foreach (var (name, amount) in tpl.Allowances)
+                {
+                    if (!existing.Allowances.Any(a => a.Name == name))
+                    {
+                        existing.Allowances.Add(new EmployeeAllowance
+                        {
+                            Id = Uuid7.NewGuid(),
+                            TenantId = tenantId,
+                            EmployeeId = existing.Id,
+                            Name = name,
+                            Amount = amount,
+                            CreatedAt = DateTime.UtcNow
+                        });
+                    }
+                }
 
                 // Đồng bộ cấu hình lương cho NV001, NV002, NV003 chuẩn theo yêu cầu đề bài
                 if (tpl.EmployeeCode is "NV001" or "NV002" or "NV003")
@@ -453,6 +546,10 @@ public static class EmployeeSeedData
                     Address = tpl.Address,
                     StartDate = tpl.StartDate,
                     Note = tpl.Note,
+                    AvatarUrl = tpl.AvatarUrl,
+                    FaceDescriptor = tpl.FaceDescriptor,
+                    FaceImageUrls = tpl.FaceImageUrls,
+                    FaceRegisteredAt = tpl.FaceRegisteredAt,
                     OtWeekday = tpl.OtWeekday,
                     OtSunday = tpl.OtSunday,
                     SalaryType = tpl.SalaryType,
@@ -521,10 +618,6 @@ public static class EmployeeSeedData
                     LateThresholdMinutes = 15, // Đi muộn sau 15 phút
                     EnableEarlyLeaveThreshold = true,
                     EarlyLeaveThresholdMinutes = 15, // Về sớm trước 15 phút
-                    EnableOtBeforeShift = true,
-                    OtBeforeShiftMinutes = 30,
-                    EnableOtAfterShift = true,
-                    OtAfterShiftMinutes = 30, // Tính OT sau 30 phút
                     CreatedAt = DateTime.UtcNow
                 };
 
@@ -540,8 +633,6 @@ public static class EmployeeSeedData
                 existingPolicy.LateThresholdMinutes = 15;
                 existingPolicy.EnableEarlyLeaveThreshold = true;
                 existingPolicy.EarlyLeaveThresholdMinutes = 15;
-                existingPolicy.EnableOtAfterShift = true;
-                existingPolicy.OtAfterShiftMinutes = 30;
                 hasChanges = true;
             }
         }
@@ -731,27 +822,33 @@ public static class EmployeeSeedData
         var shiftMorning = shifts.FirstOrDefault(s => s.ShiftCode == "CA-SANG") ?? shifts[0];
         var shiftAfternoon = shifts.FirstOrDefault(s => s.ShiftCode == "CA-CHIEU") ?? shifts[0];
 
-        // 4. Kiểm tra xem đã seed lịch chấm công cho kỳ 01/09/2026 - 31/10/2026 chưa
+        // 4. Kiểm tra xem đã seed lịch chấm công cho kỳ 01/09/2026 - 31/10/2026 chưa (Kiểm tra Exist từng ca)
         var startDate = new DateTime(2026, 9, 1);
         var endDate = new DateTime(2026, 10, 31);
 
-        var existingSchedulesCount = await context.EmployeeSchedules
+        var existingScheduleKeys = await context.EmployeeSchedules
             .IgnoreQueryFilters()
-            .CountAsync(s => s.TenantId == tenantId && s.BranchId == branchId &&
-                             s.WorkDate >= startDate && s.WorkDate <= endDate &&
-                             (s.EmployeeId == empMonthly.Id || s.EmployeeId == empShift.Id || s.EmployeeId == empHourly.Id));
+            .Where(s => s.TenantId == tenantId && s.BranchId == branchId &&
+                        s.WorkDate >= startDate && s.WorkDate <= endDate &&
+                        (s.EmployeeId == empMonthly.Id || s.EmployeeId == empShift.Id || s.EmployeeId == empHourly.Id))
+            .Select(s => new { s.EmployeeId, s.WorkDate, s.ShiftConfigId })
+            .ToListAsync();
+
+        var existingSet = new HashSet<string>(
+            existingScheduleKeys.Select(k => $"{k.EmployeeId}_{k.WorkDate:yyyyMMdd}_{k.ShiftConfigId}"));
 
         List<EmployeeSchedule> newSchedules = new();
 
-        if (existingSchedulesCount == 0)
+        // Quét qua 61 ngày (Tháng 9 có 30 ngày, Tháng 10 có 31 ngày)
+        for (var date = startDate; date <= endDate; date = date.AddDays(1))
         {
-            // Quét qua 61 ngày (Tháng 9 có 30 ngày, Tháng 10 có 31 ngày)
-            for (var date = startDate; date <= endDate; date = date.AddDays(1))
-            {
-                var isSunday = date.DayOfWeek == DayOfWeek.Sunday;
+            var isSunday = date.DayOfWeek == DayOfWeek.Sunday;
 
-                // --- Nhân viên 1: NV001 (Monthly) - Làm Ca sáng (6h - 14h), Nghỉ Chủ Nhật ---
-                if (!isSunday)
+            // --- Nhân viên 1: NV001 (Monthly) - Làm Ca sáng (6h - 14h), Nghỉ Chủ Nhật ---
+            if (!isSunday)
+            {
+                var key = $"{empMonthly.Id}_{date:yyyyMMdd}_{shiftMorning.Id}";
+                if (!existingSet.Contains(key))
                 {
                     var (lateMin, earlyMin, otMin, actualHours, checkIn, checkOut) =
                         SimulateAttendance(date, shiftMorning, date.Day switch
@@ -764,10 +861,15 @@ public static class EmployeeSeedData
 
                     newSchedules.Add(CreateSchedule(tenantId, branchId, empMonthly.Id, shiftMorning, date,
                         checkIn, checkOut, lateMin, earlyMin, otMin, actualHours));
+                    existingSet.Add(key);
                 }
+            }
 
-                // --- Nhân viên 2: NV002 (Shift) - Làm Ca chiều (14h - 22h), Nghỉ Chủ Nhật ---
-                if (!isSunday)
+            // --- Nhân viên 2: NV002 (Shift) - Làm Ca chiều (14h - 22h), Nghỉ Chủ Nhật ---
+            if (!isSunday)
+            {
+                var key = $"{empShift.Id}_{date:yyyyMMdd}_{shiftAfternoon.Id}";
+                if (!existingSet.Contains(key))
                 {
                     var (lateMin, earlyMin, otMin, actualHours, checkIn, checkOut) =
                         SimulateAttendance(date, shiftAfternoon, date.Day switch
@@ -780,13 +882,18 @@ public static class EmployeeSeedData
 
                     newSchedules.Add(CreateSchedule(tenantId, branchId, empShift.Id, shiftAfternoon, date,
                         checkIn, checkOut, lateMin, earlyMin, otMin, actualHours));
+                    existingSet.Add(key);
                 }
+            }
 
-                // --- Nhân viên 3: NV003 (Hourly) - Làm Ca sáng từ Thứ 2 - Thứ 6 + một vài ca thêm Chủ Nhật/Thứ 7 ---
-                var isSaturday = date.DayOfWeek == DayOfWeek.Saturday;
-                var shouldWorkHourly = (!isSunday && !isSaturday) || (isSaturday && date.Day % 2 == 0);
+            // --- Nhân viên 3: NV003 (Hourly) - Làm Ca sáng từ Thứ 2 - Thứ 6 + một vài ca thêm Chủ Nhật/Thứ 7 ---
+            var isSaturday = date.DayOfWeek == DayOfWeek.Saturday;
+            var shouldWorkHourly = (!isSunday && !isSaturday) || (isSaturday && date.Day % 2 == 0);
 
-                if (shouldWorkHourly)
+            if (shouldWorkHourly)
+            {
+                var key = $"{empHourly.Id}_{date:yyyyMMdd}_{shiftMorning.Id}";
+                if (!existingSet.Contains(key))
                 {
                     var (lateMin, earlyMin, otMin, actualHours, checkIn, checkOut) =
                         SimulateAttendance(date, shiftMorning, date.Day switch
@@ -799,21 +906,23 @@ public static class EmployeeSeedData
 
                     newSchedules.Add(CreateSchedule(tenantId, branchId, empHourly.Id, shiftMorning, date,
                         checkIn, checkOut, lateMin, earlyMin, otMin, actualHours));
+                    existingSet.Add(key);
                 }
             }
+        }
 
+        if (newSchedules.Count > 0)
+        {
             await context.EmployeeSchedules.AddRangeAsync(newSchedules);
             await context.SaveChangesAsync();
         }
-        else
-        {
-            newSchedules = await context.EmployeeSchedules
-                .IgnoreQueryFilters()
-                .Where(s => s.TenantId == tenantId && s.BranchId == branchId &&
-                            s.WorkDate >= startDate && s.WorkDate <= endDate &&
-                            (s.EmployeeId == empMonthly.Id || s.EmployeeId == empShift.Id || s.EmployeeId == empHourly.Id))
-                .ToListAsync();
-        }
+
+        var allSchedules = await context.EmployeeSchedules
+            .IgnoreQueryFilters()
+            .Where(s => s.TenantId == tenantId && s.BranchId == branchId &&
+                        s.WorkDate >= startDate && s.WorkDate <= endDate &&
+                        (s.EmployeeId == empMonthly.Id || s.EmployeeId == empShift.Id || s.EmployeeId == empHourly.Id))
+            .ToListAsync();
 
         // 5. YÊU CẦU 5: Tính toán Payslip cho Tháng 9 và Tháng 10 áp dụng ConfigPolicy
         // Kiểm tra xem đã có Payslip của kỳ này chưa
@@ -839,7 +948,7 @@ public static class EmployeeSeedData
                 }
 
                 // Lấy toàn bộ ca làm việc của nhân viên trong tháng
-                var monthSchedules = newSchedules
+                var monthSchedules = allSchedules
                     .Where(s => s.EmployeeId == emp.Id && s.WorkDate >= periodStartDate && s.WorkDate <= periodEndDate)
                     .ToList();
 
@@ -882,8 +991,8 @@ public static class EmployeeSeedData
                         totalEarlyLeaveMinutes += sch.EarlyLeaveMinutes;
                     }
 
-                    // Kiểm tra Làm thêm giờ (OT) theo Policy
-                    if (policy.EnableOtAfterShift && sch.OvertimeMinutes >= policy.OtAfterShiftMinutes)
+                    // Tính thời gian làm thêm ngoài giờ (OT) từ số phút thực tế
+                    if (sch.OvertimeMinutes > 0)
                     {
                         decimal otHoursInShift = Math.Round((decimal)sch.OvertimeMinutes / 60.00m, 2);
                         totalOtHours += otHoursInShift;
@@ -1127,7 +1236,9 @@ public static class EmployeeSeedData
             CheckOutTime = checkOut,
             CheckInMethod = "FACE_ID",
             CheckOutMethod = "FACE_ID",
-            FaceMatchScore = 0.98m,
+            CheckInFaceImageUrl = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80",
+            CheckOutFaceImageUrl = "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=300&q=80",
+            FaceMatchScore = 0.25m,
 
             // Giờ công & vi phạm
             LateMinutes = lateMin,

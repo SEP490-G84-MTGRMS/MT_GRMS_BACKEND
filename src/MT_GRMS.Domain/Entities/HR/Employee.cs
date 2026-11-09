@@ -23,6 +23,9 @@ public class Employee : BaseTenantEntity
     public DateTime? StartDate { get; set; }
     public string? Note { get; set; }
     public string? AvatarUrl { get; set; }
+    public string? FaceDescriptor { get; set; } // Chuỗi JSON lưu vector 128 số thực hoặc danh sách vector [[...], [...]] để train data nhiều ảnh
+    public string? FaceImageUrls { get; set; }  // Chuỗi JSON danh sách URL các ảnh mẫu đã dùng để trích xuất đặc trưng (train)
+    public DateTime? FaceRegisteredAt { get; set; }
     public SalaryType SalaryType { get; set; } = SalaryType.Monthly;
     public decimal BaseRate { get; set; } = 0.00m;
     public string? OtWeekday { get; set; }

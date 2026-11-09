@@ -132,6 +132,43 @@ public record ScheduleResponse(
     string? EvidenceImageUrl,
     string? ApprovedBy,
     DateTime? ApprovedAt,
-    DateTime CreatedAt
+    DateTime CreatedAt,
+    string? UserId = null
+);
+
+public record TodayStaffDescriptorDto(
+    Guid EmployeeId,
+    string EmployeeCode,
+    string FullName,
+    string? AvatarUrl,
+    string? FaceDescriptor,
+    Guid? ScheduleId,
+    string? ShiftCode,
+    string? ShiftName,
+    TimeSpan? PlannedStartTime,
+    TimeSpan? PlannedEndTime,
+    DateTime? CheckInTime,
+    DateTime? CheckOutTime,
+    string? Status,
+    string? FaceImageUrls = null
+);
+
+public record FaceIdCheckInRequest(
+    Guid ScheduleId,
+    Guid EmployeeId,
+    decimal FaceMatchScore,
+    string? SnapshotBase64
+);
+
+public record FaceIdCheckOutRequest(
+    Guid ScheduleId,
+    Guid EmployeeId,
+    decimal FaceMatchScore,
+    string? SnapshotBase64
+);
+
+public record RegisterFaceDescriptorRequest(
+    string FaceDescriptor,
+    string? FaceImageUrls = null
 );
 

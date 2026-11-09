@@ -13,6 +13,7 @@ using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.ShiftConfigs;
 using MT_GRMS.Application.HR.AttendancePolicies;
+using MT_GRMS.Application.HR.Payslips;
 using MT_GRMS.Application.HR.Schedules;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders;
@@ -103,6 +104,8 @@ public static class DependencyInjection
         services.AddScoped<IShiftConfigRepository, ShiftConfigRepository>();
         services.AddScoped<IBranchAttendancePolicyRepository, BranchAttendancePolicyRepository>();
         services.AddScoped<IScheduleRepository, ScheduleRepository>();
+        services.AddScoped<IScheduleApprovalRequestRepository, ScheduleApprovalRequestRepository>();
+        services.AddScoped<IPayslipRepository, PayslipRepository>();
         services.AddScoped<ISubscriptionPlanRepository, SubscriptionPlanRepository>();
         services.AddScoped<ITenantRepository, TenantRepository>();
 

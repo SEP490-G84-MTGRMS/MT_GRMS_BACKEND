@@ -64,6 +64,16 @@ public class BranchesController : BaseApiController
     }
 
     /// <summary>
+    /// Lấy thông tin chi tiết đầy đủ kèm các thông số tổng quát (Sản phẩm, tồn kho, nhân sự) của chi nhánh
+    /// </summary>
+    [HttpGet("{id:guid}/detail")]
+    public async Task<IActionResult> GetDetail(Guid id, CancellationToken cancellationToken)
+    {
+        var result = await _branchService.GetBranchDetailAsync(id, cancellationToken);
+        return Ok(ApiResponse<BranchDetailDto>.Ok(result));
+    }
+
+    /// <summary>
     /// Tạo mới một chi nhánh trong chuỗi cửa hàng (REQ-BR-02)
     /// </summary>
     [HttpPost]
@@ -94,6 +104,16 @@ public class BranchesController : BaseApiController
     {
         var result = await _branchService.ToggleBranchStatusAsync(id, request, cancellationToken);
         return Ok(ApiResponse<BranchDto>.Ok(result, $"Đã {(request.IsActive ? "kích hoạt" : "tạm dừng")} hoạt động chi nhánh."));
+    }
+
+    /// <summary>
+    /// Xóa chi nhánh khỏi chuỗi cửa hàng (Soft Delete)
+    /// </summary>
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
+    {
+        await _branchService.DeleteBranchAsync(id, cancellationToken);
+        return Ok(ApiResponse<bool>.Ok(true, "Xóa chi nhánh thành công."));
     }
 
     /// <summary>

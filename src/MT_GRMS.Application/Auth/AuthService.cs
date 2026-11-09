@@ -8,9 +8,11 @@ using Microsoft.IdentityModel.Tokens;
 using MT_GRMS.Application.Auth.Dtos;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Application.Common.Interfaces;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Application.Auth;
 
@@ -45,114 +47,19 @@ public class AuthService : IAuthService
         }
 
         // 2. Tìm user trong cơ sở dữ liệu
-        var user = await _userRepository.GetByUsernameAsync(request.UsernameOrEmail.Trim(), cancellationToken);
+        var user = await _userRepository.GetByUsernameAsync(request.UsernameOrEmail.Trim(), cancellationToken)
+            ?? throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
 
-        // 3. Kiểm tra mật khẩu (hỗ trợ PBKDF2 PasswordHasher, SHA256, Plaintext và demo password)
-        bool isPasswordValid = false;
-        bool rehashNeeded = false;
+        // 3. Xác thực mật khẩu và tự động nâng cấp hash nếu cần
+        await VerifyPasswordAsync(user, request.Password, cancellationToken);
 
-        if (user != null && !string.IsNullOrEmpty(user.PasswordHash))
-        {
-            isPasswordValid = _passwordHasher.VerifyPassword(user.PasswordHash, request.Password, out rehashNeeded);
+        // 4. Xác định Tenant và phân quyền theo UserRole enum (Admin, StoreOwner, Staff)
+        var (tenantId, tenantUser) = ResolveTenant(user, request.TenantCode);
+        var userRole = ResolveUserRole(user, tenantUser);
+        var role = userRole.ToStringRole();
+        var isAdmin = userRole == UserRole.Admin;
 
-            // Kiểm tra SHA256 hash nếu chưa khớp
-            if (!isPasswordValid)
-            {
-                try
-                {
-                    var hashedInput = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(request.Password))).ToLowerInvariant();
-                    if (string.Equals(user.PasswordHash, hashedInput, StringComparison.OrdinalIgnoreCase))
-                    {
-                        isPasswordValid = true;
-                        rehashNeeded = true;
-                    }
-                }
-                catch { }
-            }
-
-            // Kiểm tra plaintext trực tiếp
-            if (!isPasswordValid && string.Equals(user.PasswordHash, request.Password, StringComparison.Ordinal))
-            {
-                isPasswordValid = true;
-                rehashNeeded = true;
-            }
-
-            // Cho phép mật khẩu demo tiện lợi "password123" hoặc "123456" nếu là seed admin/manager/cashier
-            if (!isPasswordValid && (request.Password == "password123" || request.Password == "123456"))
-            {
-                if (user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase) ||
-                    user.UserName.Equals("manager01", StringComparison.OrdinalIgnoreCase) ||
-                    user.UserName.Equals("cashier01", StringComparison.OrdinalIgnoreCase))
-                {
-                    isPasswordValid = true;
-                }
-            }
-        }
-
-        if (user == null || !isPasswordValid)
-        {
-            throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
-        }
-
-        // Nếu mật khẩu cũ dạng plain text đã đăng nhập thành công -> tự động nâng cấp hash
-        if (rehashNeeded)
-        {
-            user.PasswordHash = _passwordHasher.HashPassword(request.Password);
-            _userRepository.Update(user);
-            await _userRepository.SaveChangesAsync(cancellationToken);
-        }
-
-        var tenantUser = user.TenantUsers?.FirstOrDefault(tu => !string.IsNullOrWhiteSpace(request.TenantCode) && tu.TenantId == request.TenantCode)
-                         ?? user.TenantUsers?.FirstOrDefault();
-
-        var tenantId = tenantUser?.TenantId ?? (!string.IsNullOrWhiteSpace(request.TenantCode) ? request.TenantCode : "DEFAULT");
-        if (tenantId is "default-tenant" or "TENANT-HCM-01" or "TENANT-DEFAULT" or "DEFAULT")
-        {
-            tenantId = "tenant_mt_mart_01";
-        }
-
-        // Xác định quyền hạn (Role) chuẩn 3 Roles: ADMIN, STORE_OWNER, EMPLOYEE
-        var isAdmin = user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase);
-        string role;
-        if (isAdmin)
-        {
-            role = RoleConstants.AdminUpper;
-        }
-        else if (tenantUser != null && !string.IsNullOrWhiteSpace(tenantUser.Role))
-        {
-            var r = tenantUser.Role.Trim().ToUpperInvariant();
-            if (r is "ADMIN" or "SYSTEMADMIN" or "SYSTEM_ADMIN")
-            {
-                role = RoleConstants.AdminUpper;
-            }
-            else if (r is "STORE_OWNER" or "STOREOWNER" or "OWNER")
-            {
-                role = RoleConstants.StoreOwnerUpper;
-            }
-            else
-            {
-                role = RoleConstants.EmployeeUpper;
-            }
-        }
-        else
-        {
-            var uName = (user.UserName ?? "").ToUpperInvariant();
-            var email = (user.Email ?? "").ToUpperInvariant();
-            if (uName.Contains("EMPLOYEE") || email.Contains("EMPLOYEE") || uName.Contains("STAFF") || email.Contains("STAFF") || uName.Contains("CASHIER") || email.Contains("CASHIER"))
-            {
-                role = RoleConstants.EmployeeUpper;
-            }
-            else if (uName.Contains("ADMIN") || email.Contains("ADMIN"))
-            {
-                role = RoleConstants.AdminUpper;
-            }
-            else
-            {
-                role = RoleConstants.StoreOwnerUpper;
-            }
-        }
-
-        // 4. Đăng nhập thành công với thông tin user từ database
+        // 5. Chuẩn bị thông tin người dùng và sinh JWT Token / RefreshToken
         var userInfo = new UserInfo(
             Id: user.Id,
             Username: user.Username,
@@ -169,6 +76,13 @@ public class AuthService : IAuthService
         var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt);
         var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
 
+        // Lưu RefreshToken và thời hạn (7 ngày) vào CSDL
+        user.RefreshToken = refreshToken;
+        user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+        user.LastLoginAt = DateTime.UtcNow;
+        _userRepository.Update(user);
+        await _userRepository.SaveChangesAsync(cancellationToken);
+
         return new LoginResponse(
             AccessToken: accessToken,
             RefreshToken: refreshToken,
@@ -177,29 +91,187 @@ public class AuthService : IAuthService
         );
     }
 
-    public Task<LoginResponse> RefreshTokenAsync(RefreshTokenRequest request, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Kiểm tra mật khẩu (hỗ trợ PBKDF2 PasswordHasher, SHA256, Plaintext và demo password tiện lợi)
+    /// Tự động nâng cấp hash lên PBKDF2 nếu đăng nhập bằng thuật toán cũ thành công
+    /// </summary>
+    private async Task VerifyPasswordAsync(User user, string requestPassword, CancellationToken cancellationToken = default)
     {
-        var refreshedUser = new UserInfo(
-            Id: $"usr_{Guid.NewGuid():N}",
-            Username: "refreshed_user",
-            FullName: "Refreshed User",
-            Email: "user@mtgrms.vn",
-            RoleName: "ADMIN",
+        if (string.IsNullOrEmpty(user.PasswordHash))
+        {
+            throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
+        }
+
+        bool isPasswordValid = _passwordHasher.VerifyPassword(user.PasswordHash, requestPassword, out var rehashNeeded);
+
+        // Fallback 1: Kiểm tra SHA256 hash từ dữ liệu seed cũ
+        if (!isPasswordValid)
+        {
+            try
+            {
+                var hashedInput = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(requestPassword))).ToLowerInvariant();
+                if (string.Equals(user.PasswordHash, hashedInput, StringComparison.OrdinalIgnoreCase))
+                {
+                    isPasswordValid = true;
+                    rehashNeeded = true;
+                }
+            }
+            catch { }
+        }
+
+        // Fallback 2: Kiểm tra plaintext trực tiếp
+        if (!isPasswordValid && string.Equals(user.PasswordHash, requestPassword, StringComparison.Ordinal))
+        {
+            isPasswordValid = true;
+            rehashNeeded = true;
+        }
+
+        // Fallback 3: Cho phép mật khẩu demo "password123" hoặc "123456" cho tài khoản seed
+        if (!isPasswordValid && (requestPassword is "password123" or "123456"))
+        {
+            if (user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase) ||
+                user.UserName.Equals("manager01", StringComparison.OrdinalIgnoreCase) ||
+                user.UserName.Equals("cashier01", StringComparison.OrdinalIgnoreCase))
+            {
+                isPasswordValid = true;
+            }
+        }
+
+        if (!isPasswordValid)
+        {
+            throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
+        }
+
+        // Tự động nâng cấp mật khẩu cũ sang PBKDF2 chuẩn bảo mật cao
+        if (rehashNeeded)
+        {
+            user.PasswordHash = _passwordHasher.HashPassword(requestPassword);
+            _userRepository.Update(user);
+            await _userRepository.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Xác định TenantId và đối tượng TenantUser liên kết của người dùng
+    /// </summary>
+    private static (string TenantId, TenantUser? TenantUser) ResolveTenant(User user, string? tenantCode)
+    {
+        var tenantUser = user.TenantUsers?.FirstOrDefault(tu => !string.IsNullOrWhiteSpace(tenantCode) && tu.TenantId == tenantCode)
+                         ?? user.TenantUsers?.FirstOrDefault();
+
+        var tenantId = tenantUser?.TenantId ?? (!string.IsNullOrWhiteSpace(tenantCode) ? tenantCode : "tenant_mt_mart_01");
+        if (tenantId is "default-tenant" or "TENANT-HCM-01" or "TENANT-DEFAULT" or "DEFAULT")
+        {
+            tenantId = "tenant_mt_mart_01";
+        }
+
+        return (tenantId, tenantUser);
+    }
+
+    private static string ResolveTenantId(User user, string? tenantCode) => ResolveTenant(user, tenantCode).TenantId;
+
+    /// <summary>
+    /// Xác định quyền hạn chuẩn hóa theo enum UserRole (Admin, StoreOwner, Staff)
+    /// </summary>
+    private static UserRole ResolveUserRole(User user, TenantUser? tenantUser)
+    {
+        // 1. Quản trị viên hệ thống
+        if (user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase))
+        {
+            return UserRole.Admin;
+        }
+
+        // 2. Lấy role trực tiếp từ database qua Enum parser (mặc định StoreOwner nếu mới tạo cửa hàng)
+        return UserRoleNames.FromString(tenantUser?.Role ?? UserRoleNames.StoreOwner);
+    }
+
+    public async Task<LoginResponse> RefreshTokenAsync(RefreshTokenRequest request, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(request.RefreshToken))
+        {
+            throw new ArgumentException("RefreshToken không được để trống.");
+        }
+
+        // Tìm user theo RefreshToken trong CSDL
+        var matchingUsers = await _userRepository.FindAsync(u => u.RefreshToken == request.RefreshToken, cancellationToken);
+        var user = matchingUsers.FirstOrDefault();
+
+        if (user == null || user.RefreshTokenExpiryTime == null || user.RefreshTokenExpiryTime <= DateTime.UtcNow)
+        {
+            throw new UnauthorizedAccessException("Phiên đăng nhập đã hết hạn hoặc RefreshToken không hợp lệ. Vui lòng đăng nhập lại.");
+        }
+
+        var (tenantId, tenantUser) = ResolveTenant(user, null);
+        var userRole = ResolveUserRole(user, tenantUser);
+        var role = userRole.ToStringRole();
+        var isAdmin = userRole == UserRole.Admin;
+
+        var userInfo = new UserInfo(
+            Id: user.Id,
+            Username: user.Username,
+            FullName: string.IsNullOrWhiteSpace(user.FullName) ? user.Username : user.FullName,
+            Email: string.IsNullOrWhiteSpace(user.Email) ? $"{user.Username}@mtgrms.vn" : user.Email,
+            RoleName: role,
             BranchId: null,
-            TenantId: "TENANT-HCM-01",
-            IsAdmin: true
+            TenantId: tenantId,
+            IsAdmin: isAdmin
         );
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
-        var accessToken = GenerateJwtToken(refreshedUser.Id, refreshedUser.Username, refreshedUser.Email, refreshedUser.RoleName, refreshedUser.TenantId, true, expiresAt);
+        var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt);
 
-        return Task.FromResult(new LoginResponse(
+        // Token Rotation: Sinh RefreshToken mới và hủy token cũ
+        var newRefreshToken = $"mt_refresh_{Guid.NewGuid():N}";
+        user.RefreshToken = newRefreshToken;
+        user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
+        _userRepository.Update(user);
+        await _userRepository.SaveChangesAsync(cancellationToken);
+
+        return new LoginResponse(
             AccessToken: accessToken,
-            RefreshToken: $"mt_refresh_{Guid.NewGuid():N}",
+            RefreshToken: newRefreshToken,
             ExpiresAt: expiresAt,
-            User: refreshedUser
-        ));
+            User: userInfo
+        );
+    }
+
+    public async Task<UserInfo?> GetCurrentUserAsync(string userId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId)) return null;
+
+        var user = await _userRepository.GetByIdAsync(userId, cancellationToken);
+        if (user == null || !user.IsActive) return null;
+
+        var (tenantId, tenantUser) = ResolveTenant(user, null);
+        var userRole = ResolveUserRole(user, tenantUser);
+        var role = userRole.ToStringRole();
+        var isAdmin = userRole == UserRole.Admin;
+
+        return new UserInfo(
+            Id: user.Id,
+            Username: user.Username,
+            FullName: string.IsNullOrWhiteSpace(user.FullName) ? user.Username : user.FullName,
+            Email: string.IsNullOrWhiteSpace(user.Email) ? $"{user.Username}@mtgrms.vn" : user.Email,
+            RoleName: role,
+            BranchId: null,
+            TenantId: tenantId,
+            IsAdmin: isAdmin
+        );
+    }
+
+    public async Task RevokeRefreshTokenAsync(string userId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId)) return;
+
+        var user = await _userRepository.GetByIdAsync(userId, cancellationToken);
+        if (user != null)
+        {
+            user.RefreshToken = null;
+            user.RefreshTokenExpiryTime = null;
+            _userRepository.Update(user);
+            await _userRepository.SaveChangesAsync(cancellationToken);
+        }
     }
 
     public async Task<LoginResponse> RegisterTenantAsync(RegisterTenantRequest request, CancellationToken cancellationToken = default)
@@ -237,9 +309,11 @@ public class AuthService : IAuthService
             Code = tenantCode.Length > 20 ? tenantCode.Substring(0, 20) : tenantCode,
             Hotline = request.Phone.Trim(),
             Status = "ACTIVE",
-            CurrentPlan = "FREE",
+            CurrentPlan = "PRO",
+            SubscriptionStatus = "TRIAL",
+            HasStaffManagementAddon = true,
             WalletBalance = 0m,
-            SubscriptionExpiresAt = DateTime.UtcNow.AddYears(1)
+            SubscriptionExpiresAt = DateTime.UtcNow.AddDays(3)
         };
 
         var userId = $"usr_{Guid.NewGuid():N}";
@@ -272,7 +346,7 @@ public class AuthService : IAuthService
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
-        var accessToken = GenerateJwtToken(user.Id, user.UserName, user.Email, "STORE_OWNER", tenant.Id, false, expiresAt);
+        var accessToken = GenerateJwtToken(user.Id, user.UserName, user.Email, UserRoleNames.StoreOwner, tenant.Id, false, expiresAt);
         var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
 
         var userInfo = new UserInfo(
@@ -280,7 +354,7 @@ public class AuthService : IAuthService
             Username: user.UserName,
             FullName: user.FullName,
             Email: user.Email,
-            RoleName: "STORE_OWNER",
+            RoleName: UserRoleNames.StoreOwner,
             BranchId: branch.Id,
             TenantId: tenant.Id,
             IsAdmin: false

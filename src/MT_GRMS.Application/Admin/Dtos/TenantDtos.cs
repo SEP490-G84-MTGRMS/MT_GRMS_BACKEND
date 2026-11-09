@@ -88,8 +88,9 @@ public record PurchaseSubscriptionRequest(
     string PlanCode,
     int Months = 12,
     int ExtraBranches = 0,
-    int ExtraWarehouses = 0,
-    string PaymentMethod = "Wallet"
+    bool HasStaffManagementAddon = false,
+    string PaymentMethod = "Wallet",
+    int ExtraWarehouses = 0
 );
 
 public record PurchaseSubscriptionResponse(
