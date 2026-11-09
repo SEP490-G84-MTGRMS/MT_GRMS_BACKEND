@@ -418,6 +418,44 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""RejectionReason"" text;
                         ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""IsConfirmedByOwner"" boolean DEFAULT false;
                         ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ConfirmedByOwnerAtUtc"" timestamp without time zone;
+
+                        CREATE TABLE IF NOT EXISTS ""StorePaymentConfigs"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" text NOT NULL,
+                            ""BankCode"" character varying(50) NOT NULL DEFAULT 'MB',
+                            ""BankName"" character varying(150) NOT NULL DEFAULT 'MBBank - Ngân hàng Quân Đội',
+                            ""BankAccountNumber"" character varying(50) NOT NULL DEFAULT '',
+                            ""BankAccountName"" character varying(150) NOT NULL DEFAULT '',
+                            ""SepayApiKeyEncrypted"" text NOT NULL DEFAULT '',
+                            ""SepayWebhookSecret"" text NOT NULL DEFAULT '',
+                            ""IsActive"" boolean NOT NULL DEFAULT true,
+                            ""CashOutApprovalThreshold"" numeric(18,2) NOT NULL DEFAULT 200000,
+                            ""CashOutShiftTotalLimit"" numeric(18,2) NOT NULL DEFAULT 0,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+
+                        CREATE TABLE IF NOT EXISTS ""PaymentTransactions"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" text NOT NULL,
+                            ""OrderId"" uuid NULL,
+                            ""BankTransactionId"" character varying(100) NOT NULL DEFAULT '',
+                            ""Gateway"" character varying(50) NOT NULL DEFAULT '',
+                            ""AmountIn"" numeric(18,2) NOT NULL DEFAULT 0,
+                            ""Accumulated"" numeric(18,2) NULL,
+                            ""TransactionContent"" text NOT NULL DEFAULT '',
+                            ""ReferenceNumber"" character varying(100) NULL,
+                            ""TransactionDate"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""VerifiedBySepayApi"" boolean NOT NULL DEFAULT false,
+                            ""RawPayloadJson"" text NULL,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+
                         ALTER TABLE ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutApprovalThreshold"" numeric(18,2) DEFAULT 200000;
                         ALTER TABLE ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutShiftTotalLimit"" numeric(18,2) DEFAULT 0;
 

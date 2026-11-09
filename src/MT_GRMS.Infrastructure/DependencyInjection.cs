@@ -67,11 +67,13 @@ public static class DependencyInjection
 
         if (string.IsNullOrWhiteSpace(connectionString))
         {
-            Console.WriteLine("[MT-GRMS] Database: InMemory (không dùng Postgres local).");
+            Console.WriteLine("[MT-GRMS] Database: InMemory.");
         }
         else
         {
-            Console.WriteLine("[MT-GRMS] Database: PostgreSQL local Host=localhost;Port=5432;Database=mtgrms_db");
+            var isNeon = connectionString.Contains("neon.tech", StringComparison.OrdinalIgnoreCase);
+            var hostInfo = connectionString.Split(';').FirstOrDefault() ?? "PostgreSQL";
+            Console.WriteLine($"[MT-GRMS] Database: {(isNeon ? "Neon Cloud PostgreSQL" : "PostgreSQL Local")} ({hostInfo})");
         }
 
         // Đăng ký Unit of Work & Repositories
