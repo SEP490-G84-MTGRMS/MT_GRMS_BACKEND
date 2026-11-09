@@ -4,6 +4,39 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ---
 
+## [Unreleased] - 2026-11-09
+
+### Added
+- Tinh gọn và tái cấu trúc hàm `LoginAsync` trong `AuthService.cs`: rút ngắn từ 140 dòng xuống 40 dòng, loại bỏ triệt để hơn 30 dòng `if...else` soi chuỗi username/email tạm bợ, tách thành 3 phương thức chuyên trách `VerifyPasswordAsync`, `ResolveTenant`, và `ResolveUserRole` dựa trên Enum `UserRole` [FE-AUTH] [worklog: docs/worklogs/2026-11-09_FE-AUTH_AI_login-refactor-clean-code.md].
+- Chuẩn hóa hệ thống phân quyền với enum `UserRole` gồm 3 giá trị: `Admin`, `StoreOwner`, `Staff`; bổ sung helper `UserRoleNames` và các thuộc tính `Role` / `UserRole` trên `User`, `TenantUser`, `UserInfo` DTO; loại bỏ triệt để nguy cơ fallback sai về quyền `ADMIN` trong `AuthService` [FE-AUTH] [worklog: docs/worklogs/2026-11-09_FE-AUTH_AI_user-role-enum-standardization.md].
+- Chuyển đổi toàn diện cơ chế xác thực sang HttpOnly Cookie: AccessToken và RefreshToken được lưu trong HttpOnly Cookie (chống XSS), loại bỏ token nhạy cảm khỏi response body, triển khai Token Rotation trong CSDL PostgreSQL bảng Users, bổ sung endpoint `GET /api/auth/me` và `POST /api/auth/refresh` đọc Cookie [FE-AUTH] [worklog: docs/worklogs/2026-11-09_FE-AUTH_AI_httponly-cookie-and-session-expiry.md].
+
+### Fixed
+- Khắc phục lỗi `InvalidOperationException` (NpgsqlRetryingExecutionStrategy không hỗ trợ user-initiated transaction) khi xử lý Webhook SePay nạp tiền ví trong `WalletService.cs`: bọc toàn bộ khối transaction cập nhật số dư ví trong `_context.Database.CreateExecutionStrategy().ExecuteAsync()`, đảm bảo luồng nạp tiền và thanh toán gói dịch vụ hoạt động hoàn hảo 100% [BE-WALLET] [worklog: docs/worklogs/2026-11-09_BE-BRANCH_AI_fix-branch-detail-schema-fallback.md].
+- Khắc phục lỗi `500 Internal Server Error` (`42P01: relation "BranchProducts" does not exist`) khi xem chi tiết chi nhánh: tự động khởi tạo bảng `"BranchProducts"` qua `EnsureBranchProductsSchemaAsync` trong `DbInitializer.cs`, bổ sung cơ chế fallback thống kê sản phẩm trực tiếp từ `BranchStocks` khi catalog rỗng, và phòng thủ try-catch cho nhân sự trong `BranchRepository.cs` [BE-BRANCH] [worklog: docs/worklogs/2026-11-09_BE-BRANCH_AI_fix-branch-detail-schema-fallback.md].
+
+## [Unreleased] - 2026-11-08
+
+### Added
+- Tái cấu trúc mô hình 2 gói cước SaaS: `STANDARD` (99.000 đ/tháng) và `PRO` (249.000 đ/tháng), xóa bỏ gói miễn phí vĩnh viễn (0đ), áp dụng dùng thử 3 ngày Gói Pro full tính năng cho tài khoản mới [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+- Bổ sung 3 cột vào bảng `Tenants`: `ExtraBranches` (chi nhánh mua thêm), `HasStaffManagementAddon` (cờ mua thêm nhân viên cho gói thường), `SubscriptionStatus` (trạng thái 'TRIAL', 'ACTIVE', 'EXPIRED'), tự động đồng bộ schema DDL qua `DbInitializer.cs` [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+- Nâng cấp API tính tiền và gia hạn `POST /api/tenant/subscriptions/purchase`: hỗ trợ tính thêm chi nhánh cho Gói Pro (+80k/tháng), option quản lý nhân viên cho Gói Thường (+30k/tháng), tính VAT 10% và cộng dồn hạn mức chi nhánh [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+- Cập nhật hàm kiểm tra hạn mức `BranchService.GetBranchQuotaAsync`: tính quota động theo `Plan.MaxBranches + Tenant.ExtraBranches` [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+- Cập nhật API `GET /api/tenant/pricing-plans`: Lọc nghiêm ngặt và trả về 3 gói cước chuẩn: `TRIAL` (0 đ), `STANDARD` (99k) và `PRO` (249k), vô hiệu hóa các gói cũ từ DB và đảm bảo dữ liệu đồng nhất [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+- Bổ sung API `POST /api/tenant/subscriptions/trial` và xử lý dùng thử miễn phí 3 ngày Full tính năng Gói Pro khi đăng ký mới hoặc kích hoạt trải nghiệm [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+- **Khắc phục lỗi logic bypass Quota chi nhánh (`BranchService.cs`, `BranchRepository.cs`)**: Thay đổi cơ chế đếm hạn mức từ `CountActiveAsync` sang `CountTotalAsync` (đếm tất cả chi nhánh sở hữu `!IsDeleted`), triệt tiêu lỗ hổng tắt chi nhánh để tạo thêm chi nhánh không giới hạn; đồng thời bổ sung chốt chặn kiểm tra Quota khi kích hoạt lại chi nhánh tại `ToggleBranchStatusAsync` [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+- Bổ sung endpoint xóa chi nhánh `DELETE /api/branches/{id}` (Soft Delete) kết hợp bảo vệ chi nhánh chính `IsHeadquarter` không cho phép xóa, giúp giải phóng hạn mức chi nhánh đang sử dụng [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+- Bổ sung endpoint `GET /api/branches/{id}/detail` tổng hợp toàn diện thông tin cơ sở và các thông số hoạt động vận hành (SKU kinh doanh, tồn kho SOH, cảnh báo thiếu hàng, tổng nhân sự và đơn hàng) [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+- Tối ưu hóa `UpdateBranchAsync`: tự động đồng bộ gỡ cờ Trụ sở chính ở các chi nhánh khác khi người dùng thiết lập chi nhánh mới làm Trụ sở chính [FE-09] [worklog: docs/worklogs/2026-11-08_FE-09_AI_subscription-tier-quota-redesign.md].
+
+## [Unreleased] - 2026-11-07
+
+### Added
+- Bổ sung 3 thuộc tính mới vào bảng `Branches`: `Email` (email thông báo), `ManagerName` (bỏ `[NotMapped]`, lưu chính thức vào DB), và `IsHeadquarter` (đánh dấu cơ sở chính), đồng thời tự động cập nhật DDL trong `DbInitializer.cs` và ánh xạ đầy đủ trong `BranchService.cs` [BE-BRANCH] [worklog: docs/worklogs/2026-11-07_BE-BRANCH_AI_fix-branch-requests-deserialization.md].
+
+### Fixed
+- Sửa lỗi `400 Bad Request` ("The JSON value could not be converted to MT_GRMS.Application.Branches.Dtos.UpdateBranchRequest. Path: $.name") khi gọi API Tạo mới chi nhánh (`POST /api/branches`) hoặc Cập nhật chi nhánh (`PUT /api/branches/{id}`): chuyển đổi `CreateBranchRequest`, `UpdateBranchRequest` và `UpdateBranchStatusRequest` từ C# positional `record` sang POCO `class` có constructor mặc định và các getter/setter an toàn, giúp `System.Text.Json` model binding chuẩn xác dữ liệu JSON gửi từ Frontend React [BE-BRANCH] [worklog: docs/worklogs/2026-11-07_BE-BRANCH_AI_fix-branch-requests-deserialization.md].
+
 ## [Unreleased] - 2026-11-06
 
 ### Fixed

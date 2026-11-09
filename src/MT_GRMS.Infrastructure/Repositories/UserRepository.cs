@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Domain.Entities.Identity;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Infrastructure.Repositories;
@@ -91,7 +92,7 @@ public class UserRepository : IUserRepository
         {
             TenantId = tenant.Id,
             UserId = user.Id,
-            Role = "STORE_OWNER",
+            Role = UserRoleNames.StoreOwner,
             IsActive = true
         };
         await _context.TenantUsers.AddAsync(tenantUser, cancellationToken);
