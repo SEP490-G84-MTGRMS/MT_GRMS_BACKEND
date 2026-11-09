@@ -182,6 +182,18 @@ public class BranchService : IBranchService
             throw new NotFoundException("Chi nhánh", id);
         }
 
+        // Nếu đặt chi nhánh này làm Trụ sở chính, tự động gỡ cờ Trụ sở chính ở các chi nhánh khác
+        if (request.IsHeadquarter && !branch.IsHeadquarter)
+        {
+            var paged = await _branchRepo.GetPagedListAsync(null, null, null, 1, 100, cancellationToken);
+            foreach (var other in paged.Items.Where(b => b.Id != id && b.IsHeadquarter))
+            {
+                other.IsHeadquarter = false;
+                other.UpdatedAt = DateTime.UtcNow;
+                _branchRepo.Update(other);
+            }
+        }
+
         branch.Name = request.Name.Trim();
         branch.Address = request.Address?.Trim() ?? string.Empty;
         branch.Phone = request.Phone?.Trim();

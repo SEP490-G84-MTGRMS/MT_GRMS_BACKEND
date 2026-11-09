@@ -98,4 +98,17 @@
 3. **Kiểm thử**:
    - Chạy `dotnet build src/MT_GRMS.Api/MT_GRMS.Api.csproj` -> Build thành công 0 Error.
 
+---
+
+### Bổ sung (2026-11-09): Tự động gỡ cờ Trụ sở chính đơn nhất khi cập nhật chi nhánh
+1. **Mục đích**:
+   - Đảm bảo tính toàn vẹn dữ liệu: trong một gian hàng chỉ có duy nhất 1 chi nhánh làm Trụ sở chính (Headquarter). Khi người dùng tích chọn chi nhánh này làm Trụ sở chính, hệ thống tự động gỡ cờ Trụ sở chính ở các chi nhánh khác.
+
+2. **Chi tiết tệp thay đổi**:
+   - `src/MT_GRMS.Application/Branches/BranchService.cs`: Trong hàm `UpdateBranchAsync`, kiểm tra nếu `request.IsHeadquarter && !branch.IsHeadquarter`, tự động cập nhật `IsHeadquarter = false` cho các chi nhánh còn lại.
+
+3. **Kiểm thử**:
+   - Chạy `dotnet build src/MT_GRMS.Api/MT_GRMS.Api.csproj` -> Build thành công 0 Error.
+
+
 
