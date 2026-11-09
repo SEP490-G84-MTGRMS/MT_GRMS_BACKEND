@@ -176,4 +176,17 @@ public class ProductsController : BaseApiController
         var result = await _supplierService.GetSuppliersForProductAsync(id, onlyActive, cancellationToken);
         return Ok(ApiResponse<IReadOnlyList<ProductSupplierMappingDto>>.Ok(result));
     }
+
+    /// <summary>
+    /// Tra cứu lịch sử biến động giá bán (FE-03.2 Price Change History Tracking)
+    /// </summary>
+    [HttpGet("{id:guid}/price-history")]
+    public async Task<IActionResult> GetPriceHistory(
+        Guid id,
+        [FromQuery] Guid? branchId,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _catalogService.GetPriceHistoryAsync(id, branchId, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<ProductPriceHistoryDto>>.Ok(result));
+    }
 }

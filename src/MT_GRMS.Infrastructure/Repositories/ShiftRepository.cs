@@ -135,13 +135,20 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
             .FirstOrDefaultAsync(m => m.Id == movementId, cancellationToken);
     }
 
-    public async Task<IReadOnlyList<ShiftCashMovement>> GetPendingMovementsAsync(Guid branchId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ShiftCashMovement>> GetPendingMovementsAsync(Guid? branchId, CancellationToken cancellationToken = default)
     {
-        return await _context.ShiftCashMovements
+        var query = _context.ShiftCashMovements
             .Include(m => m.Shift)
-            .Where(m => m.Shift != null && m.Shift.BranchId == branchId &&
+            .Where(m => m.Shift != null &&
                         (m.Status == CashMovementStatus.PendingApproval ||
-                         (m.Category == CashMovementCategory.CASH_DRAW && !m.IsConfirmedByOwner)))
+                         (m.Category == CashMovementCategory.CASH_DRAW && !m.IsConfirmedByOwner)));
+
+        if (branchId.HasValue && branchId.Value != Guid.Empty)
+        {
+            query = query.Where(m => m.Shift.BranchId == branchId.Value);
+        }
+
+        return await query
             .OrderByDescending(m => m.OccurredAtUtc)
             .ToListAsync(cancellationToken);
     }

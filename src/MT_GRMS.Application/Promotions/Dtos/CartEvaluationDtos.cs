@@ -19,7 +19,10 @@ public record CartGiftItemDto(
     Guid ProductId,
     string ProductName,
     decimal Quantity,
-    string Reason
+    string Reason,
+    Guid? PromotionId = null,
+    string? UnitName = null,
+    decimal EquivalentValue = 0m
 );
 
 public record CartItemDiscountDto(
@@ -34,6 +37,7 @@ public record EvaluateCartResponse(
     List<string> AppliedPromotions,
     List<CartGiftItemDto> GiftItems,
     ValidateVoucherResponse? VoucherResult = null,
-    List<CartItemDiscountDto>? ItemDiscounts = null
+    List<CartItemDiscountDto>? ItemDiscounts = null,
+    Guid? AppliedPromotionId = null
 );
 

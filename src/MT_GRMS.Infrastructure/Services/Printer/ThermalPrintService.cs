@@ -112,6 +112,10 @@ public class ThermalPrintService : IThermalPrintService
                     ? item.ProductName
                     : (item.Product != null ? item.Product.Name : "San pham");
                 rawName = RemoveAccents(rawName.Trim());
+                if (item.IsGift)
+                {
+                    rawName = $"[Qua KM] {rawName}";
+                }
 
                 string[] words = rawName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 var nameLines = new List<string>();
@@ -142,8 +146,10 @@ public class ThermalPrintService : IThermalPrintService
                 int itemQty = (int)Math.Round(item.Qty);
                 totalQuantity += itemQty;
 
-                string qtyPriceStr = $"   {item.Qty:0.##} x {FormatMoney(item.UnitPrice)}";
-                string lineTotalStr = FormatMoney(item.ActualPrice * item.Qty);
+                string qtyPriceStr = item.IsGift
+                    ? $"   {item.Qty:0.##} x 0 (Tang KM)"
+                    : $"   {item.Qty:0.##} x {FormatMoney(item.UnitPrice)}";
+                string lineTotalStr = item.IsGift ? "0" : FormatMoney(item.ActualPrice * item.Qty);
                 string priceLine = FormatTwoColumns(qtyPriceStr, lineTotalStr, LineWidth);
                 buffer.AddRange(Encoding.ASCII.GetBytes(priceLine + "\n"));
 
@@ -163,6 +169,23 @@ public class ThermalPrintService : IThermalPrintService
         {
             string discStr = "-" + FormatMoney(order.DiscountAmount) + " d";
             buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns("Tien chiet khau:", discStr, LineWidth) + "\n"));
+        }
+        if (!string.IsNullOrWhiteSpace(order.AppliedPromotionSummary))
+        {
+            foreach (var l in WordWrap($"  KM: {RemoveAccents(order.AppliedPromotionSummary)}", LineWidth))
+            {
+                buffer.AddRange(Encoding.ASCII.GetBytes(l + "\n"));
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(order.AppliedVoucherCode))
+        {
+            string vchVal = order.VoucherDiscountAmount > 0 ? $"-{FormatMoney(order.VoucherDiscountAmount)} d" : "Da ap dung";
+            buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns($"  Voucher ({RemoveAccents(order.AppliedVoucherCode)}):", vchVal, LineWidth) + "\n"));
+        }
+        if (order.PointsRedeemed > 0)
+        {
+            string ptsVal = order.PointsDiscountAmount > 0 ? $"-{FormatMoney(order.PointsDiscountAmount)} d" : "Da doi";
+            buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns($"  Doi {order.PointsRedeemed} diem:", ptsVal, LineWidth) + "\n"));
         }
 
         // TỔNG PHẢI TRẢ (In đậm)

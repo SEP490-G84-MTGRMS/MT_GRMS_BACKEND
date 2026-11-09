@@ -11,6 +11,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.PosOrders.Dtos;
 using MT_GRMS.Application.PosOrders.Validators;
+using MT_GRMS.Application.Promotions;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Application.PosShifts;
 using MT_GRMS.Domain.Entities.Finance;
@@ -1546,6 +1547,476 @@ public class PosOrderServiceTests
         Assert.Equal("Lê Thị Thu Ngân", res.FulfilledByCashierName);
         Assert.NotNull(res.FulfilledAtUtc);
         Assert.Equal("Nguyễn Văn Minh (Nhân viên bán hàng An Nhiên)", res.CashierName);
+    }
+
+    [Fact]
+    public async Task CreateOrderAsync_WithLoyaltyPointsRedemption_DeductsPointsAndEarnsNewPoints()
+    {
+        // Arrange: Khách hàng có 50 điểm ban đầu. Cấu hình tích điểm: 10.000 VNĐ = 1 điểm.
+        var mockPromoRepo = new Mock<IPromotionRepository>();
+        mockPromoRepo.Setup(x => x.GetLoyaltySettingAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LoyaltySetting
+            {
+                TenantId = "tenant-01",
+                IsEnabled = true,
+                EarningRateAmount = 10000m,
+                EarningPoints = 1,
+                RedemptionRatePoints = 1,
+                RedemptionRateAmount = 1000m,
+                MinRedemptionPoints = 10
+            });
+
+        var orderService = new OrderService(
+            _orderRepo,
+            _uow,
+            _printService,
+            debtService: null,
+            cashbookService: null,
+            validator: new OrderCreateRequestValidator(),
+            shiftRepository: null,
+            promotionRepository: mockPromoRepo.Object,
+            tenantContext: null);
+
+        var req = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId, // Khách hàng có sẵn 50 điểm
+            ShiftId: null,
+            PaymentMethod: "CASH",
+            CashTendered: 50000m,
+            PointsRedeemed: 20, // Tiêu 20 điểm
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(_prodHaoHaoId, 10m, 5000m) // 50.000 VNĐ
+            }
+        );
+
+        // Act
+        var res = await orderService.CreateOrderAsync(req);
+
+        // Assert
+        Assert.NotNull(res);
+        var updatedCustomer = _orderRepo.Customers.First(c => c.Id == _customerId);
+        // Ban đầu: 50 điểm. Trừ 20 điểm = 30. Tích thêm từ 50.000 VNĐ: (50.000 / 10.000) * 1 = 5 điểm.
+        // Tổng điểm cuối: 30 + 5 = 35 điểm.
+        Assert.Equal(35, updatedCustomer.RewardPoints);
+    }
+
+    [Fact]
+    public async Task CreateOrderAsync_WithVoucherCode_InvokesAtomicRedemption()
+    {
+        // Arrange
+        var mockPromoRepo = new Mock<IPromotionRepository>();
+        mockPromoRepo.Setup(x => x.RedeemVoucherCodeAtomicAsync(
+            It.IsAny<string>(),
+            It.IsAny<Guid>(),
+            It.IsAny<string>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()
+        )).ReturnsAsync(true);
+
+        var orderService = new OrderService(
+            _orderRepo,
+            _uow,
+            _printService,
+            debtService: null,
+            cashbookService: null,
+            validator: new OrderCreateRequestValidator(),
+            shiftRepository: null,
+            promotionRepository: mockPromoRepo.Object,
+            tenantContext: null);
+
+        // Seed stock cho Coca
+        _orderRepo.BranchStocks.Add(new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = _prodCocaId,
+            BatchCode = "BATCH-COCA-VOUCHER",
+            ExpiryDate = new DateTime(2026, 12, 1),
+            QuantityOnHand = 20m,
+            LandedCostPerUnit = 7000m
+        });
+
+        var req = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            ShiftId: null,
+            PaymentMethod: "CASH",
+            CashTendered: 20000m,
+            VoucherCode: "GIAM20K",
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(_prodCocaId, 2m, 10000m)
+            }
+        );
+
+        // Act
+        var res = await orderService.CreateOrderAsync(req);
+
+        // Assert
+        Assert.NotNull(res);
+        mockPromoRepo.Verify(x => x.RedeemVoucherCodeAtomicAsync(
+            "GIAM20K",
+            It.IsAny<Guid>(),
+            It.IsAny<string>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()
+        ), Times.Once);
+    }
+
+    [Fact]
+    public async Task REQ_ORD_BOGO_02_CreateOrder_WithGiftItem_DeductsFefoStockAndPersistsZeroPriceLine()
+    {
+        // Arrange: Mua 4 gói Hảo Hảo (20.000đ) + Tặng 1 lon Coca-Cola (giá gốc 10.000đ, tính 0đ)
+        var promoId = Guid.NewGuid();
+        var req = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            PaymentMethod: "CASH",
+            CashTendered: 20000m,
+            AppliedPromotionId: promoId,
+            AppliedPromotionSummary: "Mua 4 Mì tặng 1 Coca",
+            Items: new List<OrderItemCreateDto>
+            {
+                new(_prodHaoHaoId, 4m, 5000m),
+                new(_prodCocaId, 1m, 0m, ProductName: "Nuoc Ngot Coca-Cola 330ml", IsGift: true, PromotionId: promoId)
+            }
+        );
+
+        // Act
+        var res = await _orderService.CreateOrderAsync(req);
+
+        // Assert: Không tính tiền dòng quà tặng vào TotalAmount / FinalAmount, nhưng vẫn trừ 1 lon tồn kho Coca (3 -> 2)
+        Assert.Equal(20000m, res.TotalAmount);
+        Assert.Equal(0m, res.DiscountAmount);
+        Assert.Equal(20000m, res.FinalAmount);
+        Assert.Equal(2, res.Items.Count);
+
+        var giftLine = Assert.Single(res.Items, i => i.IsGift);
+        Assert.Equal(_prodCocaId, giftLine.ProductId);
+        Assert.Equal(1m, giftLine.Quantity);
+        Assert.Equal(10000m, giftLine.UnitPrice);
+        Assert.Equal(10000m, giftLine.DiscountAmount);
+        Assert.Equal(0m, giftLine.ActualPrice);
+        Assert.Equal(0m, giftLine.TotalLineAmount);
+        Assert.Equal(0m, giftLine.VatAmount);
+        Assert.Equal(promoId, giftLine.PromotionId);
+
+        var remainingCocaStock = _orderRepo.BranchStocks
+            .Where(s => s.BranchId == _branchId && s.ProductId == _prodCocaId)
+            .Sum(s => s.QuantityOnHand);
+        Assert.Equal(2m, remainingCocaStock);
+    }
+
+    [Fact]
+    public async Task REQ_ORD_BOGO_02_CreateOrder_SameProductBuyAndGift_LowStockPrioritizesPaidAndWarns_AndRejectsAllGiftOrder()
+    {
+        // 1. Đơn toàn quà tặng (không có dòng mua trả tiền) -> bị từ chối ValidationException
+        var allGiftReq = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            CashTendered: 0m,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(_prodCocaId, 1m, 0m, IsGift: true)
+            }
+        );
+        await Assert.ThrowsAsync<ValidationException>(() => _orderService.CreateOrderAsync(allGiftReq));
+
+        // 2. Kho Coca chỉ còn 3 lon. Khách mua 3 lon Coca + được tặng 1 lon Coca -> Ưu tiên bán đủ 3 lon trả tiền, quà tặng 0/1 kèm cảnh báo, không chặn đơn!
+        var promoId = Guid.NewGuid();
+        var lowGiftStockReq = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            PaymentMethod: "CASH",
+            CashTendered: 30000m,
+            AppliedPromotionId: promoId,
+            AppliedPromotionSummary: "Mua 3 tặng 1 Coca",
+            Items: new List<OrderItemCreateDto>
+            {
+                new(_prodCocaId, 3m, 10000m, IsGift: false),
+                new(_prodCocaId, 1m, 0m, IsGift: true, PromotionId: promoId)
+            }
+        );
+
+        var res = await _orderService.CreateOrderAsync(lowGiftStockReq);
+
+        Assert.Equal(30000m, res.FinalAmount);
+        Assert.DoesNotContain(res.Items, i => i.IsGift);
+        Assert.False(string.IsNullOrWhiteSpace(res.GiftStockWarning));
+        Assert.Contains("Coca", res.GiftStockWarning);
+        // Không giao được quà và không giảm tiền -> không ghi nhận khống AppliedPromotionId
+        Assert.Null(res.AppliedPromotionId);
+
+        var remainingCoca = _orderRepo.BranchStocks
+            .Where(s => s.BranchId == _branchId && s.ProductId == _prodCocaId)
+            .Sum(s => s.QuantityOnHand);
+        Assert.Equal(0m, remainingCoca);
+    }
+
+    [Fact]
+    public async Task REQ_ORD_PROMO_01_02_CreateAndCancelOrder_PersistsPromoAuditAndSyncsUsageAndVoucher()
+    {
+        var autoPromo = new Promotion
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            PromotionCode = "KM-COMBO",
+            PromotionName = "Giảm 5k + Tặng 1 Coca",
+            Type = "ORDER_DISCOUNT",
+            UsedCount = 0,
+            TotalDiscountGiven = 0m,
+            IsActive = true
+        };
+        var voucherBatch = new Promotion
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            PromotionCode = "BATCH-VCH5K",
+            PromotionName = "Đợt Voucher 5k",
+            Type = "VOUCHER",
+            UsedCount = 0,
+            TotalDiscountGiven = 0m,
+            IsActive = true
+        };
+        var voucherEntity = new VoucherCode
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            PromotionId = voucherBatch.Id,
+            Code = "VCH5K-01",
+            Status = "UNUSED"
+        };
+
+        var mockPromoRepo = new Mock<IPromotionRepository>();
+        mockPromoRepo.Setup(x => x.GetLoyaltySettingAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LoyaltySetting
+            {
+                TenantId = "tenant-01",
+                IsEnabled = true,
+                EarningRateAmount = 10000m,
+                EarningPoints = 1,
+                RedemptionRatePoints = 1,
+                RedemptionRateAmount = 200m,
+                MinRedemptionPoints = 5
+            });
+
+        mockPromoRepo.Setup(x => x.RedeemVoucherCodeAtomicAsync(
+                "VCH5K-01", It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() =>
+            {
+                voucherEntity.Status = "USED";
+                return true;
+            });
+
+        mockPromoRepo.Setup(x => x.RecordPromotionUsageAsync(
+                It.IsAny<Guid?>(), It.IsAny<decimal>(), It.IsAny<string?>(), It.IsAny<decimal>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid?, decimal, string?, decimal, string?, CancellationToken>((pId, promoAmt, vCode, vAmt, _, _) =>
+            {
+                if (pId == autoPromo.Id)
+                {
+                    autoPromo.UsedCount += 1;
+                    autoPromo.TotalDiscountGiven += promoAmt;
+                }
+                if (vCode == voucherEntity.Code)
+                {
+                    voucherBatch.UsedCount += 1;
+                    voucherBatch.TotalDiscountGiven += vAmt;
+                }
+            })
+            .Returns(Task.CompletedTask);
+
+        mockPromoRepo.Setup(x => x.RestoreOrderPromotionsOnCancelAsync(
+                It.IsAny<Guid?>(), It.IsAny<decimal>(), It.IsAny<string?>(), It.IsAny<decimal>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid?, decimal, string?, decimal, string?, CancellationToken>((pId, promoAmt, vCode, vAmt, _, _) =>
+            {
+                if (pId == autoPromo.Id)
+                {
+                    autoPromo.UsedCount = Math.Max(0, autoPromo.UsedCount - 1);
+                    autoPromo.TotalDiscountGiven = Math.Max(0m, autoPromo.TotalDiscountGiven - promoAmt);
+                }
+                if (vCode == voucherEntity.Code && voucherEntity.Status == "USED")
+                {
+                    voucherEntity.Status = "UNUSED";
+                    voucherBatch.UsedCount = Math.Max(0, voucherBatch.UsedCount - 1);
+                    voucherBatch.TotalDiscountGiven = Math.Max(0m, voucherBatch.TotalDiscountGiven - vAmt);
+                }
+            })
+            .Returns(Task.CompletedTask);
+
+        var orderService = new OrderService(
+            _orderRepo,
+            _uow,
+            _printService,
+            debtService: null,
+            cashbookService: null,
+            validator: new OrderCreateRequestValidator(),
+            shiftRepository: null,
+            promotionRepository: mockPromoRepo.Object,
+            tenantContext: null);
+
+        // Mua 10 gói Mì (50.000đ): Giảm KM 5.000đ + Voucher 5.000đ + Tiêu 10 điểm (2.000đ) = Tổng giảm 12.000đ, kèm 1 lon Coca quà tặng (10.000đ)
+        var createRes = await orderService.CreateOrderAsync(new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            PaymentMethod: "CASH",
+            CashTendered: 40000m,
+            DiscountAmount: 12000m,
+            Note: "Ghi chú kiểm tra KM",
+            PointsRedeemed: 10,
+            VoucherCode: "VCH5K-01",
+            AppliedPromotionId: autoPromo.Id,
+            AppliedPromotionSummary: autoPromo.PromotionName,
+            PromotionDiscountAmount: 5000m,
+            VoucherDiscountAmount: 5000m,
+            PointsDiscountAmount: 2000m,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(_prodHaoHaoId, 10m, 5000m),
+                new(_prodCocaId, 1m, 0m, IsGift: true, PromotionId: autoPromo.Id)
+            }
+        ));
+
+        Assert.Equal(38000m, createRes.FinalAmount);
+        Assert.Equal("Ghi chú kiểm tra KM", createRes.Note);
+        Assert.Equal(autoPromo.Id, createRes.AppliedPromotionId);
+        Assert.Equal("Giảm 5k + Tặng 1 Coca", createRes.AppliedPromotionSummary);
+        Assert.Equal(5000m, createRes.PromotionDiscountAmount);
+        Assert.Equal("VCH5K-01", createRes.AppliedVoucherCode);
+        Assert.Equal(5000m, createRes.VoucherDiscountAmount);
+        Assert.Equal(10, createRes.PointsRedeemed);
+        Assert.Equal(2000m, createRes.PointsDiscountAmount);
+
+        // Kiểm tra UsedCount & TotalDiscountGiven sau khi tạo đơn (KM = 5.000đ tiền + 10.000đ quà tặng = 15.000đ)
+        Assert.Equal(1, autoPromo.UsedCount);
+        Assert.Equal(15000m, autoPromo.TotalDiscountGiven);
+        Assert.Equal("USED", voucherEntity.Status);
+        Assert.Equal(1, voucherBatch.UsedCount);
+        Assert.Equal(5000m, voucherBatch.TotalDiscountGiven);
+
+        // Hủy đơn hàng với quyền STORE_OWNER -> Hoàn tồn kho quà tặng, trả Voucher về UNUSED và giảm UsedCount/TotalDiscountGiven về 0
+        var cancelRes = await orderService.CancelOrderAsync(createRes.Id, new CancelOrderRequest("Khách đổi ý", "Hoàn đơn test", "STORE_OWNER"));
+        Assert.Equal("Cancelled", cancelRes.Status);
+        Assert.Equal(0, autoPromo.UsedCount);
+        Assert.Equal(0m, autoPromo.TotalDiscountGiven);
+        Assert.Equal("UNUSED", voucherEntity.Status);
+        Assert.Equal(0, voucherBatch.UsedCount);
+        Assert.Equal(0m, voucherBatch.TotalDiscountGiven);
+
+        var restoredCocaStock = _orderRepo.BranchStocks
+            .Where(s => s.BranchId == _branchId && s.ProductId == _prodCocaId)
+            .Sum(s => s.QuantityOnHand);
+        Assert.Equal(3m, restoredCocaStock);
+    }
+
+    [Fact]
+    public async Task REQ_ORD_BOGO_03_ProcessReturnExchange_ReturningGiftItemSameProduct_ForcesZeroRefundAndRestocks()
+    {
+        // Arrange: Đơn hàng có 2 lon Coca trả tiền (20.000đ) + 1 lon Coca quà tặng (0đ) -> Tồn kho Coca về 0
+        var orderRes = await _orderService.CreateOrderAsync(new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            PaymentMethod: "CASH",
+            CashTendered: 20000m,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(_prodCocaId, 2m, 10000m, IsGift: false),
+                new(_prodCocaId, 1m, 0m, IsGift: true)
+            }
+        ));
+
+        var giftLine = Assert.Single(orderRes.Items, i => i.IsGift);
+        Assert.Equal(0m, _orderRepo.BranchStocks.Where(s => s.ProductId == _prodCocaId).Sum(s => s.QuantityOnHand));
+
+        // Act: Trả lại đúng dòng quà tặng (kể cả khi client giả mạo gửi UnitPrice = 10.000đ)
+        var returnRes = await _orderService.ProcessReturnExchangeAsync(orderRes.Id, new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto>
+            {
+                new(
+                    ProductId: _prodCocaId,
+                    Quantity: 1m,
+                    UnitPrice: 10000m,
+                    Condition: "Restock",
+                    OrderDetailId: giftLine.Id,
+                    IsGift: true
+                )
+            },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH",
+            Reason: "Khách trả lại quà tặng"
+        ));
+
+        // Assert: Tuyệt đối hoàn 0đ tiền mặt nhưng vẫn nhập lại 1 lon Coca vào kho!
+        Assert.Equal(0m, returnRes.ChangeAmount);
+        Assert.Equal(1m, _orderRepo.BranchStocks.Where(s => s.ProductId == _prodCocaId).Sum(s => s.QuantityOnHand));
+    }
+
+    [Fact]
+    public async Task REQ_ORD_PRE_01_CreatePreOrder_AutoPromoReducesMinDepositAndReservesGift_AndRejectsVoucherCode()
+    {
+        // 1. Chặn cứng VoucherCode trên Đơn đặt trước
+        var invalidVoucherPreOrder = new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto> { new(_prodHaoHaoId, 4m, 5000m) },
+            DepositAmount: 5000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(1),
+            VoucherCode: "VOUCHER-1LAN"
+        );
+        await Assert.ThrowsAsync<ValidationException>(() => _orderService.CreatePreOrderAsync(invalidVoucherPreOrder));
+
+        // 2. Đơn đặt trước 20 gói Hảo Hảo (100.000đ), tự áp KM giảm 20.000đ + tặng 1 lon Coca (10.000đ) -> Sau KM còn 80.000đ, cọc tối thiểu 10% = 8.000đ
+        var promoId = Guid.NewGuid();
+        decimal recordedBudget = 0m;
+        var mockPromoRepo = new Mock<IPromotionRepository>();
+        mockPromoRepo.Setup(x => x.RecordPromotionUsageAsync(
+                promoId, It.IsAny<decimal>(), null, 0m, It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid?, decimal, string?, decimal, string?, CancellationToken>((_, amt, _, _, _, _) => recordedBudget = amt)
+            .Returns(Task.CompletedTask);
+
+        var orderService = new OrderService(
+            _orderRepo,
+            _uow,
+            _printService,
+            debtService: null,
+            cashbookService: null,
+            validator: new OrderCreateRequestValidator(),
+            shiftRepository: null,
+            promotionRepository: mockPromoRepo.Object,
+            tenantContext: null);
+
+        var preOrderRes = await orderService.CreatePreOrderAsync(new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(_prodHaoHaoId, 20m, 5000m, IsGift: false),
+                new(_prodCocaId, 1m, 0m, IsGift: true, PromotionId: promoId)
+            },
+            DepositAmount: 8000m, // 10% của 80.000đ (nếu tính trên 100.000đ chưa KM thì 8.000đ sẽ bị từ chối!)
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(2),
+            DiscountAmount: 20000m,
+            AppliedPromotionId: promoId,
+            AppliedPromotionSummary: "Giảm 20k + Tặng 1 Coca"
+        ));
+
+        Assert.Equal("PendingPickup", preOrderRes.Status);
+        Assert.Equal(100000m, preOrderRes.TotalAmount);
+        Assert.Equal(20000m, preOrderRes.DiscountAmount);
+        Assert.Equal(80000m, preOrderRes.FinalAmount);
+        Assert.Equal(8000m, preOrderRes.DepositAmount);
+        Assert.Equal(promoId, preOrderRes.AppliedPromotionId);
+        Assert.Equal(20000m, preOrderRes.PromotionDiscountAmount);
+        Assert.Contains(preOrderRes.Items, i => i.IsGift && i.ProductId == _prodCocaId && i.ActualPrice == 0m);
+        // Kho Coca giữ 1 lon cho đơn đặt trước (3 -> 2), ngân sách KM ghi nhận 20.000 + 10.000 = 30.000đ
+        Assert.Equal(2m, _orderRepo.BranchStocks.Where(s => s.ProductId == _prodCocaId).Sum(s => s.QuantityOnHand));
+        Assert.Equal(30000m, recordedBudget);
     }
 }
 
