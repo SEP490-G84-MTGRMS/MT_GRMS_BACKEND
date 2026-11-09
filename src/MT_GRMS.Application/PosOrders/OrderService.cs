@@ -1049,6 +1049,7 @@ public class OrderService : IOrderService
         string paymentStatus = "PAID";
         decimal cashTendered = 0m;
         decimal changeAmount = 0m;
+        string? exchangeCashierName = originalOrder.CashierName ?? (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân POS");
 
         if (netAmount > 0)
         {
@@ -1078,12 +1079,42 @@ public class OrderService : IOrderService
             else
             {
                 changeAmount = refundAmount;
+
+                // Tự động kiểm tra két và ghi nhận phiếu chi hoàn tiền nếu có ca làm việc đang mở
+                if (_shiftRepository != null)
+                {
+                    var activeShift = await _shiftRepository.GetActiveShiftAsync(originalOrder.BranchId, cancellationToken: cancellationToken);
+                    if (activeShift != null)
+                    {
+                        if (activeShift.ExpectedCash < refundAmount)
+                        {
+                            throw new InvalidOperationException($"Số dư tiền mặt trong két quầy không đủ để hoàn trả (Hiện có: {activeShift.ExpectedCash:N0} đ, Cần hoàn: {refundAmount:N0} đ). Vui lòng nạp thêm tiền vào két ca.");
+                        }
+
+                        var movement = new ShiftCashMovement
+                        {
+                            Id = Guid.NewGuid(),
+                            TenantId = originalOrder.TenantId,
+                            ShiftId = activeShift.Id,
+                            MovementType = CashMovementType.OUT,
+                            Category = CashMovementCategory.RETURN_REFUND,
+                            Amount = refundAmount,
+                            Reason = $"Hoàn tiền mặt đổi/trả đơn '{originalOrder.OrderCode}'. Lý do: {request.Reason ?? request.Note ?? "Khách trả hàng"}",
+                            CreatedByName = exchangeCashierName,
+                            OccurredAtUtc = DateTime.UtcNow,
+                            Status = CashMovementStatus.Recorded,
+                            IsConfirmedByOwner = true
+                        };
+                        await _shiftRepository.AddCashMovementAsync(movement, cancellationToken);
+                        activeShift.TotalCashOut += refundAmount;
+                        activeShift.ExpectedCash -= refundAmount;
+                    }
+                }
             }
         }
 
         // 4. Sinh đơn mới liên kết
         string exchangeCode = $"DT{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
-        string? exchangeCashierName = originalOrder.CashierName ?? (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân POS");
         var exchangeOrder = new Order
         {
             Id = Guid.NewGuid(),
