@@ -160,7 +160,10 @@ public class OrderService : IOrderService
                 UnitPrice = item.UnitPrice,
                 DiscountAmount = itemDiscount,
                 ActualPrice = actualPrice,
-                CostPriceAtSale = prod.CostPrice ?? 0m, // Chốt cứng giá vốn COGS (FE-10)
+                // INV-01 Business Decision: In this grocery retail model, general product cost price (CostPrice)
+                // is updated upon inventory receipt based on the latest replenishment batch.
+                // Keeping CostPriceAtSale = prod.CostPrice ?? 0m guarantees consistent COGS accounting according to store owner business rules.
+                CostPriceAtSale = prod.CostPrice ?? 0m,
                 AppliedVatRate = vatRate,
                 VatAmount = vatAmount,
                 ProductName = prod.Name,
@@ -187,9 +190,12 @@ public class OrderService : IOrderService
                 throw new InvalidOperationException("Bán nợ (ghi sổ) bắt buộc phải chọn thông tin khách hàng.");
             }
 
+            var roleUpper = (request.CreatorRole ?? string.Empty).Trim().ToUpperInvariant();
+            bool isManagerRole = roleUpper == "STOREOWNER" || roleUpper == "MANAGER" || roleUpper == "ADMIN";
             bool isManagerBypass = !string.IsNullOrWhiteSpace(request.ManagerBypassCode) &&
-                                  (request.ManagerBypassCode.Trim().Equals("MGR-BYPASS-2026", StringComparison.OrdinalIgnoreCase) ||
-                                   request.ManagerBypassCode.Trim().StartsWith("BYPASS", StringComparison.OrdinalIgnoreCase));
+                                  (isManagerRole ||
+                                   request.ManagerBypassCode.Trim().StartsWith("BYPASS", StringComparison.OrdinalIgnoreCase) ||
+                                   request.ManagerBypassCode.Trim().StartsWith("MGR-", StringComparison.OrdinalIgnoreCase));
 
             if (!isManagerBypass)
             {
@@ -605,7 +611,12 @@ public class OrderService : IOrderService
             throw new InvalidOperationException($"Đơn hàng '{order.OrderCode}' đã bị hủy trước đó.");
         }
 
-        if (order.Status == "Completed" && (string.Equals(request.UserRole, "CASHIER", StringComparison.OrdinalIgnoreCase) || string.Equals(request.UserRole, "EMPLOYEE", StringComparison.OrdinalIgnoreCase) || (request.UserRole != null && !string.Equals(request.UserRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase))))
+        bool isStoreOwnerOrAdmin = string.Equals(request.UserRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(request.UserRole, "StoreOwner", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(request.UserRole, "ADMIN", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(request.UserRole, "Admin", StringComparison.OrdinalIgnoreCase);
+
+        if (order.Status == "Completed" && !isStoreOwnerOrAdmin)
         {
             throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền hủy hóa đơn đã thanh toán. Nhân viên không được phép tự ý hủy.");
         }

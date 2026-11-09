@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,6 +11,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/inventory")]
+[Authorize]
 public class InventoryController : BaseApiController
 {
     private readonly IInventoryService _inventoryService;
@@ -44,3 +46,4 @@ public class InventoryController : BaseApiController
         return Ok(ApiResponse<System.Collections.Generic.IReadOnlyList<InventoryBatchSummaryDto>>.Ok(result));
     }
 }
+

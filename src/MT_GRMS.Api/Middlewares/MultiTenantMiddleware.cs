@@ -23,38 +23,24 @@ public class MultiTenantMiddleware
             var userId = Guid.TryParse(userIdClaim, out var parsedUserId) ? parsedUserId : Guid.Empty;
             Guid? branchId = Guid.TryParse(branchIdClaim, out var parsedBranchId) ? parsedBranchId : null;
 
+            var role = context.User.FindFirst(ClaimTypes.Role)?.Value
+                ?? context.User.FindFirst("role")?.Value
+                ?? context.User.FindFirst("RoleName")?.Value;
+
+            // INV-1 & TEN-05: Chỉ System Admin mới có quyền switch tenant qua header X-Tenant-Id
+            if (string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase))
+            {
+                var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(headerTenantId))
+                {
+                    tenantId = headerTenantId;
+                }
+            }
+
             if (!string.IsNullOrWhiteSpace(tenantId))
             {
                 tenantContext.SetContext(tenantId, userId, branchId);
-                var role = context.User.FindFirst(ClaimTypes.Role)?.Value
-                    ?? context.User.FindFirst("role")?.Value
-                    ?? context.User.FindFirst("RoleName")?.Value;
                 tenantContext.SetRole(role);
-            }
-        }
-
-        // Hỗ trợ header X-Tenant-Id hoặc fallback tenant cho môi trường dev/standalone
-        if (string.IsNullOrWhiteSpace(tenantContext.CurrentTenantId) ||
-            tenantContext.CurrentTenantId == "default-tenant" ||
-            tenantContext.CurrentTenantId == "DEFAULT" ||
-            tenantContext.CurrentTenantId == "TENANT-HCM-01")
-        {
-            var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
-            var fallbackTenant = !string.IsNullOrWhiteSpace(headerTenantId) ? headerTenantId : "tenant-grocery-001";
-            if (fallbackTenant is "default-tenant" or "DEFAULT" or "TENANT-HCM-01")
-            {
-                fallbackTenant = "tenant-grocery-001";
-            }
-            tenantContext.SetContext(fallbackTenant, Guid.Empty, null);
-
-            var headerRole = context.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(headerRole))
-            {
-                tenantContext.SetRole(headerRole);
-            }
-            else if (string.IsNullOrWhiteSpace(tenantContext.CurrentRole))
-            {
-                tenantContext.SetRole("StoreOwner");
             }
         }
 

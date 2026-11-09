@@ -8,14 +8,18 @@ public class PnLReportServiceTests
 {
     private class FakePnLReportRepository : IPnLReportRepository
     {
-        public RevenueAggregation Revenue { get; set; } = new(100_000_000m, 5_000_000m, 2_000_000m);
-        public CogsAggregation Cogs { get; set; } = new(60_000_000m);
+        public RevenueAggregation Revenue { get; set; } = new(100_000_000m, 5_000_000m, 2_000_000m, 320);
+        public CogsAggregation Cogs { get; set; } = new(60_000_000m, "ACTUAL", 0m, null, 60_000_000m, 61_200_000m);
         public List<CategoryExpenseItem> Expenses { get; set; } = new()
         {
             new("Mặt bằng", 6_000_000m),
             new("Điện nước", 4_000_000m)
         };
         public decimal BadDebt { get; set; } = 1_000_000m;
+        public List<TopProductPnLItem> TopProducts { get; set; } = new()
+        {
+            new(Guid.NewGuid(), "SP-001", "Sữa tươi Vinamilk 1L", 120m, 4_200_000m, 3_150_000m, 1_050_000m, 25.0m)
+        };
 
         public Task<RevenueAggregation> GetRevenueAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default) =>
             Task.FromResult(Revenue);
@@ -47,6 +51,9 @@ public class PnLReportServiceTests
             }
             return Task.FromResult(result);
         }
+
+        public Task<List<TopProductPnLItem>> GetTopProductsAsync(Guid? branchId, DateTime fromDate, DateTime toDate, int limit = 10, CancellationToken ct = default) =>
+            Task.FromResult(TopProducts.Take(limit).ToList());
     }
 
     private readonly FakePnLReportRepository _fakeRepo = new();
@@ -89,13 +96,23 @@ public class PnLReportServiceTests
         Assert.Equal("ACTUAL", response.CogsSource);
         Assert.Equal(0m, response.CogsEstimatedPercentage);
         Assert.Null(response.CogsWarningNotice);
+
+        // Kiểm tra TotalOrders, AOV, CogsComparison, TopProducts
+        Assert.Equal(320, response.TotalOrders);
+        Assert.Equal(290_625m, response.AverageOrderValue);
+        Assert.NotNull(response.CogsComparison);
+        Assert.Equal(60_000_000m, response.CogsComparison.WeightedAverageCogs);
+        Assert.Equal(61_200_000m, response.CogsComparison.FefoSpecificCogs);
+        Assert.Equal(1_200_000m, response.CogsComparison.CogsVariance);
+        Assert.NotNull(response.TopProducts);
+        Assert.Single(response.TopProducts);
     }
 
     [Fact]
     public async Task GetPnLSummaryAsync_WhenNetRevenueIsZero_ShouldReturnZeroMarginsWithoutDividingByZero()
     {
         // GIVEN: Không có đơn hàng bán ra
-        _fakeRepo.Revenue = new RevenueAggregation(0, 0, 0);
+        _fakeRepo.Revenue = new RevenueAggregation(0, 0, 0, 0);
         _fakeRepo.Cogs = new CogsAggregation(0);
         _fakeRepo.Expenses = new List<CategoryExpenseItem> { new("Điện", 500_000m) };
         _fakeRepo.BadDebt = 0;
@@ -110,6 +127,8 @@ public class PnLReportServiceTests
         Assert.Equal(0, response.GrossMarginPercentage);
         Assert.Equal(0, response.NetMarginPercentage);
         Assert.Equal(-500_000m, response.NetProfit); // Lỗ 500k chi phí điện
+        Assert.Equal(0, response.TotalOrders);
+        Assert.Equal(0m, response.AverageOrderValue);
     }
 
     [Fact]

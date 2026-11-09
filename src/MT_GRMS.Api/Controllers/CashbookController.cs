@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Cashbook;
@@ -5,12 +6,14 @@ using MT_GRMS.Application.Cashbook.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Expenses;
 using MT_GRMS.Application.Expenses.Dtos;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Api.Controllers;
 
 [Route("api/[controller]")]
 [Route("api/v1/[controller]")]
+[Authorize]
 public class CashbookController : BaseApiController
 {
     private readonly ICashbookService _cashbookService;
@@ -55,6 +58,7 @@ public class CashbookController : BaseApiController
 
     [HttpPost("deposits/confirm")]
     [RequireIdempotency]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<CashInTransitResponse>>> ConfirmBankDeposit([FromBody] ConfirmBankDepositRequest request, CancellationToken ct)
     {
         var result = await _cashbookService.ConfirmBankDepositAsync(request, ct);
@@ -125,6 +129,7 @@ public class CashbookController : BaseApiController
 
     [HttpPost("transfers")]
     [RequireIdempotency]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<TransferFundResponse>>> TransferFunds(
         [FromBody] TransferFundRequest request,
         CancellationToken ct)
@@ -135,6 +140,7 @@ public class CashbookController : BaseApiController
 
     [HttpPost("reconcile")]
     [RequireIdempotency]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<CashbookEntryResponse?>>> ReconcileCashAccount(
         [FromBody] ReconcileAccountRequest request,
         CancellationToken ct)
@@ -145,6 +151,7 @@ public class CashbookController : BaseApiController
 
     [HttpPost("entries/{id:guid}/void")]
     [RequireIdempotency]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<CashbookEntryResponse>>> VoidTransaction(
         [FromRoute] Guid id,
         [FromBody] VoidEntryRequest request,
@@ -196,6 +203,7 @@ public class CashbookController : BaseApiController
 
     [HttpPost("triage/{id:guid}/resolve")]
     [RequireIdempotency]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<ExpenseVoucherResponse>>> ResolveTriage(
         [FromRoute] Guid id,
         [FromBody] ResolveTriageRequest request,
@@ -203,5 +211,16 @@ public class CashbookController : BaseApiController
     {
         var result = await _expenseService.ResolveTriageAsync(id, request, ct);
         return Ok(ApiResponse<ExpenseVoucherResponse>.Ok(result, "Xử lý mục tài chính trong Triage Inbox thành công."));
+    }
+
+    [HttpGet("accounts/{accountId:guid}/verify-chain")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    public async Task<ActionResult<ApiResponse<object>>> VerifyChainIntegrity(Guid accountId, CancellationToken ct)
+    {
+        var isValid = await _cashbookService.VerifyChainIntegrityAsync(accountId, ct);
+        return Ok(ApiResponse<object>.Ok(
+            new { accountId, isValid, verifiedAtUtc = DateTime.UtcNow },
+            isValid ? "Chuỗi băm sổ quỹ toàn vẹn 100%." : "CẢNH BÁO: Phát hiện chuỗi băm sổ quỹ bị đứt gãy hoặc có dấu hiệu can thiệp trái phép!"
+        ));
     }
 }

@@ -396,9 +396,13 @@ public class PurchaseOrderService : IPurchaseOrderService
             po.RejectedAtUtc = DateTime.UtcNow;
             po.RejectionReason = reason;
         }
-        else if (normalizedStatus == "DISPATCHED")
+        else if (normalizedStatus == "DISPATCHED" || normalizedStatus == "SENT")
         {
             po.DispatchedAtUtc = DateTime.UtcNow;
+        }
+        else if (normalizedStatus == "CONFIRMED")
+        {
+            po.ConfirmedBySupplierAtUtc = DateTime.UtcNow;
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -420,6 +424,7 @@ public class PurchaseOrderService : IPurchaseOrderService
             IsOwnerAdjusted = d.IsOwnerAdjusted,
             FinalQty = d.FinalQty,
             OrderedQty = d.OrderedQty ?? d.FinalQty ?? 0m,
+            ReceivedQty = d.ReceivedQty,
             UnitPrice = d.UnitPrice,
             LineAmount = d.LineAmount,
             DeliveryDate = d.DeliveryDate
@@ -430,14 +435,17 @@ public class PurchaseOrderService : IPurchaseOrderService
             Id = po.Id,
             Code = po.Code,
             BranchId = po.BranchId,
+            BranchCode = po.Branch?.BranchCode ?? "BR",
             BranchName = branchName,
             SupplierId = po.SupplierId,
+            SupplierCode = po.Supplier?.Code ?? "SUP",
             SupplierName = supplierName,
             DeliveryDate = po.DeliveryDate,
             Status = po.Status,
             TotalQty = po.TotalQty,
             TotalAmount = po.TotalAmount,
             Note = po.Note,
+            CreatedByRole = po.CreatedByRole,
             ParentDraftId = po.ParentDraftId,
             CreatedAt = po.CreatedAt,
             Details = details

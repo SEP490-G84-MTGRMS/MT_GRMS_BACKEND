@@ -5,7 +5,7 @@ namespace MT_GRMS.Domain.Entities.Catalog;
 /// <summary>
 /// Bảng ProductUnits (Đơn vị tính quy đổi)
 /// </summary>
-public class ProductUnit : BaseEntity
+public class ProductUnit : BaseTenantEntity
 {
     public Guid ProductId { get; set; }
     public string UnitName { get; set; } = string.Empty;

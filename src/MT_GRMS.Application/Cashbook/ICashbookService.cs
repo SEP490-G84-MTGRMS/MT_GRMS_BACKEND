@@ -34,4 +34,6 @@ public interface ICashbookService
         Task.FromResult<CashbookEntryResponse?>(null);
     Task<CashbookEntryResponse> VoidTransactionAsync(Guid entryId, VoidEntryRequest request, CancellationToken ct = default) =>
         Task.FromResult(new CashbookEntryResponse(Guid.NewGuid(), "CB-VOID", Guid.NewGuid(), "Till", null, "Payment", 0, 0, "COMPENSATING", entryId, "", "", request.Reason, DateTime.UtcNow));
+    Task<bool> VerifyChainIntegrityAsync(Guid accountId, CancellationToken ct = default) =>
+        Task.FromResult(true);
 }

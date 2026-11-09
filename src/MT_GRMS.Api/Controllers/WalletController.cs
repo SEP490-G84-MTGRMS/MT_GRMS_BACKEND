@@ -3,12 +3,13 @@ using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.SaaS.Dtos;
 using MT_GRMS.Application.SaaS.Services;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/tenant/wallet")]
-[Authorize]
+[Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
 public class WalletController : BaseApiController
 {
     private readonly IWalletService _walletService;

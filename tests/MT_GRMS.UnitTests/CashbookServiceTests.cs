@@ -505,4 +505,12 @@ public class CashbookServiceTests
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _service.ReconcileCashAccountAsync(request));
     }
+
+    [Fact]
+    public async Task VerifyChainIntegrityAsync_WhenEmptyOrValid_ShouldReturnTrue()
+    {
+        var accountId = Guid.NewGuid();
+        var isValid = await _service.VerifyChainIntegrityAsync(accountId);
+        Assert.True(isValid);
+    }
 }

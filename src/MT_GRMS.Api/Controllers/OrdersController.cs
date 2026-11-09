@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Common;
@@ -12,6 +13,7 @@ namespace MT_GRMS.Api.Controllers;
 [ApiController]
 [Route("api/orders")]
 [Route("api/v1/orders")]
+[Authorize]
 public class OrdersController : BaseApiController
 {
     private readonly IOrderService _orderService;

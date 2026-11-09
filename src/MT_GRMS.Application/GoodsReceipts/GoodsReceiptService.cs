@@ -7,6 +7,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.GoodsReceipts.Dtos;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.Supplier;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.GoodsReceipts;
@@ -69,17 +70,26 @@ public class GoodsReceiptService : IGoodsReceiptService
         }).ToList();
     }
 
-    public async Task<PoReceiptDetailsDto> GetPoReceiptDetailsAsync(Guid poId, CancellationToken cancellationToken = default)
+    public async Task<PoReceiptDetailsDto> GetPoReceiptDetailsAsync(string poIdOrCode, CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        var po = await _repository.GetPurchaseOrderWithDetailsAsync(tenantId, poId, cancellationToken);
+        PurchaseOrder? po = null;
+        if (Guid.TryParse(poIdOrCode, out var poGuid))
+        {
+            po = await _repository.GetPurchaseOrderWithDetailsAsync(tenantId, poGuid, cancellationToken);
+        }
+        else
+        {
+            po = await _repository.GetPurchaseOrderByCodeWithDetailsAsync(tenantId, poIdOrCode, cancellationToken);
+        }
+
         if (po == null || po.IsDeleted)
         {
-            throw new NotFoundException("Đơn đặt hàng PO", poId);
+            throw new NotFoundException("Đơn đặt hàng PO", poIdOrCode);
         }
 
         // Kiểm tra xem PO đã có phiếu nhập kho DRAFT hoặc COMPLETED chưa (Mục 4)
-        var existingReceipt = await _repository.GetActiveReceiptByPoIdAsync(tenantId, poId, cancellationToken);
+        var existingReceipt = await _repository.GetActiveReceiptByPoIdAsync(tenantId, po.Id, cancellationToken);
         if (existingReceipt != null)
         {
             throw new BusinessException(
@@ -387,17 +397,43 @@ public class GoodsReceiptService : IGoodsReceiptService
         PurchaseOrder? po,
         CancellationToken cancellationToken)
     {
-        // 1. Cập nhật tồn kho chi nhánh BranchStocks (Mục 10: Chỉ AcceptedQty được cộng vào tồn kho)
+        // 1. Cập nhật tồn kho chi nhánh BranchStocks, tạo lô FEFO (ProductBatch) và tính giá vốn bình quân gia quyền (MovingAverageCost)
         foreach (var line in receipt.Lines.Where(l => l.AcceptedQty > 0))
         {
+            var existingTotalStock = await _repository.GetTotalProductStockAsync(tenantId, line.ProductId, cancellationToken);
+            var product = line.Product ?? await _repository.GetProductByIdAsync(tenantId, line.ProductId, cancellationToken);
+
+            // Tính MovingAverageCost cho sản phẩm
+            if (product != null)
+            {
+                var oldCost = product.CostPrice ?? line.UnitPrice;
+                var totalNewQty = existingTotalStock + line.AcceptedQty;
+                if (totalNewQty > 0)
+                {
+                    product.CostPrice = Math.Round(
+                        ((existingTotalStock * oldCost) + (line.AcceptedQty * line.LandedUnitCost)) / totalNewQty,
+                        2);
+                }
+                else
+                {
+                    product.CostPrice = line.LandedUnitCost;
+                }
+                product.UpdatedAt = DateTime.UtcNow;
+            }
+
             var stock = await _repository.GetBranchStockAsync(tenantId, receipt.BranchId, line.ProductId, line.BatchCode, cancellationToken);
             if (stock != null)
             {
-                stock.QuantityOnHand += line.AcceptedQty;
-                stock.LandedCostPerUnit = line.LandedUnitCost;
+                var prevQty = Math.Max(0, stock.QuantityOnHand);
+                var nextQty = prevQty + line.AcceptedQty;
+                stock.LandedCostPerUnit = nextQty > 0
+                    ? Math.Round(((prevQty * stock.LandedCostPerUnit) + (line.AcceptedQty * line.LandedUnitCost)) / nextQty, 2)
+                    : line.LandedUnitCost;
+                stock.QuantityOnHand = nextQty;
                 if (line.ExpiryDate.HasValue) stock.ExpiryDate = line.ExpiryDate;
                 if (line.ManufactureDate.HasValue) stock.ManufactureDate = line.ManufactureDate;
                 stock.UpdatedAt = DateTime.UtcNow;
+                line.BranchStockId = stock.Id;
             }
             else
             {
@@ -419,6 +455,25 @@ public class GoodsReceiptService : IGoodsReceiptService
                 await _repository.AddBranchStockAsync(newStock, cancellationToken);
                 line.BranchStockId = newStock.Id;
             }
+
+            // Tạo bản ghi lô hàng FEFO (Batch / ProductBatch)
+            if (!string.IsNullOrWhiteSpace(line.BatchCode) || line.ExpiryDate.HasValue)
+            {
+                var newBatch = new Batch
+                {
+                    Id = Guid.NewGuid(),
+                    TenantId = tenantId,
+                    BranchId = receipt.BranchId,
+                    ProductId = line.ProductId,
+                    BatchCode = !string.IsNullOrWhiteSpace(line.BatchCode) ? line.BatchCode : $"LOT-{receipt.Code}",
+                    ManufactureDate = line.ManufactureDate ?? receipt.ReceivedAtUtc.Date,
+                    ExpiryDate = line.ExpiryDate ?? receipt.ReceivedAtUtc.Date.AddMonths(6),
+                    InitialQuantity = line.AcceptedQty,
+                    LandedCostPerUnit = line.LandedUnitCost,
+                    CreatedAt = DateTime.UtcNow
+                };
+                await _repository.AddBatchAsync(newBatch, cancellationToken);
+            }
         }
 
         // 2. Cập nhật đơn PO nguồn sang COMPLETED (Mục 8.2: "Khi Goods Receipt được hoàn tất, PO chuyển sang COMPLETED, kể cả trường hợp nhà cung cấp giao thiếu.")
@@ -439,6 +494,42 @@ public class GoodsReceiptService : IGoodsReceiptService
 
             po.Status = "COMPLETED";
             po.UpdatedAt = DateTime.UtcNow;
+        }
+
+        // 3. Sinh công nợ phải trả nhà cung cấp (SupplierAPLedger) nếu CreateApOnConfirm = true và GrandTotal > 0
+        if (receipt.CreateApOnConfirm && receipt.GrandTotal > 0)
+        {
+            var supplier = await _repository.GetSupplierByIdAsync(tenantId, receipt.SupplierId, cancellationToken);
+            if (supplier != null)
+            {
+                var isImmediatePaid = string.Equals(receipt.PaymentMethod, "CASH", StringComparison.OrdinalIgnoreCase)
+                                   || string.Equals(receipt.PaymentMethod, "BANK", StringComparison.OrdinalIgnoreCase);
+
+                var newDebt = isImmediatePaid ? supplier.CurrentDebt : supplier.CurrentDebt + receipt.GrandTotal;
+                var apEntry = new SupplierAPLedger
+                {
+                    Id = Guid.NewGuid(),
+                    TenantId = tenantId,
+                    SupplierId = supplier.Id,
+                    TransactionDate = receipt.ConfirmedAtUtc ?? DateTime.UtcNow,
+                    DocType = APDocType.PurchaseInvoice,
+                    DocNo = receipt.Code,
+                    Description = $"Nhập kho theo phiếu {receipt.Code}" + (po != null ? $" (PO: {po.Code})" : string.Empty),
+                    Amount = receipt.GrandTotal,
+                    Direction = 1,
+                    BalanceAfter = newDebt,
+                    CreatedByName = receipt.ConfirmedByUserId ?? "Hệ thống",
+                    IdempotencyKey = $"GRN-CONFIRM-{receipt.Id}",
+                    CreatedAt = DateTime.UtcNow
+                };
+
+                await _repository.AddSupplierLedgerAsync(apEntry, cancellationToken);
+                if (!isImmediatePaid)
+                {
+                    supplier.CurrentDebt = newDebt;
+                    supplier.UpdatedAt = DateTime.UtcNow;
+                }
+            }
         }
     }
 

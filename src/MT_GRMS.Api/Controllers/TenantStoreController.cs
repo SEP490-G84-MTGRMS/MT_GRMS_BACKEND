@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Admin.Dtos;
 using MT_GRMS.Application.Admin.Services;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Api.Controllers;
@@ -35,10 +36,12 @@ public class TenantStoreController : BaseApiController
     {
         var tenantId = User.FindFirst("tenant_id")?.Value;
 
-        // Nếu không có tenantId hoặc là DEFAULT, fallback lấy tenant đầu tiên trong DB
-        var tenant = !string.IsNullOrWhiteSpace(tenantId) && tenantId != "DEFAULT"
-            ? await _context.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId || t.Subdomain == tenantId, cancellationToken)
-            : await _context.Tenants.FirstOrDefaultAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(tenantId) || tenantId == "DEFAULT")
+        {
+            return Unauthorized(ApiResponse<TenantDetailResponse>.Fail("UNAUTHORIZED", "Không xác định được danh tính khách thuê từ phiên đăng nhập."));
+        }
+
+        var tenant = await _context.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId || t.Subdomain == tenantId, cancellationToken);
 
         if (tenant == null)
         {
@@ -53,13 +56,17 @@ public class TenantStoreController : BaseApiController
     /// Cập nhật thông tin gian hàng của khách thuê (Tên chuỗi, MST, Hotline, Địa chỉ, Thành phố)
     /// </summary>
     [HttpPut("store-info")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> UpdateStoreInfo([FromBody] UpdateTenantRequest request, CancellationToken cancellationToken)
     {
         var tenantId = User.FindFirst("tenant_id")?.Value;
 
-        var tenant = !string.IsNullOrWhiteSpace(tenantId) && tenantId != "DEFAULT"
-            ? await _context.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId || t.Subdomain == tenantId, cancellationToken)
-            : await _context.Tenants.FirstOrDefaultAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(tenantId) || tenantId == "DEFAULT")
+        {
+            return Unauthorized(ApiResponse<TenantDetailResponse>.Fail("UNAUTHORIZED", "Không xác định được danh tính khách thuê từ phiên đăng nhập."));
+        }
+
+        var tenant = await _context.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId || t.Subdomain == tenantId, cancellationToken);
 
         if (tenant == null)
         {
@@ -84,15 +91,19 @@ public class TenantStoreController : BaseApiController
     /// Đặt mua hoặc nâng cấp / gia hạn gói dịch vụ SaaS cho gian hàng
     /// </summary>
     [HttpPost("subscriptions/purchase")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> PurchaseSubscription(
         [FromBody] PurchaseSubscriptionRequest request,
         CancellationToken cancellationToken)
     {
         var tenantId = User.FindFirst("tenant_id")?.Value;
 
-        var tenant = !string.IsNullOrWhiteSpace(tenantId) && tenantId != "DEFAULT"
-            ? await _context.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId || t.Subdomain == tenantId, cancellationToken)
-            : await _context.Tenants.FirstOrDefaultAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(tenantId) || tenantId == "DEFAULT")
+        {
+            return Unauthorized(ApiResponse<TenantDetailResponse>.Fail("UNAUTHORIZED", "Không xác định được danh tính khách thuê từ phiên đăng nhập."));
+        }
+
+        var tenant = await _context.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId || t.Subdomain == tenantId, cancellationToken);
 
         if (tenant == null)
         {

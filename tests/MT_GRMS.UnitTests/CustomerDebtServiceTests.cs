@@ -296,4 +296,36 @@ public class CustomerDebtServiceTests
         Assert.Equal(700_000m, response.CurrentDebtBalance);
         Assert.Single(response.OpenInvoices);
     }
+
+    [Fact]
+    public async Task RecordSaleDebtAsync_WhenNonManagerRoleAttemptsBypass_ShouldThrowUnauthorizedBypass()
+    {
+        _tenantContext.SetRole("Cashier");
+        var customerId = Guid.NewGuid();
+        var customer = new Customer { Id = customerId, DebtLimit = 1_000_000m, TotalDebt = 800_000m };
+        _debtRepo.Items.Add(customer);
+
+        var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-BYPASS-FAIL", Guid.NewGuid(), 500_000m, "SOME-CODE", "Thử bypass trái phép");
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.RecordSaleDebtAsync(request));
+        Assert.Equal("UNAUTHORIZED_BYPASS", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task RecordSaleDebtAsync_WhenManagerRoleBypasses_ShouldSucceedAndRecordAuditTrailInInvoiceNotes()
+    {
+        _tenantContext.SetRole("StoreOwner");
+        var customerId = Guid.NewGuid();
+        var customer = new Customer { Id = customerId, DebtLimit = 1_000_000m, TotalDebt = 800_000m };
+        _debtRepo.Items.Add(customer);
+
+        var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-BYPASS-OK", Guid.NewGuid(), 500_000m, "OWNER-APPROVAL-888", "Chủ cửa hàng duyệt");
+        var response = await _service.RecordSaleDebtAsync(request);
+
+        Assert.NotNull(response);
+        Assert.Equal(1_300_000m, customer.TotalDebt);
+        var createdInvoice = _invoiceRepo.Items.Last();
+        Assert.Contains("ManagerBypass Approved", createdInvoice.Notes);
+        Assert.Contains(_tenantContext.CurrentUserId.ToString(), createdInvoice.Notes);
+        Assert.Contains("StoreOwner", createdInvoice.Notes);
+    }
 }

@@ -214,27 +214,49 @@ public class CashbookService : ICashbookService
             throw new BusinessException("INVALID_AMOUNT", "Số tiền chi phải lớn hơn 0.");
         }
 
-        var account = await _cashbookRepo.GetAccountWithLockAsync(accountId, ct)
-            ?? throw new NotFoundException("Không tìm thấy tài khoản quỹ.");
-
-        if (account.CurrentBalance < amount)
+        var shouldManageTransaction = !_unitOfWork.HasActiveTransaction;
+        if (shouldManageTransaction)
         {
-            throw new InsufficientStockException($"Tài khoản không đủ số dư để chi (Còn {account.CurrentBalance:N0}đ, Yêu cầu {amount:N0}đ).");
+            await _unitOfWork.BeginTransactionAsync(ct);
         }
 
-        account.CurrentBalance -= amount;
-        var branchId = account.BranchId;
-
-        if (account.AccountType == FinanceAccountType.Till && account.ActiveShiftId.HasValue)
+        try
         {
-            var shift = await _shiftRepo.GetByIdAsync(account.ActiveShiftId.Value, ct);
-            if (shift != null) shift.TotalCashOut += amount;
+            var account = await _cashbookRepo.GetAccountWithLockAsync(accountId, ct)
+                ?? throw new NotFoundException("Không tìm thấy tài khoản quỹ.");
+
+            if (account.CurrentBalance < amount)
+            {
+                throw new InsufficientStockException($"Tài khoản không đủ số dư để chi (Còn {account.CurrentBalance:N0}đ, Yêu cầu {amount:N0}đ).");
+            }
+
+            account.CurrentBalance -= amount;
+            var branchId = account.BranchId;
+
+            if (account.AccountType == FinanceAccountType.Till && account.ActiveShiftId.HasValue)
+            {
+                var shift = await _shiftRepo.GetByIdAsync(account.ActiveShiftId.Value, ct);
+                if (shift != null) shift.TotalCashOut += amount;
+            }
+
+            var entry = await RecordEntryInternalAsync(accountId, account.AccountType, branchId, CashbookEntryType.Payment, amount, sourceType, sourceId, referenceCode, description, ct);
+            await _unitOfWork.SaveChangesAsync(ct);
+
+            if (shouldManageTransaction)
+            {
+                await _unitOfWork.CommitTransactionAsync(ct);
+            }
+
+            return MapEntryResponse(entry);
         }
-
-        var entry = await RecordEntryInternalAsync(accountId, accountType, branchId, CashbookEntryType.Payment, amount, sourceType, sourceId, referenceCode, description, ct);
-        await _unitOfWork.SaveChangesAsync(ct);
-
-        return MapEntryResponse(entry);
+        catch
+        {
+            if (shouldManageTransaction)
+            {
+                await _unitOfWork.RollbackTransactionAsync(ct);
+            }
+            throw;
+        }
     }
 
     public async Task<CashbookEntryResponse> ReceiveCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default)
@@ -244,22 +266,44 @@ public class CashbookService : ICashbookService
             throw new BusinessException("INVALID_AMOUNT", "Số tiền thu phải lớn hơn 0.");
         }
 
-        var account = await _cashbookRepo.GetAccountWithLockAsync(accountId, ct)
-            ?? throw new NotFoundException("Không tìm thấy tài khoản quỹ.");
-
-        account.CurrentBalance += amount;
-        var branchId = account.BranchId;
-
-        if (account.AccountType == FinanceAccountType.Till && account.ActiveShiftId.HasValue)
+        var shouldManageTransaction = !_unitOfWork.HasActiveTransaction;
+        if (shouldManageTransaction)
         {
-            var shift = await _shiftRepo.GetByIdAsync(account.ActiveShiftId.Value, ct);
-            if (shift != null) shift.TotalCashIn += amount;
+            await _unitOfWork.BeginTransactionAsync(ct);
         }
 
-        var entry = await RecordEntryInternalAsync(accountId, accountType, branchId, CashbookEntryType.Receipt, amount, sourceType, sourceId, referenceCode, description, ct);
-        await _unitOfWork.SaveChangesAsync(ct);
+        try
+        {
+            var account = await _cashbookRepo.GetAccountWithLockAsync(accountId, ct)
+                ?? throw new NotFoundException("Không tìm thấy tài khoản quỹ.");
 
-        return MapEntryResponse(entry);
+            account.CurrentBalance += amount;
+            var branchId = account.BranchId;
+
+            if (account.AccountType == FinanceAccountType.Till && account.ActiveShiftId.HasValue)
+            {
+                var shift = await _shiftRepo.GetByIdAsync(account.ActiveShiftId.Value, ct);
+                if (shift != null) shift.TotalCashIn += amount;
+            }
+
+            var entry = await RecordEntryInternalAsync(accountId, account.AccountType, branchId, CashbookEntryType.Receipt, amount, sourceType, sourceId, referenceCode, description, ct);
+            await _unitOfWork.SaveChangesAsync(ct);
+
+            if (shouldManageTransaction)
+            {
+                await _unitOfWork.CommitTransactionAsync(ct);
+            }
+
+            return MapEntryResponse(entry);
+        }
+        catch
+        {
+            if (shouldManageTransaction)
+            {
+                await _unitOfWork.RollbackTransactionAsync(ct);
+            }
+            throw;
+        }
     }
 
     public async Task<List<CashbookEntryResponse>> GetEntriesAsync(
@@ -279,7 +323,7 @@ public class CashbookService : ICashbookService
 
         var entries = await _cashbookRepo.FindAsync(e =>
             (!accountId.HasValue || e.AccountId == accountId.Value) &&
-            (!branchId.HasValue || e.BranchId == branchId.Value) &&
+            (!branchId.HasValue || e.BranchId == branchId.Value || (e.AccountType == FinanceAccountType.Bank && e.BranchId == null)) &&
             (!fromDate.HasValue || e.OccurredAtUtc >= fromDate.Value) &&
             (!toDate.HasValue || e.OccurredAtUtc <= toDate.Value) &&
             (!entryType.HasValue || e.EntryType == entryType.Value) &&
@@ -442,7 +486,10 @@ public class CashbookService : ICashbookService
     public async Task<CashbookSummaryResponse> GetSummaryAsync(Guid? branchId = null, CancellationToken ct = default)
     {
         var accounts = await GetAccountsAsync(branchId, ct);
-        var entries = await _cashbookRepo.FindAsync(e => !branchId.HasValue || e.BranchId == branchId.Value, ct);
+        var accountIds = accounts.Select(a => a.Id).ToHashSet();
+        var entries = await _cashbookRepo.FindAsync(
+            e => accountIds.Contains(e.AccountId) || (!branchId.HasValue || e.BranchId == branchId.Value),
+            ct);
 
         decimal totalCashInDrawers = accounts.Where(a => a.AccountType == "CASH" && !a.IsSafeDeposit).Sum(a => a.CurrentBalance);
         decimal totalSafeDepositBalance = accounts.Where(a => a.IsSafeDeposit).Sum(a => a.CurrentBalance);
@@ -640,6 +687,7 @@ public class CashbookService : ICashbookService
 
         var entry = new CashbookEntry
         {
+            TenantId = _tenantContext.CurrentTenantId,
             EntryCode = "CB-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff"),
             AccountId = accountId,
             AccountType = accountType,
@@ -649,6 +697,7 @@ public class CashbookService : ICashbookService
             BalanceAfter = balanceAfter,
             SourceType = sourceType,
             SourceId = sourceId,
+            ReversedEntryId = (sourceType == "COMPENSATING" || sourceType == "REVERSAL") ? sourceId : null,
             ReferenceCode = referenceCode,
             Description = description,
             OccurredAtUtc = DateTime.UtcNow
@@ -708,5 +757,28 @@ public class CashbookService : ICashbookService
         {
             throw new UnauthorizedAccessException("Chỉ Chủ hộ kinh doanh hoặc Quản lý cửa hàng mới có thẩm quyền thực hiện thao tác tài chính này.");
         }
+    }
+
+    public async Task<bool> VerifyChainIntegrityAsync(Guid accountId, CancellationToken ct = default)
+    {
+        var entries = await _cashbookRepo.FindAsync(e => e.AccountId == accountId, ct);
+        var sortedEntries = entries
+            .OrderBy(e => e.OccurredAtUtc)
+            .ThenBy(e => e.CreatedAt)
+            .ToList();
+
+        if (sortedEntries.Count == 0) return true;
+
+        string prevHash = "GENESIS_HASH";
+        foreach (var entry in sortedEntries)
+        {
+            if (!_auditHashService.VerifyEntryHash(prevHash, entry))
+            {
+                return false;
+            }
+            prevHash = entry.AuditHash;
+        }
+
+        return true;
     }
 }

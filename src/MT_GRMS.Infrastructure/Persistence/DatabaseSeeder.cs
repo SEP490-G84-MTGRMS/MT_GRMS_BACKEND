@@ -2,7 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
-using MT_GRMS.Domain.Entities;
+using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Identity;
@@ -273,10 +273,10 @@ public static class DatabaseSeeder
                 await context.SaveChangesAsync(ct);
             }
 
-            // 4. Seed Orders & OrderItems (Phát sinh trong Q3/2026: 01/07/2026 - 30/09/2026)
+            // 4. Seed Orders & OrderDetails (Phát sinh trong Q3/2026: 01/07/2026 - 30/09/2026)
             if (!await context.Orders.IgnoreQueryFilters().AnyAsync(o => o.Id == Guid.Parse("f0000001-1111-1111-1111-111111111111"), ct))
             {
-                logger.LogInformation("Seeding Orders and OrderItems...");
+                logger.LogInformation("Seeding Orders and OrderDetails...");
 
                 // Đơn hàng 1: Ngày 15/07/2026 - Hàng thường (Được giảm GTGT 0.8%)
                 var order1 = new Order
@@ -293,7 +293,7 @@ public static class DatabaseSeeder
                     CreatedAt = new DateTime(2026, 7, 15, 10, 30, 0, DateTimeKind.Utc)
                 };
 
-                order1.Items.Add(new OrderItem
+                order1.Items.Add(new OrderDetail
                 {
                     Id = Guid.NewGuid(),
                     OrderId = order1.Id,
@@ -307,7 +307,7 @@ public static class DatabaseSeeder
                     VatDiscountAmount = 540m
                 });
 
-                order1.Items.Add(new OrderItem
+                order1.Items.Add(new OrderDetail
                 {
                     Id = Guid.NewGuid(),
                     OrderId = order1.Id,
@@ -336,7 +336,7 @@ public static class DatabaseSeeder
                     CreatedAt = new DateTime(2026, 8, 20, 15, 45, 0, DateTimeKind.Utc)
                 };
 
-                order2.Items.Add(new OrderItem
+                order2.Items.Add(new OrderDetail
                 {
                     Id = Guid.NewGuid(),
                     OrderId = order2.Id,
@@ -350,7 +350,7 @@ public static class DatabaseSeeder
                     VatDiscountAmount = 232m
                 });
 
-                order2.Items.Add(new OrderItem
+                order2.Items.Add(new OrderDetail
                 {
                     Id = Guid.NewGuid(),
                     OrderId = order2.Id,
@@ -364,7 +364,7 @@ public static class DatabaseSeeder
                     VatDiscountAmount = 0m
                 });
 
-                order2.Items.Add(new OrderItem
+                order2.Items.Add(new OrderDetail
                 {
                     Id = Guid.NewGuid(),
                     OrderId = order2.Id,
@@ -393,7 +393,7 @@ public static class DatabaseSeeder
                     CreatedAt = new DateTime(2026, 9, 10, 9, 0, 0, DateTimeKind.Utc)
                 };
 
-                order3.Items.Add(new OrderItem
+                order3.Items.Add(new OrderDetail
                 {
                     Id = Guid.NewGuid(),
                     OrderId = order3.Id,

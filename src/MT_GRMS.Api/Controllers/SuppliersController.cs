@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
@@ -7,6 +8,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/suppliers")]
+[Authorize]
 public class SuppliersController : BaseApiController
 {
     private readonly ISupplierService _supplierService;
@@ -390,4 +392,5 @@ public class SuppliersController : BaseApiController
         return Ok(ApiResponse<SupplierProductDto>.Ok(result, "Cập nhật nhà cung cấp chính thành công."));
     }
 }
+
 

@@ -4,6 +4,7 @@ using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using MT_GRMS.Application.Auth.Dtos;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Application.Auth;
 
@@ -98,24 +99,44 @@ public class AuthService : IAuthService
             tenantId = "tenant_mt_mart_01";
         }
 
-        // Xác định quyền hạn (Role)
+        // Xác định quyền hạn (Role) chuẩn 3 Roles: ADMIN, STORE_OWNER, EMPLOYEE
         var isAdmin = user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase);
-        var role = isAdmin ? "ADMIN" : (tenantUser?.Role ?? "STORE_OWNER");
-        if (string.IsNullOrWhiteSpace(role))
+        string role;
+        if (isAdmin)
         {
-            var uName = (user.UserName ?? "").ToUpperInvariant();
-            var email = (user.Email ?? "").ToUpperInvariant();
-            if (uName.Contains("EMPLOYEE") || email.Contains("EMPLOYEE") || uName.Contains("STAFF") || email.Contains("STAFF"))
+            role = RoleConstants.AdminUpper;
+        }
+        else if (tenantUser != null && !string.IsNullOrWhiteSpace(tenantUser.Role))
+        {
+            var r = tenantUser.Role.Trim().ToUpperInvariant();
+            if (r is "ADMIN" or "SYSTEMADMIN" or "SYSTEM_ADMIN")
             {
-                role = "EMPLOYEE";
+                role = RoleConstants.AdminUpper;
             }
-            else if (uName.Contains("OWNER") || email.Contains("OWNER"))
+            else if (r is "STORE_OWNER" or "STOREOWNER" or "OWNER")
             {
-                role = "STORE_OWNER";
+                role = RoleConstants.StoreOwnerUpper;
             }
             else
             {
-                role = "ADMIN";
+                role = RoleConstants.EmployeeUpper;
+            }
+        }
+        else
+        {
+            var uName = (user.UserName ?? "").ToUpperInvariant();
+            var email = (user.Email ?? "").ToUpperInvariant();
+            if (uName.Contains("EMPLOYEE") || email.Contains("EMPLOYEE") || uName.Contains("STAFF") || email.Contains("STAFF") || uName.Contains("CASHIER") || email.Contains("CASHIER"))
+            {
+                role = RoleConstants.EmployeeUpper;
+            }
+            else if (uName.Contains("ADMIN") || email.Contains("ADMIN"))
+            {
+                role = RoleConstants.AdminUpper;
+            }
+            else
+            {
+                role = RoleConstants.StoreOwnerUpper;
             }
         }
 
@@ -181,17 +202,38 @@ public class AuthService : IAuthService
         var issuer = _configuration["Jwt:Issuer"] ?? "MTGRMS_API";
         var audience = _configuration["Jwt:Audience"] ?? "MTGRMS_CLIENT";
 
-        var claims = new[]
+        var rolesToAdd = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { role };
+        if (role.Equals("STORE_OWNER", StringComparison.OrdinalIgnoreCase) || role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase))
+        {
+            rolesToAdd.Add("StoreOwner");
+            rolesToAdd.Add("STORE_OWNER");
+        }
+        else if (role.Equals("ADMIN", StringComparison.OrdinalIgnoreCase) || role.Equals("Admin", StringComparison.OrdinalIgnoreCase))
+        {
+            rolesToAdd.Add("Admin");
+            rolesToAdd.Add("ADMIN");
+        }
+        else
+        {
+            rolesToAdd.Add("Employee");
+            rolesToAdd.Add("EMPLOYEE");
+        }
+
+        var claims = new List<Claim>
         {
             new Claim(ClaimTypes.NameIdentifier, userId),
             new Claim(ClaimTypes.Name, username),
             new Claim(ClaimTypes.Email, email),
-            new Claim(ClaimTypes.Role, role),
             new Claim("role", role),
             new Claim("tenant_id", tenantId),
             new Claim("is_admin", isAdmin ? "true" : "false"),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
+
+        foreach (var r in rolesToAdd)
+        {
+            claims.Add(new Claim(ClaimTypes.Role, r));
+        }
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -11,6 +12,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/goods-receipts")]
+[Authorize]
 public class GoodsReceiptsController : BaseApiController
 {
     private readonly IGoodsReceiptService _goodsReceiptService;
@@ -53,10 +55,10 @@ public class GoodsReceiptsController : BaseApiController
     /// <summary>
     /// Lấy chi tiết mặt hàng từ PO nguồn để điền tự động vào phiếu nhập kho (GR-01)
     /// </summary>
-    [HttpGet("po-details/{poId:guid}")]
-    public async Task<IActionResult> GetPoReceiptDetails(Guid poId, CancellationToken cancellationToken)
+    [HttpGet("po-details/{poIdOrCode}")]
+    public async Task<IActionResult> GetPoReceiptDetails(string poIdOrCode, CancellationToken cancellationToken)
     {
-        var result = await _goodsReceiptService.GetPoReceiptDetailsAsync(poId, cancellationToken);
+        var result = await _goodsReceiptService.GetPoReceiptDetailsAsync(poIdOrCode, cancellationToken);
         return Ok(ApiResponse<PoReceiptDetailsDto>.Ok(result));
     }
 
@@ -74,6 +76,7 @@ public class GoodsReceiptsController : BaseApiController
     /// Hoàn tất phiếu nhập kho: cập nhật tồn kho chi nhánh & chuyển trạng thái PO sang COMPLETED (GR-08)
     /// </summary>
     [HttpPost("{id:guid}/complete")]
+    [HttpPut("{id:guid}/confirm")]
     public async Task<IActionResult> CompleteGoodsReceipt(Guid id, [FromBody] CompleteGoodsReceiptCommand command, CancellationToken cancellationToken)
     {
         var result = await _goodsReceiptService.CompleteGoodsReceiptAsync(id, command, cancellationToken);
@@ -90,3 +93,4 @@ public class GoodsReceiptsController : BaseApiController
         return Ok(ApiResponse<GoodsReceiptDto>.Ok(result));
     }
 }
+

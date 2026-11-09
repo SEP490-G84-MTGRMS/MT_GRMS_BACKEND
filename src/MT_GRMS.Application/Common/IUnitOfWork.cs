@@ -1,4 +1,4 @@
-﻿namespace MT_GRMS.Application.Common;
+namespace MT_GRMS.Application.Common;
 
 public interface IUnitOfWork
 {
@@ -6,4 +6,5 @@ public interface IUnitOfWork
     Task BeginTransactionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     Task CommitTransactionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
     Task RollbackTransactionAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    bool HasActiveTransaction => false;
 }

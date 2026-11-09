@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 
 namespace MT_GRMS.Infrastructure.Persistence;
@@ -17,9 +17,11 @@ public class UnitOfWork : IUnitOfWork
         return await _context.SaveChangesAsync(cancellationToken);
     }
 
+    public bool HasActiveTransaction => _context.Database.IsRelational() && _context.Database.CurrentTransaction != null;
+
     public async Task BeginTransactionAsync(CancellationToken cancellationToken = default)
     {
-        if (_context.Database.IsRelational())
+        if (_context.Database.IsRelational() && _context.Database.CurrentTransaction == null)
         {
             await _context.Database.BeginTransactionAsync(cancellationToken);
         }

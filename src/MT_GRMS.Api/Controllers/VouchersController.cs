@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Promotions;
@@ -7,6 +8,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/vouchers")]
+[Authorize]
 public class VouchersController : BaseApiController
 {
     private readonly IPromotionService _promotionService;
@@ -100,3 +102,4 @@ public class VouchersController : BaseApiController
         return Ok(ApiResponse<RedeemVoucherResponse>.Ok(result, result.Message));
     }
 }
+

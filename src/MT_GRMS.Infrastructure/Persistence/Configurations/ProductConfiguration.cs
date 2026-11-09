@@ -34,7 +34,7 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(x => x.IsFavorite).HasDefaultValue(false);
         builder.Property(x => x.EligibleForVatReduction).HasDefaultValue(false);
 
-        builder.HasIndex(x => x.Barcode)
+        builder.HasIndex(x => new { x.TenantId, x.Barcode })
             .IsUnique()
             .HasFilter("\"IsDeleted\" = false AND \"Barcode\" IS NOT NULL");
         builder.HasIndex(x => new { x.TenantId, x.ProductCode })

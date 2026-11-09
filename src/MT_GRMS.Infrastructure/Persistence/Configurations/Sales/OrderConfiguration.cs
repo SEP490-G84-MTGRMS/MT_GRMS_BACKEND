@@ -24,7 +24,7 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.Property(x => x.PaymentStatus).HasMaxLength(30).HasDefaultValue("PAID");
         builder.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("Completed");
 
-        builder.HasIndex(x => x.OrderCode).IsUnique();
+        builder.HasIndex(x => new { x.TenantId, x.OrderCode }).IsUnique();
 
         builder.HasOne(x => x.Branch)
             .WithMany()

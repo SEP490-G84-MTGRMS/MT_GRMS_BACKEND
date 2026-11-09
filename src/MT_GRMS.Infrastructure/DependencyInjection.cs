@@ -25,14 +25,11 @@ public static class DependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        var connectionString = configuration.GetConnectionString("DefaultConnection");
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            connectionString = configuration["DATABASE_URL"]
-                ?? Environment.GetEnvironmentVariable("DATABASE_URL")
-                ?? Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection")
-                ?? Environment.GetEnvironmentVariable("DB_CONNECTION_STRING");
-        }
+        var connectionString = Environment.GetEnvironmentVariable("DB_CONNECTION_STRING")
+            ?? Environment.GetEnvironmentVariable("DATABASE_URL")
+            ?? configuration["DATABASE_URL"]
+            ?? configuration.GetConnectionString("DefaultConnection")
+            ?? Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection");
 
         if (!string.IsNullOrWhiteSpace(connectionString) &&
             (connectionString.StartsWith("postgres://") || connectionString.StartsWith("postgresql://")))
@@ -76,7 +73,6 @@ public static class DependencyInjection
         services.AddScoped<IUserRepository, UserRepository>();
         services.AddScoped<IInventoryRepository, InventoryRepository>();
         services.AddScoped<IOrderRepository, OrderRepository>();
-        services.AddScoped<Application.PosOrders.ISalesOrderRepository, SalesOrderRepository>();
         services.AddScoped<IProductRepository, ProductRepository>();
         services.AddScoped<ICategoryRepository, CategoryRepository>();
         services.AddScoped<IProductUnitRepository, ProductUnitRepository>();

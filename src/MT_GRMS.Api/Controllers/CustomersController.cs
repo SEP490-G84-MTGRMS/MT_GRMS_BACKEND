@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
@@ -10,6 +11,8 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
+[Route("api/v1/[controller]")]
+[Authorize]
 public class CustomersController : BaseApiController
 {
     private readonly AppDbContext _context;
@@ -110,7 +113,27 @@ public class CustomersController : BaseApiController
                 i.OrderCode,
                 i.CreatedAt.ToString("yyyy-MM-dd"),
                 i.TotalDebtAmount,
-                i.Status.ToString()
+                i.Status == DebtInvoiceStatus.FullyPaid
+                    ? "Paid"
+                    : i.Status == DebtInvoiceStatus.PartiallyPaid
+                        ? "Partial"
+                        : "Unpaid"
+            ))
+            .ToListAsync(ct);
+
+        // Load recent debt repayment history
+        var recentPayments = await _context.CustomerDebtEntries
+            .AsNoTracking()
+            .Where(e => e.CustomerId == id && e.TenantId == tenantId && e.EntryType == CustomerDebtType.DebtRepayment)
+            .OrderByDescending(e => e.OccurredAtUtc)
+            .Take(10)
+            .Select(e => new CustomerPaymentSummaryResponse(
+                string.IsNullOrEmpty(e.ReferenceCode) ? e.EntryCode : e.ReferenceCode,
+                e.OccurredAtUtc.ToString("yyyy-MM-dd HH:mm"),
+                e.Amount,
+                e.Description.Contains("Bank") || e.Description.Contains("VietQR") ? "VietQR" : "Cash",
+                e.Description,
+                "Thu ngân"
             ))
             .ToListAsync(ct);
 
@@ -130,7 +153,8 @@ public class CustomersController : BaseApiController
             c.AllowDebt,
             c.IsBlockedForDebt,
             c.CreatedAt,
-            openInvoices
+            openInvoices,
+            recentPayments
         );
 
         return Ok(ApiResponse<CustomerResponse>.Ok(res));
@@ -287,3 +311,4 @@ public class CustomersController : BaseApiController
         return Ok(ApiResponse<CustomerKpiSummaryResponse>.Ok(summary));
     }
 }
+

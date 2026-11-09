@@ -3,11 +3,13 @@ using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/v1/branches")]
+[Authorize]
 public class BranchesController : BaseApiController
 {
     private readonly IBranchService _branchService;
@@ -65,6 +67,7 @@ public class BranchesController : BaseApiController
     /// Tạo mới một chi nhánh trong chuỗi cửa hàng (REQ-BR-02)
     /// </summary>
     [HttpPost]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> Create([FromBody] CreateBranchRequest request, CancellationToken cancellationToken)
     {
         var result = await _branchService.CreateBranchAsync(request, cancellationToken);
@@ -75,6 +78,7 @@ public class BranchesController : BaseApiController
     /// Cập nhật thông tin chi nhánh (REQ-BR-03)
     /// </summary>
     [HttpPut("{id:guid}")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdateBranchRequest request, CancellationToken cancellationToken)
     {
         var result = await _branchService.UpdateBranchAsync(id, request, cancellationToken);
@@ -85,6 +89,7 @@ public class BranchesController : BaseApiController
     /// Bật / Tắt trạng thái hoạt động của chi nhánh (REQ-BR-04)
     /// </summary>
     [HttpPatch("{id:guid}/status")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> ToggleStatus(Guid id, [FromBody] UpdateBranchStatusRequest request, CancellationToken cancellationToken)
     {
         var result = await _branchService.ToggleBranchStatusAsync(id, request, cancellationToken);
@@ -133,6 +138,7 @@ public class BranchesController : BaseApiController
     /// Gán một hoặc nhiều sản phẩm từ Master Catalog vào Chi nhánh
     /// </summary>
     [HttpPost("{id:guid}/products")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> AssignProducts(
         Guid id,
         [FromBody] AssignBranchProductsCommand command,
@@ -146,6 +152,7 @@ public class BranchesController : BaseApiController
     /// Cập nhật giá bán lẻ niêm yết, định mức tồn tối thiểu và vị trí quầy kệ tại chi nhánh
     /// </summary>
     [HttpPut("{id:guid}/products/{productId:guid}")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> UpdateProduct(
         Guid id,
         Guid productId,
@@ -160,6 +167,7 @@ public class BranchesController : BaseApiController
     /// Chuyển đổi trạng thái kinh doanh (Active / Inactive) của sản phẩm tại chi nhánh
     /// </summary>
     [HttpPatch("{id:guid}/products/{productId:guid}/status")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> ToggleProductStatus(
         Guid id,
         Guid productId,
@@ -174,6 +182,7 @@ public class BranchesController : BaseApiController
     /// Gỡ sản phẩm khỏi danh mục kinh doanh của chi nhánh (chặn nếu tồn kho thực tế SOH > 0)
     /// </summary>
     [HttpDelete("{id:guid}/products/{productId:guid}")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> RemoveProduct(
         Guid id,
         Guid productId,
@@ -183,3 +192,4 @@ public class BranchesController : BaseApiController
         return Ok(ApiResponse<object>.Ok(null!, "Gỡ sản phẩm khỏi chi nhánh thành công."));
     }
 }
+

@@ -43,7 +43,6 @@ public static class DependencyInjection
         services.AddScoped<PurchaseOrders.IPurchaseOrderService, PurchaseOrders.PurchaseOrderService>();
         services.AddScoped<GoodsReceipts.IGoodsReceiptService, GoodsReceipts.GoodsReceiptService>();
         services.AddScoped<SupplierReturns.ISupplierReturnService, SupplierReturns.SupplierReturnService>();
-        services.AddScoped<AiPipeline.IAiRecommendationService, AiPipeline.AiRecommendationService>();
         services.AddScoped<Promotions.IPromotionService, Promotions.PromotionService>();
 
         // 3. Đăng ký các Service cho Master Admin Portal

@@ -5,7 +5,7 @@ namespace MT_GRMS.Domain.Entities.HR;
 /// <summary>
 /// Bảng EmployeeSchedules (Lịch làm việc & Chấm công GPS Inline)
 /// </summary>
-public class EmployeeSchedule : BaseEntity
+public class EmployeeSchedule : BaseTenantEntity
 {
     public Guid EmployeeId { get; set; }
     public Guid? PayslipId { get; set; }

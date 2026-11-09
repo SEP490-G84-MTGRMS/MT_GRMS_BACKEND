@@ -5,7 +5,7 @@ namespace MT_GRMS.Domain.Entities.HR;
 /// <summary>
 /// Bảng Payslips (Phiếu lương tháng nhân viên chi tiết)
 /// </summary>
-public class Payslip : BaseEntity
+public class Payslip : BaseTenantEntity
 {
     public Guid EmployeeId { get; set; }
     public string PayslipCode { get; set; } = string.Empty;

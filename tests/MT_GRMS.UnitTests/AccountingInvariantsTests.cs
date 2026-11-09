@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using Microsoft.Extensions.Configuration;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Cashbook.Dtos;
@@ -121,12 +122,16 @@ public class AccountingInvariantsTests
         public void Delete(T entity) => Items.Remove(entity);
     }
 
-    private class SimpleAuditHashService : IAuditHashService
+    private static IAuditHashService CreateRealAuditHashService(string secretKey = "MT_GRMS_AUDIT_HASH_SECURE_HMAC_KEY_TEST_2026")
     {
-        public string ComputeEntryHash(string previousHash, CashbookEntry entry) =>
-            $"HASH-{previousHash[..Math.Min(4, previousHash.Length)]}-{entry.Amount}";
-        public bool VerifyChain(IEnumerable<CashbookEntry> entries) => true;
-        public bool VerifyEntryHash(string previousHash, CashbookEntry entry) => true;
+        var inMemorySettings = new Dictionary<string, string?>
+        {
+            ["AuditHash:SecretKey"] = secretKey
+        };
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(inMemorySettings)
+            .Build();
+        return new AuditHashService(configuration);
     }
 
     [Fact]
@@ -136,7 +141,7 @@ public class AccountingInvariantsTests
         var accountRepo = new FakeGenericRepository<FinanceAccount>();
         var transitRepo = new FakeGenericRepository<CashInTransit>();
         var shiftRepo = new FakeGenericRepository<ShiftZReport>();
-        var hashService = new SimpleAuditHashService();
+        var hashService = CreateRealAuditHashService();
         var tenantContext = new FakeTenantContext();
         var uow = new FakeUnitOfWork();
 
@@ -168,7 +173,7 @@ public class AccountingInvariantsTests
         var accountRepo = new FakeGenericRepository<FinanceAccount>();
         var transitRepo = new FakeGenericRepository<CashInTransit>();
         var shiftRepo = new FakeGenericRepository<ShiftZReport>();
-        var hashService = new SimpleAuditHashService();
+        var hashService = CreateRealAuditHashService();
         var tenantContext = new FakeTenantContext();
         var uow = new FakeUnitOfWork();
 
@@ -195,7 +200,7 @@ public class AccountingInvariantsTests
         var accountRepo = new FakeGenericRepository<FinanceAccount>();
         var transitRepo = new FakeGenericRepository<CashInTransit>();
         var shiftRepo = new FakeGenericRepository<ShiftZReport>();
-        var hashService = new SimpleAuditHashService();
+        var hashService = CreateRealAuditHashService();
         var tenantContext = new FakeTenantContext();
         var uow = new FakeUnitOfWork();
 
@@ -307,7 +312,7 @@ public class AccountingInvariantsTests
         var accountRepo = new FakeGenericRepository<FinanceAccount>();
         var transitRepo = new FakeGenericRepository<CashInTransit>();
         var shiftRepo = new FakeGenericRepository<ShiftZReport>();
-        var hashService = new SimpleAuditHashService();
+        var hashService = CreateRealAuditHashService();
         var tenantContext = new FakeTenantContext();
         var uow = new FakeUnitOfWork();
 
@@ -342,16 +347,66 @@ public class AccountingInvariantsTests
     }
 
     [Fact]
-    public void INV_10_AuditHashChaining_ShouldIncludePreviousHash()
+    public void INV_10_AuditHashChaining_ShouldVerifyRealSha256HmacAndDetectTampering()
     {
-        var hashService = new SimpleAuditHashService();
-        var entry1 = new CashbookEntry { Amount = 100_000m };
+        var hashService = CreateRealAuditHashService("TEST_SECRET_KEY_AUDIT_HASH_64_CHARS_LONG_FOR_HMAC_SECURITY_2026");
+        var accountId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+
+        var entry1 = new CashbookEntry
+        {
+            TenantId = "tenant-inv-01",
+            AccountId = accountId,
+            AccountType = FinanceAccountType.Till,
+            EntryType = CashbookEntryType.Receipt,
+            Amount = 100_000m,
+            BalanceAfter = 100_000m,
+            SourceType = "MANUAL",
+            OccurredAtUtc = now
+        };
         var hash1 = hashService.ComputeEntryHash("GENESIS", entry1);
+        entry1.AuditHash = hash1;
 
-        var entry2 = new CashbookEntry { Amount = 200_000m };
+        var entry2 = new CashbookEntry
+        {
+            TenantId = "tenant-inv-01",
+            AccountId = accountId,
+            AccountType = FinanceAccountType.Till,
+            EntryType = CashbookEntryType.Payment,
+            Amount = 40_000m,
+            BalanceAfter = 60_000m,
+            SourceType = "MANUAL",
+            OccurredAtUtc = now.AddMinutes(5)
+        };
         var hash2 = hashService.ComputeEntryHash(hash1, entry2);
+        entry2.AuditHash = hash2;
 
-        Assert.Contains(hash1[..4], hash2);
+        // 1. Kiểm thử định dạng SHA-256 HMAC (64 ký tự hex)
+        Assert.Equal(64, hash1.Length);
+        Assert.Equal(64, hash2.Length);
+        Assert.NotEqual(hash1, hash2);
+
+        // 2. Xác thực tính toàn vẹn của chuỗi băm hợp lệ
+        Assert.True(hashService.VerifyEntryHash("GENESIS", entry1));
+        Assert.True(hashService.VerifyEntryHash(hash1, entry2));
+
+        // 3. Phát hiện gian lận: Thay đổi số tiền giao dịch đã ghi sổ
+        var tamperedEntry = new CashbookEntry
+        {
+            TenantId = entry1.TenantId,
+            AccountId = entry1.AccountId,
+            AccountType = entry1.AccountType,
+            EntryType = entry1.EntryType,
+            Amount = 999_999m, // Bị sửa số tiền trái phép
+            BalanceAfter = entry1.BalanceAfter,
+            SourceType = entry1.SourceType,
+            OccurredAtUtc = entry1.OccurredAtUtc,
+            AuditHash = entry1.AuditHash
+        };
+        Assert.False(hashService.VerifyEntryHash("GENESIS", tamperedEntry), "Hệ thống phải phát hiện giả mạo khi nội dung giao dịch bị sửa đổi.");
+
+        // 4. Phát hiện gian lận: Giả mạo chuỗi liên kết (Previous Hash bị sai)
+        Assert.False(hashService.VerifyEntryHash("TAMPERED_PREV_HASH", entry2), "Hệ thống phải phát hiện chuỗi bị đứt gãy nếu hash trước đó bị thay đổi.");
     }
 
     [Fact]

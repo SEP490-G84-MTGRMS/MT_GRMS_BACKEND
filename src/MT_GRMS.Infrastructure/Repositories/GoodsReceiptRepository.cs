@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.GoodsReceipts;
 using MT_GRMS.Application.GoodsReceipts.Dtos;
+using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Infrastructure.Persistence;
@@ -218,7 +219,7 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
             .Include(po => po.Supplier)
             .Include(po => po.Branch)
             .Where(po => po.TenantId == tenantId && !po.IsDeleted &&
-                         (po.Status == "SENT" || po.Status == "CONFIRMED" || po.Status == "DISPATCHED" || po.Status == "APPROVED") &&
+                         (po.Status == "SENT" || po.Status == "CONFIRMED" || po.Status == "DISPATCHED" || po.Status == "APPROVED" || po.Status == "PARTIALLY_RECEIVED") &&
                          !activePoIdsWithReceipt.Contains(po.Id))
             .AsNoTracking();
 
@@ -241,6 +242,20 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
             .Include(po => po.Details)
                 .ThenInclude(d => d.Product)
             .FirstOrDefaultAsync(po => po.Id == poId && po.TenantId == tenantId && !po.IsDeleted, cancellationToken);
+    }
+
+    public async Task<PurchaseOrder?> GetPurchaseOrderByCodeWithDetailsAsync(
+        string tenantId,
+        string poCode,
+        CancellationToken cancellationToken = default)
+    {
+        var normalized = poCode.Trim().ToLower();
+        return await _context.PurchaseOrders
+            .Include(po => po.Supplier)
+            .Include(po => po.Branch)
+            .Include(po => po.Details)
+                .ThenInclude(d => d.Product)
+            .FirstOrDefaultAsync(po => po.Code.ToLower() == normalized && po.TenantId == tenantId && !po.IsDeleted, cancellationToken);
     }
 
     public async Task<GoodsReceipt?> GetActiveReceiptByPoIdAsync(
@@ -275,5 +290,34 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
     public async Task AddBranchStockAsync(BranchStock stock, CancellationToken cancellationToken = default)
     {
         await _context.BranchStocks.AddAsync(stock, cancellationToken);
+    }
+
+    public async Task AddBatchAsync(Batch batch, CancellationToken cancellationToken = default)
+    {
+        await _context.Batches.AddAsync(batch, cancellationToken);
+    }
+
+    public async Task<Product?> GetProductByIdAsync(string tenantId, Guid productId, CancellationToken cancellationToken = default)
+    {
+        return await _context.Products
+            .FirstOrDefaultAsync(p => p.Id == productId && p.TenantId == tenantId && !p.IsDeleted, cancellationToken);
+    }
+
+    public async Task<decimal> GetTotalProductStockAsync(string tenantId, Guid productId, CancellationToken cancellationToken = default)
+    {
+        return await _context.BranchStocks
+            .Where(bs => bs.TenantId == tenantId && bs.ProductId == productId && !bs.IsDeleted)
+            .SumAsync(bs => bs.QuantityOnHand, cancellationToken);
+    }
+
+    public async Task<Supplier?> GetSupplierByIdAsync(string tenantId, Guid supplierId, CancellationToken cancellationToken = default)
+    {
+        return await _context.Suppliers
+            .FirstOrDefaultAsync(s => s.Id == supplierId && s.TenantId == tenantId && !s.IsDeleted, cancellationToken);
+    }
+
+    public async Task AddSupplierLedgerAsync(SupplierAPLedger ledger, CancellationToken cancellationToken = default)
+    {
+        await _context.SupplierAPLedgers.AddAsync(ledger, cancellationToken);
     }
 }
