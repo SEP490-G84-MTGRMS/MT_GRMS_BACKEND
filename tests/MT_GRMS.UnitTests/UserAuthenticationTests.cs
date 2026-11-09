@@ -265,6 +265,15 @@ public class UserAuthenticationTests
     {
         // GIVEN
         var repo = new FakeUserRepository();
+        await repo.AddAsync(new User
+        {
+            Id = "usr_refreshed",
+            Username = "refreshed_user",
+            Password = "123",
+            IsAdmin = true,
+            RefreshToken = "mt_refresh_token_sample",
+            RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7)
+        });
         var authService = new AuthService(repo);
 
         // WHEN
