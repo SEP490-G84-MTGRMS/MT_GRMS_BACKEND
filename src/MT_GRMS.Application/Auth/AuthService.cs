@@ -370,15 +370,16 @@ public class AuthService : IAuthService
 
     private string GenerateJwtToken(string userId, string username, string email, string role, string tenantId, bool isAdmin, DateTime expiresAt)
     {
+        // Phải khớp fallback key trong Program.cs — appsettings thường để Jwt:Key="" 
+        // (IsNullOrWhiteSpace), nếu trả opaque mt_jwt_* thì FE gửi Bearer nhưng API không authenticate → 403 khi sửa NCC.
         var secretKey = _configuration?["Jwt:Key"];
         if (string.IsNullOrWhiteSpace(secretKey))
         {
-            // Fallback token nếu không có cấu hình JWT Key (ví dụ unit test không truyền IConfiguration)
-            return $"mt_jwt_{Guid.NewGuid():N}_{DateTimeOffset.UtcNow.ToUnixTimeSeconds()}";
+            secretKey = "MT_GRMS_Super_Secret_Key_For_JWT_Authentication_2026_FPTU_Capstone_Project!";
         }
 
-        var issuer = _configuration["Jwt:Issuer"] ?? "MTGRMS_API";
-        var audience = _configuration["Jwt:Audience"] ?? "MTGRMS_CLIENT";
+        var issuer = _configuration?["Jwt:Issuer"] ?? "MTGRMS_API";
+        var audience = _configuration?["Jwt:Audience"] ?? "MTGRMS_CLIENT";
 
         var rolesToAdd = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { role };
         if (role.Equals("STORE_OWNER", StringComparison.OrdinalIgnoreCase) || role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase))

@@ -154,9 +154,8 @@ public class BranchManagementTests
     [Fact]
     public async Task REQ_BR02_CreateBranch_ValidRequest_Success()
     {
-        // Arrange - Cho phép thêm chi nhánh bằng cách tăng ExtraBranches để có quota
-        var tenant = await _tenantRepo.GetByIdAsync("tenant-test-1");
-        if (tenant != null) tenant.ExtraBranches = 1;
+        // Arrange - Giảm bớt 1 chi nhánh để quota chưa đầy (4/5)
+        _repo.Branches.RemoveAll(b => b.Code == "DC-01");
         var req = new CreateBranchRequest("BR-NEW", "Chi nhánh Mới", "789 Phố Mới", "0912345678", "Trần Văn Mới");
 
         // Act
@@ -243,10 +242,16 @@ public class BranchManagementTests
             return Task.FromResult(Branches.Count(b => b.TenantId == "tenant-test-1" && !b.IsDeleted));
         }
 
+        public Task<BranchDetailDto?> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<BranchDetailDto?>(null);
+
         public Task<(IReadOnlyList<Branch> Items, int TotalCount)> GetPagedListAsync(
             string? keyword,
             string? branchCode,
             string? status,
+            IReadOnlyList<string>? branchCodes,
+            IReadOnlyList<string>? branchNames,
+            IReadOnlyList<string>? addresses,
+            IReadOnlyList<string>? phones,
             int pageIndex,
             int pageSize,
             CancellationToken cancellationToken = default)
@@ -265,9 +270,32 @@ public class BranchManagementTests
                     (b.Phone != null && b.Phone.Contains(kw)));
             }
 
-            if (!string.IsNullOrWhiteSpace(branchCode) && !string.Equals(branchCode, "all", StringComparison.OrdinalIgnoreCase))
+            if (branchCodes != null && branchCodes.Any(c => !string.IsNullOrWhiteSpace(c)))
+            {
+                var terms = branchCodes.Where(c => !string.IsNullOrWhiteSpace(c)).Select(c => c.Trim().ToLower()).ToList();
+                query = query.Where(b => terms.Any(t => b.Code.ToLower().Contains(t)));
+            }
+            else if (!string.IsNullOrWhiteSpace(branchCode) && !string.Equals(branchCode, "all", StringComparison.OrdinalIgnoreCase))
             {
                 query = query.Where(b => b.Code == branchCode);
+            }
+
+            if (branchNames != null && branchNames.Any(n => !string.IsNullOrWhiteSpace(n)))
+            {
+                var terms = branchNames.Where(n => !string.IsNullOrWhiteSpace(n)).Select(n => n.Trim().ToLower()).ToList();
+                query = query.Where(b => terms.Any(t => b.Name.ToLower().Contains(t)));
+            }
+
+            if (addresses != null && addresses.Any(a => !string.IsNullOrWhiteSpace(a)))
+            {
+                var terms = addresses.Where(a => !string.IsNullOrWhiteSpace(a)).Select(a => a.Trim().ToLower()).ToList();
+                query = query.Where(b => terms.Any(t => (b.Address ?? string.Empty).ToLower().Contains(t)));
+            }
+
+            if (phones != null && phones.Any(p => !string.IsNullOrWhiteSpace(p)))
+            {
+                var terms = phones.Where(p => !string.IsNullOrWhiteSpace(p)).Select(p => p.Trim().ToLower()).ToList();
+                query = query.Where(b => terms.Any(t => (b.Phone ?? string.Empty).ToLower().Contains(t)));
             }
 
             if (!string.IsNullOrWhiteSpace(status) && !string.Equals(status, "all", StringComparison.OrdinalIgnoreCase))
@@ -309,25 +337,6 @@ public class BranchManagementTests
 
         public void Update(Branch entity) { }
         public void Delete(Branch entity) => entity.IsDeleted = true;
-
-        public Task<BranchDetailDto?> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default)
-        {
-            var branch = Branches.FirstOrDefault(b => b.Id == id && !b.IsDeleted);
-            if (branch == null) return Task.FromResult<BranchDetailDto?>(null);
-            return Task.FromResult<BranchDetailDto?>(new BranchDetailDto
-            {
-                Id = branch.Id,
-                Code = branch.BranchCode,
-                Name = branch.Name,
-                Address = branch.Address ?? string.Empty,
-                Phone = branch.Phone,
-                Email = branch.Email,
-                ManagerName = branch.ManagerName,
-                IsHeadquarter = branch.IsHeadquarter,
-                Status = branch.IsActive ? "Active" : "Inactive",
-                CreatedAt = branch.CreatedAt
-            });
-        }
     }
 
     private class FakeUnitOfWork : IUnitOfWork

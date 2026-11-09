@@ -145,11 +145,52 @@ ALTER TABLE ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""SupersededBy
 
 ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryDaysJson"" character varying(500) NULL;
 ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryWeekdaysMask"" integer NULL;
+
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""CutoffDayOffset"" integer NOT NULL DEFAULT 1;
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""CutoffTime"" character varying(10) NOT NULL DEFAULT '17:00';
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""DeliveryWeekdaysMask"" integer NOT NULL DEFAULT 127;
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""DeliveryDaysJson"" text NOT NULL DEFAULT '[""Mon"",""Tue"",""Wed"",""Thu"",""Fri"",""Sat""]';
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""MinOrderQuantity"" integer NOT NULL DEFAULT 0;
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""AllowUrgent"" boolean NOT NULL DEFAULT FALSE;
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""UrgentLeadTimeHours"" integer NOT NULL DEFAULT 4;
+ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""UrgentFeePercent"" numeric(5,2) NOT NULL DEFAULT 0;
+
+ALTER TABLE ""SupplierProducts"" ADD COLUMN IF NOT EXISTS ""AllowedShortageQuantity"" integer NOT NULL DEFAULT 0;
+
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'SupplierDeliveryConfigs') THEN
+        UPDATE ""Suppliers"" s
+        SET ""CutoffDayOffset"" = c.""CutoffDayOffset"",
+            ""CutoffTime"" = COALESCE(c.""CutoffTime"", '17:00'),
+            ""DeliveryWeekdaysMask"" = c.""DeliveryWeekdaysMask"",
+            ""DeliveryDaysJson"" = COALESCE(c.""DeliveryDaysJson"", '[""Mon"",""Tue"",""Wed"",""Thu"",""Fri"",""Sat""]'),
+            ""MinOrderQuantity"" = c.""MinOrderQuantity"",
+            ""AllowUrgent"" = c.""AllowUrgent"",
+            ""UrgentLeadTimeHours"" = c.""UrgentLeadTimeHours"",
+            ""UrgentFeePercent"" = c.""UrgentFeePercent""
+        FROM ""SupplierDeliveryConfigs"" c
+        WHERE s.""Id"" = c.""SupplierId"";
+
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'SupplierBlackoutDates' AND column_name = 'SupplierDeliveryConfigId') THEN
+            UPDATE ""SupplierBlackoutDates"" b
+            SET ""SupplierId"" = c.""SupplierId""
+            FROM ""SupplierDeliveryConfigs"" c
+            WHERE b.""SupplierDeliveryConfigId"" = c.""Id"" AND (b.""SupplierId"" IS NULL OR b.""SupplierId"" = '00000000-0000-0000-0000-000000000000');
+        END IF;
+
+        DROP TABLE IF EXISTS ""SupplierDeliveryConfigs"" CASCADE;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'SupplierBlackoutDates' AND column_name = 'SupplierDeliveryConfigId') THEN
+        ALTER TABLE ""SupplierBlackoutDates"" DROP COLUMN IF EXISTS ""SupplierDeliveryConfigId"";
+    END IF;
+END $$;
 ");
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "Cảnh báo khi bổ sung cột bảng PurchaseOrders/SupplierDispatchPackages");
+            logger?.LogWarning(ex, "Cảnh báo khi bổ sung cột bảng PurchaseOrders/SupplierDispatchPackages/Suppliers");
         }
 
         // 3. Tạo các chỉ mục Index
@@ -458,6 +499,14 @@ ON CONFLICT DO NOTHING;
                         ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""CashierName"" character varying(150);
                         ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""FulfilledByCashierName"" character varying(150);
                         ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""FulfilledAtUtc"" timestamp without time zone;
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""Note"" character varying(1000);
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""AppliedPromotionId"" uuid;
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""AppliedPromotionSummary"" character varying(300);
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""PromotionDiscountAmount"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""AppliedVoucherCode"" character varying(50);
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""VoucherDiscountAmount"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""PointsRedeemed"" integer DEFAULT 0;
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""PointsDiscountAmount"" numeric(18,2) DEFAULT 0;
 
                         ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""BranchId"" uuid;
                         ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TillId"" uuid;
@@ -585,7 +634,6 @@ ON CONFLICT DO NOTHING;
                         ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
                         ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
                         ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
-
                         ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;
                         ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);
                         ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;
@@ -603,11 +651,42 @@ ON CONFLICT DO NOTHING;
                         ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;
                         ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;
                         ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;
+
+                        ALTER TABLE ""Suppliers"" DROP COLUMN IF EXISTS ""CategoryId"";
+                        ALTER TABLE ""Suppliers"" DROP COLUMN IF EXISTS ""CategoryCode"";
+                        ALTER TABLE ""SupplierDeliveryConfigs"" DROP COLUMN IF EXISTS ""LeadTimeHours"";
+                        ALTER TABLE ""SupplierDeliveryConfigs"" DROP COLUMN IF EXISTS ""LeadTimeDays"";
+                        DROP TABLE IF EXISTS ""SupplierCategories"" CASCADE;
                         DROP TABLE IF EXISTS ""ProductCombos"";
                         DROP INDEX IF EXISTS ""IX_Products_TenantID_ProductCode"";
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_TenantID_ProductCode"" ON ""Products"" (""TenantID"", ""ProductCode"") WHERE ""IsDeleted"" = false;
                         DROP INDEX IF EXISTS ""IX_Products_Barcode"";
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_Barcode"" ON ""Products"" (""Barcode"") WHERE ""IsDeleted"" = false AND ""Barcode"" IS NOT NULL;
+                        CREATE TABLE IF NOT EXISTS ""ProductPriceHistories"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" character varying(50) NOT NULL,
+                            ""ProductId"" uuid NOT NULL,
+                            ""BranchId"" uuid NULL,
+                            ""ProductUnitId"" uuid NULL,
+                            ""PriceScope"" character varying(20) NOT NULL DEFAULT 'MASTER',
+                            ""PriceType"" character varying(20) NOT NULL DEFAULT 'SELLING_PRICE',
+                            ""OldPrice"" numeric(18,2) NOT NULL,
+                            ""NewPrice"" numeric(18,2) NOT NULL,
+                            ""CostPriceSnapshot"" numeric(18,2) NULL,
+                            ""IsBelowCost"" boolean NOT NULL DEFAULT false,
+                            ""ManagerApprovedBy"" character varying(100) NULL,
+                            ""ManagerApprovalReason"" character varying(255) NULL,
+                            ""ChangedByUserId"" character varying(50) NOT NULL,
+                            ""ChangedByUserName"" character varying(100) NOT NULL,
+                            ""Reason"" character varying(255) NOT NULL DEFAULT 'Điều chỉnh giá bán',
+                            ""CreatedBy"" uuid NULL,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone NULL,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+                        CREATE INDEX IF NOT EXISTS ""IX_ProductPriceHistories_Tenant_Product"" ON ""ProductPriceHistories"" (""TenantId"", ""ProductId"", ""CreatedAt"" DESC);
+                        CREATE INDEX IF NOT EXISTS ""IX_ProductPriceHistories_Tenant_Branch"" ON ""ProductPriceHistories"" (""TenantId"", ""BranchId"");
+
                         ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceDescriptor"" text;
                         ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceImageUrls"" text;
                         ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceRegisteredAt"" timestamp without time zone;
@@ -3857,23 +3936,13 @@ ON CONFLICT DO NOTHING;
 
                 await context.SaveChangesAsync(ct);
 
-                // Cấu hình Delivery Config cho các NCC
+                // Cấu hình Delivery Config cho các NCC (lưu trực tiếp trên Supplier)
                 var allSups = new[] { supAcecook, supMasan, supOrion, supUnilever };
                 foreach (var sup in allSups)
                 {
-                    if (!await context.SupplierDeliveryConfigs.IgnoreQueryFilters().AnyAsync(dc => dc.SupplierId == sup.Id, ct))
-                    {
-                        await context.SupplierDeliveryConfigs.AddAsync(new SupplierDeliveryConfig
-                        {
-                            TenantId = DefaultTenantId,
-                            SupplierId = sup.Id,
-                            LeadTimeHours = 24,
-                            LeadTimeDays = 1,
-                            CutoffTime = "17:00",
-                            DeliveryWeekdaysMask = 127,
-                            DeliveryDaysJson = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]"
-                        }, ct);
-                    }
+                    sup.CutoffTime = "17:00";
+                    sup.DeliveryWeekdaysMask = 127;
+                    sup.DeliveryDaysJson = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]";
                 }
 
                 // Lấy các Chi nhánh
@@ -4309,9 +4378,6 @@ ON CONFLICT DO NOTHING;
 
             var misalignedSba = await context.SupplierBranchAssignments.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId).ToListAsync(ct);
             foreach (var s in misalignedSba) { s.TenantId = DefaultTenantId; }
-
-            var misalignedSdc = await context.SupplierDeliveryConfigs.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId).ToListAsync(ct);
-            foreach (var s in misalignedSdc) { s.TenantId = DefaultTenantId; }
 
             await context.SaveChangesAsync(ct);
 

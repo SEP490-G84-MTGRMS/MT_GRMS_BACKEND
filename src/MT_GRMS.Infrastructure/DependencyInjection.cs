@@ -83,6 +83,7 @@ public static class DependencyInjection
         services.AddScoped<IOrderRepository, OrderRepository>();
         services.AddScoped<Application.PosShifts.IShiftRepository, ShiftRepository>();
         services.AddScoped<IProductRepository, ProductRepository>();
+        services.AddScoped<IProductPriceHistoryRepository, ProductPriceHistoryRepository>();
         services.AddScoped<ICategoryRepository, CategoryRepository>();
         services.AddScoped<IProductUnitRepository, ProductUnitRepository>();
         services.AddScoped<IBatchRepository, BatchRepository>();

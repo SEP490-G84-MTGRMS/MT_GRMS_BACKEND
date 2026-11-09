@@ -24,9 +24,19 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.Property(x => x.PaymentStatus).HasMaxLength(30).HasDefaultValue("PAID");
         builder.Property(x => x.ShiftId).HasColumnName("ShiftID");
         builder.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("Completed");
+        builder.Property(x => x.Note).HasMaxLength(1000);
+        builder.Property(x => x.AppliedPromotionId);
+        builder.Property(x => x.AppliedPromotionSummary).HasMaxLength(300);
+        builder.Property(x => x.PromotionDiscountAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
+        builder.Property(x => x.AppliedVoucherCode).HasMaxLength(50);
+        builder.Property(x => x.VoucherDiscountAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
+        builder.Property(x => x.PointsRedeemed).HasDefaultValue(0);
+        builder.Property(x => x.PointsDiscountAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
 
         builder.HasIndex(x => new { x.TenantId, x.OrderCode }).IsUnique();
         builder.HasIndex(x => x.ShiftId);
+        builder.HasIndex(x => x.AppliedPromotionId);
+        builder.HasIndex(x => x.AppliedVoucherCode);
 
         builder.HasOne(x => x.Shift)
             .WithMany()

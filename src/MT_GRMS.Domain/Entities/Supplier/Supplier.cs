@@ -11,10 +11,6 @@ public class Supplier : BaseTenantEntity
     public string? TradeName { get; set; }
     public SupplierType SupplierType { get; set; } = SupplierType.Goods;
 
-    public Guid? CategoryId { get; set; }
-    public SupplierCategory? Category { get; set; }
-    public string CategoryCode { get; set; } = "FRESH";
-
     public string ContactPerson { get; set; } = string.Empty;
     public string Phone { get; set; } = string.Empty;
     [NotMapped]
@@ -50,7 +46,16 @@ public class Supplier : BaseTenantEntity
     [NotMapped]
     public string? Notes { get => Note; set => Note = value; }
 
-    public SupplierDeliveryConfig? DeliveryConfig { get; set; }
+    // Delivery configuration properties (consolidated from SupplierDeliveryConfigs)
+    public int CutoffDayOffset { get; set; } = 1;
+    public string CutoffTime { get; set; } = "17:00";
+    public int DeliveryWeekdaysMask { get; set; } = 127; // 7 days (binary 1111111)
+    public string DeliveryDaysJson { get; set; } = "[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]";
+    public int MinOrderQuantity { get; set; } = 0;
+    public bool AllowUrgent { get; set; } = false;
+    public int UrgentLeadTimeHours { get; set; } = 4;
+    public decimal UrgentFeePercent { get; set; } = 0;
+
     public ICollection<SupplierAPLedger> APLedgers { get; set; } = new List<SupplierAPLedger>();
     public ICollection<SupplierBlackoutDate> BlackoutDates { get; set; } = new List<SupplierBlackoutDate>();
     public ICollection<SupplierBranchAssignment> BranchAssignments { get; set; } = new List<SupplierBranchAssignment>();

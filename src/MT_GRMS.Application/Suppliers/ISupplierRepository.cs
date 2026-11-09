@@ -46,10 +46,8 @@ public interface ISupplierRepository : IRepository<Supplier>
         int pageSize,
         CancellationToken cancellationToken = default);
 
-    Task<SupplierDeliveryConfig?> GetDeliveryConfigAsync(Guid supplierId, CancellationToken cancellationToken = default);
-    Task AddDeliveryConfigAsync(SupplierDeliveryConfig config, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default);
-    Task ReplaceBlackoutDatesAsync(Guid supplierId, Guid configId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default);
+    Task ReplaceBlackoutDatesAsync(Guid supplierId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default);
 
     // Supplier Product Management (REQ-SP01 đến REQ-SP06)
     Task<SupplierProduct?> GetSupplierProductAsync(Guid supplierId, Guid productId, CancellationToken cancellationToken = default);
@@ -97,6 +95,8 @@ public interface ISupplierRepository : IRepository<Supplier>
     // Auto-sync branch products
     Task<IReadOnlyList<Guid>> GetActiveBranchIdsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SupplierProduct>> GetActiveSupplierProductsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default);
+    Task<bool> BranchProductExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default);
+    Task AddBranchProductAsync(MT_GRMS.Domain.Entities.Catalog.BranchProduct branchProduct, CancellationToken cancellationToken = default);
     Task<bool> BranchStockExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default);
     Task AddBranchStockAsync(MT_GRMS.Domain.Entities.Inventory.BranchStock branchStock, CancellationToken cancellationToken = default);
 }

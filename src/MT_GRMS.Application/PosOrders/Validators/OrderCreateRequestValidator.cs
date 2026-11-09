@@ -19,7 +19,9 @@ public class OrderCreateRequestValidator : AbstractValidator<OrderCreateRequest>
             .NotNull()
             .WithMessage("Giỏ hàng không được để trống.")
             .Must(items => items != null && items.Count > 0)
-            .WithMessage("Giỏ hàng phải có ít nhất 1 mặt hàng.");
+            .WithMessage("Giỏ hàng phải có ít nhất 1 mặt hàng.")
+            .Must(items => items == null || items.Count == 0 || items.Any(i => !i.IsGift))
+            .WithMessage("Đơn hàng bắt buộc phải có ít nhất 1 mặt hàng mua trả tiền (không thể chỉ gồm quà tặng khuyến mãi).");
 
         RuleForEach(x => x.Items).ChildRules(item =>
         {
@@ -50,5 +52,20 @@ public class OrderCreateRequestValidator : AbstractValidator<OrderCreateRequest>
             .GreaterThanOrEqualTo(0)
             .When(x => x.CashTendered.HasValue)
             .WithMessage("Số tiền khách đưa không được âm.");
+
+        RuleFor(x => x.PromotionDiscountAmount)
+            .GreaterThanOrEqualTo(0)
+            .When(x => x.PromotionDiscountAmount.HasValue)
+            .WithMessage("Tiền giảm khuyến mãi không được âm.");
+
+        RuleFor(x => x.VoucherDiscountAmount)
+            .GreaterThanOrEqualTo(0)
+            .When(x => x.VoucherDiscountAmount.HasValue)
+            .WithMessage("Tiền giảm voucher không được âm.");
+
+        RuleFor(x => x.PointsDiscountAmount)
+            .GreaterThanOrEqualTo(0)
+            .When(x => x.PointsDiscountAmount.HasValue)
+            .WithMessage("Tiền quy đổi điểm thưởng không được âm.");
     }
 }

@@ -4,9 +4,6 @@ namespace MT_GRMS.Domain.Entities.Supplier;
 
 public class SupplierBlackoutDate : BaseTenantEntity
 {
-    public Guid? SupplierDeliveryConfigId { get; set; }
-    public SupplierDeliveryConfig? SupplierDeliveryConfig { get; set; }
-
     public Guid SupplierId { get; set; }
     public Supplier? Supplier { get; set; }
 

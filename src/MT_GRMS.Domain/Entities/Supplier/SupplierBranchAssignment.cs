@@ -17,7 +17,7 @@ public class SupplierBranchAssignment : BaseTenantEntity
 
     /// <summary>
     /// Override ngày giao theo thứ cho cặp NCC×cửa hàng (JSON ["Mon","Wed",...]).
-    /// Null/empty → dùng base từ SupplierDeliveryConfig.
+    /// Null/empty → dùng base từ Supplier.
     /// </summary>
     public string? DeliveryDaysJson { get; set; }
 

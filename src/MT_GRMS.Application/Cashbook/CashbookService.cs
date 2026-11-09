@@ -384,37 +384,88 @@ public class CashbookService : ICashbookService
         return safe;
     }
 
+    public async Task<FinanceAccount> GetOrCreateBankAccountAsync(
+        Guid? branchId = null,
+        string? bankName = null,
+        string? accountNumber = null,
+        string? accountHolderName = null,
+        CancellationToken ct = default)
+    {
+        var existingBanks = await _accountRepo.FindAsync(b => b.AccountType == FinanceAccountType.Bank && !b.IsDeleted, ct);
+        var matchedBank = existingBanks
+            .Where(b => b.IsActive && (!branchId.HasValue || !b.BranchId.HasValue || b.BranchId == branchId.Value))
+            .FirstOrDefault()
+            ?? existingBanks.FirstOrDefault(b => b.IsActive)
+            ?? existingBanks.FirstOrDefault();
+
+        if (matchedBank != null)
+        {
+            if (!matchedBank.IsActive)
+            {
+                matchedBank.IsActive = true;
+                _accountRepo.Update(matchedBank);
+                await _unitOfWork.SaveChangesAsync(ct);
+            }
+            return matchedBank;
+        }
+
+        var resolvedName = string.IsNullOrWhiteSpace(bankName) ? "Tài khoản Ngân hàng cửa hàng" : bankName.Trim();
+        var bank = new FinanceAccount
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId ?? string.Empty,
+            BranchId = null,
+            AccountType = FinanceAccountType.Bank,
+            AccountName = resolvedName,
+            BankName = resolvedName,
+            AccountNumber = string.IsNullOrWhiteSpace(accountNumber) ? null : accountNumber.Trim(),
+            AccountHolderName = string.IsNullOrWhiteSpace(accountHolderName) ? "CHỦ HỘ KINH DOANH" : accountHolderName.Trim(),
+            CurrentBalance = 0m,
+            IsActive = true
+        };
+
+        await _accountRepo.AddAsync(bank, ct);
+        await _unitOfWork.SaveChangesAsync(ct);
+        return bank;
+    }
+
     public async Task<List<CashAccountResponse>> GetAccountsAsync(Guid? branchId = null, CancellationToken ct = default)
     {
         var accounts = await _accountRepo.GetAllAsync(ct);
         var defaultBranchId = accounts.FirstOrDefault(a => a.BranchId.HasValue)?.BranchId ?? branchId ?? Guid.NewGuid();
+        var currentTenantId = _tenantContext.CurrentTenantId ?? string.Empty;
 
         if (accounts.Count == 0)
         {
             var initTill = new FinanceAccount
             {
+                Id = Guid.NewGuid(),
+                TenantId = currentTenantId,
                 BranchId = defaultBranchId,
                 AccountType = FinanceAccountType.Till,
                 AccountName = "Két tiền mặt quầy chính",
-                CurrentBalance = 12500000m,
+                CurrentBalance = 0m,
                 IsActive = true
             };
             var initSafe = new FinanceAccount
             {
+                Id = Guid.NewGuid(),
+                TenantId = currentTenantId,
                 BranchId = defaultBranchId,
                 AccountType = FinanceAccountType.Safe,
                 AccountName = "Két sắt chủ shop (Safe Deposit)",
-                CurrentBalance = 150000000m,
+                CurrentBalance = 0m,
                 IsActive = true
             };
             var initBank = new FinanceAccount
             {
+                Id = Guid.NewGuid(),
+                TenantId = currentTenantId,
                 AccountType = FinanceAccountType.Bank,
-                AccountName = "Vietcombank (VCB)",
-                BankName = "Vietcombank (VCB)",
-                AccountNumber = "0071001234567",
+                AccountName = "Tài khoản Ngân hàng cửa hàng",
+                BankName = "Tài khoản Ngân hàng cửa hàng",
                 AccountHolderName = "CHỦ HỘ KINH DOANH",
-                CurrentBalance = 145800000m,
+                CurrentBalance = 0m,
                 IsActive = true
             };
 
@@ -422,6 +473,11 @@ public class CashbookService : ICashbookService
             await _accountRepo.AddAsync(initSafe, ct);
             await _accountRepo.AddAsync(initBank, ct);
             await _unitOfWork.SaveChangesAsync(ct);
+            accounts = await _accountRepo.GetAllAsync(ct);
+        }
+        else if (!accounts.Any(a => a.AccountType == FinanceAccountType.Bank && !a.IsDeleted))
+        {
+            await GetOrCreateBankAccountAsync(branchId, ct: ct);
             accounts = await _accountRepo.GetAllAsync(ct);
         }
 

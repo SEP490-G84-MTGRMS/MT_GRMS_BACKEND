@@ -117,3 +117,22 @@ public class ProductQueryFilter
     public int PageIndex { get; set; } = 1;
     public int PageSize { get; set; } = 20;
 }
+
+public record ProductPriceHistoryDto(
+    Guid Id,
+    Guid ProductId,
+    Guid? BranchId,
+    string? BranchName,
+    string PriceScope,
+    string PriceType,
+    decimal OldPrice,
+    decimal NewPrice,
+    decimal? CostPriceSnapshot,
+    bool IsBelowCost,
+    string? ManagerApprovedBy,
+    string? ManagerApprovalReason,
+    string ChangedByUserId,
+    string ChangedByUserName,
+    string Reason,
+    DateTime CreatedAt
+);
