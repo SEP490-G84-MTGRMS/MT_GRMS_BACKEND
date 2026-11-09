@@ -10,6 +10,7 @@ public class CatalogService : ICatalogService
 {
     private readonly IProductRepository _productRepository;
     private readonly ICategoryRepository _categoryRepository;
+    private readonly IProductPriceHistoryRepository? _priceHistoryRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
 
@@ -18,9 +19,20 @@ public class CatalogService : ICatalogService
         ICategoryRepository categoryRepository,
         IUnitOfWork unitOfWork,
         ITenantContext tenantContext)
+        : this(productRepository, categoryRepository, null, unitOfWork, tenantContext)
+    {
+    }
+
+    public CatalogService(
+        IProductRepository productRepository,
+        ICategoryRepository categoryRepository,
+        IProductPriceHistoryRepository? priceHistoryRepository,
+        IUnitOfWork unitOfWork,
+        ITenantContext tenantContext)
     {
         _productRepository = productRepository;
         _categoryRepository = categoryRepository;
+        _priceHistoryRepository = priceHistoryRepository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
     }
@@ -241,6 +253,37 @@ public class CatalogService : ICatalogService
             product.Barcode = null;
         }
 
+        var oldPrice = product.SellingPrice;
+        var newPrice = request.SellingPrice;
+        if (oldPrice != newPrice)
+        {
+            var costSnapshot = request.CostPrice ?? product.CostPrice;
+            var isBelowCost = costSnapshot.HasValue && newPrice < costSnapshot.Value;
+            var history = new ProductPriceHistory
+            {
+                Id = Guid.NewGuid(),
+                TenantId = _tenantContext.CurrentTenantId,
+                ProductId = product.Id,
+                BranchId = null,
+                PriceScope = "MASTER",
+                PriceType = "SELLING_PRICE",
+                OldPrice = oldPrice,
+                NewPrice = newPrice,
+                CostPriceSnapshot = costSnapshot,
+                IsBelowCost = isBelowCost,
+                ManagerApprovedBy = isBelowCost ? (_tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "STORE_OWNER") : null,
+                ManagerApprovalReason = isBelowCost ? "Xác nhận bán dưới giá vốn" : null,
+                ChangedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM",
+                ChangedByUserName = !string.IsNullOrEmpty(_tenantContext.CurrentRole) ? _tenantContext.CurrentRole : "Quản lý",
+                Reason = isBelowCost ? "Điều chỉnh giá bán (Dưới giá vốn)" : "Điều chỉnh giá bán",
+                CreatedAt = DateTime.UtcNow
+            };
+            if (_priceHistoryRepository != null)
+            {
+                await _priceHistoryRepository.AddAsync(history, cancellationToken);
+            }
+        }
+
         product.Name = request.Name.Trim();
         product.CategoryId = request.CategoryId;
         product.Category = category;
@@ -319,6 +362,30 @@ public class CatalogService : ICatalogService
         var itemIds = items.Select(x => x.Id).ToList();
         var productIdsWithOrders = await _productRepository.GetProductIdsWithOrdersAsync(itemIds, cancellationToken);
         return items.Select(p => MapToResponse(p, canSeeCost, productIdsWithOrders.Contains(p.Id))).ToList();
+    }
+
+    public async Task<IReadOnlyList<ProductPriceHistoryDto>> GetPriceHistoryAsync(Guid productId, Guid? branchId = null, CancellationToken cancellationToken = default)
+    {
+        if (_priceHistoryRepository == null) return Array.Empty<ProductPriceHistoryDto>();
+        var list = await _priceHistoryRepository.GetByProductIdAsync(productId, branchId, cancellationToken);
+        return list.Select(h => new ProductPriceHistoryDto(
+            h.Id,
+            h.ProductId,
+            h.BranchId,
+            h.Branch?.Name,
+            h.PriceScope,
+            h.PriceType,
+            h.OldPrice,
+            h.NewPrice,
+            h.CostPriceSnapshot,
+            h.IsBelowCost,
+            h.ManagerApprovedBy,
+            h.ManagerApprovalReason,
+            h.ChangedByUserId,
+            h.ChangedByUserName,
+            h.Reason,
+            h.CreatedAt
+        )).ToList();
     }
 
     private bool CanViewCostPrice()

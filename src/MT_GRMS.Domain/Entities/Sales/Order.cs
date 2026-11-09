@@ -26,6 +26,14 @@ public class Order : BaseTenantEntity
     public string? CashierName { get; set; }
     public string? FulfilledByCashierName { get; set; }
     public DateTime? FulfilledAtUtc { get; set; }
+    public string? Note { get; set; }
+    public Guid? AppliedPromotionId { get; set; }
+    public string? AppliedPromotionSummary { get; set; }
+    public decimal PromotionDiscountAmount { get; set; } = 0.00m;
+    public string? AppliedVoucherCode { get; set; }
+    public decimal VoucherDiscountAmount { get; set; } = 0.00m;
+    public int PointsRedeemed { get; set; } = 0;
+    public decimal PointsDiscountAmount { get; set; } = 0.00m;
 
     // Backward compatibility aliases
     [NotMapped]
@@ -44,8 +52,6 @@ public class Order : BaseTenantEntity
         get => Enum.TryParse<PaymentStatus>(PaymentStatus, true, out var s) ? s : Enums.PaymentStatus.Paid;
         set => PaymentStatus = value.ToString().ToUpper();
     }
-    [NotMapped]
-    public string? Note { get; set; }
     [NotMapped]
     public ICollection<OrderDetail> Items { get => Details; set => Details = value; }
 

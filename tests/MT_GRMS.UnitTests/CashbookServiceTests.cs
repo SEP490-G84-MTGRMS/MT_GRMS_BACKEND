@@ -505,4 +505,30 @@ public class CashbookServiceTests
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _service.ReconcileCashAccountAsync(request));
     }
+
+    [Fact]
+    public async Task REQ_POS_BANK_01_GetAccountsAndReceiveBankTransfer_WhenTenantOnlyHasTill_ShouldAutoProvisionTenantBankAccount()
+    {
+        var branchId = Guid.NewGuid();
+        _tenantContext.SetContext("tenant_an_nhien_02", Guid.NewGuid(), branchId);
+
+        // Mở ca POS đã tạo sẵn 1 tài khoản Till (accounts.Count == 1, chưa có Bank)
+        var till = await _service.GetOrCreateTillAsync(branchId, "Két quầy chính");
+        _cashbookRepo.Accounts.Add(till);
+
+        var accounts = await _service.GetAccountsAsync(branchId);
+        var bankResp = accounts.FirstOrDefault(a => string.Equals(a.AccountType, "Bank", StringComparison.OrdinalIgnoreCase));
+
+        Assert.NotNull(bankResp);
+        Assert.NotEqual(Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559"), bankResp!.Id);
+
+        // Đồng bộ danh sách lock của FakeCashbookRepository như DbContext thật
+        foreach (var acc in _accountRepo.Items.Where(i => _cashbookRepo.Accounts.All(a => a.Id != i.Id)))
+        {
+            _cashbookRepo.Accounts.Add(acc);
+        }
+
+        var entry = await _service.ReceiveCashAsync(bankResp.Id, FinanceAccountType.Bank, 150_000m, "POS_SALE", Guid.NewGuid(), "HD-TEST-01", "Doanh thu bán hàng POS (BANK)");
+        Assert.Equal(150_000m, entry.BalanceAfter);
+    }
 }

@@ -495,7 +495,7 @@ public class ShiftService : IShiftService
     }
 
     public async Task<PendingMovementsSummaryResponse> GetPendingMovementsSummaryAsync(
-        Guid branchId,
+        Guid? branchId,
         CancellationToken cancellationToken = default)
     {
         var list = await _shiftRepository.GetPendingMovementsAsync(branchId, cancellationToken);

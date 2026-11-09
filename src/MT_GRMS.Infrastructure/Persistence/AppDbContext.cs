@@ -47,6 +47,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<ProductUnit> ProductUnits { get; set; } = null!;
     public virtual DbSet<BranchProduct> BranchProducts { get; set; } = null!;
     public virtual DbSet<BranchProductUnitPrice> BranchProductUnitPrices { get; set; } = null!;
+    public virtual DbSet<ProductPriceHistory> ProductPriceHistories { get; set; } = null!;
 
     // 3. Phân hệ Chi nhánh, Kho & Điều chuyển (tồn theo lô)
     public virtual DbSet<Branch> Branches { get; set; } = null!;

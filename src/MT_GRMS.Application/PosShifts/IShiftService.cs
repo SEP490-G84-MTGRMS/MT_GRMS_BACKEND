@@ -73,7 +73,7 @@ public interface IShiftService
     /// <summary>
     /// Lấy danh sách các phiếu chờ duyệt chi và phiếu rút két chờ chủ xác nhận.
     /// </summary>
-    Task<PendingMovementsSummaryResponse> GetPendingMovementsSummaryAsync(Guid branchId, CancellationToken cancellationToken = default);
+    Task<PendingMovementsSummaryResponse> GetPendingMovementsSummaryAsync(Guid? branchId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Đọc cấu hình hạn mức duyệt chi két của cửa hàng.

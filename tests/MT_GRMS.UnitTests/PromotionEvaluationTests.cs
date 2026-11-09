@@ -298,11 +298,225 @@ public class PromotionEvaluationTests
         Assert.Equal(60000, result.ItemDiscounts[0].DiscountAmount);
     }
 
+    [Fact]
+    public async Task REQ_POS_PROMO_02_EvaluateCart_MultiTierOrderDiscount_SelectsHighestQualifyingTier()
+    {
+        var tiersJson = "[{\"id\":\"t1\",\"tierLevel\":1,\"minOrderValue\":100000,\"discountType\":\"PERCENT\",\"discountValue\":5},{\"id\":\"t2\",\"tierLevel\":2,\"minOrderValue\":300000,\"discountType\":\"PERCENT\",\"discountValue\":10,\"maxDiscount\":50000}]";
+        _repo.Promotions.Add(new Promotion
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-test-1",
+            PromotionCode = "KM-TIERS",
+            PromotionName = "Khuyến mãi bậc thang cuối tuần",
+            Type = "ORDER_DISCOUNT",
+            DiscountValue = 5,
+            MinOrderValue = 100000,
+            Description = $"Ưu đãi theo mốc hóa đơn\n[TIERS_JSON]{tiersJson}[/TIERS_JSON]",
+            StartDate = DateTime.UtcNow.AddDays(-1),
+            EndDate = DateTime.UtcNow.AddDays(10),
+            IsActive = true
+        });
+
+        var request = new EvaluateCartRequest(
+            Items: new List<CartItemDto> { new(_productAId, "Gạo lứt huyết rồng", 350000, 1) },
+            SubTotal: 350000
+        );
+
+        var result = await _service.EvaluateCartAsync(request);
+
+        Assert.Equal(35000, result.TotalDiscountAmount);
+        Assert.Equal(315000, result.FinalAmount);
+        Assert.Single(result.AppliedPromotions);
+    }
+
+    [Fact]
+    public async Task REQ_POS_PROMO_02_EvaluateCart_ConflictingOrderDiscounts_SelectsSingleBestOfferWithoutStacking()
+    {
+        _repo.Promotions.Add(new Promotion
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-test-1",
+            PromotionCode = "KM-10PCT",
+            PromotionName = "Giảm 10% đơn từ 200k",
+            Type = "ORDER_DISCOUNT",
+            DiscountValue = 10,
+            MinOrderValue = 200000,
+            StartDate = DateTime.UtcNow.AddDays(-1),
+            EndDate = DateTime.UtcNow.AddDays(10),
+            IsActive = true
+        });
+
+        _repo.Promotions.Add(new Promotion
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-test-1",
+            PromotionCode = "KM-30K",
+            PromotionName = "Giảm ngay 30k đơn từ 200k",
+            Type = "FIXED_AMOUNT",
+            DiscountValue = 30000,
+            MinOrderValue = 200000,
+            StartDate = DateTime.UtcNow.AddDays(-1),
+            EndDate = DateTime.UtcNow.AddDays(10),
+            IsActive = true
+        });
+
+        var request = new EvaluateCartRequest(
+            Items: new List<CartItemDto> { new(_productAId, "Sữa bột", 200000, 1) },
+            SubTotal: 200000
+        );
+
+        var result = await _service.EvaluateCartAsync(request);
+
+        // Best-Offer: chỉ chọn KM-30K (30.000đ > 20.000đ), không cộng dồn thành 50.000đ
+        Assert.Equal(30000, result.TotalDiscountAmount);
+        Assert.Equal(170000, result.FinalAmount);
+        Assert.Single(result.AppliedPromotions);
+        Assert.Contains("Giảm ngay 30k", result.AppliedPromotions[0]);
+    }
+
+    [Fact]
+    public async Task REQ_ORD_BOGO_01_EvaluateCart_BuyXGetY_WithTiersJsonAndBuyProductId_AwardsExactGift()
+    {
+        var promoId = Guid.NewGuid();
+        var tiersJson = $"[{{\"id\":\"t1\",\"tierLevel\":1,\"buyProductId\":\"{_productAId}\",\"buyProductName\":\"Mì Hảo Hảo\",\"requiredQty\":2,\"giftProductId\":\"{_productBId}\",\"giftProductName\":\"Coca-Cola 330ml\",\"giftUnit\":\"Lon\",\"giftQty\":1}}]";
+
+        _repo.ProductPrices[_productBId] = 12000m;
+        _repo.Promotions.Add(new Promotion
+        {
+            Id = promoId,
+            TenantId = "tenant-test-1",
+            PromotionCode = "KM-BOGO-TIER",
+            PromotionName = "Mua 2 Mì tặng 1 Coca",
+            Type = "BUY_X_GET_Y",
+            Description = $"Mua 2 gói mì tặng 1 lon Coca\n[TIERS_JSON]{tiersJson}[/TIERS_JSON]",
+            StartDate = DateTime.UtcNow.AddDays(-1),
+            EndDate = DateTime.UtcNow.AddDays(10),
+            IsActive = true
+        });
+
+        // Case 1: Mua 4 sản phẩm B (không phải sản phẩm X cần mua) -> Không được tặng quà
+        var nonQualifyingRes = await _service.EvaluateCartAsync(new EvaluateCartRequest(
+            Items: new List<CartItemDto> { new(_productBId, "Coca-Cola 330ml", 12000, 4) },
+            SubTotal: 48000
+        ));
+        Assert.Empty(nonQualifyingRes.GiftItems);
+        Assert.Null(nonQualifyingRes.AppliedPromotionId);
+
+        // Case 2: Mua 5 sản phẩm A (5 / 2 = 2 suất quà) -> Tặng 2 lon Coca, giá trị quy đổi 24.000đ
+        var qualifyingRes = await _service.EvaluateCartAsync(new EvaluateCartRequest(
+            Items: new List<CartItemDto> { new(_productAId, "Mì Hảo Hảo", 5000, 5) },
+            SubTotal: 25000
+        ));
+        Assert.Single(qualifyingRes.GiftItems);
+        Assert.Equal(_productBId, qualifyingRes.GiftItems[0].ProductId);
+        Assert.Equal(2m, qualifyingRes.GiftItems[0].Quantity);
+        Assert.Equal("Lon", qualifyingRes.GiftItems[0].UnitName);
+        Assert.Equal(24000m, qualifyingRes.GiftItems[0].EquivalentValue);
+        Assert.Equal(promoId, qualifyingRes.AppliedPromotionId);
+    }
+
+    [Fact]
+    public async Task REQ_ORD_BOGO_01_EvaluateCart_BestOffer_BuyXGetYVsOrderDiscount_PicksHigherValueNoStacking()
+    {
+        var bogoPromoId = Guid.NewGuid();
+        var orderPromoId = Guid.NewGuid();
+
+        _repo.ProductPrices[_productBId] = 15000m;
+        _repo.Promotions.Add(new Promotion
+        {
+            Id = bogoPromoId,
+            TenantId = "tenant-test-1",
+            PromotionCode = "KM-BOGO-15K",
+            PromotionName = "Mua 2 A tặng 1 B (trị giá 15k)",
+            Type = "BUY_X_GET_Y",
+            StartDate = DateTime.UtcNow.AddDays(-1),
+            EndDate = DateTime.UtcNow.AddDays(10),
+            IsActive = true,
+            Conditions = new List<PromotionCondition>
+            {
+                new() { Id = Guid.NewGuid(), PromotionId = bogoPromoId, ProductId = _productAId, ProductRole = "BUY", MinQty = 2 },
+                new() { Id = Guid.NewGuid(), PromotionId = bogoPromoId, ProductId = _productBId, Product = new Product { Id = _productBId, Name = "Trà xanh 0 độ", SellingPrice = 15000m }, ProductRole = "GIFT", MinQty = 1 }
+            }
+        });
+
+        var orderDiscountPromo = new Promotion
+        {
+            Id = orderPromoId,
+            TenantId = "tenant-test-1",
+            PromotionCode = "KM-ORD-10K",
+            PromotionName = "Giảm hóa đơn 10k",
+            Type = "FIXED_AMOUNT",
+            DiscountValue = 10000m,
+            MinOrderValue = 50000m,
+            StartDate = DateTime.UtcNow.AddDays(-1),
+            EndDate = DateTime.UtcNow.AddDays(10),
+            IsActive = true
+        };
+        _repo.Promotions.Add(orderDiscountPromo);
+
+        var cart = new EvaluateCartRequest(
+            Items: new List<CartItemDto> { new(_productAId, "Sản phẩm A", 50000, 2) },
+            SubTotal: 100000
+        );
+
+        // Sub-case A: Quà tặng 15.000đ > Giảm tiền 10.000đ -> Chọn BOGO, không cộng dồn giảm tiền
+        var resWhenBogoWins = await _service.EvaluateCartAsync(cart);
+        Assert.Equal(bogoPromoId, resWhenBogoWins.AppliedPromotionId);
+        Assert.Single(resWhenBogoWins.GiftItems);
+        Assert.Equal(15000m, resWhenBogoWins.GiftItems[0].EquivalentValue);
+        Assert.Equal(0m, resWhenBogoWins.TotalDiscountAmount);
+        Assert.Equal(100000m, resWhenBogoWins.FinalAmount);
+        Assert.Single(resWhenBogoWins.AppliedPromotions);
+
+        // Sub-case B: Tăng giảm tiền hóa đơn lên 25.000đ (> 15.000đ) -> Chọn giảm tiền, không tặng quà
+        orderDiscountPromo.DiscountValue = 25000m;
+        var resWhenOrderDiscountWins = await _service.EvaluateCartAsync(cart);
+        Assert.Equal(orderPromoId, resWhenOrderDiscountWins.AppliedPromotionId);
+        Assert.Empty(resWhenOrderDiscountWins.GiftItems);
+        Assert.Equal(25000m, resWhenOrderDiscountWins.TotalDiscountAmount);
+        Assert.Equal(75000m, resWhenOrderDiscountWins.FinalAmount);
+        Assert.Single(resWhenOrderDiscountWins.AppliedPromotions);
+    }
+
+    [Fact]
+    public async Task REQ_ORD_BOGO_01_EvaluateCart_BuyXGetY_BudgetLimitClampsGiftQuantity()
+    {
+        var promoId = Guid.NewGuid();
+        _repo.Promotions.Add(new Promotion
+        {
+            Id = promoId,
+            TenantId = "tenant-test-1",
+            PromotionCode = "KM-BOGO-BUDGET",
+            PromotionName = "Mua 1 tặng 1 giới hạn ngân sách",
+            Type = "BUY_X_GET_Y",
+            BudgetLimit = 25000m,
+            TotalDiscountGiven = 10000m, // Ngân sách còn lại: 15.000đ -> chỉ đủ 1 phần quà 10.000đ
+            StartDate = DateTime.UtcNow.AddDays(-1),
+            EndDate = DateTime.UtcNow.AddDays(10),
+            IsActive = true,
+            Conditions = new List<PromotionCondition>
+            {
+                new() { Id = Guid.NewGuid(), PromotionId = promoId, ProductId = _productAId, ProductRole = "BUY", MinQty = 1 },
+                new() { Id = Guid.NewGuid(), PromotionId = promoId, ProductId = _productBId, Product = new Product { Id = _productBId, Name = "Bánh Oreo", SellingPrice = 10000m }, ProductRole = "GIFT", MinQty = 1 }
+            }
+        });
+
+        var result = await _service.EvaluateCartAsync(new EvaluateCartRequest(
+            Items: new List<CartItemDto> { new(_productAId, "Sữa tươi", 30000, 3) },
+            SubTotal: 90000
+        ));
+
+        Assert.Single(result.GiftItems);
+        Assert.Equal(1m, result.GiftItems[0].Quantity);
+        Assert.Equal(10000m, result.GiftItems[0].EquivalentValue);
+    }
+
     #region Fakes
     private class FakePromotionRepository : IPromotionRepository
     {
         public List<Promotion> Promotions { get; } = new();
         public List<VoucherCode> VoucherCodes { get; } = new();
+        public Dictionary<Guid, decimal> ProductPrices { get; } = new();
 
         public Task<Promotion?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
             => Task.FromResult(Promotions.FirstOrDefault(p => p.Id == id && !p.IsDeleted));
@@ -352,6 +566,15 @@ public class PromotionEvaluationTests
 
         public Task<bool> RedeemVoucherCodeAtomicAsync(string code, Guid orderId, string orderCode, Guid? customerId, string? customerName, string? customerPhone, CancellationToken cancellationToken = default)
             => Task.FromResult(true);
+
+        public Task<Dictionary<Guid, decimal>> GetProductSellingPricesAsync(IEnumerable<Guid> productIds, CancellationToken cancellationToken = default)
+        {
+            var ids = productIds.ToHashSet();
+            var result = ProductPrices
+                .Where(kv => ids.Contains(kv.Key))
+                .ToDictionary(kv => kv.Key, kv => kv.Value);
+            return Task.FromResult(result);
+        }
 
         public Task<IReadOnlyList<Promotion>> GetAllAsync(CancellationToken cancellationToken = default) => Task.FromResult((IReadOnlyList<Promotion>)Promotions);
         public Task<IReadOnlyList<Promotion>> FindAsync(Expression<Func<Promotion, bool>> predicate, CancellationToken cancellationToken = default) => Task.FromResult((IReadOnlyList<Promotion>)Promotions.Where(predicate.Compile()).ToList());

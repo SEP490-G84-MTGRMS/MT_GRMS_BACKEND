@@ -379,6 +379,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""CashierName"" character varying(150);
                         ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""FulfilledByCashierName"" character varying(150);
                         ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""FulfilledAtUtc"" timestamp without time zone;
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""Note"" character varying(1000);
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""AppliedPromotionId"" uuid;
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""AppliedPromotionSummary"" character varying(300);
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""PromotionDiscountAmount"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""AppliedVoucherCode"" character varying(50);
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""VoucherDiscountAmount"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""PointsRedeemed"" integer DEFAULT 0;
+                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""PointsDiscountAmount"" numeric(18,2) DEFAULT 0;
 
                         ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""BranchId"" uuid;
                         ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TillId"" uuid;
@@ -478,6 +486,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_TenantID_ProductCode"" ON ""Products"" (""TenantID"", ""ProductCode"") WHERE ""IsDeleted"" = false;
                         DROP INDEX IF EXISTS ""IX_Products_Barcode"";
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Products_Barcode"" ON ""Products"" (""Barcode"") WHERE ""IsDeleted"" = false AND ""Barcode"" IS NOT NULL;
+                        CREATE TABLE IF NOT EXISTS ""ProductPriceHistories"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" character varying(50) NOT NULL,
+                            ""ProductId"" uuid NOT NULL,
+                            ""BranchId"" uuid NULL,
+                            ""ProductUnitId"" uuid NULL,
+                            ""PriceScope"" character varying(20) NOT NULL DEFAULT 'MASTER',
+                            ""PriceType"" character varying(20) NOT NULL DEFAULT 'SELLING_PRICE',
+                            ""OldPrice"" numeric(18,2) NOT NULL,
+                            ""NewPrice"" numeric(18,2) NOT NULL,
+                            ""CostPriceSnapshot"" numeric(18,2) NULL,
+                            ""IsBelowCost"" boolean NOT NULL DEFAULT false,
+                            ""ManagerApprovedBy"" character varying(100) NULL,
+                            ""ManagerApprovalReason"" character varying(255) NULL,
+                            ""ChangedByUserId"" character varying(50) NOT NULL,
+                            ""ChangedByUserName"" character varying(100) NOT NULL,
+                            ""Reason"" character varying(255) NOT NULL DEFAULT 'Điều chỉnh giá bán',
+                            ""CreatedBy"" uuid NULL,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone NULL,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+                        CREATE INDEX IF NOT EXISTS ""IX_ProductPriceHistories_Tenant_Product"" ON ""ProductPriceHistories"" (""TenantId"", ""ProductId"", ""CreatedAt"" DESC);
+                        CREATE INDEX IF NOT EXISTS ""IX_ProductPriceHistories_Tenant_Branch"" ON ""ProductPriceHistories"" (""TenantId"", ""BranchId"");
+
                         ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceDescriptor"" text;
                         ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceImageUrls"" text;
                         ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceRegisteredAt"" timestamp without time zone;
