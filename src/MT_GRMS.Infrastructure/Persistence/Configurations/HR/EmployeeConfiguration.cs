@@ -27,6 +27,9 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
         builder.Property(x => x.StartDate);
         builder.Property(x => x.Note).HasMaxLength(500);
         builder.Property(x => x.AvatarUrl).HasMaxLength(255);
+        builder.Property(x => x.FaceDescriptor).HasColumnType("text");
+        builder.Property(x => x.FaceImageUrls).HasColumnType("text");
+        builder.Property(x => x.FaceRegisteredAt);
         builder.Property(x => x.OtWeekday).HasMaxLength(20);
         builder.Property(x => x.OtSunday).HasMaxLength(20);
         builder.Property(x => x.SalaryType)

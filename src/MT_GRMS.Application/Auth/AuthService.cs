@@ -8,6 +8,7 @@ using Microsoft.IdentityModel.Tokens;
 using MT_GRMS.Application.Auth.Dtos;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Application.Common.Interfaces;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
@@ -150,6 +151,21 @@ public class AuthService : IAuthService
             {
                 role = RoleConstants.StoreOwnerUpper;
             }
+        }
+
+        // Chuẩn hóa role về 3 role hệ thống hợp lệ
+        string role;
+        if (isAdmin || string.Equals(rawRole, SystemRoles.Admin, StringComparison.OrdinalIgnoreCase) || string.Equals(rawRole, "SUPER_ADMIN", StringComparison.OrdinalIgnoreCase))
+        {
+            role = SystemRoles.Admin;
+        }
+        else if (string.Equals(rawRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase) || string.Equals(rawRole, "OWNER", StringComparison.OrdinalIgnoreCase) || string.Equals(rawRole, "BRANCH_MANAGER", StringComparison.OrdinalIgnoreCase))
+        {
+            role = SystemRoles.StoreOwner;
+        }
+        else
+        {
+            role = SystemRoles.Staff;
         }
 
         // 4. Đăng nhập thành công với thông tin user từ database
