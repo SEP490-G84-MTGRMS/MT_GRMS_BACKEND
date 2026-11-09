@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations.Schema;
 using MT_GRMS.Domain.Common;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Domain.Entities.Identity;
 
@@ -44,6 +45,28 @@ public class User : BaseEntity<string>
     public string Username { get => UserName; set => UserName = value; }
     [NotMapped]
     public string Password { get => PasswordHash; set => PasswordHash = value; }
+
+    // Vai trò người dùng (Enum UserRole: Admin, StoreOwner, Staff)
+    [NotMapped]
+    public string Role
+    {
+        get => IsAdmin ? UserRoleNames.Admin : (TenantUsers.FirstOrDefault()?.Role ?? UserRoleNames.StoreOwner);
+        set
+        {
+            if (value?.Equals(UserRoleNames.Admin, StringComparison.OrdinalIgnoreCase) == true)
+            {
+                IsAdmin = true;
+            }
+            var tu = TenantUsers.FirstOrDefault();
+            if (tu != null)
+            {
+                tu.Role = value ?? UserRoleNames.Staff;
+            }
+        }
+    }
+
+    [NotMapped]
+    public UserRole UserRole => UserRoleNames.FromString(Role);
 
     // Navigations
     public ICollection<TenantUser> TenantUsers { get; set; } = new List<TenantUser>();

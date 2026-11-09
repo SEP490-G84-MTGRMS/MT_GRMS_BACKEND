@@ -194,12 +194,6 @@ public class UpdateSupplierDeliveryConfigCommandValidator : AbstractValidator<Up
 {
     public UpdateSupplierDeliveryConfigCommandValidator()
     {
-        RuleFor(x => x.LeadTimeHours)
-            .GreaterThanOrEqualTo(0).WithMessage("Thời gian chuẩn bị giao hàng (Lead Time) phải lớn hơn hoặc bằng 0.");
-
-        RuleFor(x => x.LeadTimeDays)
-            .InclusiveBetween(0, 30).WithMessage("Lead time (ngày) phải từ 0 đến 30 ngày.");
-
         RuleFor(x => x.CutoffDayOffset)
             .GreaterThanOrEqualTo(0).WithMessage("Cutoff day offset phải lớn hơn hoặc bằng 0.");
 

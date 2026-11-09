@@ -1,3 +1,5 @@
+using MT_GRMS.Domain.Enums;
+
 namespace MT_GRMS.Application.Auth.Dtos;
 
 public record LoginRequest(
@@ -25,6 +27,7 @@ public record UserInfo(
 )
 {
     public string Role => RoleName;
+    public UserRole UserRole => UserRoleNames.FromString(RoleName);
 }
 
 public record RefreshTokenRequest(

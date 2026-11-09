@@ -39,6 +39,10 @@ public class BranchService : IBranchService
             query.Keyword,
             query.BranchCode,
             query.Status,
+            query.BranchCodes,
+            query.BranchNames,
+            query.Addresses,
+            query.Phones,
             pageIndex,
             pageSize,
             cancellationToken);
@@ -65,6 +69,17 @@ public class BranchService : IBranchService
         return MapToDto(branch);
     }
 
+    public async Task<BranchDetailDto> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var detail = await _branchRepo.GetBranchDetailAsync(id, cancellationToken);
+        if (detail == null)
+        {
+            throw new NotFoundException("Chi nhánh", id);
+        }
+
+        return detail;
+    }
+
     public async Task<BranchQuotaDto> GetBranchQuotaAsync(CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId;
@@ -72,22 +87,39 @@ public class BranchService : IBranchService
             ? await _tenantRepo.GetByIdAsync(tenantId, cancellationToken)
             : (await _tenantRepo.GetPagedAsync(pageSize: 1, cancellationToken: cancellationToken)).Items.FirstOrDefault();
 
-        var usedBranches = await _branchRepo.CountActiveAsync(cancellationToken);
+        var usedBranches = await _branchRepo.CountTotalAsync(cancellationToken);
         var maxBranches = 1;
-        var planCode = tenant?.CurrentPlan ?? "FREE";
-        var planName = "Gói Cơ Bản (Miễn Phí)";
+        var planCode = tenant?.CurrentPlan ?? "STANDARD";
+        var planName = "Gói Thường (Cửa Hàng Độc Lập)";
 
         if (tenant != null && !string.IsNullOrWhiteSpace(tenant.CurrentPlan))
         {
             var plan = await _planRepo.GetByCodeAsync(tenant.CurrentPlan, cancellationToken);
             if (plan != null)
             {
-                maxBranches = plan.MaxBranches;
+                maxBranches = plan.MaxBranches + tenant.ExtraBranches;
                 planName = plan.PlanName;
             }
+            else
+            {
+                if (tenant.CurrentPlan.Equals("PRO", StringComparison.OrdinalIgnoreCase))
+                {
+                    maxBranches = 2 + tenant.ExtraBranches;
+                    planName = "Gói Pro (Chuỗi Cửa Hàng)";
+                }
+                else
+                {
+                    maxBranches = 1 + tenant.ExtraBranches;
+                    planName = "Gói Thường (Cửa Hàng Độc Lập)";
+                }
+            }
+        }
+        else if (tenant != null)
+        {
+            maxBranches = 1 + tenant.ExtraBranches;
         }
 
-        if (maxBranches <= 0) maxBranches = 10;
+        if (maxBranches <= 0) maxBranches = 1;
 
         return new BranchQuotaDto(
             UsedBranches: usedBranches,
@@ -130,7 +162,9 @@ public class BranchService : IBranchService
             Name = request.Name.Trim(),
             Address = request.Address?.Trim() ?? string.Empty,
             Phone = request.Phone?.Trim(),
+            Email = request.Email?.Trim(),
             ManagerName = request.ManagerName?.Trim(),
+            IsHeadquarter = request.IsHeadquarter,
             IsActive = true,
             CreatedAt = DateTime.UtcNow
         };
@@ -152,10 +186,24 @@ public class BranchService : IBranchService
             throw new NotFoundException("Chi nhánh", id);
         }
 
+        // Nếu đặt chi nhánh này làm Trụ sở chính, tự động gỡ cờ Trụ sở chính ở các chi nhánh khác
+        if (request.IsHeadquarter && !branch.IsHeadquarter)
+        {
+            var paged = await _branchRepo.GetPagedListAsync(null, null, null, null, null, null, null, 1, 100, cancellationToken);
+            foreach (var other in paged.Items.Where(b => b.Id != id && b.IsHeadquarter))
+            {
+                other.IsHeadquarter = false;
+                other.UpdatedAt = DateTime.UtcNow;
+                _branchRepo.Update(other);
+            }
+        }
+
         branch.Name = request.Name.Trim();
         branch.Address = request.Address?.Trim() ?? string.Empty;
         branch.Phone = request.Phone?.Trim();
+        branch.Email = request.Email?.Trim();
         branch.ManagerName = request.ManagerName?.Trim();
+        branch.IsHeadquarter = request.IsHeadquarter;
         branch.UpdatedAt = DateTime.UtcNow;
 
         _branchRepo.Update(branch);
@@ -172,6 +220,17 @@ public class BranchService : IBranchService
             throw new NotFoundException("Chi nhánh", id);
         }
 
+        // Kiểm tra hạn mức nếu kích hoạt lại chi nhánh
+        if (request.IsActive && !branch.IsActive)
+        {
+            var quota = await GetBranchQuotaAsync(cancellationToken);
+            if (quota.UsedBranches > quota.MaxBranches)
+            {
+                throw new BusinessException("QUOTA_EXCEEDED",
+                    $"Không thể kích hoạt chi nhánh '{branch.Name}'. Chuỗi cửa hàng của bạn hiện có {quota.UsedBranches}/{quota.MaxBranches} chi nhánh (đã vượt quá hạn mức gói {quota.CurrentPlanName}). Vui lòng nâng cấp gói cước.");
+            }
+        }
+
         branch.IsActive = request.IsActive;
         branch.UpdatedAt = DateTime.UtcNow;
 
@@ -179,6 +238,27 @@ public class BranchService : IBranchService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return MapToDto(branch);
+    }
+
+    public async Task DeleteBranchAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        var branch = await _branchRepo.GetByIdAsync(id, cancellationToken);
+        if (branch == null || branch.IsDeleted)
+        {
+            throw new NotFoundException("Chi nhánh", id);
+        }
+
+        if (branch.IsHeadquarter)
+        {
+            throw new BusinessException("CANNOT_DELETE_HEADQUARTER", "Không thể xóa chi nhánh chính (Trụ sở chính) của chuỗi cửa hàng. Vui lòng chỉ định chi nhánh khác làm trụ sở chính trước khi xóa.");
+        }
+
+        branch.IsDeleted = true;
+        branch.IsActive = false;
+        branch.UpdatedAt = DateTime.UtcNow;
+
+        _branchRepo.Update(branch);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
     private static BranchDto MapToDto(Branch branch)
@@ -190,7 +270,9 @@ public class BranchService : IBranchService
             Name = branch.Name,
             Address = branch.Address ?? string.Empty,
             Phone = branch.Phone,
+            Email = branch.Email,
             ManagerName = branch.ManagerName,
+            IsHeadquarter = branch.IsHeadquarter,
             Status = branch.Status,
             PendingOrdersCount = branch.PendingOrdersCount,
             LastOrderDate = branch.LastOrderDate,

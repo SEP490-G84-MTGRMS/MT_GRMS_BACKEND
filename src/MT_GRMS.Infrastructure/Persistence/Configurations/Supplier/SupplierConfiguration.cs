@@ -16,7 +16,6 @@ public class SupplierConfiguration : IEntityTypeConfiguration<Domain.Entities.Su
         builder.Property(x => x.Name).HasMaxLength(255).IsRequired();
         builder.Property(x => x.TradeName).HasMaxLength(255);
         builder.Property(x => x.SupplierType).HasConversion<int>().IsRequired();
-        builder.Property(x => x.CategoryCode).HasMaxLength(50).HasDefaultValue("FRESH");
 
         builder.Property(x => x.ContactPerson).HasMaxLength(150).IsRequired();
         builder.Property(x => x.Phone).HasMaxLength(30).IsRequired();
@@ -39,22 +38,22 @@ public class SupplierConfiguration : IEntityTypeConfiguration<Domain.Entities.Su
         builder.Property(x => x.AccountHolder).HasMaxLength(150);
         builder.Property(x => x.Note).HasMaxLength(1000);
 
+        // Delivery configuration properties
+        builder.Property(x => x.CutoffDayOffset).HasDefaultValue(1);
+        builder.Property(x => x.CutoffTime).HasMaxLength(10).HasDefaultValue("17:00");
+        builder.Property(x => x.DeliveryWeekdaysMask).HasDefaultValue(127);
+        builder.Property(x => x.DeliveryDaysJson).HasMaxLength(500).HasDefaultValue("[\"Mon\",\"Tue\",\"Wed\",\"Thu\",\"Fri\",\"Sat\"]");
+        builder.Property(x => x.MinOrderQuantity).HasDefaultValue(0);
+        builder.Property(x => x.AllowUrgent).HasDefaultValue(false);
+        builder.Property(x => x.UrgentLeadTimeHours).HasDefaultValue(4);
+        builder.Property(x => x.UrgentFeePercent).HasColumnType("decimal(5,2)").HasDefaultValue(0);
+
         // Indexes
         builder.HasIndex(x => new { x.TenantId, x.Code }).IsUnique();
         builder.HasIndex(x => new { x.TenantId, x.Phone });
         builder.HasIndex(x => new { x.TenantId, x.Status });
 
         // Relationships
-        builder.HasOne(x => x.Category)
-            .WithMany(c => c.Suppliers)
-            .HasForeignKey(x => x.CategoryId)
-            .OnDelete(DeleteBehavior.SetNull);
-
-        builder.HasOne(x => x.DeliveryConfig)
-            .WithOne(d => d.Supplier)
-            .HasForeignKey<SupplierDeliveryConfig>(d => d.SupplierId)
-            .OnDelete(DeleteBehavior.Cascade);
-
         builder.HasMany(x => x.APLedgers)
             .WithOne(a => a.Supplier)
             .HasForeignKey(a => a.SupplierId)

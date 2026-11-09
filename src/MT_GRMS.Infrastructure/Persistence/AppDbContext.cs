@@ -57,10 +57,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<Batch> Batches { get; set; } = null!;
     public virtual DbSet<StockOnHand> StockOnHands { get; set; } = null!;
 
-    // 4. Phân hệ Nhà cung cấp, Mua hàng PO & Nhập kho GRN (10 bảng)
-    public virtual DbSet<SupplierCategory> SupplierCategories { get; set; } = null!;
+    // 4. Phân hệ Nhà cung cấp, Mua hàng PO & Nhập kho GRN
     public virtual DbSet<Domain.Entities.Supplier.Supplier> Suppliers { get; set; } = null!;
-    public virtual DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs { get; set; } = null!;
     public virtual DbSet<SupplierBlackoutDate> SupplierBlackoutDates { get; set; } = null!;
     public virtual DbSet<SupplierAPLedger> SupplierAPLedgers { get; set; } = null!;
     public virtual DbSet<SupplierProduct> SupplierProducts { get; set; } = null!;
@@ -86,6 +84,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<LoyaltySetting> LoyaltySettings { get; set; } = null!;
 
     // 6. Phân hệ Tài chính, Sổ quỹ & Chi phí (FE-07, FE-17) - Đã hợp nhất FinanceAccounts
+    public virtual DbSet<CashbookTransaction> CashbookTransactions { get; set; } = null!;
     public virtual DbSet<CashbookEntry> CashbookEntries { get; set; } = null!;
     public virtual DbSet<FinanceAccount> FinanceAccounts { get; set; } = null!;
     public virtual DbSet<CashInTransit> CashInTransits { get; set; } = null!;
@@ -110,6 +109,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<Employee> Employees { get; set; } = null!;
     public virtual DbSet<Payslip> Payslips { get; set; } = null!;
     public virtual DbSet<EmployeeSchedule> EmployeeSchedules { get; set; } = null!;
+    public virtual DbSet<ScheduleApprovalRequest> ScheduleApprovalRequests { get; set; } = null!;
     public virtual DbSet<EmployeeAllowance> EmployeeAllowances { get; set; } = null!;
     public virtual DbSet<ShiftConfig> ShiftConfigs { get; set; } = null!;
     public virtual DbSet<BranchAttendancePolicy> BranchAttendancePolicies { get; set; } = null!;

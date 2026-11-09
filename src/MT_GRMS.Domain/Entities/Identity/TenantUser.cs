@@ -1,4 +1,6 @@
+using System.ComponentModel.DataAnnotations.Schema;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Domain.Entities.Identity;
 
@@ -9,9 +11,16 @@ public class TenantUser
 {
     public string TenantId { get; set; } = string.Empty;
     public string UserId { get; set; } = string.Empty;
-    public string Role { get; set; } = "STAFF";
+    public string Role { get; set; } = UserRoleNames.Staff;
     public bool IsActive { get; set; } = true;
     public DateTime AssignedAt { get; set; } = DateTime.UtcNow;
+
+    [NotMapped]
+    public UserRole UserRole
+    {
+        get => UserRoleNames.FromString(Role);
+        set => Role = value.ToStringRole();
+    }
 
     // Navigations
     public Tenant? Tenant { get; set; }

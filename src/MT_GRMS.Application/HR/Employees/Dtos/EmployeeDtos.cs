@@ -1,3 +1,5 @@
+using MT_GRMS.Domain.Constants;
+
 namespace MT_GRMS.Application.HR.Employees.Dtos;
 
 public record EmployeeAllowanceDto(string Name, decimal Amount, Guid? Id = null);
@@ -22,10 +24,12 @@ public record CreateEmployeeRequest(
     string? BankName = null,
     string? BankAccountHolder = null,
     string? AvatarUrl = null,
+    string? FaceDescriptor = null,
+    string? FaceImageUrls = null,
     string? UserId = null,
     string? UserName = null,
     string? Password = null,
-    string? Role = null
+    string? Role = SystemRoles.Staff
 );
 
 public record UpdateEmployeeRequest(
@@ -48,10 +52,12 @@ public record UpdateEmployeeRequest(
     string? BankName = null,
     string? BankAccountHolder = null,
     string? AvatarUrl = null,
+    string? FaceDescriptor = null,
+    string? FaceImageUrls = null,
     string? UserId = null,
     string? UserName = null,
     string? Password = null,
-    string? Role = null
+    string? Role = SystemRoles.Staff
 );
 
 public record UpdateEmployeeStatusRequest(
@@ -61,7 +67,7 @@ public record UpdateEmployeeStatusRequest(
 public record CreateIdentityAccountRequest(
     string Username,
     string Password,
-    string Role = "STAFF",
+    string Role = SystemRoles.Staff,
     string? DisplayName = null
 );
 
@@ -104,7 +110,10 @@ public record EmployeeResponse(
     string? BankName,
     string? BankAccountHolder,
     DateTime CreatedAt,
-    DateTime? UpdatedAt
+    DateTime? UpdatedAt,
+    string? FaceDescriptor = null,
+    string? FaceImageUrls = null,
+    DateTime? FaceRegisteredAt = null
 );
 
 public record EmployeeSummaryDto(
@@ -127,5 +136,6 @@ public record EmployeeSummaryDto(
     decimal DebtAmount,
     string? UserId,
     string? UserName,
-    DateTime CreatedAt
+    DateTime CreatedAt,
+    bool HasFaceId = false
 );

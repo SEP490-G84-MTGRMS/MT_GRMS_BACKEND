@@ -1,11 +1,14 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.AttendancePolicies.Dtos;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Api.Controllers;
 
+[Authorize(Roles = SystemRoles.AllStaffAndOwner)]
 [ApiController]
 [Route("api/attendance-policies")]
 public class BranchAttendancePoliciesController : BaseApiController
@@ -39,6 +42,7 @@ public class BranchAttendancePoliciesController : BaseApiController
     /// <summary>
     /// Thiết lập / Cập nhật chính sách chấm công cho chi nhánh (Upsert)
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPut("branch/{branchId:guid}")]
     public async Task<IActionResult> UpsertPolicy(
         Guid branchId,
@@ -63,6 +67,7 @@ public class BranchAttendancePoliciesController : BaseApiController
     /// <summary>
     /// Sao chép chính sách chấm công từ một chi nhánh nguồn sang danh sách các chi nhánh đích
     /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost("copy")]
     public async Task<IActionResult> CopyPolicy(
         [FromBody] CopyAttendancePolicyRequest request,

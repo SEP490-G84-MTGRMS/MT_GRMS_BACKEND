@@ -23,8 +23,6 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
     public async Task<Supplier?> GetByIdWithDetailsAsync(Guid id, CancellationToken cancellationToken = default)
     {
         return await _context.Suppliers
-            .Include(s => s.Category)
-            .Include(s => s.DeliveryConfig)
             .Include(s => s.BlackoutDates)
             .Include(s => s.BranchAssignments)
             .FirstOrDefaultAsync(s => s.Id == id, cancellationToken);
@@ -63,8 +61,11 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         string? category = null,
         CancellationToken cancellationToken = default)
     {
+        // categoryId / category giữ signature tương thích API cũ nhưng không còn lọc (đã bỏ SupplierCategories)
+        _ = categoryId;
+        _ = category;
+
         var query = _context.Suppliers
-            .Include(s => s.Category)
             .Include(s => s.BranchAssignments)
             .AsNoTracking();
 
@@ -168,21 +169,13 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             query = query.Where(s => s.Status == status.Value);
         }
 
-        if (categoryId.HasValue)
-        {
-            query = query.Where(s => s.CategoryId == categoryId.Value);
-        }
-
-        if (!string.IsNullOrWhiteSpace(category))
-        {
-            var catTerm = category.Trim().ToLower();
-            query = query.Where(s =>
-                (s.CategoryCode != null && s.CategoryCode.ToLower().Contains(catTerm)) ||
-                (s.Category != null && (s.Category.Code.ToLower().Contains(catTerm) || s.Category.Name.ToLower().Contains(catTerm))));
-        }
-
-        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
-        var isStoreOwner = string.IsNullOrEmpty(role) || role is "STORE_OWNER" or "ADMIN";
+        var role = (_tenantContext.CurrentRole ?? string.Empty)
+            .Trim()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .ToUpperInvariant();
+        var isStoreOwner = string.IsNullOrEmpty(role) || role is "STOREOWNER" or "ADMIN";
         if (!isStoreOwner && _tenantContext.CurrentBranchId is Guid branchId)
         {
             query = query.Where(s =>
@@ -210,8 +203,13 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         if (string.IsNullOrWhiteSpace(query)) return result;
 
         var term = query.Trim().ToLower();
-        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
-        var isStoreOwner = string.IsNullOrEmpty(role) || role is "STORE_OWNER" or "ADMIN";
+        var role = (_tenantContext.CurrentRole ?? string.Empty)
+            .Trim()
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .Replace("_", string.Empty, StringComparison.Ordinal)
+            .Replace(" ", string.Empty, StringComparison.Ordinal)
+            .ToUpperInvariant();
+        var isStoreOwner = string.IsNullOrEmpty(role) || role is "STOREOWNER" or "ADMIN";
         var branchId = _tenantContext.CurrentBranchId;
 
         // Base Supplier query with branch isolation
@@ -343,18 +341,6 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         return (items, totalCount);
     }
 
-    public async Task<SupplierDeliveryConfig?> GetDeliveryConfigAsync(Guid supplierId, CancellationToken cancellationToken = default)
-    {
-        return await _context.SupplierDeliveryConfigs
-            .Include(c => c.BlackoutDates)
-            .FirstOrDefaultAsync(c => c.SupplierId == supplierId, cancellationToken);
-    }
-
-    public async Task AddDeliveryConfigAsync(SupplierDeliveryConfig config, CancellationToken cancellationToken = default)
-    {
-        await _context.SupplierDeliveryConfigs.AddAsync(config, cancellationToken);
-    }
-
     public async Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default)
     {
         return await _context.SupplierBlackoutDates
@@ -365,7 +351,6 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
 
     public async Task ReplaceBlackoutDatesAsync(
         Guid supplierId,
-        Guid configId,
         IEnumerable<SupplierBlackoutDate> blackoutDates,
         CancellationToken cancellationToken = default)
     {
@@ -377,7 +362,7 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
 
         foreach (var bo in blackoutDates)
         {
-            bo.SupplierDeliveryConfigId = configId;
+            bo.SupplierId = supplierId;
             await _context.SupplierBlackoutDates.AddAsync(bo, cancellationToken);
         }
     }
@@ -555,7 +540,6 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
     {
         var query = _context.SupplierBranchAssignments
             .Include(sba => sba.Supplier!)
-                .ThenInclude(s => s.DeliveryConfig)
             .Include(sba => sba.Branch)
             .AsNoTracking();
 
@@ -676,6 +660,17 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         return await _context.SupplierProducts
             .Where(sp => sp.SupplierId == supplierId && sp.Status == SupplierProductStatus.Active && !sp.IsDeleted)
             .ToListAsync(cancellationToken);
+    }
+
+    public async Task<bool> BranchProductExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
+    {
+        return await _context.BranchProducts
+            .AnyAsync(bp => bp.BranchId == branchId && bp.ProductId == productId && !bp.IsDeleted, cancellationToken);
+    }
+
+    public async Task AddBranchProductAsync(BranchProduct branchProduct, CancellationToken cancellationToken = default)
+    {
+        await _context.BranchProducts.AddAsync(branchProduct, cancellationToken);
     }
 
     public async Task<bool> BranchStockExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)

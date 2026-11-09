@@ -18,14 +18,6 @@ public class UpsertAttendancePolicyRequestValidator : AbstractValidator<UpsertAt
         RuleFor(x => x.EarlyLeaveThresholdMinutes)
             .GreaterThanOrEqualTo(0).WithMessage("Số phút tính về sớm không được âm.")
             .LessThanOrEqualTo(240).WithMessage("Số phút tính về sớm tối đa là 240 phút.");
-
-        RuleFor(x => x.OtBeforeShiftMinutes)
-            .GreaterThanOrEqualTo(0).WithMessage("Số phút tính làm thêm giờ trước ca không được âm.")
-            .LessThanOrEqualTo(360).WithMessage("Số phút tính làm thêm giờ trước ca tối đa là 360 phút.");
-
-        RuleFor(x => x.OtAfterShiftMinutes)
-            .GreaterThanOrEqualTo(0).WithMessage("Số phút tính làm thêm giờ sau ca không được âm.")
-            .LessThanOrEqualTo(360).WithMessage("Số phút tính làm thêm giờ sau ca tối đa là 360 phút.");
     }
 }
 

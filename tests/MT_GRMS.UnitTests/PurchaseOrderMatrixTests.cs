@@ -74,6 +74,47 @@ public class PurchaseOrderMatrixTests
     }
 
     [Fact]
+    public void OrderMatrixRules_MinimumLeadTime_BlocksToday_AllowsTomorrow()
+    {
+        var supplierId = _supplier1Id;
+        var config = new OrderMatrixSupplierDeliveryConfigDto
+        {
+            SupplierId = supplierId,
+            IsActive = true,
+            IsAssignedToBranch = true,
+            CutoffTime = "23:59",
+            CutoffDayOffset = 1,
+            ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 },
+            BlackoutDates = new List<string>()
+        };
+        var now = new DateTime(2026, 11, 8, 10, 30, 0);
+
+        var todayStatus = OrderMatrixRules.EvaluateDayStatus(supplierId, now.Date, config, now);
+        Assert.Equal(OrderMatrixRules.StatusSupplierOff, todayStatus.DeliveryDateStatus);
+        Assert.Equal("LEAD_TIME_VIOLATION", todayStatus.PrimaryReasonCode);
+        Assert.False(OrderMatrixRules.IsEditableStatus(todayStatus.DeliveryDateStatus));
+
+        var tomorrowStatus = OrderMatrixRules.EvaluateDayStatus(supplierId, now.Date.AddDays(1), config, now);
+        Assert.True(OrderMatrixRules.IsEditableStatus(tomorrowStatus.DeliveryDateStatus));
+        // offset=1 → cutoff ngày giao mai = hôm nay 23:59
+        Assert.Equal(new DateTime(2026, 11, 8, 23, 59, 0), tomorrowStatus.CutoffDateTime);
+    }
+
+    [Fact]
+    public void OrderMatrixRules_GetCutoffDateTime_UsesDayOffsetBeforeDelivery()
+    {
+        var delivery = new DateTime(2026, 11, 9);
+        var cutoffOffset1 = OrderMatrixRules.GetCutoffDateTime(delivery, "16:00", cutoffDayOffset: 1);
+        Assert.Equal(new DateTime(2026, 11, 8, 16, 0, 0), cutoffOffset1);
+
+        var cutoffOffset0 = OrderMatrixRules.GetCutoffDateTime(delivery, "16:00", cutoffDayOffset: 0);
+        Assert.Equal(new DateTime(2026, 11, 9, 16, 0, 0), cutoffOffset0);
+
+        var cutoffOffset2 = OrderMatrixRules.GetCutoffDateTime(delivery, "16:00", cutoffDayOffset: 2);
+        Assert.Equal(new DateTime(2026, 11, 7, 16, 0, 0), cutoffOffset2);
+    }
+
+    [Fact]
     public async Task REQ_PO_01_GetOrderMatrix_ReturnsProductsAndBranchDetails()
     {
         // Act
@@ -689,8 +730,8 @@ public class PurchaseOrderMatrixTests
     [Fact]
     public async Task REQ_PO_12c_AfterCutoff_ExistingPo_ReturnsAlreadyFinalized()
     {
-        // Cutoff = (Delivery - LeadTime) @ 00:00 = hôm nay 00:00 → đã qua
-        var deliveryDate = DateTime.Today.AddDays(1);
+        // Cutoff cùng ngày giao @ 00:00 hôm nay → đã qua
+        var deliveryDate = DateTime.Today;
         _repo.CustomSupplierConfigs = new List<OrderMatrixSupplierDeliveryConfigDto>
         {
             new OrderMatrixSupplierDeliveryConfigDto
@@ -700,14 +741,12 @@ public class PurchaseOrderMatrixTests
                 SupplierName = "Bánh Kẹo SnackVN",
                 IsActive = true,
                 IsAssignedToBranch = true,
-                LeadTimeDays = 1,
                 CutoffTime = "00:00",
                 BlackoutDates = new List<string>(),
                 ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 }
             }
         };
 
-        // Seed committed PO trực tiếp (đã quá cutoff 00:00 hôm nay cho delivery ngày mai với lead 0)
         var po = new PurchaseOrder
         {
             TenantId = "tenant-test-1",
@@ -775,7 +814,6 @@ public class PurchaseOrderMatrixTests
                 SupplierName = "Công ty Hải Nam",
                 IsActive = true,
                 IsAssignedToBranch = true,
-                LeadTimeDays = 0,
                 CutoffTime = "00:00",
                 BlackoutDates = new List<string>(),
                 ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 }
@@ -878,7 +916,6 @@ public class PurchaseOrderMatrixTests
                 SupplierName = s.Name,
                 IsActive = s.Status == SupplierStatus.Active,
                 IsAssignedToBranch = true,
-                LeadTimeDays = 0,
                 CutoffTime = "23:59",
                 BlackoutDates = new List<string>(),
                 ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 }

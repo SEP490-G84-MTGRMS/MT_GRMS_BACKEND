@@ -58,8 +58,9 @@ public class OrderMatrixSupplierDeliveryConfigDto
     public bool IsAssignedToBranch { get; set; } = true;
     public string? InactiveReason { get; set; }
 
-    public int LeadTimeDays { get; set; } = 1;
     public string CutoffTime { get; set; } = "15:00";
+    /// <summary>Số ngày trước ngày giao để chốt đơn (0 = cùng ngày giao). Mặc định 1.</summary>
+    public int CutoffDayOffset { get; set; } = 1;
     public List<int> ActiveDeliveryDays { get; set; } = new() { 1, 2, 3, 4, 5, 6 };
     public List<string> BlackoutDates { get; set; } = new();
 }
@@ -136,11 +137,14 @@ public class SplitMatrixPoCommand
     public Guid? ParentDraftId { get; set; }
     public string? Note { get; set; }
 
-    /// <summary>NEAREST | WEEK | ALL (mặc định nếu null là dùng Groups từ FE hoặc tự động resolve)</summary>
+    /// <summary>NEAREST | WEEK | DAYS_7 | DAYS_14 | DAYS_21 | DAYS_31 | ALL</summary>
     public string? Scope { get; set; }
 
     /// <summary>Ngày bắt đầu tuần nếu Scope = WEEK (định dạng yyyy-MM-dd); tự động chuẩn hóa về Thứ Hai</summary>
     public string? WeekStartDate { get; set; }
+
+    /// <summary>Số ngày rolling khi Scope = ALL (hoặc fallback). DAYS_* tự resolve theo Scope.</summary>
+    public int DurationDays { get; set; }
 
     /// <summary>Danh sách groups chỉ định thủ công (hỗ trợ backward compatibility)</summary>
     public List<SplitMatrixPoGroupCommand> Groups { get; set; } = new();
@@ -310,9 +314,30 @@ public class DispatchHubItemDto
     public string Sku { get; set; } = string.Empty;
     public string Unit { get; set; } = string.Empty;
     public decimal Price { get; set; }
+    /// <summary>SL trên ma trận (draft).</summary>
     public decimal Qty { get; set; }
+    /// <summary>SL đã chốt trên PO (0 nếu chưa có PO).</summary>
+    public decimal CommittedQty { get; set; }
     public DateTime DeliveryDate { get; set; }
     public string CutoffSchedule { get; set; } = string.Empty;
+}
+
+/// <summary>1 dòng draft SL khác PO đã chốt (product × ngày giao × cửa hàng).</summary>
+public class DispatchPendingChangeLineDto
+{
+    public Guid ProductId { get; set; }
+    public string ProductName { get; set; } = string.Empty;
+    public string Sku { get; set; } = string.Empty;
+    public string Unit { get; set; } = string.Empty;
+    public DateTime DeliveryDate { get; set; }
+    public decimal DraftQty { get; set; }
+    public decimal CommittedQty { get; set; }
+    public string? PoCode { get; set; }
+    public Guid? BranchId { get; set; }
+    public string? BranchCode { get; set; }
+    public string? BranchName { get; set; }
+    /// <summary>EDITABLE = còn amend được; LOCKED_CUTOFF = đã qua cutoff, chỉ xem.</summary>
+    public string UpdateStatus { get; set; } = "EDITABLE";
 }
 
 public class DispatchHubSupplierDto
@@ -330,9 +355,17 @@ public class DispatchHubSupplierDto
     public decimal MinOrderValue { get; set; }
     public List<DispatchHubItemDto> Items { get; set; } = new();
     public string Note { get; set; } = string.Empty;
-    /// <summary>draft | dispatched</summary>
+    /// <summary>draft | dispatched — dispatched chỉ khi đã FINALIZED (qua cutoff).</summary>
     public string Status { get; set; } = "draft";
     public string? PoCode { get; set; }
+    /// <summary>True khi đã có PO nhưng còn trước cutoff — cho phép chốt lại (amend).</summary>
+    public bool CanAmend { get; set; }
+    /// <summary>True khi draft SL khác PO đã chốt — cần cập nhật PO và gửi lại email NCC.</summary>
+    public bool HasPendingChanges { get; set; }
+    /// <summary>Số dòng (product×ngày) draft khác PO.</summary>
+    public int PendingChangeLineCount { get; set; }
+    /// <summary>Chi tiết từng dòng SL khác PO (để popup / filter).</summary>
+    public List<DispatchPendingChangeLineDto> PendingChanges { get; set; } = new();
     public string? DispatchedAt { get; set; }
     public Guid? DraftPoId { get; set; }
 }
@@ -382,6 +415,7 @@ public class DispatchSupplierBranchSummaryDto
     public decimal TotalQty { get; set; }
     public decimal TotalAmount { get; set; }
     public string Status { get; set; } = "draft"; // draft | dispatched | mixed
+    public bool HasPendingChanges { get; set; }
 }
 
 public class DispatchSupplierHubItemDto
@@ -395,6 +429,11 @@ public class DispatchSupplierHubItemDto
     public string Urgency { get; set; } = "later";
     public string ExpectedDelivery { get; set; } = string.Empty;
     public string Status { get; set; } = "draft";
+    public string? PoCode { get; set; }
+    public bool CanAmend { get; set; }
+    public bool HasPendingChanges { get; set; }
+    public int PendingChangeLineCount { get; set; }
+    public List<DispatchPendingChangeLineDto> PendingChanges { get; set; } = new();
     public int LinkedBranchCount { get; set; }
     public int BranchesWithQty { get; set; }
     public int SkuCount { get; set; }
@@ -426,7 +465,10 @@ public class DispatchSupplierDetailLineDto
     public string Sku { get; set; } = string.Empty;
     public string Unit { get; set; } = string.Empty;
     public decimal Price { get; set; }
+    /// <summary>SL trên ma trận (draft).</summary>
     public decimal Qty { get; set; }
+    /// <summary>SL đã chốt trên PO.</summary>
+    public decimal CommittedQty { get; set; }
     public DateTime DeliveryDate { get; set; }
     public string CutoffSchedule { get; set; } = string.Empty;
     public string DayStatus { get; set; } = "OPEN";

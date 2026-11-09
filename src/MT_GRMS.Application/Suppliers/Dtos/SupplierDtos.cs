@@ -19,8 +19,6 @@ public class SupplierSummaryDto
     public string ContactPerson { get; set; } = string.Empty;
     public string? TaxCode { get; set; }
     public string? Email { get; set; }
-    public Guid? CategoryId { get; set; }
-    public string? CategoryName { get; set; }
     public SupplierStatus Status { get; set; }
     public string StatusName => Status switch
     {
@@ -59,8 +57,6 @@ public class CreateSupplierCommand
     public string? Code { get; set; }
     public string Name { get; set; } = string.Empty;
     public SupplierType SupplierType { get; set; } = SupplierType.Goods;
-    public Guid? CategoryId { get; set; }
-    public string CategoryCode { get; set; } = "FRESH";
     public SupplierStatus Status { get; set; } = SupplierStatus.Active;
     public string? TaxCode { get; set; }
     public string Phone { get; set; } = string.Empty;
@@ -96,7 +92,6 @@ public class UpdateSupplierCommand
 {
     public string Name { get; set; } = string.Empty;
     public SupplierType SupplierType { get; set; }
-    public Guid? CategoryId { get; set; }
     public SupplierStatus? Status { get; set; }
     public string? TaxCode { get; set; }
     public string Phone { get; set; } = string.Empty;
@@ -203,8 +198,6 @@ public class SupplierDeliveryConfigDto
 {
     public Guid Id { get; set; }
     public Guid SupplierId { get; set; }
-    public int LeadTimeHours { get; set; }
-    public int LeadTimeDays { get; set; } = 1;
     public int CutoffDayOffset { get; set; } = 1;
     public string CutoffTime { get; set; } = "17:00";
     public string OrderCutoffTime { get; set; } = "17:00";
@@ -220,8 +213,6 @@ public class SupplierDeliveryConfigDto
 
 public class UpdateSupplierDeliveryConfigCommand
 {
-    public int LeadTimeHours { get; set; } = 24;
-    public int LeadTimeDays { get; set; } = 1;
     public int CutoffDayOffset { get; set; } = 1;
     public string CutoffTime { get; set; } = "17:00";
     public string OrderCutoffTime { get; set; } = "17:00";

@@ -18,6 +18,7 @@ public class SupplierProductConfiguration : IEntityTypeConfiguration<SupplierPro
         builder.Property(x => x.DeliveryUoM).HasMaxLength(50).IsRequired();
         builder.Property(x => x.AgreedWholesalePrice).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.MinimumOrderQuantity).HasColumnType("decimal(18,3)").HasDefaultValue(1);
+        builder.Property(x => x.AllowedShortageQuantity).HasDefaultValue(0);
         builder.Property(x => x.ConversionRate).HasColumnType("decimal(18,3)").HasDefaultValue(1.000m);
         builder.Property(x => x.IsPrimarySupplier).HasDefaultValue(false);
         builder.Property(x => x.Status).HasConversion<int>().IsRequired();

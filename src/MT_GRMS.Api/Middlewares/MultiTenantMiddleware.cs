@@ -54,7 +54,7 @@ public class MultiTenantMiddleware
             }
             else if (string.IsNullOrWhiteSpace(tenantContext.CurrentRole))
             {
-                tenantContext.SetRole("StoreOwner");
+                tenantContext.SetRole("STORE_OWNER");
             }
         }
 

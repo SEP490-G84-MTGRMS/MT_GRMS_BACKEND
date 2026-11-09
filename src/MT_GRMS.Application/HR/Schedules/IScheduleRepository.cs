@@ -8,6 +8,7 @@ public interface IScheduleRepository
     Task<EmployeeSchedule?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<EmployeeSchedule>> GetListAsync(ScheduleQueryFilter filter, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<EmployeeSchedule>> GetActiveSchedulesForEmployeesAsync(IEnumerable<Guid> employeeIds, DateTime fromDate, DateTime toDate, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<EmployeeSchedule>> GetCompletedSchedulesInPeriodAsync(IEnumerable<Guid> employeeIds, DateTime fromDate, DateTime toDate, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<EmployeeSchedule>> GetByEmployeeAndDateRangeAsync(Guid employeeId, DateTime fromDate, DateTime toDate, CancellationToken cancellationToken = default);
     Task AddRangeAsync(IEnumerable<EmployeeSchedule> schedules, CancellationToken cancellationToken = default);
     Task AddAsync(EmployeeSchedule schedule, CancellationToken cancellationToken = default);
