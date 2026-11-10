@@ -486,12 +486,12 @@ public static class EmployeeSeedData
                 }
                 if (string.IsNullOrEmpty(existing.FaceImageUrls) && !string.IsNullOrEmpty(tpl.FaceImageUrls)) existing.FaceImageUrls = tpl.FaceImageUrls;
 
-                // Đồng bộ phụ cấp: Kiểm tra từng phụ cấp trong template, nếu chưa Exist thì mới add
+                // Đồng bộ phụ cấp: Kiểm tra từng phụ cấp trong template, nếu chưa Exist thì mới add trực tiếp qua DbSet để tránh lỗi EF Core tracking Modified
                 foreach (var (name, amount) in tpl.Allowances)
                 {
                     if (!existing.Allowances.Any(a => a.Name == name))
                     {
-                        existing.Allowances.Add(new EmployeeAllowance
+                        await context.EmployeeAllowances.AddAsync(new EmployeeAllowance
                         {
                             Id = Uuid7.NewGuid(),
                             TenantId = tenantId,
