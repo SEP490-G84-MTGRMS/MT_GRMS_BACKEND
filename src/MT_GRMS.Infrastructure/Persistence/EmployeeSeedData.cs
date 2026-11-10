@@ -1247,9 +1247,11 @@ public static class EmployeeSeedData
             OvertimeMinutes = otMin,
             ActualWorkHours = actualHours,
 
-            // Phê duyệt
+            // Phê duyệt (Nếu có OT thì gán ApprovalType = OVERTIME đã được duyệt)
             Status = ScheduleStatus.Completed,
+            ApprovalType = otMin > 0 ? "OVERTIME" : null,
             ApprovalStatus = ScheduleApprovalStatus.Approved,
+            ApprovalReason = otMin > 0 ? $"Làm thêm giờ được duyệt ({otMin} phút)" : null,
             ApprovedBy = "usr_store_owner",
             ApprovedAt = workDate.Date.AddHours(23),
 

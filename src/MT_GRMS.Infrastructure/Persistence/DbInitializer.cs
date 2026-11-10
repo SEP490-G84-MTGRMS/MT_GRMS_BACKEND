@@ -123,40 +123,40 @@ CREATE TABLE IF NOT EXISTS ""OutboxMessages"" (
         try
         {
             await context.Database.ExecuteSqlRawAsync(@"
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchPackageId"" uuid NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchBatchId"" uuid NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierCodeSnapshot"" character varying(50) NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierNameSnapshot"" character varying(250) NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierEmailSnapshot"" character varying(200) NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreCodeSnapshot"" character varying(50) NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreNameSnapshot"" character varying(250) NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreAddressSnapshot"" character varying(500) NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StorePhoneSnapshot"" character varying(50) NULL;
+ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchPackageId"" uuid NULL;
+ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchBatchId"" uuid NULL;
+ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierCodeSnapshot"" character varying(50) NULL;
+ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierNameSnapshot"" character varying(250) NULL;
+ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierEmailSnapshot"" character varying(200) NULL;
+ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreCodeSnapshot"" character varying(50) NULL;
+ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreNameSnapshot"" character varying(250) NULL;
+ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StoreAddressSnapshot"" character varying(500) NULL;
+ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""StorePhoneSnapshot"" character varying(50) NULL;
 
-ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductCodeSnapshot"" character varying(50) NULL;
-ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductNameSnapshot"" character varying(250) NULL;
-ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""PurchaseUnitNameSnapshot"" character varying(50) NULL;
+ALTER TABLE IF EXISTS ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductCodeSnapshot"" character varying(50) NULL;
+ALTER TABLE IF EXISTS ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""ProductNameSnapshot"" character varying(250) NULL;
+ALTER TABLE IF EXISTS ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""PurchaseUnitNameSnapshot"" character varying(50) NULL;
 
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""RevisionNumber"" integer NOT NULL DEFAULT 1;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""LastAmendedAtUtc"" timestamp without time zone NULL;
-ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""LastAmendedByUserId"" character varying(50) NULL;
+ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""RevisionNumber"" integer NOT NULL DEFAULT 1;
+ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""LastAmendedAtUtc"" timestamp without time zone NULL;
+ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""LastAmendedByUserId"" character varying(50) NULL;
 
-ALTER TABLE ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""PackageRevisionNumber"" integer NOT NULL DEFAULT 1;
-ALTER TABLE ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""SupersededByPackageId"" uuid NULL;
+ALTER TABLE IF EXISTS ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""PackageRevisionNumber"" integer NOT NULL DEFAULT 1;
+ALTER TABLE IF EXISTS ""SupplierDispatchPackages"" ADD COLUMN IF NOT EXISTS ""SupersededByPackageId"" uuid NULL;
 
-ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryDaysJson"" character varying(500) NULL;
-ALTER TABLE ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryWeekdaysMask"" integer NULL;
+ALTER TABLE IF EXISTS ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryDaysJson"" character varying(500) NULL;
+ALTER TABLE IF EXISTS ""SupplierBranch"" ADD COLUMN IF NOT EXISTS ""DeliveryWeekdaysMask"" integer NULL;
 
-ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""CutoffDayOffset"" integer NOT NULL DEFAULT 1;
-ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""CutoffTime"" character varying(10) NOT NULL DEFAULT '17:00';
-ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""DeliveryWeekdaysMask"" integer NOT NULL DEFAULT 127;
-ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""DeliveryDaysJson"" text NOT NULL DEFAULT '[""Mon"",""Tue"",""Wed"",""Thu"",""Fri"",""Sat""]';
-ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""MinOrderQuantity"" integer NOT NULL DEFAULT 0;
-ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""AllowUrgent"" boolean NOT NULL DEFAULT FALSE;
-ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""UrgentLeadTimeHours"" integer NOT NULL DEFAULT 4;
-ALTER TABLE ""Suppliers"" ADD COLUMN IF NOT EXISTS ""UrgentFeePercent"" numeric(5,2) NOT NULL DEFAULT 0;
+ALTER TABLE IF EXISTS ""Suppliers"" ADD COLUMN IF NOT EXISTS ""CutoffDayOffset"" integer NOT NULL DEFAULT 1;
+ALTER TABLE IF EXISTS ""Suppliers"" ADD COLUMN IF NOT EXISTS ""CutoffTime"" character varying(10) NOT NULL DEFAULT '17:00';
+ALTER TABLE IF EXISTS ""Suppliers"" ADD COLUMN IF NOT EXISTS ""DeliveryWeekdaysMask"" integer NOT NULL DEFAULT 127;
+ALTER TABLE IF EXISTS ""Suppliers"" ADD COLUMN IF NOT EXISTS ""DeliveryDaysJson"" text NOT NULL DEFAULT '[""Mon"",""Tue"",""Wed"",""Thu"",""Fri"",""Sat""]';
+ALTER TABLE IF EXISTS ""Suppliers"" ADD COLUMN IF NOT EXISTS ""MinOrderQuantity"" integer NOT NULL DEFAULT 0;
+ALTER TABLE IF EXISTS ""Suppliers"" ADD COLUMN IF NOT EXISTS ""AllowUrgent"" boolean NOT NULL DEFAULT FALSE;
+ALTER TABLE IF EXISTS ""Suppliers"" ADD COLUMN IF NOT EXISTS ""UrgentLeadTimeHours"" integer NOT NULL DEFAULT 4;
+ALTER TABLE IF EXISTS ""Suppliers"" ADD COLUMN IF NOT EXISTS ""UrgentFeePercent"" numeric(5,2) NOT NULL DEFAULT 0;
 
-ALTER TABLE ""SupplierProducts"" ADD COLUMN IF NOT EXISTS ""AllowedShortageQuantity"" integer NOT NULL DEFAULT 0;
+ALTER TABLE IF EXISTS ""SupplierProducts"" ADD COLUMN IF NOT EXISTS ""AllowedShortageQuantity"" integer NOT NULL DEFAULT 0;
 
 DO $$
 BEGIN
@@ -262,8 +262,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
                 var nullable = prop.IsColumnNullable(store);
                 var ddl = nullable || defaultExpr == null
-                    ? $"ALTER TABLE \"{table}\" ADD COLUMN IF NOT EXISTS \"{column}\" {type} NULL;"
-                    : $"ALTER TABLE \"{table}\" ADD COLUMN IF NOT EXISTS \"{column}\" {type} NOT NULL DEFAULT {defaultExpr};";
+                    ? $"ALTER TABLE IF EXISTS \"{table}\" ADD COLUMN IF NOT EXISTS \"{column}\" {type} NULL;"
+                    : $"ALTER TABLE IF EXISTS \"{table}\" ADD COLUMN IF NOT EXISTS \"{column}\" {type} NOT NULL DEFAULT {defaultExpr};";
 
                 try
                 {
@@ -345,40 +345,41 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
     public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null)
     {
         // 0. Bổ sung các cột schema còn thiếu trên Cloud DB
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""IsPurchaseUnit"" boolean NOT NULL DEFAULT false;", logger);
 
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;", logger);
 
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CostPriceAtSale"" numeric(18,4) NOT NULL DEFAULT 0.0000;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""AppliedVatRate"" numeric(5,2) NOT NULL DEFAULT 0.00;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""VatAmount"" numeric(18,2) NOT NULL DEFAULT 0.00;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""BatchCode"" character varying(100);", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitId"" uuid;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitName"" character varying(50);", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CostPriceAtSale"" numeric(18,4) NOT NULL DEFAULT 0.0000;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""AppliedVatRate"" numeric(5,2) NOT NULL DEFAULT 0.00;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""VatAmount"" numeric(18,2) NOT NULL DEFAULT 0.00;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""BatchCode"" character varying(100);", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitId"" uuid;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitName"" character varying(50);", logger);
 
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""VatDiscountAmount"" numeric(18,2) NOT NULL DEFAULT 0.00;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""VatDiscountAmount"" numeric(18,2) NOT NULL DEFAULT 0.00;", logger);
 
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""Status"" character varying(20) NOT NULL DEFAULT 'Active';", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""RetailPrice"" numeric(18,2) NULL;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""ZoneArea"" character varying(50) NULL;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""RowVersion"" integer NOT NULL DEFAULT 1;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid NULL;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;", logger);
-        await ExecuteSqlSafeAsync(context, @"ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""Status"" character varying(20) NOT NULL DEFAULT 'Active';", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""RetailPrice"" numeric(18,2) NULL;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""ZoneArea"" character varying(50) NULL;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""RowVersion"" integer NOT NULL DEFAULT 1;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid NULL;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;", logger);
 
         // Đảm bảo bảng BranchProducts tồn tại
         await ExecuteSqlSafeAsync(context, @"
@@ -422,34 +423,39 @@ CREATE INDEX IF NOT EXISTS ""IX_BranchProductUnitPrices_ProductUnitId""
     ON ""BranchProductUnitPrices"" (""ProductUnitId"");
 ", logger);
 
-        // Backfill BranchProducts từ BranchStocks nếu trống
+        // Backfill BranchProducts từ BranchStocks nếu trống (chỉ chạy khi bảng BranchStocks đã tồn tại)
         await ExecuteSqlSafeAsync(context, @"
-INSERT INTO ""BranchProducts"" (
-    ""Id"", ""TenantId"", ""BranchId"", ""ProductId"", ""SellingPriceOverride"",
-    ""Status"", ""ShelfLocation"", ""CreatedAt"", ""UpdatedAt"", ""IsDeleted"", ""CreatedBy""
-)
-SELECT
-    gen_random_uuid(),
-    src.""TenantId"",
-    src.""BranchId"",
-    src.""ProductId"",
-    NULL,
-    'Active',
-    src.""ShelfLocation"",
-    CURRENT_TIMESTAMP,
-    CURRENT_TIMESTAMP,
-    false,
-    NULL
-FROM (
-    SELECT DISTINCT ON (bs.""TenantId"", bs.""BranchId"", bs.""ProductId"")
-        bs.""TenantId"",
-        bs.""BranchId"",
-        bs.""ProductId"",
-        bs.""ShelfLocation""
-    FROM ""BranchStocks"" bs
-    WHERE bs.""IsDeleted"" = false
-) src
-ON CONFLICT DO NOTHING;
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'BranchStocks') THEN
+        INSERT INTO ""BranchProducts"" (
+            ""Id"", ""TenantId"", ""BranchId"", ""ProductId"", ""SellingPriceOverride"",
+            ""Status"", ""ShelfLocation"", ""CreatedAt"", ""UpdatedAt"", ""IsDeleted"", ""CreatedBy""
+        )
+        SELECT
+            gen_random_uuid(),
+            src.""TenantId"",
+            src.""BranchId"",
+            src.""ProductId"",
+            NULL,
+            'Active',
+            src.""ShelfLocation"",
+            CURRENT_TIMESTAMP,
+            CURRENT_TIMESTAMP,
+            false,
+            NULL
+        FROM (
+            SELECT DISTINCT ON (bs.""TenantId"", bs.""BranchId"", bs.""ProductId"")
+                bs.""TenantId"",
+                bs.""BranchId"",
+                bs.""ProductId"",
+                bs.""ShelfLocation""
+            FROM ""BranchStocks"" bs
+            WHERE bs.""IsDeleted"" = false
+        ) src
+        ON CONFLICT DO NOTHING;
+    END IF;
+END $$;
 ", logger);
 
         // 1. Tự động áp dụng Migrations hoặc EnsureCreatedAsync để khởi tạo toàn bộ CSDL và các bảng nếu chưa có
@@ -544,64 +550,64 @@ ON CONFLICT DO NOTHING;
                 try
                 {
                     await context.Database.ExecuteSqlRawAsync(@"
-                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""IsAdmin"" boolean DEFAULT false;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""IsEmailVerified"" boolean DEFAULT false;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""MustChangePassword"" boolean DEFAULT false;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""LastLoginAt"" timestamp without time zone;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""LastLoginIp"" text;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityStamp"" text;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""PasswordResetOtp"" text;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""OtpExpiry"" timestamp without time zone;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""RefreshToken"" text;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""RefreshTokenExpiryTime"" timestamp without time zone;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""AccessFailedCount"" integer DEFAULT 0;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""LockoutEnd"" timestamp without time zone;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinHash"" text;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinSalt"" text;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""FailedPinAttempts"" integer DEFAULT 0;
-                        ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""PinLockedUntilUtc"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""IsAdmin"" boolean DEFAULT false;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""IsEmailVerified"" boolean DEFAULT false;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""MustChangePassword"" boolean DEFAULT false;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""LastLoginAt"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""LastLoginIp"" text;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityStamp"" text;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""PasswordResetOtp"" text;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""OtpExpiry"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""RefreshToken"" text;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""RefreshTokenExpiryTime"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""AccessFailedCount"" integer DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""LockoutEnd"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinHash"" text;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinSalt"" text;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""FailedPinAttempts"" integer DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""PinLockedUntilUtc"" timestamp without time zone;
                         UPDATE ""Users"" SET ""IsAdmin"" = true WHERE LOWER(""UserName"") = 'admin';
 
-                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""ShiftID"" uuid;
-                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""CashierName"" character varying(150);
-                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""FulfilledByCashierName"" character varying(150);
-                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""FulfilledAtUtc"" timestamp without time zone;
-                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""Note"" character varying(1000);
-                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""AppliedPromotionId"" uuid;
-                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""AppliedPromotionSummary"" character varying(300);
-                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""PromotionDiscountAmount"" numeric(18,2) DEFAULT 0;
-                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""AppliedVoucherCode"" character varying(50);
-                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""VoucherDiscountAmount"" numeric(18,2) DEFAULT 0;
-                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""PointsRedeemed"" integer DEFAULT 0;
-                        ALTER TABLE ""Orders"" ADD COLUMN IF NOT EXISTS ""PointsDiscountAmount"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""ShiftID"" uuid;
+                        ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""CashierName"" character varying(150);
+                        ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""FulfilledByCashierName"" character varying(150);
+                        ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""FulfilledAtUtc"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""Note"" character varying(1000);
+                        ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""AppliedPromotionId"" uuid;
+                        ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""AppliedPromotionSummary"" character varying(300);
+                        ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""PromotionDiscountAmount"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""AppliedVoucherCode"" character varying(50);
+                        ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""VoucherDiscountAmount"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""PointsRedeemed"" integer DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""PointsDiscountAmount"" numeric(18,2) DEFAULT 0;
 
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""BranchId"" uuid;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TillId"" uuid;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ShiftCode"" text;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ShiftName"" text;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""CashierUserId"" uuid;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ReceiverUserId"" text;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""PrevShiftId"" uuid;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpeningFloatExpected"" numeric(18,2) DEFAULT 0;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpeningFloat"" numeric(18,2) DEFAULT 0;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpeningDiscrepancy"" numeric(18,2) DEFAULT 0;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalCashIn"" numeric(18,2) DEFAULT 0;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalCashOut"" numeric(18,2) DEFAULT 0;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalBankRevenue"" numeric(18,2) DEFAULT 0;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalOrdersCount"" integer DEFAULT 0;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ExpectedCash"" numeric(18,2) DEFAULT 0;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ActualCashCounted"" numeric(18,2);
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""Discrepancy"" numeric(18,2);
-                        ALTER TABLE ""ShiftZReports"" ALTER COLUMN ""Discrepancy"" DROP NOT NULL;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""RetainedFloatAmount"" numeric(18,2) DEFAULT 0;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""DroppedToSafeAmount"" numeric(18,2) DEFAULT 0;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""HandoverStatus"" integer DEFAULT 1;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""Notes"" text;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosingStartedByUserId"" uuid;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosingStartedAtUtc"" timestamp without time zone;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosedByUserId"" uuid;
-                        ALTER TABLE ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ForceCloseReason"" text;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""BranchId"" uuid;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TillId"" uuid;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ShiftCode"" text;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ShiftName"" text;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""CashierUserId"" uuid;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ReceiverUserId"" text;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""PrevShiftId"" uuid;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpeningFloatExpected"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpeningFloat"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpeningDiscrepancy"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalCashIn"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalCashOut"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalBankRevenue"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""TotalOrdersCount"" integer DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ExpectedCash"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ActualCashCounted"" numeric(18,2);
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""Discrepancy"" numeric(18,2);
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ALTER COLUMN ""Discrepancy"" DROP NOT NULL;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""RetainedFloatAmount"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""DroppedToSafeAmount"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""HandoverStatus"" integer DEFAULT 1;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""Notes"" text;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosingStartedByUserId"" uuid;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosingStartedAtUtc"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosedByUserId"" uuid;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ForceCloseReason"" text;
 
                         CREATE TABLE IF NOT EXISTS ""ShiftParticipants"" (
                             ""Id"" uuid NOT NULL PRIMARY KEY,
@@ -650,12 +656,12 @@ ON CONFLICT DO NOTHING;
                             ""IsDeleted"" boolean NOT NULL DEFAULT false
                         );
 
-                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""Status"" integer DEFAULT 1;
-                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ApprovedBy"" text;
-                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ApprovedAtUtc"" timestamp without time zone;
-                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""RejectionReason"" text;
-                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""IsConfirmedByOwner"" boolean DEFAULT false;
-                        ALTER TABLE ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ConfirmedByOwnerAtUtc"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""Status"" integer DEFAULT 1;
+                        ALTER TABLE IF EXISTS ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ApprovedBy"" text;
+                        ALTER TABLE IF EXISTS ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ApprovedAtUtc"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""RejectionReason"" text;
+                        ALTER TABLE IF EXISTS ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""IsConfirmedByOwner"" boolean DEFAULT false;
+                        ALTER TABLE IF EXISTS ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ConfirmedByOwnerAtUtc"" timestamp without time zone;
 
                         CREATE TABLE IF NOT EXISTS ""StorePaymentConfigs"" (
                             ""Id"" uuid NOT NULL PRIMARY KEY,
@@ -694,36 +700,37 @@ ON CONFLICT DO NOTHING;
                             ""IsDeleted"" boolean NOT NULL DEFAULT false
                         );
 
-                        ALTER TABLE ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutApprovalThreshold"" numeric(18,2) DEFAULT 200000;
-                        ALTER TABLE ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutShiftTotalLimit"" numeric(18,2) DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutApprovalThreshold"" numeric(18,2) DEFAULT 200000;
+                        ALTER TABLE IF EXISTS ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutShiftTotalLimit"" numeric(18,2) DEFAULT 0;
 
-                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""TaxCategory"" text DEFAULT 'STANDARD_1PCT';
-                        ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""EligibleForVatReduction"" boolean DEFAULT false;
-                        ALTER TABLE ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
-                        ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
-                        ALTER TABLE ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
-                        ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;
-                        ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);
-                        ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;
-                        ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;
-                        ALTER TABLE ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;
+                        ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""TaxCategory"" text DEFAULT 'STANDARD_1PCT';
+                        ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""EligibleForVatReduction"" boolean DEFAULT false;
+                        ALTER TABLE IF EXISTS ""Products"" ALTER COLUMN ""Barcode"" DROP NOT NULL;
+                        ALTER TABLE IF EXISTS ""Categories"" DROP COLUMN IF EXISTS ""DisplayOrder"";
+                        ALTER TABLE IF EXISTS ""Categories"" DROP COLUMN IF EXISTS ""ParentCategoryID"";
+                        ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;
+                        ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);
+                        ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;
+                        ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;
+                        ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""IsPurchaseUnit"" boolean NOT NULL DEFAULT false;
 
-                        ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;
-                        ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);
-                        ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;
-                        ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;
-                        ALTER TABLE ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;
+                        ALTER TABLE IF EXISTS ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;
+                        ALTER TABLE IF EXISTS ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);
+                        ALTER TABLE IF EXISTS ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;
+                        ALTER TABLE IF EXISTS ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""BranchProductUnitPrices"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;
 
-                        ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;
-                        ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);
-                        ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;
-                        ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;
-                        ALTER TABLE ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;
+                        ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;
+                        ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);
+                        ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;
+                        ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""IsDeleted"" boolean DEFAULT false;
 
-                        ALTER TABLE ""Suppliers"" DROP COLUMN IF EXISTS ""CategoryId"";
-                        ALTER TABLE ""Suppliers"" DROP COLUMN IF EXISTS ""CategoryCode"";
-                        ALTER TABLE ""SupplierDeliveryConfigs"" DROP COLUMN IF EXISTS ""LeadTimeHours"";
-                        ALTER TABLE ""SupplierDeliveryConfigs"" DROP COLUMN IF EXISTS ""LeadTimeDays"";
+                        ALTER TABLE IF EXISTS ""Suppliers"" DROP COLUMN IF EXISTS ""CategoryId"";
+                        ALTER TABLE IF EXISTS ""Suppliers"" DROP COLUMN IF EXISTS ""CategoryCode"";
+                        ALTER TABLE IF EXISTS ""SupplierDeliveryConfigs"" DROP COLUMN IF EXISTS ""LeadTimeHours"";
+                        ALTER TABLE IF EXISTS ""SupplierDeliveryConfigs"" DROP COLUMN IF EXISTS ""LeadTimeDays"";
                         DROP TABLE IF EXISTS ""SupplierCategories"" CASCADE;
                         DROP TABLE IF EXISTS ""ProductCombos"";
                         DROP INDEX IF EXISTS ""IX_Products_TenantID_ProductCode"";
@@ -755,13 +762,13 @@ ON CONFLICT DO NOTHING;
                         CREATE INDEX IF NOT EXISTS ""IX_ProductPriceHistories_Tenant_Product"" ON ""ProductPriceHistories"" (""TenantId"", ""ProductId"", ""CreatedAt"" DESC);
                         CREATE INDEX IF NOT EXISTS ""IX_ProductPriceHistories_Tenant_Branch"" ON ""ProductPriceHistories"" (""TenantId"", ""BranchId"");
 
-                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceDescriptor"" text;
-                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceImageUrls"" text;
-                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceRegisteredAt"" timestamp without time zone;
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckInFaceImageUrl"" text;
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckOutFaceImageUrl"" text;
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckInMethod"" text;
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckOutMethod"" text;
+                        ALTER TABLE IF EXISTS ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceDescriptor"" text;
+                        ALTER TABLE IF EXISTS ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceImageUrls"" text;
+                        ALTER TABLE IF EXISTS ""Employees"" ADD COLUMN IF NOT EXISTS ""FaceRegisteredAt"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckInFaceImageUrl"" text;
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckOutFaceImageUrl"" text;
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckInMethod"" text;
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CheckOutMethod"" text;
                     ");
                 }
                 catch (Exception ex)
@@ -964,12 +971,12 @@ ON CONFLICT DO NOTHING;
                             ""IsDeleted"" boolean NOT NULL DEFAULT false,
                             ""CreatedBy"" uuid
                         );
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(64);
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""TenantID"" character varying(64);
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""BranchID"" uuid;
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""PeriodMonth"" character varying(7);
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""UnpaidLeaveDays"" numeric(5,2) DEFAULT 0.00;
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookTransactionId"" uuid;
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(64);
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""TenantID"" character varying(64);
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""BranchID"" uuid;
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""PeriodMonth"" character varying(7);
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""UnpaidLeaveDays"" numeric(5,2) DEFAULT 0.00;
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookTransactionId"" uuid;
 
                         DO $$
                         BEGIN
@@ -1038,38 +1045,38 @@ ON CONFLICT DO NOTHING;
                 try
                 {
                     await context.Database.ExecuteSqlRawAsync(@"
-                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""Address"" character varying(255);
-                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""Note"" character varying(500);
-                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""OtSunday"" character varying(20);
-                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""OtWeekday"" character varying(20);
-                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""StartDate"" timestamp without time zone;
-                        ALTER TABLE ""Employees"" ADD COLUMN IF NOT EXISTS ""DateOfBirth"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""Employees"" ADD COLUMN IF NOT EXISTS ""Address"" character varying(255);
+                        ALTER TABLE IF EXISTS ""Employees"" ADD COLUMN IF NOT EXISTS ""Note"" character varying(500);
+                        ALTER TABLE IF EXISTS ""Employees"" ADD COLUMN IF NOT EXISTS ""OtSunday"" character varying(20);
+                        ALTER TABLE IF EXISTS ""Employees"" ADD COLUMN IF NOT EXISTS ""OtWeekday"" character varying(20);
+                        ALTER TABLE IF EXISTS ""Employees"" ADD COLUMN IF NOT EXISTS ""StartDate"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""Employees"" ADD COLUMN IF NOT EXISTS ""DateOfBirth"" timestamp without time zone;
 
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""BranchID"" uuid;
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""ShiftConfigID"" uuid;
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""EarlyLeaveMinutes"" integer DEFAULT 0;
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""OvertimeMinutes"" integer DEFAULT 0;
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""IsCheckInNextDay"" boolean DEFAULT false;
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""TenantId"" text;
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""ApprovedAt"" timestamp without time zone;
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""PlannedStartTime"" time without time zone DEFAULT '08:00:00';
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""PlannedEndTime"" time without time zone DEFAULT '17:00:00';
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInStart"" time without time zone DEFAULT '00:00:00';
-                        ALTER TABLE ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInEnd"" time without time zone DEFAULT '23:59:59';
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""BranchID"" uuid;
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""ShiftConfigID"" uuid;
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""EarlyLeaveMinutes"" integer DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""OvertimeMinutes"" integer DEFAULT 0;
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""IsCheckInNextDay"" boolean DEFAULT false;
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""TenantId"" text;
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""ApprovedAt"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""PlannedStartTime"" time without time zone DEFAULT '08:00:00';
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""PlannedEndTime"" time without time zone DEFAULT '17:00:00';
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInStart"" time without time zone DEFAULT '00:00:00';
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInEnd"" time without time zone DEFAULT '23:59:59';
 
-                        ALTER TABLE ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""BranchIds"" character varying(2000);
-                        ALTER TABLE ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""IsCheckInNextDay"" boolean DEFAULT false;
-                        ALTER TABLE ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInStart"" time without time zone DEFAULT '00:00:00';
-                        ALTER TABLE ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInEnd"" time without time zone DEFAULT '23:59:59';
+                        ALTER TABLE IF EXISTS ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""BranchIds"" character varying(2000);
+                        ALTER TABLE IF EXISTS ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""IsCheckInNextDay"" boolean DEFAULT false;
+                        ALTER TABLE IF EXISTS ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInStart"" time without time zone DEFAULT '00:00:00';
+                        ALTER TABLE IF EXISTS ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInEnd"" time without time zone DEFAULT '23:59:59';
 
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""UnpaidLeaveDays"" numeric(5,2) DEFAULT 0.00;
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookTransactionId"" uuid;
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookVoucherCode"" character varying(50);
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""PaidBy"" character varying(100);
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""BankAccountNumber"" character varying(30);
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""BankName"" character varying(100);
-                        ALTER TABLE ""Payslips"" ADD COLUMN IF NOT EXISTS ""BankAccountHolder"" character varying(100);
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""UnpaidLeaveDays"" numeric(5,2) DEFAULT 0.00;
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookTransactionId"" uuid;
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookVoucherCode"" character varying(50);
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""PaidBy"" character varying(100);
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""BankAccountNumber"" character varying(30);
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""BankName"" character varying(100);
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""BankAccountHolder"" character varying(100);
                     ");
                 }
                 catch (Exception ex) { logger?.LogWarning(ex, "HR Column Alter DDL warning"); }
@@ -1580,7 +1587,15 @@ ON CONFLICT DO NOTHING;
             var prodMilk = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.TenantId == defaultTenantId && p.ProductCode == "SP-SUA-VNM-1L");
             if (prodMilk != null && !await context.ProductUnits.IgnoreQueryFilters().AnyAsync(u => u.ProductId == prodMilk.Id && u.UnitName == "Thùng"))
             {
-                var unitCartonMilk = new ProductUnit(prodMilk.Id, "Thùng", 12.00m, 445000.00m, "893850123499", false);
+                var unitCartonMilk = new ProductUnit(prodMilk.Id, "Thùng", 12.00m, 445000.00m, "893850123499", isBaseUnit: false, isPurchaseUnit: true)
+                {
+                    TenantId = defaultTenantId
+                };
+                var baseUnitMilk = await context.ProductUnits.IgnoreQueryFilters().FirstOrDefaultAsync(u => u.ProductId == prodMilk.Id && u.IsBaseUnit);
+                if (baseUnitMilk != null)
+                {
+                    baseUnitMilk.IsPurchaseUnit = false;
+                }
                 await context.ProductUnits.AddAsync(unitCartonMilk);
                 await context.SaveChangesAsync();
             }
@@ -1821,6 +1836,47 @@ ON CONFLICT DO NOTHING;
         // PHÂN HỆ 9: KỊCH BẢN CHUỖI CỬA HÀNG MỚI (Store Owner An Nhiên)
         // =========================================================================
         await SeedNewStoreOwnerAnNhienAsync(context);
+
+        // Backfill đơn vị tính cơ bản (BaseUnit, IsPurchaseUnit = true) cho mọi sản phẩm chưa có ProductUnit
+        await EnsureAllProductsHaveBaseUnitAsync(context);
+    }
+
+    private static async Task EnsureAllProductsHaveBaseUnitAsync(AppDbContext context)
+    {
+        var allProducts = await context.Products.IgnoreQueryFilters().ToListAsync();
+        if (!allProducts.Any()) return;
+
+        var existingBaseProductIdList = await context.ProductUnits.IgnoreQueryFilters()
+            .Where(u => u.IsBaseUnit && !u.IsDeleted)
+            .Select(u => u.ProductId)
+            .ToListAsync();
+        var existingBaseProductIds = existingBaseProductIdList.ToHashSet();
+
+        var missingBaseUnits = new List<ProductUnit>();
+        foreach (var prod in allProducts)
+        {
+            if (!existingBaseProductIds.Contains(prod.Id))
+            {
+                missingBaseUnits.Add(new ProductUnit(
+                    prod.Id,
+                    string.IsNullOrWhiteSpace(prod.BaseUnit) ? "Cái" : prod.BaseUnit,
+                    1.00m,
+                    prod.SellingPrice,
+                    prod.Barcode,
+                    isBaseUnit: true,
+                    isPurchaseUnit: true)
+                {
+                    TenantId = prod.TenantId
+                });
+                existingBaseProductIds.Add(prod.Id);
+            }
+        }
+
+        if (missingBaseUnits.Any())
+        {
+            await context.ProductUnits.AddRangeAsync(missingBaseUnits);
+            await context.SaveChangesAsync();
+        }
     }
 
     public static async Task SeedOrdersAndPreOrdersAsync(AppDbContext context)
@@ -2605,16 +2661,16 @@ ON CONFLICT DO NOTHING;
             {
                 TenantId = tenantId,
                 UserId = staffUser3.Id,
-                Role = "EMPLOYEE",
+                Role = SystemRoles.Staff,
                 IsActive = true
             });
         }
         else
         {
-            tuStaff3.Role = "EMPLOYEE";
+            tuStaff3.Role = SystemRoles.Staff;
         }
 
-        var empMinh = await context.Employees.IgnoreQueryFilters().FirstOrDefaultAsync(e => e.TenantId == tenantId && e.EmployeeCode == "NV-AN-03");
+        var empMinh = await context.Employees.IgnoreQueryFilters().FirstOrDefaultAsync(e => e.TenantId == tenantId && (e.EmployeeCode == "NV-AN-03" || e.CitizenId == "001199005544"));
         if (empMinh == null)
         {
             empMinh = new Employee
@@ -2624,6 +2680,7 @@ ON CONFLICT DO NOTHING;
                 UserId = staffUser3.Id,
                 EmployeeCode = "NV-AN-03",
                 FullName = "Nguyễn Văn Minh (Nhân viên Ba Đình)",
+                CitizenId = "001199005544",
                 Phone = "0915556666",
                 Email = "minh.nguyen@annhienmart.vn",
                 SalaryType = SalaryType.Monthly,
@@ -2636,6 +2693,10 @@ ON CONFLICT DO NOTHING;
         {
             empMinh.BranchId = branch.Id;
             empMinh.UserId = staffUser3.Id;
+            if (string.IsNullOrEmpty(empMinh.CitizenId))
+            {
+                empMinh.CitizenId = "001199005544";
+            }
         }
         await context.SaveChangesAsync();
 
@@ -3252,7 +3313,7 @@ ON CONFLICT DO NOTHING;
             try
             {
                 await context.Database.ExecuteSqlRawAsync(
-                    "ALTER TABLE \"OrderDetails\" ADD COLUMN IF NOT EXISTS \"CostPriceAtSale\" numeric(18,4) NOT NULL DEFAULT 0.0000;",
+                    "ALTER TABLE IF EXISTS \"OrderDetails\" ADD COLUMN IF NOT EXISTS \"CostPriceAtSale\" numeric(18,4) NOT NULL DEFAULT 0.0000;",
                     ct);
 
                 await context.Database.ExecuteSqlRawAsync(
@@ -4431,20 +4492,20 @@ ON CONFLICT DO NOTHING;
                 await context.SaveChangesAsync(ct);
             }
 
-            // Đồng bộ TenantId của tất cả Products, BranchStocks, Suppliers về tenant_mt_mart_01
-            var misalignedProds = await context.Products.IgnoreQueryFilters().Where(p => p.TenantId != DefaultTenantId).ToListAsync(ct);
+            // Đồng bộ TenantId của các sản phẩm mẫu thuộc DefaultTenantId bị lệch (không ghi đè dữ liệu của tenant_an_nhien_02)
+            var misalignedProds = await context.Products.IgnoreQueryFilters().Where(p => p.TenantId != DefaultTenantId && p.TenantId != "tenant_an_nhien_02").ToListAsync(ct);
             foreach (var p in misalignedProds) { p.TenantId = DefaultTenantId; }
 
-            var misalignedStocks = await context.BranchStocks.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId).ToListAsync(ct);
+            var misalignedStocks = await context.BranchStocks.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId && s.TenantId != "tenant_an_nhien_02").ToListAsync(ct);
             foreach (var s in misalignedStocks) { s.TenantId = DefaultTenantId; }
 
-            var misalignedSups = await context.Suppliers.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId).ToListAsync(ct);
+            var misalignedSups = await context.Suppliers.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId && s.TenantId != "tenant_an_nhien_02").ToListAsync(ct);
             foreach (var s in misalignedSups) { s.TenantId = DefaultTenantId; }
 
-            var misalignedSp = await context.SupplierProducts.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId).ToListAsync(ct);
+            var misalignedSp = await context.SupplierProducts.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId && s.TenantId != "tenant_an_nhien_02").ToListAsync(ct);
             foreach (var s in misalignedSp) { s.TenantId = DefaultTenantId; }
 
-            var misalignedSba = await context.SupplierBranchAssignments.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId).ToListAsync(ct);
+            var misalignedSba = await context.SupplierBranchAssignments.IgnoreQueryFilters().Where(s => s.TenantId != DefaultTenantId && s.TenantId != "tenant_an_nhien_02").ToListAsync(ct);
             foreach (var s in misalignedSba) { s.TenantId = DefaultTenantId; }
 
             await context.SaveChangesAsync(ct);

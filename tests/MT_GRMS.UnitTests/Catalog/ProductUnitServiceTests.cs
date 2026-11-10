@@ -3,9 +3,8 @@ using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Catalog;
-using Xunit;
 
-namespace MT_GRMS.UnitTests;
+namespace MT_GRMS.UnitTests.Catalog;
 
 public class ProductUnitServiceTests
 {
@@ -42,11 +41,11 @@ public class ProductUnitServiceTests
     public async Task GetUnitsByProductId_WhenProductExists_ReturnsUnitResponses()
     {
         var productId = Guid.NewGuid();
-        var product = new Product { Id = productId, ProductName = "Heineken" };
+        var product = new Product { Id = productId, Name = "Heineken" };
         var units = new List<ProductUnit>
         {
-            new() { Id = Guid.NewGuid(), ProductId = productId, UnitName = "Lon", ConversionRate = 1m, Price = 20000m, IsBaseUnit = true },
-            new() { Id = Guid.NewGuid(), ProductId = productId, UnitName = "Thùng", ConversionRate = 24m, Price = 450000m, IsBaseUnit = false }
+            new() { Id = Guid.NewGuid(), ProductId = productId, UnitName = "Lon", ConversionRate = 1m, Price = 20000m, IsBaseUnit = true, IsPurchaseUnit = false },
+            new() { Id = Guid.NewGuid(), ProductId = productId, UnitName = "Thùng", ConversionRate = 24m, Price = 450000m, IsBaseUnit = false, IsPurchaseUnit = true }
         };
 
         _mockProductRepo
@@ -63,7 +62,9 @@ public class ProductUnitServiceTests
         Assert.Equal(2, result.Count);
         Assert.Equal("Lon", result[0].UnitName);
         Assert.True(result[0].IsBaseUnit);
+        Assert.False(result[0].IsPurchaseUnit);
         Assert.Equal("Thùng", result[1].UnitName);
+        Assert.True(result[1].IsPurchaseUnit);
     }
 
     [Fact]
@@ -90,7 +91,8 @@ public class ProductUnitServiceTests
             UnitName = "Hộp",
             ConversionRate = 10m,
             Price = 150000m,
-            Barcode = "893123456789"
+            Barcode = "893123456789",
+            IsPurchaseUnit = true
         };
 
         _mockUnitRepo
@@ -103,21 +105,27 @@ public class ProductUnitServiceTests
         Assert.Equal("Hộp", result.UnitName);
         Assert.Equal(10m, result.ConversionRate);
         Assert.Equal("893123456789", result.Barcode);
+        Assert.True(result.IsPurchaseUnit);
     }
 
     [Theory]
-    [InlineData("", 1, 100)]
-    [InlineData("   ", 1, 100)]
-    [InlineData("Thùng", 0, 100)]
-    [InlineData("Thùng", -5, 100)]
-    [InlineData("Thùng", 1, -10)]
-    public async Task Create_WithInvalidInput_ThrowsArgumentException(string unitName, decimal rate, decimal price)
+    [InlineData("", 1, 100, null)]
+    [InlineData("   ", 1, 100, null)]
+    [InlineData("1234567890123456789012345678901", 1, 100, null)] // 31 chars (> 30)
+    [InlineData("Thùng", 0, 100, null)]
+    [InlineData("Thùng", -5, 100, null)]
+    [InlineData("Thùng", 1, -10, null)]
+    [InlineData("Thùng", 1, 1_000_000_001, null)] // > 1 tỷ
+    [InlineData("Thùng", 1, 100, "893 123")] // barcode có khoảng trắng
+    [InlineData("Thùng", 1, 100, "123456789012345678901234567890123456789012345678901")] // barcode 51 chars
+    public async Task Create_WithInvalidInput_ThrowsArgumentException(string unitName, decimal rate, decimal price, string? barcode)
     {
         var request = new ProductUnitCreateRequest
         {
             UnitName = unitName,
             ConversionRate = rate,
-            Price = price
+            Price = price,
+            Barcode = barcode
         };
 
         await Assert.ThrowsAsync<ArgumentException>(() =>
@@ -200,7 +208,7 @@ public class ProductUnitServiceTests
         var request = new ProductUnitCreateRequest
         {
             UnitName = "Lon",
-            ConversionRate = 5m, // Phải được tự động gán về 1.00m
+            ConversionRate = 5m,
             Price = 18000m,
             IsBaseUnit = true
         };
@@ -228,6 +236,41 @@ public class ProductUnitServiceTests
         _mockProductRepo.Verify(r => r.Update(product), Times.Once);
         _mockUnitRepo.Verify(r => r.AddAsync(It.IsAny<ProductUnit>(), It.IsAny<CancellationToken>()), Times.Once);
         _mockUnitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Create_WhenIsPurchaseUnitIsTrue_UnmarksOtherPurchaseUnits()
+    {
+        var productId = Guid.NewGuid();
+        var product = new Product { Id = productId, BaseUnit = "Lon" };
+        var existingPurchaseUnit = new ProductUnit
+        {
+            Id = Guid.NewGuid(),
+            ProductId = productId,
+            UnitName = "Lon",
+            IsBaseUnit = true,
+            IsPurchaseUnit = true
+        };
+
+        var request = new ProductUnitCreateRequest
+        {
+            UnitName = "Thùng 24",
+            ConversionRate = 24m,
+            Price = 420000m,
+            IsBaseUnit = false,
+            IsPurchaseUnit = true
+        };
+
+        _mockProductRepo.Setup(r => r.GetByIdAsync(productId, It.IsAny<CancellationToken>())).ReturnsAsync(product);
+        _mockUnitRepo.Setup(r => r.ExistsByNameAsync(productId, "Thùng 24", null, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        _mockUnitRepo.Setup(r => r.GetByProductIdAsync(productId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<ProductUnit> { existingPurchaseUnit });
+
+        var result = await _service.CreateAsync(productId, request);
+
+        Assert.True(result.IsPurchaseUnit);
+        Assert.False(existingPurchaseUnit.IsPurchaseUnit);
+        _mockUnitRepo.Verify(r => r.Update(existingPurchaseUnit), Times.Once);
     }
 
     [Fact]
@@ -265,6 +308,36 @@ public class ProductUnitServiceTests
     }
 
     [Fact]
+    public async Task Update_WhenIsPurchaseUnitChangedToTrue_UnmarksOtherPurchaseUnits()
+    {
+        var unitId = Guid.NewGuid();
+        var productId = Guid.NewGuid();
+        var targetUnit = new ProductUnit { Id = unitId, ProductId = productId, UnitName = "Lốc 6", IsPurchaseUnit = false };
+        var oldPurchaseUnit = new ProductUnit { Id = Guid.NewGuid(), ProductId = productId, UnitName = "Thùng 24", IsPurchaseUnit = true };
+
+        var request = new ProductUnitUpdateRequest
+        {
+            UnitName = "Lốc 6",
+            ConversionRate = 6m,
+            Price = 110000m,
+            IsPurchaseUnit = true
+        };
+
+        _mockUnitRepo.Setup(r => r.GetByIdAsync(unitId, It.IsAny<CancellationToken>())).ReturnsAsync(targetUnit);
+        _mockUnitRepo.Setup(r => r.ExistsByNameAsync(productId, "Lốc 6", unitId, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        _mockUnitRepo.Setup(r => r.GetByProductIdAsync(productId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<ProductUnit> { targetUnit, oldPurchaseUnit });
+
+        var result = await _service.UpdateAsync(unitId, request);
+
+        Assert.True(result.IsPurchaseUnit);
+        Assert.False(oldPurchaseUnit.IsPurchaseUnit);
+        _mockUnitRepo.Verify(r => r.Update(oldPurchaseUnit), Times.Once);
+        _mockUnitRepo.Verify(r => r.Update(targetUnit), Times.Once);
+        _mockUnitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
     public async Task Delete_WhenUnitNotFound_ThrowsKeyNotFoundException()
     {
         var unitId = Guid.NewGuid();
@@ -289,7 +362,7 @@ public class ProductUnitServiceTests
 
         _mockUnitRepo
             .Setup(r => r.CountByProductIdAsync(productId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(1); // Chỉ còn duy nhất 1 đơn vị
+            .ReturnsAsync(1);
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _service.DeleteAsync(unitId));
@@ -313,28 +386,5 @@ public class ProductUnitServiceTests
         _mockUnitRepo.Verify(r => r.Delete(unit), Times.Once);
         _mockUnitOfWork.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
-
-    [Fact]
-    public async Task Create_WhenValidRequest_CreatesUnitSuccessfully()
-    {
-        var productId = Guid.NewGuid();
-        var product = new Product { Id = productId, ProductCode = "SP0001", Name = "Coca Cola" };
-        var request = new ProductUnitCreateRequest
-        {
-            UnitName = "Thùng 24 lon",
-            ConversionRate = 24m,
-            Price = 240000m
-        };
-
-        _mockProductRepo.Setup(r => r.GetByIdAsync(productId, It.IsAny<CancellationToken>())).ReturnsAsync(product);
-        _mockUnitRepo.Setup(r => r.ExistsByNameAsync(productId, request.UnitName, null, It.IsAny<CancellationToken>())).ReturnsAsync(false);
-        _mockUnitRepo.Setup(r => r.GetByProductIdAsync(productId, It.IsAny<CancellationToken>())).ReturnsAsync(new List<ProductUnit>());
-
-        var result = await _service.CreateAsync(productId, request);
-
-        Assert.NotNull(result);
-        Assert.Equal("Thùng 24 lon", result.UnitName);
-        Assert.Equal(24m, result.ConversionRate);
-        Assert.Equal(240000m, result.Price);
-    }
 }
+

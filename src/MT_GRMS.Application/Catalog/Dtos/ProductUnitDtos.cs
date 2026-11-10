@@ -12,6 +12,7 @@ public class ProductUnitResponse
     public decimal Price { get; set; }
     public string? Barcode { get; set; }
     public bool IsBaseUnit { get; set; }
+    public bool IsPurchaseUnit { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? UpdatedAt { get; set; }
 }
@@ -26,6 +27,7 @@ public class ProductUnitCreateRequest
     public decimal Price { get; set; } = 0.00m;
     public string? Barcode { get; set; }
     public bool IsBaseUnit { get; set; } = false;
+    public bool IsPurchaseUnit { get; set; } = false;
 }
 
 /// <summary>
@@ -38,4 +40,5 @@ public class ProductUnitUpdateRequest
     public decimal Price { get; set; } = 0.00m;
     public string? Barcode { get; set; }
     public bool IsBaseUnit { get; set; } = false;
+    public bool IsPurchaseUnit { get; set; } = false;
 }

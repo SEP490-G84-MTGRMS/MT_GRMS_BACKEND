@@ -19,6 +19,7 @@ public class ProductUnitConfiguration : IEntityTypeConfiguration<ProductUnit>
         builder.Property(x => x.Price).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.Barcode).HasMaxLength(50);
         builder.Property(x => x.IsBaseUnit).HasDefaultValue(false);
+        builder.Property(x => x.IsPurchaseUnit).HasDefaultValue(false);
 
         builder.HasOne(x => x.Product)
             .WithMany(p => p.Units)

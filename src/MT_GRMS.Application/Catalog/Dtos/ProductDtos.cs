@@ -27,7 +27,9 @@ public record ProductResponse(
     List<string>? ImageUrls = null,
     bool HasOrders = false,
     string TaxCategory = "STANDARD_1PCT",
-    bool EligibleForVatReduction = false
+    bool EligibleForVatReduction = false,
+    bool IsBaseUnitPurchaseUnit = true,
+    string? PurchaseUnit = null
 )
 {
     // Backward compatibility aliases
@@ -60,7 +62,8 @@ public record ProductCreateRequest(
     bool IsFavorite = false,
     List<string>? ImageUrls = null,
     bool EligibleForVatReduction = false,
-    string TaxCategory = "STANDARD_1PCT"
+    string TaxCategory = "STANDARD_1PCT",
+    bool IsBaseUnitPurchaseUnit = true
 )
 {
     // Backward compatibility constructor
@@ -105,7 +108,8 @@ public record ProductUpdateRequest(
     bool IsFavorite = false,
     List<string>? ImageUrls = null,
     bool EligibleForVatReduction = false,
-    string TaxCategory = "STANDARD_1PCT"
+    string TaxCategory = "STANDARD_1PCT",
+    bool? IsBaseUnitPurchaseUnit = null
 );
 
 public class ProductQueryFilter
