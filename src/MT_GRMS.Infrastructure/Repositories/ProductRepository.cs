@@ -20,7 +20,7 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
         var query = _dbSet
             .AsNoTracking()
             .Include(p => p.Category)
-            .Where(p => !p.IsDeleted);
+            .Where(p => !p.IsDeleted && p.Category != null && !p.Category.IsDeleted);
 
         if (!string.IsNullOrWhiteSpace(filter.SearchTerm))
         {

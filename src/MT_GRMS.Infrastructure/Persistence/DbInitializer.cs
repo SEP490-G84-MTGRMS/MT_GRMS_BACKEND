@@ -4431,7 +4431,10 @@ ON CONFLICT DO NOTHING;
                 await context.SaveChangesAsync(ct);
             }
 
-            // Đồng bộ TenantId của tất cả Products, BranchStocks, Suppliers về tenant_mt_mart_01
+            // Đồng bộ TenantId của tất cả Categories, Products, BranchStocks, Suppliers về tenant_mt_mart_01
+            var misalignedCats = await context.Categories.IgnoreQueryFilters().Where(c => c.TenantId != DefaultTenantId).ToListAsync(ct);
+            foreach (var c in misalignedCats) { c.TenantId = DefaultTenantId; }
+
             var misalignedProds = await context.Products.IgnoreQueryFilters().Where(p => p.TenantId != DefaultTenantId).ToListAsync(ct);
             foreach (var p in misalignedProds) { p.TenantId = DefaultTenantId; }
 
