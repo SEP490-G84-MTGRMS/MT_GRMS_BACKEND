@@ -17,20 +17,22 @@ public class MultiTenantMiddleware
         if (context.User.Identity?.IsAuthenticated == true)
         {
             var tenantId = context.User.FindFirst("tenant_id")?.Value;
-            var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                ?? context.User.FindFirst("sub")?.Value;
             var branchIdClaim = context.User.FindFirst("branch_id")?.Value;
 
-            var userId = Guid.TryParse(userIdClaim, out var parsedUserId) ? parsedUserId : Guid.Empty;
+            var userId = TenantContext.ResolveDeterministicGuid(userIdClaim);
             Guid? branchId = Guid.TryParse(branchIdClaim, out var parsedBranchId) ? parsedBranchId : null;
+            var role = context.User.FindFirst(ClaimTypes.Role)?.Value
+                ?? context.User.FindFirst("role")?.Value
+                ?? context.User.FindFirst("RoleName")?.Value;
 
-            if (!string.IsNullOrWhiteSpace(tenantId))
-            {
-                tenantContext.SetContext(tenantId, userId, branchId);
-                var role = context.User.FindFirst(ClaimTypes.Role)?.Value
-                    ?? context.User.FindFirst("role")?.Value
-                    ?? context.User.FindFirst("RoleName")?.Value;
-                tenantContext.SetRole(role);
-            }
+            tenantContext.SetRawUserId(userIdClaim);
+            tenantContext.SetContext(tenantId ?? string.Empty, userId, branchId);
+            tenantContext.SetRole(role);
+
+            await _next(context);
+            return;
         }
 
         // Hỗ trợ header X-Tenant-Id hoặc fallback tenant cho môi trường dev/standalone

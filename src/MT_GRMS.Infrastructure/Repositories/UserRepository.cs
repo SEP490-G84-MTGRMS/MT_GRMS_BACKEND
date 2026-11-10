@@ -103,4 +103,20 @@ public class UserRepository : IUserRepository
 
         return user;
     }
+
+    public async Task<Guid?> GetEmployeeBranchIdAsync(string userId, string tenantId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(tenantId))
+            return null;
+
+        return await _context.Employees
+            .IgnoreQueryFilters()
+            .AsNoTracking()
+            .Where(e => !e.IsDeleted
+                && e.TenantId == tenantId
+                && e.UserId == userId
+                && e.Status == EmployeeStatus.Active)
+            .Select(e => (Guid?)e.BranchId)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
 }

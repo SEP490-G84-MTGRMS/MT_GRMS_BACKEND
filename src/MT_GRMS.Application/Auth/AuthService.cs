@@ -57,6 +57,9 @@ public class AuthService : IAuthService
         var userRole = ResolveUserRole(user, tenantUser);
         var role = userRole.ToStringRole();
         var isAdmin = userRole == UserRole.Admin;
+        var branchId = !string.IsNullOrWhiteSpace(tenantId)
+            ? await _userRepository.GetEmployeeBranchIdAsync(user.Id, tenantId, cancellationToken)
+            : null;
 
         // 5. Chuẩn bị thông tin người dùng và sinh JWT Token / RefreshToken
         var userInfo = new UserInfo(
@@ -65,14 +68,14 @@ public class AuthService : IAuthService
             FullName: string.IsNullOrWhiteSpace(user.FullName) ? user.Username : user.FullName,
             Email: string.IsNullOrWhiteSpace(user.Email) ? $"{user.Username}@mtgrms.vn" : user.Email,
             RoleName: role,
-            BranchId: null,
+            BranchId: branchId,
             TenantId: tenantId,
             IsAdmin: isAdmin
         );
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
-        var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt);
+        var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt, branchId);
         var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
 
         // Lưu RefreshToken và thời hạn (7 ngày) vào CSDL
@@ -204,6 +207,9 @@ public class AuthService : IAuthService
         var userRole = ResolveUserRole(user, tenantUser);
         var role = userRole.ToStringRole();
         var isAdmin = userRole == UserRole.Admin;
+        var branchId = !string.IsNullOrWhiteSpace(tenantId)
+            ? await _userRepository.GetEmployeeBranchIdAsync(user.Id, tenantId, cancellationToken)
+            : null;
 
         var userInfo = new UserInfo(
             Id: user.Id,
@@ -211,14 +217,14 @@ public class AuthService : IAuthService
             FullName: string.IsNullOrWhiteSpace(user.FullName) ? user.Username : user.FullName,
             Email: string.IsNullOrWhiteSpace(user.Email) ? $"{user.Username}@mtgrms.vn" : user.Email,
             RoleName: role,
-            BranchId: null,
+            BranchId: branchId,
             TenantId: tenantId,
             IsAdmin: isAdmin
         );
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
-        var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt);
+        var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt, branchId);
 
         // Token Rotation: Sinh RefreshToken mới và hủy token cũ
         var newRefreshToken = $"mt_refresh_{Guid.NewGuid():N}";
@@ -246,6 +252,9 @@ public class AuthService : IAuthService
         var userRole = ResolveUserRole(user, tenantUser);
         var role = userRole.ToStringRole();
         var isAdmin = userRole == UserRole.Admin;
+        var branchId = !string.IsNullOrWhiteSpace(tenantId)
+            ? await _userRepository.GetEmployeeBranchIdAsync(user.Id, tenantId, cancellationToken)
+            : null;
 
         return new UserInfo(
             Id: user.Id,
@@ -253,7 +262,7 @@ public class AuthService : IAuthService
             FullName: string.IsNullOrWhiteSpace(user.FullName) ? user.Username : user.FullName,
             Email: string.IsNullOrWhiteSpace(user.Email) ? $"{user.Username}@mtgrms.vn" : user.Email,
             RoleName: role,
-            BranchId: null,
+            BranchId: branchId,
             TenantId: tenantId,
             IsAdmin: isAdmin
         );
@@ -345,7 +354,7 @@ public class AuthService : IAuthService
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
-        var accessToken = GenerateJwtToken(user.Id, user.UserName, user.Email, UserRoleNames.StoreOwner, tenant.Id, false, expiresAt);
+        var accessToken = GenerateJwtToken(user.Id, user.UserName, user.Email, UserRoleNames.StoreOwner, tenant.Id, false, expiresAt, branch.Id);
         var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
 
         var userInfo = new UserInfo(
@@ -367,7 +376,7 @@ public class AuthService : IAuthService
         );
     }
 
-    private string GenerateJwtToken(string userId, string username, string email, string role, string tenantId, bool isAdmin, DateTime expiresAt)
+    private string GenerateJwtToken(string userId, string username, string email, string role, string tenantId, bool isAdmin, DateTime expiresAt, Guid? branchId = null)
     {
         // Phải khớp fallback key trong Program.cs — appsettings thường để Jwt:Key="" 
         // (IsNullOrWhiteSpace), nếu trả opaque mt_jwt_* thì FE gửi Bearer nhưng API không authenticate → 403 khi sửa NCC.
@@ -380,7 +389,7 @@ public class AuthService : IAuthService
         var issuer = _configuration?["Jwt:Issuer"] ?? "MTGRMS_API";
         var audience = _configuration?["Jwt:Audience"] ?? "MTGRMS_CLIENT";
 
-        var claims = new[]
+        var claims = new List<Claim>
         {
             new Claim(ClaimTypes.NameIdentifier, userId),
             new Claim(ClaimTypes.Name, username),
@@ -391,6 +400,11 @@ public class AuthService : IAuthService
             new Claim("is_admin", isAdmin ? "true" : "false"),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
+
+        if (branchId.HasValue)
+        {
+            claims.Add(new Claim("branch_id", branchId.Value.ToString()));
+        }
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
