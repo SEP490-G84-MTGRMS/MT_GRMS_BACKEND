@@ -54,6 +54,7 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
             var kw = query.Keyword.Trim().ToLower();
             dbQuery = dbQuery.Where(r =>
                 r.Code.ToLower().Contains(kw) ||
+                r.Reason.ToLower().Contains(kw) ||
                 (r.GoodsReceipt != null && r.GoodsReceipt.Code.ToLower().Contains(kw)) ||
                 (r.Supplier != null && r.Supplier.Name.ToLower().Contains(kw)));
         }
@@ -187,12 +188,13 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
 
         if (grn == null) return new List<GrnReturnableLineDto>();
 
-        // Query existing return lines referencing this GRN
+        // Query existing post-receipt return lines referencing this GRN (loại trừ phiếu 'Từ chối nhận hàng' vì chưa nhập vào AcceptedQty)
         var existingReturns = await _appContext.SupplierReturnLines.AsNoTracking()
             .Include(l => l.SupplierReturn)
             .Where(l => l.TenantId == tenantId && l.SupplierReturn != null &&
                         l.SupplierReturn.GoodsReceiptId == grnId &&
-                        l.SupplierReturn.Status != "CANCELLED")
+                        l.SupplierReturn.Status != "CANCELLED" &&
+                        l.SupplierReturn.Reason != "Từ chối nhận hàng")
             .ToListAsync(cancellationToken);
 
         var result = new List<GrnReturnableLineDto>();
