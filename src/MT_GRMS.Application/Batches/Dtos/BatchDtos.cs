@@ -42,7 +42,7 @@ public record BatchFilterQuery
     public Guid? BranchId { get; init; }
     public string? Status { get; init; } // ALL, Expired, Critical, Warning, Normal
     public int PageIndex { get; init; } = 1;
-    public int PageSize { get; init; } = 10;
+    public int PageSize { get; init; } = 20;
     public string? SortBy { get; init; }
     public string? SortOrder { get; init; }
 }

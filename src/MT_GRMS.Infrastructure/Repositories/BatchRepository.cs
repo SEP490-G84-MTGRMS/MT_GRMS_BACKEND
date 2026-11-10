@@ -57,7 +57,25 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 .Where(s => supplierIds.Contains(s.Id))
                 .ToDictionaryAsync(s => s.Id, cancellationToken);
 
-        var allItems = stocks.Select(bs => MapBranchStockToListItem(bs, products, branches, suppliers, now)).ToList();
+        var stockIds = stocks.Select(s => s.Id).ToList();
+        var grnByStockId = await _appContext.GoodsReceiptLines.AsNoTracking()
+            .Where(l => l.BranchStockId != null && stockIds.Contains(l.BranchStockId.Value) && !l.IsDeleted)
+            .Select(l => new { StockId = l.BranchStockId!.Value, GrnCode = l.GoodsReceipt!.Code })
+            .ToListAsync(cancellationToken);
+
+        var grnLookup = grnByStockId
+            .GroupBy(x => x.StockId)
+            .ToDictionary(g => g.Key, g => g.Select(x => x.GrnCode).FirstOrDefault(c => !string.IsNullOrWhiteSpace(c)));
+
+        var allItems = stocks
+            .Select(bs => MapBranchStockToListItem(
+                bs,
+                products,
+                branches,
+                suppliers,
+                now,
+                grnLookup.TryGetValue(bs.Id, out var grnCode) ? grnCode : null))
+            .ToList();
 
         var kpiSummary = new BatchKpiSummaryDto(
             TotalBatches: allItems.Count,
@@ -81,11 +99,13 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 var sku = x.Sku.ToLower();
                 var productName = x.ProductName.ToLower();
                 var supplierName = x.SupplierName.ToLower();
+                var grnNo = (x.OriginalGrnNo ?? string.Empty).ToLower();
                 return tokens.All(tok =>
                     batchCode.Contains(tok) ||
                     sku.Contains(tok) ||
                     productName.Contains(tok) ||
-                    supplierName.Contains(tok));
+                    supplierName.Contains(tok) ||
+                    grnNo.Contains(tok));
             }).ToList();
         }
 
@@ -98,7 +118,7 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
 
         var totalCount = allItems.Count;
         var pageIndex = query.PageIndex < 1 ? 1 : query.PageIndex;
-        var pageSize = query.PageSize < 1 ? 10 : query.PageSize;
+        var pageSize = query.PageSize < 1 ? 20 : query.PageSize;
         var pagedItems = allItems
             .Skip((pageIndex - 1) * pageSize)
             .Take(pageSize)
@@ -149,7 +169,12 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 ? new Dictionary<Guid, Domain.Entities.Supplier.Supplier> { [supplier.Id] = supplier }
                 : new Dictionary<Guid, Domain.Entities.Supplier.Supplier>();
 
-            return MapBranchStockToListItem(branchStock, products, branches, suppliers, now);
+            string? grnNo = await _appContext.GoodsReceiptLines.AsNoTracking()
+                .Where(l => l.BranchStockId == branchStock.Id && !l.IsDeleted)
+                .Select(l => l.GoodsReceipt!.Code)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            return MapBranchStockToListItem(branchStock, products, branches, suppliers, now, grnNo);
         }
 
         var batch = await _appContext.Batches.AsNoTracking().FirstOrDefaultAsync(b => b.Id == id, cancellationToken);
@@ -274,7 +299,8 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
         IReadOnlyDictionary<Guid, Domain.Entities.Catalog.Product> products,
         IReadOnlyDictionary<Guid, Domain.Entities.SaaS.Branch> branches,
         IReadOnlyDictionary<Guid, Domain.Entities.Supplier.Supplier> suppliers,
-        DateTime now)
+        DateTime now,
+        string? originalGrnNo = null)
     {
         products.TryGetValue(bs.ProductId, out var product);
         branches.TryGetValue(bs.BranchId, out var branch);
@@ -316,7 +342,7 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
             Status: status,
             ZoneArea: bs.ZoneArea,
             ShelfLocation: bs.ShelfLocation,
-            OriginalGrnNo: null
+            OriginalGrnNo: originalGrnNo
         );
     }
 }

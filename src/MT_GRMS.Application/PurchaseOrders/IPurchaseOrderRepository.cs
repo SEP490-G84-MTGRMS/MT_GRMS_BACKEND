@@ -86,6 +86,13 @@ public interface IPurchaseOrderRepository
     Task<IReadOnlyList<Guid>> GetActiveBranchIdsForSupplierAsync(
         Guid supplierId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lấy phiếu nhập kho DRAFT/COMPLETED đang gắn các PO (1 PO tối đa 1 phiếu active).
+    /// </summary>
+    Task<IReadOnlyDictionary<Guid, (Guid ReceiptId, string Code, string Status)>> GetActiveGoodsReceiptsByPoIdsAsync(
+        IReadOnlyCollection<Guid> purchaseOrderIds,
+        CancellationToken cancellationToken = default);
 }
 
 

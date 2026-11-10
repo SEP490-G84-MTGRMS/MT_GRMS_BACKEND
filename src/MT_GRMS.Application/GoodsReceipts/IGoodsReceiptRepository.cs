@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.GoodsReceipts.Dtos;
+using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.Supplier;
 
@@ -21,4 +22,7 @@ public interface IGoodsReceiptRepository
     Task<GoodsReceipt?> GetActiveReceiptByPoIdAsync(string tenantId, Guid poId, CancellationToken cancellationToken = default);
     Task<BranchStock?> GetBranchStockAsync(string tenantId, Guid branchId, Guid productId, string? batchCode, CancellationToken cancellationToken = default);
     Task AddBranchStockAsync(BranchStock stock, CancellationToken cancellationToken = default);
+    Task<IReadOnlyDictionary<Guid, Product>> GetProductsByIdsAsync(
+        IReadOnlyCollection<Guid> productIds,
+        CancellationToken cancellationToken = default);
 }

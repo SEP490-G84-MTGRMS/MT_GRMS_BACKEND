@@ -595,6 +595,46 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             .Distinct()
             .ToListAsync(cancellationToken);
     }
+
+    public async Task<IReadOnlyDictionary<Guid, (Guid ReceiptId, string Code, string Status)>> GetActiveGoodsReceiptsByPoIdsAsync(
+        IReadOnlyCollection<Guid> purchaseOrderIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (purchaseOrderIds == null || purchaseOrderIds.Count == 0)
+        {
+            return new Dictionary<Guid, (Guid, string, string)>();
+        }
+
+        var rows = await _context.GoodsReceipts
+            .AsNoTracking()
+            .Where(gr =>
+                !gr.IsDeleted
+                && gr.PurchaseOrderId != null
+                && purchaseOrderIds.Contains(gr.PurchaseOrderId.Value)
+                && (gr.Status == "DRAFT" || gr.Status == "COMPLETED"))
+            .Select(gr => new
+            {
+                PoId = gr.PurchaseOrderId!.Value,
+                gr.Id,
+                gr.Code,
+                gr.Status,
+                gr.CreatedAt
+            })
+            .ToListAsync(cancellationToken);
+
+        return rows
+            .GroupBy(r => r.PoId)
+            .ToDictionary(
+                g => g.Key,
+                g =>
+                {
+                    var best = g
+                        .OrderByDescending(x => x.Status == "COMPLETED")
+                        .ThenByDescending(x => x.CreatedAt)
+                        .First();
+                    return (best.Id, best.Code, best.Status);
+                });
+    }
 }
 
 

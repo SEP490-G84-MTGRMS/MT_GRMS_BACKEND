@@ -7,6 +7,7 @@ using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.GoodsReceipts;
 using MT_GRMS.Application.GoodsReceipts.Dtos;
+using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Infrastructure.Persistence;
@@ -281,5 +282,20 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
     public async Task AddBranchStockAsync(BranchStock stock, CancellationToken cancellationToken = default)
     {
         await _context.BranchStocks.AddAsync(stock, cancellationToken);
+    }
+
+    public async Task<IReadOnlyDictionary<Guid, Product>> GetProductsByIdsAsync(
+        IReadOnlyCollection<Guid> productIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (productIds == null || productIds.Count == 0)
+        {
+            return new Dictionary<Guid, Product>();
+        }
+
+        return await _context.Products
+            .AsNoTracking()
+            .Where(p => productIds.Contains(p.Id) && !p.IsDeleted)
+            .ToDictionaryAsync(p => p.Id, cancellationToken);
     }
 }

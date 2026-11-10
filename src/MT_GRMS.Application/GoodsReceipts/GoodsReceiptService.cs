@@ -271,7 +271,9 @@ public class GoodsReceiptService : IGoodsReceiptService
 
         if (command.AutoComplete)
         {
-            ValidateForCompletion(receipt);
+            // Không gán navigation Product vào line (tránh EF tracking conflict khi trùng ProductId / PO đã track Product)
+            var productFlags = await LoadProductValidationFlagsAsync(receipt, cancellationToken);
+            ValidateForCompletion(receipt, productFlags);
             receipt.Status = "COMPLETED";
             receipt.ConfirmedByUserId = actorUserId;
             receipt.ConfirmedAtUtc = DateTime.UtcNow;
@@ -311,7 +313,8 @@ public class GoodsReceiptService : IGoodsReceiptService
             throw new BusinessException("CANNOT_COMPLETE_CANCELLED", "Không thể hoàn tất phiếu nhập kho đã bị hủy.");
         }
 
-        ValidateForCompletion(receipt);
+        var productFlags = await LoadProductValidationFlagsAsync(receipt, cancellationToken);
+        ValidateForCompletion(receipt, productFlags);
 
         PurchaseOrder? po = null;
         if (receipt.PurchaseOrderId.HasValue)
@@ -391,30 +394,71 @@ public class GoodsReceiptService : IGoodsReceiptService
             : "usr_store_owner";
     }
 
-    private static void ValidateForCompletion(GoodsReceipt receipt)
+    private async Task<IReadOnlyDictionary<Guid, (bool HasBatches, string Name)>> LoadProductValidationFlagsAsync(
+        GoodsReceipt receipt,
+        CancellationToken cancellationToken)
+    {
+        var flags = new Dictionary<Guid, (bool HasBatches, string Name)>();
+
+        foreach (var line in receipt.Lines)
+        {
+            if (line.Product != null && !flags.ContainsKey(line.ProductId))
+            {
+                flags[line.ProductId] = (line.Product.HasBatches, line.Product.Name ?? "Sản phẩm");
+            }
+        }
+
+        var missingIds = receipt.Lines
+            .Select(l => l.ProductId)
+            .Distinct()
+            .Where(id => !flags.ContainsKey(id))
+            .ToList();
+
+        if (missingIds.Count > 0)
+        {
+            var products = await _repository.GetProductsByIdsAsync(missingIds, cancellationToken);
+            foreach (var (id, product) in products)
+            {
+                flags[id] = (product.HasBatches, product.Name ?? "Sản phẩm");
+            }
+        }
+
+        return flags;
+    }
+
+    private static void ValidateForCompletion(
+        GoodsReceipt receipt,
+        IReadOnlyDictionary<Guid, (bool HasBatches, string Name)>? productFlags = null)
     {
         foreach (var line in receipt.Lines)
         {
+            var hasBatches = productFlags != null && productFlags.TryGetValue(line.ProductId, out var flag)
+                ? flag.HasBatches
+                : line.Product?.HasBatches == true;
+            var productName = productFlags != null && productFlags.TryGetValue(line.ProductId, out var named)
+                ? named.Name
+                : (line.Product?.Name ?? "Sản phẩm");
+
             if (line.AcceptedQty < 0 || line.DeliveredQty < 0)
             {
-                throw new BusinessException("INVALID_QTY", $"Số lượng không hợp lệ tại dòng {line.Product?.Name}.");
+                throw new BusinessException("INVALID_QTY", $"Số lượng không hợp lệ tại dòng {productName}.");
             }
 
             if (line.AcceptedQty > line.DeliveredQty)
             {
-                throw new BusinessException("ACCEPTED_EXCEEDS_RECEIVED", $"Số lượng chấp nhận không được vượt quá số lượng thực nhận tại dòng {line.Product?.Name}.");
+                throw new BusinessException("ACCEPTED_EXCEEDS_RECEIVED", $"Số lượng chấp nhận không được vượt quá số lượng thực nhận tại dòng {productName}.");
             }
 
             if (line.RejectedQty > 0 && string.IsNullOrWhiteSpace(line.RejectionReason))
             {
-                throw new BusinessException("REJECTION_REASON_REQUIRED", $"Dòng {line.Product?.Name} có hàng bị từ chối, bắt buộc phải chọn lý do từ chối.");
+                throw new BusinessException("REJECTION_REASON_REQUIRED", $"Dòng {productName} có hàng bị từ chối, bắt buộc phải chọn lý do từ chối.");
             }
 
             // Quản lý batch: có MFG/EXP/BatchCode hoặc Product.HasBatches
             var manageBatch = line.ManufactureDate.HasValue
                               || line.ExpiryDate.HasValue
                               || !string.IsNullOrWhiteSpace(line.BatchCode)
-                              || line.Product?.HasBatches == true;
+                              || hasBatches;
 
             if (manageBatch && line.AcceptedQty > 0)
             {
@@ -423,23 +467,23 @@ public class GoodsReceiptService : IGoodsReceiptService
                     throw new BusinessException("EXPIRY_PAST", $"Hạn sử dụng của lô {line.BatchCode} không được trước ngày nhập hàng.");
                 }
 
-                if (line.Product?.HasBatches == true)
+                if (hasBatches)
                 {
                     if (string.IsNullOrWhiteSpace(line.BatchCode))
                     {
-                        throw new BusinessException("BATCH_CODE_REQUIRED", $"Sản phẩm {line.Product?.Name} quản lý HSD bắt buộc phải nhập mã lô.");
+                        throw new BusinessException("BATCH_CODE_REQUIRED", $"Sản phẩm {productName} quản lý HSD bắt buộc phải nhập mã lô.");
                     }
 
                     if (!line.ExpiryDate.HasValue)
                     {
-                        throw new BusinessException("EXPIRY_DATE_REQUIRED", $"Sản phẩm {line.Product?.Name} quản lý HSD bắt buộc phải nhập hạn sử dụng.");
+                        throw new BusinessException("EXPIRY_DATE_REQUIRED", $"Sản phẩm {productName} quản lý HSD bắt buộc phải nhập hạn sử dụng.");
                     }
                 }
                 else if (line.ManufactureDate.HasValue && !line.ExpiryDate.HasValue)
                 {
                     throw new BusinessException(
                         "BATCH_DATES_REQUIRED",
-                        $"Dòng {line.Product?.Name} có Ngày SX thì bắt buộc có Hạn SD.");
+                        $"Dòng {productName} có Ngày SX thì bắt buộc có Hạn SD.");
                 }
             }
         }
@@ -462,6 +506,7 @@ public class GoodsReceiptService : IGoodsReceiptService
                 if (line.ExpiryDate.HasValue) stock.ExpiryDate = line.ExpiryDate;
                 if (line.ManufactureDate.HasValue) stock.ManufactureDate = line.ManufactureDate;
                 stock.UpdatedAt = DateTime.UtcNow;
+                line.BranchStockId = stock.Id;
             }
             else
             {

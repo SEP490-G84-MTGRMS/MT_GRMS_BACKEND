@@ -1807,6 +1807,7 @@ public class PurchaseOrderService : IPurchaseOrderService
             cancellationToken);
 
         var dtos = items.Select(po => MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC")).ToList();
+        await AttachActiveGoodsReceiptsAsync(dtos, cancellationToken);
 
         return new PagedResult<PurchaseOrderDto>
         {
@@ -1827,7 +1828,9 @@ public class PurchaseOrderService : IPurchaseOrderService
             throw new NotFoundException("Đơn đặt hàng (PO)", id);
         }
 
-        return MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC");
+        var dto = MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC");
+        await AttachActiveGoodsReceiptsAsync(new List<PurchaseOrderDto> { dto }, cancellationToken);
+        return dto;
     }
 
     public async Task<PurchaseOrderDto> UpdatePurchaseOrderStatusAsync(
@@ -1863,7 +1866,26 @@ public class PurchaseOrderService : IPurchaseOrderService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC");
+        var dto = MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC");
+        await AttachActiveGoodsReceiptsAsync(new List<PurchaseOrderDto> { dto }, cancellationToken);
+        return dto;
+    }
+
+    private async Task AttachActiveGoodsReceiptsAsync(
+        IList<PurchaseOrderDto> dtos,
+        CancellationToken cancellationToken)
+    {
+        if (dtos.Count == 0) return;
+
+        var poIds = dtos.Select(d => d.Id).ToList();
+        var receipts = await _repository.GetActiveGoodsReceiptsByPoIdsAsync(poIds, cancellationToken);
+        foreach (var dto in dtos)
+        {
+            if (!receipts.TryGetValue(dto.Id, out var receipt)) continue;
+            dto.ActiveGoodsReceiptId = receipt.ReceiptId;
+            dto.ActiveGoodsReceiptCode = receipt.Code;
+            dto.ActiveGoodsReceiptStatus = receipt.Status;
+        }
     }
 
     private static PurchaseOrderDto MapToDto(PurchaseOrder po, string branchName, string supplierName)

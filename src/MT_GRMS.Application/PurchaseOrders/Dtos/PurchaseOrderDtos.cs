@@ -277,6 +277,10 @@ public class PurchaseOrderDto
     public string? Note { get; set; }
     public Guid? ParentDraftId { get; set; }
     public DateTime CreatedAt { get; set; }
+    /// <summary>Phiếu nhập kho DRAFT/COMPLETED đang gắn PO (nếu có).</summary>
+    public Guid? ActiveGoodsReceiptId { get; set; }
+    public string? ActiveGoodsReceiptCode { get; set; }
+    public string? ActiveGoodsReceiptStatus { get; set; }
     public IReadOnlyList<PurchaseOrderDetailDto> Details { get; set; } = new List<PurchaseOrderDetailDto>();
 }
 
