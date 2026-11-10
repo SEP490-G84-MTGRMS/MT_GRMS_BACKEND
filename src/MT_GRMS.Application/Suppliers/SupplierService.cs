@@ -163,6 +163,7 @@ public class SupplierService : ISupplierService
         supplier.UrgentFeePercent = 0;
 
         await _supplierRepository.AddAsync(supplier, cancellationToken);
+        await _supplierRepository.GetActiveBranchIdsForSupplierAsync(supplier.Id, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return MapToDetailDto(supplier);

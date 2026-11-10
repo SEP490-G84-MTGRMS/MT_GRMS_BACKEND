@@ -648,11 +648,42 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
 
     public async Task<IReadOnlyList<Guid>> GetActiveBranchIdsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
     {
-        return await _context.SupplierBranchAssignments
+        var assignedBranchIds = await _context.SupplierBranchAssignments
             .Where(sba => sba.SupplierId == supplierId && sba.Status == SupplierStatus.Active && !sba.IsDeleted)
             .Select(sba => sba.BranchId)
             .Distinct()
             .ToListAsync(cancellationToken);
+
+        if (assignedBranchIds.Count > 0)
+        {
+            return assignedBranchIds;
+        }
+
+        // Nếu nhà cung cấp chưa được gán chi nhánh nào, tự động liên kết với toàn bộ chi nhánh đang hoạt động
+        var hasAnyAssignment = await _context.SupplierBranchAssignments
+            .AnyAsync(sba => sba.SupplierId == supplierId && !sba.IsDeleted, cancellationToken);
+
+        if (!hasAnyAssignment)
+        {
+            var activeBranches = await _context.Branches
+                .Where(b => b.IsActive && !b.IsDeleted)
+                .Select(b => b.Id)
+                .ToListAsync(cancellationToken);
+
+            foreach (var branchId in activeBranches)
+            {
+                await _context.SupplierBranchAssignments.AddAsync(new SupplierBranchAssignment
+                {
+                    SupplierId = supplierId,
+                    BranchId = branchId,
+                    Status = SupplierStatus.Active
+                }, cancellationToken);
+            }
+
+            return activeBranches;
+        }
+
+        return assignedBranchIds;
     }
 
     public async Task<IReadOnlyList<SupplierProduct>> GetActiveSupplierProductsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
