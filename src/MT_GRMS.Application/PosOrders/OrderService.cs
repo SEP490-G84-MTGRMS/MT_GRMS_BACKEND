@@ -93,21 +93,51 @@ public class OrderService : IOrderService
             throw new InvalidOperationException($"Chi nhánh với ID '{branchId}' không tồn tại trong hệ thống.");
         }
 
-        // 1b. Kiểm tra ca bán hàng của chi nhánh (REQ-SHIFT-SHARED-03)
+        // 1b. Kiểm tra ca bán hàng của chi nhánh (REQ-SHIFT-SHARED-03 & REQ-OWNER-SHIFTLESS-04)
+        bool isOwnerOrAdmin = IsOwnerOrAdminCaller();
         ShiftZReport? activeShift = null;
         if (_shiftRepository != null)
         {
             activeShift = await _shiftRepository.GetActiveShiftAsync(branchId, cancellationToken: cancellationToken);
-            if (activeShift != null && activeShift.Status == ShiftState.Closing)
+            if (!isOwnerOrAdmin)
             {
-                throw new BusinessException(
-                    "SHIFT_CLOSING_LOCKDOWN",
-                    "Ca bán hàng của chi nhánh đang trong trạng thái kiểm đếm chốt ca (Closing). Không thể tạo đơn mới.");
+                if (_tenantContext != null
+                    && !string.IsNullOrWhiteSpace(_tenantContext.CurrentRole)
+                    && activeShift == null
+                    && !request.ShiftId.HasValue)
+                {
+                    throw new BusinessException(
+                        "SHIFT_NOT_OPEN",
+                        "Chi nhánh chưa mở ca bán hàng. Thu ngân vui lòng mở ca trước khi thanh toán.");
+                }
+
+                if (activeShift != null && activeShift.Status == ShiftState.Closing)
+                {
+                    throw new BusinessException(
+                        "SHIFT_CLOSING_LOCKDOWN",
+                        "Ca bán hàng của chi nhánh đang trong trạng thái kiểm đếm chốt ca (Closing). Không thể tạo đơn mới.");
+                }
+            }
+            if (request.ShiftId.HasValue)
+            {
+                if (activeShift == null || activeShift.Id != request.ShiftId.Value || activeShift.Status != ShiftState.Open)
+                {
+                    if (activeShift != null && activeShift.Id == request.ShiftId.Value && activeShift.Status == ShiftState.Closing)
+                    {
+                        throw new BusinessException(
+                            "SHIFT_CLOSING_LOCKDOWN",
+                            "Ca bán hàng được chọn đang trong trạng thái kiểm đếm chốt ca (Closing). Không thể tạo đơn mới.");
+                    }
+
+                    throw new BusinessException(
+                        "SHIFT_CLOSED_OR_INVALID",
+                        "Ca bán hàng được chọn đã kết thúc hoặc không tồn tại trên chi nhánh hiện tại. Vui lòng kiểm tra lại chế độ bán hàng.");
+                }
             }
         }
 
         // 1c. Kiểm tra tính đủ điều kiện trực ca của nhân viên thu ngân (REQ-STRICT-SCHEDULE-VALIDATION)
-        if (_shiftService != null && _tenantContext != null)
+        if (!isOwnerOrAdmin && _shiftService != null && _tenantContext != null)
         {
             var cashierId = _tenantContext.CurrentUserId;
             if (cashierId != Guid.Empty)
@@ -123,6 +153,16 @@ public class OrderService : IOrderService
                     throw new BusinessException(
                         "EMPLOYEE_NOT_SCHEDULED",
                         eligibility.Reason ?? "Bạn không có lịch làm việc trong ca hiện tại của chi nhánh.");
+                }
+
+                if (activeShift != null)
+                {
+                    await _shiftService.RecordParticipantAsync(
+                        activeShift.Id,
+                        cashierId,
+                        eligibility.EmployeeName,
+                        eligibility.EmployeeName,
+                        cancellationToken);
                 }
             }
         }
@@ -181,13 +221,21 @@ public class OrderService : IOrderService
 
         decimal GetConversionRate(OrderItemCreateDto item)
         {
+            var prod = products[item.ProductId];
             if (item.UnitId.HasValue && item.UnitId.Value != Guid.Empty)
             {
-                var prod = products[item.ProductId];
                 var matchedUnit = prod.Units?.FirstOrDefault(u => u.Id == item.UnitId.Value && !u.IsDeleted);
                 if (matchedUnit != null && matchedUnit.ConversionRate > 0)
                 {
                     return matchedUnit.ConversionRate;
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(item.UnitName) && prod.Units != null)
+            {
+                var matchedByName = prod.Units.FirstOrDefault(u => string.Equals(u.UnitName, item.UnitName, StringComparison.OrdinalIgnoreCase) && !u.IsDeleted);
+                if (matchedByName != null && matchedByName.ConversionRate > 0)
+                {
+                    return matchedByName.ConversionRate;
                 }
             }
             return 1.00m;
@@ -404,6 +452,33 @@ public class OrderService : IOrderService
         decimal finalAmount = Math.Max(0, totalAmount - totalDiscount);
         string? giftStockWarning = giftWarnings.Count > 0 ? string.Join("; ", giftWarnings) : null;
 
+        // Phân bổ chiết khấu cấp hóa đơn (orderDiscount) vào từng dòng hàng bán (không áp dụng quà tặng)
+        // để chốt đúng ActualPrice phục vụ đổi/trả hàng và hạch toán COGS/doanh thu thuần theo chuẩn KiotViet/Sapo
+        decimal nonGiftSubtotal = orderDetails.Where(d => !d.IsGift).Sum(d => d.UnitPrice * d.Qty - d.DiscountAmount);
+        if (orderDiscount > 0 && nonGiftSubtotal > 0)
+        {
+            decimal remainingToAllocate = orderDiscount;
+            var nonGiftItems = orderDetails.Where(d => !d.IsGift).ToList();
+            for (int i = 0; i < nonGiftItems.Count; i++)
+            {
+                var d = nonGiftItems[i];
+                decimal lineBase = (d.UnitPrice * d.Qty) - d.DiscountAmount;
+                decimal allocated;
+                if (i == nonGiftItems.Count - 1)
+                {
+                    allocated = Math.Min(remainingToAllocate, lineBase);
+                }
+                else
+                {
+                    allocated = Math.Min(remainingToAllocate, Math.Round(orderDiscount * (lineBase / nonGiftSubtotal), 2));
+                    remainingToAllocate -= allocated;
+                }
+
+                d.ActualPrice = d.Qty > 0 ? Math.Max(0, (lineBase - allocated) / d.Qty) : d.UnitPrice;
+                d.VatAmount = (d.ActualPrice * d.Qty) * d.AppliedVatRate;
+            }
+        }
+
         // 6. Xử lý phương thức thanh toán & Bán nợ
         string paymentMethodUpper = string.IsNullOrWhiteSpace(request.PaymentMethod) ? "CASH" : request.PaymentMethod.Trim().ToUpperInvariant();
         decimal cashTendered = request.CashTendered ?? finalAmount;
@@ -480,35 +555,48 @@ public class OrderService : IOrderService
             paymentStatus = "PAID";
         }
 
-        // 7. Tích điểm thưởng cho khách hàng
-        if (customer != null)
+        // 7. Tích điểm thưởng cho khách hàng (Khách lẻ KHÔNG tích điểm, tuân thủ cấu hình LoyaltySetting)
+        bool isWalkIn = customer == null
+            || string.Equals(customer.CustomerCode, "KHACHLE", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(customer.Name?.Trim(), "Khách lẻ", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(customer.Name?.Trim(), "Khách hàng lẻ", StringComparison.OrdinalIgnoreCase);
+
+        bool isLoyaltyEnabled = true;
+        if (!isWalkIn && customer != null)
         {
             decimal earningRate = 10000m;
             int earningPoints = 1;
             if (_promotionRepository != null)
             {
                 var loyaltySetting = await _promotionRepository.GetLoyaltySettingAsync(customer.TenantId, cancellationToken);
-                if (loyaltySetting != null && loyaltySetting.IsEnabled)
+                if (loyaltySetting != null)
                 {
-                    earningRate = loyaltySetting.EarningRateAmount > 0 ? loyaltySetting.EarningRateAmount : 10000m;
-                    earningPoints = loyaltySetting.EarningPoints > 0 ? loyaltySetting.EarningPoints : 1;
+                    isLoyaltyEnabled = loyaltySetting.IsEnabled;
+                    if (isLoyaltyEnabled)
+                    {
+                        earningRate = loyaltySetting.EarningRateAmount > 0 ? loyaltySetting.EarningRateAmount : 10000m;
+                        earningPoints = loyaltySetting.EarningPoints > 0 ? loyaltySetting.EarningPoints : 1;
+                    }
                 }
             }
 
-            if (request.PointsRedeemed.HasValue && request.PointsRedeemed.Value > 0)
+            if (isLoyaltyEnabled)
             {
-                int pointsToDeduct = Math.Min(customer.RewardPoints, request.PointsRedeemed.Value);
-                customer.RewardPoints -= pointsToDeduct;
-            }
+                if (request.PointsRedeemed.HasValue && request.PointsRedeemed.Value > 0)
+                {
+                    int pointsToDeduct = Math.Min(customer.RewardPoints, request.PointsRedeemed.Value);
+                    customer.RewardPoints -= pointsToDeduct;
+                }
 
-            int earnedPoints = (int)(finalAmount / earningRate) * earningPoints;
-            customer.RewardPoints += earnedPoints;
-            customer.TotalSpending += finalAmount;
-            customer.UpdatedAt = DateTime.UtcNow;
+                int earnedPoints = (int)(finalAmount / earningRate) * earningPoints;
+                customer.RewardPoints += earnedPoints;
+                customer.TotalSpending += finalAmount;
+                customer.UpdatedAt = DateTime.UtcNow;
+            }
         }
 
         // 8. Lưu Order Entity
-        Guid? shiftId = request.ShiftId ?? activeShift?.Id;
+        Guid? shiftId = request.ShiftId ?? (isOwnerOrAdmin ? null : activeShift?.Id);
         Guid? creatorId = null;
         if (_tenantContext != null && _tenantContext.CurrentUserId != Guid.Empty)
         {
@@ -524,8 +612,8 @@ public class OrderService : IOrderService
             : null;
         decimal recordedPromoDiscount = Math.Max(0m, request.PromotionDiscountAmount ?? 0m);
         decimal recordedVoucherDiscount = Math.Max(0m, request.VoucherDiscountAmount ?? 0m);
-        decimal recordedPointsDiscount = Math.Max(0m, request.PointsDiscountAmount ?? 0m);
-        int recordedPointsRedeemed = Math.Max(0, request.PointsRedeemed ?? 0);
+        decimal recordedPointsDiscount = (!isWalkIn && isLoyaltyEnabled) ? Math.Max(0m, request.PointsDiscountAmount ?? 0m) : 0m;
+        int recordedPointsRedeemed = (!isWalkIn && isLoyaltyEnabled) ? Math.Max(0, request.PointsRedeemed ?? 0) : 0;
         string? combinedPromoSummary = !string.IsNullOrWhiteSpace(request.AppliedPromotionSummary)
             ? request.AppliedPromotionSummary.Trim()
             : null;
@@ -587,17 +675,34 @@ public class OrderService : IOrderService
         {
             if (paymentMethodUpper == "CASH")
             {
-                var till = await _cashbookService.GetOrCreateTillAsync(order.BranchId, "Két quầy chính", cancellationToken);
-                await _cashbookService.ReceiveCashAsync(
-                    till.Id,
-                    FinanceAccountType.Till,
-                    finalAmount,
-                    "POS_SALE",
-                    order.Id,
-                    orderCode,
-                    $"Doanh thu bán hàng POS (Tiền mặt) đơn {orderCode}",
-                    cancellationToken
-                );
+                if (isOwnerOrAdmin && !shiftId.HasValue)
+                {
+                    var safe = await _cashbookService.GetOrCreateSafeAsync(order.BranchId, cancellationToken);
+                    await _cashbookService.ReceiveCashAsync(
+                        safe.Id,
+                        FinanceAccountType.Safe,
+                        finalAmount,
+                        "POS_SALE",
+                        order.Id,
+                        orderCode,
+                        $"Doanh thu bán hàng POS (Chủ cửa hàng - Tiền mặt) đơn {orderCode}",
+                        cancellationToken
+                    );
+                }
+                else
+                {
+                    var till = await _cashbookService.GetOrCreateTillAsync(order.BranchId, "Két quầy chính", cancellationToken);
+                    await _cashbookService.ReceiveCashAsync(
+                        till.Id,
+                        FinanceAccountType.Till,
+                        finalAmount,
+                        "POS_SALE",
+                        order.Id,
+                        orderCode,
+                        $"Doanh thu bán hàng POS (Tiền mặt) đơn {orderCode}",
+                        cancellationToken
+                    );
+                }
             }
             else if (paymentMethodUpper != "CREDIT" && paymentMethodUpper != "DEBT")
             {
@@ -633,8 +738,8 @@ public class OrderService : IOrderService
 
         await _orderRepository.AddAsync(order, cancellationToken);
 
-        // Ghi nhận nhân viên tham gia ca bán hàng chung (REQ-SHIFT-SHARED-02)
-        if (activeShift != null && _shiftRepository != null)
+        // Ghi nhận nhân viên tham gia ca bán hàng chung (REQ-SHIFT-SHARED-02 — không gán Chủ cửa hàng bán không mở ca)
+        if (shiftId.HasValue && activeShift != null && _shiftRepository != null)
         {
             var cashierId = creatorId ?? (activeShift.CashierUserId != Guid.Empty ? activeShift.CashierUserId : Guid.Empty);
             if (cashierId != Guid.Empty)
@@ -847,13 +952,21 @@ public class OrderService : IOrderService
             {
                 return item.ConversionRate;
             }
+            var prod = products[item.ProductId];
             if (item.UnitId.HasValue && item.UnitId.Value != Guid.Empty)
             {
-                var prod = products[item.ProductId];
                 var matchedUnit = prod.Units?.FirstOrDefault(u => u.Id == item.UnitId.Value && !u.IsDeleted);
                 if (matchedUnit != null && matchedUnit.ConversionRate > 0)
                 {
                     return matchedUnit.ConversionRate;
+                }
+            }
+            if (!string.IsNullOrWhiteSpace(item.UnitName) && prod.Units != null)
+            {
+                var matchedByName = prod.Units.FirstOrDefault(u => string.Equals(u.UnitName, item.UnitName, StringComparison.OrdinalIgnoreCase) && !u.IsDeleted);
+                if (matchedByName != null && matchedByName.ConversionRate > 0)
+                {
+                    return matchedByName.ConversionRate;
                 }
             }
             return item.ConversionRate > 0 ? item.ConversionRate : 1.00m;
@@ -1091,7 +1204,8 @@ public class OrderService : IOrderService
                 throw new InvalidOperationException($"Tiền đặt cọc tối thiểu phải bằng 10% tổng giá trị đơn hàng (Tối thiểu: {minDeposit:N0} đ, Thực tế: {request.DepositAmount:N0} đ).");
             }
 
-            Guid? preOrderShiftId = request.ShiftId ?? (_shiftRepository != null
+            bool isOwnerOrAdminPreOrder = IsOwnerOrAdminCaller();
+            Guid? preOrderShiftId = request.ShiftId ?? (!isOwnerOrAdminPreOrder && _shiftRepository != null
                 ? (await _shiftRepository.GetActiveShiftAsync(request.BranchId, cancellationToken: cancellationToken))?.Id
                 : null);
 
@@ -1200,62 +1314,97 @@ public class OrderService : IOrderService
             order.Note = $"{order.Note} | Xuất hàng: {request.Note}".Trim();
         }
 
-        // Tự động ghi nhận khoản thu phần còn lại vào ca làm việc đang mở của chi nhánh giao hàng
-        if (_shiftRepository != null && remainingAmount > 0)
+        // Tự động ghi nhận khoản thu phần còn lại (tách Két sắt chi nhánh nếu Chủ cửa hàng giao hàng không mở ca)
+        bool isOwnerOrAdminFulfill = IsOwnerOrAdminCaller();
+        if (remainingAmount > 0)
         {
-            var activeShift = request.ShiftId.HasValue && request.ShiftId.Value != Guid.Empty
-                ? await _shiftRepository.GetByIdAsync(request.ShiftId.Value, cancellationToken)
-                : await _shiftRepository.GetActiveShiftAsync(order.BranchId, cancellationToken: cancellationToken);
-
-            if (activeShift != null)
+            if (isOwnerOrAdminFulfill && !request.ShiftId.HasValue)
             {
-                if (string.Equals(request.PaymentMethod, "CASH", StringComparison.OrdinalIgnoreCase))
+                if (_cashbookService != null && string.Equals(request.PaymentMethod, "CASH", StringComparison.OrdinalIgnoreCase))
                 {
-                    var movement = new ShiftCashMovement
-                    {
-                        Id = Guid.NewGuid(),
-                        TenantId = order.TenantId,
-                        ShiftId = activeShift.Id,
-                        MovementType = CashMovementType.IN,
-                        Category = CashMovementCategory.PREORDER_PICKUP,
-                        Amount = remainingAmount,
-                        Reason = $"Thu tiền còn lại giao hàng đơn đặt trước '{order.OrderCode}'",
-                        CreatedByName = fulfillingCashierName,
-                        OccurredAtUtc = DateTime.UtcNow,
-                        Status = CashMovementStatus.Recorded,
-                        IsConfirmedByOwner = true
-                    };
-                    await _shiftRepository.AddCashMovementAsync(movement, cancellationToken);
-                    activeShift.TotalCashIn += remainingAmount;
-                    activeShift.ExpectedCash += remainingAmount;
+                    var safe = await _cashbookService.GetOrCreateSafeAsync(order.BranchId, cancellationToken);
+                    await _cashbookService.ReceiveCashAsync(
+                        safe.Id,
+                        FinanceAccountType.Safe,
+                        remainingAmount,
+                        "PREORDER_PICKUP",
+                        order.Id,
+                        order.OrderCode,
+                        $"Thu tiền còn lại giao hàng đơn đặt trước '{order.OrderCode}' (Chủ cửa hàng)",
+                        cancellationToken
+                    );
                 }
-                else
+            }
+            else if (_shiftRepository != null)
+            {
+                var activeShift = request.ShiftId.HasValue && request.ShiftId.Value != Guid.Empty
+                    ? await _shiftRepository.GetByIdAsync(request.ShiftId.Value, cancellationToken)
+                    : await _shiftRepository.GetActiveShiftAsync(order.BranchId, cancellationToken: cancellationToken);
+
+                if (activeShift != null)
                 {
-                    activeShift.TotalBankRevenue += remainingAmount;
+                    if (string.Equals(request.PaymentMethod, "CASH", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var movement = new ShiftCashMovement
+                        {
+                            Id = Guid.NewGuid(),
+                            TenantId = order.TenantId,
+                            ShiftId = activeShift.Id,
+                            MovementType = CashMovementType.IN,
+                            Category = CashMovementCategory.PREORDER_PICKUP,
+                            Amount = remainingAmount,
+                            Reason = $"Thu tiền còn lại giao hàng đơn đặt trước '{order.OrderCode}'",
+                            CreatedByName = fulfillingCashierName,
+                            OccurredAtUtc = DateTime.UtcNow,
+                            Status = CashMovementStatus.Recorded,
+                            IsConfirmedByOwner = true
+                        };
+                        await _shiftRepository.AddCashMovementAsync(movement, cancellationToken);
+                        activeShift.TotalCashIn += remainingAmount;
+                        activeShift.ExpectedCash += remainingAmount;
+                    }
+                    else
+                    {
+                        activeShift.TotalBankRevenue += remainingAmount;
+                    }
                 }
             }
         }
 
-        // Tích điểm thưởng cho khách hàng (10.000đ = 1 điểm)
+        // Tích điểm thưởng cho khách hàng (Khách lẻ KHÔNG tích điểm, tuân thủ cấu hình LoyaltySetting)
         if (order.CustomerId.HasValue && order.CustomerId.Value != Guid.Empty)
         {
             var customer = await _orderRepository.GetCustomerByIdAsync(order.CustomerId.Value, cancellationToken);
-            if (customer != null)
+            bool isWalkInCust = customer == null
+                || string.Equals(customer.CustomerCode, "KHACHLE", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(customer.Name?.Trim(), "Khách lẻ", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(customer.Name?.Trim(), "Khách hàng lẻ", StringComparison.OrdinalIgnoreCase);
+
+            if (!isWalkInCust && customer != null)
             {
                 decimal earningRate = 10000m;
                 int earningPoints = 1;
+                bool isLoyaltyEnabled = true;
                 if (_promotionRepository != null)
                 {
                     var loyaltySetting = await _promotionRepository.GetLoyaltySettingAsync(customer.TenantId, cancellationToken);
-                    if (loyaltySetting != null && loyaltySetting.IsEnabled)
+                    if (loyaltySetting != null)
                     {
-                        earningRate = loyaltySetting.EarningRateAmount > 0 ? loyaltySetting.EarningRateAmount : 10000m;
-                        earningPoints = loyaltySetting.EarningPoints > 0 ? loyaltySetting.EarningPoints : 1;
+                        isLoyaltyEnabled = loyaltySetting.IsEnabled;
+                        if (isLoyaltyEnabled)
+                        {
+                            earningRate = loyaltySetting.EarningRateAmount > 0 ? loyaltySetting.EarningRateAmount : 10000m;
+                            earningPoints = loyaltySetting.EarningPoints > 0 ? loyaltySetting.EarningPoints : 1;
+                        }
                     }
                 }
-                int pointsEarned = (int)(order.FinalAmount / earningRate) * earningPoints;
-                customer.RewardPoints += pointsEarned;
-                customer.TotalSpending += order.FinalAmount;
+                if (isLoyaltyEnabled)
+                {
+                    int pointsEarned = (int)(order.FinalAmount / earningRate) * earningPoints;
+                    customer.RewardPoints += pointsEarned;
+                    customer.TotalSpending += order.FinalAmount;
+                    customer.UpdatedAt = DateTime.UtcNow;
+                }
             }
         }
 
@@ -1529,8 +1678,25 @@ public class OrderService : IOrderService
             {
                 changeAmount = refundAmount;
 
-                // Tự động kiểm tra két và ghi nhận phiếu chi hoàn tiền nếu có ca làm việc đang mở
-                if (_shiftRepository != null)
+                // Tự động kiểm tra két và ghi nhận phiếu chi hoàn tiền (Chủ cửa hàng chi từ Két sắt chi nhánh, không đụng két ca thu ngân)
+                if (IsOwnerOrAdminCaller())
+                {
+                    if (_cashbookService != null)
+                    {
+                        var safe = await _cashbookService.GetOrCreateSafeAsync(originalOrder.BranchId, cancellationToken);
+                        await _cashbookService.DisburseCashAsync(
+                            safe.Id,
+                            FinanceAccountType.Safe,
+                            refundAmount,
+                            "RETURN_REFUND",
+                            originalOrder.Id,
+                            originalOrder.OrderCode,
+                            $"Hoàn tiền mặt đổi/trả đơn '{originalOrder.OrderCode}' (Chủ cửa hàng)",
+                            cancellationToken
+                        );
+                    }
+                }
+                else if (_shiftRepository != null)
                 {
                     var activeShift = await _shiftRepository.GetActiveShiftAsync(originalOrder.BranchId, cancellationToken: cancellationToken);
                     if (activeShift != null)
@@ -1691,5 +1857,12 @@ public class OrderService : IOrderService
             PointsDiscountAmount: order.PointsDiscountAmount,
             GiftStockWarning: giftStockWarning
         );
+    }
+
+    private bool IsOwnerOrAdminCaller()
+    {
+        var role = _tenantContext?.CurrentRole;
+        return string.Equals(role, "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase);
     }
 }

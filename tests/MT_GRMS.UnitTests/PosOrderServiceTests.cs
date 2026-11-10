@@ -448,6 +448,88 @@ public class PosOrderServiceTests
     }
 
     [Fact]
+    public async Task REQ_POS_06_CreateOrder_WalkInCustomer_DoesNotEarnRewardPoints()
+    {
+        // Arrange: Khách lẻ không gắn CustomerId hoặc khách có tên "Khách lẻ" -> không được tích điểm
+        var walkInCustomer = new Customer
+        {
+            Id = Guid.NewGuid(),
+            CustomerCode = "KHACHLE",
+            Name = "Khách lẻ",
+            Phone = "0999999999",
+            RewardPoints = 0,
+            TenantId = "tenant-unit-test"
+        };
+        _orderRepo.Customers.Add(walkInCustomer);
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: walkInCustomer.Id,
+            PaymentMethod: "CASH",
+            CashTendered: 20000m,
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(_prodCocaId, 2m, 10000m)
+            }
+        );
+
+        // Act
+        var result = await _orderService.CreateOrderAsync(request);
+
+        // Assert: Điểm vẫn là 0, không tích điểm
+        Assert.NotNull(result);
+        var updatedCust = _orderRepo.Customers.First(c => c.Id == walkInCustomer.Id);
+        Assert.Equal(0, updatedCust.RewardPoints);
+    }
+
+    [Fact]
+    public async Task REQ_POS_06_CreateOrder_WhenLoyaltyDisabled_DoesNotEarnRewardPoints()
+    {
+        // Arrange: Cấu hình tích điểm bị tắt (IsEnabled = false)
+        var mockPromoRepo = new Mock<IPromotionRepository>();
+        mockPromoRepo.Setup(x => x.GetLoyaltySettingAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LoyaltySetting
+            {
+                TenantId = "tenant-unit-test",
+                IsEnabled = false,
+                EarningRateAmount = 10000m,
+                EarningPoints = 1
+            });
+
+        var orderService = new OrderService(
+            _orderRepo,
+            _uow,
+            _printService,
+            debtService: null,
+            cashbookService: null,
+            validator: new OrderCreateRequestValidator(),
+            shiftRepository: null,
+            promotionRepository: mockPromoRepo.Object,
+            tenantContext: null);
+
+        var initPoints = _orderRepo.Customers.First(c => c.Id == _customerId).RewardPoints;
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            PaymentMethod: "CASH",
+            CashTendered: 30000m,
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(_prodCocaId, 3m, 10000m)
+            }
+        );
+
+        // Act
+        var result = await orderService.CreateOrderAsync(request);
+
+        // Assert: Điểm không thay đổi vì tính năng tích điểm đang tắt
+        Assert.NotNull(result);
+        var cust = _orderRepo.Customers.First(c => c.Id == _customerId);
+        Assert.Equal(initPoints, cust.RewardPoints);
+    }
+
+    [Fact]
     public void REQ_POS_04_ThermalPrintService_BuildEscPosReceipt_GeneratesValid43mmMiniSupermarketStream()
     {
         // Arrange: Tạo đơn hàng test khổ 43mm siêu thị mini
