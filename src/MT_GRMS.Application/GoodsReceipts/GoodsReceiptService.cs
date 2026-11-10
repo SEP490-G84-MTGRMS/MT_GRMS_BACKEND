@@ -253,9 +253,9 @@ public class GoodsReceiptService : IGoodsReceiptService
                 RejectedQty = rejectedQty,
                 UnitPrice = l.UnitPrice,
                 LineAmount = lineAmount,
-                BatchCode = l.BatchCode,
-                ManufactureDate = l.ManufactureDate,
-                ExpiryDate = l.ExpiryDate,
+                BatchCode = l.ManageBatch && !string.IsNullOrWhiteSpace(l.BatchCode) ? l.BatchCode.Trim() : null,
+                ManufactureDate = l.ManageBatch ? l.ManufactureDate : null,
+                ExpiryDate = l.ManageBatch ? l.ExpiryDate : null,
                 FreightAllocated = freightAlloc,
                 DiscountAllocated = discountAlloc,
                 VatAllocated = vatAlloc,
@@ -278,7 +278,7 @@ public class GoodsReceiptService : IGoodsReceiptService
             receipt.ConfirmedByUserId = actorUserId;
             receipt.ConfirmedAtUtc = DateTime.UtcNow;
 
-            await ApplyStockAndPoUpdatesAsync(tenantId, receipt, po, cancellationToken);
+            await ApplyStockAndPoUpdatesAsync(tenantId, receipt, po, productFlags, cancellationToken);
         }
         else
         {
@@ -331,7 +331,7 @@ public class GoodsReceiptService : IGoodsReceiptService
         }
         receipt.UpdatedAt = DateTime.UtcNow;
 
-        await ApplyStockAndPoUpdatesAsync(tenantId, receipt, po, cancellationToken);
+        await ApplyStockAndPoUpdatesAsync(tenantId, receipt, po, productFlags, cancellationToken);
 
         await _repository.UpdateAsync(receipt, cancellationToken);
 
@@ -493,18 +493,49 @@ public class GoodsReceiptService : IGoodsReceiptService
         string tenantId,
         GoodsReceipt receipt,
         PurchaseOrder? po,
+        IReadOnlyDictionary<Guid, (bool HasBatches, string Name)>? productFlags,
         CancellationToken cancellationToken)
     {
         // 1. Cập nhật tồn kho chi nhánh BranchStocks (Mục 10: Chỉ AcceptedQty được cộng vào tồn kho)
         foreach (var line in receipt.Lines.Where(l => l.AcceptedQty > 0))
         {
-            var stock = await _repository.GetBranchStockAsync(tenantId, receipt.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+            var hasBatches = productFlags != null && productFlags.TryGetValue(line.ProductId, out var flag)
+                ? flag.HasBatches
+                : line.Product?.HasBatches == true;
+
+            if (!hasBatches)
+            {
+                line.BatchCode = null;
+                line.ManufactureDate = null;
+                line.ExpiryDate = null;
+            }
+            else
+            {
+                line.BatchCode = string.IsNullOrWhiteSpace(line.BatchCode) ? null : line.BatchCode.Trim();
+            }
+
+            var stock = await _repository.GetBranchStockAsync(
+                tenantId,
+                receipt.BranchId,
+                line.ProductId,
+                hasBatches ? line.BatchCode : null,
+                cancellationToken);
+
             if (stock != null)
             {
                 stock.QuantityOnHand += line.AcceptedQty;
                 stock.LandedCostPerUnit = line.LandedUnitCost;
-                if (line.ExpiryDate.HasValue) stock.ExpiryDate = line.ExpiryDate;
-                if (line.ManufactureDate.HasValue) stock.ManufactureDate = line.ManufactureDate;
+                if (!hasBatches)
+                {
+                    stock.BatchCode = null;
+                    stock.ManufactureDate = null;
+                    stock.ExpiryDate = null;
+                }
+                else
+                {
+                    if (line.ExpiryDate.HasValue) stock.ExpiryDate = line.ExpiryDate;
+                    if (line.ManufactureDate.HasValue) stock.ManufactureDate = line.ManufactureDate;
+                }
                 stock.UpdatedAt = DateTime.UtcNow;
                 line.BranchStockId = stock.Id;
             }
@@ -517,9 +548,9 @@ public class GoodsReceiptService : IGoodsReceiptService
                     BranchId = receipt.BranchId,
                     ProductId = line.ProductId,
                     SupplierId = receipt.SupplierId,
-                    BatchCode = line.BatchCode,
-                    ManufactureDate = line.ManufactureDate,
-                    ExpiryDate = line.ExpiryDate,
+                    BatchCode = hasBatches ? line.BatchCode : null,
+                    ManufactureDate = hasBatches ? line.ManufactureDate : null,
+                    ExpiryDate = hasBatches ? line.ExpiryDate : null,
                     QuantityOnHand = line.AcceptedQty,
                     QuantityReserved = 0,
                     LandedCostPerUnit = line.LandedUnitCost,
