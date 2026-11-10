@@ -360,7 +360,8 @@ public class PromotionService : IPromotionService
             voucherResult = await ValidateVoucherAsync(new ValidateVoucherRequest(
                 request.CouponCode,
                 Math.Max(0, request.SubTotal - totalDiscount),
-                request.CustomerId
+                request.CustomerId,
+                HasOtherPromotions: totalDiscount > 0m
             ), cancellationToken);
 
             if (voucherResult.IsValid && voucherResult.DiscountAmount > 0)
@@ -387,7 +388,33 @@ public class PromotionService : IPromotionService
     }
 
     private static readonly Regex TiersJsonRegex = new(@"\[TIERS_JSON\]([\s\S]*?)\[/TIERS_JSON\]", RegexOptions.Compiled);
+    private static readonly Regex ConfigJsonRegex = new(@"\[CONFIG_JSON\]([\s\S]*?)\[/CONFIG_JSON\]", RegexOptions.Compiled);
     private static readonly JsonSerializerOptions TiersJsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    private static bool ParseAllowWithPromotions(string? description)
+    {
+        if (string.IsNullOrWhiteSpace(description) || !description.Contains("[CONFIG_JSON]", StringComparison.Ordinal))
+            return true;
+
+        var match = ConfigJsonRegex.Match(description);
+        if (!match.Success || string.IsNullOrWhiteSpace(match.Groups[1].Value))
+            return true;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(match.Groups[1].Value);
+            if (doc.RootElement.TryGetProperty("allowWithPromotions", out var prop))
+            {
+                return prop.GetBoolean();
+            }
+        }
+        catch
+        {
+            // fallback cho phép gộp mặc định
+        }
+
+        return true;
+    }
 
     private sealed class PromotionTierMetadata
     {
@@ -398,6 +425,7 @@ public class PromotionService : IPromotionService
         public decimal? RequiredQty { get; set; }
         public Guid? BuyProductId { get; set; }
         public string? BuyProductName { get; set; }
+        public string? BuyUnit { get; set; }
         public Guid? GiftProductId { get; set; }
         public string? GiftProductName { get; set; }
         public string? GiftUnit { get; set; }
@@ -471,7 +499,10 @@ public class PromotionService : IPromotionService
                 {
                     decimal reqQty = Math.Max(1m, t.RequiredQty ?? 1m);
                     decimal boughtQty = (t.BuyProductId.HasValue && t.BuyProductId.Value != Guid.Empty)
-                        ? cartItems.Where(i => i.ProductId == t.BuyProductId.Value).Sum(i => GetCartItemBaseQty(i))
+                        ? cartItems
+                            .Where(i => i.ProductId == t.BuyProductId.Value &&
+                                        (string.IsNullOrWhiteSpace(t.BuyUnit) || string.Equals(i.Unit, t.BuyUnit, StringComparison.OrdinalIgnoreCase)))
+                            .Sum(i => GetCartItemBaseQty(i))
                         : cartItems.Sum(i => GetCartItemBaseQty(i));
                     int mult = boughtQty >= reqQty ? (int)(boughtQty / reqQty) : 0;
                     return (Tier: t, ReqQty: reqQty, Multiple: mult);
@@ -691,6 +722,15 @@ public class PromotionService : IPromotionService
         if (await _promotionRepository.ExistsByCodeAsync(request.BatchCode, cancellationToken))
             throw new BusinessException("DUPLICATE_CODE", $"Mã đợt voucher '{request.BatchCode}' đã tồn tại.");
 
+        string? finalDescription = request.Description;
+        if (request.AllowWithPromotions.HasValue)
+        {
+            var configJson = $"[CONFIG_JSON]{{\"allowWithPromotions\":{request.AllowWithPromotions.Value.ToString().ToLowerInvariant()}}}[/CONFIG_JSON]";
+            finalDescription = string.IsNullOrWhiteSpace(finalDescription)
+                ? configJson
+                : $"{finalDescription.Trim()}\n{configJson}";
+        }
+
         var batch = new Promotion
         {
             TenantId = _tenantContext.CurrentTenantId,
@@ -705,7 +745,7 @@ public class PromotionService : IPromotionService
             StartDate = request.StartDate,
             EndDate = request.EndDate,
             IsActive = true,
-            Description = request.Description,
+            Description = finalDescription,
             VoucherPrefix = request.Prefix.Trim().ToUpper(),
             TotalVoucherQuantity = 0
         };
@@ -829,6 +869,22 @@ public class PromotionService : IPromotionService
         if (request.CartTotal < promo.MinOrderValue)
             return new ValidateVoucherResponse(false, $"Đơn hàng chưa đạt giá trị tối thiểu {promo.MinOrderValue:N0} đ để dùng voucher này", 0, codeEntity.Code);
 
+        bool allowWithPromotions = ParseAllowWithPromotions(promo.Description);
+        if (!allowWithPromotions && request.HasOtherPromotions)
+        {
+            return new ValidateVoucherResponse(
+                IsValid: false,
+                Message: "Voucher này không áp dụng đồng thời với chương trình khuyến mãi khác",
+                DiscountAmount: 0,
+                Code: codeEntity.Code,
+                PromotionId: promo.Id,
+                PromotionName: promo.PromotionName,
+                DiscountType: promo.DiscountValue <= 100 && promo.MaxDiscountAmount.HasValue ? "PERCENT" : "FIXED_AMOUNT",
+                DiscountValue: promo.DiscountValue,
+                AllowWithPromotions: false
+            );
+        }
+
         // Tính toán số tiền chiết khấu
         decimal discount = 0;
         string discountType = promo.DiscountValue <= 100 && promo.DiscountValue > 0 && promo.MaxDiscountAmount.HasValue
@@ -858,7 +914,8 @@ public class PromotionService : IPromotionService
             PromotionId: promo.Id,
             PromotionName: promo.PromotionName,
             DiscountType: discountType,
-            DiscountValue: promo.DiscountValue
+            DiscountValue: promo.DiscountValue,
+            AllowWithPromotions: allowWithPromotions
         );
     }
 
@@ -1182,6 +1239,7 @@ public class PromotionService : IPromotionService
             : "ACTIVE";
 
         string discountType = p.DiscountValue <= 100 && p.MaxDiscountAmount.HasValue ? "PERCENT" : "FIXED_AMOUNT";
+        bool allowWithPromotions = ParseAllowWithPromotions(p.Description);
 
         return new VoucherBatchResponse(
             p.Id,
@@ -1198,7 +1256,8 @@ public class PromotionService : IPromotionService
             status,
             p.VoucherPrefix ?? "VC",
             p.Description,
-            p.CreatedAt
+            p.CreatedAt,
+            allowWithPromotions
         );
     }
 
