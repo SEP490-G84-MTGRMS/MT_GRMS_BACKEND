@@ -43,3 +43,4 @@ dừng giữa chừng và nhiều API trả `500` (suppliers, pos/cash-movements
 - Cần review kỹ: `SyncMissingColumnsAsync` và đoạn chạy script theo từng câu lệnh trong `DbInitializer.cs`.
 - Hậu merge: **không cần migration**; chỉ cần chạy lại Backend, DB cũ sẽ tự được vá cột/bảng thiếu.
 - Khuyến nghị cho nhóm: mỗi khi thêm cột/bảng mới vào entity, chạy lại Backend để schema tự đồng bộ.
+
