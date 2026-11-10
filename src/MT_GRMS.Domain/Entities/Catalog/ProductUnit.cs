@@ -5,7 +5,7 @@ namespace MT_GRMS.Domain.Entities.Catalog;
 /// <summary>
 /// Bảng ProductUnits (Đơn vị tính quy đổi)
 /// </summary>
-public class ProductUnit : BaseEntity
+public class ProductUnit : BaseTenantEntity
 {
     public Guid ProductId { get; set; }
     public string UnitName { get; set; } = string.Empty;
@@ -13,6 +13,7 @@ public class ProductUnit : BaseEntity
     public decimal Price { get; set; } = 0.00m;
     public string? Barcode { get; set; }
     public bool IsBaseUnit { get; set; } = false;
+    public bool IsPurchaseUnit { get; set; } = false;
 
     // Navigation
     public Product? Product { get; set; }
@@ -31,7 +32,8 @@ public class ProductUnit : BaseEntity
         decimal conversionRate,
         decimal price,
         string? barcode = null,
-        bool isBaseUnit = false)
+        bool isBaseUnit = false,
+        bool isPurchaseUnit = false)
     {
         ProductId = productId;
         UnitName = unitName;
@@ -39,5 +41,6 @@ public class ProductUnit : BaseEntity
         Price = price;
         Barcode = barcode;
         IsBaseUnit = isBaseUnit;
+        IsPurchaseUnit = isPurchaseUnit;
     }
 }

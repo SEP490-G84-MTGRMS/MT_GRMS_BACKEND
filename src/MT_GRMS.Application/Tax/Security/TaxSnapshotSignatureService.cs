@@ -1,4 +1,4 @@
-﻿using System.Security.Cryptography;
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Configuration;
 using MT_GRMS.Domain.Entities.Finance;
@@ -94,7 +94,8 @@ public class TaxSnapshotSignatureService : ITaxSnapshotSignatureService
 
         return string.Format(
             System.Globalization.CultureInfo.InvariantCulture,
-            "{{\"Year\":{0},\"PeriodType\":{1},\"PeriodNumber\":{2},\"TaxableRevenue\":{3:F2},\"TotalTaxAmount\":{4:F2},\"BookDataHash\":\"{5}\",\"FinalizedAtUtc\":\"{6:yyyy-MM-ddTHH:mm:ssZ}\",\"FinalizedBy\":\"{7}\"}}",
+            "{{\"TenantId\":\"{0}\",\"Year\":{1},\"PeriodType\":{2},\"PeriodNumber\":{3},\"TaxableRevenue\":{4:F2},\"TotalTaxAmount\":{5:F2},\"BookDataHash\":\"{6}\",\"FinalizedAtUtc\":\"{7:yyyy-MM-ddTHH:mm:ssZ}\",\"FinalizedBy\":\"{8}\"}}",
+            s.TenantId ?? string.Empty,
             s.Year,
             (int)s.PeriodType,
             s.PeriodNumber,

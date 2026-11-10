@@ -46,6 +46,7 @@ public class CustomerDebtController : BaseApiController
 
     [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost("adjust")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<CustomerDebtEntryResponse>>> AdjustDebt([FromBody] AdjustDebtRequest request, CancellationToken ct)
     {
         var result = await _debtService.AdjustDebtAsync(request, ct);
@@ -54,6 +55,7 @@ public class CustomerDebtController : BaseApiController
 
     [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost("write-off")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<CustomerDebtEntryResponse>>> WriteOffBadDebt([FromBody] WriteOffBadDebtRequest request, CancellationToken ct)
     {
         var result = await _debtService.WriteOffBadDebtAsync(request, ct);

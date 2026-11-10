@@ -317,7 +317,7 @@ public class AuthService : IAuthService
             Code = tenantCode.Length > 20 ? tenantCode.Substring(0, 20) : tenantCode,
             Hotline = request.Phone.Trim(),
             Status = "ACTIVE",
-            CurrentPlan = "PRO",
+            CurrentPlan = "TRIAL",
             SubscriptionStatus = "TRIAL",
             HasStaffManagementAddon = true,
             WalletBalance = 0m,
@@ -326,6 +326,7 @@ public class AuthService : IAuthService
 
         var userId = $"usr_{Guid.NewGuid():N}";
         var userEmail = string.IsNullOrWhiteSpace(request.Email) ? $"{request.Phone.Trim()}@mtgrms.vn" : request.Email.Trim();
+        var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
         var user = new User
         {
             Id = userId,
@@ -337,6 +338,8 @@ public class AuthService : IAuthService
             IsActive = true,
             IsAdmin = false,
             IsEmailVerified = true,
+            RefreshToken = refreshToken,
+            RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7),
             CreatedAt = DateTime.UtcNow
         };
 
@@ -355,7 +358,6 @@ public class AuthService : IAuthService
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
         var accessToken = GenerateJwtToken(user.Id, user.UserName, user.Email, UserRoleNames.StoreOwner, tenant.Id, false, expiresAt, branch.Id);
-        var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
 
         var userInfo = new UserInfo(
             Id: user.Id,
@@ -389,12 +391,28 @@ public class AuthService : IAuthService
         var issuer = _configuration?["Jwt:Issuer"] ?? "MTGRMS_API";
         var audience = _configuration?["Jwt:Audience"] ?? "MTGRMS_CLIENT";
 
+        var rolesToAdd = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { role };
+        if (role.Equals("STORE_OWNER", StringComparison.OrdinalIgnoreCase) || role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase))
+        {
+            rolesToAdd.Add("StoreOwner");
+            rolesToAdd.Add("STORE_OWNER");
+        }
+        else if (role.Equals("ADMIN", StringComparison.OrdinalIgnoreCase) || role.Equals("Admin", StringComparison.OrdinalIgnoreCase))
+        {
+            rolesToAdd.Add("Admin");
+            rolesToAdd.Add("ADMIN");
+        }
+        else
+        {
+            rolesToAdd.Add("Employee");
+            rolesToAdd.Add("EMPLOYEE");
+        }
+
         var claims = new List<Claim>
         {
             new Claim(ClaimTypes.NameIdentifier, userId),
             new Claim(ClaimTypes.Name, username),
             new Claim(ClaimTypes.Email, email),
-            new Claim(ClaimTypes.Role, role),
             new Claim("role", role),
             new Claim("tenant_id", tenantId),
             new Claim("is_admin", isAdmin ? "true" : "false"),
@@ -404,6 +422,11 @@ public class AuthService : IAuthService
         if (branchId.HasValue)
         {
             claims.Add(new Claim("branch_id", branchId.Value.ToString()));
+        }
+
+        foreach (var r in rolesToAdd)
+        {
+            claims.Add(new Claim(ClaimTypes.Role, r));
         }
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));

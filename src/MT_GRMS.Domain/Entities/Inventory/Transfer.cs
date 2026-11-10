@@ -7,7 +7,7 @@ namespace MT_GRMS.Domain.Entities.Inventory;
 /// <summary>
 /// Bảng Transfers (Phiếu điều chuyển kho 2 pha giữa các chi nhánh)
 /// </summary>
-public class Transfer : BaseEntity
+public class Transfer : BaseTenantEntity
 {
     public string TransferCode { get; set; } = string.Empty;
     public Guid FromBranchId { get; set; }

@@ -29,6 +29,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
     private readonly Security.ITaxSnapshotSignatureService _signatureService;
     private readonly IConfiguration? _configuration;
+    private readonly Common.ITenantContext? _tenantContext;
 
     public const decimal TaxExemptionThreshold = RevenuePercentageTaxStrategy.TaxExemptionThreshold;
 
@@ -59,13 +60,15 @@ public class HouseholdTaxService : IHouseholdTaxService
         ITaxCalculationStrategyFactory strategyFactory,
         Security.IPinVerificationService? pinService = null,
         Security.ITaxSnapshotSignatureService? signatureService = null,
-        IConfiguration? configuration = null)
+        IConfiguration? configuration = null,
+        Common.ITenantContext? tenantContext = null)
     {
         _repository = repository;
         _strategyFactory = strategyFactory;
         _pinService = pinService;
         _signatureService = signatureService ?? new Security.TaxSnapshotSignatureService();
         _configuration = configuration;
+        _tenantContext = tenantContext;
     }
 
     private DateTime GetVatReductionDeadlineUtc()
@@ -569,6 +572,10 @@ public class HouseholdTaxService : IHouseholdTaxService
 
         };
 
+        var s2eEntries = bookEntries.Where(e => e.BookCode == "S2e-HKD" && !e.IsSummaryRow).ToList();
+        var totalCashBankReceipts = s2eEntries.Sum(e => e.InAmount ?? 0m);
+        var totalCashBankDisbursements = s2eEntries.Sum(e => e.OutAmount ?? 0m);
+
         var booksSummary = new TaxBooksSummaryDto
 
         {
@@ -578,6 +585,10 @@ public class HouseholdTaxService : IHouseholdTaxService
             TotalRecordedRevenue = taxableRevenueInPeriod,
 
             TotalRecordedExpenses = deductibleExpenses,
+
+            TotalCashAndBankReceipts = totalCashBankReceipts,
+
+            TotalCashAndBankDisbursements = totalCashBankDisbursements,
 
             TotalTaxObligationsAccrued = calcResult.TotalTaxAmount,
 
@@ -765,6 +776,16 @@ public class HouseholdTaxService : IHouseholdTaxService
 
         var (group, _, _) = DetermineHouseholdGroup(annualAccumulatedRevenue);
 
+        var calcMethod = (group == HouseholdTaxGroup.Group3_3BTo50B ||
+                          group == HouseholdTaxGroup.Group4_Over50B ||
+                          bookType == AccountingBookType.S2b_RevenueDeclaration ||
+                          bookType == AccountingBookType.S2c_RevenueAndExpense ||
+                          bookType == AccountingBookType.S2d_MaterialsAndGoods ||
+                          bookType == AccountingBookType.S2e_CashAndBank ||
+                          bookType == AccountingBookType.S3a_TaxObligation)
+            ? TaxCalculationMethod.DeclarationBased
+            : TaxCalculationMethod.RevenuePercentage;
+
         return await _repository.GetBookEntriesAsync(
 
             fromDateUtc,
@@ -775,7 +796,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
             group,
 
-            TaxCalculationMethod.RevenuePercentage,
+            calcMethod,
 
             bookType,
 
@@ -1041,6 +1062,8 @@ public class HouseholdTaxService : IHouseholdTaxService
 
         {
 
+            TenantId = _tenantContext?.CurrentTenantId ?? string.Empty,
+
             BranchId = request.BranchId,
 
             PeriodType = request.PeriodType,
@@ -1205,7 +1228,9 @@ public class HouseholdTaxService : IHouseholdTaxService
 
             HouseholdGroup = s.HouseholdGroup,
 
-            CalculationMethod = s.HouseholdGroup == HouseholdTaxGroup.Group1_Under1B
+            AppliedPitMethod = s.AppliedPitMethod,
+
+            CalculationMethod = s.AppliedPitMethod ?? (s.HouseholdGroup == HouseholdTaxGroup.Group1_Under1B
 
                 ? TaxCalculationMethod.Exempt
 
@@ -1213,7 +1238,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
                     ? TaxCalculationMethod.DeclarationBased
 
-                    : TaxCalculationMethod.RevenuePercentage),
+                    : TaxCalculationMethod.RevenuePercentage)),
 
             IsTaxExempt = s.IsTaxExempt,
 
@@ -1279,7 +1304,9 @@ public class HouseholdTaxService : IHouseholdTaxService
 
             HouseholdGroup = s.HouseholdGroup,
 
-            CalculationMethod = s.HouseholdGroup == HouseholdTaxGroup.Group1_Under1B
+            AppliedPitMethod = s.AppliedPitMethod,
+
+            CalculationMethod = s.AppliedPitMethod ?? (s.HouseholdGroup == HouseholdTaxGroup.Group1_Under1B
 
                 ? TaxCalculationMethod.Exempt
 
@@ -1287,7 +1314,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
                     ? TaxCalculationMethod.DeclarationBased
 
-                    : TaxCalculationMethod.RevenuePercentage),
+                    : TaxCalculationMethod.RevenuePercentage)),
 
             IsTaxExempt = s.IsTaxExempt,
 

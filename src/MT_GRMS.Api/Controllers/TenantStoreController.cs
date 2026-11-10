@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Admin.Dtos;
 using MT_GRMS.Application.Admin.Services;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Infrastructure.Persistence;
 
@@ -70,6 +71,7 @@ public class TenantStoreController : BaseApiController
     /// Cập nhật thông tin gian hàng của khách thuê (Tên chuỗi, MST, Hotline, Địa chỉ, Thành phố)
     /// </summary>
     [HttpPut("store-info")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> UpdateStoreInfo([FromBody] UpdateTenantRequest request, CancellationToken cancellationToken)
     {
         var tenant = await ResolveCurrentTenantAsync(cancellationToken);
@@ -172,6 +174,7 @@ public class TenantStoreController : BaseApiController
     /// Đặt mua hoặc nâng cấp / gia hạn gói dịch vụ SaaS cho gian hàng
     /// </summary>
     [HttpPost("subscriptions/purchase")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> PurchaseSubscription(
         [FromBody] PurchaseSubscriptionRequest request,
         CancellationToken cancellationToken)
@@ -284,12 +287,12 @@ public class TenantStoreController : BaseApiController
         if (isTrial)
         {
             newExpiresAt = DateTime.UtcNow.AddDays(3);
-            tenant.CurrentPlan = "PRO";
+            tenant.CurrentPlan = "TRIAL";
             tenant.SubscriptionStatus = "TRIAL";
             tenant.SubscriptionExpiresAt = newExpiresAt;
-            tenant.HasStaffManagementAddon = true; // Gói Pro dùng thử mở khóa full nhân viên
+            tenant.HasStaffManagementAddon = true; // Gói Dùng thử mở khóa trải nghiệm quản lý nhân viên
             tenant.Status = "ACTIVE";
-            resultMessage = "Kích hoạt thành công 3 ngày dùng thử miễn phí Full tính năng Gói Pro.";
+            resultMessage = "Kích hoạt thành công 3 ngày dùng thử miễn phí Gói Dùng Thử (Trải Nghiệm).";
         }
         else
         {
@@ -340,13 +343,13 @@ public class TenantStoreController : BaseApiController
     }
 
     /// <summary>
-    /// Kích hoạt gói dùng thử 3 ngày miễn phí Full tính năng Gói Pro cho gian hàng
+    /// Kích hoạt gói dùng thử 3 ngày miễn phí cho gian hàng
     /// </summary>
     [HttpPost("subscriptions/trial")]
     public async Task<IActionResult> ActivateTrialSubscription(CancellationToken cancellationToken)
     {
         return await PurchaseSubscription(new PurchaseSubscriptionRequest(
-            PlanCode: "PRO",
+            PlanCode: "TRIAL",
             Months: 0,
             ExtraBranches: 0,
             ExtraWarehouses: 0,

@@ -28,11 +28,27 @@ public class MultiTenantMiddleware
                 ?? context.User.FindFirst("RoleName")?.Value;
 
             tenantContext.SetRawUserId(userIdClaim);
-            tenantContext.SetContext(tenantId ?? string.Empty, userId, branchId);
-            tenantContext.SetRole(role);
 
-            await _next(context);
-            return;
+            // INV-1 & TEN-05: Chỉ System Admin mới có quyền switch tenant qua header X-Tenant-Id
+            if (string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase))
+            {
+                var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(headerTenantId))
+                {
+                    tenantId = headerTenantId;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(tenantId))
+            {
+                tenantContext.SetContext(tenantId, userId, branchId);
+                tenantContext.SetRole(role);
+            }
+            else
+            {
+                tenantContext.SetContext(string.Empty, userId, branchId);
+                tenantContext.SetRole(role);
+            }
         }
 
         // Hỗ trợ header X-Tenant-Id hoặc fallback tenant cho môi trường dev/standalone
@@ -59,7 +75,6 @@ public class MultiTenantMiddleware
                 tenantContext.SetRole("STORE_OWNER");
             }
         }
-
         await _next(context);
     }
 }

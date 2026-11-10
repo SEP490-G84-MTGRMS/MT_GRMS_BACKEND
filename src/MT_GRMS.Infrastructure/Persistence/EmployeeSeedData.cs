@@ -491,7 +491,8 @@ public static class EmployeeSeedData
                 {
                     if (!existing.Allowances.Any(a => a.Name == name))
                     {
-                        await context.EmployeeAllowances.AddAsync(new EmployeeAllowance
+                        // Thêm qua DbSet (state Added) - tránh EF coi entity có sẵn Id là Modified → UPDATE 0 dòng
+                        context.EmployeeAllowances.Add(new EmployeeAllowance
                         {
                             Id = Uuid7.NewGuid(),
                             TenantId = tenantId,
@@ -1246,9 +1247,11 @@ public static class EmployeeSeedData
             OvertimeMinutes = otMin,
             ActualWorkHours = actualHours,
 
-            // Phê duyệt
+            // Phê duyệt (Nếu có OT thì gán ApprovalType = OVERTIME đã được duyệt)
             Status = ScheduleStatus.Completed,
+            ApprovalType = otMin > 0 ? "OVERTIME" : null,
             ApprovalStatus = ScheduleApprovalStatus.Approved,
+            ApprovalReason = otMin > 0 ? $"Làm thêm giờ được duyệt ({otMin} phút)" : null,
             ApprovedBy = "usr_store_owner",
             ApprovedAt = workDate.Date.AddHours(23),
 

@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text.Json;
+using Microsoft.Extensions.Hosting;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Constants;
@@ -11,11 +12,16 @@ public class ExceptionHandlingMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly ILogger<ExceptionHandlingMiddleware> _logger;
+    private readonly IHostEnvironment _env;
 
-    public ExceptionHandlingMiddleware(RequestDelegate next, ILogger<ExceptionHandlingMiddleware> logger)
+    public ExceptionHandlingMiddleware(
+        RequestDelegate next,
+        ILogger<ExceptionHandlingMiddleware> logger,
+        IHostEnvironment env)
     {
         _next = next;
         _logger = logger;
+        _env = env;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -80,7 +86,11 @@ public class ExceptionHandlingMiddleware
 
             default:
                 statusCode = (int)HttpStatusCode.InternalServerError;
-                apiResponse = ApiResponse<object>.Fail(ErrorCodes.UnhandledError, $"Lỗi: {exception.Message} | {exception.InnerException?.Message}", statusCode);
+                // SEC-06: Ngăn chặn Information Disclosure trên môi trường Production/Staging
+                var errorMessage = _env.IsDevelopment()
+                    ? $"Lỗi: {exception.Message} | {exception.InnerException?.Message}"
+                    : "Đã xảy ra lỗi hệ thống. Vui lòng liên hệ quản trị viên.";
+                apiResponse = ApiResponse<object>.Fail(ErrorCodes.UnhandledError, errorMessage, statusCode);
                 _logger.LogError(exception, "Unhandled exception occurred");
                 break;
         }

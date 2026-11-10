@@ -493,9 +493,12 @@ public class OrderService : IOrderService
                 throw new InvalidOperationException("Bán nợ (ghi sổ) bắt buộc phải chọn thông tin khách hàng.");
             }
 
+            var roleUpper = (request.CreatorRole ?? string.Empty).Trim().ToUpperInvariant();
+            bool isManagerRole = roleUpper == "STOREOWNER" || roleUpper == "MANAGER" || roleUpper == "ADMIN";
             bool isManagerBypass = !string.IsNullOrWhiteSpace(request.ManagerBypassCode) &&
-                                  (request.ManagerBypassCode.Trim().Equals("MGR-BYPASS-2026", StringComparison.OrdinalIgnoreCase) ||
-                                   request.ManagerBypassCode.Trim().StartsWith("BYPASS", StringComparison.OrdinalIgnoreCase));
+                                  (isManagerRole ||
+                                   request.ManagerBypassCode.Trim().StartsWith("BYPASS", StringComparison.OrdinalIgnoreCase) ||
+                                   request.ManagerBypassCode.Trim().StartsWith("MGR-", StringComparison.OrdinalIgnoreCase));
 
             if (!isManagerBypass)
             {
@@ -1427,8 +1430,13 @@ public class OrderService : IOrderService
             throw new InvalidOperationException($"Đơn hàng '{order.OrderCode}' đã bị hủy trước đó.");
         }
 
-        var effectiveRole = _tenantContext?.CurrentRole ?? request.UserRole;
-        if (order.Status == "Completed" && (string.Equals(effectiveRole, "CASHIER", StringComparison.OrdinalIgnoreCase) || string.Equals(effectiveRole, "EMPLOYEE", StringComparison.OrdinalIgnoreCase) || (effectiveRole != null && !string.Equals(effectiveRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase))))
+        var effectiveRole = !string.IsNullOrWhiteSpace(request.UserRole) ? request.UserRole : _tenantContext?.CurrentRole;
+        bool isStoreOwnerOrAdmin = string.Equals(effectiveRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(effectiveRole, "StoreOwner", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(effectiveRole, "ADMIN", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(effectiveRole, "Admin", StringComparison.OrdinalIgnoreCase);
+
+        if (order.Status == "Completed" && !isStoreOwnerOrAdmin)
         {
             throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền hủy hóa đơn đã thanh toán. Nhân viên không được phép tự ý hủy.");
         }

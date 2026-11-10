@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -16,6 +17,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/products")]
+[Authorize]
 public class ProductsController : BaseApiController
 {
     private readonly ICatalogService _catalogService;
@@ -190,3 +192,4 @@ public class ProductsController : BaseApiController
         return Ok(ApiResponse<IReadOnlyList<ProductPriceHistoryDto>>.Ok(result));
     }
 }
+

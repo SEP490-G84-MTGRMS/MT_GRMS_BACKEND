@@ -33,7 +33,7 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.Property(x => x.PointsRedeemed).HasDefaultValue(0);
         builder.Property(x => x.PointsDiscountAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
 
-        builder.HasIndex(x => x.OrderCode).IsUnique();
+        builder.HasIndex(x => new { x.TenantId, x.OrderCode }).IsUnique();
         builder.HasIndex(x => x.ShiftId);
         builder.HasIndex(x => x.AppliedPromotionId);
         builder.HasIndex(x => x.AppliedVoucherCode);

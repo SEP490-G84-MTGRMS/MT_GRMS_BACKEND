@@ -14,6 +14,7 @@ public class ImageUploadRequest
 
 [ApiController]
 [Route("api/media")]
+[Authorize]
 public class MediaController : BaseApiController
 {
     private static readonly HashSet<string> AllowedExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -101,3 +102,4 @@ public class MediaController : BaseApiController
         return UploadImage(request?.File, request?.Folder, cancellationToken);
     }
 }
+

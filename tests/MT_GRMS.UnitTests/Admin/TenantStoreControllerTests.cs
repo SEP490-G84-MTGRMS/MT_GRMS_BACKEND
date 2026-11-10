@@ -34,7 +34,8 @@ public class TenantStoreControllerTests
             Subdomain = "hanoi-mart",
             Code = "HN-MART",
             Status = "ACTIVE",
-            CurrentPlan = "PRO"
+            CurrentPlan = "PRO",
+            WalletBalance = 20000000m
         });
         _dbContext.SaveChanges();
 
@@ -105,6 +106,8 @@ public class TenantStoreControllerTests
         var resp = Assert.IsType<ApiResponse<IReadOnlyList<PlanSummaryResponse>>>(ok.Value);
         Assert.True(resp.Success);
         Assert.Equal(3, resp.Data!.Count);
+        Assert.Contains(resp.Data!, p => p.Code == "STANDARD");
+        Assert.Contains(resp.Data!, p => p.Code == "TRIAL");
         var proPlan = Assert.Single(resp.Data!, p => p.Code == "PRO");
         Assert.Equal(330000m, proPlan.MonthlyPrice);
     }

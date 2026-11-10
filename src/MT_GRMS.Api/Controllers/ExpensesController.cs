@@ -1,11 +1,15 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Expenses;
 using MT_GRMS.Application.Expenses.Dtos;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
+[Route("api/[controller]")]
+[Authorize]
 public class ExpensesController : BaseApiController
 {
     private readonly IExpenseService _expenseService;
@@ -24,6 +28,7 @@ public class ExpensesController : BaseApiController
     }
 
     [HttpPost("{id:guid}/approve")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<ExpenseVoucherResponse>>> ApproveExpense([FromRoute] Guid id, [FromBody] ApproveExpenseRequest request, CancellationToken ct)
     {
         var result = await _expenseService.ApproveExpenseAsync(request with { ExpenseId = id }, ct);
@@ -31,6 +36,7 @@ public class ExpensesController : BaseApiController
     }
 
     [HttpPost("{id:guid}/reject")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<ExpenseVoucherResponse>>> RejectExpense([FromRoute] Guid id, [FromBody] RejectExpenseRequest request, CancellationToken ct)
     {
         var result = await _expenseService.RejectExpenseAsync(request with { ExpenseId = id }, ct);
@@ -38,6 +44,7 @@ public class ExpensesController : BaseApiController
     }
 
     [HttpPost("{id:guid}/cancel")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<ExpenseVoucherResponse>>> CancelExpense([FromRoute] Guid id, [FromBody] CancelExpenseRequest request, CancellationToken ct)
     {
         var result = await _expenseService.CancelExpenseAsync(request with { ExpenseId = id }, ct);
@@ -46,6 +53,7 @@ public class ExpensesController : BaseApiController
 
     [HttpPost("{id:guid}/disburse")]
     [RequireIdempotency]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<ExpenseVoucherResponse>>> DisburseExpense([FromRoute] Guid id, [FromBody] DisburseExpenseRequest request, CancellationToken ct)
     {
         var result = await _expenseService.DisburseExpenseAsync(request with { ExpenseId = id }, ct);
@@ -53,6 +61,7 @@ public class ExpensesController : BaseApiController
     }
 
     [HttpGet("summary")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<ExpenseSummaryResponse>>> GetExpenseSummary(
         [FromQuery] Guid? branchId,
         [FromQuery] DateTime? fromDate,
