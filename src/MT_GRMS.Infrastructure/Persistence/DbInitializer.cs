@@ -260,6 +260,91 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
     }
 
+    private static async Task EnsureStocktakesSchemaAsync(AppDbContext context, ILogger? logger = null)
+    {
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+                ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""QuantityQuarantined"" numeric(18,3) NOT NULL DEFAULT 0.000;
+
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""StocktakeId"" uuid NULL;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""StocktakeCode"" character varying(50) NULL;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""ResolutionType"" character varying(50) NULL DEFAULT 'REDUCE_PAYABLE';
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""SettlementStatus"" character varying(50) NULL DEFAULT 'UNSETTLED';
+
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""StocktakeLineId"" uuid NULL;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""SupplierAcceptedQty"" numeric(18,3) NOT NULL DEFAULT 0.000;
+
+                CREATE TABLE IF NOT EXISTS ""Stocktakes"" (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""Code"" character varying(50) NOT NULL,
+                    ""BranchId"" uuid NOT NULL,
+                    ""Scope"" character varying(50) NOT NULL DEFAULT 'LOT',
+                    ""ReasonType"" character varying(50) NOT NULL DEFAULT 'PERIODIC',
+                    ""Status"" character varying(50) NOT NULL DEFAULT 'DRAFT',
+                    ""CreatedByName"" character varying(150) NULL,
+                    ""StartedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""SubmittedAt"" timestamp without time zone NULL,
+                    ""ReviewedByUserId"" uuid NULL,
+                    ""ReviewedByName"" character varying(150) NULL,
+                    ""ReviewedAt"" timestamp without time zone NULL,
+                    ""ReviewNote"" character varying(1000) NULL,
+                    ""Note"" character varying(1000) NULL,
+                    ""CreatedBy"" uuid NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""UpdatedAt"" timestamp without time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT false
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Stocktakes_TenantId_Code"" ON ""Stocktakes"" (""TenantId"", ""Code"");
+                CREATE INDEX IF NOT EXISTS ""IX_Stocktakes_TenantId_BranchId_Status"" ON ""Stocktakes"" (""TenantId"", ""BranchId"", ""Status"");
+
+                CREATE TABLE IF NOT EXISTS ""StocktakeLines"" (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""StocktakeId"" uuid NOT NULL REFERENCES ""Stocktakes""(""Id"") ON DELETE CASCADE,
+                    ""ProductId"" uuid NOT NULL,
+                    ""BranchStockId"" uuid NULL,
+                    ""BatchCode"" character varying(100) NULL,
+                    ""ManufactureDate"" timestamp without time zone NULL,
+                    ""ExpiryDate"" timestamp without time zone NULL,
+                    ""UnitCost"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                    ""SystemQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""GoodQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""DefectiveQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""DamagedQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""NearExpiryQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""ExpiredQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""ActualQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""VarianceQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""DefectiveReasonCode"" character varying(50) NULL,
+                    ""NearExpiryAction"" character varying(50) NULL,
+                    ""ReturnedQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""OriginalGrnId"" uuid NULL,
+                    ""OriginalGrnLineId"" uuid NULL,
+                    ""OriginalGrnCode"" character varying(50) NULL,
+                    ""SupplierId"" uuid NULL,
+                    ""EvidenceUrl"" character varying(1000) NULL,
+                    ""Note"" character varying(1000) NULL,
+                    ""CreatedBy"" uuid NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""UpdatedAt"" timestamp without time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT false
+                );
+
+                CREATE INDEX IF NOT EXISTS ""IX_StocktakeLines_StocktakeId"" ON ""StocktakeLines"" (""StocktakeId"");
+                CREATE INDEX IF NOT EXISTS ""IX_StocktakeLines_BranchStockId"" ON ""StocktakeLines"" (""BranchStockId"");
+                CREATE INDEX IF NOT EXISTS ""IX_StocktakeLines_ProductId"" ON ""StocktakeLines"" (""ProductId"");
+            ");
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ bảng Stocktakes, StocktakeLines và các cột mở rộng BranchStocks/SupplierReturns.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ bảng Stocktakes");
+        }
+    }
+
     private static async Task EnsureTenantSubscriptionColumnsAsync(AppDbContext context, ILogger? logger = null)
     {
         try
@@ -819,6 +904,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                     await EnsureBranchColumnsAsync(context, logger);
                     await EnsureTenantSubscriptionColumnsAsync(context, logger);
                     await EnsureBranchProductsSchemaAsync(context, logger);
+                    await EnsureStocktakesSchemaAsync(context, logger);
                 }
                 catch (Exception ex)
                 {

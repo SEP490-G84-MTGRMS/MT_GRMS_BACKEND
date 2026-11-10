@@ -114,9 +114,11 @@ public class SupplierReturnService : ISupplierReturnService
                 TenantId = tenantId,
                 ProductId = reqLine.ProductId,
                 GoodsReceiptLineId = reqLine.GoodsReceiptLineId,
+                StocktakeLineId = reqLine.StocktakeLineId,
                 BatchCode = reqLine.BatchCode,
                 ExpiryDate = reqLine.ExpiryDate ?? sourceLine.ExpiryDate,
                 RequestedQty = reqLine.RequestedQty,
+                SupplierAcceptedQty = 0,
                 ApprovedQty = 0,
                 RejectedQty = 0,
                 HandedOverQty = 0,
@@ -136,10 +138,13 @@ public class SupplierReturnService : ISupplierReturnService
             GoodsReceiptId = command.GoodsReceiptId,
             SupplierId = grnInfo.SupplierId,
             BranchId = grnInfo.BranchId,
+            StocktakeId = command.StocktakeId,
             Status = command.AutoSubmit ? "PENDING_SUPPLIER" : "DRAFT",
             Reason = command.Reason,
             ReasonNotes = command.ReasonNotes,
             AttachmentUrl = command.AttachmentUrl,
+            ResolutionType = command.ResolutionType ?? "REDUCE_PAYABLE",
+            SettlementStatus = "UNSETTLED",
             TotalRequestedQty = totalQty,
             TotalApprovedQty = 0,
             TotalHandedOverQty = 0,
@@ -157,6 +162,11 @@ public class SupplierReturnService : ISupplierReturnService
                 var stock = await _repository.GetBranchStockAsync(tenantId, grnInfo.BranchId, line.ProductId, line.BatchCode, cancellationToken);
                 if (stock != null)
                 {
+                    if (stock.QuantityQuarantined > 0)
+                    {
+                        var releaseQuarantine = Math.Min(stock.QuantityQuarantined, line.RequestedQty);
+                        stock.QuantityQuarantined -= releaseQuarantine;
+                    }
                     stock.QuantityReserved += line.RequestedQty;
                 }
             }
@@ -224,6 +234,7 @@ public class SupplierReturnService : ISupplierReturnService
             entity.Status = "APPROVED";
             foreach (var line in entity.Lines)
             {
+                line.SupplierAcceptedQty = line.RequestedQty;
                 line.ApprovedQty = line.RequestedQty;
                 line.RejectedQty = 0;
             }
@@ -242,6 +253,7 @@ public class SupplierReturnService : ISupplierReturnService
                     if (resp.ApprovedQty < 0 || resp.ApprovedQty > line.RequestedQty)
                         throw new BusinessException($"Số lượng chấp nhận không hợp lệ cho dòng hàng.");
 
+                    line.SupplierAcceptedQty = resp.ApprovedQty;
                     line.ApprovedQty = resp.ApprovedQty;
                     line.RejectedQty = Math.Max(0, line.RequestedQty - resp.ApprovedQty);
                     line.RejectionReason = resp.RejectionReason;
@@ -258,6 +270,7 @@ public class SupplierReturnService : ISupplierReturnService
                 }
                 else
                 {
+                    line.SupplierAcceptedQty = line.RequestedQty;
                     line.ApprovedQty = line.RequestedQty;
                     line.RejectedQty = 0;
                 }
@@ -303,37 +316,38 @@ public class SupplierReturnService : ISupplierReturnService
         if (entity == null)
             throw new NotFoundException($"Không tìm thấy phiếu trả hàng với ID {id}.");
 
-        if (entity.Status != "APPROVED")
-            throw new BusinessException($"Chỉ có thể hoàn tất bàn giao khi phiếu ở trạng thái APPROVED (Trạng thái hiện tại: {entity.Status}).");
+        if (entity.Status != "APPROVED" && entity.Status != "PARTIALLY_HANDED_OVER")
+            throw new BusinessException($"Chỉ có thể bàn giao khi phiếu ở trạng thái APPROVED hoặc PARTIALLY_HANDED_OVER (Trạng thái hiện tại: {entity.Status}).");
 
         decimal totalHandedOver = 0;
 
         foreach (var line in entity.Lines)
         {
             var lineCommand = command.Lines?.FirstOrDefault(l => l.LineId == line.Id);
-            var handedOverQty = lineCommand?.HandedOverQty ?? line.ApprovedQty;
+            var remainingToHandover = Math.Max(0, line.ApprovedQty - line.HandedOverQty);
+            var currentBatchHandoverQty = lineCommand?.HandedOverQty ?? remainingToHandover;
 
-            if (handedOverQty < 0 || handedOverQty > line.ApprovedQty)
+            if (currentBatchHandoverQty < 0 || line.HandedOverQty + currentBatchHandoverQty > line.ApprovedQty)
             {
-                throw new BusinessException($"Số lượng bàn giao thực tế ({handedOverQty}) không được vượt quá số lượng NCC đã chấp nhận ({line.ApprovedQty}).");
+                throw new BusinessException($"Số lượng bàn giao cộng dồn ({line.HandedOverQty + currentBatchHandoverQty}) không được vượt quá số lượng đã duyệt ({line.ApprovedQty}).");
             }
 
-            line.HandedOverQty = handedOverQty;
-            totalHandedOver += handedOverQty;
+            line.HandedOverQty += currentBatchHandoverQty;
+            totalHandedOver += line.HandedOverQty;
 
-            // Giảm tồn kho chi nhánh đúng bằng số lượng thực tế bàn giao và giải phóng tồn đã khóa
-            if (handedOverQty > 0)
+            // Giảm tồn kho chi nhánh đúng bằng số lượng thực tế bàn giao đợt này và giải phóng tồn đã khóa tương ứng
+            if (currentBatchHandoverQty > 0)
             {
                 var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
                 if (stock != null)
                 {
-                    stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - line.ApprovedQty);
-                    stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - handedOverQty);
+                    stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - currentBatchHandoverQty);
+                    stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - currentBatchHandoverQty);
                 }
             }
         }
 
-        entity.Status = "COMPLETED";
+        entity.Status = totalHandedOver >= entity.TotalApprovedQty ? "COMPLETED" : "PARTIALLY_HANDED_OVER";
         entity.HandedOverAt = DateTime.UtcNow;
         entity.HandedOverBy = command.HandedOverBy ?? "Nhân viên kho";
         entity.TotalHandedOverQty = totalHandedOver;
@@ -426,6 +440,7 @@ public class SupplierReturnService : ISupplierReturnService
                 var returnedQty = source?.ReturnedQty ?? 0;
                 var pendingReturnQty = source?.PendingReturnQty ?? 0;
                 var availableReturnQty = source?.AvailableReturnQty ?? 0;
+                var stockOnHandQty = source?.StockOnHandQty ?? receivedQty;
 
                 return new SupplierReturnLineDto(
                     l.Id,
@@ -447,9 +462,16 @@ public class SupplierReturnService : ISupplierReturnService
                     l.UnitCost,
                     l.LineTotal,
                     l.RejectionReason,
-                    l.Notes
+                    l.Notes,
+                    l.StocktakeLineId,
+                    l.SupplierAcceptedQty > 0 ? l.SupplierAcceptedQty : l.ApprovedQty,
+                    stockOnHandQty
                 );
-            }).ToList()
+            }).ToList(),
+            entity.StocktakeId,
+            entity.StocktakeCode,
+            entity.ResolutionType,
+            entity.SettlementStatus
         );
     }
 }

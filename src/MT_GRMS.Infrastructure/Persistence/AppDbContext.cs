@@ -55,6 +55,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<TransferDetail> TransferDetails { get; set; } = null!;
     public virtual DbSet<Batch> Batches { get; set; } = null!;
     public virtual DbSet<StockOnHand> StockOnHands { get; set; } = null!;
+    public virtual DbSet<Stocktake> Stocktakes { get; set; } = null!;
+    public virtual DbSet<StocktakeLine> StocktakeLines { get; set; } = null!;
 
     // 4. Phân hệ Nhà cung cấp, Mua hàng PO & Nhập kho GRN
     public virtual DbSet<Domain.Entities.Supplier.Supplier> Suppliers { get; set; } = null!;

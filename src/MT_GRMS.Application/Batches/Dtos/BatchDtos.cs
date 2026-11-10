@@ -78,7 +78,11 @@ public record BatchListItemDto(
     string Status, // Expired, Critical, Warning, Normal
     string? ZoneArea,
     string? ShelfLocation,
-    string? OriginalGrnNo
+    string? OriginalGrnNo,
+    decimal QtyReserved = 0m,
+    decimal QtyQuarantined = 0m,
+    decimal QtyAvailable = 0m,
+    Guid? OriginalGrnId = null
 );
 
 public record BatchPagedResultDto(

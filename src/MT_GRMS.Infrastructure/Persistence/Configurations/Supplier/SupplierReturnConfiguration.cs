@@ -23,6 +23,9 @@ public class SupplierReturnConfiguration : IEntityTypeConfiguration<SupplierRetu
         builder.Property(x => x.SupplierResponseNote).HasMaxLength(1000);
         builder.Property(x => x.CancellationReason).HasMaxLength(500);
         builder.Property(x => x.AttachmentUrl).HasMaxLength(1000);
+        builder.Property(x => x.StocktakeCode).HasMaxLength(50);
+        builder.Property(x => x.ResolutionType).HasMaxLength(50).HasDefaultValue("REDUCE_PAYABLE");
+        builder.Property(x => x.SettlementStatus).HasMaxLength(50).HasDefaultValue("UNSETTLED");
 
         builder.Property(x => x.TotalRequestedQty).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);
         builder.Property(x => x.TotalApprovedQty).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);
