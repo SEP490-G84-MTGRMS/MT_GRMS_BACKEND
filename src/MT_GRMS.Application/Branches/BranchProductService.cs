@@ -57,7 +57,7 @@ public class BranchProductService : IBranchProductService
         }
 
         var pageIndex = Math.Max(1, filter.PageIndex);
-        var pageSize = Math.Clamp(filter.PageSize, 1, 100);
+        var pageSize = Math.Clamp(filter.PageSize, 1, 1000);
 
         var (items, totalCount) = await _repository.GetPagedBranchProductsAsync(
             branchId,

@@ -29,7 +29,8 @@ public record ProductResponse(
     string TaxCategory = "STANDARD_1PCT",
     bool EligibleForVatReduction = false,
     bool IsBaseUnitPurchaseUnit = true,
-    string? PurchaseUnit = null
+    string? PurchaseUnit = null,
+    List<ProductUnitResponse>? UnitPrices = null
 )
 {
     // Backward compatibility aliases

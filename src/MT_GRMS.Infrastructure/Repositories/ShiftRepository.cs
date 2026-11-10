@@ -241,4 +241,12 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
             .Where(s => s.EmployeeId == employeeId && s.BranchId == branchId && s.WorkDate.Date == workDate.Date && s.Status != ScheduleStatus.Cancelled)
             .ToListAsync(cancellationToken);
     }
+
+    public async Task<IReadOnlyList<EmployeeSchedule>> GetBranchCashierSchedulesAsync(Guid branchId, DateTime workDate, CancellationToken cancellationToken = default)
+    {
+        return await _context.EmployeeSchedules
+            .Include(s => s.Employee)
+            .Where(s => s.BranchId == branchId && s.WorkDate.Date == workDate.Date && s.Status != ScheduleStatus.Cancelled)
+            .ToListAsync(cancellationToken);
+    }
 }

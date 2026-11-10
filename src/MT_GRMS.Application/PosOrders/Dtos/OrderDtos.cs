@@ -39,7 +39,8 @@ public record OrderItemCreateDto(
     Guid? UnitId = null,
     string? UnitName = null,
     bool IsGift = false,
-    Guid? PromotionId = null
+    Guid? PromotionId = null,
+    decimal ConversionRate = 1.00m
 );
 
 public record OrderResponse(
