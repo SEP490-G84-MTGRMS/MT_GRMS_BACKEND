@@ -68,6 +68,8 @@ public class OrderMatrixSupplierDeliveryConfigDto
 public class OrderMatrixCellDto
 {
     public Guid ProductId { get; set; }
+    /// <summary>NCC của dòng nguồn nhập — bắt buộc khi Matrix ALL có nhiều NCC cùng SP.</summary>
+    public Guid SupplierId { get; set; }
     public DateTime DeliveryDate { get; set; }
     public decimal EmployeeQty { get; set; }
     public decimal? StoreQty { get; set; }

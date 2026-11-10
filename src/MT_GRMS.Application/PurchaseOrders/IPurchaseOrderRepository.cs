@@ -33,6 +33,11 @@ public interface IPurchaseOrderRepository
         DateTime viewFrom,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Tất cả draft matrix của chi nhánh (dùng khi view ALL — mỗi NCC 1 draft).</summary>
+    Task<IReadOnlyList<PurchaseOrder>> GetDraftMatrixPosAsync(
+        Guid branchId,
+        CancellationToken cancellationToken = default);
+
     Task<(IReadOnlyList<PurchaseOrder> Items, int TotalCount)> GetPagedPurchaseOrdersAsync(
         Guid? branchId,
         Guid? supplierId,

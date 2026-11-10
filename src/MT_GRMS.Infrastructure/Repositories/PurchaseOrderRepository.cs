@@ -111,21 +111,12 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             return Array.Empty<OrderMatrixProductDto>();
         }
 
-        // Khi filter 1 NCC: giữ mọi dòng. Khi ALL: mỗi ProductId giữ 1 NCC (primary / giá tốt)
-        // nhưng vẫn giữ thêm các dòng inactive nếu cần hiển thị — ưu tiên primary.
+        // ALL và filter 1 NCC: giữ mọi dòng Product×NCC (không collapse 1 SP → 1 NCC).
         var supplierProducts = rawSupplierProducts;
-        if (!supplierId.HasValue || supplierId.Value == Guid.Empty)
+        if (supplierId.HasValue && supplierId.Value != Guid.Empty)
         {
             supplierProducts = rawSupplierProducts
-                .GroupBy(sp => sp.ProductId)
-                .SelectMany(g =>
-                {
-                    var primary = g.OrderByDescending(sp => sp.IsPrimarySupplier)
-                        .ThenByDescending(sp => sp.Status == SupplierProductStatus.Active)
-                        .ThenBy(sp => sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : decimal.MaxValue)
-                        .First();
-                    return new[] { primary };
-                })
+                .Where(sp => sp.SupplierId == supplierId.Value)
                 .ToList();
         }
 
@@ -230,7 +221,12 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             });
         }
 
-        return list.OrderBy(x => x.SupplierName).ThenBy(x => x.Sku).ToList();
+        // Sort giá tăng dần để so sánh nguồn nhập; phụ: NCC → SKU.
+        return list
+            .OrderBy(x => x.Price <= 0 ? decimal.MaxValue : x.Price)
+            .ThenBy(x => x.SupplierName)
+            .ThenBy(x => x.Sku)
+            .ToList();
     }
 
     public async Task<IReadOnlyList<OrderMatrixSupplierDeliveryConfigDto>> GetMatrixSupplierConfigsAsync(
@@ -383,6 +379,17 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         }
 
         return await query.FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<PurchaseOrder>> GetDraftMatrixPosAsync(
+        Guid branchId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _context.PurchaseOrders
+            .Include(po => po.Details)
+                .ThenInclude(d => d.Product)
+            .Where(po => po.BranchId == branchId && po.Status == "DRAFT" && !po.IsDeleted)
+            .ToListAsync(cancellationToken);
     }
 
     public async Task<(IReadOnlyList<PurchaseOrder> Items, int TotalCount)> GetPagedPurchaseOrdersAsync(
