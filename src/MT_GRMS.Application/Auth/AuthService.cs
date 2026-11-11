@@ -25,9 +25,11 @@ public class AuthService : IAuthService
 
     private sealed record RegistrationOtpEntry(string OtpCode, DateTime ExpiresAtUtc, int FailedAttempts = 0);
     private sealed record LoginOtpEntry(string UserId, string? TenantCode, string OtpCode, DateTime ExpiresAtUtc, int FailedAttempts = 0);
+    private sealed record TwoFactorSettingsEntry(string UserId, bool Enabled, string OtpCode, DateTime ExpiresAtUtc, int FailedAttempts = 0);
 
     private static readonly ConcurrentDictionary<string, RegistrationOtpEntry> RegistrationOtpStore = new();
     private static readonly ConcurrentDictionary<string, LoginOtpEntry> LoginOtpStore = new();
+    private static readonly ConcurrentDictionary<string, TwoFactorSettingsEntry> TwoFactorSettingsStore = new();
 
     private readonly IUserRepository _userRepository;
     private readonly IConfiguration? _configuration;
@@ -58,6 +60,9 @@ public class AuthService : IAuthService
 
         await VerifyPasswordAsync(user, request.Password, cancellationToken);
 
+        if (user.IsTwoFactorEnabled)
+            throw new UnauthorizedAccessException("Tài khoản yêu cầu xác thực OTP để đăng nhập.");
+
         return await IssueLoginSessionAsync(user, request.TenantCode, cancellationToken);
     }
 
@@ -72,6 +77,13 @@ public class AuthService : IAuthService
             ?? throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
 
         await VerifyPasswordAsync(user, request.Password, cancellationToken);
+
+        if (!user.IsTwoFactorEnabled)
+        {
+            var session = await IssueLoginSessionAsync(user, request.TenantCode, cancellationToken);
+            return new SendLoginOtpResponse(false, string.Empty, string.Empty, string.Empty, 0, false,
+                "Đăng nhập thành công.", User: session.User, Session: session);
+        }
 
         var targetEmail = !string.IsNullOrWhiteSpace(user.Email)
             ? user.Email.Trim()
@@ -95,6 +107,13 @@ public class AuthService : IAuthService
             isRealEmailSent = await _emailService.SendLoginOtpAsync(targetEmail, fullName, otpCode, cancellationToken);
         }
 
+        var isDevelopment = string.Equals(_configuration?["ASPNETCORE_ENVIRONMENT"], "Development", StringComparison.OrdinalIgnoreCase);
+        if (!isRealEmailSent && !isDevelopment)
+        {
+            LoginOtpStore.TryRemove(tempToken, out _);
+            throw new InvalidOperationException("Không thể gửi mã xác thực. Vui lòng thử lại sau.");
+        }
+
         var maskedEmail = MaskEmailDisplay(targetEmail);
         var message = isRealEmailSent
             ? $"Mã xác thực OTP 6 chữ số đã được gửi tới email {maskedEmail}."
@@ -108,7 +127,7 @@ public class AuthService : IAuthService
             ExpiresInSeconds: 300,
             IsRealEmailSent: isRealEmailSent,
             Message: message,
-            DevOtpCode: isRealEmailSent ? null : otpCode
+            DevOtpCode: isDevelopment && !isRealEmailSent ? otpCode : null
         );
     }
 
@@ -152,6 +171,45 @@ public class AuthService : IAuthService
             ?? throw new UnauthorizedAccessException("Tài khoản người dùng không tồn tại.");
 
         return await IssueLoginSessionAsync(user, entry.TenantCode, cancellationToken);
+    }
+
+    public async Task<TwoFactorStatusResponse> GetTwoFactorStatusAsync(string userId, CancellationToken cancellationToken = default)
+    {
+        var user = await _userRepository.GetByIdAsync(userId, cancellationToken) ?? throw new UnauthorizedAccessException("Tài khoản không tồn tại.");
+        return new TwoFactorStatusResponse(user.IsTwoFactorEnabled, MaskEmailDisplay(user.Email), user.IsEmailVerified);
+    }
+
+    public async Task<TwoFactorChallengeResponse> CreateTwoFactorChallengeAsync(string userId, TwoFactorChallengeRequest request, CancellationToken cancellationToken = default)
+    {
+        var user = await _userRepository.GetByIdAsync(userId, cancellationToken) ?? throw new UnauthorizedAccessException("Tài khoản không tồn tại.");
+        if (request.Enabled && !user.IsEmailVerified) throw new ArgumentException("Hãy xác minh email trước khi bật xác thực 2 lớp.");
+        await VerifyPasswordAsync(user, request.CurrentPassword, cancellationToken);
+        if (string.IsNullOrWhiteSpace(user.Email)) throw new ArgumentException("Tài khoản chưa có email để nhận mã xác thực.");
+
+        var otp = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
+        var token = $"otp_2fa_settings_{Guid.NewGuid():N}";
+        TwoFactorSettingsStore[token] = new TwoFactorSettingsEntry(user.Id, request.Enabled, otp, DateTime.UtcNow.AddMinutes(5));
+        var sent = _emailService != null && await _emailService.SendTwoFactorSettingsOtpAsync(user.Email, user.FullName, otp, cancellationToken);
+        var isDevelopment = string.Equals(_configuration?["ASPNETCORE_ENVIRONMENT"], "Development", StringComparison.OrdinalIgnoreCase);
+        if (!sent && !isDevelopment)
+        {
+            TwoFactorSettingsStore.TryRemove(token, out _);
+            throw new InvalidOperationException("Không thể gửi mã xác thực. Vui lòng thử lại sau.");
+        }
+        return new TwoFactorChallengeResponse(token, MaskEmailDisplay(user.Email), 300, isDevelopment && !sent ? otp : null);
+    }
+
+    public async Task<TwoFactorStatusResponse> ConfirmTwoFactorChallengeAsync(string userId, TwoFactorConfirmRequest request, CancellationToken cancellationToken = default)
+    {
+        if (!TwoFactorSettingsStore.TryRemove(request.ChallengeToken.Trim(), out var challenge) || challenge.UserId != userId)
+            throw new UnauthorizedAccessException("Phiên xác thực không hợp lệ hoặc đã được sử dụng.");
+        if (challenge.ExpiresAtUtc < DateTime.UtcNow || !string.Equals(challenge.OtpCode, request.OtpCode.Trim(), StringComparison.Ordinal))
+            throw new ArgumentException("Mã xác thực không chính xác hoặc đã hết hạn.");
+        var user = await _userRepository.GetByIdAsync(userId, cancellationToken) ?? throw new UnauthorizedAccessException("Tài khoản không tồn tại.");
+        user.IsTwoFactorEnabled = challenge.Enabled;
+        _userRepository.Update(user);
+        await _userRepository.SaveChangesAsync(cancellationToken);
+        return new TwoFactorStatusResponse(user.IsTwoFactorEnabled, MaskEmailDisplay(user.Email), user.IsEmailVerified);
     }
 
     private async Task<LoginResponse> IssueLoginSessionAsync(User user, string? tenantCode, CancellationToken cancellationToken)

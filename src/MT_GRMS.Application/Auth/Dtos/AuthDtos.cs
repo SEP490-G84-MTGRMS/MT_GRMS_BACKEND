@@ -1,4 +1,5 @@
 using MT_GRMS.Domain.Enums;
+using System.Text.Json.Serialization;
 
 namespace MT_GRMS.Application.Auth.Dtos;
 
@@ -23,13 +24,20 @@ public record SendLoginOtpResponse(
     int ExpiresInSeconds,
     bool IsRealEmailSent,
     string Message,
-    string? DevOtpCode = null
+    string? DevOtpCode = null,
+    UserInfo? User = null,
+    [property: JsonIgnore] LoginResponse? Session = null
 );
 
 public record VerifyLoginOtpRequest(
     string TempToken,
     string OtpCode
 );
+
+public record TwoFactorStatusResponse(bool Enabled, string MaskedEmail, bool IsEmailVerified);
+public record TwoFactorChallengeRequest(bool Enabled, string CurrentPassword);
+public record TwoFactorChallengeResponse(string ChallengeToken, string MaskedEmail, int ExpiresInSeconds, string? DevOtpCode = null);
+public record TwoFactorConfirmRequest(string ChallengeToken, string OtpCode);
 
 public record UserInfo(
     string Id,

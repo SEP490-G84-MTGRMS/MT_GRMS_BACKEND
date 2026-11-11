@@ -16,4 +16,7 @@ public interface IAuthService
     Task ResetPasswordAsync(ResetPasswordRequest request, CancellationToken cancellationToken = default);
     Task<UserInfo?> GetCurrentUserAsync(string userId, CancellationToken cancellationToken = default);
     Task RevokeRefreshTokenAsync(string userId, CancellationToken cancellationToken = default);
+    Task<TwoFactorStatusResponse> GetTwoFactorStatusAsync(string userId, CancellationToken cancellationToken = default);
+    Task<TwoFactorChallengeResponse> CreateTwoFactorChallengeAsync(string userId, TwoFactorChallengeRequest request, CancellationToken cancellationToken = default);
+    Task<TwoFactorStatusResponse> ConfirmTwoFactorChallengeAsync(string userId, TwoFactorConfirmRequest request, CancellationToken cancellationToken = default);
 }

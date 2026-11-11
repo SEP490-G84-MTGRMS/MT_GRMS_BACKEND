@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Mail;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Hosting;
 using MT_GRMS.Application.Common.Interfaces;
 
 namespace MT_GRMS.Infrastructure.Services;
@@ -10,11 +11,13 @@ public class EmailService : IEmailService
 {
     private readonly EmailSettings _settings;
     private readonly ILogger<EmailService> _logger;
+    private readonly IHostEnvironment _environment;
 
-    public EmailService(IOptions<EmailSettings> options, ILogger<EmailService> logger)
+    public EmailService(IOptions<EmailSettings> options, ILogger<EmailService> logger, IHostEnvironment environment)
     {
         _settings = options.Value;
         _logger = logger;
+        _environment = environment;
     }
 
     public async Task SendPasswordResetOtpAsync(
@@ -81,6 +84,7 @@ public class EmailService : IEmailService
         // Nếu chưa cấu hình thông tin SMTP (chạy local/dev hoặc kiểm thử chấm đồ án)
         if (string.IsNullOrWhiteSpace(_settings.SmtpUser) || string.IsNullOrWhiteSpace(_settings.SmtpPass))
         {
+            if (!_environment.IsDevelopment()) return false;
             _logger.LogInformation(
                 "[EMAIL-OTP DEV LOG] Chưa cấu hình SMTP. Gửi OTP mô phỏng tới: {Email}. Mã OTP: {OtpCode}",
                 toEmail,
@@ -105,7 +109,7 @@ public class EmailService : IEmailService
                 EnableSsl = _settings.EnableSsl,
                 Credentials = new NetworkCredential(_settings.SmtpUser, _settings.SmtpPass),
                 DeliveryMethod = SmtpDeliveryMethod.Network,
-                Timeout = 15000
+                Timeout = 5000
             };
 
             var senderEmail = string.IsNullOrWhiteSpace(_settings.SenderEmail)
@@ -122,13 +126,17 @@ public class EmailService : IEmailService
 
             mail.To.Add(toEmail);
 
-            await client.SendMailAsync(mail, cancellationToken);
-            _logger.LogInformation("Đã gửi email OTP thành công tới: {Email}. [DEV OTP]: {OtpCode}", toEmail, otpCode);
+            using var sendTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            sendTimeout.CancelAfter(TimeSpan.FromSeconds(5));
+            await client.SendMailAsync(mail, sendTimeout.Token);
+            _logger.LogInformation("Đã gửi email OTP thành công tới: {Email}.", toEmail);
             return true;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Lỗi khi gửi email OTP qua SMTP tới {Email}. Fallback in ra console.", toEmail);
+
+            if (!_environment.IsDevelopment()) return false;
 
             Console.WriteLine(
                 $"\n======================================================================\n" +

@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using Microsoft.Extensions.Configuration;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Auth.Dtos;
 using MT_GRMS.Application.Common.Interfaces;
@@ -118,6 +119,7 @@ public class UserAuthenticationTests
             Id = "usr_test_01",
             Username = "testuser",
             Password = "Password@123",
+            IsTwoFactorEnabled = false,
             IsAdmin = true
         };
         await repo.AddAsync(seedUser);
@@ -154,6 +156,7 @@ public class UserAuthenticationTests
             Id = "usr_owner_01",
             Username = "shopowner",
             Password = "Password@123",
+            IsTwoFactorEnabled = false,
             IsAdmin = false
         };
         await repo.AddAsync(seedUser);
@@ -198,7 +201,8 @@ public class UserAuthenticationTests
         {
             Id = "usr_admin_01",
             Username = "admin",
-            Password = "Password@123"
+            Password = "Password@123",
+            IsTwoFactorEnabled = false
         });
 
         var authService = new AuthService(repo);
@@ -248,7 +252,7 @@ public class UserAuthenticationTests
     {
         // GIVEN
         var repo = new FakeUserRepository();
-        await repo.AddAsync(new User { Id = "usr_01", Username = "user01", Password = "123", IsAdmin = true });
+        await repo.AddAsync(new User { Id = "usr_01", Username = "user01", Password = "123", IsAdmin = true, IsTwoFactorEnabled = false });
         var authService = new AuthService(repo);
 
         // WHEN
@@ -336,7 +340,7 @@ public class UserAuthenticationTests
     {
         var repo = new FakeUserRepository();
         var hashedPass = PasswordHasher.Hash("Secret@999");
-        await repo.AddAsync(new User { Id = "usr_hash", Username = "user_hash", PasswordHash = hashedPass });
+        await repo.AddAsync(new User { Id = "usr_hash", Username = "user_hash", PasswordHash = hashedPass, IsTwoFactorEnabled = false });
 
         var authService = new AuthService(repo);
         var res = await authService.LoginAsync(new LoginRequest("user_hash", "Secret@999", null));
@@ -512,7 +516,11 @@ public class UserAuthenticationTests
             IsAdmin = false
         });
 
-        var authService = new AuthService(repo, emailService: emailService);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+        }).Build();
+        var authService = new AuthService(repo, config, emailService: emailService);
 
         // Bước 1: Gửi yêu cầu đăng nhập -> Nhận TempToken và gửi Email OTP
         var sendOtpRes = await authService.SendLoginOtpAsync(new LoginRequest("owner2fa", "Password@123", "TENANT-01"));

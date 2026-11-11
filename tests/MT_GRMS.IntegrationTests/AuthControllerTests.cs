@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Configuration;
 using MT_GRMS.API.Controllers;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Auth.Dtos;
@@ -72,7 +73,7 @@ public class AuthControllerTests
     }
 
     [Fact]
-    public async Task AuthController_Login_Should_Return_Ok_200_With_ApiResponse_When_Valid()
+    public async Task AuthController_Login_Should_Require_Otp_Without_Issuing_Session()
     {
         // GIVEN
         var repo = new FakeUserRepository();
@@ -82,7 +83,11 @@ public class AuthControllerTests
             Username = "admin",
             Password = "Admin@123"
         });
-        var authService = new AuthService(repo);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+        }).Build();
+        var authService = new AuthService(repo, config);
         var controller = new AuthController(authService);
 
         // WHEN
@@ -92,13 +97,31 @@ public class AuthControllerTests
         var okResult = Assert.IsType<OkObjectResult>(result);
         Assert.Equal(200, okResult.StatusCode);
 
-        var apiResponse = Assert.IsType<ApiResponse<UserInfo>>(okResult.Value);
+        var apiResponse = Assert.IsType<ApiResponse<SendLoginOtpResponse>>(okResult.Value);
         Assert.True(apiResponse.Success);
         Assert.NotNull(apiResponse.Data);
-        Assert.Equal("usr_super_admin_01", apiResponse.Data.Id);
-        Assert.Equal("admin", apiResponse.Data.Username);
-        Assert.Equal("ADMIN", apiResponse.Data.Role);
-        Assert.Equal("tenant_mt_mart_01", apiResponse.Data.TenantId);
+        Assert.True(apiResponse.Data.RequiresOtp);
+        Assert.NotEmpty(apiResponse.Data.TempToken);
+    }
+
+    [Fact]
+    public async Task AuthController_Login_Should_Reject_When_Email_Unavailable_In_Production()
+    {
+        var repo = new FakeUserRepository();
+        await repo.AddAsync(new User { Username = "admin", Password = "Admin@123" });
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ASPNETCORE_ENVIRONMENT"] = "Production"
+        }).Build();
+        var controller = new AuthController(new AuthService(repo, config));
+
+        var result = await controller.Login(new LoginRequest("admin", "Admin@123", null), CancellationToken.None);
+
+        var unavailable = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(503, unavailable.StatusCode);
+        var response = Assert.IsType<ApiResponse<object>>(unavailable.Value);
+        Assert.False(response.Success);
+        Assert.Equal("EMAIL_UNAVAILABLE", response.ErrorCode);
     }
 
     [Fact]

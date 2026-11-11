@@ -23,6 +23,7 @@ public class User : BaseEntity<string>
     public bool IsActive { get; set; } = true;
     public bool IsAdmin { get; set; } = false;
     public bool IsEmailVerified { get; set; } = false;
+    public bool IsTwoFactorEnabled { get; set; } = true;
     public bool MustChangePassword { get; set; } = false;
     public DateTime? LastLoginAt { get; set; }
     public string? LastLoginIp { get; set; }

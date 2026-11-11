@@ -24,7 +24,7 @@ public class AuthController : BaseApiController
     /// Đăng nhập hệ thống & cấp AccessToken + RefreshToken qua HttpOnly Cookie
     /// </summary>
     [HttpPost("login")]
-    [ProducesResponseType(typeof(ApiResponse<UserInfo>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<SendLoginOtpResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Login([FromBody] LoginRequest request, CancellationToken cancellationToken)
@@ -36,9 +36,10 @@ public class AuthController : BaseApiController
 
         try
         {
-            var result = await _authService.LoginAsync(request, cancellationToken);
-            SetAuthCookies(result.AccessToken, result.RefreshToken, result.ExpiresAt);
-            return Ok(ApiResponse<UserInfo>.Ok(result.User, "Đăng nhập thành công.", StatusCodes.Status200OK));
+            var result = await _authService.SendLoginOtpAsync(request, cancellationToken);
+            if (result.Session is not null)
+                SetAuthCookies(result.Session.AccessToken, result.Session.RefreshToken, result.Session.ExpiresAt);
+            return Ok(ApiResponse<SendLoginOtpResponse>.Ok(result, result.Message, StatusCodes.Status200OK));
         }
         catch (UnauthorizedAccessException ex)
         {
@@ -47,6 +48,10 @@ public class AuthController : BaseApiController
         catch (ArgumentException ex)
         {
             return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, ApiResponse<object>.Fail("EMAIL_UNAVAILABLE", ex.Message, StatusCodes.Status503ServiceUnavailable));
         }
     }
 
@@ -67,6 +72,8 @@ public class AuthController : BaseApiController
         try
         {
             var result = await _authService.SendLoginOtpAsync(request, cancellationToken);
+            if (result.Session is not null)
+                SetAuthCookies(result.Session.AccessToken, result.Session.RefreshToken, result.Session.ExpiresAt);
             return Ok(ApiResponse<SendLoginOtpResponse>.Ok(result, result.Message, StatusCodes.Status200OK));
         }
         catch (UnauthorizedAccessException ex)
@@ -76,6 +83,10 @@ public class AuthController : BaseApiController
         catch (ArgumentException ex)
         {
             return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, ApiResponse<object>.Fail("EMAIL_UNAVAILABLE", ex.Message, StatusCodes.Status503ServiceUnavailable));
         }
     }
 
@@ -252,6 +263,46 @@ public class AuthController : BaseApiController
         }
 
         return Ok(ApiResponse<UserInfo>.Ok(user, "Lấy thông tin người dùng thành công.", StatusCodes.Status200OK));
+    }
+
+    [HttpGet("me/2fa")]
+    [Authorize]
+    public async Task<IActionResult> GetTwoFactorStatus(CancellationToken cancellationToken)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (string.IsNullOrWhiteSpace(userId)) return Unauthorized();
+        var result = await _authService.GetTwoFactorStatusAsync(userId, cancellationToken);
+        return Ok(ApiResponse<TwoFactorStatusResponse>.Ok(result, "Lấy trạng thái xác thực 2 lớp thành công.", 200));
+    }
+
+    [HttpPost("me/2fa/challenge")]
+    [Authorize]
+    public async Task<IActionResult> CreateTwoFactorChallenge([FromBody] TwoFactorChallengeRequest request, CancellationToken cancellationToken)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (string.IsNullOrWhiteSpace(userId)) return Unauthorized();
+        try
+        {
+            var result = await _authService.CreateTwoFactorChallengeAsync(userId, request, cancellationToken);
+            return Ok(ApiResponse<TwoFactorChallengeResponse>.Ok(result, "Đã gửi mã xác thực tới email của bạn.", 200));
+        }
+        catch (ArgumentException ex) { return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, 400)); }
+        catch (InvalidOperationException ex) { return StatusCode(503, ApiResponse<object>.Fail("EMAIL_UNAVAILABLE", ex.Message, 503)); }
+    }
+
+    [HttpPost("me/2fa/confirm")]
+    [Authorize]
+    public async Task<IActionResult> ConfirmTwoFactorChallenge([FromBody] TwoFactorConfirmRequest request, CancellationToken cancellationToken)
+    {
+        var userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ?? User.FindFirstValue("sub");
+        if (string.IsNullOrWhiteSpace(userId)) return Unauthorized();
+        try
+        {
+            var result = await _authService.ConfirmTwoFactorChallengeAsync(userId, request, cancellationToken);
+            return Ok(ApiResponse<TwoFactorStatusResponse>.Ok(result, "Đã cập nhật xác thực 2 lớp.", 200));
+        }
+        catch (UnauthorizedAccessException ex) { return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", ex.Message, 401)); }
+        catch (ArgumentException ex) { return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, 400)); }
     }
 
     /// <summary>
