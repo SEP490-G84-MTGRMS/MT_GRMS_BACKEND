@@ -113,7 +113,8 @@ public class EmployeeRepository : IEmployeeRepository
         var pageSize = filter.PageSize > 0 ? filter.PageSize : 20;
 
         var items = await query
-            .OrderByDescending(e => e.CreatedAt)
+            .OrderBy(e => e.Status == EmployeeStatus.Active ? 0 : 1)
+            .ThenByDescending(e => e.CreatedAt)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(cancellationToken);
