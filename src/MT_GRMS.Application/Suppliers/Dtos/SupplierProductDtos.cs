@@ -18,7 +18,8 @@ public class SupplierProductDto
 
     public string? SupplierProductCode { get; set; }
     public string DeliveryUoM { get; set; } = "Cái";
-    public decimal AgreedWholesalePrice { get; set; }
+    /// <summary>NULL = chưa thỏa thuận.</summary>
+    public decimal? AgreedWholesalePrice { get; set; }
     public decimal? CostPrice { get; set; }
     public decimal EffectivePurchasePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
@@ -36,7 +37,8 @@ public class AssignSupplierProductCommand
 {
     public Guid ProductId { get; set; }
     public string DeliveryUoM { get; set; } = "Cái";
-    public decimal AgreedWholesalePrice { get; set; }
+    /// <summary>NULL hoặc 0 = chưa thỏa thuận.</summary>
+    public decimal? AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
     public int AllowedShortageQuantity { get; set; } = 0;
     public bool IsPrimarySupplier { get; set; } = false;
@@ -46,7 +48,7 @@ public class AssignSupplierProductCommand
 public class BatchAssignSupplierProductItemCommand
 {
     public Guid ProductId { get; set; }
-    public decimal AgreedWholesalePrice { get; set; }
+    public decimal? AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
     public int AllowedShortageQuantity { get; set; } = 0;
 }
@@ -72,7 +74,7 @@ public class BatchAssignSupplierProductsResultDto
 public class UpdateSupplierProductCommand
 {
     public string DeliveryUoM { get; set; } = "Cái";
-    public decimal AgreedWholesalePrice { get; set; }
+    public decimal? AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
     public int AllowedShortageQuantity { get; set; } = 0;
     public bool IsPrimarySupplier { get; set; } = false;
@@ -96,7 +98,7 @@ public class ProductSupplierMappingDto
     public string SupplierName { get; set; } = string.Empty;
     public string? SupplierProductCode { get; set; }
     public string DeliveryUoM { get; set; } = "Cái";
-    public decimal AgreedWholesalePrice { get; set; }
+    public decimal? AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
     public int AllowedShortageQuantity { get; set; } = 0;
     public bool IsPrimarySupplier { get; set; }

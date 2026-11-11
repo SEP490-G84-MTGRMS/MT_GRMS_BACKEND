@@ -141,7 +141,9 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             var supplierName = resolvedSupplier?.Name ?? "Nhà cung cấp";
 
             var isSupActive = resolvedSupplier == null || resolvedSupplier.Status == SupplierStatus.Active;
-            var price = sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : (p.CostPrice ?? p.SellingPrice);
+            var price = MT_GRMS.Application.Suppliers.SupplierProductPricing.ResolveEffectivePurchasePrice(
+                sp.AgreedWholesalePrice,
+                p.CostPrice ?? p.SellingPrice);
             var moq = sp.MinimumOrderQuantity > 0 ? sp.MinimumOrderQuantity : 1;
 
             var isProdActive = p.Status == ProductStatus.Active;

@@ -159,6 +159,18 @@ ALTER TABLE IF EXISTS ""Suppliers"" ADD COLUMN IF NOT EXISTS ""UrgentFeePercent"
 
 ALTER TABLE IF EXISTS ""SupplierProducts"" ADD COLUMN IF NOT EXISTS ""AllowedShortageQuantity"" integer NOT NULL DEFAULT 0;
 
+-- RULE giá nguồn: AgreedWholesalePrice nullable (0 cũ → NULL = chưa thỏa thuận)
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'SupplierProducts' AND column_name = 'AgreedWholesalePrice'
+    ) THEN
+        ALTER TABLE ""SupplierProducts"" ALTER COLUMN ""AgreedWholesalePrice"" DROP NOT NULL;
+        UPDATE ""SupplierProducts"" SET ""AgreedWholesalePrice"" = NULL WHERE ""AgreedWholesalePrice"" = 0;
+    END IF;
+END $$;
+
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'SupplierDeliveryConfigs')

@@ -283,7 +283,9 @@ public class BranchProductRepository : IBranchProductRepository
                 && sp.Supplier != null
                 && !sp.Supplier.IsDeleted
                 && sp.Supplier.Status == SupplierStatus.Active)
-            .OrderBy(sp => sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : decimal.MaxValue)
+            .OrderBy(sp => sp.AgreedWholesalePrice.HasValue && sp.AgreedWholesalePrice.Value > 0
+                ? sp.AgreedWholesalePrice.Value
+                : decimal.MaxValue)
             .ThenByDescending(sp => sp.IsPrimarySupplier)
             .ThenBy(sp => sp.CreatedAt)
             .ToListAsync(cancellationToken);
@@ -363,12 +365,15 @@ public class BranchProductRepository : IBranchProductRepository
 
             BranchProductDto MapRow(SupplierProduct? sp)
             {
-                var cost = sp != null && sp.AgreedWholesalePrice > 0
-                    ? sp.AgreedWholesalePrice
+                var cost = sp != null
+                    ? MT_GRMS.Application.Suppliers.SupplierProductPricing.ResolveEffectivePurchasePrice(
+                        sp.AgreedWholesalePrice,
+                        x.CostPrice)
                     : x.CostPrice;
                 var moq = sp != null && sp.MinimumOrderQuantity > 0
                     ? (int)sp.MinimumOrderQuantity
                     : 0;
+                var hasSource = sp != null;
 
                 return new BranchProductDto
                 {
@@ -391,6 +396,8 @@ public class BranchProductRepository : IBranchProductRepository
                     PrimarySupplierCode = sp?.Supplier?.Code ?? string.Empty,
                     PrimarySupplierName = sp?.Supplier?.Name ?? string.Empty,
                     IsPrimarySupplier = sp?.IsPrimarySupplier ?? false,
+                    HasActiveSupplierSource = hasSource,
+                    LostSupplierSource = !hasSource,
                     MinOrderQuantity = moq,
                     Status = x.ProductStatus,
                     ShelfLocation = x.ShelfLocation,
@@ -718,10 +725,9 @@ public class BranchProductRepository : IBranchProductRepository
                 continue;
             }
 
-            var agreed = sp.AgreedWholesalePrice;
-            var cost = agreed > 0
-                ? agreed
-                : (sp.Product.CostPrice ?? 0m);
+            var cost = MT_GRMS.Application.Suppliers.SupplierProductPricing.ResolveEffectivePurchasePrice(
+                sp.AgreedWholesalePrice,
+                sp.Product.CostPrice);
             var selling = sp.Product.SellingPrice;
             var unitPrices = BuildUnitPrices(
                 sp.Product.Units.Select(u => (u.Id, u.UnitName, u.ConversionRate, u.Price, u.IsBaseUnit)),

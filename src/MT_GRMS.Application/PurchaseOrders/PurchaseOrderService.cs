@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PurchaseOrders.Dispatch;
 using MT_GRMS.Application.PurchaseOrders.Dtos;
+using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Domain.Exceptions;
 
@@ -1259,14 +1260,29 @@ public class PurchaseOrderService : IPurchaseOrderService
         var supplierConfigs = await _repository.GetMatrixSupplierConfigsAsync(command.BranchId, null, cancellationToken);
         var configBySupplier = supplierConfigs.ToDictionary(c => c.SupplierId);
 
-        var draft = command.ParentDraftId.HasValue
-            ? await _repository.GetPurchaseOrderByIdAsync(command.ParentDraftId.Value, cancellationToken)
-            : await _repository.GetDraftMatrixPoAsync(command.BranchId, null, DateTime.Today, cancellationToken);
+        // Multi-NCC: lấy mọi draft theo CN (mỗi draft = 1 SupplierId), không dùng productById.First()
+        List<PurchaseOrder> draftPos;
+        if (command.ParentDraftId.HasValue)
+        {
+            var one = await _repository.GetPurchaseOrderByIdAsync(command.ParentDraftId.Value, cancellationToken);
+            draftPos = one != null && one.Status == "DRAFT" ? new List<PurchaseOrder> { one } : new List<PurchaseOrder>();
+        }
+        else if (command.SupplierId.HasValue && command.SupplierId.Value != Guid.Empty)
+        {
+            var one = await _repository.GetDraftMatrixPoAsync(
+                command.BranchId, command.SupplierId, DateTime.Today, cancellationToken);
+            draftPos = one != null ? new List<PurchaseOrder> { one } : new List<PurchaseOrder>();
+        }
+        else
+        {
+            draftPos = (await _repository.GetDraftMatrixPosAsync(command.BranchId, cancellationToken)).ToList();
+        }
 
-        var draftDetails = (draft?.Status == "DRAFT" ? draft.Details : null)?
-            .Where(d => d.DeliveryDate.HasValue)
-            .ToList()
-            ?? new List<PurchaseOrderDetail>();
+        var draftDetailRows = draftPos
+            .SelectMany(po => (po.Details ?? Enumerable.Empty<PurchaseOrderDetail>())
+                .Where(d => d.DeliveryDate.HasValue)
+                .Select(d => (Detail: d, SupplierId: po.SupplierId)))
+            .ToList();
 
         var now = OrderMatrixRules.GetVietnamNow();
         var scope = (command.Scope ?? string.Empty).Trim().ToUpperInvariant();
@@ -1274,19 +1290,16 @@ public class PurchaseOrderService : IPurchaseOrderService
         // 1. Resolve Target Groups (SupplierId, DeliveryDate)
         var targetGroups = new List<(Guid SupplierId, DateTime DeliveryDate)>();
 
+        bool HasQty((PurchaseOrderDetail Detail, Guid SupplierId) row) =>
+            OrderMatrixRules.ComputeFinalQty(row.Detail.EmployeeQty ?? 0m, row.Detail.StoreQty, row.Detail.IsOwnerAdjusted) > 0;
+
         if (scope == OrderMatrixRules.ScopeNearest)
         {
-            var detailsWithQty = draftDetails
-                .Where(d =>
-                {
-                    var fq = OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted);
-                    return fq > 0 && productById.TryGetValue(d.ProductId, out _);
-                })
-                .ToList();
+            var detailsWithQty = draftDetailRows.Where(HasQty).ToList();
 
             DateTime? nearestEligibleDate = null;
             var distinctDates = detailsWithQty
-                .Select(d => d.DeliveryDate!.Value.Date)
+                .Select(d => d.Detail.DeliveryDate!.Value.Date)
                 .Distinct()
                 .OrderBy(d => d)
                 .ToList();
@@ -1294,8 +1307,8 @@ public class PurchaseOrderService : IPurchaseOrderService
             foreach (var date in distinctDates)
             {
                 var datesSuppliers = detailsWithQty
-                    .Where(d => d.DeliveryDate!.Value.Date == date && productById.TryGetValue(d.ProductId, out _))
-                    .Select(d => productById[d.ProductId].SupplierId)
+                    .Where(d => d.Detail.DeliveryDate!.Value.Date == date)
+                    .Select(d => d.SupplierId)
                     .Distinct();
 
                 var hasValidSupplierForDate = false;
@@ -1321,8 +1334,8 @@ public class PurchaseOrderService : IPurchaseOrderService
             {
                 var targetDate = nearestEligibleDate.Value;
                 targetGroups = detailsWithQty
-                    .Where(d => d.DeliveryDate!.Value.Date == targetDate && productById.TryGetValue(d.ProductId, out _))
-                    .Select(d => (productById[d.ProductId].SupplierId, targetDate))
+                    .Where(d => d.Detail.DeliveryDate!.Value.Date == targetDate)
+                    .Select(d => (d.SupplierId, targetDate))
                     .Distinct()
                     .ToList();
             }
@@ -1340,18 +1353,13 @@ public class PurchaseOrderService : IPurchaseOrderService
                 (monday, sunday) = OrderMatrixRules.GetWeekRange(now);
             }
 
-            var detailsInWeek = draftDetails
+            targetGroups = draftDetailRows
                 .Where(d =>
                 {
-                    var date = d.DeliveryDate!.Value.Date;
-                    if (date < monday || date > sunday) return false;
-                    var fq = OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted);
-                    return fq > 0 && productById.TryGetValue(d.ProductId, out _);
+                    var date = d.Detail.DeliveryDate!.Value.Date;
+                    return date >= monday && date <= sunday && HasQty(d);
                 })
-                .ToList();
-
-            targetGroups = detailsInWeek
-                .Select(d => (productById[d.ProductId].SupplierId, d.DeliveryDate!.Value.Date))
+                .Select(d => (d.SupplierId, d.Detail.DeliveryDate!.Value.Date))
                 .Distinct()
                 .OrderBy(g => g.Item2)
                 .ThenBy(g => g.Item1)
@@ -1365,15 +1373,13 @@ public class PurchaseOrderService : IPurchaseOrderService
             var rangeFrom = now.Date;
             var rangeTo = rangeFrom.AddDays(days - 1);
 
-            targetGroups = draftDetails
+            targetGroups = draftDetailRows
                 .Where(d =>
                 {
-                    var date = d.DeliveryDate!.Value.Date;
-                    if (date < rangeFrom || date > rangeTo) return false;
-                    var fq = OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted);
-                    return fq > 0 && productById.TryGetValue(d.ProductId, out _);
+                    var date = d.Detail.DeliveryDate!.Value.Date;
+                    return date >= rangeFrom && date <= rangeTo && HasQty(d);
                 })
-                .Select(d => (productById[d.ProductId].SupplierId, d.DeliveryDate!.Value.Date))
+                .Select(d => (d.SupplierId, d.Detail.DeliveryDate!.Value.Date))
                 .Distinct()
                 .OrderBy(g => g.Item2)
                 .ThenBy(g => g.Item1)
@@ -1388,14 +1394,9 @@ public class PurchaseOrderService : IPurchaseOrderService
         }
         else
         {
-            // Không có Scope/Groups: lấy toàn bộ draft còn qty (legacy).
-            targetGroups = draftDetails
-                .Where(d =>
-                {
-                    var fq = OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted);
-                    return fq > 0 && productById.TryGetValue(d.ProductId, out _);
-                })
-                .Select(d => (productById[d.ProductId].SupplierId, d.DeliveryDate!.Value.Date))
+            targetGroups = draftDetailRows
+                .Where(HasQty)
+                .Select(d => (d.SupplierId, d.Detail.DeliveryDate!.Value.Date))
                 .Distinct()
                 .OrderBy(g => g.Item2)
                 .ToList();
@@ -1484,12 +1485,11 @@ public class PurchaseOrderService : IPurchaseOrderService
                 continue;
             }
 
-            // Lấy các mặt hàng: Ưu tiên Draft DB (Single source of truth).
-            // Nếu không có trong Draft (chỉ xảy ra ở caller/test legacy gửi explicit Items), fallback items gửi lên.
-            var detailsForGroup = draftDetails
-                .Where(d => d.DeliveryDate!.Value.Date == deliveryDate
-                            && productById.TryGetValue(d.ProductId, out var mp)
-                            && mp.SupplierId == supplierId)
+            // Lấy dòng draft đúng theo (SupplierId, DeliveryDate) — không suy NCC từ productById.First()
+            var detailsForGroup = draftDetailRows
+                .Where(d => d.SupplierId == supplierId
+                            && d.Detail.DeliveryDate!.Value.Date == deliveryDate)
+                .Select(d => d.Detail)
                 .ToList();
 
             var legacyGroup = command.Groups?.FirstOrDefault(g => g.SupplierId == supplierId && g.DeliveryDate.Date == deliveryDate);
@@ -1559,7 +1559,9 @@ public class PurchaseOrderService : IPurchaseOrderService
                 var sp = await _repository.GetSupplierProductAsync(supplierId, productId, cancellationToken);
                 var unitPrice = lineCandidate.UnitPrice.HasValue && lineCandidate.UnitPrice.Value > 0
                     ? lineCandidate.UnitPrice.Value
-                    : (sp != null && sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : mp.Price);
+                    : SupplierProductPricing.ResolveEffectivePurchasePrice(
+                        sp?.AgreedWholesalePrice,
+                        mp.Price > 0 ? mp.Price : null);
                 var unit = !string.IsNullOrWhiteSpace(lineCandidate.Unit)
                     ? lineCandidate.Unit
                     : (!string.IsNullOrWhiteSpace(sp?.DeliveryUoM) ? sp!.DeliveryUoM : mp.Unit);
@@ -1749,7 +1751,8 @@ public class PurchaseOrderService : IPurchaseOrderService
                     TotalQty = totalQty,
                     TotalAmount = totalAmount,
                     Note = command.Note,
-                    ParentDraftId = command.ParentDraftId ?? draft?.Id,
+                    ParentDraftId = command.ParentDraftId
+                        ?? draftPos.FirstOrDefault(d => d.SupplierId == supplierId)?.Id,
                     CreatedByRole = _tenantContext.CurrentRole,
                     SubmittedByUserId = actor,
                     SubmittedAtUtc = DateTime.UtcNow,
@@ -1801,7 +1804,7 @@ public class PurchaseOrderService : IPurchaseOrderService
 
         if (!isDryRun && createdPos.Count > 0)
         {
-            if (draft != null)
+            foreach (var draft in draftPos)
             {
                 draft.TotalQty = draft.Details.Sum(d =>
                     OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted));

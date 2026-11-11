@@ -1222,10 +1222,8 @@ public class SupplierService : ISupplierService
             throw new BusinessException("PRODUCT_ALREADY_ASSIGNED_TO_SUPPLIER", "Sản phẩm này đã được gán cho nhà cung cấp này trong hệ thống.");
         }
 
-        // Giá nhập: client gửi > 0 thì lưu giá đó; = 0 thì mặc định lấy giá Master (CostPrice)
-        var purchasePrice = SupplierProductPricing.ResolvePurchasePriceToPersist(
-            command.AgreedWholesalePrice,
-            product.CostPrice);
+        // NULL/0 = chưa thỏa thuận — không copy Master vào Agreed
+        var purchasePrice = SupplierProductPricing.NormalizeAgreedPriceToPersist(command.AgreedWholesalePrice);
 
         var deliveryUoM = string.IsNullOrWhiteSpace(command.DeliveryUoM)
             ? (product.BaseUnit ?? "Cái")
@@ -1303,9 +1301,9 @@ public class SupplierService : ISupplierService
             throw new BusinessException("VALIDATION_ERROR", "Số lượng thiếu hàng cho phép phải lớn hơn hoặc bằng 0.");
         }
 
-        if (workItems.Any(x => x.AgreedWholesalePrice < 0))
+        if (workItems.Any(x => x.AgreedWholesalePrice.HasValue && x.AgreedWholesalePrice.Value < 0))
         {
-            throw new BusinessException("VALIDATION_ERROR", "Giá nhập không được âm.");
+            throw new BusinessException("VALIDATION_ERROR", "Giá thỏa thuận không được âm.");
         }
 
         var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
@@ -1314,7 +1312,7 @@ public class SupplierService : ISupplierService
             throw new NotFoundException($"Không tìm thấy nhà cung cấp với ID: {supplierId}");
         }
 
-        var prepared = new List<(Domain.Entities.Catalog.Product Product, decimal PurchasePrice, int Moq, int AllowedShortage)>();
+        var prepared = new List<(Domain.Entities.Catalog.Product Product, decimal? PurchasePrice, int Moq, int AllowedShortage)>();
         foreach (var item in workItems)
         {
             var product = await _supplierRepository.GetProductByIdAsync(item.ProductId, cancellationToken);
@@ -1329,10 +1327,7 @@ public class SupplierService : ISupplierService
                 continue;
             }
 
-            var purchasePrice = SupplierProductPricing.ResolvePurchasePriceToPersist(
-                item.AgreedWholesalePrice,
-                product.CostPrice);
-
+            var purchasePrice = SupplierProductPricing.NormalizeAgreedPriceToPersist(item.AgreedWholesalePrice);
             prepared.Add((product, purchasePrice, item.MinimumOrderQuantity, Math.Max(0, item.AllowedShortageQuantity)));
         }
 
@@ -1425,9 +1420,7 @@ public class SupplierService : ISupplierService
         }
 
         var product = entity.Product ?? await _supplierRepository.GetProductByIdAsync(productId, cancellationToken);
-        var purchasePrice = SupplierProductPricing.ResolvePurchasePriceToPersist(
-            command.AgreedWholesalePrice,
-            product?.CostPrice);
+        var purchasePrice = SupplierProductPricing.NormalizeAgreedPriceToPersist(command.AgreedWholesalePrice);
 
         if (!string.IsNullOrWhiteSpace(command.DeliveryUoM))
         {
@@ -1588,7 +1581,7 @@ public class SupplierService : ISupplierService
             .Select(id => new BatchAssignSupplierProductItemCommand
             {
                 ProductId = id,
-                AgreedWholesalePrice = command.AgreedWholesalePrice ?? 0m,
+                AgreedWholesalePrice = command.AgreedWholesalePrice,
                 MinimumOrderQuantity = command.MinimumOrderQuantity,
                 AllowedShortageQuantity = command.AllowedShortageQuantity
             })

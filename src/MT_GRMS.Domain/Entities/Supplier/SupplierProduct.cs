@@ -17,7 +17,8 @@ public class SupplierProduct : BaseTenantEntity
 
     public string? SupplierProductCode { get; set; }
     public string DeliveryUoM { get; set; } = "Cái";
-    public decimal AgreedWholesalePrice { get; set; }
+    /// <summary>NULL = chưa thỏa thuận; PO lấy Master CostPrice làm fallback.</summary>
+    public decimal? AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
 
     /// <summary>
