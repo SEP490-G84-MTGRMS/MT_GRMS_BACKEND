@@ -76,7 +76,7 @@ public class ScheduleService : IScheduleService
             workDate.AddDays(1),
             cancellationToken);
 
-        CheckConflict(employee, resolved.ShiftName, startDateTime, endDateTime, workDate, existingSchedules);
+        CheckConflict(employee, request.ShiftConfigId, resolved.ShiftName, startDateTime, endDateTime, resolved.DurationHours, workDate, existingSchedules);
 
         var schedule = new EmployeeSchedule
         {
@@ -171,7 +171,7 @@ public class ScheduleService : IScheduleService
             cancellationToken)).ToList();
 
         var newSchedules = new List<EmployeeSchedule>();
-        var batchIntervals = new List<(Guid EmployeeId, string ShiftName, DateTime Start, DateTime End, DateTime WorkDate)>();
+        var batchIntervals = new List<(Guid EmployeeId, Guid? ShiftConfigId, string ShiftName, DateTime Start, DateTime End, DateTime WorkDate, decimal DurationHours)>();
 
         foreach (var item in schedulesToProcess)
         {
@@ -189,35 +189,36 @@ public class ScheduleService : IScheduleService
             var startDateTime = GetStartDateTime(workDate, resolved.StartTime);
             var endDateTime = GetEndDateTime(workDate, resolved.StartTime, resolved.EndTime, resolved.IsNextDay);
 
-            // 1. Kiểm tra xung đột với nội bộ danh sách batch gửi lên (cho phép nhiều ca, miễn trùng không quá 12 giờ)
-            var intraBatchOverlap = TimeSpan.Zero;
+            // 1. Kiểm tra xung đột với nội bộ danh sách batch gửi lên (không trùng ca, không chồng lấn giờ, tổng giờ <= 12h/ngày)
             foreach (var b in batchIntervals.Where(b => b.EmployeeId == item.EmployeeId && b.WorkDate >= workDate.AddDays(-1) && b.WorkDate <= workDate.AddDays(1)))
             {
+                if (b.WorkDate == workDate && (
+                    (item.ShiftConfigId.HasValue && b.ShiftConfigId == item.ShiftConfigId) ||
+                    string.Equals(b.ShiftName.Trim(), resolved.ShiftName.Trim(), StringComparison.OrdinalIgnoreCase)))
+                {
+                    throw new BusinessException(
+                        "SCHEDULE_DUPLICATE_SHIFT",
+                        $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) đã được phân ca [{resolved.ShiftName}] vào ngày {workDate:dd/MM/yyyy}, không thể thêm trùng cùng một ca.");
+                }
+
                 var overlap = CalculateOverlap(startDateTime, endDateTime, b.Start, b.End);
                 if (overlap > TimeSpan.Zero)
                 {
-                    if (overlap.TotalHours > 12)
-                    {
-                        throw new BusinessException(
-                            "SCHEDULE_OVERLAP_EXCEEDED",
-                            $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) bị trùng lặp thời gian làm việc vượt quá 12 giờ vào ngày {workDate:dd/MM/yyyy} ({overlap.TotalHours:0.#} giờ) giữa ca [{resolved.ShiftName} {resolved.StartTime:hh\\:mm}-{resolved.EndTime:hh\\:mm}] và ca [{b.ShiftName} {b.Start:HH:mm}-{b.End:HH:mm}].");
-                    }
-                    intraBatchOverlap += overlap;
+                    throw new BusinessException(
+                        "SCHEDULE_TIME_OVERLAP",
+                        $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) bị trùng khung giờ làm việc vào ngày {workDate:dd/MM/yyyy} giữa ca [{resolved.ShiftName} {resolved.StartTime:hh\\:mm}-{resolved.EndTime:hh\\:mm}] và ca [{b.ShiftName} {b.Start:HH:mm}-{b.End:HH:mm}].");
                 }
             }
 
-            if (intraBatchOverlap.TotalHours > 12)
-            {
-                throw new BusinessException(
-                    "SCHEDULE_OVERLAP_EXCEEDED",
-                    $"Tổng thời gian trùng lặp các ca trong ngày {workDate:dd/MM/yyyy} của nhân viên {employee.FullName} ({employee.EmployeeCode}) trong danh sách phân ca vượt quá 12 giờ ({intraBatchOverlap.TotalHours:0.#} giờ).");
-            }
+            var intraBatchSameDayHours = batchIntervals
+                .Where(b => b.EmployeeId == item.EmployeeId && b.WorkDate == workDate)
+                .Sum(b => b.DurationHours);
 
             // 2. Kiểm tra xung đột với dữ liệu hiện có trong CSDL
             var empDbSchedules = existingSchedules.Where(s => s.EmployeeId == item.EmployeeId).ToList();
-            CheckConflict(employee, resolved.ShiftName, startDateTime, endDateTime, workDate, empDbSchedules, intraBatchOverlap);
+            CheckConflict(employee, item.ShiftConfigId, resolved.ShiftName, startDateTime, endDateTime, resolved.DurationHours, workDate, empDbSchedules, intraBatchSameDayHours);
 
-            batchIntervals.Add((item.EmployeeId, resolved.ShiftName, startDateTime, endDateTime, workDate));
+            batchIntervals.Add((item.EmployeeId, item.ShiftConfigId, resolved.ShiftName, startDateTime, endDateTime, workDate, resolved.DurationHours));
 
             var schedule = new EmployeeSchedule
             {
@@ -374,7 +375,8 @@ public class ScheduleService : IScheduleService
             workDate.AddDays(1),
             cancellationToken)).Where(s => s.Id != id).ToList();
 
-        CheckConflict(employee, shiftName, startDateTime, endDateTime, workDate, existingSchedules);
+        var newDurationHours = request.DurationHours ?? shiftConfig?.DurationHours ?? (decimal)(endDateTime - startDateTime).TotalHours;
+        CheckConflict(employee, shiftConfigId, shiftName, startDateTime, endDateTime, newDurationHours, workDate, existingSchedules);
 
         schedule.EmployeeId = employeeId;
         if (request.BranchId.HasValue && request.BranchId.Value != Guid.Empty)
@@ -600,41 +602,60 @@ public class ScheduleService : IScheduleService
 
     private static void CheckConflict(
         Employee employee,
+        Guid? newShiftConfigId,
         string newShiftName,
         DateTime newStart,
         DateTime newEnd,
+        decimal newDurationHours,
         DateTime workDate,
         IEnumerable<EmployeeSchedule> existingSchedules,
-        TimeSpan existingOverlapOffset = default)
+        decimal existingDayHoursOffset = 0m)
     {
-        var totalOverlap = existingOverlapOffset;
+        var totalDayHours = existingDayHoursOffset + newDurationHours;
 
         foreach (var ex in existingSchedules)
         {
             if (ex.Status == ScheduleStatus.Cancelled) continue;
 
+            // 1. Kiểm tra trùng lặp cùng ca trong cùng một ngày
+            if (ex.WorkDate.Date == workDate.Date)
+            {
+                var isSameShift = (newShiftConfigId.HasValue && ex.ShiftConfigId.HasValue && ex.ShiftConfigId.Value == newShiftConfigId.Value) ||
+                                  string.Equals((ex.ShiftName ?? string.Empty).Trim(), (newShiftName ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase);
+
+                if (isSameShift)
+                {
+                    throw new BusinessException(
+                        "SCHEDULE_DUPLICATE_SHIFT",
+                        $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) đã có ca [{ex.ShiftName}] vào ngày {workDate:dd/MM/yyyy}, không thể phân trùng cùng một ca.");
+                }
+
+                var exHours = ex.DurationHours > 0
+                    ? ex.DurationHours
+                    : (decimal)(GetEndDateTime(ex.WorkDate, ex.PlannedStartTime, ex.PlannedEndTime, ex.IsCheckInNextDay) - GetStartDateTime(ex.WorkDate, ex.PlannedStartTime)).TotalHours;
+
+                totalDayHours += exHours;
+            }
+
+            // 2. Kiểm tra chồng lấn khung giờ làm việc giữa các ca
             var exStart = GetStartDateTime(ex.WorkDate, ex.PlannedStartTime);
             var exEnd = GetEndDateTime(ex.WorkDate, ex.PlannedStartTime, ex.PlannedEndTime, ex.IsCheckInNextDay);
 
             var overlap = CalculateOverlap(newStart, newEnd, exStart, exEnd);
             if (overlap > TimeSpan.Zero)
             {
-                if (overlap.TotalHours > 12)
-                {
-                    throw new BusinessException(
-                        "SCHEDULE_OVERLAP_EXCEEDED",
-                        $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) có thời gian trùng giữa các ca ngày {workDate:dd/MM/yyyy} vượt quá 12 giờ ({overlap.TotalHours:0.#} giờ) giữa ca [{newShiftName} {newStart:HH:mm}-{newEnd:HH:mm}] và ca [{ex.ShiftName} {ex.PlannedStartTime:hh\\:mm}-{ex.PlannedEndTime:hh\\:mm}].");
-                }
-
-                totalOverlap += overlap;
+                throw new BusinessException(
+                    "SCHEDULE_TIME_OVERLAP",
+                    $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) bị trùng thời gian làm việc vào ngày {workDate:dd/MM/yyyy} giữa ca [{newShiftName} {newStart:HH:mm}-{newEnd:HH:mm}] và ca [{ex.ShiftName} {ex.PlannedStartTime:hh\\:mm}-{ex.PlannedEndTime:hh\\:mm}].");
             }
         }
 
-        if (totalOverlap.TotalHours > 12)
+        // 3. Kiểm tra tổng thời gian làm việc các ca trong ngày không vượt quá 12 giờ
+        if (totalDayHours > 12m)
         {
             throw new BusinessException(
-                "SCHEDULE_OVERLAP_EXCEEDED",
-                $"Tổng thời gian trùng lặp các ca trong ngày {workDate:dd/MM/yyyy} của nhân viên {employee.FullName} ({employee.EmployeeCode}) vượt quá 12 giờ ({totalOverlap.TotalHours:0.#} giờ).");
+                "SCHEDULE_DAILY_HOURS_EXCEEDED",
+                $"Tổng thời gian các ca trong ngày {workDate:dd/MM/yyyy} của nhân viên {employee.FullName} ({employee.EmployeeCode}) là {totalDayHours:0.#}h, vượt quá giới hạn tối đa 12h/ngày.");
         }
     }
 
