@@ -448,7 +448,7 @@ public class UserAuthenticationTests
 
         var otpResponse = await authService.SendRegistrationOtpAsync(new SendRegistrationOtpRequest(
             Phone: "0981234321",
-            StoreName: "Siêu Thị Mini Firebase",
+            StoreName: "Siêu Thị Mini TextBee",
             FullName: "Nguyễn Chủ Tiệm"));
 
         Assert.True(otpResponse.Success);
@@ -459,7 +459,7 @@ public class UserAuthenticationTests
         await Assert.ThrowsAsync<ArgumentException>(() =>
             authService.RegisterTenantAsync(new RegisterTenantRequest(
                 FullName: "Nguyễn Chủ Tiệm",
-                StoreName: "Siêu Thị Mini Firebase",
+                StoreName: "Siêu Thị Mini TextBee",
                 Phone: "0981234321",
                 Email: null,
                 Password: "Password@123",
@@ -469,7 +469,7 @@ public class UserAuthenticationTests
         // Nhập đúng mã OTP sẽ khởi tạo cửa hàng thành công
         var loginRes = await authService.RegisterTenantAsync(new RegisterTenantRequest(
             FullName: "Nguyễn Chủ Tiệm",
-            StoreName: "Siêu Thị Mini Firebase",
+            StoreName: "Siêu Thị Mini TextBee",
             Phone: "0981234321",
             Email: null,
             Password: "Password@123",
