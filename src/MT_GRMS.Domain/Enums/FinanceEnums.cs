@@ -43,8 +43,8 @@ public enum ExpenseVoucherStatus
 public enum FinancialNature
 {
     OperatingExpense = 1, // Chi phí vận hành OPEX (Điện, nước, sửa chữa...)
-    Deposit = 2,          // Tiền cọc vỏ/bình (0% P&L, 0% Thuế)
-    RefundDeposit = 3,    // Hoàn trả cọc vỏ/bình (0% P&L, 0% Thuế)
+    Deposit = 2,          // OUT OF SCOPE: Cọc vỏ/bình - giữ giá trị số để không lệch enum đã lưu DB
+    RefundDeposit = 3,    // OUT OF SCOPE: Hoàn cọc vỏ/bình - giữ giá trị số để không lệch enum đã lưu DB
     OtherIncome = 4,      // Thu nhập khác (Ve chai, phế liệu...)
     OwnerDraw = 5,        // Rút vốn chủ sở hữu (0% P&L, 0% Thuế)
     OwnerDeposit = 6,     // Nạp vốn chủ sở hữu (0% P&L, 0% Thuế)
