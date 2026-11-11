@@ -51,16 +51,75 @@ public class AuthController : BaseApiController
     }
 
     /// <summary>
-    /// Kiểm tra trùng số điện thoại và khởi tạo phiên xác thực SMS OTP (TextBee Android Gateway / Dev Fallback)
+    /// Bước 1 Đăng nhập 2FA: Kiểm tra tài khoản/mật khẩu và gửi mã OTP 6 chữ số qua Email
+    /// </summary>
+    [HttpPost("login/send-otp")]
+    [ProducesResponseType(typeof(ApiResponse<SendLoginOtpResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> SendLoginOtp([FromBody] LoginRequest request, CancellationToken cancellationToken)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.UsernameOrEmail) || string.IsNullOrWhiteSpace(request.Password))
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Tài khoản và mật khẩu không được để trống.", StatusCodes.Status400BadRequest));
+        }
+
+        try
+        {
+            var result = await _authService.SendLoginOtpAsync(request, cancellationToken);
+            return Ok(ApiResponse<SendLoginOtpResponse>.Ok(result, result.Message, StatusCodes.Status200OK));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", ex.Message, StatusCodes.Status401Unauthorized));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+        }
+    }
+
+    /// <summary>
+    /// Bước 2 Đăng nhập 2FA: Xác thực mã Email OTP 6 chữ số và cấp phát phiên đăng nhập (HttpOnly Cookie)
+    /// </summary>
+    [HttpPost("login/verify-otp")]
+    [ProducesResponseType(typeof(ApiResponse<UserInfo>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> VerifyLoginOtp([FromBody] VerifyLoginOtpRequest request, CancellationToken cancellationToken)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.TempToken) || string.IsNullOrWhiteSpace(request.OtpCode))
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Phiên xác thực và mã OTP không được để trống.", StatusCodes.Status400BadRequest));
+        }
+
+        try
+        {
+            var result = await _authService.VerifyLoginOtpAsync(request, cancellationToken);
+            SetAuthCookies(result.AccessToken, result.RefreshToken, result.ExpiresAt);
+            return Ok(ApiResponse<UserInfo>.Ok(result.User, "Xác thực OTP và đăng nhập thành công.", StatusCodes.Status200OK));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", ex.Message, StatusCodes.Status401Unauthorized));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+        }
+    }
+
+    /// <summary>
+    /// Kiểm tra trùng email/số điện thoại và gửi mã xác thực Email OTP kích hoạt đăng ký cửa hàng
     /// </summary>
     [HttpPost("register/send-otp")]
     [ProducesResponseType(typeof(ApiResponse<SendRegistrationOtpResponse>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> SendRegistrationOtp([FromBody] SendRegistrationOtpRequest request, CancellationToken cancellationToken)
     {
-        if (request == null || string.IsNullOrWhiteSpace(request.Phone))
+        if (request == null || (string.IsNullOrWhiteSpace(request.Email) && string.IsNullOrWhiteSpace(request.Phone)))
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Vui lòng nhập số điện thoại để nhận mã xác thực SMS.", StatusCodes.Status400BadRequest));
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Vui lòng nhập địa chỉ email để nhận mã xác thực OTP.", StatusCodes.Status400BadRequest));
         }
 
         try
@@ -75,22 +134,22 @@ public class AuthController : BaseApiController
     }
 
     /// <summary>
-    /// Kiểm tra mã SMS OTP đăng ký cửa hàng
+    /// Kiểm tra mã Email OTP đăng ký cửa hàng
     /// </summary>
     [HttpPost("register/verify-otp")]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> VerifyRegistrationOtp([FromBody] VerifyRegistrationOtpRequest request, CancellationToken cancellationToken)
     {
-        if (request == null || string.IsNullOrWhiteSpace(request.Phone) || string.IsNullOrWhiteSpace(request.OtpCode))
+        if (request == null || string.IsNullOrWhiteSpace(request.EmailOrPhone) || string.IsNullOrWhiteSpace(request.OtpCode))
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Số điện thoại và mã OTP không được để trống.", StatusCodes.Status400BadRequest));
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Email và mã OTP không được để trống.", StatusCodes.Status400BadRequest));
         }
 
         try
         {
             await _authService.VerifyRegistrationOtpAsync(request, cancellationToken);
-            return Ok(ApiResponse<object>.Ok(new { success = true }, "Xác thực số điện thoại thành công.", StatusCodes.Status200OK));
+            return Ok(ApiResponse<object>.Ok(new { success = true }, "Xác thực mã OTP Email thành công.", StatusCodes.Status200OK));
         }
         catch (ArgumentException ex)
         {

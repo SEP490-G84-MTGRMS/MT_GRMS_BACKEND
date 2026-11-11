@@ -356,6 +356,20 @@ public class UserAuthenticationTests
             LastOtp = otpCode;
             return Task.CompletedTask;
         }
+
+        public Task<bool> SendLoginOtpAsync(string toEmail, string fullName, string otpCode, CancellationToken cancellationToken = default)
+        {
+            LastToEmail = toEmail;
+            LastOtp = otpCode;
+            return Task.FromResult(false);
+        }
+
+        public Task<bool> SendRegistrationOtpAsync(string toEmail, string fullName, string storeName, string otpCode, CancellationToken cancellationToken = default)
+        {
+            LastToEmail = toEmail;
+            LastOtp = otpCode;
+            return Task.FromResult(false);
+        }
     }
 
     [Fact]
@@ -444,24 +458,27 @@ public class UserAuthenticationTests
     public async Task AuthService_SendRegistrationOtp_And_RegisterTenant_Should_Verify_Registration_Otp()
     {
         var repo = new FakeUserRepository();
-        var authService = new AuthService(repo);
+        var emailService = new FakeEmailService();
+        var authService = new AuthService(repo, emailService: emailService);
 
         var otpResponse = await authService.SendRegistrationOtpAsync(new SendRegistrationOtpRequest(
             Phone: "0981234321",
-            StoreName: "Siêu Thị Mini TextBee",
-            FullName: "Nguyễn Chủ Tiệm"));
+            StoreName: "Siêu Thị Mini Email OTP",
+            FullName: "Nguyễn Chủ Tiệm",
+            Email: "newowner@mtgrms.vn"));
 
         Assert.True(otpResponse.Success);
         Assert.NotNull(otpResponse.DevOtpCode);
         Assert.Equal(6, otpResponse.DevOtpCode!.Length);
+        Assert.Equal("newowner@mtgrms.vn", emailService.LastToEmail);
 
         // Nhập sai mã OTP sẽ bị chặn
         await Assert.ThrowsAsync<ArgumentException>(() =>
             authService.RegisterTenantAsync(new RegisterTenantRequest(
                 FullName: "Nguyễn Chủ Tiệm",
-                StoreName: "Siêu Thị Mini TextBee",
+                StoreName: "Siêu Thị Mini Email OTP",
                 Phone: "0981234321",
-                Email: null,
+                Email: "newowner@mtgrms.vn",
                 Password: "Password@123",
                 AgreeTerms: true,
                 OtpCode: "000000")));
@@ -469,14 +486,57 @@ public class UserAuthenticationTests
         // Nhập đúng mã OTP sẽ khởi tạo cửa hàng thành công
         var loginRes = await authService.RegisterTenantAsync(new RegisterTenantRequest(
             FullName: "Nguyễn Chủ Tiệm",
-            StoreName: "Siêu Thị Mini TextBee",
+            StoreName: "Siêu Thị Mini Email OTP",
             Phone: "0981234321",
-            Email: null,
+            Email: "newowner@mtgrms.vn",
             Password: "Password@123",
             AgreeTerms: true,
             OtpCode: otpResponse.DevOtpCode));
 
         Assert.NotNull(loginRes);
         Assert.Equal("STORE_OWNER", loginRes.User.Role);
+    }
+
+    [Fact]
+    public async Task AuthService_SendLoginOtp_And_VerifyLoginOtp_Should_Support_2FA_Email_And_BruteForce_Protection()
+    {
+        var repo = new FakeUserRepository();
+        var emailService = new FakeEmailService();
+        await repo.AddAsync(new User
+        {
+            Id = "usr_2fa_01",
+            Username = "owner2fa",
+            Email = "owner2fa@mtgrms.vn",
+            FullName = "Chủ Cửa Hàng 2FA",
+            Password = "Password@123",
+            IsAdmin = false
+        });
+
+        var authService = new AuthService(repo, emailService: emailService);
+
+        // Bước 1: Gửi yêu cầu đăng nhập -> Nhận TempToken và gửi Email OTP
+        var sendOtpRes = await authService.SendLoginOtpAsync(new LoginRequest("owner2fa", "Password@123", "TENANT-01"));
+        Assert.True(sendOtpRes.RequiresOtp);
+        Assert.False(string.IsNullOrWhiteSpace(sendOtpRes.TempToken));
+        Assert.Equal("owner2fa@mtgrms.vn", emailService.LastToEmail);
+        Assert.NotNull(sendOtpRes.DevOtpCode);
+
+        // Bước 2: Nhập đúng mã OTP -> Hoàn tất đăng nhập
+        var verifyRes = await authService.VerifyLoginOtpAsync(new VerifyLoginOtpRequest(sendOtpRes.TempToken, sendOtpRes.DevOtpCode!));
+        Assert.NotNull(verifyRes);
+        Assert.Equal("usr_2fa_01", verifyRes.User.Id);
+        Assert.Equal("STORE_OWNER", verifyRes.User.Role);
+
+        // Bước 3: Kiểm tra chống Brute-force (quá 5 lần sai sẽ hủy mã OTP)
+        var bruteRes = await authService.SendLoginOtpAsync(new LoginRequest("owner2fa", "Password@123", "TENANT-01"));
+        for (int i = 0; i < 5; i++)
+        {
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                authService.VerifyLoginOtpAsync(new VerifyLoginOtpRequest(bruteRes.TempToken, "000000")));
+        }
+
+        // Lần thứ 6 dùng đúng mã cũng bị từ chối vì phiên đã bị hủy
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            authService.VerifyLoginOtpAsync(new VerifyLoginOtpRequest(bruteRes.TempToken, bruteRes.DevOtpCode!)));
     }
 }

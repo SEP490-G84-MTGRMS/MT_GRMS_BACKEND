@@ -15,6 +15,22 @@ public record LoginResponse(
     UserInfo User
 );
 
+public record SendLoginOtpResponse(
+    bool RequiresOtp,
+    string TempToken,
+    string MaskedEmail,
+    string TargetEmail,
+    int ExpiresInSeconds,
+    bool IsRealEmailSent,
+    string Message,
+    string? DevOtpCode = null
+);
+
+public record VerifyLoginOtpRequest(
+    string TempToken,
+    string OtpCode
+);
+
 public record UserInfo(
     string Id,
     string Username,
@@ -45,7 +61,7 @@ public record RegisterTenantRequest(
 );
 
 public record SendRegistrationOtpRequest(
-    string Phone,
+    string? Phone = null,
     string? StoreName = null,
     string? FullName = null,
     string? Email = null
@@ -54,14 +70,14 @@ public record SendRegistrationOtpRequest(
 public record SendRegistrationOtpResponse(
     bool Success,
     string Message,
-    string MaskedPhone,
+    string MaskedEmail,
     int ExpiresInSeconds,
-    bool IsRealSmsSent,
+    bool IsRealEmailSent,
     string? DevOtpCode = null
 );
 
 public record VerifyRegistrationOtpRequest(
-    string Phone,
+    string EmailOrPhone,
     string OtpCode
 );
 

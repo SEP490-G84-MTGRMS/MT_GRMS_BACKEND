@@ -5,6 +5,8 @@ namespace MT_GRMS.Application.Auth;
 public interface IAuthService
 {
     Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default);
+    Task<SendLoginOtpResponse> SendLoginOtpAsync(LoginRequest request, CancellationToken cancellationToken = default);
+    Task<LoginResponse> VerifyLoginOtpAsync(VerifyLoginOtpRequest request, CancellationToken cancellationToken = default);
     Task<LoginResponse> RefreshTokenAsync(RefreshTokenRequest request, CancellationToken cancellationToken = default);
     Task<LoginResponse> RegisterTenantAsync(RegisterTenantRequest request, CancellationToken cancellationToken = default);
     Task<SendRegistrationOtpResponse> SendRegistrationOtpAsync(SendRegistrationOtpRequest request, CancellationToken cancellationToken = default);

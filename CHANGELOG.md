@@ -7,7 +7,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-11
 
 ### Added
-- Triển khai xác thực SMS OTP qua **TextBee Android SMS Gateway** (kèm cơ chế Dev Fallback) khi đăng ký mở cửa hàng mới: bổ sung `ISmsService`, `TextBeeSettings`, `TextBeeSmsService` gọi REST API `api.textbee.dev`, xác thực `OtpCode` trong `AuthService.RegisterTenantAsync`, cùng các API `POST /api/auth/register/send-otp` và `POST /api/auth/register/verify-otp` [FE-AUTH] [worklog: docs/worklogs/2026-11-11_FE-AUTH_AI_textbee-sms-otp-registration.md].
+- Chuyển đổi toàn diện xác thực OTP sang **Email OTP** cho cả luồng **Đăng nhập 2 lớp (2FA)** (`POST /api/auth/login/send-otp`, `POST /api/auth/login/verify-otp`) và **Đăng ký mở cửa hàng** (`POST /api/auth/register/send-otp`, `POST /api/auth/register`), tích hợp bảo vệ chống brute-force (tối đa 5 lần nhập sai, TTL 5 phút) và cơ chế Dev Console Fallback; gỡ bỏ hoàn toàn TextBee SMS Gateway (`ISmsService`, `TextBeeSmsService`, `TextBeeSettings`) [EMAIL-OTP] [worklog: docs/worklogs/2026-11-11_EMAIL-OTP_AI_email-otp-auth-flow.md].
 
 ## [Unreleased] - 2026-11-09
 

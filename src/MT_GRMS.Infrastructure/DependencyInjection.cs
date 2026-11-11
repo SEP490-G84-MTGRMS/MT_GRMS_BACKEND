@@ -128,13 +128,9 @@ public static class DependencyInjection
         services.Configure<MT_GRMS.Application.Common.SePaySettings>(configuration.GetSection(MT_GRMS.Application.Common.SePaySettings.SectionName));
         services.AddScoped<MT_GRMS.Application.SaaS.Services.IWalletService, Services.WalletService>();
 
-        // Cấu hình Email & Dịch vụ gửi thư điện tử OTP
+        // Cấu hình Email & Dịch vụ gửi thư điện tử OTP (Đăng nhập 2FA, Đăng ký & Khôi phục mật khẩu)
         services.Configure<EmailSettings>(configuration.GetSection(EmailSettings.SectionName));
         services.AddScoped<IEmailService, EmailService>();
-
-        // Cấu hình TextBee Android SMS Gateway (gửi SMS miễn phí qua SIM điện thoại Android)
-        services.Configure<TextBeeSettings>(configuration.GetSection(TextBeeSettings.SectionName));
-        services.AddScoped<ISmsService, TextBeeSmsService>();
 
         return services;
     }

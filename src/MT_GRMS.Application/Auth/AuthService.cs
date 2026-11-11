@@ -17,51 +17,146 @@ using MT_GRMS.Domain.Enums;
 namespace MT_GRMS.Application.Auth;
 
 /// <summary>
-/// Service xử lý xác thực người dùng & cấp phát JWT token
+/// Service xử lý xác thực người dùng, Email OTP (2FA Đăng nhập & Đăng ký) và cấp phát JWT token
 /// </summary>
 public class AuthService : IAuthService
 {
-    private sealed record RegistrationOtpEntry(string OtpCode, DateTime ExpiresAtUtc);
+    private const int MaxOtpFailedAttempts = 5;
+
+    private sealed record RegistrationOtpEntry(string OtpCode, DateTime ExpiresAtUtc, int FailedAttempts = 0);
+    private sealed record LoginOtpEntry(string UserId, string? TenantCode, string OtpCode, DateTime ExpiresAtUtc, int FailedAttempts = 0);
 
     private static readonly ConcurrentDictionary<string, RegistrationOtpEntry> RegistrationOtpStore = new();
+    private static readonly ConcurrentDictionary<string, LoginOtpEntry> LoginOtpStore = new();
 
     private readonly IUserRepository _userRepository;
     private readonly IConfiguration? _configuration;
     private readonly IPasswordHasher _passwordHasher;
     private readonly IEmailService? _emailService;
-    private readonly ISmsService? _smsService;
 
     public AuthService(
         IUserRepository userRepository,
         IConfiguration? configuration = null,
         IPasswordHasher? passwordHasher = null,
-        IEmailService? emailService = null,
-        ISmsService? smsService = null)
+        IEmailService? emailService = null)
     {
         _userRepository = userRepository;
         _configuration = configuration;
         _passwordHasher = passwordHasher ?? new PasswordHasher();
         _emailService = emailService;
-        _smsService = smsService;
     }
 
     public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
     {
-        // 1. Kiểm tra tính hợp lệ của tham số đầu vào
         if (string.IsNullOrWhiteSpace(request.UsernameOrEmail) || string.IsNullOrWhiteSpace(request.Password))
         {
             throw new ArgumentException("Tài khoản và mật khẩu không được để trống.");
         }
 
-        // 2. Tìm user trong cơ sở dữ liệu
         var user = await _userRepository.GetByUsernameAsync(request.UsernameOrEmail.Trim(), cancellationToken)
             ?? throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
 
-        // 3. Xác thực mật khẩu và tự động nâng cấp hash nếu cần
         await VerifyPasswordAsync(user, request.Password, cancellationToken);
 
-        // 4. Xác định Tenant và phân quyền theo UserRole enum (Admin, StoreOwner, Staff)
-        var (tenantId, tenantUser) = ResolveTenant(user, request.TenantCode);
+        return await IssueLoginSessionAsync(user, request.TenantCode, cancellationToken);
+    }
+
+    public async Task<SendLoginOtpResponse> SendLoginOtpAsync(LoginRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.UsernameOrEmail) || string.IsNullOrWhiteSpace(request.Password))
+        {
+            throw new ArgumentException("Tài khoản và mật khẩu không được để trống.");
+        }
+
+        var user = await _userRepository.GetByUsernameAsync(request.UsernameOrEmail.Trim(), cancellationToken)
+            ?? throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
+
+        await VerifyPasswordAsync(user, request.Password, cancellationToken);
+
+        var targetEmail = !string.IsNullOrWhiteSpace(user.Email)
+            ? user.Email.Trim()
+            : (request.UsernameOrEmail.Contains('@') ? request.UsernameOrEmail.Trim() : $"{user.Username}@mtgrms.vn");
+
+        var fullName = string.IsNullOrWhiteSpace(user.FullName) ? user.Username : user.FullName;
+        var otpCode = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
+        var tempToken = $"otp_login_{Guid.NewGuid():N}";
+        var expiresAtUtc = DateTime.UtcNow.AddMinutes(5);
+
+        LoginOtpStore[tempToken] = new LoginOtpEntry(
+            UserId: user.Id,
+            TenantCode: request.TenantCode,
+            OtpCode: otpCode,
+            ExpiresAtUtc: expiresAtUtc,
+            FailedAttempts: 0);
+
+        var isRealEmailSent = false;
+        if (_emailService != null)
+        {
+            isRealEmailSent = await _emailService.SendLoginOtpAsync(targetEmail, fullName, otpCode, cancellationToken);
+        }
+
+        var maskedEmail = MaskEmailDisplay(targetEmail);
+        var message = isRealEmailSent
+            ? $"Mã xác thực OTP 6 chữ số đã được gửi tới email {maskedEmail}."
+            : $"Đã tạo mã xác thực OTP đăng nhập cho email {maskedEmail}.";
+
+        return new SendLoginOtpResponse(
+            RequiresOtp: true,
+            TempToken: tempToken,
+            MaskedEmail: maskedEmail,
+            TargetEmail: targetEmail,
+            ExpiresInSeconds: 300,
+            IsRealEmailSent: isRealEmailSent,
+            Message: message,
+            DevOtpCode: isRealEmailSent ? null : otpCode
+        );
+    }
+
+    public async Task<LoginResponse> VerifyLoginOtpAsync(VerifyLoginOtpRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.TempToken) || string.IsNullOrWhiteSpace(request.OtpCode))
+        {
+            throw new ArgumentException("Phiên xác thực và mã OTP không được để trống.");
+        }
+
+        var tempToken = request.TempToken.Trim();
+        if (!LoginOtpStore.TryGetValue(tempToken, out var entry))
+        {
+            throw new ArgumentException("Phiên xác thực OTP không tồn tại hoặc đã hết hạn. Vui lòng đăng nhập lại.");
+        }
+
+        if (entry.ExpiresAtUtc < DateTime.UtcNow)
+        {
+            LoginOtpStore.TryRemove(tempToken, out _);
+            throw new ArgumentException("Mã OTP đăng nhập đã hết hạn (quá 5 phút). Vui lòng đăng nhập lại để nhận mã mới.");
+        }
+
+        var cleanOtp = request.OtpCode.Trim();
+        if (!string.Equals(entry.OtpCode, cleanOtp, StringComparison.Ordinal))
+        {
+            var nextFailures = entry.FailedAttempts + 1;
+            if (nextFailures >= MaxOtpFailedAttempts)
+            {
+                LoginOtpStore.TryRemove(tempToken, out _);
+                throw new ArgumentException("Bạn đã nhập sai mã OTP quá 5 lần. Phiên xác thực đã bị hủy, vui lòng đăng nhập lại.");
+            }
+
+            LoginOtpStore[tempToken] = entry with { FailedAttempts = nextFailures };
+            throw new ArgumentException($"Mã xác thực Email OTP không chính xác (còn {MaxOtpFailedAttempts - nextFailures} lần thử).");
+        }
+
+        // Xóa mã OTP ngay sau khi xác thực thành công (One-Time-Use)
+        LoginOtpStore.TryRemove(tempToken, out _);
+
+        var user = await _userRepository.GetByIdAsync(entry.UserId, cancellationToken)
+            ?? throw new UnauthorizedAccessException("Tài khoản người dùng không tồn tại.");
+
+        return await IssueLoginSessionAsync(user, entry.TenantCode, cancellationToken);
+    }
+
+    private async Task<LoginResponse> IssueLoginSessionAsync(User user, string? tenantCode, CancellationToken cancellationToken)
+    {
+        var (tenantId, tenantUser) = ResolveTenant(user, tenantCode);
         var userRole = ResolveUserRole(user, tenantUser);
         var role = userRole.ToStringRole();
         var isAdmin = userRole == UserRole.Admin;
@@ -69,7 +164,6 @@ public class AuthService : IAuthService
             ? await _userRepository.GetEmployeeBranchIdAsync(user.Id, tenantId, cancellationToken)
             : null;
 
-        // 5. Chuẩn bị thông tin người dùng và sinh JWT Token / RefreshToken
         var userInfo = new UserInfo(
             Id: user.Id,
             Username: user.Username,
@@ -86,7 +180,6 @@ public class AuthService : IAuthService
         var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt, branchId);
         var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
 
-        // Lưu RefreshToken và thời hạn (7 ngày) vào CSDL
         user.RefreshToken = refreshToken;
         user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
         user.LastLoginAt = DateTime.UtcNow;
@@ -119,7 +212,7 @@ public class AuthService : IAuthService
         {
             try
             {
-                var hashedInput = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(requestPassword))).ToLowerInvariant();
+                var hashedInput = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(requestPassword))).ToLowerInvariant();
                 if (string.Equals(user.PasswordHash, hashedInput, StringComparison.OrdinalIgnoreCase))
                 {
                     isPasswordValid = true;
@@ -152,7 +245,6 @@ public class AuthService : IAuthService
             throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
         }
 
-        // Tự động nâng cấp mật khẩu cũ sang PBKDF2 chuẩn bảo mật cao
         if (rehashNeeded)
         {
             user.PasswordHash = _passwordHasher.HashPassword(requestPassword);
@@ -161,9 +253,6 @@ public class AuthService : IAuthService
         }
     }
 
-    /// <summary>
-    /// Xác định TenantId và đối tượng TenantUser liên kết của người dùng
-    /// </summary>
     private static (string TenantId, TenantUser? TenantUser) ResolveTenant(User user, string? tenantCode)
     {
         var tenantUser = user.TenantUsers?.FirstOrDefault(tu => !string.IsNullOrWhiteSpace(tenantCode) && tu.TenantId == tenantCode)
@@ -178,20 +267,13 @@ public class AuthService : IAuthService
         return (tenantId, tenantUser);
     }
 
-    private static string ResolveTenantId(User user, string? tenantCode) => ResolveTenant(user, tenantCode).TenantId;
-
-    /// <summary>
-    /// Xác định quyền hạn chuẩn hóa theo enum UserRole (Admin, StoreOwner, Staff)
-    /// </summary>
     private static UserRole ResolveUserRole(User user, TenantUser? tenantUser)
     {
-        // 1. Quản trị viên hệ thống
         if (user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase))
         {
             return UserRole.Admin;
         }
 
-        // 2. Lấy role trực tiếp từ database qua Enum parser (mặc định StoreOwner nếu mới tạo cửa hàng)
         return UserRoleNames.FromString(tenantUser?.Role ?? UserRoleNames.StoreOwner);
     }
 
@@ -202,7 +284,6 @@ public class AuthService : IAuthService
             throw new ArgumentException("RefreshToken không được để trống.");
         }
 
-        // Tìm user theo RefreshToken trong CSDL
         var matchingUsers = await _userRepository.FindAsync(u => u.RefreshToken == request.RefreshToken, cancellationToken);
         var user = matchingUsers.FirstOrDefault();
 
@@ -234,7 +315,6 @@ public class AuthService : IAuthService
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
         var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt, branchId);
 
-        // Token Rotation: Sinh RefreshToken mới và hủy token cũ
         var newRefreshToken = $"mt_refresh_{Guid.NewGuid():N}";
         user.RefreshToken = newRefreshToken;
         user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
@@ -307,16 +387,16 @@ public class AuthService : IAuthService
             throw new ArgumentException("Số điện thoại hoặc email đã được đăng ký trong hệ thống.");
         }
 
-        var normalizedPhoneKey = NormalizePhoneKey(request.Phone);
-        if (!string.IsNullOrWhiteSpace(request.OtpCode) || RegistrationOtpStore.ContainsKey(normalizedPhoneKey))
+        var otpKey = ResolveRegistrationOtpKey(request.Email, request.Phone);
+        if (!string.IsNullOrWhiteSpace(request.OtpCode) || (!string.IsNullOrWhiteSpace(otpKey) && RegistrationOtpStore.ContainsKey(otpKey)))
         {
             if (string.IsNullOrWhiteSpace(request.OtpCode))
             {
-                throw new ArgumentException("Vui lòng xác thực mã SMS OTP đã gửi đến số điện thoại của bạn.");
+                throw new ArgumentException("Vui lòng nhập mã xác thực OTP đã gửi đến email của bạn.");
             }
 
-            await VerifyRegistrationOtpAsync(new VerifyRegistrationOtpRequest(request.Phone, request.OtpCode), cancellationToken);
-            RegistrationOtpStore.TryRemove(normalizedPhoneKey, out _);
+            await VerifyRegistrationOtpAsync(new VerifyRegistrationOtpRequest(otpKey, request.OtpCode), cancellationToken);
+            RegistrationOtpStore.TryRemove(otpKey, out _);
         }
 
         var rawSlug = request.StoreName.Trim().ToLowerInvariant()
@@ -400,8 +480,6 @@ public class AuthService : IAuthService
 
     private string GenerateJwtToken(string userId, string username, string email, string role, string tenantId, bool isAdmin, DateTime expiresAt, Guid? branchId = null)
     {
-        // Phải khớp fallback key trong Program.cs — appsettings thường để Jwt:Key="" 
-        // (IsNullOrWhiteSpace), nếu trả opaque mt_jwt_* thì FE gửi Bearer nhưng API không authenticate → 403 khi sửa NCC.
         var secretKey = _configuration?["Jwt:Key"];
         if (string.IsNullOrWhiteSpace(secretKey))
         {
@@ -471,8 +549,6 @@ public class AuthService : IAuthService
         }
 
         var cleanInput = request.Email.Trim().ToLowerInvariant();
-
-        // Tìm user theo email hoặc username/phone
         var user = await _userRepository.GetByUsernameAsync(cleanInput, cancellationToken);
         if (user == null)
         {
@@ -480,8 +556,6 @@ public class AuthService : IAuthService
         }
 
         var targetEmail = string.IsNullOrWhiteSpace(user.Email) ? cleanInput : user.Email;
-
-        // Sinh mã OTP 6 chữ số ngẫu nhiên an toàn bằng RandomNumberGenerator
         var otpCode = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
 
         user.PasswordResetOtp = otpCode;
@@ -490,7 +564,6 @@ public class AuthService : IAuthService
         _userRepository.Update(user);
         await _userRepository.SaveChangesAsync(cancellationToken);
 
-        // Gửi email OTP
         if (_emailService != null)
         {
             await _emailService.SendPasswordResetOtpAsync(targetEmail, user.FullName, otpCode, cancellationToken);
@@ -541,7 +614,6 @@ public class AuthService : IAuthService
             throw new ArgumentException("Mật khẩu mới phải có tối thiểu 8 ký tự.");
         }
 
-        // Xác thực lại OTP
         await VerifyOtpAsync(new VerifyOtpRequest(request.Email, request.OtpCode), cancellationToken);
 
         var cleanInput = request.Email.Trim().ToLowerInvariant();
@@ -551,10 +623,7 @@ public class AuthService : IAuthService
             throw new KeyNotFoundException("Không tìm thấy tài khoản người dùng.");
         }
 
-        // Băm mật khẩu mới bằng PBKDF2 PasswordHasher
         user.PasswordHash = _passwordHasher.HashPassword(request.NewPassword);
-
-        // Hủy mã OTP sau khi sử dụng thành công
         user.PasswordResetOtp = null;
         user.OtpExpiry = null;
 
@@ -566,59 +635,61 @@ public class AuthService : IAuthService
         SendRegistrationOtpRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (request == null || string.IsNullOrWhiteSpace(request.Phone))
+        if (request == null || (string.IsNullOrWhiteSpace(request.Email) && string.IsNullOrWhiteSpace(request.Phone)))
         {
-            throw new ArgumentException("Vui lòng nhập số điện thoại hợp lệ.");
+            throw new ArgumentException("Vui lòng nhập địa chỉ email hợp lệ để nhận mã xác thực OTP.");
         }
 
-        var normalizedPhoneKey = NormalizePhoneKey(request.Phone);
-        if (normalizedPhoneKey.Length < 9 || normalizedPhoneKey.Length > 15)
+        if (!string.IsNullOrWhiteSpace(request.Email) && !request.Email.Contains('@'))
         {
-            throw new ArgumentException("Số điện thoại không đúng định dạng (cần từ 9 đến 11 chữ số).");
+            throw new ArgumentException("Địa chỉ email không đúng định dạng.");
         }
+
+        var phoneTrimmed = request.Phone?.Trim() ?? string.Empty;
+        var emailTrimmed = request.Email?.Trim().ToLowerInvariant();
 
         var isDuplicate = await _userRepository.ExistsByPhoneOrEmailAsync(
-            request.Phone.Trim(),
-            request.Email,
+            phoneTrimmed,
+            emailTrimmed,
             cancellationToken);
 
         if (isDuplicate)
         {
-            throw new ArgumentException("Số điện thoại này đã được đăng ký cửa hàng trên hệ thống.");
+            throw new ArgumentException("Số điện thoại hoặc email này đã được đăng ký cửa hàng trên hệ thống.");
         }
 
+        var otpKey = ResolveRegistrationOtpKey(request.Email, request.Phone);
         var otpCode = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
         var expiresAtUtc = DateTime.UtcNow.AddMinutes(5);
-        RegistrationOtpStore[normalizedPhoneKey] = new RegistrationOtpEntry(otpCode, expiresAtUtc);
+        RegistrationOtpStore[otpKey] = new RegistrationOtpEntry(otpCode, expiresAtUtc, 0);
 
-        var maskedPhone = MaskPhoneDisplay(request.Phone);
-        var isRealSmsSent = false;
-        string? devFallbackOtp = otpCode;
+        var targetEmail = !string.IsNullOrWhiteSpace(emailTrimmed)
+            ? emailTrimmed
+            : $"{NormalizePhoneKey(phoneTrimmed)}@mtgrms.vn";
 
-        if (_smsService != null)
+        var isRealEmailSent = false;
+        if (_emailService != null)
         {
-            var smsResult = await _smsService.SendRegistrationOtpAsync(
-                request.Phone.Trim(),
+            isRealEmailSent = await _emailService.SendRegistrationOtpAsync(
+                targetEmail,
+                request.FullName ?? "Chủ cửa hàng",
                 request.StoreName ?? "MT-GRMS",
                 otpCode,
                 cancellationToken);
-
-            maskedPhone = smsResult.MaskedPhone;
-            isRealSmsSent = smsResult.IsRealSmsSent;
-            devFallbackOtp = smsResult.DevFallbackOtp;
         }
 
-        var message = isRealSmsSent
-            ? $"Mã xác thực SMS OTP đã được gửi qua TextBee tới số {maskedPhone}."
-            : $"Đã khởi tạo mã xác thực OTP cho số {maskedPhone}.";
+        var maskedEmail = MaskEmailDisplay(targetEmail);
+        var message = isRealEmailSent
+            ? $"Mã xác thực Email OTP đã được gửi tới hộp thư {maskedEmail}."
+            : $"Đã tạo mã xác thực Email OTP cho {maskedEmail}.";
 
         return new SendRegistrationOtpResponse(
             Success: true,
             Message: message,
-            MaskedPhone: maskedPhone,
+            MaskedEmail: maskedEmail,
             ExpiresInSeconds: 300,
-            IsRealSmsSent: isRealSmsSent,
-            DevOtpCode: devFallbackOtp
+            IsRealEmailSent: isRealEmailSent,
+            DevOtpCode: isRealEmailSent ? null : otpCode
         );
     }
 
@@ -626,30 +697,50 @@ public class AuthService : IAuthService
         VerifyRegistrationOtpRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (request == null || string.IsNullOrWhiteSpace(request.Phone) || string.IsNullOrWhiteSpace(request.OtpCode))
+        if (request == null || string.IsNullOrWhiteSpace(request.EmailOrPhone) || string.IsNullOrWhiteSpace(request.OtpCode))
         {
-            throw new ArgumentException("Số điện thoại và mã OTP không được để trống.");
+            throw new ArgumentException("Email và mã OTP không được để trống.");
         }
 
-        var normalizedPhoneKey = NormalizePhoneKey(request.Phone);
-        if (!RegistrationOtpStore.TryGetValue(normalizedPhoneKey, out var entry))
+        var otpKey = request.EmailOrPhone.Contains('@')
+            ? request.EmailOrPhone.Trim().ToLowerInvariant()
+            : NormalizePhoneKey(request.EmailOrPhone);
+
+        if (!RegistrationOtpStore.TryGetValue(otpKey, out var entry))
         {
             throw new ArgumentException("Mã xác thực OTP không tồn tại hoặc đã hết hạn. Vui lòng bấm gửi lại mã.");
         }
 
         if (entry.ExpiresAtUtc < DateTime.UtcNow)
         {
-            RegistrationOtpStore.TryRemove(normalizedPhoneKey, out _);
+            RegistrationOtpStore.TryRemove(otpKey, out _);
             throw new ArgumentException("Mã xác thực OTP đã hết hạn (quá 5 phút). Vui lòng yêu cầu gửi lại mã mới.");
         }
 
         var cleanOtp = request.OtpCode.Trim();
         if (!string.Equals(entry.OtpCode, cleanOtp, StringComparison.Ordinal))
         {
-            throw new ArgumentException("Mã xác thực SMS OTP không chính xác. Vui lòng kiểm tra lại.");
+            var nextFailures = entry.FailedAttempts + 1;
+            if (nextFailures >= MaxOtpFailedAttempts)
+            {
+                RegistrationOtpStore.TryRemove(otpKey, out _);
+                throw new ArgumentException("Bạn đã nhập sai mã OTP quá 5 lần. Vui lòng yêu cầu gửi lại mã mới.");
+            }
+
+            RegistrationOtpStore[otpKey] = entry with { FailedAttempts = nextFailures };
+            throw new ArgumentException($"Mã xác thực Email OTP không chính xác (còn {MaxOtpFailedAttempts - nextFailures} lần thử).");
         }
 
         return Task.FromResult(true);
+    }
+
+    private static string ResolveRegistrationOtpKey(string? email, string? phone)
+    {
+        if (!string.IsNullOrWhiteSpace(email))
+        {
+            return email.Trim().ToLowerInvariant();
+        }
+        return NormalizePhoneKey(phone ?? string.Empty);
     }
 
     private static string NormalizePhoneKey(string rawPhone)
@@ -663,10 +754,18 @@ public class AuthService : IAuthService
         return digits;
     }
 
-    private static string MaskPhoneDisplay(string rawPhone)
+    private static string MaskEmailDisplay(string email)
     {
-        var digits = NormalizePhoneKey(rawPhone);
-        if (digits.Length < 7) return rawPhone.Trim();
-        return $"{digits[..3]}***{digits[^3..]}";
+        if (string.IsNullOrWhiteSpace(email)) return string.Empty;
+        var clean = email.Trim();
+        var atIndex = clean.IndexOf('@');
+        if (atIndex <= 1) return clean;
+        var local = clean[..atIndex];
+        var domain = clean[atIndex..];
+        if (local.Length <= 2)
+        {
+            return $"{local[0]}***{domain}";
+        }
+        return $"{local[..2]}***{local[^1]}{domain}";
     }
 }
