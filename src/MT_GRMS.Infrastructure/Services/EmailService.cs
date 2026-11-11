@@ -123,7 +123,7 @@ public class EmailService : IEmailService
             mail.To.Add(toEmail);
 
             await client.SendMailAsync(mail, cancellationToken);
-            _logger.LogInformation("Đã gửi email OTP thành công tới: {Email}", toEmail);
+            _logger.LogInformation("Đã gửi email OTP thành công tới: {Email}. [DEV OTP]: {OtpCode}", toEmail, otpCode);
             return true;
         }
         catch (Exception ex)

@@ -196,14 +196,19 @@ public partial class AppDbContext : DbContext
             if (entry.State == EntityState.Added)
             {
                 // INV-1: Gán TenantId từ ngữ cảnh xác thực, ngăn chặn client ghi đè TenantId (TEN-02)
-                if (!string.IsNullOrWhiteSpace(tenantId))
+                if (string.IsNullOrWhiteSpace(entry.Entity.TenantId))
                 {
+                    entry.Entity.TenantId = !string.IsNullOrWhiteSpace(tenantId) ? tenantId : "default-tenant";
+                }
+                else if (!string.IsNullOrWhiteSpace(tenantId)
+                         && _tenantContext?.CurrentUserId != null
+                         && _tenantContext.CurrentUserId != Guid.Empty
+                         && !string.Equals(_tenantContext.CurrentRole, "ADMIN", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Đối với user nội bộ của 1 tenant đã đăng nhập (không phải System Admin), ép TenantId theo phiên làm việc để chống IDOR
                     entry.Entity.TenantId = tenantId;
                 }
-                else if (string.IsNullOrWhiteSpace(entry.Entity.TenantId))
-                {
-                    entry.Entity.TenantId = "default-tenant";
-                }
+
                 if (entry.Entity.CreatedAt == default)
                 {
                     entry.Entity.CreatedAt = DateTime.UtcNow;

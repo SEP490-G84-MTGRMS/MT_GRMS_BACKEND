@@ -77,10 +77,13 @@ public class UserRepository : IUserRepository
         var cleanPhone = phone.Trim().Replace(" ", "").Replace(".", "").Replace("-", "");
         var cleanEmail = string.IsNullOrWhiteSpace(email) ? null : email.Trim().ToLowerInvariant();
 
-        return await _context.Users.AnyAsync(u =>
-            (u.Phone != null && u.Phone.Replace(" ", "").Replace(".", "").Replace("-", "") == cleanPhone)
-            || (cleanEmail != null && u.Email.ToLower() == cleanEmail),
-            cancellationToken);
+        return await _context.Users
+            .IgnoreQueryFilters()
+            .AnyAsync(u =>
+                u.UserName.ToLower() == cleanPhone.ToLower()
+                || (u.Phone != null && u.Phone.Replace(" ", "").Replace(".", "").Replace("-", "") == cleanPhone)
+                || (cleanEmail != null && u.Email.ToLower() == cleanEmail),
+                cancellationToken);
     }
 
     public async Task<User> RegisterStoreOwnerAsync(User user, MT_GRMS.Domain.Entities.SaaS.Tenant tenant, MT_GRMS.Domain.Entities.SaaS.Branch branch, CancellationToken cancellationToken = default)

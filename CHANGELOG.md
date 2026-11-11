@@ -6,6 +6,9 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ## [Unreleased] - 2026-11-11
 
+### Fixed
+- Khắc phục lỗi `DUPLICATE_KEY` (`23505: duplicate key value violates unique constraint "IX_Branches_TenantID_BranchCode"`) khi xác nhận OTP đăng ký mở cửa hàng mới: tinh chỉnh `AppDbContext.ApplyAuditAndTenantInfo` không ghi đè `TenantId` của chi nhánh khi thực thể đã mang `TenantId` của gian hàng mới được khởi tạo; ngăn `MultiTenantMiddleware` gán ép fallback tenant `tenant_mt_mart_01` cho các request đăng ký `/api/auth/register`; bổ sung `IgnoreQueryFilters()` và kiểm tra đồng bộ cả `UserName`, `Phone`, `Email` trong `UserRepository.ExistsByPhoneOrEmailAsync` [BE-AUTH] [worklog: docs/worklogs/2026-11-11_BE-AUTH_AI_fix-tenant-registration-branch-unique-constraint.md].
+
 ### Added
 - Chuyển đổi toàn diện xác thực OTP sang **Email OTP** cho cả luồng **Đăng nhập 2 lớp (2FA)** (`POST /api/auth/login/send-otp`, `POST /api/auth/login/verify-otp`) và **Đăng ký mở cửa hàng** (`POST /api/auth/register/send-otp`, `POST /api/auth/register`), tích hợp bảo vệ chống brute-force (tối đa 5 lần nhập sai, TTL 5 phút) và cơ chế Dev Console Fallback; gỡ bỏ hoàn toàn TextBee SMS Gateway (`ISmsService`, `TextBeeSmsService`, `TextBeeSettings`) [EMAIL-OTP] [worklog: docs/worklogs/2026-11-11_EMAIL-OTP_AI_email-otp-auth-flow.md].
 

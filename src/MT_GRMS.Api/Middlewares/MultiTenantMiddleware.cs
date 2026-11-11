@@ -51,11 +51,15 @@ public class MultiTenantMiddleware
             }
         }
 
+        // Bỏ qua ép fallback tenant cho các endpoint đăng ký tài khoản / mở cửa hàng mới
+        var reqPath = context.Request.Path.Value?.ToLowerInvariant() ?? string.Empty;
+        var isRegistration = reqPath.StartsWith("/api/auth/register", StringComparison.OrdinalIgnoreCase);
+
         // Hỗ trợ header X-Tenant-Id hoặc fallback tenant cho môi trường dev/standalone
-        if (string.IsNullOrWhiteSpace(tenantContext.CurrentTenantId) ||
+        if (!isRegistration && (string.IsNullOrWhiteSpace(tenantContext.CurrentTenantId) ||
             tenantContext.CurrentTenantId == "default-tenant" ||
             tenantContext.CurrentTenantId == "DEFAULT" ||
-            tenantContext.CurrentTenantId == "TENANT-HCM-01")
+            tenantContext.CurrentTenantId == "TENANT-HCM-01"))
         {
             var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
             var fallbackTenant = !string.IsNullOrWhiteSpace(headerTenantId) ? headerTenantId : "tenant_mt_mart_01";
