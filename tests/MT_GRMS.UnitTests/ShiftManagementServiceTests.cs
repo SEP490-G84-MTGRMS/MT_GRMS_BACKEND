@@ -226,6 +226,12 @@ public class ShiftManagementServiceTests
             }
             return Task.FromResult<IReadOnlyList<EmployeeSchedule>>(matched);
         }
+
+        public Task<IReadOnlyList<EmployeeSchedule>> GetBranchCashierSchedulesAsync(Guid branchId, DateTime workDate, CancellationToken cancellationToken = default)
+        {
+            var matched = Schedules.Where(s => s.BranchId == branchId && s.WorkDate.Date == workDate.Date).ToList();
+            return Task.FromResult<IReadOnlyList<EmployeeSchedule>>(matched);
+        }
     }
 
     private readonly FakeTenantContext _tenantContext;

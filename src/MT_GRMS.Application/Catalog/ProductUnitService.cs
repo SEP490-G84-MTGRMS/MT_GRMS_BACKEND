@@ -43,7 +43,7 @@ public class ProductUnitService : IProductUnitService
 
     public async Task<ProductUnitResponse> CreateAsync(Guid productId, ProductUnitCreateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateRequest(request.UnitName, request.ConversionRate, request.Price);
+        ValidateRequest(request.UnitName, request.ConversionRate, request.Price, request.Barcode);
 
         var product = await _productRepository.GetByIdAsync(productId, cancellationToken);
         if (product == null)
@@ -51,7 +51,7 @@ public class ProductUnitService : IProductUnitService
             throw new KeyNotFoundException("Không tìm thấy sản phẩm.");
         }
 
-        var nameExists = await _unitRepository.ExistsByNameAsync(productId, request.UnitName, null, cancellationToken);
+        var nameExists = await _unitRepository.ExistsByNameAsync(productId, request.UnitName.Trim(), null, cancellationToken);
         if (nameExists)
         {
             throw new InvalidOperationException("Đơn vị tính này đã tồn tại cho sản phẩm.");
@@ -59,10 +59,11 @@ public class ProductUnitService : IProductUnitService
 
         if (!string.IsNullOrWhiteSpace(request.Barcode))
         {
-            var barcodeExists = await _unitRepository.ExistsByBarcodeAsync(request.Barcode, null, cancellationToken);
+            var trimmedBarcode = request.Barcode.Trim();
+            var barcodeExists = await _unitRepository.ExistsByBarcodeAsync(trimmedBarcode, null, cancellationToken);
             if (barcodeExists)
             {
-                throw new InvalidOperationException($"Mã vạch '{request.Barcode.Trim()}' đã tồn tại trong hệ thống.");
+                throw new InvalidOperationException($"Mã vạch '{trimmedBarcode}' đã tồn tại trong hệ thống.");
             }
         }
 
@@ -81,6 +82,20 @@ public class ProductUnitService : IProductUnitService
             _productRepository.Update(product);
         }
 
+        // Xử lý đơn vị nhập hàng (mỗi sản phẩm chỉ có tối đa 1 đơn vị được đánh dấu là đơn vị nhập hàng)
+        if (request.IsPurchaseUnit)
+        {
+            var existingUnits = await _unitRepository.GetByProductIdAsync(productId, cancellationToken);
+            if (existingUnits != null)
+            {
+                foreach (var existingUnit in existingUnits.Where(u => u.IsPurchaseUnit))
+                {
+                    existingUnit.IsPurchaseUnit = false;
+                    _unitRepository.Update(existingUnit);
+                }
+            }
+        }
+
         var unit = new ProductUnit
         {
             ProductId = productId,
@@ -88,7 +103,8 @@ public class ProductUnitService : IProductUnitService
             ConversionRate = request.IsBaseUnit ? 1.00m : request.ConversionRate,
             Price = request.Price,
             Barcode = string.IsNullOrWhiteSpace(request.Barcode) ? null : request.Barcode.Trim(),
-            IsBaseUnit = request.IsBaseUnit
+            IsBaseUnit = request.IsBaseUnit,
+            IsPurchaseUnit = request.IsPurchaseUnit
         };
 
         await _unitRepository.AddAsync(unit, cancellationToken);
@@ -99,7 +115,7 @@ public class ProductUnitService : IProductUnitService
 
     public async Task<ProductUnitResponse> UpdateAsync(Guid id, ProductUnitUpdateRequest request, CancellationToken cancellationToken = default)
     {
-        ValidateRequest(request.UnitName, request.ConversionRate, request.Price);
+        ValidateRequest(request.UnitName, request.ConversionRate, request.Price, request.Barcode);
 
         var unit = await _unitRepository.GetByIdAsync(id, cancellationToken);
         if (unit == null)
@@ -107,7 +123,7 @@ public class ProductUnitService : IProductUnitService
             throw new KeyNotFoundException("Không tìm thấy đơn vị tính.");
         }
 
-        var nameExists = await _unitRepository.ExistsByNameAsync(unit.ProductId, request.UnitName, id, cancellationToken);
+        var nameExists = await _unitRepository.ExistsByNameAsync(unit.ProductId, request.UnitName.Trim(), id, cancellationToken);
         if (nameExists)
         {
             throw new InvalidOperationException("Đơn vị tính này đã tồn tại cho sản phẩm.");
@@ -115,10 +131,11 @@ public class ProductUnitService : IProductUnitService
 
         if (!string.IsNullOrWhiteSpace(request.Barcode))
         {
-            var barcodeExists = await _unitRepository.ExistsByBarcodeAsync(request.Barcode, id, cancellationToken);
+            var trimmedBarcode = request.Barcode.Trim();
+            var barcodeExists = await _unitRepository.ExistsByBarcodeAsync(trimmedBarcode, id, cancellationToken);
             if (barcodeExists)
             {
-                throw new InvalidOperationException($"Mã vạch '{request.Barcode.Trim()}' đã tồn tại trong hệ thống.");
+                throw new InvalidOperationException($"Mã vạch '{trimmedBarcode}' đã tồn tại trong hệ thống.");
             }
         }
 
@@ -148,11 +165,25 @@ public class ProductUnitService : IProductUnitService
             }
         }
 
+        if (request.IsPurchaseUnit && !unit.IsPurchaseUnit)
+        {
+            var existingUnits = await _unitRepository.GetByProductIdAsync(unit.ProductId, cancellationToken);
+            if (existingUnits != null)
+            {
+                foreach (var existingUnit in existingUnits.Where(u => u.IsPurchaseUnit && u.Id != unit.Id))
+                {
+                    existingUnit.IsPurchaseUnit = false;
+                    _unitRepository.Update(existingUnit);
+                }
+            }
+        }
+
         unit.UnitName = request.UnitName.Trim();
         unit.ConversionRate = request.IsBaseUnit ? 1.00m : request.ConversionRate;
         unit.Price = request.Price;
         unit.Barcode = string.IsNullOrWhiteSpace(request.Barcode) ? null : request.Barcode.Trim();
         unit.IsBaseUnit = request.IsBaseUnit;
+        unit.IsPurchaseUnit = request.IsPurchaseUnit;
 
         _unitRepository.Update(unit);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -181,11 +212,16 @@ public class ProductUnitService : IProductUnitService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
-    private static void ValidateRequest(string unitName, decimal conversionRate, decimal price)
+    private static void ValidateRequest(string unitName, decimal conversionRate, decimal price, string? barcode = null)
     {
         if (string.IsNullOrWhiteSpace(unitName))
         {
             throw new ArgumentException("Tên đơn vị tính không được để trống.");
+        }
+
+        if (unitName.Trim().Length > 30)
+        {
+            throw new ArgumentException("Tên đơn vị tính không được vượt quá 30 ký tự.");
         }
 
         if (conversionRate <= 0)
@@ -193,9 +229,18 @@ public class ProductUnitService : IProductUnitService
             throw new ArgumentException("Tỷ lệ quy đổi phải lớn hơn 0.");
         }
 
-        if (price < 0)
+        if (price < 0 || price > 1_000_000_000m)
         {
-            throw new ArgumentException("Giá bán không được nhỏ hơn 0.");
+            throw new ArgumentException("Giá bán của đơn vị tính không được nhỏ hơn 0 hoặc vượt quá 1.000.000.000 đ.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(barcode))
+        {
+            var trimmedBarcode = barcode.Trim();
+            if (trimmedBarcode.Length > 50 || trimmedBarcode.Any(char.IsWhiteSpace))
+            {
+                throw new ArgumentException("Mã vạch đơn vị tính không hợp lệ (tối đa 50 ký tự, không chứa khoảng trắng).");
+            }
         }
     }
 
@@ -210,6 +255,7 @@ public class ProductUnitService : IProductUnitService
             Price = unit.Price,
             Barcode = unit.Barcode,
             IsBaseUnit = unit.IsBaseUnit,
+            IsPurchaseUnit = unit.IsPurchaseUnit,
             CreatedAt = unit.CreatedAt,
             UpdatedAt = unit.UpdatedAt
         };

@@ -53,13 +53,13 @@ public class PromotionRepository : GenericRepository<Promotion>, IPromotionRepos
                     dbQuery = dbQuery.Where(p => p.IsActive && p.StartDate <= now && p.EndDate >= now);
                     break;
                 case "UPCOMING":
-                    dbQuery = dbQuery.Where(p => p.IsActive && p.StartDate > now);
+                    dbQuery = dbQuery.Where(p => p.IsActive && p.StartDate > now && p.EndDate >= now);
                     break;
                 case "EXPIRED":
                     dbQuery = dbQuery.Where(p => p.EndDate < now);
                     break;
                 case "PAUSED":
-                    dbQuery = dbQuery.Where(p => !p.IsActive);
+                    dbQuery = dbQuery.Where(p => !p.IsActive && p.EndDate >= now);
                     break;
             }
         }
@@ -79,16 +79,52 @@ public class PromotionRepository : GenericRepository<Promotion>, IPromotionRepos
 
     public async Task<IReadOnlyList<Promotion>> GetActivePromotionsAsync(DateTime atUtc, string? branchId = null, CancellationToken cancellationToken = default)
     {
-        var startThreshold = atUtc.Date.AddDays(1).AddTicks(-1);
-        var endThreshold = atUtc.Date;
+        var localToday = atUtc.AddHours(7).Date;
+        var startThreshold = localToday.AddDays(1).AddTicks(-1);
+        var endThreshold = localToday;
         var query = _context.Promotions
             .Include(p => p.Conditions)
                 .ThenInclude(c => c.Product)
             .Where(p => !p.IsDeleted && p.IsActive && p.StartDate <= startThreshold && p.EndDate >= endThreshold && p.Type != "VOUCHER");
 
-        if (!string.IsNullOrWhiteSpace(branchId))
+        if (!string.IsNullOrWhiteSpace(branchId) && !string.Equals(branchId, "ALL", StringComparison.OrdinalIgnoreCase))
         {
-            query = query.Where(p => p.TargetBranches == "ALL" || p.TargetBranches.Contains(branchId));
+            var cleanBranchId = branchId.Trim();
+            var candidates = await query.ToListAsync(cancellationToken);
+
+            string? branchCode = null;
+            string? branchName = null;
+            if (Guid.TryParse(cleanBranchId, out var parsedBranchGuid))
+            {
+                var br = await _context.Branches.FirstOrDefaultAsync(b => b.Id == parsedBranchGuid && !b.IsDeleted, cancellationToken);
+                if (br != null)
+                {
+                    branchCode = br.BranchCode;
+                    branchName = br.Name;
+                }
+            }
+            else
+            {
+                var br = await _context.Branches.FirstOrDefaultAsync(b => (b.BranchCode == cleanBranchId || b.Name == cleanBranchId) && !b.IsDeleted, cancellationToken);
+                if (br != null)
+                {
+                    branchCode = br.BranchCode;
+                    branchName = br.Name;
+                }
+            }
+
+            return candidates.Where(p =>
+            {
+                if (string.IsNullOrWhiteSpace(p.TargetBranches) || p.TargetBranches.Trim().Equals("ALL", StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                var tokens = p.TargetBranches.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                return tokens.Any(t =>
+                    t.Equals(cleanBranchId, StringComparison.OrdinalIgnoreCase) ||
+                    (!string.IsNullOrEmpty(branchCode) && t.Equals(branchCode, StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrEmpty(branchName) && t.Equals(branchName, StringComparison.OrdinalIgnoreCase))
+                );
+            }).ToList();
         }
 
         return await query.ToListAsync(cancellationToken);

@@ -172,3 +172,7 @@ public record RegisterFaceDescriptorRequest(
     string? FaceImageUrls = null
 );
 
+public record SelfCheckInRequest(
+    string? Note = null
+);
+

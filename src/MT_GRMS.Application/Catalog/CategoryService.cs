@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Catalog;
@@ -7,6 +8,7 @@ namespace MT_GRMS.Application.Catalog;
 
 public class CategoryService : ICategoryService
 {
+    private static readonly Regex CodeRegex = new(@"^[A-Z0-9_-]{1,30}$", RegexOptions.Compiled);
     private readonly ICategoryRepository _categoryRepository;
     private readonly IUnitOfWork _unitOfWork;
 
@@ -39,6 +41,12 @@ public class CategoryService : ICategoryService
             throw new ArgumentException("Tên nhóm hàng không được vượt quá 100 ký tự.");
         }
 
+        var trimmedDesc = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
+        if (trimmedDesc != null && trimmedDesc.Length > 500)
+        {
+            throw new ArgumentException("Mô tả nhóm hàng không được vượt quá 500 ký tự.");
+        }
+
         if (await _categoryRepository.ExistsByNameAsync(trimmedName, null, cancellationToken))
         {
             throw new BusinessException("CATEGORY_NAME_EXISTS", $"Nhóm hàng với tên '{trimmedName}' đã tồn tại trong hệ thống.");
@@ -64,6 +72,10 @@ public class CategoryService : ICategoryService
         else
         {
             code = request.Code.Trim().ToUpper();
+            if (code.Length > 30 || !CodeRegex.IsMatch(code))
+            {
+                throw new ArgumentException("Mã nhóm hàng chỉ gồm chữ cái không dấu, số, gạch ngang/dưới và tối đa 30 ký tự.");
+            }
             if (await _categoryRepository.ExistsByCodeAsync(code, null, cancellationToken))
             {
                 throw new BusinessException("CATEGORY_CODE_EXISTS", $"Mã nhóm hàng '{code}' đã tồn tại trong hệ thống.");
@@ -75,7 +87,7 @@ public class CategoryService : ICategoryService
             Id = Guid.NewGuid(),
             CategoryCode = code,
             Name = trimmedName,
-            Description = request.Description?.Trim()
+            Description = trimmedDesc
         };
 
         await _categoryRepository.AddAsync(category, cancellationToken);
@@ -103,6 +115,12 @@ public class CategoryService : ICategoryService
             throw new ArgumentException("Tên nhóm hàng không được vượt quá 100 ký tự.");
         }
 
+        var trimmedDesc = string.IsNullOrWhiteSpace(request.Description) ? null : request.Description.Trim();
+        if (trimmedDesc != null && trimmedDesc.Length > 500)
+        {
+            throw new ArgumentException("Mô tả nhóm hàng không được vượt quá 500 ký tự.");
+        }
+
         var category = await _categoryRepository.GetByIdAsync(id, cancellationToken);
         if (category == null)
         {
@@ -115,7 +133,7 @@ public class CategoryService : ICategoryService
         }
 
         category.Name = trimmedName;
-        category.Description = request.Description?.Trim();
+        category.Description = trimmedDesc;
         category.UpdatedAt = DateTime.UtcNow;
 
         _categoryRepository.Update(category);

@@ -13,6 +13,7 @@ public class ProductUnit : BaseTenantEntity
     public decimal Price { get; set; } = 0.00m;
     public string? Barcode { get; set; }
     public bool IsBaseUnit { get; set; } = false;
+    public bool IsPurchaseUnit { get; set; } = false;
 
     // Navigation
     public Product? Product { get; set; }
@@ -31,7 +32,8 @@ public class ProductUnit : BaseTenantEntity
         decimal conversionRate,
         decimal price,
         string? barcode = null,
-        bool isBaseUnit = false)
+        bool isBaseUnit = false,
+        bool isPurchaseUnit = false)
     {
         ProductId = productId;
         UnitName = unitName;
@@ -39,5 +41,6 @@ public class ProductUnit : BaseTenantEntity
         Price = price;
         Barcode = barcode;
         IsBaseUnit = isBaseUnit;
+        IsPurchaseUnit = isPurchaseUnit;
     }
 }

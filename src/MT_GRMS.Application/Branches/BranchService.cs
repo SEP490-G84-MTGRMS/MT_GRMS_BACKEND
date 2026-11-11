@@ -107,6 +107,11 @@ public class BranchService : IBranchService
                     maxBranches = 2 + tenant.ExtraBranches;
                     planName = "Gói Pro (Chuỗi Cửa Hàng)";
                 }
+                else if (tenant.CurrentPlan.Equals("TRIAL", StringComparison.OrdinalIgnoreCase))
+                {
+                    maxBranches = 1 + tenant.ExtraBranches;
+                    planName = "Gói Dùng Thử (Trải Nghiệm)";
+                }
                 else
                 {
                     maxBranches = 1 + tenant.ExtraBranches;

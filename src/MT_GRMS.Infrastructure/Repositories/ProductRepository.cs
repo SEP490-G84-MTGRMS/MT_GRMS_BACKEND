@@ -20,6 +20,7 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
         var query = _dbSet
             .AsNoTracking()
             .Include(p => p.Category)
+            .Include(p => p.Units)
             .Where(p => !p.IsDeleted);
 
         if (!string.IsNullOrWhiteSpace(filter.SearchTerm))
@@ -70,6 +71,7 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
     {
         return await _dbSet
             .Include(p => p.Category)
+            .Include(p => p.Units)
             .FirstOrDefaultAsync(p => p.Id == id && !p.IsDeleted, cancellationToken);
     }
 

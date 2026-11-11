@@ -28,5 +28,6 @@ public interface IShiftRepository
     Task<Guid?> ResolveBranchIdAsync(string? branchIdOrCode, CancellationToken cancellationToken = default);
     Task<Employee?> GetEmployeeByUserIdAsync(string userId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<EmployeeSchedule>> GetCashierSchedulesAsync(Guid employeeId, Guid branchId, DateTime workDate, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<EmployeeSchedule>> GetBranchCashierSchedulesAsync(Guid branchId, DateTime workDate, CancellationToken cancellationToken = default);
 }
 

@@ -331,6 +331,39 @@ public class SchedulesController : BaseApiController
     }
 
     /// <summary>
+    /// Nhân viên tự chấm công vào ca trực của chính mình (khi chưa đăng ký FaceID)
+    /// </summary>
+    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+    [HttpPost("{id:guid}/self-check-in")]
+    public async Task<IActionResult> SelfCheckIn(
+        Guid id,
+        [FromBody] SelfCheckInRequest? request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _scheduleService.SelfCheckInAsync(id, request, cancellationToken);
+            return Ok(ApiResponse<ScheduleResponse>.Ok(result, "Chấm công vào ca thành công."));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, ApiResponse<object>.Fail("FORBIDDEN", ex.Message));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
+        }
+        catch (BusinessException ex)
+        {
+            if (string.Equals(ex.ErrorCode, "ALREADY_CHECKED_IN", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail(ex.ErrorCode, ex.Message));
+            }
+            return BadRequest(ApiResponse<object>.Fail(ex.ErrorCode ?? "BAD_REQUEST", ex.Message));
+        }
+    }
+
+    /// <summary>
     /// Điểm danh vào ca bằng FaceID từ Web POS
     /// </summary>
     [HttpPost("face-id/check-in")]

@@ -142,6 +142,27 @@ public class PosOrderServiceTests
                 LandedCostPerUnit = 7500m
             }
         });
+
+        // Seed BranchProducts Active cho Mì Hảo Hảo & Coca-Cola tại _branchId (REQ-BRANCH-SCOPE-02)
+        _orderRepo.BranchProducts.AddRange(new[]
+        {
+            new BranchProduct
+            {
+                Id = Guid.NewGuid(),
+                TenantId = "tenant-01",
+                BranchId = _branchId,
+                ProductId = _prodHaoHaoId,
+                Status = "Active"
+            },
+            new BranchProduct
+            {
+                Id = Guid.NewGuid(),
+                TenantId = "tenant-01",
+                BranchId = _branchId,
+                ProductId = _prodCocaId,
+                Status = "Active"
+            }
+        });
     }
 
     [Fact]
@@ -424,6 +445,88 @@ public class PosOrderServiceTests
         Assert.NotNull(result);
         var cust = _orderRepo.Customers.First(c => c.Id == _customerId);
         Assert.Equal(initPoints + 3, cust.RewardPoints);
+    }
+
+    [Fact]
+    public async Task REQ_POS_06_CreateOrder_WalkInCustomer_DoesNotEarnRewardPoints()
+    {
+        // Arrange: Khách lẻ không gắn CustomerId hoặc khách có tên "Khách lẻ" -> không được tích điểm
+        var walkInCustomer = new Customer
+        {
+            Id = Guid.NewGuid(),
+            CustomerCode = "KHACHLE",
+            Name = "Khách lẻ",
+            Phone = "0999999999",
+            RewardPoints = 0,
+            TenantId = "tenant-unit-test"
+        };
+        _orderRepo.Customers.Add(walkInCustomer);
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: walkInCustomer.Id,
+            PaymentMethod: "CASH",
+            CashTendered: 20000m,
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(_prodCocaId, 2m, 10000m)
+            }
+        );
+
+        // Act
+        var result = await _orderService.CreateOrderAsync(request);
+
+        // Assert: Điểm vẫn là 0, không tích điểm
+        Assert.NotNull(result);
+        var updatedCust = _orderRepo.Customers.First(c => c.Id == walkInCustomer.Id);
+        Assert.Equal(0, updatedCust.RewardPoints);
+    }
+
+    [Fact]
+    public async Task REQ_POS_06_CreateOrder_WhenLoyaltyDisabled_DoesNotEarnRewardPoints()
+    {
+        // Arrange: Cấu hình tích điểm bị tắt (IsEnabled = false)
+        var mockPromoRepo = new Mock<IPromotionRepository>();
+        mockPromoRepo.Setup(x => x.GetLoyaltySettingAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LoyaltySetting
+            {
+                TenantId = "tenant-unit-test",
+                IsEnabled = false,
+                EarningRateAmount = 10000m,
+                EarningPoints = 1
+            });
+
+        var orderService = new OrderService(
+            _orderRepo,
+            _uow,
+            _printService,
+            debtService: null,
+            cashbookService: null,
+            validator: new OrderCreateRequestValidator(),
+            shiftRepository: null,
+            promotionRepository: mockPromoRepo.Object,
+            tenantContext: null);
+
+        var initPoints = _orderRepo.Customers.First(c => c.Id == _customerId).RewardPoints;
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            PaymentMethod: "CASH",
+            CashTendered: 30000m,
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(_prodCocaId, 3m, 10000m)
+            }
+        );
+
+        // Act
+        var result = await orderService.CreateOrderAsync(request);
+
+        // Assert: Điểm không thay đổi vì tính năng tích điểm đang tắt
+        Assert.NotNull(result);
+        var cust = _orderRepo.Customers.First(c => c.Id == _customerId);
+        Assert.Equal(initPoints, cust.RewardPoints);
     }
 
     [Fact]
@@ -800,6 +903,14 @@ public class PosOrderServiceTests
             VatRate = 0.05m
         };
         _orderRepo.Products.Add(multiBatchProd);
+        _orderRepo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = multiBatchProdId,
+            Status = "Active"
+        });
 
         // Lô 1 (Cận date hơn): HSD sau 5 ngày, tồn kho 3 hộp
         var batchNearExpiry = new BranchStock
@@ -854,10 +965,218 @@ public class PosOrderServiceTests
         // Lô 2 (date xa hơn) bị trừ 2 hộp còn lại -> còn 5 hộp
         Assert.Equal(5m, batchFarExpiry.QuantityOnHand);
 
-        // OrderDetails phải có đúng 2 dòng tương ứng với 2 lô được giữ kho
-        Assert.Equal(2, result.Items.Count);
-        Assert.Equal(3m, result.Items[0].Quantity);
-        Assert.Equal(2m, result.Items[1].Quantity);
+        // OrderDetails độc lập theo dòng đặt: đúng 1 dòng 5 hộp (không phân mảnh nhân sai thành tiền)
+        Assert.Single(result.Items);
+        Assert.Equal(5m, result.Items[0].Quantity);
+        Assert.Equal(30000m, result.Items[0].UnitPrice);
+        Assert.Equal(150000m, result.Items[0].TotalLineAmount);
+    }
+
+    [Fact]
+    public async Task REQ_FIX_PREUNIT_02_CreatePreOrder_WithConversionRate_DeductsFEFOBaseStockAndStoresUnitInfo()
+    {
+        // Arrange: Sản phẩm có 2 lô: Lô 1 (10 chai), Lô 2 (20 chai) -> Tổng 30 chai
+        var prodId = Guid.NewGuid();
+        var unitId = Guid.NewGuid();
+        var prod = new Product
+        {
+            Id = prodId,
+            TenantId = "tenant-01",
+            Name = "Nước Mắm Cá Cơm Phú Quốc",
+            SellingPrice = 25000m,
+            CostPrice = 18000m,
+            BaseUnit = "Chai",
+            Units = new List<ProductUnit>
+            {
+                new()
+                {
+                    Id = unitId,
+                    ProductId = prodId,
+                    UnitName = "Thùng",
+                    ConversionRate = 12m,
+                    Price = 280000m,
+                    IsBaseUnit = false
+                }
+            }
+        };
+        _orderRepo.Products.Add(prod);
+        _orderRepo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            Status = "Active"
+        });
+
+        var batch1 = new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            BranchId = _branchId,
+            ProductId = prodId,
+            BatchCode = "LOT-MAM-01",
+            ExpiryDate = DateTime.UtcNow.AddDays(10),
+            QuantityOnHand = 10m
+        };
+        var batch2 = new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            BranchId = _branchId,
+            ProductId = prodId,
+            BatchCode = "LOT-MAM-02",
+            ExpiryDate = DateTime.UtcNow.AddDays(30),
+            QuantityOnHand = 20m
+        };
+        _orderRepo.BranchStocks.Add(batch1);
+        _orderRepo.BranchStocks.Add(batch2);
+
+        // Khách đặt trước 2 Thùng (ConversionRate = 12 -> Tổng 24 chai). Giá thùng: 280.000đ. Cọc 100.000đ
+        var request = new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(prodId, 2m, 280000m, UnitName: "Thùng", UnitId: unitId, ConversionRate: 12m)
+            },
+            DepositAmount: 100000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(3),
+            PaymentMethod: "CASH",
+            Note: "Đơn đặt 2 thùng nước mắm giao nhà"
+        );
+
+        // Act
+        var result = await _orderService.CreatePreOrderAsync(request);
+
+        // Assert:
+        Assert.NotNull(result);
+        Assert.Equal("PendingPickup", result.Status);
+        Assert.Equal(560000m, result.FinalAmount);
+
+        // FEFO: Lô 1 (10 chai) bị trừ hết -> 0; Lô 2 (20 chai) bị trừ 14 chai -> còn 6 chai (tổng trừ 24 chai)
+        Assert.Equal(0m, batch1.QuantityOnHand);
+        Assert.Equal(6m, batch2.QuantityOnHand);
+
+        // OrderDetails: Đúng 1 dòng theo đơn đặt (2 Thùng)
+        Assert.Single(result.Items);
+        var item = result.Items[0];
+        Assert.Equal(2m, item.Quantity);
+        Assert.Equal(280000m, item.UnitPrice);
+        Assert.Equal(560000m, item.TotalLineAmount);
+        Assert.Equal("Thùng", item.UnitName);
+    }
+
+    [Fact]
+    public async Task REQ_FIX_PREUNIT_02_CancelPreOrder_RestoresBaseQuantityUsingConversionRate()
+    {
+        // Arrange: Tạo đơn đặt trước 2 Thùng (x12 = 24 chai)
+        var prodId = Guid.NewGuid();
+        var prod = new Product
+        {
+            Id = prodId,
+            TenantId = "tenant-01",
+            Name = "Bia Sài Gòn Lager",
+            SellingPrice = 12000m,
+            BaseUnit = "Lon"
+        };
+        _orderRepo.Products.Add(prod);
+        _orderRepo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            Status = "Active"
+        });
+
+        var batch = new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            BranchId = _branchId,
+            ProductId = prodId,
+            BatchCode = "LOT-BEER-01",
+            ExpiryDate = DateTime.UtcNow.AddDays(60),
+            QuantityOnHand = 30m
+        };
+        _orderRepo.BranchStocks.Add(batch);
+
+        var preOrder = await _orderService.CreatePreOrderAsync(new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(prodId, 2m, 250000m, UnitName: "Thùng", ConversionRate: 12m)
+            },
+            DepositAmount: 50000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(2),
+            PaymentMethod: "CASH"
+        ));
+
+        // Tồn kho sau khi đặt trước 2 Thùng (24 lon): 30 - 24 = 6 lon
+        Assert.Equal(6m, batch.QuantityOnHand);
+
+        // Act: Hủy đơn đặt trước
+        var cancelResult = await _orderService.CancelOrderAsync(preOrder.Id, new CancelOrderRequest(
+            Reason: "Khách bận không nhận hàng",
+            Note: "Hoàn cọc và hoàn kho",
+            UserRole: "STORE_OWNER"
+        ));
+
+        // Assert: Tồn kho được hoàn đủ 24 lon: 6 + 24 = 30 lon
+        Assert.Equal("Cancelled", cancelResult.Status);
+        Assert.Equal(30m, batch.QuantityOnHand);
+    }
+
+    [Fact]
+    public async Task REQ_FIX_PREUNIT_02_CreatePreOrder_AggregatedBaseQuantityExceedingStock_ThrowsInvalidOperationException()
+    {
+        // Arrange: Sản phẩm có tổng kho 15 chai
+        var prodId = Guid.NewGuid();
+        var prod = new Product
+        {
+            Id = prodId,
+            TenantId = "tenant-01",
+            Name = "Dầu Ăn Neptune",
+            SellingPrice = 45000m,
+            BaseUnit = "Chai"
+        };
+        _orderRepo.Products.Add(prod);
+        _orderRepo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            Status = "Active"
+        });
+
+        var batch = new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            BranchId = _branchId,
+            ProductId = prodId,
+            BatchCode = "LOT-OIL-01",
+            ExpiryDate = DateTime.UtcNow.AddDays(100),
+            QuantityOnHand = 15m
+        };
+        _orderRepo.BranchStocks.Add(batch);
+
+        // Khách đặt 1 Thùng (x12 = 12 chai) VÀ 5 Chai (x1 = 5 chai) -> Tổng 17 chai > 15 chai khả dụng
+        var request = new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(prodId, 1m, 500000m, UnitName: "Thùng", ConversionRate: 12m),
+                new(prodId, 5m, 45000m, UnitName: "Chai", ConversionRate: 1m)
+            },
+            DepositAmount: 100000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(2),
+            PaymentMethod: "CASH"
+        );
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(request));
+        Assert.Contains("không đủ tồn kho", ex.Message);
     }
 
     [Fact]
@@ -1006,6 +1325,7 @@ public class PosOrderServiceTests
             TenantId = "tenant-01",
             BranchId = _branchId,
             ProductId = prodId,
+            Status = "Active",
             UnitPriceOverrides = new List<BranchProductUnitPrice>
             {
                 new BranchProductUnitPrice
@@ -1073,6 +1393,14 @@ public class PosOrderServiceTests
             Units = new List<ProductUnit> { unitThung }
         };
         _orderRepo.Products.Add(prod);
+        _orderRepo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            Status = "Active"
+        });
 
         var lotNear = new BranchStock
         {
@@ -1142,6 +1470,14 @@ public class PosOrderServiceTests
             Units = new List<ProductUnit> { unitThung }
         };
         _orderRepo.Products.Add(prod);
+        _orderRepo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            Status = "Active"
+        });
 
         _orderRepo.BranchStocks.Add(new BranchStock
         {
@@ -1184,6 +1520,14 @@ public class PosOrderServiceTests
             IsActive = true
         };
         _orderRepo.Products.Add(prod);
+        _orderRepo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodId,
+            Status = "Active"
+        });
 
         var stock = new BranchStock
         {
@@ -2017,6 +2361,272 @@ public class PosOrderServiceTests
         // Kho Coca giữ 1 lon cho đơn đặt trước (3 -> 2), ngân sách KM ghi nhận 20.000 + 10.000 = 30.000đ
         Assert.Equal(2m, _orderRepo.BranchStocks.Where(s => s.ProductId == _prodCocaId).Sum(s => s.QuantityOnHand));
         Assert.Equal(30000m, recordedBudget);
+    }
+
+    [Fact]
+    public async Task REQ_BRANCH_SCOPE_02_CreateOrder_ProductNotInBranch_ThrowsProductNotInBranchAndDoesNotDeductStock()
+    {
+        // Arrange: Sản phẩm X có trong Products và có tồn trong BranchStocks của _branchId, nhưng KHÔNG có BranchProduct
+        var prodXId = Guid.NewGuid();
+        _orderRepo.Products.Add(new Product
+        {
+            Id = prodXId,
+            TenantId = "tenant-01",
+            ProductCode = "PROD-X",
+            Name = "San pham X ngoai chi nhanh",
+            SellingPrice = 25000m,
+            IsActive = true
+        });
+
+        _orderRepo.BranchStocks.Add(new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodXId,
+            BatchCode = "BATCH-X-01",
+            ExpiryDate = DateTime.UtcNow.AddMonths(6),
+            QuantityOnHand = 20m,
+            LandedCostPerUnit = 18000m
+        });
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            CashTendered: 50000m,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(prodXId, 2m, 25000m)
+            }
+        );
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _orderService.CreateOrderAsync(request));
+        Assert.Equal("PRODUCT_NOT_IN_BRANCH", ex.ErrorCode);
+        Assert.Contains("San pham X ngoai chi nhanh", ex.Message);
+
+        // Kiểm tra tồn kho tuyệt đối không bị trừ
+        var stockX = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == prodXId).Sum(s => s.QuantityOnHand);
+        Assert.Equal(20m, stockX);
+    }
+
+    [Fact]
+    public async Task REQ_BRANCH_SCOPE_02_CreateOrder_ProductInactiveInBranch_ThrowsProductNotInBranch()
+    {
+        // Arrange: Sản phẩm có BranchProduct nhưng Status = "Inactive"
+        var prodInactiveId = Guid.NewGuid();
+        _orderRepo.Products.Add(new Product
+        {
+            Id = prodInactiveId,
+            TenantId = "tenant-01",
+            ProductCode = "PROD-INACTIVE",
+            Name = "San pham Inactive",
+            SellingPrice = 15000m,
+            IsActive = true
+        });
+
+        _orderRepo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodInactiveId,
+            Status = "Inactive"
+        });
+
+        _orderRepo.BranchStocks.Add(new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodInactiveId,
+            BatchCode = "BATCH-INACTIVE-01",
+            ExpiryDate = DateTime.UtcNow.AddMonths(6),
+            QuantityOnHand = 10m
+        });
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            CashTendered: 30000m,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(prodInactiveId, 2m, 15000m)
+            }
+        );
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _orderService.CreateOrderAsync(request));
+        Assert.Equal("PRODUCT_NOT_IN_BRANCH", ex.ErrorCode);
+        Assert.Contains("San pham Inactive", ex.Message);
+    }
+
+    [Fact]
+    public async Task REQ_BRANCH_SCOPE_02_CreatePreOrder_ProductNotInBranch_ThrowsProductNotInBranch()
+    {
+        // Arrange: Sản phẩm không có BranchProduct tại _branchId
+        var prodPreId = Guid.NewGuid();
+        _orderRepo.Products.Add(new Product
+        {
+            Id = prodPreId,
+            TenantId = "tenant-01",
+            ProductCode = "PROD-PRE",
+            Name = "San pham PreOrder ngoai danh muc",
+            SellingPrice = 30000m,
+            IsActive = true
+        });
+
+        _orderRepo.BranchStocks.Add(new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodPreId,
+            BatchCode = "BATCH-PRE-01",
+            ExpiryDate = DateTime.UtcNow.AddMonths(6),
+            QuantityOnHand = 5m
+        });
+
+        var preOrderRequest = new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(prodPreId, 2m, 30000m)
+            },
+            DepositAmount: 10000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(3)
+        );
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _orderService.CreatePreOrderAsync(preOrderRequest));
+        Assert.Equal("PRODUCT_NOT_IN_BRANCH", ex.ErrorCode);
+        Assert.Contains("San pham PreOrder ngoai danh muc", ex.Message);
+    }
+
+    [Fact]
+    public async Task REQ_BRANCH_SCOPE_02_ProcessReturnExchange_NewItems_NotInBranch_ThrowsProductNotInBranchAndRollsBack()
+    {
+        // Arrange: Đơn hàng hoàn tất tại _branchId gồm 2 lon Coca
+        var orderRes = await _orderService.CreateOrderAsync(new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            PaymentMethod: "CASH",
+            CashTendered: 50000m,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(_prodCocaId, 2m, 10000m)
+            }
+        ));
+
+        // Sản phẩm mới để đổi (prodNewId) có tồn tại nhưng KHÔNG có BranchProduct tại _branchId
+        var prodNewId = Guid.NewGuid();
+        _orderRepo.Products.Add(new Product
+        {
+            Id = prodNewId,
+            TenantId = "tenant-01",
+            ProductCode = "PROD-NEW",
+            Name = "San pham doi moi chua kich hoat",
+            SellingPrice = 12000m,
+            IsActive = true
+        });
+
+        _orderRepo.BranchStocks.Add(new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodNewId,
+            BatchCode = "BATCH-NEW-01",
+            ExpiryDate = DateTime.UtcNow.AddMonths(6),
+            QuantityOnHand = 10m
+        });
+
+        var cocaStockBefore = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == _prodCocaId).Sum(s => s.QuantityOnHand);
+        var newStockBefore = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == prodNewId).Sum(s => s.QuantityOnHand);
+
+        // Act: Đổi 1 lon Coca lấy 1 sản phẩm mới không thuộc chi nhánh
+        var returnReq = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto>
+            {
+                new(
+                    ProductId: _prodCocaId,
+                    Quantity: 1m,
+                    UnitPrice: 10000m,
+                    Condition: "Restock"
+                )
+            },
+            NewItems: new List<OrderItemCreateDto>
+            {
+                new(prodNewId, 1m, 12000m)
+            },
+            SettlementMethod: "CASH",
+            Reason: "Doi hang sang san pham chua kich hoat"
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _orderService.ProcessReturnExchangeAsync(orderRes.Id, returnReq));
+        Assert.Equal("PRODUCT_NOT_IN_BRANCH", ex.ErrorCode);
+        Assert.Contains("San pham doi moi chua kich hoat", ex.Message);
+
+        // Assert: Kho không đổi (không hoàn trả Coca, không trừ sản phẩm mới)
+        var cocaStockAfter = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == _prodCocaId).Sum(s => s.QuantityOnHand);
+        var newStockAfter = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == prodNewId).Sum(s => s.QuantityOnHand);
+        Assert.Equal(cocaStockBefore, cocaStockAfter);
+        Assert.Equal(newStockBefore, newStockAfter);
+    }
+
+    [Fact]
+    public async Task REQ_BRANCH_SCOPE_02_CreateOrder_GiftItemNotInBranch_OmittedWithWarning()
+    {
+        // Arrange: Mì Hảo Hảo có BranchProduct Active (hàng mua trả tiền).
+        // Quà tặng là prodGiftId có trong Products và BranchStocks nhưng KHÔNG có BranchProduct tại _branchId.
+        var prodGiftId = Guid.NewGuid();
+        _orderRepo.Products.Add(new Product
+        {
+            Id = prodGiftId,
+            TenantId = "tenant-01",
+            ProductCode = "PROD-GIFT",
+            Name = "Mon qua chua gan chi nhanh",
+            SellingPrice = 8000m,
+            IsActive = true
+        });
+
+        _orderRepo.BranchStocks.Add(new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            ProductId = prodGiftId,
+            BatchCode = "BATCH-GIFT-01",
+            ExpiryDate = DateTime.UtcNow.AddMonths(6),
+            QuantityOnHand = 5m
+        });
+
+        var request = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            CashTendered: 20000m,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(_prodHaoHaoId, 2m, 5000m, IsGift: false),
+                new(prodGiftId, 1m, 0m, IsGift: true)
+            }
+        );
+
+        // Act: Tạo đơn hàng
+        var res = await _orderService.CreateOrderAsync(request);
+
+        // Assert: Đơn hàng thành công, nhưng dòng quà bị bỏ qua, có cảnh báo trong GiftStockWarning, tồn kho quà không đổi
+        Assert.NotNull(res);
+        Assert.DoesNotContain(res.Items, i => i.ProductId == prodGiftId);
+        Assert.NotNull(res.GiftStockWarning);
+        Assert.Contains("chưa được kích hoạt", res.GiftStockWarning);
+
+        var giftStock = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == prodGiftId).Sum(s => s.QuantityOnHand);
+        Assert.Equal(5m, giftStock);
     }
 }
 

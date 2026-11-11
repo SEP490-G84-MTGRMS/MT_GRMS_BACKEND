@@ -27,6 +27,7 @@ public class CustomerDebtController : BaseApiController
         return Ok(ApiResponse<CustomerDebtInvoiceResponse>.Ok(result, "Ghi nợ đơn hàng thành công."));
     }
 
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost("repay")]
     [RequireIdempotency]
     public async Task<ActionResult<ApiResponse<RepaymentResultResponse>>> RepayDebt([FromBody] RepayDebtRequest request, CancellationToken ct)
@@ -43,6 +44,7 @@ public class CustomerDebtController : BaseApiController
         return Ok(ApiResponse<CustomerDebtEntryResponse>.Ok(result, "Cấn trừ nợ trả hàng thành công."));
     }
 
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost("adjust")]
     [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<CustomerDebtEntryResponse>>> AdjustDebt([FromBody] AdjustDebtRequest request, CancellationToken ct)
@@ -51,6 +53,7 @@ public class CustomerDebtController : BaseApiController
         return Ok(ApiResponse<CustomerDebtEntryResponse>.Ok(result, "Điều chỉnh nợ thành công."));
     }
 
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
     [HttpPost("write-off")]
     [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<CustomerDebtEntryResponse>>> WriteOffBadDebt([FromBody] WriteOffBadDebtRequest request, CancellationToken ct)
@@ -59,6 +62,7 @@ public class CustomerDebtController : BaseApiController
         return Ok(ApiResponse<CustomerDebtEntryResponse>.Ok(result, "Xóa nợ xấu thành công."));
     }
 
+    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
     [HttpGet("profile/{customerId:guid}")]
     public async Task<ActionResult<ApiResponse<CustomerDebtProfileResponse>>> GetProfile(Guid customerId, CancellationToken ct)
     {
@@ -66,6 +70,7 @@ public class CustomerDebtController : BaseApiController
         return Ok(ApiResponse<CustomerDebtProfileResponse>.Ok(result));
     }
 
+    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
     [HttpGet("ledger/{customerId:guid}")]
     public async Task<ActionResult<ApiResponse<List<CustomerDebtEntryResponse>>>> GetLedger(Guid customerId, [FromQuery] int page = 1, [FromQuery] int pageSize = 50, CancellationToken ct = default)
     {

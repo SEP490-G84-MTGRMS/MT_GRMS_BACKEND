@@ -366,12 +366,16 @@ public class CashbookService : ICashbookService
 
     public async Task<FinanceAccount> GetOrCreateSafeAsync(Guid branchId, CancellationToken ct = default)
     {
-        var existingList = await _accountRepo.FindAsync(s => s.BranchId == branchId && s.AccountType == FinanceAccountType.Safe, ct);
+        var existingList = await _accountRepo.FindAsync(
+            s => s.BranchId == branchId && s.AccountType == FinanceAccountType.Safe && !s.IsDeleted,
+            ct);
         var existing = existingList.FirstOrDefault();
         if (existing != null) return existing;
 
         var safe = new FinanceAccount
         {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId ?? string.Empty,
             BranchId = branchId,
             AccountType = FinanceAccountType.Safe,
             AccountName = "Két Sắt Chi Nhánh",

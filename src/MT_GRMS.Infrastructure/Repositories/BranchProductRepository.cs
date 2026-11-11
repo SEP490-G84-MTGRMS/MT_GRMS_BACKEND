@@ -220,8 +220,8 @@ public class BranchProductRepository : IBranchProductRepository
             totalCount = filtered.Count;
             filteredIds = filtered
                 .OrderBy(x => x.ProductCode)
-                .Skip((Math.Max(1, pageIndex) - 1) * Math.Clamp(pageSize, 1, 100))
-                .Take(Math.Clamp(pageSize, 1, 100))
+                .Skip((Math.Max(1, pageIndex) - 1) * Math.Clamp(pageSize, 1, 1000))
+                .Take(Math.Clamp(pageSize, 1, 1000))
                 .Select(x => x.Id)
                 .ToList();
         }
@@ -229,7 +229,7 @@ public class BranchProductRepository : IBranchProductRepository
         {
             totalCount = await projected.CountAsync(cancellationToken);
             var safePageIndex = Math.Max(1, pageIndex);
-            var safePageSize = Math.Clamp(pageSize, 1, 100);
+            var safePageSize = Math.Clamp(pageSize, 1, 1000);
             filteredIds = await projected
                 .OrderBy(x => x.ProductCode)
                 .Skip((safePageIndex - 1) * safePageSize)
