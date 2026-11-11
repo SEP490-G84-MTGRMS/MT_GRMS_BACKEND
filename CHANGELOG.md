@@ -4,6 +4,11 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ---
 
+## [Unreleased] - 2026-11-11
+
+### Added
+- Triển khai xác thực SMS OTP qua **TextBee Android SMS Gateway** & **Google Firebase Phone Authentication** (kèm cơ chế Dev Fallback) khi đăng ký mở cửa hàng mới: bổ sung `ISmsService`, `TextBeeSettings`, `TextBeeSmsService` gọi REST API `api.textbee.dev`, xác thực `FirebaseIdToken` và `OtpCode` trong `AuthService.RegisterTenantAsync`, cùng các API `POST /api/auth/register/send-otp` và `POST /api/auth/register/verify-otp` [FE-AUTH] [worklog: docs/worklogs/2026-11-11_FE-AUTH_AI_firebase-phone-otp-registration.md].
+
 ## [Unreleased] - 2026-11-09
 
 ### Added

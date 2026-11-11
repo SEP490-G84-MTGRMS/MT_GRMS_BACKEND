@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
@@ -20,21 +21,28 @@ namespace MT_GRMS.Application.Auth;
 /// </summary>
 public class AuthService : IAuthService
 {
+    private sealed record RegistrationOtpEntry(string OtpCode, DateTime ExpiresAtUtc);
+
+    private static readonly ConcurrentDictionary<string, RegistrationOtpEntry> RegistrationOtpStore = new();
+
     private readonly IUserRepository _userRepository;
     private readonly IConfiguration? _configuration;
     private readonly IPasswordHasher _passwordHasher;
     private readonly IEmailService? _emailService;
+    private readonly ISmsService? _smsService;
 
     public AuthService(
         IUserRepository userRepository,
         IConfiguration? configuration = null,
         IPasswordHasher? passwordHasher = null,
-        IEmailService? emailService = null)
+        IEmailService? emailService = null,
+        ISmsService? smsService = null)
     {
         _userRepository = userRepository;
         _configuration = configuration;
         _passwordHasher = passwordHasher ?? new PasswordHasher();
         _emailService = emailService;
+        _smsService = smsService;
     }
 
     public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
@@ -299,6 +307,18 @@ public class AuthService : IAuthService
             throw new ArgumentException("Số điện thoại hoặc email đã được đăng ký trong hệ thống.");
         }
 
+        var normalizedPhoneKey = NormalizePhoneKey(request.Phone);
+        if (!string.IsNullOrWhiteSpace(request.OtpCode) || RegistrationOtpStore.ContainsKey(normalizedPhoneKey))
+        {
+            if (string.IsNullOrWhiteSpace(request.OtpCode))
+            {
+                throw new ArgumentException("Vui lòng xác thực mã SMS OTP đã gửi đến số điện thoại của bạn.");
+            }
+
+            await VerifyRegistrationOtpAsync(new VerifyRegistrationOtpRequest(request.Phone, request.OtpCode), cancellationToken);
+            RegistrationOtpStore.TryRemove(normalizedPhoneKey, out _);
+        }
+
         var rawSlug = request.StoreName.Trim().ToLowerInvariant()
             .Replace(" ", "-")
             .Replace(".", "-")
@@ -540,5 +560,113 @@ public class AuthService : IAuthService
 
         _userRepository.Update(user);
         await _userRepository.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<SendRegistrationOtpResponse> SendRegistrationOtpAsync(
+        SendRegistrationOtpRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.Phone))
+        {
+            throw new ArgumentException("Vui lòng nhập số điện thoại hợp lệ.");
+        }
+
+        var normalizedPhoneKey = NormalizePhoneKey(request.Phone);
+        if (normalizedPhoneKey.Length < 9 || normalizedPhoneKey.Length > 15)
+        {
+            throw new ArgumentException("Số điện thoại không đúng định dạng (cần từ 9 đến 11 chữ số).");
+        }
+
+        var isDuplicate = await _userRepository.ExistsByPhoneOrEmailAsync(
+            request.Phone.Trim(),
+            request.Email,
+            cancellationToken);
+
+        if (isDuplicate)
+        {
+            throw new ArgumentException("Số điện thoại này đã được đăng ký cửa hàng trên hệ thống.");
+        }
+
+        var otpCode = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
+        var expiresAtUtc = DateTime.UtcNow.AddMinutes(5);
+        RegistrationOtpStore[normalizedPhoneKey] = new RegistrationOtpEntry(otpCode, expiresAtUtc);
+
+        var maskedPhone = MaskPhoneDisplay(request.Phone);
+        var isRealSmsSent = false;
+        string? devFallbackOtp = otpCode;
+
+        if (_smsService != null)
+        {
+            var smsResult = await _smsService.SendRegistrationOtpAsync(
+                request.Phone.Trim(),
+                request.StoreName ?? "MT-GRMS",
+                otpCode,
+                cancellationToken);
+
+            maskedPhone = smsResult.MaskedPhone;
+            isRealSmsSent = smsResult.IsRealSmsSent;
+            devFallbackOtp = smsResult.DevFallbackOtp;
+        }
+
+        var message = isRealSmsSent
+            ? $"Mã xác thực SMS OTP đã được gửi qua TextBee tới số {maskedPhone}."
+            : $"Đã khởi tạo mã xác thực OTP cho số {maskedPhone}.";
+
+        return new SendRegistrationOtpResponse(
+            Success: true,
+            Message: message,
+            MaskedPhone: maskedPhone,
+            ExpiresInSeconds: 300,
+            IsRealSmsSent: isRealSmsSent,
+            DevOtpCode: devFallbackOtp
+        );
+    }
+
+    public Task<bool> VerifyRegistrationOtpAsync(
+        VerifyRegistrationOtpRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.Phone) || string.IsNullOrWhiteSpace(request.OtpCode))
+        {
+            throw new ArgumentException("Số điện thoại và mã OTP không được để trống.");
+        }
+
+        var normalizedPhoneKey = NormalizePhoneKey(request.Phone);
+        if (!RegistrationOtpStore.TryGetValue(normalizedPhoneKey, out var entry))
+        {
+            throw new ArgumentException("Mã xác thực OTP không tồn tại hoặc đã hết hạn. Vui lòng bấm gửi lại mã.");
+        }
+
+        if (entry.ExpiresAtUtc < DateTime.UtcNow)
+        {
+            RegistrationOtpStore.TryRemove(normalizedPhoneKey, out _);
+            throw new ArgumentException("Mã xác thực OTP đã hết hạn (quá 5 phút). Vui lòng yêu cầu gửi lại mã mới.");
+        }
+
+        var cleanOtp = request.OtpCode.Trim();
+        if (!string.Equals(entry.OtpCode, cleanOtp, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("Mã xác thực SMS OTP không chính xác. Vui lòng kiểm tra lại.");
+        }
+
+        return Task.FromResult(true);
+    }
+
+    private static string NormalizePhoneKey(string rawPhone)
+    {
+        if (string.IsNullOrWhiteSpace(rawPhone)) return string.Empty;
+        var digits = Regex.Replace(rawPhone.Trim(), @"[^\d]", "");
+        if (digits.StartsWith("84") && digits.Length >= 10)
+        {
+            return "0" + digits[2..];
+        }
+        return digits;
+    }
+
+    private static string MaskPhoneDisplay(string rawPhone)
+    {
+        var digits = NormalizePhoneKey(rawPhone);
+        if (digits.Length < 7) return rawPhone.Trim();
+        return $"{digits[..3]}***{digits[^3..]}";
     }
 }

@@ -132,6 +132,10 @@ public static class DependencyInjection
         services.Configure<EmailSettings>(configuration.GetSection(EmailSettings.SectionName));
         services.AddScoped<IEmailService, EmailService>();
 
+        // Cấu hình TextBee Android SMS Gateway (gửi SMS miễn phí qua SIM điện thoại Android)
+        services.Configure<TextBeeSettings>(configuration.GetSection(TextBeeSettings.SectionName));
+        services.AddScoped<ISmsService, TextBeeSmsService>();
+
         return services;
     }
 

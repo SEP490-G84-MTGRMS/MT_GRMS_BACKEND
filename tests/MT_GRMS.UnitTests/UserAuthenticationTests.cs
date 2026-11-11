@@ -439,4 +439,44 @@ public class UserAuthenticationTests
         Assert.NotEqual("OldHash", user.PasswordHash);
         Assert.True(PasswordHasher.Verify(user.PasswordHash, "NewSuperPassword@2026", out _));
     }
+
+    [Fact]
+    public async Task AuthService_SendRegistrationOtp_And_RegisterTenant_Should_Verify_Registration_Otp()
+    {
+        var repo = new FakeUserRepository();
+        var authService = new AuthService(repo);
+
+        var otpResponse = await authService.SendRegistrationOtpAsync(new SendRegistrationOtpRequest(
+            Phone: "0981234321",
+            StoreName: "Siêu Thị Mini Firebase",
+            FullName: "Nguyễn Chủ Tiệm"));
+
+        Assert.True(otpResponse.Success);
+        Assert.NotNull(otpResponse.DevOtpCode);
+        Assert.Equal(6, otpResponse.DevOtpCode!.Length);
+
+        // Nhập sai mã OTP sẽ bị chặn
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            authService.RegisterTenantAsync(new RegisterTenantRequest(
+                FullName: "Nguyễn Chủ Tiệm",
+                StoreName: "Siêu Thị Mini Firebase",
+                Phone: "0981234321",
+                Email: null,
+                Password: "Password@123",
+                AgreeTerms: true,
+                OtpCode: "000000")));
+
+        // Nhập đúng mã OTP sẽ khởi tạo cửa hàng thành công
+        var loginRes = await authService.RegisterTenantAsync(new RegisterTenantRequest(
+            FullName: "Nguyễn Chủ Tiệm",
+            StoreName: "Siêu Thị Mini Firebase",
+            Phone: "0981234321",
+            Email: null,
+            Password: "Password@123",
+            AgreeTerms: true,
+            OtpCode: otpResponse.DevOtpCode));
+
+        Assert.NotNull(loginRes);
+        Assert.Equal("STORE_OWNER", loginRes.User.Role);
+    }
 }

@@ -40,7 +40,29 @@ public record RegisterTenantRequest(
     string Phone,
     string? Email,
     string Password,
-    bool AgreeTerms = true
+    bool AgreeTerms = true,
+    string? OtpCode = null
+);
+
+public record SendRegistrationOtpRequest(
+    string Phone,
+    string? StoreName = null,
+    string? FullName = null,
+    string? Email = null
+);
+
+public record SendRegistrationOtpResponse(
+    bool Success,
+    string Message,
+    string MaskedPhone,
+    int ExpiresInSeconds,
+    bool IsRealSmsSent,
+    string? DevOtpCode = null
+);
+
+public record VerifyRegistrationOtpRequest(
+    string Phone,
+    string OtpCode
 );
 
 public record ForgotPasswordRequest(

@@ -51,6 +51,54 @@ public class AuthController : BaseApiController
     }
 
     /// <summary>
+    /// Kiểm tra trùng số điện thoại và khởi tạo phiên xác thực SMS OTP (TextBee Android Gateway / Dev Fallback)
+    /// </summary>
+    [HttpPost("register/send-otp")]
+    [ProducesResponseType(typeof(ApiResponse<SendRegistrationOtpResponse>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> SendRegistrationOtp([FromBody] SendRegistrationOtpRequest request, CancellationToken cancellationToken)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.Phone))
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Vui lòng nhập số điện thoại để nhận mã xác thực SMS.", StatusCodes.Status400BadRequest));
+        }
+
+        try
+        {
+            var result = await _authService.SendRegistrationOtpAsync(request, cancellationToken);
+            return Ok(ApiResponse<SendRegistrationOtpResponse>.Ok(result, result.Message, StatusCodes.Status200OK));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+        }
+    }
+
+    /// <summary>
+    /// Kiểm tra mã SMS OTP đăng ký cửa hàng
+    /// </summary>
+    [HttpPost("register/verify-otp")]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> VerifyRegistrationOtp([FromBody] VerifyRegistrationOtpRequest request, CancellationToken cancellationToken)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.Phone) || string.IsNullOrWhiteSpace(request.OtpCode))
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Số điện thoại và mã OTP không được để trống.", StatusCodes.Status400BadRequest));
+        }
+
+        try
+        {
+            await _authService.VerifyRegistrationOtpAsync(request, cancellationToken);
+            return Ok(ApiResponse<object>.Ok(new { success = true }, "Xác thực số điện thoại thành công.", StatusCodes.Status200OK));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+        }
+    }
+
+    /// <summary>
     /// Đăng ký tài khoản chủ cửa hàng và khởi tạo gian hàng mới
     /// </summary>
     [HttpPost("register")]
