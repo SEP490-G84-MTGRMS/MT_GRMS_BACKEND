@@ -19,3 +19,4 @@ public class CashbookTransaction : BaseTenantEntity
     public string Description { get; set; } = string.Empty;
     public Guid CreatedByUserId { get; set; }
 }
+

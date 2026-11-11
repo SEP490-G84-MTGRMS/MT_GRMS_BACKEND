@@ -5,7 +5,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Exceptions;
 
-namespace MT_GRMS.UnitTests;
+namespace MT_GRMS.UnitTests.Catalog;
 
 public class CategoryServiceTests
 {
@@ -119,7 +119,6 @@ public class CategoryServiceTests
     [Fact]
     public async Task GetAllAsync_ReturnsCategoriesWithAccurateProductCount()
     {
-        // Arrange
         var fakeRepo = new FakeCategoryRepository();
         var fakeUow = new FakeUnitOfWork();
         var catId = Guid.NewGuid();
@@ -134,70 +133,242 @@ public class CategoryServiceTests
 
         var service = new CategoryService(fakeRepo, fakeUow);
 
-        // Act
         var result = await service.GetAllAsync();
 
-        // Assert
         Assert.Single(result);
         Assert.Equal("Bánh kẹo", result[0].Name);
         Assert.Equal(12, result[0].ProductCount);
     }
 
     [Fact]
-    public async Task CreateAsync_ValidRequest_CreatesSuccessfully()
+    public async Task GetByIdAsync_ExistingCategory_ReturnsCategoryWithProductCount()
     {
-        // Arrange
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var catId = Guid.NewGuid();
+
+        fakeRepo.Categories.Add(new Category
+        {
+            Id = catId,
+            CategoryCode = "CAT000001",
+            Name = "Đồ uống",
+            Description = "Nước giải khát"
+        });
+        fakeRepo.ProductCounts[catId] = 5;
+
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        var result = await service.GetByIdAsync(catId);
+
+        Assert.NotNull(result);
+        Assert.Equal("CAT000001", result.Code);
+        Assert.Equal("Đồ uống", result.Name);
+        Assert.Equal(5, result.ProductCount);
+    }
+
+    [Fact]
+    public async Task CreateAsync_ValidRequest_CreatesSuccessfullyAndTrimsInputs()
+    {
         var fakeRepo = new FakeCategoryRepository();
         var fakeUow = new FakeUnitOfWork();
         var service = new CategoryService(fakeRepo, fakeUow);
 
-        var request = new CategoryCreateRequest("Đồ uống", "BEV", "Nước khoáng, trà");
+        var request = new CategoryCreateRequest("  Đồ uống  ", " bev-01 ", "  Nước khoáng, trà  ");
 
-        // Act
         var result = await service.CreateAsync(request);
 
-        // Assert
         Assert.NotNull(result);
         Assert.Equal("Đồ uống", result.Name);
-        Assert.Equal("BEV", result.Code);
+        Assert.Equal("BEV-01", result.Code);
+        Assert.Equal("Nước khoáng, trà", result.Description);
         Assert.Equal(0, result.ProductCount);
         Assert.True(fakeUow.SaveChangesCalled);
     }
 
-    [Fact]
-    public async Task CreateAsync_EmptyName_ThrowsArgumentException()
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task CreateAsync_EmptyOrWhitespaceName_ThrowsArgumentException(string invalidName)
     {
-        // Arrange
         var fakeRepo = new FakeCategoryRepository();
         var fakeUow = new FakeUnitOfWork();
         var service = new CategoryService(fakeRepo, fakeUow);
 
-        var request = new CategoryCreateRequest("   ");
+        var request = new CategoryCreateRequest(invalidName);
 
-        // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(request));
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(request));
+        Assert.Contains("Tên nhóm hàng không được để trống", ex.Message);
+    }
+
+    [Fact]
+    public async Task CreateAsync_NameExceeds100Chars_ThrowsArgumentException()
+    {
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        var longName = new string('A', 101);
+        var request = new CategoryCreateRequest(longName);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(request));
+        Assert.Contains("không được vượt quá 100 ký tự", ex.Message);
+    }
+
+    [Fact]
+    public async Task CreateAsync_DescriptionExceeds500Chars_ThrowsArgumentException()
+    {
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        var longDesc = new string('D', 501);
+        var request = new CategoryCreateRequest("Bánh kẹo", "CAT01", longDesc);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(request));
+        Assert.Contains("không được vượt quá 500 ký tự", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("CAT 001")]
+    [InlineData("CAT@001")]
+    [InlineData("MÃ_CÓ_DẤU")]
+    [InlineData("ABCDEFGHIJKLMNOPQRSTUVWXYZ12345")] // 31 chars
+    public async Task CreateAsync_InvalidCodeFormatOrLength_ThrowsArgumentException(string invalidCode)
+    {
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        var request = new CategoryCreateRequest("Bánh kẹo", invalidCode);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => service.CreateAsync(request));
+        Assert.Contains("Mã nhóm hàng", ex.Message);
     }
 
     [Fact]
     public async Task CreateAsync_DuplicateName_ThrowsBusinessException()
     {
-        // Arrange
         var fakeRepo = new FakeCategoryRepository();
         var fakeUow = new FakeUnitOfWork();
         fakeRepo.Categories.Add(new Category { Id = Guid.NewGuid(), Name = "Bánh kẹo", CategoryCode = "CAT-01" });
         var service = new CategoryService(fakeRepo, fakeUow);
 
-        var request = new CategoryCreateRequest("bánh kẹo");
+        var request = new CategoryCreateRequest("  bánh kẹo  ");
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateAsync(request));
+        Assert.Equal("CATEGORY_NAME_EXISTS", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreateAsync_DuplicateCode_ThrowsBusinessException()
+    {
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        fakeRepo.Categories.Add(new Category { Id = Guid.NewGuid(), Name = "Bánh kẹo", CategoryCode = "CAT-01" });
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        var request = new CategoryCreateRequest("Nước giải khát", "cat-01");
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateAsync(request));
+        Assert.Equal("CATEGORY_CODE_EXISTS", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenCodeIsEmpty_GeneratesFirstCode_CAT000001()
+    {
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        var result = await service.CreateAsync(new CategoryCreateRequest("Đồ uống", "", null));
+
+        Assert.Equal("CAT000001", result.Code);
+        Assert.Equal("Đồ uống", result.Name);
+        Assert.True(fakeUow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task CreateAsync_WhenCodeIsEmptyAndPreviousExists_GeneratesNextSequentialCode_CAT000002()
+    {
+        var fakeRepo = new FakeCategoryRepository();
+        fakeRepo.Categories.Add(new Category { Id = Guid.NewGuid(), Name = "Bánh kẹo", CategoryCode = "CAT000001" });
+        var fakeUow = new FakeUnitOfWork();
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        var result = await service.CreateAsync(new CategoryCreateRequest("Nước ngọt", null, null));
+
+        Assert.Equal("CAT000002", result.Code);
+        Assert.Equal("Nước ngọt", result.Name);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ValidRequest_UpdatesNameAndDescription()
+    {
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var catId = Guid.NewGuid();
+        fakeRepo.Categories.Add(new Category { Id = catId, Name = "Tên cũ", CategoryCode = "CAT000001", Description = "Mô tả cũ" });
+        fakeRepo.ProductCounts[catId] = 3;
+
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        var result = await service.UpdateAsync(catId, new CategoryUpdateRequest("  Tên mới  ", "  Mô tả mới  "));
+
+        Assert.Equal("Tên mới", result.Name);
+        Assert.Equal("Mô tả mới", result.Description);
+        Assert.Equal(3, result.ProductCount);
+        Assert.True(fakeUow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_ValidationErrors_ThrowsArgumentException()
+    {
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var catId = Guid.NewGuid();
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.UpdateAsync(catId, new CategoryUpdateRequest("   ")));
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.UpdateAsync(catId, new CategoryUpdateRequest(new string('A', 101))));
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.UpdateAsync(catId, new CategoryUpdateRequest("Hợp lệ", new string('B', 501))));
+    }
+
+    [Fact]
+    public async Task UpdateAsync_NonExistentCategory_ThrowsNotFoundException()
+    {
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.UpdateAsync(Guid.NewGuid(), new CategoryUpdateRequest("Tên mới")));
+    }
+
+    [Fact]
+    public async Task UpdateAsync_DuplicateNameWithAnotherCategory_ThrowsBusinessException()
+    {
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var cat1Id = Guid.NewGuid();
+        var cat2Id = Guid.NewGuid();
+        fakeRepo.Categories.Add(new Category { Id = cat1Id, Name = "Bánh kẹo", CategoryCode = "CAT01" });
+        fakeRepo.Categories.Add(new Category { Id = cat2Id, Name = "Đồ uống", CategoryCode = "CAT02" });
+
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateAsync(cat2Id, new CategoryUpdateRequest("Bánh kẹo")));
         Assert.Equal("CATEGORY_NAME_EXISTS", ex.ErrorCode);
     }
 
     [Fact]
     public async Task DeleteAsync_CategoryWithProducts_ThrowsBusinessException()
     {
-        // Arrange
         var fakeRepo = new FakeCategoryRepository();
         var fakeUow = new FakeUnitOfWork();
         var catId = Guid.NewGuid();
@@ -206,7 +377,6 @@ public class CategoryServiceTests
 
         var service = new CategoryService(fakeRepo, fakeUow);
 
-        // Act & Assert
         var ex = await Assert.ThrowsAsync<BusinessException>(() => service.DeleteAsync(catId));
         Assert.Equal("CATEGORY_HAS_PRODUCTS", ex.ErrorCode);
     }
@@ -214,7 +384,6 @@ public class CategoryServiceTests
     [Fact]
     public async Task DeleteAsync_EmptyCategory_DeletesSuccessfully()
     {
-        // Arrange
         var fakeRepo = new FakeCategoryRepository();
         var fakeUow = new FakeUnitOfWork();
         var catId = Guid.NewGuid();
@@ -224,61 +393,10 @@ public class CategoryServiceTests
 
         var service = new CategoryService(fakeRepo, fakeUow);
 
-        // Act
         await service.DeleteAsync(catId);
 
-        // Assert
         Assert.True(category.IsDeleted);
         Assert.True(fakeUow.SaveChangesCalled);
-    }
-
-    [Fact]
-    public async Task CreateAsync_WhenCodeIsEmpty_GeneratesFirstCode_CAT000001()
-    {
-        // Arrange
-        var fakeRepo = new FakeCategoryRepository();
-        var fakeUow = new FakeUnitOfWork();
-        var service = new CategoryService(fakeRepo, fakeUow);
-
-        // Act
-        var result = await service.CreateAsync(new CategoryCreateRequest("Đồ uống", "", null));
-
-        // Assert
-        Assert.Equal("CAT000001", result.Code);
-        Assert.Equal("Đồ uống", result.Name);
-        Assert.True(fakeUow.SaveChangesCalled);
-    }
-
-    [Fact]
-    public async Task CreateAsync_WhenCodeIsEmptyAndPreviousExists_GeneratesNextSequentialCode_CAT000002()
-    {
-        // Arrange
-        var fakeRepo = new FakeCategoryRepository();
-        fakeRepo.Categories.Add(new Category { Id = Guid.NewGuid(), Name = "Bánh kẹo", CategoryCode = "CAT000001" });
-        var fakeUow = new FakeUnitOfWork();
-        var service = new CategoryService(fakeRepo, fakeUow);
-
-        // Act
-        var result = await service.CreateAsync(new CategoryCreateRequest("Nước ngọt", null, null));
-
-        // Assert
-        Assert.Equal("CAT000002", result.Code);
-        Assert.Equal("Nước ngọt", result.Name);
-    }
-
-    [Fact]
-    public async Task CreateAsync_WhenCodeProvided_UsesProvidedCode()
-    {
-        // Arrange
-        var fakeRepo = new FakeCategoryRepository();
-        var fakeUow = new FakeUnitOfWork();
-        var service = new CategoryService(fakeRepo, fakeUow);
-
-        // Act
-        var result = await service.CreateAsync(new CategoryCreateRequest("Thịt nguội", "thit-nguoi-01", null));
-
-        // Assert
-        Assert.Equal("THIT-NGUOI-01", result.Code);
     }
 }
 

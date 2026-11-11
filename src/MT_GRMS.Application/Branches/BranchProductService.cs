@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Application.Branches.Validators;
+using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Domain.Entities.Catalog;
@@ -17,6 +18,7 @@ namespace MT_GRMS.Application.Branches;
 public class BranchProductService : IBranchProductService
 {
     private readonly IBranchProductRepository _repository;
+    private readonly IProductPriceHistoryRepository? _priceHistoryRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
 
@@ -24,8 +26,18 @@ public class BranchProductService : IBranchProductService
         IBranchProductRepository repository,
         IUnitOfWork unitOfWork,
         ITenantContext tenantContext)
+        : this(repository, null, unitOfWork, tenantContext)
+    {
+    }
+
+    public BranchProductService(
+        IBranchProductRepository repository,
+        IProductPriceHistoryRepository? priceHistoryRepository,
+        IUnitOfWork unitOfWork,
+        ITenantContext tenantContext)
     {
         _repository = repository;
+        _priceHistoryRepository = priceHistoryRepository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
     }
@@ -45,7 +57,7 @@ public class BranchProductService : IBranchProductService
         }
 
         var pageIndex = Math.Max(1, filter.PageIndex);
-        var pageSize = Math.Clamp(filter.PageSize, 1, 100);
+        var pageSize = Math.Clamp(filter.PageSize, 1, 1000);
 
         var (items, totalCount) = await _repository.GetPagedBranchProductsAsync(
             branchId,
@@ -263,6 +275,8 @@ public class BranchProductService : IBranchProductService
         var productForUnits = catalog.Product ?? product;
         ApplyUnitPriceOverrides(catalog, productForUnits, command.UnitPrices);
 
+        var oldEffective = catalog.SellingPriceOverride ?? product.SellingPrice;
+
         var retailToPersist = ResolveBranchRetailPrice(command, product.SellingPrice);
         if (retailToPersist > 0)
         {
@@ -283,6 +297,35 @@ public class BranchProductService : IBranchProductService
         catalog.UpdatedAt = DateTime.UtcNow;
 
         var effectiveRetail = catalog.SellingPriceOverride ?? product.SellingPrice;
+
+        if (oldEffective != effectiveRetail)
+        {
+            var costSnapshot = product.CostPrice;
+            var isBelowCost = costSnapshot.HasValue && effectiveRetail < costSnapshot.Value;
+            var history = new ProductPriceHistory
+            {
+                Id = Guid.NewGuid(),
+                TenantId = _tenantContext.CurrentTenantId,
+                ProductId = product.Id,
+                BranchId = branchId,
+                PriceScope = "BRANCH",
+                PriceType = "SELLING_PRICE",
+                OldPrice = oldEffective,
+                NewPrice = effectiveRetail,
+                CostPriceSnapshot = costSnapshot,
+                IsBelowCost = isBelowCost,
+                ManagerApprovedBy = isBelowCost ? (_tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "BRANCH_MANAGER") : null,
+                ManagerApprovalReason = isBelowCost ? "Xác nhận bán dưới giá vốn tại chi nhánh" : null,
+                ChangedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM",
+                ChangedByUserName = !string.IsNullOrEmpty(_tenantContext.CurrentRole) ? $"{_tenantContext.CurrentRole} ({branch.Name})" : branch.Name,
+                Reason = isBelowCost ? "Điều chỉnh giá chi nhánh (Dưới giá vốn)" : "Điều chỉnh giá chi nhánh",
+                CreatedAt = DateTime.UtcNow
+            };
+            if (_priceHistoryRepository != null)
+            {
+                await _priceHistoryRepository.AddAsync(history, cancellationToken);
+            }
+        }
 
         // Đồng bộ RetailPrice trên các lô tồn (nếu có) để POS đọc nhất quán.
         var stocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);

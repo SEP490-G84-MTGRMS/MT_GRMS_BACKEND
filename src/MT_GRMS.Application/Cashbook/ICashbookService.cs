@@ -14,9 +14,22 @@ public interface ICashbookService
     Task<CashInTransitResponse> ConfirmBankDepositAsync(ConfirmBankDepositRequest request, CancellationToken ct = default);
     Task<CashbookEntryResponse> DisburseCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default);
     Task<CashbookEntryResponse> ReceiveCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default);
-    Task<List<CashbookEntryResponse>> GetEntriesAsync(Guid? accountId, Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CancellationToken ct = default);
+    Task<List<CashbookEntryResponse>> GetEntriesAsync(Guid? accountId, Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CashbookEntryType? entryType = null, string? sourceType = null, string? keyword = null, CancellationToken ct = default);
     Task<FinanceAccount> GetOrCreateTillAsync(Guid branchId, string tillName, CancellationToken ct = default);
     Task<FinanceAccount> GetOrCreateSafeAsync(Guid branchId, CancellationToken ct = default);
+    Task<FinanceAccount> GetOrCreateBankAccountAsync(Guid? branchId = null, string? bankName = null, string? accountNumber = null, string? accountHolderName = null, CancellationToken ct = default) =>
+        Task.FromResult(new FinanceAccount
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            AccountType = FinanceAccountType.Bank,
+            AccountName = string.IsNullOrWhiteSpace(bankName) ? "Tài khoản Ngân hàng cửa hàng" : bankName,
+            BankName = string.IsNullOrWhiteSpace(bankName) ? "Ngân hàng cửa hàng" : bankName,
+            AccountNumber = accountNumber,
+            AccountHolderName = accountHolderName,
+            CurrentBalance = 0m,
+            IsActive = true
+        });
     Task<List<CashAccountResponse>> GetAccountsAsync(Guid? branchId = null, CancellationToken ct = default) =>
         Task.FromResult(new List<CashAccountResponse>());
     Task<CashbookSummaryResponse> GetSummaryAsync(Guid? branchId = null, CancellationToken ct = default) =>
@@ -34,4 +47,6 @@ public interface ICashbookService
         Task.FromResult<CashbookEntryResponse?>(null);
     Task<CashbookEntryResponse> VoidTransactionAsync(Guid entryId, VoidEntryRequest request, CancellationToken ct = default) =>
         Task.FromResult(new CashbookEntryResponse(Guid.NewGuid(), "CB-VOID", Guid.NewGuid(), "Till", null, "Payment", 0, 0, "COMPENSATING", entryId, "", "", request.Reason, DateTime.UtcNow));
+    Task<bool> VerifyChainIntegrityAsync(Guid accountId, CancellationToken ct = default) =>
+        Task.FromResult(true);
 }

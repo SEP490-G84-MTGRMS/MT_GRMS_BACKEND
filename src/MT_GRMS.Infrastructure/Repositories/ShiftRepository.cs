@@ -135,13 +135,20 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
             .FirstOrDefaultAsync(m => m.Id == movementId, cancellationToken);
     }
 
-    public async Task<IReadOnlyList<ShiftCashMovement>> GetPendingMovementsAsync(Guid branchId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ShiftCashMovement>> GetPendingMovementsAsync(Guid? branchId, CancellationToken cancellationToken = default)
     {
-        return await _context.ShiftCashMovements
+        var query = _context.ShiftCashMovements
             .Include(m => m.Shift)
-            .Where(m => m.Shift != null && m.Shift.BranchId == branchId &&
+            .Where(m => m.Shift != null &&
                         (m.Status == CashMovementStatus.PendingApproval ||
-                         (m.Category == CashMovementCategory.CASH_DRAW && !m.IsConfirmedByOwner)))
+                         (m.Category == CashMovementCategory.CASH_DRAW && !m.IsConfirmedByOwner)));
+
+        if (branchId.HasValue && branchId.Value != Guid.Empty)
+        {
+            query = query.Where(m => m.Shift.BranchId == branchId.Value);
+        }
+
+        return await query
             .OrderByDescending(m => m.OccurredAtUtc)
             .ToListAsync(cancellationToken);
     }
@@ -232,6 +239,14 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
     {
         return await _context.EmployeeSchedules
             .Where(s => s.EmployeeId == employeeId && s.BranchId == branchId && s.WorkDate.Date == workDate.Date && s.Status != ScheduleStatus.Cancelled)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<EmployeeSchedule>> GetBranchCashierSchedulesAsync(Guid branchId, DateTime workDate, CancellationToken cancellationToken = default)
+    {
+        return await _context.EmployeeSchedules
+            .Include(s => s.Employee)
+            .Where(s => s.BranchId == branchId && s.WorkDate.Date == workDate.Date && s.Status != ScheduleStatus.Cancelled)
             .ToListAsync(cancellationToken);
     }
 }

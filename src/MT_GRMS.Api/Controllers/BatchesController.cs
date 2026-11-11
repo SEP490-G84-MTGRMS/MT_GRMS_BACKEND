@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,6 +11,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/batches")]
+[Authorize]
 public class BatchesController : BaseApiController
 {
     private readonly IBatchService _batchService;
@@ -62,3 +64,4 @@ public class BatchesController : BaseApiController
         return CreatedAtAction(nameof(GetById), new { id = result.Id }, ApiResponse<BatchResponse>.Ok(result, "Tạo lô hàng thành công!"));
     }
 }
+

@@ -17,6 +17,7 @@ public class HouseholdTaxFilterDto
     public TaxPeriodType PeriodType { get; set; } = TaxPeriodType.Quarter;
     public int PeriodNumber { get; set; } = 1;
     public Guid? BranchId { get; set; }
+    public AccountingBookType? BookType { get; set; }
     public TaxCalculationMethod CalculationMethod { get; set; } = TaxCalculationMethod.RevenuePercentage;
     public string? Tier2Method { get; set; } // "REVENUE_EXCESS" (Cách 1: 0.5% vượt 1 tỷ) hoặc "PROFIT_15" (Cách 2: 15% lợi nhuận)
     public bool ApplyVatReduction2026 { get; set; } = false; // Bật/tắt chính sách giảm thuế GTGT (có thời hạn)
@@ -142,6 +143,21 @@ public class AccountingBookEntryDto
     public string BookCode { get; set; } = string.Empty; // S1a, S2a, S2b, S2c, S2d, S2e, S3a
     public string? BeneficiaryName { get; set; }
     public string? InvoiceNumber { get; set; }
+
+    // Các trường bổ trợ chuẩn hóa theo Thông tư 152/2025/TT-BTC
+    public string? Unit { get; set; } // Đơn vị tính (S2d)
+    public decimal? UnitPrice { get; set; } // Đơn giá (S2d)
+    public decimal? InQuantity { get; set; } // Số lượng nhập (S2d)
+    public decimal? InAmount { get; set; } // Số tiền nhập / thu / gửi vào (S2d, S2e)
+    public decimal? OutQuantity { get; set; } // Số lượng xuất (S2d)
+    public decimal? OutAmount { get; set; } // Số tiền xuất / chi / rút ra (S2d, S2e)
+    public decimal? BalanceQuantity { get; set; } // Số lượng tồn (S2d)
+    public decimal? BalanceAmount { get; set; } // Số tiền tồn / số dư quỹ (S2d, S2e)
+    public string? SectionGroup { get; set; } // Phân nhóm (ngành nghề S2a/S2b, mục chi phí a->e S2c, tài khoản tiền S2e, loại thuế S3a)
+    public decimal? TaxRate { get; set; } // Tỷ lệ % hoặc thuế suất (S2a, S2b, S2c)
+    public decimal? TaxAmount { get; set; } // Số tiền thuế (S2a, S2b, S2c, S3a)
+    public string? Note { get; set; } // Ghi chú
+    public bool IsSummaryRow { get; set; } // Dòng tổng cộng / phân nhóm / thuế
 }
 
 public class CreateTaxSnapshotRequest

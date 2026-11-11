@@ -120,7 +120,7 @@ public class ShiftManagementServiceTests
             return Task.FromResult(movement);
         }
 
-        public Task<IReadOnlyList<ShiftCashMovement>> GetPendingMovementsAsync(Guid branchId, CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<ShiftCashMovement>> GetPendingMovementsAsync(Guid? branchId, CancellationToken cancellationToken = default)
         {
             var list = CashMovements
                 .Where(m => (m.Status == CashMovementStatus.PendingApproval || (m.Category == CashMovementCategory.CASH_DRAW && !m.IsConfirmedByOwner)))
@@ -224,6 +224,12 @@ public class ShiftManagementServiceTests
                     Status = ScheduleStatus.Scheduled
                 });
             }
+            return Task.FromResult<IReadOnlyList<EmployeeSchedule>>(matched);
+        }
+
+        public Task<IReadOnlyList<EmployeeSchedule>> GetBranchCashierSchedulesAsync(Guid branchId, DateTime workDate, CancellationToken cancellationToken = default)
+        {
+            var matched = Schedules.Where(s => s.BranchId == branchId && s.WorkDate.Date == workDate.Date).ToList();
             return Task.FromResult<IReadOnlyList<EmployeeSchedule>>(matched);
         }
     }

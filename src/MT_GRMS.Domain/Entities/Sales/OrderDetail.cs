@@ -20,6 +20,11 @@ public class OrderDetail : BaseEntity
     public decimal CostPriceAtSale { get; set; } = 0.00m; // Giá vốn chốt cứng tại thời điểm xuất bán (Chống méo mó hồi tố)
     public bool IsGift { get; set; } = false;
 
+    // Đơn vị tính quy đổi trên đơn hàng
+    public Guid? ProductUnitId { get; set; }
+    public string? UnitName { get; set; }
+    public decimal ConversionRate { get; set; } = 1.00m;
+
     // Thuế GTGT từng dòng hàng theo TT 152/2025/TT-BTC
     public decimal AppliedVatRate { get; set; } = 0.01m;
     public decimal VatAmount { get; set; } = 0m;
@@ -36,5 +41,6 @@ public class OrderDetail : BaseEntity
     // Navigations
     public Order? Order { get; set; }
     public Product? Product { get; set; }
+    public ProductUnit? ProductUnit { get; set; }
     public Promotion? Promotion { get; set; }
 }

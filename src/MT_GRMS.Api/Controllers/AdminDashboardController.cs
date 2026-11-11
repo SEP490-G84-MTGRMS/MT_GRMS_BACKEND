@@ -3,12 +3,13 @@ using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Admin.Dtos;
 using MT_GRMS.Application.Admin.Services;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/admin/dashboard")]
-[Authorize(Roles = "ADMIN")]
+[Authorize(Roles = RoleConstants.AdminOnly)]
 public class AdminDashboardController : BaseApiController
 {
     private readonly IAdminDashboardService _dashboardService;

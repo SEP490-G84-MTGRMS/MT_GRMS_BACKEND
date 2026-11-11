@@ -96,10 +96,44 @@ public class ShiftService : IShiftService
             TenantId = _tenantContext.CurrentTenantId,
             ShiftId = shift.Id,
             UserId = cashierUserId,
-            UserName = "Thu ngân mở ca",
+            UserName = !string.IsNullOrWhiteSpace(eligibility.EmployeeName) ? eligibility.EmployeeName : "Thu ngân mở ca",
+            FullName = eligibility.EmployeeName,
             JoinedAtUtc = DateTime.UtcNow,
             LastActiveAtUtc = DateTime.UtcNow
         }, cancellationToken);
+
+        // Ghi nhận các nhân viên cùng có lịch trực tại chi nhánh hôm nay vào danh sách nhân sự của ca (tránh trùng lặp)
+        var todayVn = DateTime.UtcNow.AddHours(7).Date;
+        var addedUserIds = new HashSet<Guid> { cashierUserId };
+        var branchSchedules = await _shiftRepository.GetBranchCashierSchedulesAsync(request.BranchId, todayVn, cancellationToken);
+        if (branchSchedules != null)
+        {
+            foreach (var sched in branchSchedules)
+            {
+                if (sched.Employee != null && sched.Employee.Status == Domain.Enums.EmployeeStatus.Active && !string.IsNullOrWhiteSpace(sched.Employee.UserId))
+                {
+                    var pGuid = TenantContext.ResolveDeterministicGuid(sched.Employee.UserId);
+                    if (!addedUserIds.Contains(pGuid))
+                    {
+                        var existing = await _shiftRepository.GetParticipantAsync(shift.Id, pGuid, cancellationToken);
+                        if (existing == null)
+                        {
+                            addedUserIds.Add(pGuid);
+                            await _shiftRepository.AddParticipantAsync(new ShiftParticipant
+                            {
+                                TenantId = _tenantContext.CurrentTenantId,
+                                ShiftId = shift.Id,
+                                UserId = pGuid,
+                                UserName = sched.Employee.FullName ?? sched.Employee.EmployeeCode,
+                                FullName = sched.Employee.FullName,
+                                JoinedAtUtc = DateTime.UtcNow,
+                                LastActiveAtUtc = DateTime.UtcNow
+                            }, cancellationToken);
+                        }
+                    }
+                }
+            }
+        }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -113,6 +147,26 @@ public class ShiftService : IShiftService
     {
         var shift = await _shiftRepository.GetActiveShiftAsync(branchId, tillId, cancellationToken);
         if (shift == null) return null;
+
+        // Nếu người gọi là STAFF đang trực thuộc chi nhánh này, tự động đảm bảo có tên trong ShiftParticipants
+        if (_tenantContext != null && string.Equals(_tenantContext.CurrentRole, "STAFF", StringComparison.OrdinalIgnoreCase))
+        {
+            var rawUserId = _tenantContext.CurrentRawUserId;
+            var currentUserId = _tenantContext.CurrentUserId;
+            if (!string.IsNullOrWhiteSpace(rawUserId) && currentUserId != Guid.Empty)
+            {
+                var existing = await _shiftRepository.GetParticipantAsync(shift.Id, currentUserId, cancellationToken);
+                if (existing == null)
+                {
+                    var emp = await _shiftRepository.GetEmployeeByUserIdAsync(rawUserId, cancellationToken);
+                    if (emp != null && emp.BranchId == branchId && emp.Status == Domain.Enums.EmployeeStatus.Active)
+                    {
+                        await RecordParticipantAsync(shift.Id, currentUserId, emp.FullName ?? emp.EmployeeCode, emp.FullName, cancellationToken);
+                        shift = await _shiftRepository.GetActiveShiftAsync(branchId, tillId, cancellationToken) ?? shift;
+                    }
+                }
+            }
+        }
 
         var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shift.Id, cancellationToken);
         shift.TotalBankRevenue = bankRevenue;
@@ -383,6 +437,43 @@ public class ShiftService : IShiftService
         CancellationToken cancellationToken = default)
     {
         var list = await _shiftRepository.GetHistoryAsync(branchId, fromUtc, toUtc, cancellationToken);
+        var hasChanges = false;
+
+        foreach (var shift in list)
+        {
+            var shiftDateVn = shift.OpenedAtUtc.AddHours(7).Date;
+            var branchSchedules = await _shiftRepository.GetBranchCashierSchedulesAsync(shift.BranchId, shiftDateVn, cancellationToken);
+            foreach (var sched in branchSchedules)
+            {
+                if (sched.Employee != null && sched.Employee.Status == Domain.Enums.EmployeeStatus.Active && !string.IsNullOrWhiteSpace(sched.Employee.UserId))
+                {
+                    var pGuid = TenantContext.ResolveDeterministicGuid(sched.Employee.UserId);
+                    var existing = shift.Participants.FirstOrDefault(p => p.UserId == pGuid);
+                    if (existing == null)
+                    {
+                        var newPart = new ShiftParticipant
+                        {
+                            TenantId = shift.TenantId,
+                            ShiftId = shift.Id,
+                            UserId = pGuid,
+                            UserName = sched.Employee.FullName ?? sched.Employee.EmployeeCode,
+                            FullName = sched.Employee.FullName,
+                            JoinedAtUtc = shift.OpenedAtUtc,
+                            LastActiveAtUtc = shift.ClosedAtUtc ?? shift.OpenedAtUtc
+                        };
+                        await _shiftRepository.AddParticipantAsync(newPart, cancellationToken);
+                        shift.Participants.Add(newPart);
+                        hasChanges = true;
+                    }
+                }
+            }
+        }
+
+        if (hasChanges)
+        {
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
         return list.Select(MapToDetailResponse).ToList();
     }
 
@@ -495,7 +586,7 @@ public class ShiftService : IShiftService
     }
 
     public async Task<PendingMovementsSummaryResponse> GetPendingMovementsSummaryAsync(
-        Guid branchId,
+        Guid? branchId,
         CancellationToken cancellationToken = default)
     {
         var list = await _shiftRepository.GetPendingMovementsAsync(branchId, cancellationToken);
@@ -851,6 +942,8 @@ public class ShiftService : IShiftService
 
         var participants = shift.Participants
             .OrderBy(p => p.JoinedAtUtc)
+            .GroupBy(p => p.UserId)
+            .Select(g => g.First())
             .Select(p => new ShiftParticipantDto(
                 p.Id,
                 p.ShiftId,
@@ -933,8 +1026,17 @@ public class ShiftService : IShiftService
             );
         }
 
-        // 2. Tra cứu hồ sơ nhân viên qua UserId
-        var employee = await _shiftRepository.GetEmployeeByUserIdAsync(userId.ToString(), cancellationToken);
+        // 2. Tra cứu hồ sơ nhân viên qua UserId (ưu tiên CurrentRawUserId cho tài khoản string ID như usr_employee_*)
+        var rawCurrentUserId = (userId == Guid.Empty || userId == _tenantContext.CurrentUserId)
+            ? _tenantContext.CurrentRawUserId
+            : null;
+        var employee = !string.IsNullOrWhiteSpace(rawCurrentUserId)
+            ? await _shiftRepository.GetEmployeeByUserIdAsync(rawCurrentUserId, cancellationToken)
+            : null;
+        if (employee == null && userId != Guid.Empty && !string.Equals(rawCurrentUserId, userId.ToString(), StringComparison.OrdinalIgnoreCase))
+        {
+            employee = await _shiftRepository.GetEmployeeByUserIdAsync(userId.ToString(), cancellationToken);
+        }
         if (employee == null)
         {
             return new CashierShiftEligibilityDto(
@@ -966,17 +1068,17 @@ public class ShiftService : IShiftService
             );
         }
 
-        // 5. Kiểm tra thời gian hiện tại có nằm trong ca trực nào (kèm dung sai 30 phút)
+        // 5. Kiểm tra thời gian hiện tại có nằm trong ca trực nào (kèm dung sai 30 phút, hỗ trợ ca all-time 00:00:00 - 23:59:59)
         var buffer = TimeSpan.FromMinutes(30);
         foreach (var s in schedules)
         {
-            var startWindow = s.AllowedCheckInStart != TimeSpan.Zero
+            var startWindow = (s.PlannedStartTime == TimeSpan.Zero || s.AllowedCheckInStart != TimeSpan.Zero)
                 ? s.AllowedCheckInStart
                 : (s.PlannedStartTime > buffer ? s.PlannedStartTime.Subtract(buffer) : TimeSpan.Zero);
 
-            var endWindow = s.AllowedCheckInEnd != TimeSpan.Zero && s.AllowedCheckInEnd < new TimeSpan(23, 59, 59)
-                ? s.AllowedCheckInEnd
-                : s.PlannedEndTime.Add(buffer);
+            var endWindow = (s.AllowedCheckInEnd >= new TimeSpan(23, 59, 0) || s.PlannedEndTime >= new TimeSpan(23, 59, 0))
+                ? TimeSpan.FromDays(1)
+                : (s.AllowedCheckInEnd != TimeSpan.Zero ? s.AllowedCheckInEnd : s.PlannedEndTime.Add(buffer));
 
             bool isInShift;
             if (!s.IsCheckInNextDay && endWindow >= startWindow)

@@ -255,6 +255,7 @@ public class PurchaseOrderDetailDto
     public bool IsOwnerAdjusted { get; set; }
     public decimal? FinalQty { get; set; }
     public decimal OrderedQty { get; set; }
+    public decimal ReceivedQty { get; set; }
     public decimal UnitPrice { get; set; }
     public decimal LineAmount { get; set; }
     public DateTime? DeliveryDate { get; set; }
@@ -265,11 +266,11 @@ public class PurchaseOrderDto
     public Guid Id { get; set; }
     public string Code { get; set; } = string.Empty;
     public Guid BranchId { get; set; }
-    public string BranchName { get; set; } = string.Empty;
     public string BranchCode { get; set; } = string.Empty;
+    public string BranchName { get; set; } = string.Empty;
     public Guid SupplierId { get; set; }
-    public string SupplierName { get; set; } = string.Empty;
     public string SupplierCode { get; set; } = string.Empty;
+    public string SupplierName { get; set; } = string.Empty;
     public DateTime? DeliveryDate { get; set; }
     public string Status { get; set; } = "DRAFT";
     public int RevisionNumber { get; set; } = 1;
@@ -277,6 +278,7 @@ public class PurchaseOrderDto
     public decimal TotalQty { get; set; }
     public decimal TotalAmount { get; set; }
     public string? Note { get; set; }
+    public string? CreatedByRole { get; set; }
     public Guid? ParentDraftId { get; set; }
     public DateTime CreatedAt { get; set; }
     /// <summary>Phiếu nhập kho DRAFT/COMPLETED đang gắn PO (nếu có).</summary>
@@ -286,11 +288,18 @@ public class PurchaseOrderDto
     public IReadOnlyList<PurchaseOrderDetailDto> Details { get; set; } = new List<PurchaseOrderDetailDto>();
 }
 
+public class UpdatePurchaseOrderStatusRequest
+{
+    public string Status { get; set; } = string.Empty;
+    public string? Reason { get; set; }
+}
+
 public class PurchaseOrderFilterQuery
 {
     public Guid? BranchId { get; set; }
     public Guid? SupplierId { get; set; }
     public string? Status { get; set; }
+    public string? Keyword { get; set; }
     public DateTime? DateFrom { get; set; }
     public DateTime? DateTo { get; set; }
     public int PageIndex { get; set; } = 1;

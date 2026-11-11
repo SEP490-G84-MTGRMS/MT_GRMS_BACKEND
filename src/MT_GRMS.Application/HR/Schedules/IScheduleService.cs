@@ -17,5 +17,6 @@ public interface IScheduleService
     Task<IReadOnlyList<TodayStaffDescriptorDto>> GetTodayStaffDescriptorsAsync(Guid branchId, CancellationToken cancellationToken = default);
     Task<ScheduleResponse> CheckInFaceIdAsync(FaceIdCheckInRequest request, CancellationToken cancellationToken = default);
     Task<ScheduleResponse> CheckOutFaceIdAsync(FaceIdCheckOutRequest request, CancellationToken cancellationToken = default);
+    Task<ScheduleResponse> SelfCheckInAsync(Guid scheduleId, SelfCheckInRequest? request, CancellationToken cancellationToken = default);
 }
 

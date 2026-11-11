@@ -230,17 +230,16 @@ public class ShiftsController : BaseApiController
 
     /// <summary>
     /// Lấy danh sách các phiếu chờ chủ xử lý (duyệt chi hoặc xác nhận nhận tiền rút két).
+    /// Hỗ trợ lọc theo branchId hoặc xem toàn bộ chi nhánh thuộc Tenant (nếu branchId để trống/null).
     /// </summary>
     [HttpGet("/api/pos/cash-movements/pending")]
     public async Task<ActionResult<ApiResponse<PendingMovementsSummaryResponse>>> GetPendingMovements(
-        [FromQuery] Guid branchId,
+        [FromQuery] Guid? branchId,
         CancellationToken cancellationToken)
     {
-        var targetBranchId = branchId != Guid.Empty ? branchId : (_tenantContext.CurrentBranchId ?? Guid.Empty);
-        if (targetBranchId == Guid.Empty)
-        {
-            return BadRequest(ApiResponse<PendingMovementsSummaryResponse>.Fail("REQUIRED_BRANCH_ID", "Vui lòng cung cấp branchId chi nhánh."));
-        }
+        Guid? targetBranchId = (branchId.HasValue && branchId.Value != Guid.Empty)
+            ? branchId.Value
+            : null;
 
         var result = await _shiftService.GetPendingMovementsSummaryAsync(targetBranchId, cancellationToken);
         return Ok(ApiResponse<PendingMovementsSummaryResponse>.Ok(result));

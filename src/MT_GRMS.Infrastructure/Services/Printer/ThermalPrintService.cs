@@ -112,6 +112,10 @@ public class ThermalPrintService : IThermalPrintService
                     ? item.ProductName
                     : (item.Product != null ? item.Product.Name : "San pham");
                 rawName = RemoveAccents(rawName.Trim());
+                if (item.IsGift)
+                {
+                    rawName = $"[Qua KM] {rawName}";
+                }
 
                 string[] words = rawName.Split(' ', StringSplitOptions.RemoveEmptyEntries);
                 var nameLines = new List<string>();
@@ -142,8 +146,10 @@ public class ThermalPrintService : IThermalPrintService
                 int itemQty = (int)Math.Round(item.Qty);
                 totalQuantity += itemQty;
 
-                string qtyPriceStr = $"   {item.Qty:0.##} x {FormatMoney(item.UnitPrice)}";
-                string lineTotalStr = FormatMoney(item.ActualPrice * item.Qty);
+                string qtyPriceStr = item.IsGift
+                    ? $"   {item.Qty:0.##} x 0 (Tang KM)"
+                    : $"   {item.Qty:0.##} x {FormatMoney(item.UnitPrice)}";
+                string lineTotalStr = item.IsGift ? "0" : FormatMoney(item.UnitPrice * item.Qty);
                 string priceLine = FormatTwoColumns(qtyPriceStr, lineTotalStr, LineWidth);
                 buffer.AddRange(Encoding.ASCII.GetBytes(priceLine + "\n"));
 
@@ -158,11 +164,44 @@ public class ThermalPrintService : IThermalPrintService
         buffer.AddRange(Encoding.ASCII.GetBytes(totalRow + "\n"));
         buffer.AddRange(Encoding.ASCII.GetBytes(divider + "\n"));
 
-        // 6. Tổng kết tiền hàng và thanh toán theo form ảnh
-        if (order.DiscountAmount > 0)
+        // 6. Tổng kết tiền hàng và thanh toán chi tiết minh bạch
+        decimal itemDiscounts = order.Details != null ? order.Details.Sum(d => d.DiscountAmount) : 0m;
+        decimal promoDiscount = order.PromotionDiscountAmount > 0
+            ? order.PromotionDiscountAmount
+            : Math.Max(0m, order.DiscountAmount - itemDiscounts - order.VoucherDiscountAmount - order.PointsDiscountAmount);
+
+        if (itemDiscounts > 0)
+        {
+            string itemDiscStr = "-" + FormatMoney(itemDiscounts) + " d";
+            buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns("Chiet khau sp:", itemDiscStr, LineWidth) + "\n"));
+        }
+
+        if (promoDiscount > 0 || !string.IsNullOrWhiteSpace(order.AppliedPromotionSummary))
+        {
+            string promoVal = promoDiscount > 0 ? $"-{FormatMoney(promoDiscount)} d" : "";
+            buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns("Khuyen mai don:", promoVal, LineWidth) + "\n"));
+            if (!string.IsNullOrWhiteSpace(order.AppliedPromotionSummary))
+            {
+                foreach (var l in WordWrap($"  CTKM: {RemoveAccents(order.AppliedPromotionSummary)}", LineWidth))
+                {
+                    buffer.AddRange(Encoding.ASCII.GetBytes(l + "\n"));
+                }
+            }
+        }
+        else if (order.DiscountAmount > 0 && itemDiscounts <= 0)
         {
             string discStr = "-" + FormatMoney(order.DiscountAmount) + " d";
             buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns("Tien chiet khau:", discStr, LineWidth) + "\n"));
+        }
+        if (!string.IsNullOrWhiteSpace(order.AppliedVoucherCode))
+        {
+            string vchVal = order.VoucherDiscountAmount > 0 ? $"-{FormatMoney(order.VoucherDiscountAmount)} d" : "Da ap dung";
+            buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns($"  Voucher ({RemoveAccents(order.AppliedVoucherCode)}):", vchVal, LineWidth) + "\n"));
+        }
+        if (order.PointsRedeemed > 0)
+        {
+            string ptsVal = order.PointsDiscountAmount > 0 ? $"-{FormatMoney(order.PointsDiscountAmount)} d" : "Da doi";
+            buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns($"  Doi {order.PointsRedeemed} diem:", ptsVal, LineWidth) + "\n"));
         }
 
         // TỔNG PHẢI TRẢ (In đậm)
@@ -205,21 +244,32 @@ public class ThermalPrintService : IThermalPrintService
 
         // 7. Khối Thông Tin Khách Hàng (chuẩn theo form ảnh)
         buffer.AddRange(Encoding.ASCII.GetBytes(divider + "\n"));
-        buffer.AddRange(new byte[] { 0x1B, 0x45, 0x01 });
-        buffer.AddRange(Encoding.ASCII.GetBytes("THONG TIN KHACH HANG\n"));
-        buffer.AddRange(new byte[] { 0x1B, 0x45, 0x00 });
+        bool isWalkIn = order.Customer == null
+            || string.Equals(order.Customer.CustomerCode, "KHACHLE", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(order.Customer.Name?.Trim(), "Khách lẻ", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(order.Customer.Name?.Trim(), "Khách hàng lẻ", StringComparison.OrdinalIgnoreCase);
 
-        string custName = order.Customer != null ? RemoveAccents(order.Customer.Name) : "Khach hang le";
-        buffer.AddRange(Encoding.ASCII.GetBytes($"Ten khach hang: {custName}\n"));
-        string custAddr = !string.IsNullOrWhiteSpace(order.Customer?.Address) ? RemoveAccents(order.Customer.Address) : "- - -";
-        foreach (var l in WordWrap($"Dia chi: {custAddr}", LineWidth))
+        if (!isWalkIn && order.Customer != null)
         {
-            buffer.AddRange(Encoding.ASCII.GetBytes(l + "\n"));
+            buffer.AddRange(new byte[] { 0x1B, 0x45, 0x01 });
+            buffer.AddRange(Encoding.ASCII.GetBytes("THONG TIN KHACH HANG\n"));
+            buffer.AddRange(new byte[] { 0x1B, 0x45, 0x00 });
+
+            string custName = RemoveAccents(order.Customer.Name);
+            buffer.AddRange(Encoding.ASCII.GetBytes($"Ten khach hang: {custName}\n"));
+            string custAddr = !string.IsNullOrWhiteSpace(order.Customer.Address) ? RemoveAccents(order.Customer.Address) : "- - -";
+            foreach (var l in WordWrap($"Dia chi: {custAddr}", LineWidth))
+            {
+                buffer.AddRange(Encoding.ASCII.GetBytes(l + "\n"));
+            }
+            string custPhone = !string.IsNullOrWhiteSpace(order.Customer.Phone) ? order.Customer.Phone : "- - -";
+            buffer.AddRange(Encoding.ASCII.GetBytes($"So dien thoai: {custPhone}\n"));
+            buffer.AddRange(Encoding.ASCII.GetBytes($"Tong diem tich luy: {order.Customer.RewardPoints} diem\n"));
         }
-        string custPhone = !string.IsNullOrWhiteSpace(order.Customer?.Phone) ? order.Customer.Phone : "- - -";
-        buffer.AddRange(Encoding.ASCII.GetBytes($"So dien thoai: {custPhone}\n"));
-        int rewardPoints = order.Customer != null ? order.Customer.RewardPoints : 0;
-        buffer.AddRange(Encoding.ASCII.GetBytes($"Tong diem tich luy: {rewardPoints} diem\n"));
+        else
+        {
+            buffer.AddRange(Encoding.ASCII.GetBytes("Khach hang: Khach hang le (Khong tich diem)\n"));
+        }
 
         // 8. Chân trang siêu thị mini / tạp hóa (Canh giữa: ESC a 1)
         buffer.AddRange(Encoding.ASCII.GetBytes(divider + "\n"));

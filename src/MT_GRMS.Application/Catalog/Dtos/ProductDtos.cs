@@ -27,7 +27,10 @@ public record ProductResponse(
     List<string>? ImageUrls = null,
     bool HasOrders = false,
     string TaxCategory = "STANDARD_1PCT",
-    bool EligibleForVatReduction = false
+    bool EligibleForVatReduction = false,
+    bool IsBaseUnitPurchaseUnit = true,
+    string? PurchaseUnit = null,
+    List<ProductUnitResponse>? UnitPrices = null
 )
 {
     // Backward compatibility aliases
@@ -60,7 +63,8 @@ public record ProductCreateRequest(
     bool IsFavorite = false,
     List<string>? ImageUrls = null,
     bool EligibleForVatReduction = false,
-    string TaxCategory = "STANDARD_1PCT"
+    string TaxCategory = "STANDARD_1PCT",
+    bool IsBaseUnitPurchaseUnit = true
 )
 {
     // Backward compatibility constructor
@@ -105,7 +109,8 @@ public record ProductUpdateRequest(
     bool IsFavorite = false,
     List<string>? ImageUrls = null,
     bool EligibleForVatReduction = false,
-    string TaxCategory = "STANDARD_1PCT"
+    string TaxCategory = "STANDARD_1PCT",
+    bool? IsBaseUnitPurchaseUnit = null
 );
 
 public class ProductQueryFilter
@@ -117,3 +122,22 @@ public class ProductQueryFilter
     public int PageIndex { get; set; } = 1;
     public int PageSize { get; set; } = 20;
 }
+
+public record ProductPriceHistoryDto(
+    Guid Id,
+    Guid ProductId,
+    Guid? BranchId,
+    string? BranchName,
+    string PriceScope,
+    string PriceType,
+    decimal OldPrice,
+    decimal NewPrice,
+    decimal? CostPriceSnapshot,
+    bool IsBelowCost,
+    string? ManagerApprovedBy,
+    string? ManagerApprovalReason,
+    string ChangedByUserId,
+    string ChangedByUserName,
+    string Reason,
+    DateTime CreatedAt
+);

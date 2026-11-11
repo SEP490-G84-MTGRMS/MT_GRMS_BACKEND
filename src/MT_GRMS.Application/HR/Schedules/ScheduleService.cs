@@ -1154,4 +1154,115 @@ public class ScheduleService : IScheduleService
             return null;
         }
     }
+
+    public async Task<ScheduleResponse> SelfCheckInAsync(
+        Guid scheduleId,
+        SelfCheckInRequest? request,
+        CancellationToken cancellationToken = default)
+    {
+        var rawUserId = _tenantContext?.CurrentRawUserId;
+        if (string.IsNullOrWhiteSpace(rawUserId))
+        {
+            throw new UnauthorizedAccessException("Không xác định được danh tính tài khoản đăng nhập.");
+        }
+
+        var schedule = await _scheduleRepository.GetByIdAsync(scheduleId, cancellationToken)
+            ?? throw new NotFoundException($"Không tìm thấy ca làm việc với ID '{scheduleId}'.");
+
+        if (!string.IsNullOrWhiteSpace(_tenantContext?.CurrentTenantId)
+            && !string.IsNullOrWhiteSpace(schedule.TenantId)
+            && !string.Equals(schedule.TenantId, _tenantContext.CurrentTenantId, StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException("Bạn không có quyền thao tác ca làm việc của gian hàng khác.");
+        }
+
+        var employee = schedule.Employee ?? await _employeeRepository.GetByIdAsync(schedule.EmployeeId, cancellationToken);
+        if (employee == null
+            || employee.IsDeleted
+            || employee.Status != EmployeeStatus.Active
+            || !string.Equals(employee.UserId, rawUserId, StringComparison.Ordinal))
+        {
+            throw new UnauthorizedAccessException("Bạn không có quyền chấm công cho ca làm việc của nhân viên khác.");
+        }
+
+        if (schedule.CheckInTime.HasValue)
+        {
+            throw new BusinessException("ALREADY_CHECKED_IN", "Ca làm việc này đã được chấm công vào trước đó.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(employee.FaceDescriptor))
+        {
+            throw new BusinessException(
+                "FACE_ID_REQUIRED",
+                "Tài khoản đã đăng ký khuôn mặt AI FaceID, vui lòng chấm công bằng nhận diện khuôn mặt.");
+        }
+
+        if (schedule.Status is not (ScheduleStatus.Scheduled or ScheduleStatus.Published))
+        {
+            throw new BusinessException(
+                "INVALID_SCHEDULE_STATUS",
+                "Chỉ được chấm công vào ca đã được phân công hoặc ban hành.");
+        }
+
+        var vnNow = DateTime.UtcNow.AddHours(7);
+        if (schedule.WorkDate.Date != vnNow.Date)
+        {
+            throw new BusinessException("INVALID_WORK_DATE", "Chỉ được phép chấm công vào ca làm việc của ngày hôm nay.");
+        }
+
+        var buffer = TimeSpan.FromMinutes(30);
+        var startWindow = (schedule.PlannedStartTime == TimeSpan.Zero || schedule.AllowedCheckInStart != TimeSpan.Zero)
+            ? schedule.AllowedCheckInStart
+            : (schedule.PlannedStartTime > buffer ? schedule.PlannedStartTime.Subtract(buffer) : TimeSpan.Zero);
+
+        var endWindow = (schedule.AllowedCheckInEnd >= new TimeSpan(23, 59, 0) || schedule.PlannedEndTime >= new TimeSpan(23, 59, 0))
+            ? TimeSpan.FromDays(1)
+            : (schedule.AllowedCheckInEnd != TimeSpan.Zero ? schedule.AllowedCheckInEnd : schedule.PlannedEndTime.Add(buffer));
+
+        var currentTimeOfDay = vnNow.TimeOfDay;
+        bool isInWindow = (!schedule.IsCheckInNextDay && endWindow >= startWindow)
+            ? (currentTimeOfDay >= startWindow && currentTimeOfDay <= endWindow)
+            : (currentTimeOfDay >= startWindow || currentTimeOfDay <= endWindow);
+
+        if (!isInWindow)
+        {
+            throw new BusinessException(
+                "OUTSIDE_CHECKIN_WINDOW",
+                "Thời gian hiện tại nằm ngoài khung giờ cho phép chấm công của ca làm việc.");
+        }
+
+        var isAllTimeShift = schedule.PlannedStartTime == TimeSpan.Zero && schedule.PlannedEndTime >= new TimeSpan(23, 59, 0);
+        var lateMinutes = 0;
+        if (!isAllTimeShift)
+        {
+            var plannedStartDateTime = schedule.WorkDate.Add(schedule.PlannedStartTime);
+            BranchAttendancePolicy? policy = null;
+            if (_policyRepository != null)
+            {
+                policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
+            }
+
+            var lateThreshold = policy?.LateThresholdMinutes ?? 0;
+            if (vnNow > plannedStartDateTime)
+            {
+                var diff = (int)(vnNow - plannedStartDateTime).TotalMinutes;
+                if (diff > lateThreshold)
+                {
+                    lateMinutes = diff;
+                }
+            }
+        }
+
+        schedule.Employee ??= employee;
+        schedule.CheckInTime = vnNow;
+        schedule.CheckInMethod = "SELF_CHECK_IN";
+        schedule.LateMinutes = lateMinutes;
+        schedule.Status = ScheduleStatus.InProgress;
+        schedule.UpdatedAt = vnNow;
+
+        _scheduleRepository.Update(schedule);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return MapToResponse(schedule);
+    }
 }

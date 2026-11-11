@@ -119,9 +119,9 @@ public class BranchManagementTests
 
         // Assert
         Assert.NotNull(quota);
-        Assert.Equal(4, quota.UsedBranches);
+        Assert.Equal(5, quota.UsedBranches);
         Assert.Equal(5, quota.MaxBranches);
-        Assert.True(quota.CanAddMore);
+        Assert.False(quota.CanAddMore);
         Assert.Equal("PRO", quota.CurrentPlanCode);
     }
 
@@ -154,7 +154,8 @@ public class BranchManagementTests
     [Fact]
     public async Task REQ_BR02_CreateBranch_ValidRequest_Success()
     {
-        // Arrange
+        // Arrange - Giảm bớt 1 chi nhánh để quota chưa đầy (4/5)
+        _repo.Branches.RemoveAll(b => b.Code == "DC-01");
         var req = new CreateBranchRequest("BR-NEW", "Chi nhánh Mới", "789 Phố Mới", "0912345678", "Trần Văn Mới");
 
         // Act

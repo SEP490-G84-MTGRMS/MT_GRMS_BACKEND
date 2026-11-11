@@ -33,7 +33,24 @@ public enum ExpenseVoucherStatus
     PaymentFailed = 5,     // Xuất quỹ thất bại (thiếu tiền mặt)
     Cancelled = 6,         // Đã hủy trước khi duyệt
     Expired = 7,           // Quá hạn duyệt
-    Reversed = 8           // Đã bị đảo bút toán
+    Reversed = 8,          // Đã bị đảo bút toán
+    Unresolved = 9         // Treo tạm chờ phân loại (Triage Inbox)
+}
+
+/// <summary>
+/// Financial nature of non-POS transactions for P&L and Cashbook classification.
+/// </summary>
+public enum FinancialNature
+{
+    OperatingExpense = 1, // Chi phí vận hành OPEX (Điện, nước, sửa chữa...)
+    Deposit = 2,          // Tiền cọc vỏ/bình (0% P&L, 0% Thuế)
+    RefundDeposit = 3,    // Hoàn trả cọc vỏ/bình (0% P&L, 0% Thuế)
+    OtherIncome = 4,      // Thu nhập khác (Ve chai, phế liệu...)
+    OwnerDraw = 5,        // Rút vốn chủ sở hữu (0% P&L, 0% Thuế)
+    OwnerDeposit = 6,     // Nạp vốn chủ sở hữu (0% P&L, 0% Thuế)
+    InternalTransfer = 7, // Chuyển quỹ nội bộ (0% P&L)
+    TaxPayment = 8,       // Nộp thuế NSNN (Xóa nghĩa vụ thuế, 0% OPEX)
+    Suspense = 9          // Treo tạm chờ phân loại (0% P&L, 0% Thuế)
 }
 
 /// <summary>
@@ -77,7 +94,8 @@ public enum CashMovementCategory
     CASH_DRAW = 2,     // Rút két nộp chủ cửa hàng / chuyển két an toàn
     CASH_DEPOSIT = 3,  // Nạp thêm tiền lẻ vào két
     DEBT_COLLECT = 4,  // Thu nợ khách hàng bằng tiền mặt
-    PREORDER_PICKUP = 5 // Thu tiền còn lại khi giao hàng đơn đặt trước
+    PREORDER_PICKUP = 5, // Thu tiền còn lại khi giao hàng đơn đặt trước
+    RETURN_REFUND = 6   // Hoàn tiền mặt trả hàng cho khách tại quầy
 }
 
 /// <summary>

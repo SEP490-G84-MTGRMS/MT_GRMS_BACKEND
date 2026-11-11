@@ -12,4 +12,9 @@ public interface IExpenseService
     Task<ExpenseVoucherResponse> GetExpenseByIdAsync(Guid expenseId, CancellationToken ct = default);
     Task<List<ExpenseVoucherResponse>> GetExpensesAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CancellationToken ct = default);
     Task<ExpenseSummaryResponse> GetExpenseSummaryAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, CancellationToken ct = default);
+    Task<ExpenseVoucherResponse> CreateDepositAsync(CreateDepositRequest request, CancellationToken ct = default);
+    Task<List<DepositSearchResponse>> SearchDepositsAsync(string? keyword, Guid? branchId, CancellationToken ct = default);
+    Task<ExpenseVoucherResponse> RefundDepositAsync(Guid depositId, RefundDepositRequest request, CancellationToken ct = default);
+    Task<List<ExpenseVoucherResponse>> GetPendingTriageAsync(Guid? branchId, CancellationToken ct = default);
+    Task<ExpenseVoucherResponse> ResolveTriageAsync(Guid voucherId, ResolveTriageRequest request, CancellationToken ct = default);
 }

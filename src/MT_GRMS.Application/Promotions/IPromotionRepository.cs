@@ -20,6 +20,26 @@ public interface IPromotionRepository : IRepository<Promotion>
     Task<(IReadOnlyList<VoucherCode> Codes, int TotalCount)> GetPagedVoucherCodesAsync(Guid promotionId, int pageIndex, int pageSize, string? status = null, CancellationToken cancellationToken = default);
     Task<bool> RedeemVoucherCodeAtomicAsync(string code, Guid orderId, string orderCode, Guid? customerId, string? customerName, string? customerPhone, CancellationToken cancellationToken = default);
 
+    Task RecordPromotionUsageAsync(
+        Guid? promotionId,
+        decimal promoBudgetConsumed,
+        string? voucherCode,
+        decimal voucherDiscountAmount,
+        string? tenantId = null,
+        CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    Task RestoreOrderPromotionsOnCancelAsync(
+        Guid? promotionId,
+        decimal promoBudgetConsumed,
+        string? voucherCode,
+        decimal voucherDiscountAmount,
+        string? tenantId = null,
+        CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+    Task<Dictionary<Guid, decimal>> GetProductSellingPricesAsync(
+        IEnumerable<Guid> productIds,
+        CancellationToken cancellationToken = default) => Task.FromResult(new Dictionary<Guid, decimal>());
+
     Task<LoyaltySetting?> GetLoyaltySettingAsync(string tenantId, CancellationToken cancellationToken = default);
     Task SaveLoyaltySettingAsync(LoyaltySetting setting, CancellationToken cancellationToken = default);
 }

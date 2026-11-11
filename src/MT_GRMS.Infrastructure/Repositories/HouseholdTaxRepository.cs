@@ -85,9 +85,10 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             v.ExpenseDate <= toDateUtc &&
             (v.Status == ExpenseVoucherStatus.Paid || v.Status == ExpenseVoucherStatus.Approved));
 
-        // Lọc chi phí rút vốn chủ sở hữu (Equity/Capital) trực tiếp trên câu query SQL phía Database
+        // Lọc chi phí vận hành hợp lệ và loại trừ rút vốn chủ sở hữu / tiền cọc / nộp thuế
         return await voucherQuery
-            .Where(v => !v.Category.ToLower().Contains("capital") &&
+            .Where(v => v.Nature == FinancialNature.OperatingExpense &&
+                        !v.Category.ToLower().Contains("capital") &&
                         !v.Category.ToLower().Contains("equity") &&
                         !v.Category.ToLower().Contains("vốn") &&
                         !v.Category.ToLower().Contains("rút vốn"))
@@ -218,8 +219,8 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
     {
         var result = new List<AccountingBookEntryDto>();
 
-        // Truy vấn đơn hàng bán lẻ trong kỳ
-        var orderQuery = _context.Orders.AsQueryable();
+        // Truy vấn đơn hàng bán lẻ trong kỳ (Include Details để phục vụ tính số lượng xuất kho S2d)
+        var orderQuery = _context.Orders.Include(o => o.Details).AsQueryable();
         if (branchId.HasValue)
         {
             orderQuery = orderQuery.Where(o => o.BranchId == branchId.Value);
@@ -252,72 +253,116 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         // 1. Phân loại theo Nhóm 1 (Dưới 1 tỷ): Dùng mẫu S1a-HKD
         if ((!bookType.HasValue && group == HouseholdTaxGroup.Group1_Under1B) || bookType == AccountingBookType.S1a_RevenueGroup1)
         {
-            result.AddRange(orders.Select(o => new AccountingBookEntryDto
+            result.AddRange(orders.Select(o =>
             {
-                VoucherNumber = o.OrderCode,
-                VoucherDate = o.CreatedAt,
-                Description = $"Bán lẻ hàng hóa (Nhóm 1) {o.OrderCode}",
-                Amount = o.TotalAmount,
-                Category = "Doanh thu bán lẻ",
-                BookType = AccountingBookType.S1a_RevenueGroup1,
-                BookCode = "S1a-HKD"
+                var netAmount = Math.Max(0m, o.TotalAmount - o.DiscountAmount);
+                return new AccountingBookEntryDto
+                {
+                    VoucherNumber = o.OrderCode,
+                    VoucherDate = o.CreatedAt,
+                    Description = $"Bán lẻ hàng hóa (Nhóm 1) {o.OrderCode}",
+                    Amount = netAmount,
+                    Category = "Doanh thu bán lẻ (Nhóm 1)",
+                    SectionGroup = "Doanh thu bán lẻ",
+                    BookType = AccountingBookType.S1a_RevenueGroup1,
+                    BookCode = "S1a-HKD"
+                };
             }));
         }
 
         // 2. Phân loại theo Nhóm 2 (Phương pháp tỷ lệ % doanh thu): Dùng mẫu S2a-HKD
         if ((!bookType.HasValue && group == HouseholdTaxGroup.Group2_1BTo3B && method == TaxCalculationMethod.RevenuePercentage) || bookType == AccountingBookType.S2a_RevenueGroup2)
         {
-            result.AddRange(orders.Select(o => new AccountingBookEntryDto
+            result.AddRange(orders.Select(o =>
             {
-                VoucherNumber = o.OrderCode,
-                VoucherDate = o.CreatedAt,
-                Description = $"Bán lẻ hàng hóa chịu thuế tỷ lệ % {o.OrderCode}",
-                Amount = o.TotalAmount,
-                Category = "Doanh thu bán lẻ chịu thuế",
-                BookType = AccountingBookType.S2a_RevenueGroup2,
-                BookCode = "S2a-HKD"
+                var netAmount = Math.Max(0m, o.TotalAmount - o.DiscountAmount);
+                return new AccountingBookEntryDto
+                {
+                    VoucherNumber = o.OrderCode,
+                    VoucherDate = o.CreatedAt,
+                    Description = $"Bán lẻ hàng hóa chịu thuế tỷ lệ % {o.OrderCode}",
+                    Amount = netAmount,
+                    Category = "Doanh thu bán lẻ chịu thuế",
+                    SectionGroup = "1. Phân phối, cung cấp hàng hóa",
+                    TaxRate = 1.0m,
+                    TaxAmount = Math.Round(netAmount * 0.01m, 0, MidpointRounding.AwayFromZero),
+                    BookType = AccountingBookType.S2a_RevenueGroup2,
+                    BookCode = "S2a-HKD"
+                };
             }));
         }
 
-        // 3. Phân loại theo Phương pháp Kê khai (Nhóm 3, 4 hoặc hộ lựa chọn): Bộ sổ S2b, S2c, S2d, S2e
+        // 3. Phân loại theo Phương pháp Kê khai (Nhóm 3, 4 hoặc hộ lựa chọn): Bộ sổ S2b, S2c, S2d, S2e, S3a
         // S2b-HKD: Sổ chi tiết doanh thu bán hàng hóa, dịch vụ kê khai
         if ((!bookType.HasValue && (method == TaxCalculationMethod.DeclarationBased || group == HouseholdTaxGroup.Group4_Over50B)) || bookType == AccountingBookType.S2b_RevenueDeclaration)
         {
-            result.AddRange(orders.Select(o => new AccountingBookEntryDto
+            result.AddRange(orders.Select(o =>
             {
-                VoucherNumber = o.OrderCode,
-                VoucherDate = o.CreatedAt,
-                Description = $"Doanh thu bán hàng kê khai {o.OrderCode}",
-                Amount = o.TotalAmount,
-                Category = "Doanh thu bán lẻ kê khai",
-                BookType = AccountingBookType.S2b_RevenueDeclaration,
-                BookCode = "S2b-HKD"
+                var netAmount = Math.Max(0m, o.TotalAmount - o.DiscountAmount);
+                return new AccountingBookEntryDto
+                {
+                    VoucherNumber = o.OrderCode,
+                    VoucherDate = o.CreatedAt,
+                    Description = $"Doanh thu bán hàng kê khai {o.OrderCode}",
+                    Amount = netAmount,
+                    Category = "Doanh thu bán lẻ kê khai",
+                    SectionGroup = "1. Phân phối, cung cấp hàng hóa",
+                    TaxRate = 1.0m,
+                    TaxAmount = Math.Round(netAmount * 0.01m, 0, MidpointRounding.AwayFromZero),
+                    BookType = AccountingBookType.S2b_RevenueDeclaration,
+                    BookCode = "S2b-HKD"
+                };
             }));
         }
 
         // S2c-HKD: Sổ chi tiết doanh thu, chi phí (Thu & Chi)
         if ((!bookType.HasValue && (method == TaxCalculationMethod.DeclarationBased || group == HouseholdTaxGroup.Group4_Over50B)) || bookType == AccountingBookType.S2c_RevenueAndExpense)
         {
-            // Doanh thu
-            result.AddRange(orders.Select(o => new AccountingBookEntryDto
+            // Doanh thu bán hàng lẻ
+            result.AddRange(orders.Select(o =>
             {
-                VoucherNumber = o.OrderCode,
-                VoucherDate = o.CreatedAt,
-                Description = $"[Thu] Bán lẻ đơn hàng {o.OrderCode}",
-                Amount = o.TotalAmount,
-                Category = "Doanh thu",
-                BookType = AccountingBookType.S2c_RevenueAndExpense,
-                BookCode = "S2c-HKD"
+                var netAmount = Math.Max(0m, o.TotalAmount - o.DiscountAmount);
+                return new AccountingBookEntryDto
+                {
+                    VoucherNumber = o.OrderCode,
+                    VoucherDate = o.CreatedAt,
+                    Description = $"[Thu] Bán lẻ đơn hàng {o.OrderCode}",
+                    Amount = netAmount,
+                    Category = "Doanh thu",
+                    SectionGroup = "1. Doanh thu",
+                    BookType = AccountingBookType.S2c_RevenueAndExpense,
+                    BookCode = "S2c-HKD"
+                };
             }));
 
-            // Chi phí
-            result.AddRange(vouchers.Select(v => new AccountingBookEntryDto
+            // Kết chuyển COGS trong kỳ
+            var cogs = await GetPeriodCogsAsync(fromDateUtc, toDateUtc, branchId, cancellationToken);
+            if (cogs.TotalCogs > 0)
+            {
+                result.Add(new AccountingBookEntryDto
+                {
+                    VoucherNumber = $"COGS-{fromDateUtc:yyyyMM}",
+                    VoucherDate = toDateUtc.AddSeconds(-1),
+                    Description = $"Giá vốn hàng bán thực tế trong kỳ {(cogs.IsEstimated ? "(ước tính 70%)" : "(theo giá vốn hàng xuất kho)")}",
+                    Amount = cogs.TotalCogs,
+                    SectionGroup = "2.a) Chi phí nguyên liệu, vật liệu, nhiên liệu, hàng hóa",
+                    Category = "Giá vốn hàng bán (COGS)",
+                    BookType = AccountingBookType.S2c_RevenueAndExpense,
+                    BookCode = "S2c-HKD"
+                });
+            }
+
+            // Chi phí SXKD hợp lý từ ExpenseVouchers (chỉ lấy OperatingExpense, loại trừ cọc vỏ / rút vốn / tạm ứng)
+            result.AddRange(vouchers
+                .Where(v => v.Nature == FinancialNature.OperatingExpense)
+                .Select(v => new AccountingBookEntryDto
             {
                 VoucherNumber = v.VoucherCode ?? string.Empty,
                 VoucherDate = v.ExpenseDate,
                 Description = $"[Chi] {(!string.IsNullOrEmpty(v.Note) ? v.Note : $"{v.Category} - {v.BeneficiaryName}")}",
                 Amount = v.Amount,
                 Category = v.Category ?? string.Empty,
+                SectionGroup = ClassifyS2cExpenseGroup(v.Category, v.Note),
                 BookType = AccountingBookType.S2c_RevenueAndExpense,
                 BookCode = "S2c-HKD",
                 BeneficiaryName = v.BeneficiaryName,
@@ -329,7 +374,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         if ((!bookType.HasValue && (method == TaxCalculationMethod.DeclarationBased || group == HouseholdTaxGroup.Group4_Over50B)) || bookType == AccountingBookType.S2d_MaterialsAndGoods)
         {
             // 1. Nhập kho từ Nhà cung cấp (GoodsReceipts)
-            var receiptQuery = _context.GoodsReceipts.Include(g => g.Supplier).AsQueryable();
+            var receiptQuery = _context.GoodsReceipts.Include(g => g.Supplier).Include(g => g.Lines).AsQueryable();
             if (branchId.HasValue)
             {
                 receiptQuery = receiptQuery.Where(g => g.BranchId == branchId.Value);
@@ -337,29 +382,53 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             receiptQuery = receiptQuery.Where(g => g.ReceivedAtUtc >= fromDateUtc && g.ReceivedAtUtc <= toDateUtc && (g.Status == "CONFIRMED" || g.Status == "COMPLETED" || g.Status == "DRAFT"));
             var receipts = await receiptQuery.OrderBy(g => g.ReceivedAtUtc).ToListAsync(cancellationToken);
 
-            result.AddRange(receipts.Select(g => new AccountingBookEntryDto
+            result.AddRange(receipts.Select(g =>
             {
-                VoucherNumber = g.Code,
-                VoucherDate = g.ReceivedAtUtc,
-                Description = $"[Nhập kho] Nhập hàng từ NCC {(g.Supplier != null ? g.Supplier.Name : "Nhà cung cấp")}",
-                Amount = g.GrandTotal,
-                Category = "Nhập kho hàng hóa",
-                BookType = AccountingBookType.S2d_MaterialsAndGoods,
-                BookCode = "S2d-HKD",
-                BeneficiaryName = g.Supplier?.Name,
-                InvoiceNumber = g.InvoiceNo
+                var inQuantity = g.Lines.Sum(l => l.AcceptedQty > 0 ? l.AcceptedQty : (l.DeliveredQty > 0 ? l.DeliveredQty : l.OrderedQty));
+                var inAmount = g.GrandTotal;
+                var unitPrice = inQuantity > 0 ? inAmount / inQuantity : 0m;
+
+                return new AccountingBookEntryDto
+                {
+                    VoucherNumber = g.Code,
+                    VoucherDate = g.ReceivedAtUtc,
+                    Description = $"[Nhập kho] Nhập hàng từ NCC {(g.Supplier != null ? g.Supplier.Name : "Nhà cung cấp")}",
+                    Amount = inAmount,
+                    InQuantity = inQuantity,
+                    InAmount = inAmount,
+                    UnitPrice = Math.Round(unitPrice, 2, MidpointRounding.AwayFromZero),
+                    Unit = "Lô/Hàng",
+                    SectionGroup = "Nhập kho trong kỳ",
+                    Category = "Nhập kho hàng hóa",
+                    BookType = AccountingBookType.S2d_MaterialsAndGoods,
+                    BookCode = "S2d-HKD",
+                    BeneficiaryName = g.Supplier?.Name,
+                    InvoiceNumber = g.InvoiceNo
+                };
             }));
 
             // 2. Xuất kho bán lẻ POS
-            result.AddRange(orders.Select(o => new AccountingBookEntryDto
+            result.AddRange(orders.Select(o =>
             {
-                VoucherNumber = o.OrderCode,
-                VoucherDate = o.CreatedAt,
-                Description = $"[Xuất kho] Xuất bán lẻ đơn hàng {o.OrderCode}",
-                Amount = o.TotalAmount,
-                Category = "Xuất kho bán lẻ",
-                BookType = AccountingBookType.S2d_MaterialsAndGoods,
-                BookCode = "S2d-HKD"
+                var outQuantity = o.Details.Sum(d => d.Qty);
+                var outAmount = o.Details.Sum(d => d.CostPriceAtSale > 0 ? d.CostPriceAtSale * d.Qty : (d.UnitPrice * d.Qty * 0.7m));
+                var unitPrice = outQuantity > 0 ? outAmount / outQuantity : 0m;
+
+                return new AccountingBookEntryDto
+                {
+                    VoucherNumber = o.OrderCode,
+                    VoucherDate = o.CreatedAt,
+                    Description = $"[Xuất kho] Xuất bán lẻ đơn hàng {o.OrderCode}",
+                    Amount = outAmount,
+                    OutQuantity = outQuantity,
+                    OutAmount = outAmount,
+                    UnitPrice = Math.Round(unitPrice, 2, MidpointRounding.AwayFromZero),
+                    Unit = "Sản phẩm",
+                    SectionGroup = "Xuất kho trong kỳ",
+                    Category = "Xuất kho bán lẻ",
+                    BookType = AccountingBookType.S2d_MaterialsAndGoods,
+                    BookCode = "S2d-HKD"
+                };
             }));
 
             // 3. Chi phí bao bì, dụng cụ, vật tư tiêu hao
@@ -377,6 +446,9 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
                 VoucherDate = v.ExpenseDate,
                 Description = !string.IsNullOrEmpty(v.Note) ? v.Note : $"[Vật tư] {v.Category} - {v.BeneficiaryName}",
                 Amount = v.Amount,
+                InAmount = v.Amount,
+                Unit = "Khoản",
+                SectionGroup = "Vật liệu, dụng cụ tiêu hao",
                 Category = v.Category ?? string.Empty,
                 BookType = AccountingBookType.S2d_MaterialsAndGoods,
                 BookCode = "S2d-HKD",
@@ -388,65 +460,242 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         // S2e-HKD: Sổ chi tiết tiền (tiền mặt và tiền gửi ngân hàng - Đọc trực tiếp CashbookEntries)
         if ((!bookType.HasValue && (method == TaxCalculationMethod.DeclarationBased || group == HouseholdTaxGroup.Group4_Over50B)) || bookType == AccountingBookType.S2e_CashAndBank)
         {
+            // Truy vấn số dư đầu kỳ trước fromDateUtc
+            var priorCashbookQuery = _context.CashbookEntries.AsQueryable();
+            if (branchId.HasValue)
+            {
+                priorCashbookQuery = priorCashbookQuery.Where(c => c.BranchId == branchId.Value || (c.AccountType == FinanceAccountType.Bank && c.BranchId == null));
+            }
+            priorCashbookQuery = priorCashbookQuery.Where(c => c.OccurredAtUtc < fromDateUtc);
+
+            var openingCashReceipts = await priorCashbookQuery
+                .Where(c => c.AccountType == FinanceAccountType.Till || c.AccountType == FinanceAccountType.Safe)
+                .Where(c => c.EntryType == CashbookEntryType.Receipt)
+                .SumAsync(c => (decimal?)c.Amount, cancellationToken) ?? 0m;
+
+            var openingCashPayments = await priorCashbookQuery
+                .Where(c => c.AccountType == FinanceAccountType.Till || c.AccountType == FinanceAccountType.Safe)
+                .Where(c => c.EntryType == CashbookEntryType.Payment)
+                .SumAsync(c => (decimal?)c.Amount, cancellationToken) ?? 0m;
+
+            var openingCash = openingCashReceipts - openingCashPayments;
+
+            var openingBankReceipts = await priorCashbookQuery
+                .Where(c => c.AccountType == FinanceAccountType.Bank)
+                .Where(c => c.EntryType == CashbookEntryType.Receipt)
+                .SumAsync(c => (decimal?)c.Amount, cancellationToken) ?? 0m;
+
+            var openingBankPayments = await priorCashbookQuery
+                .Where(c => c.AccountType == FinanceAccountType.Bank)
+                .Where(c => c.EntryType == CashbookEntryType.Payment)
+                .SumAsync(c => (decimal?)c.Amount, cancellationToken) ?? 0m;
+
+            var openingBank = openingBankReceipts - openingBankPayments;
+
+            // Truy vấn phát sinh trong kỳ
             var cashbookQuery = _context.CashbookEntries.AsQueryable();
             if (branchId.HasValue)
             {
-                cashbookQuery = cashbookQuery.Where(c => c.BranchId == branchId.Value);
+                cashbookQuery = cashbookQuery.Where(c => c.BranchId == branchId.Value || (c.AccountType == FinanceAccountType.Bank && c.BranchId == null));
             }
             cashbookQuery = cashbookQuery.Where(c => c.OccurredAtUtc >= fromDateUtc && c.OccurredAtUtc <= toDateUtc);
-
             var cashEntries = await cashbookQuery.OrderBy(c => c.OccurredAtUtc).ToListAsync(cancellationToken);
 
-            if (cashEntries.Any())
+            // Khối I: Quỹ Tiền mặt
+            result.Add(new AccountingBookEntryDto
             {
-                result.AddRange(cashEntries.Select(c =>
-                {
-                    var accName = c.AccountType switch
-                    {
-                        FinanceAccountType.Till => "Két quầy",
-                        FinanceAccountType.Safe => "Két sắt",
-                        FinanceAccountType.Bank => "Ngân hàng",
-                        _ => "Quỹ"
-                    };
-                    var isReceipt = c.EntryType == CashbookEntryType.Receipt;
-                    return new AccountingBookEntryDto
-                    {
-                        VoucherNumber = c.EntryCode,
-                        VoucherDate = c.OccurredAtUtc,
-                        Description = isReceipt
-                            ? $"[Thu tiền {accName}] {c.Description}"
-                            : $"[Chi tiền {accName}] {c.Description}",
-                        Amount = c.Amount,
-                        Category = isReceipt ? $"Thu quỹ ({accName})" : $"Chi quỹ ({accName})",
-                        BookType = AccountingBookType.S2e_CashAndBank,
-                        BookCode = "S2e-HKD",
-                        BeneficiaryName = accName,
-                        InvoiceNumber = c.ReferenceCode
-                    };
-                }));
-            }
-            else
+                VoucherNumber = "DK-CASH",
+                VoucherDate = fromDateUtc,
+                Description = "Số dư đầu kỳ",
+                Amount = openingCash,
+                BalanceAmount = openingCash,
+                SectionGroup = "Khối I - Quỹ Tiền mặt",
+                Category = "Số dư đầu kỳ",
+                BookType = AccountingBookType.S2e_CashAndBank,
+                BookCode = "S2e-HKD",
+                IsSummaryRow = true
+            });
+
+            var cashTransactions = cashEntries
+                .Where(c => c.AccountType == FinanceAccountType.Till || c.AccountType == FinanceAccountType.Safe || c.AccountType != FinanceAccountType.Bank)
+                .ToList();
+
+            decimal runningCash = openingCash;
+            foreach (var c in cashTransactions)
             {
-                // Fallback sang ExpenseVouchers nếu chưa có CashbookEntries trong kỳ
-                result.AddRange(vouchers.Select(v => new AccountingBookEntryDto
+                var isReceipt = c.EntryType == CashbookEntryType.Receipt;
+                var inAmt = isReceipt ? c.Amount : 0m;
+                var outAmt = isReceipt ? 0m : c.Amount;
+                runningCash += (inAmt - outAmt);
+
+                var accName = c.AccountType switch
                 {
-                    VoucherNumber = v.VoucherCode ?? string.Empty,
-                    VoucherDate = v.ExpenseDate,
-                    Description = $"Chi tiền: {(!string.IsNullOrEmpty(v.Note) ? v.Note : $"{v.Category} - {v.BeneficiaryName}")}",
-                    Amount = v.Amount,
-                    Category = v.Category ?? string.Empty,
+                    FinanceAccountType.Till => "Két quầy",
+                    FinanceAccountType.Safe => "Két sắt",
+                    _ => "Quỹ tiền mặt"
+                };
+
+                result.Add(new AccountingBookEntryDto
+                {
+                    VoucherNumber = c.EntryCode,
+                    VoucherDate = c.OccurredAtUtc,
+                    Description = isReceipt ? $"[Thu tiền {accName}] {c.Description}" : $"[Chi tiền {accName}] {c.Description}",
+                    Amount = c.Amount,
+                    InAmount = inAmt,
+                    OutAmount = outAmt,
+                    BalanceAmount = runningCash,
+                    SectionGroup = "Khối I - Quỹ Tiền mặt",
+                    Category = isReceipt ? $"Thu quỹ ({accName})" : $"Chi quỹ ({accName})",
                     BookType = AccountingBookType.S2e_CashAndBank,
                     BookCode = "S2e-HKD",
-                    BeneficiaryName = v.BeneficiaryName,
-                    InvoiceNumber = v.InvoiceNumber
-                }));
+                    BeneficiaryName = accName,
+                    InvoiceNumber = c.ReferenceCode
+                });
+            }
+
+            // Fallback chi tiền mặt từ ExpenseVouchers nếu CashbookEntries trống hoàn toàn
+            if (cashEntries.Count == 0)
+            {
+                var cashVouchers = vouchers.Where(v => v.PaymentSourceType != FinanceAccountType.Bank).ToList();
+                foreach (var v in cashVouchers)
+                {
+                    runningCash -= v.Amount;
+                    result.Add(new AccountingBookEntryDto
+                    {
+                        VoucherNumber = v.VoucherCode ?? string.Empty,
+                        VoucherDate = v.ExpenseDate,
+                        Description = $"[Chi tiền mặt] {(!string.IsNullOrEmpty(v.Note) ? v.Note : $"{v.Category} - {v.BeneficiaryName}")}",
+                        Amount = v.Amount,
+                        InAmount = 0m,
+                        OutAmount = v.Amount,
+                        BalanceAmount = runningCash,
+                        SectionGroup = "Khối I - Quỹ Tiền mặt",
+                        Category = "Chi tiền mặt",
+                        BookType = AccountingBookType.S2e_CashAndBank,
+                        BookCode = "S2e-HKD",
+                        BeneficiaryName = v.BeneficiaryName,
+                        InvoiceNumber = v.InvoiceNumber
+                    });
+                }
+            }
+
+            // Khối II: Tiền gửi Ngân hàng
+            result.Add(new AccountingBookEntryDto
+            {
+                VoucherNumber = "DK-BANK",
+                VoucherDate = fromDateUtc,
+                Description = "Số dư đầu kỳ",
+                Amount = openingBank,
+                BalanceAmount = openingBank,
+                SectionGroup = "Khối II - Tiền gửi Ngân hàng",
+                Category = "Số dư đầu kỳ",
+                BookType = AccountingBookType.S2e_CashAndBank,
+                BookCode = "S2e-HKD",
+                IsSummaryRow = true
+            });
+
+            var bankTransactions = cashEntries
+                .Where(c => c.AccountType == FinanceAccountType.Bank)
+                .ToList();
+
+            decimal runningBank = openingBank;
+            foreach (var c in bankTransactions)
+            {
+                var isReceipt = c.EntryType == CashbookEntryType.Receipt;
+                var inAmt = isReceipt ? c.Amount : 0m;
+                var outAmt = isReceipt ? 0m : c.Amount;
+                runningBank += (inAmt - outAmt);
+
+                result.Add(new AccountingBookEntryDto
+                {
+                    VoucherNumber = c.EntryCode,
+                    VoucherDate = c.OccurredAtUtc,
+                    Description = isReceipt ? $"[Gửi vào NH] {c.Description}" : $"[Rút ra NH] {c.Description}",
+                    Amount = c.Amount,
+                    InAmount = inAmt,
+                    OutAmount = outAmt,
+                    BalanceAmount = runningBank,
+                    SectionGroup = "Khối II - Tiền gửi Ngân hàng",
+                    Category = isReceipt ? "Tiền gửi vào ngân hàng" : "Tiền rút từ ngân hàng",
+                    BookType = AccountingBookType.S2e_CashAndBank,
+                    BookCode = "S2e-HKD",
+                    BeneficiaryName = "Ngân hàng",
+                    InvoiceNumber = c.ReferenceCode
+                });
+            }
+
+            // Fallback chi ngân hàng từ ExpenseVouchers nếu CashbookEntries trống hoàn toàn
+            if (cashEntries.Count == 0)
+            {
+                var bankVouchers = vouchers.Where(v => v.PaymentSourceType == FinanceAccountType.Bank).ToList();
+                foreach (var v in bankVouchers)
+                {
+                    runningBank -= v.Amount;
+                    result.Add(new AccountingBookEntryDto
+                    {
+                        VoucherNumber = v.VoucherCode ?? string.Empty,
+                        VoucherDate = v.ExpenseDate,
+                        Description = $"[Chi tiền gửi NH] {(!string.IsNullOrEmpty(v.Note) ? v.Note : $"{v.Category} - {v.BeneficiaryName}")}",
+                        Amount = v.Amount,
+                        InAmount = 0m,
+                        OutAmount = v.Amount,
+                        BalanceAmount = runningBank,
+                        SectionGroup = "Khối II - Tiền gửi Ngân hàng",
+                        Category = "Chi tiền gửi ngân hàng",
+                        BookType = AccountingBookType.S2e_CashAndBank,
+                        BookCode = "S2e-HKD",
+                        BeneficiaryName = v.BeneficiaryName,
+                        InvoiceNumber = v.InvoiceNumber
+                    });
+                }
             }
         }
 
         // S3a-HKD: Sổ theo dõi tình hình thực hiện nghĩa vụ thuế với NSNN
-        if (bookType == AccountingBookType.S3a_TaxObligation)
+        if ((!bookType.HasValue && (method == TaxCalculationMethod.DeclarationBased || group == HouseholdTaxGroup.Group4_Over50B)) || bookType == AccountingBookType.S3a_TaxObligation)
         {
-            // 1. Nghĩa vụ thuế phát sinh từ các kỳ đã chốt thuế (Snapshots)
+            // 1. Số dư đầu kỳ thuế phải nộp trước fromDateUtc
+            var priorSnapshotQuery = _context.HouseholdTaxSnapshots.AsQueryable();
+            if (branchId.HasValue)
+            {
+                priorSnapshotQuery = priorSnapshotQuery.Where(s => s.BranchId == branchId.Value);
+            }
+            var priorTaxAccrued = await priorSnapshotQuery
+                .Where(s => s.CreatedAt < fromDateUtc)
+                .SumAsync(s => (decimal?)s.TotalTaxAmount, cancellationToken) ?? 0m;
+
+            var priorVoucherQuery = _context.ExpenseVouchers.AsQueryable();
+            if (branchId.HasValue)
+            {
+                priorVoucherQuery = priorVoucherQuery.Where(v => v.BranchId == branchId.Value);
+            }
+            var priorTaxPaid = await priorVoucherQuery
+                .Where(v => v.ExpenseDate < fromDateUtc && (v.Status == ExpenseVoucherStatus.Paid || v.Status == ExpenseVoucherStatus.Approved))
+                .Where(v => v.Category.ToLower().Contains("thuế") || v.Category.ToLower().Contains("tax") || v.Category.ToLower().Contains("nsnn") || v.Category.ToLower().Contains("kho bạc"))
+                .SumAsync(v => (decimal?)v.Amount, cancellationToken) ?? 0m;
+
+            var openingTaxDue = priorTaxAccrued - priorTaxPaid;
+
+            if (bookType == AccountingBookType.S3a_TaxObligation || openingTaxDue != 0)
+            {
+                result.Add(new AccountingBookEntryDto
+                {
+                    VoucherNumber = "DK-TAX",
+                    VoucherDate = fromDateUtc,
+                    Description = "Số dư nghĩa vụ thuế đầu kỳ",
+                    Amount = openingTaxDue,
+                    BalanceAmount = openingTaxDue,
+                    SectionGroup = "Nghĩa vụ thuế đầu kỳ",
+                    Category = "Số dư đầu kỳ",
+                    BookType = AccountingBookType.S3a_TaxObligation,
+                    BookCode = "S3a-HKD",
+                    IsSummaryRow = true
+                });
+            }
+
+            decimal runningTaxDue = openingTaxDue;
+
+            // 2. Nghĩa vụ thuế phát sinh từ các kỳ đã chốt thuế trong kỳ (Snapshots)
             var snapshotQuery = _context.HouseholdTaxSnapshots.AsQueryable();
             if (branchId.HasValue)
             {
@@ -455,40 +704,172 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             snapshotQuery = snapshotQuery.Where(s => s.CreatedAt >= fromDateUtc && s.CreatedAt <= toDateUtc);
             var snapshots = await snapshotQuery.OrderBy(s => s.CreatedAt).ToListAsync(cancellationToken);
 
-            result.AddRange(snapshots.Select(s => new AccountingBookEntryDto
+            foreach (var s in snapshots)
             {
-                VoucherNumber = $"TAX-SNP-{s.Year}-Q{s.PeriodNumber}",
-                VoucherDate = s.CreatedAt,
-                Description = $"[Nghĩa vụ thuế] Chốt thuế Q{s.PeriodNumber}/{s.Year} (GTGT: {s.VatAmount:N0} đ, TNCN: {s.PitAmount:N0} đ)",
-                Amount = s.TotalTaxAmount,
-                Category = "Nghĩa vụ thuế phát sinh",
-                BookType = AccountingBookType.S3a_TaxObligation,
-                BookCode = "S3a-HKD",
-                BeneficiaryName = "Ngân sách Nhà nước"
-            }));
+                // Thuế GTGT phát sinh
+                if (s.VatAmount > 0)
+                {
+                    runningTaxDue += s.VatAmount;
+                    result.Add(new AccountingBookEntryDto
+                    {
+                        VoucherNumber = $"TAX-VAT-{s.Year}-Q{s.PeriodNumber}",
+                        VoucherDate = s.CreatedAt,
+                        Description = $"[Nghĩa vụ thuế] Thuế GTGT phát sinh Q{s.PeriodNumber}/{s.Year}",
+                        Amount = s.VatAmount,
+                        InAmount = s.VatAmount,
+                        OutAmount = 0m,
+                        BalanceAmount = runningTaxDue,
+                        TaxAmount = s.VatAmount,
+                        SectionGroup = "1. Thuế Giá trị gia tăng (GTGT)",
+                        Category = "Thuế GTGT phải nộp",
+                        BookType = AccountingBookType.S3a_TaxObligation,
+                        BookCode = "S3a-HKD",
+                        BeneficiaryName = "Ngân sách Nhà nước"
+                    });
+                }
 
-            // 2. Chứng từ chi nộp thuế
+                // Thuế TNCN phát sinh
+                if (s.PitAmount > 0)
+                {
+                    runningTaxDue += s.PitAmount;
+                    result.Add(new AccountingBookEntryDto
+                    {
+                        VoucherNumber = $"TAX-PIT-{s.Year}-Q{s.PeriodNumber}",
+                        VoucherDate = s.CreatedAt,
+                        Description = $"[Nghĩa vụ thuế] Thuế TNCN phát sinh Q{s.PeriodNumber}/{s.Year}",
+                        Amount = s.PitAmount,
+                        InAmount = s.PitAmount,
+                        OutAmount = 0m,
+                        BalanceAmount = runningTaxDue,
+                        TaxAmount = s.PitAmount,
+                        SectionGroup = "2. Thuế Thu nhập cá nhân (TNCN)",
+                        Category = "Thuế TNCN phải nộp",
+                        BookType = AccountingBookType.S3a_TaxObligation,
+                        BookCode = "S3a-HKD",
+                        BeneficiaryName = "Ngân sách Nhà nước"
+                    });
+                }
+
+                // Fallback nếu cả 2 = 0 nhưng TotalTaxAmount > 0
+                if (s.VatAmount == 0 && s.PitAmount == 0 && s.TotalTaxAmount > 0)
+                {
+                    runningTaxDue += s.TotalTaxAmount;
+                    result.Add(new AccountingBookEntryDto
+                    {
+                        VoucherNumber = $"TAX-SNP-{s.Year}-Q{s.PeriodNumber}",
+                        VoucherDate = s.CreatedAt,
+                        Description = $"[Nghĩa vụ thuế] Chốt thuế Q{s.PeriodNumber}/{s.Year}",
+                        Amount = s.TotalTaxAmount,
+                        InAmount = s.TotalTaxAmount,
+                        OutAmount = 0m,
+                        BalanceAmount = runningTaxDue,
+                        TaxAmount = s.TotalTaxAmount,
+                        SectionGroup = "1. Thuế Giá trị gia tăng (GTGT)",
+                        Category = "Nghĩa vụ thuế phát sinh",
+                        BookType = AccountingBookType.S3a_TaxObligation,
+                        BookCode = "S3a-HKD",
+                        BeneficiaryName = "Ngân sách Nhà nước"
+                    });
+                }
+            }
+
+            // 3. Chứng từ chi nộp thuế vào NSNN
             var taxVouchers = vouchers.Where(v =>
             {
                 var cat = (v.Category ?? string.Empty).ToUpperInvariant();
-                return cat.Contains("THUẾ") || cat.Contains("TAX") || cat.Contains("NSNN") || cat.Contains("KHO BẠC");
-            });
+                var note = (v.Note ?? string.Empty).ToUpperInvariant();
+                return cat.Contains("THUẾ") || cat.Contains("TAX") || cat.Contains("NSNN") || cat.Contains("KHO BẠC") ||
+                       cat.Contains("MÔN BÀI") || cat.Contains("LỆ PHÍ") ||
+                       note.Contains("THUẾ") || note.Contains("TAX") || note.Contains("NSNN") || note.Contains("KHO BẠC") ||
+                       note.Contains("MÔN BÀI") || note.Contains("LỆ PHÍ");
+            }).ToList();
 
-            result.AddRange(taxVouchers.Select(v => new AccountingBookEntryDto
+            foreach (var v in taxVouchers)
             {
-                VoucherNumber = v.VoucherCode ?? string.Empty,
-                VoucherDate = v.ExpenseDate,
-                Description = !string.IsNullOrEmpty(v.Note) ? v.Note : $"[Nộp thuế] {v.Category} - {v.BeneficiaryName}",
-                Amount = v.Amount,
-                Category = "Đã nộp thuế NSNN",
-                BookType = AccountingBookType.S3a_TaxObligation,
-                BookCode = "S3a-HKD",
-                BeneficiaryName = v.BeneficiaryName,
-                InvoiceNumber = v.InvoiceNumber
-            }));
+                runningTaxDue -= v.Amount;
+                var text = $"{v.Category} {v.Note}".ToLowerInvariant();
+                string sectionGroup = text.Contains("tncn") || text.Contains("pit") || text.Contains("thu nhập cá nhân")
+                    ? "2. Thuế Thu nhập cá nhân (TNCN)"
+                    : (text.Contains("gtgt") || text.Contains("vat")
+                        ? "1. Thuế Giá trị gia tăng (GTGT)"
+                        : "3. Các loại thuế, phí, lệ phí khác");
+
+                result.Add(new AccountingBookEntryDto
+                {
+                    VoucherNumber = v.VoucherCode ?? string.Empty,
+                    VoucherDate = v.ExpenseDate,
+                    Description = !string.IsNullOrEmpty(v.Note) ? v.Note : $"[Nộp thuế] {v.Category} - {v.BeneficiaryName}",
+                    Amount = v.Amount,
+                    InAmount = 0m,
+                    OutAmount = v.Amount,
+                    BalanceAmount = runningTaxDue,
+                    SectionGroup = sectionGroup,
+                    Category = "Đã nộp thuế NSNN",
+                    BookType = AccountingBookType.S3a_TaxObligation,
+                    BookCode = "S3a-HKD",
+                    BeneficiaryName = v.BeneficiaryName,
+                    InvoiceNumber = v.InvoiceNumber
+                });
+            }
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Phân loại chi phí hợp lý vào 6 nhóm theo chuẩn S2c-HKD Thông tư 152/2025/TT-BTC.
+    /// </summary>
+    private static string ClassifyS2cExpenseGroup(string? category, string? note)
+    {
+        var text = $"{category} {note}".ToLowerInvariant();
+
+        // 2.a) Chi phí nguyên liệu, vật liệu, nhiên liệu, hàng hóa
+        if (text.Contains("nguyên liệu") || text.Contains("vật liệu") || text.Contains("nhiên liệu") ||
+            text.Contains("hàng hóa") || text.Contains("bao bì") || text.Contains("vật tư") ||
+            text.Contains("packaging") || text.Contains("material") || text.Contains("xăng") ||
+            text.Contains("dầu") || text.Contains("cogs") || text.Contains("giá vốn"))
+        {
+            return "2.a) Chi phí nguyên liệu, vật liệu, nhiên liệu, hàng hóa";
+        }
+
+        // 2.b) Chi phí tiền lương, tiền công, thù lao
+        if (text.Contains("lương") || text.Contains("salary") || text.Contains("wage") ||
+            text.Contains("thù lao") || text.Contains("tiền công") || text.Contains("thưởng") ||
+            text.Contains("bonus") || text.Contains("phụ cấp") || text.Contains("nhân viên") ||
+            text.Contains("nhân sự"))
+        {
+            return "2.b) Chi phí tiền lương, tiền công, thù lao";
+        }
+
+        // 2.c) Chi phí thuê mặt bằng, kho bãi, máy móc
+        if (text.Contains("mặt bằng") || text.Contains("kho bãi") || text.Contains("thuê kho") ||
+            text.Contains("thuê nhà") || text.Contains("tiền thuê") || text.Contains("rent") ||
+            text.Contains("premise") || text.Contains("máy móc") || text.Contains("thiết bị thuê"))
+        {
+            return "2.c) Chi phí thuê mặt bằng, kho bãi, máy móc";
+        }
+
+        // 2.d) Chi phí dịch vụ mua ngoài
+        if (text.Contains("điện") || text.Contains("nước") || text.Contains("internet") ||
+            text.Contains("viễn thông") || text.Contains("dịch vụ") || text.Contains("mua ngoài") ||
+            text.Contains("vệ sinh") || text.Contains("rác") || text.Contains("sửa chữa") ||
+            text.Contains("bảo trì") || text.Contains("vận chuyển") || text.Contains("giao hàng") ||
+            text.Contains("ship") || text.Contains("quảng cáo") || text.Contains("marketing") ||
+            text.Contains("utility"))
+        {
+            return "2.d) Chi phí dịch vụ mua ngoài";
+        }
+
+        // 2.e) Thuế, phí, lệ phí được trừ
+        if (text.Contains("thuế") || text.Contains("phí") || text.Contains("lệ phí") ||
+            text.Contains("tax") || text.Contains("fee") || text.Contains("môn bài") ||
+            text.Contains("công chứng") || text.Contains("hải quan"))
+        {
+            return "2.e) Thuế, phí, lệ phí được trừ";
+        }
+
+        // 2.đ) Chi phí khác liên quan kinh doanh (mặc định)
+        return "2.đ) Chi phí khác liên quan kinh doanh";
     }
 
     public async Task<HouseholdTaxSnapshot?> GetSnapshotAsync(

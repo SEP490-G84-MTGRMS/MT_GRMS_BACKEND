@@ -866,6 +866,16 @@ public class PurchaseOrderMatrixTests
         public List<PurchaseOrder> PurchaseOrders { get; } = new();
         private int _poCounter = 0;
 
+        public Task<IReadOnlyDictionary<Guid, (Guid ReceiptId, string Code, string Status)>> GetActiveGoodsReceiptsByPoIdsAsync(
+            IReadOnlyCollection<Guid> purchaseOrderIds,
+            CancellationToken cancellationToken = default)
+        {
+            IReadOnlyDictionary<Guid, (Guid ReceiptId, string Code, string Status)> res =
+                new Dictionary<Guid, (Guid, string, string)>();
+            return Task.FromResult(res);
+        }
+
+
         public Task<Branch?> GetBranchByIdAsync(Guid branchId, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(Branches.FirstOrDefault(b => b.Id == branchId));

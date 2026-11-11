@@ -79,7 +79,7 @@ public static class CatalogSeedData
                     continue;
                 }
 
-                productsToAdd.Add(new Product
+                var product = new Product
                 {
                     TenantId = tenantId,
                     CategoryId = category.Id,
@@ -96,7 +96,19 @@ public static class CatalogSeedData
                     Status = ProductStatus.Active,
                     HasBatches = prodTpl.HasBatches,
                     IsFavorite = prodTpl.IsFavorite
+                };
+                product.Units.Add(new ProductUnit(
+                    product.Id,
+                    product.BaseUnit,
+                    1.00m,
+                    product.SellingPrice,
+                    null,
+                    isBaseUnit: true,
+                    isPurchaseUnit: true)
+                {
+                    TenantId = tenantId
                 });
+                productsToAdd.Add(product);
                 existingBarcodes.Add(prodTpl.Barcode);
             }
 
@@ -105,6 +117,46 @@ public static class CatalogSeedData
                 await context.Products.AddRangeAsync(productsToAdd);
                 await context.SaveChangesAsync();
             }
+        }
+
+        // Backfill đơn vị tính cơ bản (IsBaseUnit = true, IsPurchaseUnit = true) cho các sản phẩm đã tồn tại nhưng chưa có ProductUnit
+        var allTenantProducts = await context.Products
+            .IgnoreQueryFilters()
+            .Where(p => p.TenantId == tenantId && !p.IsDeleted)
+            .Select(p => new { p.Id, p.BaseUnit, p.SellingPrice })
+            .ToListAsync();
+
+        var existingUnitProductIds = await context.ProductUnits
+            .IgnoreQueryFilters()
+            .Where(u => !u.IsDeleted && u.IsBaseUnit)
+            .Select(u => u.ProductId)
+            .Distinct()
+            .ToListAsync();
+
+        var existingSet = existingUnitProductIds.ToHashSet();
+        var missingBaseUnits = new List<ProductUnit>();
+        foreach (var p in allTenantProducts)
+        {
+            if (!existingSet.Contains(p.Id))
+            {
+                missingBaseUnits.Add(new ProductUnit(
+                    p.Id,
+                    string.IsNullOrWhiteSpace(p.BaseUnit) ? "Cái" : p.BaseUnit,
+                    1.00m,
+                    p.SellingPrice,
+                    null,
+                    isBaseUnit: true,
+                    isPurchaseUnit: true)
+                {
+                    TenantId = tenantId
+                });
+            }
+        }
+
+        if (missingBaseUnits.Any())
+        {
+            await context.ProductUnits.AddRangeAsync(missingBaseUnits);
+            await context.SaveChangesAsync();
         }
     }
 

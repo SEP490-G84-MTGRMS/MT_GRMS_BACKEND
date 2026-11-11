@@ -49,7 +49,6 @@ public static class DependencyInjection
         services.AddScoped<GoodsReceipts.IGoodsReceiptService, GoodsReceipts.GoodsReceiptService>();
         services.AddScoped<SupplierReturns.ISupplierReturnService, SupplierReturns.SupplierReturnService>();
         services.AddScoped<Stocktakes.IStocktakeService, Stocktakes.StocktakeService>();
-        services.AddScoped<AiPipeline.IAiRecommendationService, AiPipeline.AiRecommendationService>();
         services.AddScoped<Promotions.IPromotionService, Promotions.PromotionService>();
         services.AddScoped<Promotions.ILoyaltyService, Promotions.LoyaltyService>();
         services.AddScoped<IEmployeeService, EmployeeService>();

@@ -265,6 +265,15 @@ public class UserAuthenticationTests
     {
         // GIVEN
         var repo = new FakeUserRepository();
+        await repo.AddAsync(new User
+        {
+            Id = "usr_01",
+            Username = "user01",
+            Password = "123",
+            IsAdmin = true,
+            RefreshToken = "mt_refresh_token_sample",
+            RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7)
+        });
         var authService = new AuthService(repo);
 
         // WHEN
@@ -274,7 +283,7 @@ public class UserAuthenticationTests
         Assert.NotNull(response);
         Assert.True(response.AccessToken.StartsWith("mt_jwt_") || response.AccessToken.StartsWith("eyJ"));
         Assert.StartsWith("mt_refresh_", response.RefreshToken);
-        Assert.Equal("refreshed_user", response.User.Username);
+        Assert.Equal("user01", response.User.Username);
         Assert.Equal("ADMIN", response.User.Role);
         Assert.True(response.User.IsAdmin);
     }

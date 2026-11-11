@@ -11,7 +11,8 @@ public record VoucherBatchCreateRequest(
     DateTime StartDate,
     DateTime EndDate,
     string Prefix,
-    string? Description = null
+    string? Description = null,
+    bool? AllowWithPromotions = true
 );
 
 public record VoucherBatchResponse(
@@ -29,7 +30,8 @@ public record VoucherBatchResponse(
     string Status, // ACTIVE, EXPIRED, PAUSED, DEPLETED
     string Prefix,
     string? Description,
-    DateTime CreatedAt
+    DateTime CreatedAt,
+    bool AllowWithPromotions = true
 );
 
 public record GenerateVoucherCodesRequest(
@@ -54,8 +56,15 @@ public record VoucherCodeDto(
 public record ValidateVoucherRequest(
     string Code,
     decimal CartTotal,
-    Guid? CustomerId = null
-);
+    string? CustomerId = null,
+    bool HasOtherPromotions = false
+)
+{
+    public ValidateVoucherRequest(string code, decimal cartTotal, Guid? customerId, bool hasOtherPromotions = false)
+        : this(code, cartTotal, customerId?.ToString(), hasOtherPromotions)
+    {
+    }
+}
 
 public record ValidateVoucherResponse(
     bool IsValid,
@@ -65,7 +74,8 @@ public record ValidateVoucherResponse(
     Guid? PromotionId = null,
     string? PromotionName = null,
     string? DiscountType = null,
-    decimal? DiscountValue = null
+    decimal? DiscountValue = null,
+    bool AllowWithPromotions = true
 );
 
 public record RedeemVoucherRequest(

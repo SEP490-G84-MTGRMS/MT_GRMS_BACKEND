@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PurchaseOrders;
@@ -8,6 +9,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/purchase-orders")]
+[Authorize]
 public class PurchaseOrdersController : BaseApiController
 {
     private readonly IPurchaseOrderService _poService;
@@ -127,17 +129,21 @@ public class PurchaseOrdersController : BaseApiController
     }
 
     /// <summary>
-    /// Cập nhật trạng thái đơn PO (APPROVED, REJECTED, DISPATCHED, CANCELLED)
+    /// Cập nhật trạng thái đơn PO (APPROVED, REJECTED, DISPATCHED, CONFIRMED, CANCELLED)
     /// </summary>
     [HttpPatch("{id:guid}/status")]
     public async Task<IActionResult> UpdateStatus(
         Guid id,
-        [FromQuery] string status,
+        [FromQuery] string? status,
         [FromQuery] string? reason,
+        [FromBody] UpdatePurchaseOrderStatusRequest? body,
         CancellationToken cancellationToken)
     {
-        var result = await _poService.UpdatePurchaseOrderStatusAsync(id, status, reason, cancellationToken);
-        return Ok(ApiResponse<PurchaseOrderDto>.Ok(result, $"Cập nhật trạng thái đơn PO sang {status} thành công."));
+        var effectiveStatus = !string.IsNullOrWhiteSpace(status) ? status : (body?.Status ?? string.Empty);
+        var effectiveReason = !string.IsNullOrWhiteSpace(reason) ? reason : body?.Reason;
+
+        var result = await _poService.UpdatePurchaseOrderStatusAsync(id, effectiveStatus, effectiveReason, cancellationToken);
+        return Ok(ApiResponse<PurchaseOrderDto>.Ok(result, $"Cập nhật trạng thái đơn PO sang {effectiveStatus} thành công."));
     }
 
     [HttpGet("dispatch-packages")]
@@ -189,3 +195,4 @@ public class PurchaseOrdersController : BaseApiController
         return Ok(ApiResponse<SupplierDispatchPackageDto?>.Ok(result, "Đã hủy lịch gửi email."));
     }
 }
+

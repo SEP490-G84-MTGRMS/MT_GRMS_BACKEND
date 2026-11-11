@@ -303,6 +303,15 @@ public class GoodsReceiptTests
         Assert.NotNull(stock);
         Assert.Equal(100, stock.QuantityOnHand);
 
+        // Kiểm tra lô hàng FEFO (Batch) đã được sinh tự động
+        Assert.Single(_repo.Batches);
+        Assert.Equal("LOT-100", _repo.Batches[0].BatchCode);
+        Assert.Equal(100, _repo.Batches[0].InitialQuantity);
+
+        // Kiểm tra công nợ nhà cung cấp (SupplierAPLedger) đã được sinh
+        Assert.Single(_repo.Ledgers);
+        Assert.Equal(2500000, _repo.Ledgers[0].Amount);
+
         // Kiểm tra đơn PO gốc đã chuyển sang COMPLETED
         var po = _repo.PurchaseOrders.First(p => p.Id == _poId);
         Assert.Equal("COMPLETED", po.Status);
@@ -409,6 +418,8 @@ public class FakeGoodsReceiptRepository : IGoodsReceiptRepository
     public List<GoodsReceipt> Receipts { get; } = new();
     public List<PurchaseOrder> PurchaseOrders { get; } = new();
     public List<BranchStock> Stocks { get; } = new();
+    public List<Batch> Batches { get; } = new();
+    public List<SupplierAPLedger> Ledgers { get; } = new();
 
     public Task<PagedResult<GoodsReceiptDto>> GetPagedAsync(string tenantId, GoodsReceiptFilterQuery query, CancellationToken cancellationToken = default)
     {
@@ -464,6 +475,11 @@ public class FakeGoodsReceiptRepository : IGoodsReceiptRepository
         return Task.FromResult(PurchaseOrders.FirstOrDefault(p => p.Id == poId));
     }
 
+    public Task<PurchaseOrder?> GetPurchaseOrderByCodeWithDetailsAsync(string tenantId, string poCode, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(PurchaseOrders.FirstOrDefault(p => string.Equals(p.Code, poCode, StringComparison.OrdinalIgnoreCase)));
+    }
+
     public Task<GoodsReceipt?> GetActiveReceiptByPoIdAsync(string tenantId, Guid poId, CancellationToken cancellationToken = default)
     {
         return Task.FromResult(Receipts.FirstOrDefault(r => r.PurchaseOrderId == poId && (r.Status == "DRAFT" || r.Status == "COMPLETED")));
@@ -477,6 +493,49 @@ public class FakeGoodsReceiptRepository : IGoodsReceiptRepository
     public Task AddBranchStockAsync(BranchStock stock, CancellationToken cancellationToken = default)
     {
         Stocks.Add(stock);
+        return Task.CompletedTask;
+    }
+
+    public Task AddBatchAsync(Batch batch, CancellationToken cancellationToken = default)
+    {
+        Batches.Add(batch);
+        return Task.CompletedTask;
+    }
+
+    public Task<Product?> GetProductByIdAsync(string tenantId, Guid productId, CancellationToken cancellationToken = default)
+    {
+        var prod = PurchaseOrders.SelectMany(p => p.Details).Select(d => d.Product).FirstOrDefault(p => p != null && p.Id == productId);
+        return Task.FromResult(prod);
+    }
+
+    public Task<decimal> GetTotalProductStockAsync(string tenantId, Guid productId, CancellationToken cancellationToken = default)
+    {
+        var sum = Stocks.Where(s => s.TenantId == tenantId && s.ProductId == productId).Sum(s => s.QuantityOnHand);
+        return Task.FromResult(sum);
+    }
+
+    public Task<Supplier?> GetSupplierByIdAsync(string tenantId, Guid supplierId, CancellationToken cancellationToken = default)
+    {
+        var sup = PurchaseOrders.Select(p => p.Supplier).FirstOrDefault(s => s != null && s.Id == supplierId);
+        return Task.FromResult(sup);
+    }
+
+    
+    public Task<IReadOnlyDictionary<Guid, Product>> GetProductsByIdsAsync(
+        IReadOnlyCollection<Guid> productIds,
+        CancellationToken cancellationToken = default)
+    {
+        var dict = (IReadOnlyDictionary<Guid, Product>)PurchaseOrders
+            .SelectMany(p => p.Details)
+            .Select(d => d.Product)
+            .Where(p => p != null && productIds.Contains(p.Id))
+            .DistinctBy(p => p!.Id)
+            .ToDictionary(p => p!.Id, p => p!);
+        return Task.FromResult(dict);
+    }
+    public Task AddSupplierLedgerAsync(SupplierAPLedger ledger, CancellationToken cancellationToken = default)
+    {
+        Ledgers.Add(ledger);
         return Task.CompletedTask;
     }
 }

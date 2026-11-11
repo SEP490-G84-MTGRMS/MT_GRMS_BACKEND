@@ -16,6 +16,30 @@ public record PnLPeriod(
     DateTime ToDate
 );
 
+public record CogsValuationComparisonDto(
+    decimal WeightedAverageCogs,
+    decimal FefoSpecificCogs,
+    decimal CogsVariance,
+    decimal WeightedAverageGrossProfit,
+    decimal FefoSpecificGrossProfit,
+    decimal WeightedAverageGrossMarginPct,
+    decimal FefoSpecificGrossMarginPct,
+    decimal WeightedAverageNetProfit,
+    decimal FefoSpecificNetProfit,
+    string AppliedTaxMethod = "WEIGHTED_AVERAGE_TT152"
+);
+
+public record TopProductPnLDto(
+    Guid ProductId,
+    string ProductCode,
+    string ProductName,
+    decimal QuantitySold,
+    decimal Revenue,
+    decimal Cogs,
+    decimal Profit,
+    decimal MarginPct
+);
+
 public record PnLSummaryResponse(
     PnLPeriod Period,
     Guid? BranchId,
@@ -33,7 +57,11 @@ public record PnLSummaryResponse(
     decimal NetMarginPercentage,
     string CogsSource = "ACTUAL",
     decimal CogsEstimatedPercentage = 0m,
-    string? CogsWarningNotice = null
+    string? CogsWarningNotice = null,
+    int TotalOrders = 0,
+    decimal AverageOrderValue = 0m,
+    CogsValuationComparisonDto? CogsComparison = null,
+    List<TopProductPnLDto>? TopProducts = null
 );
 
 public record PnLComparisonResponse(

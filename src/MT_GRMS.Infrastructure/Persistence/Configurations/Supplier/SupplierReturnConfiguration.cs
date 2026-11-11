@@ -27,10 +27,10 @@ public class SupplierReturnConfiguration : IEntityTypeConfiguration<SupplierRetu
         builder.Property(x => x.ResolutionType).HasMaxLength(50).HasDefaultValue("REDUCE_PAYABLE");
         builder.Property(x => x.SettlementStatus).HasMaxLength(50).HasDefaultValue("UNSETTLED");
 
-        builder.Property(x => x.TotalRequestedQty).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);
-        builder.Property(x => x.TotalApprovedQty).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);
-        builder.Property(x => x.TotalHandedOverQty).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);
-        builder.Property(x => x.TotalEstimatedAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
+        builder.Property(x => x.TotalRequestedQty).HasColumnType("decimal(18,3)").IsRequired();
+        builder.Property(x => x.TotalApprovedQty).HasColumnType("decimal(18,3)").IsRequired();
+        builder.Property(x => x.TotalHandedOverQty).HasColumnType("decimal(18,3)").IsRequired();
+        builder.Property(x => x.TotalEstimatedAmount).HasColumnType("decimal(18,2)").IsRequired();
 
         builder.Property(x => x.HandedOverBy).HasMaxLength(100);
 
