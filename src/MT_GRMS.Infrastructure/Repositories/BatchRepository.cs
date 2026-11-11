@@ -452,7 +452,10 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
         var qty = bs.QuantityOnHand;
         var reservedQty = bs.QuantityReserved;
         var quarantinedQty = bs.QuantityQuarantined;
-        var availableQty = Math.Max(0, qty - reservedQty - quarantinedQty);
+        // RULE-01: hết hạn không còn khả dụng bán
+        var availableQty = (hasBatches && bs.ExpiryDate.HasValue && bs.ExpiryDate.Value.Date < now)
+            ? 0m
+            : Math.Max(0, qty - reservedQty - quarantinedQty);
         var initialQty = initialQtyOverride.HasValue && initialQtyOverride.Value > 0 ? initialQtyOverride.Value : qty;
         var costPrice = bs.LandedCostPerUnit > 0 ? bs.LandedCostPerUnit : (product?.CostPrice ?? 0);
         var totalValuation = qty * costPrice;

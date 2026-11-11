@@ -59,10 +59,13 @@ public record InventoryStockItemDto(
     decimal PendingReturnQty,
     decimal ExpiredQty,
     decimal DamagedQty,
+    decimal QuarantinedQty,
+    decimal ReservedQty,
     decimal MinStock,
     decimal AvgCost,
     decimal TotalValue,
     string Status, // OK, LOW_STOCK, OUT_OF_STOCK, NEAR_EXPIRY
+    int BatchCount,
     IReadOnlyList<InventoryBatchSummaryDto> Batches
 );
 
