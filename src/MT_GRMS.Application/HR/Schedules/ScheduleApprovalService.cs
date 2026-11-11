@@ -8,6 +8,7 @@ namespace MT_GRMS.Application.HR.Schedules;
 
 public class ScheduleApprovalService : IScheduleApprovalService
 {
+    private static DateTime VnNow => DateTime.UtcNow.AddHours(7);
     private readonly IScheduleApprovalRequestRepository _approvalRepository;
     private readonly IScheduleRepository _scheduleRepository;
     private readonly IEmployeeRepository _employeeRepository;
@@ -81,6 +82,16 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 var targetSchedule = await _scheduleRepository.GetByIdAsync(dto.TargetScheduleId.Value, cancellationToken)
                     ?? throw new KeyNotFoundException("Không tìm thấy ca của đồng nghiệp muốn đổi.");
 
+                if (targetSchedule.EmployeeId != dto.TargetEmployeeId.Value)
+                {
+                    throw new InvalidOperationException("Ca làm việc đổi chéo không thuộc về đồng nghiệp được chọn.");
+                }
+
+                if (targetSchedule.Status == ScheduleStatus.Completed || targetSchedule.Status == ScheduleStatus.Cancelled)
+                {
+                    throw new InvalidOperationException("Ca làm việc của đồng nghiệp đã hoàn thành hoặc đã hủy, không thể đổi chéo.");
+                }
+
                 if (targetSchedule.PayslipId.HasValue)
                 {
                     throw new InvalidOperationException("Ca làm việc của đồng nghiệp đã chốt bảng lương, không thể đổi.");
@@ -90,6 +101,13 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 {
                     throw new InvalidOperationException("Chỉ được đổi ca với đồng nghiệp làm cùng chi nhánh.");
                 }
+            }
+        }
+        else if (dto.RequestType == ScheduleRequestType.Overtime)
+        {
+            if (schedule.Status == ScheduleStatus.Cancelled)
+            {
+                throw new InvalidOperationException("Không thể gửi yêu cầu làm thêm giờ cho ca đã hủy.");
             }
         }
         else if (dto.RequestType == ScheduleRequestType.LeaveRequest)
@@ -102,7 +120,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
         else if (dto.RequestType == ScheduleRequestType.CheckInIncident)
         {
             // Tự động kích hoạt CheckInTime theo giờ UTC+7 để nhân viên đủ điều kiện mở phiên bán hàng POS ngay lập tức
-            var checkIn = dto.RequestedCheckInTime ?? DateTime.UtcNow.AddHours(7);
+            var checkIn = dto.RequestedCheckInTime ?? VnNow;
             if (!schedule.CheckInTime.HasValue)
             {
                 schedule.CheckInTime = checkIn;
@@ -162,7 +180,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
             RequestedCheckOutTime = dto.RequestedCheckOutTime,
             RequestedOvertimeMinutes = dto.RequestedOvertimeMinutes,
             TenantId = schedule.TenantId,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = VnNow
         };
 
         await _approvalRepository.AddAsync(request, cancellationToken);
@@ -234,7 +252,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
         }
 
         request.PeerConfirmed = dto.IsAgreed;
-        request.PeerConfirmedAt = DateTime.UtcNow;
+        request.PeerConfirmedAt = VnNow;
 
         if (!dto.IsAgreed)
         {
@@ -271,7 +289,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
         }
 
         request.ApprovedBy = reviewerUserId;
-        request.ApprovedAt = DateTime.UtcNow;
+        request.ApprovedAt = VnNow;
         request.ReviewNote = dto.ReviewNote;
 
         if (!dto.IsApproved)
@@ -294,14 +312,14 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
                 schedule.ApprovalType = schedule.IsPaidLeave ? "PAID_LEAVE" : "UNPAID_LEAVE";
                 schedule.ApprovedBy = reviewerUserId;
-                schedule.ApprovedAt = DateTime.UtcNow;
+                schedule.ApprovedAt = VnNow;
                 break;
 
             case ScheduleRequestType.ShiftSwap:
                 schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
                 schedule.ApprovalType = "SHIFT_SWAP";
                 schedule.ApprovedBy = reviewerUserId;
-                schedule.ApprovedAt = DateTime.UtcNow;
+                schedule.ApprovedAt = VnNow;
 
                 if (request.SwapType == ShiftSwapType.CrossSwap && request.TargetScheduleId.HasValue)
                 {
@@ -316,7 +334,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
                         targetSchedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
                         targetSchedule.ApprovalType = "SHIFT_SWAP";
                         targetSchedule.ApprovedBy = reviewerUserId;
-                        targetSchedule.ApprovedAt = DateTime.UtcNow;
+                        targetSchedule.ApprovedAt = VnNow;
                         _scheduleRepository.Update(targetSchedule);
                     }
                 }
@@ -343,7 +361,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
                 schedule.ApprovalType = "INCIDENT_RESOLVED";
                 schedule.ApprovedBy = reviewerUserId;
-                schedule.ApprovedAt = DateTime.UtcNow;
+                schedule.ApprovedAt = VnNow;
 
                 if (schedule.CheckInTime.HasValue && schedule.CheckOutTime.HasValue)
                 {
@@ -354,7 +372,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 break;
 
             case ScheduleRequestType.CheckOutIncident:
-                var checkOut = dto.ApprovedCheckOutTime ?? request.RequestedCheckOutTime ?? DateTime.UtcNow;
+                var checkOut = dto.ApprovedCheckOutTime ?? request.RequestedCheckOutTime ?? VnNow;
                 schedule.CheckOutTime = checkOut;
                 schedule.CheckOutMethod = "INCIDENT_EXPLAINED";
                 request.ApprovedCheckOutTime = checkOut;
@@ -375,7 +393,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
                 schedule.ApprovalType = "INCIDENT_RESOLVED";
                 schedule.ApprovedBy = reviewerUserId;
-                schedule.ApprovedAt = DateTime.UtcNow;
+                schedule.ApprovedAt = VnNow;
                 break;
 
             case ScheduleRequestType.Overtime:
@@ -385,7 +403,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
                 schedule.ApprovalType = "OVERTIME";
                 schedule.ApprovedBy = reviewerUserId;
-                schedule.ApprovedAt = DateTime.UtcNow;
+                schedule.ApprovedAt = VnNow;
                 break;
         }
 

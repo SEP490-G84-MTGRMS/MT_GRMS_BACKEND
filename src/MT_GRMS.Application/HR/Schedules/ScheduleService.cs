@@ -45,6 +45,18 @@ public class ScheduleService : IScheduleService
         var employee = await _employeeRepository.GetByIdAsync(request.EmployeeId, cancellationToken)
             ?? throw new NotFoundException($"Nhân viên với ID {request.EmployeeId} không tồn tại.");
 
+        if (employee.Status != EmployeeStatus.Active)
+        {
+            throw new BusinessException("EMPLOYEE_INACTIVE", $"Không thể phân ca cho nhân viên \"{employee.FullName}\" vì đã ngừng làm việc.");
+        }
+
+        if (employee.StartDate.HasValue && request.WorkDate.Date < employee.StartDate.Value.Date)
+        {
+            throw new BusinessException(
+                "WORK_DATE_BEFORE_START_DATE",
+                $"Không thể phân ca cho nhân viên \"{employee.FullName}\" vào ngày {request.WorkDate:dd/MM/yyyy} trước ngày bắt đầu làm việc ({employee.StartDate.Value:dd/MM/yyyy}).");
+        }
+
         ShiftConfig? shiftConfig = null;
         if (request.ShiftConfigId.HasValue)
         {
@@ -128,6 +140,10 @@ public class ScheduleService : IScheduleService
         {
             var emp = await _employeeRepository.GetByIdAsync(empId, cancellationToken)
                 ?? throw new NotFoundException($"Nhân viên với ID {empId} không tồn tại.");
+            if (emp.Status != EmployeeStatus.Active)
+            {
+                throw new BusinessException("EMPLOYEE_INACTIVE", $"Không thể phân ca cho nhân viên \"{emp.FullName}\" vì đã ngừng làm việc.");
+            }
             employees[empId] = emp;
         }
 
@@ -160,6 +176,12 @@ public class ScheduleService : IScheduleService
         foreach (var item in schedulesToProcess)
         {
             var employee = employees[item.EmployeeId];
+            if (employee.StartDate.HasValue && item.WorkDate.Date < employee.StartDate.Value.Date)
+            {
+                throw new BusinessException(
+                    "WORK_DATE_BEFORE_START_DATE",
+                    $"Không thể phân ca cho nhân viên \"{employee.FullName}\" vào ngày {item.WorkDate:dd/MM/yyyy} trước ngày bắt đầu làm việc ({employee.StartDate.Value:dd/MM/yyyy}).");
+            }
             ShiftConfig? shiftConfig = item.ShiftConfigId.HasValue ? shiftConfigs[item.ShiftConfigId.Value] : null;
 
             var resolved = ResolveShiftInfo(item, shiftConfig);
@@ -327,6 +349,12 @@ public class ScheduleService : IScheduleService
         }
 
         var workDate = (request.WorkDate ?? schedule.WorkDate).Date;
+        if (employee.StartDate.HasValue && workDate < employee.StartDate.Value.Date)
+        {
+            throw new BusinessException(
+                "WORK_DATE_BEFORE_START_DATE",
+                $"Không thể phân ca cho nhân viên \"{employee.FullName}\" vào ngày {workDate:dd/MM/yyyy} trước ngày bắt đầu làm việc ({employee.StartDate.Value:dd/MM/yyyy}).");
+        }
         var startTime = request.PlannedStartTime ?? (shiftConfig != null ? shiftConfig.StartTime : schedule.PlannedStartTime);
         var endTime = request.PlannedEndTime ?? (shiftConfig != null ? shiftConfig.EndTime : schedule.PlannedEndTime);
         var isNextDay = request.IsCheckInNextDay ?? (shiftConfig != null ? shiftConfig.IsCheckInNextDay : schedule.IsCheckInNextDay);
@@ -769,7 +797,7 @@ public class ScheduleService : IScheduleService
         schedule.ApprovedBy = _tenantContext.CurrentUserId != Guid.Empty
             ? _tenantContext.CurrentUserId.ToString()
             : "Manager";
-        schedule.ApprovedAt = DateTime.UtcNow;
+        schedule.ApprovedAt = DateTime.UtcNow.AddHours(7);
 
         _scheduleRepository.Update(schedule);
         await _unitOfWork.SaveChangesAsync(cancellationToken);

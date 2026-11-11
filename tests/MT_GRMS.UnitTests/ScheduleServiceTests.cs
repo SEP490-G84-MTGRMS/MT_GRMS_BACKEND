@@ -1066,5 +1066,42 @@ public class ScheduleServiceTests
         Assert.Equal(0, result.EarlyLeaveMinutes);
         Assert.Equal("WORKING", result.ApprovalType);
     }
+
+    [Fact]
+    public async Task CreateAsync_SCH_VAL_06_WorkDateBeforeEmployeeStartDate_ThrowsBusinessException()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        employeeRepo.Employees.Add(new Employee
+        {
+            Id = empId,
+            EmployeeCode = "NV0099",
+            FullName = "Nguyễn Văn Mới",
+            BranchId = branchId,
+            Status = EmployeeStatus.Active,
+            StartDate = new DateTime(2026, 11, 15)
+        });
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var request = new CreateScheduleItemRequest(
+            EmployeeId: empId,
+            BranchId: branchId,
+            WorkDate: new DateTime(2026, 11, 10), // Trước StartDate (15/11/2026)
+            ShiftName: "Ca Sáng",
+            PlannedStartTime: new TimeSpan(8, 0, 0),
+            PlannedEndTime: new TimeSpan(12, 0, 0),
+            DurationHours: 4m
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateAsync(request));
+        Assert.Equal("WORK_DATE_BEFORE_START_DATE", ex.ErrorCode);
+    }
 }
 

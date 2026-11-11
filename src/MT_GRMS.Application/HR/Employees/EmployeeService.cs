@@ -1,6 +1,7 @@
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.HR.Employees.Dtos;
+using MT_GRMS.Application.HR.Employees.Validators;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.HR;
@@ -12,6 +13,7 @@ namespace MT_GRMS.Application.HR.Employees;
 
 public class EmployeeService : IEmployeeService
 {
+    private static DateTime VnNow => DateTime.UtcNow.AddHours(7);
     private readonly IEmployeeRepository _employeeRepository;
     private readonly IUserRepository _userRepository;
     private readonly IUnitOfWork _unitOfWork;
@@ -150,21 +152,41 @@ public class EmployeeService : IEmployeeService
             throw new BusinessException("DUPLICATE_PHONE", $"Số điện thoại '{normalizedPhone}' đã được đăng ký cho nhân viên khác.");
         }
 
-        // 3. Tự sinh mã nhân viên tuần tự dạng NV0001
-        var maxCode = await _employeeRepository.GetMaxSequentialCodeAsync("NV", 6, cancellationToken);
-        var nextNumber = 1;
-        if (!string.IsNullOrEmpty(maxCode) && maxCode.StartsWith("NV", StringComparison.OrdinalIgnoreCase))
+        // 3. Xác định mã nhân viên: nếu nhập tay thì chuẩn hóa & kiểm tra trùng, nếu trống thì tự sinh NV0001
+        string employeeCode;
+        if (!string.IsNullOrWhiteSpace(request.EmployeeCode))
         {
-            if (int.TryParse(maxCode.Substring(2), out var currentNumber))
+            employeeCode = request.EmployeeCode.Trim().ToUpperInvariant();
+            if (!System.Text.RegularExpressions.Regex.IsMatch(employeeCode, @"^[A-Z0-9_-]{1,30}$"))
             {
-                nextNumber = currentNumber + 1;
+                throw new ArgumentException("Mã nhân viên chỉ gồm chữ cái không dấu, số, gạch ngang/dưới và tối đa 30 ký tự.");
+            }
+
+            var codeExists = await _employeeRepository.ExistsAsync(
+                e => e.EmployeeCode == employeeCode,
+                cancellationToken);
+            if (codeExists)
+            {
+                throw new BusinessException("EMPLOYEE_CODE_EXISTS", $"Mã nhân viên '{employeeCode}' đã tồn tại trong hệ thống.");
             }
         }
-        var employeeCode = $"NV{nextNumber:D4}";
-        while (await _employeeRepository.ExistsAsync(e => e.EmployeeCode == employeeCode, cancellationToken))
+        else
         {
-            nextNumber++;
+            var maxCode = await _employeeRepository.GetMaxSequentialCodeAsync("NV", 6, cancellationToken);
+            var nextNumber = 1;
+            if (!string.IsNullOrEmpty(maxCode) && maxCode.StartsWith("NV", StringComparison.OrdinalIgnoreCase))
+            {
+                if (int.TryParse(maxCode.Substring(2), out var currentNumber))
+                {
+                    nextNumber = currentNumber + 1;
+                }
+            }
             employeeCode = $"NV{nextNumber:D4}";
+            while (await _employeeRepository.ExistsAsync(e => e.EmployeeCode == employeeCode, cancellationToken))
+            {
+                nextNumber++;
+                employeeCode = $"NV{nextNumber:D4}";
+            }
         }
 
         var currentTenantId = _tenantContext.CurrentTenantId ?? "tenant_mt_mart_01";
@@ -179,21 +201,21 @@ public class EmployeeService : IEmployeeService
             DateOfBirth = request.DateOfBirth,
             Gender = request.Gender,
             Phone = normalizedPhone,
-            Email = request.Email?.Trim(),
-            AvatarUrl = request.AvatarUrl?.Trim(),
-            FaceDescriptor = request.FaceDescriptor?.Trim(),
-            FaceImageUrls = request.FaceImageUrls?.Trim(),
-            FaceRegisteredAt = !string.IsNullOrWhiteSpace(request.FaceDescriptor) ? DateTime.UtcNow : null,
-            Address = request.Address?.Trim(),
-            StartDate = request.StartDate,
-            Note = request.Note?.Trim(),
-            OtWeekday = request.OtWeekday?.Trim(),
-            OtSunday = request.OtSunday?.Trim(),
+            Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim(),
+            AvatarUrl = string.IsNullOrWhiteSpace(request.AvatarUrl) ? null : request.AvatarUrl.Trim(),
+            FaceDescriptor = string.IsNullOrWhiteSpace(request.FaceDescriptor) ? null : request.FaceDescriptor.Trim(),
+            FaceImageUrls = string.IsNullOrWhiteSpace(request.FaceImageUrls) ? null : request.FaceImageUrls.Trim(),
+            FaceRegisteredAt = !string.IsNullOrWhiteSpace(request.FaceDescriptor) ? VnNow : null,
+            Address = string.IsNullOrWhiteSpace(request.Address) ? null : request.Address.Trim(),
+            StartDate = request.StartDate ?? VnNow.Date,
+            Note = string.IsNullOrWhiteSpace(request.Note) ? null : request.Note.Trim(),
+            OtWeekday = string.IsNullOrWhiteSpace(request.OtWeekday) ? null : request.OtWeekday.Trim(),
+            OtSunday = string.IsNullOrWhiteSpace(request.OtSunday) ? null : request.OtSunday.Trim(),
             SalaryType = ParseSalaryType(request.SalaryType),
             BaseRate = request.BaseRate,
-            BankAccountNumber = request.BankAccountNumber?.Trim(),
-            BankName = request.BankName?.Trim(),
-            BankAccountHolder = request.BankAccountHolder?.Trim(),
+            BankAccountNumber = string.IsNullOrWhiteSpace(request.BankAccountNumber) ? null : request.BankAccountNumber.Trim(),
+            BankName = string.IsNullOrWhiteSpace(request.BankName) ? null : request.BankName.Trim(),
+            BankAccountHolder = string.IsNullOrWhiteSpace(request.BankAccountHolder) ? null : request.BankAccountHolder.Trim().ToUpperInvariant(),
             Status = EmployeeStatus.Active
         };
 
@@ -232,7 +254,7 @@ public class EmployeeService : IEmployeeService
                 UserId = newUser.Id,
                 Role = role,
                 IsActive = true,
-                AssignedAt = DateTime.UtcNow
+                AssignedAt = VnNow
             };
             newUser.TenantUsers.Add(tenantUser);
 
@@ -296,12 +318,12 @@ public class EmployeeService : IEmployeeService
         employee.CitizenId = normalizedCitizenId;
         employee.Phone = normalizedPhone;
         employee.BranchId = request.BranchId;
-        employee.Email = request.Email?.Trim();
-        employee.Address = request.Address?.Trim();
+        employee.Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim();
+        employee.Address = string.IsNullOrWhiteSpace(request.Address) ? null : request.Address.Trim();
         employee.StartDate = request.StartDate;
-        employee.Note = request.Note?.Trim();
-        employee.OtWeekday = request.OtWeekday?.Trim();
-        employee.OtSunday = request.OtSunday?.Trim();
+        employee.Note = string.IsNullOrWhiteSpace(request.Note) ? null : request.Note.Trim();
+        employee.OtWeekday = string.IsNullOrWhiteSpace(request.OtWeekday) ? null : request.OtWeekday.Trim();
+        employee.OtSunday = string.IsNullOrWhiteSpace(request.OtSunday) ? null : request.OtSunday.Trim();
         employee.DateOfBirth = request.DateOfBirth;
         employee.Gender = request.Gender;
         employee.SalaryType = ParseSalaryType(request.SalaryType);
@@ -310,9 +332,9 @@ public class EmployeeService : IEmployeeService
         {
             _employeeRepository.SyncAllowances(employee, request.Allowances, employee.TenantId);
         }
-        employee.BankAccountNumber = request.BankAccountNumber?.Trim();
-        employee.BankName = request.BankName?.Trim();
-        employee.BankAccountHolder = request.BankAccountHolder?.Trim();
+        employee.BankAccountNumber = string.IsNullOrWhiteSpace(request.BankAccountNumber) ? null : request.BankAccountNumber.Trim();
+        employee.BankName = string.IsNullOrWhiteSpace(request.BankName) ? null : request.BankName.Trim();
+        employee.BankAccountHolder = string.IsNullOrWhiteSpace(request.BankAccountHolder) ? null : request.BankAccountHolder.Trim().ToUpperInvariant();
         if (request.AvatarUrl != null)
         {
             employee.AvatarUrl = string.IsNullOrWhiteSpace(request.AvatarUrl) ? null : request.AvatarUrl.Trim();
@@ -320,13 +342,13 @@ public class EmployeeService : IEmployeeService
         if (request.FaceDescriptor != null)
         {
             employee.FaceDescriptor = string.IsNullOrWhiteSpace(request.FaceDescriptor) ? null : request.FaceDescriptor.Trim();
-            employee.FaceRegisteredAt = !string.IsNullOrWhiteSpace(request.FaceDescriptor) ? DateTime.UtcNow : null;
+            employee.FaceRegisteredAt = !string.IsNullOrWhiteSpace(request.FaceDescriptor) ? VnNow : null;
         }
         if (request.FaceImageUrls != null)
         {
             employee.FaceImageUrls = string.IsNullOrWhiteSpace(request.FaceImageUrls) ? null : request.FaceImageUrls.Trim();
         }
-        employee.UpdatedAt = DateTime.UtcNow;
+        employee.UpdatedAt = VnNow;
 
         // Tạo hoặc cập nhật tài khoản Identity nếu có cung cấp UserName/UserId
         if (!string.IsNullOrWhiteSpace(request.UserName))
@@ -363,7 +385,7 @@ public class EmployeeService : IEmployeeService
                     UserId = newUser.Id,
                     Role = role,
                     IsActive = true,
-                    AssignedAt = DateTime.UtcNow
+                    AssignedAt = VnNow
                 };
                 newUser.TenantUsers.Add(tenantUser);
 
@@ -422,7 +444,7 @@ public class EmployeeService : IEmployeeService
                         UserId = newUser.Id,
                         Role = role,
                         IsActive = true,
-                        AssignedAt = DateTime.UtcNow
+                        AssignedAt = VnNow
                     };
                     newUser.TenantUsers.Add(tenantUser);
 
@@ -460,8 +482,19 @@ public class EmployeeService : IEmployeeService
             throw new ArgumentException("Trạng thái nhân viên chỉ chấp nhận 'active' hoặc 'inactive'.");
         }
 
-        employee.Status = normalizedStatus == "active" ? EmployeeStatus.Active : EmployeeStatus.Inactive;
-        employee.UpdatedAt = DateTime.UtcNow;
+        var isActivating = normalizedStatus == "active";
+        employee.Status = isActivating ? EmployeeStatus.Active : EmployeeStatus.Inactive;
+        employee.UpdatedAt = VnNow;
+
+        if (!string.IsNullOrEmpty(employee.UserId))
+        {
+            var user = await _userRepository.GetByIdAsync(employee.UserId, cancellationToken);
+            if (user != null)
+            {
+                user.IsActive = isActivating;
+                _userRepository.Update(user);
+            }
+        }
 
         _employeeRepository.Update(employee);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -478,25 +511,54 @@ public class EmployeeService : IEmployeeService
             throw new NotFoundException($"Không tìm thấy nhân viên với ID: {id}");
         }
 
-        // Business Rule: Chỉ được phép xóa nhân viên khi chưa lưu trữ dữ liệu ca làm việc hoặc phiếu lương
+        // Business Rule: Khi nhân viên đã có lịch làm việc hoặc phiếu lương, hệ thống không được phép xóa cứng/xóa khỏi danh sách,
+        // mà chuyển sang trạng thái ngừng làm việc (Inactive) và giữ lại trong danh sách nhân viên (IsDeleted = false).
         var hasWorkHistory = await _employeeRepository.HasWorkOrPayrollHistoryAsync(id, cancellationToken);
         if (hasWorkHistory)
         {
+            if (!string.IsNullOrEmpty(employee.UserId))
+            {
+                var user = await _userRepository.GetByIdAsync(employee.UserId, cancellationToken);
+                if (user != null)
+                {
+                    user.IsActive = false;
+                    _userRepository.Update(user);
+                }
+            }
+
+            employee.IsDeleted = false;
+            employee.Status = EmployeeStatus.Inactive;
+            employee.UpdatedAt = VnNow;
+
+            _employeeRepository.Update(employee);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
             throw new BusinessException(
                 "EMPLOYEE_HAS_WORK_HISTORY",
-                $"Không thể xóa nhân viên \"{employee.FullName}\" ({employee.EmployeeCode}) vì đã có dữ liệu ca làm việc hoặc phiếu lương trong hệ thống. Bạn có thể chuyển trạng thái nhân viên sang \"Ngừng làm việc\" thay vì xóa.");
+                $"Nhân viên \"{employee.FullName}\" ({employee.EmployeeCode}) đã có lịch làm việc hoặc phiếu lương nên hệ thống không được phép xóa cứng. Trạng thái nhân viên đã được chuyển sang \"Ngừng làm việc\" (Đã nghỉ).");
         }
 
-        // 1. Xóa toàn bộ các khoản phụ cấp (EmployeeAllowances) của nhân viên
+        // 1. Xóa toàn bộ các khoản phụ cấp (EmployeeAllowances) của nhân viên chưa có lịch sử công/lương
         if (employee.Allowances != null && employee.Allowances.Count > 0)
         {
             _employeeRepository.RemoveAllowances(employee.Allowances.ToList());
         }
 
-        // 2. Soft delete hồ sơ nhân viên
+        // 2. Vô hiệu hóa tài khoản đăng nhập liên kết nếu có (BR-EMP-05)
+        if (!string.IsNullOrEmpty(employee.UserId))
+        {
+            var user = await _userRepository.GetByIdAsync(employee.UserId, cancellationToken);
+            if (user != null)
+            {
+                user.IsActive = false;
+                _userRepository.Update(user);
+            }
+        }
+
+        // 3. Soft delete hồ sơ nhân viên chưa có lịch sử công/lương
         employee.IsDeleted = true;
         employee.Status = EmployeeStatus.Inactive;
-        employee.UpdatedAt = DateTime.UtcNow;
+        employee.UpdatedAt = VnNow;
 
         _employeeRepository.Update(employee);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -564,7 +626,7 @@ public class EmployeeService : IEmployeeService
             UserId = newUser.Id,
             Role = role,
             IsActive = true,
-            AssignedAt = DateTime.UtcNow
+            AssignedAt = VnNow
         };
 
         newUser.TenantUsers.Add(tenantUser);
@@ -572,7 +634,7 @@ public class EmployeeService : IEmployeeService
         await _userRepository.AddAsync(newUser, cancellationToken);
 
         employee.UserId = newUser.Id;
-        employee.UpdatedAt = DateTime.UtcNow;
+        employee.UpdatedAt = VnNow;
         _employeeRepository.Update(employee);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -692,8 +754,8 @@ public class EmployeeService : IEmployeeService
         {
             employee.FaceImageUrls = string.IsNullOrWhiteSpace(faceImageUrls) ? null : faceImageUrls.Trim();
         }
-        employee.FaceRegisteredAt = !string.IsNullOrWhiteSpace(faceDescriptor) ? DateTime.UtcNow : null;
-        employee.UpdatedAt = DateTime.UtcNow;
+        employee.FaceRegisteredAt = !string.IsNullOrWhiteSpace(faceDescriptor) ? VnNow : null;
+        employee.UpdatedAt = VnNow;
 
         _employeeRepository.Update(employee);
         await _unitOfWork.SaveChangesAsync(cancellationToken);

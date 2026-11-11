@@ -323,6 +323,12 @@ public class EmployeesController : BaseApiController
         {
             return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
         }
+        catch (BusinessException ex) when (ex.ErrorCode == "EMPLOYEE_HAS_WORK_HISTORY")
+        {
+            return Ok(ApiResponse<object>.Ok(
+                new { action = "deactivated", status = "inactive", message = ex.Message },
+                ex.Message));
+        }
         catch (BusinessException ex)
         {
             return BadRequest(ApiResponse<object>.Fail(ex.ErrorCode, ex.Message));

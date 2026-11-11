@@ -13,6 +13,7 @@ namespace MT_GRMS.Application.HR.Payslips;
 
 public class PayslipService : IPayslipService
 {
+    private static DateTime VnNow => DateTime.UtcNow.AddHours(7);
     private readonly IPayslipRepository _payslipRepository;
     private readonly IEmployeeRepository _employeeRepository;
     private readonly IScheduleRepository _scheduleRepository;
@@ -110,6 +111,9 @@ public class PayslipService : IPayslipService
                 _ => 0m
             };
 
+            var weekdayMultiplier = ParseOtMultiplier(emp.OtWeekday, 1.5m);
+            var sundayMultiplier = ParseOtMultiplier(emp.OtSunday, 2.0m);
+
             foreach (var sch in empSchedules)
             {
                 if (sch.OvertimeMinutes > 0 && sch.ApprovalStatus == ScheduleApprovalStatus.Approved)
@@ -117,7 +121,7 @@ public class PayslipService : IPayslipService
                     var shiftOtHours = Math.Round((decimal)sch.OvertimeMinutes / 60.00m, 2);
                     otHours += shiftOtHours;
 
-                    var multiplier = (sch.WorkDate.DayOfWeek == DayOfWeek.Sunday) ? 2.0m : 1.5m;
+                    var multiplier = (sch.WorkDate.DayOfWeek == DayOfWeek.Sunday) ? sundayMultiplier : weekdayMultiplier;
                     overtimePay += Math.Round(shiftOtHours * hourlyRate * multiplier, 0, MidpointRounding.AwayFromZero);
                 }
             }
@@ -196,7 +200,7 @@ public class PayslipService : IPayslipService
                 payslip.BankName = emp.BankName;
                 payslip.BankAccountHolder = emp.BankAccountHolder;
                 payslip.Note = request.Note ?? payslip.Note;
-                payslip.UpdatedAt = DateTime.UtcNow;
+                payslip.UpdatedAt = VnNow;
                 payslip.Employee = emp;
 
                 _payslipRepository.Update(payslip);
@@ -242,7 +246,7 @@ public class PayslipService : IPayslipService
                     BankName = emp.BankName,
                     BankAccountHolder = emp.BankAccountHolder,
                     Note = request.Note,
-                    CreatedAt = DateTime.UtcNow
+                    CreatedAt = VnNow
                 };
 
                 await _payslipRepository.AddAsync(payslip, cancellationToken);
@@ -325,7 +329,7 @@ public class PayslipService : IPayslipService
         }
 
         var method = request.PaymentMethod.Trim().ToUpper();
-        var now = DateTime.UtcNow;
+        var now = VnNow;
         var voucherCode = $"PC-{now:yyyyMM}-{Random.Shared.Next(1000, 9999)}";
 
         payslip.Status = PayslipStatus.Paid;
@@ -389,7 +393,7 @@ public class PayslipService : IPayslipService
                 continue;
             }
 
-            var now = DateTime.UtcNow;
+            var now = VnNow;
             var voucherCode = $"PC-{now:yyyyMM}-{Random.Shared.Next(1000, 9999)}";
 
             payslip.Status = PayslipStatus.Paid;
@@ -458,6 +462,29 @@ public class PayslipService : IPayslipService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return true;
+    }
+
+    private static decimal ParseOtMultiplier(string? otRateStr, decimal fallbackMultiplier)
+    {
+        if (string.IsNullOrWhiteSpace(otRateStr))
+        {
+            return fallbackMultiplier;
+        }
+
+        var cleaned = otRateStr.Trim().Replace("%", "").Replace("x", "", StringComparison.OrdinalIgnoreCase).Trim();
+        if (decimal.TryParse(cleaned, System.Globalization.NumberStyles.Any, System.Globalization.CultureInfo.InvariantCulture, out var val))
+        {
+            if (val >= 10m)
+            {
+                return Math.Round(val / 100m, 2);
+            }
+            if (val > 0m)
+            {
+                return Math.Round(val, 2);
+            }
+        }
+
+        return fallbackMultiplier;
     }
 
     private static PayslipResponse MapToResponse(Payslip p)

@@ -780,8 +780,9 @@ public class EmployeeServiceTests
             service.DeleteEmployeeAsync(employeeId));
 
         Assert.Equal("EMPLOYEE_HAS_WORK_HISTORY", ex.ErrorCode);
-        Assert.Contains("không thể xóa", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("xóa cứng", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.False(employee.IsDeleted);
+        Assert.Equal(EmployeeStatus.Inactive, employee.Status);
     }
 
     [Fact]

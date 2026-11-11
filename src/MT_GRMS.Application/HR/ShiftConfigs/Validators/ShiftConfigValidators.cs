@@ -26,8 +26,13 @@ public class CreateShiftConfigRequestValidator : AbstractValidator<CreateShiftCo
         When(x => !string.IsNullOrEmpty(x.ShiftCode), () =>
         {
             RuleFor(x => x.ShiftCode!)
-                .Length(2, 30).WithMessage("Mã ca phải từ 2 đến 30 ký tự.");
+                .Length(2, 30).WithMessage("Mã ca phải từ 2 đến 30 ký tự.")
+                .Matches(@"^[A-Za-z0-9_-]+$").WithMessage("Mã ca chỉ gồm chữ cái không dấu, số, gạch ngang/dưới.");
         });
+
+        RuleFor(x => x)
+            .Must(x => x.StartTime != x.EndTime || (x.DurationHours.HasValue && x.DurationHours.Value > 0))
+            .WithMessage("Giờ bắt đầu và giờ kết thúc ca không được trùng nhau (thời lượng ca phải lớn hơn 0).");
 
         When(x => x.DurationHours.HasValue, () =>
         {
@@ -77,8 +82,13 @@ public class UpdateShiftConfigRequestValidator : AbstractValidator<UpdateShiftCo
         When(x => !string.IsNullOrEmpty(x.ShiftCode), () =>
         {
             RuleFor(x => x.ShiftCode!)
-                .Length(2, 30).WithMessage("Mã ca phải từ 2 đến 30 ký tự.");
+                .Length(2, 30).WithMessage("Mã ca phải từ 2 đến 30 ký tự.")
+                .Matches(@"^[A-Za-z0-9_-]+$").WithMessage("Mã ca chỉ gồm chữ cái không dấu, số, gạch ngang/dưới.");
         });
+
+        RuleFor(x => x)
+            .Must(x => x.StartTime != x.EndTime || (x.DurationHours.HasValue && x.DurationHours.Value > 0))
+            .WithMessage("Giờ bắt đầu và giờ kết thúc ca không được trùng nhau (thời lượng ca phải lớn hơn 0).");
 
         When(x => x.DurationHours.HasValue, () =>
         {
