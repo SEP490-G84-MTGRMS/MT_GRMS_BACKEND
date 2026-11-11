@@ -17,11 +17,12 @@ public class SupplierReturnLineConfiguration : IEntityTypeConfiguration<Supplier
         builder.Property(x => x.ProductId).IsRequired();
         builder.Property(x => x.BatchCode).HasMaxLength(100);
 
-        builder.Property(x => x.RequestedQty).HasColumnType("decimal(18,3)").IsRequired();
-        builder.Property(x => x.ApprovedQty).HasColumnType("decimal(18,3)").IsRequired();
-        builder.Property(x => x.RejectedQty).HasColumnType("decimal(18,3)").IsRequired();
-        builder.Property(x => x.HandedOverQty).HasColumnType("decimal(18,3)").IsRequired();
-        builder.Property(x => x.UnitCost).HasColumnType("decimal(18,2)").IsRequired();
+        builder.Property(x => x.RequestedQty).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);
+        builder.Property(x => x.SupplierAcceptedQty).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);
+        builder.Property(x => x.ApprovedQty).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);
+        builder.Property(x => x.RejectedQty).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);
+        builder.Property(x => x.HandedOverQty).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);
+        builder.Property(x => x.UnitCost).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
 
         builder.Property(x => x.RejectionReason).HasMaxLength(500);
         builder.Property(x => x.Notes).HasMaxLength(500);

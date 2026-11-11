@@ -35,6 +35,8 @@ public class BranchProductDto
     public Guid? SupplierId { get; set; }
     public string PrimarySupplierCode { get; set; } = string.Empty;
     public string PrimarySupplierName { get; set; } = string.Empty;
+    /// <summary>NCC chính (tenant-wide) trên quan hệ SupplierProduct — chỉ để badge/gợi ý.</summary>
+    public bool IsPrimarySupplier { get; set; }
     public int MinOrderQuantity { get; set; } = 1;
     public string Status { get; set; } = "Active";
     public string? ShelfLocation { get; set; }

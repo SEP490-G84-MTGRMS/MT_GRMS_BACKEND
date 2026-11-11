@@ -55,6 +55,8 @@ public class GoodsReceiptDto
     public decimal TotalShortageQty => Math.Max(0, TotalOrderedQty - TotalReceivedQty);
     public bool HasMismatch { get; set; }
     public string? Note { get; set; }
+    public Guid? CreatedReturnId { get; set; }
+    public string? CreatedReturnCode { get; set; }
     public List<GoodsReceiptLineDto> Lines { get; set; } = new();
 }
 

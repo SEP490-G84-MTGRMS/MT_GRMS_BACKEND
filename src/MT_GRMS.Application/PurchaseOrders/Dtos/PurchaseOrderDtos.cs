@@ -68,6 +68,8 @@ public class OrderMatrixSupplierDeliveryConfigDto
 public class OrderMatrixCellDto
 {
     public Guid ProductId { get; set; }
+    /// <summary>NCC của dòng nguồn nhập — bắt buộc khi Matrix ALL có nhiều NCC cùng SP.</summary>
+    public Guid SupplierId { get; set; }
     public DateTime DeliveryDate { get; set; }
     public decimal EmployeeQty { get; set; }
     public decimal? StoreQty { get; set; }
@@ -279,6 +281,10 @@ public class PurchaseOrderDto
     public string? CreatedByRole { get; set; }
     public Guid? ParentDraftId { get; set; }
     public DateTime CreatedAt { get; set; }
+    /// <summary>Phiếu nhập kho DRAFT/COMPLETED đang gắn PO (nếu có).</summary>
+    public Guid? ActiveGoodsReceiptId { get; set; }
+    public string? ActiveGoodsReceiptCode { get; set; }
+    public string? ActiveGoodsReceiptStatus { get; set; }
     public IReadOnlyList<PurchaseOrderDetailDto> Details { get; set; } = new List<PurchaseOrderDetailDto>();
 }
 

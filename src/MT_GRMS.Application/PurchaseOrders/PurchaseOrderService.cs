@@ -80,20 +80,38 @@ public class PurchaseOrderService : IPurchaseOrderService
         var products = await _repository.GetMatrixProductsAsync(query.BranchId, query.SupplierId, cancellationToken);
         var supplierConfigs = await _repository.GetMatrixSupplierConfigsAsync(query.BranchId, query.SupplierId, cancellationToken);
 
-        var draftPo = await _repository.GetDraftMatrixPoAsync(query.BranchId, query.SupplierId, query.ViewFrom, cancellationToken);
-
-        var cellMap = new Dictionary<(Guid ProductId, DateTime Date), OrderMatrixCellDto>();
-        if (draftPo != null && draftPo.Details != null)
+        var isAllSuppliers = !query.SupplierId.HasValue || query.SupplierId.Value == Guid.Empty;
+        IReadOnlyList<PurchaseOrder> draftPos;
+        PurchaseOrder? draftPo;
+        if (isAllSuppliers)
         {
-            foreach (var detail in draftPo.Details)
+            draftPos = await _repository.GetDraftMatrixPosAsync(query.BranchId, cancellationToken);
+            draftPo = draftPos.FirstOrDefault();
+        }
+        else
+        {
+            draftPo = await _repository.GetDraftMatrixPoAsync(
+                query.BranchId, query.SupplierId, query.ViewFrom, cancellationToken);
+            draftPos = draftPo != null
+                ? new List<PurchaseOrder> { draftPo }
+                : Array.Empty<PurchaseOrder>();
+        }
+
+        // Key ô = (SupplierId, ProductId, Date) — cùng SP nhiều NCC không đè nhau.
+        var cellMap = new Dictionary<(Guid SupplierId, Guid ProductId, DateTime Date), OrderMatrixCellDto>();
+        foreach (var draft in draftPos)
+        {
+            if (draft.Details == null) continue;
+            foreach (var detail in draft.Details)
             {
                 if (!detail.DeliveryDate.HasValue) continue;
 
                 var finalQty = detail.FinalQty
                     ?? (detail.IsOwnerAdjusted ? (detail.StoreQty ?? 0m) : (detail.EmployeeQty ?? 0m));
-                cellMap[(detail.ProductId, detail.DeliveryDate.Value.Date)] = new OrderMatrixCellDto
+                cellMap[(draft.SupplierId, detail.ProductId, detail.DeliveryDate.Value.Date)] = new OrderMatrixCellDto
                 {
                     ProductId = detail.ProductId,
+                    SupplierId = draft.SupplierId,
                     DeliveryDate = detail.DeliveryDate.Value.Date,
                     EmployeeQty = detail.EmployeeQty ?? 0m,
                     StoreQty = detail.StoreQty,
@@ -131,7 +149,7 @@ public class PurchaseOrderService : IPurchaseOrderService
                 var qty = detail.OrderedQty ?? detail.FinalQty ?? 0m;
                 if (qty <= 0) continue;
 
-                var key = (detail.ProductId, date);
+                var key = (po.SupplierId, detail.ProductId, date);
                 if (dayStillEditable && cellMap.ContainsKey(key))
                 {
                     continue; // Giữ số lượng draft (đã lưu) — không đè bằng PO cũ
@@ -140,6 +158,7 @@ public class PurchaseOrderService : IPurchaseOrderService
                 cellMap[key] = new OrderMatrixCellDto
                 {
                     ProductId = detail.ProductId,
+                    SupplierId = po.SupplierId,
                     DeliveryDate = date,
                     EmployeeQty = detail.EmployeeQty ?? qty,
                     StoreQty = detail.StoreQty ?? qty,
@@ -181,50 +200,18 @@ public class PurchaseOrderService : IPurchaseOrderService
             throw new NotFoundException("Chi nhánh", command.BranchId);
         }
 
-        var draft = await _repository.GetDraftMatrixPoAsync(command.BranchId, command.SupplierId, command.ViewFrom, cancellationToken);
-
-        if (draft == null)
-        {
-            var code = $"DRAFT-{DateTime.UtcNow:yyyyMMdd}-{branch.Code}-{Guid.NewGuid().ToString().Substring(0, 4).ToUpper()}";
-            var effectiveSupplierId = command.SupplierId;
-            if (!effectiveSupplierId.HasValue || effectiveSupplierId.Value == Guid.Empty)
-            {
-                var configs = await _repository.GetMatrixSupplierConfigsAsync(command.BranchId, null, cancellationToken);
-                effectiveSupplierId = configs.FirstOrDefault()?.SupplierId;
-            }
-
-            draft = new PurchaseOrder
-            {
-                TenantId = _tenantContext.CurrentTenantId,
-                Code = code,
-                BranchId = command.BranchId,
-                SupplierId = effectiveSupplierId ?? Guid.Empty,
-                ViewFromDate = command.ViewFrom,
-                ViewToDate = command.ViewTo,
-                Status = "DRAFT",
-                Note = command.Note,
-                CreatedByRole = _tenantContext.CurrentRole,
-                SubmittedByUserId = await ResolveValidUserIdAsync(cancellationToken),
-                SubmittedAtUtc = DateTime.UtcNow
-            };
-            await _repository.AddPurchaseOrderAsync(draft, cancellationToken);
-        }
-        else
-        {
-            draft.ViewFromDate = command.ViewFrom;
-            draft.ViewToDate = command.ViewTo;
-            draft.Note = command.Note;
-        }
-
         var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
         bool isStoreOwner = string.IsNullOrEmpty(role) || role is "STORE_OWNER" or "ADMIN";
 
-        // Gate cutoff: không ghi đè ô đã FINALIZED / LOCKED / OFF
         var nowVn = OrderMatrixRules.GetVietnamNow();
         var matrixProducts = await _repository.GetMatrixProductsAsync(command.BranchId, null, cancellationToken);
-        var productSupplier = matrixProducts
+        var productByKey = matrixProducts
+            .GroupBy(p => (p.Id, p.SupplierId))
+            .ToDictionary(g => g.Key, g => g.First());
+        var fallbackSupplierByProduct = matrixProducts
             .GroupBy(p => p.Id)
-            .ToDictionary(g => g.Key, g => g.First().SupplierId);
+            .ToDictionary(g => g.Key, g => g.OrderBy(x => x.Price <= 0 ? decimal.MaxValue : x.Price).First().SupplierId);
+
         var supplierConfigs = await _repository.GetMatrixSupplierConfigsAsync(command.BranchId, null, cancellationToken);
         var configBySupplier = supplierConfigs.ToDictionary(c => c.SupplierId);
         var dateFrom = command.Cells.Count > 0
@@ -241,110 +228,195 @@ public class PurchaseOrderService : IPurchaseOrderService
             .GroupBy(p => (p.SupplierId, p.DeliveryDate!.Value.Date))
             .ToDictionary(g => g.Key, g => (g.First().Id, g.First().Code));
 
-        // Map existing details theo (ProductId, DeliveryDate) để thực hiện upsert an toàn mà không làm mất lịch sử
-        var existingDetails = draft.Details
-            .Where(d => d.DeliveryDate.HasValue)
-            .ToDictionary(d => (d.ProductId, d.DeliveryDate!.Value.Date));
-
-        foreach (var cell in command.Cells)
+        // Resolve NCC cho từng ô: ưu tiên cell.SupplierId → command.SupplierId → giá rẻ nhất của SP.
+        Guid ResolveCellSupplier(OrderMatrixCellDto cell)
         {
-            var cellDate = cell.DeliveryDate.Date;
-
-            if (productSupplier.TryGetValue(cell.ProductId, out var cellSupplierId)
-                && configBySupplier.TryGetValue(cellSupplierId, out var cellCfg))
-            {
-                string? committedCode = null;
-                Guid? committedId = null;
-                if (committedDict.TryGetValue((cellSupplierId, cellDate), out var committed))
-                {
-                    committedId = committed.Id;
-                    committedCode = committed.Code;
-                }
-
-                var daySt = OrderMatrixRules.EvaluateDayStatus(
-                    cellSupplierId, cellDate, cellCfg, nowVn, committedCode, committedId);
-                if (!OrderMatrixRules.IsEditableStatus(daySt.DeliveryDateStatus))
-                {
-                    continue; // Bỏ qua ô đã khóa / off — PO trước cutoff vẫn OPEN/CUTOFF_DUE nên vẫn ghi được
-                }
-            }
-
-            existingDetails.TryGetValue((cell.ProductId, cellDate), out var detail);
-
-            decimal employeeQty;
-            decimal? storeQty;
-            bool isOwnerAdjusted;
-
-            if (isStoreOwner)
-            {
-                // Store Owner điều chỉnh
-                storeQty = cell.StoreQty;
-                isOwnerAdjusted = cell.IsOwnerAdjusted || cell.StoreQty.HasValue;
-                // Giữ nguyên đề xuất ban đầu của Employee từ detail cũ nếu có
-                employeeQty = detail?.EmployeeQty ?? cell.EmployeeQty;
-            }
-            else
-            {
-                // Employee nhập số lượng đề xuất: chỉ được cập nhật EmployeeQty
-                employeeQty = cell.EmployeeQty;
-                // Không được phép can thiệp owner override nếu đã tồn tại
-                storeQty = detail?.StoreQty;
-                isOwnerAdjusted = detail?.IsOwnerAdjusted ?? false;
-            }
-
-            // Tính finalQuantity chuẩn nghiệp vụ:
-            // finalQuantity = isOwnerAdjusted ? (ownerQuantity ?? 0) : employeeQuantity;
-            decimal finalQty = isOwnerAdjusted
-                ? (storeQty ?? 0m)
-                : employeeQty;
-
-            if (detail == null)
-            {
-                // Nếu chưa có detail và cả 2 bên đều không có số lượng thì bỏ qua
-                if (finalQty == 0 && employeeQty == 0 && !isOwnerAdjusted)
-                {
-                    continue;
-                }
-
-                var product = await _repository.GetProductByIdAsync(cell.ProductId, cancellationToken);
-                var unitPrice = product?.CostPrice ?? product?.SellingPrice ?? 0m;
-                var lineAmt = finalQty * unitPrice;
-
-                detail = new PurchaseOrderDetail
-                {
-                    TenantId = _tenantContext.CurrentTenantId,
-                    PurchaseOrderId = draft.Id,
-                    ProductId = cell.ProductId,
-                    DeliveryDate = cellDate,
-                    EmployeeQty = employeeQty,
-                    StoreQty = storeQty,
-                    IsOwnerAdjusted = isOwnerAdjusted,
-                    FinalQty = finalQty,
-                    OrderedQty = finalQty,
-                    UnitPrice = unitPrice,
-                    DeliveryUoM = product?.BaseUnit ?? "Gói",
-                    LineAmount = lineAmt
-                };
-                draft.Details.Add(detail);
-                _repository.AddPurchaseOrderDetail(detail);
-            }
-            else
-            {
-                detail.EmployeeQty = employeeQty;
-                detail.StoreQty = storeQty;
-                detail.IsOwnerAdjusted = isOwnerAdjusted;
-                detail.FinalQty = finalQty;
-                detail.OrderedQty = finalQty;
-                detail.LineAmount = finalQty * detail.UnitPrice;
-            }
+            if (cell.SupplierId != Guid.Empty) return cell.SupplierId;
+            if (command.SupplierId.HasValue && command.SupplierId.Value != Guid.Empty) return command.SupplierId.Value;
+            return fallbackSupplierByProduct.GetValueOrDefault(cell.ProductId);
         }
 
-        draft.TotalQty = draft.Details.Sum(d => d.FinalQty ?? 0m);
-        draft.TotalAmount = draft.Details.Sum(d => d.LineAmount);
+        var cellsBySupplier = command.Cells
+            .Select(c => (Cell: c, SupplierId: ResolveCellSupplier(c)))
+            .Where(x => x.SupplierId != Guid.Empty)
+            .GroupBy(x => x.SupplierId)
+            .ToList();
+
+        PurchaseOrder? lastDraft = null;
+        var submittedBy = await ResolveValidUserIdAsync(cancellationToken);
+
+        foreach (var supplierGroup in cellsBySupplier)
+        {
+            var supplierId = supplierGroup.Key;
+            var draft = await _repository.GetDraftMatrixPoAsync(
+                command.BranchId, supplierId, command.ViewFrom, cancellationToken);
+
+            if (draft == null)
+            {
+                draft = new PurchaseOrder
+                {
+                    TenantId = _tenantContext.CurrentTenantId,
+                    Code = $"DRAFT-{DateTime.UtcNow:yyyyMMdd}-{branch.Code}-{Guid.NewGuid().ToString()[..4].ToUpper()}",
+                    BranchId = command.BranchId,
+                    SupplierId = supplierId,
+                    ViewFromDate = command.ViewFrom,
+                    ViewToDate = command.ViewTo,
+                    Status = "DRAFT",
+                    Note = command.Note,
+                    CreatedByRole = _tenantContext.CurrentRole,
+                    SubmittedByUserId = submittedBy,
+                    SubmittedAtUtc = DateTime.UtcNow
+                };
+                await _repository.AddPurchaseOrderAsync(draft, cancellationToken);
+            }
+            else
+            {
+                draft.ViewFromDate = command.ViewFrom;
+                draft.ViewToDate = command.ViewTo;
+                draft.Note = command.Note;
+            }
+
+            var existingDetails = draft.Details
+                .Where(d => d.DeliveryDate.HasValue)
+                .ToDictionary(d => (d.ProductId, d.DeliveryDate!.Value.Date));
+
+            foreach (var (cell, _) in supplierGroup)
+            {
+                var cellDate = cell.DeliveryDate.Date;
+
+                if (configBySupplier.TryGetValue(supplierId, out var cellCfg))
+                {
+                    string? committedCode = null;
+                    Guid? committedId = null;
+                    if (committedDict.TryGetValue((supplierId, cellDate), out var committed))
+                    {
+                        committedId = committed.Id;
+                        committedCode = committed.Code;
+                    }
+
+                    var daySt = OrderMatrixRules.EvaluateDayStatus(
+                        supplierId, cellDate, cellCfg, nowVn, committedCode, committedId);
+                    if (!OrderMatrixRules.IsEditableStatus(daySt.DeliveryDateStatus))
+                    {
+                        continue;
+                    }
+                }
+
+                existingDetails.TryGetValue((cell.ProductId, cellDate), out var detail);
+
+                decimal employeeQty;
+                decimal? storeQty;
+                bool isOwnerAdjusted;
+
+                if (isStoreOwner)
+                {
+                    storeQty = cell.StoreQty;
+                    isOwnerAdjusted = cell.IsOwnerAdjusted || cell.StoreQty.HasValue;
+                    employeeQty = detail?.EmployeeQty ?? cell.EmployeeQty;
+                }
+                else
+                {
+                    var ownerLocked = detail != null
+                        && (detail.IsOwnerAdjusted || detail.StoreQty.HasValue);
+                    if (ownerLocked)
+                    {
+                        continue;
+                    }
+
+                    employeeQty = cell.EmployeeQty;
+                    storeQty = null;
+                    isOwnerAdjusted = false;
+                }
+
+                decimal finalQty = isOwnerAdjusted
+                    ? (storeQty ?? 0m)
+                    : employeeQty;
+
+                if (detail == null)
+                {
+                    if (finalQty == 0 && employeeQty == 0 && !isOwnerAdjusted)
+                    {
+                        continue;
+                    }
+
+                    productByKey.TryGetValue((cell.ProductId, supplierId), out var matrixRow);
+                    var product = await _repository.GetProductByIdAsync(cell.ProductId, cancellationToken);
+                    var unitPrice = matrixRow?.Price > 0
+                        ? matrixRow.Price
+                        : (product?.CostPrice ?? product?.SellingPrice ?? 0m);
+                    var lineAmt = finalQty * unitPrice;
+                    var uom = !string.IsNullOrWhiteSpace(matrixRow?.Unit)
+                        ? matrixRow!.Unit
+                        : (product?.BaseUnit ?? "Gói");
+
+                    detail = new PurchaseOrderDetail
+                    {
+                        TenantId = _tenantContext.CurrentTenantId,
+                        PurchaseOrderId = draft.Id,
+                        ProductId = cell.ProductId,
+                        DeliveryDate = cellDate,
+                        EmployeeQty = employeeQty,
+                        StoreQty = storeQty,
+                        IsOwnerAdjusted = isOwnerAdjusted,
+                        FinalQty = finalQty,
+                        OrderedQty = finalQty,
+                        UnitPrice = unitPrice,
+                        DeliveryUoM = uom,
+                        LineAmount = lineAmt
+                    };
+                    draft.Details.Add(detail);
+                    _repository.AddPurchaseOrderDetail(detail);
+                }
+                else
+                {
+                    detail.EmployeeQty = employeeQty;
+                    detail.StoreQty = storeQty;
+                    detail.IsOwnerAdjusted = isOwnerAdjusted;
+                    detail.FinalQty = finalQty;
+                    detail.OrderedQty = finalQty;
+                    detail.LineAmount = finalQty * detail.UnitPrice;
+                }
+            }
+
+            draft.TotalQty = draft.Details.Sum(d => d.FinalQty ?? 0m);
+            draft.TotalAmount = draft.Details.Sum(d => d.LineAmount);
+            lastDraft = draft;
+        }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapToDto(draft, branch.Name, "Nhiều nhà cung cấp");
+        if (lastDraft == null)
+        {
+            // Không có ô hợp lệ — vẫn đảm bảo có draft rỗng theo filter NCC (nếu có).
+            var fallbackSupplier = command.SupplierId is { } sid && sid != Guid.Empty
+                ? sid
+                : configBySupplier.Keys.FirstOrDefault();
+            var empty = await _repository.GetDraftMatrixPoAsync(
+                command.BranchId, fallbackSupplier == Guid.Empty ? null : fallbackSupplier, command.ViewFrom, cancellationToken);
+            if (empty == null)
+            {
+                empty = new PurchaseOrder
+                {
+                    TenantId = _tenantContext.CurrentTenantId,
+                    Code = $"DRAFT-{DateTime.UtcNow:yyyyMMdd}-{branch.Code}-{Guid.NewGuid().ToString()[..4].ToUpper()}",
+                    BranchId = command.BranchId,
+                    SupplierId = fallbackSupplier,
+                    ViewFromDate = command.ViewFrom,
+                    ViewToDate = command.ViewTo,
+                    Status = "DRAFT",
+                    Note = command.Note,
+                    CreatedByRole = _tenantContext.CurrentRole,
+                    SubmittedByUserId = submittedBy,
+                    SubmittedAtUtc = DateTime.UtcNow
+                };
+                await _repository.AddPurchaseOrderAsync(empty, cancellationToken);
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+
+            return MapToDto(empty, branch.Name, "Nhiều nhà cung cấp");
+        }
+
+        return MapToDto(lastDraft, branch.Name, "Nhiều nhà cung cấp");
     }
 
     public async Task<DispatchHubResponse> GetDispatchHubAsync(
@@ -398,9 +470,9 @@ public class PurchaseOrderService : IPurchaseOrderService
 
         var configsBySupplier = matrix.SupplierConfigs.ToDictionary(c => c.SupplierId, c => c);
 
-        // Cell map: productId+date -> qty
+        // Cell map: supplierId+productId+date -> qty (cùng SP nhiều NCC)
         var cells = matrix.Cells
-            .GroupBy(c => (c.ProductId, c.DeliveryDate.Date))
+            .GroupBy(c => (c.SupplierId, c.ProductId, c.DeliveryDate.Date))
             .ToDictionary(g => g.Key, g => g.First());
 
         var dayBySupplierDate = matrix.DayStatuses
@@ -436,7 +508,7 @@ public class PurchaseOrderService : IPurchaseOrderService
                 dayBySupplierDate.TryGetValue((product.SupplierId, date), out var dayStatus);
                 var status = dayStatus?.DeliveryDateStatus ?? OrderMatrixRules.StatusOpen;
 
-                cells.TryGetValue((product.Id, date), out var cell);
+                cells.TryGetValue((product.SupplierId, product.Id, date), out var cell);
                 var qty = cell?.FinalQty ?? 0m;
                 if (qty <= 0) continue;
 
@@ -492,7 +564,7 @@ public class PurchaseOrderService : IPurchaseOrderService
 
                 group.Items.Add(new DispatchHubItemDto
                 {
-                    Id = $"{product.Id:N}_{date:yyyyMMdd}",
+                    Id = $"{product.SupplierId:N}_{product.Id:N}_{date:yyyyMMdd}",
                     ProductId = product.Id,
                     Name = product.Name,
                     Sku = product.Sku,
@@ -540,7 +612,9 @@ public class PurchaseOrderService : IPurchaseOrderService
             }
         }
 
-        var productsById = matrix.Products.ToDictionary(p => p.Id, p => p);
+        var productsById = matrix.Products
+            .GroupBy(p => p.Id)
+            .ToDictionary(g => g.Key, g => g.OrderBy(x => x.Price <= 0 ? decimal.MaxValue : x.Price).First());
 
         // PO còn dòng mà draft đã về 0 (không vào Items) → cũng là thay đổi
         foreach (var kv in committedQtyByKey)
@@ -553,7 +627,7 @@ public class PurchaseOrderService : IPurchaseOrderService
             var isFinalizedDay = ds.DeliveryDateStatus == OrderMatrixRules.StatusFinalized;
             if (!isEditableDay && !isFinalizedDay) continue;
 
-            cells.TryGetValue((productId, date), out var cell);
+            cells.TryGetValue((supplierId, productId, date), out var cell);
             var draftQty = cell?.FinalQty ?? 0m;
             if (draftQty == kv.Value) continue;
             if (draftQty > 0) continue; // đã xử lý vòng trên
@@ -1801,6 +1875,7 @@ public class PurchaseOrderService : IPurchaseOrderService
             cancellationToken);
 
         var dtos = items.Select(po => MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC")).ToList();
+        await AttachActiveGoodsReceiptsAsync(dtos, cancellationToken);
 
         return new PagedResult<PurchaseOrderDto>
         {
@@ -1821,7 +1896,9 @@ public class PurchaseOrderService : IPurchaseOrderService
             throw new NotFoundException("Đơn đặt hàng (PO)", id);
         }
 
-        return MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC");
+        var dto = MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC");
+        await AttachActiveGoodsReceiptsAsync(new List<PurchaseOrderDto> { dto }, cancellationToken);
+        return dto;
     }
 
     public async Task<PurchaseOrderDto> UpdatePurchaseOrderStatusAsync(
@@ -1861,7 +1938,26 @@ public class PurchaseOrderService : IPurchaseOrderService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC");
+        var dto = MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC");
+        await AttachActiveGoodsReceiptsAsync(new List<PurchaseOrderDto> { dto }, cancellationToken);
+        return dto;
+    }
+
+    private async Task AttachActiveGoodsReceiptsAsync(
+        IList<PurchaseOrderDto> dtos,
+        CancellationToken cancellationToken)
+    {
+        if (dtos.Count == 0) return;
+
+        var poIds = dtos.Select(d => d.Id).ToList();
+        var receipts = await _repository.GetActiveGoodsReceiptsByPoIdsAsync(poIds, cancellationToken);
+        foreach (var dto in dtos)
+        {
+            if (!receipts.TryGetValue(dto.Id, out var receipt)) continue;
+            dto.ActiveGoodsReceiptId = receipt.ReceiptId;
+            dto.ActiveGoodsReceiptCode = receipt.Code;
+            dto.ActiveGoodsReceiptStatus = receipt.Status;
+        }
     }
 
     private static PurchaseOrderDto MapToDto(PurchaseOrder po, string branchName, string supplierName)

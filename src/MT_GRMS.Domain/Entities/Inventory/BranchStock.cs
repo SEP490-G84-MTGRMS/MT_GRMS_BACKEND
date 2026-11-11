@@ -17,6 +17,7 @@ public class BranchStock : BaseTenantEntity
     public DateTime? ExpiryDate { get; set; }
     public decimal QuantityOnHand { get; set; } = 0.000m;
     public decimal QuantityReserved { get; set; } = 0.000m;
+    public decimal QuantityQuarantined { get; set; } = 0.000m;
     public decimal LandedCostPerUnit { get; set; } = 0.00m;
     public decimal? RetailPrice { get; set; }
     public string Status { get; set; } = "Active";
