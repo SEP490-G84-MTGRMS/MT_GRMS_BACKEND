@@ -673,6 +673,16 @@ public class GoodsReceiptService : IGoodsReceiptService
                 }
             }
 
+            // RULE-02 P-SHORT-A: 1 lần nhập → đóng PO kể cả giao thiếu; phần thiếu đặt bù PO mới.
+            var orderedTotal = po.Details.Sum(d => d.OrderedQty ?? d.FinalQty ?? 0m);
+            var receivedTotal = po.Details.Sum(d => d.ReceivedQty);
+            if (receivedTotal + 0.0001m < orderedTotal)
+            {
+                var shortNote =
+                    $"[P-SHORT-A] Đóng PO sau 1 lần nhập thiếu (nhận {receivedTotal:0.##}/{orderedTotal:0.##}). Phần còn lại cần đặt bù đơn mới.";
+                po.Note = string.IsNullOrWhiteSpace(po.Note) ? shortNote : $"{po.Note} | {shortNote}";
+            }
+
             po.Status = "COMPLETED";
             po.UpdatedAt = DateTime.UtcNow;
         }
