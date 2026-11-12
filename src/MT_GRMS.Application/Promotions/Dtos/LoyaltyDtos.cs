@@ -20,3 +20,25 @@ public record UpdateLoyaltyConfigRequest(
     bool AllowPointsWithPromotions
 );
 
+public record LoyaltyLedgerDto(
+    string Id,
+    string TransactionCode,
+    Guid CustomerId,
+    string CustomerName,
+    string CustomerPhone,
+    string Type,
+    int PointsChanged,
+    int BalanceAfter,
+    string? OrderCode,
+    string Reason,
+    DateTime CreatedAt,
+    string CreatedBy
+);
+
+public record AdjustLoyaltyPointsRequest(
+    string CustomerPhone,
+    string AdjustmentType,
+    int Points,
+    string Reason
+);
+

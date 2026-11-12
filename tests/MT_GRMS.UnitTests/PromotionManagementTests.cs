@@ -194,6 +194,231 @@ public class PromotionManagementTests
         Assert.Equal(0, secondRun);
     }
 
+    private static PromotionCreateRequest BuildValidCreateRequest(
+        string code = "KM-VALID-01",
+        string name = "Chương trình hợp lệ",
+        string type = "ORDER_DISCOUNT",
+        decimal discountValue = 10m,
+        decimal minOrderValue = 100000m,
+        decimal? maxDiscountAmount = 50000m,
+        int? usageLimit = 100,
+        DateTime? startDate = null,
+        DateTime? endDate = null,
+        decimal? budgetLimit = 5000000m,
+        string targetBranches = "ALL",
+        List<PromotionConditionDto>? conditions = null)
+    {
+        var start = startDate ?? DateTime.UtcNow;
+        var end = endDate ?? start.AddDays(10);
+        return new PromotionCreateRequest(
+            PromotionCode: code,
+            PromotionName: name,
+            Type: type,
+            DiscountValue: discountValue,
+            MinOrderValue: minOrderValue,
+            MaxDiscountAmount: maxDiscountAmount,
+            UsageLimit: usageLimit,
+            StartDate: start,
+            EndDate: end,
+            IsActive: true,
+            Description: null,
+            TargetBranches: targetBranches,
+            BudgetLimit: budgetLimit,
+            Conditions: conditions
+        );
+    }
+
+    [Theory]
+    [InlineData("", "Valid Name", "ORDER_DISCOUNT", 10, 0, null, null, null, 1)]
+    [InlineData("   ", "Valid Name", "ORDER_DISCOUNT", 10, 0, null, null, null, 1)]
+    [InlineData("CODE_OVER_50_CHARS_12345678901234567890123456789012345", "Valid Name", "ORDER_DISCOUNT", 10, 0, null, null, null, 1)]
+    [InlineData("KM-01", "", "ORDER_DISCOUNT", 10, 0, null, null, null, 1)]
+    [InlineData("KM-01", "Valid Name", "", 10, 0, null, null, null, 1)]
+    [InlineData("KM-01", "Valid Name", "VOUCHER", 10, 0, null, null, null, 1)]
+    [InlineData("KM-01", "Valid Name", "UNKNOWN_TYPE", 10, 0, null, null, null, 1)]
+    [InlineData("KM-01", "Valid Name", "ORDER_DISCOUNT", -1, 0, null, null, null, 1)]
+    [InlineData("KM-01", "Valid Name", "PERCENT", 0, 0, null, null, null, 1)]
+    [InlineData("KM-01", "Valid Name", "PERCENT", 101, 0, null, null, null, 1)]
+    [InlineData("KM-01", "Valid Name", "FIXED_AMOUNT", 0, 0, null, null, null, 1)]
+    [InlineData("KM-01", "Valid Name", "ORDER_DISCOUNT", 10, -1, null, null, null, 1)]
+    [InlineData("KM-01", "Valid Name", "ORDER_DISCOUNT", 10, 0, -500.0, null, null, 1)]
+    [InlineData("KM-01", "Valid Name", "ORDER_DISCOUNT", 10, 0, null, 0, null, 1)]
+    [InlineData("KM-01", "Valid Name", "ORDER_DISCOUNT", 10, 0, null, null, 0.0, 1)]
+    [InlineData("KM-01", "Valid Name", "ORDER_DISCOUNT", 10, 0, null, null, -1000.0, 1)]
+    [InlineData("KM-01", "Valid Name", "ORDER_DISCOUNT", 10, 0, null, null, null, 0)]
+    [InlineData("KM-01", "Valid Name", "ORDER_DISCOUNT", 10, 0, null, null, null, -2)]
+    public async Task CreatePromotion_InvalidInput_ThrowsValidationException(
+        string code,
+        string name,
+        string type,
+        double discountValue,
+        double minOrderValue,
+        double? maxDiscountAmount,
+        int? usageLimit,
+        double? budgetLimit,
+        int endOffsetDays)
+    {
+        var start = new DateTime(2026, 6, 1, 0, 0, 0, DateTimeKind.Utc);
+        var request = BuildValidCreateRequest(
+            code: code,
+            name: name,
+            type: type,
+            discountValue: (decimal)discountValue,
+            minOrderValue: (decimal)minOrderValue,
+            maxDiscountAmount: maxDiscountAmount.HasValue ? (decimal)maxDiscountAmount.Value : null,
+            usageLimit: usageLimit,
+            startDate: start,
+            endDate: start.AddDays(endOffsetDays),
+            budgetLimit: budgetLimit.HasValue ? (decimal)budgetLimit.Value : null);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.CreatePromotionAsync(request));
+        Assert.Equal("VALIDATION_ERROR", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreatePromotion_NameOver150Chars_AndInvalidCondition_ThrowsValidationException()
+    {
+        var longNameRequest = BuildValidCreateRequest(name: new string('A', 151));
+        var ex1 = await Assert.ThrowsAsync<BusinessException>(() => _service.CreatePromotionAsync(longNameRequest));
+        Assert.Equal("VALIDATION_ERROR", ex1.ErrorCode);
+
+        var badRoleRequest = BuildValidCreateRequest(
+            type: "BUY_X_GET_Y",
+            discountValue: 0m,
+            conditions: new List<PromotionConditionDto>
+            {
+                new(null, Guid.NewGuid(), "SP A", "INVALID_ROLE", 2, 0m, null)
+            });
+        var ex2 = await Assert.ThrowsAsync<BusinessException>(() => _service.CreatePromotionAsync(badRoleRequest));
+        Assert.Equal("VALIDATION_ERROR", ex2.ErrorCode);
+
+        var badMinQtyRequest = BuildValidCreateRequest(
+            type: "BUY_X_GET_Y",
+            discountValue: 0m,
+            conditions: new List<PromotionConditionDto>
+            {
+                new(null, Guid.NewGuid(), "SP A", "BUY", 0, 0m, null)
+            });
+        var ex3 = await Assert.ThrowsAsync<BusinessException>(() => _service.CreatePromotionAsync(badMinQtyRequest));
+        Assert.Equal("VALIDATION_ERROR", ex3.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreatePromotion_ValidBoundaries_BuyXGetYZeroDiscount_AndPercent100_Succeed()
+    {
+        var buyXGetY = BuildValidCreateRequest(
+            code: "KM-BOGO-ZERO",
+            type: "BUY_X_GET_Y",
+            discountValue: 0m,
+            maxDiscountAmount: null);
+        var res1 = await _service.CreatePromotionAsync(buyXGetY);
+        Assert.Equal("BUY_X_GET_Y", res1.Type);
+        Assert.Equal(0m, res1.DiscountValue);
+
+        var pct100 = BuildValidCreateRequest(
+            code: "KM-PCT-100",
+            type: "PERCENT",
+            discountValue: 100m,
+            maxDiscountAmount: 0m);
+        var res2 = await _service.CreatePromotionAsync(pct100);
+        Assert.Equal(100m, res2.DiscountValue);
+    }
+
+    [Fact]
+    public async Task UpdatePromotion_ValidRequest_UpdatesFieldsAndReplacesConditions()
+    {
+        var promoId = _repo.Promotions.First(p => p.PromotionCode == "KM-SALE10").Id;
+        var newProductId = Guid.NewGuid();
+        var start = new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc);
+        var updateRequest = new PromotionUpdateRequest(
+            PromotionName: "Tên đã cập nhật",
+            Type: "PRODUCT_DISCOUNT",
+            DiscountValue: 25000m,
+            MinOrderValue: 100000m,
+            MaxDiscountAmount: 80000m,
+            UsageLimit: 50,
+            StartDate: start,
+            EndDate: start.AddDays(15),
+            IsActive: false,
+            Description: "Mô tả mới",
+            TargetBranches: "Chi nhánh Ba Đình",
+            BudgetLimit: 2000000m,
+            Conditions: new List<PromotionConditionDto>
+            {
+                new(null, newProductId, "Sản phẩm mới", "DISCOUNT", 2, 25000m, "Note")
+            });
+
+        var updated = await _service.UpdatePromotionAsync(promoId, updateRequest);
+
+        Assert.Equal("Tên đã cập nhật", updated.PromotionName);
+        Assert.Equal("PRODUCT_DISCOUNT", updated.Type);
+        Assert.Equal(25000m, updated.DiscountValue);
+        Assert.False(updated.IsActive);
+        Assert.Equal("Chi nhánh Ba Đình", updated.TargetBranches);
+        Assert.Single(updated.Conditions);
+        Assert.Equal(newProductId, updated.Conditions[0].ProductId);
+    }
+
+    [Theory]
+    [InlineData("", "ORDER_DISCOUNT", 10, 1)]
+    [InlineData("Valid", "VOUCHER", 10, 1)]
+    [InlineData("Valid", "PERCENT", 150, 1)]
+    [InlineData("Valid", "ORDER_DISCOUNT", 10, 0)]
+    public async Task UpdatePromotion_InvalidInput_ThrowsValidationException(
+        string name,
+        string type,
+        double discountValue,
+        int endOffsetDays)
+    {
+        var promoId = _repo.Promotions.First(p => p.PromotionCode == "KM-SALE10").Id;
+        var start = new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc);
+        var updateRequest = new PromotionUpdateRequest(
+            PromotionName: name,
+            Type: type,
+            DiscountValue: (decimal)discountValue,
+            MinOrderValue: 0m,
+            MaxDiscountAmount: null,
+            UsageLimit: null,
+            StartDate: start,
+            EndDate: start.AddDays(endOffsetDays),
+            IsActive: true);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.UpdatePromotionAsync(promoId, updateRequest));
+        Assert.Equal("VALIDATION_ERROR", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task PromotionLifecycle_NotFoundIds_ThrowNotFoundException_AndDeleteSoftDeletes()
+    {
+        var missingId = Guid.NewGuid();
+        var start = DateTime.UtcNow;
+        var validUpdate = new PromotionUpdateRequest("Name", "ORDER_DISCOUNT", 10m, 0m, null, null, start, start.AddDays(1), true);
+
+        await Assert.ThrowsAsync<NotFoundException>(() => _service.UpdatePromotionAsync(missingId, validUpdate));
+        await Assert.ThrowsAsync<NotFoundException>(() => _service.TogglePromotionStatusAsync(missingId));
+        await Assert.ThrowsAsync<NotFoundException>(() => _service.DeletePromotionAsync(missingId));
+
+        var existingId = _repo.Promotions.First(p => p.PromotionCode == "KM-SALE10").Id;
+        _repo.Promotions.First(p => p.Id == existingId).IsActive = false;
+        var deleted = await _service.DeletePromotionAsync(existingId);
+        Assert.True(deleted);
+        await Assert.ThrowsAsync<NotFoundException>(() => _service.GetPromotionByIdAsync(existingId));
+    }
+
+    [Fact]
+    public async Task DeletePromotion_WhenCurrentlyRunning_ThrowsBusinessException()
+    {
+        var promo = _repo.Promotions.First(p => p.PromotionCode == "KM-SALE10");
+        promo.IsActive = true;
+        promo.StartDate = DateTime.UtcNow.AddMinutes(-5);
+        promo.EndDate = DateTime.UtcNow.AddMinutes(5);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.DeletePromotionAsync(promo.Id));
+
+        Assert.Equal("PROMOTION_IS_RUNNING", ex.ErrorCode);
+        Assert.False(promo.IsDeleted);
+    }
+
     #region Fakes
     private class FakePromotionRepository : IPromotionRepository
     {

@@ -3,6 +3,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Promotions;
 using MT_GRMS.Application.Promotions.Dtos;
 using MT_GRMS.Domain.Entities.Sales;
+using MT_GRMS.Domain.Exceptions;
 using Xunit;
 
 namespace MT_GRMS.UnitTests;
@@ -68,17 +69,89 @@ public class LoyaltyServiceTests
         Assert.Equal(50, retrieved.MinRedemptionPoints);
     }
 
+    [Theory]
+    [InlineData(0, 1, 1, 1000, 0)]
+    [InlineData(-10000, 1, 1, 1000, 0)]
+    [InlineData(10000, 0, 1, 1000, 0)]
+    [InlineData(10000, -1, 1, 1000, 0)]
+    [InlineData(10000, 1, 0, 1000, 0)]
+    [InlineData(10000, 1, -1, 1000, 0)]
+    [InlineData(10000, 1, 1, 0, 0)]
+    [InlineData(10000, 1, 1, -500, 0)]
+    [InlineData(10000, 1, 1, 1000, -1)]
+    public async Task REQ_LOYALTY_02_UpdateConfigAsync_InvalidValues_ThrowsValidationException(
+        double earningRateAmount,
+        int earningPoints,
+        int redemptionRatePoints,
+        double redemptionRateAmount,
+        int minRedemptionPoints)
+    {
+        var request = new UpdateLoyaltyConfigRequest(
+            IsEnabled: true,
+            EarningRateAmount: (decimal)earningRateAmount,
+            EarningPoints: earningPoints,
+            RedemptionRatePoints: redemptionRatePoints,
+            RedemptionRateAmount: (decimal)redemptionRateAmount,
+            MinRedemptionPoints: minRedemptionPoints,
+            AllowPointsWithPromotions: true
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _loyaltyService.UpdateConfigAsync(request));
+        Assert.Equal("VALIDATION_ERROR", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQ_LOYALTY_02_UpdateConfigAsync_DisabledAndZeroMinPoints_SavesSuccessfully()
+    {
+        var request = new UpdateLoyaltyConfigRequest(
+            IsEnabled: false,
+            EarningRateAmount: 10000m,
+            EarningPoints: 1,
+            RedemptionRatePoints: 1,
+            RedemptionRateAmount: 1000m,
+            MinRedemptionPoints: 0,
+            AllowPointsWithPromotions: false
+        );
+
+        var result = await _loyaltyService.UpdateConfigAsync(request);
+        Assert.False(result.IsEnabled);
+        Assert.Equal(0, result.MinRedemptionPoints);
+        Assert.False(result.AllowPointsWithPromotions);
+    }
+
+    [Fact]
+    public async Task REQ_LOYALTY_03_MultiTenancy_ConfigIsolatedByTenant()
+    {
+        await _loyaltyService.UpdateConfigAsync(new UpdateLoyaltyConfigRequest(
+            IsEnabled: true,
+            EarningRateAmount: 50000m,
+            EarningPoints: 5,
+            RedemptionRatePoints: 1,
+            RedemptionRateAmount: 1000m,
+            MinRedemptionPoints: 10,
+            AllowPointsWithPromotions: true
+        ));
+
+        var otherTenantService = new LoyaltyService(_repo, new FakeTenantContext("tenant-other"));
+        var otherConfig = await otherTenantService.GetConfigAsync();
+
+        // Tenant khác vẫn nhận cấu hình mặc định, không bị ghi đè bởi tenant-unit-test
+        Assert.Equal(10000m, otherConfig.EarningRateAmount);
+        Assert.Equal(1, otherConfig.EarningPoints);
+        Assert.Equal(20, otherConfig.MinRedemptionPoints);
+    }
+
     #region Fakes
     private class FakePromotionRepository : IPromotionRepository
     {
-        private LoyaltySetting? _setting;
+        private readonly Dictionary<string, LoyaltySetting> _settings = new();
 
         public Task<LoyaltySetting?> GetLoyaltySettingAsync(string tenantId, CancellationToken cancellationToken = default)
-            => Task.FromResult(_setting);
+            => Task.FromResult(_settings.TryGetValue(tenantId, out var setting) ? setting : null);
 
         public Task SaveLoyaltySettingAsync(LoyaltySetting setting, CancellationToken cancellationToken = default)
         {
-            _setting = setting;
+            _settings[setting.TenantId] = setting;
             return Task.CompletedTask;
         }
 

@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace MT_GRMS.Application.Promotions.Dtos;
 
 public record VoucherBatchCreateRequest(
@@ -53,14 +55,33 @@ public record VoucherCodeDto(
     DateTime CreatedAt
 );
 
-public record ValidateVoucherRequest(
-    string Code,
-    decimal CartTotal,
-    string? CustomerId = null,
-    bool HasOtherPromotions = false
-)
+public record ValidateVoucherRequest
 {
-    public ValidateVoucherRequest(string code, decimal cartTotal, Guid? customerId, bool hasOtherPromotions = false)
+    public string Code { get; init; } = string.Empty;
+    public decimal CartTotal { get; init; }
+    public string? CustomerId { get; init; }
+    public bool HasOtherPromotions { get; init; }
+
+    public ValidateVoucherRequest() { }
+
+    [JsonConstructor]
+    public ValidateVoucherRequest(
+        string Code,
+        decimal CartTotal,
+        string? CustomerId = null,
+        bool HasOtherPromotions = false)
+    {
+        this.Code = Code;
+        this.CartTotal = CartTotal;
+        this.CustomerId = CustomerId;
+        this.HasOtherPromotions = HasOtherPromotions;
+    }
+
+    public ValidateVoucherRequest(
+        string code,
+        decimal cartTotal,
+        Guid? customerId,
+        bool hasOtherPromotions = false)
         : this(code, cartTotal, customerId?.ToString(), hasOtherPromotions)
     {
     }
