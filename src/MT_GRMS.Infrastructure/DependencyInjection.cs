@@ -98,6 +98,7 @@ public static class DependencyInjection
         services.AddScoped<IBranchRepository, BranchRepository>();
         services.AddScoped<IBranchProductRepository, BranchProductRepository>();
         services.AddScoped<MT_GRMS.Application.PurchaseOrders.IPurchaseOrderRepository, PurchaseOrderRepository>();
+        services.AddScoped<MT_GRMS.Application.PurchaseOrders.IMatrixExcelImportService, Services.MatrixExcelImportService>();
         services.AddScoped<MT_GRMS.Application.GoodsReceipts.IGoodsReceiptRepository, GoodsReceiptRepository>();
         services.AddScoped<MT_GRMS.Application.SupplierReturns.ISupplierReturnRepository, SupplierReturnRepository>();
         services.AddScoped<MT_GRMS.Application.Stocktakes.IStocktakeRepository, StocktakeRepository>();

@@ -514,3 +514,135 @@ public class DispatchSupplierDetailResponse
     public string Status { get; set; } = "draft";
     public IReadOnlyList<DispatchSupplierDetailBranchDto> Branches { get; set; } = new List<DispatchSupplierDetailBranchDto>();
 }
+
+// ── Matrix Excel Import / Preview ──────────────────────────────────────────
+
+public class MatrixExcelAllowedProductDto
+{
+    public Guid ProductId { get; set; }
+    public Guid SupplierId { get; set; }
+}
+
+public class MatrixExcelPreviewQuery
+{
+    public Guid BranchId { get; set; }
+    public Guid? SupplierId { get; set; }
+    public DateTime ViewFrom { get; set; }
+    public int DurationDays { get; set; } = 7;
+    public List<MatrixExcelAllowedProductDto> AllowedProducts { get; set; } = new();
+    public string? FileName { get; set; }
+    public long FileSize { get; set; }
+}
+
+public class MatrixExcelIssueDto
+{
+    public string Type { get; set; } = "ERROR"; // ERROR | WARNING
+    public int Row { get; set; }
+    public string ProductCode { get; set; } = "-";
+    public string ProductName { get; set; } = "-";
+    public string DeliveryDate { get; set; } = "-";
+    public string DateLabel { get; set; } = "-";
+    public string InputValue { get; set; } = "-";
+    public string Code { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+}
+
+public class MatrixExcelCellApplyDto
+{
+    public int ExcelRow { get; set; }
+    public Guid ProductId { get; set; }
+    public Guid SupplierId { get; set; }
+    public DateTime DeliveryDate { get; set; }
+    public string DateLabel { get; set; } = string.Empty;
+    public string ProductCode { get; set; } = string.Empty;
+    public string ProductName { get; set; } = string.Empty;
+    public decimal CurrentQty { get; set; }
+    public decimal Quantity { get; set; }
+}
+
+public class MatrixExcelScopeStatusDto
+{
+    public bool BranchMatched { get; set; }
+    public string BranchExpected { get; set; } = string.Empty;
+    public string? BranchActual { get; set; }
+    public bool SupplierMatched { get; set; }
+    public string SupplierExpected { get; set; } = string.Empty;
+    public string? SupplierActual { get; set; }
+    public bool PeriodMatched { get; set; }
+    public string PeriodExpected { get; set; } = string.Empty;
+    public int ProductsInFilterCount { get; set; }
+}
+
+public class MatrixExcelValidationSummaryDto
+{
+    public int TotalCells { get; set; }
+    public int ValidCells { get; set; }
+    public int ErrorCount { get; set; }
+    public int WarningCount { get; set; }
+    public int IgnoredCells { get; set; }
+    public int SkippedOwnerLocked { get; set; }
+    public int OutOfFilterCount { get; set; }
+}
+
+public class MatrixExcelValidationResultDto
+{
+    public bool Valid { get; set; }
+    public string FileName { get; set; } = string.Empty;
+    public long FileSize { get; set; }
+    public MatrixExcelScopeStatusDto ScopeStatus { get; set; } = new();
+    public MatrixExcelValidationSummaryDto Summary { get; set; } = new();
+    public List<MatrixExcelIssueDto> Errors { get; set; } = new();
+    public List<MatrixExcelIssueDto> Warnings { get; set; } = new();
+    public List<MatrixExcelCellApplyDto> CellsToApply { get; set; } = new();
+}
+
+public class ImportMatrixExcelCellDto
+{
+    public Guid ProductId { get; set; }
+    public Guid SupplierId { get; set; }
+    public DateTime DeliveryDate { get; set; }
+    public decimal Quantity { get; set; }
+    public int? ExcelRow { get; set; }
+    public string? ProductCode { get; set; }
+    public string? ProductName { get; set; }
+    public string? DateLabel { get; set; }
+}
+
+public class ImportMatrixExcelCommand
+{
+    public Guid BranchId { get; set; }
+    public Guid? SupplierId { get; set; }
+    public DateTime ViewFrom { get; set; }
+    public DateTime ViewTo { get; set; }
+    public string? FileName { get; set; }
+    public List<MatrixExcelAllowedProductDto> AllowedProducts { get; set; } = new();
+    public List<ImportMatrixExcelCellDto> Cells { get; set; } = new();
+}
+
+public class MatrixExcelSuccessDayDto
+{
+    public DateTime DeliveryDate { get; set; }
+    public string DateLabel { get; set; } = string.Empty;
+    public int AppliedCells { get; set; }
+    public int ProductCount { get; set; }
+}
+
+public class MatrixExcelImportSummaryDto
+{
+    public int AppliedCells { get; set; }
+    public int SkippedOwnerLocked { get; set; }
+    public int ErrorCount { get; set; }
+    public int WarningCount { get; set; }
+    public int SuccessDayCount { get; set; }
+}
+
+public class MatrixExcelImportResultDto
+{
+    public bool Success { get; set; }
+    public string FileName { get; set; } = string.Empty;
+    public MatrixExcelImportSummaryDto Summary { get; set; } = new();
+    public List<MatrixExcelSuccessDayDto> SuccessDays { get; set; } = new();
+    public List<MatrixExcelIssueDto> Errors { get; set; } = new();
+    public List<MatrixExcelIssueDto> Warnings { get; set; } = new();
+    public Guid? DraftPoId { get; set; }
+}
