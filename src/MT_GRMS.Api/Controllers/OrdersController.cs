@@ -83,6 +83,10 @@ public class OrdersController : BaseApiController
         {
             return StatusCode(403, new { message = authEx.Message });
         }
+        catch (MT_GRMS.Domain.Exceptions.BusinessException bEx)
+        {
+            return UnprocessableEntity(new { code = bEx.ErrorCode, message = bEx.Message });
+        }
         catch (InvalidOperationException opEx)
         {
             return BadRequest(new { message = opEx.Message });
@@ -107,6 +111,10 @@ public class OrdersController : BaseApiController
         catch (UnauthorizedAccessException authEx)
         {
             return StatusCode(403, new { message = authEx.Message });
+        }
+        catch (MT_GRMS.Domain.Exceptions.BusinessException bEx)
+        {
+            return UnprocessableEntity(new { code = bEx.ErrorCode, message = bEx.Message });
         }
         catch (InvalidOperationException opEx)
         {
@@ -137,6 +145,10 @@ public class OrdersController : BaseApiController
         {
             return StatusCode(403, new { message = authEx.Message });
         }
+        catch (MT_GRMS.Domain.Exceptions.BusinessException bEx)
+        {
+            return UnprocessableEntity(new { code = bEx.ErrorCode, message = bEx.Message });
+        }
         catch (InvalidOperationException opEx)
         {
             return BadRequest(new { message = opEx.Message });
@@ -161,6 +173,10 @@ public class OrdersController : BaseApiController
         catch (UnauthorizedAccessException authEx)
         {
             return StatusCode(403, new { message = authEx.Message });
+        }
+        catch (MT_GRMS.Domain.Exceptions.BusinessException bEx)
+        {
+            return UnprocessableEntity(new { code = bEx.ErrorCode, message = bEx.Message });
         }
         catch (InvalidOperationException opEx)
         {
@@ -221,6 +237,10 @@ public class OrdersController : BaseApiController
         {
             return StatusCode(403, new { message = authEx.Message });
         }
+        catch (MT_GRMS.Domain.Exceptions.BusinessException bEx)
+        {
+            return UnprocessableEntity(new { code = bEx.ErrorCode, message = bEx.Message });
+        }
         catch (InvalidOperationException opEx)
         {
             return BadRequest(new { message = opEx.Message });
@@ -228,6 +248,73 @@ public class OrdersController : BaseApiController
         catch (Exception ex)
         {
             return StatusCode(500, new { message = "Lỗi hệ thống khi in hóa đơn.", detail = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Xác nhận đơn hàng chờ thanh toán (PendingPayment -> Completed / PAID) khi thanh toán VietQR thành công
+    /// </summary>
+    [HttpPost("{id:guid}/confirm-payment")]
+    public async Task<IActionResult> ConfirmOrderPayment([FromRoute] Guid id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var response = await _orderService.ConfirmOrderPaymentAsync(id, cancellationToken);
+            return Ok(ApiResponse<OrderResponse>.Ok(response, "Đã xác nhận thanh toán đơn hàng thành công."));
+        }
+        catch (InvalidOperationException opEx)
+        {
+            return BadRequest(new { message = opEx.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Lỗi xác nhận thanh toán đơn hàng.", detail = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Lấy thống kê các đơn hàng bán lẻ trực tiếp của Chủ cửa hàng (Shiftless) chưa kết toán vào Sổ quỹ cuối ngày
+    /// </summary>
+    [HttpGet("owner-unsettled-summary")]
+    public async Task<IActionResult> GetOwnerUnsettledSummary([FromQuery] Guid? branchId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var summary = await _orderService.GetOwnerUnsettledSummaryAsync(branchId, cancellationToken);
+            return Ok(ApiResponse<OwnerUnsettledSummaryResponse>.Ok(summary));
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Lỗi lấy thống kê đơn chưa chốt cuối ngày.", detail = ex.Message });
+        }
+    }
+
+    /// <summary>
+    /// Chốt doanh thu bán lẻ cuối ngày cho Chủ cửa hàng (gộp toàn bộ đơn Shiftless trong ngày vào Két sắt & Ngân hàng)
+    /// </summary>
+    [HttpPost("owner-settle-daily")]
+    public async Task<IActionResult> SettleOwnerDailyOrders([FromBody] SettleOwnerDailyRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _orderService.SettleOwnerDailyOrdersAsync(request, cancellationToken);
+            return Ok(ApiResponse<OwnerDailySettlementResponse>.Ok(result, "Đã chốt doanh thu bán lẻ cuối ngày vào Sổ quỹ thành công!"));
+        }
+        catch (UnauthorizedAccessException authEx)
+        {
+            return StatusCode(403, new { message = authEx.Message });
+        }
+        catch (MT_GRMS.Domain.Exceptions.BusinessException bEx)
+        {
+            return UnprocessableEntity(new { code = bEx.ErrorCode, message = bEx.Message });
+        }
+        catch (InvalidOperationException opEx)
+        {
+            return BadRequest(new { message = opEx.Message });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { message = "Lỗi khi chốt doanh thu cuối ngày.", detail = ex.Message });
         }
     }
 
@@ -245,6 +332,10 @@ public class OrdersController : BaseApiController
         catch (UnauthorizedAccessException authEx)
         {
             return StatusCode(403, new { message = authEx.Message });
+        }
+        catch (MT_GRMS.Domain.Exceptions.BusinessException bEx)
+        {
+            return UnprocessableEntity(new { code = bEx.ErrorCode, message = bEx.Message });
         }
         catch (InvalidOperationException opEx)
         {

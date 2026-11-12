@@ -38,9 +38,11 @@ public record InventoryFilterQuery
 public record InventoryBatchSummaryDto(
     Guid BatchId,
     string BatchCode,
-    DateTime MfgDate,
-    DateTime ExpiryDate,
-    int DaysLeft,
+    DateTime? MfgDate,
+    DateTime? ExpiryDate,
+    int? DaysLeft,
+    decimal QuantityOnHand,
+    decimal ReservedQty,
     decimal AvailableQty,
     string Status
 );

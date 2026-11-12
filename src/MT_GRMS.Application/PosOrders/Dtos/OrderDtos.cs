@@ -23,7 +23,8 @@ public record OrderCreateRequest(
     string? AppliedPromotionSummary = null,
     decimal? PromotionDiscountAmount = null,
     decimal? VoucherDiscountAmount = null,
-    decimal? PointsDiscountAmount = null
+    decimal? PointsDiscountAmount = null,
+    bool IsPendingPayment = false
 )
 {
     // Hỗ trợ tương thích ngược cho StoreId
@@ -172,4 +173,27 @@ public record OrderSummaryResponse(
     int PendingPreOrdersCount,
     int CompletedOrdersCount,
     int CancelledOrdersCount
+);
+
+public record OwnerUnsettledSummaryResponse(
+    int UnsettledOrdersCount,
+    decimal CashRevenue,
+    decimal BankRevenue,
+    decimal TotalRevenue,
+    DateTime? EarliestOrderTimeUtc,
+    DateTime? LatestOrderTimeUtc
+);
+
+public record SettleOwnerDailyRequest(
+    Guid? BranchId = null,
+    string? Note = null
+);
+
+public record OwnerDailySettlementResponse(
+    int SettledOrdersCount,
+    decimal CashSettledAmount,
+    decimal BankSettledAmount,
+    decimal TotalSettledAmount,
+    string SettlementCode,
+    DateTime SettledAtUtc
 );

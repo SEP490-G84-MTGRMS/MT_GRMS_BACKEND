@@ -19,6 +19,7 @@ public class Branch : BaseTenantEntity
     public decimal? Longitude { get; set; }
     public int CheckinRadiusMeters { get; set; } = 100;
     public bool IsActive { get; set; } = true;
+    public TimeSpan BusinessDayStartTime { get; set; } = new(6, 0, 0);
 
     // Backward compatibility aliases
     [NotMapped]

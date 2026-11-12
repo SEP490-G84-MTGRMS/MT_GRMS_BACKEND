@@ -16,6 +16,8 @@ public class Order : BaseTenantEntity
     public Guid? ShiftId { get; set; }
     public string OrderCode { get; set; } = string.Empty;
     public DateTime OrderDate { get; set; } = DateTime.UtcNow;
+    public DateOnly BusinessDate { get; set; }
+    public Guid? BusinessDayClosingId { get; set; }
     public decimal TotalAmount { get; set; } = 0.00m;
     public decimal DiscountAmount { get; set; } = 0.00m;
     public decimal FinalAmount { get; set; } = 0.00m;

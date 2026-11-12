@@ -326,11 +326,17 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
 
         Assert.NotNull(savedOrder);
         Assert.Null(savedOrder!.ShiftId);
-        // Must receive cash into Safe, NOT Till, and must NOT add owner to ShiftParticipants!
-        cashbookMock.Verify(c => c.GetOrCreateSafeAsync(_branchId, It.IsAny<CancellationToken>()), Times.Once);
-        cashbookMock.Verify(c => c.ReceiveCashAsync(safeAccount.Id, FinanceAccountType.Safe, 50000m, "POS_SALE", It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        // Per-order creation must NOT record individual cashbook entries; instead, EOD settlement aggregates and records into Safe!
         cashbookMock.Verify(c => c.GetOrCreateTillAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         shiftRepoMock.Verify(r => r.AddParticipantAsync(It.IsAny<ShiftParticipant>(), It.IsAny<CancellationToken>()), Times.Never);
+
+        orderRepoMock.Setup(r => r.GetAllOrdersForSummaryAsync(_branchId, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<Order> { savedOrder });
+        var settleResult = await orderService.SettleOwnerDailyOrdersAsync(new SettleOwnerDailyRequest(_branchId, "Chốt cuối ngày"));
+        Assert.Equal(1, settleResult.SettledOrdersCount);
+        Assert.Equal(50000m, settleResult.CashSettledAmount);
+        cashbookMock.Verify(c => c.GetOrCreateSafeAsync(_branchId, It.IsAny<CancellationToken>()), Times.Once);
+        cashbookMock.Verify(c => c.ReceiveCashAsync(safeAccount.Id, FinanceAccountType.Safe, 50000m, "POS_SALE", It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
 
         // Staff spoofing creatorRole = "STORE_OWNER" when no shift is open MUST be rejected with SHIFT_NOT_OPEN
         shiftRepoMock.Setup(r => r.GetActiveShiftAsync(_branchId, null, It.IsAny<CancellationToken>()))

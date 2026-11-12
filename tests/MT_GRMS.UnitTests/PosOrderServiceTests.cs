@@ -2628,6 +2628,515 @@ public class PosOrderServiceTests
         var giftStock = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == prodGiftId).Sum(s => s.QuantityOnHand);
         Assert.Equal(5m, giftStock);
     }
+
+    private async Task<OrderResponse> CreateSampleCompletedOrderAsync(Guid? customerId = null, decimal haoHaoQty = 2m)
+    {
+        return await _orderService.CreateOrderAsync(new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: customerId ?? _customerId,
+            PaymentMethod: "CASH",
+            CashTendered: haoHaoQty * 5000m,
+            Items: new List<OrderItemCreateDto>
+            {
+                new(_prodHaoHaoId, haoHaoQty, 5000m)
+            }
+        ));
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchange_OrderNotFound_ThrowsInvalidOperationException()
+    {
+        var req = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_prodHaoHaoId, 1m, 5000m) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH"
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(Guid.NewGuid(), req));
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchange_OrderNotCompleted_ThrowsInvalidOperationException()
+    {
+        var originalOrder = await CreateSampleCompletedOrderAsync();
+        var domainOrder = _orderRepo.Orders.First(o => o.Id == originalOrder.Id);
+        domainOrder.Status = "PendingPickup";
+
+        var req = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_prodHaoHaoId, 1m, 5000m) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH"
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(originalOrder.Id, req));
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchange_EmptyReturnedAndNewItems_ThrowsInvalidOperationException()
+    {
+        var originalOrder = await CreateSampleCompletedOrderAsync();
+        var req = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto>(),
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH"
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(originalOrder.Id, req));
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchange_ReturnedQtyNonPositive_ThrowsInvalidOperationException()
+    {
+        var originalOrder = await CreateSampleCompletedOrderAsync();
+        var req = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_prodHaoHaoId, 0m, 5000m) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH"
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(originalOrder.Id, req));
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchange_DuplicateReturnedRowsExceedPurchasedQty_ThrowsInvalidOperationException()
+    {
+        var originalOrder = await CreateSampleCompletedOrderAsync(haoHaoQty: 2m);
+        var detailId = originalOrder.Items.First().Id;
+        var stockBefore = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == _prodHaoHaoId).Sum(s => s.QuantityOnHand);
+
+        var req = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto>
+            {
+                new(_prodHaoHaoId, 2m, 5000m, OrderDetailId: detailId),
+                new(_prodHaoHaoId, 1m, 5000m, OrderDetailId: detailId)
+            },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH"
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(originalOrder.Id, req));
+
+        var stockAfter = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == _prodHaoHaoId).Sum(s => s.QuantityOnHand);
+        Assert.Equal(stockBefore, stockAfter);
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchange_ReturnedProductNotInOrder_ThrowsInvalidOperationException()
+    {
+        var originalOrder = await CreateSampleCompletedOrderAsync();
+        var req = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_prodCocaId, 1m, 10000m) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH"
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(originalOrder.Id, req));
+    }
+
+    [Theory]
+    [InlineData("Broken", "CASH")]
+    [InlineData("Restock", "")]
+    [InlineData("Restock", "CRYPTO")]
+    public async Task ProcessReturnExchange_InvalidConditionOrSettlementMethod_ThrowsInvalidOperationException(string condition, string settlementMethod)
+    {
+        var originalOrder = await CreateSampleCompletedOrderAsync();
+        var req = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_prodHaoHaoId, 1m, 5000m, Condition: condition) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: settlementMethod
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(originalOrder.Id, req));
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchange_NoteOver500OrOtherReasonWithoutNote_ThrowsInvalidOperationException()
+    {
+        var originalOrder = await CreateSampleCompletedOrderAsync();
+
+        var tooLongNoteReq = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_prodHaoHaoId, 1m, 5000m) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH",
+            Reason: "DEFECTIVE",
+            Note: new string('a', 501)
+        );
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(originalOrder.Id, tooLongNoteReq));
+
+        var otherWithoutNoteReq = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_prodHaoHaoId, 1m, 5000m) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH",
+            Reason: "OTHER",
+            Note: "   "
+        );
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(originalOrder.Id, otherWithoutNoteReq));
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchange_NewItemInvalidQtyOrNegativePrice_ThrowsInvalidOperationException()
+    {
+        var originalOrder = await CreateSampleCompletedOrderAsync();
+
+        var zeroQtyReq = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_prodHaoHaoId, 1m, 5000m) },
+            NewItems: new List<OrderItemCreateDto> { new(_prodCocaId, 0m, 10000m) },
+            SettlementMethod: "CASH"
+        );
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(originalOrder.Id, zeroQtyReq));
+
+        var negativePriceReq = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_prodHaoHaoId, 1m, 5000m) },
+            NewItems: new List<OrderItemCreateDto> { new(_prodCocaId, 1m, -1000m) },
+            SettlementMethod: "CASH"
+        );
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(originalOrder.Id, negativePriceReq));
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchange_DebtOrReduceDebtWithoutCustomer_ThrowsInvalidOperationException()
+    {
+        var originalOrder = await _orderService.CreateOrderAsync(new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            CashTendered: 10000m,
+            Items: new List<OrderItemCreateDto> { new(_prodHaoHaoId, 2m, 5000m) }
+        ));
+
+        var debtBuyReq = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_prodHaoHaoId, 1m, 5000m) },
+            NewItems: new List<OrderItemCreateDto> { new(_prodCocaId, 1m, 10000m) },
+            SettlementMethod: "DEBT"
+        );
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(originalOrder.Id, debtBuyReq));
+
+        var reduceDebtReq = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_prodHaoHaoId, 1m, 5000m) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "REDUCE_DEBT"
+        );
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(originalOrder.Id, reduceDebtReq));
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchange_InsufficientDrawerCash_ThrowsInvalidOperationExceptionWithoutMutatingStock()
+    {
+        var originalOrder = await CreateSampleCompletedOrderAsync(haoHaoQty: 2m);
+        var stockBefore = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == _prodHaoHaoId).Sum(s => s.QuantityOnHand);
+
+        var shiftId = Guid.NewGuid();
+        var mockShiftRepo = new Moq.Mock<IShiftRepository>();
+        mockShiftRepo.Setup(r => r.GetActiveShiftAsync(_branchId, Moq.It.IsAny<Guid?>(), Moq.It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new ShiftZReport
+            {
+                Id = shiftId,
+                BranchId = _branchId,
+                Status = ShiftState.Open,
+                ExpectedCash = 2000m
+            });
+
+        var mockTenant = new Moq.Mock<ITenantContext>();
+        mockTenant.Setup(t => t.CurrentTenantId).Returns("tenant-01");
+        mockTenant.Setup(t => t.CurrentRole).Returns("CASHIER");
+
+        var cashierOrderService = new OrderService(
+            _orderRepo,
+            _uow,
+            _printService,
+            null,
+            null,
+            new OrderCreateRequestValidator(),
+            mockShiftRepo.Object,
+            null,
+            mockTenant.Object);
+
+        var refundReq = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_prodHaoHaoId, 1m, 5000m) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH",
+            Reason: "DEFECTIVE"
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            cashierOrderService.ProcessReturnExchangeAsync(originalOrder.Id, refundReq));
+
+        var stockAfter = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == _prodHaoHaoId).Sum(s => s.QuantityOnHand);
+        Assert.Equal(stockBefore, stockAfter);
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchange_PreOrderCompleted_BlocksRefundUnlessDefectiveReason()
+    {
+        var originalOrder = await CreateSampleCompletedOrderAsync(haoHaoQty: 2m);
+        var domainOrder = _orderRepo.Orders.First(o => o.Id == originalOrder.Id);
+        domainOrder.OrderCode = "PO2611120001";
+
+        var changeMindRefundReq = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_prodHaoHaoId, 1m, 5000m) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH",
+            Reason: "CHANGE_MIND"
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(originalOrder.Id, changeMindRefundReq));
+
+        // Ngoại lệ DEFECTIVE được phép hoàn tiền
+        var defectiveRefundRes = await _orderService.ProcessReturnExchangeAsync(originalOrder.Id, new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_prodHaoHaoId, 1m, 5000m) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH",
+            Reason: "DEFECTIVE"
+        ));
+        Assert.Equal(5000m, defectiveRefundRes.ChangeAmount);
+    }
+
+    [Fact]
+    public async Task CreatePreOrder_EmptyOrGiftOnlyItems_ThrowsValidationException()
+    {
+        var emptyReq = new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto>(),
+            DepositAmount: 0m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(1)
+        );
+        await Assert.ThrowsAsync<ValidationException>(() => _orderService.CreatePreOrderAsync(emptyReq));
+
+        var giftOnlyReq = new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto> { new(_prodCocaId, 1m, 0m, IsGift: true) },
+            DepositAmount: 0m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(1)
+        );
+        await Assert.ThrowsAsync<ValidationException>(() => _orderService.CreatePreOrderAsync(giftOnlyReq));
+    }
+
+    [Fact]
+    public async Task CreatePreOrder_EmptyOrUnknownOrWalkInCustomer_ThrowsInvalidOperationException()
+    {
+        var baseItems = new List<OrderItemCreateDto> { new(_prodHaoHaoId, 2m, 5000m) };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(_branchId, Guid.Empty, baseItems, 1000m, DateTime.UtcNow.AddDays(1))));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(_branchId, Guid.NewGuid(), baseItems, 1000m, DateTime.UtcNow.AddDays(1))));
+
+        var walkInId = Guid.NewGuid();
+        _orderRepo.Customers.Add(new Customer
+        {
+            Id = walkInId,
+            TenantId = "tenant-01",
+            CustomerCode = "KHACHLE",
+            Name = "Khách lẻ"
+        });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(_branchId, walkInId, baseItems, 1000m, DateTime.UtcNow.AddDays(1))));
+    }
+
+    [Fact]
+    public async Task CreatePreOrder_BranchOrProductNotFound_ThrowsInvalidOperationException()
+    {
+        var baseItems = new List<OrderItemCreateDto> { new(_prodHaoHaoId, 2m, 5000m) };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(Guid.Empty, _customerId, baseItems, 1000m, DateTime.UtcNow.AddDays(1))));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(Guid.NewGuid(), _customerId, baseItems, 1000m, DateTime.UtcNow.AddDays(1))));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(_branchId, _customerId, new List<OrderItemCreateDto> { new(Guid.NewGuid(), 1m, 5000m) }, 1000m, DateTime.UtcNow.AddDays(1))));
+    }
+
+    [Fact]
+    public async Task CreatePreOrder_PastOrDefaultPickupDate_ThrowsInvalidOperationException()
+    {
+        var baseItems = new List<OrderItemCreateDto> { new(_prodHaoHaoId, 2m, 5000m) };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(_branchId, _customerId, baseItems, 1000m, default)));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(_branchId, _customerId, baseItems, 1000m, DateTime.UtcNow.AddHours(-2))));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("DEBT")]
+    [InlineData("CRYPTO")]
+    public async Task CreatePreOrder_InvalidPaymentMethod_ThrowsInvalidOperationException(string paymentMethod)
+    {
+        var req = new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto> { new(_prodHaoHaoId, 2m, 5000m) },
+            DepositAmount: 2000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(1),
+            PaymentMethod: paymentMethod
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(req));
+    }
+
+    [Fact]
+    public async Task CreatePreOrder_NoteOver500OrNegativeDiscount_ThrowsInvalidOperationException()
+    {
+        var baseItems = new List<OrderItemCreateDto> { new(_prodHaoHaoId, 2m, 5000m) };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(_branchId, _customerId, baseItems, 1000m, DateTime.UtcNow.AddDays(1), Note: new string('x', 501))));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(_branchId, _customerId, baseItems, 1000m, DateTime.UtcNow.AddDays(1), DiscountAmount: -500m)));
+    }
+
+    [Fact]
+    public async Task CreatePreOrder_InvalidItemQtyOrNegativePriceOrConversionRate_ThrowsInvalidOperationException()
+    {
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(_branchId, _customerId, new List<OrderItemCreateDto> { new(_prodHaoHaoId, 0m, 5000m) }, 0m, DateTime.UtcNow.AddDays(1))));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(_branchId, _customerId, new List<OrderItemCreateDto> { new(_prodHaoHaoId, -2m, 5000m) }, 0m, DateTime.UtcNow.AddDays(1))));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(_branchId, _customerId, new List<OrderItemCreateDto> { new(_prodHaoHaoId, 2m, -5000m) }, 0m, DateTime.UtcNow.AddDays(1))));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(_branchId, _customerId, new List<OrderItemCreateDto> { new(_prodHaoHaoId, 2m, 5000m, ConversionRate: -1m) }, 1000m, DateTime.UtcNow.AddDays(1))));
+    }
+
+    [Fact]
+    public async Task CreatePreOrder_DepositNegativeOrExceedsFinalAmount_ThrowsInvalidOperationException()
+    {
+        var baseItems = new List<OrderItemCreateDto> { new(_prodHaoHaoId, 4m, 5000m) };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(_branchId, _customerId, baseItems, -1000m, DateTime.UtcNow.AddDays(1))));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(
+            new PreOrderCreateRequest(_branchId, _customerId, baseItems, 25000m, DateTime.UtcNow.AddDays(1))));
+    }
+
+    [Fact]
+    public async Task CreatePreOrder_Full100PercentDeposit_SetsPaymentStatusPaid()
+    {
+        var req = new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto> { new(_prodHaoHaoId, 4m, 5000m) },
+            DepositAmount: 20000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(1),
+            PaymentMethod: "VIETQR"
+        );
+
+        var res = await _orderService.CreatePreOrderAsync(req);
+
+        Assert.Equal("PendingPickup", res.Status);
+        Assert.Equal("PAID", res.PaymentStatus);
+        Assert.Equal(20000m, res.DepositAmount);
+    }
+
+    [Fact]
+    public async Task FulfillPreOrder_NotFoundOrInvalidStatus_ThrowsInvalidOperationException()
+    {
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.FulfillPreOrderAsync(
+            Guid.NewGuid(),
+            new PreOrderFulfillRequest("CASH", 10000m)));
+
+        var preOrder = await _orderService.CreatePreOrderAsync(new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto> { new(_prodHaoHaoId, 2m, 5000m) },
+            DepositAmount: 2000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(1)
+        ));
+
+        await _orderService.FulfillPreOrderAsync(preOrder.Id, new PreOrderFulfillRequest("CASH", 8000m));
+
+        // Bàn giao lại đơn đã Completed -> phải chặn
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.FulfillPreOrderAsync(preOrder.Id, new PreOrderFulfillRequest("CASH", 0m)));
+    }
+
+    [Fact]
+    public async Task FulfillPreOrder_InsufficientPaymentOrInvalidMethodOrNoteOver500_ThrowsInvalidOperationException()
+    {
+        var preOrder = await _orderService.CreatePreOrderAsync(new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto> { new(_prodHaoHaoId, 4m, 5000m) },
+            DepositAmount: 5000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(1)
+        ));
+
+        // Thiếu tiền (cần 15.000, chỉ đưa 10.000)
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.FulfillPreOrderAsync(preOrder.Id, new PreOrderFulfillRequest("CASH", 10000m)));
+
+        // Phương thức không hợp lệ
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.FulfillPreOrderAsync(preOrder.Id, new PreOrderFulfillRequest("DEBT", 15000m)));
+
+        // Note vượt 500 ký tự
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.FulfillPreOrderAsync(preOrder.Id, new PreOrderFulfillRequest("CASH", 15000m, Note: new string('n', 501))));
+    }
+
+    [Fact]
+    public async Task FulfillPreOrder_WalkInCustomerOrder_DoesNotAwardLoyaltyPoints()
+    {
+        var walkInId = Guid.NewGuid();
+        var walkIn = new Customer
+        {
+            Id = walkInId,
+            TenantId = "tenant-01",
+            CustomerCode = "KHACHLE",
+            Name = "Khách lẻ",
+            RewardPoints = 0
+        };
+        _orderRepo.Customers.Add(walkIn);
+
+        var legacyPreOrder = new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            CustomerId = walkInId,
+            OrderCode = "PO2611129999",
+            TotalAmount = 50000m,
+            FinalAmount = 50000m,
+            DepositAmount = 10000m,
+            PaymentMethod = "CASH",
+            PaymentStatus = "PARTIALLY_PAID",
+            Status = "PendingPickup",
+            OrderDate = DateTime.UtcNow
+        };
+        _orderRepo.Orders.Add(legacyPreOrder);
+
+        var res = await _orderService.FulfillPreOrderAsync(legacyPreOrder.Id, new PreOrderFulfillRequest("CASH", 40000m));
+
+        Assert.Equal("Completed", res.Status);
+        Assert.Equal(0, walkIn.RewardPoints);
+    }
 }
 
 // ----------------- FAKE IMPLEMENTATIONS DÀNH CHO UNIT TEST -----------------

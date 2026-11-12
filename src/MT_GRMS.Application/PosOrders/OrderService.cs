@@ -555,7 +555,12 @@ public class OrderService : IOrderService
             // VIETQR / BANK_TRANSFER / BANK / CARD
             cashTendered = finalAmount;
             changeAmount = 0m;
-            paymentStatus = "PAID";
+            paymentStatus = request.IsPendingPayment ? "PENDING_PAYMENT" : "PAID";
+        }
+
+        if (request.IsPendingPayment && paymentMethodUpper != "CREDIT" && paymentMethodUpper != "DEBT")
+        {
+            paymentStatus = "PENDING_PAYMENT";
         }
 
         // 7. Tích điểm thưởng cho khách hàng (Khách lẻ KHÔNG tích điểm, tuân thủ cấu hình LoyaltySetting)
@@ -591,9 +596,12 @@ public class OrderService : IOrderService
                     customer.RewardPoints -= pointsToDeduct;
                 }
 
-                int earnedPoints = (int)(finalAmount / earningRate) * earningPoints;
-                customer.RewardPoints += earnedPoints;
-                customer.TotalSpending += finalAmount;
+                if (!request.IsPendingPayment)
+                {
+                    int earnedPoints = (int)(finalAmount / earningRate) * earningPoints;
+                    customer.RewardPoints += earnedPoints;
+                    customer.TotalSpending += finalAmount;
+                }
                 customer.UpdatedAt = DateTime.UtcNow;
             }
         }
@@ -635,6 +643,7 @@ public class OrderService : IOrderService
             : combinedPromoSummary;
 
         string orderCode = debtInvoiceResponse != null ? debtInvoiceResponse.OrderCode : $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
+        var orderBusinessDate = activeShift?.BusinessDate ?? BusinessDateResolver.Resolve(DateTime.UtcNow, new TimeSpan(6, 0, 0));
         var order = new Order
         {
             Id = debtInvoiceResponse != null ? debtInvoiceResponse.OrderId : Guid.NewGuid(),
@@ -646,13 +655,14 @@ public class OrderService : IOrderService
             CashierName = resolvedCashierName,
             CreatedBy = creatorId,
             OrderDate = DateTime.UtcNow,
+            BusinessDate = orderBusinessDate,
             TotalAmount = totalAmount,
             DiscountAmount = totalDiscount,
             FinalAmount = finalAmount,
-            DepositAmount = (paymentMethodUpper == "CASH") ? cashTendered : (paymentMethodUpper == "CREDIT" ? 0m : finalAmount),
+            DepositAmount = request.IsPendingPayment ? 0m : ((paymentMethodUpper == "CASH") ? cashTendered : (paymentMethodUpper == "CREDIT" ? 0m : finalAmount)),
             PaymentMethod = paymentMethodUpper,
             PaymentStatus = paymentStatus,
-            Status = "Completed",
+            Status = request.IsPendingPayment ? "PendingPayment" : "Completed",
             Note = request.Note,
             AppliedPromotionId = effectiveAppliedPromoId,
             AppliedPromotionSummary = effectivePromoSummary,
@@ -673,71 +683,9 @@ public class OrderService : IOrderService
             d.OrderId = order.Id;
         }
 
-        // Đồng bộ Sổ quỹ (FE-17)
-        if (_cashbookService != null && finalAmount > 0)
-        {
-            if (paymentMethodUpper == "CASH")
-            {
-                if (isOwnerOrAdmin && !shiftId.HasValue)
-                {
-                    var safe = await _cashbookService.GetOrCreateSafeAsync(order.BranchId, cancellationToken);
-                    await _cashbookService.ReceiveCashAsync(
-                        safe.Id,
-                        FinanceAccountType.Safe,
-                        finalAmount,
-                        "POS_SALE",
-                        order.Id,
-                        orderCode,
-                        $"Doanh thu bán hàng POS (Chủ cửa hàng - Tiền mặt) đơn {orderCode}",
-                        cancellationToken
-                    );
-                }
-                else
-                {
-                    var till = await _cashbookService.GetOrCreateTillAsync(order.BranchId, "Két quầy chính", cancellationToken);
-                    await _cashbookService.ReceiveCashAsync(
-                        till.Id,
-                        FinanceAccountType.Till,
-                        finalAmount,
-                        "POS_SALE",
-                        order.Id,
-                        orderCode,
-                        $"Doanh thu bán hàng POS (Tiền mặt) đơn {orderCode}",
-                        cancellationToken
-                    );
-                }
-            }
-            else if (paymentMethodUpper != "CREDIT" && paymentMethodUpper != "DEBT")
-            {
-                StorePaymentConfig? paymentCfg = null;
-                if (_shiftRepository != null && !string.IsNullOrWhiteSpace(order.TenantId))
-                {
-                    paymentCfg = await _shiftRepository.GetPaymentConfigAsync(order.TenantId, cancellationToken);
-                }
-
-                var bankDisplayName = !string.IsNullOrWhiteSpace(paymentCfg?.BankName)
-                    ? paymentCfg.BankName
-                    : (!string.IsNullOrWhiteSpace(paymentCfg?.BankCode) ? $"Ngân hàng {paymentCfg.BankCode}" : null);
-
-                var bank = await _cashbookService.GetOrCreateBankAccountAsync(
-                    order.BranchId,
-                    bankDisplayName,
-                    paymentCfg?.BankAccountNumber,
-                    paymentCfg?.BankAccountName,
-                    cancellationToken);
-
-                await _cashbookService.ReceiveCashAsync(
-                    bank.Id,
-                    FinanceAccountType.Bank,
-                    finalAmount,
-                    "POS_SALE",
-                    order.Id,
-                    orderCode,
-                    $"Doanh thu bán hàng POS ({paymentMethodUpper}) đơn {orderCode}",
-                    cancellationToken
-                );
-            }
-        }
+        // Lưu ý (FE-17 Consolidated):
+        // - Đơn hàng thuộc Ca thu ngân (shiftId.HasValue) sẽ được gộp doanh thu vào Sổ quỹ khi Chốt ca / Xác nhận bàn giao ca.
+        // - Đơn hàng của Chủ cửa hàng bán lẻ trực tiếp (!shiftId.HasValue) sẽ được gộp khi Chủ bấm "Chốt doanh thu cuối ngày" (SettleOwnerDailyOrdersAsync).
 
         await _orderRepository.AddAsync(order, cancellationToken);
 
@@ -894,9 +842,19 @@ public class OrderService : IOrderService
 
     public async Task<OrderResponse> CreatePreOrderAsync(PreOrderCreateRequest request, CancellationToken cancellationToken = default)
     {
+        if (request == null)
+        {
+            throw new ValidationException("Dữ liệu đơn đặt trước không được để trống.");
+        }
+
         if (!string.IsNullOrWhiteSpace(request.VoucherCode))
         {
             throw new ValidationException("Đơn đặt trước không hỗ trợ áp dụng mã giảm giá (Voucher) dùng 1 lần.");
+        }
+
+        if (request.BranchId == Guid.Empty)
+        {
+            throw new InvalidOperationException("Chi nhánh (BranchId) không được để trống.");
         }
 
         if (request.Items == null || request.Items.Count == 0)
@@ -914,6 +872,40 @@ public class OrderService : IOrderService
             throw new InvalidOperationException("Đơn đặt trước bắt buộc phải có thông tin khách hàng định danh.");
         }
 
+        if (request.ExpectedPickupDate == default ||
+            (request.ExpectedPickupDate.Kind == DateTimeKind.Utc && request.ExpectedPickupDate <= DateTime.UtcNow.AddMinutes(-1)) ||
+            (request.ExpectedPickupDate.Kind == DateTimeKind.Local && request.ExpectedPickupDate.ToUniversalTime() <= DateTime.UtcNow.AddMinutes(-1)) ||
+            (request.ExpectedPickupDate.Kind == DateTimeKind.Unspecified && request.ExpectedPickupDate <= DateTime.UtcNow.AddHours(-14)))
+        {
+            throw new InvalidOperationException("Thời gian hẹn nhận hàng phải sau thời điểm hiện tại.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.PaymentMethod))
+        {
+            throw new InvalidOperationException("Phương thức thu cọc không được để trống.");
+        }
+
+        string preOrderPaymentMethod = request.PaymentMethod.Trim().ToUpperInvariant();
+        if (preOrderPaymentMethod is not ("CASH" or "VIETQR" or "TRANSFER" or "BANK"))
+        {
+            throw new InvalidOperationException($"Phương thức thanh toán '{request.PaymentMethod}' không được hỗ trợ cho đơn đặt trước.");
+        }
+
+        if (request.Note != null && request.Note.Trim().Length > 500)
+        {
+            throw new InvalidOperationException("Ghi chú đơn đặt trước tối đa 500 ký tự.");
+        }
+
+        if (request.DiscountAmount.HasValue && request.DiscountAmount.Value < 0)
+        {
+            throw new InvalidOperationException("Chiết khấu đơn đặt trước không được âm.");
+        }
+
+        if (request.DepositAmount < 0)
+        {
+            throw new InvalidOperationException("Tiền đặt cọc không được là số âm.");
+        }
+
         var branch = await _orderRepository.GetBranchByIdAsync(request.BranchId, cancellationToken);
         if (branch == null)
         {
@@ -926,12 +918,40 @@ public class OrderService : IOrderService
             throw new InvalidOperationException($"Khách hàng với ID '{request.CustomerId}' không tồn tại.");
         }
 
+        bool isWalkInCustomer = string.Equals(customer.CustomerCode, "KHACHLE", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(customer.Name?.Trim(), "Khách lẻ", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(customer.Name?.Trim(), "Khách hàng lẻ", StringComparison.OrdinalIgnoreCase);
+        if (isWalkInCustomer)
+        {
+            throw new InvalidOperationException("Đơn đặt trước bắt buộc phải chọn khách hàng định danh (không áp dụng cho Khách lẻ).");
+        }
+
         var productIds = request.Items.Select(i => i.ProductId).Distinct().ToList();
         var products = await _orderRepository.GetProductsByIdsAsync(productIds, cancellationToken);
         var branchProducts = await _orderRepository.GetBranchProductsByProductIdsAsync(request.BranchId, productIds, cancellationToken);
 
         foreach (var item in request.Items)
         {
+            if (item.ProductId == Guid.Empty)
+            {
+                throw new InvalidOperationException("Mã sản phẩm không được để trống.");
+            }
+            if (item.Quantity <= 0)
+            {
+                throw new InvalidOperationException("Số lượng sản phẩm đặt trước phải lớn hơn 0.");
+            }
+            if (item.UnitPrice < 0)
+            {
+                throw new InvalidOperationException("Đơn giá sản phẩm đặt trước không được âm.");
+            }
+            if (item.DiscountAmount.HasValue && item.DiscountAmount.Value < 0)
+            {
+                throw new InvalidOperationException("Giảm giá sản phẩm không được âm.");
+            }
+            if (item.ConversionRate < 0)
+            {
+                throw new InvalidOperationException("Hệ số quy đổi đơn vị sản phẩm không hợp lệ.");
+            }
             if (!products.TryGetValue(item.ProductId, out _))
             {
                 throw new InvalidOperationException($"Sản phẩm với ID '{item.ProductId}' không tồn tại.");
@@ -1211,6 +1231,9 @@ public class OrderService : IOrderService
             Guid? preOrderShiftId = request.ShiftId ?? (!isOwnerOrAdminPreOrder && _shiftRepository != null
                 ? (await _shiftRepository.GetActiveShiftAsync(request.BranchId, cancellationToken: cancellationToken))?.Id
                 : null);
+            var preOrderShift = preOrderShiftId.HasValue && _shiftRepository != null
+                ? await _shiftRepository.GetByIdAsync(preOrderShiftId.Value, cancellationToken)
+                : null;
 
             string? preOrderCashierName = !string.IsNullOrWhiteSpace(request.CashierName)
                 ? request.CashierName.Trim()
@@ -1229,6 +1252,9 @@ public class OrderService : IOrderService
                 effectivePromoSummary = effectivePromoSummary.Substring(0, 300);
             }
 
+            var preOrderBusinessDate = preOrderShift != null
+                ? preOrderShift.BusinessDate
+                : BusinessDateResolver.Resolve(DateTime.UtcNow, new TimeSpan(6, 0, 0));
             var order = new Order
             {
                 Id = Guid.NewGuid(),
@@ -1240,11 +1266,12 @@ public class OrderService : IOrderService
                 CashierName = preOrderCashierName,
                 CreatedBy = _tenantContext != null && _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId : null,
                 OrderDate = DateTime.UtcNow,
+                BusinessDate = preOrderBusinessDate,
                 TotalAmount = totalAmount,
                 DiscountAmount = totalDiscount,
                 FinalAmount = finalAmount,
                 DepositAmount = request.DepositAmount,
-                PaymentMethod = request.PaymentMethod,
+                PaymentMethod = preOrderPaymentMethod,
                 PaymentStatus = request.DepositAmount >= finalAmount ? "PAID" : "PARTIALLY_PAID",
                 Status = "PendingPickup",
                 Note = $"Hẹn nhận: {request.ExpectedPickupDate:dd/MM/yyyy HH:mm}. {request.Note}".Trim(),
@@ -1285,6 +1312,32 @@ public class OrderService : IOrderService
 
     public async Task<OrderResponse> FulfillPreOrderAsync(Guid orderId, PreOrderFulfillRequest request, CancellationToken cancellationToken = default)
     {
+        if (request == null)
+        {
+            throw new InvalidOperationException("Dữ liệu bàn giao đơn đặt trước không hợp lệ.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.PaymentMethod))
+        {
+            throw new InvalidOperationException("Phương thức thanh toán bàn giao không được để trống.");
+        }
+
+        string fulfillPaymentMethod = request.PaymentMethod.Trim().ToUpperInvariant();
+        if (fulfillPaymentMethod is not ("CASH" or "VIETQR" or "TRANSFER" or "BANK"))
+        {
+            throw new InvalidOperationException($"Phương thức thanh toán '{request.PaymentMethod}' không được hỗ trợ khi bàn giao đơn đặt trước.");
+        }
+
+        if (request.Note != null && request.Note.Trim().Length > 500)
+        {
+            throw new InvalidOperationException("Ghi chú xuất hàng tối đa 500 ký tự.");
+        }
+
+        if (request.AmountPaid < 0)
+        {
+            throw new InvalidOperationException("Số tiền khách trả không được âm.");
+        }
+
         var order = await _orderRepository.GetOrderWithDetailsAsync(orderId, cancellationToken);
         if (order == null)
         {
@@ -1308,7 +1361,7 @@ public class OrderService : IOrderService
 
         order.Status = "Completed";
         order.PaymentStatus = "PAID";
-        order.PaymentMethod = request.PaymentMethod;
+        order.PaymentMethod = fulfillPaymentMethod;
         order.DepositAmount = order.FinalAmount;
         order.FulfilledByCashierName = fulfillingCashierName;
         order.FulfilledAtUtc = DateTime.UtcNow;
@@ -1453,18 +1506,27 @@ public class OrderService : IOrderService
             }
         }
 
-        // Nếu là đơn bán nợ thì hoàn nợ cho khách
-        if (order.PaymentMethod == "DEBT" && order.CustomerId.HasValue)
+        // Nếu là đơn bán nợ thì hoàn nợ cho khách, hoặc hoàn điểm đã quy đổi nếu hủy đơn
+        if (order.CustomerId.HasValue)
         {
             var customer = await _orderRepository.GetCustomerByIdAsync(order.CustomerId.Value, cancellationToken);
             if (customer != null)
             {
-                customer.TotalDebt = Math.Max(0, customer.TotalDebt - order.FinalAmount);
+                if (order.PaymentMethod == "DEBT" && order.Status != "PendingPayment")
+                {
+                    customer.TotalDebt = Math.Max(0, customer.TotalDebt - order.FinalAmount);
+                }
+                if (order.PointsRedeemed > 0)
+                {
+                    customer.RewardPoints += order.PointsRedeemed;
+                }
+                customer.UpdatedAt = DateTime.UtcNow;
             }
         }
 
+        bool wasPendingPayment = string.Equals(order.Status, "PendingPayment", StringComparison.OrdinalIgnoreCase);
         order.Status = "Cancelled";
-        order.PaymentStatus = "REFUNDED";
+        order.PaymentStatus = wasPendingPayment ? "CANCELLED" : "REFUNDED";
         order.Note = $"Đã hủy: {request.Reason}. {request.Note} | Trước đó: {order.Note}".Trim();
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -1487,6 +1549,11 @@ public class OrderService : IOrderService
 
     public async Task<OrderResponse> ProcessReturnExchangeAsync(Guid orderId, ReturnExchangeRequest request, CancellationToken cancellationToken = default)
     {
+        if (request == null)
+        {
+            throw new InvalidOperationException("Dữ liệu đổi/trả hàng không hợp lệ.");
+        }
+
         var originalOrder = await _orderRepository.GetOrderWithDetailsAsync(orderId, cancellationToken);
         if (originalOrder == null)
         {
@@ -1504,8 +1571,31 @@ public class OrderService : IOrderService
             throw new InvalidOperationException("Yêu cầu đổi trả phải có ít nhất một mặt hàng trả hoặc mặt hàng đổi mới.");
         }
 
-        // Tiền kiểm tra NewItems: Sản phẩm đổi mới phải tồn tại và thuộc danh mục Active của chi nhánh đơn gốc (REQ-BRANCH-SCOPE-02)
+        if (string.IsNullOrWhiteSpace(request.SettlementMethod))
+        {
+            throw new InvalidOperationException("Phương thức bù trừ không được để trống.");
+        }
+
+        string settlementMethodUpper = request.SettlementMethod.Trim().ToUpperInvariant();
+        if (settlementMethodUpper is not ("CASH" or "VIETQR" or "TRANSFER" or "BANK" or "DEBT" or "REDUCE_DEBT"))
+        {
+            throw new InvalidOperationException($"Phương thức bù trừ '{request.SettlementMethod}' không hợp lệ.");
+        }
+
+        if (request.Note != null && request.Note.Trim().Length > 500)
+        {
+            throw new InvalidOperationException("Ghi chú đổi/trả hàng tối đa 500 ký tự.");
+        }
+
+        if (string.Equals(request.Reason?.Trim(), "OTHER", StringComparison.OrdinalIgnoreCase) &&
+            string.IsNullOrWhiteSpace(request.Note))
+        {
+            throw new InvalidOperationException("Khi chọn lý do khác, bắt buộc nhập ghi chú chi tiết.");
+        }
+
+        // Tiền kiểm tra NewItems: dữ liệu hợp lệ, sản phẩm tồn tại và thuộc danh mục Active của chi nhánh đơn gốc (REQ-BRANCH-SCOPE-02)
         Dictionary<Guid, Product>? newProducts = null;
+        decimal totalNewAmount = 0m;
         if (request.NewItems != null && request.NewItems.Count > 0)
         {
             var newProductIds = request.NewItems.Select(i => i.ProductId).Distinct().ToList();
@@ -1514,6 +1604,26 @@ public class OrderService : IOrderService
 
             foreach (var newItem in request.NewItems)
             {
+                if (newItem.Quantity <= 0)
+                {
+                    throw new InvalidOperationException("Số lượng sản phẩm đổi mới phải lớn hơn 0.");
+                }
+
+                if (newItem.UnitPrice < 0)
+                {
+                    throw new InvalidOperationException("Đơn giá sản phẩm đổi mới không được âm.");
+                }
+
+                if (newItem.DiscountAmount.HasValue && newItem.DiscountAmount.Value < 0)
+                {
+                    throw new InvalidOperationException("Chiết khấu sản phẩm đổi mới không được âm.");
+                }
+
+                if (newItem.ConversionRate < 0)
+                {
+                    throw new InvalidOperationException("Hệ số quy đổi đơn vị sản phẩm đổi mới không hợp lệ.");
+                }
+
                 if (!newProducts.TryGetValue(newItem.ProductId, out var nProd))
                 {
                     throw new InvalidOperationException($"Sản phẩm đổi mới với ID '{newItem.ProductId}' không tồn tại.");
@@ -1524,11 +1634,21 @@ public class OrderService : IOrderService
                 {
                     throw new BusinessException("PRODUCT_NOT_IN_BRANCH", $"Sản phẩm '{nProd.Name}' chưa được kích hoạt hoặc không thuộc danh mục bán của chi nhánh.");
                 }
+
+                decimal lineTotal = newItem.Quantity * newItem.UnitPrice;
+                decimal itemDiscount = newItem.DiscountAmount ?? 0m;
+                if (itemDiscount > lineTotal)
+                {
+                    throw new InvalidOperationException($"Chiết khấu sản phẩm '{nProd.Name}' không được vượt quá thành tiền.");
+                }
+                totalNewAmount += lineTotal - itemDiscount;
             }
         }
 
-        // 1. Kiểm tra và hoàn kho các mặt hàng khách trả
+        // 1. Tiền kiểm tra toàn bộ mặt hàng khách trả trước khi ghi kho
         decimal totalReturnAmount = 0m;
+        var resolvedReturns = new List<(ReturnItemDto RetItem, OrderDetail OrigDetail)>();
+        var returnedQtyByDetailId = new Dictionary<Guid, decimal>();
         if (request.ReturnedItems != null && request.ReturnedItems.Count > 0)
         {
             foreach (var retItem in request.ReturnedItems)
@@ -1536,6 +1656,18 @@ public class OrderService : IOrderService
                 if (retItem.Quantity <= 0)
                 {
                     throw new InvalidOperationException("Số lượng trả phải lớn hơn 0.");
+                }
+
+                if (retItem.UnitPrice < 0)
+                {
+                    throw new InvalidOperationException("Đơn giá hàng trả không được âm.");
+                }
+
+                if (!string.IsNullOrWhiteSpace(retItem.Condition) &&
+                    !string.Equals(retItem.Condition.Trim(), "Restock", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(retItem.Condition.Trim(), "Damaged", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException($"Tình trạng hàng trả '{retItem.Condition}' không hợp lệ (chỉ hỗ trợ Restock hoặc Damaged).");
                 }
 
                 OrderDetail? origDetail = null;
@@ -1551,10 +1683,12 @@ public class OrderService : IOrderService
                     throw new InvalidOperationException($"Sản phẩm với ID '{retItem.ProductId}' không có trong hóa đơn gốc '{originalOrder.OrderCode}'.");
                 }
 
-                if (retItem.Quantity > origDetail.Qty)
+                decimal cumulativeReturnQty = returnedQtyByDetailId.GetValueOrDefault(origDetail.Id) + retItem.Quantity;
+                if (cumulativeReturnQty > origDetail.Qty)
                 {
-                    throw new InvalidOperationException($"Số lượng trả ({retItem.Quantity}) vượt quá số lượng đã mua ({origDetail.Qty}) của sản phẩm '{origDetail.ProductName}'.");
+                    throw new InvalidOperationException($"Số lượng trả ({cumulativeReturnQty}) vượt quá số lượng đã mua ({origDetail.Qty}) của sản phẩm '{origDetail.ProductName}'.");
                 }
+                returnedQtyByDetailId[origDetail.Id] = cumulativeReturnQty;
 
                 // Khóa cứng hoàn tiền 0đ đối với dòng quà tặng khuyến mãi (REQ-ORD-BOGO-03)
                 decimal refundableUnitPrice = origDetail.IsGift
@@ -1562,24 +1696,23 @@ public class OrderService : IOrderService
                     : (origDetail.ActualPrice > 0m ? Math.Min(Math.Max(0m, retItem.UnitPrice), origDetail.ActualPrice) : Math.Max(0m, retItem.UnitPrice));
 
                 totalReturnAmount += retItem.Quantity * refundableUnitPrice;
-
-                // Hoàn lại kho BranchStock nếu tình trạng hàng là Restock (nguyên vẹn)
-                if (!string.Equals(retItem.Condition, "Damaged", StringComparison.OrdinalIgnoreCase))
-                {
-                    var stock = await _orderRepository.GetBranchStockAsync(originalOrder.BranchId, retItem.ProductId, null, cancellationToken);
-                    if (stock != null)
-                    {
-                        var convRate = origDetail.ConversionRate > 0m ? origDetail.ConversionRate : 1.00m;
-                        stock.QuantityOnHand += retItem.Quantity * convRate;
-                        stock.UpdatedAt = DateTime.UtcNow;
-                    }
-                }
+                resolvedReturns.Add((retItem, origDetail));
             }
         }
 
-        // 2. Kiểm tra và trừ kho FEFO các mặt hàng khách đổi mới (nếu có)
-        decimal totalNewAmount = 0m;
-        var newOrderDetails = new List<OrderDetail>();
+        // Kiểm tra quy tắc Đơn Đặt Trước (PreOrder): chỉ cho đổi sang sản phẩm tương đương trở lên, chặn hoàn tiền trừ khi lỗi NSX
+        decimal netAmount = totalNewAmount - totalReturnAmount;
+        bool isPreOrderOrder = originalOrder.OrderCode.StartsWith("PO", StringComparison.OrdinalIgnoreCase) ||
+                               originalOrder.OrderCode.StartsWith("PRE-", StringComparison.OrdinalIgnoreCase);
+        if (isPreOrderOrder &&
+            (request.NewItems == null || request.NewItems.Count == 0 || netAmount < 0m) &&
+            !string.Equals(request.Reason?.Trim(), "DEFECTIVE", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Đơn đặt trước chỉ hỗ trợ đổi sang sản phẩm khác có giá trị tương đương trở lên, không hỗ trợ hoàn tiền trừ khi sản phẩm lỗi do Nhà Sản Xuất.");
+        }
+
+        // 2. Tiền kiểm tra tồn kho FEFO các mặt hàng đổi mới trước khi mutate kho
+        var fefoDeductions = new List<(decimal RequiredQty, IReadOnlyList<Domain.Entities.Inventory.BranchStock> Stocks)>();
         if (request.NewItems != null && request.NewItems.Count > 0 && newProducts != null)
         {
             var itemGroups = request.NewItems.GroupBy(i => i.ProductId);
@@ -1596,6 +1729,67 @@ public class OrderService : IOrderService
                     throw new InvalidOperationException($"Sản phẩm '{prod.Name}' không đủ tồn kho tại chi nhánh để đổi (Hiện còn: {totalOnHand:0.##}, Cần: {requiredQty:0.##}).");
                 }
 
+                fefoDeductions.Add((requiredQty, branchStocks));
+            }
+        }
+
+        // 3. Kiểm tra công nợ & két quầy trước khi ghi kho
+        Customer? customer = null;
+        if (originalOrder.CustomerId.HasValue)
+        {
+            customer = await _orderRepository.GetCustomerByIdAsync(originalOrder.CustomerId.Value, cancellationToken);
+        }
+
+        if (netAmount > 0 && settlementMethodUpper == "DEBT" && customer == null)
+        {
+            throw new InvalidOperationException("Bán nợ bù trừ bắt buộc phải có thông tin khách hàng.");
+        }
+
+        if (netAmount < 0 && (settlementMethodUpper == "REDUCE_DEBT" || settlementMethodUpper == "DEBT") && customer == null)
+        {
+            throw new InvalidOperationException("Trừ nợ khách hàng bắt buộc phải có thông tin khách hàng.");
+        }
+
+        Domain.Entities.Finance.ShiftZReport? currentOpenShift = null;
+        if (!IsOwnerOrAdminCaller() && _shiftRepository != null)
+        {
+            currentOpenShift = await _shiftRepository.GetActiveShiftAsync(originalOrder.BranchId, cancellationToken: cancellationToken);
+        }
+
+        if (netAmount < 0 &&
+            settlementMethodUpper != "REDUCE_DEBT" &&
+            settlementMethodUpper != "DEBT" &&
+            !IsOwnerOrAdminCaller() &&
+            currentOpenShift != null)
+        {
+            decimal previewRefundAmount = Math.Abs(netAmount);
+            if (currentOpenShift.ExpectedCash < previewRefundAmount)
+            {
+                throw new InvalidOperationException($"Số dư tiền mặt trong két quầy không đủ để hoàn trả (Hiện có: {currentOpenShift.ExpectedCash:N0} đ, Cần hoàn: {previewRefundAmount:N0} đ). Vui lòng nạp thêm tiền vào két ca.");
+            }
+        }
+
+        // Hoàn lại kho BranchStock cho hàng trả Restock
+        foreach (var (retItem, origDetail) in resolvedReturns)
+        {
+            if (!string.Equals(retItem.Condition?.Trim(), "Damaged", StringComparison.OrdinalIgnoreCase))
+            {
+                var stock = await _orderRepository.GetBranchStockAsync(originalOrder.BranchId, retItem.ProductId, null, cancellationToken);
+                if (stock != null)
+                {
+                    var convRate = origDetail.ConversionRate > 0m ? origDetail.ConversionRate : 1.00m;
+                    stock.QuantityOnHand += retItem.Quantity * convRate;
+                    stock.UpdatedAt = DateTime.UtcNow;
+                }
+            }
+        }
+
+        // Trừ kho FEFO cho hàng đổi mới & build chi tiết hóa đơn mới
+        var newOrderDetails = new List<OrderDetail>();
+        if (request.NewItems != null && request.NewItems.Count > 0 && newProducts != null)
+        {
+            foreach (var (requiredQty, branchStocks) in fefoDeductions)
+            {
                 var remainingToDeduct = requiredQty;
                 foreach (var stock in branchStocks)
                 {
@@ -1616,8 +1810,6 @@ public class OrderService : IOrderService
                 decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : item.UnitPrice;
                 decimal vatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m;
                 decimal vatAmount = (actualPrice * item.Quantity) * vatRate;
-
-                totalNewAmount += lineTotal - itemDiscount;
 
                 var rate = item.ConversionRate > 0m ? item.ConversionRate : (prod.Units?.FirstOrDefault(u => u.Id == item.UnitId)?.ConversionRate ?? 1.00m);
                 var uName = !string.IsNullOrWhiteSpace(item.UnitName) ? item.UnitName : (prod.Units?.FirstOrDefault(u => u.Id == item.UnitId)?.UnitName ?? prod.BaseUnit);
@@ -1643,15 +1835,7 @@ public class OrderService : IOrderService
             }
         }
 
-        // 3. Tính bù trừ chênh lệch
-        decimal netAmount = totalNewAmount - totalReturnAmount;
-        Customer? customer = null;
-        if (originalOrder.CustomerId.HasValue)
-        {
-            customer = await _orderRepository.GetCustomerByIdAsync(originalOrder.CustomerId.Value, cancellationToken);
-        }
-
-        string settlementMethodUpper = request.SettlementMethod.ToUpper();
+        // Ghi nhận thanh toán / hoàn tiền / công nợ
         string paymentStatus = "PAID";
         decimal cashTendered = 0m;
         decimal changeAmount = 0m;
@@ -1661,8 +1845,7 @@ public class OrderService : IOrderService
         {
             if (settlementMethodUpper == "DEBT")
             {
-                if (customer == null) throw new InvalidOperationException("Bán nợ bù trừ bắt buộc phải có thông tin khách hàng.");
-                customer.TotalDebt += netAmount;
+                customer!.TotalDebt += netAmount;
                 customer.UpdatedAt = DateTime.UtcNow;
                 paymentStatus = "UNPAID";
             }
@@ -1676,11 +1859,8 @@ public class OrderService : IOrderService
             decimal refundAmount = Math.Abs(netAmount);
             if (settlementMethodUpper == "REDUCE_DEBT" || settlementMethodUpper == "DEBT")
             {
-                if (customer != null)
-                {
-                    customer.TotalDebt = Math.Max(0, customer.TotalDebt - refundAmount);
-                    customer.UpdatedAt = DateTime.UtcNow;
-                }
+                customer!.TotalDebt = Math.Max(0, customer.TotalDebt - refundAmount);
+                customer.UpdatedAt = DateTime.UtcNow;
             }
             else
             {
@@ -1704,44 +1884,38 @@ public class OrderService : IOrderService
                         );
                     }
                 }
-                else if (_shiftRepository != null)
+                else if (currentOpenShift != null && _shiftRepository != null)
                 {
-                    var activeShift = await _shiftRepository.GetActiveShiftAsync(originalOrder.BranchId, cancellationToken: cancellationToken);
-                    if (activeShift != null)
+                    var movement = new ShiftCashMovement
                     {
-                        if (activeShift.ExpectedCash < refundAmount)
-                        {
-                            throw new InvalidOperationException($"Số dư tiền mặt trong két quầy không đủ để hoàn trả (Hiện có: {activeShift.ExpectedCash:N0} đ, Cần hoàn: {refundAmount:N0} đ). Vui lòng nạp thêm tiền vào két ca.");
-                        }
-
-                        var movement = new ShiftCashMovement
-                        {
-                            Id = Guid.NewGuid(),
-                            TenantId = originalOrder.TenantId,
-                            ShiftId = activeShift.Id,
-                            MovementType = CashMovementType.OUT,
-                            Category = CashMovementCategory.RETURN_REFUND,
-                            Amount = refundAmount,
-                            Reason = $"Hoàn tiền mặt đổi/trả đơn '{originalOrder.OrderCode}'. Lý do: {request.Reason ?? request.Note ?? "Khách trả hàng"}",
-                            CreatedByName = exchangeCashierName,
-                            OccurredAtUtc = DateTime.UtcNow,
-                            Status = CashMovementStatus.Recorded,
-                            IsConfirmedByOwner = true
-                        };
-                        await _shiftRepository.AddCashMovementAsync(movement, cancellationToken);
-                        activeShift.TotalCashOut += refundAmount;
-                        activeShift.ExpectedCash -= refundAmount;
-                    }
+                        Id = Guid.NewGuid(),
+                        TenantId = originalOrder.TenantId,
+                        ShiftId = currentOpenShift.Id,
+                        MovementType = CashMovementType.OUT,
+                        Category = CashMovementCategory.RETURN_REFUND,
+                        Amount = refundAmount,
+                        Reason = $"Hoàn tiền mặt đổi/trả đơn '{originalOrder.OrderCode}'. Lý do: {request.Reason ?? request.Note ?? "Khách trả hàng"}",
+                        CreatedByName = exchangeCashierName,
+                        OccurredAtUtc = DateTime.UtcNow,
+                        Status = CashMovementStatus.Recorded,
+                        IsConfirmedByOwner = true
+                    };
+                    await _shiftRepository.AddCashMovementAsync(movement, cancellationToken);
+                    currentOpenShift.TotalCashOut += refundAmount;
+                    currentOpenShift.ExpectedCash -= refundAmount;
                 }
             }
         }
 
-        // 4. Sinh đơn mới liên kết
+        // 4. Sinh đơn mới liên kết (gắn vào ca đang mở nếu nhân viên thực hiện đổi trả sau khi ca cũ đã đóng)
+        Guid? currentActiveShiftId = currentOpenShift?.Id;
+
         string exchangeCode = $"DT{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
         var exchangeOrder = new Order
         {
             Id = Guid.NewGuid(),
             BranchId = originalOrder.BranchId,
+            ShiftId = currentActiveShiftId,
             CustomerId = originalOrder.CustomerId,
             OrderCode = exchangeCode,
             CashierName = exchangeCashierName,
@@ -1787,11 +1961,11 @@ public class OrderService : IOrderService
         decimal totalRevenue = completedRevenue + preOrderDepositRevenue;
 
         decimal cashRevenue = orders
-            .Where(o => o.PaymentMethod == "CASH" && o.Status != "Cancelled")
+            .Where(o => o.PaymentMethod == "CASH" && o.Status != "Cancelled" && o.Status != "PendingPayment")
             .Sum(o => o.Status == "Completed" ? o.FinalAmount : o.DepositAmount);
 
         decimal transferRevenue = orders
-            .Where(o => (o.PaymentMethod == "VIETQR" || o.PaymentMethod == "TRANSFER" || o.PaymentMethod == "BANK") && o.Status != "Cancelled")
+            .Where(o => (o.PaymentMethod == "VIETQR" || o.PaymentMethod == "TRANSFER" || o.PaymentMethod == "BANK") && o.Status != "Cancelled" && o.Status != "PendingPayment")
             .Sum(o => o.Status == "Completed" ? o.FinalAmount : o.DepositAmount);
 
         return new OrderSummaryResponse(
@@ -1802,6 +1976,184 @@ public class OrderService : IOrderService
             PendingPreOrdersCount: pendingPreOrders,
             CompletedOrdersCount: completedCount,
             CancelledOrdersCount: cancelledCount
+        );
+    }
+
+    public async Task<OrderResponse> ConfirmOrderPaymentAsync(Guid orderId, CancellationToken cancellationToken = default)
+    {
+        var order = await _orderRepository.GetOrderWithDetailsAsync(orderId, cancellationToken);
+        if (order == null)
+        {
+            throw new InvalidOperationException($"Không tìm thấy đơn hàng với ID '{orderId}'.");
+        }
+
+        if (order.Status == "Cancelled")
+        {
+            throw new InvalidOperationException($"Đơn hàng '{order.OrderCode}' đã bị hủy, không thể xác nhận thanh toán.");
+        }
+
+        if (order.Status == "Completed" && order.PaymentStatus == "PAID")
+        {
+            return MapToOrderResponse(order, order.FinalAmount, 0m, null);
+        }
+
+        bool wasPendingPayment = string.Equals(order.Status, "PendingPayment", StringComparison.OrdinalIgnoreCase);
+        order.Status = "Completed";
+        order.PaymentStatus = "PAID";
+        order.DepositAmount = order.FinalAmount;
+        order.UpdatedAt = DateTime.UtcNow;
+
+        if (wasPendingPayment && order.CustomerId.HasValue && order.FinalAmount > 0m)
+        {
+            var customer = await _orderRepository.GetCustomerByIdAsync(order.CustomerId.Value, cancellationToken);
+            if (customer != null)
+            {
+                bool isLoyaltyEnabled = true;
+                decimal earningRate = 10000m;
+                int earningPoints = 1;
+                if (_promotionRepository != null)
+                {
+                    var loyaltySetting = await _promotionRepository.GetLoyaltySettingAsync(order.TenantId, cancellationToken);
+                    if (loyaltySetting != null)
+                    {
+                        isLoyaltyEnabled = loyaltySetting.IsEnabled;
+                        if (isLoyaltyEnabled)
+                        {
+                            earningRate = loyaltySetting.EarningRateAmount > 0 ? loyaltySetting.EarningRateAmount : 10000m;
+                            earningPoints = loyaltySetting.EarningPoints > 0 ? loyaltySetting.EarningPoints : 1;
+                        }
+                    }
+                }
+                if (isLoyaltyEnabled)
+                {
+                    int pointsEarned = (int)(order.FinalAmount / earningRate) * earningPoints;
+                    customer.RewardPoints += pointsEarned;
+                }
+                customer.TotalSpending += order.FinalAmount;
+                customer.UpdatedAt = DateTime.UtcNow;
+            }
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapToOrderResponse(order, order.FinalAmount, 0m, null);
+    }
+
+    public async Task<OwnerUnsettledSummaryResponse> GetOwnerUnsettledSummaryAsync(Guid? branchId = null, CancellationToken cancellationToken = default)
+    {
+        var orders = await _orderRepository.GetAllOrdersForSummaryAsync(branchId, null, null, cancellationToken);
+        var unsettled = orders
+            .Where(o => o.ShiftId == null
+                && o.Status == "Completed"
+                && o.PaymentMethod != "DEBT"
+                && (o.Note == null || !o.Note.Contains("[CHỐT CUỐI NGÀY:")))
+            .OrderByDescending(o => o.OrderDate)
+            .ToList();
+
+        var cashOrders = unsettled.Where(o => o.PaymentMethod == "CASH").ToList();
+        var bankOrders = unsettled.Where(o => o.PaymentMethod == "VIETQR" || o.PaymentMethod == "BANK" || o.PaymentMethod == "TRANSFER").ToList();
+
+        decimal cashRevenue = cashOrders.Sum(o => o.FinalAmount);
+        decimal bankRevenue = bankOrders.Sum(o => o.FinalAmount);
+
+        return new OwnerUnsettledSummaryResponse(
+            UnsettledOrdersCount: unsettled.Count,
+            CashRevenue: cashRevenue,
+            BankRevenue: bankRevenue,
+            TotalRevenue: cashRevenue + bankRevenue,
+            EarliestOrderTimeUtc: unsettled.Count > 0 ? unsettled.Min(o => o.OrderDate) : null,
+            LatestOrderTimeUtc: unsettled.Count > 0 ? unsettled.Max(o => o.OrderDate) : null
+        );
+    }
+
+    public async Task<OwnerDailySettlementResponse> SettleOwnerDailyOrdersAsync(SettleOwnerDailyRequest request, CancellationToken cancellationToken = default)
+    {
+        if (!IsOwnerOrAdminCaller())
+        {
+            throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền thực hiện chốt doanh thu bán lẻ cuối ngày.");
+        }
+
+        var orders = await _orderRepository.GetAllOrdersForSummaryAsync(request.BranchId, null, null, cancellationToken);
+        var unsettled = orders
+            .Where(o => o.ShiftId == null
+                && o.Status == "Completed"
+                && o.PaymentMethod != "DEBT"
+                && (o.Note == null || !o.Note.Contains("[CHỐT CUỐI NGÀY:")))
+            .ToList();
+
+        if (unsettled.Count == 0)
+        {
+            throw new InvalidOperationException("Hiện không có đơn hàng bán lẻ trực tiếp nào của Chủ cửa hàng chờ kết toán cuối ngày.");
+        }
+
+        string settlementCode = $"EOD-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
+        string noteSuffix = !string.IsNullOrWhiteSpace(request.Note) ? $" - Ghi chú: {request.Note.Trim()}" : "";
+
+        decimal totalCashSettled = 0m;
+        decimal totalBankSettled = 0m;
+
+        foreach (var branchGroup in unsettled.GroupBy(o => o.BranchId))
+        {
+            var bId = branchGroup.Key;
+            var branchCashOrders = branchGroup.Where(o => o.PaymentMethod == "CASH").ToList();
+            var branchBankOrders = branchGroup.Where(o => o.PaymentMethod == "VIETQR" || o.PaymentMethod == "BANK" || o.PaymentMethod == "TRANSFER").ToList();
+
+            decimal branchCash = branchCashOrders.Sum(o => o.FinalAmount);
+            decimal branchBank = branchBankOrders.Sum(o => o.FinalAmount);
+
+            if (_cashbookService != null)
+            {
+                if (branchCash > 0m)
+                {
+                    var safe = await _cashbookService.GetOrCreateSafeAsync(bId, cancellationToken);
+                    await _cashbookService.ReceiveCashAsync(
+                        safe.Id,
+                        FinanceAccountType.Safe,
+                        branchCash,
+                        "POS_SALE",
+                        null,
+                        settlementCode,
+                        $"Chốt doanh thu bán lẻ cuối ngày của Chủ cửa hàng ({branchCashOrders.Count} đơn tiền mặt){noteSuffix}",
+                        cancellationToken
+                    );
+                }
+
+                if (branchBank > 0m)
+                {
+                    var bank = await _cashbookService.GetOrCreateBankAccountAsync(bId, ct: cancellationToken);
+                    await _cashbookService.ReceiveCashAsync(
+                        bank.Id,
+                        FinanceAccountType.Bank,
+                        branchBank,
+                        "POS_SALE",
+                        null,
+                        $"{settlementCode}-BANK",
+                        $"Chốt doanh thu CK/VietQR cuối ngày của Chủ cửa hàng ({branchBankOrders.Count} đơn CK){noteSuffix}",
+                        cancellationToken
+                    );
+                }
+            }
+
+            totalCashSettled += branchCash;
+            totalBankSettled += branchBank;
+        }
+
+        foreach (var ord in unsettled)
+        {
+            ord.Note = string.IsNullOrWhiteSpace(ord.Note)
+                ? $"[CHỐT CUỐI NGÀY: {settlementCode}]"
+                : $"{ord.Note} | [CHỐT CUỐI NGÀY: {settlementCode}]";
+            ord.UpdatedAt = DateTime.UtcNow;
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return new OwnerDailySettlementResponse(
+            SettledOrdersCount: unsettled.Count,
+            CashSettledAmount: totalCashSettled,
+            BankSettledAmount: totalBankSettled,
+            TotalSettledAmount: totalCashSettled + totalBankSettled,
+            SettlementCode: settlementCode,
+            SettledAtUtc: DateTime.UtcNow
         );
     }
 

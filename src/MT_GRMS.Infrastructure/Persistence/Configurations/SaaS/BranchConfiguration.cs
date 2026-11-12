@@ -25,6 +25,7 @@ public class BranchConfiguration : IEntityTypeConfiguration<Branch>
         builder.Property(x => x.Longitude).HasColumnType("decimal(10,7)");
         builder.Property(x => x.CheckinRadiusMeters).HasDefaultValue(100);
         builder.Property(x => x.IsActive).HasDefaultValue(true);
+        builder.Property(x => x.BusinessDayStartTime).HasDefaultValue(new TimeSpan(6, 0, 0));
 
         builder.HasIndex(x => new { x.TenantId, x.BranchCode }).IsUnique();
 
