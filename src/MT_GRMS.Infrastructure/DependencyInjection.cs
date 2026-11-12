@@ -88,6 +88,7 @@ public static class DependencyInjection
         services.AddScoped<IProductUnitRepository, ProductUnitRepository>();
         services.AddScoped<IBatchRepository, BatchRepository>();
         services.AddScoped<ICashbookRepository, CashbookRepository>();
+        services.AddScoped<Application.BusinessDays.IBusinessDayClosingRepository, BusinessDayClosingRepository>();
         services.AddScoped<Application.Expenses.IExpenseRepository, ExpenseRepository>();
         services.AddScoped<Application.Debt.ICustomerDebtRepository, CustomerDebtRepository>();
         services.AddScoped<Application.Reports.IPnLReportRepository, PnLReportRepository>();

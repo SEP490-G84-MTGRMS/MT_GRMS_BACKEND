@@ -72,6 +72,7 @@ builder.Services.AddAuthentication(options =>
 });
 
 builder.Services.AddAuthorization();
+builder.Services.AddHttpClient();
 
 // 3. Đăng ký Scoped Context đa người thuê
 builder.Services.AddScoped<ITenantContext, TenantContext>();

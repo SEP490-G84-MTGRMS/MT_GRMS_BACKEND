@@ -82,6 +82,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<Domain.Entities.Sales.Order> Orders { get; set; } = null!;
     public virtual DbSet<OrderDetail> OrderDetails { get; set; } = null!;
     public virtual DbSet<LoyaltySetting> LoyaltySettings { get; set; } = null!;
+    public virtual DbSet<LoyaltyPointAdjustment> LoyaltyPointAdjustments { get; set; } = null!;
 
     // 6. Phân hệ Tài chính, Sổ quỹ & Chi phí (FE-07, FE-17) - Đã hợp nhất FinanceAccounts
     public virtual DbSet<CashbookTransaction> CashbookTransactions { get; set; } = null!;
@@ -92,6 +93,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<ShiftCashMovement> ShiftCashMovements { get; set; } = null!;
     public virtual DbSet<ShiftParticipant> ShiftParticipants { get; set; } = null!;
     public virtual DbSet<ShiftCloseConfirmation> ShiftCloseConfirmations { get; set; } = null!;
+    public virtual DbSet<BusinessDayClosing> BusinessDayClosings { get; set; } = null!;
     public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!;
     public virtual DbSet<StorePaymentConfig> StorePaymentConfigs { get; set; } = null!;
     public virtual DbSet<PaymentTransaction> PaymentTransactions { get; set; } = null!;
