@@ -25,6 +25,9 @@ public class Tenant : BaseEntity<string>
     public decimal WalletBalance { get; set; } = 0;
     public string? CurrentPlan { get; set; }
     public int ExtraBranches { get; set; } = 0;
+    public int ExtraStorageGb { get; set; } = 0;
+    public DateTime? StorageAddonExpiresAt { get; set; }
+    public long StorageUsedBytes { get; set; } = 0;
     public bool HasStaffManagementAddon { get; set; } = false;
     public DateTime? SubscriptionExpiresAt { get; set; }
     public DateTime? GracePeriodExpiresAt { get; set; }

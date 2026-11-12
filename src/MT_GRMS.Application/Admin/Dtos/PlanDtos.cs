@@ -3,7 +3,7 @@ namespace MT_GRMS.Application.Admin.Dtos;
 public record PlanQuotaDto(
     int MaxBranches = 1,
     int MaxEmployees = 3,
-    int MaxStorageGb = 5,
+    int MaxStorageGb = 2,
     string BackupFrequency = "Weekly"
 );
 

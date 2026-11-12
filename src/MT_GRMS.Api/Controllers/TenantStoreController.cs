@@ -126,12 +126,12 @@ public class TenantStoreController : BaseApiController
                 Id: "plan_standard",
                 Code: "STANDARD",
                 Name: "Gói Thường (Cửa Hàng Độc Lập)",
-                Description: "Dành cho tiệm tạp hóa, siêu thị mini độc lập (1 điểm bán kiêm kho tại chỗ).",
+                Description: "Dành cho tiệm tạp hóa, siêu thị mini độc lập.",
                 MonthlyPrice: 99000m,
                 YearlyPrice: 1188000m,
                 Status: "ACTIVE",
                 ActiveTenantCount: 0,
-                Quotas: new PlanQuotaDto(MaxBranches: 1, MaxEmployees: 1, MaxStorageGb: 5, BackupFrequency: "Daily"),
+                Quotas: new PlanQuotaDto(MaxBranches: 1, MaxEmployees: 1, MaxStorageGb: 2, BackupFrequency: "Daily"),
                 Features: new PlanFeatureDto(FefoExpiryAlert: true, MultiUnitConversion: true, VietQrDynamic: true, DebtZaloBook: false, BarcodeScanning: true, FinancialReporting: false),
                 CreatedAt: DateTime.UtcNow,
                 UpdatedAt: null
@@ -150,7 +150,7 @@ public class TenantStoreController : BaseApiController
                 YearlyPrice: 2988000m,
                 Status: "ACTIVE",
                 ActiveTenantCount: 0,
-                Quotas: new PlanQuotaDto(MaxBranches: 2, MaxEmployees: 100, MaxStorageGb: 50, BackupFrequency: "Hourly"),
+                Quotas: new PlanQuotaDto(MaxBranches: 2, MaxEmployees: 100, MaxStorageGb: 2, BackupFrequency: "Hourly"),
                 Features: new PlanFeatureDto(FefoExpiryAlert: true, MultiUnitConversion: true, VietQrDynamic: true, DebtZaloBook: true, BarcodeScanning: true, FinancialReporting: true),
                 CreatedAt: DateTime.UtcNow,
                 UpdatedAt: null
@@ -179,10 +179,35 @@ public class TenantStoreController : BaseApiController
         [FromBody] PurchaseSubscriptionRequest request,
         CancellationToken cancellationToken)
     {
-        var tenant = await ResolveCurrentTenantAsync(cancellationToken);
+        var currentTenantId = User.FindFirst("tenant_id")?.Value;
+        if (string.IsNullOrWhiteSpace(currentTenantId)) return Unauthorized();
+        if (request.ExtraStorageGb is < 0 or > 100)
+            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("INVALID_STORAGE_GB", "Số GB mua thêm phải từ 0 đến 100."));
+        var tenant = await _context.Tenants.Include(t => t.SubscriptionPlan).SingleOrDefaultAsync(t => t.Id == currentTenantId, cancellationToken);
         if (tenant == null)
         {
             return NotFound(ApiResponse<PurchaseSubscriptionResponse>.Fail("TENANT_NOT_FOUND", "Không tìm thấy thông tin gian hàng trong hệ thống."));
+        }
+
+        var idempotencyCode = request.RequestId.HasValue ? $"SUB-{request.RequestId.Value:N}" : null;
+        if (idempotencyCode != null)
+        {
+            var completed = await _context.WalletTransactions.AsNoTracking().SingleOrDefaultAsync(
+                transaction => transaction.TenantId == tenant.Id && transaction.TransactionCode == idempotencyCode && transaction.Status == "SUCCESS",
+                cancellationToken);
+            if (completed != null && tenant.SubscriptionExpiresAt.HasValue)
+            {
+                var existingDays = (int)Math.Max(0, Math.Ceiling((tenant.SubscriptionExpiresAt.Value - DateTime.UtcNow).TotalDays));
+                var existingResponse = new PurchaseSubscriptionResponse(
+                    tenant.CurrentPlan ?? "STANDARD",
+                    tenant.SubscriptionPlan?.PlanName ?? tenant.CurrentPlan ?? "Gói dịch vụ",
+                    tenant.SubscriptionExpiresAt.Value,
+                    existingDays,
+                    completed.Amount,
+                    completed.PaymentMethod,
+                    "Giao dịch đã được xử lý trước đó.");
+                return Ok(ApiResponse<PurchaseSubscriptionResponse>.Ok(existingResponse, "Giao dịch đã được xử lý trước đó."));
+            }
         }
 
         // Chuẩn hóa mã gói: chấp nhận TRIAL, STANDARD hoặc PRO
@@ -225,6 +250,8 @@ public class TenantStoreController : BaseApiController
         }
 
         var isTrial = request.Months == 0 || string.Equals(request.PaymentMethod, "TRIAL", StringComparison.OrdinalIgnoreCase);
+        if (isTrial && request.ExtraStorageGb > 0)
+            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("INVALID_TRIAL_ADDON", "Gói dùng thử không hỗ trợ mua thêm dung lượng."));
         var months = isTrial ? 0 : (request.Months <= 0 ? 12 : request.Months);
 
         // Validation nghiệp vụ theo gói
@@ -242,7 +269,8 @@ public class TenantStoreController : BaseApiController
             var basePrice = plan.PriceMonthly * months;
             var branchAddonPrice = (plan.PlanCode == "PRO" ? request.ExtraBranches * 80000m : 0m) * months;
             var staffAddonPrice = (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon ? 30000m : 0m) * months;
-            var subTotal = basePrice + branchAddonPrice + staffAddonPrice;
+            var storageAddonPrice = request.ExtraStorageGb * 15000m * months;
+            var subTotal = basePrice + branchAddonPrice + staffAddonPrice + storageAddonPrice;
             var vatAmount = Math.Round(subTotal * 0.1m, 0);
             grandTotal = subTotal + vatAmount;
 
@@ -267,7 +295,7 @@ public class TenantStoreController : BaseApiController
                 var walletTx = new MT_GRMS.Domain.Entities.SaaS.WalletTransaction
                 {
                     TenantId = tenant.Id,
-                    TransactionCode = $"SUB-{DateTime.UtcNow:yyyyMMdd}-{Random.Shared.Next(1000, 9999)}",
+                    TransactionCode = idempotencyCode ?? $"SUB-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid():N}",
                     Type = "PURCHASE_PLAN",
                     Amount = grandTotal,
                     BalanceBefore = balanceBefore,
@@ -321,6 +349,8 @@ public class TenantStoreController : BaseApiController
             {
                 tenant.HasStaffManagementAddon = true;
             }
+            tenant.ExtraStorageGb = request.ExtraStorageGb;
+            tenant.StorageAddonExpiresAt = request.ExtraStorageGb > 0 ? newExpiresAt : null;
 
             resultMessage = $"Gia hạn thành công {plan.PlanName} thêm {totalMonthsAdded} tháng.";
         }

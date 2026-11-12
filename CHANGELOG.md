@@ -4,6 +4,13 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ---
 
+## [Unreleased] - 2026-11-12
+
+### Added
+- Chuẩn hóa hạn mức lưu trữ 2 GB cho gói STANDARD/PRO; bổ sung mua thêm dung lượng với giá 15.000 đ/GB/tháng, báo giá theo thời gian còn lại, VAT và thanh toán ví có idempotency [SUBSCRIPTION-STORAGE] [worklog: docs/worklogs/2026-11-12_SUBSCRIPTION-STORAGE_AI_storage-quota-addon.md].
+- Thêm luồng mua chi nhánh riêng cho Gói PRO, báo giá theo thời gian còn lại và trừ Ví gian hàng mà không gia hạn hay tính lại tiền gói [SUBSCRIPTION-BRANCH].
+- Theo dõi dung lượng ảnh theo tenant, chặn upload vượt hạn mức và hoàn trả quota khi xóa media [SUBSCRIPTION-STORAGE].
+
 ## [Unreleased] - 2026-11-11
 
 ### Fixed

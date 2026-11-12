@@ -35,6 +35,7 @@ public partial class AppDbContext : DbContext
     // 1. Phân hệ SaaS & Multi-Tenancy (6 bảng)
     public virtual DbSet<SubscriptionPlan> SubscriptionPlans { get; set; } = null!;
     public virtual DbSet<Tenant> Tenants { get; set; } = null!;
+    public virtual DbSet<TenantMedia> TenantMedia { get; set; } = null!;
     public virtual DbSet<User> Users { get; set; } = null!;
     public virtual DbSet<TenantUser> TenantUsers { get; set; } = null!;
     public virtual DbSet<AuditLog> AuditLogs { get; set; } = null!;

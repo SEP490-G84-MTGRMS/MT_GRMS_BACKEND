@@ -385,6 +385,21 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         {
             await context.Database.ExecuteSqlRawAsync(@"
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""ExtraBranches"" integer NOT NULL DEFAULT 0;
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""ExtraStorageGb"" integer NOT NULL DEFAULT 0;
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""StorageAddonExpiresAt"" timestamp with time zone NULL;
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""StorageUsedBytes"" bigint NOT NULL DEFAULT 0;
+                CREATE TABLE IF NOT EXISTS ""TenantMedia"" (
+                    ""Id"" text NOT NULL PRIMARY KEY,
+                    ""TenantId"" text NOT NULL,
+                    ""PublicId"" text NOT NULL,
+                    ""Url"" text NOT NULL,
+                    ""Bytes"" bigint NOT NULL,
+                    ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT now(),
+                    ""UpdatedAt"" timestamp with time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT false
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_TenantMedia_PublicId"" ON ""TenantMedia"" (""PublicId"");
+                CREATE INDEX IF NOT EXISTS ""IX_TenantMedia_TenantId"" ON ""TenantMedia"" (""TenantId"");
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""HasStaffManagementAddon"" boolean NOT NULL DEFAULT false;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""SubscriptionStatus"" character varying(30) NOT NULL DEFAULT 'TRIAL';
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""WalletBalance"" numeric(18,2) NOT NULL DEFAULT 0;
