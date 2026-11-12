@@ -520,6 +520,19 @@ public class FakeGoodsReceiptRepository : IGoodsReceiptRepository
         return Task.FromResult(sup);
     }
 
+    
+    public Task<IReadOnlyDictionary<Guid, Product>> GetProductsByIdsAsync(
+        IReadOnlyCollection<Guid> productIds,
+        CancellationToken cancellationToken = default)
+    {
+        var dict = (IReadOnlyDictionary<Guid, Product>)PurchaseOrders
+            .SelectMany(p => p.Details)
+            .Select(d => d.Product)
+            .Where(p => p != null && productIds.Contains(p.Id))
+            .DistinctBy(p => p!.Id)
+            .ToDictionary(p => p!.Id, p => p!);
+        return Task.FromResult(dict);
+    }
     public Task AddSupplierLedgerAsync(SupplierAPLedger ledger, CancellationToken cancellationToken = default)
     {
         Ledgers.Add(ledger);

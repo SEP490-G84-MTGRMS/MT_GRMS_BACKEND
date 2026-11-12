@@ -15,12 +15,16 @@ public class SupplierReturn : BaseTenantEntity
     public Guid GoodsReceiptId { get; set; }
     public Guid SupplierId { get; set; }
     public Guid BranchId { get; set; }
-    public string Status { get; set; } = "DRAFT"; // DRAFT, PENDING_SUPPLIER, APPROVED, REJECTED, COMPLETED, CANCELLED
+    public Guid? StocktakeId { get; set; }
+    public string? StocktakeCode { get; set; }
+    public string Status { get; set; } = "DRAFT"; // DRAFT, PENDING_SUPPLIER, APPROVED, REJECTED, PARTIALLY_HANDED_OVER, COMPLETED, CANCELLED
     public string Reason { get; set; } = string.Empty; // Sắp hết hạn, Hàng hư hỏng lỗi chất lượng, Sai quy cách, Thỏa thuận thu hồi, Khác
     public string? ReasonNotes { get; set; }
     public string? SupplierResponseNote { get; set; }
     public string? CancellationReason { get; set; }
     public string? AttachmentUrl { get; set; }
+    public string? ResolutionType { get; set; } = "REDUCE_PAYABLE"; // REDUCE_PAYABLE, REFUND, EXCHANGE, OTHER
+    public string? SettlementStatus { get; set; } = "UNSETTLED"; // UNSETTLED, SETTLED, NOT_REQUIRED
 
     public decimal TotalRequestedQty { get; set; } = 0;
     public decimal TotalApprovedQty { get; set; } = 0;
@@ -47,10 +51,12 @@ public class SupplierReturnLine : BaseTenantEntity
     public Guid SupplierReturnId { get; set; }
     public Guid ProductId { get; set; }
     public Guid? GoodsReceiptLineId { get; set; }
+    public Guid? StocktakeLineId { get; set; }
     public string? BatchCode { get; set; }
     public DateTime? ExpiryDate { get; set; }
 
     public decimal RequestedQty { get; set; } = 0;
+    public decimal SupplierAcceptedQty { get; set; } = 0;
     public decimal ApprovedQty { get; set; } = 0;
     public decimal RejectedQty { get; set; } = 0;
     public decimal HandedOverQty { get; set; } = 0;
