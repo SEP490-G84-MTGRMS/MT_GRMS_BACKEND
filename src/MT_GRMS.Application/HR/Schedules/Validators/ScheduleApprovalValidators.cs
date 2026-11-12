@@ -21,21 +21,6 @@ public class CreateScheduleApprovalRequestValidator : AbstractValidator<CreateSc
                 .LessThanOrEqualTo(480).WithMessage("Số phút OT tối đa là 480 phút (8 giờ).");
         });
 
-        When(x => x.RequestType == ScheduleRequestType.ShiftSwap, () =>
-        {
-            RuleFor(x => x.SwapType)
-                .NotNull().WithMessage("Vui lòng chọn hình thức đổi ca (Làm thay hoặc Đổi chéo).");
-
-            RuleFor(x => x.TargetEmployeeId)
-                .NotEmpty().WithMessage("Vui lòng chọn đồng nghiệp muốn đổi ca cùng.");
-
-            When(x => x.SwapType == ShiftSwapType.CrossSwap, () =>
-            {
-                RuleFor(x => x.TargetScheduleId)
-                    .NotEmpty().WithMessage("Vui lòng chọn ca của đồng nghiệp muốn đổi chéo.");
-            });
-        });
-
         When(x => x.RequestType == ScheduleRequestType.LeaveRequest, () =>
         {
             RuleFor(x => x.LeaveType)

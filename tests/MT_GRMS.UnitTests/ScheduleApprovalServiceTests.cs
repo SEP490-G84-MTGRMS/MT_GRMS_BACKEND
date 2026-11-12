@@ -469,11 +469,51 @@ public class ScheduleApprovalServiceTests
         // Act
         var result = await service.ReviewRequestAsync(request.Id, Guid.NewGuid().ToString(), reviewDto);
 
-        // Assert
+        // Assert: Chỉ đánh dấu duyệt đơn đổi ca, không tự động đổi EmployeeId của các ca
         Assert.True(result);
         Assert.Equal(ScheduleApprovalStatus.Approved, request.Status);
-        Assert.Equal(emp2.Id, schedule1.EmployeeId);
-        Assert.Equal(emp1.Id, schedule2.EmployeeId);
+        Assert.Equal("SHIFT_SWAP", schedule1.ApprovalType);
+        Assert.Equal(emp1.Id, schedule1.EmployeeId);
+        Assert.Equal(emp2.Id, schedule2.EmployeeId);
+    }
+
+    [Fact]
+    public async Task CreateRequestAsync_ShiftSwap_WithOnlyScheduleAndReason_CreatesPendingRequest()
+    {
+        // Arrange
+        var service = CreateService();
+        var userId = Guid.NewGuid().ToString();
+        var emp = new Employee { Id = Guid.NewGuid(), UserId = userId, FullName = "NV Xin Đổi Ca", TenantId = _tenantContext.CurrentTenantId };
+        _employees.Add(emp);
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            EmployeeId = emp.Id,
+            BranchId = _tenantContext.CurrentBranchId ?? Guid.NewGuid(),
+            WorkDate = DateTime.UtcNow.Date.AddDays(1),
+            ShiftName = "Ca Sáng",
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(12, 0, 0),
+            Status = ScheduleStatus.Published
+        };
+        _scheduleRepo.Schedules.Add(schedule);
+
+        var dto = new CreateScheduleApprovalRequestDto(
+            RequestType: ScheduleRequestType.ShiftSwap,
+            Reason: "Xin đổi từ Ca Sáng sang Ca Chiều ngày mai do bận việc gia đình"
+        );
+
+        // Act
+        var created = await service.CreateRequestAsync(schedule.Id, userId, dto);
+
+        // Assert
+        Assert.Equal(ScheduleRequestType.ShiftSwap, created.RequestType);
+        Assert.Equal(ScheduleApprovalStatus.Pending, created.Status);
+        Assert.Null(created.TargetEmployeeId);
+        Assert.Null(created.TargetScheduleId);
+        Assert.Null(created.PeerConfirmed);
     }
 
     [Fact]
@@ -581,5 +621,304 @@ public class ScheduleApprovalServiceTests
         Assert.Equal(ScheduleApprovalStatus.Rejected, request.Status);
         Assert.Equal("Khong can thiet lam them", request.ReviewNote);
         Assert.Equal(0, schedule.OvertimeMinutes);
+    }
+
+    [Fact]
+    public async Task UpdateRequestAsync_PendingRequest_UpdatesFields()
+    {
+        // Arrange
+        var service = CreateService();
+        var userId = Guid.NewGuid().ToString();
+        var emp = new Employee { Id = Guid.NewGuid(), UserId = userId, FullName = "NV A", TenantId = _tenantContext.CurrentTenantId };
+        _employees.Add(emp);
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            EmployeeId = emp.Id,
+            BranchId = _tenantContext.CurrentBranchId ?? Guid.NewGuid(),
+            WorkDate = DateTime.UtcNow.Date.AddDays(1),
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            Status = ScheduleStatus.Published
+        };
+        _scheduleRepo.Schedules.Add(schedule);
+
+        var request = new ScheduleApprovalRequest
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            ScheduleId = schedule.Id,
+            Schedule = schedule,
+            EmployeeId = emp.Id,
+            Employee = emp,
+            RequestType = ScheduleRequestType.LeaveRequest,
+            LeaveType = LeaveType.SickLeave,
+            IsPaidLeave = false,
+            Status = ScheduleApprovalStatus.Pending,
+            Reason = "Lý do cũ"
+        };
+        _requestRepo.Requests.Add(request);
+
+        var dto = new CreateScheduleApprovalRequestDto(
+            RequestType: ScheduleRequestType.LeaveRequest,
+            Reason: "Cập nhật lý do xin nghỉ phép năm",
+            LeaveType: LeaveType.AnnualLeave,
+            IsPaidLeaveRequested: true
+        );
+
+        // Act
+        var updated = await service.UpdateRequestAsync(request.Id, userId, isOwnerOrAdmin: false, dto);
+
+        // Assert
+        Assert.Equal("Cập nhật lý do xin nghỉ phép năm", updated.Reason);
+        Assert.Equal(LeaveType.AnnualLeave, updated.LeaveType);
+        Assert.True(updated.IsPaidLeave);
+    }
+
+    [Fact]
+    public async Task UpdateRequestAsync_NonPendingRequest_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var service = CreateService();
+        var userId = Guid.NewGuid().ToString();
+        var emp = new Employee { Id = Guid.NewGuid(), UserId = userId, FullName = "NV A", TenantId = _tenantContext.CurrentTenantId };
+        _employees.Add(emp);
+
+        var request = new ScheduleApprovalRequest
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            ScheduleId = Guid.NewGuid(),
+            EmployeeId = emp.Id,
+            RequestType = ScheduleRequestType.LeaveRequest,
+            Status = ScheduleApprovalStatus.Approved,
+            Reason = "Đã duyệt"
+        };
+        _requestRepo.Requests.Add(request);
+
+        var dto = new CreateScheduleApprovalRequestDto(
+            RequestType: ScheduleRequestType.LeaveRequest,
+            Reason: "Thử sửa lại sau khi đã duyệt",
+            LeaveType: LeaveType.SickLeave
+        );
+
+        // Act & Assert
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.UpdateRequestAsync(request.Id, userId, isOwnerOrAdmin: false, dto));
+    }
+
+    [Fact]
+    public async Task DeleteRequestAsync_PendingCheckInIncident_DeletesAndRevertsScheduleCheckIn()
+    {
+        // Arrange
+        var service = CreateService();
+        var userId = Guid.NewGuid().ToString();
+        var emp = new Employee { Id = Guid.NewGuid(), UserId = userId, FullName = "NV A", TenantId = _tenantContext.CurrentTenantId };
+        _employees.Add(emp);
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            EmployeeId = emp.Id,
+            BranchId = _tenantContext.CurrentBranchId ?? Guid.NewGuid(),
+            WorkDate = DateTime.UtcNow.Date,
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            CheckInTime = DateTime.UtcNow.Date.AddHours(8).AddMinutes(10),
+            CheckInMethod = "INCIDENT_PENDING",
+            LateMinutes = 10,
+            Status = ScheduleStatus.InProgress
+        };
+        _scheduleRepo.Schedules.Add(schedule);
+
+        var request = new ScheduleApprovalRequest
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            ScheduleId = schedule.Id,
+            Schedule = schedule,
+            EmployeeId = emp.Id,
+            RequestType = ScheduleRequestType.CheckInIncident,
+            Status = ScheduleApprovalStatus.Pending,
+            Reason = "Lỗi FaceID"
+        };
+        _requestRepo.Requests.Add(request);
+
+        // Act
+        var deleted = await service.DeleteRequestAsync(request.Id, userId, isOwnerOrAdmin: false);
+
+        // Assert
+        Assert.True(deleted);
+        Assert.True(request.IsDeleted);
+        Assert.Null(schedule.CheckInTime);
+        Assert.Null(schedule.CheckInMethod);
+        Assert.Equal(0, schedule.LateMinutes);
+        Assert.Equal(ScheduleStatus.Published, schedule.Status);
+    }
+
+    [Fact]
+    public async Task DeleteRequestAsync_NonPendingRequest_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var service = CreateService();
+        var userId = Guid.NewGuid().ToString();
+        var emp = new Employee { Id = Guid.NewGuid(), UserId = userId, FullName = "NV A", TenantId = _tenantContext.CurrentTenantId };
+        _employees.Add(emp);
+
+        var request = new ScheduleApprovalRequest
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            ScheduleId = Guid.NewGuid(),
+            EmployeeId = emp.Id,
+            RequestType = ScheduleRequestType.ShiftSwap,
+            Status = ScheduleApprovalStatus.Rejected,
+            Reason = "Đã bị từ chối"
+        };
+        _requestRepo.Requests.Add(request);
+
+        // Act & Assert
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.DeleteRequestAsync(request.Id, userId, isOwnerOrAdmin: false));
+    }
+
+    [Fact]
+    public async Task CreateRequestAsync_OvertimeWhenLeaveRequestPending_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var service = CreateService();
+        var userId = Guid.NewGuid().ToString();
+        var emp = new Employee { Id = Guid.NewGuid(), UserId = userId, FullName = "NV A", TenantId = _tenantContext.CurrentTenantId };
+        _employees.Add(emp);
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            EmployeeId = emp.Id,
+            BranchId = _tenantContext.CurrentBranchId ?? Guid.NewGuid(),
+            WorkDate = DateTime.UtcNow.Date.AddDays(1),
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            Status = ScheduleStatus.Published
+        };
+        _scheduleRepo.Schedules.Add(schedule);
+
+        _requestRepo.Requests.Add(new ScheduleApprovalRequest
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            ScheduleId = schedule.Id,
+            EmployeeId = emp.Id,
+            RequestType = ScheduleRequestType.LeaveRequest,
+            LeaveType = LeaveType.AnnualLeave,
+            Status = ScheduleApprovalStatus.Pending,
+            Reason = "Xin nghỉ phép"
+        });
+
+        var overtimeDto = new CreateScheduleApprovalRequestDto(
+            RequestType: ScheduleRequestType.Overtime,
+            Reason: "Đăng ký làm thêm 60 phút",
+            RequestedOvertimeMinutes: 60
+        );
+
+        // Act & Assert
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.CreateRequestAsync(schedule.Id, userId, overtimeDto));
+    }
+
+    [Fact]
+    public async Task CreateRequestAsync_LeaveRequestWhenOvertimeExists_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var service = CreateService();
+        var userId = Guid.NewGuid().ToString();
+        var emp = new Employee { Id = Guid.NewGuid(), UserId = userId, FullName = "NV A", TenantId = _tenantContext.CurrentTenantId };
+        _employees.Add(emp);
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            EmployeeId = emp.Id,
+            BranchId = _tenantContext.CurrentBranchId ?? Guid.NewGuid(),
+            WorkDate = DateTime.UtcNow.Date.AddDays(1),
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            Status = ScheduleStatus.Published
+        };
+        _scheduleRepo.Schedules.Add(schedule);
+
+        _requestRepo.Requests.Add(new ScheduleApprovalRequest
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            ScheduleId = schedule.Id,
+            EmployeeId = emp.Id,
+            RequestType = ScheduleRequestType.Overtime,
+            RequestedOvertimeMinutes = 60,
+            Status = ScheduleApprovalStatus.Pending,
+            Reason = "Đăng ký OT"
+        });
+
+        var leaveDto = new CreateScheduleApprovalRequestDto(
+            RequestType: ScheduleRequestType.LeaveRequest,
+            Reason: "Xin nghỉ phép năm",
+            LeaveType: LeaveType.AnnualLeave
+        );
+
+        // Act & Assert
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.CreateRequestAsync(schedule.Id, userId, leaveDto));
+    }
+
+    [Fact]
+    public async Task CreateRequestAsync_LeaveRequestWhenShiftSwapApproved_CreatesPendingRequest()
+    {
+        // Arrange
+        var service = CreateService();
+        var userId = Guid.NewGuid().ToString();
+        var emp = new Employee { Id = Guid.NewGuid(), UserId = userId, FullName = "NV A", TenantId = _tenantContext.CurrentTenantId };
+        _employees.Add(emp);
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            EmployeeId = emp.Id,
+            BranchId = _tenantContext.CurrentBranchId ?? Guid.NewGuid(),
+            WorkDate = DateTime.UtcNow.Date.AddDays(1),
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            Status = ScheduleStatus.Published
+        };
+        _scheduleRepo.Schedules.Add(schedule);
+
+        _requestRepo.Requests.Add(new ScheduleApprovalRequest
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            ScheduleId = schedule.Id,
+            EmployeeId = emp.Id,
+            RequestType = ScheduleRequestType.ShiftSwap,
+            Status = ScheduleApprovalStatus.Approved,
+            Reason = "Đổi ca đã được duyệt"
+        });
+
+        var leaveDto = new CreateScheduleApprovalRequestDto(
+            RequestType: ScheduleRequestType.LeaveRequest,
+            Reason: "Có việc đột xuất nên xin nghỉ ca sau khi đã đổi ca",
+            LeaveType: LeaveType.AnnualLeave
+        );
+
+        // Act
+        var created = await service.CreateRequestAsync(schedule.Id, userId, leaveDto);
+
+        // Assert
+        Assert.Equal(ScheduleRequestType.LeaveRequest, created.RequestType);
+        Assert.Equal(ScheduleApprovalStatus.Pending, created.Status);
     }
 }
