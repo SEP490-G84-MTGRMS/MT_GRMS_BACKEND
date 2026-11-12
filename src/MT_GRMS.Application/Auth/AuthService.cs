@@ -3,6 +3,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
@@ -12,6 +13,7 @@ using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Entities.System;
 using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Application.Auth;
@@ -22,12 +24,15 @@ namespace MT_GRMS.Application.Auth;
 public class AuthService : IAuthService
 {
     private const int MaxOtpFailedAttempts = 5;
+    private const int MaxSendOtpPerWindow = 5;
+    private static readonly TimeSpan SendOtpRateLimitWindow = TimeSpan.FromMinutes(10);
 
-    private sealed record RegistrationOtpEntry(string OtpCode, DateTime ExpiresAtUtc, int FailedAttempts = 0);
     private sealed record LoginOtpEntry(string UserId, string? TenantCode, string OtpCode, DateTime ExpiresAtUtc, int FailedAttempts = 0);
     private sealed record TwoFactorSettingsEntry(string UserId, bool Enabled, string OtpCode, DateTime ExpiresAtUtc, int FailedAttempts = 0);
 
-    private static readonly ConcurrentDictionary<string, RegistrationOtpEntry> RegistrationOtpStore = new();
+    private static readonly ConcurrentDictionary<string, RegistrationOtpState> RegistrationOtpStore = new();
+    private static readonly ConcurrentDictionary<string, Queue<DateTime>> RegistrationOtpSendWindows = new();
+    private static readonly object InMemoryOtpSync = new();
     private static readonly ConcurrentDictionary<string, LoginOtpEntry> LoginOtpStore = new();
     private static readonly ConcurrentDictionary<string, TwoFactorSettingsEntry> TwoFactorSettingsStore = new();
 
@@ -35,17 +40,20 @@ public class AuthService : IAuthService
     private readonly IConfiguration? _configuration;
     private readonly IPasswordHasher _passwordHasher;
     private readonly IEmailService? _emailService;
+    private readonly IRegistrationOtpStore? _registrationOtpStore;
 
     public AuthService(
         IUserRepository userRepository,
         IConfiguration? configuration = null,
         IPasswordHasher? passwordHasher = null,
-        IEmailService? emailService = null)
+        IEmailService? emailService = null,
+        IRegistrationOtpStore? registrationOtpStore = null)
     {
         _userRepository = userRepository;
         _configuration = configuration;
         _passwordHasher = passwordHasher ?? new PasswordHasher();
         _emailService = emailService;
+        _registrationOtpStore = registrationOtpStore;
     }
 
     public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
@@ -438,23 +446,65 @@ public class AuthService : IAuthService
             throw new ArgumentException("Số điện thoại không được để trống.");
         if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < 6)
             throw new ArgumentException("Mật khẩu phải có tối thiểu 6 ký tự.");
+        if (string.IsNullOrWhiteSpace(request.Email))
+            throw new ArgumentException("Email nhận OTP không được để trống.");
 
-        var isDuplicate = await _userRepository.ExistsByPhoneOrEmailAsync(request.Phone.Trim(), request.Email, cancellationToken);
+        if (string.IsNullOrWhiteSpace(request.OtpCode))
+            throw new ArgumentException("OTP_REQUIRED: Vui lòng nhập mã xác thực OTP đã gửi đến email của bạn.");
+
+        var userEmail = request.Email.Trim().ToLowerInvariant();
+        var normalizedPhone = NormalizePhoneKey(request.Phone);
+        if (string.IsNullOrWhiteSpace(normalizedPhone))
+            throw new ArgumentException("Số điện thoại không hợp lệ.");
+
+        var isDuplicate = await _userRepository.ExistsByPhoneOrEmailAsync(normalizedPhone, userEmail, cancellationToken);
         if (isDuplicate)
         {
             throw new ArgumentException("Số điện thoại hoặc email đã được đăng ký trong hệ thống.");
         }
 
-        var otpKey = ResolveRegistrationOtpKey(request.Email, request.Phone);
-        if (!string.IsNullOrWhiteSpace(request.OtpCode) || (!string.IsNullOrWhiteSpace(otpKey) && RegistrationOtpStore.ContainsKey(otpKey)))
+        var challenge = await GetRegistrationOtpAsync(request.ChallengeId, userEmail, cancellationToken);
+        if (challenge == null)
         {
-            if (string.IsNullOrWhiteSpace(request.OtpCode))
-            {
-                throw new ArgumentException("Vui lòng nhập mã xác thực OTP đã gửi đến email của bạn.");
-            }
+            throw new ArgumentException("OTP_REQUIRED: Mã xác thực OTP không tồn tại hoặc đã hết hạn. Vui lòng bấm gửi lại mã.");
+        }
 
-            await VerifyRegistrationOtpAsync(new VerifyRegistrationOtpRequest(otpKey, request.OtpCode), cancellationToken);
-            RegistrationOtpStore.TryRemove(otpKey, out _);
+        var utcNow = DateTime.UtcNow;
+        if (challenge.ExpiresAtUtc <= utcNow)
+        {
+            await RemoveRegistrationOtpAsync(challenge.ChallengeId, cancellationToken);
+            throw new ArgumentException("OTP_EXPIRED: Mã xác thực OTP đã hết hạn (quá 5 phút). Vui lòng yêu cầu gửi lại mã mới.");
+        }
+
+        if (!string.Equals(challenge.NormalizedEmail, userEmail, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("OTP_EMAIL_MISMATCH: Email đăng ký không khớp với yêu cầu OTP ban đầu.");
+        }
+
+        var expectedIntent = request.StartTrial ? "TRIAL" : "NO_PLAN";
+        if (!string.Equals(challenge.Intent, "ANY", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(challenge.Intent, expectedIntent, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("OTP_INTENT_MISMATCH: Mã OTP không khớp với luồng đăng ký hiện tại. Vui lòng yêu cầu gửi lại mã mới.");
+        }
+
+        var expectedFingerprint = ComputeRegistrationFingerprint(userEmail, normalizedPhone, request.StoreName);
+        if (!string.IsNullOrWhiteSpace(challenge.RequestFingerprint) &&
+            !string.Equals(challenge.RequestFingerprint, expectedFingerprint, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("OTP_FINGERPRINT_MISMATCH: Thông tin đăng ký đã thay đổi sau khi gửi OTP. Vui lòng yêu cầu gửi lại mã mới.");
+        }
+
+        await VerifyChallengeOtpHashAsync(challenge, request.OtpCode, cancellationToken);
+
+        var idempotencyKey = string.IsNullOrWhiteSpace(request.IdempotencyKey)
+            ? $"reg_{Guid.NewGuid():N}"
+            : request.IdempotencyKey.Trim();
+
+        var reserved = await TryReserveRegistrationOtpAsync(challenge.ChallengeId, idempotencyKey, utcNow, cancellationToken);
+        if (!reserved)
+        {
+            throw new InvalidOperationException("OTP_ALREADY_USED: Mã xác thực OTP đang được xử lý hoặc đã được sử dụng.");
         }
 
         var rawSlug = request.StoreName.Trim().ToLowerInvariant()
@@ -467,31 +517,36 @@ public class AuthService : IAuthService
         var tenantId = $"tenant_{cleanSlug}_{uniqueSuffix}";
         var tenantCode = $"{cleanSlug.ToUpperInvariant()}-{uniqueSuffix.ToUpperInvariant()}";
 
+        var trialStartedAt = request.StartTrial ? DateTime.UtcNow : (DateTime?)null;
         var tenant = new Tenant
         {
             Id = tenantId,
             Name = request.StoreName.Trim(),
             Subdomain = $"{cleanSlug}-{uniqueSuffix}",
             Code = tenantCode.Length > 20 ? tenantCode.Substring(0, 20) : tenantCode,
-            Hotline = request.Phone.Trim(),
+            Hotline = normalizedPhone,
             Status = "ACTIVE",
-            CurrentPlan = "TRIAL",
-            SubscriptionStatus = "TRIAL",
-            HasStaffManagementAddon = true,
+            CurrentPlan = request.StartTrial ? "TRIAL" : null,
+            SubscriptionStatus = request.StartTrial ? "TRIAL" : "NO_PLAN",
+            HasStaffManagementAddon = request.StartTrial,
             WalletBalance = 0m,
-            SubscriptionExpiresAt = DateTime.UtcNow.AddDays(3)
+            TrialStartedAt = trialStartedAt,
+            TrialExpiresAt = trialStartedAt?.AddHours(72),
+            SubscriptionExpiresAt = trialStartedAt?.AddHours(72)
         };
 
         var userId = $"usr_{Guid.NewGuid():N}";
-        var userEmail = string.IsNullOrWhiteSpace(request.Email) ? $"{request.Phone.Trim()}@mtgrms.vn" : request.Email.Trim();
         var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
         var user = new User
         {
             Id = userId,
-            UserName = request.Phone.Trim(),
+            UserName = normalizedPhone,
             FullName = request.FullName.Trim(),
             Email = userEmail,
-            Phone = request.Phone.Trim(),
+            NormalizedEmail = userEmail,
+            Phone = normalizedPhone,
+            NormalizedPhone = normalizedPhone,
+            TrialConsumedAt = trialStartedAt,
             PasswordHash = _passwordHasher.HashPassword(request.Password),
             IsActive = true,
             IsAdmin = false,
@@ -507,11 +562,41 @@ public class AuthService : IAuthService
             TenantId = tenantId,
             BranchCode = "BR-01",
             Name = $"{request.StoreName.Trim()} - Chi Nhánh Chính",
-            Phone = request.Phone.Trim(),
+            Phone = normalizedPhone,
             IsActive = true
         };
 
-        await _userRepository.RegisterStoreOwnerAsync(user, tenant, branch, cancellationToken);
+        var auditLog = new AuditLog
+        {
+            TenantId = tenantId,
+            ActorId = userId,
+            ActorName = user.FullName,
+            ActorRole = UserRoleNames.StoreOwner,
+            ActionType = request.StartTrial ? "TRIAL_ACTIVATED" : "TENANT_REGISTERED",
+            TargetEntity = "Tenant",
+            TargetId = tenantId,
+            NewValuesJson = JsonSerializer.Serialize(new
+            {
+                idempotencyKey,
+                challengeId = challenge.ChallengeId,
+                startTrial = request.StartTrial,
+                subscriptionStatus = tenant.SubscriptionStatus,
+                trialStartedAt = tenant.TrialStartedAt,
+                trialExpiresAt = tenant.TrialExpiresAt
+            })
+        };
+
+        try
+        {
+            await _userRepository.RegisterStoreOwnerAsync(user, tenant, branch, auditLog, cancellationToken);
+        }
+        catch
+        {
+            await ReleaseRegistrationOtpReservationAsync(challenge.ChallengeId, idempotencyKey, DateTime.UtcNow, cancellationToken);
+            throw;
+        }
+
+        await ConsumeRegistrationOtpAsync(challenge.ChallengeId, idempotencyKey, cancellationToken);
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
@@ -693,21 +778,23 @@ public class AuthService : IAuthService
         SendRegistrationOtpRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (request == null || (string.IsNullOrWhiteSpace(request.Email) && string.IsNullOrWhiteSpace(request.Phone)))
+        if (request == null || string.IsNullOrWhiteSpace(request.Email))
         {
             throw new ArgumentException("Vui lòng nhập địa chỉ email hợp lệ để nhận mã xác thực OTP.");
         }
 
-        if (!string.IsNullOrWhiteSpace(request.Email) && !request.Email.Contains('@'))
+        var emailTrimmed = request.Email.Trim().ToLowerInvariant();
+        if (!TryValidateEmail(emailTrimmed))
         {
             throw new ArgumentException("Địa chỉ email không đúng định dạng.");
         }
 
-        var phoneTrimmed = request.Phone?.Trim() ?? string.Empty;
-        var emailTrimmed = request.Email?.Trim().ToLowerInvariant();
+        EnforceSendOtpIdentifierRateLimit(emailTrimmed);
+
+        var normalizedPhone = NormalizePhoneKey(request.Phone ?? string.Empty);
 
         var isDuplicate = await _userRepository.ExistsByPhoneOrEmailAsync(
-            phoneTrimmed,
+            normalizedPhone,
             emailTrimmed,
             cancellationToken);
 
@@ -716,27 +803,44 @@ public class AuthService : IAuthService
             throw new ArgumentException("Số điện thoại hoặc email này đã được đăng ký cửa hàng trên hệ thống.");
         }
 
-        var otpKey = ResolveRegistrationOtpKey(request.Email, request.Phone);
+        var challengeId = $"regotp_{Guid.NewGuid():N}";
         var otpCode = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
         var expiresAtUtc = DateTime.UtcNow.AddMinutes(5);
-        RegistrationOtpStore[otpKey] = new RegistrationOtpEntry(otpCode, expiresAtUtc, 0);
+        var intent = request.StartTrial.HasValue ? (request.StartTrial.Value ? "TRIAL" : "NO_PLAN") : "ANY";
+        var fingerprint = ComputeRegistrationFingerprint(emailTrimmed, normalizedPhone, request.StoreName);
 
-        var targetEmail = !string.IsNullOrWhiteSpace(emailTrimmed)
-            ? emailTrimmed
-            : $"{NormalizePhoneKey(phoneTrimmed)}@mtgrms.vn";
+        var challengeState = new RegistrationOtpState(
+            ChallengeId: challengeId,
+            NormalizedEmail: emailTrimmed,
+            OtpHash: HashChallengeOtp(challengeId, otpCode),
+            Intent: intent,
+            RequestFingerprint: fingerprint,
+            State: RegistrationOtpStates.Pending,
+            ReservedByIdempotencyKey: null,
+            ExpiresAtUtc: expiresAtUtc,
+            FailedAttempts: 0);
+
+        await CreateRegistrationOtpAsync(challengeState, cancellationToken);
 
         var isRealEmailSent = false;
         if (_emailService != null)
         {
             isRealEmailSent = await _emailService.SendRegistrationOtpAsync(
-                targetEmail,
+                emailTrimmed,
                 request.FullName ?? "Chủ cửa hàng",
                 request.StoreName ?? "MT-GRMS",
                 otpCode,
                 cancellationToken);
         }
 
-        var maskedEmail = MaskEmailDisplay(targetEmail);
+        var isDevelopment = IsDevelopmentEnvironment();
+        if (!isRealEmailSent && !isDevelopment)
+        {
+            await RemoveRegistrationOtpAsync(challengeId, cancellationToken);
+            throw new InvalidOperationException("Không thể gửi mã xác thực. Vui lòng thử lại sau.");
+        }
+
+        var maskedEmail = MaskEmailDisplay(emailTrimmed);
         var message = isRealEmailSent
             ? $"Mã xác thực Email OTP đã được gửi tới hộp thư {maskedEmail}."
             : $"Đã tạo mã xác thực Email OTP cho {maskedEmail}.";
@@ -747,11 +851,12 @@ public class AuthService : IAuthService
             MaskedEmail: maskedEmail,
             ExpiresInSeconds: 300,
             IsRealEmailSent: isRealEmailSent,
-            DevOtpCode: isRealEmailSent ? null : otpCode
+            DevOtpCode: !isRealEmailSent && isDevelopment ? otpCode : null,
+            ChallengeId: challengeId
         );
     }
 
-    public Task<bool> VerifyRegistrationOtpAsync(
+    public async Task<bool> VerifyRegistrationOtpAsync(
         VerifyRegistrationOtpRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -760,45 +865,242 @@ public class AuthService : IAuthService
             throw new ArgumentException("Email và mã OTP không được để trống.");
         }
 
-        var otpKey = request.EmailOrPhone.Contains('@')
-            ? request.EmailOrPhone.Trim().ToLowerInvariant()
-            : NormalizePhoneKey(request.EmailOrPhone);
-
-        if (!RegistrationOtpStore.TryGetValue(otpKey, out var entry))
+        var normalizedEmail = request.EmailOrPhone.Trim().ToLowerInvariant();
+        var entry = await GetRegistrationOtpAsync(null, normalizedEmail, cancellationToken);
+        if (entry == null)
         {
             throw new ArgumentException("Mã xác thực OTP không tồn tại hoặc đã hết hạn. Vui lòng bấm gửi lại mã.");
         }
 
-        if (entry.ExpiresAtUtc < DateTime.UtcNow)
+        if (entry.ExpiresAtUtc <= DateTime.UtcNow)
         {
-            RegistrationOtpStore.TryRemove(otpKey, out _);
+            await RemoveRegistrationOtpAsync(entry.ChallengeId, cancellationToken);
             throw new ArgumentException("Mã xác thực OTP đã hết hạn (quá 5 phút). Vui lòng yêu cầu gửi lại mã mới.");
         }
 
-        var cleanOtp = request.OtpCode.Trim();
-        if (!string.Equals(entry.OtpCode, cleanOtp, StringComparison.Ordinal))
-        {
-            var nextFailures = entry.FailedAttempts + 1;
-            if (nextFailures >= MaxOtpFailedAttempts)
-            {
-                RegistrationOtpStore.TryRemove(otpKey, out _);
-                throw new ArgumentException("Bạn đã nhập sai mã OTP quá 5 lần. Vui lòng yêu cầu gửi lại mã mới.");
-            }
-
-            RegistrationOtpStore[otpKey] = entry with { FailedAttempts = nextFailures };
-            throw new ArgumentException($"Mã xác thực Email OTP không chính xác (còn {MaxOtpFailedAttempts - nextFailures} lần thử).");
-        }
-
-        return Task.FromResult(true);
+        await VerifyChallengeOtpHashAsync(entry, request.OtpCode, cancellationToken);
+        return true;
     }
 
-    private static string ResolveRegistrationOtpKey(string? email, string? phone)
+    private async Task VerifyChallengeOtpHashAsync(RegistrationOtpState entry, string otpCode, CancellationToken cancellationToken)
     {
-        if (!string.IsNullOrWhiteSpace(email))
+        var cleanOtp = otpCode.Trim();
+        var actualHash = Convert.FromHexString(entry.OtpHash);
+        var candidateHash = Convert.FromHexString(HashChallengeOtp(entry.ChallengeId, cleanOtp));
+        if (!CryptographicOperations.FixedTimeEquals(actualHash, candidateHash))
         {
-            return email.Trim().ToLowerInvariant();
+            var nextFailures = await IncrementRegistrationOtpFailureAsync(entry.ChallengeId, MaxOtpFailedAttempts, cancellationToken);
+            if (nextFailures >= MaxOtpFailedAttempts)
+            {
+                throw new ArgumentException("OTP_ATTEMPTS_EXCEEDED: Bạn đã nhập sai mã OTP quá 5 lần. Vui lòng yêu cầu gửi lại mã mới.");
+            }
+
+            throw new ArgumentException($"OTP_INVALID: Mã xác thực Email OTP không chính xác (còn {MaxOtpFailedAttempts - nextFailures} lần thử).");
         }
-        return NormalizePhoneKey(phone ?? string.Empty);
+    }
+
+    private async Task CreateRegistrationOtpAsync(RegistrationOtpState state, CancellationToken cancellationToken)
+    {
+        if (_registrationOtpStore != null)
+        {
+            await _registrationOtpStore.CreateAsync(state, cancellationToken);
+            return;
+        }
+
+        lock (InMemoryOtpSync)
+        {
+            foreach (var oldKey in RegistrationOtpStore.Where(kvp =>
+                         kvp.Value.NormalizedEmail == state.NormalizedEmail &&
+                         kvp.Value.State != RegistrationOtpStates.Consumed).Select(kvp => kvp.Key).ToList())
+            {
+                RegistrationOtpStore.TryRemove(oldKey, out _);
+            }
+            RegistrationOtpStore[state.ChallengeId] = state;
+        }
+    }
+
+    private async Task<RegistrationOtpState?> GetRegistrationOtpAsync(string? challengeId, string normalizedEmail, CancellationToken cancellationToken)
+    {
+        if (_registrationOtpStore != null)
+        {
+            return await _registrationOtpStore.GetAsync(challengeId, normalizedEmail, cancellationToken);
+        }
+
+        lock (InMemoryOtpSync)
+        {
+            if (!string.IsNullOrWhiteSpace(challengeId))
+            {
+                return RegistrationOtpStore.TryGetValue(challengeId, out var found) ? found : null;
+            }
+
+            return RegistrationOtpStore.Values
+                .Where(x => x.NormalizedEmail == normalizedEmail && x.State != RegistrationOtpStates.Consumed)
+                .OrderByDescending(x => x.ExpiresAtUtc)
+                .FirstOrDefault();
+        }
+    }
+
+    private async Task<bool> TryReserveRegistrationOtpAsync(string challengeId, string idempotencyKey, DateTime utcNow, CancellationToken cancellationToken)
+    {
+        if (_registrationOtpStore != null)
+        {
+            return await _registrationOtpStore.TryReserveAsync(challengeId, idempotencyKey, utcNow, cancellationToken);
+        }
+
+        lock (InMemoryOtpSync)
+        {
+            if (!RegistrationOtpStore.TryGetValue(challengeId, out var row) || row.ExpiresAtUtc <= utcNow)
+                return false;
+
+            if (row.State == RegistrationOtpStates.Pending ||
+                (row.State == RegistrationOtpStates.Reserved && row.ReservedByIdempotencyKey == idempotencyKey))
+            {
+                RegistrationOtpStore[challengeId] = row with
+                {
+                    State = RegistrationOtpStates.Reserved,
+                    ReservedByIdempotencyKey = idempotencyKey
+                };
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    private async Task ReleaseRegistrationOtpReservationAsync(string challengeId, string idempotencyKey, DateTime utcNow, CancellationToken cancellationToken)
+    {
+        if (_registrationOtpStore != null)
+        {
+            await _registrationOtpStore.ReleaseReservationAsync(challengeId, idempotencyKey, utcNow, cancellationToken);
+            return;
+        }
+
+        lock (InMemoryOtpSync)
+        {
+            if (RegistrationOtpStore.TryGetValue(challengeId, out var row) &&
+                row.State == RegistrationOtpStates.Reserved &&
+                row.ReservedByIdempotencyKey == idempotencyKey &&
+                row.ExpiresAtUtc > utcNow)
+            {
+                RegistrationOtpStore[challengeId] = row with
+                {
+                    State = RegistrationOtpStates.Pending,
+                    ReservedByIdempotencyKey = null
+                };
+            }
+        }
+    }
+
+    private async Task ConsumeRegistrationOtpAsync(string challengeId, string idempotencyKey, CancellationToken cancellationToken)
+    {
+        if (_registrationOtpStore != null)
+        {
+            await _registrationOtpStore.ConsumeAsync(challengeId, idempotencyKey, cancellationToken);
+            return;
+        }
+
+        lock (InMemoryOtpSync)
+        {
+            if (RegistrationOtpStore.TryGetValue(challengeId, out var row) &&
+                row.State == RegistrationOtpStates.Reserved &&
+                row.ReservedByIdempotencyKey == idempotencyKey)
+            {
+                RegistrationOtpStore[challengeId] = row with { State = RegistrationOtpStates.Consumed };
+            }
+        }
+    }
+
+    private async Task<int> IncrementRegistrationOtpFailureAsync(string challengeId, int maxAttempts, CancellationToken cancellationToken)
+    {
+        if (_registrationOtpStore != null)
+        {
+            return await _registrationOtpStore.IncrementFailureOrRemoveAsync(challengeId, maxAttempts, cancellationToken);
+        }
+
+        lock (InMemoryOtpSync)
+        {
+            if (!RegistrationOtpStore.TryGetValue(challengeId, out var row))
+                return maxAttempts;
+
+            var next = row.FailedAttempts + 1;
+            if (next >= maxAttempts)
+            {
+                RegistrationOtpStore.TryRemove(challengeId, out _);
+            }
+            else
+            {
+                RegistrationOtpStore[challengeId] = row with { FailedAttempts = next };
+            }
+            return next;
+        }
+    }
+
+    private async Task RemoveRegistrationOtpAsync(string challengeId, CancellationToken cancellationToken)
+    {
+        if (_registrationOtpStore != null)
+        {
+            await _registrationOtpStore.RemoveAsync(challengeId, cancellationToken);
+            return;
+        }
+        RegistrationOtpStore.TryRemove(challengeId, out _);
+    }
+
+    private bool IsDevelopmentEnvironment()
+    {
+        var configEnv = _configuration?["ASPNETCORE_ENVIRONMENT"] ?? _configuration?["Environment"];
+        if (!string.IsNullOrWhiteSpace(configEnv))
+        {
+            return string.Equals(configEnv, "Development", StringComparison.OrdinalIgnoreCase);
+        }
+
+        var processEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+        return string.Equals(processEnv, "Development", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryValidateEmail(string email)
+    {
+        if (string.IsNullOrWhiteSpace(email) || email.Length > 100) return false;
+        try
+        {
+            var addr = new System.Net.Mail.MailAddress(email);
+            return string.Equals(addr.Address, email, StringComparison.OrdinalIgnoreCase) && email.Contains('.');
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void EnforceSendOtpIdentifierRateLimit(string normalizedEmail)
+    {
+        var now = DateTime.UtcNow;
+        var queue = RegistrationOtpSendWindows.GetOrAdd(normalizedEmail, _ => new Queue<DateTime>());
+        lock (queue)
+        {
+            while (queue.Count > 0 && now - queue.Peek() > SendOtpRateLimitWindow)
+            {
+                queue.Dequeue();
+            }
+
+            if (queue.Count >= MaxSendOtpPerWindow)
+            {
+                throw new InvalidOperationException("RATE_LIMIT_EXCEEDED: Bạn đã yêu cầu gửi mã OTP quá nhiều lần. Vui lòng thử lại sau ít phút.");
+            }
+
+            queue.Enqueue(now);
+        }
+    }
+
+    private static string HashChallengeOtp(string challengeId, string otp)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{challengeId}:{otp}")));
+
+    private static string ComputeRegistrationFingerprint(string normalizedEmail, string normalizedPhone, string? storeName)
+    {
+        var normalizedStore = (storeName ?? string.Empty).Trim().ToLowerInvariant();
+        var raw = string.IsNullOrWhiteSpace(normalizedPhone)
+            ? normalizedEmail
+            : $"{normalizedEmail}|{normalizedPhone}|{normalizedStore}";
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw)));
     }
 
     private static string NormalizePhoneKey(string rawPhone)

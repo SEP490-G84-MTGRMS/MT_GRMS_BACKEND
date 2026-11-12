@@ -6,6 +6,7 @@
 [Oo]ut/
 build/
 dist/
+.codex-build/
 
 ## Visual Studio Cache & User Preferences
 .vs/

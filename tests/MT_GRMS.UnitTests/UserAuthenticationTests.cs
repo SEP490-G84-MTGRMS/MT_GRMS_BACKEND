@@ -13,6 +13,7 @@ public class UserAuthenticationTests
     private class FakeUserRepository : IUserRepository
     {
         private readonly List<User> _users = new();
+        public MT_GRMS.Domain.Entities.SaaS.Tenant? LastRegisteredTenant { get; private set; }
 
         public Task AddAsync(User user, CancellationToken cancellationToken = default)
         {
@@ -57,6 +58,7 @@ public class UserAuthenticationTests
 
         public Task<User> RegisterStoreOwnerAsync(User user, MT_GRMS.Domain.Entities.SaaS.Tenant tenant, MT_GRMS.Domain.Entities.SaaS.Branch branch, CancellationToken cancellationToken = default)
         {
+            LastRegisteredTenant = tenant;
             _users.Add(user);
             return Task.FromResult(user);
         }
@@ -384,7 +386,11 @@ public class UserAuthenticationTests
         var user = new User { Id = "usr_forgot", Username = "user_forgot", Email = "owner@mtgrms.vn", FullName = "Nguyễn Chủ Tiệm" };
         await repo.AddAsync(user);
 
-        var authService = new AuthService(repo, emailService: emailService);
+        var developmentConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+        }).Build();
+        var authService = new AuthService(repo, developmentConfig, emailService: emailService);
         await authService.ForgotPasswordAsync(new ForgotPasswordRequest("owner@mtgrms.vn"));
 
         Assert.NotNull(user.PasswordResetOtp);
@@ -463,7 +469,11 @@ public class UserAuthenticationTests
     {
         var repo = new FakeUserRepository();
         var emailService = new FakeEmailService();
-        var authService = new AuthService(repo, emailService: emailService);
+        var developmentConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+        }).Build();
+        var authService = new AuthService(repo, developmentConfig, emailService: emailService);
 
         var otpResponse = await authService.SendRegistrationOtpAsync(new SendRegistrationOtpRequest(
             Phone: "0981234321",
@@ -499,6 +509,97 @@ public class UserAuthenticationTests
 
         Assert.NotNull(loginRes);
         Assert.Equal("STORE_OWNER", loginRes.User.Role);
+        Assert.Equal("NO_PLAN", repo.LastRegisteredTenant!.SubscriptionStatus);
+        Assert.Null(repo.LastRegisteredTenant.TrialStartedAt);
+    }
+
+    [Fact]
+    public async Task RegisterTenant_WithTrialIntent_StartsExactly72HoursAndConsumesAccountTrial()
+    {
+        var repo = new FakeUserRepository();
+        var developmentConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+        }).Build();
+        var authService = new AuthService(repo, developmentConfig, emailService: new FakeEmailService());
+        var otp = await authService.SendRegistrationOtpAsync(new SendRegistrationOtpRequest(
+            "0981000001", "Trial Store", "Trial Owner", "trial-owner@mtgrms.vn"));
+
+        await authService.RegisterTenantAsync(new RegisterTenantRequest(
+            "Trial Owner", "Trial Store", "0981000001", "trial-owner@mtgrms.vn",
+            "Password@123", true, otp.DevOtpCode, StartTrial: true));
+
+        var tenant = repo.LastRegisteredTenant!;
+        Assert.Equal("TRIAL", tenant.SubscriptionStatus);
+        Assert.Equal(TimeSpan.FromHours(72), tenant.TrialExpiresAt!.Value - tenant.TrialStartedAt!.Value);
+        var user = await repo.GetByUsernameAsync("trial-owner@mtgrms.vn");
+        Assert.NotNull(user!.TrialConsumedAt);
+    }
+
+    private class SuccessEmailService : IEmailService
+    {
+        public Task SendPasswordResetOtpAsync(string toEmail, string fullName, string otpCode, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task<bool> SendLoginOtpAsync(string toEmail, string fullName, string otpCode, CancellationToken cancellationToken = default) => Task.FromResult(true);
+        public Task<bool> SendRegistrationOtpAsync(string toEmail, string fullName, string storeName, string otpCode, CancellationToken cancellationToken = default) => Task.FromResult(true);
+    }
+
+    [Fact]
+    public async Task SendRegistrationOtp_InProduction_NeverReturnsDevOtpCode_AndFailsClosedWithoutEmail()
+    {
+        var repo = new FakeUserRepository();
+        var prodConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ASPNETCORE_ENVIRONMENT"] = "Production"
+        }).Build();
+
+        var noEmailAuth = new AuthService(repo, prodConfig, emailService: null);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => noEmailAuth.SendRegistrationOtpAsync(
+            new SendRegistrationOtpRequest("0981000099", "Prod Store", "Prod Owner", "prod-noemail@mtgrms.vn", StartTrial: false)));
+
+        var realEmailAuth = new AuthService(repo, prodConfig, emailService: new SuccessEmailService());
+        var otp = await realEmailAuth.SendRegistrationOtpAsync(
+            new SendRegistrationOtpRequest("0981000099", "Prod Store", "Prod Owner", "prod-email@mtgrms.vn", StartTrial: false));
+        Assert.Null(otp.DevOtpCode);
+        Assert.False(string.IsNullOrWhiteSpace(otp.ChallengeId));
+    }
+
+    [Fact]
+    public async Task RegisterTenant_RejectsIntentOrFingerprintMismatch_AndInvalidatesAfter5FailedOtpAttempts()
+    {
+        var repo = new FakeUserRepository();
+        var devConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+        }).Build();
+        var authService = new AuthService(repo, devConfig, emailService: new FakeEmailService());
+
+        var otp = await authService.SendRegistrationOtpAsync(new SendRegistrationOtpRequest(
+            "0981000088", "Intent Store", "Owner", "intent-bind@mtgrms.vn", StartTrial: false));
+
+        // 1. Đổi intent sang StartTrial = true -> từ chối
+        var intentEx = await Assert.ThrowsAsync<ArgumentException>(() => authService.RegisterTenantAsync(new RegisterTenantRequest(
+            "Owner", "Intent Store", "0981000088", "intent-bind@mtgrms.vn",
+            "Password@123", true, otp.DevOtpCode, StartTrial: true, ChallengeId: otp.ChallengeId)));
+        Assert.StartsWith("OTP_INTENT_MISMATCH", intentEx.Message);
+
+        // 2. Đổi SĐT sau khi gửi OTP -> từ chối fingerprint mismatch
+        var fpEx = await Assert.ThrowsAsync<ArgumentException>(() => authService.RegisterTenantAsync(new RegisterTenantRequest(
+            "Owner", "Intent Store", "0989999999", "intent-bind@mtgrms.vn",
+            "Password@123", true, otp.DevOtpCode, StartTrial: false, ChallengeId: otp.ChallengeId)));
+        Assert.StartsWith("OTP_FINGERPRINT_MISMATCH", fpEx.Message);
+
+        // 3. Nhập sai OTP 5 lần -> hủy challenge
+        for (int i = 0; i < 5; i++)
+        {
+            await Assert.ThrowsAsync<ArgumentException>(() => authService.RegisterTenantAsync(new RegisterTenantRequest(
+                "Owner", "Intent Store", "0981000088", "intent-bind@mtgrms.vn",
+                "Password@123", true, "000000", StartTrial: false, ChallengeId: otp.ChallengeId)));
+        }
+
+        var afterMaxEx = await Assert.ThrowsAsync<ArgumentException>(() => authService.RegisterTenantAsync(new RegisterTenantRequest(
+            "Owner", "Intent Store", "0981000088", "intent-bind@mtgrms.vn",
+            "Password@123", true, otp.DevOtpCode, StartTrial: false, ChallengeId: otp.ChallengeId)));
+        Assert.StartsWith("OTP_REQUIRED", afterMaxEx.Message);
     }
 
     [Fact]

@@ -7,6 +7,12 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-12
 
 ### Added
+- Tách đăng ký thường thành `NO_PLAN` và CTA HomePage thành Trial 72 giờ; bổ sung dấu Trial/paid bền vững, API trạng thái/kích hoạt Trial (`AuditLog` `TRIAL_ACTIVATED` + conditional update), `GET /api/tenant/subscriptions/access-status` cho mọi thành viên active của tenant, chặn hạ cấp từ `PRO` xuống `STANDARD` (`DOWNGRADE_NOT_ALLOWED`), tenant membership validation và backend subscription gate chặn cả `NO_PLAN`, Trial hết hạn và gói trả phí đã hết hạn (`SubscriptionExpiresAt <= UtcNow`) [HOMEPAGE-TRIAL] [worklog: docs/worklogs/2026-11-12_HOMEPAGE-TRIAL_AI_trial-onboarding.md].
+- Bổ sung `TrialOnboardingBackfillService` (dry-run & backfill deterministic) và migration cho trạng thái Trial, paid và dữ liệu legacy `REVIEW_REQUIRED`; sửa `DbInitializer` không gán nhầm `CurrentPlan = "PRO"` cho tenant `NO_PLAN` và `TenantService` luôn trả `"Chưa kích hoạt"` cho tenant `NO_PLAN`; chuẩn hóa email/điện thoại cho account [HOMEPAGE-TRIAL].
+
+### Security
+- Bắt buộc Email OTP distributed (`Pending/Reserved/Consumed`) gắn `NormalizedEmail`, intent và request fingerprint; fail-closed ngoài Development; `IdempotencyFilter` scoped theo actor + operation + tenant/challenge trả RFC 7807 `ProblemDetails`; cấu hình `ForwardedHeadersOptions` trusted proxy và củng cố chống replay webhook SePay [HOMEPAGE-TRIAL].
+
 - Chuẩn hóa hạn mức lưu trữ 2 GB cho gói STANDARD/PRO; bổ sung mua thêm dung lượng với giá 15.000 đ/GB/tháng, báo giá theo thời gian còn lại, VAT và thanh toán ví có idempotency [SUBSCRIPTION-STORAGE] [worklog: docs/worklogs/2026-11-12_SUBSCRIPTION-STORAGE_AI_storage-quota-addon.md].
 - Thêm luồng mua chi nhánh riêng cho Gói PRO, báo giá theo thời gian còn lại và trừ Ví gian hàng mà không gia hạn hay tính lại tiền gói [SUBSCRIPTION-BRANCH].
 - Theo dõi dung lượng ảnh theo tenant, chặn upload vượt hạn mức và hoàn trả quota khi xóa media [SUBSCRIPTION-STORAGE].

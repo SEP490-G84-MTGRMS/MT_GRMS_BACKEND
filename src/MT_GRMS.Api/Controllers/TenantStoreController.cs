@@ -7,6 +7,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Infrastructure.Persistence;
+using MT_GRMS.Api.Filters;
 
 namespace MT_GRMS.Api.Controllers;
 
@@ -32,23 +33,16 @@ public class TenantStoreController : BaseApiController
     private async Task<Tenant?> ResolveCurrentTenantAsync(CancellationToken cancellationToken)
     {
         var tenantId = User.FindFirst("tenant_id")?.Value;
-        var headerTenant = Request.Headers["X-Tenant-Id"].FirstOrDefault();
+        var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+            ?? User.FindFirst("sub")?.Value;
+        if (string.IsNullOrWhiteSpace(tenantId) || string.IsNullOrWhiteSpace(userId) || tenantId == "DEFAULT") return null;
 
-        if (!string.IsNullOrWhiteSpace(headerTenant) && headerTenant != "DEFAULT" && headerTenant != "tenant_mt_mart_01")
-        {
-            tenantId = headerTenant;
-        }
-        else if (string.IsNullOrWhiteSpace(tenantId) || tenantId == "DEFAULT")
-        {
-            if (!string.IsNullOrWhiteSpace(headerTenant) && headerTenant != "DEFAULT")
-            {
-                tenantId = headerTenant;
-            }
-        }
+        var hasMembership = await _context.TenantUsers.AnyAsync(x =>
+            x.TenantId == tenantId && x.UserId == userId && x.IsActive, cancellationToken);
+        if (!hasMembership) return null;
 
-        return !string.IsNullOrWhiteSpace(tenantId) && tenantId != "DEFAULT"
-            ? await _context.Tenants.Include(t => t.SubscriptionPlan).FirstOrDefaultAsync(t => t.Id == tenantId || t.Subdomain == tenantId, cancellationToken)
-            : await _context.Tenants.Include(t => t.SubscriptionPlan).FirstOrDefaultAsync(cancellationToken);
+        return await _context.Tenants.Include(t => t.SubscriptionPlan)
+            .FirstOrDefaultAsync(t => t.Id == tenantId, cancellationToken);
     }
 
     /// <summary>
@@ -179,11 +173,9 @@ public class TenantStoreController : BaseApiController
         [FromBody] PurchaseSubscriptionRequest request,
         CancellationToken cancellationToken)
     {
-        var currentTenantId = User.FindFirst("tenant_id")?.Value;
-        if (string.IsNullOrWhiteSpace(currentTenantId)) return Unauthorized();
         if (request.ExtraStorageGb is < 0 or > 100)
             return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("INVALID_STORAGE_GB", "Số GB mua thêm phải từ 0 đến 100."));
-        var tenant = await _context.Tenants.Include(t => t.SubscriptionPlan).SingleOrDefaultAsync(t => t.Id == currentTenantId, cancellationToken);
+        var tenant = await ResolveCurrentTenantAsync(cancellationToken);
         if (tenant == null)
         {
             return NotFound(ApiResponse<PurchaseSubscriptionResponse>.Fail("TENANT_NOT_FOUND", "Không tìm thấy thông tin gian hàng trong hệ thống."));
@@ -210,11 +202,22 @@ public class TenantStoreController : BaseApiController
             }
         }
 
-        // Chuẩn hóa mã gói: chấp nhận TRIAL, STANDARD hoặc PRO
-        var targetCode = (request.PlanCode ?? "").ToUpper();
-        if (targetCode != "TRIAL" && targetCode != "STANDARD" && targetCode != "PRO")
+        // Trial có endpoint riêng để đảm bảo one-time eligibility; purchase chỉ dành cho gói trả phí.
+        var targetCode = (request.PlanCode ?? "").Trim().ToUpperInvariant();
+        if (targetCode.Contains("TRIAL"))
+            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("TRIAL_ENDPOINT_REQUIRED", "Vui lòng dùng chức năng Bắt đầu dùng thử."));
+        if (targetCode != "STANDARD" && targetCode != "PRO")
         {
-            targetCode = targetCode.Contains("PRO") ? "PRO" : (targetCode.Contains("TRIAL") ? "TRIAL" : "STANDARD");
+            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("INVALID_PLAN_CODE", "Mã gói dịch vụ không hợp lệ. Vui lòng chọn STANDARD hoặc PRO."));
+        }
+
+        if (targetCode == "STANDARD" &&
+            string.Equals(tenant.CurrentPlan, "PRO", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(tenant.SubscriptionStatus, "NO_PLAN", StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
+                "DOWNGRADE_NOT_ALLOWED",
+                "Gian hàng đang sử dụng Gói Pro, không hỗ trợ hạ cấp xuống Gói Thường."));
         }
 
         // Tìm gói cước theo PlanCode
@@ -336,6 +339,7 @@ public class TenantStoreController : BaseApiController
             newExpiresAt = baseDate.AddMonths(totalMonthsAdded);
 
             tenant.CurrentPlan = plan.PlanCode;
+            tenant.FirstPaidAt ??= DateTime.UtcNow;
             tenant.SubscriptionExpiresAt = newExpiresAt;
             tenant.SubscriptionStatus = "ACTIVE";
             tenant.Status = "ACTIVE";
@@ -372,20 +376,214 @@ public class TenantStoreController : BaseApiController
         return Ok(ApiResponse<PurchaseSubscriptionResponse>.Ok(response, isTrial ? "Kích hoạt dùng thử thành công." : "Thanh toán và gia hạn gói dịch vụ thành công."));
     }
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> TrialActivationLocks = new();
+
     /// <summary>
     /// Kích hoạt gói dùng thử 3 ngày miễn phí cho gian hàng
     /// </summary>
     [HttpPost("subscriptions/trial")]
+    [RequireIdempotency(useProblemDetails: true)]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> ActivateTrialSubscription(CancellationToken cancellationToken)
     {
-        return await PurchaseSubscription(new PurchaseSubscriptionRequest(
-            PlanCode: "TRIAL",
-            Months: 0,
-            ExtraBranches: 0,
-            ExtraWarehouses: 0,
-            PaymentMethod: "TRIAL",
-            HasStaffManagementAddon: true
-        ), cancellationToken);
+        var tenantId = User.FindFirst("tenant_id")?.Value;
+        var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+            ?? User.FindFirst("sub")?.Value;
+        if (string.IsNullOrWhiteSpace(tenantId) || string.IsNullOrWhiteSpace(userId) || tenantId == "DEFAULT")
+        {
+            return ProblemResult(StatusCodes.Status403Forbidden, "FORBIDDEN", "Không có quyền truy cập", "Phiên đăng nhập không hợp lệ cho gian hàng.");
+        }
+
+        var hasMembership = await _context.TenantUsers.AsNoTracking().AnyAsync(x =>
+            x.TenantId == tenantId && x.UserId == userId && x.IsActive &&
+            (x.Role == MT_GRMS.Domain.Enums.UserRoleNames.StoreOwner || x.Role == "StoreOwner" || x.Role == "ADMIN"),
+            cancellationToken);
+        if (!hasMembership)
+        {
+            return ProblemResult(StatusCodes.Status403Forbidden, "FORBIDDEN", "Không có quyền truy cập", "Tài khoản không phải chủ sở hữu đang hoạt động của gian hàng.");
+        }
+
+        var lockGate = TrialActivationLocks.GetOrAdd(userId, _ => new SemaphoreSlim(1, 1));
+        await lockGate.WaitAsync(cancellationToken);
+        try
+        {
+            await using var transaction = _context.Database.IsRelational()
+                ? await _context.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, cancellationToken)
+                : null;
+
+            var utcNow = DateTime.UtcNow;
+            var tenant = await _context.Tenants.Include(t => t.SubscriptionPlan)
+                .SingleOrDefaultAsync(t => t.Id == tenantId && !t.IsDeleted, cancellationToken);
+            var user = await _context.Users
+                .SingleOrDefaultAsync(x => x.Id == userId && !x.IsDeleted, cancellationToken);
+
+            if (tenant == null || user == null || !user.IsEmailVerified)
+            {
+                return ProblemResult(StatusCodes.Status403Forbidden, "FORBIDDEN", "Không đủ điều kiện xác thực", "Tài khoản chưa xác thực email hoặc gian hàng không tồn tại.");
+            }
+
+            if (tenant.TrialStartedAt.HasValue)
+            {
+                if (tenant.TrialExpiresAt > utcNow)
+                    return Ok(ApiResponse<object>.Ok(ToTrialStatus(tenant, user)));
+                return ProblemResult(StatusCodes.Status409Conflict, "TRIAL_ALREADY_USED", "Đã hết lượt dùng thử", "Gian hàng đã sử dụng gói dùng thử.");
+            }
+
+            if (user.TrialConsumedAt.HasValue)
+                return ProblemResult(StatusCodes.Status409Conflict, "TRIAL_ALREADY_USED", "Đã hết lượt dùng thử", "Tài khoản đã sử dụng gói dùng thử.");
+
+            if (tenant.FirstPaidAt.HasValue || !string.Equals(tenant.SubscriptionStatus, "NO_PLAN", StringComparison.OrdinalIgnoreCase))
+                return ProblemResult(StatusCodes.Status409Conflict, "TRIAL_NOT_ELIGIBLE", "Không đủ điều kiện dùng thử", "Gian hàng không đủ điều kiện dùng thử.");
+
+            var idempotencyKey = Request?.Headers["Idempotency-Key"].FirstOrDefault() ?? $"trial_{Guid.NewGuid():N}";
+            var startedAt = utcNow;
+            var expiresAt = startedAt.AddHours(72);
+
+            if (_context.Database.IsRelational())
+            {
+                var updatedUsers = await _context.Users
+                    .Where(u => u.Id == userId && !u.IsDeleted && u.IsEmailVerified && u.TrialConsumedAt == null)
+                    .ExecuteUpdateAsync(s => s.SetProperty(u => u.TrialConsumedAt, startedAt), cancellationToken);
+                if (updatedUsers != 1)
+                {
+                    if (transaction != null) await transaction.RollbackAsync(cancellationToken);
+                    return ProblemResult(StatusCodes.Status409Conflict, "TRIAL_ALREADY_USED", "Đã hết lượt dùng thử", "Tài khoản đã sử dụng gói dùng thử.");
+                }
+
+                var updatedTenants = await _context.Tenants
+                    .Where(t => t.Id == tenantId && !t.IsDeleted && t.TrialStartedAt == null && t.FirstPaidAt == null && t.SubscriptionStatus == "NO_PLAN")
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(t => t.TrialStartedAt, startedAt)
+                        .SetProperty(t => t.TrialExpiresAt, expiresAt)
+                        .SetProperty(t => t.SubscriptionExpiresAt, expiresAt)
+                        .SetProperty(t => t.CurrentPlan, "TRIAL")
+                        .SetProperty(t => t.SubscriptionStatus, "TRIAL")
+                        .SetProperty(t => t.HasStaffManagementAddon, true), cancellationToken);
+                if (updatedTenants != 1)
+                {
+                    if (transaction != null) await transaction.RollbackAsync(cancellationToken);
+                    return ProblemResult(StatusCodes.Status409Conflict, "TRIAL_NOT_ELIGIBLE", "Không đủ điều kiện dùng thử", "Gian hàng không đủ điều kiện dùng thử.");
+                }
+
+                await _context.Entry(user).ReloadAsync(cancellationToken);
+                await _context.Entry(tenant).ReloadAsync(cancellationToken);
+            }
+            else
+            {
+                user.TrialConsumedAt = startedAt;
+                tenant.TrialStartedAt = startedAt;
+                tenant.TrialExpiresAt = expiresAt;
+                tenant.SubscriptionExpiresAt = expiresAt;
+                tenant.CurrentPlan = "TRIAL";
+                tenant.SubscriptionStatus = "TRIAL";
+                tenant.HasStaffManagementAddon = true;
+            }
+
+            _context.AuditLogs.Add(new MT_GRMS.Domain.Entities.System.AuditLog
+            {
+                TenantId = tenant.Id,
+                ActorId = user.Id,
+                ActorName = user.FullName,
+                ActorRole = MT_GRMS.Domain.Enums.UserRoleNames.StoreOwner,
+                ActionType = "TRIAL_ACTIVATED",
+                TargetEntity = "Tenant",
+                TargetId = tenant.Id,
+                IpAddress = HttpContext?.Connection?.RemoteIpAddress?.ToString(),
+                NewValuesJson = System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    idempotencyKey,
+                    trialStartedAt = startedAt,
+                    trialExpiresAt = expiresAt
+                })
+            });
+
+            await _context.SaveChangesAsync(cancellationToken);
+            if (transaction != null) await transaction.CommitAsync(cancellationToken);
+            return Ok(ApiResponse<object>.Ok(ToTrialStatus(tenant, user), "Kích hoạt dùng thử 3 ngày thành công."));
+        }
+        finally
+        {
+            lockGate.Release();
+        }
+    }
+
+    [HttpGet("subscriptions/trial-status")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    public Task<IActionResult> GetTrialStatus(CancellationToken cancellationToken)
+        => BuildSubscriptionAccessStatusAsync(cancellationToken);
+
+    [HttpGet("subscriptions/access-status")]
+    [Authorize]
+    public Task<IActionResult> GetSubscriptionAccessStatus(CancellationToken cancellationToken)
+        => BuildSubscriptionAccessStatusAsync(cancellationToken);
+
+    private async Task<IActionResult> BuildSubscriptionAccessStatusAsync(CancellationToken cancellationToken)
+    {
+        var tenant = await ResolveCurrentTenantAsync(cancellationToken);
+        var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+            ?? User.FindFirst("sub")?.Value;
+        if (tenant == null || string.IsNullOrWhiteSpace(userId))
+        {
+            return ProblemResult(StatusCodes.Status403Forbidden, "FORBIDDEN", "Không có quyền truy cập", "Không xác minh được gian hàng hợp lệ.");
+        }
+        var user = await _context.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Id == userId, cancellationToken);
+        if (user == null)
+        {
+            return ProblemResult(StatusCodes.Status403Forbidden, "FORBIDDEN", "Không có quyền truy cập", "Không tìm thấy tài khoản.");
+        }
+        return Ok(ApiResponse<object>.Ok(ToTrialStatus(tenant, user)));
+    }
+
+    private ObjectResult ProblemResult(int statusCode, string code, string title, string detail)
+    {
+        var problem = new ProblemDetails
+        {
+            Status = statusCode,
+            Title = title,
+            Detail = detail,
+            Instance = HttpContext?.Request?.Path.Value
+        };
+        problem.Extensions["code"] = code;
+        problem.Extensions["traceId"] = HttpContext?.TraceIdentifier ?? Guid.NewGuid().ToString("N");
+        return new ObjectResult(problem) { StatusCode = statusCode };
+    }
+
+    private static object ToTrialStatus(Tenant tenant, MT_GRMS.Domain.Entities.Identity.User user)
+    {
+        var now = DateTime.UtcNow;
+        var hasPaidRecord = tenant.FirstPaidAt.HasValue || string.Equals(tenant.SubscriptionStatus, "ACTIVE", StringComparison.OrdinalIgnoreCase);
+        var isPaidExpired = hasPaidRecord && tenant.SubscriptionExpiresAt.HasValue && tenant.SubscriptionExpiresAt.Value <= now;
+        var isExplicitExpired = string.Equals(tenant.SubscriptionStatus, "EXPIRED", StringComparison.OrdinalIgnoreCase);
+        var trialExpiry = tenant.TrialExpiresAt ?? (string.Equals(tenant.SubscriptionStatus, "TRIAL", StringComparison.OrdinalIgnoreCase) ? tenant.SubscriptionExpiresAt : null);
+        var isTrialExpired = !hasPaidRecord && trialExpiry.HasValue && trialExpiry.Value <= now;
+        var isExpired = isExplicitExpired || isPaidExpired || isTrialExpired;
+
+        var state = isExpired
+            ? "EXPIRED"
+            : hasPaidRecord
+                ? "PAID"
+                : tenant.TrialStartedAt.HasValue
+                    ? "ACTIVE"
+                    : !user.TrialConsumedAt.HasValue && string.Equals(tenant.SubscriptionStatus, "NO_PLAN", StringComparison.OrdinalIgnoreCase)
+                        ? "ELIGIBLE"
+                        : "REVIEW_REQUIRED";
+
+        var isNoPlan = string.Equals(tenant.SubscriptionStatus, "NO_PLAN", StringComparison.OrdinalIgnoreCase);
+        var isLocked = state == "EXPIRED" || state == "ELIGIBLE" || state == "REVIEW_REQUIRED";
+
+        return new
+        {
+            state,
+            planCode = tenant.CurrentPlan,
+            subscriptionStatus = tenant.SubscriptionStatus,
+            subscriptionExpiresAt = tenant.SubscriptionExpiresAt,
+            trialStartedAt = tenant.TrialStartedAt,
+            trialExpiresAt = tenant.TrialExpiresAt,
+            isExpired,
+            isNoPlan,
+            isLocked,
+            destination = state == "ACTIVE" || state == "PAID" ? "DASHBOARD" : state == "ELIGIBLE" ? "CONFIRM" : "SUBSCRIPTIONS"
+        };
     }
 
     /// <summary>
@@ -423,21 +621,24 @@ public class TenantStoreController : BaseApiController
             ));
         }
 
-        // 2. Luôn có bản ghi gói khởi tạo ban đầu (Gói miễn phí / dùng thử khi đăng ký tài khoản)
-        var initPlanName = tenant.SubscriptionPlan?.PlanName ?? (tenant.CurrentPlan == "FREE" ? "Gói Cơ Bản (Miễn Phí) 01" : "Gói Dùng Thử Trải Nghiệm");
-        var initEndDate = tenant.SubscriptionExpiresAt ?? tenant.CreatedAt.AddYears(1);
-        var isInitActive = list.Count == 0 && initEndDate >= DateTime.UtcNow;
+        // 2. Chỉ bổ sung bản ghi gói dùng thử nếu tenant thực sự có dấu Trial
+        if (tenant.TrialStartedAt.HasValue || string.Equals(tenant.CurrentPlan, "TRIAL", StringComparison.OrdinalIgnoreCase))
+        {
+            var initPlanName = tenant.SubscriptionPlan?.PlanName ?? "Gói Dùng Thử Trải Nghiệm";
+            var initEndDate = tenant.TrialExpiresAt ?? tenant.SubscriptionExpiresAt ?? tenant.CreatedAt.AddHours(72);
+            var isInitActive = list.Count == 0 && initEndDate >= DateTime.UtcNow;
 
-        list.Add(new SubscriptionOrderHistoryDto(
-            Code: $"SUB-{tenant.CreatedAt:yyyyMMdd}-001",
-            PlanName: initPlanName,
-            StartDate: tenant.CreatedAt.ToString("dd/MM/yyyy"),
-            EndDate: initEndDate.ToString("dd/MM/yyyy"),
-            TotalAmount: 0m,
-            PaymentMethod: "Gói hệ thống cấp",
-            Status: isInitActive ? "Đang hiệu lực" : "Hết hạn",
-            CreatedAt: tenant.CreatedAt
-        ));
+            list.Add(new SubscriptionOrderHistoryDto(
+                Code: $"SUB-{tenant.CreatedAt:yyyyMMdd}-001",
+                PlanName: initPlanName,
+                StartDate: (tenant.TrialStartedAt ?? tenant.CreatedAt).ToString("dd/MM/yyyy"),
+                EndDate: initEndDate.ToString("dd/MM/yyyy"),
+                TotalAmount: 0m,
+                PaymentMethod: "Gói hệ thống cấp",
+                Status: isInitActive ? "Đang hiệu lực" : "Hết hạn",
+                CreatedAt: tenant.TrialStartedAt ?? tenant.CreatedAt
+            ));
+        }
 
         return Ok(ApiResponse<IReadOnlyList<SubscriptionOrderHistoryDto>>.Ok(list));
     }

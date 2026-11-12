@@ -79,6 +79,8 @@ public static class DependencyInjection
 
         // Đăng ký Repository cụ thể cho từng module
         services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IRegistrationOtpStore, RegistrationOtpStore>();
+        services.AddScoped<Application.SaaS.Services.ITrialOnboardingBackfillService, Services.TrialOnboardingBackfillService>();
         services.AddScoped<IInventoryRepository, InventoryRepository>();
         services.AddScoped<IOrderRepository, OrderRepository>();
         services.AddScoped<Application.PosShifts.IShiftRepository, ShiftRepository>();

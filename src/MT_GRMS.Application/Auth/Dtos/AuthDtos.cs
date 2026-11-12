@@ -65,14 +65,18 @@ public record RegisterTenantRequest(
     string? Email,
     string Password,
     bool AgreeTerms = true,
-    string? OtpCode = null
+    string? OtpCode = null,
+    bool StartTrial = false,
+    string? IdempotencyKey = null,
+    string? ChallengeId = null
 );
 
 public record SendRegistrationOtpRequest(
     string? Phone = null,
     string? StoreName = null,
     string? FullName = null,
-    string? Email = null
+    string? Email = null,
+    bool? StartTrial = null
 );
 
 public record SendRegistrationOtpResponse(
@@ -81,7 +85,8 @@ public record SendRegistrationOtpResponse(
     string MaskedEmail,
     int ExpiresInSeconds,
     bool IsRealEmailSent,
-    string? DevOtpCode = null
+    string? DevOtpCode = null,
+    string? ChallengeId = null
 );
 
 public record VerifyRegistrationOtpRequest(

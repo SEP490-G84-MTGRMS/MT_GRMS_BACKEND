@@ -401,14 +401,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 CREATE UNIQUE INDEX IF NOT EXISTS ""IX_TenantMedia_PublicId"" ON ""TenantMedia"" (""PublicId"");
                 CREATE INDEX IF NOT EXISTS ""IX_TenantMedia_TenantId"" ON ""TenantMedia"" (""TenantId"");
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""HasStaffManagementAddon"" boolean NOT NULL DEFAULT false;
-                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""SubscriptionStatus"" character varying(30) NOT NULL DEFAULT 'TRIAL';
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""SubscriptionStatus"" character varying(30) NOT NULL DEFAULT 'NO_PLAN';
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""WalletBalance"" numeric(18,2) NOT NULL DEFAULT 0;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""SubscriptionExpiresAt"" timestamp with time zone NULL;
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""TrialStartedAt"" timestamp with time zone NULL;
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""TrialExpiresAt"" timestamp with time zone NULL;
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""FirstPaidAt"" timestamp with time zone NULL;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""GracePeriodExpiresAt"" timestamp with time zone NULL;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""LockType"" character varying(50) NULL;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""LockReason"" character varying(500) NULL;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""LockedAt"" timestamp with time zone NULL;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""LockedBy"" character varying(100) NULL;
+
+                ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""NormalizedEmail"" character varying(100) NOT NULL DEFAULT '';
+                ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""NormalizedPhone"" character varying(20) NULL;
+                ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""TrialConsumedAt"" timestamp with time zone NULL;
+
+                CREATE TABLE IF NOT EXISTS ""RegistrationOtpChallenges"" (
+                    ""Key"" character varying(120) NOT NULL PRIMARY KEY,
+                    ""NormalizedEmail"" character varying(100) NOT NULL,
+                    ""OtpHash"" character varying(64) NOT NULL,
+                    ""Intent"" character varying(20) NOT NULL,
+                    ""RequestFingerprint"" character varying(64) NOT NULL,
+                    ""State"" character varying(20) NOT NULL,
+                    ""ReservedByIdempotencyKey"" character varying(120) NULL,
+                    ""ExpiresAtUtc"" timestamp with time zone NOT NULL,
+                    ""FailedAttempts"" integer NOT NULL DEFAULT 0,
+                    ""CreatedAtUtc"" timestamp with time zone NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
+                    ""UpdatedAtUtc"" timestamp with time zone NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC')
+                );
+                CREATE INDEX IF NOT EXISTS ""IX_RegistrationOtpChallenges_NormalizedEmail_State"" ON ""RegistrationOtpChallenges"" (""NormalizedEmail"", ""State"");
 
                 CREATE TABLE IF NOT EXISTS ""WalletTransactions"" (
                     ""Id"" character varying(50) NOT NULL PRIMARY KEY,
@@ -1560,17 +1582,29 @@ END $$;
             op.IsActive = false;
         }
 
-        // Đồng bộ các tenant đang mang mã gói cũ
+        // Đồng bộ các tenant đang mang mã gói cũ (không ghi đè tenant NO_PLAN / REVIEW_REQUIRED / TRIAL / EXPIRED)
         var outdatedTenants = await context.Tenants
-            .Where(t => t.CurrentPlan == "FREE" || t.CurrentPlan == "SUPPORT" || string.IsNullOrEmpty(t.CurrentPlan))
+            .IgnoreQueryFilters()
+            .Where(t => (t.CurrentPlan == "FREE" || t.CurrentPlan == "SUPPORT" || string.IsNullOrEmpty(t.CurrentPlan))
+                        && (string.IsNullOrEmpty(t.SubscriptionStatus) || t.SubscriptionStatus == "ACTIVE"))
             .ToListAsync();
         foreach (var ot in outdatedTenants)
         {
             ot.CurrentPlan = "PRO";
-            if (string.IsNullOrEmpty(ot.SubscriptionStatus) || ot.SubscriptionStatus == "ACTIVE")
-            {
-                ot.SubscriptionStatus = "ACTIVE";
-            }
+            ot.SubscriptionStatus = "ACTIVE";
+        }
+
+        // Khắc phục các tenant NO_PLAN chưa trả phí/chưa trial nhưng từng bị gán nhầm CurrentPlan = "PRO"
+        var corruptedNoPlanTenants = await context.Tenants
+            .IgnoreQueryFilters()
+            .Where(t => t.SubscriptionStatus == "NO_PLAN"
+                        && t.FirstPaidAt == null
+                        && t.TrialStartedAt == null
+                        && !string.IsNullOrEmpty(t.CurrentPlan))
+            .ToListAsync();
+        foreach (var nt in corruptedNoPlanTenants)
+        {
+            nt.CurrentPlan = null;
         }
 
         await context.SaveChangesAsync();

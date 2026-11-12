@@ -149,9 +149,19 @@ public class AuthControllerTests
     {
         // GIVEN
         var repo = new FakeUserRepository();
-        var authService = new AuthService(repo);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+        }).Build();
+        var authService = new AuthService(repo, config);
         var controller = new AuthController(authService);
-        var request = new RegisterTenantRequest("Nguyễn Văn A", "Cửa hàng A", "0987654321", "owner_a@gmail.com", "Password@123", true);
+        var otpResult = Assert.IsType<OkObjectResult>(await controller.SendRegistrationOtp(
+            new SendRegistrationOtpRequest("0987654321", "Cửa hàng A", "Nguyễn Văn A", "owner_a@gmail.com", StartTrial: false),
+            CancellationToken.None));
+        var otpPayload = Assert.IsType<ApiResponse<SendRegistrationOtpResponse>>(otpResult.Value);
+        var request = new RegisterTenantRequest(
+            "Nguyễn Văn A", "Cửa hàng A", "0987654321", "owner_a@gmail.com", "Password@123",
+            true, otpPayload.Data!.DevOtpCode, StartTrial: false, ChallengeId: otpPayload.Data.ChallengeId);
 
         // WHEN
         var result = await controller.Register(request, CancellationToken.None);
@@ -165,6 +175,22 @@ public class AuthControllerTests
         Assert.NotNull(apiResponse.Data);
         Assert.Equal("Nguyễn Văn A", apiResponse.Data.FullName);
         Assert.Equal("STORE_OWNER", apiResponse.Data.Role);
+    }
+
+    [Fact]
+    public async Task AuthController_Register_WithoutOtp_Should_Return_400_ProblemDetails_OtpRequired()
+    {
+        var repo = new FakeUserRepository();
+        var controller = new AuthController(new AuthService(repo));
+        var request = new RegisterTenantRequest("Nguyễn Văn A", "Cửa hàng A", "0987654321", "owner_a@gmail.com", "Password@123", true);
+
+        var result = await controller.Register(request, CancellationToken.None);
+
+        var obj = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(400, obj.StatusCode);
+        var problem = Assert.IsType<ProblemDetails>(obj.Value);
+        Assert.Equal("OTP_REQUIRED", problem.Extensions["code"]);
+        Assert.NotNull(problem.Extensions["traceId"]);
     }
 
     [Fact]

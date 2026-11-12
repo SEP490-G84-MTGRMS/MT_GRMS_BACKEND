@@ -24,6 +24,9 @@ public class User : BaseEntity<string>
     public bool IsAdmin { get; set; } = false;
     public bool IsEmailVerified { get; set; } = false;
     public bool IsTwoFactorEnabled { get; set; } = true;
+    public string NormalizedEmail { get; set; } = string.Empty;
+    public string? NormalizedPhone { get; set; }
+    public DateTime? TrialConsumedAt { get; set; }
     public bool MustChangePassword { get; set; } = false;
     public DateTime? LastLoginAt { get; set; }
     public string? LastLoginIp { get; set; }

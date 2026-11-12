@@ -1,8 +1,10 @@
+using System.Collections.Concurrent;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Api.Controllers;
 using MT_GRMS.Application.Auth;
+using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Auth.Dtos;
 using MT_GRMS.Application.Common;
 
@@ -13,6 +15,10 @@ namespace MT_GRMS.API.Controllers;
 [Route("api/v1/[controller]")]
 public class AuthController : BaseApiController
 {
+    private static readonly ConcurrentDictionary<string, Queue<DateTime>> OtpIpRateLimits = new();
+    private const int MaxOtpSendPerIp = 15;
+    private static readonly TimeSpan OtpIpWindow = TimeSpan.FromMinutes(10);
+
     private readonly IAuthService _authService;
 
     public AuthController(IAuthService authService)
@@ -125,12 +131,19 @@ public class AuthController : BaseApiController
     /// </summary>
     [HttpPost("register/send-otp")]
     [ProducesResponseType(typeof(ApiResponse<SendRegistrationOtpResponse>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status429TooManyRequests)]
     public async Task<IActionResult> SendRegistrationOtp([FromBody] SendRegistrationOtpRequest request, CancellationToken cancellationToken)
     {
-        if (request == null || (string.IsNullOrWhiteSpace(request.Email) && string.IsNullOrWhiteSpace(request.Phone)))
+        if (request == null || string.IsNullOrWhiteSpace(request.Email))
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Vui lòng nhập địa chỉ email để nhận mã xác thực OTP.", StatusCodes.Status400BadRequest));
+            return ProblemResult(StatusCodes.Status400BadRequest, "EMAIL_REQUIRED", "Thiếu địa chỉ email", "Vui lòng nhập địa chỉ email hợp lệ để nhận mã xác thực OTP.");
+        }
+
+        var remoteIp = HttpContext?.Connection?.RemoteIpAddress?.ToString();
+        if (!string.IsNullOrWhiteSpace(remoteIp) && IsIpRateLimited(remoteIp))
+        {
+            return ProblemResult(StatusCodes.Status429TooManyRequests, "RATE_LIMIT_EXCEEDED", "Vượt quá giới hạn yêu cầu", "Bạn đã yêu cầu gửi mã OTP quá nhiều lần từ địa chỉ này. Vui lòng thử lại sau ít phút.");
         }
 
         try
@@ -140,7 +153,16 @@ public class AuthController : BaseApiController
         }
         catch (ArgumentException ex)
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+            var (code, msg) = ParseCodedMessage(ex.Message, "BAD_REQUEST");
+            return ProblemResult(StatusCodes.Status400BadRequest, code, "Yêu cầu OTP không hợp lệ", msg);
+        }
+        catch (InvalidOperationException ex)
+        {
+            var (code, msg) = ParseCodedMessage(ex.Message, "EMAIL_UNAVAILABLE");
+            var status = code == "RATE_LIMIT_EXCEEDED"
+                ? StatusCodes.Status429TooManyRequests
+                : StatusCodes.Status503ServiceUnavailable;
+            return ProblemResult(status, code, "Không thể gửi mã OTP", msg);
         }
     }
 
@@ -149,12 +171,12 @@ public class AuthController : BaseApiController
     /// </summary>
     [HttpPost("register/verify-otp")]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> VerifyRegistrationOtp([FromBody] VerifyRegistrationOtpRequest request, CancellationToken cancellationToken)
     {
         if (request == null || string.IsNullOrWhiteSpace(request.EmailOrPhone) || string.IsNullOrWhiteSpace(request.OtpCode))
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Email và mã OTP không được để trống.", StatusCodes.Status400BadRequest));
+            return ProblemResult(StatusCodes.Status400BadRequest, "BAD_REQUEST", "Thiếu thông tin xác thực", "Email và mã OTP không được để trống.");
         }
 
         try
@@ -164,7 +186,8 @@ public class AuthController : BaseApiController
         }
         catch (ArgumentException ex)
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+            var (code, msg) = ParseCodedMessage(ex.Message, "BAD_REQUEST");
+            return ProblemResult(StatusCodes.Status400BadRequest, code, "Xác thực OTP thất bại", msg);
         }
     }
 
@@ -172,13 +195,15 @@ public class AuthController : BaseApiController
     /// Đăng ký tài khoản chủ cửa hàng và khởi tạo gian hàng mới
     /// </summary>
     [HttpPost("register")]
+    [RequireIdempotency(useProblemDetails: true)]
     [ProducesResponseType(typeof(ApiResponse<UserInfo>), StatusCodes.Status200OK)]
-    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status409Conflict)]
     public async Task<IActionResult> Register([FromBody] RegisterTenantRequest request, CancellationToken cancellationToken)
     {
         if (request == null || string.IsNullOrWhiteSpace(request.FullName) || string.IsNullOrWhiteSpace(request.Phone) || string.IsNullOrWhiteSpace(request.Password))
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Vui lòng nhập đầy đủ họ tên, số điện thoại và mật khẩu.", StatusCodes.Status400BadRequest));
+            return ProblemResult(StatusCodes.Status400BadRequest, "BAD_REQUEST", "Thiếu thông tin đăng ký", "Vui lòng nhập đầy đủ họ tên, số điện thoại và mật khẩu.");
         }
 
         try
@@ -189,7 +214,13 @@ public class AuthController : BaseApiController
         }
         catch (ArgumentException ex)
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+            var (code, msg) = ParseCodedMessage(ex.Message, "BAD_REQUEST");
+            return ProblemResult(StatusCodes.Status400BadRequest, code, "Đăng ký không hợp lệ", msg);
+        }
+        catch (InvalidOperationException ex)
+        {
+            var (code, msg) = ParseCodedMessage(ex.Message, "CONFLICT");
+            return ProblemResult(StatusCodes.Status409Conflict, code, "Xung đột xác thực OTP", msg);
         }
     }
 
@@ -443,6 +474,58 @@ public class AuthController : BaseApiController
         catch (ArgumentException ex)
         {
             return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+        }
+    }
+
+    private ObjectResult ProblemResult(int statusCode, string code, string title, string detail)
+    {
+        var problem = new ProblemDetails
+        {
+            Status = statusCode,
+            Title = title,
+            Detail = detail,
+            Instance = HttpContext?.Request?.Path.Value
+        };
+        problem.Extensions["code"] = code;
+        problem.Extensions["traceId"] = HttpContext?.TraceIdentifier ?? ActivityTraceFallback();
+        return new ObjectResult(problem) { StatusCode = statusCode };
+    }
+
+    private static string ActivityTraceFallback()
+        => System.Diagnostics.Activity.Current?.Id ?? Guid.NewGuid().ToString("N");
+
+    private static (string Code, string Message) ParseCodedMessage(string rawMessage, string fallbackCode)
+    {
+        var colonIdx = rawMessage.IndexOf(':');
+        if (colonIdx > 1 && colonIdx < 40)
+        {
+            var candidate = rawMessage[..colonIdx].Trim();
+            if (candidate.All(c => char.IsUpper(c) || char.IsDigit(c) || c == '_'))
+            {
+                return (candidate, rawMessage[(colonIdx + 1)..].Trim());
+            }
+        }
+        return (fallbackCode, rawMessage);
+    }
+
+    private static bool IsIpRateLimited(string ip)
+    {
+        var now = DateTime.UtcNow;
+        var queue = OtpIpRateLimits.GetOrAdd(ip, _ => new Queue<DateTime>());
+        lock (queue)
+        {
+            while (queue.Count > 0 && now - queue.Peek() > OtpIpWindow)
+            {
+                queue.Dequeue();
+            }
+
+            if (queue.Count >= MaxOtpSendPerIp)
+            {
+                return true;
+            }
+
+            queue.Enqueue(now);
+            return false;
         }
     }
 }

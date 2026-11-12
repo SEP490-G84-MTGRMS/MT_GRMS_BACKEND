@@ -97,6 +97,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<StorePaymentConfig> StorePaymentConfigs { get; set; } = null!;
     public virtual DbSet<PaymentTransaction> PaymentTransactions { get; set; } = null!;
     public virtual DbSet<IdempotencyRecord> IdempotencyRecords { get; set; } = null!;
+    public virtual DbSet<MT_GRMS.Infrastructure.Services.RegistrationOtpChallenge> RegistrationOtpChallenges { get; set; } = null!;
 
     // 7. Customer Debt Module (FE-08) - Đã hợp nhất công nợ vào Customers
     public virtual DbSet<CustomerDebtInvoice> CustomerDebtInvoices { get; set; } = null!;
@@ -121,6 +122,19 @@ public partial class AppDbContext : DbContext
 
         // Tự động nạp toàn bộ Configurations trong assembly Infrastructure
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
+        modelBuilder.Entity<MT_GRMS.Infrastructure.Services.RegistrationOtpChallenge>(entity =>
+        {
+            entity.ToTable("RegistrationOtpChallenges");
+            entity.HasKey(x => x.Key);
+            entity.Property(x => x.Key).HasMaxLength(120);
+            entity.Property(x => x.NormalizedEmail).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.OtpHash).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.Intent).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.RequestFingerprint).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.State).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.ReservedByIdempotencyKey).HasMaxLength(120);
+            entity.HasIndex(x => new { x.NormalizedEmail, x.State });
+        });
 
         // Tắt toàn bộ Cascade Delete ở mức Database để tránh lỗi Multiple Cascade Paths (Error 1785) của SQL Server
         // Dự án áp dụng Soft Delete (IsDeleted) toàn diện nên an toàn 100%
