@@ -439,4 +439,46 @@ public class UserAuthenticationTests
         Assert.NotEqual("OldHash", user.PasswordHash);
         Assert.True(PasswordHasher.Verify(user.PasswordHash, "NewSuperPassword@2026", out _));
     }
+
+    [Fact]
+    public async Task AuthService_LoginAsync_InactiveUser_ShouldThrowUnauthorizedAccessException()
+    {
+        var repo = new FakeUserRepository();
+        var user = new User
+        {
+            Id = "usr_locked",
+            Username = "locked_staff",
+            Email = "locked@mtgrms.vn",
+            PasswordHash = PasswordHasher.Hash("Staff@123456"),
+            IsActive = false
+        };
+        await repo.AddAsync(user);
+
+        var authService = new AuthService(repo);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            authService.LoginAsync(new LoginRequest("locked_staff", "Staff@123456", null)));
+    }
+
+    [Fact]
+    public async Task AuthService_RefreshTokenAsync_InactiveUser_ShouldThrowUnauthorizedAccessException()
+    {
+        var repo = new FakeUserRepository();
+        var user = new User
+        {
+            Id = "usr_locked_refresh",
+            Username = "locked_refresh",
+            Email = "locked_refresh@mtgrms.vn",
+            PasswordHash = "Hash",
+            IsActive = false,
+            RefreshToken = "mt_refresh_locked",
+            RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(5)
+        };
+        await repo.AddAsync(user);
+
+        var authService = new AuthService(repo);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            authService.RefreshTokenAsync(new RefreshTokenRequest("mt_refresh_locked")));
+    }
 }

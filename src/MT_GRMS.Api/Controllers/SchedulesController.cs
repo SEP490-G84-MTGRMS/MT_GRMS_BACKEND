@@ -278,6 +278,36 @@ public class SchedulesController : BaseApiController
     }
 
     /// <summary>
+    /// Hủy chấm công và đưa ca làm việc về trạng thái chờ vào ca (Published)
+    /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [HttpPost("{id:guid}/attendance/reset")]
+    [HttpDelete("{id:guid}/attendance")]
+    public async Task<IActionResult> ResetAttendance(
+        Guid id,
+        [FromBody] ResetAttendanceRequest? request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _scheduleService.ResetManualAttendanceAsync(id, request, cancellationToken);
+            return Ok(ApiResponse<ResetAttendanceResponse>.Ok(result, result.Message));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
+        }
+        catch (BusinessException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail(ex.ErrorCode ?? "BAD_REQUEST", ex.Message));
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, ApiResponse<object>.Fail("INTERNAL_SERVER_ERROR", ex.Message));
+        }
+    }
+
+    /// <summary>
     /// Gửi phiếu yêu cầu (Xin nghỉ, Đổi ca, Chấm công sự cố, Xin OT) cho ca làm việc
     /// </summary>
     [HttpPost("{scheduleId:guid}/requests")]

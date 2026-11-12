@@ -2,6 +2,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
+using MT_GRMS.Application.HR.Payslips;
 using MT_GRMS.Application.HR.Schedules.Dtos;
 using MT_GRMS.Application.HR.ShiftConfigs;
 using MT_GRMS.Domain.Entities.HR;
@@ -17,6 +18,7 @@ public class ScheduleService : IScheduleService
     private readonly IShiftConfigRepository _shiftConfigRepository;
     private readonly IBranchAttendancePolicyRepository? _policyRepository;
     private readonly ICloudinaryService? _cloudinaryService;
+    private readonly IPayslipRepository? _payslipRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
 
@@ -27,7 +29,8 @@ public class ScheduleService : IScheduleService
         IUnitOfWork unitOfWork,
         ITenantContext tenantContext,
         IBranchAttendancePolicyRepository? policyRepository = null,
-        ICloudinaryService? cloudinaryService = null)
+        ICloudinaryService? cloudinaryService = null,
+        IPayslipRepository? payslipRepository = null)
     {
         _scheduleRepository = scheduleRepository;
         _employeeRepository = employeeRepository;
@@ -36,6 +39,7 @@ public class ScheduleService : IScheduleService
         _tenantContext = tenantContext;
         _policyRepository = policyRepository;
         _cloudinaryService = cloudinaryService;
+        _payslipRepository = payslipRepository;
     }
 
     public async Task<ScheduleResponse> CreateAsync(
@@ -829,6 +833,130 @@ public class ScheduleService : IScheduleService
         }
 
         return MapToResponse(schedule);
+    }
+
+    public async Task<ResetAttendanceResponse> ResetManualAttendanceAsync(
+        Guid id,
+        ResetAttendanceRequest? request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!string.IsNullOrWhiteSpace(_tenantContext.CurrentRole)
+            && !string.Equals(_tenantContext.CurrentRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(_tenantContext.CurrentRole, "ADMIN", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new BusinessException("FORBIDDEN", "Chỉ Chủ cửa hàng hoặc Quản trị viên mới có quyền hủy chấm công.");
+        }
+
+        var schedule = await _scheduleRepository.GetByIdAsync(id, cancellationToken)
+            ?? throw new NotFoundException($"Lịch làm việc với ID {id} không tồn tại.");
+
+        // 1. Kiểm tra khóa bảng lương: chặn hủy nếu ca hoặc kỳ lương tháng của nhân viên đã thanh toán (Paid/Partial)
+        if (schedule.Payslip != null && schedule.Payslip.Status is PayslipStatus.Paid or PayslipStatus.Partial)
+        {
+            throw new BusinessException(
+                "PAYSLIP_LOCKED",
+                "Không thể hủy chấm công vì ca làm việc này đã được chốt và thanh toán trong phiếu lương.");
+        }
+
+        var periodMonth = schedule.WorkDate.ToString("yyyy-MM");
+        var periodPayslip = _payslipRepository != null
+            ? await _payslipRepository.GetByEmployeeAndPeriodAsync(schedule.EmployeeId, periodMonth, cancellationToken)
+            : null;
+
+        if (periodPayslip != null && periodPayslip.Status is PayslipStatus.Paid or PayslipStatus.Partial)
+        {
+            throw new BusinessException(
+                "PAYSLIP_LOCKED",
+                $"Không thể hủy chấm công vì phiếu lương tháng {schedule.WorkDate:MM/yyyy} của nhân viên đã được thanh toán.");
+        }
+
+        var hasUnpaidPayslip = (periodPayslip != null && periodPayslip.Status == PayslipStatus.Unpaid)
+            || (schedule.Payslip != null && schedule.Payslip.Status == PayslipStatus.Unpaid);
+
+        // 2. Chặn hủy nếu đang có phiếu yêu cầu chờ duyệt gắn với ca làm việc này
+        if (schedule.ApprovalRequests.Any(r => !r.IsDeleted && r.Status == ScheduleApprovalStatus.Pending))
+        {
+            throw new BusinessException(
+                "PENDING_APPROVAL_REQUESTS",
+                "Ca làm việc đang có phiếu yêu cầu chờ duyệt. Vui lòng xử lý phiếu yêu cầu trước khi hủy chấm công.");
+        }
+
+        // 3. Chặn hủy nếu ca làm việc chưa có dữ liệu chấm công
+        var hasAttendanceData = schedule.CheckInTime.HasValue
+            || schedule.CheckOutTime.HasValue
+            || schedule.IsLeave
+            || string.Equals(schedule.ApprovalType, "PAID_LEAVE", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(schedule.ApprovalType, "UNPAID_LEAVE", StringComparison.OrdinalIgnoreCase)
+            || schedule.Status is ScheduleStatus.InProgress or ScheduleStatus.Completed or ScheduleStatus.Cancelled or ScheduleStatus.OnLeave;
+
+        if (!hasAttendanceData)
+        {
+            throw new BusinessException(
+                "NO_ATTENDANCE_DATA",
+                "Ca làm việc chưa có dữ liệu chấm công để hủy.");
+        }
+
+        // 4. Kiểm tra lý do hủy chấm công (bắt buộc nếu đã điểm danh bằng FaceID)
+        var trimmedReason = request?.Reason?.Trim();
+        if (!string.IsNullOrEmpty(trimmedReason) && trimmedReason.Length > 255)
+        {
+            throw new BusinessException(
+                "INVALID_RESET_REASON",
+                "Lý do hủy chấm công tối đa 255 ký tự.");
+        }
+
+        var isFaceIdAttendance = string.Equals(schedule.CheckInMethod, "FACE_ID", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(schedule.CheckOutMethod, "FACE_ID", StringComparison.OrdinalIgnoreCase);
+
+        if (isFaceIdAttendance && string.IsNullOrWhiteSpace(trimmedReason))
+        {
+            throw new BusinessException(
+                "RESET_REASON_REQUIRED",
+                "Ca làm việc đã chấm công bằng FaceID. Vui lòng nhập lý do khi hủy chấm công.");
+        }
+
+        // 5. Reset dữ liệu chấm công và giữ nguyên thông tin ca phân bổ
+        var vnNow = DateTime.UtcNow.AddHours(7);
+        var actor = _tenantContext.CurrentUserId != Guid.Empty
+            ? _tenantContext.CurrentUserId.ToString()
+            : "Manager";
+
+        schedule.Status = ScheduleStatus.Published;
+        schedule.CheckInTime = null;
+        schedule.CheckOutTime = null;
+        schedule.CheckInMethod = null;
+        schedule.CheckOutMethod = null;
+        schedule.CheckInFaceImageUrl = null;
+        schedule.CheckOutFaceImageUrl = null;
+        schedule.FaceMatchScore = null;
+        schedule.LateMinutes = 0;
+        schedule.EarlyLeaveMinutes = 0;
+        schedule.OvertimeMinutes = 0;
+        schedule.ActualWorkHours = 0.00m;
+        schedule.IsLeave = false;
+        schedule.IsPaidLeave = false;
+        schedule.ApprovalType = null;
+        schedule.ApprovalStatus = ScheduleApprovalStatus.None;
+        schedule.EvidenceImageUrl = null;
+        schedule.PayslipId = null;
+        schedule.ApprovalReason = string.IsNullOrWhiteSpace(trimmedReason) ? null : trimmedReason;
+        schedule.ApprovedBy = string.IsNullOrWhiteSpace(trimmedReason) ? null : actor;
+        schedule.ApprovedAt = string.IsNullOrWhiteSpace(trimmedReason) ? null : vnNow;
+        schedule.UpdatedAt = vnNow;
+
+        _scheduleRepository.Update(schedule);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        if (schedule.Employee == null)
+        {
+            schedule.Employee = await _employeeRepository.GetByIdAsync(schedule.EmployeeId, cancellationToken);
+        }
+
+        var message = hasUnpaidPayslip
+            ? $"Đã hủy chấm công. Lưu ý: nhân viên đang có phiếu lương tháng {schedule.WorkDate:MM/yyyy} ở trạng thái chưa thanh toán, vui lòng tính lại lương để cập nhật công."
+            : "Đã hủy chấm công và đưa ca làm việc về trạng thái chờ vào ca.";
+
+        return new ResetAttendanceResponse(MapToResponse(schedule), hasUnpaidPayslip, message);
     }
 
     private static void ApplyWorkingAttendance(

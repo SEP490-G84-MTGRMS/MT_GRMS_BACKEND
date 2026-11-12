@@ -16,6 +16,16 @@ public record ManualAttendanceRequest(
     string? Note = null
 );
 
+public record ResetAttendanceRequest(
+    string? Reason = null
+);
+
+public record ResetAttendanceResponse(
+    ScheduleResponse Schedule,
+    bool HasUnpaidPayslip,
+    string Message
+);
+
 public record CreateScheduleItemRequest(
     Guid EmployeeId,
     Guid BranchId,

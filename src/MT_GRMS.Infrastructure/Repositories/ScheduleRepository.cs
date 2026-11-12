@@ -24,6 +24,8 @@ public class ScheduleRepository : IScheduleRepository
             .Include(s => s.Employee)
             .Include(s => s.Branch)
             .Include(s => s.ShiftConfig)
+            .Include(s => s.Payslip)
+            .Include(s => s.ApprovalRequests)
             .FirstOrDefaultAsync(s => s.Id == id && !s.IsDeleted, cancellationToken);
     }
 

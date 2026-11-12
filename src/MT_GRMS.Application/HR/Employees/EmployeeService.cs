@@ -356,6 +356,10 @@ public class EmployeeService : IEmployeeService
             var normalizedUsername = request.UserName.Trim();
             if (string.IsNullOrEmpty(employee.UserId))
             {
+                if (employee.Status == EmployeeStatus.Inactive)
+                {
+                    throw new BusinessException("EMPLOYEE_INACTIVE", "Không thể cấp tài khoản đăng nhập cho nhân viên đã ngừng làm việc.");
+                }
                 var existingUser = await _userRepository.GetByUsernameAsync(normalizedUsername, cancellationToken);
                 if (existingUser != null)
                 {
@@ -486,15 +490,7 @@ public class EmployeeService : IEmployeeService
         employee.Status = isActivating ? EmployeeStatus.Active : EmployeeStatus.Inactive;
         employee.UpdatedAt = VnNow;
 
-        if (!string.IsNullOrEmpty(employee.UserId))
-        {
-            var user = await _userRepository.GetByIdAsync(employee.UserId, cancellationToken);
-            if (user != null)
-            {
-                user.IsActive = isActivating;
-                _userRepository.Update(user);
-            }
-        }
+        await SyncLinkedUserLockAsync(employee, isActivating, cancellationToken);
 
         _employeeRepository.Update(employee);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -516,15 +512,7 @@ public class EmployeeService : IEmployeeService
         var hasWorkHistory = await _employeeRepository.HasWorkOrPayrollHistoryAsync(id, cancellationToken);
         if (hasWorkHistory)
         {
-            if (!string.IsNullOrEmpty(employee.UserId))
-            {
-                var user = await _userRepository.GetByIdAsync(employee.UserId, cancellationToken);
-                if (user != null)
-                {
-                    user.IsActive = false;
-                    _userRepository.Update(user);
-                }
-            }
+            await SyncLinkedUserLockAsync(employee, false, cancellationToken);
 
             employee.IsDeleted = false;
             employee.Status = EmployeeStatus.Inactive;
@@ -535,7 +523,7 @@ public class EmployeeService : IEmployeeService
 
             throw new BusinessException(
                 "EMPLOYEE_HAS_WORK_HISTORY",
-                $"Nhân viên \"{employee.FullName}\" ({employee.EmployeeCode}) đã có lịch làm việc hoặc phiếu lương nên hệ thống không được phép xóa cứng. Trạng thái nhân viên đã được chuyển sang \"Ngừng làm việc\" (Đã nghỉ).");
+                $"Nhân viên \"{employee.FullName}\" ({employee.EmployeeCode}) đã có lịch làm việc hoặc phiếu lương nên hệ thống không được phép xóa cứng. Trạng thái nhân viên đã được chuyển sang \"Ngừng làm việc\" (Đã nghỉ) và tài khoản đăng nhập liên kết đã bị khóa.");
         }
 
         // 1. Xóa toàn bộ các khoản phụ cấp (EmployeeAllowances) của nhân viên chưa có lịch sử công/lương
@@ -545,15 +533,7 @@ public class EmployeeService : IEmployeeService
         }
 
         // 2. Vô hiệu hóa tài khoản đăng nhập liên kết nếu có (BR-EMP-05)
-        if (!string.IsNullOrEmpty(employee.UserId))
-        {
-            var user = await _userRepository.GetByIdAsync(employee.UserId, cancellationToken);
-            if (user != null)
-            {
-                user.IsActive = false;
-                _userRepository.Update(user);
-            }
-        }
+        await SyncLinkedUserLockAsync(employee, false, cancellationToken);
 
         // 3. Soft delete hồ sơ nhân viên chưa có lịch sử công/lương
         employee.IsDeleted = true;
@@ -563,6 +543,40 @@ public class EmployeeService : IEmployeeService
         _employeeRepository.Update(employee);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return true;
+    }
+
+    private async Task SyncLinkedUserLockAsync(Employee employee, bool isActive, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(employee.UserId))
+        {
+            return;
+        }
+
+        var user = await _userRepository.GetByIdAsync(employee.UserId, cancellationToken);
+        if (user == null)
+        {
+            return;
+        }
+
+        user.IsActive = isActive;
+        if (!isActive)
+        {
+            user.RefreshToken = null;
+            user.RefreshTokenExpiryTime = null;
+        }
+
+        if (user.TenantUsers != null)
+        {
+            foreach (var tenantUser in user.TenantUsers)
+            {
+                if (string.IsNullOrEmpty(employee.TenantId) || tenantUser.TenantId == employee.TenantId)
+                {
+                    tenantUser.IsActive = isActive;
+                }
+            }
+        }
+
+        _userRepository.Update(user);
     }
 
     public async Task<string> CreateIdentityAccountAsync(
@@ -584,6 +598,11 @@ public class EmployeeService : IEmployeeService
         if (employee == null)
         {
             throw new NotFoundException($"Không tìm thấy nhân viên với ID: {employeeId}");
+        }
+
+        if (employee.Status == EmployeeStatus.Inactive)
+        {
+            throw new BusinessException("EMPLOYEE_INACTIVE", "Không thể cấp tài khoản đăng nhập cho nhân viên đã ngừng làm việc.");
         }
 
         if (!string.IsNullOrEmpty(employee.UserId))
@@ -656,6 +675,11 @@ public class EmployeeService : IEmployeeService
         if (employee == null)
         {
             throw new NotFoundException($"Không tìm thấy nhân viên với ID: {employeeId}");
+        }
+
+        if (employee.Status == EmployeeStatus.Inactive)
+        {
+            throw new BusinessException("EMPLOYEE_INACTIVE", "Không thể cập nhật tài khoản cho nhân viên đã ngừng làm việc (tài khoản đang bị khóa).");
         }
 
         if (string.IsNullOrEmpty(employee.UserId))

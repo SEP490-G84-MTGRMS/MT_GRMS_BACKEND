@@ -6,8 +6,8 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using MT_GRMS.Application.Auth.Dtos;
-using MT_GRMS.Domain.Constants;
 using MT_GRMS.Application.Common.Interfaces;
+using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Entities.Inventory;
@@ -25,17 +25,20 @@ public class AuthService : IAuthService
     private readonly IConfiguration? _configuration;
     private readonly IPasswordHasher _passwordHasher;
     private readonly IEmailService? _emailService;
+    private readonly IEmployeeRepository? _employeeRepository;
 
     public AuthService(
         IUserRepository userRepository,
         IConfiguration? configuration = null,
         IPasswordHasher? passwordHasher = null,
-        IEmailService? emailService = null)
+        IEmailService? emailService = null,
+        IEmployeeRepository? employeeRepository = null)
     {
         _userRepository = userRepository;
         _configuration = configuration;
         _passwordHasher = passwordHasher ?? new PasswordHasher();
         _emailService = emailService;
+        _employeeRepository = employeeRepository;
     }
 
     public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
@@ -53,8 +56,9 @@ public class AuthService : IAuthService
         // 3. Xác thực mật khẩu và tự động nâng cấp hash nếu cần
         await VerifyPasswordAsync(user, request.Password, cancellationToken);
 
-        // 4. Xác định Tenant và phân quyền theo UserRole enum (Admin, StoreOwner, Staff)
+        // 4. Xác định Tenant và kiểm tra tài khoản có bị khóa / nhân viên đã nghỉ việc hay không
         var (tenantId, tenantUser) = ResolveTenant(user, request.TenantCode);
+        await EnsureAccountActiveAsync(user, tenantUser, cancellationToken);
         var userRole = ResolveUserRole(user, tenantUser);
         var role = userRole.ToStringRole();
         var isAdmin = userRole == UserRole.Admin;
@@ -154,6 +158,23 @@ public class AuthService : IAuthService
     /// <summary>
     /// Xác định TenantId và đối tượng TenantUser liên kết của người dùng
     /// </summary>
+    private async Task EnsureAccountActiveAsync(User user, TenantUser? tenantUser, CancellationToken cancellationToken)
+    {
+        if (!user.IsActive || (tenantUser != null && !tenantUser.IsActive))
+        {
+            throw new UnauthorizedAccessException("Tài khoản của bạn đã bị khóa hoặc ngừng hoạt động. Vui lòng liên hệ quản lý.");
+        }
+
+        if (_employeeRepository != null)
+        {
+            var linkedEmployee = await _employeeRepository.GetByUserIdAsync(user.Id, cancellationToken);
+            if (linkedEmployee != null && linkedEmployee.Status == EmployeeStatus.Inactive)
+            {
+                throw new UnauthorizedAccessException("Tài khoản đã bị khóa do nhân viên đã ngừng làm việc. Vui lòng liên hệ quản lý.");
+            }
+        }
+    }
+
     private static (string TenantId, TenantUser? TenantUser) ResolveTenant(User user, string? tenantCode)
     {
         var tenantUser = user.TenantUsers?.FirstOrDefault(tu => !string.IsNullOrWhiteSpace(tenantCode) && tu.TenantId == tenantCode)
@@ -202,6 +223,7 @@ public class AuthService : IAuthService
         }
 
         var (tenantId, tenantUser) = ResolveTenant(user, null);
+        await EnsureAccountActiveAsync(user, tenantUser, cancellationToken);
         var userRole = ResolveUserRole(user, tenantUser);
         var role = userRole.ToStringRole();
         var isAdmin = userRole == UserRole.Admin;
@@ -244,6 +266,16 @@ public class AuthService : IAuthService
         if (user == null || !user.IsActive) return null;
 
         var (tenantId, tenantUser) = ResolveTenant(user, null);
+        if (tenantUser != null && !tenantUser.IsActive) return null;
+
+        if (_employeeRepository != null)
+        {
+            var linkedEmployee = await _employeeRepository.GetByUserIdAsync(user.Id, cancellationToken);
+            if (linkedEmployee != null && linkedEmployee.Status == EmployeeStatus.Inactive)
+            {
+                return null;
+            }
+        }
         var userRole = ResolveUserRole(user, tenantUser);
         var role = userRole.ToStringRole();
         var isAdmin = userRole == UserRole.Admin;

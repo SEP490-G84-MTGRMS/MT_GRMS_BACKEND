@@ -67,6 +67,37 @@ builder.Services.AddAuthentication(options =>
                 context.Token = cookieToken;
             }
             return Task.CompletedTask;
+        },
+        OnTokenValidated = async context =>
+        {
+            var userId = context.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                context.Fail("Tài khoản không hợp lệ.");
+                return;
+            }
+
+            var userRepo = context.HttpContext.RequestServices.GetService<MT_GRMS.Application.Auth.IUserRepository>();
+            if (userRepo != null)
+            {
+                var user = await userRepo.GetByIdAsync(userId, context.HttpContext.RequestAborted);
+                if (user == null || !user.IsActive || (user.TenantUsers.Any() && user.TenantUsers.All(t => !t.IsActive)))
+                {
+                    context.Fail("Tài khoản đã bị khóa hoặc ngừng hoạt động.");
+                    return;
+                }
+            }
+
+            var empRepo = context.HttpContext.RequestServices.GetService<MT_GRMS.Application.HR.Employees.IEmployeeRepository>();
+            if (empRepo != null)
+            {
+                var linkedEmployee = await empRepo.GetByUserIdAsync(userId, context.HttpContext.RequestAborted);
+                if (linkedEmployee != null && linkedEmployee.Status == MT_GRMS.Domain.Enums.EmployeeStatus.Inactive)
+                {
+                    context.Fail("Tài khoản đã bị khóa do nhân viên đã ngừng làm việc.");
+                    return;
+                }
+            }
         }
     };
 });

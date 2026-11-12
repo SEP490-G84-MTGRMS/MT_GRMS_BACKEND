@@ -830,4 +830,80 @@ public class EmployeeServiceTests
         Assert.Equal("Phụ cấp ăn trưa", empRepo.RemovedAllowances[0].Name);
         Assert.True(uow.SaveChangesCalled);
     }
+
+    [Fact]
+    public async Task UpdateStatusAsync_Inactive_LocksLinkedUserAndClearsRefreshToken()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var user = new User
+        {
+            Id = "usr_emp_lock",
+            Username = "staff_lock",
+            IsActive = true,
+            RefreshToken = "refresh_active",
+            RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(3),
+            TenantUsers = new List<TenantUser>
+            {
+                new() { TenantId = "tenant_test_01", UserId = "usr_emp_lock", Role = "STAFF", IsActive = true }
+            }
+        };
+        await userRepo.AddAsync(user);
+
+        var empId = Guid.NewGuid();
+        var employee = new Employee
+        {
+            Id = empId,
+            TenantId = "tenant_test_01",
+            EmployeeCode = "NV0090",
+            FullName = "Nhân Viên Nghỉ Việc",
+            CitizenId = "001202008811",
+            Phone = "0988777666",
+            BranchId = Guid.NewGuid(),
+            UserId = user.Id,
+            Status = EmployeeStatus.Active
+        };
+        await empRepo.AddAsync(employee);
+
+        var ok = await service.UpdateStatusAsync(empId, "inactive");
+
+        Assert.True(ok);
+        Assert.Equal(EmployeeStatus.Inactive, employee.Status);
+        Assert.False(user.IsActive);
+        Assert.Null(user.RefreshToken);
+        Assert.Null(user.RefreshTokenExpiryTime);
+        Assert.All(user.TenantUsers, tu => Assert.False(tu.IsActive));
+    }
+
+    [Fact]
+    public async Task CreateIdentityAccountAsync_InactiveEmployee_ThrowsBusinessException()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var empId = Guid.NewGuid();
+        await empRepo.AddAsync(new Employee
+        {
+            Id = empId,
+            TenantId = "tenant_test_01",
+            EmployeeCode = "NV0091",
+            FullName = "Nhân Viên Đã Nghỉ",
+            CitizenId = "001202008822",
+            Phone = "0988777555",
+            BranchId = Guid.NewGuid(),
+            Status = EmployeeStatus.Inactive
+        });
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.CreateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("new_user", "Pass@123")));
+
+        Assert.Equal("EMPLOYEE_INACTIVE", ex.ErrorCode);
+    }
 }

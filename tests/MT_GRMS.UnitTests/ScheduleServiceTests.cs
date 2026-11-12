@@ -2,6 +2,8 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Employees.Dtos;
+using MT_GRMS.Application.HR.Payslips;
+using MT_GRMS.Application.HR.Payslips.Dtos;
 using MT_GRMS.Application.HR.Schedules;
 using MT_GRMS.Application.HR.Schedules.Dtos;
 using MT_GRMS.Application.HR.ShiftConfigs;
@@ -260,6 +262,42 @@ public class ScheduleServiceTests
             var index = Policies.FindIndex(p => p.Id == policy.Id);
             if (index >= 0) Policies[index] = policy;
         }
+    }
+
+    private class FakePayslipRepository : IPayslipRepository
+    {
+        public List<Payslip> Payslips { get; } = new();
+
+        public Task<Payslip?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+            => Task.FromResult(Payslips.FirstOrDefault(p => p.Id == id && !p.IsDeleted));
+
+        public Task<Payslip?> GetByEmployeeAndPeriodAsync(Guid employeeId, string periodMonth, CancellationToken cancellationToken = default)
+            => Task.FromResult(Payslips.FirstOrDefault(p => p.EmployeeId == employeeId && p.PeriodMonth == periodMonth && !p.IsDeleted));
+
+        public Task<(IReadOnlyList<Payslip> Items, int TotalCount)> GetPagedListAsync(PayslipQueryFilter filter, CancellationToken cancellationToken = default)
+            => Task.FromResult(((IReadOnlyList<Payslip>)Payslips, Payslips.Count));
+
+        public Task<IReadOnlyList<Payslip>> GetByPeriodAndBranchAsync(string periodMonth, Guid? branchId, CancellationToken cancellationToken = default)
+            => Task.FromResult((IReadOnlyList<Payslip>)Payslips.Where(p => p.PeriodMonth == periodMonth && !p.IsDeleted).ToList());
+
+        public Task AddAsync(Payslip payslip, CancellationToken cancellationToken = default)
+        {
+            Payslips.Add(payslip);
+            return Task.CompletedTask;
+        }
+
+        public Task AddRangeAsync(IEnumerable<Payslip> payslips, CancellationToken cancellationToken = default)
+        {
+            Payslips.AddRange(payslips);
+            return Task.CompletedTask;
+        }
+
+        public void Update(Payslip payslip) { }
+        public void Delete(Payslip payslip) => payslip.IsDeleted = true;
+        public Task<int> GetCountByPeriodMonthAsync(string periodMonth, CancellationToken cancellationToken = default)
+            => Task.FromResult(Payslips.Count(p => p.PeriodMonth == periodMonth));
+        public Task AddCashbookTransactionAsync(MT_GRMS.Domain.Entities.Finance.CashbookTransaction transaction, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
     }
 
     [Fact]
@@ -1102,6 +1140,233 @@ public class ScheduleServiceTests
 
         var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateAsync(request));
         Assert.Equal("WORK_DATE_BEFORE_START_DATE", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ResetManualAttendanceAsync_PaidPayslip_ThrowsPayslipLocked()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var payslipRepo = new FakePayslipRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext { CurrentRole = "STORE_OWNER" };
+
+        var empId = Guid.NewGuid();
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = empId,
+            BranchId = Guid.NewGuid(),
+            WorkDate = new DateTime(2026, 11, 10),
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(12, 0, 0),
+            DurationHours = 4m,
+            CheckInTime = new DateTime(2026, 11, 10, 8, 0, 0),
+            CheckOutTime = new DateTime(2026, 11, 10, 12, 0, 0),
+            CheckInMethod = "MANUAL",
+            ActualWorkHours = 4m,
+            Status = ScheduleStatus.Completed
+        };
+        scheduleRepo.Schedules.Add(schedule);
+        payslipRepo.Payslips.Add(new Payslip
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = empId,
+            PeriodMonth = "2026-11",
+            Status = PayslipStatus.Paid
+        });
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext, payslipRepository: payslipRepo);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.ResetManualAttendanceAsync(schedule.Id, new ResetAttendanceRequest("Sai giờ")));
+        Assert.Equal("PAYSLIP_LOCKED", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ResetManualAttendanceAsync_PendingApprovalRequest_ThrowsPendingApprovalRequests()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var payslipRepo = new FakePayslipRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext { CurrentRole = "STORE_OWNER" };
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = Guid.NewGuid(),
+            BranchId = Guid.NewGuid(),
+            WorkDate = new DateTime(2026, 11, 10),
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(12, 0, 0),
+            Status = ScheduleStatus.InProgress,
+            CheckInTime = new DateTime(2026, 11, 10, 8, 5, 0),
+            ApprovalRequests = new List<ScheduleApprovalRequest>
+            {
+                new() { Id = Guid.NewGuid(), Status = ScheduleApprovalStatus.Pending, IsDeleted = false }
+            }
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext, payslipRepository: payslipRepo);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.ResetManualAttendanceAsync(schedule.Id, new ResetAttendanceRequest("Hủy ca")));
+        Assert.Equal("PENDING_APPROVAL_REQUESTS", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ResetManualAttendanceAsync_NoAttendanceData_ThrowsNoAttendanceData()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var payslipRepo = new FakePayslipRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext { CurrentRole = "STORE_OWNER" };
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = Guid.NewGuid(),
+            BranchId = Guid.NewGuid(),
+            WorkDate = new DateTime(2026, 11, 10),
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(12, 0, 0),
+            Status = ScheduleStatus.Published
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext, payslipRepository: payslipRepo);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.ResetManualAttendanceAsync(schedule.Id, null));
+        Assert.Equal("NO_ATTENDANCE_DATA", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ResetManualAttendanceAsync_FaceIdWithoutReason_ThrowsResetReasonRequired()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var payslipRepo = new FakePayslipRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext { CurrentRole = "STORE_OWNER" };
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = Guid.NewGuid(),
+            BranchId = Guid.NewGuid(),
+            WorkDate = new DateTime(2026, 11, 10),
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(12, 0, 0),
+            CheckInTime = new DateTime(2026, 11, 10, 8, 0, 0),
+            CheckInMethod = "FACE_ID",
+            Status = ScheduleStatus.InProgress
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext, payslipRepository: payslipRepo);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.ResetManualAttendanceAsync(schedule.Id, new ResetAttendanceRequest("   ")));
+        Assert.Equal("RESET_REASON_REQUIRED", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ResetManualAttendanceAsync_PaidLeaveWithUnpaidPayslip_ResetsAllFieldsAndWarns()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var payslipRepo = new FakePayslipRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext { CurrentRole = "STORE_OWNER" };
+
+        var empId = Guid.NewGuid();
+        employeeRepo.Employees.Add(new Employee
+        {
+            Id = empId,
+            EmployeeCode = "NV0010",
+            FullName = "Trần Minh Tâm",
+            Status = EmployeeStatus.Active
+        });
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = empId,
+            BranchId = Guid.NewGuid(),
+            WorkDate = new DateTime(2026, 11, 10),
+            ShiftCode = "CA_SANG",
+            ShiftName = "Ca Sáng",
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(12, 0, 0),
+            DurationHours = 4m,
+            CheckInMethod = "MANUAL_PAID_LEAVE",
+            CheckOutMethod = "MANUAL_PAID_LEAVE",
+            LateMinutes = 10,
+            EarlyLeaveMinutes = 5,
+            OvertimeMinutes = 60,
+            ActualWorkHours = 5m,
+            IsLeave = true,
+            IsPaidLeave = true,
+            ApprovalType = "PAID_LEAVE",
+            ApprovalStatus = ScheduleApprovalStatus.Approved,
+            ApprovalReason = "Nghỉ phép cũ",
+            Status = ScheduleStatus.Completed
+        };
+        scheduleRepo.Schedules.Add(schedule);
+        payslipRepo.Payslips.Add(new Payslip
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = empId,
+            PeriodMonth = "2026-11",
+            Status = PayslipStatus.Unpaid
+        });
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext, payslipRepository: payslipRepo);
+
+        var result = await service.ResetManualAttendanceAsync(schedule.Id, new ResetAttendanceRequest("Nhân viên vẫn đi làm bình thường"));
+
+        Assert.True(uow.SaveChangesCalled);
+        Assert.True(result.HasUnpaidPayslip);
+        Assert.Equal(ScheduleStatus.Published, result.Schedule.Status);
+        Assert.Null(result.Schedule.CheckInTime);
+        Assert.Null(result.Schedule.CheckOutTime);
+        Assert.Null(result.Schedule.CheckInMethod);
+        Assert.Null(result.Schedule.CheckOutMethod);
+        Assert.Equal(0, result.Schedule.LateMinutes);
+        Assert.Equal(0, result.Schedule.EarlyLeaveMinutes);
+        Assert.Equal(0, result.Schedule.OvertimeMinutes);
+        Assert.Equal(0.00m, result.Schedule.ActualWorkHours);
+        Assert.Null(result.Schedule.ApprovalType);
+        Assert.Equal(ScheduleApprovalStatus.None, result.Schedule.ApprovalStatus);
+        Assert.Equal("Nhân viên vẫn đi làm bình thường", result.Schedule.ApprovalReason);
+        Assert.False(schedule.IsLeave);
+        Assert.False(schedule.IsPaidLeave);
+        Assert.Null(schedule.PayslipId);
+    }
+
+    [Fact]
+    public async Task ResetManualAttendanceAsync_StaffRole_ThrowsForbidden()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext { CurrentRole = "CASHIER" };
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.ResetManualAttendanceAsync(Guid.NewGuid(), new ResetAttendanceRequest("Test")));
+        Assert.Equal("FORBIDDEN", ex.ErrorCode);
     }
 }
 
