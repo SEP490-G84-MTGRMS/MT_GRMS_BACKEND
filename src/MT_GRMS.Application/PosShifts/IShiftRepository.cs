@@ -29,5 +29,6 @@ public interface IShiftRepository
     Task<Employee?> GetEmployeeByUserIdAsync(string userId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<EmployeeSchedule>> GetCashierSchedulesAsync(Guid employeeId, Guid branchId, DateTime workDate, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<EmployeeSchedule>> GetBranchCashierSchedulesAsync(Guid branchId, DateTime workDate, CancellationToken cancellationToken = default);
+    Task<TimeSpan> GetBusinessDayStartTimeAsync(Guid branchId, CancellationToken cancellationToken = default) => Task.FromResult(new TimeSpan(6, 0, 0));
 }
 

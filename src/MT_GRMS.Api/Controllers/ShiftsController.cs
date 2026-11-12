@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PosShifts;
@@ -11,6 +12,7 @@ using MT_GRMS.Application.PosShifts.Dtos;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/pos/shifts")]
 [Route("api/shifts")]
 public class ShiftsController : BaseApiController

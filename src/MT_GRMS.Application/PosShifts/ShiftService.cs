@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PosShifts.Dtos;
 using MT_GRMS.Domain.Entities.Finance;
@@ -16,15 +17,18 @@ public class ShiftService : IShiftService
     private readonly IShiftRepository _shiftRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
+    private readonly ICashbookService? _cashbookService;
 
     public ShiftService(
         IShiftRepository shiftRepository,
         IUnitOfWork unitOfWork,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        ICashbookService? cashbookService = null)
     {
         _shiftRepository = shiftRepository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
+        _cashbookService = cashbookService;
     }
 
     public async Task<ShiftDetailResponse> OpenShiftAsync(
@@ -63,6 +67,8 @@ public class ShiftService : IShiftService
         // 3. Sinh mã ca tự động
         var shiftCode = await _shiftRepository.GenerateNextShiftCodeAsync(request.BranchId, cancellationToken);
 
+        var openedAtUtc = DateTime.UtcNow;
+        var businessDayStart = await _shiftRepository.GetBusinessDayStartTimeAsync(request.BranchId, cancellationToken);
         var shift = new ShiftZReport
         {
             TenantId = _tenantContext.CurrentTenantId,
@@ -72,7 +78,8 @@ public class ShiftService : IShiftService
             ShiftName = string.IsNullOrWhiteSpace(request.ShiftName) ? $"Ca {DateTime.UtcNow:dd/MM/yyyy HH:mm}" : request.ShiftName.Trim(),
             CashierUserId = cashierUserId,
             PrevShiftId = prevShift?.Id,
-            OpenedAtUtc = DateTime.UtcNow,
+            OpenedAtUtc = openedAtUtc,
+            BusinessDate = BusinessDateResolver.Resolve(openedAtUtc, businessDayStart),
             OpeningFloatExpected = openingFloatExpected,
             OpeningFloat = request.OpeningFloat,
             OpeningDiscrepancy = openingDiscrepancy,
@@ -208,6 +215,8 @@ public class ShiftService : IShiftService
         {
             throw new BusinessException("REQUIRED_REASON", "Lý do thu chi két không được để trống.");
         }
+        if (request.Reason.Length > 500)
+            throw new BusinessException("REASON_TOO_LONG", "Lý do tối đa 500 ký tự.");
 
         var shift = await _shiftRepository.GetByIdAsync(shiftId, cancellationToken);
         if (shift == null)
@@ -342,10 +351,24 @@ public class ShiftService : IShiftService
         shift.RetainedFloatAmount = request.RetainedFloatAmount;
         shift.DroppedToSafeAmount = request.DroppedToSafeAmount;
         shift.TotalBankRevenue = bankRevenue;
+        shift.TotalCashSales = cashSales;
         shift.TotalOrdersCount = ordersCount;
         shift.ReceiverUserId = request.ReceiverUserId;
         shift.Status = ShiftState.Closed;
         shift.HandoverStatus = HandoverStatus.PENDING;
+        shift.SnapshotLocked = true;
+        shift.CashbookPostingStatus = CashbookPostingStatus.NotPosted;
+
+        if (!string.IsNullOrWhiteSpace(request.EarlyOrLateReason))
+        {
+            var reasonTag = $"[GIẢI TRÌNH GIỜ CHỐT CA: {request.EarlyOrLateReason.Trim()}]";
+            if (shift.Notes == null || !shift.Notes.Contains(request.EarlyOrLateReason.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                shift.Notes = string.IsNullOrWhiteSpace(shift.Notes)
+                    ? reasonTag
+                    : $"{shift.Notes} | {reasonTag}";
+            }
+        }
 
         if (!string.IsNullOrWhiteSpace(request.Notes))
         {
@@ -365,11 +388,31 @@ public class ShiftService : IShiftService
         string receiverUserId,
         CancellationToken cancellationToken = default)
     {
+        if (!string.Equals(_tenantContext.CurrentRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(_tenantContext.CurrentRole, "ADMIN", StringComparison.OrdinalIgnoreCase))
+            throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng hoặc Admin được xác nhận bàn giao ca.");
+
         var shift = await _shiftRepository.GetByIdAsync(shiftId, cancellationToken);
         if (shift == null)
         {
             throw new BusinessException("SHIFT_NOT_FOUND", "Không tìm thấy ca làm việc.");
         }
+
+        if (shift.Status != ShiftState.Closed)
+        {
+            throw new BusinessException(
+                "SHIFT_NOT_CLOSED",
+                $"Ca làm việc '{shift.ShiftName}' ({shift.ShiftCode}) vẫn đang mở. Vui lòng chốt ca hoặc buộc đóng ca trước khi duyệt bàn giao.");
+        }
+
+        if (shift.HandoverStatus == HandoverStatus.CONFIRMED)
+            throw new BusinessException("HANDOVER_ALREADY_CONFIRMED", "Ca đã được xác nhận bàn giao trước đó.");
+        if (request.Status is not (HandoverStatus.CONFIRMED or HandoverStatus.DISPUTED))
+            throw new BusinessException("INVALID_HANDOVER_STATUS", "Chỉ chấp nhận CONFIRMED hoặc DISPUTED.");
+        if (request.Status == HandoverStatus.DISPUTED && string.IsNullOrWhiteSpace(request.DisputeReason))
+            throw new BusinessException("DISPUTE_REASON_REQUIRED", "Bắt buộc nhập lý do khi tranh chấp bàn giao.");
+        if (request.DisputeReason?.Length > 500)
+            throw new BusinessException("DISPUTE_REASON_TOO_LONG", "Lý do tranh chấp tối đa 500 ký tự.");
 
         shift.HandoverStatus = request.Status;
         shift.ReceiverUserId = receiverUserId;
@@ -761,15 +804,26 @@ public class ShiftService : IShiftService
             throw new BusinessException("SHIFT_NOT_FOUND", "Không tìm thấy ca làm việc.");
         }
 
-        if (shift.Status != ShiftState.Closing && shift.Status != ShiftState.Open)
+        if (shift.Status != ShiftState.Closing)
         {
             throw new BusinessException("INVALID_SHIFT_STATE", "Ca làm việc này đã được chốt trước đó.");
         }
+
+        var participant = await _shiftRepository.GetParticipantAsync(shiftId, userId, cancellationToken);
+        if (shift.CashierUserId != userId && participant == null)
+            throw new UnauthorizedAccessException("Bạn không phải người phụ trách hoặc người tham gia ca này.");
 
         if (request.ActualCashCounted < 0)
         {
             throw new BusinessException("INVALID_ACTUAL_CASH", "Tiền kiểm đếm thực tế không được âm.");
         }
+
+        if (request.RetainedFloatAmount < 0 || request.DroppedToSafeAmount < 0)
+            throw new BusinessException("INVALID_CASH_ALLOCATION", "Tiền để lại két và tiền nộp két không được âm.");
+        if (request.ReceiverUserId?.Length > 100)
+            throw new BusinessException("RECEIVER_TOO_LONG", "Người nhận ca tối đa 100 ký tự.");
+        if (request.Notes?.Length > 500 || request.EarlyOrLateReason?.Length > 500)
+            throw new BusinessException("NOTE_TOO_LONG", "Ghi chú và lý do tối đa 500 ký tự.");
 
         decimal allocatedSum = request.RetainedFloatAmount + request.DroppedToSafeAmount;
         if (Math.Abs(allocatedSum - request.ActualCashCounted) > 0.01m)
@@ -800,6 +854,7 @@ public class ShiftService : IShiftService
 
         var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shiftId, cancellationToken);
         shift.TotalBankRevenue = bankRevenue;
+        shift.TotalCashSales = cashSales;
         shift.TotalOrdersCount = ordersCount;
         shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
 
@@ -812,6 +867,19 @@ public class ShiftService : IShiftService
         shift.ClosedByUserId = userId;
         shift.Status = ShiftState.Closed;
         shift.HandoverStatus = HandoverStatus.PENDING;
+        shift.SnapshotLocked = true;
+        shift.CashbookPostingStatus = CashbookPostingStatus.NotPosted;
+
+        if (!string.IsNullOrWhiteSpace(request.EarlyOrLateReason))
+        {
+            var reasonTag = $"[GIẢI TRÌNH GIỜ CHỐT CA: {request.EarlyOrLateReason.Trim()}]";
+            if (shift.Notes == null || !shift.Notes.Contains(request.EarlyOrLateReason.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                shift.Notes = string.IsNullOrWhiteSpace(shift.Notes)
+                    ? reasonTag
+                    : $"{shift.Notes} | {reasonTag}";
+            }
+        }
 
         if (!string.IsNullOrWhiteSpace(request.Notes))
         {
@@ -832,6 +900,10 @@ public class ShiftService : IShiftService
         {
             throw new BusinessException("REASON_REQUIRED", "Lý do đóng ca cưỡng bức là bắt buộc.");
         }
+        if (request.Reason.Length > 500 || request.Notes?.Length > 500)
+            throw new BusinessException("NOTE_TOO_LONG", "Lý do và ghi chú tối đa 500 ký tự.");
+        if (request.RetainedFloatAmount < 0 || request.DroppedToSafeAmount < 0)
+            throw new BusinessException("INVALID_CASH_ALLOCATION", "Tiền để lại két và tiền nộp két không được âm.");
 
         if (request.ActualCashCounted < 0)
         {
@@ -857,9 +929,14 @@ public class ShiftService : IShiftService
         {
             throw new BusinessException("SHIFT_ALREADY_CLOSED", "Ca làm việc này đã được chốt trước đó.");
         }
+        if (shift.CashierUserId == ownerUserId)
+            throw new BusinessException("CANNOT_FORCE_CLOSE_OWN_SHIFT", "Chủ cửa hàng phải tự chốt ca của mình theo luồng đóng ca thông thường.");
+        if (shift.CashMovements.Any(m => m.Status == CashMovementStatus.PendingApproval))
+            throw new BusinessException("PENDING_CASH_MOVEMENTS", "Không thể buộc đóng khi còn phiếu thu/chi chờ duyệt.");
 
         var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shiftId, cancellationToken);
         shift.TotalBankRevenue = bankRevenue;
+        shift.TotalCashSales = cashSales;
         shift.TotalOrdersCount = ordersCount;
         shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
 
@@ -870,11 +947,111 @@ public class ShiftService : IShiftService
         shift.ClosedAtUtc = DateTime.UtcNow;
         shift.ClosedByUserId = ownerUserId;
         shift.ForceCloseReason = request.Reason.Trim();
-        shift.Status = ShiftState.Closed;
-        shift.HandoverStatus = HandoverStatus.PENDING;
+        shift.Status = ShiftState.ForceClosed;
+        shift.HandoverStatus = HandoverStatus.CONFIRMED;
+        shift.SnapshotLocked = true;
+        shift.CashbookPostingStatus = CashbookPostingStatus.NotPosted;
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return MapToDetailResponse(shift);
+    }
+
+    private async Task RecordShiftCashbookSettlementAsync(
+        ShiftZReport shift,
+        decimal cashSales,
+        decimal bankRevenue,
+        int ordersCount,
+        bool recordSafeDrop,
+        CancellationToken cancellationToken)
+    {
+        if (_cashbookService == null) return;
+
+        try
+        {
+            var existingEntries = await _cashbookService.GetEntriesAsync(
+                accountId: null,
+                branchId: shift.BranchId,
+                fromDate: null,
+                toDate: null,
+                page: 1,
+                pageSize: 50,
+                entryType: null,
+                sourceType: null,
+                keyword: shift.ShiftCode,
+                ct: cancellationToken) ?? new List<MT_GRMS.Application.Cashbook.Dtos.CashbookEntryResponse>();
+
+            // 1. Gộp doanh thu chuyển khoản VietQR của cả ca vào Ngân hàng Chủ tiệm (1 bút toán/ca)
+            if (bankRevenue > 0 && !existingEntries.Any(e => e.AccountType == "Bank" && e.ReferenceCode == shift.ShiftCode))
+            {
+                var paymentCfg = !string.IsNullOrWhiteSpace(shift.TenantId)
+                    ? await _shiftRepository.GetPaymentConfigAsync(shift.TenantId, cancellationToken)
+                    : null;
+
+                var bankDisplayName = !string.IsNullOrWhiteSpace(paymentCfg?.BankName)
+                    ? paymentCfg.BankName
+                    : (!string.IsNullOrWhiteSpace(paymentCfg?.BankCode) ? $"Ngân hàng {paymentCfg.BankCode}" : null);
+
+                var bank = await _cashbookService.GetOrCreateBankAccountAsync(
+                    shift.BranchId,
+                    bankDisplayName,
+                    paymentCfg?.BankAccountNumber,
+                    paymentCfg?.BankAccountName,
+                    cancellationToken);
+
+                if (bank != null && bank.Id != Guid.Empty)
+                {
+                    await _cashbookService.ReceiveCashAsync(
+                        bank.Id,
+                        FinanceAccountType.Bank,
+                        bankRevenue,
+                        "POS_SALE",
+                        shift.Id,
+                        shift.ShiftCode,
+                        $"Kết toán doanh thu Chuyển khoản/VietQR ca {shift.ShiftCode} ({ordersCount} đơn hàng)",
+                        cancellationToken);
+                }
+            }
+
+            // 2. Gộp doanh thu tiền mặt của cả ca vào Két quầy thu ngân (1 bút toán/ca)
+            if (cashSales > 0 && !existingEntries.Any(e => e.AccountType == "Till" && e.ReferenceCode == shift.ShiftCode))
+            {
+                var till = await _cashbookService.GetOrCreateTillAsync(shift.BranchId, "Két quầy chính", cancellationToken);
+                if (till != null && till.Id != Guid.Empty)
+                {
+                    await _cashbookService.ReceiveCashAsync(
+                        till.Id,
+                        FinanceAccountType.Till,
+                        cashSales,
+                        "POS_SALE",
+                        shift.Id,
+                        shift.ShiftCode,
+                        $"Kết toán doanh thu Tiền mặt ca {shift.ShiftCode} ({ordersCount} đơn hàng)",
+                        cancellationToken);
+                }
+            }
+
+            // 3. Khi Chủ cửa hàng xác nhận bàn giao (hoặc đóng ca cưỡng bức): Ghi nhận tiền nộp về Két sắt Chủ tiệm
+            if (recordSafeDrop && shift.DroppedToSafeAmount > 0 && !existingEntries.Any(e => e.AccountType == "Safe" && e.ReferenceCode == shift.ShiftCode))
+            {
+                var safe = await _cashbookService.GetOrCreateSafeAsync(shift.BranchId, cancellationToken);
+                if (safe != null && safe.Id != Guid.Empty)
+                {
+                    await _cashbookService.ReceiveCashAsync(
+                        safe.Id,
+                        FinanceAccountType.Safe,
+                        shift.DroppedToSafeAmount,
+                        "CASH_DROP",
+                        shift.Id,
+                        shift.ShiftCode,
+                        $"Thu tiền mặt bàn giao kết ca {shift.ShiftCode} ({shift.ShiftName}) về Két sắt Chủ tiệm",
+                        cancellationToken);
+                }
+            }
+        }
+        catch
+        {
+            // Không làm gián đoạn luồng đóng ca/bàn giao nếu sổ quỹ chưa khởi tạo trong môi trường test độc lập
+        }
     }
 
     public async Task RecordParticipantAsync(
@@ -1054,9 +1231,17 @@ public class ShiftService : IShiftService
         var todayDate = nowVn.Date;
         var currentTimeOfDay = nowVn.TimeOfDay;
 
-        // 4. Lấy lịch làm việc hôm nay của nhân viên tại chi nhánh
-        var schedules = await _shiftRepository.GetCashierSchedulesAsync(employee.Id, branchId, todayDate, cancellationToken);
-        if (schedules == null || schedules.Count == 0)
+        // 4. Lấy lịch làm việc hôm nay của nhân viên tại chi nhánh (kèm các ca xuyên đêm mở từ hôm qua vắt sang sáng nay)
+        var todaySchedules = await _shiftRepository.GetCashierSchedulesAsync(employee.Id, branchId, todayDate, cancellationToken)
+            ?? Array.Empty<Domain.Entities.HR.EmployeeSchedule>();
+        var yesterdaySchedules = await _shiftRepository.GetCashierSchedulesAsync(employee.Id, branchId, todayDate.AddDays(-1), cancellationToken)
+            ?? Array.Empty<Domain.Entities.HR.EmployeeSchedule>();
+        var overnightFromYesterday = yesterdaySchedules
+            .Where(s => s.IsCheckInNextDay || s.PlannedEndTime < s.PlannedStartTime)
+            .ToList();
+
+        var schedules = overnightFromYesterday.Concat(todaySchedules).ToList();
+        if (schedules.Count == 0)
         {
             return new CashierShiftEligibilityDto(
                 IsAllowed: false,
@@ -1093,6 +1278,65 @@ public class ShiftService : IShiftService
 
             if (isInShift)
             {
+                bool isFullTime = employee.SalaryType == SalaryType.Monthly;
+                var todayStartUtc = todayDate.AddHours(-7);
+                var todayEndUtc = todayStartUtc.AddDays(1);
+                var todayShifts = await _shiftRepository.GetHistoryAsync(branchId, todayStartUtc, todayEndUtc, cancellationToken);
+                var empUserGuid = !string.IsNullOrWhiteSpace(employee.UserId)
+                    ? TenantContext.ResolveDeterministicGuid(employee.UserId)
+                    : userId;
+
+                int closedByEmpCount = 0;
+                if (todayShifts != null)
+                {
+                    closedByEmpCount = todayShifts.Count(sh =>
+                        sh.Status == ShiftState.Closed &&
+                        (sh.ClosedByUserId == empUserGuid ||
+                         (userId != Guid.Empty && sh.ClosedByUserId == userId) ||
+                         sh.CashierUserId == empUserGuid ||
+                         (userId != Guid.Empty && sh.CashierUserId == userId)));
+                }
+
+                var activeShift = await _shiftRepository.GetActiveShiftAsync(branchId, null, cancellationToken);
+                if (activeShift == null && closedByEmpCount > 0)
+                {
+                    // Kiểm tra xem trong khung ca trực hiện tại (s) hoặc tổng số ca được phân công hôm nay, nhân viên đã chốt ca chưa
+                    bool hasClosedCurrentSchedule = closedByEmpCount >= schedules.Count;
+                    if (!hasClosedCurrentSchedule && todayShifts != null)
+                    {
+                        hasClosedCurrentSchedule = todayShifts.Any(sh =>
+                            sh.Status == ShiftState.Closed &&
+                            (sh.ClosedByUserId == empUserGuid ||
+                             (userId != Guid.Empty && sh.ClosedByUserId == userId) ||
+                             sh.CashierUserId == empUserGuid ||
+                             (userId != Guid.Empty && sh.CashierUserId == userId)) &&
+                            sh.ClosedAtUtc.HasValue &&
+                            sh.ClosedAtUtc.Value.AddHours(7).TimeOfDay >= startWindow &&
+                            sh.ClosedAtUtc.Value.AddHours(7).TimeOfDay <= endWindow);
+                    }
+
+                    if (hasClosedCurrentSchedule)
+                    {
+                        return new CashierShiftEligibilityDto(
+                            IsAllowed: false,
+                            IsExempt: false,
+                            Role: roleUpper,
+                            EmployeeName: employee.FullName,
+                            Reason: $"Bạn ({employee.FullName}) đã chốt ca làm việc ({s.ShiftName}) hôm nay. Sau khi đã chốt ca, nhân viên không được phép mở lại ca mới (ca tiếp theo do nhân viên ca sau mở).",
+                            ActiveSchedule: new CashierShiftInfo(
+                                s.Id,
+                                s.ShiftCode,
+                                s.ShiftName,
+                                s.PlannedStartTime,
+                                s.PlannedEndTime
+                            ),
+                            IsFullTime: isFullTime,
+                            HasClosedShiftToday: true,
+                            SalaryType: employee.SalaryType.ToString()
+                        );
+                    }
+                }
+
                 return new CashierShiftEligibilityDto(
                     IsAllowed: true,
                     IsExempt: false,
@@ -1105,7 +1349,10 @@ public class ShiftService : IShiftService
                         s.ShiftName,
                         s.PlannedStartTime,
                         s.PlannedEndTime
-                    )
+                    ),
+                    IsFullTime: isFullTime,
+                    HasClosedShiftToday: closedByEmpCount > 0,
+                    SalaryType: employee.SalaryType.ToString()
                 );
             }
         }
