@@ -365,4 +365,16 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
     {
         await _context.SupplierAPLedgers.AddAsync(ledger, cancellationToken);
     }
+
+    public async Task<bool> UserExistsAsync(string userId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return false;
+        }
+
+        return await _context.Users
+            .IgnoreQueryFilters()
+            .AnyAsync(u => u.Id == userId, cancellationToken);
+    }
 }

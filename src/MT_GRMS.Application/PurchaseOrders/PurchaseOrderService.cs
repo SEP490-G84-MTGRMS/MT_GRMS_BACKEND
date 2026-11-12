@@ -237,11 +237,23 @@ public class PurchaseOrderService : IPurchaseOrderService
             return fallbackSupplierByProduct.GetValueOrDefault(cell.ProductId);
         }
 
+        var validSupplierIds = new HashSet<Guid>(
+            matrixProducts.Select(p => p.SupplierId)
+                .Concat(supplierConfigs.Select(c => c.SupplierId))
+                .Where(id => id != Guid.Empty));
+
         var cellsBySupplier = command.Cells
             .Select(c => (Cell: c, SupplierId: ResolveCellSupplier(c)))
-            .Where(x => x.SupplierId != Guid.Empty)
+            .Where(x => x.SupplierId != Guid.Empty && validSupplierIds.Contains(x.SupplierId))
             .GroupBy(x => x.SupplierId)
             .ToList();
+
+        if (command.Cells.Count > 0 && cellsBySupplier.Count == 0)
+        {
+            throw new BusinessException(
+                "SUPPLIER_NOT_FOUND",
+                "Không lưu được bản thảo: nhà cung cấp trên ma trận không còn tồn tại (có thể vừa xóa/tạo lại NCC). Vui lòng tải lại trang rồi nhập lại số lượng.");
+        }
 
         PurchaseOrder? lastDraft = null;
         var submittedBy = await ResolveValidUserIdAsync(cancellationToken);
@@ -249,6 +261,14 @@ public class PurchaseOrderService : IPurchaseOrderService
         foreach (var supplierGroup in cellsBySupplier)
         {
             var supplierId = supplierGroup.Key;
+            var supplierEntity = await _repository.GetSupplierByIdAsync(supplierId, cancellationToken);
+            if (supplierEntity == null || supplierEntity.IsDeleted)
+            {
+                throw new BusinessException(
+                    "SUPPLIER_NOT_FOUND",
+                    $"Nhà cung cấp {supplierId} không tồn tại. Vui lòng tải lại trang ma trận rồi thử lưu lại.");
+            }
+
             var draft = await _repository.GetDraftMatrixPoAsync(
                 command.BranchId, supplierId, command.ViewFrom, cancellationToken);
 
@@ -388,12 +408,19 @@ public class PurchaseOrderService : IPurchaseOrderService
 
         if (lastDraft == null)
         {
-            // Không có ô hợp lệ — vẫn đảm bảo có draft rỗng theo filter NCC (nếu có).
-            var fallbackSupplier = command.SupplierId is { } sid && sid != Guid.Empty
+            // Không có ô hợp lệ — chỉ tạo draft rỗng khi có NCC thật (tránh FK Guid.Empty).
+            var fallbackSupplier = command.SupplierId is { } sid && sid != Guid.Empty && validSupplierIds.Contains(sid)
                 ? sid
-                : configBySupplier.Keys.FirstOrDefault();
+                : validSupplierIds.FirstOrDefault();
+            if (fallbackSupplier == Guid.Empty)
+            {
+                throw new BusinessException(
+                    "SUPPLIER_REQUIRED",
+                    "Chưa có nhà cung cấp hợp lệ để lưu bản thảo. Hãy gán NCC cho chi nhánh rồi tải lại ma trận.");
+            }
+
             var empty = await _repository.GetDraftMatrixPoAsync(
-                command.BranchId, fallbackSupplier == Guid.Empty ? null : fallbackSupplier, command.ViewFrom, cancellationToken);
+                command.BranchId, fallbackSupplier, command.ViewFrom, cancellationToken);
             if (empty == null)
             {
                 empty = new PurchaseOrder

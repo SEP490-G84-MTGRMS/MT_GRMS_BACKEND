@@ -405,6 +405,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
                 ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""StocktakeLineId"" uuid NULL;
                 ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""SupplierAcceptedQty"" numeric(18,3) NOT NULL DEFAULT 0.000;
+                UPDATE ""SupplierReturnLines"" SET ""SupplierAcceptedQty"" = 0 WHERE ""SupplierAcceptedQty"" IS NULL;
+                ALTER TABLE ""SupplierReturnLines"" ALTER COLUMN ""SupplierAcceptedQty"" SET DEFAULT 0.000;
+                ALTER TABLE ""SupplierReturnLines"" ALTER COLUMN ""SupplierAcceptedQty"" SET NOT NULL;
 
                 CREATE TABLE IF NOT EXISTS ""Stocktakes"" (
                     ""Id"" uuid NOT NULL PRIMARY KEY,
@@ -717,7 +720,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
     }
 
-    public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null)
+    public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null, bool seedSampleData = true)
     {
         // 0. Bổ sung các cột schema còn thiếu trên Cloud DB
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;", logger);
@@ -1545,6 +1548,12 @@ END $$;
         catch (Exception ex)
         {
             logger?.LogWarning(ex, "Lỗi trong quá trình kiểm tra cấu trúc CSDL hoặc migrations (bỏ qua nếu bảng đã tồn tại).");
+        }
+
+        if (!seedSampleData)
+        {
+            logger?.LogInformation("SeedSampleData=false — chỉ đồng bộ schema, bỏ qua nạp dữ liệu mẫu.");
+            return;
         }
 
         // 2. PHÂN HỆ SAAS: Nạp danh sách các gói cước SubscriptionPlans (Idempotent: TRIAL 0k, STANDARD 99k & PRO 249k)

@@ -132,7 +132,7 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-// 8. Tự động áp dụng Migration (Auto-migration) và Nạp dữ liệu mẫu (Seeder) mỗi lần khởi động
+// 8. Tự động áp dụng Migration (Auto-migration); Seed mẫu chỉ khi Database:SeedSampleData=true
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
@@ -140,10 +140,16 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var dbContext = services.GetRequiredService<AppDbContext>();
+        var seedSampleData = app.Configuration.GetValue("Database:SeedSampleData", true);
 
-        logger.LogInformation("Initializing database schema and seed data...");
-        await DbInitializer.InitializeAsync(dbContext, logger);
-        logger.LogInformation("Database seeded successfully.");
+        logger.LogInformation(
+            "Initializing database schema{0}...",
+            seedSampleData ? " and seed data" : " (SeedSampleData=false)");
+        await DbInitializer.InitializeAsync(dbContext, logger, seedSampleData);
+        logger.LogInformation(
+            seedSampleData
+                ? "Database seeded successfully."
+                : "Database schema sync completed (sample seed skipped).");
     }
     catch (Exception ex)
     {

@@ -92,6 +92,8 @@ public class GoodsReceiptService : IGoodsReceiptService
             throw new NotFoundException("Đơn đặt hàng PO", poIdOrCode);
         }
 
+        EnsureDeliveryDateReachedForReceipt(po);
+
         // Kiểm tra xem PO đã có phiếu nhập kho DRAFT hoặc COMPLETED chưa (Mục 4)
         var existingReceipt = await _repository.GetActiveReceiptByPoIdAsync(tenantId, po.Id, cancellationToken);
         if (existingReceipt != null)
@@ -142,6 +144,8 @@ public class GoodsReceiptService : IGoodsReceiptService
             throw new NotFoundException("Đơn đặt hàng PO", command.PurchaseOrderId);
         }
 
+        EnsureDeliveryDateReachedForReceipt(po);
+
         // 2. Ràng buộc: Một PO chỉ có tối đa một phiếu nhập chưa bị hủy (Mục 4)
         var activeReceipt = await _repository.GetActiveReceiptByPoIdAsync(tenantId, command.PurchaseOrderId, cancellationToken);
         if (activeReceipt != null)
@@ -152,7 +156,7 @@ public class GoodsReceiptService : IGoodsReceiptService
         }
 
         var code = await _repository.GenerateCodeAsync(tenantId, cancellationToken);
-        var actorUserId = ResolveActorUserId();
+        var actorUserId = await ResolveValidActorUserIdAsync(cancellationToken);
 
         var receipt = new GoodsReceipt
         {
@@ -363,9 +367,13 @@ public class GoodsReceiptService : IGoodsReceiptService
         if (receipt.PurchaseOrderId.HasValue)
         {
             po = await _repository.GetPurchaseOrderWithDetailsAsync(tenantId, receipt.PurchaseOrderId.Value, cancellationToken);
+            if (po != null)
+            {
+                EnsureDeliveryDateReachedForReceipt(po);
+            }
         }
 
-        var actorUserId = ResolveActorUserId();
+        var actorUserId = await ResolveValidActorUserIdAsync(cancellationToken);
         receipt.Status = "COMPLETED";
         receipt.ConfirmedByUserId = actorUserId;
         receipt.ConfirmedAtUtc = DateTime.UtcNow;
@@ -419,7 +427,7 @@ public class GoodsReceiptService : IGoodsReceiptService
         }
 
         receipt.Status = "CANCELLED";
-        receipt.RejectedByUserId = ResolveActorUserId();
+        receipt.RejectedByUserId = await ResolveValidActorUserIdAsync(cancellationToken);
         receipt.RejectedAtUtc = DateTime.UtcNow;
         receipt.RejectionReason = command.Reason;
         receipt.UpdatedAt = DateTime.UtcNow;
@@ -430,20 +438,57 @@ public class GoodsReceiptService : IGoodsReceiptService
     }
 
     /// <summary>
-    /// User.Id là string (vd usr_store_owner), không phải Guid.
-    /// Khi claim NameIdentifier không parse được Guid → fallback user thực tế trong DB.
+    /// User.Id trong DB là string (usr_store_owner / user-owner-001), không phải Guid JWT.
+    /// Chỉ trả ID có thật trong bảng Users — tránh FK ConfirmedByUserId / ReceiverUserId.
     /// </summary>
-    private string ResolveActorUserId()
+    private async Task<string> ResolveValidActorUserIdAsync(CancellationToken cancellationToken = default)
     {
         if (_tenantContext.CurrentUserId != Guid.Empty)
         {
-            return _tenantContext.CurrentUserId.ToString();
+            var strId = _tenantContext.CurrentUserId.ToString();
+            if (await _repository.UserExistsAsync(strId, cancellationToken))
+            {
+                return strId;
+            }
         }
 
         var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
-        return role is "EMPLOYEE" or "STAFF" or "CASHIER"
-            ? "usr_cashier"
-            : "usr_store_owner";
+        var isStaff = role is "EMPLOYEE" or "STAFF" or "CASHIER";
+        var candidates = isStaff
+            ? new[] { "usr_cashier", "user-cashier-001", "user-employee-001", "usr_store_owner", "user-owner-001" }
+            : new[] { "usr_store_owner", "user-owner-001", "usr_cashier", "user-cashier-001" };
+
+        foreach (var id in candidates)
+        {
+            if (await _repository.UserExistsAsync(id, cancellationToken))
+            {
+                return id;
+            }
+        }
+
+        throw new BusinessException(
+            "ACTOR_USER_MISSING",
+            "Không xác định được người dùng hợp lệ để ghi nhận phiếu nhập kho. Vui lòng đăng nhập lại.");
+    }
+
+    /// <summary>
+    /// Chỉ cho phép nhập kho từ ngày giao PO trở đi (so theo lịch VN UTC+7).
+    /// </summary>
+    private static void EnsureDeliveryDateReachedForReceipt(PurchaseOrder po)
+    {
+        if (!po.DeliveryDate.HasValue)
+        {
+            return;
+        }
+
+        var deliveryDate = DateOnly.FromDateTime(po.DeliveryDate.Value);
+        var todayVn = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(7));
+        if (deliveryDate > todayVn)
+        {
+            throw new BusinessException(
+                "DELIVERY_DATE_NOT_REACHED",
+                $"Chỉ được nhập hàng từ ngày giao {deliveryDate:dd/MM/yyyy}. Hôm nay chưa đến ngày giao.");
+        }
     }
 
     private async Task<IReadOnlyDictionary<Guid, (bool HasBatches, string Name)>> LoadProductValidationFlagsAsync(
@@ -756,6 +801,8 @@ public class GoodsReceiptService : IGoodsReceiptService
             BatchCode = rLine.BatchCode,
             ExpiryDate = rLine.ExpiryDate,
             RequestedQty = rLine.RejectedQty,
+            // GRN từ chối tại chỗ = NCC nhận lại ngay → SupplierAcceptedQty = số bị từ chối
+            SupplierAcceptedQty = rLine.RejectedQty,
             ApprovedQty = rLine.RejectedQty,
             RejectedQty = 0,
             HandedOverQty = rLine.RejectedQty,
