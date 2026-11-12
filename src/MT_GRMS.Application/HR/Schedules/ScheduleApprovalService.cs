@@ -84,6 +84,11 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 _scheduleRepository.Update(schedule);
             }
         }
+        else if (dto.RequestType == ScheduleRequestType.Overtime)
+        {
+            var requestedOtMinutes = dto.RequestedOvertimeMinutes ?? CalculateExtraMinutesOutsideShift(schedule);
+            await ValidateDailyWorkAndOvertimeLimitAsync(schedule, requestedOtMinutes, null, cancellationToken);
+        }
 
         var imageUrls = BuildImageUrls(dto);
 
@@ -263,6 +268,14 @@ public class ScheduleApprovalService : IScheduleApprovalService
                         : 0;
                 }
 
+                var checkOutFromIncident = dto.ApprovedCheckOutTime ?? request.RequestedCheckOutTime;
+                if (checkOutFromIncident.HasValue && !schedule.CheckOutTime.HasValue)
+                {
+                    schedule.CheckOutTime = checkOutFromIncident.Value;
+                    schedule.CheckOutMethod = "INCIDENT_EXPLAINED";
+                    request.ApprovedCheckOutTime = checkOutFromIncident.Value;
+                }
+
                 schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
                 schedule.ApprovalType = "INCIDENT_RESOLVED";
                 schedule.ApprovedBy = reviewerUserId;
@@ -270,8 +283,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
 
                 if (schedule.CheckInTime.HasValue && schedule.CheckOutTime.HasValue)
                 {
-                    var hours = (decimal)(schedule.CheckOutTime.Value - schedule.CheckInTime.Value).TotalHours;
-                    schedule.ActualWorkHours = Math.Max(0, Math.Round(hours, 2));
+                    schedule.ActualWorkHours = CalculateClampedInShiftHours(schedule);
                     schedule.Status = ScheduleStatus.Completed;
                 }
                 break;
@@ -290,8 +302,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
 
                 if (schedule.CheckInTime.HasValue)
                 {
-                    var hours = (decimal)(schedule.CheckOutTime.Value - schedule.CheckInTime.Value).TotalHours;
-                    schedule.ActualWorkHours = Math.Max(0, Math.Round(hours, 2));
+                    schedule.ActualWorkHours = CalculateClampedInShiftHours(schedule);
                 }
 
                 schedule.Status = ScheduleStatus.Completed;
@@ -302,7 +313,24 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 break;
 
             case ScheduleRequestType.Overtime:
-                var overtimeMinutes = dto.ApprovedOvertimeMinutes ?? request.RequestedOvertimeMinutes ?? 0;
+                var extraOutsideMinutes = CalculateExtraMinutesOutsideShift(schedule);
+                int overtimeMinutes;
+                if (dto.ApprovedOvertimeMinutes.HasValue)
+                {
+                    overtimeMinutes = dto.ApprovedOvertimeMinutes.Value;
+                }
+                else if (extraOutsideMinutes > 0)
+                {
+                    overtimeMinutes = request.RequestedOvertimeMinutes.HasValue && request.RequestedOvertimeMinutes.Value > 0
+                        ? Math.Min(request.RequestedOvertimeMinutes.Value, extraOutsideMinutes)
+                        : extraOutsideMinutes;
+                }
+                else
+                {
+                    overtimeMinutes = request.RequestedOvertimeMinutes ?? 0;
+                }
+
+                await ValidateDailyWorkAndOvertimeLimitAsync(schedule, overtimeMinutes, request.Id, cancellationToken);
                 request.ApprovedOvertimeMinutes = overtimeMinutes;
                 schedule.OvertimeMinutes += overtimeMinutes;
                 schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
@@ -356,6 +384,11 @@ public class ScheduleApprovalService : IScheduleApprovalService
             {
                 schedule.CheckOutTime = dto.RequestedCheckOutTime.Value;
                 _scheduleRepository.Update(schedule);
+            }
+            else if (request.RequestType == ScheduleRequestType.Overtime)
+            {
+                var requestedOtMinutes = dto.RequestedOvertimeMinutes ?? CalculateExtraMinutesOutsideShift(schedule);
+                await ValidateDailyWorkAndOvertimeLimitAsync(schedule, requestedOtMinutes, request.Id, cancellationToken);
             }
         }
 
@@ -602,5 +635,115 @@ public class ScheduleApprovalService : IScheduleApprovalService
             r.Schedule?.PlannedStartTime ?? TimeSpan.Zero,
             r.Schedule?.PlannedEndTime ?? TimeSpan.Zero
         );
+    }
+
+    private static decimal CalculateClampedInShiftHours(EmployeeSchedule schedule)
+    {
+        if (!schedule.CheckInTime.HasValue || !schedule.CheckOutTime.HasValue)
+        {
+            return 0m;
+        }
+
+        var workDate = schedule.WorkDate.Date;
+        var plannedStart = workDate.Add(schedule.PlannedStartTime);
+        var isNextDay = schedule.IsCheckInNextDay || schedule.PlannedEndTime < schedule.PlannedStartTime;
+        var plannedEnd = isNextDay
+            ? workDate.AddDays(1).Add(schedule.PlannedEndTime)
+            : workDate.Add(schedule.PlannedEndTime);
+
+        if (schedule.PlannedStartTime == TimeSpan.Zero && schedule.PlannedEndTime == TimeSpan.Zero)
+        {
+            var rawHours = (decimal)(schedule.CheckOutTime.Value - schedule.CheckInTime.Value).TotalHours;
+            return Math.Max(0m, Math.Round(rawHours, 2));
+        }
+
+        var effectiveStart = schedule.CheckInTime.Value < plannedStart ? plannedStart : schedule.CheckInTime.Value;
+        var effectiveEnd = schedule.CheckOutTime.Value > plannedEnd ? plannedEnd : schedule.CheckOutTime.Value;
+        var inShiftMinutes = Math.Max(0, (int)(effectiveEnd - effectiveStart).TotalMinutes);
+        return Math.Round((decimal)inShiftMinutes / 60m, 2);
+    }
+
+    private static int CalculateExtraMinutesOutsideShift(EmployeeSchedule schedule)
+    {
+        if (!schedule.CheckInTime.HasValue || !schedule.CheckOutTime.HasValue)
+        {
+            return 0;
+        }
+
+        if (schedule.PlannedStartTime == TimeSpan.Zero && schedule.PlannedEndTime == TimeSpan.Zero)
+        {
+            return 0;
+        }
+
+        var workDate = schedule.WorkDate.Date;
+        var plannedStart = workDate.Add(schedule.PlannedStartTime);
+        var isNextDay = schedule.IsCheckInNextDay || schedule.PlannedEndTime < schedule.PlannedStartTime;
+        var plannedEnd = isNextDay
+            ? workDate.AddDays(1).Add(schedule.PlannedEndTime)
+            : workDate.Add(schedule.PlannedEndTime);
+
+        var earlyExtraMinutes = schedule.CheckInTime.Value < plannedStart
+            ? Math.Max(0, (int)(plannedStart - schedule.CheckInTime.Value).TotalMinutes)
+            : 0;
+        var lateExtraMinutes = schedule.CheckOutTime.Value > plannedEnd
+            ? Math.Max(0, (int)(schedule.CheckOutTime.Value - plannedEnd).TotalMinutes)
+            : 0;
+
+        return earlyExtraMinutes + lateExtraMinutes;
+    }
+
+    private static decimal GetSchedulePlannedHours(EmployeeSchedule schedule)
+    {
+        if (schedule.PlannedStartTime != TimeSpan.Zero || schedule.PlannedEndTime != TimeSpan.Zero)
+        {
+            var isNextDay = schedule.IsCheckInNextDay || schedule.PlannedEndTime < schedule.PlannedStartTime;
+            var duration = isNextDay
+                ? (TimeSpan.FromHours(24) - schedule.PlannedStartTime) + schedule.PlannedEndTime
+                : schedule.PlannedEndTime - schedule.PlannedStartTime;
+            var plannedHours = Math.Round((decimal)duration.TotalHours, 2);
+            if (plannedHours > 0m)
+            {
+                return plannedHours;
+            }
+        }
+
+        return schedule.DurationHours > 0m ? schedule.DurationHours : 0m;
+    }
+
+    private async Task ValidateDailyWorkAndOvertimeLimitAsync(
+        EmployeeSchedule targetSchedule,
+        int additionalOvertimeMinutes,
+        Guid? excludeRequestId,
+        CancellationToken cancellationToken)
+    {
+        if (additionalOvertimeMinutes <= 0)
+        {
+            return;
+        }
+
+        var daySchedules = await _scheduleRepository.GetByEmployeeAndDateRangeAsync(
+            targetSchedule.EmployeeId,
+            targetSchedule.WorkDate.Date,
+            targetSchedule.WorkDate.Date,
+            cancellationToken);
+
+        var activeDaySchedules = daySchedules
+            .Where(s => !s.IsLeave && s.Status != ScheduleStatus.OnLeave && s.Status != ScheduleStatus.Cancelled)
+            .ToList();
+
+        if (!activeDaySchedules.Any(s => s.Id == targetSchedule.Id))
+        {
+            activeDaySchedules.Add(targetSchedule);
+        }
+
+        decimal totalPlannedHours = activeDaySchedules.Sum(GetSchedulePlannedHours);
+        int existingApprovedOtMinutes = activeDaySchedules.Sum(s => s.OvertimeMinutes);
+
+        var totalHoursWithOt = totalPlannedHours + ((existingApprovedOtMinutes + additionalOvertimeMinutes) / 60m);
+        if (totalHoursWithOt > 12m)
+        {
+            throw new InvalidOperationException(
+                $"Tổng giờ làm việc và làm thêm giờ (OT) trong ngày {targetSchedule.WorkDate:dd/MM/yyyy} là {totalHoursWithOt:0.##}h, vượt quá giới hạn tối đa 12 giờ/ngày.");
+        }
     }
 }

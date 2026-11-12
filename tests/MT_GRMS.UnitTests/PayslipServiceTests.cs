@@ -196,7 +196,13 @@ public class PayslipServiceTests
         {
             var set = employeeIds.ToHashSet();
             var list = Schedules
-                .Where(s => !s.IsDeleted && set.Contains(s.EmployeeId) && s.WorkDate >= fromDate.Date && s.WorkDate <= toDate.Date && s.Status == ScheduleStatus.Completed)
+                .Where(s => !s.IsDeleted
+                            && set.Contains(s.EmployeeId)
+                            && s.WorkDate >= fromDate.Date
+                            && s.WorkDate <= toDate.Date
+                            && (s.Status == ScheduleStatus.Completed
+                                || (s.Status == ScheduleStatus.OnLeave && s.ApprovalStatus == ScheduleApprovalStatus.Approved)
+                                || ((s.ApprovalType == "PAID_LEAVE" || s.ApprovalType == "UNPAID_LEAVE") && s.ApprovalStatus == ScheduleApprovalStatus.Approved)))
                 .ToList();
             return Task.FromResult<IReadOnlyList<EmployeeSchedule>>(list);
         }
@@ -773,5 +779,244 @@ public class PayslipServiceTests
         Assert.Equal(PayslipStatus.Paid, p2.Status);
         Assert.Equal(2, payslipRepo.CashbookTransactions.Count);
         Assert.True(uow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task GenerateMonthlyPayroll_OnlyGeneratesForEmployeesWithSchedulesInPeriod()
+    {
+        // Arrange
+        var (service, payslipRepo, empRepo, schedRepo, policyRepo, tenantContext, uow) = CreateService();
+        var branchId = Guid.NewGuid();
+
+        var empWithSchedule = new Employee
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            EmployeeCode = "NV_HAS_SCHED",
+            FullName = "Co Ca Lam",
+            SalaryType = SalaryType.Monthly,
+            BaseRate = 8_000_000m,
+            Status = EmployeeStatus.Active
+        };
+        var empWithoutSchedule = new Employee
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            EmployeeCode = "NV_NO_SCHED",
+            FullName = "Khong Co Ca",
+            SalaryType = SalaryType.Monthly,
+            BaseRate = 8_000_000m,
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(empWithSchedule);
+        empRepo.Employees.Add(empWithoutSchedule);
+
+        schedRepo.Schedules.Add(new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = empWithSchedule.Id,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 10),
+            Status = ScheduleStatus.Completed,
+            ActualWorkHours = 8.0m
+        });
+
+        // Act
+        var result = await service.GenerateMonthlyPayrollAsync(new GeneratePayrollBatchRequest("2026-11", branchId));
+
+        // Assert: Chỉ tạo phiếu lương cho nhân viên có ca làm trong tháng
+        Assert.Single(result);
+        Assert.Equal(empWithSchedule.Id, result[0].EmployeeId);
+    }
+
+    [Fact]
+    public async Task GenerateMonthlyPayroll_ManualPaidLeaveAndUnpaidLeave_DoesNotDoubleCountPaidLeaveAndCountsUnpaidLeave()
+    {
+        var (service, payslipRepo, empRepo, schedRepo, policyRepo, tenantContext, uow) = CreateService();
+        var branchId = Guid.NewGuid();
+
+        var employee = new Employee
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            EmployeeCode = "NV_LEAVE",
+            FullName = "Tran Nghi Phep",
+            SalaryType = SalaryType.Shift,
+            BaseRate = 200_000m,
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(employee);
+
+        // 1 ca đi làm bình thường
+        schedRepo.Schedules.Add(new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = employee.Id,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 1),
+            DurationHours = 8.0m,
+            ActualWorkHours = 8.0m,
+            Status = ScheduleStatus.Completed,
+            ApprovalType = "WORKING",
+            ApprovalStatus = ScheduleApprovalStatus.Approved
+        });
+
+        // 1 ca nghỉ phép có lương chấm công tay (Status = Completed, ActualWorkHours = DurationHours, ApprovalType = PAID_LEAVE)
+        schedRepo.Schedules.Add(new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = employee.Id,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 2),
+            DurationHours = 8.0m,
+            ActualWorkHours = 8.0m,
+            IsLeave = true,
+            IsPaidLeave = true,
+            Status = ScheduleStatus.Completed,
+            ApprovalType = "PAID_LEAVE",
+            CheckInMethod = "MANUAL_PAID_LEAVE",
+            ApprovalStatus = ScheduleApprovalStatus.Approved
+        });
+
+        // 1 ca nghỉ không lương chấm công tay (Status = Cancelled, ApprovalType = UNPAID_LEAVE)
+        schedRepo.Schedules.Add(new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = employee.Id,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 3),
+            DurationHours = 8.0m,
+            ActualWorkHours = 0.0m,
+            IsLeave = true,
+            IsPaidLeave = false,
+            Status = ScheduleStatus.Cancelled,
+            ApprovalType = "UNPAID_LEAVE",
+            CheckInMethod = "MANUAL_UNPAID_LEAVE",
+            ApprovalStatus = ScheduleApprovalStatus.Approved
+        });
+
+        var result = await service.GenerateMonthlyPayrollAsync(new GeneratePayrollBatchRequest("2026-11", branchId));
+
+        Assert.Single(result);
+        var payslip = result[0];
+        Assert.Equal(1, payslip.TotalShifts);
+        Assert.Equal(8.0m, payslip.TotalWorkHours);
+        Assert.Equal(1m, payslip.PaidLeaveDays);
+        Assert.Equal(1m, payslip.UnpaidLeaveDays);
+        // 1 ca làm + 1 ca phép có lương = 2 * 200,000 = 400,000 (không bị nhân đôi thành 600,000)
+        Assert.Equal(400_000m, payslip.BaseSalaryEarned);
+    }
+
+    [Fact]
+    public async Task GenerateMonthlyPayroll_WithConversionRules_AppliesPolicyWorkUnitsAndLocksSchedulesOnPay()
+    {
+        var (service, payslipRepo, empRepo, schedRepo, policyRepo, tenantContext, uow) = CreateService();
+        var branchId = Guid.NewGuid();
+
+        policyRepo.Policies.Add(new BranchAttendancePolicy
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            StandardDayHours = 8.0m,
+            IsConvertHoursToDays = true,
+            ConversionRulesJson = "[{\"type\":\"range\",\"fromHours\":1,\"fromMinutes\":0,\"toHours\":4,\"toMinutes\":30,\"workUnits\":0.5},{\"type\":\"gte\",\"fromHours\":4,\"fromMinutes\":30,\"workUnits\":1.0}]"
+        });
+
+        var employee = new Employee
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            EmployeeCode = "NV_CONV",
+            FullName = "Le Quy Doi",
+            SalaryType = SalaryType.Monthly,
+            BaseRate = 7_800_000m, // 300,000 VND / công (26 công)
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(employee);
+
+        var s1 = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = employee.Id,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 5),
+            DurationHours = 4.0m,
+            ActualWorkHours = 3.5m, // 3.5h thuộc [1h..4h30) => 0.5 công
+            Status = ScheduleStatus.Completed
+        };
+        var s2 = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = employee.Id,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 6),
+            DurationHours = 8.0m,
+            ActualWorkHours = 6.0m, // 6.0h >= 4h30 => 1.0 công
+            Status = ScheduleStatus.Completed
+        };
+        schedRepo.Schedules.Add(s1);
+        schedRepo.Schedules.Add(s2);
+
+        var generated = await service.GenerateMonthlyPayrollAsync(new GeneratePayrollBatchRequest("2026-11", branchId));
+        Assert.Single(generated);
+        Assert.Equal(1.5m, generated[0].WorkedDays); // 0.5 + 1.0 = 1.5 công
+
+        await service.PayPayslipAsync(generated[0].Id, new PayPayslipRequest("CASH", "Chi luong"));
+        Assert.Equal(generated[0].Id, s1.PayslipId);
+        Assert.Equal(generated[0].Id, s2.PayslipId);
+    }
+
+    [Fact]
+    public async Task GenerateMonthlyPayroll_WhenPolicyNotConfigured_UsesDefaultConversionRulesAndCapsDailyWorkWithOtAt12Hours()
+    {
+        var (service, payslipRepo, empRepo, schedRepo, policyRepo, tenantContext, uow) = CreateService();
+        var branchId = Guid.NewGuid();
+
+        var employee = new Employee
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            EmployeeCode = "NV_DEFAULT_POLICY",
+            FullName = "Tran Mac Dinh",
+            SalaryType = SalaryType.Monthly,
+            BaseRate = 10_400_000m, // 26 * 8 = 208h => 50,000 VND/h
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(employee);
+
+        // Ca 1 (Thứ 5 - 05/11/2026): Ca 4h => Mặc định 0.5 công
+        schedRepo.Schedules.Add(new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = employee.Id,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 5),
+            DurationHours = 4.0m,
+            ActualWorkHours = 4.0m,
+            Status = ScheduleStatus.Completed
+        });
+
+        // Ca 2 (Chủ nhật - 08/11/2026): Ca 8h + OT 360 phút (6h), nhưng giới hạn 12h/ngày nên OT chỉ tính tối đa 4h
+        schedRepo.Schedules.Add(new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = employee.Id,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 8),
+            DurationHours = 8.0m,
+            ActualWorkHours = 8.0m,
+            OvertimeMinutes = 360, // 6h raw, capped to 4h (8h + 4h = 12h)
+            ApprovalStatus = ScheduleApprovalStatus.Approved,
+            Status = ScheduleStatus.Completed
+        });
+
+        var generated = await service.GenerateMonthlyPayrollAsync(new GeneratePayrollBatchRequest("2026-11", branchId));
+
+        Assert.Single(generated);
+        var payslip = generated[0];
+        Assert.Equal(1.5m, payslip.WorkedDays); // 0.5 (ca 4h) + 1.0 (ca 8h)
+        Assert.Equal(4.0m, payslip.OtHours); // Capped at 4h instead of 6h
+        // OT Sunday (200% default): 4h * 50,000 * 2.0 = 400,000
+        Assert.Equal(400_000m, payslip.OvertimePay);
     }
 }

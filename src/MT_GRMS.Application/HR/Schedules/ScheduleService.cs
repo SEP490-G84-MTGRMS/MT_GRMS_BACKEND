@@ -650,7 +650,11 @@ public class ScheduleService : IScheduleService
                     ? ex.DurationHours
                     : (decimal)(GetEndDateTime(ex.WorkDate, ex.PlannedStartTime, ex.PlannedEndTime, ex.IsCheckInNextDay) - GetStartDateTime(ex.WorkDate, ex.PlannedStartTime)).TotalHours;
 
-                totalDayHours += exHours;
+                var exOtHours = (ex.OvertimeMinutes > 0 && ex.ApprovalStatus == ScheduleApprovalStatus.Approved)
+                    ? Math.Round((decimal)ex.OvertimeMinutes / 60m, 2)
+                    : 0m;
+
+                totalDayHours += exHours + exOtHours;
             }
 
             // 2. Kiểm tra chồng lấn khung giờ làm việc giữa các ca
@@ -1036,21 +1040,35 @@ public class ScheduleService : IScheduleService
             }
         }
 
-        // Không tự tiện tính OT khi check-in sớm hoặc về muộn khi chưa có đơn xin OT được duyệt (ScheduleRequestType.Overtime)
-        // Đơn OT bắt buộc phải được chấp thuận (ApprovalType == "OVERTIME") mới được ghi nhận giờ làm thêm
-        var approvedOtMinutes = 0;
-        if (schedule.ApprovalType == "OVERTIME" || (schedule.ApprovalStatus == ScheduleApprovalStatus.Approved && schedule.OvertimeMinutes > 0))
-        {
-            approvedOtMinutes = schedule.OvertimeMinutes;
-        }
-
-        // Thời gian làm việc thực tế chỉ tính trong khung ca kế hoạch, không tính dôi ra ngoài ca nếu không có đơn OT được duyệt
+        // Thời gian làm việc thực tế trong ca chỉ tính trong khung ca kế hoạch (không cộng dồn giờ OT vào ActualWorkHours để tránh tính trùng lương chính + lương OT)
         var effectiveStart = checkInDateTime < plannedStartDateTime ? plannedStartDateTime : checkInDateTime;
         var effectiveEnd = checkOutDateTime > plannedEndDateTime ? plannedEndDateTime : checkOutDateTime;
         var inShiftMinutes = Math.Max(0, (int)(effectiveEnd - effectiveStart).TotalMinutes);
         var inShiftHours = Math.Round((decimal)inShiftMinutes / 60m, 2);
-        var otHours = Math.Round((decimal)approvedOtMinutes / 60m, 2);
-        var actualHours = inShiftHours + otHours;
+
+        // Không tự tiện tính OT khi check-in sớm hoặc về muộn khi chưa có đơn xin OT được duyệt (ScheduleRequestType.Overtime).
+        // Chỉ khi có đơn OT được Chủ cửa hàng phê duyệt thì thời gian đi sớm / về muộn dôi ra ngoài khung ca mới được tính OT, và tổng Giờ làm + OT không vượt quá 12h (720 phút)/ngày.
+        var earlyExtraMinutes = checkInDateTime < plannedStartDateTime ? (int)(plannedStartDateTime - checkInDateTime).TotalMinutes : 0;
+        var lateExtraMinutes = checkOutDateTime > plannedEndDateTime ? (int)(checkOutDateTime - plannedEndDateTime).TotalMinutes : 0;
+        var extraOutsideMinutes = Math.Max(0, earlyExtraMinutes + lateExtraMinutes);
+
+        var approvedOtMinutes = 0;
+        if (schedule.ApprovalType == "OVERTIME" || (schedule.ApprovalStatus == ScheduleApprovalStatus.Approved && schedule.OvertimeMinutes > 0))
+        {
+            if (schedule.OvertimeMinutes > 0)
+            {
+                approvedOtMinutes = extraOutsideMinutes > 0
+                    ? Math.Min(schedule.OvertimeMinutes, extraOutsideMinutes)
+                    : schedule.OvertimeMinutes;
+            }
+            else
+            {
+                approvedOtMinutes = extraOutsideMinutes;
+            }
+
+            var maxAllowedOtMinutes = Math.Max(0, 720 - inShiftMinutes);
+            approvedOtMinutes = Math.Min(approvedOtMinutes, maxAllowedOtMinutes);
+        }
 
         schedule.CheckInTime = checkInDateTime;
         schedule.CheckOutTime = checkOutDateTime;
@@ -1059,7 +1077,7 @@ public class ScheduleService : IScheduleService
         schedule.LateMinutes = lateMinutes;
         schedule.EarlyLeaveMinutes = earlyLeaveMinutes;
         schedule.OvertimeMinutes = approvedOtMinutes;
-        schedule.ActualWorkHours = actualHours;
+        schedule.ActualWorkHours = inShiftHours;
         schedule.Status = ScheduleStatus.Completed;
         if (schedule.ApprovalType != "OVERTIME")
         {
@@ -1081,6 +1099,8 @@ public class ScheduleService : IScheduleService
         schedule.EarlyLeaveMinutes = 0;
         schedule.OvertimeMinutes = 0;
         schedule.ActualWorkHours = schedule.DurationHours;
+        schedule.IsLeave = true;
+        schedule.IsPaidLeave = true;
         schedule.Status = ScheduleStatus.Completed;
         schedule.ApprovalType = "PAID_LEAVE";
         schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
@@ -1099,6 +1119,8 @@ public class ScheduleService : IScheduleService
         schedule.EarlyLeaveMinutes = 0;
         schedule.OvertimeMinutes = 0;
         schedule.ActualWorkHours = 0.00m;
+        schedule.IsLeave = true;
+        schedule.IsPaidLeave = false;
         schedule.Status = ScheduleStatus.Cancelled;
         schedule.ApprovalType = "UNPAID_LEAVE";
         schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
@@ -1200,11 +1222,17 @@ public class ScheduleService : IScheduleService
             policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
         }
 
-        var lateThreshold = policy?.LateThresholdMinutes ?? 0;
         if (vnNow > plannedStartDateTime)
         {
             var diff = (int)(vnNow - plannedStartDateTime).TotalMinutes;
-            if (diff > lateThreshold)
+            if (policy != null)
+            {
+                if (policy.EnableLateThreshold && diff > policy.LateThresholdMinutes)
+                {
+                    lateMinutes = diff;
+                }
+            }
+            else
             {
                 lateMinutes = diff;
             }
@@ -1272,35 +1300,54 @@ public class ScheduleService : IScheduleService
             policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
         }
 
-        var earlyLeaveThreshold = policy?.EarlyLeaveThresholdMinutes ?? 0;
         var earlyLeaveMinutes = 0;
         if (vnNow < plannedEndDateTime)
         {
             var diff = (int)(plannedEndDateTime - vnNow).TotalMinutes;
-            if (diff > earlyLeaveThreshold)
+            if (policy != null)
+            {
+                if (policy.EnableEarlyLeaveThreshold && diff > policy.EarlyLeaveThresholdMinutes)
+                {
+                    earlyLeaveMinutes = diff;
+                }
+            }
+            else
             {
                 earlyLeaveMinutes = diff;
             }
         }
 
-        // Tăng ca (OT) bắt buộc phải có đơn xin OT được phê duyệt (ScheduleRequestType.Overtime)
-        // Khi check-out FaceID, không tự tiện tính OT khi check-in sớm hoặc về muộn nếu chưa có đơn OT được duyệt.
-        // Nếu không có đơn xin OT được chấp thuận, thời gian dôi ra ngoài ca không được tính là OT và nhân viên vẫn bị tính đi muộn / về sớm.
-        var approvedOtMinutes = 0;
-        if (schedule.ApprovalType == "OVERTIME" || (schedule.ApprovalStatus == ScheduleApprovalStatus.Approved && schedule.OvertimeMinutes > 0))
-        {
-            approvedOtMinutes = schedule.OvertimeMinutes;
-        }
-
-        // Tính giờ làm việc thực tế chuẩn trong khung ca + OT đã duyệt (nếu có)
+        // Tính giờ làm việc thực tế chuẩn trong khung ca (không cộng dồn giờ OT vào ActualWorkHours để tránh tính trùng lương chính + lương OT)
         // CheckInTime đã được lưu theo giờ UTC+7
         var checkInVn = schedule.CheckInTime.Value;
         var effectiveStart = checkInVn < plannedStartDateTime ? plannedStartDateTime : checkInVn;
         var effectiveEnd = vnNow > plannedEndDateTime ? plannedEndDateTime : vnNow;
         var inShiftMinutes = Math.Max(0, (int)(effectiveEnd - effectiveStart).TotalMinutes);
         var inShiftHours = Math.Round((decimal)inShiftMinutes / 60m, 2);
-        var approvedOtHours = Math.Round((decimal)approvedOtMinutes / 60m, 2);
-        var actualHours = inShiftHours + approvedOtHours;
+
+        // Tăng ca (OT) bắt buộc phải có đơn xin OT được phê duyệt (ScheduleRequestType.Overtime).
+        // Chỉ khi có đơn OT được Chủ cửa hàng phê duyệt thì thời gian đi sớm / về muộn dôi ra ngoài khung ca mới được tính OT, và tổng Giờ làm + OT không vượt quá 12h (720 phút)/ngày.
+        var earlyExtraMinutes = checkInVn < plannedStartDateTime ? (int)(plannedStartDateTime - checkInVn).TotalMinutes : 0;
+        var lateExtraMinutes = vnNow > plannedEndDateTime ? (int)(vnNow - plannedEndDateTime).TotalMinutes : 0;
+        var extraOutsideMinutes = Math.Max(0, earlyExtraMinutes + lateExtraMinutes);
+
+        var approvedOtMinutes = 0;
+        if (schedule.ApprovalType == "OVERTIME" || (schedule.ApprovalStatus == ScheduleApprovalStatus.Approved && schedule.OvertimeMinutes > 0))
+        {
+            if (schedule.OvertimeMinutes > 0)
+            {
+                approvedOtMinutes = extraOutsideMinutes > 0
+                    ? Math.Min(schedule.OvertimeMinutes, extraOutsideMinutes)
+                    : schedule.OvertimeMinutes;
+            }
+            else
+            {
+                approvedOtMinutes = extraOutsideMinutes;
+            }
+
+            var maxAllowedOtMinutes = Math.Max(0, 720 - inShiftMinutes);
+            approvedOtMinutes = Math.Min(approvedOtMinutes, maxAllowedOtMinutes);
+        }
 
         schedule.CheckOutTime = vnNow;
         schedule.CheckOutMethod = "FACE_ID";
@@ -1308,7 +1355,7 @@ public class ScheduleService : IScheduleService
         schedule.FaceMatchScore = request.FaceMatchScore;
         schedule.EarlyLeaveMinutes = earlyLeaveMinutes;
         schedule.OvertimeMinutes = approvedOtMinutes;
-        schedule.ActualWorkHours = actualHours;
+        schedule.ActualWorkHours = inShiftHours;
         schedule.Status = ScheduleStatus.Completed;
         schedule.UpdatedAt = vnNow;
 

@@ -921,4 +921,94 @@ public class ScheduleApprovalServiceTests
         Assert.Equal(ScheduleRequestType.LeaveRequest, created.RequestType);
         Assert.Equal(ScheduleApprovalStatus.Pending, created.Status);
     }
+
+    [Fact]
+    public async Task CreateRequestAsync_OvertimeExceeding12HoursDailyLimit_ThrowsInvalidOperationException()
+    {
+        // Arrange
+        var service = CreateService();
+        var userId = Guid.NewGuid().ToString();
+        var emp = new Employee { Id = Guid.NewGuid(), UserId = userId, FullName = "NV A", TenantId = _tenantContext.CurrentTenantId };
+        _employees.Add(emp);
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            EmployeeId = emp.Id,
+            BranchId = _tenantContext.CurrentBranchId ?? Guid.NewGuid(),
+            WorkDate = DateTime.UtcNow.Date,
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(16, 0, 0),
+            DurationHours = 8.0m,
+            Status = ScheduleStatus.Completed
+        };
+        _scheduleRepo.Schedules.Add(schedule);
+
+        // 8h ca chính + 300 phút (5h) OT = 13h > 12h
+        var overtimeDto = new CreateScheduleApprovalRequestDto(
+            RequestType: ScheduleRequestType.Overtime,
+            Reason: "Đăng ký làm thêm 5 tiếng",
+            RequestedOvertimeMinutes: 300
+        );
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.CreateRequestAsync(schedule.Id, userId, overtimeDto));
+        Assert.Contains("12 giờ/ngày", ex.Message);
+    }
+
+    [Fact]
+    public async Task ReviewRequestAsync_OvertimeApproved_CalculatesFromEarlyCheckInAndLateCheckOut()
+    {
+        // Arrange
+        var service = CreateService();
+        var emp = new Employee { Id = Guid.NewGuid(), FullName = "NV A", TenantId = _tenantContext.CurrentTenantId };
+        _employees.Add(emp);
+
+        var workDate = new DateTime(2026, 11, 10);
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            EmployeeId = emp.Id,
+            BranchId = _tenantContext.CurrentBranchId ?? Guid.NewGuid(),
+            WorkDate = workDate,
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(16, 0, 0),
+            DurationHours = 8.0m,
+            // Đi sớm 30p (07:30) + về muộn 90p (17:30) => 120 phút OT thực tế ngoài khung ca
+            CheckInTime = workDate.AddHours(7).AddMinutes(30),
+            CheckOutTime = workDate.AddHours(17).AddMinutes(30),
+            Status = ScheduleStatus.Completed
+        };
+        _scheduleRepo.Schedules.Add(schedule);
+
+        var request = new ScheduleApprovalRequest
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            ScheduleId = schedule.Id,
+            Schedule = schedule,
+            EmployeeId = emp.Id,
+            RequestType = ScheduleRequestType.Overtime,
+            RequestedOvertimeMinutes = 180,
+            Status = ScheduleApprovalStatus.Pending,
+            Reason = "Xin duyệt OT theo giờ chấm công thực tế"
+        };
+        _requestRepo.Requests.Add(request);
+
+        var reviewDto = new ReviewScheduleApprovalRequestDto(
+            IsApproved: true,
+            ReviewNote: "Duyệt OT theo giờ đi sớm về muộn"
+        );
+
+        // Act
+        var result = await service.ReviewRequestAsync(request.Id, Guid.NewGuid().ToString(), reviewDto);
+
+        // Assert
+        Assert.True(result);
+        Assert.Equal(120, request.ApprovedOvertimeMinutes);
+        Assert.Equal(120, schedule.OvertimeMinutes);
+    }
 }
