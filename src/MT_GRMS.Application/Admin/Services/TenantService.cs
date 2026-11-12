@@ -43,6 +43,7 @@ public class TenantService : ITenantService
             var ownerPhone = !string.IsNullOrWhiteSpace(owner?.Phone) ? owner.Phone : (t.Hotline ?? string.Empty);
 
             var (status, graceDaysRemaining, daysUntilExpiry) = ComputeStatus(t, now);
+            var isNoPlan = string.Equals(t.SubscriptionStatus, "NO_PLAN", StringComparison.OrdinalIgnoreCase);
 
             return new TenantSummaryResponse(
                 Id: t.Id,
@@ -53,7 +54,7 @@ public class TenantService : ITenantService
                 OwnerName: ownerName,
                 OwnerEmail: ownerEmail,
                 OwnerPhone: ownerPhone,
-                Plan: t.SubscriptionPlan?.PlanName ?? t.CurrentPlan ?? "Chưa kích hoạt",
+                Plan: isNoPlan ? "Chưa kích hoạt" : (t.SubscriptionPlan?.PlanName ?? t.CurrentPlan ?? "Chưa kích hoạt"),
                 BranchCount: t.Branches.Count,
                 MaxBranches: t.SubscriptionPlan?.MaxBranches ?? 1,
                 StaffCount: t.TenantUsers.Count,
@@ -94,6 +95,7 @@ public class TenantService : ITenantService
 
         var now = DateTime.UtcNow;
         var (status, _, _) = ComputeStatus(t, now);
+        var isNoPlan = string.Equals(t.SubscriptionStatus, "NO_PLAN", StringComparison.OrdinalIgnoreCase);
 
         return new TenantDetailResponse(
             Id: t.Id,
@@ -105,8 +107,8 @@ public class TenantService : ITenantService
             Address: t.Address,
             City: t.City,
             Status: status,
-            CurrentPlan: t.CurrentPlan,
-            PlanName: t.SubscriptionPlan?.PlanName ?? t.CurrentPlan ?? "Chưa kích hoạt",
+            CurrentPlan: isNoPlan ? null : t.CurrentPlan,
+            PlanName: isNoPlan ? "Chưa kích hoạt" : (t.SubscriptionPlan?.PlanName ?? t.CurrentPlan ?? "Chưa kích hoạt"),
             SubscriptionExpiresAt: t.SubscriptionExpiresAt,
             GracePeriodExpiresAt: t.GracePeriodExpiresAt,
             LockType: t.LockType,

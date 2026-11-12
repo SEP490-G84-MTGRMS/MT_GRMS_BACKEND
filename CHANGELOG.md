@@ -4,6 +4,29 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ---
 
+## [Unreleased] - 2026-11-12
+
+### Added
+- Tách đăng ký thường thành `NO_PLAN` và CTA HomePage thành Trial 72 giờ; bổ sung dấu Trial/paid bền vững, API trạng thái/kích hoạt Trial (`AuditLog` `TRIAL_ACTIVATED` + conditional update), `GET /api/tenant/subscriptions/access-status` cho mọi thành viên active của tenant, chặn hạ cấp từ `PRO` xuống `STANDARD` (`DOWNGRADE_NOT_ALLOWED`), tenant membership validation và backend subscription gate chặn cả `NO_PLAN`, Trial hết hạn và gói trả phí đã hết hạn (`SubscriptionExpiresAt <= UtcNow`) [HOMEPAGE-TRIAL] [worklog: docs/worklogs/2026-11-12_HOMEPAGE-TRIAL_AI_trial-onboarding.md].
+- Bổ sung `TrialOnboardingBackfillService` (dry-run & backfill deterministic) và migration cho trạng thái Trial, paid và dữ liệu legacy `REVIEW_REQUIRED`; sửa `DbInitializer` không gán nhầm `CurrentPlan = "PRO"` cho tenant `NO_PLAN` và `TenantService` luôn trả `"Chưa kích hoạt"` cho tenant `NO_PLAN`; chuẩn hóa email/điện thoại cho account [HOMEPAGE-TRIAL].
+
+### Security
+- Bắt buộc Email OTP distributed (`Pending/Reserved/Consumed`) gắn `NormalizedEmail`, intent và request fingerprint; fail-closed ngoài Development; `IdempotencyFilter` scoped theo actor + operation + tenant/challenge trả RFC 7807 `ProblemDetails`; cấu hình `ForwardedHeadersOptions` trusted proxy và củng cố chống replay webhook SePay [HOMEPAGE-TRIAL].
+
+- Chuẩn hóa hạn mức lưu trữ 2 GB cho gói STANDARD/PRO; bổ sung mua thêm dung lượng với giá 15.000 đ/GB/tháng, báo giá theo thời gian còn lại, VAT và thanh toán ví có idempotency [SUBSCRIPTION-STORAGE] [worklog: docs/worklogs/2026-11-12_SUBSCRIPTION-STORAGE_AI_storage-quota-addon.md].
+- Thêm luồng mua chi nhánh riêng cho Gói PRO, báo giá theo thời gian còn lại và trừ Ví gian hàng mà không gia hạn hay tính lại tiền gói [SUBSCRIPTION-BRANCH].
+- Theo dõi dung lượng ảnh theo tenant, chặn upload vượt hạn mức và hoàn trả quota khi xóa media [SUBSCRIPTION-STORAGE].
+
+## [Unreleased] - 2026-11-11
+
+### Fixed
+- Chặn `POST /api/auth/login` cấp phiên bỏ qua Email OTP; giới hạn chờ SMTP 5 giây và không trả/log mã fallback ở production [BE-AUTH] [worklog: docs/worklogs/2026-11-11_BE-AUTH_AI_close-login-otp-bypass-and-smtp-timeout.md].
+- Khắc phục lỗi `DUPLICATE_KEY` (`23505: duplicate key value violates unique constraint "IX_Branches_TenantID_BranchCode"`) khi xác nhận OTP đăng ký mở cửa hàng mới: tinh chỉnh `AppDbContext.ApplyAuditAndTenantInfo` không ghi đè `TenantId` của chi nhánh khi thực thể đã mang `TenantId` của gian hàng mới được khởi tạo; ngăn `MultiTenantMiddleware` gán ép fallback tenant `tenant_mt_mart_01` cho các request đăng ký `/api/auth/register`; bổ sung `IgnoreQueryFilters()` và kiểm tra đồng bộ cả `UserName`, `Phone`, `Email` trong `UserRepository.ExistsByPhoneOrEmailAsync` [BE-AUTH] [worklog: docs/worklogs/2026-11-11_BE-AUTH_AI_fix-tenant-registration-branch-unique-constraint.md].
+
+### Added
+- Thêm cờ `Users.IsTwoFactorEnabled` mặc định bật cho tài khoản hiện có, phân nhánh đăng nhập theo cờ và API Settings xác nhận bật/tắt qua Email OTP [BE-AUTH] [worklog: docs/worklogs/2026-11-11_BE-AUTH_AI_close-login-otp-bypass-and-smtp-timeout.md].
+- Chuyển đổi toàn diện xác thực OTP sang **Email OTP** cho cả luồng **Đăng nhập 2 lớp (2FA)** (`POST /api/auth/login/send-otp`, `POST /api/auth/login/verify-otp`) và **Đăng ký mở cửa hàng** (`POST /api/auth/register/send-otp`, `POST /api/auth/register`), tích hợp bảo vệ chống brute-force (tối đa 5 lần nhập sai, TTL 5 phút) và cơ chế Dev Console Fallback; gỡ bỏ hoàn toàn TextBee SMS Gateway (`ISmsService`, `TextBeeSmsService`, `TextBeeSettings`) [EMAIL-OTP] [worklog: docs/worklogs/2026-11-11_EMAIL-OTP_AI_email-otp-auth-flow.md].
+
 ## [Unreleased] - 2026-11-09
 
 ### Added
