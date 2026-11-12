@@ -265,12 +265,15 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
         Guid poId,
         CancellationToken cancellationToken = default)
     {
+        // Ưu tiên DRAFT (chặn tạo mới); COMPLETED dùng cho PO mua thường (1 GRN).
         return await _context.GoodsReceipts
-            .FirstOrDefaultAsync(gr =>
+            .Where(gr =>
                 gr.TenantId == tenantId &&
                 gr.PurchaseOrderId == poId &&
                 !gr.IsDeleted &&
-                (gr.Status == "DRAFT" || gr.Status == "COMPLETED"), cancellationToken);
+                (gr.Status == "DRAFT" || gr.Status == "COMPLETED"))
+            .OrderBy(gr => gr.Status == "DRAFT" ? 0 : 1)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     public async Task<BranchStock?> GetBranchStockAsync(

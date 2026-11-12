@@ -391,6 +391,65 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
     }
 
+    private static async Task EnsureSupplierExchangeSchemaAsync(AppDbContext context, ILogger? logger = null)
+    {
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+                CREATE TABLE IF NOT EXISTS ""SupplierReturnPolicies"" (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""SupplierId"" uuid NOT NULL,
+                    ""AllowReturn"" boolean NOT NULL DEFAULT TRUE,
+                    ""AllowedReturnTypesJson"" character varying(1000) NOT NULL DEFAULT '[""QUALITY_DEFECT"",""NEAR_EXPIRY"",""WRONG_ITEM""]',
+                    ""AllowedResolutionTypesJson"" character varying(1000) NOT NULL DEFAULT '[""REDUCE_PAYABLE"",""EXCHANGE"",""REFUND""]',
+                    ""DefaultResolutionType"" character varying(50) NOT NULL DEFAULT 'REDUCE_PAYABLE',
+                    ""NearExpiryMinDaysLeft"" integer NULL,
+                    ""RequireEvidenceImage"" boolean NOT NULL DEFAULT TRUE,
+                    ""MaxReturnDaysAfterReceipt"" integer NULL,
+                    ""CostShareEnabled"" boolean NOT NULL DEFAULT FALSE,
+                    ""StoreCostSharePercent"" numeric(5,2) NULL,
+                    ""SupplierCostSharePercent"" numeric(5,2) NULL,
+                    ""CostShareBase"" character varying(32) NOT NULL DEFAULT 'REPLACEMENT_VALUE',
+                    ""RequireStorePaymentBeforeReplacement"" boolean NOT NULL DEFAULT TRUE,
+                    ""Notes"" character varying(2000) NULL,
+                    ""IsActive"" boolean NOT NULL DEFAULT TRUE,
+                    ""CreatedBy"" uuid NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""UpdatedAt"" timestamp without time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT FALSE
+                );
+
+                CREATE INDEX IF NOT EXISTS ""IX_SupplierReturnPolicies_Tenant_Supplier_Active""
+                    ON ""SupplierReturnPolicies"" (""TenantId"", ""SupplierId"", ""IsActive"");
+
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""ReplacementStatus"" character varying(50) NULL DEFAULT 'NOT_REQUIRED';
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""PolicyId"" uuid NULL;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""PolicySnapshotJson"" text NULL;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""StoreCostSharePercentSnapshot"" numeric(5,2) NULL;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""SupplierCostSharePercentSnapshot"" numeric(5,2) NULL;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""ReplacementValue"" numeric(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""StorePayableAmount"" numeric(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""StorePaidAmount"" numeric(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""SupplierBearAmount"" numeric(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""SupplierConfirmedBy"" character varying(100) NULL;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""HandoverNote"" character varying(1000) NULL;
+
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""ExchangePoOrderedQty"" numeric(18,3) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""ReplacementUnitPrice"" numeric(18,2) NOT NULL DEFAULT 0;
+
+                ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SourceType"" character varying(50) NULL;
+                ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SourceSupplierReturnId"" uuid NULL;
+                ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""SourceSupplierReturnLineId"" uuid NULL;
+            ");
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ schema Supplier Exchange / Return Policy.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ schema Supplier Exchange");
+        }
+    }
+
     private static async Task EnsureStocktakesSchemaAsync(AppDbContext context, ILogger? logger = null)
     {
         try
@@ -1519,6 +1578,7 @@ END $$;
                     await EnsureTenantSubscriptionColumnsAsync(context, logger);
                     await EnsureBranchProductsSchemaAsync(context, logger);
                     await EnsureStocktakesSchemaAsync(context, logger);
+                    await EnsureSupplierExchangeSchemaAsync(context, logger);
                     await EnsureMissingModelSchemaAsync(context, logger);
                 }
                 catch (Exception ex)

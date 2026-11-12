@@ -429,6 +429,143 @@ public class SupplierService : ISupplierService
         return resDto;
     }
 
+    public async Task<SupplierReturnPolicyDto> GetReturnPolicyAsync(Guid supplierId, CancellationToken cancellationToken = default)
+    {
+        var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
+        if (supplier == null) throw new NotFoundException("Nhà cung cấp", supplierId);
+
+        var policy = await _supplierRepository.GetActiveReturnPolicyAsync(supplierId, cancellationToken);
+        if (policy == null)
+        {
+            return CreateDefaultReturnPolicyDto(supplierId);
+        }
+
+        return MapReturnPolicyDto(policy);
+    }
+
+    public async Task<SupplierReturnPolicyDto> UpsertReturnPolicyAsync(
+        Guid supplierId,
+        UpdateSupplierReturnPolicyCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
+        if (supplier == null) throw new NotFoundException("Nhà cung cấp", supplierId);
+
+        ValidateReturnPolicyCommand(command);
+
+        var policy = await _supplierRepository.GetActiveReturnPolicyAsync(supplierId, cancellationToken);
+        if (policy == null)
+        {
+            policy = new SupplierReturnPolicy
+            {
+                SupplierId = supplierId,
+                TenantId = _tenantContext.CurrentTenantId ?? string.Empty,
+                IsActive = true
+            };
+            await _supplierRepository.AddReturnPolicyAsync(policy, cancellationToken);
+        }
+
+        policy.AllowReturn = command.AllowReturn;
+        policy.AllowedReturnTypesJson = System.Text.Json.JsonSerializer.Serialize(command.AllowedReturnTypes ?? []);
+        policy.AllowedResolutionTypesJson = System.Text.Json.JsonSerializer.Serialize(command.AllowedResolutionTypes ?? []);
+        policy.DefaultResolutionType = command.DefaultResolutionType?.Trim() ?? "REDUCE_PAYABLE";
+        policy.NearExpiryMinDaysLeft = command.NearExpiryMinDaysLeft;
+        policy.RequireEvidenceImage = command.RequireEvidenceImage;
+        policy.MaxReturnDaysAfterReceipt = command.MaxReturnDaysAfterReceipt;
+        policy.CostShareEnabled = command.CostShareEnabled;
+        policy.StoreCostSharePercent = command.CostShareEnabled ? command.StoreCostSharePercent : null;
+        policy.SupplierCostSharePercent = command.CostShareEnabled
+            ? (command.SupplierCostSharePercent ?? (100m - (command.StoreCostSharePercent ?? 0m)))
+            : null;
+        policy.CostShareBase = string.IsNullOrWhiteSpace(command.CostShareBase) ? "REPLACEMENT_VALUE" : command.CostShareBase.Trim();
+        policy.RequireStorePaymentBeforeReplacement = command.RequireStorePaymentBeforeReplacement;
+        policy.Notes = command.Notes;
+        policy.IsActive = true;
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapReturnPolicyDto(policy);
+    }
+
+    private static void ValidateReturnPolicyCommand(UpdateSupplierReturnPolicyCommand command)
+    {
+        if (command.AllowedReturnTypes == null || command.AllowedReturnTypes.Count == 0)
+            throw new BusinessException("INVALID_RETURN_TYPES", "Phải chọn ít nhất một loại lý do trả/đổi hàng.");
+
+        if (command.AllowedResolutionTypes == null || command.AllowedResolutionTypes.Count == 0)
+            throw new BusinessException("INVALID_RESOLUTION_TYPES", "Phải chọn ít nhất một hình thức bồi hoàn.");
+
+        var defaultRes = command.DefaultResolutionType?.Trim() ?? string.Empty;
+        if (!command.AllowedResolutionTypes.Any(x => string.Equals(x, defaultRes, StringComparison.OrdinalIgnoreCase)))
+            throw new BusinessException("INVALID_DEFAULT_RESOLUTION", "Hình thức mặc định phải nằm trong danh sách hình thức được phép.");
+
+        if (command.CostShareEnabled)
+        {
+            if (!command.StoreCostSharePercent.HasValue)
+                throw new BusinessException("INVALID_COST_SHARE", "Khi bật chia sẻ chi phí phải nhập % cửa hàng chịu.");
+
+            var storePct = command.StoreCostSharePercent.Value;
+            if (storePct < 0 || storePct > 100)
+                throw new BusinessException("INVALID_COST_SHARE", "% cửa hàng chịu phải trong khoảng 0–100.");
+
+            var supplierPct = command.SupplierCostSharePercent ?? (100m - storePct);
+            if (Math.Abs(storePct + supplierPct - 100m) > 0.01m)
+                throw new BusinessException("INVALID_COST_SHARE", "Tổng % cửa hàng và % NCC phải bằng 100.");
+        }
+    }
+
+    private static SupplierReturnPolicyDto CreateDefaultReturnPolicyDto(Guid supplierId) => new()
+    {
+        Id = Guid.Empty,
+        SupplierId = supplierId,
+        AllowReturn = true,
+        AllowedReturnTypes = ["QUALITY_DEFECT", "NEAR_EXPIRY", "WRONG_ITEM"],
+        AllowedResolutionTypes = ["REDUCE_PAYABLE", "EXCHANGE", "REFUND"],
+        DefaultResolutionType = "REDUCE_PAYABLE",
+        RequireEvidenceImage = true,
+        CostShareEnabled = false,
+        CostShareBase = "REPLACEMENT_VALUE",
+        RequireStorePaymentBeforeReplacement = true,
+        IsActive = true
+    };
+
+    private static SupplierReturnPolicyDto MapReturnPolicyDto(SupplierReturnPolicy policy)
+    {
+        static List<string> ParseList(string? json, List<string> fallback)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return fallback;
+            try
+            {
+                return System.Text.Json.JsonSerializer.Deserialize<List<string>>(json) ?? fallback;
+            }
+            catch
+            {
+                return fallback;
+            }
+        }
+
+        return new SupplierReturnPolicyDto
+        {
+            Id = policy.Id,
+            SupplierId = policy.SupplierId,
+            AllowReturn = policy.AllowReturn,
+            AllowedReturnTypes = ParseList(policy.AllowedReturnTypesJson, ["QUALITY_DEFECT", "NEAR_EXPIRY", "WRONG_ITEM"]),
+            AllowedResolutionTypes = ParseList(policy.AllowedResolutionTypesJson, ["REDUCE_PAYABLE", "EXCHANGE", "REFUND"]),
+            DefaultResolutionType = policy.DefaultResolutionType,
+            NearExpiryMinDaysLeft = policy.NearExpiryMinDaysLeft,
+            RequireEvidenceImage = policy.RequireEvidenceImage,
+            MaxReturnDaysAfterReceipt = policy.MaxReturnDaysAfterReceipt,
+            CostShareEnabled = policy.CostShareEnabled,
+            StoreCostSharePercent = policy.StoreCostSharePercent,
+            SupplierCostSharePercent = policy.SupplierCostSharePercent,
+            CostShareBase = policy.CostShareBase,
+            RequireStorePaymentBeforeReplacement = policy.RequireStorePaymentBeforeReplacement,
+            Notes = policy.Notes,
+            IsActive = policy.IsActive
+        };
+    }
+
     public async Task<PagedResult<SupplierAPLedgerDto>> GetAPLedgerAsync(Guid supplierId, DateTime? fromDate, DateTime? toDate, int pageIndex = 1, int pageSize = 20, CancellationToken cancellationToken = default)
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);

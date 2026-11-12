@@ -143,6 +143,20 @@ public class SuppliersController : BaseApiController
         return Ok(ApiResponse<SupplierDeliveryConfigDto>.Ok(result, "Cập nhật cấu hình giao hàng thành công."));
     }
 
+    [HttpGet("{id:guid}/return-policy")]
+    public async Task<IActionResult> GetReturnPolicy(Guid id, CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.GetReturnPolicyAsync(id, cancellationToken);
+        return Ok(ApiResponse<SupplierReturnPolicyDto>.Ok(result));
+    }
+
+    [HttpPut("{id:guid}/return-policy")]
+    public async Task<IActionResult> UpsertReturnPolicy(Guid id, [FromBody] UpdateSupplierReturnPolicyCommand command, CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.UpsertReturnPolicyAsync(id, command, cancellationToken);
+        return Ok(ApiResponse<SupplierReturnPolicyDto>.Ok(result, "Đã lưu chính sách trả/đổi hàng thành công."));
+    }
+
     /// <summary>
     /// Xem sổ cái biến động công nợ AP của nhà cung cấp (REQ-04)
     /// </summary>

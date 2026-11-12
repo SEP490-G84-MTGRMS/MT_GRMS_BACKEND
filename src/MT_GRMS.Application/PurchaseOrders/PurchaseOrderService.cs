@@ -2031,6 +2031,8 @@ public class PurchaseOrderService : IPurchaseOrderService
             CreatedByRole = po.CreatedByRole,
             ParentDraftId = po.ParentDraftId,
             CreatedAt = po.CreatedAt,
+            SourceType = po.SourceType,
+            SourceSupplierReturnId = po.SourceSupplierReturnId,
             Details = details
         };
     }

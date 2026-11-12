@@ -281,6 +281,10 @@ public class PurchaseOrderDto
     public string? CreatedByRole { get; set; }
     public Guid? ParentDraftId { get; set; }
     public DateTime CreatedAt { get; set; }
+    /// <summary>null/MANUAL_MATRIX = mua thường; SUPPLIER_RETURN = đổi hàng.</summary>
+    public string? SourceType { get; set; }
+    public Guid? SourceSupplierReturnId { get; set; }
+    public string? SourceReturnCode { get; set; }
     /// <summary>Phiếu nhập kho DRAFT/COMPLETED đang gắn PO (nếu có).</summary>
     public Guid? ActiveGoodsReceiptId { get; set; }
     public string? ActiveGoodsReceiptCode { get; set; }

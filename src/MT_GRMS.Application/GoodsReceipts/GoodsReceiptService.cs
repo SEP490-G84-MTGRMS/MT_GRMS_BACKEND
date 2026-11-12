@@ -146,13 +146,27 @@ public class GoodsReceiptService : IGoodsReceiptService
 
         EnsureDeliveryDateReachedForReceipt(po);
 
-        // 2. Ràng buộc: Một PO chỉ có tối đa một phiếu nhập chưa bị hủy (Mục 4)
+        // 2. Ràng buộc GRN active theo loại PO
         var activeReceipt = await _repository.GetActiveReceiptByPoIdAsync(tenantId, command.PurchaseOrderId, cancellationToken);
+        var isExchangePo = string.Equals(po.SourceType, "SUPPLIER_RETURN", StringComparison.OrdinalIgnoreCase);
         if (activeReceipt != null)
         {
-            throw new BusinessException(
-                "PO_ALREADY_HAS_RECEIPT",
-                $"Đơn đặt hàng {po.Code} đã có phiếu nhập {activeReceipt.Code} ({activeReceipt.Status}). Mỗi đơn PO chỉ có tối đa một phiếu nhập chưa bị hủy.");
+            // PO đổi hàng: cho phép nhiều GRN COMPLETED; chỉ chặn khi còn DRAFT.
+            if (isExchangePo)
+            {
+                if (string.Equals(activeReceipt.Status, "DRAFT", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new BusinessException(
+                        "PO_ALREADY_HAS_RECEIPT",
+                        $"PO đổi hàng {po.Code} đang có phiếu nhập nháp {activeReceipt.Code}. Hãy hoàn tất hoặc hủy phiếu nháp trước.");
+                }
+            }
+            else
+            {
+                throw new BusinessException(
+                    "PO_ALREADY_HAS_RECEIPT",
+                    $"Đơn đặt hàng {po.Code} đã có phiếu nhập {activeReceipt.Code} ({activeReceipt.Status}). Mỗi đơn PO chỉ có tối đa một phiếu nhập chưa bị hủy.");
+            }
         }
 
         var code = await _repository.GenerateCodeAsync(tenantId, cancellationToken);
@@ -833,9 +847,11 @@ public class GoodsReceiptService : IGoodsReceiptService
             }
         }
 
-        // 2. Cập nhật đơn PO nguồn sang COMPLETED (Mục 8.2: "Khi Goods Receipt được hoàn tất, PO chuyển sang COMPLETED, kể cả trường hợp nhà cung cấp giao thiếu.")
+        // 2. Cập nhật PO nguồn
         if (po != null)
         {
+            var isExchangePo = string.Equals(po.SourceType, "SUPPLIER_RETURN", StringComparison.OrdinalIgnoreCase);
+
             foreach (var line in receipt.Lines)
             {
                 if (line.PurchaseOrderDetailId.HasValue)
@@ -843,23 +859,63 @@ public class GoodsReceiptService : IGoodsReceiptService
                     var pod = po.Details.FirstOrDefault(d => d.Id == line.PurchaseOrderDetailId.Value);
                     if (pod != null)
                     {
+                        var ordered = pod.OrderedQty ?? pod.FinalQty ?? 0m;
+                        if (isExchangePo && pod.ReceivedQty + line.AcceptedQty > ordered + 0.0001m)
+                        {
+                            throw new BusinessException(
+                                "EXCHANGE_EXCEEDS_ORDERED",
+                                $"PO đổi hàng: nhận vượt số lượng đặt (đã nhận {pod.ReceivedQty:0.##} + {line.AcceptedQty:0.##} > {ordered:0.##}).");
+                        }
+
                         pod.ReceivedQty += line.AcceptedQty;
                         pod.UpdatedAt = DateTime.UtcNow;
                     }
                 }
             }
 
-            // RULE-02 P-SHORT-A: 1 lần nhập → đóng PO kể cả giao thiếu; phần thiếu đặt bù PO mới.
             var orderedTotal = po.Details.Sum(d => d.OrderedQty ?? d.FinalQty ?? 0m);
             var receivedTotal = po.Details.Sum(d => d.ReceivedQty);
-            if (receivedTotal + 0.0001m < orderedTotal)
+
+            if (isExchangePo)
             {
-                var shortNote =
-                    $"[P-SHORT-A] Đóng PO sau 1 lần nhập thiếu (nhận {receivedTotal:0.##}/{orderedTotal:0.##}). Phần còn lại cần đặt bù đơn mới.";
-                po.Note = string.IsNullOrWhiteSpace(po.Note) ? shortNote : $"{po.Note} | {shortNote}";
+                // PO đổi hàng: bắt buộc nhận đủ — không đóng thiếu; có thể nhận nhiều đợt.
+                if (receivedTotal + 0.0001m < orderedTotal)
+                {
+                    po.Status = "PARTIALLY_RECEIVED";
+                    var remainNote =
+                        $"[EXCHANGE] Đã nhận {receivedTotal:0.##}/{orderedTotal:0.##}, còn thiếu {orderedTotal - receivedTotal:0.##}. Chờ NCC giao đủ trên cùng PO.";
+                    po.Note = string.IsNullOrWhiteSpace(po.Note) ? remainNote : $"{po.Note} | {remainNote}";
+                    await UpdateExchangeReturnReplacementStatusAsync(
+                        tenantId,
+                        po.SourceSupplierReturnId,
+                        "PARTIALLY_RECEIVED",
+                        completeReturn: false,
+                        cancellationToken);
+                }
+                else
+                {
+                    po.Status = "COMPLETED";
+                    await UpdateExchangeReturnReplacementStatusAsync(
+                        tenantId,
+                        po.SourceSupplierReturnId,
+                        "COMPLETED",
+                        completeReturn: true,
+                        cancellationToken);
+                }
+            }
+            else
+            {
+                // RULE-02 P-SHORT-A: PO mua thường — 1 lần nhập → đóng kể cả thiếu.
+                if (receivedTotal + 0.0001m < orderedTotal)
+                {
+                    var shortNote =
+                        $"[P-SHORT-A] Đóng PO sau 1 lần nhập thiếu (nhận {receivedTotal:0.##}/{orderedTotal:0.##}). Phần còn lại cần đặt bù đơn mới.";
+                    po.Note = string.IsNullOrWhiteSpace(po.Note) ? shortNote : $"{po.Note} | {shortNote}";
+                }
+
+                po.Status = "COMPLETED";
             }
 
-            po.Status = "COMPLETED";
             po.UpdatedAt = DateTime.UtcNow;
         }
 
@@ -1060,5 +1116,33 @@ public class GoodsReceiptService : IGoodsReceiptService
                 Note = l.Note
             }).ToList()
         };
+    }
+
+    private async Task UpdateExchangeReturnReplacementStatusAsync(
+        string tenantId,
+        Guid? sourceSupplierReturnId,
+        string replacementStatus,
+        bool completeReturn,
+        CancellationToken cancellationToken)
+    {
+        if (!sourceSupplierReturnId.HasValue || _supplierReturnRepository == null)
+            return;
+
+        var ret = await _supplierReturnRepository.GetByIdAsync(tenantId, sourceSupplierReturnId.Value, cancellationToken);
+        if (ret == null)
+            return;
+
+        ret.ReplacementStatus = replacementStatus;
+        if (completeReturn
+            && ret.TotalApprovedQty > 0
+            && ret.TotalHandedOverQty + 0.0001m >= ret.TotalApprovedQty
+            && (ret.SettlementStatus is "PAID" or "NOT_REQUIRED" or "SETTLED"
+                || ret.StorePayableAmount <= 0
+                || ret.StorePaidAmount + 0.0001m >= ret.StorePayableAmount))
+        {
+            ret.Status = "COMPLETED";
+        }
+
+        await _supplierReturnRepository.UpdateAsync(ret, cancellationToken);
     }
 }

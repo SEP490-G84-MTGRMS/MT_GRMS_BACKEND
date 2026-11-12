@@ -42,6 +42,10 @@ public class PurchaseOrder : BaseTenantEntity
     public Guid? DispatchPackageId { get; set; }
     public Guid? DispatchBatchId { get; set; }
 
+    /// <summary>null/MANUAL_MATRIX = PO mua thường; SUPPLIER_RETURN = PO đổi hàng.</summary>
+    public string? SourceType { get; set; }
+    public Guid? SourceSupplierReturnId { get; set; }
+
     // Snapshots tại thời điểm chốt — không ghi đè sau này
     public string? SupplierCodeSnapshot { get; set; }
     public string? SupplierNameSnapshot { get; set; }

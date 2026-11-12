@@ -439,7 +439,7 @@ public class StocktakeService : IStocktakeService
             Lines: returnLinesToCreate,
             AutoSubmit: command.AutoSubmit,
             StocktakeId: stocktake.Id,
-            ResolutionType: command.ResolutionType ?? "REDUCE_PAYABLE"
+            ResolutionType: NormalizeStocktakeResolution(command.ResolutionType)
         );
 
         var createdReturn = await _supplierReturnService.CreateAsync(createReturnCmd, cancellationToken);
@@ -531,6 +531,22 @@ public class StocktakeService : IStocktakeService
             return query with { BranchId = _tenantContext.CurrentBranchId.Value };
         }
         return query;
+    }
+
+    private static string NormalizeStocktakeResolution(string? resolutionType)
+    {
+        if (string.IsNullOrWhiteSpace(resolutionType))
+            return "REDUCE_PAYABLE";
+
+        var raw = resolutionType.Trim().ToUpperInvariant();
+        return raw switch
+        {
+            "REPLACE_GOODS" or "EXCHANGE" => "EXCHANGE",
+            "DEDUCT_INVOICE" or "REDUCE_PAYABLE" => "REDUCE_PAYABLE",
+            "REFUND" => "REFUND",
+            "SUPPLIER_CREDIT" or "OTHER" => "OTHER",
+            _ => resolutionType.Trim()
+        };
     }
 }
 

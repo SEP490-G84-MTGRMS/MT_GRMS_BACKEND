@@ -367,6 +367,19 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         }
     }
 
+    public async Task<SupplierReturnPolicy?> GetActiveReturnPolicyAsync(Guid supplierId, CancellationToken cancellationToken = default)
+    {
+        return await _context.SupplierReturnPolicies
+            .Where(p => p.SupplierId == supplierId && p.IsActive)
+            .OrderByDescending(p => p.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task AddReturnPolicyAsync(SupplierReturnPolicy policy, CancellationToken cancellationToken = default)
+    {
+        await _context.SupplierReturnPolicies.AddAsync(policy, cancellationToken);
+    }
+
     // Supplier Product Management (REQ-SP01 đến REQ-SP06)
     public async Task<SupplierProduct?> GetSupplierProductAsync(Guid supplierId, Guid productId, CancellationToken cancellationToken = default)
     {
