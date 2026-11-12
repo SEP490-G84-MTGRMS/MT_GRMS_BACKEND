@@ -19,6 +19,7 @@ public class ShiftZReport : BaseTenantEntity
 
     public DateTime OpenedAtUtc { get; set; } = DateTime.UtcNow;
     public DateTime? ClosedAtUtc { get; set; }
+    public DateOnly BusinessDate { get; set; }
 
     public decimal OpeningFloatExpected { get; set; } = 0.00m; // Số tiền ca trước để lại (prevShift.RetainedFloatAmount)
     public decimal OpeningFloat { get; set; } = 0.00m;         // Số tiền thực đếm khi mở ca
@@ -36,6 +37,7 @@ public class ShiftZReport : BaseTenantEntity
     public decimal RetainedFloatAmount { get; set; } = 0.00m;  // Số tiền giữ lại két cho ca kế tiếp
     public decimal DroppedToSafeAmount { get; set; } = 0.00m;  // Số tiền rút nộp vào két an toàn (BranchSafe)
 
+    public decimal TotalCashSales { get; set; } = 0.00m;
     public HandoverStatus HandoverStatus { get; set; } = HandoverStatus.PENDING;
     public ShiftState Status { get; set; } = ShiftState.Open;
     public string? Notes { get; set; }
@@ -44,6 +46,9 @@ public class ShiftZReport : BaseTenantEntity
     public DateTime? ClosingStartedAtUtc { get; set; }
     public Guid? ClosedByUserId { get; set; }
     public string? ForceCloseReason { get; set; }
+    public bool SnapshotLocked { get; set; }
+    public CashbookPostingStatus CashbookPostingStatus { get; set; } = CashbookPostingStatus.NotPosted;
+    public Guid? BusinessDayClosingId { get; set; }
 
     // Navigations
     public Branch? Branch { get; set; }

@@ -119,6 +119,7 @@ public class ShiftZReportConfiguration : IEntityTypeConfiguration<ShiftZReport>
         builder.Property(s => s.TotalCashIn).HasColumnType("decimal(18,2)");
         builder.Property(s => s.TotalCashOut).HasColumnType("decimal(18,2)");
         builder.Property(s => s.TotalBankRevenue).HasColumnType("decimal(18,2)");
+        builder.Property(s => s.TotalCashSales).HasColumnType("decimal(18,2)");
         builder.Property(s => s.ExpectedCash).HasColumnType("decimal(18,2)");
         builder.Property(s => s.ActualCashCounted).HasColumnType("decimal(18,2)");
         builder.Property(s => s.Discrepancy).HasColumnType("decimal(18,2)");
@@ -153,6 +154,7 @@ public class ShiftZReportConfiguration : IEntityTypeConfiguration<ShiftZReport>
         builder.HasIndex(s => new { s.TenantId, s.BranchId, s.Status });
         builder.HasIndex(s => new { s.TenantId, s.TillId, s.Status });
         builder.HasIndex(s => new { s.TenantId, s.ShiftCode });
+        builder.HasIndex(s => new { s.TenantId, s.BranchId, s.BusinessDate });
     }
 }
 
