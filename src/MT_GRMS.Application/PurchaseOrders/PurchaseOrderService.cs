@@ -1902,6 +1902,7 @@ public class PurchaseOrderService : IPurchaseOrderService
             query.DateTo,
             pageIndex,
             pageSize,
+            query.Keyword,
             cancellationToken);
 
         var dtos = items.Select(po => MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC")).ToList();

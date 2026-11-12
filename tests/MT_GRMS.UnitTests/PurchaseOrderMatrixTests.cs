@@ -1017,6 +1017,7 @@ public class PurchaseOrderMatrixTests
             DateTime? dateTo,
             int pageIndex,
             int pageSize,
+            string? keyword,
             CancellationToken cancellationToken = default)
         {
             var query = PurchaseOrders.Where(p => p.Status != "DRAFT").AsEnumerable();

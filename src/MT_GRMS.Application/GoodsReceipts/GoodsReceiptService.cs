@@ -337,6 +337,137 @@ public class GoodsReceiptService : IGoodsReceiptService
         return resultDto;
     }
 
+    public async Task<GoodsReceiptDto> UpdateDraftGoodsReceiptAsync(
+        Guid id,
+        CreateGoodsReceiptCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
+        var receipt = await _repository.GetByIdAsync(tenantId, id, cancellationToken);
+        if (receipt == null || receipt.IsDeleted)
+        {
+            throw new NotFoundException("Phiếu nhập kho", id);
+        }
+
+        if (!string.Equals(receipt.Status, "DRAFT", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new BusinessException(
+                "GRN_NOT_DRAFT",
+                $"Chỉ được sửa phiếu nhập ở trạng thái nháp. Phiếu {receipt.Code} đang {receipt.Status}.");
+        }
+
+        var po = receipt.PurchaseOrderId.HasValue
+            ? await _repository.GetPurchaseOrderWithDetailsAsync(tenantId, receipt.PurchaseOrderId.Value, cancellationToken)
+            : null;
+        if (po != null)
+        {
+            EnsureDeliveryDateReachedForReceipt(po);
+        }
+
+        receipt.InvoiceNo = command.InvoiceNo;
+        receipt.FreightFee = command.FreightFee;
+        receipt.DiscountAmount = command.DiscountAmount;
+        receipt.VatPercent = command.VatPercent;
+        receipt.PaymentMethod = command.PaymentMethod;
+        receipt.PaymentDueDate = command.PaymentDueDate;
+        receipt.Note = command.Note;
+        receipt.UpdatedAt = DateTime.UtcNow;
+
+        foreach (var existing in receipt.Lines.ToList())
+        {
+            receipt.Lines.Remove(existing);
+        }
+
+        decimal subTotal = 0;
+        foreach (var l in command.Lines)
+        {
+            subTotal += l.AcceptedQty * l.UnitPrice;
+        }
+
+        receipt.SubTotal = subTotal;
+        var baseAmount = subTotal - command.DiscountAmount + command.FreightFee;
+        receipt.VatAmount = Math.Round(Math.Max(0, baseAmount) * (command.VatPercent / 100m), 2);
+        receipt.GrandTotal = Math.Max(0, baseAmount) + receipt.VatAmount;
+
+        foreach (var group in command.Lines.GroupBy(l => l.PurchaseOrderDetailId ?? l.ProductId))
+        {
+            var ordered = group.Max(x => x.OrderedQty);
+            var sumDelivered = group.Sum(x => x.DeliveredQty);
+            var sumAccepted = group.Sum(x => x.AcceptedQty);
+            if (sumDelivered > ordered)
+            {
+                throw new BusinessException(
+                    "EXCEEDS_ORDERED",
+                    $"Tổng thực nhận ({sumDelivered}) vượt số lượng đặt PO ({ordered}). Không được nhận vượt khi tách lô.");
+            }
+
+            if (sumAccepted > ordered)
+            {
+                throw new BusinessException(
+                    "ACCEPTED_EXCEEDS_ORDERED",
+                    $"Tổng chấp nhận ({sumAccepted}) vượt số lượng đặt PO ({ordered}).");
+            }
+        }
+
+        foreach (var l in command.Lines)
+        {
+            if (l.AcceptedQty < 0 || l.DeliveredQty < 0)
+            {
+                throw new BusinessException("INVALID_QTY", "Số lượng nhận và chấp nhận không được âm.");
+            }
+
+            if (l.AcceptedQty > l.DeliveredQty)
+            {
+                throw new BusinessException("ACCEPTED_EXCEEDS_RECEIVED", "Số lượng chấp nhận không được vượt quá số lượng thực nhận.");
+            }
+
+            var rejectedQty = l.RejectedQty > 0 ? l.RejectedQty : Math.Max(0, l.DeliveredQty - l.AcceptedQty);
+            var deliveredQty = Math.Max(l.DeliveredQty, l.AcceptedQty + rejectedQty);
+            if (rejectedQty > 0 && string.IsNullOrWhiteSpace(l.RejectionReason))
+            {
+                throw new BusinessException("REJECTION_REASON_REQUIRED", $"Dòng sản phẩm có {rejectedQty} hàng bị từ chối bắt buộc phải có lý do từ chối.");
+            }
+
+            var lineAmount = l.AcceptedQty * l.UnitPrice;
+            var weight = subTotal > 0 ? (lineAmount / subTotal) : 0;
+            var freightAlloc = Math.Round(command.FreightFee * weight, 2);
+            var discountAlloc = Math.Round(command.DiscountAmount * weight, 2);
+            var landedSubtotal = lineAmount - discountAlloc + freightAlloc;
+            var vatAlloc = Math.Round(landedSubtotal * (command.VatPercent / 100m), 2);
+            var landedTotal = landedSubtotal + vatAlloc;
+            var landedUnitCost = l.AcceptedQty > 0 ? Math.Round(landedTotal / l.AcceptedQty, 2) : l.UnitPrice;
+
+            receipt.Lines.Add(new GoodsReceiptLine
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenantId,
+                GoodsReceiptId = receipt.Id,
+                ProductId = l.ProductId,
+                PurchaseOrderDetailId = l.PurchaseOrderDetailId,
+                OrderedQty = l.OrderedQty,
+                DeliveredQty = deliveredQty,
+                AcceptedQty = l.AcceptedQty,
+                RejectedQty = rejectedQty,
+                UnitPrice = l.UnitPrice,
+                LineAmount = lineAmount,
+                BatchCode = l.ManageBatch && !string.IsNullOrWhiteSpace(l.BatchCode) ? l.BatchCode.Trim() : null,
+                ManufactureDate = l.ManageBatch ? l.ManufactureDate : null,
+                ExpiryDate = l.ManageBatch ? l.ExpiryDate : null,
+                FreightAllocated = freightAlloc,
+                DiscountAllocated = discountAlloc,
+                VatAllocated = vatAlloc,
+                LandedUnitCost = landedUnitCost,
+                QualityStatus = rejectedQty > 0 ? "PARTIAL_REJECT" : "ACCEPTED",
+                RejectionReason = l.RejectionReason,
+                Note = string.IsNullOrWhiteSpace(l.RejectionNote) ? l.Note : $"{l.RejectionNote} | {l.Note}",
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+
+        await _repository.UpdateAsync(receipt, cancellationToken);
+        return await GetGoodsReceiptByIdAsync(receipt.Id, cancellationToken);
+    }
+
     public async Task<GoodsReceiptDto> CompleteGoodsReceiptAsync(
         Guid id,
         CompleteGoodsReceiptCommand command,
