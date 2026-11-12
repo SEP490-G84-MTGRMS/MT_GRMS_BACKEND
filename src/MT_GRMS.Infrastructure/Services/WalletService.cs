@@ -200,7 +200,11 @@ public class WalletService : IWalletService
             : $"SEPAY-{payload.Id}";
 
         var existingTx = await _context.WalletTransactions
-            .FirstOrDefaultAsync(t => t.ReferenceCode == refCode || t.TransactionCode == $"WAL-{payload.Id}", cancellationToken);
+            .FirstOrDefaultAsync(t =>
+                t.ReferenceCode == refCode ||
+                t.TransactionCode == $"WAL-{payload.Id}" ||
+                t.TransactionCode.EndsWith($"-{payload.Id}"),
+                cancellationToken);
 
         if (existingTx != null)
         {
@@ -244,56 +248,60 @@ public class WalletService : IWalletService
             return new SepayWebhookResult(false, $"Không xác định được gian hàng từ nội dung: {content}", candidateCode, null, payload.TransferAmount);
         }
 
-        // 3. Thực thi cập nhật số dư trong DB Transaction an toàn
-        using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
-        try
+        // 3. Thực thi cập nhật số dư trong DB Transaction an toàn qua ExecutionStrategy của Npgsql
+        var strategy = _context.Database.CreateExecutionStrategy();
+        return await strategy.ExecuteAsync(async () =>
         {
-            var balanceBefore = tenant.WalletBalance;
-            tenant.WalletBalance += payload.TransferAmount;
-            var balanceAfter = tenant.WalletBalance;
-
-            var txCode = $"WAL-{DateTime.UtcNow:yyyyMMdd}-{payload.Id}";
-            var walletTx = new WalletTransaction
+            using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+            try
             {
-                TenantId = tenant.Id,
-                TransactionCode = txCode,
-                Type = "TOPUP",
-                Amount = payload.TransferAmount,
-                BalanceBefore = balanceBefore,
-                BalanceAfter = balanceAfter,
-                Description = $"Nạp tiền ví gian hàng qua VietQR SePay ({payload.Gateway ?? "MBBank"})",
-                PaymentMethod = "VietQR",
-                Status = "SUCCESS",
-                ReferenceCode = refCode,
-                Metadata = System.Text.Json.JsonSerializer.Serialize(new
+                var balanceBefore = tenant.WalletBalance;
+                tenant.WalletBalance += payload.TransferAmount;
+                var balanceAfter = tenant.WalletBalance;
+
+                var txCode = $"WAL-{DateTime.UtcNow:yyyyMMdd}-{payload.Id}";
+                var walletTx = new WalletTransaction
                 {
-                    payload.Gateway,
-                    payload.AccountNumber,
-                    payload.TransactionDate,
-                    payload.Content,
-                    payload.TransferAmount
-                })
-            };
+                    TenantId = tenant.Id,
+                    TransactionCode = txCode,
+                    Type = "TOPUP",
+                    Amount = payload.TransferAmount,
+                    BalanceBefore = balanceBefore,
+                    BalanceAfter = balanceAfter,
+                    Description = $"Nạp tiền ví gian hàng qua VietQR SePay ({payload.Gateway ?? "MBBank"})",
+                    PaymentMethod = "VietQR",
+                    Status = "SUCCESS",
+                    ReferenceCode = refCode,
+                    Metadata = System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        payload.Gateway,
+                        payload.AccountNumber,
+                        payload.TransactionDate,
+                        payload.Content,
+                        payload.TransferAmount
+                    })
+                };
 
-            _context.WalletTransactions.Add(walletTx);
+                _context.WalletTransactions.Add(walletTx);
 
-            if (order != null)
-            {
-                order.Status = "COMPLETED";
-                order.CompletedAt = DateTime.UtcNow;
-                order.ReferenceCode = refCode;
+                if (order != null)
+                {
+                    order.Status = "COMPLETED";
+                    order.CompletedAt = DateTime.UtcNow;
+                    order.ReferenceCode = refCode;
+                }
+
+                await _context.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+
+                return new SepayWebhookResult(true, "Cộng tiền ví gian hàng thành công.", order?.OrderCode, tenant.Id, payload.TransferAmount);
             }
-
-            await _context.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
-
-            return new SepayWebhookResult(true, "Cộng tiền ví gian hàng thành công.", order?.OrderCode, tenant.Id, payload.TransferAmount);
-        }
-        catch (Exception ex)
-        {
-            await transaction.RollbackAsync(cancellationToken);
-            return new SepayWebhookResult(false, $"Lỗi xử lý giao dịch: {ex.Message}", candidateCode, tenant.Id, payload.TransferAmount);
-        }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                return new SepayWebhookResult(false, $"Lỗi xử lý giao dịch: {ex.Message}", candidateCode, tenant.Id, payload.TransferAmount);
+            }
+        });
     }
 
     public async Task DeductWalletAsync(

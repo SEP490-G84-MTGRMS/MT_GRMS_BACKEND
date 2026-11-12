@@ -35,6 +35,7 @@ public partial class AppDbContext : DbContext
     // 1. Phân hệ SaaS & Multi-Tenancy (6 bảng)
     public virtual DbSet<SubscriptionPlan> SubscriptionPlans { get; set; } = null!;
     public virtual DbSet<Tenant> Tenants { get; set; } = null!;
+    public virtual DbSet<TenantMedia> TenantMedia { get; set; } = null!;
     public virtual DbSet<User> Users { get; set; } = null!;
     public virtual DbSet<TenantUser> TenantUsers { get; set; } = null!;
     public virtual DbSet<AuditLog> AuditLogs { get; set; } = null!;
@@ -47,6 +48,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<ProductUnit> ProductUnits { get; set; } = null!;
     public virtual DbSet<BranchProduct> BranchProducts { get; set; } = null!;
     public virtual DbSet<BranchProductUnitPrice> BranchProductUnitPrices { get; set; } = null!;
+    public virtual DbSet<ProductPriceHistory> ProductPriceHistories { get; set; } = null!;
 
     // 3. Phân hệ Chi nhánh, Kho & Điều chuyển (tồn theo lô)
     public virtual DbSet<Branch> Branches { get; set; } = null!;
@@ -55,21 +57,25 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<TransferDetail> TransferDetails { get; set; } = null!;
     public virtual DbSet<Batch> Batches { get; set; } = null!;
     public virtual DbSet<StockOnHand> StockOnHands { get; set; } = null!;
+    public virtual DbSet<Stocktake> Stocktakes { get; set; } = null!;
+    public virtual DbSet<StocktakeLine> StocktakeLines { get; set; } = null!;
 
-    // 4. Phân hệ Nhà cung cấp, Mua hàng PO & Nhập kho GRN (10 bảng)
-    public virtual DbSet<SupplierCategory> SupplierCategories { get; set; } = null!;
+    // 4. Phân hệ Nhà cung cấp, Mua hàng PO & Nhập kho GRN
     public virtual DbSet<Domain.Entities.Supplier.Supplier> Suppliers { get; set; } = null!;
-    public virtual DbSet<SupplierDeliveryConfig> SupplierDeliveryConfigs { get; set; } = null!;
     public virtual DbSet<SupplierBlackoutDate> SupplierBlackoutDates { get; set; } = null!;
     public virtual DbSet<SupplierAPLedger> SupplierAPLedgers { get; set; } = null!;
     public virtual DbSet<SupplierProduct> SupplierProducts { get; set; } = null!;
     public virtual DbSet<SupplierBranchAssignment> SupplierBranchAssignments { get; set; } = null!;
     public virtual DbSet<PurchaseOrder> PurchaseOrders { get; set; } = null!;
     public virtual DbSet<PurchaseOrderDetail> PurchaseOrderDetails { get; set; } = null!;
+    public virtual DbSet<PurchaseOrderRevision> PurchaseOrderRevisions { get; set; } = null!;
+    public virtual DbSet<SupplierDispatchPackage> SupplierDispatchPackages { get; set; } = null!;
+    public virtual DbSet<SupplierDispatchPackageItem> SupplierDispatchPackageItems { get; set; } = null!;
     public virtual DbSet<GoodsReceipt> GoodsReceipts { get; set; } = null!;
     public virtual DbSet<GoodsReceiptLine> GoodsReceiptLines { get; set; } = null!;
     public virtual DbSet<SupplierReturn> SupplierReturns { get; set; } = null!;
     public virtual DbSet<SupplierReturnLine> SupplierReturnLines { get; set; } = null!;
+    public virtual DbSet<OutboxMessage> OutboxMessages { get; set; } = null!;
 
     // 5. Phân hệ Khách hàng, Khuyến mãi & Bán lẻ POS (4 bảng)
     public virtual DbSet<Customer> Customers { get; set; } = null!;
@@ -78,14 +84,22 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<VoucherCode> VoucherCodes { get; set; } = null!;
     public virtual DbSet<Domain.Entities.Sales.Order> Orders { get; set; } = null!;
     public virtual DbSet<OrderDetail> OrderDetails { get; set; } = null!;
+    public virtual DbSet<LoyaltySetting> LoyaltySettings { get; set; } = null!;
 
     // 6. Phân hệ Tài chính, Sổ quỹ & Chi phí (FE-07, FE-17) - Đã hợp nhất FinanceAccounts
+    public virtual DbSet<CashbookTransaction> CashbookTransactions { get; set; } = null!;
     public virtual DbSet<CashbookEntry> CashbookEntries { get; set; } = null!;
     public virtual DbSet<FinanceAccount> FinanceAccounts { get; set; } = null!;
     public virtual DbSet<CashInTransit> CashInTransits { get; set; } = null!;
     public virtual DbSet<ShiftZReport> ShiftZReports { get; set; } = null!;
-    public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!; 
+    public virtual DbSet<ShiftCashMovement> ShiftCashMovements { get; set; } = null!;
+    public virtual DbSet<ShiftParticipant> ShiftParticipants { get; set; } = null!;
+    public virtual DbSet<ShiftCloseConfirmation> ShiftCloseConfirmations { get; set; } = null!;
+    public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!;
+    public virtual DbSet<StorePaymentConfig> StorePaymentConfigs { get; set; } = null!;
+    public virtual DbSet<PaymentTransaction> PaymentTransactions { get; set; } = null!;
     public virtual DbSet<IdempotencyRecord> IdempotencyRecords { get; set; } = null!;
+    public virtual DbSet<MT_GRMS.Infrastructure.Services.RegistrationOtpChallenge> RegistrationOtpChallenges { get; set; } = null!;
 
     // 7. Customer Debt Module (FE-08) - Đã hợp nhất công nợ vào Customers
     public virtual DbSet<CustomerDebtInvoice> CustomerDebtInvoices { get; set; } = null!;
@@ -99,7 +113,10 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<Employee> Employees { get; set; } = null!;
     public virtual DbSet<Payslip> Payslips { get; set; } = null!;
     public virtual DbSet<EmployeeSchedule> EmployeeSchedules { get; set; } = null!;
-    public virtual DbSet<EmployeeBonusViolation> EmployeeBonusViolations { get; set; } = null!;
+    public virtual DbSet<ScheduleApprovalRequest> ScheduleApprovalRequests { get; set; } = null!;
+    public virtual DbSet<EmployeeAllowance> EmployeeAllowances { get; set; } = null!;
+    public virtual DbSet<ShiftConfig> ShiftConfigs { get; set; } = null!;
+    public virtual DbSet<BranchAttendancePolicy> BranchAttendancePolicies { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -107,11 +124,28 @@ public partial class AppDbContext : DbContext
 
         // Tự động nạp toàn bộ Configurations trong assembly Infrastructure
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
+        modelBuilder.Entity<MT_GRMS.Infrastructure.Services.RegistrationOtpChallenge>(entity =>
+        {
+            entity.ToTable("RegistrationOtpChallenges");
+            entity.HasKey(x => x.Key);
+            entity.Property(x => x.Key).HasMaxLength(120);
+            entity.Property(x => x.NormalizedEmail).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.OtpHash).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.Intent).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.RequestFingerprint).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.State).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.ReservedByIdempotencyKey).HasMaxLength(120);
+            entity.HasIndex(x => new { x.NormalizedEmail, x.State });
+        });
 
         // Tắt toàn bộ Cascade Delete ở mức Database để tránh lỗi Multiple Cascade Paths (Error 1785) của SQL Server
         // Dự án áp dụng Soft Delete (IsDeleted) toàn diện nên an toàn 100%
         foreach (var foreignKey in modelBuilder.Model.GetEntityTypes().SelectMany(e => e.GetForeignKeys()))
         {
+            if (foreignKey.DeclaringEntityType.ClrType == typeof(EmployeeAllowance))
+            {
+                continue;
+            }
             if (foreignKey.DeleteBehavior == DeleteBehavior.Cascade)
             {
                 foreignKey.DeleteBehavior = DeleteBehavior.Restrict;
@@ -137,7 +171,9 @@ public partial class AppDbContext : DbContext
     {
         modelBuilder.Entity<T>().HasQueryFilter(e =>
             !e.IsDeleted &&
-            (_tenantContext == null || string.IsNullOrEmpty(_tenantContext.CurrentTenantId) || e.TenantId == _tenantContext.CurrentTenantId));
+            e.TenantId == (_tenantContext != null && !string.IsNullOrEmpty(_tenantContext.CurrentTenantId)
+                ? _tenantContext.CurrentTenantId
+                : "__FAIL_CLOSED_NO_ACTIVE_TENANT__"));
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
@@ -155,10 +191,6 @@ public partial class AppDbContext : DbContext
     private void ApplyAuditAndTenantInfo()
     {
         var tenantId = _tenantContext?.CurrentTenantId;
-        if (string.IsNullOrWhiteSpace(tenantId))
-        {
-            tenantId = "default-tenant";
-        }
 
         foreach (var entry in ChangeTracker.Entries<BaseTenantEntity>())
         {
@@ -180,10 +212,20 @@ public partial class AppDbContext : DbContext
 
             if (entry.State == EntityState.Added)
             {
+                // INV-1: Gán TenantId từ ngữ cảnh xác thực, ngăn chặn client ghi đè TenantId (TEN-02)
                 if (string.IsNullOrWhiteSpace(entry.Entity.TenantId))
                 {
+                    entry.Entity.TenantId = !string.IsNullOrWhiteSpace(tenantId) ? tenantId : "default-tenant";
+                }
+                else if (!string.IsNullOrWhiteSpace(tenantId)
+                         && _tenantContext?.CurrentUserId != null
+                         && _tenantContext.CurrentUserId != Guid.Empty
+                         && !string.Equals(_tenantContext.CurrentRole, "ADMIN", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Đối với user nội bộ của 1 tenant đã đăng nhập (không phải System Admin), ép TenantId theo phiên làm việc để chống IDOR
                     entry.Entity.TenantId = tenantId;
                 }
+
                 if (entry.Entity.CreatedAt == default)
                 {
                     entry.Entity.CreatedAt = DateTime.UtcNow;
@@ -192,6 +234,11 @@ public partial class AppDbContext : DbContext
             else if (entry.State == EntityState.Modified)
             {
                 entry.Entity.UpdatedAt = DateTime.UtcNow;
+                if (entry.Entity is BranchStock branchStock)
+                {
+                    // CONC-03: Optimistic Concurrency token increment for BranchStock
+                    branchStock.RowVersion++;
+                }
             }
         }
 

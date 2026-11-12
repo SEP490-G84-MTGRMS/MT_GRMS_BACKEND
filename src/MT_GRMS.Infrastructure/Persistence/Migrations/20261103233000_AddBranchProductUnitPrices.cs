@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 namespace MT_GRMS.Infrastructure.Persistence.Migrations;
 
+[Microsoft.EntityFrameworkCore.Infrastructure.DbContext(typeof(AppDbContext))]
 [Migration("20261103233000_AddBranchProductUnitPrices")]
 public partial class AddBranchProductUnitPrices : Migration
 {

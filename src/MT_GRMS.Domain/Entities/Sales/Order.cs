@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations.Schema;
 using MT_GRMS.Domain.Common;
+using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Enums;
 
@@ -12,6 +13,7 @@ public class Order : BaseTenantEntity
 {
     public Guid BranchId { get; set; }
     public Guid? CustomerId { get; set; }
+    public Guid? ShiftId { get; set; }
     public string OrderCode { get; set; } = string.Empty;
     public DateTime OrderDate { get; set; } = DateTime.UtcNow;
     public decimal TotalAmount { get; set; } = 0.00m;
@@ -21,6 +23,17 @@ public class Order : BaseTenantEntity
     public string PaymentMethod { get; set; } = "CASH";
     public string PaymentStatus { get; set; } = "PAID";
     public string Status { get; set; } = "Completed";
+    public string? CashierName { get; set; }
+    public string? FulfilledByCashierName { get; set; }
+    public DateTime? FulfilledAtUtc { get; set; }
+    public string? Note { get; set; }
+    public Guid? AppliedPromotionId { get; set; }
+    public string? AppliedPromotionSummary { get; set; }
+    public decimal PromotionDiscountAmount { get; set; } = 0.00m;
+    public string? AppliedVoucherCode { get; set; }
+    public decimal VoucherDiscountAmount { get; set; } = 0.00m;
+    public int PointsRedeemed { get; set; } = 0;
+    public decimal PointsDiscountAmount { get; set; } = 0.00m;
 
     // Backward compatibility aliases
     [NotMapped]
@@ -40,12 +53,11 @@ public class Order : BaseTenantEntity
         set => PaymentStatus = value.ToString().ToUpper();
     }
     [NotMapped]
-    public string? Note { get; set; }
-    [NotMapped]
     public ICollection<OrderDetail> Items { get => Details; set => Details = value; }
 
     // Navigations
     public Branch? Branch { get; set; }
     public Customer? Customer { get; set; }
+    public ShiftZReport? Shift { get; set; }
     public ICollection<OrderDetail> Details { get; set; } = new List<OrderDetail>();
 }

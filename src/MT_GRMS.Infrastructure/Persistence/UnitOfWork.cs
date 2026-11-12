@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 
 namespace MT_GRMS.Infrastructure.Persistence;
@@ -17,9 +17,11 @@ public class UnitOfWork : IUnitOfWork
         return await _context.SaveChangesAsync(cancellationToken);
     }
 
+    public bool HasActiveTransaction => _context.Database.IsRelational() && _context.Database.CurrentTransaction != null;
+
     public async Task BeginTransactionAsync(CancellationToken cancellationToken = default)
     {
-        if (_context.Database.IsRelational())
+        if (_context.Database.IsRelational() && _context.Database.CurrentTransaction == null)
         {
             await _context.Database.BeginTransactionAsync(cancellationToken);
         }
@@ -39,5 +41,32 @@ public class UnitOfWork : IUnitOfWork
         {
             await _context.Database.RollbackTransactionAsync(cancellationToken);
         }
+    }
+
+    public async Task ExecuteInTransactionAsync(
+        Func<CancellationToken, Task> operation,
+        CancellationToken cancellationToken = default)
+    {
+        if (!_context.Database.IsRelational())
+        {
+            await operation(cancellationToken);
+            return;
+        }
+
+        var strategy = _context.Database.CreateExecutionStrategy();
+        await strategy.ExecuteAsync(async () =>
+        {
+            await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+            try
+            {
+                await operation(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+            }
+            catch
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                throw;
+            }
+        });
     }
 }

@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,7 +10,8 @@ using MT_GRMS.Application.SupplierReturns.Dtos;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/supplier-returns")]
+[Route("api/supplier-returns")]
+[Authorize]
 public class SupplierReturnsController : BaseApiController
 {
     private readonly ISupplierReturnService _service;
@@ -126,3 +128,4 @@ public class SupplierReturnsController : BaseApiController
         return Ok(ApiResponse<SupplierReturnDetailDto>.Ok(result, "Đã hủy phiếu trả hàng thành công."));
     }
 }
+

@@ -1,6 +1,9 @@
 using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Promotions.Dtos;
+using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Exceptions;
 
@@ -66,16 +69,19 @@ public class PromotionService : IPromotionService
         {
             foreach (var cond in request.Conditions)
             {
-                promo.Conditions.Add(new PromotionCondition
+                if (cond.ProductId != Guid.Empty)
                 {
-                    TenantId = _tenantContext.CurrentTenantId,
-                    PromotionId = promo.Id,
-                    ProductId = cond.ProductId,
-                    ProductRole = string.IsNullOrWhiteSpace(cond.ProductRole) ? "BUY" : cond.ProductRole.ToUpper(),
-                    MinQty = cond.MinQty <= 0 ? 1 : cond.MinQty,
-                    DiscountValue = cond.DiscountValue,
-                    Note = cond.Note
-                });
+                    promo.Conditions.Add(new PromotionCondition
+                    {
+                        TenantId = _tenantContext.CurrentTenantId,
+                        PromotionId = promo.Id,
+                        ProductId = cond.ProductId,
+                        ProductRole = string.IsNullOrWhiteSpace(cond.ProductRole) ? "BUY" : cond.ProductRole.ToUpper(),
+                        MinQty = cond.MinQty <= 0 ? 1 : cond.MinQty,
+                        DiscountValue = cond.DiscountValue,
+                        Note = cond.Note
+                    });
+                }
             }
         }
 
@@ -110,16 +116,19 @@ public class PromotionService : IPromotionService
         {
             foreach (var cond in request.Conditions)
             {
-                newConditions.Add(new PromotionCondition
+                if (cond.ProductId != Guid.Empty)
                 {
-                    TenantId = _tenantContext.CurrentTenantId,
-                    PromotionId = promo.Id,
-                    ProductId = cond.ProductId,
-                    ProductRole = string.IsNullOrWhiteSpace(cond.ProductRole) ? "BUY" : cond.ProductRole.ToUpper(),
-                    MinQty = cond.MinQty <= 0 ? 1 : cond.MinQty,
-                    DiscountValue = cond.DiscountValue,
-                    Note = cond.Note
-                });
+                    newConditions.Add(new PromotionCondition
+                    {
+                        TenantId = _tenantContext.CurrentTenantId,
+                        PromotionId = promo.Id,
+                        ProductId = cond.ProductId,
+                        ProductRole = string.IsNullOrWhiteSpace(cond.ProductRole) ? "BUY" : cond.ProductRole.ToUpper(),
+                        MinQty = cond.MinQty <= 0 ? 1 : cond.MinQty,
+                        DiscountValue = cond.DiscountValue,
+                        Note = cond.Note
+                    });
+                }
             }
         }
         await _promotionRepository.ReplaceConditionsAsync(promo.Id, newConditions, cancellationToken);
@@ -160,99 +169,199 @@ public class PromotionService : IPromotionService
     public async Task<EvaluateCartResponse> EvaluateCartAsync(EvaluateCartRequest request, CancellationToken cancellationToken = default)
     {
         var now = DateTime.UtcNow;
-        var activePromos = await _promotionRepository.GetActivePromotionsAsync(now, request.BranchId?.ToString(), cancellationToken);
+        var activePromos = await _promotionRepository.GetActivePromotionsAsync(now, request.BranchId, cancellationToken);
 
         decimal totalDiscount = 0.00m;
         var appliedPromos = new List<string>();
         var giftItems = new List<CartGiftItemDto>();
+        var itemDiscounts = new List<CartItemDiscountDto>();
+        Guid? winningPromoId = null;
+
+        // Tập hợp các sản phẩm quà tặng tiềm năng để tra cứu đơn giá bán phục vụ quy đổi Best-Offer & BudgetLimit
+        var potentialGiftProductIds = new HashSet<Guid>();
+        foreach (var p in activePromos.Where(p => p.Type == "BUY_X_GET_Y"))
+        {
+            foreach (var c in p.Conditions.Where(c => c.ProductRole == "GIFT" && c.ProductId != Guid.Empty))
+            {
+                potentialGiftProductIds.Add(c.ProductId);
+            }
+            foreach (var tier in ParseTiersFromDescription(p.Description))
+            {
+                if (tier.GiftProductId.HasValue && tier.GiftProductId.Value != Guid.Empty)
+                {
+                    potentialGiftProductIds.Add(tier.GiftProductId.Value);
+                }
+            }
+        }
+
+        var giftPriceLookup = potentialGiftProductIds.Count > 0
+            ? await _promotionRepository.GetProductSellingPricesAsync(potentialGiftProductIds, cancellationToken)
+            : new Dictionary<Guid, decimal>();
+
+        var promoCandidates = new List<(
+            Guid PromoId,
+            decimal ComparisonValue,
+            decimal MonetaryDiscount,
+            string Label,
+            List<CartItemDiscountDto> Items,
+            List<CartGiftItemDto> Gifts)>();
 
         foreach (var promo in activePromos)
         {
-            // Kiểm tra ngân sách khuyến mại nếu có
-            if (promo.BudgetLimit.HasValue && promo.TotalDiscountGiven >= promo.BudgetLimit.Value)
-                continue;
+            // Kiểm tra ngân sách khuyến mại còn lại nếu có
+            decimal? remainingBudget = null;
+            if (promo.BudgetLimit.HasValue)
+            {
+                remainingBudget = promo.BudgetLimit.Value - promo.TotalDiscountGiven;
+                if (remainingBudget <= 0m)
+                    continue;
+            }
 
             // Kiểm tra giới hạn số lượt dùng nếu có
             if (promo.UsageLimit.HasValue && promo.UsedCount >= promo.UsageLimit.Value)
                 continue;
 
-            // 1. ORDER_DISCOUNT hoặc PERCENT / FIXED_AMOUNT
+            // 1. ORDER_DISCOUNT hoặc PERCENT / FIXED_AMOUNT (hỗ trợ đa bậc [TIERS_JSON])
             if (promo.Type is "ORDER_DISCOUNT" or "PERCENT" or "FIXED_AMOUNT")
             {
-                if (request.SubTotal >= promo.MinOrderValue)
+                decimal candidateDiscount = EvaluateOrderDiscountPromotion(promo, request.SubTotal);
+                if (remainingBudget.HasValue)
                 {
-                    decimal discount = 0;
-                    if (promo.Type == "PERCENT" || (promo.Type == "ORDER_DISCOUNT" && promo.DiscountValue <= 100))
-                    {
-                        discount = Math.Round(request.SubTotal * (promo.DiscountValue / 100.00m), 2);
-                        if (promo.MaxDiscountAmount.HasValue && discount > promo.MaxDiscountAmount.Value)
-                        {
-                            discount = promo.MaxDiscountAmount.Value;
-                        }
-                    }
-                    else
-                    {
-                        discount = promo.DiscountValue;
-                    }
+                    candidateDiscount = Math.Min(candidateDiscount, remainingBudget.Value);
+                }
+                candidateDiscount = Math.Min(candidateDiscount, Math.Max(0m, request.SubTotal));
 
-                    discount = Math.Min(discount, Math.Max(0, request.SubTotal - totalDiscount));
-                    if (discount > 0)
-                    {
-                        totalDiscount += discount;
-                        appliedPromos.Add($"{promo.PromotionName} (-{discount:N0} đ)");
-                    }
+                if (candidateDiscount > 0m)
+                {
+                    promoCandidates.Add((
+                        promo.Id,
+                        candidateDiscount,
+                        candidateDiscount,
+                        $"{promo.PromotionName} (-{candidateDiscount:N0} đ)",
+                        new List<CartItemDiscountDto>(),
+                        new List<CartGiftItemDto>()
+                    ));
                 }
             }
-            // 2. BUY_X_GET_Y (Mua X tặng Y)
-            else if (promo.Type == "BUY_X_GET_Y" && promo.Conditions.Count > 0)
+            // 2. BUY_X_GET_Y (Mua X tặng Y — hỗ trợ cả [TIERS_JSON] và PromotionConditions, tham gia Best-Offer)
+            else if (promo.Type == "BUY_X_GET_Y")
             {
-                var buyConditions = promo.Conditions.Where(c => c.ProductRole == "BUY").ToList();
-                var giftConditions = promo.Conditions.Where(c => c.ProductRole == "GIFT").ToList();
+                var (candidateGifts, totalGiftValue) = EvaluateBuyXGetYPromotion(
+                    promo,
+                    request.Items,
+                    giftPriceLookup,
+                    remainingBudget);
 
-                if (buyConditions.Count > 0 && giftConditions.Count > 0)
+                if (candidateGifts.Count > 0)
                 {
-                    bool isEligible = true;
-                    int minMultiple = int.MaxValue;
+                    // Nếu sản phẩm tặng chưa khai báo giá bán (VD trong test đơn giản), dùng 0.01m để vẫn được chọn khi không có KM tiền tốt hơn
+                    decimal comparisonVal = totalGiftValue > 0m ? totalGiftValue : 0.01m;
+                    var giftSummary = string.Join(", ", candidateGifts.Select(g => $"{g.Quantity:0.##} {g.UnitName ?? "SP"} {g.ProductName}".Trim()));
+                    promoCandidates.Add((
+                        promo.Id,
+                        comparisonVal,
+                        0m,
+                        $"{promo.PromotionName} (Tặng: {giftSummary})",
+                        new List<CartItemDiscountDto>(),
+                        candidateGifts
+                    ));
+                }
+            }
+            // 3. PRODUCT_DISCOUNT (Giảm giá theo từng sản phẩm/mặt hàng)
+            else if (promo.Type == "PRODUCT_DISCOUNT" && promo.Conditions.Count > 0)
+            {
+                var discountConds = promo.Conditions.Where(c => c.ProductRole is "DISCOUNT" or "BUY").ToList();
+                decimal promoItemDiscountTotal = 0m;
+                var candidateItems = new List<CartItemDiscountDto>();
 
-                    foreach (var buyCond in buyConditions)
+                foreach (var cond in discountConds)
+                {
+                    var matchingCartItems = request.Items.Where(i => i.ProductId == cond.ProductId).ToList();
+                    var totalBoughtBaseQty = matchingCartItems.Sum(i => GetCartItemBaseQty(i));
+                    if (matchingCartItems.Count == 0 || totalBoughtBaseQty < cond.MinQty)
+                        continue;
+
+                    decimal discountPerItem = cond.DiscountValue ?? promo.DiscountValue;
+                    decimal lineDiscount = 0m;
+
+                    foreach (var cartItem in matchingCartItems)
                     {
-                        var matchingCartItem = request.Items.FirstOrDefault(i => i.ProductId == buyCond.ProductId);
-                        if (matchingCartItem == null || matchingCartItem.Quantity < buyCond.MinQty)
+                        decimal itemLineDiscount = 0m;
+                        if (discountPerItem <= 100m)
                         {
-                            isEligible = false;
-                            break;
+                            itemLineDiscount = Math.Round(cartItem.UnitPrice * (discountPerItem / 100.00m) * cartItem.Quantity, 2);
                         }
-
-                        int multiple = (int)(matchingCartItem.Quantity / buyCond.MinQty);
-                        if (multiple < minMultiple) minMultiple = multiple;
+                        else
+                        {
+                            var rate = cartItem.ConversionRate > 0m ? cartItem.ConversionRate : 1.00m;
+                            itemLineDiscount = discountPerItem * cartItem.Quantity * rate;
+                        }
+                        lineDiscount += itemLineDiscount;
                     }
 
-                    if (isEligible && minMultiple > 0 && minMultiple != int.MaxValue)
+                    if (promo.MaxDiscountAmount.HasValue && lineDiscount > promo.MaxDiscountAmount.Value)
                     {
-                        foreach (var giftCond in giftConditions)
-                        {
-                            decimal giftQty = minMultiple * giftCond.MinQty;
-                            giftItems.Add(new CartGiftItemDto(
-                                giftCond.ProductId,
-                                giftCond.Product?.Name ?? "Quà tặng khuyến mãi",
-                                giftQty,
-                                $"{promo.PromotionName} (Mua đủ tặng {giftQty} sản phẩm)"
-                            ));
-                        }
-                        appliedPromos.Add($"{promo.PromotionName} (Đủ điều kiện nhận quà tặng)");
+                        lineDiscount = promo.MaxDiscountAmount.Value;
                     }
+
+                    lineDiscount = Math.Min(lineDiscount, Math.Max(0, request.SubTotal - promoItemDiscountTotal));
+                    if (lineDiscount > 0)
+                    {
+                        promoItemDiscountTotal += lineDiscount;
+                        candidateItems.Add(new CartItemDiscountDto(cond.ProductId, lineDiscount));
+                    }
+                }
+
+                if (remainingBudget.HasValue)
+                {
+                    promoItemDiscountTotal = Math.Min(promoItemDiscountTotal, remainingBudget.Value);
+                }
+                promoItemDiscountTotal = Math.Min(promoItemDiscountTotal, Math.Max(0m, request.SubTotal));
+
+                if (promoItemDiscountTotal > 0)
+                {
+                    promoCandidates.Add((
+                        promo.Id,
+                        promoItemDiscountTotal,
+                        promoItemDiscountTotal,
+                        $"{promo.PromotionName} (-{promoItemDiscountTotal:N0} đ)",
+                        candidateItems,
+                        new List<CartGiftItemDto>()
+                    ));
                 }
             }
         }
 
-        // 3. Thẩm định Voucher Coupon nếu có nhập mã
+        // Giải quyết xung đột toàn cục (Best-Offer không cộng dồn): chọn 1 chương trình KM tự động có giá trị ưu đãi cao nhất
+        var bestOffer = promoCandidates
+            .OrderByDescending(c => c.ComparisonValue)
+            .ThenByDescending(c => c.MonetaryDiscount)
+            .FirstOrDefault();
+
+        if (bestOffer.ComparisonValue > 0m)
+        {
+            winningPromoId = bestOffer.PromoId;
+            totalDiscount += bestOffer.MonetaryDiscount;
+            appliedPromos.Insert(0, bestOffer.Label);
+            if (bestOffer.Items.Count > 0)
+            {
+                itemDiscounts.AddRange(bestOffer.Items);
+            }
+            if (bestOffer.Gifts.Count > 0)
+            {
+                giftItems.AddRange(bestOffer.Gifts);
+            }
+        }
+
+        // 4. Thẩm định Voucher Coupon nếu có nhập mã
         ValidateVoucherResponse? voucherResult = null;
         if (!string.IsNullOrWhiteSpace(request.CouponCode))
         {
             voucherResult = await ValidateVoucherAsync(new ValidateVoucherRequest(
                 request.CouponCode,
                 Math.Max(0, request.SubTotal - totalDiscount),
-                request.CustomerId
+                request.CustomerId,
+                HasOtherPromotions: totalDiscount > 0m
             ), cancellationToken);
 
             if (voucherResult.IsValid && voucherResult.DiscountAmount > 0)
@@ -272,8 +381,322 @@ public class PromotionService : IPromotionService
             FinalAmount: finalAmount,
             AppliedPromotions: appliedPromos,
             GiftItems: giftItems,
-            VoucherResult: voucherResult
+            VoucherResult: voucherResult,
+            ItemDiscounts: itemDiscounts,
+            AppliedPromotionId: winningPromoId
         );
+    }
+
+    private static readonly Regex TiersJsonRegex = new(@"\[TIERS_JSON\]([\s\S]*?)\[/TIERS_JSON\]", RegexOptions.Compiled);
+    private static readonly Regex ConfigJsonRegex = new(@"\[CONFIG_JSON\]([\s\S]*?)\[/CONFIG_JSON\]", RegexOptions.Compiled);
+    private static readonly JsonSerializerOptions TiersJsonOptions = new() { PropertyNameCaseInsensitive = true };
+
+    private static bool ParseAllowWithPromotions(string? description)
+    {
+        if (string.IsNullOrWhiteSpace(description) || !description.Contains("[CONFIG_JSON]", StringComparison.Ordinal))
+            return true;
+
+        var match = ConfigJsonRegex.Match(description);
+        if (!match.Success || string.IsNullOrWhiteSpace(match.Groups[1].Value))
+            return true;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(match.Groups[1].Value);
+            if (doc.RootElement.TryGetProperty("allowWithPromotions", out var prop))
+            {
+                return prop.GetBoolean();
+            }
+        }
+        catch
+        {
+            // fallback cho phép gộp mặc định
+        }
+
+        return true;
+    }
+
+    private sealed class PromotionTierMetadata
+    {
+        public decimal? MinOrderValue { get; set; }
+        public string? DiscountType { get; set; }
+        public decimal DiscountValue { get; set; }
+        public decimal? MaxDiscount { get; set; }
+        public decimal? RequiredQty { get; set; }
+        public Guid? BuyProductId { get; set; }
+        public string? BuyProductName { get; set; }
+        public string? BuyUnit { get; set; }
+        public Guid? GiftProductId { get; set; }
+        public string? GiftProductName { get; set; }
+        public string? GiftUnit { get; set; }
+        public decimal? GiftQty { get; set; }
+    }
+
+    private static List<PromotionTierMetadata> ParseTiersFromDescription(string? description)
+    {
+        if (string.IsNullOrWhiteSpace(description) || !description.Contains("[TIERS_JSON]", StringComparison.Ordinal))
+            return new List<PromotionTierMetadata>();
+
+        var match = TiersJsonRegex.Match(description);
+        if (!match.Success || string.IsNullOrWhiteSpace(match.Groups[1].Value))
+            return new List<PromotionTierMetadata>();
+
+        try
+        {
+            return JsonSerializer.Deserialize<List<PromotionTierMetadata>>(match.Groups[1].Value, TiersJsonOptions)
+                   ?? new List<PromotionTierMetadata>();
+        }
+        catch
+        {
+            return new List<PromotionTierMetadata>();
+        }
+    }
+
+    private static decimal ResolveGiftUnitPrice(
+        Guid giftProductId,
+        Product? navProduct,
+        List<CartItemDto> cartItems,
+        Dictionary<Guid, decimal> giftPriceLookup)
+    {
+        if (navProduct != null && navProduct.SellingPrice > 0m)
+            return navProduct.SellingPrice;
+
+        if (giftProductId != Guid.Empty && giftPriceLookup.TryGetValue(giftProductId, out var dbPrice) && dbPrice > 0m)
+            return dbPrice;
+
+        var inCart = cartItems.FirstOrDefault(i => i.ProductId == giftProductId);
+        if (inCart != null && inCart.UnitPrice > 0m)
+            return inCart.UnitPrice;
+
+        return 0m;
+    }
+
+    private static decimal GetCartItemBaseQty(CartItemDto item)
+    {
+        return item.Quantity * (item.ConversionRate > 0m ? item.ConversionRate : 1.00m);
+    }
+
+    private static (List<CartGiftItemDto> Gifts, decimal TotalGiftValue) EvaluateBuyXGetYPromotion(
+        Promotion promo,
+        List<CartItemDto> cartItems,
+        Dictionary<Guid, decimal> giftPriceLookup,
+        decimal? remainingBudget)
+    {
+        var gifts = new List<CartGiftItemDto>();
+        decimal totalGiftValue = 0m;
+        decimal? budgetLeft = remainingBudget;
+
+        var tiers = ParseTiersFromDescription(promo.Description);
+        var validGiftTiers = tiers
+            .Where(t => (t.RequiredQty ?? 0m) > 0m && ((t.GiftProductId.HasValue && t.GiftProductId.Value != Guid.Empty) || !string.IsNullOrWhiteSpace(t.GiftProductName)))
+            .ToList();
+
+        if (validGiftTiers.Count > 0)
+        {
+            // Chọn bậc cao nhất đạt điều kiện mua trong danh sách bậc thang [TIERS_JSON]
+            var qualifyingTier = validGiftTiers
+                .Select(t =>
+                {
+                    decimal reqQty = Math.Max(1m, t.RequiredQty ?? 1m);
+                    decimal boughtQty = (t.BuyProductId.HasValue && t.BuyProductId.Value != Guid.Empty)
+                        ? cartItems
+                            .Where(i => i.ProductId == t.BuyProductId.Value &&
+                                        (string.IsNullOrWhiteSpace(t.BuyUnit) || string.Equals(i.Unit, t.BuyUnit, StringComparison.OrdinalIgnoreCase)))
+                            .Sum(i => GetCartItemBaseQty(i))
+                        : cartItems.Sum(i => GetCartItemBaseQty(i));
+                    int mult = boughtQty >= reqQty ? (int)(boughtQty / reqQty) : 0;
+                    return (Tier: t, ReqQty: reqQty, Multiple: mult);
+                })
+                .Where(x => x.Multiple > 0)
+                .OrderByDescending(x => x.ReqQty)
+                .ThenByDescending(x => (x.Tier.GiftQty ?? 1m) * x.Multiple)
+                .FirstOrDefault();
+
+            if (qualifyingTier.Multiple > 0 && qualifyingTier.Tier != null)
+            {
+                var t = qualifyingTier.Tier;
+                var giftProdId = t.GiftProductId ?? Guid.Empty;
+                var condMatch = promo.Conditions.FirstOrDefault(c => c.ProductRole == "GIFT" && c.ProductId == giftProdId);
+                decimal unitPrice = ResolveGiftUnitPrice(giftProdId, condMatch?.Product, cartItems, giftPriceLookup);
+                decimal rawGiftQty = qualifyingTier.Multiple * Math.Max(1m, t.GiftQty ?? 1m);
+
+                if (budgetLeft.HasValue && unitPrice > 0m)
+                {
+                    decimal affordable = Math.Floor(budgetLeft.Value / unitPrice);
+                    rawGiftQty = Math.Min(rawGiftQty, Math.Max(0m, affordable));
+                }
+
+                if (rawGiftQty > 0m)
+                {
+                    decimal eqVal = unitPrice * rawGiftQty;
+                    var giftName = !string.IsNullOrWhiteSpace(t.GiftProductName)
+                        ? t.GiftProductName!
+                        : (condMatch?.Product?.Name ?? "Quà tặng khuyến mãi");
+                    gifts.Add(new CartGiftItemDto(
+                        giftProdId,
+                        giftName,
+                        rawGiftQty,
+                        $"{promo.PromotionName} (Mua đủ tặng {rawGiftQty:0.##} {t.GiftUnit ?? "sản phẩm"})",
+                        promo.Id,
+                        t.GiftUnit,
+                        eqVal
+                    ));
+                    totalGiftValue += eqVal;
+                }
+                return (gifts, totalGiftValue);
+            }
+
+            return (gifts, 0m);
+        }
+
+        // Nhánh chuẩn theo PromotionConditions (BUY + GIFT, hoặc fallback tổng SL giỏ nếu chỉ lưu GIFT)
+        if (promo.Conditions.Count > 0)
+        {
+            var buyConditions = promo.Conditions.Where(c => c.ProductRole == "BUY").ToList();
+            var giftConditions = promo.Conditions.Where(c => c.ProductRole == "GIFT").ToList();
+
+            if (giftConditions.Count > 0)
+            {
+                bool isEligible = true;
+                int minMultiple = int.MaxValue;
+
+                if (buyConditions.Count > 0)
+                {
+                    foreach (var buyCond in buyConditions)
+                    {
+                        var matchingCartItems = cartItems.Where(i => i.ProductId == buyCond.ProductId).ToList();
+                        var boughtQty = matchingCartItems.Sum(i => GetCartItemBaseQty(i));
+                        var reqMin = Math.Max(1m, buyCond.MinQty);
+                        if (matchingCartItems.Count == 0 || boughtQty < reqMin)
+                        {
+                            isEligible = false;
+                            break;
+                        }
+
+                        int multiple = (int)(boughtQty / reqMin);
+                        if (multiple < minMultiple) minMultiple = multiple;
+                    }
+                }
+                else
+                {
+                    var totalCartQty = cartItems.Sum(i => GetCartItemBaseQty(i));
+                    var reqMin = Math.Max(1m, giftConditions.Min(g => g.MinQty));
+                    if (totalCartQty >= reqMin)
+                    {
+                        minMultiple = (int)(totalCartQty / reqMin);
+                    }
+                    else
+                    {
+                        isEligible = false;
+                    }
+                }
+
+                if (isEligible && minMultiple > 0 && minMultiple != int.MaxValue)
+                {
+                    foreach (var giftCond in giftConditions)
+                    {
+                        decimal unitPrice = ResolveGiftUnitPrice(giftCond.ProductId, giftCond.Product, cartItems, giftPriceLookup);
+                        decimal baseGiftQty = buyConditions.Count > 0 ? Math.Max(1m, giftCond.MinQty) : 1m;
+                        decimal giftQty = minMultiple * baseGiftQty;
+
+                        if (budgetLeft.HasValue && unitPrice > 0m)
+                        {
+                            decimal affordable = Math.Floor(budgetLeft.Value / unitPrice);
+                            giftQty = Math.Min(giftQty, Math.Max(0m, affordable));
+                        }
+
+                        if (giftQty <= 0m) continue;
+
+                        decimal eqVal = unitPrice * giftQty;
+                        if (budgetLeft.HasValue)
+                        {
+                            budgetLeft = Math.Max(0m, budgetLeft.Value - eqVal);
+                        }
+
+                        string? unitName = null;
+                        if (!string.IsNullOrWhiteSpace(giftCond.Note) && giftCond.Note.StartsWith("ĐVT:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            unitName = giftCond.Note.Substring(4).Trim();
+                        }
+
+                        gifts.Add(new CartGiftItemDto(
+                            giftCond.ProductId,
+                            giftCond.Product?.Name ?? "Quà tặng khuyến mãi",
+                            giftQty,
+                            $"{promo.PromotionName} (Mua đủ tặng {giftQty:0.##} sản phẩm)",
+                            promo.Id,
+                            unitName ?? giftCond.Product?.BaseUnit,
+                            eqVal
+                        ));
+                        totalGiftValue += eqVal;
+                    }
+                }
+            }
+        }
+
+        return (gifts, totalGiftValue);
+    }
+
+    private static decimal EvaluateOrderDiscountPromotion(Promotion promo, decimal subTotal)
+    {
+        if (!string.IsNullOrWhiteSpace(promo.Description) && promo.Description.Contains("[TIERS_JSON]", StringComparison.Ordinal))
+        {
+            var match = TiersJsonRegex.Match(promo.Description);
+            if (match.Success && !string.IsNullOrWhiteSpace(match.Groups[1].Value))
+            {
+                try
+                {
+                    var tiers = JsonSerializer.Deserialize<List<PromotionTierMetadata>>(match.Groups[1].Value, TiersJsonOptions);
+                    if (tiers != null && tiers.Count > 0)
+                    {
+                        var qualifyingTiers = tiers
+                            .Where(t => (t.MinOrderValue ?? 0m) <= subTotal && t.DiscountValue > 0m)
+                            .Select(t =>
+                            {
+                                bool isPercent = string.Equals(t.DiscountType, "PERCENT", StringComparison.OrdinalIgnoreCase)
+                                    || (string.IsNullOrWhiteSpace(t.DiscountType) && t.DiscountValue <= 100m);
+                                decimal disc = isPercent
+                                    ? Math.Round(subTotal * (t.DiscountValue / 100.00m), 2)
+                                    : t.DiscountValue;
+                                var maxCap = t.MaxDiscount ?? promo.MaxDiscountAmount;
+                                if (maxCap.HasValue && maxCap.Value > 0m && disc > maxCap.Value)
+                                {
+                                    disc = maxCap.Value;
+                                }
+                                return (MinOrder: t.MinOrderValue ?? 0m, Discount: disc);
+                            })
+                            .OrderByDescending(x => x.MinOrder)
+                            .ThenByDescending(x => x.Discount)
+                            .ToList();
+
+                        if (qualifyingTiers.Count > 0)
+                        {
+                            return qualifyingTiers[0].Discount;
+                        }
+                        return 0m;
+                    }
+                }
+                catch
+                {
+                    // Fallback sang thông số gốc của Promotion nếu JSON lỗi
+                }
+            }
+        }
+
+        if (subTotal < promo.MinOrderValue)
+            return 0m;
+
+        if (promo.Type == "PERCENT" || (promo.Type == "ORDER_DISCOUNT" && promo.DiscountValue <= 100m))
+        {
+            decimal discount = Math.Round(subTotal * (promo.DiscountValue / 100.00m), 2);
+            if (promo.MaxDiscountAmount.HasValue && discount > promo.MaxDiscountAmount.Value)
+            {
+                discount = promo.MaxDiscountAmount.Value;
+            }
+            return discount;
+        }
+
+        return promo.DiscountValue;
     }
     #endregion
 
@@ -299,6 +722,15 @@ public class PromotionService : IPromotionService
         if (await _promotionRepository.ExistsByCodeAsync(request.BatchCode, cancellationToken))
             throw new BusinessException("DUPLICATE_CODE", $"Mã đợt voucher '{request.BatchCode}' đã tồn tại.");
 
+        string? finalDescription = request.Description;
+        if (request.AllowWithPromotions.HasValue)
+        {
+            var configJson = $"[CONFIG_JSON]{{\"allowWithPromotions\":{request.AllowWithPromotions.Value.ToString().ToLowerInvariant()}}}[/CONFIG_JSON]";
+            finalDescription = string.IsNullOrWhiteSpace(finalDescription)
+                ? configJson
+                : $"{finalDescription.Trim()}\n{configJson}";
+        }
+
         var batch = new Promotion
         {
             TenantId = _tenantContext.CurrentTenantId,
@@ -313,7 +745,7 @@ public class PromotionService : IPromotionService
             StartDate = request.StartDate,
             EndDate = request.EndDate,
             IsActive = true,
-            Description = request.Description,
+            Description = finalDescription,
             VoucherPrefix = request.Prefix.Trim().ToUpper(),
             TotalVoucherQuantity = 0
         };
@@ -416,14 +848,42 @@ public class PromotionService : IPromotionService
             return new ValidateVoucherResponse(false, "Chương trình ưu đãi của voucher này đã bị ngưng", 0, codeEntity.Code);
 
         var now = DateTime.UtcNow;
-        if (now < promo.StartDate)
+        var todayLocal = now.AddHours(7).Date;
+        if (todayLocal < promo.StartDate.Date && now < promo.StartDate)
             return new ValidateVoucherResponse(false, $"Voucher chỉ có hiệu lực từ ngày {promo.StartDate:dd/MM/yyyy}", 0, codeEntity.Code);
 
-        if (now > promo.EndDate)
+        var endOfExpiry = promo.EndDate.Date.AddDays(1).AddTicks(-1);
+        if (now > endOfExpiry && promo.EndDate > DateTime.MinValue)
             return new ValidateVoucherResponse(false, $"Voucher đã hết hạn từ ngày {promo.EndDate:dd/MM/yyyy}", 0, codeEntity.Code);
+
+        if (codeEntity.CustomerId.HasValue)
+        {
+            if (string.IsNullOrWhiteSpace(request.CustomerId) ||
+                !Guid.TryParse(request.CustomerId, out var parsedCustId) ||
+                parsedCustId != codeEntity.CustomerId.Value)
+            {
+                return new ValidateVoucherResponse(false, "Voucher này được cấp riêng cho khách hàng khác", 0, codeEntity.Code);
+            }
+        }
 
         if (request.CartTotal < promo.MinOrderValue)
             return new ValidateVoucherResponse(false, $"Đơn hàng chưa đạt giá trị tối thiểu {promo.MinOrderValue:N0} đ để dùng voucher này", 0, codeEntity.Code);
+
+        bool allowWithPromotions = ParseAllowWithPromotions(promo.Description);
+        if (!allowWithPromotions && request.HasOtherPromotions)
+        {
+            return new ValidateVoucherResponse(
+                IsValid: false,
+                Message: "Voucher này không áp dụng đồng thời với chương trình khuyến mãi khác",
+                DiscountAmount: 0,
+                Code: codeEntity.Code,
+                PromotionId: promo.Id,
+                PromotionName: promo.PromotionName,
+                DiscountType: promo.DiscountValue <= 100 && promo.MaxDiscountAmount.HasValue ? "PERCENT" : "FIXED_AMOUNT",
+                DiscountValue: promo.DiscountValue,
+                AllowWithPromotions: false
+            );
+        }
 
         // Tính toán số tiền chiết khấu
         decimal discount = 0;
@@ -454,7 +914,8 @@ public class PromotionService : IPromotionService
             PromotionId: promo.Id,
             PromotionName: promo.PromotionName,
             DiscountType: discountType,
-            DiscountValue: promo.DiscountValue
+            DiscountValue: promo.DiscountValue,
+            AllowWithPromotions: allowWithPromotions
         );
     }
 
@@ -778,6 +1239,7 @@ public class PromotionService : IPromotionService
             : "ACTIVE";
 
         string discountType = p.DiscountValue <= 100 && p.MaxDiscountAmount.HasValue ? "PERCENT" : "FIXED_AMOUNT";
+        bool allowWithPromotions = ParseAllowWithPromotions(p.Description);
 
         return new VoucherBatchResponse(
             p.Id,
@@ -794,7 +1256,8 @@ public class PromotionService : IPromotionService
             status,
             p.VoucherPrefix ?? "VC",
             p.Description,
-            p.CreatedAt
+            p.CreatedAt,
+            allowWithPromotions
         );
     }
 

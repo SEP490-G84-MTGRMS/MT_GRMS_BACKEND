@@ -19,8 +19,6 @@ public class SupplierSummaryDto
     public string ContactPerson { get; set; } = string.Empty;
     public string? TaxCode { get; set; }
     public string? Email { get; set; }
-    public Guid? CategoryId { get; set; }
-    public string? CategoryName { get; set; }
     public SupplierStatus Status { get; set; }
     public string StatusName => Status switch
     {
@@ -59,8 +57,6 @@ public class CreateSupplierCommand
     public string? Code { get; set; }
     public string Name { get; set; } = string.Empty;
     public SupplierType SupplierType { get; set; } = SupplierType.Goods;
-    public Guid? CategoryId { get; set; }
-    public string CategoryCode { get; set; } = "FRESH";
     public SupplierStatus Status { get; set; } = SupplierStatus.Active;
     public string? TaxCode { get; set; }
     public string Phone { get; set; } = string.Empty;
@@ -96,7 +92,6 @@ public class UpdateSupplierCommand
 {
     public string Name { get; set; } = string.Empty;
     public SupplierType SupplierType { get; set; }
-    public Guid? CategoryId { get; set; }
     public SupplierStatus? Status { get; set; }
     public string? TaxCode { get; set; }
     public string Phone { get; set; } = string.Empty;
@@ -203,8 +198,6 @@ public class SupplierDeliveryConfigDto
 {
     public Guid Id { get; set; }
     public Guid SupplierId { get; set; }
-    public int LeadTimeHours { get; set; }
-    public int LeadTimeDays { get; set; } = 1;
     public int CutoffDayOffset { get; set; } = 1;
     public string CutoffTime { get; set; } = "17:00";
     public string OrderCutoffTime { get; set; } = "17:00";
@@ -220,8 +213,6 @@ public class SupplierDeliveryConfigDto
 
 public class UpdateSupplierDeliveryConfigCommand
 {
-    public int LeadTimeHours { get; set; } = 24;
-    public int LeadTimeDays { get; set; } = 1;
     public int CutoffDayOffset { get; set; } = 1;
     public string CutoffTime { get; set; } = "17:00";
     public string OrderCutoffTime { get; set; } = "17:00";
@@ -335,6 +326,12 @@ public class SupplierBranchAssignmentDetailDto
     public DateTime CreatedAt { get; set; }
     public string Status { get; set; } = "Active";
     public string? InactiveReason { get; set; }
+
+    /// <summary>Ngày giao override (Mon..Sun). Rỗng = đang dùng base NCC.</summary>
+    public List<string> DeliveryDays { get; set; } = [];
+
+    /// <summary>Chuỗi viết tắt hiển thị list, vd. T2, T4, T6.</summary>
+    public string DeliveryDaysDisplay { get; set; } = string.Empty;
 }
 
 public class SupplierBranchAssignmentQueryFilter
@@ -358,15 +355,30 @@ public class AssignSupplierToBranchesCommand
     public List<Guid> BranchIds { get; set; } = [];
 }
 
+public class AssignSupplierToBranchItemDto
+{
+    public Guid SupplierId { get; set; }
+    /// <summary>Override ngày giao Mon..Sun. Bắt buộc ≥1 ngày khi gán mới.</summary>
+    public List<string> DeliveryDays { get; set; } = [];
+}
+
 public class AssignSuppliersToBranchCommand
 {
     public Guid BranchId { get; set; }
+    /// <summary>Legacy: chỉ danh sách NCC (không kèm ngày → copy base NCC).</summary>
     public List<Guid> SupplierIds { get; set; } = [];
+    /// <summary>Ưu tiên: từng NCC kèm DeliveryDays override.</summary>
+    public List<AssignSupplierToBranchItemDto> Items { get; set; } = [];
 }
 
 public class UpdateSupplierBranchAssignmentStatusRequest
 {
     public SupplierStatus Status { get; set; }
     public string? Reason { get; set; }
+}
+
+public class UpdateSupplierBranchAssignmentDeliveryDaysRequest
+{
+    public List<string> DeliveryDays { get; set; } = [];
 }
 

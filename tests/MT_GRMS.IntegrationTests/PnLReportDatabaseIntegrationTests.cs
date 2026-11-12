@@ -1,7 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
-using MT_GRMS.Domain.Entities;
+using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Entities.Finance;
+using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Infrastructure.Repositories;
@@ -177,5 +178,107 @@ public class PnLReportDatabaseIntegrationTests
 
         var badDebt = await repo.GetBadDebtExpenseAsync(branchId, now.Date, now.Date.AddDays(1));
         Assert.Equal(250_000m, badDebt); // Chỉ tính 250k xóa nợ xấu
+    }
+
+    [Fact]
+    public async Task PnLReport_And_S2cHkd_ShouldBe100PercentIdentical_InSamePeriod()
+    {
+        using var context = CreateDbContext();
+        var pnlRepo = new PnLReportRepository(context);
+        var taxRepo = new HouseholdTaxRepository(context);
+
+        var branchId = Guid.NewGuid();
+        var prodId = Guid.NewGuid();
+        var fromUtc = new DateTime(2026, 9, 30, 17, 0, 0, DateTimeKind.Utc); // 01/10/2026 00:00 VN
+        var toUtc = new DateTime(2026, 10, 31, 16, 59, 59, DateTimeKind.Utc); // 31/10/2026 23:59:59 VN
+        var orderTime = new DateTime(2026, 10, 15, 10, 0, 0, DateTimeKind.Utc);
+
+        context.Products.Add(new MT_GRMS.Domain.Entities.Catalog.Product
+        {
+            Id = prodId,
+            ProductCode = "SP-AUDIT-01",
+            Name = "Sữa tươi Vinamilk 1L",
+            CostPrice = 24_000m,
+            SellingPrice = 35_000m
+        });
+
+        var order = new Order
+        {
+            OrderCode = "ORD-AUDIT-01",
+            BranchId = branchId,
+            TotalAmount = 3_500_000m,
+            DiscountAmount = 100_000m,
+            FinalAmount = 3_400_000m,
+            PaymentStatus = "PAID",
+            Status = "Completed",
+            CreatedAt = orderTime
+        };
+        order.Details.Add(new OrderDetail
+        {
+            Id = Guid.NewGuid(),
+            OrderId = order.Id,
+            ProductId = prodId,
+            Qty = 100m,
+            UnitPrice = 35_000m,
+            ActualPrice = 34_000m,
+            CostPriceAtSale = 25_000m // FEFO Cost = 2,500,000
+        });
+        context.Orders.Add(order);
+
+        // Return entry: 350,000 VND (10% of GrossRevenue)
+        context.CustomerDebtEntries.Add(new CustomerDebtEntry
+        {
+            EntryCode = "RET-AUDIT-01",
+            BranchId = branchId,
+            EntryType = CustomerDebtType.GoodsReturnOffset,
+            Amount = 350_000m,
+            OccurredAtUtc = orderTime.AddHours(2)
+        });
+
+        // Operating expense voucher: 500,000 VND
+        context.ExpenseVouchers.Add(new ExpenseVoucher
+        {
+            VoucherCode = "PC-AUDIT-01",
+            BranchId = branchId,
+            Category = "Tiền điện nước cửa hàng",
+            Amount = 500_000m,
+            Status = ExpenseVoucherStatus.Paid,
+            Nature = FinancialNature.OperatingExpense,
+            ExpenseDate = orderTime.AddHours(3),
+            CreatedAt = orderTime.AddHours(3)
+        });
+
+        // Owner draw voucher (excluded from both PnL and S2c): 10,000,000 VND
+        context.ExpenseVouchers.Add(new ExpenseVoucher
+        {
+            VoucherCode = "PC-EQUITY-01",
+            BranchId = branchId,
+            Category = "Rút vốn chủ hộ (Capital/Equity)",
+            Amount = 10_000_000m,
+            Status = ExpenseVoucherStatus.Paid,
+            Nature = FinancialNature.OwnerDraw,
+            ExpenseDate = orderTime.AddHours(4),
+            CreatedAt = orderTime.AddHours(4)
+        });
+
+        await context.SaveChangesAsync();
+
+        // 1. Query FE-10 PnL Report
+        var pnlRev = await pnlRepo.GetRevenueAsync(branchId, fromUtc, toUtc);
+        var pnlCogs = await pnlRepo.GetCogsAsync(branchId, fromUtc, toUtc);
+        var pnlExpenses = await pnlRepo.GetOperatingExpensesAsync(branchId, fromUtc, toUtc);
+        var pnlNetRev = pnlRev.GrossRevenue - pnlRev.Discounts - pnlRev.SalesReturns;
+        var pnlTotalOpex = pnlExpenses.Sum(x => x.Amount);
+
+        // 2. Query FE-19 S2c-HKD
+        var (taxGross, taxDisc, taxRet) = await taxRepo.GetPeriodRevenueAsync(fromUtc, toUtc.AddSeconds(1), branchId);
+        var (taxCogs, _) = await taxRepo.GetPeriodCogsAsync(fromUtc, toUtc.AddSeconds(1), branchId);
+        var taxOpex = await taxRepo.GetPeriodOpexAsync(fromUtc, toUtc, branchId);
+        var taxNetRev = taxGross - taxDisc - taxRet;
+
+        // Assert 100% reconciliation between FE-10 and FE-19 S2c-HKD
+        Assert.Equal(taxNetRev, pnlNetRev);       // 3,500,000 - 100,000 - 350,000 = 3,050,000
+        Assert.Equal(taxCogs, pnlCogs.TotalCogs); // 2,500,000 - 250,000 (return COGS) = 2,250,000
+        Assert.Equal(taxOpex, pnlTotalOpex);      // 500,000 (Owner draw excluded)
     }
 }

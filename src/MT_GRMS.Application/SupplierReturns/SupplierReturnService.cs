@@ -43,7 +43,14 @@ public class SupplierReturnService : ISupplierReturnService
         if (entity == null)
             throw new NotFoundException($"Không tìm thấy phiếu trả hàng nhà cung cấp với ID {id}.");
 
-        return MapToDetailDto(entity);
+        List<GrnReturnableLineDto>? returnableLines = null;
+        try
+        {
+            returnableLines = await _repository.GetGrnReturnableLinesAsync(tenantId, entity.GoodsReceiptId, cancellationToken);
+        }
+        catch { }
+
+        return MapToDetailDto(entity, returnableLines);
     }
 
     public async Task<List<EligibleGrnLookupDto>> GetEligibleGrnsAsync(
@@ -107,9 +114,11 @@ public class SupplierReturnService : ISupplierReturnService
                 TenantId = tenantId,
                 ProductId = reqLine.ProductId,
                 GoodsReceiptLineId = reqLine.GoodsReceiptLineId,
+                StocktakeLineId = reqLine.StocktakeLineId,
                 BatchCode = reqLine.BatchCode,
                 ExpiryDate = reqLine.ExpiryDate ?? sourceLine.ExpiryDate,
                 RequestedQty = reqLine.RequestedQty,
+                SupplierAcceptedQty = 0,
                 ApprovedQty = 0,
                 RejectedQty = 0,
                 HandedOverQty = 0,
@@ -129,10 +138,13 @@ public class SupplierReturnService : ISupplierReturnService
             GoodsReceiptId = command.GoodsReceiptId,
             SupplierId = grnInfo.SupplierId,
             BranchId = grnInfo.BranchId,
+            StocktakeId = command.StocktakeId,
             Status = command.AutoSubmit ? "PENDING_SUPPLIER" : "DRAFT",
             Reason = command.Reason,
             ReasonNotes = command.ReasonNotes,
             AttachmentUrl = command.AttachmentUrl,
+            ResolutionType = command.ResolutionType ?? "REDUCE_PAYABLE",
+            SettlementStatus = "UNSETTLED",
             TotalRequestedQty = totalQty,
             TotalApprovedQty = 0,
             TotalHandedOverQty = 0,
@@ -142,6 +154,24 @@ public class SupplierReturnService : ISupplierReturnService
         };
 
         await _repository.AddAsync(supplierReturn, cancellationToken);
+
+        if (command.AutoSubmit)
+        {
+            foreach (var line in linesToCreate)
+            {
+                var stock = await _repository.GetBranchStockAsync(tenantId, grnInfo.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+                if (stock != null)
+                {
+                    if (stock.QuantityQuarantined > 0)
+                    {
+                        var releaseQuarantine = Math.Min(stock.QuantityQuarantined, line.RequestedQty);
+                        stock.QuantityQuarantined -= releaseQuarantine;
+                    }
+                    stock.QuantityReserved += line.RequestedQty;
+                }
+            }
+        }
+
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return await GetByIdAsync(supplierReturn.Id, cancellationToken);
@@ -165,6 +195,16 @@ public class SupplierReturnService : ISupplierReturnService
         if (!string.IsNullOrWhiteSpace(notes))
         {
             entity.ReasonNotes = string.IsNullOrWhiteSpace(entity.ReasonNotes) ? notes : $"{entity.ReasonNotes} | {notes}";
+        }
+
+        // Khóa tồn kho sang trạng thái chờ trả
+        foreach (var line in entity.Lines)
+        {
+            var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+            if (stock != null)
+            {
+                stock.QuantityReserved += line.RequestedQty;
+            }
         }
 
         await _repository.UpdateAsync(entity, cancellationToken);
@@ -194,6 +234,7 @@ public class SupplierReturnService : ISupplierReturnService
             entity.Status = "APPROVED";
             foreach (var line in entity.Lines)
             {
+                line.SupplierAcceptedQty = line.RequestedQty;
                 line.ApprovedQty = line.RequestedQty;
                 line.RejectedQty = 0;
             }
@@ -212,12 +253,24 @@ public class SupplierReturnService : ISupplierReturnService
                     if (resp.ApprovedQty < 0 || resp.ApprovedQty > line.RequestedQty)
                         throw new BusinessException($"Số lượng chấp nhận không hợp lệ cho dòng hàng.");
 
+                    line.SupplierAcceptedQty = resp.ApprovedQty;
                     line.ApprovedQty = resp.ApprovedQty;
                     line.RejectedQty = Math.Max(0, line.RequestedQty - resp.ApprovedQty);
                     line.RejectionReason = resp.RejectionReason;
+
+                    // Giảm bớt số lượng khóa đối với phần bị từ chối
+                    if (line.RejectedQty > 0)
+                    {
+                        var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+                        if (stock != null)
+                        {
+                            stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - line.RejectedQty);
+                        }
+                    }
                 }
                 else
                 {
+                    line.SupplierAcceptedQty = line.RequestedQty;
                     line.ApprovedQty = line.RequestedQty;
                     line.RejectedQty = 0;
                 }
@@ -232,6 +285,13 @@ public class SupplierReturnService : ISupplierReturnService
             {
                 line.ApprovedQty = 0;
                 line.RejectedQty = line.RequestedQty;
+
+                // Giải phóng toàn bộ số lượng đã khóa
+                var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+                if (stock != null)
+                {
+                    stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - line.RequestedQty);
+                }
             }
             entity.TotalApprovedQty = 0;
         }
@@ -256,36 +316,38 @@ public class SupplierReturnService : ISupplierReturnService
         if (entity == null)
             throw new NotFoundException($"Không tìm thấy phiếu trả hàng với ID {id}.");
 
-        if (entity.Status != "APPROVED")
-            throw new BusinessException($"Chỉ có thể hoàn tất bàn giao khi phiếu ở trạng thái APPROVED (Trạng thái hiện tại: {entity.Status}).");
+        if (entity.Status != "APPROVED" && entity.Status != "PARTIALLY_HANDED_OVER")
+            throw new BusinessException($"Chỉ có thể bàn giao khi phiếu ở trạng thái APPROVED hoặc PARTIALLY_HANDED_OVER (Trạng thái hiện tại: {entity.Status}).");
 
         decimal totalHandedOver = 0;
 
         foreach (var line in entity.Lines)
         {
             var lineCommand = command.Lines?.FirstOrDefault(l => l.LineId == line.Id);
-            var handedOverQty = lineCommand?.HandedOverQty ?? line.ApprovedQty;
+            var remainingToHandover = Math.Max(0, line.ApprovedQty - line.HandedOverQty);
+            var currentBatchHandoverQty = lineCommand?.HandedOverQty ?? remainingToHandover;
 
-            if (handedOverQty < 0 || handedOverQty > line.ApprovedQty)
+            if (currentBatchHandoverQty < 0 || line.HandedOverQty + currentBatchHandoverQty > line.ApprovedQty)
             {
-                throw new BusinessException($"Số lượng bàn giao thực tế ({handedOverQty}) không được vượt quá số lượng NCC đã chấp nhận ({line.ApprovedQty}).");
+                throw new BusinessException($"Số lượng bàn giao cộng dồn ({line.HandedOverQty + currentBatchHandoverQty}) không được vượt quá số lượng đã duyệt ({line.ApprovedQty}).");
             }
 
-            line.HandedOverQty = handedOverQty;
-            totalHandedOver += handedOverQty;
+            line.HandedOverQty += currentBatchHandoverQty;
+            totalHandedOver += line.HandedOverQty;
 
-            // Giảm tồn kho chi nhánh đúng bằng số lượng thực tế bàn giao
-            if (handedOverQty > 0)
+            // Giảm tồn kho chi nhánh đúng bằng số lượng thực tế bàn giao đợt này và giải phóng tồn đã khóa tương ứng
+            if (currentBatchHandoverQty > 0)
             {
                 var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
                 if (stock != null)
                 {
-                    stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - handedOverQty);
+                    stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - currentBatchHandoverQty);
+                    stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - currentBatchHandoverQty);
                 }
             }
         }
 
-        entity.Status = "COMPLETED";
+        entity.Status = totalHandedOver >= entity.TotalApprovedQty ? "COMPLETED" : "PARTIALLY_HANDED_OVER";
         entity.HandedOverAt = DateTime.UtcNow;
         entity.HandedOverBy = command.HandedOverBy ?? "Nhân viên kho";
         entity.TotalHandedOverQty = totalHandedOver;
@@ -312,6 +374,23 @@ public class SupplierReturnService : ISupplierReturnService
         if (string.IsNullOrWhiteSpace(command.Reason))
             throw new BusinessException("Bắt buộc phải nhập lý do khi hủy phiếu trả hàng.");
 
+        // Giải phóng tồn kho đã khóa nếu phiếu đang chờ NCC hoặc đã duyệt
+        if (entity.Status is "PENDING_SUPPLIER" or "APPROVED")
+        {
+            foreach (var line in entity.Lines)
+            {
+                var unreserveQty = entity.Status == "APPROVED" ? line.ApprovedQty : line.RequestedQty;
+                if (unreserveQty > 0)
+                {
+                    var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+                    if (stock != null)
+                    {
+                        stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - unreserveQty);
+                    }
+                }
+            }
+        }
+
         entity.Status = "CANCELLED";
         entity.CancellationReason = command.Reason.Trim();
 
@@ -321,7 +400,9 @@ public class SupplierReturnService : ISupplierReturnService
         return await GetByIdAsync(entity.Id, cancellationToken);
     }
 
-    private static SupplierReturnDetailDto MapToDetailDto(SupplierReturn entity)
+    private static SupplierReturnDetailDto MapToDetailDto(
+        SupplierReturn entity,
+        List<GrnReturnableLineDto>? returnableLines = null)
     {
         return new SupplierReturnDetailDto(
             entity.Id,
@@ -349,28 +430,48 @@ public class SupplierReturnService : ISupplierReturnService
             entity.RespondedAt,
             entity.HandedOverAt,
             entity.HandedOverBy,
-            entity.Lines.Select(l => new SupplierReturnLineDto(
-                l.Id,
-                l.ProductId,
-                l.Product != null ? l.Product.ProductCode : string.Empty,
-                l.Product != null ? l.Product.Name : "Sản phẩm",
-                l.Product != null ? l.Product.BaseUnit : "Cái",
-                l.GoodsReceiptLineId,
-                l.BatchCode,
-                l.ExpiryDate,
-                0, // ReceivedQty
-                0, // ReturnedQty
-                0, // PendingReturnQty
-                0, // AvailableReturnQty
-                l.RequestedQty,
-                l.ApprovedQty,
-                l.RejectedQty,
-                l.HandedOverQty,
-                l.UnitCost,
-                l.LineTotal,
-                l.RejectionReason,
-                l.Notes
-            )).ToList()
+            entity.Lines.Select(l =>
+            {
+                var source = returnableLines?.FirstOrDefault(rl =>
+                    (l.GoodsReceiptLineId.HasValue && rl.GoodsReceiptLineId == l.GoodsReceiptLineId.Value) ||
+                    (rl.ProductId == l.ProductId && rl.BatchCode == l.BatchCode));
+
+                var receivedQty = source?.ReceivedQty ?? l.RequestedQty;
+                var returnedQty = source?.ReturnedQty ?? 0;
+                var pendingReturnQty = source?.PendingReturnQty ?? 0;
+                var availableReturnQty = source?.AvailableReturnQty ?? 0;
+                var stockOnHandQty = source?.StockOnHandQty ?? receivedQty;
+
+                return new SupplierReturnLineDto(
+                    l.Id,
+                    l.ProductId,
+                    l.Product != null ? l.Product.ProductCode : string.Empty,
+                    l.Product != null ? l.Product.Name : "Sản phẩm",
+                    l.Product != null ? l.Product.BaseUnit : "Cái",
+                    l.GoodsReceiptLineId,
+                    l.BatchCode,
+                    l.ExpiryDate,
+                    receivedQty,
+                    returnedQty,
+                    pendingReturnQty,
+                    availableReturnQty,
+                    l.RequestedQty,
+                    l.ApprovedQty,
+                    l.RejectedQty,
+                    l.HandedOverQty,
+                    l.UnitCost,
+                    l.LineTotal,
+                    l.RejectionReason,
+                    l.Notes,
+                    l.StocktakeLineId,
+                    l.SupplierAcceptedQty > 0 ? l.SupplierAcceptedQty : l.ApprovedQty,
+                    stockOnHandQty
+                );
+            }).ToList(),
+            entity.StocktakeId,
+            entity.StocktakeCode,
+            entity.ResolutionType,
+            entity.SettlementStatus
         );
     }
 }

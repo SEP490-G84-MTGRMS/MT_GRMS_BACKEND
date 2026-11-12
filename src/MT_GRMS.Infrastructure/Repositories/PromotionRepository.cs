@@ -53,13 +53,13 @@ public class PromotionRepository : GenericRepository<Promotion>, IPromotionRepos
                     dbQuery = dbQuery.Where(p => p.IsActive && p.StartDate <= now && p.EndDate >= now);
                     break;
                 case "UPCOMING":
-                    dbQuery = dbQuery.Where(p => p.IsActive && p.StartDate > now);
+                    dbQuery = dbQuery.Where(p => p.IsActive && p.StartDate > now && p.EndDate >= now);
                     break;
                 case "EXPIRED":
                     dbQuery = dbQuery.Where(p => p.EndDate < now);
                     break;
                 case "PAUSED":
-                    dbQuery = dbQuery.Where(p => !p.IsActive);
+                    dbQuery = dbQuery.Where(p => !p.IsActive && p.EndDate >= now);
                     break;
             }
         }
@@ -79,14 +79,52 @@ public class PromotionRepository : GenericRepository<Promotion>, IPromotionRepos
 
     public async Task<IReadOnlyList<Promotion>> GetActivePromotionsAsync(DateTime atUtc, string? branchId = null, CancellationToken cancellationToken = default)
     {
+        var localToday = atUtc.AddHours(7).Date;
+        var startThreshold = localToday.AddDays(1).AddTicks(-1);
+        var endThreshold = localToday;
         var query = _context.Promotions
             .Include(p => p.Conditions)
                 .ThenInclude(c => c.Product)
-            .Where(p => !p.IsDeleted && p.IsActive && p.StartDate <= atUtc && p.EndDate >= atUtc && p.Type != "VOUCHER");
+            .Where(p => !p.IsDeleted && p.IsActive && p.StartDate <= startThreshold && p.EndDate >= endThreshold && p.Type != "VOUCHER");
 
-        if (!string.IsNullOrWhiteSpace(branchId))
+        if (!string.IsNullOrWhiteSpace(branchId) && !string.Equals(branchId, "ALL", StringComparison.OrdinalIgnoreCase))
         {
-            query = query.Where(p => p.TargetBranches == "ALL" || p.TargetBranches.Contains(branchId));
+            var cleanBranchId = branchId.Trim();
+            var candidates = await query.ToListAsync(cancellationToken);
+
+            string? branchCode = null;
+            string? branchName = null;
+            if (Guid.TryParse(cleanBranchId, out var parsedBranchGuid))
+            {
+                var br = await _context.Branches.FirstOrDefaultAsync(b => b.Id == parsedBranchGuid && !b.IsDeleted, cancellationToken);
+                if (br != null)
+                {
+                    branchCode = br.BranchCode;
+                    branchName = br.Name;
+                }
+            }
+            else
+            {
+                var br = await _context.Branches.FirstOrDefaultAsync(b => (b.BranchCode == cleanBranchId || b.Name == cleanBranchId) && !b.IsDeleted, cancellationToken);
+                if (br != null)
+                {
+                    branchCode = br.BranchCode;
+                    branchName = br.Name;
+                }
+            }
+
+            return candidates.Where(p =>
+            {
+                if (string.IsNullOrWhiteSpace(p.TargetBranches) || p.TargetBranches.Trim().Equals("ALL", StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                var tokens = p.TargetBranches.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                return tokens.Any(t =>
+                    t.Equals(cleanBranchId, StringComparison.OrdinalIgnoreCase) ||
+                    (!string.IsNullOrEmpty(branchCode) && t.Equals(branchCode, StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrEmpty(branchName) && t.Equals(branchName, StringComparison.OrdinalIgnoreCase))
+                );
+            }).ToList();
         }
 
         return await query.ToListAsync(cancellationToken);
@@ -193,8 +231,10 @@ public class PromotionRepository : GenericRepository<Promotion>, IPromotionRepos
 
     public async Task<bool> RedeemVoucherCodeAtomicAsync(string code, Guid orderId, string orderCode, Guid? customerId, string? customerName, string? customerPhone, CancellationToken cancellationToken = default)
     {
+        var normalizedCode = code.Trim().ToUpper();
         var voucher = await _context.VoucherCodes
-            .FirstOrDefaultAsync(v => v.Code == code && v.Status == "UNUSED" && !v.IsDeleted, cancellationToken);
+            .Include(v => v.Promotion)
+            .FirstOrDefaultAsync(v => v.Code == normalizedCode && v.Status == "UNUSED" && !v.IsDeleted, cancellationToken);
 
         if (voucher == null) return false;
 
@@ -206,8 +246,176 @@ public class PromotionRepository : GenericRepository<Promotion>, IPromotionRepos
         voucher.CustomerPhone = customerPhone;
         voucher.UsedAt = DateTime.UtcNow;
 
+        if (voucher.Promotion != null)
+        {
+            voucher.Promotion.UsedCount += 1;
+            voucher.Promotion.UpdatedAt = DateTime.UtcNow;
+        }
+
         await _context.SaveChangesAsync(cancellationToken);
         return true;
+    }
+
+    public async Task RecordPromotionUsageAsync(
+        Guid? promotionId,
+        decimal promoBudgetConsumed,
+        string? voucherCode,
+        decimal voucherDiscountAmount,
+        string? tenantId = null,
+        CancellationToken cancellationToken = default)
+    {
+        bool changed = false;
+
+        if (promotionId.HasValue && promotionId.Value != Guid.Empty)
+        {
+            var promoQuery = _context.Promotions.Where(p => p.Id == promotionId.Value && !p.IsDeleted);
+            if (!string.IsNullOrWhiteSpace(tenantId))
+            {
+                promoQuery = promoQuery.Where(p => p.TenantId == tenantId);
+            }
+
+            var promo = await promoQuery.FirstOrDefaultAsync(cancellationToken);
+            if (promo != null)
+            {
+                promo.UsedCount += 1;
+                promo.TotalDiscountGiven += Math.Max(0m, promoBudgetConsumed);
+                promo.UpdatedAt = DateTime.UtcNow;
+                changed = true;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(voucherCode) && voucherDiscountAmount > 0m)
+        {
+            var normalizedCode = voucherCode.Trim().ToUpper();
+            var voucherQuery = _context.VoucherCodes
+                .Include(v => v.Promotion)
+                .Where(v => v.Code == normalizedCode && !v.IsDeleted);
+            if (!string.IsNullOrWhiteSpace(tenantId))
+            {
+                voucherQuery = voucherQuery.Where(v => v.TenantId == tenantId);
+            }
+
+            var voucher = await voucherQuery.FirstOrDefaultAsync(cancellationToken);
+            if (voucher?.Promotion != null)
+            {
+                voucher.Promotion.TotalDiscountGiven += Math.Max(0m, voucherDiscountAmount);
+                voucher.Promotion.UpdatedAt = DateTime.UtcNow;
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    public async Task RestoreOrderPromotionsOnCancelAsync(
+        Guid? promotionId,
+        decimal promoBudgetConsumed,
+        string? voucherCode,
+        decimal voucherDiscountAmount,
+        string? tenantId = null,
+        CancellationToken cancellationToken = default)
+    {
+        bool changed = false;
+
+        if (promotionId.HasValue && promotionId.Value != Guid.Empty)
+        {
+            var promoQuery = _context.Promotions.Where(p => p.Id == promotionId.Value && !p.IsDeleted);
+            if (!string.IsNullOrWhiteSpace(tenantId))
+            {
+                promoQuery = promoQuery.Where(p => p.TenantId == tenantId);
+            }
+
+            var promo = await promoQuery.FirstOrDefaultAsync(cancellationToken);
+            if (promo != null)
+            {
+                promo.UsedCount = Math.Max(0, promo.UsedCount - 1);
+                promo.TotalDiscountGiven = Math.Max(0m, promo.TotalDiscountGiven - Math.Max(0m, promoBudgetConsumed));
+                promo.UpdatedAt = DateTime.UtcNow;
+                changed = true;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(voucherCode))
+        {
+            var normalizedCode = voucherCode.Trim().ToUpper();
+            var voucherQuery = _context.VoucherCodes
+                .Include(v => v.Promotion)
+                .Where(v => v.Code == normalizedCode && v.Status == "USED" && !v.IsDeleted);
+            if (!string.IsNullOrWhiteSpace(tenantId))
+            {
+                voucherQuery = voucherQuery.Where(v => v.TenantId == tenantId);
+            }
+
+            var voucher = await voucherQuery.FirstOrDefaultAsync(cancellationToken);
+            if (voucher != null)
+            {
+                voucher.Status = "UNUSED";
+                voucher.OrderId = null;
+                voucher.OrderCode = null;
+                voucher.CustomerId = null;
+                voucher.CustomerName = null;
+                voucher.CustomerPhone = null;
+                voucher.UsedAt = null;
+
+                if (voucher.Promotion != null)
+                {
+                    voucher.Promotion.UsedCount = Math.Max(0, voucher.Promotion.UsedCount - 1);
+                    voucher.Promotion.TotalDiscountGiven = Math.Max(0m, voucher.Promotion.TotalDiscountGiven - Math.Max(0m, voucherDiscountAmount));
+                    voucher.Promotion.UpdatedAt = DateTime.UtcNow;
+                }
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+    }
+
+    public async Task<Dictionary<Guid, decimal>> GetProductSellingPricesAsync(
+        IEnumerable<Guid> productIds,
+        CancellationToken cancellationToken = default)
+    {
+        var ids = productIds.Where(id => id != Guid.Empty).Distinct().ToList();
+        if (ids.Count == 0) return new Dictionary<Guid, decimal>();
+
+        return await _context.Products
+            .Where(p => ids.Contains(p.Id) && !p.IsDeleted)
+            .ToDictionaryAsync(p => p.Id, p => p.SellingPrice, cancellationToken);
+    }
+
+    public async Task<LoyaltySetting?> GetLoyaltySettingAsync(string tenantId, CancellationToken cancellationToken = default)
+    {
+        return await _context.LoyaltySettings
+            .FirstOrDefaultAsync(s => s.TenantId == tenantId && !s.IsDeleted, cancellationToken);
+    }
+
+    public async Task SaveLoyaltySettingAsync(LoyaltySetting setting, CancellationToken cancellationToken = default)
+    {
+        var existing = await _context.LoyaltySettings
+            .FirstOrDefaultAsync(s => s.TenantId == setting.TenantId && !s.IsDeleted, cancellationToken);
+
+        if (existing == null)
+        {
+            await _context.LoyaltySettings.AddAsync(setting, cancellationToken);
+        }
+        else
+        {
+            existing.IsEnabled = setting.IsEnabled;
+            existing.EarningRateAmount = setting.EarningRateAmount;
+            existing.EarningPoints = setting.EarningPoints;
+            existing.RedemptionRatePoints = setting.RedemptionRatePoints;
+            existing.RedemptionRateAmount = setting.RedemptionRateAmount;
+            existing.MinRedemptionPoints = setting.MinRedemptionPoints;
+            existing.AllowPointsWithPromotions = setting.AllowPointsWithPromotions;
+            existing.UpdatedAt = DateTime.UtcNow;
+        }
+
+        await _context.SaveChangesAsync(cancellationToken);
     }
 }
 

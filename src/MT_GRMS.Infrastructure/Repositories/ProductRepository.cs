@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Domain.Entities.Catalog;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Infrastructure.Repositories;
@@ -19,6 +20,7 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
         var query = _dbSet
             .AsNoTracking()
             .Include(p => p.Category)
+            .Include(p => p.Units)
             .Where(p => !p.IsDeleted);
 
         if (!string.IsNullOrWhiteSpace(filter.SearchTerm))
@@ -45,7 +47,10 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
 
         if (!string.IsNullOrWhiteSpace(filter.Status))
         {
-            query = query.Where(p => p.Status == filter.Status);
+            if (Enum.TryParse<ProductStatus>(filter.Status.Trim(), true, out var prodStatus))
+            {
+                query = query.Where(p => p.Status == prodStatus);
+            }
         }
 
         var totalCount = await query.CountAsync(cancellationToken);
@@ -66,6 +71,7 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
     {
         return await _dbSet
             .Include(p => p.Category)
+            .Include(p => p.Units)
             .FirstOrDefaultAsync(p => p.Id == id && !p.IsDeleted, cancellationToken);
     }
 

@@ -14,7 +14,16 @@ public record OrderCreateRequest(
     decimal? DiscountAmount = null,
     string? ManagerBypassCode = null,
     string? Note = null,
-    string? CreatorRole = null
+    string? CreatorRole = null,
+    string? CashierName = null,
+    int? PointsRedeemed = null,
+    Guid? ShiftId = null,
+    string? VoucherCode = null,
+    Guid? AppliedPromotionId = null,
+    string? AppliedPromotionSummary = null,
+    decimal? PromotionDiscountAmount = null,
+    decimal? VoucherDiscountAmount = null,
+    decimal? PointsDiscountAmount = null
 )
 {
     // Hỗ trợ tương thích ngược cho StoreId
@@ -26,7 +35,12 @@ public record OrderItemCreateDto(
     decimal Quantity,
     decimal UnitPrice,
     decimal? DiscountAmount = null,
-    string? ProductName = null
+    string? ProductName = null,
+    Guid? UnitId = null,
+    string? UnitName = null,
+    bool IsGift = false,
+    Guid? PromotionId = null,
+    decimal ConversionRate = 1.00m
 );
 
 public record OrderResponse(
@@ -49,7 +63,19 @@ public record OrderResponse(
     string? CustomerPhone = null,
     decimal DepositAmount = 0m,
     string? Note = null,
-    CustomerDebtInvoiceResponse? DebtInvoice = null
+    CustomerDebtInvoiceResponse? DebtInvoice = null,
+    Guid? ShiftId = null,
+    string? CashierName = null,
+    string? FulfilledByCashierName = null,
+    DateTime? FulfilledAtUtc = null,
+    Guid? AppliedPromotionId = null,
+    string? AppliedPromotionSummary = null,
+    decimal PromotionDiscountAmount = 0m,
+    string? AppliedVoucherCode = null,
+    decimal VoucherDiscountAmount = 0m,
+    int PointsRedeemed = 0,
+    decimal PointsDiscountAmount = 0m,
+    string? GiftStockWarning = null
 )
 {
     public Guid StoreId => BranchId;
@@ -69,7 +95,9 @@ public record OrderItemResponse(
     decimal TotalLineAmount,
     decimal AppliedVatRate = 0m,
     decimal VatAmount = 0m,
-    string? BatchCode = null
+    string? BatchCode = null,
+    bool IsGift = false,
+    Guid? PromotionId = null
 );
 
 public record OrderFilterRequest(
@@ -85,7 +113,8 @@ public record OrderFilterRequest(
 
 public record PrintOrderRequest(
     string? PrinterName = "POS-58",
-    decimal? CashTendered = null
+    decimal? CashTendered = null,
+    string? CashierName = null
 );
 
 public record PreOrderCreateRequest(
@@ -95,13 +124,21 @@ public record PreOrderCreateRequest(
     decimal DepositAmount,
     DateTime ExpectedPickupDate,
     string PaymentMethod = "CASH",
-    string? Note = null
+    string? Note = null,
+    string? CashierName = null,
+    Guid? ShiftId = null,
+    decimal? DiscountAmount = null,
+    Guid? AppliedPromotionId = null,
+    string? AppliedPromotionSummary = null,
+    string? VoucherCode = null
 );
 
 public record PreOrderFulfillRequest(
     string PaymentMethod,
     decimal AmountPaid,
-    string? Note = null
+    string? Note = null,
+    string? CashierName = null,
+    Guid? ShiftId = null
 );
 
 public record CancelOrderRequest(
@@ -114,13 +151,17 @@ public record ReturnExchangeRequest(
     List<ReturnItemDto> ReturnedItems,
     List<OrderItemCreateDto> NewItems,
     string SettlementMethod = "CASH",
+    string? Reason = null,
     string? Note = null
 );
 
 public record ReturnItemDto(
     Guid ProductId,
     decimal Quantity,
-    decimal UnitPrice
+    decimal UnitPrice,
+    string? Condition = "Restock",
+    Guid? OrderDetailId = null,
+    bool IsGift = false
 );
 
 public record OrderSummaryResponse(

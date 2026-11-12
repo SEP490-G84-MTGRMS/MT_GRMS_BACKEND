@@ -99,16 +99,106 @@ public class ShiftZReportConfiguration : IEntityTypeConfiguration<ShiftZReport>
     {
         builder.ToTable("ShiftZReports");
 
+        builder.Property(s => s.ShiftCode)
+            .HasMaxLength(50)
+            .IsRequired();
+
+        builder.Property(s => s.ShiftName)
+            .HasMaxLength(100)
+            .IsRequired();
+
+        builder.Property(s => s.ReceiverUserId)
+            .HasMaxLength(100);
+
+        builder.Property(s => s.Notes)
+            .HasMaxLength(500);
+
+        builder.Property(s => s.OpeningFloatExpected).HasColumnType("decimal(18,2)");
         builder.Property(s => s.OpeningFloat).HasColumnType("decimal(18,2)");
+        builder.Property(s => s.OpeningDiscrepancy).HasColumnType("decimal(18,2)");
         builder.Property(s => s.TotalCashIn).HasColumnType("decimal(18,2)");
         builder.Property(s => s.TotalCashOut).HasColumnType("decimal(18,2)");
+        builder.Property(s => s.TotalBankRevenue).HasColumnType("decimal(18,2)");
         builder.Property(s => s.ExpectedCash).HasColumnType("decimal(18,2)");
         builder.Property(s => s.ActualCashCounted).HasColumnType("decimal(18,2)");
         builder.Property(s => s.Discrepancy).HasColumnType("decimal(18,2)");
         builder.Property(s => s.RetainedFloatAmount).HasColumnType("decimal(18,2)");
         builder.Property(s => s.DroppedToSafeAmount).HasColumnType("decimal(18,2)");
 
+        builder.HasOne(s => s.PrevShift)
+            .WithMany()
+            .HasForeignKey(s => s.PrevShiftId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(s => s.Branch)
+            .WithMany()
+            .HasForeignKey(s => s.BranchId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasMany(s => s.CashMovements)
+            .WithOne(m => m.Shift)
+            .HasForeignKey(m => m.ShiftId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasMany(s => s.Participants)
+            .WithOne(p => p.Shift)
+            .HasForeignKey(p => p.ShiftId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasMany(s => s.CloseConfirmations)
+            .WithOne(c => c.Shift)
+            .HasForeignKey(c => c.ShiftId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        builder.HasIndex(s => new { s.TenantId, s.BranchId, s.Status });
         builder.HasIndex(s => new { s.TenantId, s.TillId, s.Status });
+        builder.HasIndex(s => new { s.TenantId, s.ShiftCode });
+    }
+}
+
+public class ShiftParticipantConfiguration : IEntityTypeConfiguration<ShiftParticipant>
+{
+    public void Configure(EntityTypeBuilder<ShiftParticipant> builder)
+    {
+        builder.ToTable("ShiftParticipants");
+        builder.HasKey(p => p.Id);
+        builder.Property(p => p.UserName).HasMaxLength(100);
+        builder.Property(p => p.FullName).HasMaxLength(150);
+        builder.HasIndex(p => new { p.TenantId, p.ShiftId, p.UserId });
+    }
+}
+
+public class ShiftCloseConfirmationConfiguration : IEntityTypeConfiguration<ShiftCloseConfirmation>
+{
+    public void Configure(EntityTypeBuilder<ShiftCloseConfirmation> builder)
+    {
+        builder.ToTable("ShiftCloseConfirmations");
+        builder.HasKey(c => c.Id);
+        builder.Property(c => c.UserName).HasMaxLength(100);
+        builder.Property(c => c.ConfirmedCountedCash).HasColumnType("decimal(18,2)");
+        builder.HasIndex(c => new { c.TenantId, c.ShiftId });
+    }
+}
+
+public class ShiftCashMovementConfiguration : IEntityTypeConfiguration<ShiftCashMovement>
+{
+    public void Configure(EntityTypeBuilder<ShiftCashMovement> builder)
+    {
+        builder.ToTable("ShiftCashMovements");
+
+        builder.Property(m => m.Amount)
+            .HasColumnType("decimal(18,2)")
+            .IsRequired();
+
+        builder.Property(m => m.Reason)
+            .HasMaxLength(500)
+            .IsRequired();
+
+        builder.Property(m => m.CreatedByName)
+            .HasMaxLength(150);
+
+        builder.HasIndex(m => new { m.TenantId, m.ShiftId });
+        builder.HasIndex(m => new { m.TenantId, m.OccurredAtUtc });
     }
 }
 
@@ -134,6 +224,16 @@ public class ExpenseVoucherConfiguration : IEntityTypeConfiguration<ExpenseVouch
             .HasColumnType("decimal(18,2)")
             .IsRequired();
 
+        builder.Property(e => e.RefundedAmount)
+            .HasColumnType("decimal(18,2)")
+            .HasDefaultValue(0);
+
+        builder.Property(e => e.IsSettled)
+            .HasDefaultValue(false);
+
+        builder.Property(e => e.ReferenceCode)
+            .HasMaxLength(100);
+
         builder.Property(e => e.InvoiceNumber)
             .HasMaxLength(100);
 
@@ -142,6 +242,8 @@ public class ExpenseVoucherConfiguration : IEntityTypeConfiguration<ExpenseVouch
 
         builder.HasIndex(e => new { e.TenantId, e.BranchId, e.ExpenseDate });
         builder.HasIndex(e => new { e.TenantId, e.Status });
+        builder.HasIndex(e => new { e.TenantId, e.ReferenceCode });
+        builder.HasIndex(e => new { e.TenantId, e.Nature });
     }
 }
 

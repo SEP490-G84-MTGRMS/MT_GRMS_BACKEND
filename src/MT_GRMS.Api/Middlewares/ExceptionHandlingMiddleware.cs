@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text.Json;
+using Microsoft.Extensions.Hosting;
+using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Exceptions;
@@ -10,11 +12,16 @@ public class ExceptionHandlingMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly ILogger<ExceptionHandlingMiddleware> _logger;
+    private readonly IHostEnvironment _env;
 
-    public ExceptionHandlingMiddleware(RequestDelegate next, ILogger<ExceptionHandlingMiddleware> logger)
+    public ExceptionHandlingMiddleware(
+        RequestDelegate next,
+        ILogger<ExceptionHandlingMiddleware> logger,
+        IHostEnvironment env)
     {
         _next = next;
         _logger = logger;
+        _env = env;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -31,10 +38,7 @@ public class ExceptionHandlingMiddleware
 
     private async Task HandleExceptionAsync(HttpContext context, Exception exception)
     {
-        var response = context.Response;
-        response.ContentType = "application/json";
-
-        int statusCode;
+        var statusCode = (int)HttpStatusCode.InternalServerError;
         ApiResponse<object> apiResponse;
 
         switch (exception)
@@ -42,7 +46,7 @@ public class ExceptionHandlingMiddleware
             case BusinessException businessEx:
                 statusCode = businessEx.ErrorCode switch
                 {
-                    "PRODUCT_ALREADY_ASSIGNED_TO_SUPPLIER" => (int)HttpStatusCode.Conflict,
+                    "CONFLICT" or "DUPLICATE_KEY" or "DUPLICATE_CODE" or "DUPLICATE_BARCODE" or "DUPLICATE_CITIZEN_ID" or "DUPLICATE_PHONE" or "DUPLICATE_USERNAME" or "PRODUCT_ALREADY_ASSIGNED_TO_SUPPLIER" or "SHIFT_ALREADY_OPEN" or "SHIFT_CLOSING_LOCKDOWN" => (int)HttpStatusCode.Conflict,
                     "FORBIDDEN" => (int)HttpStatusCode.Forbidden,
                     _ => (int)HttpStatusCode.UnprocessableEntity
                 };
@@ -68,16 +72,19 @@ public class ExceptionHandlingMiddleware
                 _logger.LogWarning(unauthEx, "Unauthorized access: {Message}", unauthEx.Message);
                 break;
 
-            case Microsoft.EntityFrameworkCore.DbUpdateException dbUpdateEx when dbUpdateEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505":
+            case DbUpdateException dbUpdateEx when dbUpdateEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505":
                 statusCode = (int)HttpStatusCode.Conflict;
-                var constraintName = pgEx.ConstraintName ?? string.Empty;
-                var friendlyMsg = constraintName.Contains("ProductCode", StringComparison.OrdinalIgnoreCase)
-                    ? "Mã sản phẩm đã tồn tại trong hệ thống. Vui lòng nhập mã khác."
-                    : constraintName.Contains("Barcode", StringComparison.OrdinalIgnoreCase)
-                        ? "Mã vạch đã được sử dụng bởi sản phẩm khác."
-                        : "Dữ liệu bị trùng lặp trong hệ thống (vi phạm ràng buộc duy nhất).";
+                var friendlyMsg = pgEx.ConstraintName switch
+                {
+                    var c when c != null && c.Contains("IX_Users_Phone", StringComparison.OrdinalIgnoreCase) => "Số điện thoại này đã được đăng ký tài khoản.",
+                    var c when c != null && c.Contains("IX_Users_Email", StringComparison.OrdinalIgnoreCase) => "Địa chỉ email này đã được sử dụng trong hệ thống.",
+                    var c when c != null && c.Contains("IX_Users_UserName", StringComparison.OrdinalIgnoreCase) => "Tên đăng nhập hoặc số điện thoại này đã tồn tại.",
+                    var c when c != null && c.Contains("IX_Tenants", StringComparison.OrdinalIgnoreCase) => "Tên cửa hàng hoặc mã cửa hàng đã tồn tại.",
+                    var c when c != null && c.Contains("IX_Branches", StringComparison.OrdinalIgnoreCase) => "Mã chi nhánh bị trùng lặp trong cửa hàng.",
+                    _ => "Dữ liệu bị trùng lặp trong hệ thống (vi phạm ràng buộc duy nhất)."
+                };
                 apiResponse = ApiResponse<object>.Fail("DUPLICATE_KEY", friendlyMsg);
-                _logger.LogWarning(dbUpdateEx, "Unique constraint violation: {ConstraintName}", constraintName);
+                _logger.LogWarning(dbUpdateEx, "Postgres unique constraint 23505: {Constraint}", pgEx.ConstraintName);
                 break;
 
             case NotFoundException notFoundEx:
@@ -88,13 +95,23 @@ public class ExceptionHandlingMiddleware
 
             default:
                 statusCode = (int)HttpStatusCode.InternalServerError;
-                apiResponse = ApiResponse<object>.Fail(ErrorCodes.UnhandledError, $"Lỗi: {exception.Message} | {exception.InnerException?.Message}", statusCode);
+                // SEC-06: Ngăn chặn Information Disclosure trên môi trường Production/Staging
+                var errorMessage = _env.IsDevelopment()
+                    ? $"Lỗi: {exception.Message} | {exception.InnerException?.Message}"
+                    : "Đã xảy ra lỗi hệ thống. Vui lòng liên hệ quản trị viên.";
+                apiResponse = ApiResponse<object>.Fail(ErrorCodes.UnhandledError, errorMessage, statusCode);
                 _logger.LogError(exception, "Unhandled exception occurred");
                 break;
         }
 
-        response.StatusCode = statusCode;
-        var jsonOptions = new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
-        await response.WriteAsync(JsonSerializer.Serialize(apiResponse, jsonOptions));
+        context.Response.ContentType = "application/json";
+        context.Response.StatusCode = statusCode;
+
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
+
+        await context.Response.WriteAsync(JsonSerializer.Serialize(apiResponse, options));
     }
 }

@@ -99,9 +99,9 @@ public class SupplierProductManagementTests
         // Assert
         Assert.NotNull(result);
         Assert.Equal(2, result.SyncedBranchesCount);
-        Assert.Equal(2, _repo.BranchStocks.Count);
-        Assert.Contains(_repo.BranchStocks, bs => bs.BranchId == branch1Id && bs.ProductId == product.Id);
-        Assert.Contains(_repo.BranchStocks, bs => bs.BranchId == branch2Id && bs.ProductId == product.Id);
+        Assert.Equal(2, _repo.BranchProducts.Count);
+        Assert.Contains(_repo.BranchProducts, bp => bp.BranchId == branch1Id && bp.ProductId == product.Id && bp.Status == "Active");
+        Assert.Contains(_repo.BranchProducts, bp => bp.BranchId == branch2Id && bp.ProductId == product.Id && bp.Status == "Active");
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public class SupplierProductManagementTests
         Assert.Equal(2, result.AssignedCount);
         Assert.Equal(1, result.SyncedBranchesCount);
         Assert.Equal(2, _repo.SupplierProducts.Count);
-        Assert.Equal(2, _repo.BranchStocks.Count);
+        Assert.Equal(2, _repo.BranchProducts.Count);
         Assert.True(_uow.HasSaved);
     }
 
@@ -658,7 +658,6 @@ public class SupplierProductManagementTests
         public List<SupplierProduct> SupplierProducts { get; } = new();
         public List<Product> Products { get; } = new();
         public List<SupplierAPLedger> Ledgers { get; } = new();
-        public List<SupplierDeliveryConfig> DeliveryConfigs { get; } = new();
         public List<SupplierBlackoutDate> BlackoutDates { get; } = new();
 
         public Task AddAsync(Supplier entity, CancellationToken cancellationToken = default)
@@ -722,10 +721,8 @@ public class SupplierProductManagementTests
             return Task.FromResult(((IReadOnlyList<SupplierAPLedger>)Ledgers, Ledgers.Count));
         }
 
-        public Task<SupplierDeliveryConfig?> GetDeliveryConfigAsync(Guid supplierId, CancellationToken cancellationToken = default) => Task.FromResult<SupplierDeliveryConfig?>(null);
-        public Task AddDeliveryConfigAsync(SupplierDeliveryConfig config, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default) => Task.FromResult((IReadOnlyList<SupplierBlackoutDate>)BlackoutDates);
-        public Task ReplaceBlackoutDatesAsync(Guid supplierId, Guid configId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default) => Task.CompletedTask;
+        public Task ReplaceBlackoutDatesAsync(Guid supplierId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default) => Task.CompletedTask;
 
         public Task<SupplierProduct?> GetSupplierProductAsync(Guid supplierId, Guid productId, CancellationToken cancellationToken = default)
         {
@@ -896,6 +893,19 @@ public class SupplierProductManagementTests
                 Name = "Chi nhánh mẫu",
                 IsActive = true
             });
+        }
+
+        public List<MT_GRMS.Domain.Entities.Catalog.BranchProduct> BranchProducts { get; } = new();
+
+        public Task<bool> BranchProductExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(BranchProducts.Any(bp => bp.BranchId == branchId && bp.ProductId == productId && !bp.IsDeleted));
+        }
+
+        public Task AddBranchProductAsync(MT_GRMS.Domain.Entities.Catalog.BranchProduct branchProduct, CancellationToken cancellationToken = default)
+        {
+            BranchProducts.Add(branchProduct);
+            return Task.CompletedTask;
         }
 
         public List<MT_GRMS.Domain.Entities.Inventory.BranchStock> BranchStocks { get; } = new();

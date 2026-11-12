@@ -20,6 +20,8 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(x => x.PasswordHash).HasMaxLength(255).IsRequired();
         builder.Property(x => x.FullName).HasMaxLength(100).IsRequired();
         builder.Property(x => x.Email).HasMaxLength(100).IsRequired();
+        builder.Property(x => x.NormalizedEmail).HasMaxLength(100).IsRequired();
+        builder.Property(x => x.NormalizedPhone).HasMaxLength(20);
         builder.Property(x => x.Phone).HasMaxLength(20);
         builder.Property(x => x.AvatarUrl).HasMaxLength(255);
         builder.Property(x => x.IsActive).HasDefaultValue(true);
@@ -35,6 +37,10 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.HasIndex(x => x.UserName).IsUnique();
         builder.HasIndex(x => x.Email).IsUnique();
         builder.HasIndex(x => x.Phone).IsUnique();
+        builder.HasIndex(x => x.NormalizedEmail).IsUnique();
+        builder.HasIndex(x => x.NormalizedPhone)
+            .IsUnique()
+            .HasFilter("\"NormalizedPhone\" IS NOT NULL");
 
         // Cấu hình các cột Security PIN phục vụ ký số và bảo mật chốt kỳ
         builder.Property(x => x.SecurityPinHash)

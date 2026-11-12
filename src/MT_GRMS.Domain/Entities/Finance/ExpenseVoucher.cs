@@ -1,4 +1,4 @@
-﻿using MT_GRMS.Domain.Common;
+using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Domain.Entities.Finance;
@@ -14,6 +14,10 @@ public class ExpenseVoucher : BaseTenantEntity
     public string Category { get; set; } = string.Empty; // Điện, nước, mặt bằng, rác, sửa chữa...
     public decimal Amount { get; set; }
     public ExpenseVoucherStatus Status { get; set; } = ExpenseVoucherStatus.Draft;
+    public FinancialNature Nature { get; set; } = FinancialNature.OperatingExpense;
+    public string? ReferenceCode { get; set; } // Mã chứng từ tham chiếu (phiếu cọc gốc, đơn nhập, ca trực...)
+    public decimal RefundedAmount { get; set; } = 0; // Số tiền cọc đã hoàn trả (đối với phiếu cọc)
+    public bool IsSettled { get; set; } = false; // Đã tất toán hoàn toàn hay chưa
     public FinanceAccountType PaymentSourceType { get; set; } = FinanceAccountType.Till;
     public Guid? PaymentSourceAccountId { get; set; }
     public bool IsTaxDeductible { get; set; } = false; // Một sổ hai góc nhìn

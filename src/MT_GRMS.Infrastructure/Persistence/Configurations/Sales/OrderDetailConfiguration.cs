@@ -24,6 +24,11 @@ public class OrderDetailConfiguration : IEntityTypeConfiguration<OrderDetail>
         builder.Property(x => x.CostPriceAtSale).HasColumnType("decimal(18,4)").HasDefaultValue(0.0000m);
         builder.Property(x => x.IsGift).HasDefaultValue(false);
 
+        // Đơn vị quy đổi
+        builder.Property(x => x.ProductUnitId).HasColumnName("ProductUnitID");
+        builder.Property(x => x.UnitName).HasColumnName("UnitName").HasMaxLength(50);
+        builder.Property(x => x.ConversionRate).HasColumnName("ConversionRate").HasColumnType("decimal(18,4)").HasDefaultValue(1.00m);
+
         // Thuế GTGT từng dòng hàng TT 152/2025/TT-BTC
         builder.Property(x => x.AppliedVatRate).HasColumnType("decimal(5,4)").HasDefaultValue(0.01m);
         builder.Property(x => x.VatAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
@@ -38,6 +43,11 @@ public class OrderDetailConfiguration : IEntityTypeConfiguration<OrderDetail>
             .WithMany()
             .HasForeignKey(x => x.ProductId)
             .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(x => x.ProductUnit)
+            .WithMany()
+            .HasForeignKey(x => x.ProductUnitId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         builder.HasOne(x => x.Promotion)
             .WithMany()

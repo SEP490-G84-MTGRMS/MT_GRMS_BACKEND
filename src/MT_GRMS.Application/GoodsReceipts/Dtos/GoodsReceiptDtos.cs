@@ -55,6 +55,8 @@ public class GoodsReceiptDto
     public decimal TotalShortageQty => Math.Max(0, TotalOrderedQty - TotalReceivedQty);
     public bool HasMismatch { get; set; }
     public string? Note { get; set; }
+    public Guid? CreatedReturnId { get; set; }
+    public string? CreatedReturnCode { get; set; }
     public List<GoodsReceiptLineDto> Lines { get; set; } = new();
 }
 
@@ -131,6 +133,8 @@ public class CreateGoodsReceiptLineCommand
     public string? BatchCode { get; set; }
     public DateTime? ManufactureDate { get; set; }
     public DateTime? ExpiryDate { get; set; }
+    /// <summary>User tick quản lý batch trên dòng → bắt buộc MFG + EXP.</summary>
+    public bool ManageBatch { get; set; }
     public string QualityStatus { get; set; } = "ACCEPTED";
     public string? RejectionReason { get; set; }
     public string? RejectionNote { get; set; }

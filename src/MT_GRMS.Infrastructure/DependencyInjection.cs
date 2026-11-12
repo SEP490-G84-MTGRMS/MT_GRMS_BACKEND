@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using MT_GRMS.Application.Admin.Repositories;
@@ -9,13 +10,20 @@ using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Interfaces;
+using MT_GRMS.Application.HR.Employees;
+using MT_GRMS.Application.HR.ShiftConfigs;
+using MT_GRMS.Application.HR.AttendancePolicies;
+using MT_GRMS.Application.HR.Payslips;
+using MT_GRMS.Application.HR.Schedules;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders;
+using MT_GRMS.Application.PurchaseOrders.Dispatch;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Infrastructure.Repositories;
 using MT_GRMS.Infrastructure.Services;
 using MT_GRMS.Infrastructure.Services.Printer;
+using MT_GRMS.Infrastructure.Workers;
 
 namespace MT_GRMS.Infrastructure;
 
@@ -25,14 +33,11 @@ public static class DependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        var connectionString = configuration.GetConnectionString("DefaultConnection");
-        if (string.IsNullOrWhiteSpace(connectionString))
-        {
-            connectionString = configuration["DATABASE_URL"]
-                ?? Environment.GetEnvironmentVariable("DATABASE_URL")
-                ?? Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection")
-                ?? Environment.GetEnvironmentVariable("DB_CONNECTION_STRING");
-        }
+        var connectionString = Environment.GetEnvironmentVariable("DB_CONNECTION_STRING")
+            ?? Environment.GetEnvironmentVariable("DATABASE_URL")
+            ?? configuration["DATABASE_URL"]
+            ?? configuration.GetConnectionString("DefaultConnection")
+            ?? Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection");
 
         if (!string.IsNullOrWhiteSpace(connectionString) &&
             (connectionString.StartsWith("postgres://") || connectionString.StartsWith("postgresql://")))
@@ -42,6 +47,8 @@ public static class DependencyInjection
 
         services.AddDbContext<AppDbContext>(options =>
         {
+            options.ConfigureWarnings(w => w.Ignore(CoreEventId.PossibleIncorrectRequiredNavigationWithQueryFilterInteractionWarning));
+
             if (string.IsNullOrWhiteSpace(connectionString))
             {
                 options.UseInMemoryDatabase("MT_GRMS_DevDb");
@@ -51,21 +58,19 @@ public static class DependencyInjection
                 options.UseNpgsql(connectionString, npgsqlOptions =>
                 {
                     npgsqlOptions.MigrationsAssembly(typeof(AppDbContext).Assembly.FullName);
-                    npgsqlOptions.EnableRetryOnFailure(
-                        maxRetryCount: 3,
-                        maxRetryDelay: TimeSpan.FromSeconds(5),
-                        errorCodesToAdd: null);
                 });
             }
         });
 
         if (string.IsNullOrWhiteSpace(connectionString))
         {
-            Console.WriteLine("[MT-GRMS] Database: InMemory (không dùng Postgres local).");
+            Console.WriteLine("[MT-GRMS] Database: InMemory.");
         }
         else
         {
-            Console.WriteLine("[MT-GRMS] Database: PostgreSQL local Host=localhost;Port=5432;Database=mtgrms_db");
+            var isNeon = connectionString.Contains("neon.tech", StringComparison.OrdinalIgnoreCase);
+            var hostInfo = connectionString.Split(';').FirstOrDefault() ?? "PostgreSQL";
+            Console.WriteLine($"[MT-GRMS] Database: {(isNeon ? "Neon Cloud PostgreSQL" : "PostgreSQL Local")} ({hostInfo})");
         }
 
         // Đăng ký Unit of Work & Repositories
@@ -74,10 +79,13 @@ public static class DependencyInjection
 
         // Đăng ký Repository cụ thể cho từng module
         services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IRegistrationOtpStore, RegistrationOtpStore>();
+        services.AddScoped<Application.SaaS.Services.ITrialOnboardingBackfillService, Services.TrialOnboardingBackfillService>();
         services.AddScoped<IInventoryRepository, InventoryRepository>();
         services.AddScoped<IOrderRepository, OrderRepository>();
-        services.AddScoped<Application.PosOrders.ISalesOrderRepository, SalesOrderRepository>();
+        services.AddScoped<Application.PosShifts.IShiftRepository, ShiftRepository>();
         services.AddScoped<IProductRepository, ProductRepository>();
+        services.AddScoped<IProductPriceHistoryRepository, ProductPriceHistoryRepository>();
         services.AddScoped<ICategoryRepository, CategoryRepository>();
         services.AddScoped<IProductUnitRepository, ProductUnitRepository>();
         services.AddScoped<IBatchRepository, BatchRepository>();
@@ -94,7 +102,14 @@ public static class DependencyInjection
         services.AddScoped<MT_GRMS.Application.PurchaseOrders.IPurchaseOrderRepository, PurchaseOrderRepository>();
         services.AddScoped<MT_GRMS.Application.GoodsReceipts.IGoodsReceiptRepository, GoodsReceiptRepository>();
         services.AddScoped<MT_GRMS.Application.SupplierReturns.ISupplierReturnRepository, SupplierReturnRepository>();
+        services.AddScoped<MT_GRMS.Application.Stocktakes.IStocktakeRepository, StocktakeRepository>();
         services.AddScoped<Application.Promotions.IPromotionRepository, PromotionRepository>();
+        services.AddScoped<IEmployeeRepository, EmployeeRepository>();
+        services.AddScoped<IShiftConfigRepository, ShiftConfigRepository>();
+        services.AddScoped<IBranchAttendancePolicyRepository, BranchAttendancePolicyRepository>();
+        services.AddScoped<IScheduleRepository, ScheduleRepository>();
+        services.AddScoped<IScheduleApprovalRequestRepository, ScheduleApprovalRequestRepository>();
+        services.AddScoped<IPayslipRepository, PayslipRepository>();
         services.AddScoped<ISubscriptionPlanRepository, SubscriptionPlanRepository>();
         services.AddScoped<ITenantRepository, TenantRepository>();
 
@@ -105,9 +120,20 @@ public static class DependencyInjection
         services.Configure<CloudinarySettings>(configuration.GetSection(CloudinarySettings.SectionName));
         services.AddScoped<ICloudinaryService, CloudinaryService>();
 
+        // Supplier order Excel + email + local storage + package
+        services.AddScoped<IFileStorage, LocalFileStorage>();
+        services.AddScoped<ISupplierOrderExcelGenerator, SupplierOrderExcelGenerator>();
+        services.AddScoped<ISupplierOrderEmailSender, SmtpSupplierOrderEmailSender>();
+        services.AddScoped<ISupplierDispatchPackageService, SupplierDispatchPackageService>();
+        services.AddHostedService<SupplierOrderDispatchWorker>();
+
         // Cấu hình SePay & Dịch vụ Ví gian hàng
         services.Configure<MT_GRMS.Application.Common.SePaySettings>(configuration.GetSection(MT_GRMS.Application.Common.SePaySettings.SectionName));
         services.AddScoped<MT_GRMS.Application.SaaS.Services.IWalletService, Services.WalletService>();
+
+        // Cấu hình Email & Dịch vụ gửi thư điện tử OTP (Đăng nhập 2FA, Đăng ký & Khôi phục mật khẩu)
+        services.Configure<EmailSettings>(configuration.GetSection(EmailSettings.SectionName));
+        services.AddScoped<IEmailService, EmailService>();
 
         return services;
     }

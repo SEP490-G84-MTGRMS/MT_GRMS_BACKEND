@@ -42,7 +42,7 @@ public record BatchFilterQuery
     public Guid? BranchId { get; init; }
     public string? Status { get; init; } // ALL, Expired, Critical, Warning, Normal
     public int PageIndex { get; init; } = 1;
-    public int PageSize { get; init; } = 10;
+    public int PageSize { get; init; } = 20;
     public string? SortBy { get; init; }
     public string? SortOrder { get; init; }
 }
@@ -78,7 +78,11 @@ public record BatchListItemDto(
     string Status, // Expired, Critical, Warning, Normal
     string? ZoneArea,
     string? ShelfLocation,
-    string? OriginalGrnNo
+    string? OriginalGrnNo,
+    decimal QtyReserved = 0m,
+    decimal QtyQuarantined = 0m,
+    decimal QtyAvailable = 0m,
+    Guid? OriginalGrnId = null
 );
 
 public record BatchPagedResultDto(

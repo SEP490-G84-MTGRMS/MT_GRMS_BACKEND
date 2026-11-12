@@ -23,6 +23,11 @@ public class PurchaseOrderDetail : BaseTenantEntity
     public string? RemainOption { get; set; }
     public bool IsClosed { get; set; } = false;
 
+    // Snapshots tại thời điểm chốt
+    public string? ProductCodeSnapshot { get; set; }
+    public string? ProductNameSnapshot { get; set; }
+    public string? PurchaseUnitNameSnapshot { get; set; }
+
     // Navigations
     public PurchaseOrder? PurchaseOrder { get; set; }
     public Product? Product { get; set; }

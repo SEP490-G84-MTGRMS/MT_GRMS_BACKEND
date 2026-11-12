@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Catalog.Dtos;
@@ -6,7 +7,8 @@ using MT_GRMS.Application.Common;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1")]
+[Route("api")]
+[Authorize]
 public class ProductUnitsController : BaseApiController
 {
     private readonly IProductUnitService _productUnitService;
@@ -144,4 +146,5 @@ public class ProductUnitsController : BaseApiController
         }
     }
 }
+
 

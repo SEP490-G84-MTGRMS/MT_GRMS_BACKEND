@@ -6,6 +6,7 @@
 [Oo]ut/
 build/
 dist/
+.codex-build/
 
 ## Visual Studio Cache & User Preferences
 .vs/
@@ -55,3 +56,7 @@ ehthumbs.db
 **/[Mm]igrations/
 **/AppDbContextModelSnapshot.cs
 *.Designer.cs
+
+## Supplier order Excel local storage
+**/storage/supplier-orders/
+storage/

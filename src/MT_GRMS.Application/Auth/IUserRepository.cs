@@ -16,4 +16,9 @@ public interface IUserRepository
     void Update(User user);
     void Delete(User user);
     Task SaveChangesAsync(CancellationToken cancellationToken = default);
+    Task<bool> ExistsByPhoneOrEmailAsync(string phone, string? email, CancellationToken cancellationToken = default);
+    Task<User> RegisterStoreOwnerAsync(User user, MT_GRMS.Domain.Entities.SaaS.Tenant tenant, MT_GRMS.Domain.Entities.SaaS.Branch branch, CancellationToken cancellationToken = default);
+    Task<User> RegisterStoreOwnerAsync(User user, MT_GRMS.Domain.Entities.SaaS.Tenant tenant, MT_GRMS.Domain.Entities.SaaS.Branch branch, MT_GRMS.Domain.Entities.System.AuditLog? auditLog, CancellationToken cancellationToken = default)
+        => RegisterStoreOwnerAsync(user, tenant, branch, cancellationToken);
+    Task<Guid?> GetEmployeeBranchIdAsync(string userId, string tenantId, CancellationToken cancellationToken = default) => Task.FromResult<Guid?>(null);
 }

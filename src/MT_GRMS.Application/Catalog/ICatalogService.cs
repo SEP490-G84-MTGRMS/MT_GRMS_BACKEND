@@ -14,6 +14,7 @@ public interface ICatalogService
     Task<ProductResponse> CreateProductAsync(ProductCreateRequest request, CancellationToken cancellationToken = default);
     Task<ProductResponse> UpdateProductAsync(Guid id, ProductUpdateRequest request, CancellationToken cancellationToken = default);
     Task DeleteProductAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<ProductPriceHistoryDto>> GetPriceHistoryAsync(Guid productId, Guid? branchId = null, CancellationToken cancellationToken = default);
 
     // Backward compatibility
     Task<IReadOnlyList<ProductResponse>> GetAllAsync(CancellationToken cancellationToken = default);

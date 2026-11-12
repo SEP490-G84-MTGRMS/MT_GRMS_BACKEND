@@ -4,12 +4,13 @@ using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Admin.Dtos;
 using MT_GRMS.Application.Admin.Services;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/admin/plans")]
-[Authorize(Roles = "ADMIN")]
+[Route("api/admin/plans")]
+[Authorize(Roles = RoleConstants.AdminOnly)]
 public class AdminPlansController : BaseApiController
 {
     private readonly ISubscriptionPlanService _planService;

@@ -50,15 +50,10 @@ public static class DeliveryScheduleCalculator
     }
 
     /// <summary>
-    /// Tính toán ngày giao hàng sớm nhất (Earliest Delivery Date) theo BR-S12 & BR-S13:
-    /// - Cutoff Time: nếu vượt giờ chốt trong ngày, dời mốc tính sang ngày hôm sau.
-    /// - LeadTimeHours: cộng số giờ chuẩn bị đơn.
-    /// - Delivery Weekdays: chỉ chọn ngày NCC chấp nhận giao hàng.
-    /// - Blackout Dates: bỏ qua các ngày nghỉ lễ/ngưng giao (hỗ trợ cả lặp lại hàng năm).
+    /// Tính ngày giao sớm nhất theo giờ chốt đơn + ngày giao + blackout (không dùng Lead Time).
     /// </summary>
     public static DateTime CalculateEarliestDeliveryDate(
         DateTime orderTime,
-        int leadTimeHours,
         string cutoffTimeStr,
         int deliveryWeekdaysMask,
         IEnumerable<SupplierBlackoutDate>? blackoutDates)
@@ -86,9 +81,7 @@ public static class DeliveryScheduleCalculator
             effectiveStart = orderTime;
         }
 
-        // Thời điểm khả dụng sau Lead Time
-        var candidateDateTime = effectiveStart.AddHours(Math.Max(leadTimeHours, 0));
-        var candidateDate = candidateDateTime.Date;
+        var candidateDate = effectiveStart.Date;
 
         var blackoutList = blackoutDates?.ToList() ?? new List<SupplierBlackoutDate>();
 

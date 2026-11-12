@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -11,469 +11,172 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
         {
-            migrationBuilder.AddColumn<decimal>(
-                name: "BudgetLimit",
-                table: "Promotions",
-                type: "numeric(18,2)",
-                nullable: true);
+            migrationBuilder.Sql(@"
+                -- 1. Thêm cột vào Promotions nếu chưa có
+                ALTER TABLE ""Promotions"" ADD COLUMN IF NOT EXISTS ""BudgetLimit"" numeric(18,2);
+                ALTER TABLE ""Promotions"" ADD COLUMN IF NOT EXISTS ""Description"" character varying(500);
+                ALTER TABLE ""Promotions"" ADD COLUMN IF NOT EXISTS ""MaxDiscountAmount"" numeric(18,2);
+                ALTER TABLE ""Promotions"" ADD COLUMN IF NOT EXISTS ""MinOrderValue"" numeric(18,2) NOT NULL DEFAULT 0.00;
+                ALTER TABLE ""Promotions"" ADD COLUMN IF NOT EXISTS ""TargetBranches"" character varying(255) NOT NULL DEFAULT 'ALL';
+                ALTER TABLE ""Promotions"" ADD COLUMN IF NOT EXISTS ""TotalDiscountGiven"" numeric(18,2) NOT NULL DEFAULT 0.00;
+                ALTER TABLE ""Promotions"" ADD COLUMN IF NOT EXISTS ""TotalVoucherQuantity"" integer NOT NULL DEFAULT 0;
+                ALTER TABLE ""Promotions"" ADD COLUMN IF NOT EXISTS ""UsageLimit"" integer;
+                ALTER TABLE ""Promotions"" ADD COLUMN IF NOT EXISTS ""UsedCount"" integer NOT NULL DEFAULT 0;
+                ALTER TABLE ""Promotions"" ADD COLUMN IF NOT EXISTS ""VoucherPrefix"" character varying(20);
 
-            migrationBuilder.AddColumn<string>(
-                name: "Description",
-                table: "Promotions",
-                type: "character varying(500)",
-                maxLength: 500,
-                nullable: true);
+                -- 2. Thêm EligibleForVatReduction vào Products
+                ALTER TABLE ""Products"" ADD COLUMN IF NOT EXISTS ""EligibleForVatReduction"" boolean NOT NULL DEFAULT false;
 
-            migrationBuilder.AddColumn<decimal>(
-                name: "MaxDiscountAmount",
-                table: "Promotions",
-                type: "numeric(18,2)",
-                nullable: true);
+                -- 3. IdempotencyRecords & HouseholdTaxSnapshots
+                ALTER TABLE ""IdempotencyRecords"" ADD COLUMN IF NOT EXISTS ""Status"" character varying(20) NOT NULL DEFAULT 'PENDING';
+                ALTER TABLE ""IdempotencyRecords"" ADD COLUMN IF NOT EXISTS ""UserId"" uuid;
+                ALTER TABLE ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""AppliedPitMethod"" integer;
 
-            migrationBuilder.AddColumn<decimal>(
-                name: "MinOrderValue",
-                table: "Promotions",
-                type: "numeric(18,2)",
-                nullable: false,
-                defaultValue: 0.00m);
+                -- 4. Bảng Batches
+                CREATE TABLE IF NOT EXISTS ""Batches"" (
+                    ""Id"" uuid NOT NULL,
+                    ""ProductId"" uuid NOT NULL,
+                    ""BranchId"" uuid NOT NULL,
+                    ""BatchCode"" text NOT NULL,
+                    ""ManufactureDate"" timestamp without time zone NOT NULL,
+                    ""ExpiryDate"" timestamp without time zone NOT NULL,
+                    ""InitialQuantity"" numeric NOT NULL,
+                    ""LandedCostPerUnit"" numeric NOT NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL,
+                    ""UpdatedAt"" timestamp without time zone,
+                    ""IsDeleted"" boolean NOT NULL,
+                    ""TenantId"" text NOT NULL,
+                    ""CreatedBy"" uuid,
+                    CONSTRAINT ""PK_Batches"" PRIMARY KEY (""Id"")
+                );
 
-            migrationBuilder.AddColumn<string>(
-                name: "TargetBranches",
-                table: "Promotions",
-                type: "character varying(255)",
-                maxLength: 255,
-                nullable: false,
-                defaultValue: "ALL");
+                -- 5. Bảng HouseholdTaxYearSettings
+                CREATE TABLE IF NOT EXISTS ""HouseholdTaxYearSettings"" (
+                    ""Id"" uuid NOT NULL,
+                    ""Year"" integer NOT NULL,
+                    ""PitMethod"" character varying(50) NOT NULL,
+                    ""LockedUntilYear"" integer NOT NULL,
+                    ""LockReason"" character varying(100) NOT NULL,
+                    ""LockedAtUtc"" timestamp without time zone NOT NULL,
+                    ""LockedBySystem"" character varying(100) NOT NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL,
+                    ""UpdatedAt"" timestamp without time zone,
+                    ""IsDeleted"" boolean NOT NULL,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""CreatedBy"" uuid,
+                    CONSTRAINT ""PK_HouseholdTaxYearSettings"" PRIMARY KEY (""Id"")
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_HouseholdTaxYearSettings_TenantId_Year""
+                    ON ""HouseholdTaxYearSettings"" (""TenantId"", ""Year"");
 
-            migrationBuilder.AddColumn<decimal>(
-                name: "TotalDiscountGiven",
-                table: "Promotions",
-                type: "numeric(18,2)",
-                nullable: false,
-                defaultValue: 0.00m);
+                -- 6. Bảng StockOnHands
+                CREATE TABLE IF NOT EXISTS ""StockOnHands"" (
+                    ""Id"" uuid NOT NULL,
+                    ""BranchId"" uuid NOT NULL,
+                    ""ProductId"" uuid NOT NULL,
+                    ""BatchId"" uuid,
+                    ""Quantity"" numeric NOT NULL,
+                    ""ReservedQuantity"" numeric NOT NULL,
+                    ""MinAlertThreshold"" numeric NOT NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL,
+                    ""UpdatedAt"" timestamp without time zone,
+                    ""IsDeleted"" boolean NOT NULL,
+                    ""TenantId"" text NOT NULL,
+                    ""CreatedBy"" uuid,
+                    CONSTRAINT ""PK_StockOnHands"" PRIMARY KEY (""Id"")
+                );
 
-            migrationBuilder.AddColumn<int>(
-                name: "TotalVoucherQuantity",
-                table: "Promotions",
-                type: "integer",
-                nullable: false,
-                defaultValue: 0);
+                -- 7. Bảng SupplierReturns
+                CREATE TABLE IF NOT EXISTS ""SupplierReturns"" (
+                    ""Id"" uuid NOT NULL,
+                    ""Code"" text NOT NULL,
+                    ""GoodsReceiptId"" uuid NOT NULL,
+                    ""SupplierId"" uuid NOT NULL,
+                    ""BranchId"" uuid NOT NULL,
+                    ""Status"" text NOT NULL,
+                    ""Reason"" text NOT NULL,
+                    ""ReasonNotes"" text,
+                    ""SupplierResponseNote"" text,
+                    ""CancellationReason"" text,
+                    ""AttachmentUrl"" text,
+                    ""TotalRequestedQty"" numeric NOT NULL,
+                    ""TotalApprovedQty"" numeric NOT NULL,
+                    ""TotalHandedOverQty"" numeric NOT NULL,
+                    ""TotalEstimatedAmount"" numeric NOT NULL,
+                    ""SubmittedAt"" timestamp without time zone,
+                    ""RespondedAt"" timestamp without time zone,
+                    ""HandedOverAt"" timestamp without time zone,
+                    ""HandedOverBy"" text,
+                    ""CreatedAt"" timestamp without time zone NOT NULL,
+                    ""UpdatedAt"" timestamp without time zone,
+                    ""IsDeleted"" boolean NOT NULL,
+                    ""TenantId"" text NOT NULL,
+                    ""CreatedBy"" uuid,
+                    CONSTRAINT ""PK_SupplierReturns"" PRIMARY KEY (""Id"")
+                );
 
-            migrationBuilder.AddColumn<int>(
-                name: "UsageLimit",
-                table: "Promotions",
-                type: "integer",
-                nullable: true);
+                -- 8. Bảng SupplierReturnLines
+                CREATE TABLE IF NOT EXISTS ""SupplierReturnLines"" (
+                    ""Id"" uuid NOT NULL,
+                    ""SupplierReturnId"" uuid NOT NULL,
+                    ""ProductId"" uuid NOT NULL,
+                    ""GoodsReceiptLineId"" uuid,
+                    ""BatchCode"" text,
+                    ""RequestedQty"" numeric NOT NULL,
+                    ""ApprovedQty"" numeric NOT NULL,
+                    ""HandedOverQty"" numeric NOT NULL,
+                    ""UnitCost"" numeric NOT NULL,
+                    ""TotalAmount"" numeric NOT NULL DEFAULT 0,
+                    ""ReturnReason"" text NOT NULL DEFAULT '',
+                    ""CreatedAt"" timestamp without time zone NOT NULL,
+                    ""UpdatedAt"" timestamp without time zone,
+                    ""IsDeleted"" boolean NOT NULL,
+                    ""TenantId"" text NOT NULL,
+                    ""CreatedBy"" uuid,
+                    CONSTRAINT ""PK_SupplierReturnLines"" PRIMARY KEY (""Id"")
+                );
 
-            migrationBuilder.AddColumn<int>(
-                name: "UsedCount",
-                table: "Promotions",
-                type: "integer",
-                nullable: false,
-                defaultValue: 0);
-
-            migrationBuilder.AddColumn<string>(
-                name: "VoucherPrefix",
-                table: "Promotions",
-                type: "character varying(20)",
-                maxLength: 20,
-                nullable: true);
-
-            migrationBuilder.AddColumn<bool>(
-                name: "EligibleForVatReduction",
-                table: "Products",
-                type: "boolean",
-                nullable: false,
-                defaultValue: false);
-
-            migrationBuilder.AddColumn<string>(
-                name: "Status",
-                table: "IdempotencyRecords",
-                type: "character varying(20)",
-                maxLength: 20,
-                nullable: false,
-                defaultValue: "PENDING");
-
-            migrationBuilder.AddColumn<Guid>(
-                name: "UserId",
-                table: "IdempotencyRecords",
-                type: "uuid",
-                nullable: true);
-
-            migrationBuilder.AddColumn<int>(
-                name: "AppliedPitMethod",
-                table: "HouseholdTaxSnapshots",
-                type: "integer",
-                nullable: true);
-
-            migrationBuilder.CreateTable(
-                name: "Batches",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "uuid", nullable: false),
-                    ProductId = table.Column<Guid>(type: "uuid", nullable: false),
-                    BranchId = table.Column<Guid>(type: "uuid", nullable: false),
-                    BatchCode = table.Column<string>(type: "text", nullable: false),
-                    ManufactureDate = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    ExpiryDate = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    InitialQuantity = table.Column<decimal>(type: "numeric", nullable: false),
-                    LandedCostPerUnit = table.Column<decimal>(type: "numeric", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
-                    IsDeleted = table.Column<bool>(type: "boolean", nullable: false),
-                    TenantId = table.Column<string>(type: "text", nullable: false),
-                    CreatedBy = table.Column<Guid>(type: "uuid", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_Batches", x => x.Id);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "HouseholdTaxYearSettings",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "uuid", nullable: false),
-                    Year = table.Column<int>(type: "integer", nullable: false),
-                    PitMethod = table.Column<string>(type: "character varying(50)", maxLength: 50, nullable: false),
-                    LockedUntilYear = table.Column<int>(type: "integer", nullable: false),
-                    LockReason = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: false),
-                    LockedAtUtc = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    LockedBySystem = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
-                    IsDeleted = table.Column<bool>(type: "boolean", nullable: false),
-                    TenantId = table.Column<string>(type: "character varying(50)", maxLength: 50, nullable: false),
-                    CreatedBy = table.Column<Guid>(type: "uuid", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_HouseholdTaxYearSettings", x => x.Id);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "PromotionConditions",
-                columns: table => new
-                {
-                    ConditionID = table.Column<Guid>(type: "uuid", nullable: false),
-                    PromotionID = table.Column<Guid>(type: "uuid", nullable: false),
-                    ProductID = table.Column<Guid>(type: "uuid", nullable: false),
-                    ProductRole = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false, defaultValue: "BUY"),
-                    MinQty = table.Column<decimal>(type: "numeric(12,2)", nullable: false, defaultValue: 1.00m),
-                    DiscountValue = table.Column<decimal>(type: "numeric(18,2)", nullable: true),
-                    Note = table.Column<string>(type: "character varying(255)", maxLength: 255, nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
-                    IsDeleted = table.Column<bool>(type: "boolean", nullable: false),
-                    TenantID = table.Column<string>(type: "character varying(50)", maxLength: 50, nullable: false),
-                    CreatedBy = table.Column<Guid>(type: "uuid", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_PromotionConditions", x => x.ConditionID);
-                    table.ForeignKey(
-                        name: "FK_PromotionConditions_Products_ProductID",
-                        column: x => x.ProductID,
-                        principalTable: "Products",
-                        principalColumn: "ProductID",
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_PromotionConditions_Promotions_PromotionID",
-                        column: x => x.PromotionID,
-                        principalTable: "Promotions",
-                        principalColumn: "PromotionID",
-                        onDelete: ReferentialAction.Restrict);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "StockOnHands",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "uuid", nullable: false),
-                    BranchId = table.Column<Guid>(type: "uuid", nullable: false),
-                    ProductId = table.Column<Guid>(type: "uuid", nullable: false),
-                    BatchId = table.Column<Guid>(type: "uuid", nullable: true),
-                    Quantity = table.Column<decimal>(type: "numeric", nullable: false),
-                    ReservedQuantity = table.Column<decimal>(type: "numeric", nullable: false),
-                    MinAlertThreshold = table.Column<decimal>(type: "numeric", nullable: false),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
-                    IsDeleted = table.Column<bool>(type: "boolean", nullable: false),
-                    TenantId = table.Column<string>(type: "text", nullable: false),
-                    CreatedBy = table.Column<Guid>(type: "uuid", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_StockOnHands", x => x.Id);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "SupplierReturns",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "uuid", nullable: false),
-                    Code = table.Column<string>(type: "text", nullable: false),
-                    GoodsReceiptId = table.Column<Guid>(type: "uuid", nullable: false),
-                    SupplierId = table.Column<Guid>(type: "uuid", nullable: false),
-                    BranchId = table.Column<Guid>(type: "uuid", nullable: false),
-                    Status = table.Column<string>(type: "text", nullable: false),
-                    Reason = table.Column<string>(type: "text", nullable: false),
-                    ReasonNotes = table.Column<string>(type: "text", nullable: true),
-                    SupplierResponseNote = table.Column<string>(type: "text", nullable: true),
-                    CancellationReason = table.Column<string>(type: "text", nullable: true),
-                    AttachmentUrl = table.Column<string>(type: "text", nullable: true),
-                    TotalRequestedQty = table.Column<decimal>(type: "numeric", nullable: false),
-                    TotalApprovedQty = table.Column<decimal>(type: "numeric", nullable: false),
-                    TotalHandedOverQty = table.Column<decimal>(type: "numeric", nullable: false),
-                    TotalEstimatedAmount = table.Column<decimal>(type: "numeric", nullable: false),
-                    SubmittedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
-                    RespondedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
-                    HandedOverAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
-                    HandedOverBy = table.Column<string>(type: "text", nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
-                    IsDeleted = table.Column<bool>(type: "boolean", nullable: false),
-                    TenantId = table.Column<string>(type: "text", nullable: false),
-                    CreatedBy = table.Column<Guid>(type: "uuid", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_SupplierReturns", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_SupplierReturns_Branches_BranchId",
-                        column: x => x.BranchId,
-                        principalTable: "Branches",
-                        principalColumn: "BranchID",
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_SupplierReturns_GoodsReceipts_GoodsReceiptId",
-                        column: x => x.GoodsReceiptId,
-                        principalTable: "GoodsReceipts",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_SupplierReturns_Suppliers_SupplierId",
-                        column: x => x.SupplierId,
-                        principalTable: "Suppliers",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "VoucherCodes",
-                columns: table => new
-                {
-                    VoucherCodeID = table.Column<Guid>(type: "uuid", nullable: false),
-                    PromotionID = table.Column<Guid>(type: "uuid", nullable: false),
-                    Code = table.Column<string>(type: "character varying(50)", maxLength: 50, nullable: false),
-                    Status = table.Column<string>(type: "character varying(30)", maxLength: 30, nullable: false, defaultValue: "UNUSED"),
-                    CustomerID = table.Column<Guid>(type: "uuid", nullable: true),
-                    CustomerName = table.Column<string>(type: "character varying(100)", maxLength: 100, nullable: true),
-                    CustomerPhone = table.Column<string>(type: "character varying(20)", maxLength: 20, nullable: true),
-                    OrderID = table.Column<Guid>(type: "uuid", nullable: true),
-                    OrderCode = table.Column<string>(type: "character varying(50)", maxLength: 50, nullable: true),
-                    UsedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
-                    IsDeleted = table.Column<bool>(type: "boolean", nullable: false),
-                    TenantID = table.Column<string>(type: "character varying(50)", maxLength: 50, nullable: false),
-                    CreatedBy = table.Column<Guid>(type: "uuid", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_VoucherCodes", x => x.VoucherCodeID);
-                    table.ForeignKey(
-                        name: "FK_VoucherCodes_Promotions_PromotionID",
-                        column: x => x.PromotionID,
-                        principalTable: "Promotions",
-                        principalColumn: "PromotionID",
-                        onDelete: ReferentialAction.Restrict);
-                });
-
-            migrationBuilder.CreateTable(
-                name: "SupplierReturnLines",
-                columns: table => new
-                {
-                    Id = table.Column<Guid>(type: "uuid", nullable: false),
-                    SupplierReturnId = table.Column<Guid>(type: "uuid", nullable: false),
-                    ProductId = table.Column<Guid>(type: "uuid", nullable: false),
-                    GoodsReceiptLineId = table.Column<Guid>(type: "uuid", nullable: true),
-                    BatchCode = table.Column<string>(type: "text", nullable: true),
-                    ExpiryDate = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
-                    RequestedQty = table.Column<decimal>(type: "numeric", nullable: false),
-                    ApprovedQty = table.Column<decimal>(type: "numeric", nullable: false),
-                    RejectedQty = table.Column<decimal>(type: "numeric", nullable: false),
-                    HandedOverQty = table.Column<decimal>(type: "numeric", nullable: false),
-                    UnitCost = table.Column<decimal>(type: "numeric", nullable: false),
-                    RejectionReason = table.Column<string>(type: "text", nullable: true),
-                    Notes = table.Column<string>(type: "text", nullable: true),
-                    CreatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: false),
-                    UpdatedAt = table.Column<DateTime>(type: "timestamp without time zone", nullable: true),
-                    IsDeleted = table.Column<bool>(type: "boolean", nullable: false),
-                    TenantId = table.Column<string>(type: "text", nullable: false),
-                    CreatedBy = table.Column<Guid>(type: "uuid", nullable: true)
-                },
-                constraints: table =>
-                {
-                    table.PrimaryKey("PK_SupplierReturnLines", x => x.Id);
-                    table.ForeignKey(
-                        name: "FK_SupplierReturnLines_Products_ProductId",
-                        column: x => x.ProductId,
-                        principalTable: "Products",
-                        principalColumn: "ProductID",
-                        onDelete: ReferentialAction.Restrict);
-                    table.ForeignKey(
-                        name: "FK_SupplierReturnLines_SupplierReturns_SupplierReturnId",
-                        column: x => x.SupplierReturnId,
-                        principalTable: "SupplierReturns",
-                        principalColumn: "Id",
-                        onDelete: ReferentialAction.Restrict);
-                });
-
-            migrationBuilder.CreateIndex(
-                name: "IX_HouseholdTaxYearSettings_TenantId_Year",
-                table: "HouseholdTaxYearSettings",
-                columns: new[] { "TenantId", "Year" },
-                unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_PromotionConditions_ProductID",
-                table: "PromotionConditions",
-                column: "ProductID");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_PromotionConditions_PromotionID",
-                table: "PromotionConditions",
-                column: "PromotionID");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_PromotionConditions_TenantID_PromotionID_ProductID_ProductR~",
-                table: "PromotionConditions",
-                columns: new[] { "TenantID", "PromotionID", "ProductID", "ProductRole" },
-                unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_SupplierReturnLines_ProductId",
-                table: "SupplierReturnLines",
-                column: "ProductId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_SupplierReturnLines_SupplierReturnId",
-                table: "SupplierReturnLines",
-                column: "SupplierReturnId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_SupplierReturns_BranchId",
-                table: "SupplierReturns",
-                column: "BranchId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_SupplierReturns_GoodsReceiptId",
-                table: "SupplierReturns",
-                column: "GoodsReceiptId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_SupplierReturns_SupplierId",
-                table: "SupplierReturns",
-                column: "SupplierId");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_VoucherCodes_PromotionID",
-                table: "VoucherCodes",
-                column: "PromotionID");
-
-            migrationBuilder.CreateIndex(
-                name: "IX_VoucherCodes_TenantID_Code",
-                table: "VoucherCodes",
-                columns: new[] { "TenantID", "Code" },
-                unique: true);
-
-            migrationBuilder.CreateIndex(
-                name: "IX_VoucherCodes_TenantID_PromotionID_Status",
-                table: "VoucherCodes",
-                columns: new[] { "TenantID", "PromotionID", "Status" });
+                CREATE INDEX IF NOT EXISTS ""IX_SupplierReturns_BranchId"" ON ""SupplierReturns"" (""BranchId"");
+                CREATE INDEX IF NOT EXISTS ""IX_SupplierReturns_GoodsReceiptId"" ON ""SupplierReturns"" (""GoodsReceiptId"");
+                CREATE INDEX IF NOT EXISTS ""IX_SupplierReturns_SupplierId"" ON ""SupplierReturns"" (""SupplierId"");
+                CREATE INDEX IF NOT EXISTS ""IX_SupplierReturnLines_ProductId"" ON ""SupplierReturnLines"" (""ProductId"");
+                CREATE INDEX IF NOT EXISTS ""IX_SupplierReturnLines_SupplierReturnId"" ON ""SupplierReturnLines"" (""SupplierReturnId"");
+            ");
         }
 
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
             migrationBuilder.DropTable(
-                name: "Batches");
+                name: "SupplierReturnLines");
 
             migrationBuilder.DropTable(
-                name: "HouseholdTaxYearSettings");
-
-            migrationBuilder.DropTable(
-                name: "PromotionConditions");
+                name: "SupplierReturns");
 
             migrationBuilder.DropTable(
                 name: "StockOnHands");
 
             migrationBuilder.DropTable(
-                name: "SupplierReturnLines");
+                name: "HouseholdTaxYearSettings");
 
             migrationBuilder.DropTable(
-                name: "VoucherCodes");
-
-            migrationBuilder.DropTable(
-                name: "SupplierReturns");
+                name: "Batches");
 
             migrationBuilder.DropColumn(
-                name: "BudgetLimit",
-                table: "Promotions");
-
-            migrationBuilder.DropColumn(
-                name: "Description",
-                table: "Promotions");
-
-            migrationBuilder.DropColumn(
-                name: "MaxDiscountAmount",
-                table: "Promotions");
-
-            migrationBuilder.DropColumn(
-                name: "MinOrderValue",
-                table: "Promotions");
-
-            migrationBuilder.DropColumn(
-                name: "TargetBranches",
-                table: "Promotions");
-
-            migrationBuilder.DropColumn(
-                name: "TotalDiscountGiven",
-                table: "Promotions");
-
-            migrationBuilder.DropColumn(
-                name: "TotalVoucherQuantity",
-                table: "Promotions");
-
-            migrationBuilder.DropColumn(
-                name: "UsageLimit",
-                table: "Promotions");
-
-            migrationBuilder.DropColumn(
-                name: "UsedCount",
-                table: "Promotions");
-
-            migrationBuilder.DropColumn(
-                name: "VoucherPrefix",
-                table: "Promotions");
-
-            migrationBuilder.DropColumn(
-                name: "EligibleForVatReduction",
-                table: "Products");
-
-            migrationBuilder.DropColumn(
-                name: "Status",
-                table: "IdempotencyRecords");
+                name: "AppliedPitMethod",
+                table: "HouseholdTaxSnapshots");
 
             migrationBuilder.DropColumn(
                 name: "UserId",
                 table: "IdempotencyRecords");
 
             migrationBuilder.DropColumn(
-                name: "AppliedPitMethod",
-                table: "HouseholdTaxSnapshots");
+                name: "Status",
+                table: "IdempotencyRecords");
 
-            }
+            migrationBuilder.DropColumn(
+                name: "EligibleForVatReduction",
+                table: "Products");
+        }
     }
 }

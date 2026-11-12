@@ -172,7 +172,97 @@ public class GoodsReceiptTests
         };
 
         var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.CreateGoodsReceiptAsync(command));
-        Assert.Equal("ACCEPTED_EXCEEDS_ORDERED", ex.ErrorCode);
+        Assert.Equal("EXCEEDS_ORDERED", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreateGoodsReceipt_SplitLotsSameSku_WithinOrdered_Succeeds()
+    {
+        var podId = _repo.PurchaseOrders[0].Details.First().Id;
+        var command = new CreateGoodsReceiptCommand
+        {
+            PurchaseOrderId = _poId,
+            SupplierId = _supplierId,
+            BranchId = _branchId,
+            AutoComplete = true,
+            Lines = new List<CreateGoodsReceiptLineCommand>
+            {
+                new()
+                {
+                    ProductId = _milkProdId,
+                    PurchaseOrderDetailId = podId,
+                    OrderedQty = 100,
+                    DeliveredQty = 40,
+                    AcceptedQty = 40,
+                    UnitPrice = 25000,
+                    ManageBatch = true,
+                    BatchCode = "LOT-A",
+                    ManufactureDate = DateTime.UtcNow.AddMonths(-2),
+                    ExpiryDate = DateTime.UtcNow.AddMonths(6)
+                },
+                new()
+                {
+                    ProductId = _milkProdId,
+                    PurchaseOrderDetailId = podId,
+                    OrderedQty = 100,
+                    DeliveredQty = 60,
+                    AcceptedQty = 60,
+                    UnitPrice = 25000,
+                    ManageBatch = true,
+                    BatchCode = "LOT-B",
+                    ManufactureDate = DateTime.UtcNow.AddMonths(-1),
+                    ExpiryDate = DateTime.UtcNow.AddMonths(10)
+                }
+            }
+        };
+
+        var result = await _service.CreateGoodsReceiptAsync(command);
+        Assert.Equal("COMPLETED", result.Status);
+        Assert.Equal(2, result.Lines.Count);
+        Assert.Equal(100, result.TotalAcceptedQty);
+        Assert.Equal(2, _repo.Stocks.Count);
+    }
+
+    [Fact]
+    public async Task CreateGoodsReceipt_SplitLotsExceedOrdered_Throws()
+    {
+        var podId = _repo.PurchaseOrders[0].Details.First().Id;
+        var command = new CreateGoodsReceiptCommand
+        {
+            PurchaseOrderId = _poId,
+            SupplierId = _supplierId,
+            BranchId = _branchId,
+            Lines = new List<CreateGoodsReceiptLineCommand>
+            {
+                new()
+                {
+                    ProductId = _milkProdId,
+                    PurchaseOrderDetailId = podId,
+                    OrderedQty = 100,
+                    DeliveredQty = 40,
+                    AcceptedQty = 40,
+                    UnitPrice = 25000,
+                    ManageBatch = true,
+                    ManufactureDate = DateTime.UtcNow.AddMonths(-1),
+                    ExpiryDate = DateTime.UtcNow.AddMonths(6)
+                },
+                new()
+                {
+                    ProductId = _milkProdId,
+                    PurchaseOrderDetailId = podId,
+                    OrderedQty = 100,
+                    DeliveredQty = 70,
+                    AcceptedQty = 70,
+                    UnitPrice = 25000,
+                    ManageBatch = true,
+                    ManufactureDate = DateTime.UtcNow.AddMonths(-1),
+                    ExpiryDate = DateTime.UtcNow.AddMonths(8)
+                }
+            }
+        };
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.CreateGoodsReceiptAsync(command));
+        Assert.Equal("EXCEEDS_ORDERED", ex.ErrorCode);
     }
 
     [Fact]
@@ -212,6 +302,15 @@ public class GoodsReceiptTests
         var stock = await _repo.GetBranchStockAsync("tenant-test-1", _branchId, _milkProdId, "LOT-100");
         Assert.NotNull(stock);
         Assert.Equal(100, stock.QuantityOnHand);
+
+        // Kiểm tra lô hàng FEFO (Batch) đã được sinh tự động
+        Assert.Single(_repo.Batches);
+        Assert.Equal("LOT-100", _repo.Batches[0].BatchCode);
+        Assert.Equal(100, _repo.Batches[0].InitialQuantity);
+
+        // Kiểm tra công nợ nhà cung cấp (SupplierAPLedger) đã được sinh
+        Assert.Single(_repo.Ledgers);
+        Assert.Equal(2500000, _repo.Ledgers[0].Amount);
 
         // Kiểm tra đơn PO gốc đã chuyển sang COMPLETED
         var po = _repo.PurchaseOrders.First(p => p.Id == _poId);
@@ -319,6 +418,8 @@ public class FakeGoodsReceiptRepository : IGoodsReceiptRepository
     public List<GoodsReceipt> Receipts { get; } = new();
     public List<PurchaseOrder> PurchaseOrders { get; } = new();
     public List<BranchStock> Stocks { get; } = new();
+    public List<Batch> Batches { get; } = new();
+    public List<SupplierAPLedger> Ledgers { get; } = new();
 
     public Task<PagedResult<GoodsReceiptDto>> GetPagedAsync(string tenantId, GoodsReceiptFilterQuery query, CancellationToken cancellationToken = default)
     {
@@ -374,6 +475,11 @@ public class FakeGoodsReceiptRepository : IGoodsReceiptRepository
         return Task.FromResult(PurchaseOrders.FirstOrDefault(p => p.Id == poId));
     }
 
+    public Task<PurchaseOrder?> GetPurchaseOrderByCodeWithDetailsAsync(string tenantId, string poCode, CancellationToken cancellationToken = default)
+    {
+        return Task.FromResult(PurchaseOrders.FirstOrDefault(p => string.Equals(p.Code, poCode, StringComparison.OrdinalIgnoreCase)));
+    }
+
     public Task<GoodsReceipt?> GetActiveReceiptByPoIdAsync(string tenantId, Guid poId, CancellationToken cancellationToken = default)
     {
         return Task.FromResult(Receipts.FirstOrDefault(r => r.PurchaseOrderId == poId && (r.Status == "DRAFT" || r.Status == "COMPLETED")));
@@ -387,6 +493,49 @@ public class FakeGoodsReceiptRepository : IGoodsReceiptRepository
     public Task AddBranchStockAsync(BranchStock stock, CancellationToken cancellationToken = default)
     {
         Stocks.Add(stock);
+        return Task.CompletedTask;
+    }
+
+    public Task AddBatchAsync(Batch batch, CancellationToken cancellationToken = default)
+    {
+        Batches.Add(batch);
+        return Task.CompletedTask;
+    }
+
+    public Task<Product?> GetProductByIdAsync(string tenantId, Guid productId, CancellationToken cancellationToken = default)
+    {
+        var prod = PurchaseOrders.SelectMany(p => p.Details).Select(d => d.Product).FirstOrDefault(p => p != null && p.Id == productId);
+        return Task.FromResult(prod);
+    }
+
+    public Task<decimal> GetTotalProductStockAsync(string tenantId, Guid productId, CancellationToken cancellationToken = default)
+    {
+        var sum = Stocks.Where(s => s.TenantId == tenantId && s.ProductId == productId).Sum(s => s.QuantityOnHand);
+        return Task.FromResult(sum);
+    }
+
+    public Task<Supplier?> GetSupplierByIdAsync(string tenantId, Guid supplierId, CancellationToken cancellationToken = default)
+    {
+        var sup = PurchaseOrders.Select(p => p.Supplier).FirstOrDefault(s => s != null && s.Id == supplierId);
+        return Task.FromResult(sup);
+    }
+
+    
+    public Task<IReadOnlyDictionary<Guid, Product>> GetProductsByIdsAsync(
+        IReadOnlyCollection<Guid> productIds,
+        CancellationToken cancellationToken = default)
+    {
+        var dict = (IReadOnlyDictionary<Guid, Product>)PurchaseOrders
+            .SelectMany(p => p.Details)
+            .Select(d => d.Product)
+            .Where(p => p != null && productIds.Contains(p.Id))
+            .DistinctBy(p => p!.Id)
+            .ToDictionary(p => p!.Id, p => p!);
+        return Task.FromResult(dict);
+    }
+    public Task AddSupplierLedgerAsync(SupplierAPLedger ledger, CancellationToken cancellationToken = default)
+    {
+        Ledgers.Add(ledger);
         return Task.CompletedTask;
     }
 }

@@ -88,8 +88,11 @@ public record PurchaseSubscriptionRequest(
     string PlanCode,
     int Months = 12,
     int ExtraBranches = 0,
+    bool HasStaffManagementAddon = false,
+    string PaymentMethod = "Wallet",
     int ExtraWarehouses = 0,
-    string PaymentMethod = "Wallet"
+    int ExtraStorageGb = 0,
+    Guid? RequestId = null
 );
 
 public record PurchaseSubscriptionResponse(
@@ -100,4 +103,15 @@ public record PurchaseSubscriptionResponse(
     decimal TotalAmount,
     string PaymentMethod,
     string Message
+);
+
+public record SubscriptionOrderHistoryDto(
+    string Code,
+    string PlanName,
+    string StartDate,
+    string EndDate,
+    decimal TotalAmount,
+    string PaymentMethod,
+    string Status,
+    DateTime CreatedAt
 );

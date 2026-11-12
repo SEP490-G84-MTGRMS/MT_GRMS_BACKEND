@@ -21,8 +21,11 @@ public class TenantConfiguration : IEntityTypeConfiguration<Tenant>
         builder.Property(x => x.Address).HasMaxLength(255);
         builder.Property(x => x.City).HasMaxLength(100);
         builder.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("ACTIVE");
+        builder.Property(x => x.SubscriptionStatus).HasMaxLength(30).HasDefaultValue("NO_PLAN");
         builder.Property(x => x.WalletBalance).HasPrecision(18, 2).HasDefaultValue(0);
         builder.Property(x => x.CurrentPlan).HasMaxLength(50);
+        builder.Property(x => x.ExtraBranches).HasDefaultValue(0);
+        builder.Property(x => x.HasStaffManagementAddon).HasDefaultValue(false);
         builder.Property(x => x.LockType).HasMaxLength(50);
         builder.Property(x => x.LockReason).HasMaxLength(500);
         builder.Property(x => x.LockedBy).HasMaxLength(100);

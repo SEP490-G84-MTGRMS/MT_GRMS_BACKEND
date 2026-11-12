@@ -2,11 +2,15 @@ using System.Text;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using Microsoft.EntityFrameworkCore;
+using System.Security.Claims;
 using Moq;
 using MT_GRMS.Api.Controllers;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.DTOs;
 using MT_GRMS.Application.Common.Interfaces;
+using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Infrastructure.Persistence;
 using Xunit;
 
 namespace MT_GRMS.UnitTests;
@@ -21,7 +25,20 @@ public class MediaUploadTests
     {
         _mockCloudinaryService = new Mock<ICloudinaryService>();
         _mockLogger = new Mock<ILogger<MediaController>>();
-        _controller = new MediaController(_mockCloudinaryService.Object, _mockLogger.Object);
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase($"MediaUpload_{Guid.NewGuid()}")
+            .Options;
+        var context = new AppDbContext(options);
+        context.Tenants.Add(new Tenant { Id = "tenant-test", Name = "Test", Subdomain = "test", Code = "TEST", Status = "ACTIVE" });
+        context.SaveChanges();
+        _controller = new MediaController(_mockCloudinaryService.Object, _mockLogger.Object, context);
+        _controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("tenant_id", "tenant-test") }, "test"))
+            }
+        };
     }
 
     [Fact]
@@ -130,7 +147,7 @@ public class MediaUploadTests
         };
 
         _mockCloudinaryService
-            .Setup(s => s.UploadImageAsync(It.IsAny<Stream>(), fileName, "mtgrms/products", It.IsAny<CancellationToken>()))
+            .Setup(s => s.UploadImageAsync(It.IsAny<Stream>(), fileName, "mtgrms/tenants/tenant-test", It.IsAny<CancellationToken>()))
             .ReturnsAsync(expectedDto);
 
         // Act

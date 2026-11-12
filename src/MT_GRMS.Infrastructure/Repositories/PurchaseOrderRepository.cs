@@ -35,7 +35,6 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
     public async Task<Domain.Entities.Supplier.Supplier?> GetSupplierByIdAsync(Guid supplierId, CancellationToken cancellationToken = default)
     {
         return await _context.Suppliers
-            .Include(s => s.DeliveryConfig)
             .FirstOrDefaultAsync(s => s.Id == supplierId, cancellationToken);
     }
 
@@ -51,51 +50,59 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         Guid? supplierId,
         CancellationToken cancellationToken = default)
     {
-        // 1. Xác định các Nhà cung cấp được gán HOẠT ĐỘNG cho Cửa hàng (Chi nhánh) này qua SupplierBranchAssignments
-        var validSupplierIds = await _context.SupplierBranchAssignments
-            .Where(sba => sba.BranchId == branchId && !sba.IsDeleted && sba.Status == SupplierStatus.Active)
-            .Select(sba => sba.SupplierId)
-            .Distinct()
-            .ToListAsync(cancellationToken);
+        // 1. Lấy mọi assignment (kể cả inactive) để trả trạng thái đúng theo OpenSpec §4.3 / §7
+        var branchAssignments = await _context.SupplierBranchAssignments
+            .Where(sba => sba.BranchId == branchId && !sba.IsDeleted)
+            .ToDictionaryAsync(sba => sba.SupplierId, cancellationToken);
 
+        var assignedSupplierIds = branchAssignments.Keys.ToList();
         if (supplierId.HasValue && supplierId.Value != Guid.Empty)
         {
-            if (!validSupplierIds.Contains(supplierId.Value))
-            {
-                return Array.Empty<OrderMatrixProductDto>();
-            }
-            validSupplierIds = new List<Guid> { supplierId.Value };
+            assignedSupplierIds = assignedSupplierIds.Contains(supplierId.Value)
+                ? new List<Guid> { supplierId.Value }
+                : new List<Guid>();
         }
 
-        if (validSupplierIds.Count == 0)
+        if (assignedSupplierIds.Count == 0)
         {
             return Array.Empty<OrderMatrixProductDto>();
         }
 
-        // 2. Lấy danh sách ProductId đã được phân bổ tới chi nhánh (qua BranchStocks)
-        var allocatedProductIds = await _context.BranchStocks
+        // 2. Sản phẩm được phép tại chi nhánh: BranchProducts (ưu tiên) ∪ BranchStocks
+        var branchProductRows = await _context.BranchProducts
+            .Where(bp => bp.BranchId == branchId && !bp.IsDeleted)
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+        var branchProductLookup = branchProductRows
+            .GroupBy(bp => bp.ProductId)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        var stockProductIds = await _context.BranchStocks
             .Where(bs => bs.BranchId == branchId && !bs.IsDeleted)
             .Select(bs => bs.ProductId)
             .Distinct()
             .ToListAsync(cancellationToken);
+
+        var allocatedProductIds = branchProductLookup.Keys
+            .Union(stockProductIds)
+            .Distinct()
+            .ToList();
 
         if (allocatedProductIds.Count == 0)
         {
             return Array.Empty<OrderMatrixProductDto>();
         }
 
-        // 3. Lấy các sản phẩm đã được add cho các Nhà cung cấp hợp lệ của cửa hàng (từ SupplierProducts)
-        // và đã được phân bổ đến chi nhánh (allocatedProductIds)
+        // 3. SupplierProducts: giữ cả inactive để hiển thị dòng xám + draft cũ
         var spQuery = _context.SupplierProducts
             .Include(sp => sp.Product)
                 .ThenInclude(p => p!.Category)
             .Include(sp => sp.Supplier)
-            .Where(sp => validSupplierIds.Contains(sp.SupplierId)
+            .Where(sp => assignedSupplierIds.Contains(sp.SupplierId)
                          && !sp.IsDeleted
-                         && sp.Status == SupplierProductStatus.Active
                          && sp.Product != null
                          && !sp.Product.IsDeleted
-                         && sp.Product.Status == "Active"
+                         && sp.Product.Status == ProductStatus.Active
                          && allocatedProductIds.Contains(sp.ProductId));
 
         var rawSupplierProducts = await spQuery.AsNoTracking().ToListAsync(cancellationToken);
@@ -104,21 +111,17 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             return Array.Empty<OrderMatrixProductDto>();
         }
 
-        // Khử trùng lặp sản phẩm: Khi xem Tất cả NCC, nếu 1 sản phẩm được nhiều NCC cung cấp, ưu tiên NCC chính (IsPrimarySupplier), sau đó là giá sỉ tốt nhất
+        // ALL và filter 1 NCC: giữ mọi dòng Product×NCC (không collapse 1 SP → 1 NCC).
         var supplierProducts = rawSupplierProducts;
-        if (!supplierId.HasValue || supplierId.Value == Guid.Empty)
+        if (supplierId.HasValue && supplierId.Value != Guid.Empty)
         {
             supplierProducts = rawSupplierProducts
-                .GroupBy(sp => sp.ProductId)
-                .Select(g => g.OrderByDescending(sp => sp.IsPrimarySupplier)
-                              .ThenBy(sp => sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : decimal.MaxValue)
-                              .First())
+                .Where(sp => sp.SupplierId == supplierId.Value)
                 .ToList();
         }
 
         var productIds = supplierProducts.Select(sp => sp.ProductId).Distinct().ToList();
 
-        // 4. Lấy thông tin tồn kho BranchStocks theo sản phẩm tại chi nhánh (nếu có)
         var stocks = await _context.BranchStocks
             .Where(bs => bs.BranchId == branchId && productIds.Contains(bs.ProductId) && !bs.IsDeleted)
             .AsNoTracking()
@@ -127,10 +130,6 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         var stockLookup = stocks
             .GroupBy(bs => bs.ProductId)
             .ToDictionary(g => g.Key, g => g.Sum(x => x.QuantityOnHand));
-
-        var branchAssignments = await _context.SupplierBranchAssignments
-            .Where(sba => sba.BranchId == branchId && !sba.IsDeleted)
-            .ToDictionaryAsync(sba => sba.SupplierId, cancellationToken);
 
         var list = new List<OrderMatrixProductDto>();
 
@@ -143,9 +142,9 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
 
             var isSupActive = resolvedSupplier == null || resolvedSupplier.Status == SupplierStatus.Active;
             var price = sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : (p.CostPrice ?? p.SellingPrice);
-            var moq = sp.MinimumOrderQuantity > 0 ? (int)sp.MinimumOrderQuantity : 10;
+            var moq = sp.MinimumOrderQuantity > 0 ? sp.MinimumOrderQuantity : 1;
 
-            var isProdActive = p.Status == "Active";
+            var isProdActive = p.Status == ProductStatus.Active;
             var prodInactiveReason = !isProdActive ? "Sản phẩm đang tạm ngưng kinh doanh" : null;
             var supInactiveReason = !isSupActive && resolvedSupplier != null
                 ? $"Nhà cung cấp {resolvedSupplier.Name} đang tạm ngừng hoạt động"
@@ -158,14 +157,35 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
 
             var isSupBranchActive = true;
             string? supBranchInactiveReason = null;
-            if (branchAssignments.TryGetValue(resolvedSupplierId, out var asg) && asg.Status != SupplierStatus.Active)
+            if (!branchAssignments.TryGetValue(resolvedSupplierId, out var asg))
+            {
+                isSupBranchActive = false;
+                supBranchInactiveReason = $"NCC {supplierName} chưa được gán hoặc đã ngừng phục vụ chi nhánh này";
+            }
+            else if (asg.Status != SupplierStatus.Active)
             {
                 isSupBranchActive = false;
                 supBranchInactiveReason = asg.InactiveReason
                     ?? $"NCC {supplierName} đang tạm ngưng phân bổ tới chi nhánh này";
             }
 
-            var rowDisabledReason = prodInactiveReason ?? supInactiveReason ?? supBranchInactiveReason ?? spInactiveReason;
+            var isBranchProductActive = true;
+            string? branchProductInactiveReason = null;
+            if (branchProductLookup.TryGetValue(p.Id, out var bp))
+            {
+                isBranchProductActive = string.Equals(bp.Status, "Active", StringComparison.OrdinalIgnoreCase);
+                if (!isBranchProductActive)
+                {
+                    branchProductInactiveReason = "Chi nhánh không kinh doanh sản phẩm này";
+                }
+            }
+
+            var rowDisabledReason = prodInactiveReason
+                ?? (!isSupActive ? (supInactiveReason ?? "NCC ngừng hoạt động") : null)
+                ?? (!isSupBranchActive ? supBranchInactiveReason : null)
+                ?? spInactiveReason
+                ?? branchProductInactiveReason;
+
             var safetyStock = p.MinStock > 0 ? p.MinStock : 10m;
             var salesPerDay = Math.Max(2m, Math.Round(safetyStock / 2m));
 
@@ -183,6 +203,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 Unit = !string.IsNullOrWhiteSpace(sp.DeliveryUoM) ? sp.DeliveryUoM : (p.BaseUnit ?? "Gói"),
                 Price = price,
                 Moq = moq,
+                OrderMultiple = 1,
                 Soh = soh,
                 SalesPerDay = salesPerDay,
                 SafetyStock = safetyStock,
@@ -194,13 +215,18 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 SupplierProductInactiveReason = spInactiveReason,
                 IsSupplierBranchActive = isSupBranchActive,
                 SupplierBranchInactiveReason = supBranchInactiveReason,
-                IsBranchProductActive = true,
-                BranchProductInactiveReason = null,
+                IsBranchProductActive = isBranchProductActive,
+                BranchProductInactiveReason = branchProductInactiveReason,
                 RowDisabledReason = rowDisabledReason
             });
         }
 
-        return list.OrderBy(x => x.SupplierName).ThenBy(x => x.Sku).ToList();
+        // Sort giá tăng dần để so sánh nguồn nhập; phụ: NCC → SKU.
+        return list
+            .OrderBy(x => x.Price <= 0 ? decimal.MaxValue : x.Price)
+            .ThenBy(x => x.SupplierName)
+            .ThenBy(x => x.Sku)
+            .ToList();
     }
 
     public async Task<IReadOnlyList<OrderMatrixSupplierDeliveryConfigDto>> GetMatrixSupplierConfigsAsync(
@@ -208,23 +234,21 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         Guid? supplierId,
         CancellationToken cancellationToken = default)
     {
-        var activeSupplierIds = await _context.SupplierBranchAssignments
-            .Where(sba => sba.BranchId == branchId && !sba.IsDeleted && sba.Status == SupplierStatus.Active)
+        var assignedSupplierIds = await _context.SupplierBranchAssignments
+            .Where(sba => sba.BranchId == branchId && !sba.IsDeleted)
             .Select(sba => sba.SupplierId)
             .Distinct()
             .ToListAsync(cancellationToken);
 
-        if (activeSupplierIds.Count == 0)
+        if (assignedSupplierIds.Count == 0)
         {
             return Array.Empty<OrderMatrixSupplierDeliveryConfigDto>();
         }
 
         var supQuery = _context.Suppliers
-            .Include(s => s.DeliveryConfig)
-                .ThenInclude(dc => dc!.BlackoutDates)
             .Include(s => s.BlackoutDates)
             .Include(s => s.BranchAssignments)
-            .Where(s => !s.IsDeleted && s.Status == SupplierStatus.Active && activeSupplierIds.Contains(s.Id))
+            .Where(s => !s.IsDeleted && assignedSupplierIds.Contains(s.Id))
             .AsNoTracking();
 
         if (supplierId.HasValue && supplierId.Value != Guid.Empty)
@@ -237,30 +261,35 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
 
         foreach (var s in suppliers)
         {
-            var dc = s.DeliveryConfig;
             var asg = s.BranchAssignments.FirstOrDefault(b => b.BranchId == branchId && !b.IsDeleted);
-            var isAssigned = activeSupplierIds.Contains(s.Id);
-            var isSupActive = s.Status == SupplierStatus.Active && (asg == null || asg.Status == SupplierStatus.Active);
+            var isAssigned = asg != null && asg.Status == SupplierStatus.Active;
+            var isSupActive = s.Status == SupplierStatus.Active && isAssigned;
             var inactiveReason = s.Status != SupplierStatus.Active
                 ? $"Nhà cung cấp {s.Name} đang tạm ngừng hoạt động"
-                : (asg != null && asg.Status != SupplierStatus.Active ? asg.InactiveReason ?? "NCC tạm ngưng phân bổ tới chi nhánh này" : null);
+                : (asg == null
+                    ? $"NCC {s.Name} chưa được gán tới chi nhánh này"
+                    : (asg.Status != SupplierStatus.Active
+                        ? asg.InactiveReason ?? "NCC tạm ngưng phân bổ tới chi nhánh này"
+                        : null));
 
-            var activeDays = ParseDeliveryDays(dc?.DeliveryDaysJson, dc?.DeliveryWeekdaysMask ?? 127);
+            // Ưu tiên lịch giao override trên assignment (cửa hàng × NCC); không có thì dùng base Supplier.
+            List<int> activeDays;
+            if (asg != null
+                && (!string.IsNullOrWhiteSpace(asg.DeliveryDaysJson) || asg.DeliveryWeekdaysMask is > 0))
+            {
+                activeDays = ParseDeliveryDays(
+                    asg.DeliveryDaysJson,
+                    asg.DeliveryWeekdaysMask ?? 0);
+            }
+            else
+            {
+                activeDays = ParseDeliveryDays(s.DeliveryDaysJson, s.DeliveryWeekdaysMask);
+            }
 
             var blackoutDates = new HashSet<string>();
             if (s.BlackoutDates != null)
             {
                 foreach (var bo in s.BlackoutDates)
-                {
-                    for (var dt = bo.StartDate.Date; dt <= bo.EndDate.Date; dt = dt.AddDays(1))
-                    {
-                        blackoutDates.Add(dt.ToString("yyyy-MM-dd"));
-                    }
-                }
-            }
-            if (dc?.BlackoutDates != null)
-            {
-                foreach (var bo in dc.BlackoutDates)
                 {
                     for (var dt = bo.StartDate.Date; dt <= bo.EndDate.Date; dt = dt.AddDays(1))
                     {
@@ -277,8 +306,8 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 IsActive = isSupActive,
                 IsAssignedToBranch = isAssigned,
                 InactiveReason = inactiveReason,
-                LeadTimeDays = dc?.LeadTimeDays > 0 ? dc.LeadTimeDays : 1,
-                CutoffTime = !string.IsNullOrWhiteSpace(dc?.CutoffTime) ? dc.CutoffTime : "15:00",
+                CutoffTime = !string.IsNullOrWhiteSpace(s.CutoffTime) ? s.CutoffTime : "15:00",
+                CutoffDayOffset = s.CutoffDayOffset >= 0 ? s.CutoffDayOffset : 1,
                 ActiveDeliveryDays = activeDays,
                 BlackoutDates = blackoutDates.OrderBy(x => x).ToList()
             });
@@ -350,6 +379,17 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         }
 
         return await query.FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<PurchaseOrder>> GetDraftMatrixPosAsync(
+        Guid branchId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _context.PurchaseOrders
+            .Include(po => po.Details)
+                .ThenInclude(d => d.Product)
+            .Where(po => po.BranchId == branchId && po.Status == "DRAFT" && !po.IsDeleted)
+            .ToListAsync(cancellationToken);
     }
 
     public async Task<(IReadOnlyList<PurchaseOrder> Items, int TotalCount)> GetPagedPurchaseOrdersAsync(
@@ -429,6 +469,11 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         await _context.PurchaseOrders.AddAsync(purchaseOrder, cancellationToken);
     }
 
+    public void AddPurchaseOrderRevision(PurchaseOrderRevision revision)
+    {
+        _context.PurchaseOrderRevisions.Add(revision);
+    }
+
     public async Task<string> GeneratePoCodeAsync(
         DateTime deliveryDate,
         CancellationToken cancellationToken = default)
@@ -457,6 +502,145 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
     public void AddPurchaseOrderDetail(PurchaseOrderDetail detail)
     {
         _context.PurchaseOrderDetails.Add(detail);
+    }
+
+    public async Task<PurchaseOrder?> FindCommittedPoAsync(
+        Guid branchId,
+        Guid supplierId,
+        DateTime deliveryDate,
+        CancellationToken cancellationToken = default)
+    {
+        var day = deliveryDate.Date;
+        // Tracked + Details — phục vụ CREATE vs AMEND (optimistic concurrency qua RowVersion).
+        return await _context.PurchaseOrders
+            .Include(po => po.Details)
+            .Where(po => !po.IsDeleted
+                         && po.BranchId == branchId
+                         && po.SupplierId == supplierId
+                         && po.Status != "DRAFT"
+                         && po.Status != "CANCELLED"
+                         && po.Status != "REJECTED"
+                         && po.DeliveryDate.HasValue
+                         && po.DeliveryDate.Value.Date == day)
+            .OrderByDescending(po => po.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<PurchaseOrder>> GetCommittedPosInRangeAsync(
+        Guid branchId,
+        Guid? supplierId,
+        DateTime viewFrom,
+        int durationDays,
+        CancellationToken cancellationToken = default)
+    {
+        var from = viewFrom.Date;
+        var to = from.AddDays(Math.Clamp(durationDays, 1, 31));
+        var query = _context.PurchaseOrders
+            .AsNoTracking()
+            .Include(po => po.Details)
+            .Where(po => !po.IsDeleted
+                         && po.BranchId == branchId
+                         && po.Status != "DRAFT"
+                         && po.Status != "CANCELLED"
+                         && po.Status != "REJECTED"
+                         && po.DeliveryDate.HasValue
+                         && po.DeliveryDate.Value.Date >= from
+                         && po.DeliveryDate.Value.Date < to);
+
+        if (supplierId.HasValue && supplierId.Value != Guid.Empty)
+        {
+            query = query.Where(po => po.SupplierId == supplierId.Value);
+        }
+
+        return await query.ToListAsync(cancellationToken);
+    }
+
+    public async Task<SupplierProduct?> GetSupplierProductAsync(
+        Guid supplierId,
+        Guid productId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _context.SupplierProducts
+            .Include(sp => sp.Product)
+            .FirstOrDefaultAsync(
+                sp => sp.SupplierId == supplierId && sp.ProductId == productId && !sp.IsDeleted,
+                cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<Branch>> GetActiveBranchesAsync(CancellationToken cancellationToken = default)
+    {
+        return await _context.Branches
+            .AsNoTracking()
+            .Where(b => b.IsActive && !b.IsDeleted)
+            .OrderBy(b => b.BranchCode)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<Guid>> GetActiveBranchIdsForSupplierAsync(
+        Guid supplierId,
+        CancellationToken cancellationToken = default)
+    {
+        var activeBranchIds = await _context.Branches
+            .AsNoTracking()
+            .Where(b => b.IsActive && !b.IsDeleted)
+            .Select(b => b.Id)
+            .ToListAsync(cancellationToken);
+
+        if (activeBranchIds.Count == 0)
+        {
+            return Array.Empty<Guid>();
+        }
+
+        return await _context.SupplierBranchAssignments
+            .AsNoTracking()
+            .Where(a =>
+                a.SupplierId == supplierId
+                && !a.IsDeleted
+                && a.Status == SupplierStatus.Active
+                && activeBranchIds.Contains(a.BranchId))
+            .Select(a => a.BranchId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyDictionary<Guid, (Guid ReceiptId, string Code, string Status)>> GetActiveGoodsReceiptsByPoIdsAsync(
+        IReadOnlyCollection<Guid> purchaseOrderIds,
+        CancellationToken cancellationToken = default)
+    {
+        if (purchaseOrderIds == null || purchaseOrderIds.Count == 0)
+        {
+            return new Dictionary<Guid, (Guid, string, string)>();
+        }
+
+        var rows = await _context.GoodsReceipts
+            .AsNoTracking()
+            .Where(gr =>
+                !gr.IsDeleted
+                && gr.PurchaseOrderId != null
+                && purchaseOrderIds.Contains(gr.PurchaseOrderId.Value)
+                && (gr.Status == "DRAFT" || gr.Status == "COMPLETED"))
+            .Select(gr => new
+            {
+                PoId = gr.PurchaseOrderId!.Value,
+                gr.Id,
+                gr.Code,
+                gr.Status,
+                gr.CreatedAt
+            })
+            .ToListAsync(cancellationToken);
+
+        return rows
+            .GroupBy(r => r.PoId)
+            .ToDictionary(
+                g => g.Key,
+                g =>
+                {
+                    var best = g
+                        .OrderByDescending(x => x.Status == "COMPLETED")
+                        .ThenByDescending(x => x.CreatedAt)
+                        .First();
+                    return (best.Id, best.Code, best.Status);
+                });
     }
 }
 

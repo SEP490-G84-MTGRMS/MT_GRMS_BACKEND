@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
@@ -6,7 +7,8 @@ using MT_GRMS.Application.Suppliers.Dtos;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
-[Route("api/v1/suppliers")]
+[Route("api/suppliers")]
+[Authorize]
 public class SuppliersController : BaseApiController
 {
     private readonly ISupplierService _supplierService;
@@ -259,6 +261,20 @@ public class SuppliersController : BaseApiController
         return Ok(ApiResponse<SupplierBranchAssignmentDetailDto>.Ok(result, message));
     }
 
+    /// <summary>
+    /// Cập nhật ngày giao hàng theo thứ (override) cho phân bổ NCC × cửa hàng.
+    /// </summary>
+    [HttpPatch("{id:guid}/branches/{branchId:guid}/delivery-days")]
+    public async Task<IActionResult> UpdateBranchAssignmentDeliveryDays(
+        Guid id,
+        Guid branchId,
+        [FromBody] UpdateSupplierBranchAssignmentDeliveryDaysRequest request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _supplierService.UpdateBranchAssignmentDeliveryDaysAsync(id, branchId, request, cancellationToken);
+        return Ok(ApiResponse<SupplierBranchAssignmentDetailDto>.Ok(result, "Đã cập nhật ngày giao hàng cho phân bổ."));
+    }
+
     [HttpGet("{id:guid}/ap/ledger")]
     public async Task<IActionResult> GetAPLedger(
         Guid id,
@@ -390,4 +406,5 @@ public class SuppliersController : BaseApiController
         return Ok(ApiResponse<SupplierProductDto>.Ok(result, "Cập nhật nhà cung cấp chính thành công."));
     }
 }
+
 

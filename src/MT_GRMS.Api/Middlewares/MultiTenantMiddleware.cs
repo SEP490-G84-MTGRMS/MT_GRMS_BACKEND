@@ -17,27 +17,49 @@ public class MultiTenantMiddleware
         if (context.User.Identity?.IsAuthenticated == true)
         {
             var tenantId = context.User.FindFirst("tenant_id")?.Value;
-            var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            var userIdClaim = context.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                ?? context.User.FindFirst("sub")?.Value;
             var branchIdClaim = context.User.FindFirst("branch_id")?.Value;
 
-            var userId = Guid.TryParse(userIdClaim, out var parsedUserId) ? parsedUserId : Guid.Empty;
+            var userId = TenantContext.ResolveDeterministicGuid(userIdClaim);
             Guid? branchId = Guid.TryParse(branchIdClaim, out var parsedBranchId) ? parsedBranchId : null;
+            var role = context.User.FindFirst(ClaimTypes.Role)?.Value
+                ?? context.User.FindFirst("role")?.Value
+                ?? context.User.FindFirst("RoleName")?.Value;
+
+            tenantContext.SetRawUserId(userIdClaim);
+
+            // INV-1 & TEN-05: Chỉ System Admin mới có quyền switch tenant qua header X-Tenant-Id
+            if (string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase))
+            {
+                var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
+                if (!string.IsNullOrWhiteSpace(headerTenantId))
+                {
+                    tenantId = headerTenantId;
+                }
+            }
 
             if (!string.IsNullOrWhiteSpace(tenantId))
             {
                 tenantContext.SetContext(tenantId, userId, branchId);
-                var role = context.User.FindFirst(ClaimTypes.Role)?.Value
-                    ?? context.User.FindFirst("role")?.Value
-                    ?? context.User.FindFirst("RoleName")?.Value;
+                tenantContext.SetRole(role);
+            }
+            else
+            {
+                tenantContext.SetContext(string.Empty, userId, branchId);
                 tenantContext.SetRole(role);
             }
         }
 
+        // Bỏ qua ép fallback tenant cho các endpoint đăng ký tài khoản / mở cửa hàng mới
+        var reqPath = context.Request.Path.Value?.ToLowerInvariant() ?? string.Empty;
+        var isRegistration = reqPath.StartsWith("/api/auth/register", StringComparison.OrdinalIgnoreCase);
+
         // Hỗ trợ header X-Tenant-Id hoặc fallback tenant cho môi trường dev/standalone
-        if (string.IsNullOrWhiteSpace(tenantContext.CurrentTenantId) ||
+        if (!isRegistration && (string.IsNullOrWhiteSpace(tenantContext.CurrentTenantId) ||
             tenantContext.CurrentTenantId == "default-tenant" ||
             tenantContext.CurrentTenantId == "DEFAULT" ||
-            tenantContext.CurrentTenantId == "TENANT-HCM-01")
+            tenantContext.CurrentTenantId == "TENANT-HCM-01"))
         {
             var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
             var fallbackTenant = !string.IsNullOrWhiteSpace(headerTenantId) ? headerTenantId : "tenant_mt_mart_01";
@@ -54,10 +76,9 @@ public class MultiTenantMiddleware
             }
             else if (string.IsNullOrWhiteSpace(tenantContext.CurrentRole))
             {
-                tenantContext.SetRole("StoreOwner");
+                tenantContext.SetRole("STORE_OWNER");
             }
         }
-
         await _next(context);
     }
 }

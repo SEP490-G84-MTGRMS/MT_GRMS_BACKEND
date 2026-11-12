@@ -1,5 +1,8 @@
+using System.Net;
 using System.Text;
+using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using MT_GRMS.Api.Common;
@@ -17,12 +20,22 @@ AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 var builder = WebApplication.CreateBuilder(args);
 
 // 1. Thêm Controllers & Cấu hình Swagger
-builder.Services.AddControllers();
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+    });
 builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+builder.Services.AddSwaggerGen(options =>
+{
+    options.CustomSchemaIds(type => type.FullName?.Replace("+", ".") ?? type.Name);
+});
 
 // 2. Cấu hình JWT Bearer Authentication
-var jwtKey = builder.Configuration["Jwt:Key"] ?? "MT_GRMS_Super_Secret_Key_For_JWT_Authentication_2026_FPTU_Capstone_Project!";
+// appsettings often has Jwt:Key="" — treat empty as missing so the fallback still applies
+var jwtKey = builder.Configuration["Jwt:Key"];
+if (string.IsNullOrWhiteSpace(jwtKey))
+    jwtKey = "MT_GRMS_Super_Secret_Key_For_JWT_Authentication_2026_FPTU_Capstone_Project!";
 var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "MTGRMS_API";
 var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "MTGRMS_CLIENT";
 
@@ -45,6 +58,18 @@ builder.Services.AddAuthentication(options =>
         ValidAudience = jwtAudience,
         ValidateLifetime = true,
         ClockSkew = TimeSpan.Zero
+    };
+    options.Events = new JwtBearerEvents
+    {
+        OnMessageReceived = context =>
+        {
+            // Ưu tiên đọc access_token từ HttpOnly Cookie
+            if (context.Request.Cookies.TryGetValue("access_token", out var cookieToken) && !string.IsNullOrWhiteSpace(cookieToken))
+            {
+                context.Token = cookieToken;
+            }
+            return Task.CompletedTask;
+        }
     };
 });
 
@@ -81,6 +106,24 @@ builder.Services.AddCors(options =>
     });
 });
 
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    var configuredProxies = builder.Configuration.GetSection("ForwardedHeaders:KnownProxies").Get<string[]>();
+    if (configuredProxies is { Length: > 0 })
+    {
+        options.KnownNetworks.Clear();
+        options.KnownProxies.Clear();
+        foreach (var proxy in configuredProxies)
+        {
+            if (IPAddress.TryParse(proxy, out var ip))
+            {
+                options.KnownProxies.Add(ip);
+            }
+        }
+    }
+});
+
 var app = builder.Build();
 
 // 6. Cấu hình Swagger (Bật ở cả Development và Production để test API trên Render/Cloud)
@@ -94,6 +137,8 @@ app.UseSwaggerUI(c =>
 // Chuyển hướng trang chủ "/" sang "/swagger" để khi vào domain là mở Swagger ngay
 app.MapGet("/", () => Results.Redirect("/swagger"));
 
+app.UseForwardedHeaders();
+
 // 7. Cấu hình HTTP Pipeline theo thứ tự chuẩn
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
@@ -105,6 +150,7 @@ app.UseRouting();
 // Middleware xác thực & cô lập Tenant
 app.UseAuthentication();
 app.UseMiddleware<MultiTenantMiddleware>();
+app.UseMiddleware<SubscriptionAccessMiddleware>();
 app.UseAuthorization();
 
 app.MapControllers();
@@ -119,10 +165,7 @@ using (var scope = app.Services.CreateScope())
         var dbContext = services.GetRequiredService<AppDbContext>();
 
         logger.LogInformation("Initializing database schema and seed data...");
-        await DbInitializer.InitializeAsync(dbContext);
-
-        logger.LogInformation("Seeding tax & finance sample data into database...");
-        await DatabaseSeeder.SeedAsync(dbContext, logger);
+        await DbInitializer.InitializeAsync(dbContext, logger);
         logger.LogInformation("Database seeded successfully.");
     }
     catch (Exception ex)

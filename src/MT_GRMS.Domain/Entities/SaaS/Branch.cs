@@ -12,6 +12,9 @@ public class Branch : BaseTenantEntity
     public string Name { get; set; } = string.Empty;
     public string? Address { get; set; }
     public string? Phone { get; set; }
+    public string? Email { get; set; }
+    public string? ManagerName { get; set; }
+    public bool IsHeadquarter { get; set; } = false;
     public decimal? Latitude { get; set; }
     public decimal? Longitude { get; set; }
     public int CheckinRadiusMeters { get; set; } = 100;
@@ -20,8 +23,6 @@ public class Branch : BaseTenantEntity
     // Backward compatibility aliases
     [NotMapped]
     public string Code { get => BranchCode; set => BranchCode = value; }
-    [NotMapped]
-    public string? ManagerName { get; set; }
     [NotMapped]
     public string Status { get => IsActive ? "Active" : "Inactive"; set => IsActive = value == "Active"; }
     [NotMapped]

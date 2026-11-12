@@ -14,4 +14,13 @@ public class SupplierBranchAssignment : BaseTenantEntity
 
     public SupplierStatus Status { get; set; } = SupplierStatus.Active;
     public string? InactiveReason { get; set; }
+
+    /// <summary>
+    /// Override ngày giao theo thứ cho cặp NCC×cửa hàng (JSON ["Mon","Wed",...]).
+    /// Null/empty → dùng base từ Supplier.
+    /// </summary>
+    public string? DeliveryDaysJson { get; set; }
+
+    /// <summary>Mask tuần lễ tương ứng DeliveryDaysJson (nullable = chưa override).</summary>
+    public int? DeliveryWeekdaysMask { get; set; }
 }
