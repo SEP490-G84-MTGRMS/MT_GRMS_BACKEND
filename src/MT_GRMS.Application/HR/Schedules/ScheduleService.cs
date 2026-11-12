@@ -439,6 +439,18 @@ public class ScheduleService : IScheduleService
         var schedule = await _scheduleRepository.GetByIdAsync(id, cancellationToken)
             ?? throw new NotFoundException($"Lịch làm việc với ID {id} không tồn tại.");
 
+        var isLeaveSchedule = schedule.IsLeave
+            || schedule.Status == ScheduleStatus.OnLeave
+            || string.Equals(schedule.ApprovalType, "PAID_LEAVE", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(schedule.ApprovalType, "UNPAID_LEAVE", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(schedule.CheckInMethod, "MANUAL_PAID_LEAVE", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(schedule.CheckInMethod, "MANUAL_UNPAID_LEAVE", StringComparison.OrdinalIgnoreCase);
+
+        if (isLeaveSchedule)
+        {
+            throw new BusinessException("Không thể xóa ca làm việc đang ở trạng thái nghỉ phép (nghỉ phép có lương hoặc không lương).");
+        }
+
         if (schedule.Status == ScheduleStatus.Completed)
         {
             throw new BusinessException("Không thể xóa ca làm việc đã hoàn thành.");
