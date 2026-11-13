@@ -38,3 +38,4 @@
 - **Mức độ rủi ro**: **Low** (Chỉ tinh chỉnh nhánh xử lý fallback dev của `EmailService.cs`).
 - **File cần review**: `src/MT_GRMS.Infrastructure/Services/EmailService.cs`.
 - **Lưu ý cấu hình**: Khi triển khai production, cần điền đầy đủ `EmailSettings:SmtpUser` và `EmailSettings:SmtpPass` vào biến môi trường hoặc `appsettings.Production.json` để email thật được gửi đến người dùng.
+
