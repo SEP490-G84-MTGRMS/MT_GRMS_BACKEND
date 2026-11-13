@@ -1,5 +1,7 @@
 using System.Net;
-using System.Net.Mail;
+using MailKit.Net.Smtp;
+using MailKit.Security;
+using MimeKit;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Hosting;
@@ -104,15 +106,15 @@ public class EmailService : IEmailService
             return Task.FromResult(false);
         }
 
-        var senderEmail = string.IsNullOrWhiteSpace(_settings.SenderEmail)
-            ? _settings.SmtpUser
-            : _settings.SenderEmail;
-        var senderName = _settings.SenderName;
-        var host = _settings.SmtpHost;
+        var host = _settings.SmtpHost?.Trim().Trim('"', '\'') ?? "mail.oxmail.vn";
         var port = _settings.SmtpPort;
         var ssl = _settings.EnableSsl;
-        var user = _settings.SmtpUser;
-        var pass = _settings.SmtpPass;
+        var user = _settings.SmtpUser?.Trim().Trim('"', '\'') ?? string.Empty;
+        var pass = _settings.SmtpPass?.Trim().Trim('"', '\'') ?? string.Empty;
+        var senderEmail = (string.IsNullOrWhiteSpace(_settings.SenderEmail)
+            ? user
+            : _settings.SenderEmail)?.Trim().Trim('"', '\'') ?? user;
+        var senderName = _settings.SenderName?.Trim() ?? "THViet";
         var htmlBody = BuildOtpHtmlBody(greetingName, description, otpCode, validityMinutes);
 
         // Gửi email OTP qua SMTP ở chế độ chạy nền (non-blocking background task)
@@ -121,25 +123,27 @@ public class EmailService : IEmailService
         {
             try
             {
-                using var client = new SmtpClient(host, port)
-                {
-                    EnableSsl = ssl,
-                    Credentials = new NetworkCredential(user, pass),
-                    DeliveryMethod = SmtpDeliveryMethod.Network,
-                    Timeout = 15000
-                };
+                var message = new MimeMessage();
+                message.From.Add(new MailboxAddress(senderName, senderEmail));
+                message.To.Add(MailboxAddress.Parse(toEmail));
+                message.Subject = subject.Replace("\r", string.Empty).Replace("\n", string.Empty);
+                var builder = new BodyBuilder { HtmlBody = htmlBody };
+                message.Body = builder.ToMessageBody();
 
-                using var mail = new MailMessage
-                {
-                    From = new MailAddress(senderEmail, senderName),
-                    Subject = subject,
-                    IsBodyHtml = true,
-                    Body = htmlBody
-                };
-                mail.To.Add(toEmail);
+                using var client = new SmtpClient();
+                var secure = port == 465
+                    ? SecureSocketOptions.SslOnConnect
+                    : (ssl ? SecureSocketOptions.StartTls : SecureSocketOptions.Auto);
 
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-                await client.SendMailAsync(mail, cts.Token);
+                await client.ConnectAsync(host, port, secure, cts.Token);
+                if (!string.IsNullOrWhiteSpace(user) && !string.IsNullOrWhiteSpace(pass))
+                {
+                    _logger.LogInformation("[EmailService Debug] User: '{User}', PassLength: {Len}, PassFirst: '{First}', PassLast: '{Last}'", user, pass.Length, pass[0], pass[^1]);
+                    await client.AuthenticateAsync(user, pass, cts.Token);
+                }
+                await client.SendAsync(message, cts.Token);
+                await client.DisconnectAsync(true, cts.Token);
                 _logger.LogInformation("[Background SMTP] Đã gửi email OTP thành công tới: {Email}.", toEmail);
             }
             catch (Exception ex)
