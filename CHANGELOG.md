@@ -11,6 +11,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - Bổ sung `TrialOnboardingBackfillService` (dry-run & backfill deterministic) và migration cho trạng thái Trial, paid và dữ liệu legacy `REVIEW_REQUIRED`; sửa `DbInitializer` không gán nhầm `CurrentPlan = "PRO"` cho tenant `NO_PLAN` và `TenantService` luôn trả `"Chưa kích hoạt"` cho tenant `NO_PLAN`; chuẩn hóa email/điện thoại cho account [HOMEPAGE-TRIAL].
 
 ### Security
+- Chuẩn hóa validation authentication: giới hạn payload đăng nhập, password đăng ký mạnh 8–64 ký tự, email/phone/tên/OTP, bắt buộc đồng ý điều khoản và chặn malformed OTP trước khi tiêu hao lượt thử [AUTH-VALIDATION] [worklog: docs/worklogs/2026-11-13_AUTH-VALIDATION_AI_auth-input-validation.md].
 - Bắt buộc Email OTP distributed (`Pending/Reserved/Consumed`) gắn `NormalizedEmail`, intent và request fingerprint; fail-closed ngoài Development; `IdempotencyFilter` scoped theo actor + operation + tenant/challenge trả RFC 7807 `ProblemDetails`; cấu hình `ForwardedHeadersOptions` trusted proxy và củng cố chống replay webhook SePay [HOMEPAGE-TRIAL].
 
 - Chuẩn hóa hạn mức lưu trữ 2 GB cho gói STANDARD/PRO; bổ sung mua thêm dung lượng với giá 15.000 đ/GB/tháng, báo giá theo thời gian còn lại, VAT và thanh toán ví có idempotency [SUBSCRIPTION-STORAGE] [worklog: docs/worklogs/2026-11-12_SUBSCRIPTION-STORAGE_AI_storage-quota-addon.md].

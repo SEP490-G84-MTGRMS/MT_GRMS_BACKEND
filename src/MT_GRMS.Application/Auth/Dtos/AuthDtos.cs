@@ -64,7 +64,7 @@ public record RegisterTenantRequest(
     string Phone,
     string? Email,
     string Password,
-    bool AgreeTerms = true,
+    bool AgreeTerms = false,
     string? OtpCode = null,
     bool StartTrial = false,
     string? IdempotencyKey = null,
