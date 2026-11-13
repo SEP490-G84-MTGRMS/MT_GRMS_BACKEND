@@ -52,3 +52,4 @@
 - **Rủi ro**: Thấp (Low).
 - **File cần review**: `src/MT_GRMS.Infrastructure/Services/EmailService.cs`.
 - **Hậu merge**: Không cần chạy migration hoặc chỉnh sửa cấu hình `appsettings.json`.
+
