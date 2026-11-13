@@ -54,6 +54,7 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
             var kw = query.Keyword.Trim().ToLower();
             dbQuery = dbQuery.Where(r =>
                 r.Code.ToLower().Contains(kw) ||
+                r.Reason.ToLower().Contains(kw) ||
                 (r.GoodsReceipt != null && r.GoodsReceipt.Code.ToLower().Contains(kw)) ||
                 (r.Supplier != null && r.Supplier.Name.ToLower().Contains(kw)));
         }
@@ -83,7 +84,11 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
                 r.TotalHandedOverQty,
                 r.TotalEstimatedAmount,
                 r.CreatedAt,
-                r.HandedOverAt
+                r.HandedOverAt,
+                r.StocktakeId,
+                r.StocktakeCode,
+                r.ResolutionType,
+                r.SettlementStatus
             ))
             .ToListAsync(cancellationToken);
 
@@ -187,12 +192,17 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
 
         if (grn == null) return new List<GrnReturnableLineDto>();
 
-        // Query existing return lines referencing this GRN
+        // Query existing post-receipt return lines referencing this GRN (loại trừ phiếu 'Từ chối nhận hàng' vì chưa nhập vào AcceptedQty)
         var existingReturns = await _appContext.SupplierReturnLines.AsNoTracking()
             .Include(l => l.SupplierReturn)
             .Where(l => l.TenantId == tenantId && l.SupplierReturn != null &&
                         l.SupplierReturn.GoodsReceiptId == grnId &&
-                        l.SupplierReturn.Status != "CANCELLED")
+                        l.SupplierReturn.Status != "CANCELLED" &&
+                        l.SupplierReturn.Reason != "Từ chối nhận hàng")
+            .ToListAsync(cancellationToken);
+
+        var branchStocks = await _appContext.BranchStocks.AsNoTracking()
+            .Where(s => s.TenantId == tenantId && s.BranchId == grn.BranchId && !s.IsDeleted)
             .ToListAsync(cancellationToken);
 
         var result = new List<GrnReturnableLineDto>();
@@ -205,14 +215,25 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
                 .ToList();
 
             var returnedQty = relatedReturns
-                .Where(r => r.SupplierReturn?.Status == "COMPLETED")
+                .Where(r => r.SupplierReturn?.Status == "COMPLETED" || r.SupplierReturn?.Status == "PARTIALLY_HANDED_OVER")
                 .Sum(r => r.HandedOverQty > 0 ? r.HandedOverQty : r.ApprovedQty);
 
             var pendingReturnQty = relatedReturns
                 .Where(r => r.SupplierReturn?.Status == "PENDING_SUPPLIER" || r.SupplierReturn?.Status == "APPROVED")
-                .Sum(r => r.RequestedQty);
+                .Sum(r => r.SupplierReturn?.Status == "APPROVED" ? r.ApprovedQty : r.RequestedQty);
 
-            var availableReturnQty = Math.Max(0, line.AcceptedQty - returnedQty - pendingReturnQty);
+            var grnCeilingQty = Math.Max(0, line.AcceptedQty - returnedQty - pendingReturnQty);
+
+            // Giới hạn 2: Số lượng thực tế còn trong kho tại chi nhánh (BranchStock)
+            var matchedStocks = line.BranchStockId.HasValue
+                ? branchStocks.Where(s => s.Id == line.BranchStockId.Value).ToList()
+                : branchStocks.Where(s => s.ProductId == line.ProductId && (string.IsNullOrEmpty(line.BatchCode) || s.BatchCode == line.BatchCode)).ToList();
+
+            var stockOnHandQty = matchedStocks.Any() ? matchedStocks.Sum(s => s.QuantityOnHand) : grnCeilingQty;
+            var stockReservedQty = matchedStocks.Any() ? matchedStocks.Sum(s => s.QuantityReserved) : 0m;
+            var stockAvailableQty = Math.Max(0, stockOnHandQty - stockReservedQty);
+
+            var availableReturnQty = Math.Min(grnCeilingQty, stockAvailableQty);
 
             result.Add(new GrnReturnableLineDto(
                 GoodsReceiptLineId: line.Id,
@@ -226,7 +247,9 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
                 ReturnedQty: returnedQty,
                 PendingReturnQty: pendingReturnQty,
                 AvailableReturnQty: availableReturnQty,
-                UnitCost: line.UnitPrice
+                UnitCost: line.UnitPrice,
+                StockOnHandQty: stockOnHandQty,
+                StockReservedQty: stockReservedQty
             ));
         }
 

@@ -6,6 +6,7 @@ using MT_GRMS.Api.Controllers;
 using MT_GRMS.Application.Admin.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Infrastructure.Persistence;
 using Xunit;
 
@@ -37,6 +38,16 @@ public class TenantStoreControllerTests
             CurrentPlan = "PRO",
             WalletBalance = 20000000m
         });
+        _dbContext.Users.Add(new User
+        {
+            Id = "user-owner-01", UserName = "owner", FullName = "Owner",
+            Email = "owner@example.com", NormalizedEmail = "owner@example.com",
+            PasswordHash = "test", IsEmailVerified = true
+        });
+        _dbContext.TenantUsers.Add(new TenantUser
+        {
+            TenantId = "tenant-01", UserId = "user-owner-01", Role = "STORE_OWNER", IsActive = true
+        });
         _dbContext.SaveChanges();
 
         _tenantService = new MockTenantService();
@@ -62,6 +73,7 @@ public class TenantStoreControllerTests
         var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {
             new Claim(ClaimTypes.Name, "StoreOwner"),
+            new Claim(ClaimTypes.NameIdentifier, "user-owner-01"),
             new Claim("tenant_id", "tenant-01"),
             new Claim(ClaimTypes.Role, "STORE_OWNER")
         }, "mock_auth"));
@@ -95,6 +107,33 @@ public class TenantStoreControllerTests
         var resp = Assert.IsType<ApiResponse<TenantDetailResponse>>(ok.Value);
         Assert.True(resp.Success);
         Assert.Equal("Hà Nội Mart Cập Nhật", resp.Data!.Name);
+    }
+
+    [Fact]
+    public async Task ActivateTrial_EligibleTenant_StartsOnceForExactly72Hours()
+    {
+        var tenant = await _dbContext.Tenants.FindAsync("tenant-01");
+        tenant!.CurrentPlan = null;
+        tenant.SubscriptionStatus = "NO_PLAN";
+        tenant.FirstPaidAt = null;
+        await _dbContext.SaveChangesAsync();
+
+        var first = Assert.IsType<OkObjectResult>(await _controller.ActivateTrialSubscription(CancellationToken.None));
+        Assert.NotNull(first.Value);
+        Assert.Equal("TRIAL", tenant.SubscriptionStatus);
+        Assert.Equal(TimeSpan.FromHours(72), tenant.TrialExpiresAt!.Value - tenant.TrialStartedAt!.Value);
+
+        var originalExpiry = tenant.TrialExpiresAt;
+        Assert.IsType<OkObjectResult>(await _controller.ActivateTrialSubscription(CancellationToken.None));
+        Assert.Equal(originalExpiry, tenant.TrialExpiresAt);
+    }
+
+    [Fact]
+    public async Task GetStoreInfo_IgnoresSpoofedTenantHeader()
+    {
+        _controller.Request.Headers["X-Tenant-Id"] = "tenant-other";
+        var result = await _controller.GetStoreInfo(CancellationToken.None);
+        Assert.IsType<OkObjectResult>(result);
     }
 
     [Fact]
@@ -153,5 +192,31 @@ public class TenantStoreControllerTests
         Assert.NotNull(updatedTenant);
         Assert.Equal("PRO", updatedTenant!.CurrentPlan);
         Assert.NotNull(updatedTenant.SubscriptionExpiresAt);
+    }
+
+    [Fact]
+    public async Task PurchaseSubscription_FromProToStandard_Returns400DowngradeNotAllowed()
+    {
+        var tenant = await _dbContext.Tenants.FindAsync("tenant-01");
+        Assert.NotNull(tenant);
+        tenant!.CurrentPlan = "PRO";
+        tenant.SubscriptionStatus = "ACTIVE";
+        tenant.WalletBalance = 10000000m;
+        await _dbContext.SaveChangesAsync();
+
+        var req = new PurchaseSubscriptionRequest(
+            PlanCode: "STANDARD",
+            Months: 1,
+            ExtraBranches: 0,
+            ExtraWarehouses: 0,
+            PaymentMethod: "Wallet"
+        );
+
+        var result = await _controller.PurchaseSubscription(req, CancellationToken.None);
+
+        var bad = Assert.IsType<BadRequestObjectResult>(result);
+        var resp = Assert.IsType<ApiResponse<PurchaseSubscriptionResponse>>(bad.Value);
+        Assert.False(resp.Success);
+        Assert.Equal("DOWNGRADE_NOT_ALLOWED", resp.ErrorCode);
     }
 }

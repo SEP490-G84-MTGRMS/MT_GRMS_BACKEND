@@ -1,9 +1,11 @@
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.EntityFrameworkCore;
+using MT_GRMS.Application.Auth.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Infrastructure.Persistence;
@@ -16,8 +18,9 @@ namespace MT_GRMS.Api.Filters;
 [AttributeUsage(AttributeTargets.Method | AttributeTargets.Class)]
 public class RequireIdempotencyAttribute : TypeFilterAttribute
 {
-    public RequireIdempotencyAttribute() : base(typeof(IdempotencyFilter))
+    public RequireIdempotencyAttribute(bool useProblemDetails = false) : base(typeof(IdempotencyFilter))
     {
+        Arguments = [useProblemDetails];
     }
 }
 
@@ -30,11 +33,13 @@ public class IdempotencyFilter : IAsyncActionFilter
 {
     private readonly AppDbContext _context;
     private readonly ITenantContext _tenantContext;
+    private readonly bool _useProblemDetails;
 
-    public IdempotencyFilter(AppDbContext context, ITenantContext tenantContext)
+    public IdempotencyFilter(AppDbContext context, ITenantContext tenantContext, bool useProblemDetails = false)
     {
         _context = context;
         _tenantContext = tenantContext;
+        _useProblemDetails = useProblemDetails;
     }
 
     /// <summary>
@@ -47,31 +52,38 @@ public class IdempotencyFilter : IAsyncActionFilter
 
         if (!req.Headers.TryGetValue("Idempotency-Key", out var keyValues) || string.IsNullOrWhiteSpace(keyValues.ToString()))
         {
-            context.Result = new BadRequestObjectResult(new ApiResponse<string>
-            {
-                Success = false,
-                Message = "Yêu cầu bắt buộc cung cấp Header 'Idempotency-Key' (UUID) để bảo đảm chống trùng lặp giao dịch tài chính.",
-                ErrorCode = "IDEMPOTENCY_KEY_REQUIRED"
-            });
+            context.Result = BuildErrorResult(
+                httpContext,
+                StatusCodes.Status400BadRequest,
+                "IDEMPOTENCY_KEY_REQUIRED",
+                "Thiếu khóa chống trùng lặp",
+                "Yêu cầu bắt buộc cung cấp Header 'Idempotency-Key' (UUID) để bảo đảm chống trùng lặp giao dịch tài chính.");
             return;
         }
 
-        var key = keyValues.ToString();
+        var key = keyValues.ToString().Trim();
         var endpoint = $"{req.Method}:{req.Path}";
         var payloadHash = ComputePayloadHash(context.ActionArguments);
 
-        var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
+        var tenantId = !string.IsNullOrWhiteSpace(_tenantContext.CurrentTenantId)
+            ? _tenantContext.CurrentTenantId
+            : (httpContext.User.FindFirst("tenant_id")?.Value ?? "ANONYMOUS_SCOPE");
         var userGuid = _tenantContext.CurrentUserId;
-        var userIdStr = userGuid != Guid.Empty ? userGuid.ToString() : "anonymous";
-        var scopedKey = $"{userIdStr}:{key}";
+        var claimUserId = httpContext.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+            ?? httpContext.User.FindFirst("sub")?.Value;
+        var actorScope = !string.IsNullOrWhiteSpace(claimUserId)
+            ? claimUserId
+            : (userGuid != Guid.Empty ? userGuid.ToString() : ResolveAnonymousScope(context.ActionArguments));
+        var scopedKey = ComposeScopedKey(actorScope, key);
 
         // Phase 1: Check existing record or claim lock
         var existingRecord = await _context.IdempotencyRecords
-            .FirstOrDefaultAsync(r => r.TenantId == tenantId && r.Endpoint == endpoint && r.Key == scopedKey);
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(r => !r.IsDeleted && r.TenantId == tenantId && r.Endpoint == endpoint && r.Key == scopedKey);
 
         if (existingRecord != null)
         {
-            if (HandleExistingRecord(context, existingRecord, payloadHash))
+            if (HandleExistingRecord(context, httpContext, existingRecord, payloadHash))
             {
                 return;
             }
@@ -94,13 +106,37 @@ public class IdempotencyFilter : IAsyncActionFilter
             ExpiresAtUtc = DateTime.UtcNow.AddMinutes(5)
         };
 
-        if (!await TryClaimPendingLockAsync(context, pendingRecord, tenantId, endpoint, scopedKey, payloadHash))
+        if (!await TryClaimPendingLockAsync(context, httpContext, pendingRecord, tenantId, endpoint, scopedKey, payloadHash))
         {
             return;
         }
 
         // Phase 2: Execute action and finalize or rollback lock
         await ExecuteAndFinalizeAsync(context, next, pendingRecord);
+    }
+
+    private static string ResolveAnonymousScope(IDictionary<string, object?> actionArguments)
+    {
+        var regReq = actionArguments.Values.OfType<RegisterTenantRequest>().FirstOrDefault();
+        if (regReq != null)
+        {
+            var raw = !string.IsNullOrWhiteSpace(regReq.ChallengeId)
+                ? $"ch:{regReq.ChallengeId.Trim()}"
+                : $"em:{regReq.Email?.Trim().ToLowerInvariant() ?? string.Empty}";
+            var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw))).ToLowerInvariant()[..16];
+            return $"anon:{hash}";
+        }
+
+        return "anonymous";
+    }
+
+    private static string ComposeScopedKey(string actorScope, string key)
+    {
+        var combined = $"{actorScope}:{key}";
+        if (combined.Length <= 100) return combined;
+        var actorHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(actorScope))).ToLowerInvariant()[..16];
+        var truncatedKey = key.Length > 80 ? key[..80] : key;
+        return $"{actorHash}:{truncatedKey}";
     }
 
     private static string ComputePayloadHash(IDictionary<string, object?> actionArguments)
@@ -112,18 +148,18 @@ public class IdempotencyFilter : IAsyncActionFilter
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payloadString))).ToLowerInvariant();
     }
 
-    private static bool HandleExistingRecord(ActionExecutingContext context, IdempotencyRecord record, string payloadHash)
+    private bool HandleExistingRecord(ActionExecutingContext context, HttpContext httpContext, IdempotencyRecord record, string payloadHash)
     {
         if (record.Status == "PENDING")
         {
             if (record.ExpiresAtUtc >= DateTime.UtcNow)
             {
-                context.Result = new ConflictObjectResult(new ApiResponse<string>
-                {
-                    Success = false,
-                    Message = "Giao dịch đang được xử lý bởi một yêu cầu song song. Vui lòng không gửi lại yêu cầu lúc này.",
-                    ErrorCode = "IDEMPOTENCY_IN_PROGRESS"
-                });
+                context.Result = BuildErrorResult(
+                    httpContext,
+                    StatusCodes.Status409Conflict,
+                    "IDEMPOTENCY_IN_PROGRESS",
+                    "Giao dịch đang xử lý",
+                    "Giao dịch đang được xử lý bởi một yêu cầu song song. Vui lòng không gửi lại yêu cầu lúc này.");
                 return true;
             }
 
@@ -134,12 +170,12 @@ public class IdempotencyFilter : IAsyncActionFilter
         // Status is COMPLETED
         if (record.PayloadHash != payloadHash)
         {
-            context.Result = new ConflictObjectResult(new ApiResponse<string>
-            {
-                Success = false,
-                Message = "Xung đột Idempotency-Key: Khóa này đã được sử dụng với nội dung payload khác.",
-                ErrorCode = "IDEMPOTENCY_PAYLOAD_MISMATCH"
-            });
+            context.Result = BuildErrorResult(
+                httpContext,
+                StatusCodes.Status409Conflict,
+                "IDEMPOTENCY_PAYLOAD_MISMATCH",
+                "Xung đột khóa Idempotency-Key",
+                "Xung đột Idempotency-Key: Khóa này đã được sử dụng với nội dung payload khác.");
             return true;
         }
 
@@ -154,6 +190,7 @@ public class IdempotencyFilter : IAsyncActionFilter
 
     private async Task<bool> TryClaimPendingLockAsync(
         ActionExecutingContext context,
+        HttpContext httpContext,
         IdempotencyRecord pendingRecord,
         string tenantId,
         string endpoint,
@@ -171,19 +208,20 @@ public class IdempotencyFilter : IAsyncActionFilter
             // Concurrent race condition caught by Unique Constraint
             _context.Entry(pendingRecord).State = EntityState.Detached;
             var racedRecord = await _context.IdempotencyRecords
+                .IgnoreQueryFilters()
                 .AsNoTracking()
-                .FirstOrDefaultAsync(r => r.TenantId == tenantId && r.Endpoint == endpoint && r.Key == scopedKey);
+                .FirstOrDefaultAsync(r => !r.IsDeleted && r.TenantId == tenantId && r.Endpoint == endpoint && r.Key == scopedKey);
 
             if (racedRecord != null && racedRecord.Status == "COMPLETED")
             {
                 if (racedRecord.PayloadHash != payloadHash)
                 {
-                    context.Result = new ConflictObjectResult(new ApiResponse<string>
-                    {
-                        Success = false,
-                        Message = "Xung đột Idempotency-Key: Khóa này đã được sử dụng với nội dung payload khác.",
-                        ErrorCode = "IDEMPOTENCY_PAYLOAD_MISMATCH"
-                    });
+                    context.Result = BuildErrorResult(
+                        httpContext,
+                        StatusCodes.Status409Conflict,
+                        "IDEMPOTENCY_PAYLOAD_MISMATCH",
+                        "Xung đột khóa Idempotency-Key",
+                        "Xung đột Idempotency-Key: Khóa này đã được sử dụng với nội dung payload khác.");
                     return false;
                 }
 
@@ -196,14 +234,45 @@ public class IdempotencyFilter : IAsyncActionFilter
                 return false;
             }
 
-            context.Result = new ConflictObjectResult(new ApiResponse<string>
-            {
-                Success = false,
-                Message = "Giao dịch đang được xử lý bởi một yêu cầu song song. Vui lòng không gửi lại yêu cầu lúc này.",
-                ErrorCode = "IDEMPOTENCY_IN_PROGRESS"
-            });
+            context.Result = BuildErrorResult(
+                httpContext,
+                StatusCodes.Status409Conflict,
+                "IDEMPOTENCY_IN_PROGRESS",
+                "Giao dịch đang xử lý",
+                "Giao dịch đang được xử lý bởi một yêu cầu song song. Vui lòng không gửi lại yêu cầu lúc này.");
             return false;
         }
+    }
+
+    private IActionResult BuildErrorResult(HttpContext httpContext, int statusCode, string code, string title, string detail)
+    {
+        if (!_useProblemDetails)
+        {
+            var apiResp = new ApiResponse<string>
+            {
+                Success = false,
+                Message = detail,
+                ErrorCode = code
+            };
+            return statusCode == StatusCodes.Status409Conflict
+                ? new ConflictObjectResult(apiResp)
+                : new BadRequestObjectResult(apiResp);
+        }
+
+        var problem = new ProblemDetails
+        {
+            Status = statusCode,
+            Title = title,
+            Detail = detail,
+            Instance = httpContext.Request.Path
+        };
+        problem.Extensions["code"] = code;
+        problem.Extensions["traceId"] = httpContext.TraceIdentifier;
+
+        return new ObjectResult(problem)
+        {
+            StatusCode = statusCode
+        };
     }
 
     private async Task ExecuteAndFinalizeAsync(

@@ -79,6 +79,8 @@ public static class DependencyInjection
 
         // Đăng ký Repository cụ thể cho từng module
         services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IRegistrationOtpStore, RegistrationOtpStore>();
+        services.AddScoped<Application.SaaS.Services.ITrialOnboardingBackfillService, Services.TrialOnboardingBackfillService>();
         services.AddScoped<IInventoryRepository, InventoryRepository>();
         services.AddScoped<IOrderRepository, OrderRepository>();
         services.AddScoped<Application.PosShifts.IShiftRepository, ShiftRepository>();
@@ -101,6 +103,7 @@ public static class DependencyInjection
         services.AddScoped<MT_GRMS.Application.PurchaseOrders.IPurchaseOrderRepository, PurchaseOrderRepository>();
         services.AddScoped<MT_GRMS.Application.GoodsReceipts.IGoodsReceiptRepository, GoodsReceiptRepository>();
         services.AddScoped<MT_GRMS.Application.SupplierReturns.ISupplierReturnRepository, SupplierReturnRepository>();
+        services.AddScoped<MT_GRMS.Application.Stocktakes.IStocktakeRepository, StocktakeRepository>();
         services.AddScoped<Application.Promotions.IPromotionRepository, PromotionRepository>();
         services.AddScoped<IEmployeeRepository, EmployeeRepository>();
         services.AddScoped<IShiftConfigRepository, ShiftConfigRepository>();
@@ -129,7 +132,7 @@ public static class DependencyInjection
         services.Configure<MT_GRMS.Application.Common.SePaySettings>(configuration.GetSection(MT_GRMS.Application.Common.SePaySettings.SectionName));
         services.AddScoped<MT_GRMS.Application.SaaS.Services.IWalletService, Services.WalletService>();
 
-        // Cấu hình Email & Dịch vụ gửi thư điện tử OTP
+        // Cấu hình Email & Dịch vụ gửi thư điện tử OTP (Đăng nhập 2FA, Đăng ký & Khôi phục mật khẩu)
         services.Configure<EmailSettings>(configuration.GetSection(EmailSettings.SectionName));
         services.AddScoped<IEmailService, EmailService>();
 

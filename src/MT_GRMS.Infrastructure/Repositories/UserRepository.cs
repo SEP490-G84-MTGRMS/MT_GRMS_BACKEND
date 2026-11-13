@@ -74,17 +74,35 @@ public class UserRepository : IUserRepository
 
     public async Task<bool> ExistsByPhoneOrEmailAsync(string phone, string? email, CancellationToken cancellationToken = default)
     {
-        var cleanPhone = phone.Trim().Replace(" ", "").Replace(".", "").Replace("-", "");
+        var cleanPhone = System.Text.RegularExpressions.Regex.Replace(phone.Trim(), @"\D", "");
+        if (cleanPhone.StartsWith("84") && cleanPhone.Length >= 10)
+            cleanPhone = "0" + cleanPhone[2..];
         var cleanEmail = string.IsNullOrWhiteSpace(email) ? null : email.Trim().ToLowerInvariant();
 
-        return await _context.Users.AnyAsync(u =>
-            (u.Phone != null && u.Phone.Replace(" ", "").Replace(".", "").Replace("-", "") == cleanPhone)
-            || (cleanEmail != null && u.Email.ToLower() == cleanEmail),
-            cancellationToken);
+        return await _context.Users
+            .IgnoreQueryFilters()
+            .AnyAsync(u =>
+                u.UserName.ToLower() == cleanPhone.ToLower()
+                || u.NormalizedPhone == cleanPhone
+                || (u.Phone != null && u.Phone.Replace(" ", "").Replace(".", "").Replace("-", "") == cleanPhone)
+                || (cleanEmail != null && (u.NormalizedEmail == cleanEmail || u.Email.ToLower() == cleanEmail)),
+                cancellationToken);
     }
 
-    public async Task<User> RegisterStoreOwnerAsync(User user, MT_GRMS.Domain.Entities.SaaS.Tenant tenant, MT_GRMS.Domain.Entities.SaaS.Branch branch, CancellationToken cancellationToken = default)
+    public Task<User> RegisterStoreOwnerAsync(User user, MT_GRMS.Domain.Entities.SaaS.Tenant tenant, MT_GRMS.Domain.Entities.SaaS.Branch branch, CancellationToken cancellationToken = default)
+        => RegisterStoreOwnerAsync(user, tenant, branch, null, cancellationToken);
+
+    public async Task<User> RegisterStoreOwnerAsync(
+        User user,
+        MT_GRMS.Domain.Entities.SaaS.Tenant tenant,
+        MT_GRMS.Domain.Entities.SaaS.Branch branch,
+        MT_GRMS.Domain.Entities.System.AuditLog? auditLog,
+        CancellationToken cancellationToken = default)
     {
+        await using var transaction = _context.Database.IsRelational() && _context.Database.CurrentTransaction == null
+            ? await _context.Database.BeginTransactionAsync(cancellationToken)
+            : null;
+
         await _context.Tenants.AddAsync(tenant, cancellationToken);
         await _context.Users.AddAsync(user, cancellationToken);
 
@@ -99,7 +117,17 @@ public class UserRepository : IUserRepository
 
         await _context.Branches.AddAsync(branch, cancellationToken);
 
+        if (auditLog != null)
+        {
+            await _context.AuditLogs.AddAsync(auditLog, cancellationToken);
+        }
+
         await _context.SaveChangesAsync(cancellationToken);
+
+        if (transaction != null)
+        {
+            await transaction.CommitAsync(cancellationToken);
+        }
 
         return user;
     }

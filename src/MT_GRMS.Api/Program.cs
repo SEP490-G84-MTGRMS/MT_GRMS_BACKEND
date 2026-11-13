@@ -1,6 +1,8 @@
+using System.Net;
 using System.Text;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using MT_GRMS.Api.Common;
@@ -105,6 +107,24 @@ builder.Services.AddCors(options =>
     });
 });
 
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    var configuredProxies = builder.Configuration.GetSection("ForwardedHeaders:KnownProxies").Get<string[]>();
+    if (configuredProxies is { Length: > 0 })
+    {
+        options.KnownNetworks.Clear();
+        options.KnownProxies.Clear();
+        foreach (var proxy in configuredProxies)
+        {
+            if (IPAddress.TryParse(proxy, out var ip))
+            {
+                options.KnownProxies.Add(ip);
+            }
+        }
+    }
+});
+
 var app = builder.Build();
 
 // 6. Cấu hình Swagger (Bật ở cả Development và Production để test API trên Render/Cloud)
@@ -118,6 +138,8 @@ app.UseSwaggerUI(c =>
 // Chuyển hướng trang chủ "/" sang "/swagger" để khi vào domain là mở Swagger ngay
 app.MapGet("/", () => Results.Redirect("/swagger"));
 
+app.UseForwardedHeaders();
+
 // 7. Cấu hình HTTP Pipeline theo thứ tự chuẩn
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
@@ -129,6 +151,7 @@ app.UseRouting();
 // Middleware xác thực & cô lập Tenant
 app.UseAuthentication();
 app.UseMiddleware<MultiTenantMiddleware>();
+app.UseMiddleware<SubscriptionAccessMiddleware>();
 app.UseAuthorization();
 
 app.MapControllers();

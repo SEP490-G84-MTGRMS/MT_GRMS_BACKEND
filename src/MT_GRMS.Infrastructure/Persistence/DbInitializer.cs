@@ -379,21 +379,143 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
     }
 
+    private static async Task EnsureStocktakesSchemaAsync(AppDbContext context, ILogger? logger = null)
+    {
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+                ALTER TABLE ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""QuantityQuarantined"" numeric(18,3) NOT NULL DEFAULT 0.000;
+
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""StocktakeId"" uuid NULL;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""StocktakeCode"" character varying(50) NULL;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""ResolutionType"" character varying(50) NULL DEFAULT 'REDUCE_PAYABLE';
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""SettlementStatus"" character varying(50) NULL DEFAULT 'UNSETTLED';
+
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""StocktakeLineId"" uuid NULL;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""SupplierAcceptedQty"" numeric(18,3) NOT NULL DEFAULT 0.000;
+
+                CREATE TABLE IF NOT EXISTS ""Stocktakes"" (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""Code"" character varying(50) NOT NULL,
+                    ""BranchId"" uuid NOT NULL,
+                    ""Scope"" character varying(50) NOT NULL DEFAULT 'LOT',
+                    ""ReasonType"" character varying(50) NOT NULL DEFAULT 'PERIODIC',
+                    ""Status"" character varying(50) NOT NULL DEFAULT 'DRAFT',
+                    ""CreatedByName"" character varying(150) NULL,
+                    ""StartedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""SubmittedAt"" timestamp without time zone NULL,
+                    ""ReviewedByUserId"" uuid NULL,
+                    ""ReviewedByName"" character varying(150) NULL,
+                    ""ReviewedAt"" timestamp without time zone NULL,
+                    ""ReviewNote"" character varying(1000) NULL,
+                    ""Note"" character varying(1000) NULL,
+                    ""CreatedBy"" uuid NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""UpdatedAt"" timestamp without time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT false
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Stocktakes_TenantId_Code"" ON ""Stocktakes"" (""TenantId"", ""Code"");
+                CREATE INDEX IF NOT EXISTS ""IX_Stocktakes_TenantId_BranchId_Status"" ON ""Stocktakes"" (""TenantId"", ""BranchId"", ""Status"");
+
+                CREATE TABLE IF NOT EXISTS ""StocktakeLines"" (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""StocktakeId"" uuid NOT NULL REFERENCES ""Stocktakes""(""Id"") ON DELETE CASCADE,
+                    ""ProductId"" uuid NOT NULL,
+                    ""BranchStockId"" uuid NULL,
+                    ""BatchCode"" character varying(100) NULL,
+                    ""ManufactureDate"" timestamp without time zone NULL,
+                    ""ExpiryDate"" timestamp without time zone NULL,
+                    ""UnitCost"" numeric(18,2) NOT NULL DEFAULT 0.00,
+                    ""SystemQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""GoodQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""DefectiveQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""DamagedQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""NearExpiryQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""ExpiredQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""ActualQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""VarianceQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""DefectiveReasonCode"" character varying(50) NULL,
+                    ""NearExpiryAction"" character varying(50) NULL,
+                    ""ReturnedQty"" numeric(18,3) NOT NULL DEFAULT 0.000,
+                    ""OriginalGrnId"" uuid NULL,
+                    ""OriginalGrnLineId"" uuid NULL,
+                    ""OriginalGrnCode"" character varying(50) NULL,
+                    ""SupplierId"" uuid NULL,
+                    ""EvidenceUrl"" character varying(1000) NULL,
+                    ""Note"" character varying(1000) NULL,
+                    ""CreatedBy"" uuid NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""UpdatedAt"" timestamp without time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT false
+                );
+
+                CREATE INDEX IF NOT EXISTS ""IX_StocktakeLines_StocktakeId"" ON ""StocktakeLines"" (""StocktakeId"");
+                CREATE INDEX IF NOT EXISTS ""IX_StocktakeLines_BranchStockId"" ON ""StocktakeLines"" (""BranchStockId"");
+                CREATE INDEX IF NOT EXISTS ""IX_StocktakeLines_ProductId"" ON ""StocktakeLines"" (""ProductId"");
+            ");
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ bảng Stocktakes, StocktakeLines và các cột mở rộng BranchStocks/SupplierReturns.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ bảng Stocktakes");
+        }
+    }
+
     private static async Task EnsureTenantSubscriptionColumnsAsync(AppDbContext context, ILogger? logger = null)
     {
         try
         {
             await context.Database.ExecuteSqlRawAsync(@"
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""ExtraBranches"" integer NOT NULL DEFAULT 0;
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""ExtraStorageGb"" integer NOT NULL DEFAULT 0;
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""StorageAddonExpiresAt"" timestamp with time zone NULL;
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""StorageUsedBytes"" bigint NOT NULL DEFAULT 0;
+                CREATE TABLE IF NOT EXISTS ""TenantMedia"" (
+                    ""Id"" text NOT NULL PRIMARY KEY,
+                    ""TenantId"" text NOT NULL,
+                    ""PublicId"" text NOT NULL,
+                    ""Url"" text NOT NULL,
+                    ""Bytes"" bigint NOT NULL,
+                    ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT now(),
+                    ""UpdatedAt"" timestamp with time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT false
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_TenantMedia_PublicId"" ON ""TenantMedia"" (""PublicId"");
+                CREATE INDEX IF NOT EXISTS ""IX_TenantMedia_TenantId"" ON ""TenantMedia"" (""TenantId"");
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""HasStaffManagementAddon"" boolean NOT NULL DEFAULT false;
-                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""SubscriptionStatus"" character varying(30) NOT NULL DEFAULT 'TRIAL';
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""SubscriptionStatus"" character varying(30) NOT NULL DEFAULT 'NO_PLAN';
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""WalletBalance"" numeric(18,2) NOT NULL DEFAULT 0;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""SubscriptionExpiresAt"" timestamp with time zone NULL;
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""TrialStartedAt"" timestamp with time zone NULL;
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""TrialExpiresAt"" timestamp with time zone NULL;
+                ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""FirstPaidAt"" timestamp with time zone NULL;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""GracePeriodExpiresAt"" timestamp with time zone NULL;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""LockType"" character varying(50) NULL;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""LockReason"" character varying(500) NULL;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""LockedAt"" timestamp with time zone NULL;
                 ALTER TABLE ""Tenants"" ADD COLUMN IF NOT EXISTS ""LockedBy"" character varying(100) NULL;
+
+                ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""NormalizedEmail"" character varying(100) NOT NULL DEFAULT '';
+                ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""NormalizedPhone"" character varying(20) NULL;
+                ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""TrialConsumedAt"" timestamp with time zone NULL;
+
+                CREATE TABLE IF NOT EXISTS ""RegistrationOtpChallenges"" (
+                    ""Key"" character varying(120) NOT NULL PRIMARY KEY,
+                    ""NormalizedEmail"" character varying(100) NOT NULL,
+                    ""OtpHash"" character varying(64) NOT NULL,
+                    ""Intent"" character varying(20) NOT NULL,
+                    ""RequestFingerprint"" character varying(64) NOT NULL,
+                    ""State"" character varying(20) NOT NULL,
+                    ""ReservedByIdempotencyKey"" character varying(120) NULL,
+                    ""ExpiresAtUtc"" timestamp with time zone NOT NULL,
+                    ""FailedAttempts"" integer NOT NULL DEFAULT 0,
+                    ""CreatedAtUtc"" timestamp with time zone NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
+                    ""UpdatedAtUtc"" timestamp with time zone NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC')
+                );
+                CREATE INDEX IF NOT EXISTS ""IX_RegistrationOtpChallenges_NormalizedEmail_State"" ON ""RegistrationOtpChallenges"" (""NormalizedEmail"", ""State"");
 
                 CREATE TABLE IF NOT EXISTS ""WalletTransactions"" (
                     ""Id"" character varying(50) NOT NULL PRIMARY KEY,
@@ -834,6 +956,8 @@ END $$;
                         ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""IsAdmin"" boolean DEFAULT false;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""IsEmailVerified"" boolean DEFAULT false;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""IsTwoFactorEnabled"" boolean NOT NULL DEFAULT true;
+                        UPDATE ""Users"" SET ""IsTwoFactorEnabled"" = true WHERE ""IsTwoFactorEnabled"" IS NULL;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""MustChangePassword"" boolean DEFAULT false;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""LastLoginAt"" timestamp without time zone;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""LastLoginIp"" text;
@@ -1463,6 +1587,7 @@ END $$;
                     await EnsureBranchColumnsAsync(context, logger);
                     await EnsureTenantSubscriptionColumnsAsync(context, logger);
                     await EnsureBranchProductsSchemaAsync(context, logger);
+                    await EnsureStocktakesSchemaAsync(context, logger);
                     await EnsureMissingModelSchemaAsync(context, logger);
                 }
                 catch (Exception ex)
@@ -1588,17 +1713,29 @@ END $$;
             op.IsActive = false;
         }
 
-        // Đồng bộ các tenant đang mang mã gói cũ
+        // Đồng bộ các tenant đang mang mã gói cũ (không ghi đè tenant NO_PLAN / REVIEW_REQUIRED / TRIAL / EXPIRED)
         var outdatedTenants = await context.Tenants
-            .Where(t => t.CurrentPlan == "FREE" || t.CurrentPlan == "SUPPORT" || string.IsNullOrEmpty(t.CurrentPlan))
+            .IgnoreQueryFilters()
+            .Where(t => (t.CurrentPlan == "FREE" || t.CurrentPlan == "SUPPORT" || string.IsNullOrEmpty(t.CurrentPlan))
+                        && (string.IsNullOrEmpty(t.SubscriptionStatus) || t.SubscriptionStatus == "ACTIVE"))
             .ToListAsync();
         foreach (var ot in outdatedTenants)
         {
             ot.CurrentPlan = "PRO";
-            if (string.IsNullOrEmpty(ot.SubscriptionStatus) || ot.SubscriptionStatus == "ACTIVE")
-            {
-                ot.SubscriptionStatus = "ACTIVE";
-            }
+            ot.SubscriptionStatus = "ACTIVE";
+        }
+
+        // Khắc phục các tenant NO_PLAN chưa trả phí/chưa trial nhưng từng bị gán nhầm CurrentPlan = "PRO"
+        var corruptedNoPlanTenants = await context.Tenants
+            .IgnoreQueryFilters()
+            .Where(t => t.SubscriptionStatus == "NO_PLAN"
+                        && t.FirstPaidAt == null
+                        && t.TrialStartedAt == null
+                        && !string.IsNullOrEmpty(t.CurrentPlan))
+            .ToListAsync();
+        foreach (var nt in corruptedNoPlanTenants)
+        {
+            nt.CurrentPlan = null;
         }
 
         await context.SaveChangesAsync();

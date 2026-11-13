@@ -866,6 +866,16 @@ public class PurchaseOrderMatrixTests
         public List<PurchaseOrder> PurchaseOrders { get; } = new();
         private int _poCounter = 0;
 
+        public Task<IReadOnlyDictionary<Guid, (Guid ReceiptId, string Code, string Status)>> GetActiveGoodsReceiptsByPoIdsAsync(
+            IReadOnlyCollection<Guid> purchaseOrderIds,
+            CancellationToken cancellationToken = default)
+        {
+            IReadOnlyDictionary<Guid, (Guid ReceiptId, string Code, string Status)> res =
+                new Dictionary<Guid, (Guid, string, string)>();
+            return Task.FromResult(res);
+        }
+
+
         public Task<Branch?> GetBranchByIdAsync(Guid branchId, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(Branches.FirstOrDefault(b => b.Id == branchId));
@@ -981,7 +991,22 @@ public class PurchaseOrderMatrixTests
             DateTime viewFrom,
             CancellationToken cancellationToken = default)
         {
-            return Task.FromResult(PurchaseOrders.FirstOrDefault(po => po.BranchId == branchId && po.Status == "DRAFT"));
+            var q = PurchaseOrders.Where(po => po.BranchId == branchId && po.Status == "DRAFT");
+            if (supplierId.HasValue && supplierId.Value != Guid.Empty)
+            {
+                q = q.Where(po => po.SupplierId == supplierId.Value);
+            }
+            return Task.FromResult(q.FirstOrDefault());
+        }
+
+        public Task<IReadOnlyList<PurchaseOrder>> GetDraftMatrixPosAsync(
+            Guid branchId,
+            CancellationToken cancellationToken = default)
+        {
+            IReadOnlyList<PurchaseOrder> list = PurchaseOrders
+                .Where(po => po.BranchId == branchId && po.Status == "DRAFT" && !po.IsDeleted)
+                .ToList();
+            return Task.FromResult(list);
         }
 
         public Task<(IReadOnlyList<PurchaseOrder> Items, int TotalCount)> GetPagedPurchaseOrdersAsync(

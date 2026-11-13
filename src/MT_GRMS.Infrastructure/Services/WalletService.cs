@@ -200,7 +200,11 @@ public class WalletService : IWalletService
             : $"SEPAY-{payload.Id}";
 
         var existingTx = await _context.WalletTransactions
-            .FirstOrDefaultAsync(t => t.ReferenceCode == refCode || t.TransactionCode == $"WAL-{payload.Id}", cancellationToken);
+            .FirstOrDefaultAsync(t =>
+                t.ReferenceCode == refCode ||
+                t.TransactionCode == $"WAL-{payload.Id}" ||
+                t.TransactionCode.EndsWith($"-{payload.Id}"),
+                cancellationToken);
 
         if (existingTx != null)
         {

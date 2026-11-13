@@ -21,12 +21,18 @@ public class Tenant : BaseEntity<string>
     public string? Address { get; set; }
     public string? City { get; set; }
     public string Status { get; set; } = "ACTIVE";
-    public string SubscriptionStatus { get; set; } = "TRIAL";
+    public string SubscriptionStatus { get; set; } = "NO_PLAN";
     public decimal WalletBalance { get; set; } = 0;
     public string? CurrentPlan { get; set; }
     public int ExtraBranches { get; set; } = 0;
+    public int ExtraStorageGb { get; set; } = 0;
+    public DateTime? StorageAddonExpiresAt { get; set; }
+    public long StorageUsedBytes { get; set; } = 0;
     public bool HasStaffManagementAddon { get; set; } = false;
     public DateTime? SubscriptionExpiresAt { get; set; }
+    public DateTime? TrialStartedAt { get; set; }
+    public DateTime? TrialExpiresAt { get; set; }
+    public DateTime? FirstPaidAt { get; set; }
     public DateTime? GracePeriodExpiresAt { get; set; }
     public string? LockType { get; set; }
     public string? LockReason { get; set; }

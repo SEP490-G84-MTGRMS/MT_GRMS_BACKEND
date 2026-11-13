@@ -40,7 +40,11 @@ public record SupplierReturnListItemDto(
     decimal TotalHandedOverQty,
     decimal TotalEstimatedAmount,
     DateTime CreatedAt,
-    DateTime? HandedOverAt
+    DateTime? HandedOverAt,
+    Guid? StocktakeId = null,
+    string? StocktakeCode = null,
+    string? ResolutionType = "REDUCE_PAYABLE",
+    string? SettlementStatus = "UNSETTLED"
 );
 
 public record SupplierReturnLineDto(
@@ -63,7 +67,10 @@ public record SupplierReturnLineDto(
     decimal UnitCost,
     decimal LineTotal,
     string? RejectionReason,
-    string? Notes
+    string? Notes,
+    Guid? StocktakeLineId = null,
+    decimal SupplierAcceptedQty = 0m,
+    decimal StockOnHandQty = 0m
 );
 
 public record SupplierReturnDetailDto(
@@ -92,7 +99,11 @@ public record SupplierReturnDetailDto(
     DateTime? RespondedAt,
     DateTime? HandedOverAt,
     string? HandedOverBy,
-    IReadOnlyList<SupplierReturnLineDto> Lines
+    IReadOnlyList<SupplierReturnLineDto> Lines,
+    Guid? StocktakeId = null,
+    string? StocktakeCode = null,
+    string? ResolutionType = "REDUCE_PAYABLE",
+    string? SettlementStatus = "UNSETTLED"
 );
 
 public record EligibleGrnLookupDto(
@@ -118,7 +129,9 @@ public record GrnReturnableLineDto(
     decimal ReturnedQty,
     decimal PendingReturnQty,
     decimal AvailableReturnQty,
-    decimal UnitCost
+    decimal UnitCost,
+    decimal StockOnHandQty = 0m,
+    decimal StockReservedQty = 0m
 );
 
 public record CreateSupplierReturnLineDto(
@@ -128,7 +141,8 @@ public record CreateSupplierReturnLineDto(
     DateTime? ExpiryDate,
     decimal RequestedQty,
     decimal UnitCost,
-    string? Notes
+    string? Notes,
+    Guid? StocktakeLineId = null
 );
 
 public record CreateSupplierReturnCommand(
@@ -137,7 +151,9 @@ public record CreateSupplierReturnCommand(
     string? ReasonNotes,
     string? AttachmentUrl,
     List<CreateSupplierReturnLineDto> Lines,
-    bool AutoSubmit = false
+    bool AutoSubmit = false,
+    Guid? StocktakeId = null,
+    string? ResolutionType = "REDUCE_PAYABLE"
 );
 
 public record SupplierResponseLineDto(

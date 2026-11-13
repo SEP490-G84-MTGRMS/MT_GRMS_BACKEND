@@ -57,7 +57,136 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 .Where(s => supplierIds.Contains(s.Id))
                 .ToDictionaryAsync(s => s.Id, cancellationToken);
 
-        var allItems = stocks.Select(bs => MapBranchStockToListItem(bs, products, branches, suppliers, now)).ToList();
+        var stockIds = stocks.Select(s => s.Id).ToList();
+        var grnByStockId = await _appContext.GoodsReceiptLines.AsNoTracking()
+            .Where(l => l.BranchStockId != null && stockIds.Contains(l.BranchStockId.Value) && !l.IsDeleted)
+            .Select(l => new { StockId = l.BranchStockId!.Value, GrnId = l.GoodsReceiptId, GrnCode = l.GoodsReceipt!.Code, AcceptedQty = l.AcceptedQty })
+            .ToListAsync(cancellationToken);
+
+        var grnLookup = grnByStockId
+            .GroupBy(x => x.StockId)
+            .ToDictionary(g => g.Key, g => g.Select(x => x.GrnCode).FirstOrDefault(c => !string.IsNullOrWhiteSpace(c)));
+
+        var grnIdLookup = grnByStockId
+            .GroupBy(x => x.StockId)
+            .ToDictionary(g => g.Key, g => g.Select(x => (Guid?)x.GrnId).FirstOrDefault());
+
+        var initialQtyLookup = grnByStockId
+            .GroupBy(x => x.StockId)
+            .ToDictionary(g => g.Key, g => g.Sum(x => x.AcceptedQty));
+
+        var allItems = new List<BatchListItemDto>();
+
+        // Nhóm 1 (Product.HasBatches == true): Hiển thị chi tiết từng dòng lô theo từng cửa hàng (BranchId)
+        var batchManagedStocks = stocks
+            .Where(bs => products.TryGetValue(bs.ProductId, out var p) && p.HasBatches)
+            .GroupBy(bs => new
+            {
+                bs.BranchId,
+                bs.ProductId,
+                BatchCodeKey = (bs.BatchCode ?? string.Empty).Trim().ToUpperInvariant(),
+                MfgKey = bs.ManufactureDate?.Date,
+                ExpKey = bs.ExpiryDate?.Date
+            });
+
+        foreach (var lotGroup in batchManagedStocks)
+        {
+            var representative = lotGroup
+                .OrderByDescending(x => x.UpdatedAt ?? x.CreatedAt)
+                .First();
+            var totalLotQty = lotGroup.Sum(x => x.QuantityOnHand);
+            var grnCode = lotGroup
+                .Select(x => grnLookup.TryGetValue(x.Id, out var code) ? code : null)
+                .FirstOrDefault(c => !string.IsNullOrWhiteSpace(c));
+            var grnId = lotGroup
+                .Select(x => grnIdLookup.TryGetValue(x.Id, out var gid) ? gid : null)
+                .FirstOrDefault(g => g.HasValue);
+            var initQty = lotGroup
+                .Sum(x => initialQtyLookup.TryGetValue(x.Id, out var iq) ? iq : x.QuantityOnHand);
+
+            var mergedLotStock = new BranchStock
+            {
+                Id = representative.Id,
+                TenantId = representative.TenantId,
+                BranchId = representative.BranchId,
+                ProductId = representative.ProductId,
+                SupplierId = representative.SupplierId,
+                BatchCode = representative.BatchCode,
+                ManufactureDate = representative.ManufactureDate,
+                ExpiryDate = representative.ExpiryDate,
+                QuantityOnHand = totalLotQty,
+                QuantityReserved = lotGroup.Sum(x => x.QuantityReserved),
+                QuantityQuarantined = lotGroup.Sum(x => x.QuantityQuarantined),
+                LandedCostPerUnit = representative.LandedCostPerUnit,
+                ZoneArea = representative.ZoneArea,
+                ShelfLocation = representative.ShelfLocation,
+                CreatedAt = representative.CreatedAt,
+                UpdatedAt = representative.UpdatedAt
+            };
+
+            allItems.Add(MapBranchStockToListItem(
+                mergedLotStock,
+                products,
+                branches,
+                suppliers,
+                now,
+                grnCode,
+                isBatchManaged: true,
+                originalGrnId: grnId,
+                initialQtyOverride: initQty));
+        }
+
+        // Nhóm 2 (Product.HasBatches == false): Gom nhóm (GroupBy) theo (BranchId, ProductId) thành 1 bản ghi duy nhất cho mỗi cửa hàng
+        var nonBatchManagedGroups = stocks
+            .Where(bs => !products.TryGetValue(bs.ProductId, out var p) || !p.HasBatches)
+            .GroupBy(bs => new { bs.BranchId, bs.ProductId });
+
+        foreach (var group in nonBatchManagedGroups)
+        {
+            var representative = group
+                .OrderByDescending(x => x.UpdatedAt ?? x.CreatedAt)
+                .First();
+            var totalQty = group.Sum(x => x.QuantityOnHand);
+            var grnCode = group
+                .Select(x => grnLookup.TryGetValue(x.Id, out var code) ? code : null)
+                .FirstOrDefault(c => !string.IsNullOrWhiteSpace(c));
+            var grnId = group
+                .Select(x => grnIdLookup.TryGetValue(x.Id, out var gid) ? gid : null)
+                .FirstOrDefault(g => g.HasValue);
+            var initQty = group
+                .Sum(x => initialQtyLookup.TryGetValue(x.Id, out var iq) ? iq : x.QuantityOnHand);
+
+            var mergedNonBatchStock = new BranchStock
+            {
+                Id = representative.Id,
+                TenantId = representative.TenantId,
+                BranchId = representative.BranchId,
+                ProductId = representative.ProductId,
+                SupplierId = representative.SupplierId ?? group.Select(x => x.SupplierId).FirstOrDefault(s => s.HasValue),
+                BatchCode = null,
+                ManufactureDate = null,
+                ExpiryDate = null,
+                QuantityOnHand = totalQty,
+                QuantityReserved = group.Sum(x => x.QuantityReserved),
+                QuantityQuarantined = group.Sum(x => x.QuantityQuarantined),
+                LandedCostPerUnit = representative.LandedCostPerUnit,
+                ZoneArea = representative.ZoneArea ?? group.Select(x => x.ZoneArea).FirstOrDefault(z => !string.IsNullOrWhiteSpace(z)),
+                ShelfLocation = representative.ShelfLocation ?? group.Select(x => x.ShelfLocation).FirstOrDefault(s => !string.IsNullOrWhiteSpace(s)),
+                CreatedAt = representative.CreatedAt,
+                UpdatedAt = representative.UpdatedAt
+            };
+
+            allItems.Add(MapBranchStockToListItem(
+                mergedNonBatchStock,
+                products,
+                branches,
+                suppliers,
+                now,
+                grnCode,
+                isBatchManaged: false,
+                originalGrnId: grnId,
+                initialQtyOverride: initQty));
+        }
 
         var kpiSummary = new BatchKpiSummaryDto(
             TotalBatches: allItems.Count,
@@ -81,11 +210,13 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 var sku = x.Sku.ToLower();
                 var productName = x.ProductName.ToLower();
                 var supplierName = x.SupplierName.ToLower();
+                var grnNo = (x.OriginalGrnNo ?? string.Empty).ToLower();
                 return tokens.All(tok =>
                     batchCode.Contains(tok) ||
                     sku.Contains(tok) ||
                     productName.Contains(tok) ||
-                    supplierName.Contains(tok));
+                    supplierName.Contains(tok) ||
+                    grnNo.Contains(tok));
             }).ToList();
         }
 
@@ -98,7 +229,7 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
 
         var totalCount = allItems.Count;
         var pageIndex = query.PageIndex < 1 ? 1 : query.PageIndex;
-        var pageSize = query.PageSize < 1 ? 10 : query.PageSize;
+        var pageSize = query.PageSize < 1 ? 20 : query.PageSize;
         var pagedItems = allItems
             .Skip((pageIndex - 1) * pageSize)
             .Take(pageSize)
@@ -149,7 +280,24 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 ? new Dictionary<Guid, Domain.Entities.Supplier.Supplier> { [supplier.Id] = supplier }
                 : new Dictionary<Guid, Domain.Entities.Supplier.Supplier>();
 
-            return MapBranchStockToListItem(branchStock, products, branches, suppliers, now);
+            var isBatchManaged = product?.HasBatches == true;
+            if (!isBatchManaged)
+            {
+                var totalQty = await _appContext.BranchStocks.AsNoTracking()
+                    .Where(bs => !bs.IsDeleted && bs.BranchId == branchStock.BranchId && bs.ProductId == branchStock.ProductId && bs.QuantityOnHand > 0)
+                    .SumAsync(bs => bs.QuantityOnHand, cancellationToken);
+                branchStock.QuantityOnHand = totalQty;
+                branchStock.BatchCode = null;
+                branchStock.ManufactureDate = null;
+                branchStock.ExpiryDate = null;
+            }
+
+            string? grnNo = await _appContext.GoodsReceiptLines.AsNoTracking()
+                .Where(l => l.BranchStockId == branchStock.Id && !l.IsDeleted)
+                .Select(l => l.GoodsReceipt!.Code)
+                .FirstOrDefaultAsync(cancellationToken);
+
+            return MapBranchStockToListItem(branchStock, products, branches, suppliers, now, grnNo, isBatchManaged);
         }
 
         var batch = await _appContext.Batches.AsNoTracking().FirstOrDefaultAsync(b => b.Id == id, cancellationToken);
@@ -274,10 +422,16 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
         IReadOnlyDictionary<Guid, Domain.Entities.Catalog.Product> products,
         IReadOnlyDictionary<Guid, Domain.Entities.SaaS.Branch> branches,
         IReadOnlyDictionary<Guid, Domain.Entities.Supplier.Supplier> suppliers,
-        DateTime now)
+        DateTime now,
+        string? originalGrnNo = null,
+        bool? isBatchManaged = null,
+        Guid? originalGrnId = null,
+        decimal? initialQtyOverride = null)
     {
         products.TryGetValue(bs.ProductId, out var product);
         branches.TryGetValue(bs.BranchId, out var branch);
+
+        bool hasBatches = isBatchManaged ?? (product?.HasBatches == true);
 
         string supplierName = "—";
         if (bs.SupplierId.HasValue && suppliers.TryGetValue(bs.SupplierId.Value, out var supplier))
@@ -285,18 +439,30 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
             supplierName = supplier.Name;
         }
 
-        var mfgDate = bs.ManufactureDate ?? DateTime.MinValue;
-        var expiryDate = bs.ExpiryDate ?? DateTime.MaxValue.Date;
-        var daysLeft = bs.ExpiryDate.HasValue
+        var mfgDate = hasBatches && bs.ManufactureDate.HasValue
+            ? bs.ManufactureDate.Value
+            : DateTime.MinValue;
+        var expiryDate = hasBatches && bs.ExpiryDate.HasValue
+            ? bs.ExpiryDate.Value
+            : DateTime.MaxValue.Date;
+        var daysLeft = hasBatches && bs.ExpiryDate.HasValue
             ? (bs.ExpiryDate.Value.Date - now).Days
             : 9999;
-        var status = ResolveStatus(daysLeft);
+        var status = hasBatches ? ResolveStatus(daysLeft) : "Normal";
         var qty = bs.QuantityOnHand;
-        var totalValuation = qty * bs.LandedCostPerUnit;
+        var reservedQty = bs.QuantityReserved;
+        var quarantinedQty = bs.QuantityQuarantined;
+        var availableQty = Math.Max(0, qty - reservedQty - quarantinedQty);
+        var initialQty = initialQtyOverride.HasValue && initialQtyOverride.Value > 0 ? initialQtyOverride.Value : qty;
+        var costPrice = bs.LandedCostPerUnit > 0 ? bs.LandedCostPerUnit : (product?.CostPrice ?? 0);
+        var totalValuation = qty * costPrice;
+        var batchCode = !hasBatches || string.IsNullOrWhiteSpace(bs.BatchCode)
+            ? "—"
+            : bs.BatchCode!;
 
         return new BatchListItemDto(
             Id: bs.Id,
-            BatchCode: string.IsNullOrWhiteSpace(bs.BatchCode) ? "—" : bs.BatchCode!,
+            BatchCode: batchCode,
             ProductId: bs.ProductId,
             Sku: product?.ProductCode ?? string.Empty,
             ProductName: product?.Name ?? "Sản phẩm",
@@ -308,15 +474,19 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
             MfgDate: mfgDate,
             ExpiryDate: expiryDate,
             DaysLeft: daysLeft,
-            QtyInitial: qty,
+            QtyInitial: initialQty,
             QtyCurrent: qty,
             Unit: product?.BaseUnit ?? "Cái",
-            CostPrice: bs.LandedCostPerUnit,
+            CostPrice: costPrice,
             TotalValuation: totalValuation,
             Status: status,
             ZoneArea: bs.ZoneArea,
             ShelfLocation: bs.ShelfLocation,
-            OriginalGrnNo: null
+            OriginalGrnNo: originalGrnNo,
+            QtyReserved: reservedQty,
+            QtyQuarantined: quarantinedQty,
+            QtyAvailable: availableQty,
+            OriginalGrnId: originalGrnId
         );
     }
 }

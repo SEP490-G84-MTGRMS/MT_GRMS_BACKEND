@@ -17,7 +17,7 @@
 - `docker-compose.yml`: Dịch vụ PostgreSQL 16 Alpine, port 5432, persistent volume `postgres_data`, auto-mount init script.
 - `init-db.sql`: Script SQL khởi tạo bảng `users` và nạp seed user `admin`.
 - `src/MT_GRMS.Domain/Entities/Identity/User.cs`: Tối giản hóa thực thể với `Id` (string Uid), `Username`, `Password`.
-- `src/MT_GRMS.Infrastructure/Persistence/Configurations/UserConfiguration.cs`: Fluent API ánh xạ bảng `users`, PK `id`, unique index `username`.
+- `src/MT_GRMS.Infrastructure/Persistence/Co`nfigurations/UserConfiguration.cs`: Fluent API ánh xạ bảng `users`, PK `id`, unique index `username`.
 - `src/MT_GRMS.Infrastructure/Persistence/AppDbContext.cs`: Đăng ký `DbSet<User> Users` và áp dụng `UserConfiguration`.
 - `src/MT_GRMS.Infrastructure/Persistence/Migrations/20261012174712_InitialCreate_UsersOnly.cs`: Initial Migration chỉ sinh duy nhất bảng `users`.
 - `src/MT_GRMS.Application/Auth/`: Cập nhật `IUserRepository`, `UserRepository`, `UserInfo` và `AuthService` tương thích `string Id`.
