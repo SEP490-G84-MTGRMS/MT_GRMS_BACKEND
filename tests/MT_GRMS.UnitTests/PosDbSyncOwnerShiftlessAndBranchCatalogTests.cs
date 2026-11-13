@@ -407,6 +407,7 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
             FullName = "Phạm Thị Yến",
             Password = "123456",
             IsActive = true,
+            IsTwoFactorEnabled = false,
             TenantUsers = new List<TenantUser>
             {
                 new TenantUser { TenantId = "tenant_an_nhien_02", UserId = "usr_employee_annhien_02", Role = "STAFF", IsActive = true }

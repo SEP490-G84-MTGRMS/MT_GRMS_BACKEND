@@ -320,12 +320,16 @@ public class PurchaseOrderService : IPurchaseOrderService
                         && (detail.IsOwnerAdjusted || detail.StoreQty.HasValue);
                     if (ownerLocked)
                     {
-                        continue;
+                        employeeQty = cell.EmployeeQty;
+                        storeQty = detail!.StoreQty;
+                        isOwnerAdjusted = detail.IsOwnerAdjusted;
                     }
-
-                    employeeQty = cell.EmployeeQty;
-                    storeQty = null;
-                    isOwnerAdjusted = false;
+                    else
+                    {
+                        employeeQty = cell.EmployeeQty;
+                        storeQty = null;
+                        isOwnerAdjusted = false;
+                    }
                 }
 
                 decimal finalQty = isOwnerAdjusted
@@ -1259,14 +1263,24 @@ public class PurchaseOrderService : IPurchaseOrderService
         var supplierConfigs = await _repository.GetMatrixSupplierConfigsAsync(command.BranchId, null, cancellationToken);
         var configBySupplier = supplierConfigs.ToDictionary(c => c.SupplierId);
 
-        var draft = command.ParentDraftId.HasValue
-            ? await _repository.GetPurchaseOrderByIdAsync(command.ParentDraftId.Value, cancellationToken)
-            : await _repository.GetDraftMatrixPoAsync(command.BranchId, null, DateTime.Today, cancellationToken);
+        List<PurchaseOrder> sourceDrafts;
+        if (command.ParentDraftId.HasValue)
+        {
+            var p = await _repository.GetPurchaseOrderByIdAsync(command.ParentDraftId.Value, cancellationToken);
+            sourceDrafts = p != null && p.Status == "DRAFT" ? new List<PurchaseOrder> { p } : new List<PurchaseOrder>();
+        }
+        else
+        {
+            var list = await _repository.GetDraftMatrixPosAsync(command.BranchId, cancellationToken);
+            sourceDrafts = list.Where(p => p.Status == "DRAFT").ToList();
+        }
 
-        var draftDetails = (draft?.Status == "DRAFT" ? draft.Details : null)?
+        var draft = sourceDrafts.FirstOrDefault();
+
+        var draftDetails = sourceDrafts
+            .SelectMany(d => d.Details)
             .Where(d => d.DeliveryDate.HasValue)
-            .ToList()
-            ?? new List<PurchaseOrderDetail>();
+            .ToList();
 
         var now = OrderMatrixRules.GetVietnamNow();
         var scope = (command.Scope ?? string.Empty).Trim().ToUpperInvariant();
@@ -1801,14 +1815,14 @@ public class PurchaseOrderService : IPurchaseOrderService
 
         if (!isDryRun && createdPos.Count > 0)
         {
-            if (draft != null)
+            foreach (var d in sourceDrafts)
             {
-                draft.TotalQty = draft.Details.Sum(d =>
-                    OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted));
-                draft.TotalAmount = draft.Details.Sum(d =>
+                d.TotalQty = d.Details.Sum(det =>
+                    OrderMatrixRules.ComputeFinalQty(det.EmployeeQty ?? 0m, det.StoreQty, det.IsOwnerAdjusted));
+                d.TotalAmount = d.Details.Sum(det =>
                 {
-                    var q = OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted);
-                    return q * d.UnitPrice;
+                    var q = OrderMatrixRules.ComputeFinalQty(det.EmployeeQty ?? 0m, det.StoreQty, det.IsOwnerAdjusted);
+                    return q * det.UnitPrice;
                 });
             }
 
