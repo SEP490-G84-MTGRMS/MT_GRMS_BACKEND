@@ -84,8 +84,6 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
             ShiftName = "Ca Toàn Thời Gian 24/7",
             PlannedStartTime = TimeSpan.Zero,
             PlannedEndTime = new TimeSpan(23, 59, 59),
-            AllowedCheckInStart = TimeSpan.Zero,
-            AllowedCheckInEnd = new TimeSpan(23, 59, 59),
             Status = ScheduleStatus.Scheduled
         };
 
@@ -150,8 +148,6 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
             ShiftName = "Ca 24/7",
             PlannedStartTime = TimeSpan.Zero,
             PlannedEndTime = new TimeSpan(23, 59, 59),
-            AllowedCheckInStart = TimeSpan.Zero,
-            AllowedCheckInEnd = new TimeSpan(23, 59, 59),
             Status = ScheduleStatus.Scheduled
         };
 
@@ -203,8 +199,6 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
             WorkDate = vnToday,
             PlannedStartTime = TimeSpan.Zero,
             PlannedEndTime = new TimeSpan(23, 59, 59),
-            AllowedCheckInStart = TimeSpan.Zero,
-            AllowedCheckInEnd = new TimeSpan(23, 59, 59),
             Status = ScheduleStatus.Scheduled
         };
         schedRepoMock.Setup(r => r.GetByIdAsync(scheduleWithFace.Id, It.IsAny<CancellationToken>())).ReturnsAsync(scheduleWithFace);
@@ -401,6 +395,7 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
             FullName = "Phạm Thị Yến",
             Password = "123456",
             IsActive = true,
+            IsTwoFactorEnabled = false,
             TenantUsers = new List<TenantUser>
             {
                 new TenantUser { TenantId = "tenant_an_nhien_02", UserId = "usr_employee_annhien_02", Role = "STAFF", IsActive = true }

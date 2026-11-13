@@ -1237,8 +1237,6 @@ END $$;
                             ""StartTime"" time without time zone NOT NULL,
                             ""EndTime"" time without time zone NOT NULL,
                             ""DurationHours"" numeric(4,2) NOT NULL DEFAULT 4.00,
-                            ""AllowedCheckInStart"" time without time zone NOT NULL DEFAULT '00:00:00',
-                            ""AllowedCheckInEnd"" time without time zone NOT NULL DEFAULT '23:59:59',
                             ""IsCheckInNextDay"" boolean NOT NULL DEFAULT false,
                             ""BranchIds"" character varying(2000),
                             ""Description"" character varying(255),
@@ -1425,8 +1423,6 @@ END $$;
                             ""PlannedStartTime"" time without time zone NOT NULL DEFAULT '08:00:00',
                             ""PlannedEndTime"" time without time zone NOT NULL DEFAULT '17:00:00',
                             ""DurationHours"" numeric(4,2) NOT NULL DEFAULT 4.00,
-                            ""AllowedCheckInStart"" time without time zone NOT NULL DEFAULT '00:00:00',
-                            ""AllowedCheckInEnd"" time without time zone NOT NULL DEFAULT '23:59:59',
                             ""IsCheckInNextDay"" boolean NOT NULL DEFAULT false,
                             ""CheckInTime"" timestamp without time zone,
                             ""CheckInMethod"" character varying(30),
@@ -1443,7 +1439,6 @@ END $$;
                             ""ApprovalType"" character varying(30),
                             ""ApprovalStatus"" character varying(30) NOT NULL DEFAULT 'NONE',
                             ""ApprovalReason"" character varying(255),
-                            ""EvidenceImageUrl"" character varying(255),
                             ""ApprovedBy"" character varying(100),
                             ""ApprovedAt"" timestamp without time zone,
                             ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1501,13 +1496,21 @@ END $$;
                         ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""ApprovedAt"" timestamp without time zone;
                         ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""PlannedStartTime"" time without time zone DEFAULT '08:00:00';
                         ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""PlannedEndTime"" time without time zone DEFAULT '17:00:00';
-                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInStart"" time without time zone DEFAULT '00:00:00';
-                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInEnd"" time without time zone DEFAULT '23:59:59';
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" DROP COLUMN IF EXISTS ""AllowedCheckInStart"";
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" DROP COLUMN IF EXISTS ""AllowedCheckInEnd"";
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" DROP COLUMN IF EXISTS ""EvidenceImageUrl"";
 
                         ALTER TABLE IF EXISTS ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""BranchIds"" character varying(2000);
                         ALTER TABLE IF EXISTS ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""IsCheckInNextDay"" boolean DEFAULT false;
-                        ALTER TABLE IF EXISTS ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInStart"" time without time zone DEFAULT '00:00:00';
-                        ALTER TABLE IF EXISTS ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInEnd"" time without time zone DEFAULT '23:59:59';
+                        ALTER TABLE IF EXISTS ""ShiftConfigs"" DROP COLUMN IF EXISTS ""AllowedCheckInStart"";
+                        ALTER TABLE IF EXISTS ""ShiftConfigs"" DROP COLUMN IF EXISTS ""AllowedCheckInEnd"";
+
+                        ALTER TABLE IF EXISTS ""ScheduleApprovalRequests"" DROP COLUMN IF EXISTS ""EvidenceImageUrl"";
+                        ALTER TABLE IF EXISTS ""ScheduleApprovalRequests"" DROP COLUMN IF EXISTS ""SwapType"";
+                        ALTER TABLE IF EXISTS ""ScheduleApprovalRequests"" DROP COLUMN IF EXISTS ""TargetEmployeeID"";
+                        ALTER TABLE IF EXISTS ""ScheduleApprovalRequests"" DROP COLUMN IF EXISTS ""TargetScheduleID"";
+                        ALTER TABLE IF EXISTS ""ScheduleApprovalRequests"" DROP COLUMN IF EXISTS ""PeerConfirmed"";
+                        ALTER TABLE IF EXISTS ""ScheduleApprovalRequests"" DROP COLUMN IF EXISTS ""PeerConfirmedAt"";
 
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""UnpaidLeaveDays"" numeric(5,2) DEFAULT 0.00;
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookTransactionId"" uuid;
@@ -3306,8 +3309,6 @@ END $$;
                 StartTime = TimeSpan.Zero,
                 EndTime = new TimeSpan(23, 59, 59),
                 DurationHours = 24.00m,
-                AllowedCheckInStart = TimeSpan.Zero,
-                AllowedCheckInEnd = new TimeSpan(23, 59, 59),
                 IsActive = true
             };
             await context.ShiftConfigs.AddAsync(shiftConfigSang);
@@ -3320,8 +3321,6 @@ END $$;
             shiftConfigSang.StartTime = TimeSpan.Zero;
             shiftConfigSang.EndTime = new TimeSpan(23, 59, 59);
             shiftConfigSang.DurationHours = 24.00m;
-            shiftConfigSang.AllowedCheckInStart = TimeSpan.Zero;
-            shiftConfigSang.AllowedCheckInEnd = new TimeSpan(23, 59, 59);
             shiftConfigSang.IsActive = true;
             shiftConfigSang.IsDeleted = false;
             await context.SaveChangesAsync();
@@ -3350,11 +3349,9 @@ END $$;
                         WorkDate = targetDate,
                         ShiftCode = shiftConfigSang.ShiftCode,
                         ShiftName = shiftConfigSang.ShiftName,
-                        PlannedStartTime = TimeSpan.Zero,
-                        PlannedEndTime = new TimeSpan(23, 59, 59),
-                        DurationHours = 24.00m,
-                        AllowedCheckInStart = TimeSpan.Zero,
-                        AllowedCheckInEnd = new TimeSpan(23, 59, 59),
+                        PlannedStartTime = shiftConfigSang.StartTime,
+                        PlannedEndTime = shiftConfigSang.EndTime,
+                        DurationHours = shiftConfigSang.DurationHours,
                         Status = ScheduleStatus.Scheduled
                     });
                 }
@@ -3364,11 +3361,9 @@ END $$;
                     existingSchedule.ShiftConfigId = shiftConfigSang.Id;
                     existingSchedule.ShiftCode = shiftConfigSang.ShiftCode;
                     existingSchedule.ShiftName = shiftConfigSang.ShiftName;
-                    existingSchedule.PlannedStartTime = TimeSpan.Zero;
-                    existingSchedule.PlannedEndTime = new TimeSpan(23, 59, 59);
-                    existingSchedule.DurationHours = 24.00m;
-                    existingSchedule.AllowedCheckInStart = TimeSpan.Zero;
-                    existingSchedule.AllowedCheckInEnd = new TimeSpan(23, 59, 59);
+                    existingSchedule.PlannedStartTime = shiftConfigSang.StartTime;
+                    existingSchedule.PlannedEndTime = shiftConfigSang.EndTime;
+                    existingSchedule.DurationHours = shiftConfigSang.DurationHours;
                     if (existingSchedule.Status == ScheduleStatus.Cancelled || existingSchedule.Status == ScheduleStatus.Draft)
                     {
                         existingSchedule.Status = ScheduleStatus.Scheduled;

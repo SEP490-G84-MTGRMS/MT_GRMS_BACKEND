@@ -21,18 +21,6 @@ public class CreateScheduleApprovalRequestValidator : AbstractValidator<CreateSc
                 .LessThanOrEqualTo(480).WithMessage("Số phút OT tối đa là 480 phút (8 giờ).");
         });
 
-        When(x => x.RequestType == ScheduleRequestType.ShiftSwap, () =>
-        {
-            RuleFor(x => x.TargetEmployeeId)
-                .NotEmpty().WithMessage("Vui lòng chọn đồng nghiệp muốn đổi ca cùng.");
-
-            When(x => x.SwapType == ShiftSwapType.CrossSwap, () =>
-            {
-                RuleFor(x => x.TargetScheduleId)
-                    .NotEmpty().WithMessage("Vui lòng chọn ca của đồng nghiệp muốn đổi chéo.");
-            });
-        });
-
         When(x => x.RequestType == ScheduleRequestType.LeaveRequest, () =>
         {
             RuleFor(x => x.LeaveType)
@@ -45,6 +33,26 @@ public class CreateScheduleApprovalRequestValidator : AbstractValidator<CreateSc
                 .Must(x => x.RequestedCheckInTime.HasValue || x.RequestedCheckOutTime.HasValue)
                 .WithMessage("Vui lòng cung cấp giờ vào hoặc giờ ra thực tế cần giải trình.");
         });
+
+        When(x => x.RequestType == ScheduleRequestType.CheckOutIncident, () =>
+        {
+            RuleFor(x => x.RequestedCheckOutTime)
+                .NotNull().WithMessage("Vui lòng cung cấp giờ ra thực tế cần giải trình.");
+        });
+
+        When(x => x.RequestedCheckInTime.HasValue && x.RequestedCheckOutTime.HasValue, () =>
+        {
+            RuleFor(x => x)
+                .Must(x => x.RequestedCheckOutTime!.Value >= x.RequestedCheckInTime!.Value)
+                .WithMessage("Giờ ra thực tế không được nhỏ hơn giờ vào thực tế.");
+        });
+
+        When(x => x.EvidenceImageUrls != null, () =>
+        {
+            RuleFor(x => x.EvidenceImageUrls!)
+                .Must(list => list.Count <= 8)
+                .WithMessage("Chỉ được đính kèm tối đa 8 ảnh minh chứng.");
+        });
     }
 }
 
@@ -55,7 +63,14 @@ public class ReviewScheduleApprovalRequestValidator : AbstractValidator<ReviewSc
         When(x => !x.IsApproved, () =>
         {
             RuleFor(x => x.ReviewNote)
-                .NotEmpty().WithMessage("Vui lòng cung cấp lý do từ chối yêu cầu.");
+                .NotEmpty().WithMessage("Vui lòng cung cấp lý do từ chối yêu cầu.")
+                .MaximumLength(500).WithMessage("Lý do từ chối không được vượt quá 500 ký tự.");
+        });
+
+        When(x => x.IsApproved && !string.IsNullOrWhiteSpace(x.ReviewNote), () =>
+        {
+            RuleFor(x => x.ReviewNote!)
+                .MaximumLength(500).WithMessage("Ghi chú phê duyệt không được vượt quá 500 ký tự.");
         });
 
         When(x => x.ApprovedOvertimeMinutes.HasValue, () =>

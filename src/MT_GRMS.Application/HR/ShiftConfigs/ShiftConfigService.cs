@@ -1,5 +1,6 @@
 using System.Text.Json;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.HR.Employees.Validators;
 using MT_GRMS.Application.HR.ShiftConfigs.Dtos;
 using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Exceptions;
@@ -8,6 +9,7 @@ namespace MT_GRMS.Application.HR.ShiftConfigs;
 
 public class ShiftConfigService : IShiftConfigService
 {
+    private static DateTime VnNow => DateTime.UtcNow.AddHours(7);
     private readonly IShiftConfigRepository _repository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
@@ -94,15 +96,29 @@ public class ShiftConfigService : IShiftConfigService
             }
         }
 
+        // 2.5. Kiểm tra trùng tên ca làm việc (không phân biệt chữ hoa/thường và tiếng Việt có dấu/không dấu) trong cùng chi nhánh
+        var normalizedShiftName = VietnameseTextNormalizer.NormalizeForComparison(request.ShiftName);
+        if (!string.IsNullOrEmpty(normalizedShiftName))
+        {
+            var existingBranchShifts = await _repository.GetByBranchIdAsync(primaryBranchId, null, cancellationToken);
+            var duplicateNameShift = existingBranchShifts.FirstOrDefault(s =>
+                !s.IsDeleted &&
+                VietnameseTextNormalizer.NormalizeForComparison(s.ShiftName) == normalizedShiftName);
+            if (duplicateNameShift != null)
+            {
+                throw new BusinessException("DUPLICATE_SHIFT_NAME", $"Tên ca làm việc '{request.ShiftName.Trim()}' bị trùng với ca '{duplicateNameShift.ShiftName}' đã tồn tại trong chi nhánh (so sánh không phân biệt dấu và hoa/thường).");
+            }
+        }
+
         // 3. Tính toán DurationHours nếu không truyền
         var durationHours = request.DurationHours ?? CalculateDuration(request.StartTime, request.EndTime);
+        if (durationHours <= 0 || durationHours > 24)
+        {
+            throw new BusinessException("INVALID_SHIFT_DURATION", "Thời lượng ca làm việc phải lớn hơn 0 và không được vượt quá 24 giờ.");
+        }
 
-        // 4. Tính toán khung giờ check-in mặc định nếu không truyền
-        var allowedCheckInStart = request.AllowedCheckInStart ?? NormalizeTime(request.StartTime - TimeSpan.FromMinutes(30));
-        var allowedCheckInEnd = request.AllowedCheckInEnd ?? NormalizeTime(request.StartTime + TimeSpan.FromMinutes(60));
-
-        // 5. Xác định check-in hôm sau
-        var isCheckInNextDay = request.IsCheckInNextDay ?? (allowedCheckInEnd <= allowedCheckInStart || request.EndTime < request.StartTime);
+        // 4. Tính toán thời lượng ca & check-in hôm sau
+        var isCheckInNextDay = request.IsCheckInNextDay ?? (request.EndTime < request.StartTime);
 
         var shiftConfig = new ShiftConfig
         {
@@ -114,12 +130,10 @@ public class ShiftConfigService : IShiftConfigService
             StartTime = request.StartTime,
             EndTime = request.EndTime,
             DurationHours = durationHours,
-            AllowedCheckInStart = allowedCheckInStart,
-            AllowedCheckInEnd = allowedCheckInEnd,
             IsCheckInNextDay = isCheckInNextDay,
             Description = request.Description?.Trim(),
             IsActive = request.IsActive,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = VnNow
         };
 
         await _repository.AddAsync(shiftConfig, cancellationToken);
@@ -140,9 +154,11 @@ public class ShiftConfigService : IShiftConfigService
         }
 
         var durationHours = request.DurationHours ?? CalculateDuration(request.StartTime, request.EndTime);
-        var allowedCheckInStart = request.AllowedCheckInStart ?? NormalizeTime(request.StartTime - TimeSpan.FromMinutes(30));
-        var allowedCheckInEnd = request.AllowedCheckInEnd ?? NormalizeTime(request.StartTime + TimeSpan.FromMinutes(60));
-        var isCheckInNextDay = request.IsCheckInNextDay ?? (allowedCheckInEnd <= allowedCheckInStart || request.EndTime < request.StartTime);
+        if (durationHours <= 0 || durationHours > 24)
+        {
+            throw new BusinessException("INVALID_SHIFT_DURATION", "Thời lượng ca làm việc phải lớn hơn 0 và không được vượt quá 24 giờ.");
+        }
+        var isCheckInNextDay = request.IsCheckInNextDay ?? (request.EndTime < request.StartTime);
 
         if (request.BranchIds != null && request.BranchIds.Count > 0)
         {
@@ -161,19 +177,41 @@ public class ShiftConfigService : IShiftConfigService
 
         if (!string.IsNullOrWhiteSpace(request.ShiftCode))
         {
-            shift.ShiftCode = request.ShiftCode.Trim().ToUpper();
+            var normalizedCode = request.ShiftCode.Trim().ToUpperInvariant();
+            if (!string.Equals(shift.ShiftCode, normalizedCode, StringComparison.OrdinalIgnoreCase))
+            {
+                var existing = await _repository.GetByCodeAsync(shift.BranchId, normalizedCode, cancellationToken);
+                if (existing != null && existing.Id != id)
+                {
+                    throw new BusinessException("DUPLICATE_SHIFT_CODE", $"Mã ca '{normalizedCode}' đã tồn tại trong chi nhánh này.");
+                }
+            }
+            shift.ShiftCode = normalizedCode;
+        }
+
+        // Kiểm tra trùng tên ca làm việc khi cập nhật (không phân biệt chữ hoa/thường và tiếng Việt có dấu/không dấu)
+        var normalizedUpdateName = VietnameseTextNormalizer.NormalizeForComparison(request.ShiftName);
+        if (!string.IsNullOrEmpty(normalizedUpdateName))
+        {
+            var existingBranchShifts = await _repository.GetByBranchIdAsync(shift.BranchId, null, cancellationToken);
+            var duplicateNameShift = existingBranchShifts.FirstOrDefault(s =>
+                s.Id != id &&
+                !s.IsDeleted &&
+                VietnameseTextNormalizer.NormalizeForComparison(s.ShiftName) == normalizedUpdateName);
+            if (duplicateNameShift != null)
+            {
+                throw new BusinessException("DUPLICATE_SHIFT_NAME", $"Tên ca làm việc '{request.ShiftName.Trim()}' bị trùng với ca '{duplicateNameShift.ShiftName}' đã tồn tại trong chi nhánh (so sánh không phân biệt dấu và hoa/thường).");
+            }
         }
 
         shift.ShiftName = request.ShiftName.Trim();
         shift.StartTime = request.StartTime;
         shift.EndTime = request.EndTime;
         shift.DurationHours = durationHours;
-        shift.AllowedCheckInStart = allowedCheckInStart;
-        shift.AllowedCheckInEnd = allowedCheckInEnd;
         shift.IsCheckInNextDay = isCheckInNextDay;
         shift.Description = request.Description?.Trim();
         shift.IsActive = request.IsActive;
-        shift.UpdatedAt = DateTime.UtcNow;
+        shift.UpdatedAt = VnNow;
 
         _repository.Update(shift);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -193,7 +231,7 @@ public class ShiftConfigService : IShiftConfigService
         }
 
         shift.IsActive = request.IsActive;
-        shift.UpdatedAt = DateTime.UtcNow;
+        shift.UpdatedAt = VnNow;
 
         _repository.Update(shift);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -307,8 +345,6 @@ public class ShiftConfigService : IShiftConfigService
             s.StartTime,
             s.EndTime,
             s.DurationHours,
-            s.AllowedCheckInStart,
-            s.AllowedCheckInEnd,
             s.IsCheckInNextDay,
             s.Description,
             s.IsActive,
