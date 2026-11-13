@@ -105,26 +105,23 @@ public class AuthService : IAuthService
             ExpiresAtUtc: expiresAtUtc,
             FailedAttempts: 0);
 
-        var isDevelopment = string.Equals(_configuration?["ASPNETCORE_ENVIRONMENT"], "Development", StringComparison.OrdinalIgnoreCase);
-
-        // Kích hoạt tác vụ gửi Email ngầm (Fire-and-Forget) để HTTP Response trả về ngay lập tức (< 50ms)
+        var isRealEmailSent = false;
         if (_emailService != null)
         {
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await _emailService.SendLoginOtpAsync(targetEmail, fullName, otpCode, CancellationToken.None);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[EMAIL-BACKGROUND-ERROR] Không thể gửi login OTP tới {targetEmail}: {ex.Message}");
-                }
-            });
+            isRealEmailSent = await _emailService.SendLoginOtpAsync(targetEmail, fullName, otpCode, cancellationToken);
+        }
+
+        var isDevelopment = string.Equals(_configuration?["ASPNETCORE_ENVIRONMENT"], "Development", StringComparison.OrdinalIgnoreCase);
+        if (!isRealEmailSent && !isDevelopment)
+        {
+            LoginOtpStore.TryRemove(tempToken, out _);
+            throw new InvalidOperationException("Không thể gửi mã xác thực. Vui lòng thử lại sau.");
         }
 
         var maskedEmail = MaskEmailDisplay(targetEmail);
-        var message = $"Mã xác thực OTP 6 chữ số đã được gửi tới email {maskedEmail}.";
+        var message = isRealEmailSent
+            ? $"Mã xác thực OTP 6 chữ số đã được gửi tới email {maskedEmail}."
+            : $"Đã tạo mã xác thực OTP đăng nhập cho email {maskedEmail}.";
 
         return new SendLoginOtpResponse(
             RequiresOtp: true,
@@ -132,9 +129,9 @@ public class AuthService : IAuthService
             MaskedEmail: maskedEmail,
             TargetEmail: targetEmail,
             ExpiresInSeconds: 300,
-            IsRealEmailSent: true,
+            IsRealEmailSent: isRealEmailSent,
             Message: message,
-            DevOtpCode: isDevelopment ? otpCode : null
+            DevOtpCode: isDevelopment && !isRealEmailSent ? otpCode : null
         );
     }
 
@@ -806,39 +803,36 @@ public class AuthService : IAuthService
 
         await CreateRegistrationOtpAsync(challengeState, cancellationToken);
 
-        var isDevelopment = IsDevelopmentEnvironment();
-
-        // Kích hoạt tác vụ gửi Email ngầm (Fire-and-Forget) để HTTP Response trả về ngay lập tức (< 50ms)
+        var isRealEmailSent = false;
         if (_emailService != null)
         {
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await _emailService.SendRegistrationOtpAsync(
-                        emailTrimmed,
-                        request.FullName ?? "Chủ cửa hàng",
-                        request.StoreName ?? "MT-GRMS",
-                        otpCode,
-                        CancellationToken.None);
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[EMAIL-BACKGROUND-ERROR] Không thể gửi registration OTP tới {emailTrimmed}: {ex.Message}");
-                }
-            });
+            isRealEmailSent = await _emailService.SendRegistrationOtpAsync(
+                emailTrimmed,
+                request.FullName ?? "Chủ cửa hàng",
+                request.StoreName ?? "MT-GRMS",
+                otpCode,
+                cancellationToken);
+        }
+
+        var isDevelopment = IsDevelopmentEnvironment();
+        if (!isRealEmailSent && !isDevelopment)
+        {
+            await RemoveRegistrationOtpAsync(challengeId, cancellationToken);
+            throw new InvalidOperationException("Không thể gửi mã xác thực. Vui lòng thử lại sau.");
         }
 
         var maskedEmail = MaskEmailDisplay(emailTrimmed);
-        var message = $"Mã xác thực Email OTP đã được gửi tới hộp thư {maskedEmail}.";
+        var message = isRealEmailSent
+            ? $"Mã xác thực Email OTP đã được gửi tới hộp thư {maskedEmail}."
+            : $"Đã tạo mã xác thực Email OTP cho {maskedEmail}.";
 
         return new SendRegistrationOtpResponse(
             Success: true,
             Message: message,
             MaskedEmail: maskedEmail,
             ExpiresInSeconds: 300,
-            IsRealEmailSent: true,
-            DevOtpCode: isDevelopment ? otpCode : null,
+            IsRealEmailSent: isRealEmailSent,
+            DevOtpCode: !isRealEmailSent && isDevelopment ? otpCode : null,
             ChallengeId: challengeId
         );
     }

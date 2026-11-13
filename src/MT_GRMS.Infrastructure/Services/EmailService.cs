@@ -181,30 +181,45 @@ public class EmailService : IEmailService
 <html>
 <head>
     <meta charset='utf-8'>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
     <title>Xác thực OTP MT-GRMS</title>
 </head>
-<body style='margin:0;padding:24px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background-color:#f4f6f8;'>
-    <div style='max-width:540px;margin:0 auto;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 12px rgba(0,0,0,0.08);border:1px solid #e5e7eb;'>
-        <div style='background:linear-gradient(135deg,#0066FF,#0052CC);padding:28px 24px;text-align:center;'>
-            <h1 style='color:#ffffff;margin:0;font-size:22px;letter-spacing:0.5px;'>HỆ THỐNG QUẢN LÝ BÁN LẺ MT-GRMS</h1>
-            <p style='color:#e0f2fe;margin:6px 0 0;font-size:13px;'>Multi-Tenant Grocery Retail Management System</p>
+<body style='margin:0;padding:40px 24px;background-color:#ffffff;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827;line-height:1.6;'>
+    <div style='max-width:540px;margin:0 auto;text-align:left;'>
+        <!-- Brand Header (Phong cách tối giản giống NVIDIA) -->
+        <div style='margin-bottom:32px;'>
+            <span style='font-size:22px;font-weight:800;letter-spacing:-0.5px;color:#0f172a;'>MT-GRMS</span>
+            <span style='font-size:22px;font-weight:800;color:#0f766e;'>.</span>
         </div>
-        <div style='padding:32px 28px;color:#1f2937;line-height:1.6;'>
-            <p style='font-size:15px;margin-top:0;'>Xin chào <strong>{WebUtility.HtmlEncode(fullName)}</strong>,</p>
-            <p style='font-size:14px;color:#4b5563;'>{description}</p>
-            <div style='margin:28px 0;text-align:center;'>
-                <div style='display:inline-block;padding:14px 36px;background:#f0f6ff;border:2px dashed #0066FF;border-radius:12px;font-size:32px;font-weight:700;letter-spacing:8px;color:#0052CC;'>
-                    {otpCode}
-                </div>
-                <p style='margin:10px 0 0;font-size:12px;color:#6b7280;'>Mã OTP có hiệu lực trong vòng <strong>{validityMinutes} phút</strong>.</p>
+
+        <!-- Lời chào & Nội dung -->
+        <p style='font-size:16px;margin:0 0 16px 0;color:#111827;'>Hi <strong>{WebUtility.HtmlEncode(fullName)}</strong>,</p>
+        <p style='font-size:14px;margin:0 0 24px 0;color:#374151;'>{description}</p>
+
+        <!-- Khối mã OTP nổi bật tối giản -->
+        <div style='margin:28px 0 12px 0;'>
+            <div style='display:inline-block;background-color:#0f766e;color:#ffffff;font-size:28px;font-weight:700;letter-spacing:6px;padding:12px 28px;border-radius:6px;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Consolas,monospace;'>
+                {otpCode}
             </div>
-            <p style='font-size:13px;color:#dc2626;background:#fef2f2;padding:12px;border-radius:8px;border-left:4px solid #ef4444;'>
-                <strong>Lưu ý bảo mật:</strong> Tuyệt đối không chia sẻ mã OTP này cho bất kỳ ai, kể cả nhân viên hỗ trợ hệ thống.
-            </p>
-            <p style='font-size:13px;color:#6b7280;margin-bottom:0;'>Nếu bạn không thực hiện yêu cầu này, vui lòng bỏ qua email hoặc liên hệ quản trị viên để kiểm tra bảo mật.</p>
         </div>
-        <div style='background:#f9fafb;padding:16px 24px;text-align:center;font-size:12px;color:#9ca3af;border-top:1px solid #f3f4f6;'>
-            © {DateTime.UtcNow.Year} MT-GRMS Platform · Hệ thống Bán lẻ Đa chi nhánh
+        <p style='font-size:13px;color:#6b7280;margin:0 0 28px 0;'>
+            Mã OTP có hiệu lực trong vòng <strong>{validityMinutes} phút</strong>.
+        </p>
+
+        <!-- Lưu ý bảo mật & quyền riêng tư -->
+        <div style='margin-top:32px;padding-top:20px;border-top:1px solid #f3f4f6;font-size:13px;color:#6b7280;line-height:1.6;'>
+            <p style='margin:0 0 8px 0;'>Để bảo mật tài khoản, tuyệt đối không chia sẻ mã này cho bất kỳ ai.</p>
+            <p style='margin:0;'>Nếu bạn không thực hiện yêu cầu này, vui lòng bỏ qua email và mật khẩu tài khoản của bạn sẽ không bị thay đổi.</p>
+        </div>
+
+        <!-- Chân trang tối giản -->
+        <div style='margin-top:40px;font-size:12px;color:#9ca3af;'>
+            <p style='margin:0 0 6px 0;'>
+                <a href='#' style='color:#6b7280;text-decoration:underline;'>Chính sách bảo mật</a> &nbsp;|&nbsp; 
+                <a href='#' style='color:#6b7280;text-decoration:underline;'>Hỗ trợ</a> &nbsp;|&nbsp; 
+                <a href='#' style='color:#6b7280;text-decoration:underline;'>Điều khoản dịch vụ</a>
+            </p>
+            <p style='margin:0;'>© {DateTime.UtcNow.Year} MT-GRMS Corporation. All rights reserved.</p>
         </div>
     </div>
 </body>
