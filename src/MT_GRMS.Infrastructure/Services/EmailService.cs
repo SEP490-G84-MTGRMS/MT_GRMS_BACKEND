@@ -84,20 +84,22 @@ public class EmailService : IEmailService
         // Nếu chưa cấu hình thông tin SMTP (chạy local/dev hoặc kiểm thử chấm đồ án)
         if (string.IsNullOrWhiteSpace(_settings.SmtpUser) || string.IsNullOrWhiteSpace(_settings.SmtpPass))
         {
-            if (!_environment.IsDevelopment()) return false;
             _logger.LogInformation(
                 "[EMAIL-OTP DEV LOG] Chưa cấu hình SMTP. Gửi OTP mô phỏng tới: {Email}. Mã OTP: {OtpCode}",
                 toEmail,
                 otpCode);
 
-            Console.WriteLine(
-                $"\n======================================================================\n" +
-                $"[MT-GRMS EMAIL-OTP DEV LOG]\n" +
-                $"Tiêu đề: {subject}\n" +
-                $"Người nhận: {greetingName} <{toEmail}>\n" +
-                $"MÃ XÁC THỰC OTP: >>> {otpCode} <<<\n" +
-                $"Thời hạn: {validityMinutes} phút (kể từ {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC)\n" +
-                $"======================================================================\n");
+            if (_environment.IsDevelopment())
+            {
+                Console.WriteLine(
+                    $"\n======================================================================\n" +
+                    $"[MT-GRMS EMAIL-OTP DEV LOG]\n" +
+                    $"Tiêu đề: {subject}\n" +
+                    $"Người nhận: {greetingName} <{toEmail}>\n" +
+                    $"MÃ XÁC THỰC OTP: >>> {otpCode} <<<\n" +
+                    $"Thời hạn: {validityMinutes} phút (kể từ {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC)\n" +
+                    $"======================================================================\n");
+            }
 
             return false;
         }
