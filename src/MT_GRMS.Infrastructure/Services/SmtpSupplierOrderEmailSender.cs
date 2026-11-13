@@ -25,7 +25,7 @@ public class SmtpSupplierOrderEmailSender : ISupplierOrderEmailSender
         var user = _configuration["SMTP_USER"] ?? _configuration["Smtp:User"];
         var pass = _configuration["SMTP_PASSWORD"] ?? _configuration["Smtp:Password"];
         var from = _configuration["SMTP_FROM"] ?? _configuration["Smtp:From"] ?? user;
-        var fromName = _configuration["SMTP_FROM_NAME"] ?? _configuration["Smtp:FromName"] ?? "MT-GRMS";
+        var fromName = _configuration["SMTP_FROM_NAME"] ?? _configuration["Smtp:FromName"] ?? "THViet";
         var useSsl = bool.TryParse(_configuration["SMTP_USE_SSL"] ?? _configuration["Smtp:UseSsl"], out var ssl) && ssl;
 
         if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(from))

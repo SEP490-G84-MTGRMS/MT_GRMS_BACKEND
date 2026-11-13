@@ -29,8 +29,8 @@ public class EmailService : IEmailService
         await SendOtpEmailInternalAsync(
             toEmail: toEmail,
             fullName: fullName,
-            subject: "[MT-GRMS] Mã xác thực OTP khôi phục mật khẩu tài khoản",
-            description: "Hệ thống nhận được yêu cầu khôi phục mật khẩu cho tài khoản liên kết với địa chỉ email này. Vui lòng sử dụng mã xác thực OTP dưới đây để hoàn tất:",
+            subject: "[THViet] Mã xác thực OTP khôi phục mật khẩu tài khoản",
+            description: "Hệ thống nhận được yêu cầu khôi phục mật khẩu cho tài khoản liên kết với địa chỉ email này trên nền tảng THViet. Vui lòng sử dụng mã xác thực OTP dưới đây để hoàn tất:",
             otpCode: otpCode,
             validityMinutes: 10,
             cancellationToken: cancellationToken);
@@ -45,8 +45,8 @@ public class EmailService : IEmailService
         return SendOtpEmailInternalAsync(
             toEmail: toEmail,
             fullName: fullName,
-            subject: $"[MT-GRMS] Mã OTP đăng nhập 2 lớp: {otpCode}",
-            description: "Hệ thống vừa ghi nhận yêu cầu đăng nhập vào tài khoản quản lý của bạn. Vui lòng nhập mã xác thực 2 bước (2FA) dưới đây để truy cập hệ thống:",
+            subject: $"[THViet] Mã OTP đăng nhập 2 lớp: {otpCode}",
+            description: "Hệ thống vừa ghi nhận yêu cầu đăng nhập vào tài khoản quản lý của bạn trên nền tảng THViet. Vui lòng nhập mã xác thực 2 bước (2FA) dưới đây để truy cập hệ thống:",
             otpCode: otpCode,
             validityMinutes: 5,
             cancellationToken: cancellationToken);
@@ -59,12 +59,12 @@ public class EmailService : IEmailService
         string otpCode,
         CancellationToken cancellationToken = default)
     {
-        var storeDisplay = string.IsNullOrWhiteSpace(storeName) ? "MT-GRMS" : storeName.Trim();
+        var storeDisplay = string.IsNullOrWhiteSpace(storeName) ? "THViet" : storeName.Trim();
         return SendOtpEmailInternalAsync(
             toEmail: toEmail,
             fullName: fullName,
-            subject: $"[MT-GRMS] Mã OTP kích hoạt cửa hàng {storeDisplay}: {otpCode}",
-            description: $"Chào mừng bạn đăng ký mở cửa hàng <strong>{WebUtility.HtmlEncode(storeDisplay)}</strong> trên nền tảng MT-GRMS. Vui lòng nhập mã xác thực OTP dưới đây để hoàn tất kích hoạt gian hàng:",
+            subject: $"[THViet] Mã OTP kích hoạt cửa hàng {storeDisplay}: {otpCode}",
+            description: $"Chào mừng bạn đăng ký mở cửa hàng <strong>{WebUtility.HtmlEncode(storeDisplay)}</strong> trên nền tảng THViet. Vui lòng nhập mã xác thực OTP dưới đây để hoàn tất kích hoạt gian hàng:",
             otpCode: otpCode,
             validityMinutes: 5,
             cancellationToken: cancellationToken);
@@ -93,7 +93,7 @@ public class EmailService : IEmailService
             {
                 Console.WriteLine(
                     $"\n======================================================================\n" +
-                    $"[MT-GRMS EMAIL-OTP DEV LOG]\n" +
+                    $"[THViet EMAIL-OTP DEV LOG]\n" +
                     $"Tiêu đề: {subject}\n" +
                     $"Người nhận: {greetingName} <{toEmail}>\n" +
                     $"MÃ XÁC THỰC OTP: >>> {otpCode} <<<\n" +
@@ -150,7 +150,7 @@ public class EmailService : IEmailService
                 {
                     Console.WriteLine(
                         $"\n======================================================================\n" +
-                        $"[MT-GRMS EMAIL-OTP FALLBACK LOG]\n" +
+                        $"[THViet EMAIL-OTP FALLBACK LOG]\n" +
                         $"Tiêu đề: {subject}\n" +
                         $"Người nhận: {greetingName} <{toEmail}>\n" +
                         $"MÃ XÁC THỰC OTP: >>> {otpCode} <<<\n" +
@@ -163,7 +163,7 @@ public class EmailService : IEmailService
         {
             Console.WriteLine(
                 $"\n======================================================================\n" +
-                $"[MT-GRMS EMAIL-OTP DEV LOG (Đang gửi nền qua SMTP)]\n" +
+                $"[THViet EMAIL-OTP DEV LOG (Đang gửi nền qua SMTP)]\n" +
                 $"Tiêu đề: {subject}\n" +
                 $"Người nhận: {greetingName} <{toEmail}>\n" +
                 $"MÃ XÁC THỰC OTP: >>> {otpCode} <<<\n" +
@@ -182,27 +182,27 @@ public class EmailService : IEmailService
 <head>
     <meta charset='utf-8'>
     <meta name='viewport' content='width=device-width, initial-scale=1.0'>
-    <title>Xác thực OTP MT-GRMS</title>
+    <title>Xác thực OTP THViet</title>
 </head>
 <body style='margin:0;padding:40px 24px;background-color:#ffffff;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827;line-height:1.6;'>
     <div style='max-width:540px;margin:0 auto;text-align:left;'>
-        <!-- Brand Header (Phong cách tối giản giống NVIDIA) -->
+        <!-- Brand Header (THViet - Quản Lý Tạp Hóa Việt) -->
         <div style='margin-bottom:32px;'>
-            <span style='font-size:22px;font-weight:800;letter-spacing:-0.5px;color:#0f172a;'>MT-GRMS</span>
-            <span style='font-size:22px;font-weight:800;color:#0f766e;'>.</span>
+            <span style='font-size:30px;font-weight:900;letter-spacing:-0.5px;color:#0F766E;'>TH</span><span style='font-size:30px;font-weight:900;color:#14B8A6;'>Viet</span>
+            <div style='font-size:12px;font-weight:700;color:#0F172A;letter-spacing:2px;margin-top:2px;text-transform:uppercase;'>QUẢN LÝ TẠP HÓA VIỆT</div>
         </div>
 
         <!-- Lời chào & Nội dung -->
         <p style='font-size:16px;margin:0 0 16px 0;color:#111827;'>Hi <strong>{WebUtility.HtmlEncode(fullName)}</strong>,</p>
         <p style='font-size:14px;margin:0 0 24px 0;color:#374151;'>{description}</p>
 
-        <!-- Khối mã OTP nổi bật tối giản -->
-        <div style='margin:28px 0 12px 0;'>
-            <div style='display:inline-block;background-color:#0f766e;color:#ffffff;font-size:28px;font-weight:700;letter-spacing:6px;padding:12px 28px;border-radius:6px;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Consolas,monospace;'>
+        <!-- Khối mã OTP nổi bật cỡ lớn -->
+        <div style='margin:28px 0 14px 0;'>
+            <div style='display:inline-block;background-color:#0F766E;color:#ffffff;font-size:38px;font-weight:800;letter-spacing:10px;padding:14px 36px;border-radius:8px;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Consolas,monospace;box-shadow:0 4px 14px rgba(15,118,110,0.3);'>
                 {otpCode}
             </div>
         </div>
-        <p style='font-size:13px;color:#6b7280;margin:0 0 28px 0;'>
+        <p style='font-size:14px;color:#6b7280;margin:0 0 28px 0;'>
             Mã OTP có hiệu lực trong vòng <strong>{validityMinutes} phút</strong>.
         </p>
 
@@ -219,7 +219,8 @@ public class EmailService : IEmailService
                 <a href='#' style='color:#6b7280;text-decoration:underline;'>Hỗ trợ</a> &nbsp;|&nbsp; 
                 <a href='#' style='color:#6b7280;text-decoration:underline;'>Điều khoản dịch vụ</a>
             </p>
-            <p style='margin:0;'>© {DateTime.UtcNow.Year} MT-GRMS Corporation. All rights reserved.</p>
+            <p style='margin:0;'>© {DateTime.UtcNow.Year} THViet Corporation. All rights reserved.</p>
+            <p style='margin:4px 0 0 0;color:#94a3b8;font-size:11px;'>Hệ thống Quản lý Tạp hóa Việt - THViet</p>
         </div>
     </div>
 </body>
