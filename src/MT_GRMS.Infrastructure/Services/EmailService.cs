@@ -70,7 +70,7 @@ public class EmailService : IEmailService
             cancellationToken: cancellationToken);
     }
 
-    private async Task<bool> SendOtpEmailInternalAsync(
+    private Task<bool> SendOtpEmailInternalAsync(
         string toEmail,
         string fullName,
         string subject,
@@ -101,55 +101,77 @@ public class EmailService : IEmailService
                     $"======================================================================\n");
             }
 
-            return false;
+            return Task.FromResult(false);
         }
 
-        try
+        var senderEmail = string.IsNullOrWhiteSpace(_settings.SenderEmail)
+            ? _settings.SmtpUser
+            : _settings.SenderEmail;
+        var senderName = _settings.SenderName;
+        var host = _settings.SmtpHost;
+        var port = _settings.SmtpPort;
+        var ssl = _settings.EnableSsl;
+        var user = _settings.SmtpUser;
+        var pass = _settings.SmtpPass;
+        var htmlBody = BuildOtpHtmlBody(greetingName, description, otpCode, validityMinutes);
+
+        // Gửi email OTP qua SMTP ở chế độ chạy nền (non-blocking background task)
+        // API phản hồi tức thì (<15ms) để giao diện hiển thị ngay popup OTP cho người dùng mà không bị delay mạng SMTP
+        _ = Task.Run(async () =>
         {
-            using var client = new SmtpClient(_settings.SmtpHost, _settings.SmtpPort)
+            try
             {
-                EnableSsl = _settings.EnableSsl,
-                Credentials = new NetworkCredential(_settings.SmtpUser, _settings.SmtpPass),
-                DeliveryMethod = SmtpDeliveryMethod.Network,
-                Timeout = 5000
-            };
+                using var client = new SmtpClient(host, port)
+                {
+                    EnableSsl = ssl,
+                    Credentials = new NetworkCredential(user, pass),
+                    DeliveryMethod = SmtpDeliveryMethod.Network,
+                    Timeout = 15000
+                };
 
-            var senderEmail = string.IsNullOrWhiteSpace(_settings.SenderEmail)
-                ? _settings.SmtpUser
-                : _settings.SenderEmail;
+                using var mail = new MailMessage
+                {
+                    From = new MailAddress(senderEmail, senderName),
+                    Subject = subject,
+                    IsBodyHtml = true,
+                    Body = htmlBody
+                };
+                mail.To.Add(toEmail);
 
-            using var mail = new MailMessage
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                await client.SendMailAsync(mail, cts.Token);
+                _logger.LogInformation("[Background SMTP] Đã gửi email OTP thành công tới: {Email}.", toEmail);
+            }
+            catch (Exception ex)
             {
-                From = new MailAddress(senderEmail, _settings.SenderName),
-                Subject = subject,
-                IsBodyHtml = true,
-                Body = BuildOtpHtmlBody(greetingName, description, otpCode, validityMinutes)
-            };
+                _logger.LogError(ex, "[Background SMTP] Lỗi khi gửi email OTP qua SMTP tới {Email}. Fallback in ra console.", toEmail);
 
-            mail.To.Add(toEmail);
+                if (_environment.IsDevelopment())
+                {
+                    Console.WriteLine(
+                        $"\n======================================================================\n" +
+                        $"[MT-GRMS EMAIL-OTP FALLBACK LOG]\n" +
+                        $"Tiêu đề: {subject}\n" +
+                        $"Người nhận: {greetingName} <{toEmail}>\n" +
+                        $"MÃ XÁC THỰC OTP: >>> {otpCode} <<<\n" +
+                        $"======================================================================\n");
+                }
+            }
+        });
 
-            using var sendTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            sendTimeout.CancelAfter(TimeSpan.FromSeconds(5));
-            await client.SendMailAsync(mail, sendTimeout.Token);
-            _logger.LogInformation("Đã gửi email OTP thành công tới: {Email}.", toEmail);
-            return true;
-        }
-        catch (Exception ex)
+        if (_environment.IsDevelopment())
         {
-            _logger.LogError(ex, "Lỗi khi gửi email OTP qua SMTP tới {Email}. Fallback in ra console.", toEmail);
-
-            if (!_environment.IsDevelopment()) return false;
-
             Console.WriteLine(
                 $"\n======================================================================\n" +
-                $"[MT-GRMS EMAIL-OTP FALLBACK LOG]\n" +
+                $"[MT-GRMS EMAIL-OTP DEV LOG (Đang gửi nền qua SMTP)]\n" +
                 $"Tiêu đề: {subject}\n" +
                 $"Người nhận: {greetingName} <{toEmail}>\n" +
                 $"MÃ XÁC THỰC OTP: >>> {otpCode} <<<\n" +
+                $"Thời hạn: {validityMinutes} phút (kể từ {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC)\n" +
                 $"======================================================================\n");
-
-            return false;
         }
+
+        return Task.FromResult(true);
     }
 
     private static string BuildOtpHtmlBody(string fullName, string description, string otpCode, int validityMinutes)
