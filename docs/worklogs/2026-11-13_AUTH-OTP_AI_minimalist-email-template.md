@@ -49,3 +49,4 @@
 ## 5. Ghi Chú Cho Manager Khi Duyệt & Merge (Manager Merge Notes)
 - **Rủi ro**: Low.
 - **File cần review**: `src/MT_GRMS.Infrastructure/Services/EmailService.cs`.
+
