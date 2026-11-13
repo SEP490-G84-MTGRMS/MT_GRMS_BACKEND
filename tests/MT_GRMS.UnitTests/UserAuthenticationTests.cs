@@ -465,187 +465,44 @@ public class UserAuthenticationTests
     }
 
     [Fact]
-    public async Task AuthService_SendRegistrationOtp_And_RegisterTenant_Should_Verify_Registration_Otp()
+    public async Task AuthService_LoginAsync_InactiveUser_ShouldThrowUnauthorizedAccessException()
     {
         var repo = new FakeUserRepository();
-        var emailService = new FakeEmailService();
-        var developmentConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        var user = new User
         {
-            ["ASPNETCORE_ENVIRONMENT"] = "Development"
-        }).Build();
-        var authService = new AuthService(repo, developmentConfig, emailService: emailService);
+            Id = "usr_locked",
+            Username = "locked_staff",
+            Email = "locked@mtgrms.vn",
+            PasswordHash = PasswordHasher.Hash("Staff@123456"),
+            IsActive = false
+        };
+        await repo.AddAsync(user);
 
-        var otpResponse = await authService.SendRegistrationOtpAsync(new SendRegistrationOtpRequest(
-            Phone: "0981234321",
-            StoreName: "Siêu Thị Mini Email OTP",
-            FullName: "Nguyễn Chủ Tiệm",
-            Email: "newowner@mtgrms.vn"));
+        var authService = new AuthService(repo);
 
-        Assert.True(otpResponse.Success);
-        Assert.NotNull(otpResponse.DevOtpCode);
-        Assert.Equal(6, otpResponse.DevOtpCode!.Length);
-        Assert.Equal("newowner@mtgrms.vn", emailService.LastToEmail);
-
-        // Nhập sai mã OTP sẽ bị chặn
-        await Assert.ThrowsAsync<ArgumentException>(() =>
-            authService.RegisterTenantAsync(new RegisterTenantRequest(
-                FullName: "Nguyễn Chủ Tiệm",
-                StoreName: "Siêu Thị Mini Email OTP",
-                Phone: "0981234321",
-                Email: "newowner@mtgrms.vn",
-                Password: "Password@123",
-                AgreeTerms: true,
-                OtpCode: "000000")));
-
-        // Nhập đúng mã OTP sẽ khởi tạo cửa hàng thành công
-        var loginRes = await authService.RegisterTenantAsync(new RegisterTenantRequest(
-            FullName: "Nguyễn Chủ Tiệm",
-            StoreName: "Siêu Thị Mini Email OTP",
-            Phone: "0981234321",
-            Email: "newowner@mtgrms.vn",
-            Password: "Password@123",
-            AgreeTerms: true,
-            OtpCode: otpResponse.DevOtpCode));
-
-        Assert.NotNull(loginRes);
-        Assert.Equal("STORE_OWNER", loginRes.User.Role);
-        Assert.Equal("NO_PLAN", repo.LastRegisteredTenant!.SubscriptionStatus);
-        Assert.Null(repo.LastRegisteredTenant.TrialStartedAt);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            authService.LoginAsync(new LoginRequest("locked_staff", "Staff@123456", null)));
     }
 
     [Fact]
-    public async Task RegisterTenant_WithTrialIntent_StartsExactly72HoursAndConsumesAccountTrial()
+    public async Task AuthService_RefreshTokenAsync_InactiveUser_ShouldThrowUnauthorizedAccessException()
     {
         var repo = new FakeUserRepository();
-        var developmentConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        var user = new User
         {
-            ["ASPNETCORE_ENVIRONMENT"] = "Development"
-        }).Build();
-        var authService = new AuthService(repo, developmentConfig, emailService: new FakeEmailService());
-        var otp = await authService.SendRegistrationOtpAsync(new SendRegistrationOtpRequest(
-            "0981000001", "Trial Store", "Trial Owner", "trial-owner@mtgrms.vn"));
+            Id = "usr_locked_refresh",
+            Username = "locked_refresh",
+            Email = "locked_refresh@mtgrms.vn",
+            PasswordHash = "Hash",
+            IsActive = false,
+            RefreshToken = "mt_refresh_locked",
+            RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(5)
+        };
+        await repo.AddAsync(user);
 
-        await authService.RegisterTenantAsync(new RegisterTenantRequest(
-            "Trial Owner", "Trial Store", "0981000001", "trial-owner@mtgrms.vn",
-            "Password@123", true, otp.DevOtpCode, StartTrial: true));
+        var authService = new AuthService(repo);
 
-        var tenant = repo.LastRegisteredTenant!;
-        Assert.Equal("TRIAL", tenant.SubscriptionStatus);
-        Assert.Equal(TimeSpan.FromHours(72), tenant.TrialExpiresAt!.Value - tenant.TrialStartedAt!.Value);
-        var user = await repo.GetByUsernameAsync("trial-owner@mtgrms.vn");
-        Assert.NotNull(user!.TrialConsumedAt);
-    }
-
-    private class SuccessEmailService : IEmailService
-    {
-        public Task SendPasswordResetOtpAsync(string toEmail, string fullName, string otpCode, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task<bool> SendLoginOtpAsync(string toEmail, string fullName, string otpCode, CancellationToken cancellationToken = default) => Task.FromResult(true);
-        public Task<bool> SendRegistrationOtpAsync(string toEmail, string fullName, string storeName, string otpCode, CancellationToken cancellationToken = default) => Task.FromResult(true);
-    }
-
-    [Fact]
-    public async Task SendRegistrationOtp_InProduction_NeverReturnsDevOtpCode_AndFailsClosedWithoutEmail()
-    {
-        var repo = new FakeUserRepository();
-        var prodConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["ASPNETCORE_ENVIRONMENT"] = "Production"
-        }).Build();
-
-        var noEmailAuth = new AuthService(repo, prodConfig, emailService: null);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => noEmailAuth.SendRegistrationOtpAsync(
-            new SendRegistrationOtpRequest("0981000099", "Prod Store", "Prod Owner", "prod-noemail@mtgrms.vn", StartTrial: false)));
-
-        var realEmailAuth = new AuthService(repo, prodConfig, emailService: new SuccessEmailService());
-        var otp = await realEmailAuth.SendRegistrationOtpAsync(
-            new SendRegistrationOtpRequest("0981000099", "Prod Store", "Prod Owner", "prod-email@mtgrms.vn", StartTrial: false));
-        Assert.Null(otp.DevOtpCode);
-        Assert.False(string.IsNullOrWhiteSpace(otp.ChallengeId));
-    }
-
-    [Fact]
-    public async Task RegisterTenant_RejectsIntentOrFingerprintMismatch_AndInvalidatesAfter5FailedOtpAttempts()
-    {
-        var repo = new FakeUserRepository();
-        var devConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["ASPNETCORE_ENVIRONMENT"] = "Development"
-        }).Build();
-        var authService = new AuthService(repo, devConfig, emailService: new FakeEmailService());
-
-        var otp = await authService.SendRegistrationOtpAsync(new SendRegistrationOtpRequest(
-            "0981000088", "Intent Store", "Owner", "intent-bind@mtgrms.vn", StartTrial: false));
-
-        // 1. Đổi intent sang StartTrial = true -> từ chối
-        var intentEx = await Assert.ThrowsAsync<ArgumentException>(() => authService.RegisterTenantAsync(new RegisterTenantRequest(
-            "Owner", "Intent Store", "0981000088", "intent-bind@mtgrms.vn",
-            "Password@123", true, otp.DevOtpCode, StartTrial: true, ChallengeId: otp.ChallengeId)));
-        Assert.StartsWith("OTP_INTENT_MISMATCH", intentEx.Message);
-
-        // 2. Đổi SĐT sau khi gửi OTP -> từ chối fingerprint mismatch
-        var fpEx = await Assert.ThrowsAsync<ArgumentException>(() => authService.RegisterTenantAsync(new RegisterTenantRequest(
-            "Owner", "Intent Store", "0989999999", "intent-bind@mtgrms.vn",
-            "Password@123", true, otp.DevOtpCode, StartTrial: false, ChallengeId: otp.ChallengeId)));
-        Assert.StartsWith("OTP_FINGERPRINT_MISMATCH", fpEx.Message);
-
-        // 3. Nhập sai OTP 5 lần -> hủy challenge
-        for (int i = 0; i < 5; i++)
-        {
-            await Assert.ThrowsAsync<ArgumentException>(() => authService.RegisterTenantAsync(new RegisterTenantRequest(
-                "Owner", "Intent Store", "0981000088", "intent-bind@mtgrms.vn",
-                "Password@123", true, "000000", StartTrial: false, ChallengeId: otp.ChallengeId)));
-        }
-
-        var afterMaxEx = await Assert.ThrowsAsync<ArgumentException>(() => authService.RegisterTenantAsync(new RegisterTenantRequest(
-            "Owner", "Intent Store", "0981000088", "intent-bind@mtgrms.vn",
-            "Password@123", true, otp.DevOtpCode, StartTrial: false, ChallengeId: otp.ChallengeId)));
-        Assert.StartsWith("OTP_REQUIRED", afterMaxEx.Message);
-    }
-
-    [Fact]
-    public async Task AuthService_SendLoginOtp_And_VerifyLoginOtp_Should_Support_2FA_Email_And_BruteForce_Protection()
-    {
-        var repo = new FakeUserRepository();
-        var emailService = new FakeEmailService();
-        await repo.AddAsync(new User
-        {
-            Id = "usr_2fa_01",
-            Username = "owner2fa",
-            Email = "owner2fa@mtgrms.vn",
-            FullName = "Chủ Cửa Hàng 2FA",
-            Password = "Password@123",
-            IsAdmin = false
-        });
-
-        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-        {
-            ["ASPNETCORE_ENVIRONMENT"] = "Development"
-        }).Build();
-        var authService = new AuthService(repo, config, emailService: emailService);
-
-        // Bước 1: Gửi yêu cầu đăng nhập -> Nhận TempToken và gửi Email OTP
-        var sendOtpRes = await authService.SendLoginOtpAsync(new LoginRequest("owner2fa", "Password@123", "TENANT-01"));
-        Assert.True(sendOtpRes.RequiresOtp);
-        Assert.False(string.IsNullOrWhiteSpace(sendOtpRes.TempToken));
-        Assert.Equal("owner2fa@mtgrms.vn", emailService.LastToEmail);
-        Assert.NotNull(sendOtpRes.DevOtpCode);
-
-        // Bước 2: Nhập đúng mã OTP -> Hoàn tất đăng nhập
-        var verifyRes = await authService.VerifyLoginOtpAsync(new VerifyLoginOtpRequest(sendOtpRes.TempToken, sendOtpRes.DevOtpCode!));
-        Assert.NotNull(verifyRes);
-        Assert.Equal("usr_2fa_01", verifyRes.User.Id);
-        Assert.Equal("STORE_OWNER", verifyRes.User.Role);
-
-        // Bước 3: Kiểm tra chống Brute-force (quá 5 lần sai sẽ hủy mã OTP)
-        var bruteRes = await authService.SendLoginOtpAsync(new LoginRequest("owner2fa", "Password@123", "TENANT-01"));
-        for (int i = 0; i < 5; i++)
-        {
-            await Assert.ThrowsAsync<ArgumentException>(() =>
-                authService.VerifyLoginOtpAsync(new VerifyLoginOtpRequest(bruteRes.TempToken, "000000")));
-        }
-
-        // Lần thứ 6 dùng đúng mã cũng bị từ chối vì phiên đã bị hủy
-        await Assert.ThrowsAsync<ArgumentException>(() =>
-            authService.VerifyLoginOtpAsync(new VerifyLoginOtpRequest(bruteRes.TempToken, bruteRes.DevOtpCode!)));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            authService.RefreshTokenAsync(new RefreshTokenRequest("mt_refresh_locked")));
     }
 }

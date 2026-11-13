@@ -150,4 +150,37 @@ public class ScheduleApprovalRequestsController : BaseApiController
         var message = dto.IsApproved ? "Phê duyệt yêu cầu thành công." : "Đã từ chối yêu cầu.";
         return Ok(ApiResponse<bool>.Ok(success, message));
     }
+
+    /// <summary>
+    /// Cập nhật phiếu yêu cầu ca làm việc (chỉ áp dụng khi trạng thái đang chờ duyệt - Pending)
+    /// </summary>
+    [HttpPut("{requestId:guid}")]
+    public async Task<IActionResult> UpdateRequest(
+        [FromRoute] Guid requestId,
+        [FromBody] CreateScheduleApprovalRequestDto dto,
+        CancellationToken cancellationToken)
+    {
+        var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+            ?? throw new UnauthorizedAccessException("Không tìm thấy thông tin định danh người dùng.");
+
+        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner) || User.IsInRole(SystemRoles.Admin);
+        var result = await _approvalService.UpdateRequestAsync(requestId, currentUserId, isOwnerOrAdmin, dto, cancellationToken);
+        return Ok(ApiResponse<ScheduleApprovalRequestDto>.Ok(result, "Cập nhật phiếu yêu cầu thành công."));
+    }
+
+    /// <summary>
+    /// Xóa phiếu yêu cầu ca làm việc (chỉ áp dụng khi trạng thái đang chờ duyệt - Pending)
+    /// </summary>
+    [HttpDelete("{requestId:guid}")]
+    public async Task<IActionResult> DeleteRequest(
+        [FromRoute] Guid requestId,
+        CancellationToken cancellationToken)
+    {
+        var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
+            ?? throw new UnauthorizedAccessException("Không tìm thấy thông tin định danh người dùng.");
+
+        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner) || User.IsInRole(SystemRoles.Admin);
+        var success = await _approvalService.DeleteRequestAsync(requestId, currentUserId, isOwnerOrAdmin, cancellationToken);
+        return Ok(ApiResponse<bool>.Ok(success, "Xóa phiếu yêu cầu thành công."));
+    }
 }

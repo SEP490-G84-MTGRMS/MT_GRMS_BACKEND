@@ -668,8 +668,6 @@ public static class EmployeeSeedData
                 StartTime = new TimeSpan(6, 0, 0),
                 EndTime = new TimeSpan(14, 0, 0),
                 DurationHours = 8.00m,
-                AllowedCheckInStart = new TimeSpan(5, 30, 0),
-                AllowedCheckInEnd = new TimeSpan(7, 0, 0),
                 IsCheckInNextDay = false,
                 Description = "Ca sáng: Tiếp nhận thực phẩm tươi sống, trưng bày quầy kệ & phục vụ bán hàng",
                 IsActive = true
@@ -681,8 +679,6 @@ public static class EmployeeSeedData
                 StartTime = new TimeSpan(14, 0, 0),
                 EndTime = new TimeSpan(22, 0, 0),
                 DurationHours = 8.00m,
-                AllowedCheckInStart = new TimeSpan(13, 30, 0),
-                AllowedCheckInEnd = new TimeSpan(15, 0, 0),
                 IsCheckInNextDay = false,
                 Description = "Ca chiều: Phục vụ khách hàng giờ cao điểm tối & kết ca kiểm đếm quỹ tiền mặt",
                 IsActive = true
@@ -694,8 +690,6 @@ public static class EmployeeSeedData
                 StartTime = new TimeSpan(22, 0, 0),
                 EndTime = new TimeSpan(6, 0, 0),
                 DurationHours = 8.00m,
-                AllowedCheckInStart = new TimeSpan(21, 30, 0),
-                AllowedCheckInEnd = new TimeSpan(23, 0, 0),
                 IsCheckInNextDay = true,
                 Description = "Ca trực đêm: Kiểm kê hàng hóa định kỳ, vệ sinh quầy kệ & nhập kho hàng lạnh",
                 IsActive = true
@@ -707,8 +701,6 @@ public static class EmployeeSeedData
                 StartTime = new TimeSpan(8, 0, 0),
                 EndTime = new TimeSpan(17, 0, 0),
                 DurationHours = 8.00m,
-                AllowedCheckInStart = new TimeSpan(7, 30, 0),
-                AllowedCheckInEnd = new TimeSpan(9, 0, 0),
                 IsCheckInNextDay = false,
                 Description = "Ca làm việc hành chính: Quản trị chi nhánh, kế toán kho & nhân sự",
                 IsActive = true
@@ -720,8 +712,6 @@ public static class EmployeeSeedData
                 StartTime = new TimeSpan(18, 0, 0),
                 EndTime = new TimeSpan(22, 0, 0),
                 DurationHours = 4.00m,
-                AllowedCheckInStart = new TimeSpan(17, 30, 0),
-                AllowedCheckInEnd = new TimeSpan(18, 30, 0),
                 IsCheckInNextDay = false,
                 Description = "Ca tối 4 tiếng: Tăng cường thu ngân & tiếp thực phục vụ giờ cao điểm",
                 IsActive = true
@@ -749,8 +739,6 @@ public static class EmployeeSeedData
                     StartTime = tpl.StartTime,
                     EndTime = tpl.EndTime,
                     DurationHours = tpl.DurationHours,
-                    AllowedCheckInStart = tpl.AllowedCheckInStart,
-                    AllowedCheckInEnd = tpl.AllowedCheckInEnd,
                     IsCheckInNextDay = tpl.IsCheckInNextDay,
                     Description = tpl.Description,
                     IsActive = tpl.IsActive,
@@ -1228,8 +1216,6 @@ public static class EmployeeSeedData
             PlannedStartTime = shift.StartTime,
             PlannedEndTime = shift.EndTime,
             DurationHours = shift.DurationHours,
-            AllowedCheckInStart = shift.AllowedCheckInStart,
-            AllowedCheckInEnd = shift.AllowedCheckInEnd,
             IsCheckInNextDay = shift.IsCheckInNextDay,
 
             // Chấm công thực tế
