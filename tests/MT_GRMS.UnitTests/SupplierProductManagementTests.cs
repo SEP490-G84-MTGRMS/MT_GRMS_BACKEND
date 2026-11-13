@@ -400,14 +400,14 @@ public class SupplierProductManagementTests
             MinimumOrderQuantity = 3
         });
 
-        // Giá 0 từ client → backend mặc định lưu giá Master (CostPrice)
-        Assert.Equal(8000m, result.AgreedWholesalePrice);
+        // Giá 0 từ client → lưu NULL (chưa thỏa thuận); hiệu lực = Master CostPrice
+        Assert.Null(result.AgreedWholesalePrice);
         Assert.Equal(8000m, result.EffectivePurchasePrice);
         Assert.Equal(3, result.MinimumOrderQuantity);
     }
 
     [Fact]
-    public async Task REQ_SP01_AssignProduct_AgreedPriceZeroWithoutCost_Throws()
+    public async Task REQ_SP01_AssignProduct_AgreedPriceZeroWithoutCost_AllowsNullAgreed()
     {
         var supplier = CreateTestSupplier("Vinamilk", "NCC-VNM-001");
         var product = CreateTestProduct("Sữa Chua 100g", "89312345602", "PRD-YOGURT");
@@ -415,15 +415,16 @@ public class SupplierProductManagementTests
         _repo.Suppliers.Add(supplier);
         _repo.Products.Add(product);
 
-        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
-            _service.AssignSupplierProductAsync(supplier.Id, new AssignSupplierProductCommand
-            {
-                ProductId = product.Id,
-                AgreedWholesalePrice = 0m,
-                MinimumOrderQuantity = 3
-            }));
+        var result = await _service.AssignSupplierProductAsync(supplier.Id, new AssignSupplierProductCommand
+        {
+            ProductId = product.Id,
+            AgreedWholesalePrice = 0m,
+            MinimumOrderQuantity = 3
+        });
 
-        Assert.Equal("INVALID_PURCHASE_PRICE", ex.ErrorCode);
+        Assert.Null(result.AgreedWholesalePrice);
+        Assert.Equal(0m, result.EffectivePurchasePrice);
+        Assert.Equal(3, result.MinimumOrderQuantity);
     }
 
     [Fact]

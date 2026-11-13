@@ -127,5 +127,31 @@ public class SupplierReturnsController : BaseApiController
         var result = await _service.CancelAsync(id, command, cancellationToken);
         return Ok(ApiResponse<SupplierReturnDetailDto>.Ok(result, "Đã hủy phiếu trả hàng thành công."));
     }
+
+    [HttpPost("{id:guid}/exchange-purchase-orders")]
+    public async Task<IActionResult> CreateExchangePurchaseOrders(Guid id, CancellationToken cancellationToken)
+    {
+        var result = await _service.CreateExchangePurchaseOrdersAsync(id, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<ExchangePurchaseOrderSummaryDto>>.Ok(
+            result,
+            "Đã tạo PO đổi hàng thành công."));
+    }
+
+    [HttpGet("{id:guid}/purchase-orders")]
+    public async Task<IActionResult> GetRelatedPurchaseOrders(Guid id, CancellationToken cancellationToken)
+    {
+        var result = await _service.GetRelatedPurchaseOrdersAsync(id, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<ExchangePurchaseOrderSummaryDto>>.Ok(result));
+    }
+
+    [HttpPost("{id:guid}/cost-share-payments")]
+    public async Task<IActionResult> RecordCostSharePayment(
+        Guid id,
+        [FromBody] RecordCostSharePaymentCommand command,
+        CancellationToken cancellationToken)
+    {
+        var result = await _service.RecordCostSharePaymentAsync(id, command, cancellationToken);
+        return Ok(ApiResponse<SupplierReturnDetailDto>.Ok(result, "Đã ghi nhận thanh toán chi phí đổi hàng."));
+    }
 }
 

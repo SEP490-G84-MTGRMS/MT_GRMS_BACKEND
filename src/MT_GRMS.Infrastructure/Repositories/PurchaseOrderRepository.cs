@@ -141,7 +141,9 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             var supplierName = resolvedSupplier?.Name ?? "Nhà cung cấp";
 
             var isSupActive = resolvedSupplier == null || resolvedSupplier.Status == SupplierStatus.Active;
-            var price = sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : (p.CostPrice ?? p.SellingPrice);
+            var price = MT_GRMS.Application.Suppliers.SupplierProductPricing.ResolveEffectivePurchasePrice(
+                sp.AgreedWholesalePrice,
+                p.CostPrice ?? p.SellingPrice);
             var moq = sp.MinimumOrderQuantity > 0 ? sp.MinimumOrderQuantity : 1;
 
             var isProdActive = p.Status == ProductStatus.Active;
@@ -400,6 +402,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         DateTime? dateTo,
         int pageIndex,
         int pageSize,
+        string? keyword,
         CancellationToken cancellationToken = default)
     {
         var query = _context.PurchaseOrders
@@ -434,6 +437,21 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         if (dateTo.HasValue)
         {
             query = query.Where(po => po.DeliveryDate <= dateTo.Value.Date.AddDays(1).AddTicks(-1));
+        }
+
+        if (!string.IsNullOrWhiteSpace(keyword))
+        {
+            var kw = keyword.Trim().ToLower();
+            query = query.Where(po =>
+                po.Code.ToLower().Contains(kw)
+                || (po.Supplier != null && (
+                    po.Supplier.Name.ToLower().Contains(kw) || po.Supplier.Code.ToLower().Contains(kw)))
+                || (po.Branch != null && (
+                    po.Branch.Name.ToLower().Contains(kw) || po.Branch.BranchCode.ToLower().Contains(kw)))
+                || po.Details.Any(d =>
+                    d.Product != null && (
+                        (d.Product.Name != null && d.Product.Name.ToLower().Contains(kw))
+                        || (d.Product.ProductCode != null && d.Product.ProductCode.ToLower().Contains(kw)))));
         }
 
         var totalCount = await query.CountAsync(cancellationToken);

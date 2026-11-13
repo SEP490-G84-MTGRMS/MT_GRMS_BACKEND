@@ -265,12 +265,15 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
         Guid poId,
         CancellationToken cancellationToken = default)
     {
+        // Ưu tiên DRAFT (chặn tạo mới); COMPLETED dùng cho PO mua thường (1 GRN).
         return await _context.GoodsReceipts
-            .FirstOrDefaultAsync(gr =>
+            .Where(gr =>
                 gr.TenantId == tenantId &&
                 gr.PurchaseOrderId == poId &&
                 !gr.IsDeleted &&
-                (gr.Status == "DRAFT" || gr.Status == "COMPLETED"), cancellationToken);
+                (gr.Status == "DRAFT" || gr.Status == "COMPLETED"))
+            .OrderBy(gr => gr.Status == "DRAFT" ? 0 : 1)
+            .FirstOrDefaultAsync(cancellationToken);
     }
 
     public async Task<BranchStock?> GetBranchStockAsync(
@@ -364,5 +367,17 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
     public async Task AddSupplierLedgerAsync(SupplierAPLedger ledger, CancellationToken cancellationToken = default)
     {
         await _context.SupplierAPLedgers.AddAsync(ledger, cancellationToken);
+    }
+
+    public async Task<bool> UserExistsAsync(string userId, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return false;
+        }
+
+        return await _context.Users
+            .IgnoreQueryFilters()
+            .AnyAsync(u => u.Id == userId, cancellationToken);
     }
 }

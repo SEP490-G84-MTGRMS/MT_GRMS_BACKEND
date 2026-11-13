@@ -513,7 +513,13 @@ public class BranchProductManagementTests
                     Category = "Lương thực",
                     Unit = prod?.BaseUnit ?? "Gói",
                     RetailPrice = bp.SellingPriceOverride ?? prod?.SellingPrice ?? 0m,
-                    CostPrice = sp != null && sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : (prod?.CostPrice ?? 0m),
+                    CostPrice = sp != null
+                        ? MT_GRMS.Application.Suppliers.SupplierProductPricing.ResolveEffectivePurchasePrice(
+                            sp.AgreedWholesalePrice,
+                            prod?.CostPrice)
+                        : (prod?.CostPrice ?? 0m),
+                    HasActiveSupplierSource = sp != null,
+                    LostSupplierSource = sp == null,
                     CurrentStock = stocks.Sum(x => x.QuantityOnHand),
                     MinStockLevel = prod?.MinStock ?? 0m,
                     SupplierId = sp?.SupplierId ?? displaySupplierId,
