@@ -137,17 +137,19 @@ using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
     var logger = services.GetRequiredService<ILogger<Program>>();
+    var startupInitializationTimer = System.Diagnostics.Stopwatch.StartNew();
     try
     {
         var dbContext = services.GetRequiredService<AppDbContext>();
+        var seedDemoData = builder.Configuration.GetValue<bool>("Database:SeedDemoData");
 
-        logger.LogInformation("Initializing database schema and seed data...");
-        await DbInitializer.InitializeAsync(dbContext, logger);
-        logger.LogInformation("Database seeded successfully.");
+        logger.LogInformation("Initializing database schema. Demo seed enabled: {SeedDemoData}.", seedDemoData);
+        await DbInitializer.InitializeAsync(dbContext, logger, seedDemoData);
+        logger.LogInformation("Database initialization completed in {ElapsedMilliseconds} ms.", startupInitializationTimer.ElapsedMilliseconds);
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, "Lỗi khi tự động áp dụng migrations hoặc nạp dữ liệu mẫu vào CSDL.");
+        logger.LogError(ex, "Lỗi khi tự động áp dụng schema hoặc nạp dữ liệu mẫu vào CSDL sau {ElapsedMilliseconds} ms.", startupInitializationTimer.ElapsedMilliseconds);
     }
 }
 

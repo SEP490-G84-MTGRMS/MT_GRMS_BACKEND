@@ -12,6 +12,7 @@ using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Schedules;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders;
+using MT_GRMS.Application.Transfers;
 
 namespace MT_GRMS.Application;
 
@@ -26,6 +27,7 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IInventoryService, InventoryService>();
+        services.AddScoped<ITransferService, TransferService>();
         services.AddScoped<IOrderService, OrderService>();
         services.AddScoped<PosShifts.IShiftService, PosShifts.ShiftService>();
         services.AddScoped<ICatalogService, CatalogService>();
