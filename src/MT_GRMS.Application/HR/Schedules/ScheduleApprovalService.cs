@@ -100,14 +100,9 @@ public class ScheduleApprovalService : IScheduleApprovalService
             RequestType = dto.RequestType,
             Status = ScheduleApprovalStatus.Pending,
             Reason = dto.Reason.Trim(),
-            EvidenceImageUrl = imageUrls.FirstOrDefault(),
             EvidenceImageUrls = imageUrls,
             LeaveType = dto.LeaveType,
             IsPaidLeave = dto.IsPaidLeaveRequested,
-            SwapType = dto.SwapType,
-            TargetEmployeeId = dto.TargetEmployeeId,
-            TargetScheduleId = dto.TargetScheduleId,
-            PeerConfirmed = null,
             RequestedCheckInTime = dto.RequestedCheckInTime,
             RequestedCheckOutTime = dto.RequestedCheckOutTime,
             RequestedOvertimeMinutes = dto.RequestedOvertimeMinutes,
@@ -163,38 +158,13 @@ public class ScheduleApprovalService : IScheduleApprovalService
         return new PendingApprovalRequestsResponse(dtos.Count, dtos);
     }
 
-    public async Task<bool> PeerConfirmShiftSwapAsync(
+    public Task<bool> PeerConfirmShiftSwapAsync(
         Guid requestId,
         string currentUserId,
         PeerConfirmShiftSwapDto dto,
         CancellationToken cancellationToken = default)
     {
-        var request = await _approvalRepository.GetByIdWithDetailsAsync(requestId, cancellationToken)
-            ?? throw new KeyNotFoundException("Không tìm thấy yêu cầu.");
-
-        if (request.RequestType != ScheduleRequestType.ShiftSwap || request.Status != ScheduleApprovalStatus.Pending)
-        {
-            throw new InvalidOperationException("Yêu cầu này không phải là đơn đổi ca đang chờ xử lý.");
-        }
-
-        var currentEmployee = await ResolveEmployeeAsync(currentUserId, cancellationToken);
-        if (currentEmployee == null || currentEmployee.Id != request.TargetEmployeeId)
-        {
-            throw new UnauthorizedAccessException("Chỉ đồng nghiệp được đề nghị đổi ca mới có quyền xác nhận yêu cầu này.");
-        }
-
-        request.PeerConfirmed = dto.IsAgreed;
-        request.PeerConfirmedAt = VnNow;
-
-        if (!dto.IsAgreed)
-        {
-            request.Status = ScheduleApprovalStatus.Rejected;
-            request.ReviewNote = $"Đồng nghiệp từ chối đổi ca: {dto.Note}";
-        }
-
-        _approvalRepository.Update(request);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
-        return true;
+        throw new InvalidOperationException("Quy trình đổi ca hiện do Quản lý / Chủ cửa hàng phê duyệt trực tiếp.");
     }
 
     public async Task<bool> ReviewRequestAsync(
@@ -394,7 +364,6 @@ public class ScheduleApprovalService : IScheduleApprovalService
 
         var imageUrls = BuildImageUrls(dto);
         request.Reason = dto.Reason.Trim();
-        request.EvidenceImageUrl = imageUrls.FirstOrDefault();
         request.EvidenceImageUrls = imageUrls;
         request.LeaveType = request.RequestType == ScheduleRequestType.LeaveRequest ? dto.LeaveType : null;
         request.IsPaidLeave = request.RequestType == ScheduleRequestType.LeaveRequest && dto.IsPaidLeaveRequested;
@@ -573,10 +542,6 @@ public class ScheduleApprovalService : IScheduleApprovalService
         {
             imageUrls.AddRange(dto.EvidenceImageUrls.Where(u => !string.IsNullOrWhiteSpace(u)).Select(u => u.Trim()));
         }
-        if (!string.IsNullOrWhiteSpace(dto.EvidenceImageUrl) && !imageUrls.Contains(dto.EvidenceImageUrl.Trim()))
-        {
-            imageUrls.Insert(0, dto.EvidenceImageUrl.Trim());
-        }
         return imageUrls;
     }
 
@@ -593,10 +558,6 @@ public class ScheduleApprovalService : IScheduleApprovalService
     private static ScheduleApprovalRequestDto MapToDto(ScheduleApprovalRequest r)
     {
         var imageUrls = r.EvidenceImageUrls?.ToList() ?? new List<string>();
-        if (imageUrls.Count == 0 && !string.IsNullOrWhiteSpace(r.EvidenceImageUrl))
-        {
-            imageUrls.Add(r.EvidenceImageUrl);
-        }
 
         return new ScheduleApprovalRequestDto(
             r.Id,
@@ -609,17 +570,9 @@ public class ScheduleApprovalService : IScheduleApprovalService
             r.RequestType,
             r.Status,
             r.Reason,
-            r.EvidenceImageUrl ?? imageUrls.FirstOrDefault(),
             imageUrls,
             r.LeaveType,
             r.IsPaidLeave,
-            r.SwapType,
-            r.TargetEmployeeId,
-            r.TargetEmployee?.FullName,
-            r.TargetEmployee?.EmployeeCode,
-            r.TargetScheduleId,
-            r.PeerConfirmed,
-            r.PeerConfirmedAt.HasValue ? DateTime.SpecifyKind(r.PeerConfirmedAt.Value, DateTimeKind.Utc) : null,
             r.RequestedCheckInTime,
             r.RequestedCheckOutTime,
             r.ApprovedCheckInTime,

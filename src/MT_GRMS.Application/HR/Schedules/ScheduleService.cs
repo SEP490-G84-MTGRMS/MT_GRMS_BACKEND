@@ -94,8 +94,6 @@ public class ScheduleService : IScheduleService
             PlannedStartTime = resolved.StartTime,
             PlannedEndTime = resolved.EndTime,
             DurationHours = resolved.DurationHours,
-            AllowedCheckInStart = resolved.AllowedCheckInStart,
-            AllowedCheckInEnd = resolved.AllowedCheckInEnd,
             IsCheckInNextDay = resolved.IsNextDay,
             Status = ScheduleStatus.Draft
         };
@@ -236,8 +234,6 @@ public class ScheduleService : IScheduleService
                 PlannedStartTime = resolved.StartTime,
                 PlannedEndTime = resolved.EndTime,
                 DurationHours = resolved.DurationHours,
-                AllowedCheckInStart = resolved.AllowedCheckInStart,
-                AllowedCheckInEnd = resolved.AllowedCheckInEnd,
                 IsCheckInNextDay = resolved.IsNextDay,
                 Status = ScheduleStatus.Draft,
                 Employee = employee
@@ -306,8 +302,6 @@ public class ScheduleService : IScheduleService
                         request.PlannedStartTime,
                         request.PlannedEndTime,
                         request.DurationHours,
-                        request.AllowedCheckInStart,
-                        request.AllowedCheckInEnd,
                         request.IsCheckInNextDay
                     ));
                 }
@@ -404,23 +398,6 @@ public class ScheduleService : IScheduleService
             schedule.DurationHours = shiftConfig.DurationHours;
         }
 
-        if (request.AllowedCheckInStart.HasValue)
-        {
-            schedule.AllowedCheckInStart = request.AllowedCheckInStart.Value;
-        }
-        else if (shiftConfig != null)
-        {
-            schedule.AllowedCheckInStart = shiftConfig.AllowedCheckInStart;
-        }
-
-        if (request.AllowedCheckInEnd.HasValue)
-        {
-            schedule.AllowedCheckInEnd = request.AllowedCheckInEnd.Value;
-        }
-        else if (shiftConfig != null)
-        {
-            schedule.AllowedCheckInEnd = shiftConfig.AllowedCheckInEnd;
-        }
 
         if (request.Status.HasValue)
         {
@@ -555,7 +532,7 @@ public class ScheduleService : IScheduleService
         return new PublishSchedulesResponse(count, $"Đã ban hành thành công {count} ca làm việc.");
     }
 
-    private static (string ShiftCode, string ShiftName, TimeSpan StartTime, TimeSpan EndTime, decimal DurationHours, TimeSpan AllowedCheckInStart, TimeSpan AllowedCheckInEnd, bool IsNextDay)
+    private static (string ShiftCode, string ShiftName, TimeSpan StartTime, TimeSpan EndTime, decimal DurationHours, bool IsNextDay)
         ResolveShiftInfo(CreateScheduleItemRequest item, ShiftConfig? config)
     {
         if (config != null)
@@ -569,9 +546,7 @@ public class ScheduleService : IScheduleService
             var end = item.PlannedEndTime ?? config.EndTime;
             var isNext = item.IsCheckInNextDay ?? config.IsCheckInNextDay;
             var dur = item.DurationHours ?? config.DurationHours;
-            var inStart = item.AllowedCheckInStart ?? config.AllowedCheckInStart;
-            var inEnd = item.AllowedCheckInEnd ?? config.AllowedCheckInEnd;
-            return (code, name, start, end, dur, inStart, inEnd, isNext);
+            return (code, name, start, end, dur, isNext);
         }
         else
         {
@@ -582,9 +557,7 @@ public class ScheduleService : IScheduleService
             var end = item.PlannedEndTime ?? TimeSpan.FromHours(17);
             var isNext = item.IsCheckInNextDay ?? (end <= start);
             var dur = item.DurationHours ?? (decimal)(isNext ? (end.Add(TimeSpan.FromDays(1)) - start).TotalHours : (end - start).TotalHours);
-            var inStart = item.AllowedCheckInStart ?? (start >= TimeSpan.FromMinutes(15) ? start.Subtract(TimeSpan.FromMinutes(15)) : TimeSpan.Zero);
-            var inEnd = item.AllowedCheckInEnd ?? start.Add(TimeSpan.FromMinutes(30));
-            return (code, name, start, end, dur, inStart, inEnd, isNext);
+            return (code, name, start, end, dur, isNext);
         }
     }
 
@@ -777,8 +750,6 @@ public class ScheduleService : IScheduleService
             s.PlannedStartTime,
             s.PlannedEndTime,
             s.DurationHours,
-            s.AllowedCheckInStart,
-            s.AllowedCheckInEnd,
             s.IsCheckInNextDay,
             s.CheckInTime,
             s.CheckOutTime,
@@ -795,7 +766,6 @@ public class ScheduleService : IScheduleService
             s.ApprovalType,
             s.ApprovalStatus,
             s.ApprovalReason,
-            s.EvidenceImageUrl,
             s.ApprovedBy,
             s.ApprovedAt,
             s.CreatedAt,
@@ -953,7 +923,6 @@ public class ScheduleService : IScheduleService
         schedule.IsPaidLeave = false;
         schedule.ApprovalType = null;
         schedule.ApprovalStatus = ScheduleApprovalStatus.None;
-        schedule.EvidenceImageUrl = null;
         schedule.PayslipId = null;
         schedule.ApprovalReason = string.IsNullOrWhiteSpace(trimmedReason) ? null : trimmedReason;
         schedule.ApprovedBy = string.IsNullOrWhiteSpace(trimmedReason) ? null : actor;

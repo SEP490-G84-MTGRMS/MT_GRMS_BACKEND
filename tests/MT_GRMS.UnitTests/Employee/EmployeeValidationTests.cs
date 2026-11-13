@@ -645,15 +645,12 @@ public class EmployeeValidationTests
     [Fact]
     public void ScheduleApproval_APP_VAL_01_05_AllRequestTypesAndEvidenceLimit_ValidateCorrectly()
     {
-        // 1. ShiftSwap CrossSwap thiếu TargetScheduleId -> Fail
-        var invalidCrossSwap = new CreateScheduleApprovalRequestDto(
+        // 1. ShiftSwap lý do ngắn (< 5 ký tự) -> Fail
+        var invalidShiftSwap = new CreateScheduleApprovalRequestDto(
             RequestType: ScheduleRequestType.ShiftSwap,
-            Reason: "Xin đổi ca chéo với đồng nghiệp",
-            SwapType: ShiftSwapType.CrossSwap,
-            TargetEmployeeId: Guid.NewGuid(),
-            TargetScheduleId: null
+            Reason: "Đổi"
         );
-        Assert.False(_approvalValidator.Validate(invalidCrossSwap).IsValid);
+        Assert.False(_approvalValidator.Validate(invalidShiftSwap).IsValid);
 
         // 2. LeaveRequest thiếu LeaveType -> Fail
         var invalidLeave = new CreateScheduleApprovalRequestDto(

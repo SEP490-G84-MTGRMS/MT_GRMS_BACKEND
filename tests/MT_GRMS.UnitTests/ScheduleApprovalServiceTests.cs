@@ -452,10 +452,7 @@ public class ScheduleApprovalServiceTests
             ScheduleId = schedule1.Id,
             Schedule = schedule1,
             EmployeeId = emp1.Id,
-            TargetEmployeeId = emp2.Id,
-            TargetScheduleId = schedule2.Id,
             RequestType = ScheduleRequestType.ShiftSwap,
-            SwapType = ShiftSwapType.CrossSwap,
             Status = ScheduleApprovalStatus.Pending,
             Reason = "Doi ca chieu"
         };
@@ -511,9 +508,7 @@ public class ScheduleApprovalServiceTests
         // Assert
         Assert.Equal(ScheduleRequestType.ShiftSwap, created.RequestType);
         Assert.Equal(ScheduleApprovalStatus.Pending, created.Status);
-        Assert.Null(created.TargetEmployeeId);
-        Assert.Null(created.TargetScheduleId);
-        Assert.Null(created.PeerConfirmed);
+        Assert.Equal("Xin đổi từ Ca Sáng sang Ca Chiều ngày mai do bận việc gia đình", created.Reason);
     }
 
     [Fact]

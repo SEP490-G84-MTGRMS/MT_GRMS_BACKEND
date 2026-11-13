@@ -138,6 +138,23 @@ public class EmployeeRepository : IEmployeeRepository
         return await _dbSet.AnyAsync(predicate, cancellationToken);
     }
 
+    public async Task<bool> ExistsIgnoringFiltersAsync(Expression<Func<Employee, bool>> predicate, CancellationToken cancellationToken = default)
+    {
+        return await _dbSet.IgnoreQueryFilters().AnyAsync(predicate, cancellationToken);
+    }
+
+    public async Task<Employee?> GetDeletedDuplicateAsync(string tenantId, string citizenId, string phone, string? employeeCode = null, Guid? excludeId = null, CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .IgnoreQueryFilters()
+            .Where(e => e.TenantId == tenantId && e.IsDeleted && (!excludeId.HasValue || e.Id != excludeId.Value))
+            .FirstOrDefaultAsync(e =>
+                e.CitizenId == citizenId
+                || e.Phone == phone
+                || (!string.IsNullOrEmpty(employeeCode) && e.EmployeeCode == employeeCode),
+                cancellationToken);
+    }
+
     public async Task AddAsync(Employee employee, CancellationToken cancellationToken = default)
     {
         await _dbSet.AddAsync(employee, cancellationToken);

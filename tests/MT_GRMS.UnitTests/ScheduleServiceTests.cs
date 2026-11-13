@@ -357,13 +357,13 @@ public class ScheduleServiceTests
 
         var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
 
-        // Ca 1: 06:00 - 14:00, Ca 2: 12:00 - 18:00 (Trùng nhau 2 giờ <= 12 giờ -> HỢP LỆ)
+        // Ca 1: 06:00 - 12:00 (6h), Ca 2: 14:00 - 18:00 (4h) (Không trùng giờ, tổng 10h <= 12 giờ -> HỢP LỆ)
         var request = new BatchCreateScheduleRequest(
             branchId,
             new List<CreateScheduleItemRequest>
             {
-                new(emp.Id, branchId, workDate, null, "CA_SANG", "Ca Sáng", TimeSpan.FromHours(6), TimeSpan.FromHours(14)),
-                new(emp.Id, branchId, workDate, null, "CA_GIAOTHOA", "Ca Giao thoa", TimeSpan.FromHours(12), TimeSpan.FromHours(18))
+                new(emp.Id, branchId, workDate, null, "CA_SANG", "Ca Sáng", TimeSpan.FromHours(6), TimeSpan.FromHours(12)),
+                new(emp.Id, branchId, workDate, null, "CA_CHIEU", "Ca Chiều", TimeSpan.FromHours(14), TimeSpan.FromHours(18))
             }
         );
 
@@ -393,20 +393,20 @@ public class ScheduleServiceTests
 
         var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
 
-        // Ca 1: 00:00 - 16:00, Ca 2: 02:00 - 18:00 (Trùng nhau 14 giờ > 12 giờ -> BÁO LỖI)
+        // Ca 1: 06:00 - 14:00 (8h), Ca 2: 15:00 - 20:00 (5h) (Tổng 13h > 12 giờ -> BÁO LỖI SCHEDULE_DAILY_HOURS_EXCEEDED)
         var request = new BatchCreateScheduleRequest(
             branchId,
             new List<CreateScheduleItemRequest>
             {
-                new(emp.Id, branchId, workDate, null, "CA_DAI_1", "Ca Dài 1", TimeSpan.FromHours(0), TimeSpan.FromHours(16)),
-                new(emp.Id, branchId, workDate, null, "CA_DAI_2", "Ca Dài 2", TimeSpan.FromHours(2), TimeSpan.FromHours(18))
+                new(emp.Id, branchId, workDate, null, "CA_DAI_1", "Ca Dài 1", TimeSpan.FromHours(6), TimeSpan.FromHours(14)),
+                new(emp.Id, branchId, workDate, null, "CA_DAI_2", "Ca Dài 2", TimeSpan.FromHours(15), TimeSpan.FromHours(20))
             }
         );
 
         // Act & Assert
         var ex = await Assert.ThrowsAsync<BusinessException>(() => service.BatchCreateAsync(request));
-        Assert.Equal("SCHEDULE_OVERLAP_EXCEEDED", ex.ErrorCode);
-        Assert.Contains("vượt quá 12 giờ", ex.Message);
+        Assert.Equal("SCHEDULE_DAILY_HOURS_EXCEEDED", ex.ErrorCode);
+        Assert.Contains("vượt quá giới hạn tối đa 12h", ex.Message);
     }
 
     [Fact]
@@ -425,7 +425,7 @@ public class ScheduleServiceTests
         var branchId = Guid.NewGuid();
         var workDate = new DateTime(2026, 11, 5);
 
-        // Đã có ca sẵn trong DB: 06:00 - 14:00
+        // Đã có ca sẵn trong DB: 06:00 - 12:00
         scheduleRepo.Schedules.Add(new EmployeeSchedule
         {
             Id = Guid.NewGuid(),
@@ -434,18 +434,18 @@ public class ScheduleServiceTests
             WorkDate = workDate,
             ShiftName = "Ca Sáng",
             PlannedStartTime = TimeSpan.FromHours(6),
-            PlannedEndTime = TimeSpan.FromHours(14),
+            PlannedEndTime = TimeSpan.FromHours(12),
             Status = ScheduleStatus.Draft
         });
 
         var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
 
-        // Gửi xếp thêm ca: 12:00 - 18:00 (Giao thoa 2 giờ <= 12 giờ -> Cho phép)
+        // Gửi xếp thêm ca: 14:00 - 18:00 (Không trùng giờ, tổng 10h <= 12 giờ -> Cho phép)
         var request = new BatchCreateScheduleRequest(
             branchId,
             new List<CreateScheduleItemRequest>
             {
-                new(emp.Id, branchId, workDate, null, "CA_GIAOTHOA", "Ca Giao thoa", TimeSpan.FromHours(12), TimeSpan.FromHours(18))
+                new(emp.Id, branchId, workDate, null, "CA_CHIEU", "Ca Chiều", TimeSpan.FromHours(14), TimeSpan.FromHours(18))
             }
         );
 
@@ -473,7 +473,7 @@ public class ScheduleServiceTests
         var branchId = Guid.NewGuid();
         var workDate = new DateTime(2026, 11, 5);
 
-        // Đã có ca sẵn trong DB: 00:00 - 16:00
+        // Đã có ca sẵn trong DB: 06:00 - 14:00 (8h)
         scheduleRepo.Schedules.Add(new EmployeeSchedule
         {
             Id = Guid.NewGuid(),
@@ -481,26 +481,27 @@ public class ScheduleServiceTests
             BranchId = branchId,
             WorkDate = workDate,
             ShiftName = "Ca Dài 1",
-            PlannedStartTime = TimeSpan.FromHours(0),
-            PlannedEndTime = TimeSpan.FromHours(16),
+            PlannedStartTime = TimeSpan.FromHours(6),
+            PlannedEndTime = TimeSpan.FromHours(14),
+            DurationHours = 8.00m,
             Status = ScheduleStatus.Draft
         });
 
         var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
 
-        // Gửi xếp thêm ca: 02:00 - 18:00 (Giao thoa 14 giờ > 12 giờ -> Ném ngoại lệ)
+        // Gửi xếp thêm ca: 15:00 - 20:00 (5h) (Tổng 13h > 12 giờ -> Ném ngoại lệ)
         var request = new BatchCreateScheduleRequest(
             branchId,
             new List<CreateScheduleItemRequest>
             {
-                new(emp.Id, branchId, workDate, null, "CA_DAI_2", "Ca Dài 2", TimeSpan.FromHours(2), TimeSpan.FromHours(18))
+                new(emp.Id, branchId, workDate, null, "CA_DAI_2", "Ca Dài 2", TimeSpan.FromHours(15), TimeSpan.FromHours(20))
             }
         );
 
         // Act & Assert
         var ex = await Assert.ThrowsAsync<BusinessException>(() => service.BatchCreateAsync(request));
-        Assert.Equal("SCHEDULE_OVERLAP_EXCEEDED", ex.ErrorCode);
-        Assert.Contains("vượt quá 12 giờ", ex.Message);
+        Assert.Equal("SCHEDULE_DAILY_HOURS_EXCEEDED", ex.ErrorCode);
+        Assert.Contains("vượt quá giới hạn tối đa 12h", ex.Message);
     }
 
     [Fact]

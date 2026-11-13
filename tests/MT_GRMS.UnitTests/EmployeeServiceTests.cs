@@ -179,6 +179,21 @@ public class EmployeeServiceTests
             return Task.FromResult(Employees.Where(e => !e.IsDeleted).Any(compiled));
         }
 
+        public Task<bool> ExistsIgnoringFiltersAsync(Expression<Func<Employee, bool>> predicate, CancellationToken cancellationToken = default)
+        {
+            var compiled = predicate.Compile();
+            return Task.FromResult(Employees.Any(compiled));
+        }
+
+        public Task<Employee?> GetDeletedDuplicateAsync(string tenantId, string citizenId, string phone, string? employeeCode = null, Guid? excludeId = null, CancellationToken cancellationToken = default)
+        {
+            var match = Employees.FirstOrDefault(e =>
+                e.IsDeleted
+                && (!excludeId.HasValue || e.Id != excludeId.Value)
+                && (e.CitizenId == citizenId || e.Phone == phone || (!string.IsNullOrEmpty(employeeCode) && e.EmployeeCode == employeeCode)));
+            return Task.FromResult(match);
+        }
+
         public Task AddAsync(Employee employee, CancellationToken cancellationToken = default)
         {
             Employees.Add(employee);
@@ -905,5 +920,58 @@ public class EmployeeServiceTests
             service.CreateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("new_user", "Pass@123")));
 
         Assert.Equal("EMPLOYEE_INACTIVE", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task UpdateEmployee_WhenPhoneStoredWithPlus84AndUpdatedWithZeroPrefix_DoesNotThrowDuplicatePhone()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var branchId = Guid.NewGuid();
+        var empId = Guid.NewGuid();
+        await empRepo.AddAsync(new Employee
+        {
+            Id = empId,
+            TenantId = "tenant_test_01",
+            EmployeeCode = "NV0050",
+            FullName = "Nguyễn Văn A",
+            CitizenId = "001202005050",
+            Phone = "+84912345678", // Lưu trong DB dạng +84
+            BranchId = branchId,
+            Status = EmployeeStatus.Active
+        });
+
+        // Bảng Users đã có 1 user khác trùng SĐT 0912345678 (ví dụ StoreOwner)
+        await userRepo.AddAsync(new User
+        {
+            Id = "owner_01",
+            UserName = "store_owner",
+            Email = "owner@mtgrms.vn",
+            Phone = "0912345678",
+            FullName = "Chủ cửa hàng"
+        });
+
+        // Update nhân viên với SĐT chuẩn hóa 0912345678 (không đổi số, chỉ khác +84 và 0) và cấp kèm tài khoản
+        var updateReq = new UpdateEmployeeRequest(
+            FullName: "Nguyễn Văn A (Đã cập nhật)",
+            CitizenId: "001202005050",
+            Phone: "0912345678",
+            BranchId: branchId,
+            UserName: "nva_staff",
+            Password: "Password@123"
+        );
+
+        var updated = await service.UpdateEmployeeAsync(empId, updateReq);
+
+        Assert.Equal("0912345678", updated.Phone);
+        Assert.Equal("nva_staff", updated.UserName);
+        var createdStaffUser = userRepo.Users.FirstOrDefault(u => u.UserName == "nva_staff");
+        Assert.NotNull(createdStaffUser);
+        // Phone của User mới được để null để không đụng Unique Index IX_Users_Phone của StoreOwner
+        Assert.Null(createdStaffUser!.Phone);
     }
 }

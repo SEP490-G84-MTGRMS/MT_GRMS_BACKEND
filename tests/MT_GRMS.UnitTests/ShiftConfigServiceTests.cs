@@ -154,8 +154,6 @@ public class ShiftConfigServiceTests
         Assert.Equal("SANG", result.ShiftCode);
         Assert.Equal("Ca sáng chuẩn", result.ShiftName);
         Assert.Equal(8.00m, result.DurationHours);
-        Assert.Equal(new TimeSpan(5, 30, 0), result.AllowedCheckInStart);
-        Assert.Equal(new TimeSpan(7, 0, 0), result.AllowedCheckInEnd);
         Assert.True(result.IsActive);
         Assert.True(uow.SaveChangesCalled);
 
@@ -187,8 +185,6 @@ public class ShiftConfigServiceTests
 
         // Assert
         Assert.Equal(8.00m, result.DurationHours);
-        Assert.Equal(new TimeSpan(21, 30, 0), result.AllowedCheckInStart);
-        Assert.Equal(new TimeSpan(23, 0, 0), result.AllowedCheckInEnd);
     }
 
     [Fact]

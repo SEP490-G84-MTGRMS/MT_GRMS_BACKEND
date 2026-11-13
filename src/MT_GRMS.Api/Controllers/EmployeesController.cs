@@ -130,6 +130,14 @@ public class EmployeesController : BaseApiController
             {
                 return Conflict(ApiResponse<object>.Fail("DUPLICATE_CODE", "Mã nhân viên đã tồn tại trong hệ thống."));
             }
+            if (constraint.Contains("UserName", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_USERNAME", "Tên đăng nhập đã tồn tại trong hệ thống."));
+            }
+            if (constraint.Contains("Email", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_EMAIL", "Địa chỉ email tài khoản đã tồn tại trong hệ thống."));
+            }
             if (constraint.Contains("Phone", StringComparison.OrdinalIgnoreCase))
             {
                 return Conflict(ApiResponse<object>.Fail("DUPLICATE_PHONE", "Số điện thoại đã tồn tại trong hệ thống."));
@@ -171,6 +179,18 @@ public class EmployeesController : BaseApiController
             {
                 return Conflict(ApiResponse<object>.Fail("DUPLICATE_CITIZEN_ID", "Số CCCD đã tồn tại trong hệ thống. Vui lòng kiểm tra lại."));
             }
+            if (constraint.Contains("EmployeeCode", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_CODE", "Mã nhân viên đã tồn tại trong hệ thống."));
+            }
+            if (constraint.Contains("UserName", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_USERNAME", "Tên đăng nhập đã tồn tại trong hệ thống."));
+            }
+            if (constraint.Contains("Email", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_EMAIL", "Địa chỉ email tài khoản đã tồn tại trong hệ thống."));
+            }
             if (constraint.Contains("Phone", StringComparison.OrdinalIgnoreCase))
             {
                 return Conflict(ApiResponse<object>.Fail("DUPLICATE_PHONE", "Số điện thoại đã tồn tại trong hệ thống."));
@@ -180,6 +200,23 @@ public class EmployeesController : BaseApiController
         catch (NotFoundException ex)
         {
             return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
+        }
+        catch (DbUpdateException dbEx) when (dbEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505")
+        {
+            var constraint = pgEx.ConstraintName ?? string.Empty;
+            if (constraint.Contains("UserName", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_USERNAME", "Tên đăng nhập đã tồn tại trong hệ thống."));
+            }
+            if (constraint.Contains("Email", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_EMAIL", "Địa chỉ email tài khoản đã tồn tại trong hệ thống."));
+            }
+            if (constraint.Contains("Phone", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_PHONE", "Số điện thoại tài khoản đã tồn tại trong hệ thống."));
+            }
+            return Conflict(ApiResponse<object>.Fail("DUPLICATE_KEY", "Thông tin tài khoản đăng nhập bị trùng lặp trong hệ thống."));
         }
         catch (BusinessException ex)
         {
@@ -249,6 +286,23 @@ public class EmployeesController : BaseApiController
         {
             return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
         }
+        catch (DbUpdateException dbEx) when (dbEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505")
+        {
+            var constraint = pgEx.ConstraintName ?? string.Empty;
+            if (constraint.Contains("UserName", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_USERNAME", "Tên đăng nhập đã tồn tại trong hệ thống."));
+            }
+            if (constraint.Contains("Email", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_EMAIL", "Địa chỉ email tài khoản đã tồn tại trong hệ thống."));
+            }
+            if (constraint.Contains("Phone", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_PHONE", "Số điện thoại tài khoản đã tồn tại trong hệ thống."));
+            }
+            return Conflict(ApiResponse<object>.Fail("DUPLICATE_KEY", "Thông tin tài khoản đăng nhập bị trùng lặp trong hệ thống."));
+        }
         catch (BusinessException ex)
         {
             var status = ex.ErrorCode.StartsWith("DUPLICATE") || ex.ErrorCode == "CONFLICT"
@@ -292,6 +346,23 @@ public class EmployeesController : BaseApiController
         {
             return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
         }
+        catch (DbUpdateException dbEx) when (dbEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505")
+        {
+            var constraint = pgEx.ConstraintName ?? string.Empty;
+            if (constraint.Contains("UserName", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_USERNAME", "Tên đăng nhập đã tồn tại trong hệ thống."));
+            }
+            if (constraint.Contains("Email", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_EMAIL", "Địa chỉ email tài khoản đã tồn tại trong hệ thống."));
+            }
+            if (constraint.Contains("Phone", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_PHONE", "Số điện thoại tài khoản đã tồn tại trong hệ thống."));
+            }
+            return Conflict(ApiResponse<object>.Fail("DUPLICATE_KEY", "Thông tin tài khoản đăng nhập bị trùng lặp trong hệ thống."));
+        }
         catch (BusinessException ex)
         {
             var status = ex.ErrorCode.StartsWith("DUPLICATE") || ex.ErrorCode == "CONFLICT"
@@ -322,6 +393,23 @@ public class EmployeesController : BaseApiController
         catch (NotFoundException ex)
         {
             return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
+        }
+        catch (DbUpdateException dbEx) when (dbEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505")
+        {
+            var constraint = pgEx.ConstraintName ?? string.Empty;
+            if (constraint.Contains("UserName", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_USERNAME", "Tên đăng nhập đã tồn tại trong hệ thống."));
+            }
+            if (constraint.Contains("Email", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_EMAIL", "Địa chỉ email tài khoản đã tồn tại trong hệ thống."));
+            }
+            if (constraint.Contains("Phone", StringComparison.OrdinalIgnoreCase))
+            {
+                return Conflict(ApiResponse<object>.Fail("DUPLICATE_PHONE", "Số điện thoại tài khoản đã tồn tại trong hệ thống."));
+            }
+            return Conflict(ApiResponse<object>.Fail("DUPLICATE_KEY", "Thông tin tài khoản đăng nhập bị trùng lặp trong hệ thống."));
         }
         catch (BusinessException ex) when (ex.ErrorCode == "EMPLOYEE_HAS_WORK_HISTORY")
         {

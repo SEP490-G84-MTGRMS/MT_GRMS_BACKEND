@@ -970,13 +970,8 @@ public class ShiftService : IShiftService
         var buffer = TimeSpan.FromMinutes(30);
         foreach (var s in schedules)
         {
-            var startWindow = s.AllowedCheckInStart != TimeSpan.Zero
-                ? s.AllowedCheckInStart
-                : (s.PlannedStartTime > buffer ? s.PlannedStartTime.Subtract(buffer) : TimeSpan.Zero);
-
-            var endWindow = s.AllowedCheckInEnd != TimeSpan.Zero && s.AllowedCheckInEnd < new TimeSpan(23, 59, 59)
-                ? s.AllowedCheckInEnd
-                : s.PlannedEndTime.Add(buffer);
+            var startWindow = s.PlannedStartTime > buffer ? s.PlannedStartTime.Subtract(buffer) : TimeSpan.Zero;
+            var endWindow = s.PlannedEndTime.Add(buffer);
 
             bool isInShift;
             if (!s.IsCheckInNextDay && endWindow >= startWindow)

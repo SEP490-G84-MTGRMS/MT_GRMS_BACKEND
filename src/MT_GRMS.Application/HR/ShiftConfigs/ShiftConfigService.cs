@@ -117,12 +117,8 @@ public class ShiftConfigService : IShiftConfigService
             throw new BusinessException("INVALID_SHIFT_DURATION", "Thời lượng ca làm việc phải lớn hơn 0 và không được vượt quá 24 giờ.");
         }
 
-        // 4. Tính toán khung giờ check-in mặc định nếu không truyền
-        var allowedCheckInStart = request.AllowedCheckInStart ?? NormalizeTime(request.StartTime - TimeSpan.FromMinutes(30));
-        var allowedCheckInEnd = request.AllowedCheckInEnd ?? NormalizeTime(request.StartTime + TimeSpan.FromMinutes(60));
-
-        // 5. Xác định check-in hôm sau
-        var isCheckInNextDay = request.IsCheckInNextDay ?? (allowedCheckInEnd <= allowedCheckInStart || request.EndTime < request.StartTime);
+        // 4. Tính toán thời lượng ca & check-in hôm sau
+        var isCheckInNextDay = request.IsCheckInNextDay ?? (request.EndTime < request.StartTime);
 
         var shiftConfig = new ShiftConfig
         {
@@ -134,8 +130,6 @@ public class ShiftConfigService : IShiftConfigService
             StartTime = request.StartTime,
             EndTime = request.EndTime,
             DurationHours = durationHours,
-            AllowedCheckInStart = allowedCheckInStart,
-            AllowedCheckInEnd = allowedCheckInEnd,
             IsCheckInNextDay = isCheckInNextDay,
             Description = request.Description?.Trim(),
             IsActive = request.IsActive,
@@ -164,9 +158,7 @@ public class ShiftConfigService : IShiftConfigService
         {
             throw new BusinessException("INVALID_SHIFT_DURATION", "Thời lượng ca làm việc phải lớn hơn 0 và không được vượt quá 24 giờ.");
         }
-        var allowedCheckInStart = request.AllowedCheckInStart ?? NormalizeTime(request.StartTime - TimeSpan.FromMinutes(30));
-        var allowedCheckInEnd = request.AllowedCheckInEnd ?? NormalizeTime(request.StartTime + TimeSpan.FromMinutes(60));
-        var isCheckInNextDay = request.IsCheckInNextDay ?? (allowedCheckInEnd <= allowedCheckInStart || request.EndTime < request.StartTime);
+        var isCheckInNextDay = request.IsCheckInNextDay ?? (request.EndTime < request.StartTime);
 
         if (request.BranchIds != null && request.BranchIds.Count > 0)
         {
@@ -216,8 +208,6 @@ public class ShiftConfigService : IShiftConfigService
         shift.StartTime = request.StartTime;
         shift.EndTime = request.EndTime;
         shift.DurationHours = durationHours;
-        shift.AllowedCheckInStart = allowedCheckInStart;
-        shift.AllowedCheckInEnd = allowedCheckInEnd;
         shift.IsCheckInNextDay = isCheckInNextDay;
         shift.Description = request.Description?.Trim();
         shift.IsActive = request.IsActive;
@@ -355,8 +345,6 @@ public class ShiftConfigService : IShiftConfigService
             s.StartTime,
             s.EndTime,
             s.DurationHours,
-            s.AllowedCheckInStart,
-            s.AllowedCheckInEnd,
             s.IsCheckInNextDay,
             s.Description,
             s.IsActive,

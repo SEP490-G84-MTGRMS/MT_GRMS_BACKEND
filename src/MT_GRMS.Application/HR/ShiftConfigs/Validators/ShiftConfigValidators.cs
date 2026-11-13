@@ -41,20 +41,6 @@ public class CreateShiftConfigRequestValidator : AbstractValidator<CreateShiftCo
                 .LessThanOrEqualTo(24).WithMessage("Thời lượng ca làm việc không được vượt quá 24 giờ.");
         });
 
-        When(x => x.AllowedCheckInStart.HasValue, () =>
-        {
-            RuleFor(x => x.AllowedCheckInStart!.Value)
-                .Must(t => t >= TimeSpan.Zero && t < TimeSpan.FromDays(1))
-                .WithMessage("Khung check-in sớm không hợp lệ.");
-        });
-
-        When(x => x.AllowedCheckInEnd.HasValue, () =>
-        {
-            RuleFor(x => x.AllowedCheckInEnd!.Value)
-                .Must(t => t >= TimeSpan.Zero && t < TimeSpan.FromDays(1))
-                .WithMessage("Khung check-in trễ không hợp lệ.");
-        });
-
         When(x => !string.IsNullOrEmpty(x.Description), () =>
         {
             RuleFor(x => x.Description)
@@ -95,20 +81,6 @@ public class UpdateShiftConfigRequestValidator : AbstractValidator<UpdateShiftCo
             RuleFor(x => x.DurationHours!.Value)
                 .GreaterThan(0).WithMessage("Thời lượng ca làm việc phải lớn hơn 0.")
                 .LessThanOrEqualTo(24).WithMessage("Thời lượng ca làm việc không được vượt quá 24 giờ.");
-        });
-
-        When(x => x.AllowedCheckInStart.HasValue, () =>
-        {
-            RuleFor(x => x.AllowedCheckInStart!.Value)
-                .Must(t => t >= TimeSpan.Zero && t < TimeSpan.FromDays(1))
-                .WithMessage("Khung check-in sớm không hợp lệ.");
-        });
-
-        When(x => x.AllowedCheckInEnd.HasValue, () =>
-        {
-            RuleFor(x => x.AllowedCheckInEnd!.Value)
-                .Must(t => t >= TimeSpan.Zero && t < TimeSpan.FromDays(1))
-                .WithMessage("Khung check-in trễ không hợp lệ.");
         });
 
         When(x => !string.IsNullOrEmpty(x.Description), () =>
