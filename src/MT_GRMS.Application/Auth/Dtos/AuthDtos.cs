@@ -47,7 +47,8 @@ public record UserInfo(
     string RoleName,
     Guid? BranchId,
     string TenantId,
-    bool IsAdmin = false
+    bool IsAdmin = false,
+    bool IsTwoFactorEnabled = false
 )
 {
     public string Role => RoleName;

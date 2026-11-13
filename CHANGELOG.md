@@ -4,9 +4,15 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ---
 
+## [Unreleased] - 2026-11-14
+
+### Added
+- **Đồng bộ trường `IsTwoFactorEnabled` trong `UserInfo` DTO**: Bổ sung `IsTwoFactorEnabled` vào `UserInfo` record và gán từ entity `User.IsTwoFactorEnabled` tại các luồng xác thực (`Login`, `VerifyLoginOtp`, `GetMe`, `Register`), giúp Frontend và thanh điều hướng TopNav nhận diện chính xác trạng thái xác thực 2 bước của tài khoản thời gian thực [FEAT-AUTH] [worklog: docs/worklogs/2026-11-14_FEAT-AUTH_AI_sync-two-factor-auth-status-in-user-info.md].
+
 ## [Unreleased] - 2026-11-13
 
 ### Changed
+- **Mặc định tắt xác thực 2 bước (2FA OTP Email) khi tạo tài khoản**: Chuyển cờ `User.IsTwoFactorEnabled` mặc định thành `false` cho toàn bộ tài khoản mới đăng ký/tạo mới, giúp người dùng đăng nhập ngay sau mật khẩu mà không bị bắt buộc xác thực 2FA OTP qua email [BE-AUTH] [worklog: docs/worklogs/2026-11-13_BE-AUTH_AI_default-disable-two-factor-auth-on-registration.md].
 - **Cập nhật nhận diện thương hiệu THViet cho Email OTP & Cấu hình**: Chuyển đổi tên thương hiệu hệ thống sang `THViet - QUẢN LÝ TẠP HÓA VIỆT`, cập nhật tiêu đề email `[THViet]`, Header logo thương hiệu, SenderName (`.env`, `EmailSettings.cs`, `appsettings.json`) và phóng to mã OTP lên 38px nổi bật trên nền xanh thương hiệu `#0F766E` [BRAND-THVIET] [worklog: docs/worklogs/2026-11-13_BRAND-THVIET_AI_rebrand-email-and-settings.md].
 - **Giao diện Email OTP tối giản phong cách hiện đại (Minimalist NVIDIA Style)**: Tối ưu hóa HTML template trong `EmailService.cs`, chuyển sang layout nền trắng phẳng, căn lề trái, hiển thị mã OTP dạng badge thanh lịch và chân trang tinh gọn [AUTH-OTP] [worklog: docs/worklogs/2026-11-13_AUTH-OTP_AI_minimalist-email-template.md].
 

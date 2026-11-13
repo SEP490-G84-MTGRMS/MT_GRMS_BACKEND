@@ -232,7 +232,8 @@ public class AuthService : IAuthService
             RoleName: role,
             BranchId: branchId,
             TenantId: tenantId,
-            IsAdmin: isAdmin
+            IsAdmin: isAdmin,
+            IsTwoFactorEnabled: user.IsTwoFactorEnabled
         );
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
@@ -368,7 +369,8 @@ public class AuthService : IAuthService
             RoleName: role,
             BranchId: branchId,
             TenantId: tenantId,
-            IsAdmin: isAdmin
+            IsAdmin: isAdmin,
+            IsTwoFactorEnabled: user.IsTwoFactorEnabled
         );
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
@@ -412,7 +414,8 @@ public class AuthService : IAuthService
             RoleName: role,
             BranchId: branchId,
             TenantId: tenantId,
-            IsAdmin: isAdmin
+            IsAdmin: isAdmin,
+            IsTwoFactorEnabled: user.IsTwoFactorEnabled
         );
     }
 
@@ -534,6 +537,7 @@ public class AuthService : IAuthService
             IsActive = true,
             IsAdmin = false,
             IsEmailVerified = true,
+            IsTwoFactorEnabled = false,
             RefreshToken = refreshToken,
             RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7),
             CreatedAt = DateTime.UtcNow
@@ -593,7 +597,8 @@ public class AuthService : IAuthService
             RoleName: UserRoleNames.StoreOwner,
             BranchId: branch.Id,
             TenantId: tenant.Id,
-            IsAdmin: false
+            IsAdmin: false,
+            IsTwoFactorEnabled: user.IsTwoFactorEnabled
         );
 
         return new LoginResponse(
