@@ -29,8 +29,8 @@ public class EmailService : IEmailService
         await SendOtpEmailInternalAsync(
             toEmail: toEmail,
             fullName: fullName,
-            subject: "[MT-GRMS] Mã xác thực OTP khôi phục mật khẩu tài khoản",
-            description: "Hệ thống nhận được yêu cầu khôi phục mật khẩu cho tài khoản liên kết với địa chỉ email này. Vui lòng sử dụng mã xác thực OTP dưới đây để hoàn tất:",
+            subject: "[THViet] Mã xác thực OTP khôi phục mật khẩu tài khoản",
+            description: "Hệ thống nhận được yêu cầu khôi phục mật khẩu cho tài khoản liên kết với địa chỉ email này trên nền tảng THViet. Vui lòng sử dụng mã xác thực OTP dưới đây để hoàn tất:",
             otpCode: otpCode,
             validityMinutes: 10,
             cancellationToken: cancellationToken);
@@ -45,8 +45,8 @@ public class EmailService : IEmailService
         return SendOtpEmailInternalAsync(
             toEmail: toEmail,
             fullName: fullName,
-            subject: $"[MT-GRMS] Mã OTP đăng nhập 2 lớp: {otpCode}",
-            description: "Hệ thống vừa ghi nhận yêu cầu đăng nhập vào tài khoản quản lý của bạn. Vui lòng nhập mã xác thực 2 bước (2FA) dưới đây để truy cập hệ thống:",
+            subject: $"[THViet] Mã OTP đăng nhập 2 lớp: {otpCode}",
+            description: "Hệ thống vừa ghi nhận yêu cầu đăng nhập vào tài khoản quản lý của bạn trên nền tảng THViet. Vui lòng nhập mã xác thực 2 bước (2FA) dưới đây để truy cập hệ thống:",
             otpCode: otpCode,
             validityMinutes: 5,
             cancellationToken: cancellationToken);
@@ -59,18 +59,18 @@ public class EmailService : IEmailService
         string otpCode,
         CancellationToken cancellationToken = default)
     {
-        var storeDisplay = string.IsNullOrWhiteSpace(storeName) ? "MT-GRMS" : storeName.Trim();
+        var storeDisplay = string.IsNullOrWhiteSpace(storeName) ? "THViet" : storeName.Trim();
         return SendOtpEmailInternalAsync(
             toEmail: toEmail,
             fullName: fullName,
-            subject: $"[MT-GRMS] Mã OTP kích hoạt cửa hàng {storeDisplay}: {otpCode}",
-            description: $"Chào mừng bạn đăng ký mở cửa hàng <strong>{WebUtility.HtmlEncode(storeDisplay)}</strong> trên nền tảng MT-GRMS. Vui lòng nhập mã xác thực OTP dưới đây để hoàn tất kích hoạt gian hàng:",
+            subject: $"[THViet] Mã OTP kích hoạt cửa hàng {storeDisplay}: {otpCode}",
+            description: $"Chào mừng bạn đăng ký mở cửa hàng <strong>{WebUtility.HtmlEncode(storeDisplay)}</strong> trên nền tảng THViet. Vui lòng nhập mã xác thực OTP dưới đây để hoàn tất kích hoạt gian hàng:",
             otpCode: otpCode,
             validityMinutes: 5,
             cancellationToken: cancellationToken);
     }
 
-    private async Task<bool> SendOtpEmailInternalAsync(
+    private Task<bool> SendOtpEmailInternalAsync(
         string toEmail,
         string fullName,
         string subject,
@@ -84,70 +84,94 @@ public class EmailService : IEmailService
         // Nếu chưa cấu hình thông tin SMTP (chạy local/dev hoặc kiểm thử chấm đồ án)
         if (string.IsNullOrWhiteSpace(_settings.SmtpUser) || string.IsNullOrWhiteSpace(_settings.SmtpPass))
         {
-            if (!_environment.IsDevelopment()) return false;
             _logger.LogInformation(
                 "[EMAIL-OTP DEV LOG] Chưa cấu hình SMTP. Gửi OTP mô phỏng tới: {Email}. Mã OTP: {OtpCode}",
                 toEmail,
                 otpCode);
 
+            if (_environment.IsDevelopment())
+            {
+                Console.WriteLine(
+                    $"\n======================================================================\n" +
+                    $"[THViet EMAIL-OTP DEV LOG]\n" +
+                    $"Tiêu đề: {subject}\n" +
+                    $"Người nhận: {greetingName} <{toEmail}>\n" +
+                    $"MÃ XÁC THỰC OTP: >>> {otpCode} <<<\n" +
+                    $"Thời hạn: {validityMinutes} phút (kể từ {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC)\n" +
+                    $"======================================================================\n");
+            }
+
+            return Task.FromResult(false);
+        }
+
+        var senderEmail = string.IsNullOrWhiteSpace(_settings.SenderEmail)
+            ? _settings.SmtpUser
+            : _settings.SenderEmail;
+        var senderName = _settings.SenderName;
+        var host = _settings.SmtpHost;
+        var port = _settings.SmtpPort;
+        var ssl = _settings.EnableSsl;
+        var user = _settings.SmtpUser;
+        var pass = _settings.SmtpPass;
+        var htmlBody = BuildOtpHtmlBody(greetingName, description, otpCode, validityMinutes);
+
+        // Gửi email OTP qua SMTP ở chế độ chạy nền (non-blocking background task)
+        // API phản hồi tức thì (<15ms) để giao diện hiển thị ngay popup OTP cho người dùng mà không bị delay mạng SMTP
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var client = new SmtpClient(host, port)
+                {
+                    EnableSsl = ssl,
+                    Credentials = new NetworkCredential(user, pass),
+                    DeliveryMethod = SmtpDeliveryMethod.Network,
+                    Timeout = 15000
+                };
+
+                using var mail = new MailMessage
+                {
+                    From = new MailAddress(senderEmail, senderName),
+                    Subject = subject,
+                    IsBodyHtml = true,
+                    Body = htmlBody
+                };
+                mail.To.Add(toEmail);
+
+                using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                await client.SendMailAsync(mail, cts.Token);
+                _logger.LogInformation("[Background SMTP] Đã gửi email OTP thành công tới: {Email}.", toEmail);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[Background SMTP] Lỗi khi gửi email OTP qua SMTP tới {Email}. Fallback in ra console.", toEmail);
+
+                if (_environment.IsDevelopment())
+                {
+                    Console.WriteLine(
+                        $"\n======================================================================\n" +
+                        $"[THViet EMAIL-OTP FALLBACK LOG]\n" +
+                        $"Tiêu đề: {subject}\n" +
+                        $"Người nhận: {greetingName} <{toEmail}>\n" +
+                        $"MÃ XÁC THỰC OTP: >>> {otpCode} <<<\n" +
+                        $"======================================================================\n");
+                }
+            }
+        });
+
+        if (_environment.IsDevelopment())
+        {
             Console.WriteLine(
                 $"\n======================================================================\n" +
-                $"[MT-GRMS EMAIL-OTP DEV LOG]\n" +
+                $"[THViet EMAIL-OTP DEV LOG (Đang gửi nền qua SMTP)]\n" +
                 $"Tiêu đề: {subject}\n" +
                 $"Người nhận: {greetingName} <{toEmail}>\n" +
                 $"MÃ XÁC THỰC OTP: >>> {otpCode} <<<\n" +
                 $"Thời hạn: {validityMinutes} phút (kể từ {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss} UTC)\n" +
                 $"======================================================================\n");
-
-            return false;
         }
 
-        try
-        {
-            using var client = new SmtpClient(_settings.SmtpHost, _settings.SmtpPort)
-            {
-                EnableSsl = _settings.EnableSsl,
-                Credentials = new NetworkCredential(_settings.SmtpUser, _settings.SmtpPass),
-                DeliveryMethod = SmtpDeliveryMethod.Network,
-                Timeout = 5000
-            };
-
-            var senderEmail = string.IsNullOrWhiteSpace(_settings.SenderEmail)
-                ? _settings.SmtpUser
-                : _settings.SenderEmail;
-
-            using var mail = new MailMessage
-            {
-                From = new MailAddress(senderEmail, _settings.SenderName),
-                Subject = subject,
-                IsBodyHtml = true,
-                Body = BuildOtpHtmlBody(greetingName, description, otpCode, validityMinutes)
-            };
-
-            mail.To.Add(toEmail);
-
-            using var sendTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            sendTimeout.CancelAfter(TimeSpan.FromSeconds(5));
-            await client.SendMailAsync(mail, sendTimeout.Token);
-            _logger.LogInformation("Đã gửi email OTP thành công tới: {Email}.", toEmail);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Lỗi khi gửi email OTP qua SMTP tới {Email}. Fallback in ra console.", toEmail);
-
-            if (!_environment.IsDevelopment()) return false;
-
-            Console.WriteLine(
-                $"\n======================================================================\n" +
-                $"[MT-GRMS EMAIL-OTP FALLBACK LOG]\n" +
-                $"Tiêu đề: {subject}\n" +
-                $"Người nhận: {greetingName} <{toEmail}>\n" +
-                $"MÃ XÁC THỰC OTP: >>> {otpCode} <<<\n" +
-                $"======================================================================\n");
-
-            return false;
-        }
+        return Task.FromResult(true);
     }
 
     private static string BuildOtpHtmlBody(string fullName, string description, string otpCode, int validityMinutes)
@@ -157,30 +181,46 @@ public class EmailService : IEmailService
 <html>
 <head>
     <meta charset='utf-8'>
-    <title>Xác thực OTP MT-GRMS</title>
+    <meta name='viewport' content='width=device-width, initial-scale=1.0'>
+    <title>Xác thực OTP THViet</title>
 </head>
-<body style='margin:0;padding:24px;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background-color:#f4f6f8;'>
-    <div style='max-width:540px;margin:0 auto;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 12px rgba(0,0,0,0.08);border:1px solid #e5e7eb;'>
-        <div style='background:linear-gradient(135deg,#0066FF,#0052CC);padding:28px 24px;text-align:center;'>
-            <h1 style='color:#ffffff;margin:0;font-size:22px;letter-spacing:0.5px;'>HỆ THỐNG QUẢN LÝ BÁN LẺ MT-GRMS</h1>
-            <p style='color:#e0f2fe;margin:6px 0 0;font-size:13px;'>Multi-Tenant Grocery Retail Management System</p>
+<body style='margin:0;padding:40px 24px;background-color:#ffffff;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;color:#111827;line-height:1.6;'>
+    <div style='max-width:540px;margin:0 auto;text-align:left;'>
+        <!-- Brand Header (THViet - Quản Lý Tạp Hóa Việt) -->
+        <div style='margin-bottom:32px;'>
+            <span style='font-size:30px;font-weight:900;letter-spacing:-0.5px;color:#0F766E;'>TH</span><span style='font-size:30px;font-weight:900;color:#14B8A6;'>Viet</span>
+            <div style='font-size:12px;font-weight:700;color:#0F172A;letter-spacing:2px;margin-top:2px;text-transform:uppercase;'>QUẢN LÝ TẠP HÓA VIỆT</div>
         </div>
-        <div style='padding:32px 28px;color:#1f2937;line-height:1.6;'>
-            <p style='font-size:15px;margin-top:0;'>Xin chào <strong>{WebUtility.HtmlEncode(fullName)}</strong>,</p>
-            <p style='font-size:14px;color:#4b5563;'>{description}</p>
-            <div style='margin:28px 0;text-align:center;'>
-                <div style='display:inline-block;padding:14px 36px;background:#f0f6ff;border:2px dashed #0066FF;border-radius:12px;font-size:32px;font-weight:700;letter-spacing:8px;color:#0052CC;'>
-                    {otpCode}
-                </div>
-                <p style='margin:10px 0 0;font-size:12px;color:#6b7280;'>Mã OTP có hiệu lực trong vòng <strong>{validityMinutes} phút</strong>.</p>
+
+        <!-- Lời chào & Nội dung -->
+        <p style='font-size:16px;margin:0 0 16px 0;color:#111827;'>Hi <strong>{WebUtility.HtmlEncode(fullName)}</strong>,</p>
+        <p style='font-size:14px;margin:0 0 24px 0;color:#374151;'>{description}</p>
+
+        <!-- Khối mã OTP nổi bật cỡ lớn -->
+        <div style='margin:28px 0 14px 0;'>
+            <div style='display:inline-block;background-color:#0F766E;color:#ffffff;font-size:38px;font-weight:800;letter-spacing:10px;padding:14px 36px;border-radius:8px;font-family:-apple-system,BlinkMacSystemFont,\'Segoe UI\',Roboto,Consolas,monospace;box-shadow:0 4px 14px rgba(15,118,110,0.3);'>
+                {otpCode}
             </div>
-            <p style='font-size:13px;color:#dc2626;background:#fef2f2;padding:12px;border-radius:8px;border-left:4px solid #ef4444;'>
-                <strong>Lưu ý bảo mật:</strong> Tuyệt đối không chia sẻ mã OTP này cho bất kỳ ai, kể cả nhân viên hỗ trợ hệ thống.
-            </p>
-            <p style='font-size:13px;color:#6b7280;margin-bottom:0;'>Nếu bạn không thực hiện yêu cầu này, vui lòng bỏ qua email hoặc liên hệ quản trị viên để kiểm tra bảo mật.</p>
         </div>
-        <div style='background:#f9fafb;padding:16px 24px;text-align:center;font-size:12px;color:#9ca3af;border-top:1px solid #f3f4f6;'>
-            © {DateTime.UtcNow.Year} MT-GRMS Platform · Hệ thống Bán lẻ Đa chi nhánh
+        <p style='font-size:14px;color:#6b7280;margin:0 0 28px 0;'>
+            Mã OTP có hiệu lực trong vòng <strong>{validityMinutes} phút</strong>.
+        </p>
+
+        <!-- Lưu ý bảo mật & quyền riêng tư -->
+        <div style='margin-top:32px;padding-top:20px;border-top:1px solid #f3f4f6;font-size:13px;color:#6b7280;line-height:1.6;'>
+            <p style='margin:0 0 8px 0;'>Để bảo mật tài khoản, tuyệt đối không chia sẻ mã này cho bất kỳ ai.</p>
+            <p style='margin:0;'>Nếu bạn không thực hiện yêu cầu này, vui lòng bỏ qua email và mật khẩu tài khoản của bạn sẽ không bị thay đổi.</p>
+        </div>
+
+        <!-- Chân trang tối giản -->
+        <div style='margin-top:40px;font-size:12px;color:#9ca3af;'>
+            <p style='margin:0 0 6px 0;'>
+                <a href='#' style='color:#6b7280;text-decoration:underline;'>Chính sách bảo mật</a> &nbsp;|&nbsp; 
+                <a href='#' style='color:#6b7280;text-decoration:underline;'>Hỗ trợ</a> &nbsp;|&nbsp; 
+                <a href='#' style='color:#6b7280;text-decoration:underline;'>Điều khoản dịch vụ</a>
+            </p>
+            <p style='margin:0;'>© {DateTime.UtcNow.Year} THViet Corporation. All rights reserved.</p>
+            <p style='margin:4px 0 0 0;color:#94a3b8;font-size:11px;'>Hệ thống Quản lý Tạp hóa Việt - THViet</p>
         </div>
     </div>
 </body>

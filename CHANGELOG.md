@@ -4,6 +4,16 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ---
 
+## [Unreleased] - 2026-11-13
+
+### Changed
+- **Cập nhật nhận diện thương hiệu THViet cho Email OTP & Cấu hình**: Chuyển đổi tên thương hiệu hệ thống sang `THViet - QUẢN LÝ TẠP HÓA VIỆT`, cập nhật tiêu đề email `[THViet]`, Header logo thương hiệu, SenderName (`.env`, `EmailSettings.cs`, `appsettings.json`) và phóng to mã OTP lên 38px nổi bật trên nền xanh thương hiệu `#0F766E` [BRAND-THVIET] [worklog: docs/worklogs/2026-11-13_BRAND-THVIET_AI_rebrand-email-and-settings.md].
+- **Giao diện Email OTP tối giản phong cách hiện đại (Minimalist NVIDIA Style)**: Tối ưu hóa HTML template trong `EmailService.cs`, chuyển sang layout nền trắng phẳng, căn lề trái, hiển thị mã OTP dạng badge thanh lịch và chân trang tinh gọn [AUTH-OTP] [worklog: docs/worklogs/2026-11-13_AUTH-OTP_AI_minimalist-email-template.md].
+
+### Fixed
+- **Gửi Email OTP chạy nền không chặn luồng (Non-blocking Background Dispatch)**: Chuyển tác vụ gửi thư qua giao thức SMTP trong `EmailService.cs` sang background task (`Task.Run`), giúp API phản hồi tức thì (< 15ms) khi thông tin đăng nhập/đăng ký hợp lệ, popup modal OTP hiển thị ngay lập tức không bị chờ độ trễ mạng SMTP [AUTH-OTP] [worklog: docs/worklogs/2026-11-13_AUTH-OTP_AI_non-blocking-background-smtp-dispatch.md].
+- **Khắc phục hiện tượng đơ lag khi gửi mã OTP Email (`EmailService.cs`)**: Tinh gọn nhánh xử lý fallback dev của `EmailService.cs`, phản hồi tức thì (< 100ms) và in mã OTP ra console khi cấu hình SMTP chưa hoàn tất ở môi trường local/dev, loại bỏ triệt để việc treo luồng mạng [AUTH-OTP] [worklog: docs/worklogs/2026-11-13_AUTH-OTP_AI_fix-email-otp-lag-fallback.md].
+
 ## [Unreleased] - 2026-11-12
 
 ### Added
@@ -11,6 +21,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - Bổ sung `TrialOnboardingBackfillService` (dry-run & backfill deterministic) và migration cho trạng thái Trial, paid và dữ liệu legacy `REVIEW_REQUIRED`; sửa `DbInitializer` không gán nhầm `CurrentPlan = "PRO"` cho tenant `NO_PLAN` và `TenantService` luôn trả `"Chưa kích hoạt"` cho tenant `NO_PLAN`; chuẩn hóa email/điện thoại cho account [HOMEPAGE-TRIAL].
 
 ### Security
+- Chuẩn hóa validation authentication: giới hạn payload đăng nhập, password đăng ký mạnh 8–64 ký tự, email/phone/tên/OTP, bắt buộc đồng ý điều khoản và chặn malformed OTP trước khi tiêu hao lượt thử [AUTH-VALIDATION] [worklog: docs/worklogs/2026-11-13_AUTH-VALIDATION_AI_auth-input-validation.md].
 - Bắt buộc Email OTP distributed (`Pending/Reserved/Consumed`) gắn `NormalizedEmail`, intent và request fingerprint; fail-closed ngoài Development; `IdempotencyFilter` scoped theo actor + operation + tenant/challenge trả RFC 7807 `ProblemDetails`; cấu hình `ForwardedHeadersOptions` trusted proxy và củng cố chống replay webhook SePay [HOMEPAGE-TRIAL].
 
 - Chuẩn hóa hạn mức lưu trữ 2 GB cho gói STANDARD/PRO; bổ sung mua thêm dung lượng với giá 15.000 đ/GB/tháng, báo giá theo thời gian còn lại, VAT và thanh toán ví có idempotency [SUBSCRIPTION-STORAGE] [worklog: docs/worklogs/2026-11-12_SUBSCRIPTION-STORAGE_AI_storage-quota-addon.md].

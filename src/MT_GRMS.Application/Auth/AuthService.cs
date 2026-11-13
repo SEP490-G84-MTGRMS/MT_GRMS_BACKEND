@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using MT_GRMS.Application.Auth.Dtos;
+using MT_GRMS.Application.Auth.Validators;
 using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Identity;
@@ -58,10 +59,7 @@ public class AuthService : IAuthService
 
     public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(request.UsernameOrEmail) || string.IsNullOrWhiteSpace(request.Password))
-        {
-            throw new ArgumentException("Tài khoản và mật khẩu không được để trống.");
-        }
+        AuthRequestValidation.EnsureValid(new LoginRequestValidator(), request);
 
         var user = await _userRepository.GetByUsernameAsync(request.UsernameOrEmail.Trim(), cancellationToken)
             ?? throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
@@ -76,10 +74,8 @@ public class AuthService : IAuthService
 
     public async Task<SendLoginOtpResponse> SendLoginOtpAsync(LoginRequest request, CancellationToken cancellationToken = default)
     {
-        if (request == null || string.IsNullOrWhiteSpace(request.UsernameOrEmail) || string.IsNullOrWhiteSpace(request.Password))
-        {
-            throw new ArgumentException("Tài khoản và mật khẩu không được để trống.");
-        }
+        ArgumentNullException.ThrowIfNull(request);
+        AuthRequestValidation.EnsureValid(new LoginRequestValidator(), request);
 
         var user = await _userRepository.GetByUsernameAsync(request.UsernameOrEmail.Trim(), cancellationToken)
             ?? throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
@@ -141,10 +137,8 @@ public class AuthService : IAuthService
 
     public async Task<LoginResponse> VerifyLoginOtpAsync(VerifyLoginOtpRequest request, CancellationToken cancellationToken = default)
     {
-        if (request == null || string.IsNullOrWhiteSpace(request.TempToken) || string.IsNullOrWhiteSpace(request.OtpCode))
-        {
-            throw new ArgumentException("Phiên xác thực và mã OTP không được để trống.");
-        }
+        ArgumentNullException.ThrowIfNull(request);
+        AuthRequestValidation.EnsureValid(new VerifyLoginOtpRequestValidator(), request);
 
         var tempToken = request.TempToken.Trim();
         if (!LoginOtpStore.TryGetValue(tempToken, out var entry))
@@ -438,19 +432,8 @@ public class AuthService : IAuthService
 
     public async Task<LoginResponse> RegisterTenantAsync(RegisterTenantRequest request, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(request.FullName))
-            throw new ArgumentException("Họ và tên không được để trống.");
-        if (string.IsNullOrWhiteSpace(request.StoreName))
-            throw new ArgumentException("Tên cửa hàng không được để trống.");
-        if (string.IsNullOrWhiteSpace(request.Phone))
-            throw new ArgumentException("Số điện thoại không được để trống.");
-        if (string.IsNullOrWhiteSpace(request.Password) || request.Password.Length < 6)
-            throw new ArgumentException("Mật khẩu phải có tối thiểu 6 ký tự.");
-        if (string.IsNullOrWhiteSpace(request.Email))
-            throw new ArgumentException("Email nhận OTP không được để trống.");
-
-        if (string.IsNullOrWhiteSpace(request.OtpCode))
-            throw new ArgumentException("OTP_REQUIRED: Vui lòng nhập mã xác thực OTP đã gửi đến email của bạn.");
+        ArgumentNullException.ThrowIfNull(request);
+        AuthRequestValidation.EnsureValid(new RegisterTenantRequestValidator(), request);
 
         var userEmail = request.Email.Trim().ToLowerInvariant();
         var normalizedPhone = NormalizePhoneKey(request.Phone);
@@ -778,10 +761,8 @@ public class AuthService : IAuthService
         SendRegistrationOtpRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (request == null || string.IsNullOrWhiteSpace(request.Email))
-        {
-            throw new ArgumentException("Vui lòng nhập địa chỉ email hợp lệ để nhận mã xác thực OTP.");
-        }
+        ArgumentNullException.ThrowIfNull(request);
+        AuthRequestValidation.EnsureValid(new SendRegistrationOtpRequestValidator(), request);
 
         var emailTrimmed = request.Email.Trim().ToLowerInvariant();
         if (!TryValidateEmail(emailTrimmed))
@@ -860,10 +841,8 @@ public class AuthService : IAuthService
         VerifyRegistrationOtpRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (request == null || string.IsNullOrWhiteSpace(request.EmailOrPhone) || string.IsNullOrWhiteSpace(request.OtpCode))
-        {
-            throw new ArgumentException("Email và mã OTP không được để trống.");
-        }
+        ArgumentNullException.ThrowIfNull(request);
+        AuthRequestValidation.EnsureValid(new VerifyRegistrationOtpRequestValidator(), request);
 
         var normalizedEmail = request.EmailOrPhone.Trim().ToLowerInvariant();
         var entry = await GetRegistrationOtpAsync(null, normalizedEmail, cancellationToken);
