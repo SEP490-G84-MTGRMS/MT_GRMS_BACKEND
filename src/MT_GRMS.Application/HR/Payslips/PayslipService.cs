@@ -172,13 +172,23 @@ public class PayslipService : IPayslipService
                 }
             }
 
+            // ─── Làm tròn giờ làm việc đối với nhân viên tính lương theo giờ (Hourly) theo block 30 phút ───
+            var roundedWorkHours = emp.SalaryType == SalaryType.Hourly
+                ? RoundTo30MinuteBlock(totalWorkHours)
+                : totalWorkHours;
+
             decimal baseSalaryEarned = emp.SalaryType switch
             {
                 SalaryType.Monthly => standardDays > 0 ? Math.Round(((workedDays + paidLeaveDays) / standardDays) * emp.BaseRate, 0, MidpointRounding.AwayFromZero) : 0m,
                 SalaryType.Shift => Math.Round((totalShifts + paidLeaveDays) * emp.BaseRate, 0, MidpointRounding.AwayFromZero),
-                SalaryType.Hourly => Math.Round((totalWorkHours + (paidLeaveDays * standardDayHours)) * emp.BaseRate, 0, MidpointRounding.AwayFromZero),
+                SalaryType.Hourly => Math.Round((roundedWorkHours + (paidLeaveDays * standardDayHours)) * emp.BaseRate, 0, MidpointRounding.AwayFromZero),
                 _ => emp.BaseRate
             };
+
+            if (emp.SalaryType == SalaryType.Hourly)
+            {
+                totalWorkHours = roundedWorkHours;
+            }
 
             var allowances = emp.Allowances.Where(a => a.Amount > 0).ToList();
             var totalAllowance = allowances.Sum(a => a.Amount);
@@ -514,6 +524,30 @@ public class PayslipService : IPayslipService
         return true;
     }
 
+    /// <summary>
+    /// Làm tròn giờ làm việc theo block 30 phút đối với nhân viên hưởng lương theo giờ (Hourly):
+    /// - 0 đến 14 phút -> 0 phút (0.0h)
+    /// - 15 đến 44 phút -> 30 phút (0.5h)
+    /// - 45 đến 59 phút -> 60 phút (+1.0h)
+    /// </summary>
+    public static decimal RoundTo30MinuteBlock(decimal rawHours)
+    {
+        if (rawHours <= 0m) return 0m;
+
+        var totalMinutes = (long)Math.Round(rawHours * 60m, MidpointRounding.AwayFromZero);
+        var fullHours = totalMinutes / 60;
+        var remainderMinutes = totalMinutes % 60;
+
+        decimal fractionHours = remainderMinutes switch
+        {
+            >= 45 => 1.0m,
+            >= 15 => 0.5m,
+            _ => 0.0m
+        };
+
+        return (decimal)fullHours + fractionHours;
+    }
+
     private static decimal ParseOtMultiplier(string? otRateStr, decimal fallbackMultiplier)
     {
         if (string.IsNullOrWhiteSpace(otRateStr))
@@ -740,7 +774,9 @@ public class PayslipService : IPayslipService
             ApprovedBy: p.ApprovedBy,
             ApprovedAt: p.ApprovedAt,
             CreatedAt: p.CreatedAt,
-            UserId: p.Employee?.UserId
+            UserId: p.Employee?.UserId,
+            OtWeekday: p.Employee?.OtWeekday ?? "150%",
+            OtSunday: p.Employee?.OtSunday ?? "200%"
         );
     }
 }

@@ -38,7 +38,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
         var schedule = await _scheduleRepository.GetByIdAsync(scheduleId, cancellationToken)
             ?? throw new KeyNotFoundException("Không tìm thấy ca làm việc chỉ định.");
 
-        if (schedule.PayslipId.HasValue)
+        if (schedule.PayslipId.HasValue && (schedule.Payslip == null || schedule.Payslip.Status != PayslipStatus.Unpaid))
         {
             throw new InvalidOperationException("Ca làm việc đã được chốt bảng lương, không thể gửi yêu cầu.");
         }
@@ -185,7 +185,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
             ?? await _scheduleRepository.GetByIdAsync(request.ScheduleId, cancellationToken)
             ?? throw new KeyNotFoundException("Không tìm thấy ca làm việc liên kết.");
 
-        if (schedule.PayslipId.HasValue)
+        if (schedule.PayslipId.HasValue && (schedule.Payslip == null || schedule.Payslip.Status != PayslipStatus.Unpaid))
         {
             throw new InvalidOperationException("Ca làm việc đã được chốt bảng lương, không thể phê duyệt.");
         }
@@ -313,6 +313,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
         _scheduleRepository.Update(schedule);
         _approvalRepository.Update(request);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
         return true;
     }
 
@@ -433,7 +434,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
         }
 
         var schedule = await _scheduleRepository.GetByIdAsync(request.ScheduleId, cancellationToken);
-        if (schedule != null && schedule.PayslipId.HasValue)
+        if (schedule != null && schedule.PayslipId.HasValue && (schedule.Payslip == null || schedule.Payslip.Status != PayslipStatus.Unpaid))
         {
             throw new InvalidOperationException("Ca làm việc đã được chốt bảng lương, không thể thao tác.");
         }

@@ -1019,4 +1019,82 @@ public class PayslipServiceTests
         // OT Sunday (200% default): 4h * 50,000 * 2.0 = 400,000
         Assert.Equal(400_000m, payslip.OvertimePay);
     }
+
+    [Theory]
+    [InlineData(0, 0.0)]
+    [InlineData(14.0 / 60.0, 0.0)] // 14 phút -> 0 phút
+    [InlineData(15.0 / 60.0, 0.5)] // 15 phút -> 30 phút (0.5h)
+    [InlineData(30.0 / 60.0, 0.5)] // 30 phút -> 30 phút (0.5h)
+    [InlineData(44.0 / 60.0, 0.5)] // 44 phút -> 30 phút (0.5h)
+    [InlineData(45.0 / 60.0, 1.0)] // 45 phút -> 60 phút (1.0h)
+    [InlineData(59.0 / 60.0, 1.0)] // 59 phút -> 60 phút (1.0h)
+    [InlineData(15.5, 15.5)]       // 15h 30m -> 15.5h
+    [InlineData(15.2, 15.0)]       // 15h 12m -> 15.0h
+    [InlineData(15.35, 15.5)]      // 15h 21m -> 15.5h
+    [InlineData(15.8, 16.0)]       // 15h 48m -> 16.0h
+    public void RoundTo30MinuteBlock_CorrectlyApplies30MinuteRules(double rawHoursInput, double expectedHours)
+    {
+        var rawHours = (decimal)rawHoursInput;
+        var actual = PayslipService.RoundTo30MinuteBlock(rawHours);
+        Assert.Equal((decimal)expectedHours, actual);
+    }
+
+    [Fact]
+    public async Task HourlyEmployee_WhenPayrollCalculated_UsesRoundedHoursAndExactDecimalRate()
+    {
+        // Arrange
+        var payslipRepo = new FakePayslipRepository();
+        var empRepo = new FakeEmployeeRepository();
+        var schedRepo = new FakeScheduleRepository();
+        var policyRepo = new FakeAttendancePolicyRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        var service = new PayslipService(payslipRepo, empRepo, schedRepo, policyRepo, tenantContext, uow);
+
+        var branchId = Guid.NewGuid();
+        var hourlyEmp = new Employee
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            TenantId = "tenant_test_01",
+            FullName = "Nguyen Hourly",
+            SalaryType = SalaryType.Hourly,
+            BaseRate = 50_000m, // 50,000 đ/giờ
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(hourlyEmp);
+
+        // Nhân viên làm 15.5 giờ trong kỳ tháng 11/2026
+        schedRepo.Schedules.Add(new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = hourlyEmp.Id,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 2),
+            DurationHours = 8.0m,
+            ActualWorkHours = 8.0m,
+            Status = ScheduleStatus.Completed
+        });
+        schedRepo.Schedules.Add(new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = hourlyEmp.Id,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 3),
+            DurationHours = 7.5m,
+            ActualWorkHours = 7.5m, // 8.0 + 7.5 = 15.5h
+            Status = ScheduleStatus.Completed
+        });
+
+        // Act
+        var result = await service.GenerateMonthlyPayrollAsync(new GeneratePayrollBatchRequest("2026-11", branchId));
+
+        // Assert
+        Assert.Single(result);
+        var payslip = result[0];
+        Assert.Equal(15.5m, payslip.TotalWorkHours);
+        // 15.5 giờ * 50,000 = 775,000 đ (chuẩn decimal, không bị sai số 705,000 đ)
+        Assert.Equal(775_000m, payslip.BaseSalaryEarned);
+        Assert.Equal(775_000m, payslip.NetSalary);
+    }
 }

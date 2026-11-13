@@ -107,6 +107,8 @@ public record PayslipResponse(
     string? ApprovedBy,
     DateTime? ApprovedAt,
     DateTime CreatedAt,
-    string? UserId = null
+    string? UserId = null,
+    string? OtWeekday = null,
+    string? OtSunday = null
 );
 
