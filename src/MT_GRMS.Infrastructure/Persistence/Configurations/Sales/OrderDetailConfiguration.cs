@@ -28,6 +28,7 @@ public class OrderDetailConfiguration : IEntityTypeConfiguration<OrderDetail>
         builder.Property(x => x.ProductUnitId).HasColumnName("ProductUnitID");
         builder.Property(x => x.UnitName).HasColumnName("UnitName").HasMaxLength(50);
         builder.Property(x => x.ConversionRate).HasColumnName("ConversionRate").HasColumnType("decimal(18,4)").HasDefaultValue(1.00m);
+        builder.Property(x => x.PackageId).HasColumnName("PackageId");
 
         // Thuế GTGT từng dòng hàng TT 152/2025/TT-BTC
         builder.Property(x => x.AppliedVatRate).HasColumnType("decimal(5,4)").HasDefaultValue(0.01m);

@@ -391,6 +391,86 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
     }
 
+    private static async Task EnsureWeightRepackSchemaAsync(AppDbContext context, ILogger? logger = null)
+    {
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+                ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""AllowRepack"" boolean NOT NULL DEFAULT FALSE;
+                ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""SellRawByWeight"" boolean NOT NULL DEFAULT TRUE;
+
+                CREATE TABLE IF NOT EXISTS ""RepackOrders"" (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""Code"" character varying(40) NOT NULL,
+                    ""BranchId"" uuid NOT NULL,
+                    ""ProductId"" uuid NOT NULL,
+                    ""BranchStockId"" uuid NOT NULL,
+                    ""RepackType"" character varying(20) NOT NULL DEFAULT 'PORTIONING',
+                    ""InputWeight"" numeric(18,3) NOT NULL DEFAULT 0,
+                    ""WasteWeight"" numeric(18,3) NOT NULL DEFAULT 0,
+                    ""WasteReason"" character varying(40) NULL,
+                    ""WasteNote"" character varying(500) NULL,
+                    ""UnitCostSnapshot"" numeric(18,2) NOT NULL DEFAULT 0,
+                    ""WasteCostAmount"" numeric(18,2) NOT NULL DEFAULT 0,
+                    ""DefaultUnitPricePerKg"" numeric(18,2) NOT NULL DEFAULT 0,
+                    ""Status"" character varying(20) NOT NULL DEFAULT 'COMPLETED',
+                    ""CompletedAt"" timestamp without time zone NULL,
+                    ""CreatedBy"" uuid NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""UpdatedAt"" timestamp without time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT FALSE
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS ""UX_RepackOrders_Tenant_Code""
+                    ON ""RepackOrders"" (""TenantId"", ""Code"");
+                CREATE INDEX IF NOT EXISTS ""IX_RepackOrders_Tenant_BranchStock""
+                    ON ""RepackOrders"" (""TenantId"", ""BranchStockId"");
+
+                CREATE TABLE IF NOT EXISTS ""Packages"" (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""BranchId"" uuid NOT NULL,
+                    ""ProductId"" uuid NOT NULL,
+                    ""BranchStockId"" uuid NOT NULL,
+                    ""InternalCode"" character varying(40) NOT NULL,
+                    ""Barcode"" character varying(50) NULL,
+                    ""NetWeight"" numeric(18,3) NOT NULL DEFAULT 0,
+                    ""SellingPrice"" numeric(18,2) NOT NULL DEFAULT 0,
+                    ""ExpiryDate"" timestamp without time zone NULL,
+                    ""RepackType"" character varying(20) NOT NULL DEFAULT 'PORTIONING',
+                    ""RepackOrderId"" uuid NULL,
+                    ""GoodsReceiptLineId"" uuid NULL,
+                    ""Status"" character varying(20) NOT NULL DEFAULT 'AVAILABLE',
+                    ""VoidMode"" character varying(30) NULL,
+                    ""VoidReason"" character varying(500) NULL,
+                    ""SoldOrderId"" uuid NULL,
+                    ""SoldOrderDetailId"" uuid NULL,
+                    ""SoldAt"" timestamp without time zone NULL,
+                    ""PriceHistoryJson"" text NULL,
+                    ""CreatedBy"" uuid NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""UpdatedAt"" timestamp without time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT FALSE
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS ""UX_Packages_Tenant_InternalCode""
+                    ON ""Packages"" (""TenantId"", ""InternalCode"");
+                CREATE UNIQUE INDEX IF NOT EXISTS ""UX_Packages_Tenant_Barcode""
+                    ON ""Packages"" (""TenantId"", ""Barcode"") WHERE ""Barcode"" IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS ""IX_Packages_BranchStock_Status""
+                    ON ""Packages"" (""BranchStockId"", ""Status"");
+
+                ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""PackageId"" uuid NULL;
+            ");
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ schema Weight / Repack / Package.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ schema Weight Repack");
+        }
+    }
+
     private static async Task EnsureSupplierExchangeSchemaAsync(AppDbContext context, ILogger? logger = null)
     {
         try
@@ -1579,6 +1659,7 @@ END $$;
                     await EnsureBranchProductsSchemaAsync(context, logger);
                     await EnsureStocktakesSchemaAsync(context, logger);
                     await EnsureSupplierExchangeSchemaAsync(context, logger);
+                    await EnsureWeightRepackSchemaAsync(context, logger);
                     await EnsureMissingModelSchemaAsync(context, logger);
                 }
                 catch (Exception ex)
