@@ -11,6 +11,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - **Giao diện Email OTP tối giản phong cách hiện đại (Minimalist NVIDIA Style)**: Tối ưu hóa HTML template trong `EmailService.cs`, chuyển sang layout nền trắng phẳng, căn lề trái, hiển thị mã OTP dạng badge thanh lịch và chân trang tinh gọn [AUTH-OTP] [worklog: docs/worklogs/2026-11-13_AUTH-OTP_AI_minimalist-email-template.md].
 
 ### Fixed
+- **Sửa lỗi upload/xóa ảnh trả 500 trên PostgreSQL**: Chuẩn hóa câu lệnh khóa bản ghi tenant trong `MediaController` sử dụng đúng khóa chính vật lý `Tenants.TenantID` thay vì cột không tồn tại `Id`; bổ sung unit test xác nhận ánh xạ khóa tenant [MEDIA-UPLOAD] [worklog: docs/worklogs/2026-11-14_MEDIA-UPLOAD_AI_fix-tenant-lock-column.md].
 - **Gửi Email OTP chạy nền không chặn luồng (Non-blocking Background Dispatch)**: Chuyển tác vụ gửi thư qua giao thức SMTP trong `EmailService.cs` sang background task (`Task.Run`), giúp API phản hồi tức thì (< 15ms) khi thông tin đăng nhập/đăng ký hợp lệ, popup modal OTP hiển thị ngay lập tức không bị chờ độ trễ mạng SMTP [AUTH-OTP] [worklog: docs/worklogs/2026-11-13_AUTH-OTP_AI_non-blocking-background-smtp-dispatch.md].
 - **Khắc phục hiện tượng đơ lag khi gửi mã OTP Email (`EmailService.cs`)**: Tinh gọn nhánh xử lý fallback dev của `EmailService.cs`, phản hồi tức thì (< 100ms) và in mã OTP ra console khi cấu hình SMTP chưa hoàn tất ở môi trường local/dev, loại bỏ triệt để việc treo luồng mạng [AUTH-OTP] [worklog: docs/worklogs/2026-11-13_AUTH-OTP_AI_fix-email-otp-lag-fallback.md].
 
