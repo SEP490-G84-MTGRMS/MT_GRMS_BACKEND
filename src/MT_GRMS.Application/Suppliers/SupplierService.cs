@@ -1725,9 +1725,26 @@ public class SupplierService : ISupplierService
             .ToList();
     }
 
+    private static string ResolvePurchaseUnitName(SupplierProduct sp)
+    {
+        var purchaseFromUnits = sp.Product?.Units?
+            .Where(u => !u.IsDeleted && u.IsPurchaseUnit)
+            .Select(u => u.UnitName)
+            .FirstOrDefault(n => !string.IsNullOrWhiteSpace(n));
+
+        if (!string.IsNullOrWhiteSpace(purchaseFromUnits))
+            return purchaseFromUnits.Trim();
+
+        if (!string.IsNullOrWhiteSpace(sp.DeliveryUoM))
+            return sp.DeliveryUoM.Trim();
+
+        return sp.Product?.BaseUnit?.Trim() ?? "Cái";
+    }
+
     private static SupplierProductDto MapToSupplierProductDto(SupplierProduct sp, int syncedBranchesCount = 0)
     {
         var costPrice = sp.Product?.CostPrice;
+        var purchaseUnit = ResolvePurchaseUnitName(sp);
         return new SupplierProductDto
         {
             Id = sp.Id,
@@ -1739,9 +1756,9 @@ public class SupplierService : ISupplierService
             Sku = sp.Product?.SKU ?? string.Empty,
             ProductName = sp.Product?.ProductName ?? string.Empty,
             CategoryName = sp.Product?.Category?.CategoryName,
-            BaseUoM = sp.Product?.UnitName ?? "Cái",
+            BaseUoM = purchaseUnit,
             SupplierProductCode = sp.SupplierProductCode,
-            DeliveryUoM = string.IsNullOrWhiteSpace(sp.DeliveryUoM) ? (sp.Product?.BaseUnit ?? "Cái") : sp.DeliveryUoM,
+            DeliveryUoM = purchaseUnit,
             AgreedWholesalePrice = sp.AgreedWholesalePrice,
             CostPrice = costPrice,
             EffectivePurchasePrice = SupplierProductPricing.GetEffectivePurchasePriceOrZero(

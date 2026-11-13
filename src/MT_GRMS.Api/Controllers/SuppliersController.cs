@@ -419,6 +419,44 @@ public class SuppliersController : BaseApiController
         var result = await _supplierService.SetPrimarySupplierAsync(id, productId, request, cancellationToken);
         return Ok(ApiResponse<SupplierProductDto>.Ok(result, "Cập nhật nhà cung cấp chính thành công."));
     }
+
+    /// <summary>
+    /// Xuất Excel danh sách SP đã gán NCC để điền giá nhập sỉ + MOQ.
+    /// </summary>
+    [HttpGet("{id:guid}/products/export")]
+    public async Task<IActionResult> ExportSupplierProducts(
+        Guid id,
+        [FromServices] ISupplierProductExcelService excelService,
+        CancellationToken cancellationToken)
+    {
+        var file = await excelService.ExportAsync(id, cancellationToken);
+        return File(file.Content, file.ContentType, file.FileName);
+    }
+
+    /// <summary>
+    /// Import Excel: validate + override giá nhập sỉ &amp; MOQ (partial success theo từng dòng).
+    /// </summary>
+    [HttpPost("{id:guid}/products/import")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(10_000_000)]
+    public async Task<IActionResult> ImportSupplierProducts(
+        Guid id,
+        IFormFile? file,
+        [FromServices] ISupplierProductExcelService excelService,
+        CancellationToken cancellationToken)
+    {
+        if (file == null || file.Length == 0)
+        {
+            return BadRequest(ApiResponse<object>.Fail("INVALID_FILE", "Vui lòng chọn file Excel (.xlsx)."));
+        }
+
+        await using var stream = file.OpenReadStream();
+        var result = await excelService.ImportAsync(id, stream, file.FileName, cancellationToken);
+        var msg = result.Summary.FailedCount == 0
+            ? $"Import thành công {result.Summary.SuccessCount}/{result.Summary.TotalRows} dòng."
+            : $"Import xong: {result.Summary.SuccessCount} thành công, {result.Summary.FailedCount} lỗi / {result.Summary.TotalRows} dòng.";
+        return Ok(ApiResponse<SupplierProductExcelImportResultDto>.Ok(result, msg));
+    }
 }
 
 

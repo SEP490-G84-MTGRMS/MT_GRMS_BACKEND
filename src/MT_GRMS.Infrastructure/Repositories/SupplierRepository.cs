@@ -387,6 +387,8 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             .Include(sp => sp.Supplier)
             .Include(sp => sp.Product)
                 .ThenInclude(p => p.Category)
+            .Include(sp => sp.Product)
+                .ThenInclude(p => p!.Units)
             .FirstOrDefaultAsync(sp => sp.SupplierId == supplierId && sp.ProductId == productId, cancellationToken);
     }
 
@@ -409,6 +411,8 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             .Include(sp => sp.Supplier)
             .Include(sp => sp.Product)
                 .ThenInclude(p => p.Category)
+            .Include(sp => sp.Product)
+                .ThenInclude(p => p!.Units)
             .AsNoTracking();
 
         if (supplierId != Guid.Empty)
@@ -671,6 +675,7 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
     public async Task<IReadOnlyList<SupplierProduct>> GetActiveSupplierProductsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
     {
         return await _context.SupplierProducts
+            .Include(sp => sp.Product)
             .Where(sp => sp.SupplierId == supplierId && sp.Status == SupplierProductStatus.Active && !sp.IsDeleted)
             .ToListAsync(cancellationToken);
     }
