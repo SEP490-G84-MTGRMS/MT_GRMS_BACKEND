@@ -20,6 +20,11 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
         _appContext = context;
     }
 
+    public Task<BranchStock?> GetBranchStockForUpdateAsync(string tenantId, Guid id, CancellationToken cancellationToken = default)
+        => _appContext.BranchStocks.FirstOrDefaultAsync(
+            x => x.Id == id && x.TenantId == tenantId && !x.IsDeleted,
+            cancellationToken);
+
     public async Task<BatchPagedResultDto> GetPagedBatchesAsync(
         string tenantId,
         BatchFilterQuery query,
@@ -118,6 +123,8 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 QuantityReserved = lotGroup.Sum(x => x.QuantityReserved),
                 QuantityQuarantined = lotGroup.Sum(x => x.QuantityQuarantined),
                 LandedCostPerUnit = representative.LandedCostPerUnit,
+                FefoDiscountPercent = representative.FefoDiscountPercent,
+                IsFefoDiscountActive = representative.IsFefoDiscountActive,
                 ZoneArea = representative.ZoneArea,
                 ShelfLocation = representative.ShelfLocation,
                 CreatedAt = representative.CreatedAt,
@@ -486,7 +493,9 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
             QtyReserved: reservedQty,
             QtyQuarantined: quarantinedQty,
             QtyAvailable: availableQty,
-            OriginalGrnId: originalGrnId
+            OriginalGrnId: originalGrnId,
+            FefoDiscountPercent: bs.FefoDiscountPercent,
+            IsFefoDiscountActive: bs.IsFefoDiscountActive
         );
     }
 }

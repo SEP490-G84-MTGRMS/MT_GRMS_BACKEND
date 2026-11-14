@@ -239,7 +239,7 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
             null => "NoExpiry",
             _ => "Normal"
         };
-        var availableQty = Math.Max(0m, stock.QuantityOnHand - stock.QuantityReserved);
+        var availableQty = Math.Max(0m, stock.QuantityOnHand - stock.QuantityReserved - stock.QuantityQuarantined);
 
         return new InventoryBatchSummaryDto(
             stock.Id,
@@ -250,7 +250,9 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
             stock.QuantityOnHand,
             stock.QuantityReserved,
             availableQty,
-            status
+            status,
+            stock.FefoDiscountPercent,
+            stock.IsFefoDiscountActive
         );
     }
 }

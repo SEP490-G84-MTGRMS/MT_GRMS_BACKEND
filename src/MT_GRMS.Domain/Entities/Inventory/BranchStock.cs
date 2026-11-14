@@ -20,6 +20,8 @@ public class BranchStock : BaseTenantEntity
     public decimal QuantityQuarantined { get; set; } = 0.000m;
     public decimal LandedCostPerUnit { get; set; } = 0.00m;
     public decimal? RetailPrice { get; set; }
+    public decimal FefoDiscountPercent { get; set; } = 0.00m;
+    public bool IsFefoDiscountActive { get; set; } = false;
     public string Status { get; set; } = "Active";
     public string? ShelfLocation { get; set; }
     public string? ZoneArea { get; set; }

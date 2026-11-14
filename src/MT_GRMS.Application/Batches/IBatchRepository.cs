@@ -11,6 +11,7 @@ public interface IBatchRepository
 {
     Task<BatchPagedResultDto> GetPagedBatchesAsync(string tenantId, BatchFilterQuery query, CancellationToken cancellationToken = default);
     Task<BatchListItemDto?> GetBatchByIdAsync(string tenantId, Guid id, CancellationToken cancellationToken = default);
+    Task<BranchStock?> GetBranchStockForUpdateAsync(string tenantId, Guid id, CancellationToken cancellationToken = default);
     Task<Batch> AddBatchAsync(Batch batch, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ExpiryAlertDto>> GetNearExpiryBatchesAsync(string tenantId, int daysThreshold, Guid? branchId, CancellationToken cancellationToken = default);
 }

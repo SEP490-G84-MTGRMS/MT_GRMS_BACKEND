@@ -44,7 +44,9 @@ public record InventoryBatchSummaryDto(
     decimal QuantityOnHand,
     decimal ReservedQty,
     decimal AvailableQty,
-    string Status
+    string Status,
+    decimal FefoDiscountPercent = 0m,
+    bool IsFefoDiscountActive = false
 );
 
 public record InventoryStockItemDto(

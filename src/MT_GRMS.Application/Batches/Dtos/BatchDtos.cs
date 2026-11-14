@@ -82,8 +82,13 @@ public record BatchListItemDto(
     decimal QtyReserved = 0m,
     decimal QtyQuarantined = 0m,
     decimal QtyAvailable = 0m,
-    Guid? OriginalGrnId = null
+    Guid? OriginalGrnId = null,
+    decimal FefoDiscountPercent = 0m,
+    bool IsFefoDiscountActive = false
 );
+
+public record ApplyFefoDiscountRequest(decimal DiscountPercent, bool IsActive = true);
+public record FefoDiscountResponse(Guid BatchId, decimal DiscountPercent, bool IsActive);
 
 public record BatchPagedResultDto(
     IReadOnlyList<BatchListItemDto> Items,

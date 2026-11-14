@@ -12,5 +12,6 @@ public interface IBatchService
     Task<BatchListItemDto> GetBatchByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<BatchResponse> CreateBatchAsync(BatchCreateRequest request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ExpiryAlertDto>> GetNearExpiryBatchesAsync(int daysThreshold = 30, Guid? branchId = null, CancellationToken cancellationToken = default);
+    Task<FefoDiscountResponse> ApplyFefoDiscountAsync(Guid id, ApplyFefoDiscountRequest request, CancellationToken cancellationToken = default);
 }
 

@@ -63,5 +63,12 @@ public class BatchesController : BaseApiController
         var result = await _batchService.CreateBatchAsync(request, cancellationToken);
         return CreatedAtAction(nameof(GetById), new { id = result.Id }, ApiResponse<BatchResponse>.Ok(result, "Tạo lô hàng thành công!"));
     }
+
+    [HttpPatch("{id:guid}/fefo-discount")]
+    public async Task<IActionResult> ApplyFefoDiscount(Guid id, [FromBody] ApplyFefoDiscountRequest request, CancellationToken cancellationToken)
+    {
+        var result = await _batchService.ApplyFefoDiscountAsync(id, request, cancellationToken);
+        return Ok(ApiResponse<FefoDiscountResponse>.Ok(result, "Đã cập nhật giảm giá FEFO cho lô hàng."));
+    }
 }
 
