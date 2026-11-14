@@ -38,6 +38,7 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(x => x.IsFavorite).HasDefaultValue(false);
         builder.Property(x => x.AllowRepack).HasDefaultValue(false);
         builder.Property(x => x.SellRawByWeight).HasDefaultValue(true);
+        builder.Property(x => x.ProcessedSellingPricePerKg).HasColumnType("decimal(18,2)").IsRequired(false);
         builder.Property(x => x.EligibleForVatReduction).HasDefaultValue(false);
 
         builder.HasIndex(x => new { x.TenantId, x.Barcode })

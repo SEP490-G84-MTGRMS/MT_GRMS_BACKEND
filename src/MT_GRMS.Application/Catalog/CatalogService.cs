@@ -45,25 +45,34 @@ public class CatalogService : ICatalogService
         var imageUrls = p.ImageUrls != null && p.ImageUrls.Any() ? p.ImageUrls : new List<string>();
         var avatar = imageUrls.FirstOrDefault();
 
+        var activeUnits = p.Units?.Where(u => !u.IsDeleted).ToList() ?? new List<ProductUnit>();
+        var purchaseUnitEntity = activeUnits.FirstOrDefault(u => u.IsPurchaseUnit);
+        var baseUnitEntity = activeUnits.FirstOrDefault(u => u.IsBaseUnit);
+        var isBaseUnitPurchaseUnit = purchaseUnitEntity != null
+            ? purchaseUnitEntity.IsBaseUnit
+            : (baseUnitEntity?.IsPurchaseUnit ?? !activeUnits.Any(u => !u.IsBaseUnit && u.IsPurchaseUnit));
+        var purchaseUnitName = purchaseUnitEntity?.UnitName ?? p.BaseUnit;
+
         var unitPrices = new List<ProductUnitResponse>
         {
             new()
             {
-                Id = Guid.Empty,
+                Id = baseUnitEntity?.Id ?? Guid.Empty,
                 ProductId = p.Id,
                 UnitName = p.BaseUnit,
                 ConversionRate = 1.00m,
                 Price = p.SellingPrice,
                 Barcode = p.Barcode,
                 IsBaseUnit = true,
+                IsPurchaseUnit = isBaseUnitPurchaseUnit,
                 CreatedAt = p.CreatedAt,
                 UpdatedAt = p.UpdatedAt
             }
         };
 
-        if (p.Units != null && p.Units.Any())
+        if (activeUnits.Count > 0)
         {
-            unitPrices.AddRange(p.Units.Where(u => !u.IsDeleted).Select(u => new ProductUnitResponse
+            unitPrices.AddRange(activeUnits.Where(u => !u.IsBaseUnit).Select(u => new ProductUnitResponse
             {
                 Id = u.Id,
                 ProductId = u.ProductId,
@@ -72,18 +81,11 @@ public class CatalogService : ICatalogService
                 Price = u.Price,
                 Barcode = u.Barcode,
                 IsBaseUnit = false,
+                IsPurchaseUnit = u.IsPurchaseUnit,
                 CreatedAt = u.CreatedAt,
                 UpdatedAt = u.UpdatedAt
             }));
         }
-
-        var activeUnits = p.Units?.Where(u => !u.IsDeleted).ToList() ?? new List<ProductUnit>();
-        var purchaseUnitEntity = activeUnits.FirstOrDefault(u => u.IsPurchaseUnit);
-        var baseUnitEntity = activeUnits.FirstOrDefault(u => u.IsBaseUnit);
-        var isBaseUnitPurchaseUnit = purchaseUnitEntity != null
-            ? purchaseUnitEntity.IsBaseUnit
-            : (baseUnitEntity?.IsPurchaseUnit ?? !activeUnits.Any(u => !u.IsBaseUnit && u.IsPurchaseUnit));
-        var purchaseUnitName = purchaseUnitEntity?.UnitName ?? p.BaseUnit;
 
         return new ProductResponse(
             p.Id,
@@ -115,7 +117,8 @@ public class CatalogService : ICatalogService
             purchaseUnitName,
             unitPrices,
             p.AllowRepack,
-            p.SellRawByWeight
+            p.SellRawByWeight,
+            p.ProcessedSellingPricePerKg
         );
     }
 
@@ -288,6 +291,7 @@ public class CatalogService : ICatalogService
             HasBatches = request.HasBatches || request.AllowRepack,
             AllowRepack = request.AllowRepack,
             SellRawByWeight = request.SellRawByWeight,
+            ProcessedSellingPricePerKg = ResolveProcessedPrice(request.AllowRepack, request.ProcessedSellingPricePerKg, request.SellingPrice),
             IsFavorite = request.IsFavorite,
             IsActive = true,
             TaxCategory = "STANDARD_1PCT",
@@ -441,6 +445,7 @@ public class CatalogService : ICatalogService
         product.HasBatches = request.HasBatches || request.AllowRepack;
         product.AllowRepack = request.AllowRepack;
         product.SellRawByWeight = request.SellRawByWeight;
+        product.ProcessedSellingPricePerKg = ResolveProcessedPrice(request.AllowRepack, request.ProcessedSellingPricePerKg, request.SellingPrice);
         product.IsFavorite = request.IsFavorite;
         product.TaxCategory = request.TaxCategory ?? product.TaxCategory ?? "STANDARD_1PCT";
         product.EligibleForVatReduction = request.EligibleForVatReduction;
@@ -590,5 +595,23 @@ public class CatalogService : ICatalogService
     {
         var role = _tenantContext.CurrentRole;
         return role is "SUPER_ADMIN" or "STORE_OWNER" or "BRANCH_MANAGER" or "StoreOwner" or "Manager";
+    }
+
+    /// <summary>
+    /// AllowRepack tắt → null. Bật mà không gửi / ≤ 0 → mặc định = RAW (SellingPrice).
+    /// </summary>
+    private static decimal? ResolveProcessedPrice(bool allowRepack, decimal? processed, decimal sellingPrice)
+    {
+        if (!allowRepack)
+        {
+            return null;
+        }
+
+        if (processed is > 0)
+        {
+            return processed;
+        }
+
+        return sellingPrice > 0 ? sellingPrice : null;
     }
 }

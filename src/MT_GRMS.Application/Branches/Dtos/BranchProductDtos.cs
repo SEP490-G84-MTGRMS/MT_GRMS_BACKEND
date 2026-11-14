@@ -144,3 +144,41 @@ public class AssignableBranchProductDto
     public bool IsAlreadyAssigned { get; set; }
     public List<BranchProductUnitPriceDto> UnitPrices { get; set; } = new();
 }
+
+/// <summary>Kết quả import Excel giá bán theo ĐVT (từng dòng SP).</summary>
+public class BranchProductExcelImportRowResultDto
+{
+    public int Row { get; set; }
+    public string? ProductId { get; set; }
+    public string Sku { get; set; } = string.Empty;
+    public string ProductName { get; set; } = string.Empty;
+    /// <summary>Tóm tắt giá ĐVT đã áp (vd: Hộp:10.000; Lốc:32.000).</summary>
+    public string? UnitPricesSummary { get; set; }
+    /// <summary>OK | ERROR</summary>
+    public string Status { get; set; } = "ERROR";
+    public string Message { get; set; } = string.Empty;
+}
+
+public class BranchProductExcelImportSummaryDto
+{
+    public int TotalRows { get; set; }
+    public int SuccessCount { get; set; }
+    public int FailedCount { get; set; }
+}
+
+public class BranchProductExcelImportResultDto
+{
+    public string FileName { get; set; } = string.Empty;
+    public Guid BranchId { get; set; }
+    public string BranchCode { get; set; } = string.Empty;
+    public string BranchName { get; set; } = string.Empty;
+    public BranchProductExcelImportSummaryDto Summary { get; set; } = new();
+    public List<BranchProductExcelImportRowResultDto> Rows { get; set; } = new();
+}
+
+public class BranchProductExcelFileDto
+{
+    public byte[] Content { get; set; } = Array.Empty<byte>();
+    public string FileName { get; set; } = string.Empty;
+    public string ContentType { get; set; } = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+}

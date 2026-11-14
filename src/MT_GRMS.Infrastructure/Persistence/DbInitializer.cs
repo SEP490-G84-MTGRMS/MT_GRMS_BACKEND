@@ -399,6 +399,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             await context.Database.ExecuteSqlRawAsync(@"
                 ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""AllowRepack"" boolean NOT NULL DEFAULT FALSE;
                 ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""SellRawByWeight"" boolean NOT NULL DEFAULT TRUE;
+                ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""ProcessedSellingPricePerKg"" numeric(18,2) NULL;
 
                 CREATE TABLE IF NOT EXISTS ""RepackOrders"" (
                     ""Id"" uuid NOT NULL PRIMARY KEY,

@@ -75,7 +75,7 @@ public class RepackService : IRepackService
             RawSellableQty: raw,
             ExpiryDate: stock.ExpiryDate,
             LandedCostPerUnit: stock.LandedCostPerUnit,
-            SuggestPricePerKg: stock.RetailPrice ?? product.SellingPrice,
+            SuggestPricePerKg: ResolveProcessedPricePerKg(product, stock),
             Packages: packages.Select(MapPackage).ToList()
         );
     }
@@ -186,8 +186,7 @@ public class RepackService : IRepackService
         var unitCost = stock.LandedCostPerUnit;
         var wasteCost = Math.Round(request.WasteWeight * unitCost, 2, MidpointRounding.AwayFromZero);
         var defaultPerKg = request.DefaultUnitPricePerKg
-            ?? stock.RetailPrice
-            ?? product.SellingPrice;
+            ?? ResolveProcessedPricePerKg(product, stock);
 
         var order = new RepackOrder
         {
@@ -419,4 +418,20 @@ public class RepackService : IRepackService
         RepackOrderId: p.RepackOrderId,
         CreatedAt: p.CreatedAt
     );
+
+    /// <summary>Giá/kg đóng khay: PROCESSED nếu có, không thì RAW (SellingPrice / RetailPrice).</summary>
+    private static decimal ResolveProcessedPricePerKg(Domain.Entities.Catalog.Product product, BranchStock stock)
+    {
+        if (product.ProcessedSellingPricePerKg is > 0)
+        {
+            return product.ProcessedSellingPricePerKg.Value;
+        }
+
+        if (stock.RetailPrice is > 0)
+        {
+            return stock.RetailPrice.Value;
+        }
+
+        return product.SellingPrice;
+    }
 }

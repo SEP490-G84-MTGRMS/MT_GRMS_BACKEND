@@ -211,5 +211,45 @@ public class BranchesController : BaseApiController
         await _branchProductService.RemoveProductAsync(id, productId, cancellationToken);
         return Ok(ApiResponse<object>.Ok(null!, "Gỡ sản phẩm khỏi chi nhánh thành công."));
     }
+
+    /// <summary>
+    /// Xuất Excel danh sách SP đã gán chi nhánh để điền giá bán theo từng ĐVT.
+    /// </summary>
+    [HttpGet("{id:guid}/products/export")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    public async Task<IActionResult> ExportBranchProducts(
+        Guid id,
+        [FromServices] IBranchProductExcelService excelService,
+        CancellationToken cancellationToken)
+    {
+        var file = await excelService.ExportAsync(id, cancellationToken);
+        return File(file.Content, file.ContentType, file.FileName);
+    }
+
+    /// <summary>
+    /// Import Excel: validate + override giá bán theo ĐVT (partial success theo từng dòng).
+    /// </summary>
+    [HttpPost("{id:guid}/products/import")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(10_000_000)]
+    public async Task<IActionResult> ImportBranchProducts(
+        Guid id,
+        IFormFile? file,
+        [FromServices] IBranchProductExcelService excelService,
+        CancellationToken cancellationToken)
+    {
+        if (file == null || file.Length == 0)
+        {
+            return BadRequest(ApiResponse<object>.Fail("INVALID_FILE", "Vui lòng chọn file Excel (.xlsx)."));
+        }
+
+        await using var stream = file.OpenReadStream();
+        var result = await excelService.ImportAsync(id, stream, file.FileName, cancellationToken);
+        var msg = result.Summary.FailedCount == 0
+            ? $"Import thành công {result.Summary.SuccessCount}/{result.Summary.TotalRows} dòng."
+            : $"Import xong: {result.Summary.SuccessCount} thành công, {result.Summary.FailedCount} lỗi / {result.Summary.TotalRows} dòng.";
+        return Ok(ApiResponse<BranchProductExcelImportResultDto>.Ok(result, msg));
+    }
 }
 

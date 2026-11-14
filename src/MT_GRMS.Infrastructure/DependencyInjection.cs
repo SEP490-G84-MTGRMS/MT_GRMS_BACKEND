@@ -126,6 +126,7 @@ public static class DependencyInjection
         services.AddScoped<IFileStorage, LocalFileStorage>();
         services.AddScoped<ISupplierOrderExcelGenerator, SupplierOrderExcelGenerator>();
         services.AddScoped<ISupplierProductExcelService, Services.SupplierProductExcelService>();
+        services.AddScoped<IBranchProductExcelService, Services.BranchProductExcelService>();
         services.AddScoped<ISupplierOrderEmailSender, SmtpSupplierOrderEmailSender>();
         services.AddScoped<ISupplierDispatchPackageService, SupplierDispatchPackageService>();
         services.AddHostedService<SupplierOrderDispatchWorker>();
