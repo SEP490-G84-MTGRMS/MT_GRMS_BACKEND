@@ -223,7 +223,7 @@ public class CustomersController : BaseApiController
             TotalSpending = 0m,
             TotalDebt = 0m,
             DebtLimit = Math.Max(0m, request.DebtLimit),
-            AllowDebt = request.DebtLimit > 0,
+            AllowDebt = true,
             IsBlockedForDebt = false,
             PrepaymentBalance = 0m,
             MaxDebtDays = 30,
@@ -291,9 +291,9 @@ public class CustomersController : BaseApiController
                 return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Hạn mức nợ không thể là số âm."));
             }
             customer.DebtLimit = Math.Max(0m, request.DebtLimit.Value);
-            customer.AllowDebt = customer.DebtLimit > 0;
+            customer.AllowDebt = true;
 
-            if (customer.TotalDebt > customer.DebtLimit)
+            if (customer.DebtLimit > 0 && customer.TotalDebt > customer.DebtLimit)
             {
                 customer.DebtStatus = CustomerDebtStatus.LimitExceededBlocked;
                 customer.IsBlockedForDebt = true;

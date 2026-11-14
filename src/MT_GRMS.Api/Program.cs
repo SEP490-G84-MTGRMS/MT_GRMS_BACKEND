@@ -72,33 +72,40 @@ builder.Services.AddAuthentication(options =>
         },
         OnTokenValidated = async context =>
         {
-            var userId = context.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-            if (string.IsNullOrWhiteSpace(userId))
+            try
             {
-                context.Fail("Tài khoản không hợp lệ.");
-                return;
-            }
-
-            var userRepo = context.HttpContext.RequestServices.GetService<MT_GRMS.Application.Auth.IUserRepository>();
-            if (userRepo != null)
-            {
-                var user = await userRepo.GetByIdAsync(userId, context.HttpContext.RequestAborted);
-                if (user == null || !user.IsActive || (user.TenantUsers.Any() && user.TenantUsers.All(t => !t.IsActive)))
+                var userId = context.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                if (string.IsNullOrWhiteSpace(userId))
                 {
-                    context.Fail("Tài khoản đã bị khóa hoặc ngừng hoạt động.");
+                    context.Fail("Tài khoản không hợp lệ.");
                     return;
                 }
-            }
 
-            var empRepo = context.HttpContext.RequestServices.GetService<MT_GRMS.Application.HR.Employees.IEmployeeRepository>();
-            if (empRepo != null)
-            {
-                var linkedEmployee = await empRepo.GetByUserIdAsync(userId, context.HttpContext.RequestAborted);
-                if (linkedEmployee != null && linkedEmployee.Status == MT_GRMS.Domain.Enums.EmployeeStatus.Inactive)
+                var userRepo = context.HttpContext.RequestServices.GetService<MT_GRMS.Application.Auth.IUserRepository>();
+                if (userRepo != null)
                 {
-                    context.Fail("Tài khoản đã bị khóa do nhân viên đã ngừng làm việc.");
-                    return;
+                    var user = await userRepo.GetByIdAsync(userId, context.HttpContext.RequestAborted);
+                    if (user == null || !user.IsActive || (user.TenantUsers.Any() && user.TenantUsers.All(t => !t.IsActive)))
+                    {
+                        context.Fail("Tài khoản đã bị khóa hoặc ngừng hoạt động.");
+                        return;
+                    }
                 }
+
+                var empRepo = context.HttpContext.RequestServices.GetService<MT_GRMS.Application.HR.Employees.IEmployeeRepository>();
+                if (empRepo != null)
+                {
+                    var linkedEmployee = await empRepo.GetByUserIdAsync(userId, context.HttpContext.RequestAborted);
+                    if (linkedEmployee != null && linkedEmployee.Status == MT_GRMS.Domain.Enums.EmployeeStatus.Inactive)
+                    {
+                        context.Fail("Tài khoản đã bị khóa do nhân viên đã ngừng làm việc.");
+                        return;
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Request was canceled by client navigation/refresh, ignore gracefully
             }
         }
     };
@@ -187,8 +194,10 @@ app.UseAuthorization();
 app.MapControllers();
 
 // 8. Tự động áp dụng Migration (Auto-migration); Seed mẫu chỉ khi Database:SeedSampleData=true
-using (var scope = app.Services.CreateScope())
+var skipDbInit = app.Configuration.GetValue<bool>("Database:SkipDbInitialization");
+if (!skipDbInit)
 {
+    using var scope = app.Services.CreateScope();
     var services = scope.ServiceProvider;
     var logger = services.GetRequiredService<ILogger<Program>>();
     var startupInitializationTimer = System.Diagnostics.Stopwatch.StartNew();

@@ -148,13 +148,22 @@ public class ExpenseService : IExpenseService
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
-        if (voucher.Status != ExpenseVoucherStatus.PendingApproval)
+        // Idempotent: Nếu đã duyệt hoặc đã thanh toán thành công thì không báo lỗi 422
+        if (voucher.Status == ExpenseVoucherStatus.Approved || voucher.Status == ExpenseVoucherStatus.Paid)
+        {
+            return MapVoucherResponse(voucher);
+        }
+
+        if (voucher.Status != ExpenseVoucherStatus.PendingApproval &&
+            voucher.Status != ExpenseVoucherStatus.Draft &&
+            voucher.Status != ExpenseVoucherStatus.PaymentFailed &&
+            voucher.Status != ExpenseVoucherStatus.Unresolved)
         {
             throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể phê duyệt.");
         }
 
         // Kiểm toán tiệm 1 chủ solo: Nếu phiếu bị cảnh báo xé nhỏ hạn mức thì bắt buộc phải nhập lý do/ghi chú giải trình
-        if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note))
+        if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note) && string.IsNullOrWhiteSpace(voucher.Note))
         {
             throw new BusinessException("NOTE_REQUIRED_FOR_SUSPICIOUS_EXPENSE", "Phiếu chi bị gắn cờ nghi vấn xé nhỏ hạn mức. Bắt buộc nhập ghi chú giải trình khi phê duyệt.");
         }
@@ -162,7 +171,12 @@ public class ExpenseService : IExpenseService
         voucher.Status = ExpenseVoucherStatus.Approved;
         voucher.ApprovedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId : Guid.NewGuid();
         voucher.ApprovedAtUtc = DateTime.UtcNow;
-        if (!string.IsNullOrEmpty(request.Note)) voucher.Note = request.Note;
+        if (!string.IsNullOrWhiteSpace(request.Note))
+        {
+            voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
+                ? request.Note.Trim()
+                : $"{voucher.Note} | {request.Note.Trim()}";
+        }
 
         await _unitOfWork.SaveChangesAsync(ct);
         return MapVoucherResponse(voucher);
@@ -175,7 +189,9 @@ public class ExpenseService : IExpenseService
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
-        if (voucher.Status != ExpenseVoucherStatus.PendingApproval)
+        if (voucher.Status != ExpenseVoucherStatus.PendingApproval &&
+            voucher.Status != ExpenseVoucherStatus.Draft &&
+            voucher.Status != ExpenseVoucherStatus.Unresolved)
         {
             throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể từ chối duyệt.");
         }
@@ -240,7 +256,8 @@ public class ExpenseService : IExpenseService
         else if (voucher.Status == ExpenseVoucherStatus.Draft ||
                  voucher.Status == ExpenseVoucherStatus.PendingApproval ||
                  voucher.Status == ExpenseVoucherStatus.Approved ||
-                 voucher.Status == ExpenseVoucherStatus.PaymentFailed)
+                 voucher.Status == ExpenseVoucherStatus.PaymentFailed ||
+                 voucher.Status == ExpenseVoucherStatus.Unresolved)
         {
             voucher.Status = ExpenseVoucherStatus.Cancelled;
             voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
@@ -258,12 +275,42 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> DisburseExpenseAsync(DisburseExpenseRequest request, CancellationToken ct = default)
     {
+        ValidateFinancialManagementRole("xuất quỹ chi trả phiếu chi");
+
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
-        if (voucher.Status != ExpenseVoucherStatus.Approved && voucher.Status != ExpenseVoucherStatus.PaymentFailed)
+        // Idempotent: Nếu đã xuất quỹ thành công từ trước thì trả về luôn không thực hiện trừ quỹ kép
+        if (voucher.Status == ExpenseVoucherStatus.Paid)
         {
-            throw new BusinessException("INVALID_STATUS", $"Phiếu chi chưa được phê duyệt hoặc đã được chi trả (Trạng thái hiện tại: {voucher.Status}).");
+            return MapVoucherResponse(voucher);
+        }
+
+        // Tự động phê duyệt cho Chủ cửa hàng / Quản lý nếu phiếu đang ở Draft, PendingApproval hoặc Unresolved (1-click payment flow)
+        if (voucher.Status == ExpenseVoucherStatus.Draft ||
+            voucher.Status == ExpenseVoucherStatus.PendingApproval ||
+            voucher.Status == ExpenseVoucherStatus.Unresolved)
+        {
+            if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note) && string.IsNullOrWhiteSpace(voucher.Note))
+            {
+                throw new BusinessException("NOTE_REQUIRED_FOR_SUSPICIOUS_EXPENSE", "Phiếu chi bị gắn cờ nghi vấn xé nhỏ hạn mức. Bắt buộc nhập ghi chú giải trình khi phê duyệt và xuất quỹ.");
+            }
+
+            voucher.Status = ExpenseVoucherStatus.Approved;
+            voucher.ApprovedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId : Guid.NewGuid();
+            voucher.ApprovedAtUtc = DateTime.UtcNow;
+        }
+        else if (voucher.Status != ExpenseVoucherStatus.Approved && voucher.Status != ExpenseVoucherStatus.PaymentFailed)
+        {
+            throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể xuất quỹ chi trả.");
+        }
+
+        // Cập nhật/bổ sung ghi chú giải trình hoặc thanh toán nếu có (áp dụng cho mọi trường hợp xuất quỹ)
+        if (!string.IsNullOrWhiteSpace(request.Note))
+        {
+            voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
+                ? request.Note.Trim()
+                : $"{voucher.Note} | {request.Note.Trim()}";
         }
 
         voucher.PaymentSourceType = request.PaymentSourceType;
@@ -326,14 +373,18 @@ public class ExpenseService : IExpenseService
             (!fromDate.HasValue || e.CreatedAt >= fromDate.Value) &&
             (!toDate.HasValue || e.CreatedAt <= toDate.Value), ct);
 
-        var totalAmount = vouchers.Sum(v => v.Amount);
-        var totalCount = vouchers.Count;
+        var activeVouchers = vouchers
+            .Where(v => v.Status != ExpenseVoucherStatus.Cancelled && v.Status != ExpenseVoucherStatus.Reversed)
+            .ToList();
 
-        var paidVouchers = vouchers.Where(v => v.Status == ExpenseVoucherStatus.Paid).ToList();
-        var pendingVouchers = vouchers.Where(v => v.Status == ExpenseVoucherStatus.PendingApproval).ToList();
-        var suspiciousVouchers = vouchers.Where(v => v.IsFlaggedAsSuspiciousSplit).ToList();
-        var taxDeductibleVouchers = vouchers.Where(v => v.IsTaxDeductible).ToList();
-        var nonTaxDeductibleVouchers = vouchers.Where(v => !v.IsTaxDeductible).ToList();
+        var totalAmount = activeVouchers.Sum(v => v.Amount);
+        var totalCount = activeVouchers.Count;
+
+        var paidVouchers = activeVouchers.Where(v => v.Status == ExpenseVoucherStatus.Paid).ToList();
+        var pendingVouchers = activeVouchers.Where(v => v.Status != ExpenseVoucherStatus.Paid).ToList();
+        var suspiciousVouchers = activeVouchers.Where(v => v.IsFlaggedAsSuspiciousSplit).ToList();
+        var taxDeductibleVouchers = activeVouchers.Where(v => v.IsTaxDeductible).ToList();
+        var nonTaxDeductibleVouchers = activeVouchers.Where(v => !v.IsTaxDeductible).ToList();
 
         return new ExpenseSummaryResponse(
             TotalAmount: totalAmount,
