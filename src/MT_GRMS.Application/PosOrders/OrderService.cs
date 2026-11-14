@@ -31,6 +31,7 @@ public class OrderService : IOrderService
     private readonly PosShifts.IShiftService? _shiftService;
     private readonly Promotions.IPromotionRepository? _promotionRepository;
     private readonly ITenantContext? _tenantContext;
+    private readonly Tax.ITaxPeriodLockGuard? _taxPeriodLockGuard;
 
     private static readonly Guid DefaultTillId = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db");
     private static readonly Guid DefaultBankId = Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559");
@@ -45,7 +46,8 @@ public class OrderService : IOrderService
         PosShifts.IShiftRepository? shiftRepository = null,
         Promotions.IPromotionRepository? promotionRepository = null,
         ITenantContext? tenantContext = null,
-        PosShifts.IShiftService? shiftService = null)
+        PosShifts.IShiftService? shiftService = null,
+        Tax.ITaxPeriodLockGuard? taxPeriodLockGuard = null)
     {
         _orderRepository = orderRepository;
         _unitOfWork = unitOfWork;
@@ -57,6 +59,7 @@ public class OrderService : IOrderService
         _promotionRepository = promotionRepository;
         _tenantContext = tenantContext;
         _shiftService = shiftService;
+        _taxPeriodLockGuard = taxPeriodLockGuard;
     }
 
     public OrderService(
@@ -64,7 +67,7 @@ public class OrderService : IOrderService
         IUnitOfWork unitOfWork,
         IThermalPrintService thermalPrintService,
         IValidator<OrderCreateRequest>? validator)
-        : this(orderRepository, unitOfWork, thermalPrintService, null, null, validator, null, null, null, null)
+        : this(orderRepository, unitOfWork, thermalPrintService, null, null, validator, null, null, null, null, null)
     {
     }
 
@@ -1377,6 +1380,15 @@ public class OrderService : IOrderService
         if (order.Status == "Cancelled")
         {
             throw new InvalidOperationException($"Đơn hàng '{order.OrderCode}' đã bị hủy trước đó.");
+        }
+
+        if (_taxPeriodLockGuard != null)
+        {
+            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(
+                order.CreatedAt,
+                "hủy hóa đơn bán lẻ",
+                order.BranchId,
+                cancellationToken);
         }
 
         var effectiveRole = !string.IsNullOrWhiteSpace(request.UserRole) ? request.UserRole : _tenantContext?.CurrentRole;

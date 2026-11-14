@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Moq;
+using Microsoft.Extensions.Configuration;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Auth.Dtos;
 using MT_GRMS.Application.Branches;
@@ -407,7 +408,13 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
         userRepoMock.Setup(r => r.GetEmployeeBranchIdAsync("usr_employee_annhien_02", "tenant_an_nhien_02", It.IsAny<CancellationToken>()))
             .ReturnsAsync(_branchId);
 
-        var authService = new AuthService(userRepoMock.Object);
+        var authConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Jwt:Key"] = "MT_GRMS_UNIT_TEST_JWT_SIGNING_SECRET_2026_0123456789",
+            ["Jwt:Issuer"] = "MTGRMS_API",
+            ["Jwt:Audience"] = "MTGRMS_CLIENT"
+        }).Build();
+        var authService = new AuthService(userRepoMock.Object, authConfig);
 
         var loginRes = await authService.LoginAsync(new LoginRequest("0917778888", "123456", "tenant_an_nhien_02"));
         Assert.Equal(_branchId, loginRes.User.BranchId);

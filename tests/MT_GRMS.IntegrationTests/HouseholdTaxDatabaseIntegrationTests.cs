@@ -1,8 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Tax;
+using MT_GRMS.Application.Tax.Dtos;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Entities.Finance;
-using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Infrastructure.Repositories;
@@ -652,6 +653,261 @@ public class HouseholdTaxDatabaseIntegrationTests
         Assert.Contains(s3aEntries, e => e.SectionGroup == "1. Thuế Giá trị gia tăng (GTGT)" && e.InAmount == 2_000_000m);
         Assert.Contains(s3aEntries, e => e.SectionGroup == "2. Thuế Thu nhập cá nhân (TNCN)" && e.InAmount == 1_000_000m);
         Assert.Contains(s3aEntries, e => e.OutAmount == 1_000_000m); // PC-THUE-NOP
+    }
+
+    [Fact]
+    public async Task FinalizeSnapshot_Supersede_WithRepositoryAndDbContext()
+    {
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+        var service = new HouseholdTaxService(repo);
+
+        // 1. Chốt kỳ ban đầu (Revision 0)
+        var req1 = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage
+        };
+        var res1 = await service.FinalizeTaxSnapshotAsync(req1, "owner");
+        Assert.NotNull(res1);
+        Assert.Equal(0, res1.RevisionNumber);
+        Assert.Equal(TaxSnapshotStatus.Finalized, res1.Status);
+
+        // 2. Chốt lại nhưng KHÔNG tick cho phép supersede -> Ném ngoại lệ TAX_PERIOD_LOCKED
+        var reqLocked = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            AllowSupersedeExisting = false
+        };
+        var exLocked = await Assert.ThrowsAsync<MT_GRMS.Domain.Exceptions.BusinessException>(() =>
+            service.FinalizeTaxSnapshotAsync(reqLocked, "owner"));
+        Assert.Equal("TAX_PERIOD_LOCKED", exLocked.ErrorCode);
+
+        // 3. Chốt lại có tick supersede nhưng thiếu lý do điều chỉnh -> Ném ngoại lệ RECTIFICATION_REASON_REQUIRED
+        var reqNoReason = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            AllowSupersedeExisting = true,
+            RectificationReason = ""
+        };
+        var exNoReason = await Assert.ThrowsAsync<MT_GRMS.Domain.Exceptions.BusinessException>(() =>
+            service.FinalizeTaxSnapshotAsync(reqNoReason, "owner"));
+        Assert.Equal("RECTIFICATION_REASON_REQUIRED", exNoReason.ErrorCode);
+
+        // 4. Chốt lại hợp lệ (Revision 1)
+        var req2 = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            AllowSupersedeExisting = true,
+            RectificationReason = "Chốt lại do phát hiện nhầm lẫn hóa đơn"
+        };
+        var res2 = await service.FinalizeTaxSnapshotAsync(req2, "owner");
+        Assert.NotNull(res2);
+        Assert.Equal(1, res2.RevisionNumber);
+        Assert.Equal(TaxSnapshotStatus.Finalized, res2.Status);
+        Assert.Equal(res1.Id, res2.SupersededSnapshotId);
+        Assert.Equal("Chốt lại do phát hiện nhầm lẫn hóa đơn", res2.RectificationReason);
+
+        // Xác minh bản ghi cũ đã chuyển sang trạng thái Superseded trong cơ sở dữ liệu
+        var oldSnapshot = await context.HouseholdTaxSnapshots.FindAsync(res1.Id);
+        Assert.NotNull(oldSnapshot);
+        Assert.Equal(TaxSnapshotStatus.Superseded, oldSnapshot.Status);
+
+        // 5. Kiểm thử tính bất biến: Cố tình sửa đổi số liệu tài chính của snapshot đã supersede phải bị chặn
+        oldSnapshot.TotalTaxAmount = 999_999_999m;
+        var exModified = await Assert.ThrowsAsync<InvalidOperationException>(() => context.SaveChangesAsync());
+        Assert.Contains("Cấm chỉnh sửa số liệu tài chính của snapshot bất biến", exModified.Message);
+    }
+
+    [Fact]
+    public async Task FinalizeSnapshot_Supersede_WhenExistingSnapshotHasBranchId_ShouldFindAndSupersedeSuccessfully()
+    {
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+        var service = new HouseholdTaxService(repo);
+
+        var branchId = Guid.NewGuid();
+
+        // Seed Q1 để thỏa mãn tính tuần tự
+        context.HouseholdTaxSnapshots.Add(new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-tax-01",
+            BranchId = branchId,
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            Status = TaxSnapshotStatus.Finalized,
+            BookDataJson = "{}",
+            FinalizedBy = "initial-user",
+            FinalizedAtUtc = DateTime.UtcNow
+        });
+
+        // Tạo snapshot cũ Q2 có BranchId (ví dụ do migration hoặc tạo từ chi nhánh cụ thể trước đó)
+        var existingWithBranch = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-tax-01",
+            BranchId = branchId,
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 2,
+            Status = TaxSnapshotStatus.Finalized,
+            RevisionNumber = 0,
+            BookDataJson = "{}",
+            FinalizedBy = "initial-user",
+            FinalizedAtUtc = DateTime.UtcNow
+        };
+        context.HouseholdTaxSnapshots.Add(existingWithBranch);
+        await context.SaveChangesAsync();
+
+        // Chốt lại kỳ Q2/2026 (yêu cầu chốt ở cấp tenant-wide, request.BranchId = null)
+        var req = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 2,
+            BranchId = null,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            AllowSupersedeExisting = true,
+            RectificationReason = "BBĐC-Q2-2026: Điều chỉnh thay thế bản chốt có branchId cũ"
+        };
+
+        var result = await service.FinalizeTaxSnapshotAsync(req, "store-owner");
+        Assert.NotNull(result);
+        Assert.Equal(1, result.RevisionNumber);
+        Assert.Equal(TaxSnapshotStatus.Finalized, result.Status);
+        Assert.Equal(existingWithBranch.Id, result.SupersededSnapshotId);
+
+        // Bản ghi cũ có BranchId phải được chuyển sang Superseded
+        var oldDb = await context.HouseholdTaxSnapshots.FindAsync(existingWithBranch.Id);
+        Assert.NotNull(oldDb);
+        Assert.Equal(TaxSnapshotStatus.Superseded, oldDb.Status);
+    }
+
+    [Fact]
+    public async Task FinalizeSnapshot_Supersede_SequentialMultipleRevisions_ShouldMaintainAuditChain()
+    {
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+        var service = new HouseholdTaxService(repo);
+
+        // 1. Revision 0: Bản chốt đầu tiên
+        var reqRev0 = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage
+        };
+        var resRev0 = await service.FinalizeTaxSnapshotAsync(reqRev0, "owner");
+        Assert.Equal(0, resRev0.RevisionNumber);
+        Assert.Equal(TaxSnapshotStatus.Finalized, resRev0.Status);
+
+        // 2. Revision 1: Chốt lại lần 1
+        var reqRev1 = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            AllowSupersedeExisting = true,
+            RectificationReason = "BBĐC-01: Thay thế lần 1 do soát xét hóa đơn"
+        };
+        var resRev1 = await service.FinalizeTaxSnapshotAsync(reqRev1, "owner");
+        Assert.Equal(1, resRev1.RevisionNumber);
+        Assert.Equal(TaxSnapshotStatus.Finalized, resRev1.Status);
+        Assert.Equal(resRev0.Id, resRev1.SupersededSnapshotId);
+
+        // 3. Revision 2: Chốt lại lần 2
+        var reqRev2 = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            AllowSupersedeExisting = true,
+            RectificationReason = "BBĐC-02: Thay thế lần 2 theo kết luận kiểm toán"
+        };
+        var resRev2 = await service.FinalizeTaxSnapshotAsync(reqRev2, "owner");
+        Assert.Equal(2, resRev2.RevisionNumber);
+        Assert.Equal(TaxSnapshotStatus.Finalized, resRev2.Status);
+        Assert.Equal(resRev1.Id, resRev2.SupersededSnapshotId);
+
+        // Kiểm tra cơ sở dữ liệu: Rev0 và Rev1 đều Superseded, chỉ duy nhất Rev2 là Finalized
+        var dbRev0 = await context.HouseholdTaxSnapshots.FindAsync(resRev0.Id);
+        var dbRev1 = await context.HouseholdTaxSnapshots.FindAsync(resRev1.Id);
+        var dbRev2 = await context.HouseholdTaxSnapshots.FindAsync(resRev2.Id);
+
+        Assert.Equal(TaxSnapshotStatus.Superseded, dbRev0!.Status);
+        Assert.Equal(TaxSnapshotStatus.Superseded, dbRev1!.Status);
+        Assert.Equal(TaxSnapshotStatus.Finalized, dbRev2!.Status);
+
+        // Truy vấn GetSnapshotAsync phải trả về đúng bản Rev2
+        var activeSnapshot = await repo.GetSnapshotAsync(2026, TaxPeriodType.Quarter, 1, null);
+        Assert.NotNull(activeSnapshot);
+        Assert.Equal(resRev2.Id, activeSnapshot.Id);
+        Assert.Equal(2, activeSnapshot.RevisionNumber);
+    }
+
+    [Fact]
+    public async Task FinalizeSnapshot_Supersede_WhenLegacySnapshotHasDefaultStatusZero_ShouldFindAndSupersedeSuccessfully()
+    {
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+        var service = new HouseholdTaxService(repo);
+
+        // Tạo bản ghi snapshot legacy có Status = 0 (trước khi áp dụng enum)
+        var legacySnapshot = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-tax-01",
+            BranchId = null,
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            Status = 0, // Legacy uninitialized status
+            RevisionNumber = 0,
+            BookDataJson = "{}",
+            FinalizedBy = "legacy-user",
+            FinalizedAtUtc = DateTime.UtcNow
+        };
+        context.HouseholdTaxSnapshots.Add(legacySnapshot);
+        await context.SaveChangesAsync();
+
+        // Chốt lại với allowSupersede = true
+        var req = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            BranchId = null,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            AllowSupersedeExisting = true,
+            RectificationReason = "Thay thế bản chốt legacy của kỳ Q1"
+        };
+
+        var result = await service.FinalizeTaxSnapshotAsync(req, "owner");
+        Assert.NotNull(result);
+        Assert.Equal(1, result.RevisionNumber);
+        Assert.Equal(TaxSnapshotStatus.Finalized, result.Status);
+        Assert.Equal(legacySnapshot.Id, result.SupersededSnapshotId);
+
+        // Bản ghi legacy cũ phải được chuyển sang Superseded
+        var oldDb = await context.HouseholdTaxSnapshots.FindAsync(legacySnapshot.Id);
+        Assert.NotNull(oldDb);
+        Assert.Equal(TaxSnapshotStatus.Superseded, oldDb.Status);
     }
 }
 

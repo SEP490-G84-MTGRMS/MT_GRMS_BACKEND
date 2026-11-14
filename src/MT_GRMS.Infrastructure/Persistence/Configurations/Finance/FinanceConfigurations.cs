@@ -240,10 +240,16 @@ public class ExpenseVoucherConfiguration : IEntityTypeConfiguration<ExpenseVouch
         builder.Property(e => e.SellerTaxCode)
             .HasMaxLength(50);
 
+        builder.HasOne<HouseholdTaxSnapshot>()
+            .WithMany()
+            .HasForeignKey(e => e.HouseholdTaxSnapshotId)
+            .OnDelete(DeleteBehavior.Restrict);
+
         builder.HasIndex(e => new { e.TenantId, e.BranchId, e.ExpenseDate });
         builder.HasIndex(e => new { e.TenantId, e.Status });
         builder.HasIndex(e => new { e.TenantId, e.ReferenceCode });
         builder.HasIndex(e => new { e.TenantId, e.Nature });
+        builder.HasIndex(e => new { e.TenantId, e.HouseholdTaxSnapshotId });
     }
 }
 

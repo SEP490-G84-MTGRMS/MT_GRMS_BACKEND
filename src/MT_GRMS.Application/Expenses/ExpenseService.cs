@@ -13,6 +13,7 @@ public class ExpenseService : IExpenseService
     private readonly ICashbookService _cashbookService;
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly Tax.ITaxPeriodLockGuard? _taxPeriodLockGuard;
 
     // Định mức thẩm quyền theo BR-17-06 / TT 152/2025/TT-BTC
     private const decimal T1_AutoApprovalThreshold = 500_000m; // Ngưỡng tự duyệt chi dưới 500k
@@ -23,12 +24,14 @@ public class ExpenseService : IExpenseService
         IExpenseRepository expenseRepo,
         ICashbookService cashbookService,
         ITenantContext tenantContext,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        Tax.ITaxPeriodLockGuard? taxPeriodLockGuard = null)
     {
         _expenseRepo = expenseRepo;
         _cashbookService = cashbookService;
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
+        _taxPeriodLockGuard = taxPeriodLockGuard;
     }
 
     public async Task<ExpenseVoucherResponse> CreateExpenseAsync(CreateExpenseRequest request, CancellationToken ct = default)
@@ -45,6 +48,13 @@ public class ExpenseService : IExpenseService
             ValidateFinancialManagementRole("thực hiện rút vốn hoặc nộp thuế");
         }
 
+        var expenseDate = request.ExpenseDate ?? DateTime.UtcNow;
+
+        if (_taxPeriodLockGuard != null)
+        {
+            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(expenseDate, "tạo phiếu chi", request.BranchId, ct);
+        }
+
         var voucher = new ExpenseVoucher
         {
             VoucherCode = "EXP-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff"),
@@ -58,7 +68,7 @@ public class ExpenseService : IExpenseService
             InvoiceNumber = request.InvoiceNumber,
             SellerTaxCode = request.SellerTaxCode,
             EvidenceAttachmentUrl = request.EvidenceAttachmentUrl,
-            ExpenseDate = DateTime.UtcNow,
+            ExpenseDate = expenseDate,
             Note = request.Note,
             Nature = request.Nature,
             ReferenceCode = request.ReferenceCode,
@@ -148,6 +158,11 @@ public class ExpenseService : IExpenseService
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
+        if (_taxPeriodLockGuard != null)
+        {
+            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(voucher.ExpenseDate, "phê duyệt phiếu chi", voucher.BranchId, ct);
+        }
+
         // Idempotent: Nếu đã duyệt hoặc đã thanh toán thành công thì không báo lỗi 422
         if (voucher.Status == ExpenseVoucherStatus.Approved || voucher.Status == ExpenseVoucherStatus.Paid)
         {
@@ -189,6 +204,11 @@ public class ExpenseService : IExpenseService
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
+        if (_taxPeriodLockGuard != null)
+        {
+            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(voucher.ExpenseDate, "từ chối phê duyệt phiếu chi", voucher.BranchId, ct);
+        }
+
         if (voucher.Status != ExpenseVoucherStatus.PendingApproval &&
             voucher.Status != ExpenseVoucherStatus.Draft &&
             voucher.Status != ExpenseVoucherStatus.Unresolved)
@@ -220,6 +240,11 @@ public class ExpenseService : IExpenseService
 
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
+
+        if (_taxPeriodLockGuard != null)
+        {
+            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(voucher.ExpenseDate, "hủy phiếu chi", voucher.BranchId, ct);
+        }
 
         if (string.IsNullOrWhiteSpace(request.Reason))
         {
@@ -279,6 +304,11 @@ public class ExpenseService : IExpenseService
 
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
+
+        if (_taxPeriodLockGuard != null)
+        {
+            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(voucher.ExpenseDate, "chi tiền cho phiếu chi", voucher.BranchId, ct);
+        }
 
         // Idempotent: Nếu đã xuất quỹ thành công từ trước thì trả về luôn không thực hiện trừ quỹ kép
         if (voucher.Status == ExpenseVoucherStatus.Paid)
@@ -425,6 +455,11 @@ public class ExpenseService : IExpenseService
 
         var voucher = await _expenseRepo.GetByIdAsync(voucherId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi/mục cần xử lý trong Triage Inbox.");
+
+        if (_taxPeriodLockGuard != null)
+        {
+            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(voucher.ExpenseDate, "xử lý mục tài chính trong Triage Inbox", voucher.BranchId, ct);
+        }
 
         if (voucher.Status != ExpenseVoucherStatus.Unresolved && voucher.Nature != FinancialNature.Suspense)
         {

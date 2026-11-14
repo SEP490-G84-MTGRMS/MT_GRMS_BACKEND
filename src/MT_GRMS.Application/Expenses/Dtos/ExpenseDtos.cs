@@ -15,7 +15,8 @@ public record CreateExpenseRequest(
     string? EvidenceAttachmentUrl,
     string? Note,
     FinancialNature Nature = FinancialNature.OperatingExpense,
-    string? ReferenceCode = null
+    string? ReferenceCode = null,
+    DateTime? ExpenseDate = null
 );
 
 public record ApproveExpenseRequest(

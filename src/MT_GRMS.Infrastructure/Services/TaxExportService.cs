@@ -128,9 +128,9 @@ public class TaxExportService : ITaxExportService
         var snapshotQuery = _context.HouseholdTaxSnapshots.AsNoTracking().AsQueryable();
         if (filter.BranchId.HasValue)
         {
-            snapshotQuery = snapshotQuery.Where(s => s.BranchId == filter.BranchId.Value);
+            snapshotQuery = snapshotQuery.Where(s => s.BranchId == filter.BranchId.Value || s.BranchId == null);
         }
-        snapshotQuery = snapshotQuery.Where(s => s.Year == filter.Year);
+        snapshotQuery = snapshotQuery.Where(s => s.Year == filter.Year && s.Status == TaxSnapshotStatus.Finalized);
         var snapshots = await snapshotQuery.OrderBy(s => s.PeriodNumber).ToListAsync(cancellationToken);
 
         using var workbook = new XLWorkbook();

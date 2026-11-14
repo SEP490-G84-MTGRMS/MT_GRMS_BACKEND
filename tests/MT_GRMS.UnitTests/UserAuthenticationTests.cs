@@ -10,6 +10,16 @@ namespace MT_GRMS.UnitTests;
 
 public class UserAuthenticationTests
 {
+    private const string TestJwtKey = "MT_GRMS_UNIT_TEST_JWT_SIGNING_SECRET_2026_0123456789";
+
+    private static AuthService CreateAuthService(FakeUserRepository repository) =>
+        new(repository, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Jwt:Key"] = TestJwtKey,
+            ["Jwt:Issuer"] = "MTGRMS_API",
+            ["Jwt:Audience"] = "MTGRMS_CLIENT"
+        }).Build());
+
     private class FakeUserRepository : IUserRepository
     {
         private readonly List<User> _users = new();
@@ -126,7 +136,7 @@ public class UserAuthenticationTests
         };
         await repo.AddAsync(seedUser);
 
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN
         var response = await authService.LoginAsync(new LoginRequest(
@@ -162,7 +172,7 @@ public class UserAuthenticationTests
             IsAdmin = false
         };
         await repo.AddAsync(seedUser);
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN
         var response = await authService.LoginAsync(new LoginRequest("shopowner", "Password@123", "TENANT-01"));
@@ -184,7 +194,7 @@ public class UserAuthenticationTests
             Password = "CorrectPassword@123"
         });
 
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN & THEN
         var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
@@ -207,7 +217,7 @@ public class UserAuthenticationTests
             IsTwoFactorEnabled = false
         });
 
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN
         var response = await authService.LoginAsync(new LoginRequest("admin", "Password@123", TenantCode: null));
@@ -222,7 +232,7 @@ public class UserAuthenticationTests
     {
         // GIVEN
         var repo = new FakeUserRepository();
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN & THEN (Không có user trong DB -> Phải ném UnauthorizedAccessException)
         var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
@@ -237,7 +247,7 @@ public class UserAuthenticationTests
     {
         // GIVEN
         var repo = new FakeUserRepository();
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN & THEN
         await Assert.ThrowsAsync<ArgumentException>(() =>
@@ -255,7 +265,7 @@ public class UserAuthenticationTests
         // GIVEN
         var repo = new FakeUserRepository();
         await repo.AddAsync(new User { Id = "usr_01", Username = "user01", Password = "123", IsAdmin = true, IsTwoFactorEnabled = false });
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN
         var before = DateTime.UtcNow;
@@ -280,7 +290,7 @@ public class UserAuthenticationTests
             RefreshToken = "mt_refresh_token_sample",
             RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7)
         });
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN
         var response = await authService.RefreshTokenAsync(new RefreshTokenRequest("mt_refresh_token_sample"));
@@ -344,7 +354,7 @@ public class UserAuthenticationTests
         var hashedPass = PasswordHasher.Hash("Secret@999");
         await repo.AddAsync(new User { Id = "usr_hash", Username = "user_hash", PasswordHash = hashedPass, IsTwoFactorEnabled = false });
 
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
         var res = await authService.LoginAsync(new LoginRequest("user_hash", "Secret@999", null));
 
         Assert.NotNull(res);

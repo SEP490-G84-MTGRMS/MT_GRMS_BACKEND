@@ -53,9 +53,11 @@ ehthumbs.db
 ## Entity Framework Core Migrations
 ## ----------------------------------------------------
 # Bỏ qua các file migrations tự động để tránh xung đột (merge conflicts) liên tục giữa các nhánh
-**/[Mm]igrations/
+**/[Mm]igrations/*
 **/AppDbContextModelSnapshot.cs
 *.Designer.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261114193000_AddTaxPaymentSnapshotReference.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261114203000_AddTaxSnapshotSupersedeAndRevision.cs
 
 ## Supplier order Excel local storage
 **/storage/supplier-orders/
