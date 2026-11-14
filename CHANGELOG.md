@@ -6,7 +6,11 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ## [Unreleased] - 2026-11-14
 
+### Added
+- API `GET /api/store-owner/dashboard` tổng hợp số liệu thật về doanh số, P&L, nhập hàng, kho và nhân viên theo tenant/chi nhánh; kiểm tra role StoreOwner. [worklog: docs/worklogs/2026-11-14_FE10_AI_store-owner-dashboard-real-data.md]
+
 ### Changed
+- Dashboard Chủ cửa hàng hiển thị doanh thu theo 24 giờ Việt Nam khi chọn Hôm nay/Hôm qua; các kỳ dài hơn tiếp tục theo ngày. [worklog: docs/worklogs/2026-11-14_FE10_AI_store-owner-dashboard-real-data.md]
 - Thu gọn luồng access/refresh dùng các trường hiện có trên Users, access mặc định 15 phút và refresh cố định 7 ngày. Lưu hash token mới, đồng bộ hạn cookie và hỗ trợ logout khi access hết hạn. [worklog: docs/worklogs/2026-11-14_AUTH-REFRESH_AI_user-token-flow.md]
 
 ### Added

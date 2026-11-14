@@ -93,6 +93,7 @@ public static class DependencyInjection
         services.AddScoped<Application.Expenses.IExpenseRepository, ExpenseRepository>();
         services.AddScoped<Application.Debt.ICustomerDebtRepository, CustomerDebtRepository>();
         services.AddScoped<Application.Reports.IPnLReportRepository, PnLReportRepository>();
+        services.AddScoped<Application.Reports.IStoreOwnerDashboardService, StoreOwnerDashboardService>();
         services.AddScoped<Application.Tax.IHouseholdTaxRepository, HouseholdTaxRepository>();
         services.AddScoped<Application.Tax.ITaxExportService, Services.TaxExportService>();
         services.AddScoped<Application.Tax.Security.IPinVerificationService, Services.PinVerificationService>();
