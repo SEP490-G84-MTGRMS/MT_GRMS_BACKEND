@@ -553,7 +553,8 @@ public class PayslipServiceTests
             PayslipCode = "PL-202611-0001",
             PeriodMonth = "2026-11",
             NetSalary = 5_000_000m,
-            Status = PayslipStatus.Unpaid
+            Status = PayslipStatus.Unpaid,
+            ApprovedAt = DateTime.UtcNow
         };
         payslipRepo.Payslips.Add(payslip);
 
@@ -605,6 +606,143 @@ public class PayslipServiceTests
         var ex = await Assert.ThrowsAsync<BusinessException>(() =>
             service.PayPayslipAsync(payslip.Id, payRequest));
         Assert.Contains("đã được thanh toán", ex.Message);
+    }
+
+    [Fact]
+    public async Task PayPayslip_NotFinalized_ThrowsBusinessException()
+    {
+        var (service, payslipRepo, _, _, _, _, _) = CreateService();
+        var payslip = new Payslip
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            BranchId = Guid.NewGuid(),
+            EmployeeId = Guid.NewGuid(),
+            PayslipCode = "PL-202611-0099",
+            PeriodMonth = "2026-11",
+            NetSalary = 5_000_000m,
+            Status = PayslipStatus.Unpaid,
+            ApprovedAt = null
+        };
+        payslipRepo.Payslips.Add(payslip);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.PayPayslipAsync(payslip.Id, new PayPayslipRequest("CASH")));
+        Assert.Contains("chưa được chốt", ex.Message);
+    }
+
+    [Fact]
+    public async Task FinalizeAndUnfinalizePayslip_TogglesApprovalAndAllowsPaymentOnlyWhenFinalized()
+    {
+        var (service, payslipRepo, _, _, _, tenantContext, _) = CreateService();
+        var payslip = new Payslip
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            BranchId = Guid.NewGuid(),
+            EmployeeId = Guid.NewGuid(),
+            PayslipCode = "PL-202611-0100",
+            PeriodMonth = "2026-11",
+            NetSalary = 4_500_000m,
+            Status = PayslipStatus.Unpaid
+        };
+        payslipRepo.Payslips.Add(payslip);
+
+        var finalized = await service.FinalizePayslipAsync(payslip.Id);
+        Assert.NotNull(finalized.ApprovedAt);
+        Assert.Equal(tenantContext.CurrentUserId.ToString(), finalized.ApprovedBy);
+
+        var unfinalized = await service.UnfinalizePayslipAsync(payslip.Id);
+        Assert.Null(unfinalized.ApprovedAt);
+        Assert.Null(unfinalized.ApprovedBy);
+    }
+
+    [Fact]
+    public async Task AdvanceSalary_UnfinalizedPayslip_IncreasesDebtAndUpdatesDeduction()
+    {
+        var (service, payslipRepo, empRepo, _, _, _, _) = CreateService();
+        var employee = new Employee
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            EmployeeCode = "NV010",
+            FullName = "Nguyen Van Tam Ung",
+            DebtAmount = 0m
+        };
+        empRepo.Employees.Add(employee);
+
+        var payslip = new Payslip
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            BranchId = Guid.NewGuid(),
+            EmployeeId = employee.Id,
+            Employee = employee,
+            PayslipCode = "PL-202611-0110",
+            PeriodMonth = "2026-11",
+            TotalEarnings = 10_000_000m,
+            SocialInsurance = 1_050_000m,
+            TotalDeductions = 1_050_000m,
+            NetSalary = 8_950_000m,
+            Status = PayslipStatus.Unpaid,
+            ApprovedAt = null
+        };
+        payslipRepo.Payslips.Add(payslip);
+
+        var result = await service.AdvanceSalaryAsync(
+            payslip.Id,
+            new SalaryAdvanceRequest(Amount: 2_000_000m, PaymentMethod: "CASH", Note: "Tam ung giua thang"));
+
+        Assert.Equal(2_000_000m, employee.DebtAmount);
+        Assert.Equal(2_000_000m, result.AdvanceDeduction);
+        Assert.Equal(3_050_000m, result.TotalDeductions);
+        Assert.Equal(6_950_000m, result.NetSalary);
+        Assert.Single(payslipRepo.CashbookTransactions);
+        Assert.Equal("Tạm ứng lương nhân viên", payslipRepo.CashbookTransactions[0].Category);
+    }
+
+    [Fact]
+    public async Task AdvanceSalary_ExceedsEarnedSalary_ThrowsBusinessException()
+    {
+        var (service, payslipRepo, empRepo, _, _, _, _) = CreateService();
+
+        var employee = new Employee
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            BranchId = Guid.NewGuid(),
+            EmployeeCode = "NV111",
+            FullName = "Tran Thi B",
+            Status = EmployeeStatus.Active,
+            DebtAmount = 0m
+        };
+        empRepo.Employees.Add(employee);
+
+        var payslip = new Payslip
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            BranchId = employee.BranchId,
+            EmployeeId = employee.Id,
+            Employee = employee,
+            PayslipCode = "PL-202611-0111",
+            PeriodMonth = "2026-11",
+            TotalEarnings = 5_000_000m,
+            SocialInsurance = 500_000m,
+            AdvanceDeduction = 1_000_000m,
+            TotalDeductions = 1_500_000m,
+            NetSalary = 3_500_000m,
+            Status = PayslipStatus.Unpaid,
+            ApprovedAt = null
+        };
+        payslipRepo.Payslips.Add(payslip);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.AdvanceSalaryAsync(
+                payslip.Id,
+                new SalaryAdvanceRequest(Amount: 4_000_000m, PaymentMethod: "CASH")));
+
+        Assert.Contains("không được vượt quá tiền lương đã làm được còn lại", ex.Message);
     }
 
     [Fact]
@@ -747,7 +885,8 @@ public class PayslipServiceTests
             PayslipCode = "PL-202611-0001",
             PeriodMonth = "2026-11",
             NetSalary = 5_000_000m,
-            Status = PayslipStatus.Unpaid
+            Status = PayslipStatus.Unpaid,
+            ApprovedAt = DateTime.UtcNow
         };
         var p2 = new Payslip
         {
@@ -758,7 +897,8 @@ public class PayslipServiceTests
             PayslipCode = "PL-202611-0002",
             PeriodMonth = "2026-11",
             NetSalary = 6_000_000m,
-            Status = PayslipStatus.Unpaid
+            Status = PayslipStatus.Unpaid,
+            ApprovedAt = DateTime.UtcNow
         };
         payslipRepo.Payslips.Add(p1);
         payslipRepo.Payslips.Add(p2);
@@ -962,6 +1102,7 @@ public class PayslipServiceTests
         Assert.Single(generated);
         Assert.Equal(1.5m, generated[0].WorkedDays); // 0.5 + 1.0 = 1.5 công
 
+        await service.FinalizePayslipAsync(generated[0].Id);
         await service.PayPayslipAsync(generated[0].Id, new PayPayslipRequest("CASH", "Chi luong"));
         Assert.Equal(generated[0].Id, s1.PayslipId);
         Assert.Equal(generated[0].Id, s2.PayslipId);

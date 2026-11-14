@@ -157,6 +157,63 @@ public class PayslipsController : BaseApiController
     }
 
     /// <summary>
+    /// POST /api/v1/payslips/{id}/finalize
+    /// Chốt phiếu lương trước khi thực hiện chi trả.
+    /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [HttpPost("{id:guid}/finalize")]
+    public async Task<ActionResult<ApiResponse<PayslipResponse>>> FinalizePayslip(
+        Guid id,
+        CancellationToken ct = default)
+    {
+        var result = await _payslipService.FinalizePayslipAsync(id, ct);
+        return Ok(ApiResponse<PayslipResponse>.Ok(result, "Chốt phiếu lương thành công."));
+    }
+
+    /// <summary>
+    /// POST /api/v1/payslips/batch-finalize
+    /// Chốt hàng loạt các phiếu lương trước khi chi trả.
+    /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [HttpPost("batch-finalize")]
+    public async Task<ActionResult<ApiResponse<BatchFinalizeResultDto>>> BatchFinalizePayslips(
+        [FromBody] BatchFinalizePayslipsRequest request,
+        CancellationToken ct = default)
+    {
+        var result = await _payslipService.BatchFinalizePayslipsAsync(request, ct);
+        return Ok(ApiResponse<BatchFinalizeResultDto>.Ok(result, "Chốt hàng loạt phiếu lương thành công."));
+    }
+
+    /// <summary>
+    /// POST /api/v1/payslips/{id}/unfinalize
+    /// Mở chốt phiếu lương (chỉ áp dụng khi chưa thanh toán).
+    /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [HttpPost("{id:guid}/unfinalize")]
+    public async Task<ActionResult<ApiResponse<PayslipResponse>>> UnfinalizePayslip(
+        Guid id,
+        CancellationToken ct = default)
+    {
+        var result = await _payslipService.UnfinalizePayslipAsync(id, ct);
+        return Ok(ApiResponse<PayslipResponse>.Ok(result, "Đã mở chốt phiếu lương."));
+    }
+
+    /// <summary>
+    /// POST /api/v1/payslips/{id}/advance
+    /// Tạo khoản tạm ứng lương cho nhân viên, tự động hạch toán Sổ quỹ.
+    /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [HttpPost("{id:guid}/advance")]
+    public async Task<ActionResult<ApiResponse<PayslipResponse>>> AdvanceSalary(
+        Guid id,
+        [FromBody] SalaryAdvanceRequest request,
+        CancellationToken ct = default)
+    {
+        var result = await _payslipService.AdvanceSalaryAsync(id, request, ct);
+        return Ok(ApiResponse<PayslipResponse>.Ok(result, "Tạm ứng lương thành công."));
+    }
+
+    /// <summary>
     /// POST /api/v1/payslips/{id}/pay
     /// Thực hiện chi trả một phiếu lương đơn lẻ, tự động sinh phiếu chi Sổ quỹ.
     /// </summary>
