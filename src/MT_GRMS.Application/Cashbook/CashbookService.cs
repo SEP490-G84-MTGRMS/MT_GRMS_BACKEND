@@ -397,10 +397,9 @@ public class CashbookService : ICashbookService
     {
         var existingBanks = await _accountRepo.FindAsync(b => b.AccountType == FinanceAccountType.Bank && !b.IsDeleted, ct);
         var matchedBank = existingBanks
-            .Where(b => b.IsActive && (!branchId.HasValue || !b.BranchId.HasValue || b.BranchId == branchId.Value))
+            .Where(b => b.IsActive && b.BranchId == branchId)
             .FirstOrDefault()
-            ?? existingBanks.FirstOrDefault(b => b.IsActive)
-            ?? existingBanks.FirstOrDefault();
+            ?? existingBanks.FirstOrDefault(b => b.BranchId == branchId);
 
         if (matchedBank != null)
         {
@@ -418,7 +417,9 @@ public class CashbookService : ICashbookService
         {
             Id = Guid.NewGuid(),
             TenantId = _tenantContext.CurrentTenantId ?? string.Empty,
-            BranchId = null,
+            // Sổ ngân hàng phục vụ chốt ngày phải tách theo chi nhánh. Tài khoản vật lý
+            // dùng chung được biểu diễn bằng PaymentAccount/BranchPaymentAccount.
+            BranchId = branchId,
             AccountType = FinanceAccountType.Bank,
             AccountName = resolvedName,
             BankName = resolvedName,

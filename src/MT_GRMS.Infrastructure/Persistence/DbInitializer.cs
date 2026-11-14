@@ -254,6 +254,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 {
                     defaultExpr = t.StartsWith("uuid") ? "'00000000-0000-0000-0000-000000000000'"
                         : t.StartsWith("bool") ? "false"
+                        : t.StartsWith("interval") ? "INTERVAL '0 seconds'"
                         : (t.StartsWith("int") || t.StartsWith("bigint") || t.StartsWith("smallint")
                             || t.StartsWith("numeric") || t.StartsWith("decimal") || t.StartsWith("double") || t.StartsWith("real")) ? "0"
                         : t.StartsWith("timestamp") ? "CURRENT_TIMESTAMP"
@@ -393,6 +394,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
                 ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""StocktakeLineId"" uuid NULL;
                 ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""SupplierAcceptedQty"" numeric(18,3) NOT NULL DEFAULT 0.000;
+
+                -- Schema cũ từng lưu TotalAmount trực tiếp và đặt NOT NULL. Model hiện tại tính
+                -- LineTotal từ RequestedQty * UnitCost nên EF không còn gửi cột legacy này.
+                -- Giữ cột để tương thích dữ liệu cũ nhưng cấp default để INSERT mới không thất bại.
+                DO $legacy$
+                BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_schema = 'public'
+                          AND table_name = 'SupplierReturnLines'
+                          AND column_name = 'TotalAmount'
+                    ) THEN
+                        ALTER TABLE ""SupplierReturnLines"" ALTER COLUMN ""TotalAmount"" SET DEFAULT 0;
+                        UPDATE ""SupplierReturnLines"" SET ""TotalAmount"" = 0 WHERE ""TotalAmount"" IS NULL;
+                    END IF;
+                END $legacy$;
 
                 CREATE TABLE IF NOT EXISTS ""Stocktakes"" (
                     ""Id"" uuid NOT NULL PRIMARY KEY,
@@ -683,6 +700,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                         {
                             constraintClause = "NOT NULL DEFAULT false";
                         }
+                        else if (lowerType.StartsWith("interval"))
+                        {
+                            constraintClause = "NOT NULL DEFAULT INTERVAL '0 seconds'";
+                        }
                         else if (lowerType.Contains("int") || lowerType.Contains("numeric") || lowerType.Contains("decimal") || lowerType.Contains("double") || lowerType.Contains("real"))
                         {
                             constraintClause = "NOT NULL DEFAULT 0";
@@ -782,6 +803,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""AppliedVatRate"" numeric(5,2) NOT NULL DEFAULT 0.00;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""VatAmount"" numeric(18,2) NOT NULL DEFAULT 0.00;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""BatchCode"" character varying(100);", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""BatchID"" uuid NULL;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""BatchExpiryDate"" timestamp without time zone NULL;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""FefoDiscountPercent"" numeric(5,2) NOT NULL DEFAULT 0;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""IsFefoDiscountActive"" boolean NOT NULL DEFAULT false;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitId"" uuid;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitName"" character varying(50);", logger);
 
@@ -980,6 +1005,24 @@ END $$;
                     logger?.LogWarning(ex, "Cảnh báo khi chạy DDL nâng cấp bảng Users");
                 }
 
+                // Keep the shift-closing compatibility columns in an isolated command. If a later
+                // legacy DDL statement fails, checkout queries must still be able to read shifts.
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        ALTER TABLE IF EXISTS ""ShiftZReports""
+                            ADD COLUMN IF NOT EXISTS ""ClosingVersion"" bigint NOT NULL DEFAULT 1;
+                        ALTER TABLE IF EXISTS ""ShiftZReports""
+                            ADD COLUMN IF NOT EXISTS ""DestinationFundId"" uuid;
+                        ALTER TABLE IF EXISTS ""ShiftZReports""
+                            ADD COLUMN IF NOT EXISTS ""DiscrepancyReason"" character varying(500);
+                    ");
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(ex, "Không thể bổ sung các cột tương thích chốt ca");
+                }
+
                 try
                 {
                     await context.Database.ExecuteSqlRawAsync(@"
@@ -1014,6 +1057,8 @@ END $$;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ShiftCode"" text;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ShiftName"" text;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""CashierUserId"" uuid;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpenedScheduleId"" uuid;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosedScheduleId"" uuid;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ReceiverUserId"" text;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""PrevShiftId"" uuid;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpeningFloatExpected"" numeric(18,2) DEFAULT 0;
@@ -1040,6 +1085,9 @@ END $$;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""SnapshotLocked"" boolean DEFAULT false;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""CashbookPostingStatus"" integer DEFAULT 1;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""BusinessDayClosingId"" uuid;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""DiscrepancyReason"" character varying(500);
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosingVersion"" bigint NOT NULL DEFAULT 1;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""DestinationFundId"" uuid;
                         UPDATE ""ShiftZReports"" SET ""BusinessDate"" = (""OpenedAtUtc"" + interval '7 hours' - interval '6 hours')::date WHERE ""BusinessDate"" IS NULL;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ALTER COLUMN ""BusinessDate"" SET NOT NULL;
                         ALTER TABLE IF EXISTS ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""PostedCashbookEntryId"" uuid;
@@ -1060,6 +1108,16 @@ END $$;
                             ""UpdatedAt"" timestamp without time zone, ""IsDeleted"" boolean NOT NULL DEFAULT false
                         );
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BusinessDayClosings_Tenant_Branch_Date"" ON ""BusinessDayClosings"" (""TenantId"", ""BranchId"", ""BusinessDate"");
+                        ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""Version"" integer NOT NULL DEFAULT 1;
+                        ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""IsActive"" boolean NOT NULL DEFAULT true;
+                        ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""SupersedesClosingId"" uuid;
+                        ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""PreviewToken"" character varying(128) NOT NULL DEFAULT '';
+                        ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""ReopenedAtUtc"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""ReopenedByUserId"" uuid;
+                        ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""ReopenReason"" character varying(500);
+                        DROP INDEX IF EXISTS ""IX_BusinessDayClosings_Tenant_Branch_Date"";
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate_Version"" ON ""BusinessDayClosings"" (""TenantId"", ""BranchId"", ""BusinessDate"", ""Version"");
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate_IsActive"" ON ""BusinessDayClosings"" (""TenantId"", ""BranchId"", ""BusinessDate"", ""IsActive"") WHERE ""IsActive"" = TRUE;
 
                         CREATE TABLE IF NOT EXISTS ""ShiftParticipants"" (
                             ""Id"" uuid NOT NULL PRIMARY KEY,
@@ -1151,6 +1209,56 @@ END $$;
                             ""UpdatedAt"" timestamp without time zone,
                             ""IsDeleted"" boolean NOT NULL DEFAULT false
                         );
+
+                        CREATE TABLE IF NOT EXISTS ""PaymentAccounts"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" text NOT NULL,
+                            ""BankCode"" character varying(20) NOT NULL,
+                            ""BankName"" character varying(150) NOT NULL,
+                            ""AccountNumber"" character varying(50) NOT NULL,
+                            ""AccountHolderName"" character varying(150) NOT NULL,
+                            ""IsActive"" boolean NOT NULL DEFAULT true,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false
+                        );
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_PaymentAccounts_TenantId_BankCode_AccountNumber""
+                            ON ""PaymentAccounts"" (""TenantId"", ""BankCode"", ""AccountNumber"");
+
+                        CREATE TABLE IF NOT EXISTS ""BranchPaymentAccounts"" (
+                            ""Id"" uuid NOT NULL PRIMARY KEY,
+                            ""TenantId"" text NOT NULL,
+                            ""BranchId"" uuid NOT NULL,
+                            ""PaymentAccountId"" uuid NOT NULL,
+                            ""IsDefault"" boolean NOT NULL DEFAULT false,
+                            ""IsActive"" boolean NOT NULL DEFAULT true,
+                            ""CreatedBy"" uuid,
+                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                            ""UpdatedAt"" timestamp without time zone,
+                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
+                            CONSTRAINT ""FK_BranchPaymentAccounts_Branches_BranchId"" FOREIGN KEY (""BranchId"") REFERENCES ""Branches"" (""Id"") ON DELETE RESTRICT,
+                            CONSTRAINT ""FK_BranchPaymentAccounts_PaymentAccounts_PaymentAccountId"" FOREIGN KEY (""PaymentAccountId"") REFERENCES ""PaymentAccounts"" (""Id"") ON DELETE RESTRICT
+                        );
+                        DROP INDEX IF EXISTS ""IX_BranchPaymentAccounts_TenantId_BranchId_PaymentAccountId"";
+                        DROP INDEX IF EXISTS ""IX_BranchPaymentAccounts_TenantId_BranchId_IsDefault"";
+                        DELETE FROM ""BranchPaymentAccounts"" current_assignment
+                        USING ""BranchPaymentAccounts"" duplicate_assignment
+                        WHERE current_assignment.""TenantId"" = duplicate_assignment.""TenantId""
+                          AND current_assignment.""BranchId"" = duplicate_assignment.""BranchId""
+                          AND current_assignment.""Id"" <> duplicate_assignment.""Id""
+                          AND (current_assignment.""IsDefault"", current_assignment.""CreatedAt"", current_assignment.""Id"")
+                              < (duplicate_assignment.""IsDefault"", duplicate_assignment.""CreatedAt"", duplicate_assignment.""Id"");
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BranchPaymentAccounts_TenantId_BranchId""
+                            ON ""BranchPaymentAccounts"" (""TenantId"", ""BranchId"");
+
+                        ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""PaymentAccountId"" uuid;
+                        ALTER TABLE IF EXISTS ""PaymentTransactions"" ADD COLUMN IF NOT EXISTS ""BranchId"" uuid;
+                        ALTER TABLE IF EXISTS ""PaymentTransactions"" ADD COLUMN IF NOT EXISTS ""PaymentAccountId"" uuid;
+                        ALTER TABLE IF EXISTS ""FinanceAccounts"" ADD COLUMN IF NOT EXISTS ""PaymentAccountId"" uuid;
+                        CREATE INDEX IF NOT EXISTS ""IX_Orders_PaymentAccountId"" ON ""Orders"" (""PaymentAccountId"");
+                        CREATE INDEX IF NOT EXISTS ""IX_PaymentTransactions_TenantId_BranchId_TransactionDate""
+                            ON ""PaymentTransactions"" (""TenantId"", ""BranchId"", ""TransactionDate"");
 
                         ALTER TABLE IF EXISTS ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutApprovalThreshold"" numeric(18,2) DEFAULT 200000;
                         ALTER TABLE IF EXISTS ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutShiftTotalLimit"" numeric(18,2) DEFAULT 0;
