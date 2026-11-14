@@ -181,6 +181,16 @@ public class CreateTaxSnapshotRequest
     public bool ConfirmEstimatedCogsResponsible { get; set; } = false;
     public string? EstimatedCogsConfirmationStatement { get; set; }
 
+    /// <summary>
+    /// Cho phép chốt lại (điều chỉnh hồi tố) kỳ tính thuế đã khóa trước đó.
+    /// </summary>
+    public bool AllowSupersedeExisting { get; set; } = false;
+
+    /// <summary>
+    /// Bắt buộc khi AllowSupersedeExisting = true: Lý do thay thế / số biên bản điều chỉnh.
+    /// </summary>
+    public string? RectificationReason { get; set; }
+
     public string? Notes { get; set; }
 }
 
@@ -209,4 +219,28 @@ public class HouseholdTaxSnapshotDto
     public string FinalizedBy { get; set; } = string.Empty;
     public DateTime FinalizedAtUtc { get; set; }
     public string? Notes { get; set; }
+    public TaxSnapshotStatus Status { get; set; } = TaxSnapshotStatus.Finalized;
+    public int RevisionNumber { get; set; } = 0;
+    public Guid? SupersededSnapshotId { get; set; }
+    public string? RectificationReason { get; set; }
+}
+
+/// <summary>
+/// DTO yêu cầu thiết lập / đổi mã PIN bảo mật của chủ hộ kinh doanh.
+/// </summary>
+public class ChangeSecurityPinRequest
+{
+    public string? CurrentPassword { get; set; }
+    public string? CurrentPin { get; set; }
+    public string NewPin { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// DTO yêu cầu khôi phục mã PIN bảo mật khi quên (xác thực qua mật khẩu đăng nhập).
+/// </summary>
+public class ResetSecurityPinRequest
+{
+    public string? UserId { get; set; }
+    public string Password { get; set; } = string.Empty;
+    public string NewPin { get; set; } = string.Empty;
 }

@@ -199,6 +199,24 @@ public class ShiftService : IShiftService
         CashMovementRequest request,
         CancellationToken cancellationToken = default)
     {
+        return await AddCashMovementCoreAsync(shiftId, request, null, cancellationToken);
+    }
+
+    public async Task<ShiftCashMovementDto> AddCashMovementAsync(
+        Guid shiftId,
+        CashMovementRequest request,
+        Guid actorUserId,
+        CancellationToken cancellationToken = default)
+    {
+        return await AddCashMovementCoreAsync(shiftId, request, actorUserId, cancellationToken);
+    }
+
+    private async Task<ShiftCashMovementDto> AddCashMovementCoreAsync(
+        Guid shiftId,
+        CashMovementRequest request,
+        Guid? actorUserId,
+        CancellationToken cancellationToken)
+    {
         if (request.Amount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền thu chi két phải lớn hơn 0.");
@@ -213,6 +231,11 @@ public class ShiftService : IShiftService
         if (shift == null)
         {
             throw new BusinessException("SHIFT_NOT_FOUND", "Không tìm thấy ca làm việc.");
+        }
+
+        if (actorUserId.HasValue)
+        {
+            EnsureActorCanOperateShift(shift, actorUserId.Value);
         }
 
         if (shift.Status != ShiftState.Open)
@@ -293,6 +316,24 @@ public class ShiftService : IShiftService
         CloseShiftRequest request,
         CancellationToken cancellationToken = default)
     {
+        return await CloseShiftCoreAsync(shiftId, request, null, cancellationToken);
+    }
+
+    public async Task<ShiftDetailResponse> CloseShiftAsync(
+        Guid shiftId,
+        CloseShiftRequest request,
+        Guid actorUserId,
+        CancellationToken cancellationToken = default)
+    {
+        return await CloseShiftCoreAsync(shiftId, request, actorUserId, cancellationToken);
+    }
+
+    private async Task<ShiftDetailResponse> CloseShiftCoreAsync(
+        Guid shiftId,
+        CloseShiftRequest request,
+        Guid? actorUserId,
+        CancellationToken cancellationToken)
+    {
         if (request.ActualCashCounted < 0)
         {
             throw new BusinessException("INVALID_ACTUAL_CASH", "Tiền kiểm đếm thực tế không được âm.");
@@ -312,6 +353,11 @@ public class ShiftService : IShiftService
         if (shift == null)
         {
             throw new BusinessException("SHIFT_NOT_FOUND", "Không tìm thấy ca làm việc.");
+        }
+
+        if (actorUserId.HasValue)
+        {
+            EnsureActorCanOperateShift(shift, actorUserId.Value);
         }
 
         if (shift.Status != ShiftState.Open && shift.Status != ShiftState.Closing)
@@ -482,6 +528,7 @@ public class ShiftService : IShiftService
         string approverName,
         CancellationToken cancellationToken = default)
     {
+        EnsureOwnerOrAdmin();
         var movement = await _shiftRepository.GetCashMovementByIdAsync(movementId, cancellationToken);
         if (movement == null)
         {
@@ -515,6 +562,7 @@ public class ShiftService : IShiftService
         string reason,
         CancellationToken cancellationToken = default)
     {
+        EnsureOwnerOrAdmin();
         if (string.IsNullOrWhiteSpace(reason))
         {
             throw new BusinessException("REQUIRED_REASON", "Vui lòng nhập lý do từ chối phiếu chi.");
@@ -566,6 +614,7 @@ public class ShiftService : IShiftService
         string ownerName,
         CancellationToken cancellationToken = default)
     {
+        EnsureOwnerOrAdmin();
         var movement = await _shiftRepository.GetCashMovementByIdAsync(movementId, cancellationToken);
         if (movement == null)
         {
@@ -589,6 +638,7 @@ public class ShiftService : IShiftService
         Guid? branchId,
         CancellationToken cancellationToken = default)
     {
+        EnsureOwnerOrAdmin();
         var list = await _shiftRepository.GetPendingMovementsAsync(branchId, cancellationToken);
         var dtos = list.Select(MapToMovementDto).ToList();
         int pendingApprovals = dtos.Count(m => m.Status == CashMovementStatus.PendingApproval);
@@ -610,6 +660,7 @@ public class ShiftService : IShiftService
         UpdateCashMovementSettingsRequest request,
         CancellationToken cancellationToken = default)
     {
+        EnsureOwnerOrAdmin();
         if (request.CashOutApprovalThreshold < 0)
         {
             throw new BusinessException("INVALID_THRESHOLD", "Hạn mức duyệt chi không được âm.");
@@ -911,6 +962,45 @@ public class ShiftService : IShiftService
     public Task<Guid?> ResolveBranchIdAsync(string? branchIdOrCode, CancellationToken cancellationToken = default)
     {
         return _shiftRepository.ResolveBranchIdAsync(branchIdOrCode, cancellationToken);
+    }
+
+    private void EnsureActorCanOperateShift(ShiftZReport shift, Guid actorUserId)
+    {
+        if (actorUserId == Guid.Empty ||
+            string.IsNullOrWhiteSpace(_tenantContext.CurrentTenantId) ||
+            !string.Equals(shift.TenantId, _tenantContext.CurrentTenantId, StringComparison.Ordinal))
+        {
+            throw new BusinessException("SHIFT_ACTOR_DENIED", "Không xác thực được quyền thao tác ca làm việc.");
+        }
+
+        if (IsOwnerOrAdmin())
+        {
+            return;
+        }
+
+        if ((_tenantContext.CurrentRole.Equals("STAFF", StringComparison.OrdinalIgnoreCase) ||
+             _tenantContext.CurrentRole.Equals("EMPLOYEE", StringComparison.OrdinalIgnoreCase)) &&
+            _tenantContext.CurrentBranchId == shift.BranchId &&
+            shift.CashierUserId == actorUserId)
+        {
+            return;
+        }
+
+        throw new BusinessException("SHIFT_ACTOR_DENIED", "Nhân viên chỉ được thao tác trên ca đang mở của chính mình tại chi nhánh được phân công.");
+    }
+
+    private bool IsOwnerOrAdmin() =>
+        _tenantContext.CurrentRole.Equals("STORE_OWNER", StringComparison.OrdinalIgnoreCase) ||
+        _tenantContext.CurrentRole.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase) ||
+        _tenantContext.CurrentRole.Equals("ADMIN", StringComparison.OrdinalIgnoreCase) ||
+        _tenantContext.CurrentRole.Equals("Admin", StringComparison.OrdinalIgnoreCase);
+
+    private void EnsureOwnerOrAdmin()
+    {
+        if (!IsOwnerOrAdmin())
+        {
+            throw new UnauthorizedAccessException("Chỉ Chủ hộ kinh doanh hoặc Quản trị viên mới được duyệt, xác nhận hoặc cấu hình dòng tiền ca.");
+        }
     }
 
     private static ShiftCashMovementDto MapToMovementDto(ShiftCashMovement movement)

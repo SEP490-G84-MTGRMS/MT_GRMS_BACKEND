@@ -32,10 +32,11 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 // 2. Cấu hình JWT Bearer Authentication
-// appsettings often has Jwt:Key="" — treat empty as missing so the fallback still applies
 var jwtKey = builder.Configuration["Jwt:Key"];
-if (string.IsNullOrWhiteSpace(jwtKey))
-    jwtKey = "MT_GRMS_Super_Secret_Key_For_JWT_Authentication_2026_FPTU_Capstone_Project!";
+if (string.IsNullOrWhiteSpace(jwtKey) || Encoding.UTF8.GetByteCount(jwtKey) < 32)
+{
+    throw new InvalidOperationException("Jwt:Key phải được cấu hình bằng bí mật dài ít nhất 32 byte.");
+}
 var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "MTGRMS_API";
 var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "MTGRMS_CLIENT";
 

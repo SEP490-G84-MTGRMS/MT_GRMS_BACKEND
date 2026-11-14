@@ -658,10 +658,10 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             var priorSnapshotQuery = _context.HouseholdTaxSnapshots.AsQueryable();
             if (branchId.HasValue)
             {
-                priorSnapshotQuery = priorSnapshotQuery.Where(s => s.BranchId == branchId.Value);
+                priorSnapshotQuery = priorSnapshotQuery.Where(s => s.BranchId == branchId.Value || s.BranchId == null);
             }
             var priorTaxAccrued = await priorSnapshotQuery
-                .Where(s => s.CreatedAt < fromDateUtc)
+                .Where(s => s.Status == TaxSnapshotStatus.Finalized && s.CreatedAt < fromDateUtc)
                 .SumAsync(s => (decimal?)s.TotalTaxAmount, cancellationToken) ?? 0m;
 
             var priorVoucherQuery = _context.ExpenseVouchers.AsQueryable();
@@ -699,9 +699,9 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             var snapshotQuery = _context.HouseholdTaxSnapshots.AsQueryable();
             if (branchId.HasValue)
             {
-                snapshotQuery = snapshotQuery.Where(s => s.BranchId == branchId.Value);
+                snapshotQuery = snapshotQuery.Where(s => s.BranchId == branchId.Value || s.BranchId == null);
             }
-            snapshotQuery = snapshotQuery.Where(s => s.CreatedAt >= fromDateUtc && s.CreatedAt <= toDateUtc);
+            snapshotQuery = snapshotQuery.Where(s => s.Status == TaxSnapshotStatus.Finalized && s.CreatedAt >= fromDateUtc && s.CreatedAt <= toDateUtc);
             var snapshots = await snapshotQuery.OrderBy(s => s.CreatedAt).ToListAsync(cancellationToken);
 
             foreach (var s in snapshots)
@@ -879,13 +879,27 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         Guid? branchId,
         CancellationToken cancellationToken = default)
     {
-        return await _context.HouseholdTaxSnapshots
-            .FirstOrDefaultAsync(s =>
+        var query = _context.HouseholdTaxSnapshots
+            .Where(s =>
                 s.Year == year &&
                 s.PeriodType == periodType &&
                 s.PeriodNumber == periodNumber &&
-                s.BranchId == branchId,
-                cancellationToken);
+                s.Status != TaxSnapshotStatus.Superseded);
+
+        if (branchId.HasValue)
+        {
+            query = query.Where(s => s.BranchId == branchId.Value || s.BranchId == null)
+                         .OrderByDescending(s => s.BranchId.HasValue)
+                         .ThenByDescending(s => s.RevisionNumber);
+        }
+        else
+        {
+            // Tenant-wide: Ưu tiên bản ghi toàn hộ (BranchId == null), fallback về bản ghi theo chi nhánh nếu có
+            query = query.OrderBy(s => s.BranchId.HasValue)
+                         .ThenByDescending(s => s.RevisionNumber);
+        }
+
+        return await query.FirstOrDefaultAsync(cancellationToken);
     }
 
     public async Task<HouseholdTaxSnapshot?> GetSnapshotByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -905,12 +919,13 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
 
         if (branchId.HasValue)
         {
-            query = query.Where(s => s.BranchId == branchId.Value);
+            query = query.Where(s => s.BranchId == branchId.Value || s.BranchId == null);
         }
 
         return await query
             .OrderByDescending(s => s.Year)
             .ThenByDescending(s => s.PeriodNumber)
+            .ThenByDescending(s => s.RevisionNumber)
             .ToListAsync(cancellationToken);
     }
 
@@ -922,11 +937,23 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             await _context.SaveChangesAsync(cancellationToken);
             return snapshot;
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException ex) when (ex.InnerException is Npgsql.PostgresException { SqlState: "23505" } ||
+                                           ex.GetBaseException() is Npgsql.PostgresException { SqlState: "23505" })
         {
             // Bắt ngoại lệ vi phạm Unique Index khi có race condition (chốt kỳ song song)
             throw new MT_GRMS.Domain.Exceptions.BusinessException("TAX_PERIOD_LOCKED", $"Kỳ tính thuế {snapshot.PeriodType} {snapshot.PeriodNumber}/{snapshot.Year} đã được chốt và khóa sổ.");
         }
+    }
+
+    public async Task UpdateSnapshotAsync(HouseholdTaxSnapshot snapshot, CancellationToken cancellationToken = default)
+    {
+        var entry = _context.Entry(snapshot);
+        if (entry.State == EntityState.Detached)
+        {
+            _context.HouseholdTaxSnapshots.Attach(snapshot);
+        }
+        entry.Property(s => s.Status).IsModified = true;
+        await _context.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<(decimal ReducedVatRevenue, decimal StandardVatRevenue)> GetPeriodRevenueSplitAsync(

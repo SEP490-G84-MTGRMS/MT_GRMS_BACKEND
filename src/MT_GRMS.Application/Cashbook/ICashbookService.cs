@@ -38,6 +38,8 @@ public interface ICashbookService
         Task.FromResult(new CashbookEntryResponse(Guid.NewGuid(), "CB-REC", request.AccountId, "Till", null, "Receipt", request.Amount, request.Amount, "MANUAL", null, request.ReferenceCode ?? "", "", request.Description ?? "", DateTime.UtcNow));
     Task<CashbookEntryResponse> CreatePaymentAsync(CreatePaymentRequest request, CancellationToken ct = default) =>
         Task.FromResult(new CashbookEntryResponse(Guid.NewGuid(), "CB-PAY", request.AccountId, "Till", null, "Payment", request.Amount, 0, "MANUAL", null, request.ReferenceCode ?? "", "", request.Description ?? "", DateTime.UtcNow));
+    Task<TaxPaymentResponse> RecordTaxPaymentAsync(RecordTaxPaymentRequest request, CancellationToken ct = default) =>
+        Task.FromResult(new TaxPaymentResponse(Guid.NewGuid(), request.HouseholdTaxSnapshotId, new CashbookEntryResponse(Guid.NewGuid(), "CB-TAX", request.SourceAccountId, "Bank", null, "Payment", request.Amount, 0, "TAX_PAYMENT", null, request.PaymentReference, "", request.Note ?? string.Empty, DateTime.UtcNow)));
     Task<TransferFundResponse> TransferFundsAsync(TransferFundRequest request, CancellationToken ct = default) =>
         Task.FromResult(new TransferFundResponse(
             new CashbookEntryResponse(Guid.NewGuid(), "CB-TRF-OUT", request.FromAccountId, "Till", null, "Payment", request.Amount, 0, "INTERNAL_TRANSFER", null, "", "", request.Note ?? "", DateTime.UtcNow),

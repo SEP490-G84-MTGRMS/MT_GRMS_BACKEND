@@ -209,7 +209,25 @@ public partial class AppDbContext : DbContext
                 }
                 if (entry.State == EntityState.Modified)
                 {
-                    throw new InvalidOperationException($"Cấm chỉnh sửa (Modified) thực thể sổ cái tài chính bất biến: {entry.Entity.GetType().Name}. Sổ cái chỉ hỗ trợ cơ chế append-only và điều chỉnh qua bút toán đảo.");
+                    // Đối với HouseholdTaxSnapshot: Cho phép duy nhất thao tác chuyển trạng thái sang Superseded khi thực hiện điều chỉnh hồi tố.
+                    // Nghiêm cấm sửa đổi bất kỳ số liệu tài chính, doanh thu, thuế hoặc chữ ký số nào của bản ghi lịch sử.
+                    if (entry.Entity is HouseholdTaxSnapshot taxSnapshot && taxSnapshot.Status == MT_GRMS.Domain.Enums.TaxSnapshotStatus.Superseded)
+                    {
+                        var modifiedProps = entry.Properties
+                            .Where(p => p.IsModified && !Equals(p.OriginalValue, p.CurrentValue))
+                            .Select(p => p.Metadata.Name)
+                            .ToHashSet();
+                        modifiedProps.Remove(nameof(HouseholdTaxSnapshot.Status));
+                        modifiedProps.Remove(nameof(HouseholdTaxSnapshot.UpdatedAt));
+                        if (modifiedProps.Count > 0)
+                        {
+                            throw new InvalidOperationException($"Cấm chỉnh sửa số liệu tài chính của snapshot bất biến: {string.Join(", ", modifiedProps)}. Chỉ cho phép chuyển trạng thái sang Superseded.");
+                        }
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException($"Cấm chỉnh sửa (Modified) thực thể sổ cái tài chính bất biến: {entry.Entity.GetType().Name}. Sổ cái chỉ hỗ trợ cơ chế append-only và điều chỉnh qua bút toán đảo.");
+                    }
                 }
             }
 

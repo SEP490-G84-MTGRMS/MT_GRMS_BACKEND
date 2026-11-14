@@ -131,6 +131,25 @@ public record CreatePaymentRequest(
     string? ReferenceCode
 );
 
+/// <summary>
+/// Records an MT-GRMS cashbook payment as tax-payment evidence. It is not an eTax/treasury settlement assertion.
+/// </summary>
+public record RecordTaxPaymentRequest(
+    Guid SourceAccountId,
+    decimal Amount,
+    string BeneficiaryName,
+    string PaymentReference,
+    string? EvidenceAttachmentUrl,
+    Guid? HouseholdTaxSnapshotId,
+    string? Note
+);
+
+public record TaxPaymentResponse(
+    Guid VoucherId,
+    Guid? HouseholdTaxSnapshotId,
+    CashbookEntryResponse Entry
+);
+
 public record TransferFundRequest(
     Guid FromAccountId,
     Guid ToAccountId,

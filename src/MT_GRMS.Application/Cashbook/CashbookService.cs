@@ -1,6 +1,7 @@
 using MT_GRMS.Application.Cashbook.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Services;
+using MT_GRMS.Application.Tax;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
@@ -16,6 +17,8 @@ public class CashbookService : ICashbookService
     private readonly IAuditHashService _auditHashService;
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IRepository<ExpenseVoucher>? _expenseVoucherRepo;
+    private readonly IHouseholdTaxRepository? _taxRepository;
 
     public CashbookService(
         ICashbookRepository cashbookRepo,
@@ -24,7 +27,9 @@ public class CashbookService : ICashbookService
         IRepository<ShiftZReport> shiftRepo,
         IAuditHashService auditHashService,
         ITenantContext tenantContext,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        IRepository<ExpenseVoucher>? expenseVoucherRepo = null,
+        IHouseholdTaxRepository? taxRepository = null)
     {
         _cashbookRepo = cashbookRepo;
         _accountRepo = accountRepo;
@@ -33,6 +38,8 @@ public class CashbookService : ICashbookService
         _auditHashService = auditHashService;
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
+        _expenseVoucherRepo = expenseVoucherRepo;
+        _taxRepository = taxRepository;
     }
 
     public async Task<ShiftResponse> OpenShiftAsync(OpenShiftRequest request, CancellationToken ct = default)
@@ -346,6 +353,7 @@ public class CashbookService : ICashbookService
 
     public async Task<FinanceAccount> GetOrCreateTillAsync(Guid branchId, string tillName, CancellationToken ct = default)
     {
+        ValidateFinancialManagementRole();
         var existingList = await _accountRepo.FindAsync(t => t.BranchId == branchId && t.AccountType == FinanceAccountType.Till, ct);
         var existing = existingList.FirstOrDefault(t => t.AccountName == tillName) ?? existingList.FirstOrDefault();
         if (existing != null) return existing;
@@ -582,6 +590,7 @@ public class CashbookService : ICashbookService
 
     public async Task<CashbookEntryResponse> CreateReceiptAsync(CreateReceiptRequest request, CancellationToken ct = default)
     {
+        ValidateFinancialManagementRole();
         if (request.Amount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền thu phải lớn hơn 0.");
@@ -601,6 +610,7 @@ public class CashbookService : ICashbookService
 
     public async Task<CashbookEntryResponse> CreatePaymentAsync(CreatePaymentRequest request, CancellationToken ct = default)
     {
+        ValidateFinancialManagementRole();
         if (request.Amount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền chi phải lớn hơn 0.");
@@ -628,6 +638,88 @@ public class CashbookService : ICashbookService
             : request.Description.Trim();
 
         return await DisburseCashAsync(request.AccountId, account.AccountType, request.Amount, "MANUAL", null, refCode, description, ct);
+    }
+
+    public async Task<TaxPaymentResponse> RecordTaxPaymentAsync(RecordTaxPaymentRequest request, CancellationToken ct = default)
+    {
+        ValidateFinancialManagementRole();
+        if (_expenseVoucherRepo == null || _taxRepository == null)
+        {
+            throw new InvalidOperationException("Dịch vụ nộp thuế chưa được cấu hình đầy đủ.");
+        }
+        if (request.Amount <= 0)
+        {
+            throw new BusinessException("INVALID_AMOUNT", "Số tiền nộp thuế phải lớn hơn 0.");
+        }
+        if (string.IsNullOrWhiteSpace(request.BeneficiaryName) || string.IsNullOrWhiteSpace(request.PaymentReference))
+        {
+            throw new BusinessException("TAX_PAYMENT_EVIDENCE_REQUIRED", "Nộp thuế phải có đơn vị thụ hưởng và mã/chứng từ tham chiếu thanh toán.");
+        }
+
+        return await _unitOfWork.ExecuteInTransactionAsync(async token =>
+        {
+            var account = await _cashbookRepo.GetAccountWithLockAsync(request.SourceAccountId, token)
+                ?? throw new NotFoundException("Không tìm thấy tài khoản nguồn nộp thuế.");
+            if (!string.Equals(account.TenantId, _tenantContext.CurrentTenantId, StringComparison.Ordinal) ||
+                !account.IsActive || account.AccountType is not (FinanceAccountType.Bank or FinanceAccountType.Safe))
+            {
+                throw new BusinessException("TAX_PAYMENT_ACCOUNT_DENIED", "Nộp thuế chỉ được thực hiện từ tài khoản ngân hàng hoặc két sắt đang hoạt động.");
+            }
+            if (account.CurrentBalance < request.Amount)
+            {
+                throw new BusinessException("INSUFFICIENT_FUNDS", "Tài khoản nguồn không đủ số dư để nộp thuế.");
+            }
+
+            HouseholdTaxSnapshot? snapshot = null;
+            if (request.HouseholdTaxSnapshotId.HasValue)
+            {
+                snapshot = await _taxRepository.GetSnapshotByIdAsync(request.HouseholdTaxSnapshotId.Value, token)
+                    ?? throw new BusinessException("TAX_SNAPSHOT_NOT_FOUND", "Không tìm thấy snapshot thuế đã chốt để liên kết chứng từ nộp thuế.");
+                if (snapshot.BranchId.HasValue && snapshot.BranchId != account.BranchId)
+                {
+                    throw new BusinessException("TAX_PAYMENT_ACCOUNT_DENIED", "Tài khoản nguồn không cùng phạm vi chi nhánh với snapshot thuế được chọn.");
+                }
+            }
+
+            var paidAtUtc = DateTime.UtcNow;
+            var voucher = new ExpenseVoucher
+            {
+                TenantId = _tenantContext.CurrentTenantId,
+                VoucherCode = "TAX-" + paidAtUtc.ToString("yyyyMMddHHmmssfff"),
+                BranchId = account.BranchId,
+                BeneficiaryName = request.BeneficiaryName.Trim(),
+                Category = "Nộp thuế",
+                Amount = request.Amount,
+                Status = ExpenseVoucherStatus.Paid,
+                Nature = FinancialNature.TaxPayment,
+                ReferenceCode = request.PaymentReference.Trim(),
+                EvidenceAttachmentUrl = string.IsNullOrWhiteSpace(request.EvidenceAttachmentUrl) ? null : request.EvidenceAttachmentUrl.Trim(),
+                PaymentSourceType = account.AccountType,
+                PaymentSourceAccountId = account.Id,
+                HouseholdTaxSnapshotId = snapshot?.Id,
+                PaidAtUtc = paidAtUtc,
+                ExpenseDate = paidAtUtc,
+                Note = string.IsNullOrWhiteSpace(request.Note) ? null : request.Note.Trim(),
+                IsTaxDeductible = false
+            };
+            await _expenseVoucherRepo.AddAsync(voucher, token);
+
+            account.CurrentBalance -= request.Amount;
+            var entry = await RecordEntryInternalAsync(
+                account.Id,
+                account.AccountType,
+                account.BranchId,
+                CashbookEntryType.Payment,
+                request.Amount,
+                "TAX_PAYMENT",
+                voucher.Id,
+                voucher.ReferenceCode!,
+                $"Nộp thuế: {voucher.BeneficiaryName}",
+                token);
+            await _unitOfWork.SaveChangesAsync(token);
+
+            return new TaxPaymentResponse(voucher.Id, voucher.HouseholdTaxSnapshotId, MapEntryResponse(entry));
+        }, ct);
     }
 
     private async Task LockAccountByIdAsync(Guid accountId, CancellationToken ct)
@@ -805,14 +897,14 @@ public class CashbookService : ICashbookService
     private void ValidateFinancialManagementRole()
     {
         var role = _tenantContext.CurrentRole;
-        if (!string.IsNullOrWhiteSpace(role) &&
-            !role.Equals("Owner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Admin", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Manager", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(_tenantContext.CurrentTenantId) ||
+            string.IsNullOrWhiteSpace(role) ||
+            (!role.Equals("STORE_OWNER", StringComparison.OrdinalIgnoreCase) &&
+             !role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase) &&
+             !role.Equals("ADMIN", StringComparison.OrdinalIgnoreCase) &&
+             !role.Equals("Admin", StringComparison.OrdinalIgnoreCase)))
         {
-            throw new UnauthorizedAccessException("Chỉ Chủ hộ kinh doanh hoặc Quản lý cửa hàng mới có thẩm quyền thực hiện thao tác tài chính này.");
+            throw new UnauthorizedAccessException("Chỉ Chủ hộ kinh doanh hoặc Quản trị viên đã xác thực mới có thẩm quyền thực hiện thao tác tài chính này.");
         }
     }
 

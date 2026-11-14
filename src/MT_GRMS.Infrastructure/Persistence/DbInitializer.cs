@@ -897,6 +897,77 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
     }
 
+    private static async Task EnsureHouseholdTaxSnapshotSchemaAsync(AppDbContext context, ILogger? logger = null)
+    {
+        if (!context.Database.IsRelational()) return;
+
+        try
+        {
+            // 1. Bổ sung các cột Status, RevisionNumber, SupersededSnapshotId, RectificationReason nếu chưa có
+            await ExecuteSqlSafeAsync(context, @"
+                ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""Status"" integer NOT NULL DEFAULT 1;
+                ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""RevisionNumber"" integer NOT NULL DEFAULT 0;
+                ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""SupersededSnapshotId"" uuid NULL;
+                ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""RectificationReason"" character varying(1000) NULL;
+            ", logger);
+
+            // 2. Cập nhật Status = 1 (Finalized) và RevisionNumber = 0 cho các bản ghi cũ
+            await ExecuteSqlSafeAsync(context, @"
+                UPDATE ""HouseholdTaxSnapshots"" SET ""Status"" = 1 WHERE ""Status"" = 0 OR ""Status"" IS NULL;
+                UPDATE ""HouseholdTaxSnapshots"" SET ""RevisionNumber"" = 0 WHERE ""RevisionNumber"" IS NULL;
+            ", logger);
+
+            // 3. Xóa các Unique Index cũ không lọc theo Status = 1 khiến thao tác Supersede bị vi phạm ràng buộc trùng lặp
+            await ExecuteSqlSafeAsync(context, @"
+DO $$ 
+DECLARE r RECORD;
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'HouseholdTaxSnapshots') THEN
+        FOR r IN (
+            SELECT indexname 
+            FROM pg_indexes 
+            WHERE tablename = 'HouseholdTaxSnapshots' 
+              AND (
+                  indexname LIKE 'IX_HouseholdTaxSnapshots_TenantId_BranchId_PeriodType_Year%'
+                  OR indexname = 'UX_HouseholdTaxSnapshots_Tenant_Period_NullSafe'
+                  OR indexname = 'IX_HouseholdTaxSnapshots_Tenant_Period_Revision'
+              )
+        ) LOOP
+            EXECUTE 'DROP INDEX IF EXISTS ' || quote_ident(r.indexname);
+        END LOOP;
+    END IF;
+END $$;
+            ", logger);
+
+            // 4. Tạo Unique Index cho active snapshot duy nhất (Status = 1) và cho Revision
+            await ExecuteSqlSafeAsync(context, @"
+CREATE UNIQUE INDEX IF NOT EXISTS ""UX_HouseholdTaxSnapshots_ActiveFinalized_NullSafe""
+ON ""HouseholdTaxSnapshots"" (
+    ""TenantId"",
+    COALESCE(""BranchId"", '00000000-0000-0000-0000-000000000000'::uuid),
+    ""PeriodType"",
+    ""Year"",
+    ""PeriodNumber"")
+WHERE ""Status"" = 1;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ""UX_HouseholdTaxSnapshots_Revision_NullSafe""
+ON ""HouseholdTaxSnapshots"" (
+    ""TenantId"",
+    COALESCE(""BranchId"", '00000000-0000-0000-0000-000000000000'::uuid),
+    ""PeriodType"",
+    ""Year"",
+    ""PeriodNumber"",
+    ""RevisionNumber"");
+            ", logger);
+
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ schema và partial unique index cho HouseholdTaxSnapshots phục vụ Supersede.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ schema cho bảng HouseholdTaxSnapshots");
+        }
+    }
+
     public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null, bool seedSampleData = true)
     {
         var schemaTimer = Stopwatch.StartNew();
@@ -1705,6 +1776,7 @@ END $$;
                     await EnsureSupplierExchangeSchemaAsync(context, logger);
                     await EnsureWeightRepackSchemaAsync(context, logger);
                     await EnsureMissingModelSchemaAsync(context, logger);
+                    await EnsureHouseholdTaxSnapshotSchemaAsync(context, logger);
                 }
                 catch (Exception ex)
                 {

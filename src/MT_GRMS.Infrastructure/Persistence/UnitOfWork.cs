@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
+using System.Data;
 
 namespace MT_GRMS.Infrastructure.Persistence;
 
@@ -45,22 +46,40 @@ public class UnitOfWork : IUnitOfWork
 
     public async Task ExecuteInTransactionAsync(
         Func<CancellationToken, Task> operation,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
+    {
+        await ExecuteInTransactionAsync(async token =>
+        {
+            await operation(token);
+            return true;
+        }, cancellationToken, isolationLevel);
+    }
+
+    public async Task<T> ExecuteInTransactionAsync<T>(
+        Func<CancellationToken, Task<T>> operation,
+        CancellationToken cancellationToken = default,
+        IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
     {
         if (!_context.Database.IsRelational())
         {
-            await operation(cancellationToken);
-            return;
+            return await operation(cancellationToken);
+        }
+
+        if (_context.Database.CurrentTransaction != null)
+        {
+            return await operation(cancellationToken);
         }
 
         var strategy = _context.Database.CreateExecutionStrategy();
-        await strategy.ExecuteAsync(async () =>
+        return await strategy.ExecuteAsync(async () =>
         {
-            await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+            await using var transaction = await _context.Database.BeginTransactionAsync(isolationLevel, cancellationToken);
             try
             {
-                await operation(cancellationToken);
+                var result = await operation(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
+                return result;
             }
             catch
             {

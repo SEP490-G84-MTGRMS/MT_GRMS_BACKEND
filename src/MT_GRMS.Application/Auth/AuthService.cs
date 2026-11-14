@@ -636,9 +636,9 @@ public class AuthService : IAuthService
     private string GenerateJwtToken(string userId, string username, string email, string role, string tenantId, bool isAdmin, DateTime expiresAt, Guid? branchId = null)
     {
         var secretKey = _configuration?["Jwt:Key"];
-        if (string.IsNullOrWhiteSpace(secretKey))
+        if (string.IsNullOrWhiteSpace(secretKey) || Encoding.UTF8.GetByteCount(secretKey) < 32)
         {
-            secretKey = "MT_GRMS_Super_Secret_Key_For_JWT_Authentication_2026_FPTU_Capstone_Project!";
+            throw new InvalidOperationException("Jwt:Key phải được cấu hình bằng bí mật dài ít nhất 32 byte.");
         }
 
         var issuer = _configuration?["Jwt:Issuer"] ?? "MTGRMS_API";
