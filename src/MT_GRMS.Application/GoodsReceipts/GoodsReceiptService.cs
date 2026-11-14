@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.GoodsReceipts.Dtos;
 using MT_GRMS.Application.SupplierReturns;
+using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Domain.Enums;
@@ -92,6 +93,8 @@ public class GoodsReceiptService : IGoodsReceiptService
             throw new NotFoundException("Đơn đặt hàng PO", poIdOrCode);
         }
 
+        EnsureDeliveryDateReachedForReceipt(po);
+
         // Kiểm tra xem PO đã có phiếu nhập kho DRAFT hoặc COMPLETED chưa (Mục 4)
         var existingReceipt = await _repository.GetActiveReceiptByPoIdAsync(tenantId, po.Id, cancellationToken);
         if (existingReceipt != null)
@@ -120,7 +123,7 @@ public class GoodsReceiptService : IGoodsReceiptService
                 ProductId = d.ProductId,
                 ProductCode = d.Product?.ProductCode ?? string.Empty,
                 ProductName = d.Product?.Name ?? string.Empty,
-                Unit = d.Product?.BaseUnit ?? "Cái",
+                Unit = ResolveInboundUnit(d.DeliveryUoM, d.PurchaseUnitNameSnapshot, d.Product),
                 HasBatches = d.Product?.HasBatches ?? false,
                 OrderedQty = d.OrderedQty ?? d.FinalQty ?? 0,
                 UnitPrice = d.UnitPrice,
@@ -142,17 +145,33 @@ public class GoodsReceiptService : IGoodsReceiptService
             throw new NotFoundException("Đơn đặt hàng PO", command.PurchaseOrderId);
         }
 
-        // 2. Ràng buộc: Một PO chỉ có tối đa một phiếu nhập chưa bị hủy (Mục 4)
+        EnsureDeliveryDateReachedForReceipt(po);
+
+        // 2. Ràng buộc GRN active theo loại PO
         var activeReceipt = await _repository.GetActiveReceiptByPoIdAsync(tenantId, command.PurchaseOrderId, cancellationToken);
+        var isExchangePo = string.Equals(po.SourceType, "SUPPLIER_RETURN", StringComparison.OrdinalIgnoreCase);
         if (activeReceipt != null)
         {
-            throw new BusinessException(
-                "PO_ALREADY_HAS_RECEIPT",
-                $"Đơn đặt hàng {po.Code} đã có phiếu nhập {activeReceipt.Code} ({activeReceipt.Status}). Mỗi đơn PO chỉ có tối đa một phiếu nhập chưa bị hủy.");
+            // PO đổi hàng: cho phép nhiều GRN COMPLETED; chỉ chặn khi còn DRAFT.
+            if (isExchangePo)
+            {
+                if (string.Equals(activeReceipt.Status, "DRAFT", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new BusinessException(
+                        "PO_ALREADY_HAS_RECEIPT",
+                        $"PO đổi hàng {po.Code} đang có phiếu nhập nháp {activeReceipt.Code}. Hãy hoàn tất hoặc hủy phiếu nháp trước.");
+                }
+            }
+            else
+            {
+                throw new BusinessException(
+                    "PO_ALREADY_HAS_RECEIPT",
+                    $"Đơn đặt hàng {po.Code} đã có phiếu nhập {activeReceipt.Code} ({activeReceipt.Status}). Mỗi đơn PO chỉ có tối đa một phiếu nhập chưa bị hủy.");
+            }
         }
 
         var code = await _repository.GenerateCodeAsync(tenantId, cancellationToken);
-        var actorUserId = ResolveActorUserId();
+        var actorUserId = await ResolveValidActorUserIdAsync(cancellationToken);
 
         var receipt = new GoodsReceipt
         {
@@ -333,6 +352,137 @@ public class GoodsReceiptService : IGoodsReceiptService
         return resultDto;
     }
 
+    public async Task<GoodsReceiptDto> UpdateDraftGoodsReceiptAsync(
+        Guid id,
+        CreateGoodsReceiptCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
+        var receipt = await _repository.GetByIdAsync(tenantId, id, cancellationToken);
+        if (receipt == null || receipt.IsDeleted)
+        {
+            throw new NotFoundException("Phiếu nhập kho", id);
+        }
+
+        if (!string.Equals(receipt.Status, "DRAFT", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new BusinessException(
+                "GRN_NOT_DRAFT",
+                $"Chỉ được sửa phiếu nhập ở trạng thái nháp. Phiếu {receipt.Code} đang {receipt.Status}.");
+        }
+
+        var po = receipt.PurchaseOrderId.HasValue
+            ? await _repository.GetPurchaseOrderWithDetailsAsync(tenantId, receipt.PurchaseOrderId.Value, cancellationToken)
+            : null;
+        if (po != null)
+        {
+            EnsureDeliveryDateReachedForReceipt(po);
+        }
+
+        receipt.InvoiceNo = command.InvoiceNo;
+        receipt.FreightFee = command.FreightFee;
+        receipt.DiscountAmount = command.DiscountAmount;
+        receipt.VatPercent = command.VatPercent;
+        receipt.PaymentMethod = command.PaymentMethod;
+        receipt.PaymentDueDate = command.PaymentDueDate;
+        receipt.Note = command.Note;
+        receipt.UpdatedAt = DateTime.UtcNow;
+
+        foreach (var existing in receipt.Lines.ToList())
+        {
+            receipt.Lines.Remove(existing);
+        }
+
+        decimal subTotal = 0;
+        foreach (var l in command.Lines)
+        {
+            subTotal += l.AcceptedQty * l.UnitPrice;
+        }
+
+        receipt.SubTotal = subTotal;
+        var baseAmount = subTotal - command.DiscountAmount + command.FreightFee;
+        receipt.VatAmount = Math.Round(Math.Max(0, baseAmount) * (command.VatPercent / 100m), 2);
+        receipt.GrandTotal = Math.Max(0, baseAmount) + receipt.VatAmount;
+
+        foreach (var group in command.Lines.GroupBy(l => l.PurchaseOrderDetailId ?? l.ProductId))
+        {
+            var ordered = group.Max(x => x.OrderedQty);
+            var sumDelivered = group.Sum(x => x.DeliveredQty);
+            var sumAccepted = group.Sum(x => x.AcceptedQty);
+            if (sumDelivered > ordered)
+            {
+                throw new BusinessException(
+                    "EXCEEDS_ORDERED",
+                    $"Tổng thực nhận ({sumDelivered}) vượt số lượng đặt PO ({ordered}). Không được nhận vượt khi tách lô.");
+            }
+
+            if (sumAccepted > ordered)
+            {
+                throw new BusinessException(
+                    "ACCEPTED_EXCEEDS_ORDERED",
+                    $"Tổng chấp nhận ({sumAccepted}) vượt số lượng đặt PO ({ordered}).");
+            }
+        }
+
+        foreach (var l in command.Lines)
+        {
+            if (l.AcceptedQty < 0 || l.DeliveredQty < 0)
+            {
+                throw new BusinessException("INVALID_QTY", "Số lượng nhận và chấp nhận không được âm.");
+            }
+
+            if (l.AcceptedQty > l.DeliveredQty)
+            {
+                throw new BusinessException("ACCEPTED_EXCEEDS_RECEIVED", "Số lượng chấp nhận không được vượt quá số lượng thực nhận.");
+            }
+
+            var rejectedQty = l.RejectedQty > 0 ? l.RejectedQty : Math.Max(0, l.DeliveredQty - l.AcceptedQty);
+            var deliveredQty = Math.Max(l.DeliveredQty, l.AcceptedQty + rejectedQty);
+            if (rejectedQty > 0 && string.IsNullOrWhiteSpace(l.RejectionReason))
+            {
+                throw new BusinessException("REJECTION_REASON_REQUIRED", $"Dòng sản phẩm có {rejectedQty} hàng bị từ chối bắt buộc phải có lý do từ chối.");
+            }
+
+            var lineAmount = l.AcceptedQty * l.UnitPrice;
+            var weight = subTotal > 0 ? (lineAmount / subTotal) : 0;
+            var freightAlloc = Math.Round(command.FreightFee * weight, 2);
+            var discountAlloc = Math.Round(command.DiscountAmount * weight, 2);
+            var landedSubtotal = lineAmount - discountAlloc + freightAlloc;
+            var vatAlloc = Math.Round(landedSubtotal * (command.VatPercent / 100m), 2);
+            var landedTotal = landedSubtotal + vatAlloc;
+            var landedUnitCost = l.AcceptedQty > 0 ? Math.Round(landedTotal / l.AcceptedQty, 2) : l.UnitPrice;
+
+            receipt.Lines.Add(new GoodsReceiptLine
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenantId,
+                GoodsReceiptId = receipt.Id,
+                ProductId = l.ProductId,
+                PurchaseOrderDetailId = l.PurchaseOrderDetailId,
+                OrderedQty = l.OrderedQty,
+                DeliveredQty = deliveredQty,
+                AcceptedQty = l.AcceptedQty,
+                RejectedQty = rejectedQty,
+                UnitPrice = l.UnitPrice,
+                LineAmount = lineAmount,
+                BatchCode = l.ManageBatch && !string.IsNullOrWhiteSpace(l.BatchCode) ? l.BatchCode.Trim() : null,
+                ManufactureDate = l.ManageBatch ? l.ManufactureDate : null,
+                ExpiryDate = l.ManageBatch ? l.ExpiryDate : null,
+                FreightAllocated = freightAlloc,
+                DiscountAllocated = discountAlloc,
+                VatAllocated = vatAlloc,
+                LandedUnitCost = landedUnitCost,
+                QualityStatus = rejectedQty > 0 ? "PARTIAL_REJECT" : "ACCEPTED",
+                RejectionReason = l.RejectionReason,
+                Note = string.IsNullOrWhiteSpace(l.RejectionNote) ? l.Note : $"{l.RejectionNote} | {l.Note}",
+                CreatedAt = DateTime.UtcNow
+            });
+        }
+
+        await _repository.UpdateAsync(receipt, cancellationToken);
+        return await GetGoodsReceiptByIdAsync(receipt.Id, cancellationToken);
+    }
+
     public async Task<GoodsReceiptDto> CompleteGoodsReceiptAsync(
         Guid id,
         CompleteGoodsReceiptCommand command,
@@ -363,9 +513,13 @@ public class GoodsReceiptService : IGoodsReceiptService
         if (receipt.PurchaseOrderId.HasValue)
         {
             po = await _repository.GetPurchaseOrderWithDetailsAsync(tenantId, receipt.PurchaseOrderId.Value, cancellationToken);
+            if (po != null)
+            {
+                EnsureDeliveryDateReachedForReceipt(po);
+            }
         }
 
-        var actorUserId = ResolveActorUserId();
+        var actorUserId = await ResolveValidActorUserIdAsync(cancellationToken);
         receipt.Status = "COMPLETED";
         receipt.ConfirmedByUserId = actorUserId;
         receipt.ConfirmedAtUtc = DateTime.UtcNow;
@@ -419,7 +573,7 @@ public class GoodsReceiptService : IGoodsReceiptService
         }
 
         receipt.Status = "CANCELLED";
-        receipt.RejectedByUserId = ResolveActorUserId();
+        receipt.RejectedByUserId = await ResolveValidActorUserIdAsync(cancellationToken);
         receipt.RejectedAtUtc = DateTime.UtcNow;
         receipt.RejectionReason = command.Reason;
         receipt.UpdatedAt = DateTime.UtcNow;
@@ -430,20 +584,135 @@ public class GoodsReceiptService : IGoodsReceiptService
     }
 
     /// <summary>
-    /// User.Id là string (vd usr_store_owner), không phải Guid.
-    /// Khi claim NameIdentifier không parse được Guid → fallback user thực tế trong DB.
+    /// User.Id trong DB là string (usr_store_owner / user-owner-001), không phải Guid JWT.
+    /// Chỉ trả ID có thật trong bảng Users — tránh FK ConfirmedByUserId / ReceiverUserId.
     /// </summary>
-    private string ResolveActorUserId()
+    private async Task<string> ResolveValidActorUserIdAsync(CancellationToken cancellationToken = default)
     {
         if (_tenantContext.CurrentUserId != Guid.Empty)
         {
-            return _tenantContext.CurrentUserId.ToString();
+            var strId = _tenantContext.CurrentUserId.ToString();
+            if (await _repository.UserExistsAsync(strId, cancellationToken))
+            {
+                return strId;
+            }
         }
 
         var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
-        return role is "EMPLOYEE" or "STAFF" or "CASHIER"
-            ? "usr_cashier"
-            : "usr_store_owner";
+        var isStaff = role is "EMPLOYEE" or "STAFF" or "CASHIER";
+        var candidates = isStaff
+            ? new[] { "usr_cashier", "user-cashier-001", "user-employee-001", "usr_store_owner", "user-owner-001" }
+            : new[] { "usr_store_owner", "user-owner-001", "usr_cashier", "user-cashier-001" };
+
+        foreach (var id in candidates)
+        {
+            if (await _repository.UserExistsAsync(id, cancellationToken))
+            {
+                return id;
+            }
+        }
+
+        throw new BusinessException(
+            "ACTOR_USER_MISSING",
+            "Không xác định được người dùng hợp lệ để ghi nhận phiếu nhập kho. Vui lòng đăng nhập lại.");
+    }
+
+    /// <summary>
+    /// Chỉ cho phép nhập kho từ ngày giao PO trở đi (so theo lịch VN UTC+7).
+    /// TEMP (test/UAT): bỏ chặn ngày giao — đặt lại false khi ship thật.
+    /// </summary>
+    private const bool AllowReceiveBeforeDeliveryDate = true;
+
+    /// <summary>Đơn vị nhập: DeliveryUoM / snapshot PO → ProductUnit IsPurchaseUnit → BaseUnit.</summary>
+    private static string ResolveInboundUnit(string? deliveryUoM, string? purchaseUnitSnapshot, Product? product)
+    {
+        if (!string.IsNullOrWhiteSpace(deliveryUoM))
+        {
+            return deliveryUoM.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(purchaseUnitSnapshot))
+        {
+            return purchaseUnitSnapshot.Trim();
+        }
+
+        if (product?.Units != null)
+        {
+            var active = product.Units.Where(u => !u.IsDeleted).ToList();
+            var purchase = active.FirstOrDefault(u => u.IsPurchaseUnit)
+                           ?? active.FirstOrDefault(u => u.IsBaseUnit);
+            if (purchase != null && !string.IsNullOrWhiteSpace(purchase.UnitName))
+            {
+                return purchase.UnitName.Trim();
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(product?.BaseUnit) ? "Cái" : product!.BaseUnit.Trim();
+    }
+
+    /// <summary>
+    /// 1 đơn vị nhập = bao nhiêu đơn vị tồn (base). BranchStock.QuantityOnHand luôn theo base (giống POS).
+    /// </summary>
+    private static decimal ResolvePurchaseToStockRate(
+        Product? product,
+        string? deliveryUoM,
+        string? purchaseUnitSnapshot)
+    {
+        if (product?.Units == null)
+        {
+            return 1m;
+        }
+
+        var active = product.Units.Where(u => !u.IsDeleted).ToList();
+        if (active.Count == 0)
+        {
+            return 1m;
+        }
+
+        ProductUnit? matched = null;
+        if (!string.IsNullOrWhiteSpace(deliveryUoM))
+        {
+            matched = active.FirstOrDefault(u =>
+                string.Equals(u.UnitName, deliveryUoM.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (matched == null && !string.IsNullOrWhiteSpace(purchaseUnitSnapshot))
+        {
+            matched = active.FirstOrDefault(u =>
+                string.Equals(u.UnitName, purchaseUnitSnapshot.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        matched ??= active.FirstOrDefault(u => u.IsPurchaseUnit)
+                    ?? active.FirstOrDefault(u => u.IsBaseUnit);
+
+        if (matched == null || matched.ConversionRate <= 0)
+        {
+            return 1m;
+        }
+
+        return matched.ConversionRate;
+    }
+
+    private static void EnsureDeliveryDateReachedForReceipt(PurchaseOrder po)
+    {
+        if (AllowReceiveBeforeDeliveryDate)
+        {
+            return;
+        }
+
+        if (!po.DeliveryDate.HasValue)
+        {
+            return;
+        }
+
+        var deliveryDate = DateOnly.FromDateTime(po.DeliveryDate.Value);
+        var todayVn = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(7));
+        if (deliveryDate > todayVn)
+        {
+            throw new BusinessException(
+                "DELIVERY_DATE_NOT_REACHED",
+                $"Chỉ được nhập hàng từ ngày giao {deliveryDate:dd/MM/yyyy}. Hôm nay chưa đến ngày giao.");
+        }
     }
 
     private async Task<IReadOnlyDictionary<Guid, (bool HasBatches, string Name)>> LoadProductValidationFlagsAsync(
@@ -568,21 +837,34 @@ public class GoodsReceiptService : IGoodsReceiptService
 
             var existingTotalStock = await _repository.GetTotalProductStockAsync(tenantId, line.ProductId, cancellationToken);
             var product = line.Product ?? await _repository.GetProductByIdAsync(tenantId, line.ProductId, cancellationToken);
+            var pod = line.PurchaseOrderDetailId.HasValue && po != null
+                ? po.Details.FirstOrDefault(d => d.Id == line.PurchaseOrderDetailId.Value)
+                : line.PurchaseOrderDetail;
 
-            // Tính MovingAverageCost cho sản phẩm
+            // AcceptedQty trên GRN/PO theo đơn vị nhập; BranchStock theo đơn vị tồn (base) — giống POS.
+            var purchaseToStockRate = ResolvePurchaseToStockRate(
+                product,
+                pod?.DeliveryUoM,
+                pod?.PurchaseUnitNameSnapshot);
+            var stockQtyDelta = Math.Round(line.AcceptedQty * purchaseToStockRate, 3);
+            var landedCostPerStockUnit = purchaseToStockRate > 0
+                ? Math.Round(line.LandedUnitCost / purchaseToStockRate, 4)
+                : line.LandedUnitCost;
+
+            // Tính MovingAverageCost theo đơn vị tồn (base)
             if (product != null)
             {
-                var oldCost = product.CostPrice ?? line.UnitPrice;
-                var totalNewQty = existingTotalStock + line.AcceptedQty;
+                var oldCost = product.CostPrice ?? landedCostPerStockUnit;
+                var totalNewQty = existingTotalStock + stockQtyDelta;
                 if (totalNewQty > 0)
                 {
                     product.CostPrice = Math.Round(
-                        ((existingTotalStock * oldCost) + (line.AcceptedQty * line.LandedUnitCost)) / totalNewQty,
+                        ((existingTotalStock * oldCost) + (stockQtyDelta * landedCostPerStockUnit)) / totalNewQty,
                         2);
                 }
                 else
                 {
-                    product.CostPrice = line.LandedUnitCost;
+                    product.CostPrice = landedCostPerStockUnit;
                 }
                 product.UpdatedAt = DateTime.UtcNow;
             }
@@ -597,10 +879,10 @@ public class GoodsReceiptService : IGoodsReceiptService
             if (stock != null)
             {
                 var prevQty = Math.Max(0, stock.QuantityOnHand);
-                var nextQty = prevQty + line.AcceptedQty;
+                var nextQty = prevQty + stockQtyDelta;
                 stock.LandedCostPerUnit = nextQty > 0
-                    ? Math.Round(((prevQty * stock.LandedCostPerUnit) + (line.AcceptedQty * line.LandedUnitCost)) / nextQty, 2)
-                    : line.LandedUnitCost;
+                    ? Math.Round(((prevQty * stock.LandedCostPerUnit) + (stockQtyDelta * landedCostPerStockUnit)) / nextQty, 4)
+                    : landedCostPerStockUnit;
                 stock.QuantityOnHand = nextQty;
                 if (!hasBatches)
                 {
@@ -628,16 +910,16 @@ public class GoodsReceiptService : IGoodsReceiptService
                     BatchCode = hasBatches ? line.BatchCode : null,
                     ManufactureDate = hasBatches ? line.ManufactureDate : null,
                     ExpiryDate = hasBatches ? line.ExpiryDate : null,
-                    QuantityOnHand = line.AcceptedQty,
+                    QuantityOnHand = stockQtyDelta,
                     QuantityReserved = 0,
-                    LandedCostPerUnit = line.LandedUnitCost,
+                    LandedCostPerUnit = landedCostPerStockUnit,
                     CreatedAt = DateTime.UtcNow
                 };
                 await _repository.AddBranchStockAsync(newStock, cancellationToken);
                 line.BranchStockId = newStock.Id;
             }
 
-            // Tạo bản ghi lô hàng FEFO (Batch / ProductBatch)
+            // Tạo bản ghi lô hàng FEFO (Batch / ProductBatch) — InitialQuantity theo đơn vị tồn
             if (!string.IsNullOrWhiteSpace(line.BatchCode) || line.ExpiryDate.HasValue)
             {
                 var newBatch = new Batch
@@ -649,17 +931,19 @@ public class GoodsReceiptService : IGoodsReceiptService
                     BatchCode = !string.IsNullOrWhiteSpace(line.BatchCode) ? line.BatchCode : $"LOT-{receipt.Code}",
                     ManufactureDate = line.ManufactureDate ?? receipt.ReceivedAtUtc.Date,
                     ExpiryDate = line.ExpiryDate ?? receipt.ReceivedAtUtc.Date.AddMonths(6),
-                    InitialQuantity = line.AcceptedQty,
-                    LandedCostPerUnit = line.LandedUnitCost,
+                    InitialQuantity = stockQtyDelta,
+                    LandedCostPerUnit = landedCostPerStockUnit,
                     CreatedAt = DateTime.UtcNow
                 };
                 await _repository.AddBatchAsync(newBatch, cancellationToken);
             }
         }
 
-        // 2. Cập nhật đơn PO nguồn sang COMPLETED (Mục 8.2: "Khi Goods Receipt được hoàn tất, PO chuyển sang COMPLETED, kể cả trường hợp nhà cung cấp giao thiếu.")
+        // 2. Cập nhật PO nguồn
         if (po != null)
         {
+            var isExchangePo = string.Equals(po.SourceType, "SUPPLIER_RETURN", StringComparison.OrdinalIgnoreCase);
+
             foreach (var line in receipt.Lines)
             {
                 if (line.PurchaseOrderDetailId.HasValue)
@@ -667,13 +951,63 @@ public class GoodsReceiptService : IGoodsReceiptService
                     var pod = po.Details.FirstOrDefault(d => d.Id == line.PurchaseOrderDetailId.Value);
                     if (pod != null)
                     {
+                        var ordered = pod.OrderedQty ?? pod.FinalQty ?? 0m;
+                        if (isExchangePo && pod.ReceivedQty + line.AcceptedQty > ordered + 0.0001m)
+                        {
+                            throw new BusinessException(
+                                "EXCHANGE_EXCEEDS_ORDERED",
+                                $"PO đổi hàng: nhận vượt số lượng đặt (đã nhận {pod.ReceivedQty:0.##} + {line.AcceptedQty:0.##} > {ordered:0.##}).");
+                        }
+
                         pod.ReceivedQty += line.AcceptedQty;
                         pod.UpdatedAt = DateTime.UtcNow;
                     }
                 }
             }
 
-            po.Status = "COMPLETED";
+            var orderedTotal = po.Details.Sum(d => d.OrderedQty ?? d.FinalQty ?? 0m);
+            var receivedTotal = po.Details.Sum(d => d.ReceivedQty);
+
+            if (isExchangePo)
+            {
+                // PO đổi hàng: bắt buộc nhận đủ — không đóng thiếu; có thể nhận nhiều đợt.
+                if (receivedTotal + 0.0001m < orderedTotal)
+                {
+                    po.Status = "PARTIALLY_RECEIVED";
+                    var remainNote =
+                        $"[EXCHANGE] Đã nhận {receivedTotal:0.##}/{orderedTotal:0.##}, còn thiếu {orderedTotal - receivedTotal:0.##}. Chờ NCC giao đủ trên cùng PO.";
+                    po.Note = string.IsNullOrWhiteSpace(po.Note) ? remainNote : $"{po.Note} | {remainNote}";
+                    await UpdateExchangeReturnReplacementStatusAsync(
+                        tenantId,
+                        po.SourceSupplierReturnId,
+                        "PARTIALLY_RECEIVED",
+                        completeReturn: false,
+                        cancellationToken);
+                }
+                else
+                {
+                    po.Status = "COMPLETED";
+                    await UpdateExchangeReturnReplacementStatusAsync(
+                        tenantId,
+                        po.SourceSupplierReturnId,
+                        "COMPLETED",
+                        completeReturn: true,
+                        cancellationToken);
+                }
+            }
+            else
+            {
+                // RULE-02 P-SHORT-A: PO mua thường — 1 lần nhập → đóng kể cả thiếu.
+                if (receivedTotal + 0.0001m < orderedTotal)
+                {
+                    var shortNote =
+                        $"[P-SHORT-A] Đóng PO sau 1 lần nhập thiếu (nhận {receivedTotal:0.##}/{orderedTotal:0.##}). Phần còn lại cần đặt bù đơn mới.";
+                    po.Note = string.IsNullOrWhiteSpace(po.Note) ? shortNote : $"{po.Note} | {shortNote}";
+                }
+
+                po.Status = "COMPLETED";
+            }
+
             po.UpdatedAt = DateTime.UtcNow;
         }
 
@@ -746,6 +1080,8 @@ public class GoodsReceiptService : IGoodsReceiptService
             BatchCode = rLine.BatchCode,
             ExpiryDate = rLine.ExpiryDate,
             RequestedQty = rLine.RejectedQty,
+            // GRN từ chối tại chỗ = NCC nhận lại ngay → SupplierAcceptedQty = số bị từ chối
+            SupplierAcceptedQty = rLine.RejectedQty,
             ApprovedQty = rLine.RejectedQty,
             RejectedQty = 0,
             HandedOverQty = rLine.RejectedQty,
@@ -851,7 +1187,10 @@ public class GoodsReceiptService : IGoodsReceiptService
                 ProductId = l.ProductId,
                 ProductCode = l.Product?.ProductCode ?? string.Empty,
                 ProductName = l.Product?.Name ?? string.Empty,
-                Unit = l.Product?.BaseUnit ?? "Cái",
+                Unit = ResolveInboundUnit(
+                    l.PurchaseOrderDetail?.DeliveryUoM,
+                    l.PurchaseOrderDetail?.PurchaseUnitNameSnapshot,
+                    l.Product),
                 HasBatches = l.Product?.HasBatches ?? false,
                 PurchaseOrderDetailId = l.PurchaseOrderDetailId,
                 OrderedQty = l.OrderedQty,
@@ -872,5 +1211,33 @@ public class GoodsReceiptService : IGoodsReceiptService
                 Note = l.Note
             }).ToList()
         };
+    }
+
+    private async Task UpdateExchangeReturnReplacementStatusAsync(
+        string tenantId,
+        Guid? sourceSupplierReturnId,
+        string replacementStatus,
+        bool completeReturn,
+        CancellationToken cancellationToken)
+    {
+        if (!sourceSupplierReturnId.HasValue || _supplierReturnRepository == null)
+            return;
+
+        var ret = await _supplierReturnRepository.GetByIdAsync(tenantId, sourceSupplierReturnId.Value, cancellationToken);
+        if (ret == null)
+            return;
+
+        ret.ReplacementStatus = replacementStatus;
+        if (completeReturn
+            && ret.TotalApprovedQty > 0
+            && ret.TotalHandedOverQty + 0.0001m >= ret.TotalApprovedQty
+            && (ret.SettlementStatus is "PAID" or "NOT_REQUIRED" or "SETTLED"
+                || ret.StorePayableAmount <= 0
+                || ret.StorePaidAmount + 0.0001m >= ret.StorePayableAmount))
+        {
+            ret.Status = "COMPLETED";
+        }
+
+        await _supplierReturnRepository.UpdateAsync(ret, cancellationToken);
     }
 }

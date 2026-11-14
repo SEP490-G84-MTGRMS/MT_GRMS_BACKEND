@@ -64,12 +64,12 @@ public class InventoryTests
             {
                 new InventoryStockItemDto(
                     Guid.NewGuid(), "SKU-01", "8930001", "Sữa tươi TH 1L", "Dairy",
-                    Guid.NewGuid(), "Chi nhánh 1", "Hộp", 50, 40, 5, 5, 0, 15, 30000, 1500000, "OK",
+                    Guid.NewGuid(), "Chi nhánh 1", "Hộp", 50, 40, 5, 5, 0, 0, 0, 15, 30000, 1500000, "OK", 0,
                     new List<InventoryBatchSummaryDto>()
                 ),
                 new InventoryStockItemDto(
                     Guid.NewGuid(), "SKU-02", "8930002", "Bánh mì sandwich", "Bakery",
-                    Guid.NewGuid(), "Chi nhánh 1", "Gói", 8, 8, 0, 0, 0, 10, 15000, 120000, "LOW_STOCK",
+                    Guid.NewGuid(), "Chi nhánh 1", "Gói", 8, 8, 0, 0, 0, 0, 0, 10, 15000, 120000, "LOW_STOCK", 0,
                     new List<InventoryBatchSummaryDto>()
                 )
             };

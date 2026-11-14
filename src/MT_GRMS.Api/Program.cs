@@ -186,22 +186,32 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-// 8. Tự động áp dụng Migration (Auto-migration) và Nạp dữ liệu mẫu (Seeder) mỗi lần khởi động
+// 8. Tự động áp dụng Migration (Auto-migration); Seed mẫu chỉ khi Database:SeedSampleData=true
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
     var logger = services.GetRequiredService<ILogger<Program>>();
+    var startupInitializationTimer = System.Diagnostics.Stopwatch.StartNew();
     try
     {
         var dbContext = services.GetRequiredService<AppDbContext>();
+        var seedSampleData = app.Configuration.GetValue<bool?>("Database:SeedSampleData")
+            ?? app.Configuration.GetValue<bool?>("Database:SeedDemoData")
+            ?? true;
 
-        logger.LogInformation("Initializing database schema and seed data...");
-        await DbInitializer.InitializeAsync(dbContext, logger);
-        logger.LogInformation("Database seeded successfully.");
+        logger.LogInformation(
+            "Initializing database schema{0}...",
+            seedSampleData ? " and seed data" : " (SeedSampleData=false)");
+        await DbInitializer.InitializeAsync(dbContext, logger, seedSampleData);
+        logger.LogInformation(
+            seedSampleData
+                ? "Database seeded successfully in {0} ms."
+                : "Database schema sync completed in {0} ms (sample seed skipped).",
+            startupInitializationTimer.ElapsedMilliseconds);
     }
     catch (Exception ex)
     {
-        logger.LogError(ex, "Lỗi khi tự động áp dụng migrations hoặc nạp dữ liệu mẫu vào CSDL.");
+        logger.LogError(ex, "Lỗi khi tự động áp dụng schema hoặc nạp dữ liệu mẫu vào CSDL sau {ElapsedMilliseconds} ms.", startupInitializationTimer.ElapsedMilliseconds);
     }
 }
 

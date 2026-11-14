@@ -123,7 +123,11 @@ public record UpdateStocktakeCommand(
 public record ReviewStocktakeCommand(
     string Decision, // APPROVE, REJECT, NEEDS_RECOUNT
     string? ReviewNote,
-    string? ReviewedByName = null
+    string? ReviewedByName = null,
+    /// <summary>
+    /// RULE-03 Q7: bắt buộc true khi phiếu có dòng VarianceQty &gt; 0 (SURPLUS) mới được cộng tồn.
+    /// </summary>
+    bool ConfirmSurplusFound = false
 );
 
 public record CreateReturnFromStocktakeLineItemDto(

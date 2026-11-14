@@ -28,6 +28,9 @@ public class PurchaseOrderDetail : BaseTenantEntity
     public string? ProductNameSnapshot { get; set; }
     public string? PurchaseUnitNameSnapshot { get; set; }
 
+    /// <summary>Truy vết dòng phiếu trả/đổi khi SourceType = SUPPLIER_RETURN.</summary>
+    public Guid? SourceSupplierReturnLineId { get; set; }
+
     // Navigations
     public PurchaseOrder? PurchaseOrder { get; set; }
     public Product? Product { get; set; }
