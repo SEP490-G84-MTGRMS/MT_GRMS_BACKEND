@@ -1,4 +1,5 @@
 using System.Text.Json;
+using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
@@ -19,6 +20,7 @@ public class PayslipService : IPayslipService
     private readonly IBranchAttendancePolicyRepository _attendancePolicyRepository;
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly ICashbookService? _cashbookService;
 
     public PayslipService(
         IPayslipRepository payslipRepository,
@@ -26,7 +28,8 @@ public class PayslipService : IPayslipService
         IScheduleRepository scheduleRepository,
         IBranchAttendancePolicyRepository attendancePolicyRepository,
         ITenantContext tenantContext,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        ICashbookService? cashbookService = null)
     {
         _payslipRepository = payslipRepository;
         _employeeRepository = employeeRepository;
@@ -34,6 +37,7 @@ public class PayslipService : IPayslipService
         _attendancePolicyRepository = attendancePolicyRepository;
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
+        _cashbookService = cashbookService;
     }
 
     public async Task<IReadOnlyList<PayslipResponse>> GenerateMonthlyPayrollAsync(
@@ -328,6 +332,32 @@ public class PayslipService : IPayslipService
         var now = DateTime.UtcNow;
         var voucherCode = $"PC-{now:yyyyMM}-{Random.Shared.Next(1000, 9999)}";
 
+        if (_cashbookService != null && payslip.NetSalary > 0)
+        {
+            try
+            {
+                FinanceAccount account = method.Contains("BANK") || method.Contains("TRANSFER")
+                    ? await _cashbookService.GetOrCreateBankAccountAsync(payslip.BranchId, ct: cancellationToken)
+                    : await _cashbookService.GetOrCreateSafeAsync(payslip.BranchId, cancellationToken);
+
+                var entry = await _cashbookService.DisburseCashAsync(
+                    account.Id,
+                    account.AccountType,
+                    payslip.NetSalary,
+                    "SALARY",
+                    payslip.Id,
+                    payslip.PayslipCode,
+                    $"Chi trả lương kỳ {payslip.PeriodMonth} cho nhân viên {payslip.Employee?.FullName ?? payslip.EmployeeId.ToString()}",
+                    cancellationToken
+                );
+                voucherCode = entry.EntryCode;
+            }
+            catch
+            {
+                // Keep default voucher code on fallback
+            }
+        }
+
         payslip.Status = PayslipStatus.Paid;
         payslip.PaidAt = now;
         payslip.PaymentMethod = method;
@@ -391,6 +421,32 @@ public class PayslipService : IPayslipService
 
             var now = DateTime.UtcNow;
             var voucherCode = $"PC-{now:yyyyMM}-{Random.Shared.Next(1000, 9999)}";
+
+            if (_cashbookService != null && payslip.NetSalary > 0)
+            {
+                try
+                {
+                    FinanceAccount account = method.Contains("BANK") || method.Contains("TRANSFER")
+                        ? await _cashbookService.GetOrCreateBankAccountAsync(payslip.BranchId, ct: cancellationToken)
+                        : await _cashbookService.GetOrCreateSafeAsync(payslip.BranchId, cancellationToken);
+
+                    var entry = await _cashbookService.DisburseCashAsync(
+                        account.Id,
+                        account.AccountType,
+                        payslip.NetSalary,
+                        "SALARY",
+                        payslip.Id,
+                        payslip.PayslipCode,
+                        $"Chi trả lương kỳ {payslip.PeriodMonth} cho nhân viên {payslip.Employee?.FullName ?? payslip.EmployeeId.ToString()}",
+                        cancellationToken
+                    );
+                    voucherCode = entry.EntryCode;
+                }
+                catch
+                {
+                    // Keep default voucher code on fallback
+                }
+            }
 
             payslip.Status = PayslipStatus.Paid;
             payslip.PaidAt = now;

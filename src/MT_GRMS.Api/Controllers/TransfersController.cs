@@ -11,8 +11,8 @@ namespace MT_GRMS.Api.Controllers;
 public sealed class TransfersController(ITransferService service) : BaseApiController
 {
     [HttpGet]
-    public async Task<ActionResult<ApiResponse<PagedResult<TransferDto>>>> Get([FromQuery] string? search, [FromQuery] Guid? fromBranchId, [FromQuery] Guid? toBranchId, [FromQuery] TransferStatus? status, [FromQuery] DateTime? fromDate, [FromQuery] DateTime? toDate, [FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default)
-        => Ok(ApiResponse<PagedResult<TransferDto>>.Ok(await service.GetTransfersAsync(new TransferFilterParams(search, fromBranchId, toBranchId, status, fromDate, toDate, page, pageSize), ct)));
+    public async Task<ActionResult<ApiResponse<PagedResult<TransferDto>>>> Get([FromQuery] string? search, [FromQuery] Guid? fromBranchId, [FromQuery] Guid? toBranchId, [FromQuery] TransferStatus? status, [FromQuery] DateTime? fromDate, [FromQuery] DateTime? toDate, [FromQuery] int page = 1, [FromQuery] int pageSize = 20, [FromQuery] List<TransferStatus>? statuses = null, [FromQuery] string? dateField = null, [FromQuery] string? receiveStatus = null, CancellationToken ct = default)
+        => Ok(ApiResponse<PagedResult<TransferDto>>.Ok(await service.GetTransfersAsync(new TransferFilterParams(search, fromBranchId, toBranchId, status, fromDate, toDate, page, pageSize, statuses, dateField, receiveStatus), ct)));
 
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<ApiResponse<TransferDto>>> GetById(Guid id, CancellationToken ct)
