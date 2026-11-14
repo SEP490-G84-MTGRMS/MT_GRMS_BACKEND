@@ -78,7 +78,8 @@ public record ConfirmCloseShiftRequest(
     decimal DroppedToSafeAmount,
     string? ReceiverUserId = null,
     string? Notes = null,
-    string? EarlyOrLateReason = null
+    string? EarlyOrLateReason = null,
+    string? DiscrepancyReason = null
 );
 
 /// <summary>
@@ -213,7 +214,11 @@ public record ShiftDetailResponse(
     Guid? ClosedByUserId = null,
     string? ForceCloseReason = null,
     IReadOnlyList<ShiftParticipantDto>? Participants = null,
-    IReadOnlyList<ShiftCloseConfirmationDto>? CloseConfirmations = null
+    IReadOnlyList<ShiftCloseConfirmationDto>? CloseConfirmations = null,
+    DateOnly? BusinessDate = null,
+    string? DiscrepancyReason = null,
+    Guid? OpenedScheduleId = null,
+    Guid? ClosedScheduleId = null
 );
 
 /// <summary>

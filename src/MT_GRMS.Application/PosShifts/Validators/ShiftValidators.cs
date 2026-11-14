@@ -39,6 +39,7 @@ public class ConfirmCloseShiftRequestValidator : AbstractValidator<ConfirmCloseS
         RuleFor(x => x.ReceiverUserId).MaximumLength(100);
         RuleFor(x => x.Notes).MaximumLength(500);
         RuleFor(x => x.EarlyOrLateReason).MaximumLength(500);
+        RuleFor(x => x.DiscrepancyReason).MaximumLength(500);
     }
 }
 
