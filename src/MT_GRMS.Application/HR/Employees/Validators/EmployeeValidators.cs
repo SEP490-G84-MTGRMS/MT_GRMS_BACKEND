@@ -162,7 +162,7 @@ public class CreateEmployeeRequestValidator : AbstractValidator<CreateEmployeeRe
                 .MaximumLength(100).WithMessage("Chủ tài khoản ngân hàng không vượt quá 100 ký tự.");
         });
 
-        When(x => !string.IsNullOrWhiteSpace(x.AvatarUrl), () =>
+        When(x => !string.IsNullOrWhiteSpace(x.AvatarUrl) && !x.AvatarUrl!.TrimStart().StartsWith("data:image/", StringComparison.OrdinalIgnoreCase), () =>
         {
             RuleFor(x => x.AvatarUrl)
                 .MaximumLength(255).WithMessage("Đường dẫn ảnh đại diện không vượt quá 255 ký tự.");
@@ -296,7 +296,7 @@ public class UpdateEmployeeRequestValidator : AbstractValidator<UpdateEmployeeRe
                 .MaximumLength(100).WithMessage("Chủ tài khoản ngân hàng không vượt quá 100 ký tự.");
         });
 
-        When(x => !string.IsNullOrWhiteSpace(x.AvatarUrl), () =>
+        When(x => !string.IsNullOrWhiteSpace(x.AvatarUrl) && !x.AvatarUrl!.TrimStart().StartsWith("data:image/", StringComparison.OrdinalIgnoreCase), () =>
         {
             RuleFor(x => x.AvatarUrl)
                 .MaximumLength(255).WithMessage("Đường dẫn ảnh đại diện không vượt quá 255 ký tự.");

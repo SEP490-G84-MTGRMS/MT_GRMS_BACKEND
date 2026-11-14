@@ -1,5 +1,6 @@
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.Expenses.Dtos;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Enums;
@@ -13,6 +14,7 @@ public class ExpenseService : IExpenseService
     private readonly ICashbookService _cashbookService;
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly ICloudinaryService? _cloudinaryService;
 
     // Định mức thẩm quyền theo BR-17-06 / TT 152/2025/TT-BTC
     private const decimal T1_AutoApprovalThreshold = 500_000m; // Ngưỡng tự duyệt chi dưới 500k
@@ -23,12 +25,14 @@ public class ExpenseService : IExpenseService
         IExpenseRepository expenseRepo,
         ICashbookService cashbookService,
         ITenantContext tenantContext,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        ICloudinaryService? cloudinaryService = null)
     {
         _expenseRepo = expenseRepo;
         _cashbookService = cashbookService;
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
+        _cloudinaryService = cloudinaryService;
     }
 
     public async Task<ExpenseVoucherResponse> CreateExpenseAsync(CreateExpenseRequest request, CancellationToken ct = default)
@@ -45,9 +49,17 @@ public class ExpenseService : IExpenseService
             ValidateFinancialManagementRole("thực hiện rút vốn hoặc nộp thuế");
         }
 
+        var voucherCode = "EXP-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff");
+        var resolvedEvidenceUrl = await CloudinaryDataUrlHelper.ResolveImageUrlAsync(
+            _cloudinaryService,
+            request.EvidenceAttachmentUrl,
+            "mtgrms/expenses",
+            voucherCode,
+            ct);
+
         var voucher = new ExpenseVoucher
         {
-            VoucherCode = "EXP-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff"),
+            VoucherCode = voucherCode,
             BranchId = request.BranchId,
             BeneficiaryName = request.BeneficiaryName,
             Category = request.Category,
@@ -57,7 +69,7 @@ public class ExpenseService : IExpenseService
             IsTaxDeductible = request.IsTaxDeductible,
             InvoiceNumber = request.InvoiceNumber,
             SellerTaxCode = request.SellerTaxCode,
-            EvidenceAttachmentUrl = request.EvidenceAttachmentUrl,
+            EvidenceAttachmentUrl = resolvedEvidenceUrl,
             ExpenseDate = DateTime.UtcNow,
             Note = request.Note,
             Nature = request.Nature,

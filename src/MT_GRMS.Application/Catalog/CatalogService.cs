@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
@@ -16,13 +17,14 @@ public class CatalogService : ICatalogService
     private readonly IProductPriceHistoryRepository? _priceHistoryRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
+    private readonly ICloudinaryService? _cloudinaryService;
 
     public CatalogService(
         IProductRepository productRepository,
         ICategoryRepository categoryRepository,
         IUnitOfWork unitOfWork,
         ITenantContext tenantContext)
-        : this(productRepository, categoryRepository, null, unitOfWork, tenantContext)
+        : this(productRepository, categoryRepository, null, unitOfWork, tenantContext, null)
     {
     }
 
@@ -31,13 +33,15 @@ public class CatalogService : ICatalogService
         ICategoryRepository categoryRepository,
         IProductPriceHistoryRepository? priceHistoryRepository,
         IUnitOfWork unitOfWork,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        ICloudinaryService? cloudinaryService = null)
     {
         _productRepository = productRepository;
         _categoryRepository = categoryRepository;
         _priceHistoryRepository = priceHistoryRepository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
+        _cloudinaryService = cloudinaryService;
     }
 
     private static ProductResponse MapToResponse(Product p, bool canViewCostPrice = true, bool hasOrders = false)
@@ -256,10 +260,17 @@ public class CatalogService : ICatalogService
             imageUrls.Add(request.ImageUrl.Trim());
         }
 
-        if (imageUrls.Any(u => u.Length > 500))
+        if (imageUrls.Any(u => !CloudinaryDataUrlHelper.IsDataImageUrl(u) && u.Length > 500))
         {
             throw new ArgumentException("Đường dẫn ảnh hàng hóa không được vượt quá 500 ký tự.");
         }
+
+        imageUrls = await CloudinaryDataUrlHelper.ResolveImageUrlsAsync(
+            _cloudinaryService,
+            imageUrls,
+            "mtgrms/products",
+            $"product-{code}",
+            cancellationToken);
 
         var productStatus = !string.IsNullOrWhiteSpace(request.Status) && Enum.TryParse<ProductStatus>(request.Status, true, out var parsedStatus)
             ? parsedStatus
@@ -505,7 +516,12 @@ public class CatalogService : ICatalogService
 
         if (request.ImageUrls != null)
         {
-            product.ImageUrls = request.ImageUrls.Where(u => !string.IsNullOrWhiteSpace(u)).Select(u => u.Trim()).ToList();
+            product.ImageUrls = await CloudinaryDataUrlHelper.ResolveImageUrlsAsync(
+                _cloudinaryService,
+                request.ImageUrls,
+                "mtgrms/products",
+                $"product-{product.ProductCode}",
+                cancellationToken);
         }
         else if (request.ImageUrl != null)
         {
@@ -515,7 +531,16 @@ public class CatalogService : ICatalogService
             }
             else if (!product.ImageUrls.Contains(request.ImageUrl.Trim()))
             {
-                product.ImageUrls = new List<string> { request.ImageUrl.Trim() };
+                var resolvedUrl = await CloudinaryDataUrlHelper.ResolveImageUrlAsync(
+                    _cloudinaryService,
+                    request.ImageUrl,
+                    "mtgrms/products",
+                    $"product-{product.ProductCode}",
+                    cancellationToken);
+                if (!string.IsNullOrWhiteSpace(resolvedUrl))
+                {
+                    product.ImageUrls = new List<string> { resolvedUrl };
+                }
             }
         }
 

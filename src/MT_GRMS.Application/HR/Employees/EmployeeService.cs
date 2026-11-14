@@ -1,5 +1,7 @@
+using System.Text.Json;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.HR.Employees.Dtos;
 using MT_GRMS.Application.HR.Employees.Validators;
 using MT_GRMS.Domain.Common;
@@ -18,17 +20,20 @@ public class EmployeeService : IEmployeeService
     private readonly IUserRepository _userRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
+    private readonly ICloudinaryService? _cloudinaryService;
 
     public EmployeeService(
         IEmployeeRepository employeeRepository,
         IUserRepository userRepository,
         IUnitOfWork unitOfWork,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        ICloudinaryService? cloudinaryService = null)
     {
         _employeeRepository = employeeRepository;
         _userRepository = userRepository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
+        _cloudinaryService = cloudinaryService;
     }
 
     public async Task<PagedResult<EmployeeSummaryDto>> GetEmployeesPagedAsync(
@@ -196,6 +201,12 @@ public class EmployeeService : IEmployeeService
 
         ValidateOtRates(request.OtWeekday, request.OtSunday);
 
+        var (resolvedAvatarUrl, resolvedFaceImageUrls) = await ResolveEmployeeMediaAsync(
+            request.AvatarUrl,
+            request.FaceImageUrls,
+            employeeCode,
+            cancellationToken);
+
         var employee = new Employee
         {
             TenantId = currentTenantId,
@@ -207,9 +218,9 @@ public class EmployeeService : IEmployeeService
             Gender = request.Gender,
             Phone = normalizedPhone,
             Email = string.IsNullOrWhiteSpace(request.Email) ? null : request.Email.Trim(),
-            AvatarUrl = string.IsNullOrWhiteSpace(request.AvatarUrl) ? null : request.AvatarUrl.Trim(),
+            AvatarUrl = resolvedAvatarUrl,
             FaceDescriptor = string.IsNullOrWhiteSpace(request.FaceDescriptor) ? null : request.FaceDescriptor.Trim(),
-            FaceImageUrls = string.IsNullOrWhiteSpace(request.FaceImageUrls) ? null : request.FaceImageUrls.Trim(),
+            FaceImageUrls = resolvedFaceImageUrls,
             FaceRegisteredAt = !string.IsNullOrWhiteSpace(request.FaceDescriptor) ? VnNow : null,
             Address = string.IsNullOrWhiteSpace(request.Address) ? null : request.Address.Trim(),
             StartDate = request.StartDate ?? VnNow.Date,
@@ -345,18 +356,27 @@ public class EmployeeService : IEmployeeService
         employee.BankAccountNumber = string.IsNullOrWhiteSpace(request.BankAccountNumber) ? null : request.BankAccountNumber.Trim();
         employee.BankName = string.IsNullOrWhiteSpace(request.BankName) ? null : request.BankName.Trim();
         employee.BankAccountHolder = string.IsNullOrWhiteSpace(request.BankAccountHolder) ? null : request.BankAccountHolder.Trim().ToUpperInvariant();
-        if (request.AvatarUrl != null)
+        if (request.AvatarUrl != null || request.FaceImageUrls != null)
         {
-            employee.AvatarUrl = string.IsNullOrWhiteSpace(request.AvatarUrl) ? null : request.AvatarUrl.Trim();
+            var (resolvedAvatarUrl, resolvedFaceImageUrls) = await ResolveEmployeeMediaAsync(
+                request.AvatarUrl,
+                request.FaceImageUrls,
+                employee.EmployeeCode,
+                cancellationToken);
+
+            if (request.AvatarUrl != null)
+            {
+                employee.AvatarUrl = resolvedAvatarUrl;
+            }
+            if (request.FaceImageUrls != null)
+            {
+                employee.FaceImageUrls = resolvedFaceImageUrls;
+            }
         }
         if (request.FaceDescriptor != null)
         {
             employee.FaceDescriptor = string.IsNullOrWhiteSpace(request.FaceDescriptor) ? null : request.FaceDescriptor.Trim();
             employee.FaceRegisteredAt = !string.IsNullOrWhiteSpace(request.FaceDescriptor) ? VnNow : null;
-        }
-        if (request.FaceImageUrls != null)
-        {
-            employee.FaceImageUrls = string.IsNullOrWhiteSpace(request.FaceImageUrls) ? null : request.FaceImageUrls.Trim();
         }
         employee.UpdatedAt = VnNow;
 
@@ -983,5 +1003,64 @@ public class EmployeeService : IEmployeeService
                 throw new BusinessException("INVALID_OT_RATE", "Hệ số làm thêm giờ (OT) Chủ nhật / Nghỉ tuần không được nhỏ hơn 100%.");
             }
         }
+    }
+
+    private async Task<(string? AvatarUrl, string? FaceImageUrlsJson)> ResolveEmployeeMediaAsync(
+        string? rawAvatarUrl,
+        string? rawFaceImageUrlsJson,
+        string employeeCode,
+        CancellationToken cancellationToken)
+    {
+        var uploadedCache = new Dictionary<string, string>(StringComparer.Ordinal);
+        const string folder = "mtgrms/employees";
+
+        var resolvedAvatar = string.IsNullOrWhiteSpace(rawAvatarUrl)
+            ? null
+            : await CloudinaryDataUrlHelper.ResolveImageUrlAsync(
+                _cloudinaryService,
+                rawAvatarUrl,
+                folder,
+                employeeCode,
+                cancellationToken,
+                uploadedCache);
+
+        string? resolvedFaceUrlsJson = string.IsNullOrWhiteSpace(rawFaceImageUrlsJson) ? null : rawFaceImageUrlsJson.Trim();
+        if (resolvedFaceUrlsJson != null)
+        {
+            if (resolvedFaceUrlsJson.StartsWith('['))
+            {
+                try
+                {
+                    var items = JsonSerializer.Deserialize<List<string>>(resolvedFaceUrlsJson);
+                    if (items != null)
+                    {
+                        var resolvedItems = await CloudinaryDataUrlHelper.ResolveImageUrlsAsync(
+                            _cloudinaryService,
+                            items,
+                            folder,
+                            employeeCode,
+                            cancellationToken,
+                            uploadedCache);
+                        resolvedFaceUrlsJson = resolvedItems.Count > 0 ? JsonSerializer.Serialize(resolvedItems) : null;
+                    }
+                }
+                catch (JsonException)
+                {
+                    // Giữ nguyên nếu chuỗi không phải JSON array hợp lệ
+                }
+            }
+            else if (CloudinaryDataUrlHelper.IsDataImageUrl(resolvedFaceUrlsJson))
+            {
+                resolvedFaceUrlsJson = await CloudinaryDataUrlHelper.ResolveImageUrlAsync(
+                    _cloudinaryService,
+                    resolvedFaceUrlsJson,
+                    folder,
+                    employeeCode,
+                    cancellationToken,
+                    uploadedCache);
+            }
+        }
+
+        return (resolvedAvatar, resolvedFaceUrlsJson);
     }
 }

@@ -1,4 +1,5 @@
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Schedules.Dtos;
 using MT_GRMS.Domain.Entities.HR;
@@ -14,19 +15,22 @@ public class ScheduleApprovalService : IScheduleApprovalService
     private readonly IEmployeeRepository _employeeRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
+    private readonly ICloudinaryService? _cloudinaryService;
 
     public ScheduleApprovalService(
         IScheduleApprovalRequestRepository approvalRepository,
         IScheduleRepository scheduleRepository,
         IEmployeeRepository employeeRepository,
         IUnitOfWork unitOfWork,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        ICloudinaryService? cloudinaryService = null)
     {
         _approvalRepository = approvalRepository;
         _scheduleRepository = scheduleRepository;
         _employeeRepository = employeeRepository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
+        _cloudinaryService = cloudinaryService;
     }
 
     public async Task<ScheduleApprovalRequestDto> CreateRequestAsync(
@@ -90,7 +94,12 @@ public class ScheduleApprovalService : IScheduleApprovalService
             await ValidateDailyWorkAndOvertimeLimitAsync(schedule, requestedOtMinutes, null, cancellationToken);
         }
 
-        var imageUrls = BuildImageUrls(dto);
+        var imageUrls = await CloudinaryDataUrlHelper.ResolveImageUrlsAsync(
+            _cloudinaryService,
+            BuildImageUrls(dto),
+            "mtgrms/schedule-requests",
+            $"schedule-{scheduleId:N}",
+            cancellationToken);
 
         var request = new ScheduleApprovalRequest
         {
@@ -363,7 +372,12 @@ public class ScheduleApprovalService : IScheduleApprovalService
             }
         }
 
-        var imageUrls = BuildImageUrls(dto);
+        var imageUrls = await CloudinaryDataUrlHelper.ResolveImageUrlsAsync(
+            _cloudinaryService,
+            BuildImageUrls(dto),
+            "mtgrms/schedule-requests",
+            $"schedule-{request.ScheduleId:N}",
+            cancellationToken);
         request.Reason = dto.Reason.Trim();
         request.EvidenceImageUrls = imageUrls;
         request.LeaveType = request.RequestType == ScheduleRequestType.LeaveRequest ? dto.LeaveType : null;
