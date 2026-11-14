@@ -23,7 +23,7 @@ public class User : BaseEntity<string>
     public bool IsActive { get; set; } = true;
     public bool IsAdmin { get; set; } = false;
     public bool IsEmailVerified { get; set; } = false;
-    public bool IsTwoFactorEnabled { get; set; } = true;
+    public bool IsTwoFactorEnabled { get; set; } = false;
     public string NormalizedEmail { get; set; } = string.Empty;
     public string? NormalizedPhone { get; set; }
     public DateTime? TrialConsumedAt { get; set; }

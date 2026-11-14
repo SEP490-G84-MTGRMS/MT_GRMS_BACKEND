@@ -87,7 +87,7 @@ public class MediaController : BaseApiController
                 ? await _context.Database.BeginTransactionAsync(cancellationToken)
                 : null;
             var tenant = _context.Database.IsRelational()
-                ? await _context.Tenants.FromSqlInterpolated($"SELECT * FROM \"Tenants\" WHERE \"Id\" = {tenantId} FOR UPDATE").SingleOrDefaultAsync(cancellationToken)
+                ? await _context.Tenants.FromSqlInterpolated($"SELECT * FROM \"Tenants\" WHERE \"TenantID\" = {tenantId} FOR UPDATE").SingleOrDefaultAsync(cancellationToken)
                 : await _context.Tenants.SingleOrDefaultAsync(t => t.Id == tenantId, cancellationToken);
             if (tenant == null) return NotFound();
             var extraGb = tenant.StorageAddonExpiresAt > DateTime.UtcNow ? tenant.ExtraStorageGb : 0;
@@ -133,7 +133,7 @@ public class MediaController : BaseApiController
         var tenantId = User.FindFirst("tenant_id")?.Value;
         if (string.IsNullOrWhiteSpace(tenantId)) return Unauthorized();
         await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
-        var tenant = await _context.Tenants.FromSqlInterpolated($"SELECT * FROM \"Tenants\" WHERE \"Id\" = {tenantId} FOR UPDATE").SingleOrDefaultAsync(cancellationToken);
+        var tenant = await _context.Tenants.FromSqlInterpolated($"SELECT * FROM \"Tenants\" WHERE \"TenantID\" = {tenantId} FOR UPDATE").SingleOrDefaultAsync(cancellationToken);
         var media = await _context.TenantMedia.SingleOrDefaultAsync(m => m.Id == mediaId && m.TenantId == tenantId, cancellationToken);
         if (tenant == null || media == null) return NotFound();
         if (!await _cloudinaryService.DeleteImageAsync(media.PublicId, cancellationToken)) return StatusCode(503);

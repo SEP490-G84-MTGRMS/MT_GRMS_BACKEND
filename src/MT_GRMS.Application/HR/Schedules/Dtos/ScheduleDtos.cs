@@ -16,6 +16,16 @@ public record ManualAttendanceRequest(
     string? Note = null
 );
 
+public record ResetAttendanceRequest(
+    string? Reason = null
+);
+
+public record ResetAttendanceResponse(
+    ScheduleResponse Schedule,
+    bool HasUnpaidPayslip,
+    string Message
+);
+
 public record CreateScheduleItemRequest(
     Guid EmployeeId,
     Guid BranchId,
@@ -26,8 +36,6 @@ public record CreateScheduleItemRequest(
     TimeSpan? PlannedStartTime = null,
     TimeSpan? PlannedEndTime = null,
     decimal? DurationHours = null,
-    TimeSpan? AllowedCheckInStart = null,
-    TimeSpan? AllowedCheckInEnd = null,
     bool? IsCheckInNextDay = null
 );
 
@@ -41,8 +49,6 @@ public record UpdateScheduleRequest(
     TimeSpan? PlannedStartTime = null,
     TimeSpan? PlannedEndTime = null,
     decimal? DurationHours = null,
-    TimeSpan? AllowedCheckInStart = null,
-    TimeSpan? AllowedCheckInEnd = null,
     bool? IsCheckInNextDay = null,
     ScheduleStatus? Status = null
 );
@@ -68,8 +74,6 @@ public record CreateRecurringScheduleRequest(
     TimeSpan? PlannedStartTime = null,
     TimeSpan? PlannedEndTime = null,
     decimal? DurationHours = null,
-    TimeSpan? AllowedCheckInStart = null,
-    TimeSpan? AllowedCheckInEnd = null,
     bool? IsCheckInNextDay = null
 );
 
@@ -111,8 +115,6 @@ public record ScheduleResponse(
     TimeSpan PlannedStartTime,
     TimeSpan PlannedEndTime,
     decimal DurationHours,
-    TimeSpan AllowedCheckInStart,
-    TimeSpan AllowedCheckInEnd,
     bool IsCheckInNextDay,
     DateTime? CheckInTime,
     DateTime? CheckOutTime,
@@ -129,7 +131,6 @@ public record ScheduleResponse(
     string? ApprovalType,
     ScheduleApprovalStatus ApprovalStatus,
     string? ApprovalReason,
-    string? EvidenceImageUrl,
     string? ApprovedBy,
     DateTime? ApprovedAt,
     DateTime CreatedAt,

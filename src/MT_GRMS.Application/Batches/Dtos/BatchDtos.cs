@@ -72,17 +72,27 @@ public record BatchListItemDto(
     int DaysLeft,
     decimal QtyInitial,
     decimal QtyCurrent,
+    /// <summary>Đơn vị nhập (purchase unit).</summary>
     string Unit,
-    decimal CostPrice,
-    decimal TotalValuation,
-    string Status, // Expired, Critical, Warning, Normal
-    string? ZoneArea,
-    string? ShelfLocation,
-    string? OriginalGrnNo,
+    /// <summary>Đơn vị tồn / gốc (base unit) — số tồn đang tính theo đơn vị này.</summary>
+    string StockUnit = "",
+    /// <summary>1 đơn vị nhập = bao nhiêu đơn vị tồn. Ví dụ Thùng→Chai = 24.</summary>
+    decimal PurchaseToStockRate = 1m,
+    decimal CostPrice = 0m,
+    decimal TotalValuation = 0m,
+    string Status = "Normal", // Expired, Critical, Warning, Normal
+    string? ZoneArea = null,
+    string? ShelfLocation = null,
+    string? OriginalGrnNo = null,
     decimal QtyReserved = 0m,
     decimal QtyQuarantined = 0m,
     decimal QtyAvailable = 0m,
-    Guid? OriginalGrnId = null
+    Guid? OriginalGrnId = null,
+    bool IsWeightProduct = false,
+    bool AllowRepack = false,
+    decimal PackagedQty = 0m,
+    int PackageCount = 0,
+    decimal RawSellableQty = 0m
 );
 
 public record BatchPagedResultDto(

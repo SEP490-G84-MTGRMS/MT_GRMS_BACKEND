@@ -3,6 +3,7 @@ using OrderItem = MT_GRMS.Domain.Entities.Sales.OrderDetail;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using MT_GRMS.Domain.Enums;
 using Promotion = MT_GRMS.Domain.Entities.Sales.Promotion;
@@ -158,6 +159,18 @@ ALTER TABLE IF EXISTS ""Suppliers"" ADD COLUMN IF NOT EXISTS ""UrgentLeadTimeHou
 ALTER TABLE IF EXISTS ""Suppliers"" ADD COLUMN IF NOT EXISTS ""UrgentFeePercent"" numeric(5,2) NOT NULL DEFAULT 0;
 
 ALTER TABLE IF EXISTS ""SupplierProducts"" ADD COLUMN IF NOT EXISTS ""AllowedShortageQuantity"" integer NOT NULL DEFAULT 0;
+
+-- RULE giá nguồn: AgreedWholesalePrice nullable (0 cũ → NULL = chưa thỏa thuận)
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'SupplierProducts' AND column_name = 'AgreedWholesalePrice'
+    ) THEN
+        ALTER TABLE ""SupplierProducts"" ALTER COLUMN ""AgreedWholesalePrice"" DROP NOT NULL;
+        UPDATE ""SupplierProducts"" SET ""AgreedWholesalePrice"" = NULL WHERE ""AgreedWholesalePrice"" = 0;
+    END IF;
+END $$;
 
 DO $$
 BEGIN
@@ -379,6 +392,145 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
     }
 
+    private static async Task EnsureWeightRepackSchemaAsync(AppDbContext context, ILogger? logger = null)
+    {
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+                ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""AllowRepack"" boolean NOT NULL DEFAULT FALSE;
+                ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""SellRawByWeight"" boolean NOT NULL DEFAULT TRUE;
+
+                CREATE TABLE IF NOT EXISTS ""RepackOrders"" (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""Code"" character varying(40) NOT NULL,
+                    ""BranchId"" uuid NOT NULL,
+                    ""ProductId"" uuid NOT NULL,
+                    ""BranchStockId"" uuid NOT NULL,
+                    ""RepackType"" character varying(20) NOT NULL DEFAULT 'PORTIONING',
+                    ""InputWeight"" numeric(18,3) NOT NULL DEFAULT 0,
+                    ""WasteWeight"" numeric(18,3) NOT NULL DEFAULT 0,
+                    ""WasteReason"" character varying(40) NULL,
+                    ""WasteNote"" character varying(500) NULL,
+                    ""UnitCostSnapshot"" numeric(18,2) NOT NULL DEFAULT 0,
+                    ""WasteCostAmount"" numeric(18,2) NOT NULL DEFAULT 0,
+                    ""DefaultUnitPricePerKg"" numeric(18,2) NOT NULL DEFAULT 0,
+                    ""Status"" character varying(20) NOT NULL DEFAULT 'COMPLETED',
+                    ""CompletedAt"" timestamp without time zone NULL,
+                    ""CreatedBy"" uuid NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""UpdatedAt"" timestamp without time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT FALSE
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS ""UX_RepackOrders_Tenant_Code""
+                    ON ""RepackOrders"" (""TenantId"", ""Code"");
+                CREATE INDEX IF NOT EXISTS ""IX_RepackOrders_Tenant_BranchStock""
+                    ON ""RepackOrders"" (""TenantId"", ""BranchStockId"");
+
+                CREATE TABLE IF NOT EXISTS ""Packages"" (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""BranchId"" uuid NOT NULL,
+                    ""ProductId"" uuid NOT NULL,
+                    ""BranchStockId"" uuid NOT NULL,
+                    ""InternalCode"" character varying(40) NOT NULL,
+                    ""Barcode"" character varying(50) NULL,
+                    ""NetWeight"" numeric(18,3) NOT NULL DEFAULT 0,
+                    ""SellingPrice"" numeric(18,2) NOT NULL DEFAULT 0,
+                    ""ExpiryDate"" timestamp without time zone NULL,
+                    ""RepackType"" character varying(20) NOT NULL DEFAULT 'PORTIONING',
+                    ""RepackOrderId"" uuid NULL,
+                    ""GoodsReceiptLineId"" uuid NULL,
+                    ""Status"" character varying(20) NOT NULL DEFAULT 'AVAILABLE',
+                    ""VoidMode"" character varying(30) NULL,
+                    ""VoidReason"" character varying(500) NULL,
+                    ""SoldOrderId"" uuid NULL,
+                    ""SoldOrderDetailId"" uuid NULL,
+                    ""SoldAt"" timestamp without time zone NULL,
+                    ""PriceHistoryJson"" text NULL,
+                    ""CreatedBy"" uuid NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""UpdatedAt"" timestamp without time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT FALSE
+                );
+
+                CREATE UNIQUE INDEX IF NOT EXISTS ""UX_Packages_Tenant_InternalCode""
+                    ON ""Packages"" (""TenantId"", ""InternalCode"");
+                CREATE UNIQUE INDEX IF NOT EXISTS ""UX_Packages_Tenant_Barcode""
+                    ON ""Packages"" (""TenantId"", ""Barcode"") WHERE ""Barcode"" IS NOT NULL;
+                CREATE INDEX IF NOT EXISTS ""IX_Packages_BranchStock_Status""
+                    ON ""Packages"" (""BranchStockId"", ""Status"");
+
+                ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""PackageId"" uuid NULL;
+            ");
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ schema Weight / Repack / Package.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ schema Weight Repack");
+        }
+    }
+
+    private static async Task EnsureSupplierExchangeSchemaAsync(AppDbContext context, ILogger? logger = null)
+    {
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync(@"
+                CREATE TABLE IF NOT EXISTS ""SupplierReturnPolicies"" (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""SupplierId"" uuid NOT NULL,
+                    ""AllowReturn"" boolean NOT NULL DEFAULT TRUE,
+                    ""AllowedReturnTypesJson"" character varying(1000) NOT NULL DEFAULT '[""QUALITY_DEFECT"",""NEAR_EXPIRY"",""WRONG_ITEM""]',
+                    ""AllowedResolutionTypesJson"" character varying(1000) NOT NULL DEFAULT '[""REDUCE_PAYABLE"",""EXCHANGE"",""REFUND""]',
+                    ""DefaultResolutionType"" character varying(50) NOT NULL DEFAULT 'REDUCE_PAYABLE',
+                    ""NearExpiryMinDaysLeft"" integer NULL,
+                    ""RequireEvidenceImage"" boolean NOT NULL DEFAULT TRUE,
+                    ""MaxReturnDaysAfterReceipt"" integer NULL,
+                    ""CostShareEnabled"" boolean NOT NULL DEFAULT FALSE,
+                    ""StoreCostSharePercent"" numeric(5,2) NULL,
+                    ""SupplierCostSharePercent"" numeric(5,2) NULL,
+                    ""CostShareBase"" character varying(32) NOT NULL DEFAULT 'REPLACEMENT_VALUE',
+                    ""RequireStorePaymentBeforeReplacement"" boolean NOT NULL DEFAULT TRUE,
+                    ""Notes"" character varying(2000) NULL,
+                    ""IsActive"" boolean NOT NULL DEFAULT TRUE,
+                    ""CreatedBy"" uuid NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""UpdatedAt"" timestamp without time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT FALSE
+                );
+
+                CREATE INDEX IF NOT EXISTS ""IX_SupplierReturnPolicies_Tenant_Supplier_Active""
+                    ON ""SupplierReturnPolicies"" (""TenantId"", ""SupplierId"", ""IsActive"");
+
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""ReplacementStatus"" character varying(50) NULL DEFAULT 'NOT_REQUIRED';
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""PolicyId"" uuid NULL;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""PolicySnapshotJson"" text NULL;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""StoreCostSharePercentSnapshot"" numeric(5,2) NULL;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""SupplierCostSharePercentSnapshot"" numeric(5,2) NULL;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""ReplacementValue"" numeric(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""StorePayableAmount"" numeric(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""StorePaidAmount"" numeric(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""SupplierBearAmount"" numeric(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""SupplierConfirmedBy"" character varying(100) NULL;
+                ALTER TABLE ""SupplierReturns"" ADD COLUMN IF NOT EXISTS ""HandoverNote"" character varying(1000) NULL;
+
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""ExchangePoOrderedQty"" numeric(18,3) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""ReplacementUnitPrice"" numeric(18,2) NOT NULL DEFAULT 0;
+
+                ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SourceType"" character varying(50) NULL;
+                ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SourceSupplierReturnId"" uuid NULL;
+                ALTER TABLE ""PurchaseOrderDetails"" ADD COLUMN IF NOT EXISTS ""SourceSupplierReturnLineId"" uuid NULL;
+            ");
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ schema Supplier Exchange / Return Policy.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ schema Supplier Exchange");
+        }
+    }
+
     private static async Task EnsureStocktakesSchemaAsync(AppDbContext context, ILogger? logger = null)
     {
         try
@@ -393,6 +545,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
                 ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""StocktakeLineId"" uuid NULL;
                 ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""SupplierAcceptedQty"" numeric(18,3) NOT NULL DEFAULT 0.000;
+                UPDATE ""SupplierReturnLines"" SET ""SupplierAcceptedQty"" = 0 WHERE ""SupplierAcceptedQty"" IS NULL;
+                ALTER TABLE ""SupplierReturnLines"" ALTER COLUMN ""SupplierAcceptedQty"" SET DEFAULT 0.000;
+                ALTER TABLE ""SupplierReturnLines"" ALTER COLUMN ""SupplierAcceptedQty"" SET NOT NULL;
 
                 CREATE TABLE IF NOT EXISTS ""Stocktakes"" (
                     ""Id"" uuid NOT NULL PRIMARY KEY,
@@ -742,8 +897,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
     }
 
-    public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null)
+    public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null, bool seedSampleData = true)
     {
+        var schemaTimer = Stopwatch.StartNew();
         // 0. Bổ sung các cột schema còn thiếu trên Cloud DB
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);", logger);
@@ -941,8 +1097,8 @@ END $$;
                         ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""ImageUrls"" text[] DEFAULT ARRAY[]::text[];
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""IsAdmin"" boolean DEFAULT false;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""IsEmailVerified"" boolean DEFAULT false;
-                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""IsTwoFactorEnabled"" boolean NOT NULL DEFAULT true;
-                        UPDATE ""Users"" SET ""IsTwoFactorEnabled"" = true WHERE ""IsTwoFactorEnabled"" IS NULL;
+                        ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""IsTwoFactorEnabled"" boolean NOT NULL DEFAULT false;
+                        UPDATE ""Users"" SET ""IsTwoFactorEnabled"" = false WHERE ""IsTwoFactorEnabled"" IS NULL;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""MustChangePassword"" boolean DEFAULT false;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""LastLoginAt"" timestamp without time zone;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""LastLoginIp"" text;
@@ -1237,8 +1393,6 @@ END $$;
                             ""StartTime"" time without time zone NOT NULL,
                             ""EndTime"" time without time zone NOT NULL,
                             ""DurationHours"" numeric(4,2) NOT NULL DEFAULT 4.00,
-                            ""AllowedCheckInStart"" time without time zone NOT NULL DEFAULT '00:00:00',
-                            ""AllowedCheckInEnd"" time without time zone NOT NULL DEFAULT '23:59:59',
                             ""IsCheckInNextDay"" boolean NOT NULL DEFAULT false,
                             ""BranchIds"" character varying(2000),
                             ""Description"" character varying(255),
@@ -1425,8 +1579,6 @@ END $$;
                             ""PlannedStartTime"" time without time zone NOT NULL DEFAULT '08:00:00',
                             ""PlannedEndTime"" time without time zone NOT NULL DEFAULT '17:00:00',
                             ""DurationHours"" numeric(4,2) NOT NULL DEFAULT 4.00,
-                            ""AllowedCheckInStart"" time without time zone NOT NULL DEFAULT '00:00:00',
-                            ""AllowedCheckInEnd"" time without time zone NOT NULL DEFAULT '23:59:59',
                             ""IsCheckInNextDay"" boolean NOT NULL DEFAULT false,
                             ""CheckInTime"" timestamp without time zone,
                             ""CheckInMethod"" character varying(30),
@@ -1443,7 +1595,6 @@ END $$;
                             ""ApprovalType"" character varying(30),
                             ""ApprovalStatus"" character varying(30) NOT NULL DEFAULT 'NONE',
                             ""ApprovalReason"" character varying(255),
-                            ""EvidenceImageUrl"" character varying(255),
                             ""ApprovedBy"" character varying(100),
                             ""ApprovedAt"" timestamp without time zone,
                             ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -1501,13 +1652,21 @@ END $$;
                         ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""ApprovedAt"" timestamp without time zone;
                         ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""PlannedStartTime"" time without time zone DEFAULT '08:00:00';
                         ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""PlannedEndTime"" time without time zone DEFAULT '17:00:00';
-                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInStart"" time without time zone DEFAULT '00:00:00';
-                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInEnd"" time without time zone DEFAULT '23:59:59';
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" DROP COLUMN IF EXISTS ""AllowedCheckInStart"";
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" DROP COLUMN IF EXISTS ""AllowedCheckInEnd"";
+                        ALTER TABLE IF EXISTS ""EmployeeSchedules"" DROP COLUMN IF EXISTS ""EvidenceImageUrl"";
 
                         ALTER TABLE IF EXISTS ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""BranchIds"" character varying(2000);
                         ALTER TABLE IF EXISTS ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""IsCheckInNextDay"" boolean DEFAULT false;
-                        ALTER TABLE IF EXISTS ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInStart"" time without time zone DEFAULT '00:00:00';
-                        ALTER TABLE IF EXISTS ""ShiftConfigs"" ADD COLUMN IF NOT EXISTS ""AllowedCheckInEnd"" time without time zone DEFAULT '23:59:59';
+                        ALTER TABLE IF EXISTS ""ShiftConfigs"" DROP COLUMN IF EXISTS ""AllowedCheckInStart"";
+                        ALTER TABLE IF EXISTS ""ShiftConfigs"" DROP COLUMN IF EXISTS ""AllowedCheckInEnd"";
+
+                        ALTER TABLE IF EXISTS ""ScheduleApprovalRequests"" DROP COLUMN IF EXISTS ""EvidenceImageUrl"";
+                        ALTER TABLE IF EXISTS ""ScheduleApprovalRequests"" DROP COLUMN IF EXISTS ""SwapType"";
+                        ALTER TABLE IF EXISTS ""ScheduleApprovalRequests"" DROP COLUMN IF EXISTS ""TargetEmployeeID"";
+                        ALTER TABLE IF EXISTS ""ScheduleApprovalRequests"" DROP COLUMN IF EXISTS ""TargetScheduleID"";
+                        ALTER TABLE IF EXISTS ""ScheduleApprovalRequests"" DROP COLUMN IF EXISTS ""PeerConfirmed"";
+                        ALTER TABLE IF EXISTS ""ScheduleApprovalRequests"" DROP COLUMN IF EXISTS ""PeerConfirmedAt"";
 
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""UnpaidLeaveDays"" numeric(5,2) DEFAULT 0.00;
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookTransactionId"" uuid;
@@ -1543,6 +1702,8 @@ END $$;
                     await EnsureTenantSubscriptionColumnsAsync(context, logger);
                     await EnsureBranchProductsSchemaAsync(context, logger);
                     await EnsureStocktakesSchemaAsync(context, logger);
+                    await EnsureSupplierExchangeSchemaAsync(context, logger);
+                    await EnsureWeightRepackSchemaAsync(context, logger);
                     await EnsureMissingModelSchemaAsync(context, logger);
                 }
                 catch (Exception ex)
@@ -1574,6 +1735,15 @@ END $$;
             logger?.LogWarning(ex, "Lỗi trong quá trình kiểm tra cấu trúc CSDL hoặc migrations (bỏ qua nếu bảng đã tồn tại).");
         }
 
+        schemaTimer.Stop();
+        logger?.LogInformation("Database schema initialization phase completed in {ElapsedMilliseconds} ms.", schemaTimer.ElapsedMilliseconds);
+        if (!seedSampleData)
+        {
+            logger?.LogInformation("SeedSampleData=false — chỉ đồng bộ schema, bỏ qua nạp dữ liệu mẫu.");
+            return;
+        }
+
+        var seedTimer = Stopwatch.StartNew();
         // 2. PHÂN HỆ SAAS: Nạp danh sách các gói cước SubscriptionPlans (Idempotent: TRIAL 0k, STANDARD 99k & PRO 249k)
         var planTrial = await context.SubscriptionPlans.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.PlanCode == "TRIAL");
         if (planTrial == null)
@@ -2324,6 +2494,9 @@ END $$;
 
         // Backfill đơn vị tính cơ bản (BaseUnit, IsPurchaseUnit = true) cho mọi sản phẩm chưa có ProductUnit
         await EnsureAllProductsHaveBaseUnitAsync(context);
+
+        seedTimer.Stop();
+        logger?.LogInformation("Demo data seeding phase completed in {ElapsedMilliseconds} ms.", seedTimer.ElapsedMilliseconds);
     }
 
     private static async Task EnsureAllProductsHaveBaseUnitAsync(AppDbContext context)
@@ -3306,8 +3479,6 @@ END $$;
                 StartTime = TimeSpan.Zero,
                 EndTime = new TimeSpan(23, 59, 59),
                 DurationHours = 24.00m,
-                AllowedCheckInStart = TimeSpan.Zero,
-                AllowedCheckInEnd = new TimeSpan(23, 59, 59),
                 IsActive = true
             };
             await context.ShiftConfigs.AddAsync(shiftConfigSang);
@@ -3320,8 +3491,6 @@ END $$;
             shiftConfigSang.StartTime = TimeSpan.Zero;
             shiftConfigSang.EndTime = new TimeSpan(23, 59, 59);
             shiftConfigSang.DurationHours = 24.00m;
-            shiftConfigSang.AllowedCheckInStart = TimeSpan.Zero;
-            shiftConfigSang.AllowedCheckInEnd = new TimeSpan(23, 59, 59);
             shiftConfigSang.IsActive = true;
             shiftConfigSang.IsDeleted = false;
             await context.SaveChangesAsync();
@@ -3350,11 +3519,9 @@ END $$;
                         WorkDate = targetDate,
                         ShiftCode = shiftConfigSang.ShiftCode,
                         ShiftName = shiftConfigSang.ShiftName,
-                        PlannedStartTime = TimeSpan.Zero,
-                        PlannedEndTime = new TimeSpan(23, 59, 59),
-                        DurationHours = 24.00m,
-                        AllowedCheckInStart = TimeSpan.Zero,
-                        AllowedCheckInEnd = new TimeSpan(23, 59, 59),
+                        PlannedStartTime = shiftConfigSang.StartTime,
+                        PlannedEndTime = shiftConfigSang.EndTime,
+                        DurationHours = shiftConfigSang.DurationHours,
                         Status = ScheduleStatus.Scheduled
                     });
                 }
@@ -3364,11 +3531,9 @@ END $$;
                     existingSchedule.ShiftConfigId = shiftConfigSang.Id;
                     existingSchedule.ShiftCode = shiftConfigSang.ShiftCode;
                     existingSchedule.ShiftName = shiftConfigSang.ShiftName;
-                    existingSchedule.PlannedStartTime = TimeSpan.Zero;
-                    existingSchedule.PlannedEndTime = new TimeSpan(23, 59, 59);
-                    existingSchedule.DurationHours = 24.00m;
-                    existingSchedule.AllowedCheckInStart = TimeSpan.Zero;
-                    existingSchedule.AllowedCheckInEnd = new TimeSpan(23, 59, 59);
+                    existingSchedule.PlannedStartTime = shiftConfigSang.StartTime;
+                    existingSchedule.PlannedEndTime = shiftConfigSang.EndTime;
+                    existingSchedule.DurationHours = shiftConfigSang.DurationHours;
                     if (existingSchedule.Status == ScheduleStatus.Cancelled || existingSchedule.Status == ScheduleStatus.Draft)
                     {
                         existingSchedule.Status = ScheduleStatus.Scheduled;

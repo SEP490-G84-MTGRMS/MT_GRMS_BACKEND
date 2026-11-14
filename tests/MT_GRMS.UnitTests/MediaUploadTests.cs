@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata;
 using System.Security.Claims;
 using Moq;
 using MT_GRMS.Api.Controllers;
@@ -20,6 +21,7 @@ public class MediaUploadTests
     private readonly Mock<ICloudinaryService> _mockCloudinaryService;
     private readonly Mock<ILogger<MediaController>> _mockLogger;
     private readonly MediaController _controller;
+    private readonly AppDbContext _context;
 
     public MediaUploadTests()
     {
@@ -28,10 +30,10 @@ public class MediaUploadTests
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase($"MediaUpload_{Guid.NewGuid()}")
             .Options;
-        var context = new AppDbContext(options);
-        context.Tenants.Add(new Tenant { Id = "tenant-test", Name = "Test", Subdomain = "test", Code = "TEST", Status = "ACTIVE" });
-        context.SaveChanges();
-        _controller = new MediaController(_mockCloudinaryService.Object, _mockLogger.Object, context);
+        _context = new AppDbContext(options);
+        _context.Tenants.Add(new Tenant { Id = "tenant-test", Name = "Test", Subdomain = "test", Code = "TEST", Status = "ACTIVE" });
+        _context.SaveChanges();
+        _controller = new MediaController(_mockCloudinaryService.Object, _mockLogger.Object, _context);
         _controller.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext
@@ -39,6 +41,17 @@ public class MediaUploadTests
                 User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("tenant_id", "tenant-test") }, "test"))
             }
         };
+    }
+
+    [Fact]
+    public void TenantPrimaryKey_UsesTenantIdDatabaseColumn()
+    {
+        var entityType = _context.Model.FindEntityType(typeof(Tenant));
+        var idProperty = entityType?.FindProperty(nameof(Tenant.Id));
+        var table = StoreObjectIdentifier.Table("Tenants", null);
+
+        Assert.NotNull(idProperty);
+        Assert.Equal("TenantID", idProperty.GetColumnName(table));
     }
 
     [Fact]

@@ -160,37 +160,6 @@ public class CashbookController : BaseApiController
         return Ok(ApiResponse<CashbookEntryResponse>.Ok(result, "Đã tạo bút toán bù trừ gạch bỏ phiếu thành công."));
     }
 
-    [HttpGet("deposits/search")]
-    public async Task<ActionResult<ApiResponse<List<DepositSearchResponse>>>> SearchDeposits(
-        [FromQuery] string? keyword,
-        [FromQuery] Guid? branchId,
-        CancellationToken ct = default)
-    {
-        var result = await _expenseService.SearchDepositsAsync(keyword, branchId, ct);
-        return Ok(ApiResponse<List<DepositSearchResponse>>.Ok(result));
-    }
-
-    [HttpPost("deposits")]
-    [RequireIdempotency]
-    public async Task<ActionResult<ApiResponse<ExpenseVoucherResponse>>> CreateDeposit(
-        [FromBody] CreateDepositRequest request,
-        CancellationToken ct = default)
-    {
-        var result = await _expenseService.CreateDepositAsync(request, ct);
-        return Ok(ApiResponse<ExpenseVoucherResponse>.Ok(result, "Ghi nhận phiếu thu cọc thành công."));
-    }
-
-    [HttpPost("deposits/{id:guid}/refund")]
-    [RequireIdempotency]
-    public async Task<ActionResult<ApiResponse<ExpenseVoucherResponse>>> RefundDeposit(
-        [FromRoute] Guid id,
-        [FromBody] RefundDepositRequest request,
-        CancellationToken ct = default)
-    {
-        var result = await _expenseService.RefundDepositAsync(id, request, ct);
-        return Ok(ApiResponse<ExpenseVoucherResponse>.Ok(result, "Hoàn trả tiền cọc thành công."));
-    }
-
     [HttpGet("triage/pending")]
     public async Task<ActionResult<ApiResponse<List<ExpenseVoucherResponse>>>> GetPendingTriage(
         [FromQuery] Guid? branchId,

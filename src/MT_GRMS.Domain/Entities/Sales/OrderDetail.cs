@@ -25,6 +25,9 @@ public class OrderDetail : BaseEntity
     public string? UnitName { get; set; }
     public decimal ConversionRate { get; set; } = 1.00m;
 
+    /// <summary>Có giá trị khi dòng hóa đơn là bán khay.</summary>
+    public Guid? PackageId { get; set; }
+
     // Thuế GTGT từng dòng hàng theo TT 152/2025/TT-BTC
     public decimal AppliedVatRate { get; set; } = 0.01m;
     public decimal VatAmount { get; set; } = 0m;

@@ -26,28 +26,19 @@ public class CreateShiftConfigRequestValidator : AbstractValidator<CreateShiftCo
         When(x => !string.IsNullOrEmpty(x.ShiftCode), () =>
         {
             RuleFor(x => x.ShiftCode!)
-                .Length(2, 30).WithMessage("Mã ca phải từ 2 đến 30 ký tự.");
+                .Length(2, 30).WithMessage("Mã ca phải từ 2 đến 30 ký tự.")
+                .Matches(@"^[A-Za-z0-9_-]+$").WithMessage("Mã ca chỉ gồm chữ cái không dấu, số, gạch ngang/dưới.");
         });
+
+        RuleFor(x => x)
+            .Must(x => x.StartTime != x.EndTime || (x.DurationHours.HasValue && x.DurationHours.Value > 0))
+            .WithMessage("Giờ bắt đầu và giờ kết thúc ca không được trùng nhau (thời lượng ca phải lớn hơn 0).");
 
         When(x => x.DurationHours.HasValue, () =>
         {
             RuleFor(x => x.DurationHours!.Value)
                 .GreaterThan(0).WithMessage("Thời lượng ca làm việc phải lớn hơn 0.")
                 .LessThanOrEqualTo(24).WithMessage("Thời lượng ca làm việc không được vượt quá 24 giờ.");
-        });
-
-        When(x => x.AllowedCheckInStart.HasValue, () =>
-        {
-            RuleFor(x => x.AllowedCheckInStart!.Value)
-                .Must(t => t >= TimeSpan.Zero && t < TimeSpan.FromDays(1))
-                .WithMessage("Khung check-in sớm không hợp lệ.");
-        });
-
-        When(x => x.AllowedCheckInEnd.HasValue, () =>
-        {
-            RuleFor(x => x.AllowedCheckInEnd!.Value)
-                .Must(t => t >= TimeSpan.Zero && t < TimeSpan.FromDays(1))
-                .WithMessage("Khung check-in trễ không hợp lệ.");
         });
 
         When(x => !string.IsNullOrEmpty(x.Description), () =>
@@ -77,28 +68,19 @@ public class UpdateShiftConfigRequestValidator : AbstractValidator<UpdateShiftCo
         When(x => !string.IsNullOrEmpty(x.ShiftCode), () =>
         {
             RuleFor(x => x.ShiftCode!)
-                .Length(2, 30).WithMessage("Mã ca phải từ 2 đến 30 ký tự.");
+                .Length(2, 30).WithMessage("Mã ca phải từ 2 đến 30 ký tự.")
+                .Matches(@"^[A-Za-z0-9_-]+$").WithMessage("Mã ca chỉ gồm chữ cái không dấu, số, gạch ngang/dưới.");
         });
+
+        RuleFor(x => x)
+            .Must(x => x.StartTime != x.EndTime || (x.DurationHours.HasValue && x.DurationHours.Value > 0))
+            .WithMessage("Giờ bắt đầu và giờ kết thúc ca không được trùng nhau (thời lượng ca phải lớn hơn 0).");
 
         When(x => x.DurationHours.HasValue, () =>
         {
             RuleFor(x => x.DurationHours!.Value)
                 .GreaterThan(0).WithMessage("Thời lượng ca làm việc phải lớn hơn 0.")
                 .LessThanOrEqualTo(24).WithMessage("Thời lượng ca làm việc không được vượt quá 24 giờ.");
-        });
-
-        When(x => x.AllowedCheckInStart.HasValue, () =>
-        {
-            RuleFor(x => x.AllowedCheckInStart!.Value)
-                .Must(t => t >= TimeSpan.Zero && t < TimeSpan.FromDays(1))
-                .WithMessage("Khung check-in sớm không hợp lệ.");
-        });
-
-        When(x => x.AllowedCheckInEnd.HasValue, () =>
-        {
-            RuleFor(x => x.AllowedCheckInEnd!.Value)
-                .Must(t => t >= TimeSpan.Zero && t < TimeSpan.FromDays(1))
-                .WithMessage("Khung check-in trễ không hợp lệ.");
         });
 
         When(x => !string.IsNullOrEmpty(x.Description), () =>

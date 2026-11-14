@@ -73,6 +73,16 @@ public class GoodsReceiptsController : BaseApiController
     }
 
     /// <summary>
+    /// Cập nhật dòng kiểm đếm phiếu nháp (giữ nguyên mã GRN).
+    /// </summary>
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> UpdateDraft(Guid id, [FromBody] CreateGoodsReceiptCommand command, CancellationToken cancellationToken)
+    {
+        var result = await _goodsReceiptService.UpdateDraftGoodsReceiptAsync(id, command, cancellationToken);
+        return Ok(ApiResponse<GoodsReceiptDto>.Ok(result));
+    }
+
+    /// <summary>
     /// Hoàn tất phiếu nhập kho: cập nhật tồn kho chi nhánh & chuyển trạng thái PO sang COMPLETED (GR-08)
     /// </summary>
     [HttpPost("{id:guid}/complete")]

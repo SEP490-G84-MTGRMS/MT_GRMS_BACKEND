@@ -12,6 +12,7 @@ public interface IGoodsReceiptService
     Task<PagedResult<GoodsReceiptDto>> GetGoodsReceiptsAsync(GoodsReceiptFilterQuery query, CancellationToken cancellationToken = default);
     Task<GoodsReceiptDto> GetGoodsReceiptByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<GoodsReceiptDto> CreateGoodsReceiptAsync(CreateGoodsReceiptCommand command, CancellationToken cancellationToken = default);
+    Task<GoodsReceiptDto> UpdateDraftGoodsReceiptAsync(Guid id, CreateGoodsReceiptCommand command, CancellationToken cancellationToken = default);
     Task<GoodsReceiptDto> CompleteGoodsReceiptAsync(Guid id, CompleteGoodsReceiptCommand command, CancellationToken cancellationToken = default);
     Task<GoodsReceiptDto> CancelGoodsReceiptAsync(Guid id, CancelGoodsReceiptCommand command, CancellationToken cancellationToken = default);
     Task<List<PurchaseOrderLookupDto>> GetPoLookupAsync(Guid? branchId, CancellationToken cancellationToken = default);

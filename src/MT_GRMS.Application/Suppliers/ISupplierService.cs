@@ -18,6 +18,9 @@ public interface ISupplierService
     Task<SupplierDeliveryConfigDto> GetDeliveryConfigAsync(Guid supplierId, CancellationToken cancellationToken = default);
     Task<SupplierDeliveryConfigDto> UpdateDeliveryConfigAsync(Guid supplierId, UpdateSupplierDeliveryConfigCommand command, CancellationToken cancellationToken = default);
 
+    Task<SupplierReturnPolicyDto> GetReturnPolicyAsync(Guid supplierId, CancellationToken cancellationToken = default);
+    Task<SupplierReturnPolicyDto> UpsertReturnPolicyAsync(Guid supplierId, UpdateSupplierReturnPolicyCommand command, CancellationToken cancellationToken = default);
+
     Task<PagedResult<SupplierAPLedgerDto>> GetAPLedgerAsync(Guid supplierId, DateTime? fromDate, DateTime? toDate, int pageIndex = 1, int pageSize = 20, CancellationToken cancellationToken = default);
     Task<SupplierAPLedgerDto> RecordAPTransactionAsync(RecordAPTransactionCommand command, CancellationToken cancellationToken = default);
     Task<SupplierApSummaryDto> GetApSummaryAsync(Guid supplierId, CancellationToken cancellationToken = default);

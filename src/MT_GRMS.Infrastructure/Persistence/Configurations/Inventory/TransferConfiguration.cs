@@ -25,7 +25,7 @@ public class TransferConfiguration : IEntityTypeConfiguration<Transfer>
         builder.Property(x => x.CancelReason).HasMaxLength(255);
         builder.Property(x => x.IsFavorite).HasDefaultValue(false);
 
-        builder.HasIndex(x => x.TransferCode).IsUnique();
+        builder.HasIndex(x => new { x.TenantId, x.TransferCode }).IsUnique();
 
         builder.HasOne(x => x.FromBranch)
             .WithMany()

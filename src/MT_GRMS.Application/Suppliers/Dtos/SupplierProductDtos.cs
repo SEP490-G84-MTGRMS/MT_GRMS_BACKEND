@@ -18,7 +18,8 @@ public class SupplierProductDto
 
     public string? SupplierProductCode { get; set; }
     public string DeliveryUoM { get; set; } = "Cái";
-    public decimal AgreedWholesalePrice { get; set; }
+    /// <summary>NULL = chưa thỏa thuận.</summary>
+    public decimal? AgreedWholesalePrice { get; set; }
     public decimal? CostPrice { get; set; }
     public decimal EffectivePurchasePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
@@ -36,7 +37,8 @@ public class AssignSupplierProductCommand
 {
     public Guid ProductId { get; set; }
     public string DeliveryUoM { get; set; } = "Cái";
-    public decimal AgreedWholesalePrice { get; set; }
+    /// <summary>NULL hoặc 0 = chưa thỏa thuận.</summary>
+    public decimal? AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
     public int AllowedShortageQuantity { get; set; } = 0;
     public bool IsPrimarySupplier { get; set; } = false;
@@ -46,7 +48,7 @@ public class AssignSupplierProductCommand
 public class BatchAssignSupplierProductItemCommand
 {
     public Guid ProductId { get; set; }
-    public decimal AgreedWholesalePrice { get; set; }
+    public decimal? AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
     public int AllowedShortageQuantity { get; set; } = 0;
 }
@@ -72,7 +74,7 @@ public class BatchAssignSupplierProductsResultDto
 public class UpdateSupplierProductCommand
 {
     public string DeliveryUoM { get; set; } = "Cái";
-    public decimal AgreedWholesalePrice { get; set; }
+    public decimal? AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
     public int AllowedShortageQuantity { get; set; } = 0;
     public bool IsPrimarySupplier { get; set; } = false;
@@ -96,7 +98,7 @@ public class ProductSupplierMappingDto
     public string SupplierName { get; set; } = string.Empty;
     public string? SupplierProductCode { get; set; }
     public string DeliveryUoM { get; set; } = "Cái";
-    public decimal AgreedWholesalePrice { get; set; }
+    public decimal? AgreedWholesalePrice { get; set; }
     public int MinimumOrderQuantity { get; set; } = 1;
     public int AllowedShortageQuantity { get; set; } = 0;
     public bool IsPrimarySupplier { get; set; }
@@ -116,4 +118,42 @@ public class SupplierProductQueryFilter
     public SupplierProductStatus? Status { get; set; }
     public int PageIndex { get; set; } = 1;
     public int PageSize { get; set; } = 10;
+}
+
+/// <summary>Kết quả import Excel giá nhập sỉ + MOQ theo từng dòng.</summary>
+public class SupplierProductExcelImportRowResultDto
+{
+    public int Row { get; set; }
+    public string? ProductId { get; set; }
+    public string Sku { get; set; } = string.Empty;
+    public string ProductName { get; set; } = string.Empty;
+    public decimal? AgreedWholesalePrice { get; set; }
+    public int? Moq { get; set; }
+    /// <summary>OK | ERROR</summary>
+    public string Status { get; set; } = "ERROR";
+    public string Message { get; set; } = string.Empty;
+}
+
+public class SupplierProductExcelImportSummaryDto
+{
+    public int TotalRows { get; set; }
+    public int SuccessCount { get; set; }
+    public int FailedCount { get; set; }
+}
+
+public class SupplierProductExcelImportResultDto
+{
+    public string FileName { get; set; } = string.Empty;
+    public Guid SupplierId { get; set; }
+    public string SupplierCode { get; set; } = string.Empty;
+    public string SupplierName { get; set; } = string.Empty;
+    public SupplierProductExcelImportSummaryDto Summary { get; set; } = new();
+    public List<SupplierProductExcelImportRowResultDto> Rows { get; set; } = new();
+}
+
+public class SupplierProductExcelFileDto
+{
+    public byte[] Content { get; set; } = Array.Empty<byte>();
+    public string FileName { get; set; } = string.Empty;
+    public string ContentType { get; set; } = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 }

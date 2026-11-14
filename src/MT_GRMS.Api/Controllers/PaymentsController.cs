@@ -2,7 +2,6 @@ using System;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
-using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -11,6 +10,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Infrastructure.Persistence;
@@ -18,21 +18,25 @@ using MT_GRMS.Infrastructure.Persistence;
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/payments")]
 public class PaymentsController : BaseApiController
 {
     private readonly AppDbContext _context;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<PaymentsController> _logger;
+    private readonly ITenantContext _tenantContext;
 
     public PaymentsController(
         AppDbContext context,
         IHttpClientFactory httpClientFactory,
-        ILogger<PaymentsController> logger)
+        ILogger<PaymentsController> logger,
+        ITenantContext tenantContext)
     {
         _context = context;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
+        _tenantContext = tenantContext;
     }
 
     /// <summary>
@@ -41,9 +45,16 @@ public class PaymentsController : BaseApiController
     [HttpGet("config")]
     public async Task<IActionResult> GetPaymentConfig(CancellationToken ct)
     {
-        var tenantId = User.FindFirst("tenant_id")?.Value 
-                       ?? User.FindFirst("TenantId")?.Value 
-                       ?? "tenant_an_nhien_02";
+        if (!IsStoreOwnerOrAdmin())
+        {
+            return Forbid();
+        }
+
+        var tenantId = GetAuthenticatedTenantId();
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
 
         var config = await _context.StorePaymentConfigs
             .AsNoTracking()
@@ -94,9 +105,16 @@ public class PaymentsController : BaseApiController
     [HttpPost("config")]
     public async Task<IActionResult> SavePaymentConfig([FromBody] SavePaymentConfigRequest request, CancellationToken ct)
     {
-        var tenantId = User.FindFirst("tenant_id")?.Value 
-                       ?? User.FindFirst("TenantId")?.Value 
-                       ?? "tenant_an_nhien_02";
+        if (!IsStoreOwnerOrAdmin())
+        {
+            return Forbid();
+        }
+
+        var tenantId = GetAuthenticatedTenantId();
+        if (tenantId == null)
+        {
+            return Forbid();
+        }
 
         var config = await _context.StorePaymentConfigs
             .FirstOrDefaultAsync(c => c.TenantId == tenantId && !c.IsDeleted, ct);
@@ -329,6 +347,17 @@ public class PaymentsController : BaseApiController
             }
         }
         return parts.FirstOrDefault(p => p.Length >= 4)?.ToUpperInvariant() ?? "";
+    }
+
+    private bool IsStoreOwnerOrAdmin()
+    {
+        return User.IsInRole("STORE_OWNER") || User.IsInRole("ADMIN");
+    }
+
+    private string? GetAuthenticatedTenantId()
+    {
+        var tenantId = User.FindFirst("tenant_id")?.Value ?? User.FindFirst("TenantId")?.Value;
+        return string.IsNullOrWhiteSpace(tenantId) ? null : tenantId.Trim();
     }
 }
 
