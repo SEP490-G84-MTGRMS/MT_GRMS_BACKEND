@@ -21,20 +21,13 @@ public class AdminDashboardService : IAdminDashboardService
     public async Task<IReadOnlyList<KpiMetricResponse>> GetKpiMetricsAsync(CancellationToken cancellationToken = default)
     {
         var totalTenants = await _tenantRepository.GetTotalCountAsync(cancellationToken);
-        var activeTenants = await _tenantRepository.GetActiveCountAsync(cancellationToken);
-        var expiringSoon = await _tenantRepository.GetExpiringSoonCountAsync(7, cancellationToken);
-        var inGrace = await _tenantRepository.GetGracePeriodCountAsync(cancellationToken);
-        var lockedCount = await _tenantRepository.GetLockedCountAsync(cancellationToken);
-        var totalBranches = await _tenantRepository.GetTotalBranchesCountAsync(cancellationToken);
+        var successfulUpgrades = await _tenantRepository.GetSuccessfulUpgradeCountAsync(cancellationToken);
 
         // Tính MRR từ danh sách Tenant Active
         var activeTenantsWithPlans = await _tenantRepository.GetAllActiveWithPlanAsync(cancellationToken);
         decimal mrr = activeTenantsWithPlans
             .Where(t => t.Status == "ACTIVE" && t.LockType == null)
             .Sum(t => t.SubscriptionPlan?.PriceMonthly ?? 0);
-
-        var urgentCount = expiringSoon + inGrace + lockedCount;
-        var avgBranches = activeTenants > 0 ? (double)totalBranches / activeTenants : 0;
 
         return new List<KpiMetricResponse>
         {
@@ -44,51 +37,38 @@ public class AdminDashboardService : IAdminDashboardService
                 Value: mrr.ToString("N0", ViCulture),
                 Unit: "đ/tháng",
                 SubText: "ARR tương đương: " + (mrr * 12).ToString("N0", ViCulture) + " đ",
-                TrendText: "+8.5% so với tháng trước",
-                TrendType: "up",
+                TrendText: null,
+                TrendType: "neutral",
                 Icon: "DollarOutlined",
-                IconBg: "#e6f7ff",
-                IconColor: "#1890ff",
-                ValueColor: "#1890ff"
+                IconBg: "#EFF6FF",
+                IconColor: "#0066FF",
+                ValueColor: "#0066FF"
             ),
             new(
-                Id: "active_tenants",
-                Title: "Khách thuê hoạt động",
-                Value: activeTenants.ToString(),
-                Unit: "doanh nghiệp",
-                SubText: $"Trên tổng số {totalTenants} gian hàng đăng ký",
-                TrendText: "+2 tháng này",
-                TrendType: "up",
+                Id: "total_tenants",
+                Title: "Tổng số tenant",
+                Value: totalTenants.ToString(),
+                Unit: "tenant",
+                SubText: "Tất cả tenant đã đăng ký trên hệ thống",
+                TrendText: null,
+                TrendType: "neutral",
                 Icon: "ShopOutlined",
-                IconBg: "#f6ffed",
-                IconColor: "#52c41a",
-                ValueColor: "#52c41a"
+                IconBg: "#F1F5F9",
+                IconColor: "#475569",
+                ValueColor: "#0F172A"
             ),
             new(
-                Id: "total_branches",
-                Title: "Tổng số chi nhánh",
-                Value: totalBranches.ToString(),
-                Unit: "điểm bán",
-                SubText: $"Trung bình {avgBranches:F1} CN / khách thuê",
-                TrendText: "+5 điểm bán mới",
-                TrendType: "up",
+                Id: "successful_upgrades",
+                Title: "Nâng cấp gói thành công",
+                Value: successfulUpgrades.ToString(),
+                Unit: "giao dịch",
+                SubText: "Chỉ tính giao dịch chuyển lên gói cao hơn",
+                TrendText: null,
+                TrendType: "neutral",
                 Icon: "ApartmentOutlined",
-                IconBg: "#fff7e6",
-                IconColor: "#fa8c16",
-                ValueColor: "#fa8c16"
-            ),
-            new(
-                Id: "urgent_alerts",
-                Title: "Cần xử lý gấp",
-                Value: urgentCount.ToString(),
-                Unit: "sự việc",
-                SubText: $"{inGrace} ân hạn, {expiringSoon} sắp hết hạn, {lockedCount} đang khóa",
-                TrendText: urgentCount > 0 ? "Cần can thiệp" : "Ổn định",
-                TrendType: urgentCount > 0 ? "down" : "up",
-                Icon: "AlertOutlined",
-                IconBg: "#fff1f0",
-                IconColor: "#f5222d",
-                ValueColor: urgentCount > 0 ? "#f5222d" : "#52c41a"
+                IconBg: "#F1F5F9",
+                IconColor: "#475569",
+                ValueColor: "#0F172A"
             )
         };
     }
@@ -187,58 +167,7 @@ public class AdminDashboardService : IAdminDashboardService
 
     public async Task<IReadOnlyList<MonthlyAnalyticsResponse>> GetMonthlyAnalyticsAsync(CancellationToken cancellationToken = default)
     {
-        // Trả về dữ liệu 6 tháng gần nhất (mock theo quy mô doanh thu hiện tại)
-        var plans = await _planRepository.GetAllAsync(cancellationToken: cancellationToken);
-        var activeTenants = await _tenantRepository.GetActiveCountAsync(cancellationToken);
-        var activeTenantsWithPlans = await _tenantRepository.GetAllActiveWithPlanAsync(cancellationToken);
-
-        decimal currentMrr = activeTenantsWithPlans
-            .Where(t => t.Status == "ACTIVE" && t.LockType == null)
-            .Sum(t => t.SubscriptionPlan?.PriceMonthly ?? 0);
-
-        if (currentMrr <= 0) currentMrr = 45000000m; // baseline nếu DB chưa có tenant gán plan
-
-        var now = DateTime.UtcNow;
-        var list = new List<MonthlyAnalyticsResponse>();
-
-        for (int i = 5; i >= 0; i--)
-        {
-            var date = now.AddMonths(-i);
-            var monthStr = date.ToString("yyyy-MM");
-            var shortMonthStr = "T" + date.Month;
-
-            // Tính tăng trưởng lũy tiến lùi
-            var factor = (decimal)(1.0 - (i * 0.08));
-            var mrr = Math.Max(10000000m, currentMrr * factor);
-            var arr = mrr * 12;
-            var tenantCount = Math.Max(1, (int)(activeTenants * factor));
-            var arpu = tenantCount > 0 ? mrr / tenantCount : 0;
-
-            var breakdown = new RevenueBreakdownDto(
-                Basic: mrr * 0.25m,
-                Advanced: mrr * 0.45m,
-                Enterprise: mrr * 0.30m
-            );
-
-            list.Add(new MonthlyAnalyticsResponse(
-                Month: monthStr,
-                ShortMonth: shortMonthStr,
-                Mrr: Math.Round(mrr, 0),
-                MrrFormatted: mrr.ToString("N0", ViCulture) + " đ",
-                Arr: Math.Round(arr, 0),
-                ArrFormatted: arr.ToString("N0", ViCulture) + " đ",
-                Arpu: Math.Round(arpu, 0),
-                ArpuFormatted: arpu.ToString("N0", ViCulture) + " đ",
-                RevenueBreakdown: breakdown,
-                NewTenants: Math.Max(1, (int)(tenantCount * 0.15)),
-                ActiveTenants: tenantCount,
-                TotalOrders: tenantCount * 450,
-                OrdersFormatted: (tenantCount * 450).ToString("N0", ViCulture),
-                GrowthRate: (8.0 + (i % 3)).ToString("F1") + "%",
-                ChurnRate: "1.2%"
-            ));
-        }
-
-        return await Task.FromResult(list);
+        await Task.CompletedTask;
+        return Array.Empty<MonthlyAnalyticsResponse>();
     }
 }

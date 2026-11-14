@@ -150,6 +150,12 @@ public class TenantRepository : ITenantRepository
             .CountAsync(b => !b.IsDeleted, cancellationToken);
     }
 
+    public async Task<int> GetSuccessfulUpgradeCountAsync(CancellationToken cancellationToken = default)
+    {
+        return await _context.WalletTransactions
+            .CountAsync(transaction => transaction.Type == "UPGRADE_PLAN" && transaction.Status == "SUCCESS", cancellationToken);
+    }
+
     public async Task<IReadOnlyList<Tenant>> GetUrgentAlertTenantsAsync(int limit = 10, CancellationToken cancellationToken = default)
     {
         var now = DateTime.UtcNow;

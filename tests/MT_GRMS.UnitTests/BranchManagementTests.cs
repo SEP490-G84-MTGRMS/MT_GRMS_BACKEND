@@ -390,6 +390,7 @@ public class BranchManagementTests
         public Task<int> GetGracePeriodCountAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
         public Task<int> GetLockedCountAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
         public Task<int> GetTotalBranchesCountAsync(CancellationToken cancellationToken = default) => Task.FromResult(4);
+        public Task<int> GetSuccessfulUpgradeCountAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
         public Task<IReadOnlyList<Tenant>> GetUrgentAlertTenantsAsync(int limit = 10, CancellationToken cancellationToken = default) => Task.FromResult((IReadOnlyList<Tenant>)new List<Tenant>());
         public Task<IReadOnlyList<Tenant>> GetAllActiveWithPlanAsync(CancellationToken cancellationToken = default) => Task.FromResult((IReadOnlyList<Tenant>)new List<Tenant>());
         public void Update(Tenant tenant) { }
