@@ -89,7 +89,7 @@ public class BranchService : IBranchService
 
         var usedBranches = await _branchRepo.CountTotalAsync(cancellationToken);
         var maxBranches = 1;
-        var planCode = tenant?.CurrentPlan ?? "STANDARD";
+        var planCode = tenant?.CurrentPlan ?? "NO_PLAN";
         var planName = "Gói Thường (Cửa Hàng Độc Lập)";
 
         if (tenant != null && !string.IsNullOrWhiteSpace(tenant.CurrentPlan))

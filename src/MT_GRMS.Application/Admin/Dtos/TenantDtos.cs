@@ -90,7 +90,9 @@ public record PurchaseSubscriptionRequest(
     int ExtraBranches = 0,
     bool HasStaffManagementAddon = false,
     string PaymentMethod = "Wallet",
-    int ExtraWarehouses = 0
+    int ExtraWarehouses = 0,
+    int ExtraStorageGb = 0,
+    Guid? RequestId = null
 );
 
 public record PurchaseSubscriptionResponse(

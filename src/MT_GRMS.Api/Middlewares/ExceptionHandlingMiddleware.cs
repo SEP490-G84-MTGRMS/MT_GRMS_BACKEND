@@ -74,7 +74,16 @@ public class ExceptionHandlingMiddleware
 
             case DbUpdateException dbUpdateEx when dbUpdateEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505":
                 statusCode = (int)HttpStatusCode.Conflict;
-                apiResponse = ApiResponse<object>.Fail("DUPLICATE_KEY", "Dữ liệu bị trùng lặp trong hệ thống (vi phạm ràng buộc duy nhất).");
+                var friendlyMsg = pgEx.ConstraintName switch
+                {
+                    var c when c != null && c.Contains("IX_Users_Phone", StringComparison.OrdinalIgnoreCase) => "Số điện thoại này đã được đăng ký tài khoản.",
+                    var c when c != null && c.Contains("IX_Users_Email", StringComparison.OrdinalIgnoreCase) => "Địa chỉ email này đã được sử dụng trong hệ thống.",
+                    var c when c != null && c.Contains("IX_Users_UserName", StringComparison.OrdinalIgnoreCase) => "Tên đăng nhập hoặc số điện thoại này đã tồn tại.",
+                    var c when c != null && c.Contains("IX_Tenants", StringComparison.OrdinalIgnoreCase) => "Tên cửa hàng hoặc mã cửa hàng đã tồn tại.",
+                    var c when c != null && c.Contains("IX_Branches", StringComparison.OrdinalIgnoreCase) => "Mã chi nhánh bị trùng lặp trong cửa hàng.",
+                    _ => "Dữ liệu bị trùng lặp trong hệ thống (vi phạm ràng buộc duy nhất)."
+                };
+                apiResponse = ApiResponse<object>.Fail("DUPLICATE_KEY", friendlyMsg);
                 _logger.LogWarning(dbUpdateEx, "Postgres unique constraint 23505: {Constraint}", pgEx.ConstraintName);
                 break;
 

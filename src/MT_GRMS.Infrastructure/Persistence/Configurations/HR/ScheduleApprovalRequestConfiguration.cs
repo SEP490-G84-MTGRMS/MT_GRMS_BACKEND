@@ -18,8 +18,6 @@ public class ScheduleApprovalRequestConfiguration : IEntityTypeConfiguration<Sch
         builder.Property(x => x.ScheduleId).HasColumnName("ScheduleID").IsRequired();
         builder.Property(x => x.EmployeeId).HasColumnName("EmployeeID").IsRequired();
         builder.Property(x => x.BranchId).HasColumnName("BranchID").IsRequired();
-        builder.Property(x => x.TargetEmployeeId).HasColumnName("TargetEmployeeID");
-        builder.Property(x => x.TargetScheduleId).HasColumnName("TargetScheduleID");
 
         builder.Property(x => x.RequestType)
             .HasConversion(
@@ -35,12 +33,6 @@ public class ScheduleApprovalRequestConfiguration : IEntityTypeConfiguration<Sch
             .HasMaxLength(30)
             .HasDefaultValue(ScheduleApprovalStatus.Pending);
 
-        builder.Property(x => x.SwapType)
-            .HasConversion(
-                v => v.HasValue ? v.Value.ToString() : null,
-                v => string.IsNullOrEmpty(v) ? (ShiftSwapType?)null : Enum.Parse<ShiftSwapType>(v, true))
-            .HasMaxLength(30);
-
         builder.Property(x => x.LeaveType)
             .HasConversion(
                 v => v.HasValue ? v.Value.ToString() : null,
@@ -48,7 +40,6 @@ public class ScheduleApprovalRequestConfiguration : IEntityTypeConfiguration<Sch
             .HasMaxLength(30);
 
         builder.Property(x => x.Reason).HasMaxLength(500).IsRequired();
-        builder.Property(x => x.EvidenceImageUrl).HasMaxLength(1000);
         builder.Property(x => x.EvidenceImageUrls)
             .HasConversion(
                 v => JsonSerializer.Serialize(v ?? new List<string>(), (JsonSerializerOptions?)null),
@@ -72,16 +63,6 @@ public class ScheduleApprovalRequestConfiguration : IEntityTypeConfiguration<Sch
         builder.HasOne(x => x.Employee)
             .WithMany()
             .HasForeignKey(x => x.EmployeeId)
-            .OnDelete(DeleteBehavior.Restrict);
-
-        builder.HasOne(x => x.TargetEmployee)
-            .WithMany()
-            .HasForeignKey(x => x.TargetEmployeeId)
-            .OnDelete(DeleteBehavior.Restrict);
-
-        builder.HasOne(x => x.TargetSchedule)
-            .WithMany()
-            .HasForeignKey(x => x.TargetScheduleId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

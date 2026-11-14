@@ -8,8 +8,10 @@ using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Debt;
 using MT_GRMS.Application.Debt.Dtos;
+using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders.Dtos;
 using MT_GRMS.Domain.Entities.Catalog;
+using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
@@ -262,24 +264,7 @@ public class OrderService : IOrderService
             var prod = products[pId];
 
             var branchStocks = await GetStocksCachedAsync(pId);
-
-            var totalOnHand = branchStocks.Where(s => s.QuantityOnHand > 0).Sum(s => s.QuantityOnHand);
-            if (totalOnHand < requiredBaseQty)
-            {
-                throw new InvalidOperationException($"Sản phẩm '{prod.Name}' không đủ tồn kho tại chi nhánh (Hiện còn: {totalOnHand:0.##}, Cần bán: {requiredBaseQty:0.##}).");
-            }
-
-            var remainingToDeduct = requiredBaseQty;
-            foreach (var stock in branchStocks)
-            {
-                if (remainingToDeduct <= 0) break;
-                if (stock.QuantityOnHand <= 0) continue;
-
-                var deduct = Math.Min(stock.QuantityOnHand, remainingToDeduct);
-                stock.QuantityOnHand -= deduct;
-                stock.UpdatedAt = DateTime.UtcNow;
-                remainingToDeduct -= deduct;
-            }
+            DeductSellableFefo(branchStocks, requiredBaseQty, prod.Name, "bán");
         }
 
         // 5. Tính toán chi tiết đơn hàng (Phân giải giá BranchProduct & xử lý dòng quà tặng IsGift = 0đ) (REQ-POS-09, REQ-POS-10, REQ-ORD-BOGO-02)
@@ -331,7 +316,7 @@ public class OrderService : IOrderService
 
                 var rate = GetConversionRate(item);
                 var giftStocks = await GetStocksCachedAsync(item.ProductId);
-                var remainingBaseStock = giftStocks.Where(s => s.QuantityOnHand > 0).Sum(s => s.QuantityOnHand);
+                var remainingBaseStock = BranchStockAvailability.SumSellableAvailable(giftStocks);
                 var availableGiftUnits = Math.Floor(remainingBaseStock / rate);
                 var actualGiftQty = Math.Min(item.Quantity, Math.Max(0m, availableGiftUnits));
 
@@ -347,17 +332,7 @@ public class OrderService : IOrderService
                     continue;
                 }
 
-                var remainingGiftBaseToDeduct = actualGiftQty * rate;
-                foreach (var stock in giftStocks)
-                {
-                    if (remainingGiftBaseToDeduct <= 0) break;
-                    if (stock.QuantityOnHand <= 0) continue;
-
-                    var deduct = Math.Min(stock.QuantityOnHand, remainingGiftBaseToDeduct);
-                    stock.QuantityOnHand -= deduct;
-                    stock.UpdatedAt = DateTime.UtcNow;
-                    remainingGiftBaseToDeduct -= deduct;
-                }
+                DeductSellableFefo(giftStocks, actualGiftQty * rate, prod.Name, "xuất quà", throwIfInsufficient: false);
 
                 var refGiftValue = resolvedUnitPrice * actualGiftQty;
                 giftEquivalenceTotal += refGiftValue;
@@ -1022,23 +997,7 @@ public class OrderService : IOrderService
                 var prod = products[pId];
 
                 var branchStocks = await GetPreOrderStocksCachedAsync(pId);
-                var totalOnHand = branchStocks.Where(s => s.QuantityOnHand > 0).Sum(s => s.QuantityOnHand);
-                if (totalOnHand < requiredBaseQty)
-                {
-                    throw new InvalidOperationException($"Sản phẩm '{prod.Name}' không đủ tồn kho để đặt trước (Hiện còn: {totalOnHand:0.##}, Cần đặt: {requiredBaseQty:0.##}).");
-                }
-
-                var remainingToDeduct = requiredBaseQty;
-                foreach (var stock in branchStocks)
-                {
-                    if (remainingToDeduct <= 0) break;
-                    if (stock.QuantityOnHand <= 0) continue;
-
-                    var deduct = Math.Min(stock.QuantityOnHand, remainingToDeduct);
-                    stock.QuantityOnHand -= deduct;
-                    stock.UpdatedAt = DateTime.UtcNow;
-                    remainingToDeduct -= deduct;
-                }
+                DeductSellableFefo(branchStocks, requiredBaseQty, prod.Name, "đặt trước");
             }
 
             // 2. Tạo chi tiết đơn hàng (OrderDetails) độc lập theo từng dòng request.Items
@@ -1090,7 +1049,7 @@ public class OrderService : IOrderService
                     }
 
                     var giftStocks = await GetPreOrderStocksCachedAsync(item.ProductId);
-                    var remainingBaseStock = giftStocks.Where(s => s.QuantityOnHand > 0).Sum(s => s.QuantityOnHand);
+                    var remainingBaseStock = BranchStockAvailability.SumSellableAvailable(giftStocks);
                     var availableGiftUnits = Math.Floor(remainingBaseStock / rate);
                     var actualGiftQty = Math.Min(item.Quantity, Math.Max(0m, availableGiftUnits));
 
@@ -1103,17 +1062,7 @@ public class OrderService : IOrderService
 
                     if (actualGiftQty <= 0m) continue;
 
-                    var remainingGiftBaseToDeduct = actualGiftQty * rate;
-                    foreach (var stock in giftStocks)
-                    {
-                        if (remainingGiftBaseToDeduct <= 0) break;
-                        if (stock.QuantityOnHand <= 0) continue;
-
-                        var deduct = Math.Min(stock.QuantityOnHand, remainingGiftBaseToDeduct);
-                        stock.QuantityOnHand -= deduct;
-                        stock.UpdatedAt = DateTime.UtcNow;
-                        remainingGiftBaseToDeduct -= deduct;
-                    }
+                    DeductSellableFefo(giftStocks, actualGiftQty * rate, prod.Name, "giữ quà đặt trước", throwIfInsufficient: false);
 
                     var refGiftValue = resolvedUnitPrice * actualGiftQty;
                     giftEquivalenceTotal += refGiftValue;
@@ -1590,21 +1539,7 @@ public class OrderService : IOrderService
                 var requiredQty = group.Sum(x => x.Quantity * (x.ConversionRate > 0m ? x.ConversionRate : (prod.Units?.FirstOrDefault(u => u.Id == x.UnitId)?.ConversionRate ?? 1.00m)));
 
                 var branchStocks = await _orderRepository.GetBranchStocksForProductFefoAsync(originalOrder.BranchId, pId, cancellationToken);
-                var totalOnHand = branchStocks.Sum(s => s.QuantityOnHand);
-                if (totalOnHand < requiredQty)
-                {
-                    throw new InvalidOperationException($"Sản phẩm '{prod.Name}' không đủ tồn kho tại chi nhánh để đổi (Hiện còn: {totalOnHand:0.##}, Cần: {requiredQty:0.##}).");
-                }
-
-                var remainingToDeduct = requiredQty;
-                foreach (var stock in branchStocks)
-                {
-                    if (remainingToDeduct <= 0) break;
-                    var deduct = Math.Min(stock.QuantityOnHand, remainingToDeduct);
-                    stock.QuantityOnHand -= deduct;
-                    stock.UpdatedAt = DateTime.UtcNow;
-                    remainingToDeduct -= deduct;
-                }
+                DeductSellableFefo(branchStocks, requiredQty, prod.Name, "đổi hàng");
             }
 
             int line = 1;
@@ -1872,5 +1807,41 @@ public class OrderService : IOrderService
         var role = _tenantContext?.CurrentRole;
         return string.Equals(role, "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
             || string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// RULE-01: trừ tồn theo SellableAvailable (OnHand - Reserved - Quarantined; hết hạn = 0), FEFO đã sort sẵn.
+    /// </summary>
+    private static void DeductSellableFefo(
+        IReadOnlyList<BranchStock> stocks,
+        decimal requiredBaseQty,
+        string productName,
+        string actionLabel,
+        bool throwIfInsufficient = true)
+    {
+        if (requiredBaseQty <= 0) return;
+
+        var totalAvailable = BranchStockAvailability.SumSellableAvailable(stocks);
+        if (totalAvailable < requiredBaseQty)
+        {
+            if (throwIfInsufficient)
+            {
+                throw new InvalidOperationException(
+                    $"Sản phẩm '{productName}' không đủ tồn khả dụng để {actionLabel} (Khả dụng: {totalAvailable:0.##}, Cần: {requiredBaseQty:0.##}).");
+            }
+        }
+
+        var remainingToDeduct = Math.Min(requiredBaseQty, totalAvailable);
+        foreach (var stock in stocks)
+        {
+            if (remainingToDeduct <= 0) break;
+            var sellable = BranchStockAvailability.GetSellableAvailable(stock);
+            if (sellable <= 0) continue;
+
+            var deduct = Math.Min(sellable, remainingToDeduct);
+            stock.QuantityOnHand -= deduct;
+            stock.UpdatedAt = DateTime.UtcNow;
+            remainingToDeduct -= deduct;
+        }
     }
 }

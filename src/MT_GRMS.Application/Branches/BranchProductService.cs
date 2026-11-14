@@ -10,6 +10,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
+using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
@@ -164,7 +165,7 @@ public class BranchProductService : IBranchProductService
 
             var sp = await _repository.GetSupplierProductAsync(productId, eligible.SupplierId, cancellationToken);
             var effectiveCost = SupplierProductPricing.GetEffectivePurchasePriceOrZero(
-                sp?.AgreedWholesalePrice ?? 0m,
+                sp?.AgreedWholesalePrice,
                 product.CostPrice);
             var moq = sp != null && sp.MinimumOrderQuantity > 0 ? (int)sp.MinimumOrderQuantity : eligible.Moq;
 
@@ -460,9 +461,31 @@ public class BranchProductService : IBranchProductService
             .Distinct()
             .ToList();
         Guid? displaySupplierId = uniqueLotSupplierIds.Count == 1 ? uniqueLotSupplierIds[0] : null;
-        var sp = await _repository.GetSupplierProductAsync(product.Id, displaySupplierId, cancellationToken);
+        var activeSupplierIds = await _repository.GetActiveSupplierIdsForBranchAsync(branch.Id, cancellationToken);
+        SupplierProduct? sp = null;
+        var hasSource = false;
+        if (displaySupplierId.HasValue && displaySupplierId.Value != Guid.Empty)
+        {
+            sp = await _repository.GetSupplierProductAsync(product.Id, displaySupplierId, cancellationToken);
+            hasSource = sp != null && sp.Status == SupplierProductStatus.Active;
+        }
+        else
+        {
+            foreach (var sid in activeSupplierIds)
+            {
+                var candidate = await _repository.GetSupplierProductAsync(product.Id, sid, cancellationToken);
+                if (candidate == null || candidate.Status != SupplierProductStatus.Active)
+                {
+                    continue;
+                }
+
+                hasSource = true;
+                sp ??= candidate;
+            }
+        }
+
         var costPrice = SupplierProductPricing.GetEffectivePurchasePriceOrZero(
-            sp?.AgreedWholesalePrice ?? 0m,
+            sp?.AgreedWholesalePrice,
             product.CostPrice);
         var moq = sp != null && sp.MinimumOrderQuantity > 0
             ? (int)sp.MinimumOrderQuantity
@@ -487,6 +510,8 @@ public class BranchProductService : IBranchProductService
             CurrentStock = stocks.Sum(s => s.QuantityOnHand),
             MinStockLevel = product.MinStock,
             SupplierId = displaySupplierId ?? sp?.SupplierId,
+            HasActiveSupplierSource = hasSource,
+            LostSupplierSource = !hasSource,
             PrimarySupplierCode = stocks.FirstOrDefault()?.Supplier?.Code ?? sp?.Supplier?.Code ?? string.Empty,
             PrimarySupplierName = stocks.FirstOrDefault()?.Supplier?.Name ?? sp?.Supplier?.Name ?? string.Empty,
             MinOrderQuantity = moq,

@@ -35,6 +35,7 @@ public partial class AppDbContext : DbContext
     // 1. Phân hệ SaaS & Multi-Tenancy (6 bảng)
     public virtual DbSet<SubscriptionPlan> SubscriptionPlans { get; set; } = null!;
     public virtual DbSet<Tenant> Tenants { get; set; } = null!;
+    public virtual DbSet<TenantMedia> TenantMedia { get; set; } = null!;
     public virtual DbSet<User> Users { get; set; } = null!;
     public virtual DbSet<TenantUser> TenantUsers { get; set; } = null!;
     public virtual DbSet<AuditLog> AuditLogs { get; set; } = null!;
@@ -58,6 +59,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<StockOnHand> StockOnHands { get; set; } = null!;
     public virtual DbSet<Stocktake> Stocktakes { get; set; } = null!;
     public virtual DbSet<StocktakeLine> StocktakeLines { get; set; } = null!;
+    public virtual DbSet<RepackOrder> RepackOrders { get; set; } = null!;
+    public virtual DbSet<Package> Packages { get; set; } = null!;
 
     // 4. Phân hệ Nhà cung cấp, Mua hàng PO & Nhập kho GRN
     public virtual DbSet<Domain.Entities.Supplier.Supplier> Suppliers { get; set; } = null!;
@@ -74,6 +77,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<GoodsReceiptLine> GoodsReceiptLines { get; set; } = null!;
     public virtual DbSet<SupplierReturn> SupplierReturns { get; set; } = null!;
     public virtual DbSet<SupplierReturnLine> SupplierReturnLines { get; set; } = null!;
+    public virtual DbSet<SupplierReturnPolicy> SupplierReturnPolicies { get; set; } = null!;
     public virtual DbSet<OutboxMessage> OutboxMessages { get; set; } = null!;
 
     // 5. Phân hệ Khách hàng, Khuyến mãi & Bán lẻ POS (4 bảng)
@@ -98,6 +102,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<StorePaymentConfig> StorePaymentConfigs { get; set; } = null!;
     public virtual DbSet<PaymentTransaction> PaymentTransactions { get; set; } = null!;
     public virtual DbSet<IdempotencyRecord> IdempotencyRecords { get; set; } = null!;
+    public virtual DbSet<MT_GRMS.Infrastructure.Services.RegistrationOtpChallenge> RegistrationOtpChallenges { get; set; } = null!;
 
     // 7. Customer Debt Module (FE-08) - Đã hợp nhất công nợ vào Customers
     public virtual DbSet<CustomerDebtInvoice> CustomerDebtInvoices { get; set; } = null!;
@@ -122,6 +127,19 @@ public partial class AppDbContext : DbContext
 
         // Tự động nạp toàn bộ Configurations trong assembly Infrastructure
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
+        modelBuilder.Entity<MT_GRMS.Infrastructure.Services.RegistrationOtpChallenge>(entity =>
+        {
+            entity.ToTable("RegistrationOtpChallenges");
+            entity.HasKey(x => x.Key);
+            entity.Property(x => x.Key).HasMaxLength(120);
+            entity.Property(x => x.NormalizedEmail).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.OtpHash).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.Intent).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.RequestFingerprint).HasMaxLength(64).IsRequired();
+            entity.Property(x => x.State).HasMaxLength(20).IsRequired();
+            entity.Property(x => x.ReservedByIdempotencyKey).HasMaxLength(120);
+            entity.HasIndex(x => new { x.NormalizedEmail, x.State });
+        });
 
         // Tắt toàn bộ Cascade Delete ở mức Database để tránh lỗi Multiple Cascade Paths (Error 1785) của SQL Server
         // Dự án áp dụng Soft Delete (IsDeleted) toàn diện nên an toàn 100%
@@ -198,14 +216,19 @@ public partial class AppDbContext : DbContext
             if (entry.State == EntityState.Added)
             {
                 // INV-1: Gán TenantId từ ngữ cảnh xác thực, ngăn chặn client ghi đè TenantId (TEN-02)
-                if (!string.IsNullOrWhiteSpace(tenantId))
+                if (string.IsNullOrWhiteSpace(entry.Entity.TenantId))
                 {
+                    entry.Entity.TenantId = !string.IsNullOrWhiteSpace(tenantId) ? tenantId : "default-tenant";
+                }
+                else if (!string.IsNullOrWhiteSpace(tenantId)
+                         && _tenantContext?.CurrentUserId != null
+                         && _tenantContext.CurrentUserId != Guid.Empty
+                         && !string.Equals(_tenantContext.CurrentRole, "ADMIN", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Đối với user nội bộ của 1 tenant đã đăng nhập (không phải System Admin), ép TenantId theo phiên làm việc để chống IDOR
                     entry.Entity.TenantId = tenantId;
                 }
-                else if (string.IsNullOrWhiteSpace(entry.Entity.TenantId))
-                {
-                    entry.Entity.TenantId = "default-tenant";
-                }
+
                 if (entry.Entity.CreatedAt == default)
                 {
                     entry.Entity.CreatedAt = DateTime.UtcNow;

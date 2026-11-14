@@ -31,4 +31,6 @@ public interface IGoodsReceiptRepository
     Task<decimal> GetTotalProductStockAsync(string tenantId, Guid productId, CancellationToken cancellationToken = default);
     Task<Supplier?> GetSupplierByIdAsync(string tenantId, Guid supplierId, CancellationToken cancellationToken = default);
     Task AddSupplierLedgerAsync(SupplierAPLedger ledger, CancellationToken cancellationToken = default);
+
+    Task<bool> UserExistsAsync(string userId, CancellationToken cancellationToken = default);
 }

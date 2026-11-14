@@ -13,6 +13,7 @@ using MT_GRMS.Application.HR.Schedules;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.Transfers;
+using MT_GRMS.Application.Repacks;
 
 namespace MT_GRMS.Application;
 
@@ -51,6 +52,7 @@ public static class DependencyInjection
         services.AddScoped<GoodsReceipts.IGoodsReceiptService, GoodsReceipts.GoodsReceiptService>();
         services.AddScoped<SupplierReturns.ISupplierReturnService, SupplierReturns.SupplierReturnService>();
         services.AddScoped<Stocktakes.IStocktakeService, Stocktakes.StocktakeService>();
+        services.AddScoped<IRepackService, RepackService>();
         services.AddScoped<Promotions.IPromotionService, Promotions.PromotionService>();
         services.AddScoped<Promotions.ILoyaltyService, Promotions.LoyaltyService>();
         services.AddScoped<IEmployeeService, EmployeeService>();

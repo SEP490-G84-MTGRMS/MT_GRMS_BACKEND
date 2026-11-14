@@ -1,4 +1,5 @@
 using System.Linq.Expressions;
+using Microsoft.Extensions.Configuration;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Auth.Dtos;
 using MT_GRMS.Application.Common.Interfaces;
@@ -12,6 +13,7 @@ public class UserAuthenticationTests
     private class FakeUserRepository : IUserRepository
     {
         private readonly List<User> _users = new();
+        public MT_GRMS.Domain.Entities.SaaS.Tenant? LastRegisteredTenant { get; private set; }
 
         public Task AddAsync(User user, CancellationToken cancellationToken = default)
         {
@@ -56,6 +58,7 @@ public class UserAuthenticationTests
 
         public Task<User> RegisterStoreOwnerAsync(User user, MT_GRMS.Domain.Entities.SaaS.Tenant tenant, MT_GRMS.Domain.Entities.SaaS.Branch branch, CancellationToken cancellationToken = default)
         {
+            LastRegisteredTenant = tenant;
             _users.Add(user);
             return Task.FromResult(user);
         }
@@ -118,6 +121,7 @@ public class UserAuthenticationTests
             Id = "usr_test_01",
             Username = "testuser",
             Password = "Password@123",
+            IsTwoFactorEnabled = false,
             IsAdmin = true
         };
         await repo.AddAsync(seedUser);
@@ -154,6 +158,7 @@ public class UserAuthenticationTests
             Id = "usr_owner_01",
             Username = "shopowner",
             Password = "Password@123",
+            IsTwoFactorEnabled = false,
             IsAdmin = false
         };
         await repo.AddAsync(seedUser);
@@ -198,7 +203,8 @@ public class UserAuthenticationTests
         {
             Id = "usr_admin_01",
             Username = "admin",
-            Password = "Password@123"
+            Password = "Password@123",
+            IsTwoFactorEnabled = false
         });
 
         var authService = new AuthService(repo);
@@ -248,7 +254,7 @@ public class UserAuthenticationTests
     {
         // GIVEN
         var repo = new FakeUserRepository();
-        await repo.AddAsync(new User { Id = "usr_01", Username = "user01", Password = "123", IsAdmin = true });
+        await repo.AddAsync(new User { Id = "usr_01", Username = "user01", Password = "123", IsAdmin = true, IsTwoFactorEnabled = false });
         var authService = new AuthService(repo);
 
         // WHEN
@@ -336,7 +342,7 @@ public class UserAuthenticationTests
     {
         var repo = new FakeUserRepository();
         var hashedPass = PasswordHasher.Hash("Secret@999");
-        await repo.AddAsync(new User { Id = "usr_hash", Username = "user_hash", PasswordHash = hashedPass });
+        await repo.AddAsync(new User { Id = "usr_hash", Username = "user_hash", PasswordHash = hashedPass, IsTwoFactorEnabled = false });
 
         var authService = new AuthService(repo);
         var res = await authService.LoginAsync(new LoginRequest("user_hash", "Secret@999", null));
@@ -356,6 +362,20 @@ public class UserAuthenticationTests
             LastOtp = otpCode;
             return Task.CompletedTask;
         }
+
+        public Task<bool> SendLoginOtpAsync(string toEmail, string fullName, string otpCode, CancellationToken cancellationToken = default)
+        {
+            LastToEmail = toEmail;
+            LastOtp = otpCode;
+            return Task.FromResult(false);
+        }
+
+        public Task<bool> SendRegistrationOtpAsync(string toEmail, string fullName, string storeName, string otpCode, CancellationToken cancellationToken = default)
+        {
+            LastToEmail = toEmail;
+            LastOtp = otpCode;
+            return Task.FromResult(false);
+        }
     }
 
     [Fact]
@@ -366,7 +386,11 @@ public class UserAuthenticationTests
         var user = new User { Id = "usr_forgot", Username = "user_forgot", Email = "owner@mtgrms.vn", FullName = "Nguyễn Chủ Tiệm" };
         await repo.AddAsync(user);
 
-        var authService = new AuthService(repo, emailService: emailService);
+        var developmentConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+        }).Build();
+        var authService = new AuthService(repo, developmentConfig, emailService: emailService);
         await authService.ForgotPasswordAsync(new ForgotPasswordRequest("owner@mtgrms.vn"));
 
         Assert.NotNull(user.PasswordResetOtp);
@@ -438,5 +462,47 @@ public class UserAuthenticationTests
         Assert.Null(user.OtpExpiry);
         Assert.NotEqual("OldHash", user.PasswordHash);
         Assert.True(PasswordHasher.Verify(user.PasswordHash, "NewSuperPassword@2026", out _));
+    }
+
+    [Fact]
+    public async Task AuthService_LoginAsync_InactiveUser_ShouldThrowUnauthorizedAccessException()
+    {
+        var repo = new FakeUserRepository();
+        var user = new User
+        {
+            Id = "usr_locked",
+            Username = "locked_staff",
+            Email = "locked@mtgrms.vn",
+            PasswordHash = PasswordHasher.Hash("Staff@123456"),
+            IsActive = false
+        };
+        await repo.AddAsync(user);
+
+        var authService = new AuthService(repo);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            authService.LoginAsync(new LoginRequest("locked_staff", "Staff@123456", null)));
+    }
+
+    [Fact]
+    public async Task AuthService_RefreshTokenAsync_InactiveUser_ShouldThrowUnauthorizedAccessException()
+    {
+        var repo = new FakeUserRepository();
+        var user = new User
+        {
+            Id = "usr_locked_refresh",
+            Username = "locked_refresh",
+            Email = "locked_refresh@mtgrms.vn",
+            PasswordHash = "Hash",
+            IsActive = false,
+            RefreshToken = "mt_refresh_locked",
+            RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(5)
+        };
+        await repo.AddAsync(user);
+
+        var authService = new AuthService(repo);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            authService.RefreshTokenAsync(new RefreshTokenRequest("mt_refresh_locked")));
     }
 }

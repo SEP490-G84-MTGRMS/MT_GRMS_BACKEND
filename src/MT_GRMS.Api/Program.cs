@@ -1,6 +1,8 @@
+using System.Net;
 using System.Text;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using MT_GRMS.Api.Common;
@@ -67,6 +69,37 @@ builder.Services.AddAuthentication(options =>
                 context.Token = cookieToken;
             }
             return Task.CompletedTask;
+        },
+        OnTokenValidated = async context =>
+        {
+            var userId = context.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+            if (string.IsNullOrWhiteSpace(userId))
+            {
+                context.Fail("Tài khoản không hợp lệ.");
+                return;
+            }
+
+            var userRepo = context.HttpContext.RequestServices.GetService<MT_GRMS.Application.Auth.IUserRepository>();
+            if (userRepo != null)
+            {
+                var user = await userRepo.GetByIdAsync(userId, context.HttpContext.RequestAborted);
+                if (user == null || !user.IsActive || (user.TenantUsers.Any() && user.TenantUsers.All(t => !t.IsActive)))
+                {
+                    context.Fail("Tài khoản đã bị khóa hoặc ngừng hoạt động.");
+                    return;
+                }
+            }
+
+            var empRepo = context.HttpContext.RequestServices.GetService<MT_GRMS.Application.HR.Employees.IEmployeeRepository>();
+            if (empRepo != null)
+            {
+                var linkedEmployee = await empRepo.GetByUserIdAsync(userId, context.HttpContext.RequestAborted);
+                if (linkedEmployee != null && linkedEmployee.Status == MT_GRMS.Domain.Enums.EmployeeStatus.Inactive)
+                {
+                    context.Fail("Tài khoản đã bị khóa do nhân viên đã ngừng làm việc.");
+                    return;
+                }
+            }
         }
     };
 });
@@ -104,6 +137,24 @@ builder.Services.AddCors(options =>
     });
 });
 
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    var configuredProxies = builder.Configuration.GetSection("ForwardedHeaders:KnownProxies").Get<string[]>();
+    if (configuredProxies is { Length: > 0 })
+    {
+        options.KnownNetworks.Clear();
+        options.KnownProxies.Clear();
+        foreach (var proxy in configuredProxies)
+        {
+            if (IPAddress.TryParse(proxy, out var ip))
+            {
+                options.KnownProxies.Add(ip);
+            }
+        }
+    }
+});
+
 var app = builder.Build();
 
 // 6. Cấu hình Swagger (Bật ở cả Development và Production để test API trên Render/Cloud)
@@ -117,6 +168,8 @@ app.UseSwaggerUI(c =>
 // Chuyển hướng trang chủ "/" sang "/swagger" để khi vào domain là mở Swagger ngay
 app.MapGet("/", () => Results.Redirect("/swagger"));
 
+app.UseForwardedHeaders();
+
 // 7. Cấu hình HTTP Pipeline theo thứ tự chuẩn
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
@@ -128,11 +181,12 @@ app.UseRouting();
 // Middleware xác thực & cô lập Tenant
 app.UseAuthentication();
 app.UseMiddleware<MultiTenantMiddleware>();
+app.UseMiddleware<SubscriptionAccessMiddleware>();
 app.UseAuthorization();
 
 app.MapControllers();
 
-// 8. Tự động áp dụng Migration (Auto-migration) và Nạp dữ liệu mẫu (Seeder) mỗi lần khởi động
+// 8. Tự động áp dụng Migration (Auto-migration); Seed mẫu chỉ khi Database:SeedSampleData=true
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
@@ -141,11 +195,19 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var dbContext = services.GetRequiredService<AppDbContext>();
-        var seedDemoData = builder.Configuration.GetValue<bool>("Database:SeedDemoData");
+        var seedSampleData = app.Configuration.GetValue<bool?>("Database:SeedSampleData")
+            ?? app.Configuration.GetValue<bool?>("Database:SeedDemoData")
+            ?? true;
 
-        logger.LogInformation("Initializing database schema. Demo seed enabled: {SeedDemoData}.", seedDemoData);
-        await DbInitializer.InitializeAsync(dbContext, logger, seedDemoData);
-        logger.LogInformation("Database initialization completed in {ElapsedMilliseconds} ms.", startupInitializationTimer.ElapsedMilliseconds);
+        logger.LogInformation(
+            "Initializing database schema{0}...",
+            seedSampleData ? " and seed data" : " (SeedSampleData=false)");
+        await DbInitializer.InitializeAsync(dbContext, logger, seedSampleData);
+        logger.LogInformation(
+            seedSampleData
+                ? "Database seeded successfully in {0} ms."
+                : "Database schema sync completed in {0} ms (sample seed skipped).",
+            startupInitializationTimer.ElapsedMilliseconds);
     }
     catch (Exception ex)
     {
