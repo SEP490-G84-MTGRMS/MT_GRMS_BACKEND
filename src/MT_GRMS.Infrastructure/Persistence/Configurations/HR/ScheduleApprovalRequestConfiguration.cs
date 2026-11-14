@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Enums;
@@ -31,7 +32,8 @@ public class ScheduleApprovalRequestConfiguration : IEntityTypeConfiguration<Sch
                 v => v.ToString(),
                 v => Enum.Parse<ScheduleApprovalStatus>(v, true))
             .HasMaxLength(30)
-            .HasDefaultValue(ScheduleApprovalStatus.Pending);
+            .HasDefaultValue(ScheduleApprovalStatus.Pending)
+            .HasSentinel(ScheduleApprovalStatus.None);
 
         builder.Property(x => x.LeaveType)
             .HasConversion(
@@ -40,12 +42,19 @@ public class ScheduleApprovalRequestConfiguration : IEntityTypeConfiguration<Sch
             .HasMaxLength(30);
 
         builder.Property(x => x.Reason).HasMaxLength(500).IsRequired();
+
+        var stringListComparer = new ValueComparer<List<string>>(
+            (c1, c2) => (c1 == null && c2 == null) || (c1 != null && c2 != null && c1.SequenceEqual(c2)),
+            c => c.Aggregate(0, (a, v) => HashCode.Combine(a, v == null ? 0 : v.GetHashCode())),
+            c => c == null ? new List<string>() : c.ToList());
+
         builder.Property(x => x.EvidenceImageUrls)
             .HasConversion(
                 v => JsonSerializer.Serialize(v ?? new List<string>(), (JsonSerializerOptions?)null),
                 v => string.IsNullOrWhiteSpace(v)
                     ? new List<string>()
-                    : (JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>()))
+                    : (JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>()),
+                stringListComparer)
             .HasColumnType("text")
             .HasDefaultValueSql("'[]'::text");
         builder.Property(x => x.ReviewNote).HasMaxLength(500);

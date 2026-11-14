@@ -203,7 +203,7 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
     {
         if (string.IsNullOrWhiteSpace(branchIdOrCode))
         {
-            var defaultBranch = await _context.Branches.FirstOrDefaultAsync(cancellationToken);
+            var defaultBranch = await _context.Branches.OrderBy(b => b.Id).FirstOrDefaultAsync(cancellationToken);
             return defaultBranch?.Id;
         }
 
@@ -217,7 +217,7 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
 
         if (branch != null) return branch.Id;
 
-        var fallback = await _context.Branches.FirstOrDefaultAsync(cancellationToken);
+        var fallback = await _context.Branches.OrderBy(b => b.Id).FirstOrDefaultAsync(cancellationToken);
         return fallback?.Id;
     }
 

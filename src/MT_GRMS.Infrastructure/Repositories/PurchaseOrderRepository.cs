@@ -381,7 +381,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             query = query.Where(po => po.SupplierId == supplierId.Value);
         }
 
-        return await query.FirstOrDefaultAsync(cancellationToken);
+        return await query.OrderByDescending(po => po.CreatedAt).FirstOrDefaultAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<PurchaseOrder>> GetDraftMatrixPosAsync(

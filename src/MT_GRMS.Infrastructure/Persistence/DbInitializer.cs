@@ -4227,7 +4227,13 @@ END $$;
             }
 
             // Resolve default branch for Orders & Expenses foreign key
-            var defaultBranch = await context.Branches.IgnoreQueryFilters().FirstOrDefaultAsync(ct);
+            var defaultBranch = await context.Branches.IgnoreQueryFilters()
+                .Where(b => b.TenantId == DefaultTenantId)
+                .OrderBy(b => b.Id)
+                .FirstOrDefaultAsync(ct)
+                ?? await context.Branches.IgnoreQueryFilters()
+                    .OrderBy(b => b.Id)
+                    .FirstOrDefaultAsync(ct);
             var branchId = defaultBranch?.Id ?? Guid.Parse("99999999-9999-9999-9999-999999999999");
             if (defaultBranch == null)
             {
@@ -4658,7 +4664,10 @@ END $$;
                 logger?.LogInformation("Seeding 20 Additional Grocery Products with Suppliers and Stocks...");
 
                 // Lấy hoặc tạo các Nhà Cung Cấp
-                var supAcecook = await context.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Code == "SUP-ACECOOK", ct);
+                var supAcecook = await context.Suppliers.IgnoreQueryFilters()
+                    .Where(s => s.Code == "SUP-ACECOOK")
+                    .OrderBy(s => s.Id)
+                    .FirstOrDefaultAsync(ct);
                 if (supAcecook == null)
                 {
                     supAcecook = new Domain.Entities.Supplier.Supplier
@@ -4679,7 +4688,10 @@ END $$;
                     await context.Suppliers.AddAsync(supAcecook, ct);
                 }
 
-                var supMasan = await context.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Code == "SUP-MASAN", ct);
+                var supMasan = await context.Suppliers.IgnoreQueryFilters()
+                    .Where(s => s.Code == "SUP-MASAN")
+                    .OrderBy(s => s.Id)
+                    .FirstOrDefaultAsync(ct);
                 if (supMasan == null)
                 {
                     supMasan = new Domain.Entities.Supplier.Supplier
@@ -4700,7 +4712,10 @@ END $$;
                     await context.Suppliers.AddAsync(supMasan, ct);
                 }
 
-                var supOrion = await context.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Code == "SUP-ORION", ct);
+                var supOrion = await context.Suppliers.IgnoreQueryFilters()
+                    .Where(s => s.Code == "SUP-ORION")
+                    .OrderBy(s => s.Id)
+                    .FirstOrDefaultAsync(ct);
                 if (supOrion == null)
                 {
                     supOrion = new Domain.Entities.Supplier.Supplier
@@ -4721,7 +4736,10 @@ END $$;
                     await context.Suppliers.AddAsync(supOrion, ct);
                 }
 
-                var supUnilever = await context.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Code == "SUP-UNILEVER", ct);
+                var supUnilever = await context.Suppliers.IgnoreQueryFilters()
+                    .Where(s => s.Code == "SUP-UNILEVER")
+                    .OrderBy(s => s.Id)
+                    .FirstOrDefaultAsync(ct);
                 if (supUnilever == null)
                 {
                     supUnilever = new Domain.Entities.Supplier.Supplier
@@ -4772,11 +4790,17 @@ END $$;
                     }
                 }
 
-                var fmcgCat = await context.Categories.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.CategoryCode == "FMCG", ct);
+                var fmcgCat = await context.Categories.IgnoreQueryFilters()
+                    .Where(c => c.CategoryCode == "FMCG")
+                    .OrderBy(c => c.Id)
+                    .FirstOrDefaultAsync(ct);
                 var fmcgCatId = fmcgCat?.Id ?? Guid.Parse("11111111-1111-1111-1111-111111111111");
 
 
-                var alcCat = await context.Categories.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.CategoryCode == "ALCOHOL", ct);
+                var alcCat = await context.Categories.IgnoreQueryFilters()
+                    .Where(c => c.CategoryCode == "ALCOHOL")
+                    .OrderBy(c => c.Id)
+                    .FirstOrDefaultAsync(ct);
                 var alcCatId = alcCat?.Id ?? Guid.Parse("22222222-2222-2222-2222-222222222222");
 
                 var extraProducts = new List<(Product prod, Guid supplierId, decimal wholesalePrice, int moq)>
@@ -5125,7 +5149,10 @@ END $$;
 
                 foreach (var item in extraProducts)
                 {
-                    var existingProd = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.ProductCode == item.prod.ProductCode || (!string.IsNullOrEmpty(item.prod.Barcode) && p.Barcode == item.prod.Barcode), ct);
+                    var existingProd = await context.Products.IgnoreQueryFilters()
+                        .Where(p => p.ProductCode == item.prod.ProductCode || (!string.IsNullOrEmpty(item.prod.Barcode) && p.Barcode == item.prod.Barcode))
+                        .OrderBy(p => p.Id)
+                        .FirstOrDefaultAsync(ct);
                     var targetProd = existingProd ?? item.prod;
                     if (existingProd == null)
                     {
@@ -5377,7 +5404,10 @@ END $$;
     private static async Task SeedPosRetailDataAsync(AppDbContext context, ILogger? logger = null, CancellationToken ct = default)
     {
         // 1. Tạo hoặc lấy Branch POS chuẩn
-        var branch = await context.Branches.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.BranchCode == "BR-POS-01", ct);
+        var branch = await context.Branches.IgnoreQueryFilters()
+            .Where(b => b.BranchCode == "BR-POS-01")
+            .OrderBy(b => b.Id)
+            .FirstOrDefaultAsync(ct);
         if (branch == null)
         {
             branch = new Domain.Entities.SaaS.Branch
@@ -5461,7 +5491,10 @@ END $$;
         }
 
         // 3. Thêm các sản phẩm tạp hóa có Barcode chuẩn
-        var catFmcg = await context.Categories.IgnoreQueryFilters().FirstOrDefaultAsync(c => c.CategoryCode == "FMCG", ct);
+        var catFmcg = await context.Categories.IgnoreQueryFilters()
+            .Where(c => c.CategoryCode == "FMCG")
+            .OrderBy(c => c.Id)
+            .FirstOrDefaultAsync(ct);
         var catId = catFmcg?.Id ?? Guid.Parse("11111111-1111-1111-1111-111111111111");
 
         var posProducts = new List<(Guid Id, string SKU, string Barcode, string Name, decimal Price, decimal CostPrice, string Unit, decimal Vat)>
@@ -5479,7 +5512,9 @@ END $$;
 
         // Tự động sửa barcode cho bản ghi LAVIE-500ML cũ nếu đã tồn tại để tránh xung đột với Bánh Custas (8936036010022)
         var oldLavie = await context.Products.IgnoreQueryFilters()
-            .FirstOrDefaultAsync(p => (p.ProductCode == "LAVIE-500ML" || p.Id == Guid.Parse("e0000004-0000-0000-0000-000000000004")) && p.Barcode == "8936036010022", ct);
+            .Where(p => (p.ProductCode == "LAVIE-500ML" || p.Id == Guid.Parse("e0000004-0000-0000-0000-000000000004")) && p.Barcode == "8936036010022")
+            .OrderBy(p => p.Id)
+            .FirstOrDefaultAsync(ct);
         if (oldLavie != null)
         {
             oldLavie.Barcode = "8935001700035";
@@ -5488,7 +5523,10 @@ END $$;
 
         foreach (var item in posProducts)
         {
-            var existingProd = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == item.Id || p.ProductCode == item.SKU || p.Barcode == item.Barcode, ct);
+            var existingProd = await context.Products.IgnoreQueryFilters()
+                .Where(p => p.Id == item.Id || p.ProductCode == item.SKU || p.Barcode == item.Barcode)
+                .OrderBy(p => p.Id)
+                .FirstOrDefaultAsync(ct);
             if (existingProd == null)
             {
                 var newP = new Product
@@ -5570,22 +5608,42 @@ END $$;
 
     private static async Task SeedSupplierReturnsAndGrnsAsync(AppDbContext context, ILogger? logger = null, CancellationToken ct = default)
     {
-        var branch = await context.Branches.IgnoreQueryFilters().FirstOrDefaultAsync(b => b.TenantId == DefaultTenantId, ct);
-        var supAcecook = await context.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Code == "SUP-ACECOOK", ct);
-        var supMasan = await context.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(s => s.Code == "SUP-MASAN", ct);
+        var branch = await context.Branches.IgnoreQueryFilters()
+            .Where(b => b.TenantId == DefaultTenantId)
+            .OrderBy(b => b.Id)
+            .FirstOrDefaultAsync(ct);
+        var supAcecook = await context.Suppliers.IgnoreQueryFilters()
+            .Where(s => s.Code == "SUP-ACECOOK")
+            .OrderBy(s => s.Id)
+            .FirstOrDefaultAsync(ct);
+        var supMasan = await context.Suppliers.IgnoreQueryFilters()
+            .Where(s => s.Code == "SUP-MASAN")
+            .OrderBy(s => s.Id)
+            .FirstOrDefaultAsync(ct);
 
         if (branch == null || supAcecook == null || supMasan == null) return;
 
-        var prodHaoHao = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.ProductCode == "SP-MI-HAOHAO-TC", ct);
-        var prodOmachi = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.ProductCode == "SP-MI-OMACHI-BBQ", ct);
-        var prodHaoHaoGoi = await context.Products.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.ProductCode == "HH-TOM-CAY", ct);
+        var prodHaoHao = await context.Products.IgnoreQueryFilters()
+            .Where(p => p.ProductCode == "SP-MI-HAOHAO-TC")
+            .OrderBy(p => p.Id)
+            .FirstOrDefaultAsync(ct);
+        var prodOmachi = await context.Products.IgnoreQueryFilters()
+            .Where(p => p.ProductCode == "SP-MI-OMACHI-BBQ")
+            .OrderBy(p => p.Id)
+            .FirstOrDefaultAsync(ct);
+        var prodHaoHaoGoi = await context.Products.IgnoreQueryFilters()
+            .Where(p => p.ProductCode == "HH-TOM-CAY")
+            .OrderBy(p => p.Id)
+            .FirstOrDefaultAsync(ct);
 
         if (prodHaoHao == null || prodOmachi == null) return;
 
         // 1. Tạo 2 phiếu nhập kho hoàn thành (COMPLETED) làm nguồn cho trả hàng
         var grn1 = await context.GoodsReceipts.IgnoreQueryFilters()
             .Include(g => g.Lines)
-            .FirstOrDefaultAsync(g => g.Code == "GRN-20261101-001", ct);
+            .Where(g => g.Code == "GRN-20261101-001")
+            .OrderBy(g => g.Id)
+            .FirstOrDefaultAsync(ct);
         if (grn1 == null)
         {
             var grn1Id = Guid.NewGuid();
@@ -5650,7 +5708,9 @@ END $$;
 
         var grn2 = await context.GoodsReceipts.IgnoreQueryFilters()
             .Include(g => g.Lines)
-            .FirstOrDefaultAsync(g => g.Code == "GRN-20261102-002", ct);
+            .Where(g => g.Code == "GRN-20261102-002")
+            .OrderBy(g => g.Id)
+            .FirstOrDefaultAsync(ct);
         if (grn2 == null)
         {
             var grn2Id = Guid.NewGuid();
@@ -5702,15 +5762,24 @@ END $$;
         {
             var rtv1Line = grn1?.Lines?.FirstOrDefault(l => prodHaoHao != null && l.ProductId == prodHaoHao.Id)
                 ?? grn1?.Lines?.FirstOrDefault()
-                ?? await context.GoodsReceiptLines.IgnoreQueryFilters().FirstOrDefaultAsync(l => grn1 != null && l.GoodsReceiptId == grn1.Id, ct);
+                ?? await context.GoodsReceiptLines.IgnoreQueryFilters()
+                    .Where(l => grn1 != null && l.GoodsReceiptId == grn1.Id)
+                    .OrderBy(l => l.Id)
+                    .FirstOrDefaultAsync(ct);
 
             var rtv2Line = grn2?.Lines?.FirstOrDefault(l => prodOmachi != null && l.ProductId == prodOmachi.Id)
                 ?? grn2?.Lines?.FirstOrDefault()
-                ?? await context.GoodsReceiptLines.IgnoreQueryFilters().FirstOrDefaultAsync(l => grn2 != null && l.GoodsReceiptId == grn2.Id, ct);
+                ?? await context.GoodsReceiptLines.IgnoreQueryFilters()
+                    .Where(l => grn2 != null && l.GoodsReceiptId == grn2.Id)
+                    .OrderBy(l => l.Id)
+                    .FirstOrDefaultAsync(ct);
 
             var rtv3Line = grn1?.Lines?.FirstOrDefault(l => l.ProductId == (prodHaoHaoGoi != null ? prodHaoHaoGoi.Id : (prodHaoHao != null ? prodHaoHao.Id : Guid.Empty)))
                 ?? grn1?.Lines?.FirstOrDefault()
-                ?? await context.GoodsReceiptLines.IgnoreQueryFilters().FirstOrDefaultAsync(l => grn1 != null && l.GoodsReceiptId == grn1.Id, ct);
+                ?? await context.GoodsReceiptLines.IgnoreQueryFilters()
+                    .Where(l => grn1 != null && l.GoodsReceiptId == grn1.Id)
+                    .OrderBy(l => l.Id)
+                    .FirstOrDefaultAsync(ct);
 
             if (grn1 != null && grn2 != null && rtv1Line != null && rtv2Line != null && rtv3Line != null && prodHaoHao != null && prodOmachi != null)
             {

@@ -4,6 +4,11 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ---
 
+## [Unreleased] - 2026-11-15
+
+### Fixed
+- **Triệt tiêu toàn bộ cảnh báo EF Core Model Validation ([20601] & [10620]) & Query First Without OrderBy ([10103])**: Cấu hình `.HasSentinel(...)` cho các thuộc tính Enum có database default (`Product.Status`, `Employee.SalaryType`, `Employee.Status`, `Payslip.SalaryType`, `Payslip.Status`, `ScheduleApprovalRequest.Status`, `Transfer.Status`) và bổ sung `ValueComparer<List<string>>` cho `ScheduleApprovalRequest.EvidenceImageUrls`. Bổ sung điều kiện deterministic ordering `.OrderBy(x => x.Id)` và filter tenant cho các truy vấn `FirstOrDefaultAsync` trong `DbInitializer.cs`, `CashbookRepository.cs`, `PurchaseOrderRepository.cs`, `ShiftRepository.cs`, `TaxExportService.cs`, `WalletService.cs` và `OrderRepository.cs` [FIX-WARN] [worklog: docs/worklogs/2026-11-15_FIX-WARN_AI_fix-efcore-validation-warnings.md].
+
 ## [Unreleased] - 2026-11-14
 
 ### Added

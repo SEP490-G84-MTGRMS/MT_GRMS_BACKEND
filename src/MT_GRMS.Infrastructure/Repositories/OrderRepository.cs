@@ -123,7 +123,7 @@ public class OrderRepository : GenericRepository<Order>, IOrderRepository
             query = query.Where(s => s.BatchCode == batchCode);
         }
 
-        return await query.FirstOrDefaultAsync(cancellationToken);
+        return await query.OrderBy(s => s.Id).FirstOrDefaultAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<Order>> GetAllOrdersForSummaryAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, CancellationToken cancellationToken = default)

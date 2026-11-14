@@ -29,7 +29,8 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(x => x.Status)
             .HasConversion<string>()
             .HasMaxLength(30)
-            .HasDefaultValue(ProductStatus.Active);
+            .HasDefaultValue(ProductStatus.Active)
+            .HasSentinel((ProductStatus)0);
         builder.Property(x => x.ImageUrl).HasMaxLength(500);
         builder.Ignore(x => x.ImageUrls);
         builder.Property(x => x.Description).HasMaxLength(1000);

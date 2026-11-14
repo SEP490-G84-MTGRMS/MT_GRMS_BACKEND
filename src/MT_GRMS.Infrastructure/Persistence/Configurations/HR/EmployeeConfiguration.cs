@@ -37,7 +37,8 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
                 v => v.ToString().ToLower(),
                 v => Enum.Parse<SalaryType>(v, true))
             .HasMaxLength(30)
-            .HasDefaultValue(SalaryType.Monthly);
+            .HasDefaultValue(SalaryType.Monthly)
+            .HasSentinel((SalaryType)0);
         builder.Property(x => x.BaseRate).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.BankAccountNumber).HasMaxLength(30);
         builder.Property(x => x.BankName).HasMaxLength(100);
@@ -48,7 +49,8 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
                 v => v.ToString().ToLower(),
                 v => Enum.Parse<EmployeeStatus>(v, true))
             .HasMaxLength(30)
-            .HasDefaultValue(EmployeeStatus.Active);
+            .HasDefaultValue(EmployeeStatus.Active)
+            .HasSentinel((EmployeeStatus)0);
 
         builder.HasIndex(x => new { x.TenantId, x.CitizenId }).IsUnique().HasFilter("\"IsDeleted\" = false");
         builder.HasIndex(x => new { x.TenantId, x.EmployeeCode }).IsUnique().HasFilter("\"IsDeleted\" = false");
