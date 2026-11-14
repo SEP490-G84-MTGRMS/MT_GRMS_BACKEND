@@ -128,7 +128,14 @@ public class PayslipService : IPayslipService
             var standardDayHours = policy?.StandardDayHours ?? 8.00m;
             if (standardDayHours <= 0) standardDayHours = 8.00m;
 
-            var standardDays = 26.00m;
+            const decimal monthlyFormulaStandardDays = 26.00m;
+            var assignedShiftCount = activeSchedulesInMonth
+                .Where(s => s.EmployeeId == emp.Id)
+                .Select(s => s.Id)
+                .Concat(empSchedules.Select(s => s.Id))
+                .Distinct()
+                .Count();
+            var standardDays = assignedShiftCount > 0 ? (decimal)assignedShiftCount : monthlyFormulaStandardDays;
 
             var workingSchedules = empSchedules
                 .Where(s => s.Status == ScheduleStatus.Completed && !IsPaidLeaveSchedule(s) && !IsUnpaidLeaveSchedule(s))
@@ -153,7 +160,7 @@ public class PayslipService : IPayslipService
 
             var hourlyRate = emp.SalaryType switch
             {
-                SalaryType.Monthly => (standardDays * standardDayHours > 0) ? Math.Round(emp.BaseRate / (standardDays * standardDayHours), 2) : 0m,
+                SalaryType.Monthly => (monthlyFormulaStandardDays * standardDayHours > 0) ? Math.Round(emp.BaseRate / (monthlyFormulaStandardDays * standardDayHours), 2) : 0m,
                 SalaryType.Shift => (standardDayHours > 0) ? Math.Round(emp.BaseRate / standardDayHours, 2) : 0m,
                 SalaryType.Hourly => emp.BaseRate,
                 _ => 0m
@@ -183,7 +190,7 @@ public class PayslipService : IPayslipService
 
             decimal baseSalaryEarned = emp.SalaryType switch
             {
-                SalaryType.Monthly => standardDays > 0 ? Math.Round(((workedDays + paidLeaveDays) / standardDays) * emp.BaseRate, 0, MidpointRounding.AwayFromZero) : 0m,
+                SalaryType.Monthly => monthlyFormulaStandardDays > 0 ? Math.Round(((workedDays + paidLeaveDays) / monthlyFormulaStandardDays) * emp.BaseRate, 0, MidpointRounding.AwayFromZero) : 0m,
                 SalaryType.Shift => Math.Round((totalShifts + paidLeaveDays) * emp.BaseRate, 0, MidpointRounding.AwayFromZero),
                 SalaryType.Hourly => Math.Round((roundedWorkHours + (paidLeaveDays * standardDayHours)) * emp.BaseRate, 0, MidpointRounding.AwayFromZero),
                 _ => emp.BaseRate

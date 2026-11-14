@@ -194,6 +194,8 @@ public class EmployeeService : IEmployeeService
         // Giải phóng CCCD/SĐT/EmployeeCode trên các bản ghi đã soft-delete (IsDeleted = true) nếu DB còn giữ unique index cũ
         await ReleaseDeletedEmployeeUniqueFieldsAsync(currentTenantId, normalizedCitizenId, normalizedPhone, employeeCode, null, cancellationToken);
 
+        ValidateOtRates(request.OtWeekday, request.OtSunday);
+
         var employee = new Employee
         {
             TenantId = currentTenantId,
@@ -319,6 +321,8 @@ public class EmployeeService : IEmployeeService
         }
 
         await ReleaseDeletedEmployeeUniqueFieldsAsync(employee.TenantId, normalizedCitizenId, normalizedPhone, null, id, cancellationToken);
+
+        ValidateOtRates(request.OtWeekday, request.OtSunday);
 
         employee.FullName = request.FullName.Trim();
         employee.CitizenId = normalizedCitizenId;
@@ -958,5 +962,26 @@ public class EmployeeService : IEmployeeService
             NormalizedPhone = candidatePhone,
             IsActive = true
         };
+    }
+
+    private static void ValidateOtRates(string? otWeekday, string? otSunday)
+    {
+        if (!string.IsNullOrWhiteSpace(otWeekday))
+        {
+            var raw = otWeekday.Trim().TrimEnd('%');
+            if (!decimal.TryParse(raw, out var val) || val < 100m)
+            {
+                throw new BusinessException("INVALID_OT_RATE", "Hệ số làm thêm giờ (OT) ngày thường không được nhỏ hơn 100%.");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(otSunday))
+        {
+            var raw = otSunday.Trim().TrimEnd('%');
+            if (!decimal.TryParse(raw, out var val) || val < 100m)
+            {
+                throw new BusinessException("INVALID_OT_RATE", "Hệ số làm thêm giờ (OT) Chủ nhật / Nghỉ tuần không được nhỏ hơn 100%.");
+            }
+        }
     }
 }

@@ -1241,11 +1241,6 @@ public class ScheduleService : IScheduleService
             throw new BusinessException("NOT_CHECKED_IN", "Ca làm việc chưa được điểm danh vào. Không thể điểm danh ra.");
         }
 
-        if (schedule.CheckOutTime.HasValue)
-        {
-            throw new BusinessException("ALREADY_CHECKED_OUT", "Ca làm việc này đã được điểm danh ra trước đó.");
-        }
-
         if (request.FaceMatchScore > 0.45m)
         {
             throw new BusinessException("FACE_MATCH_FAILED", $"Khoảng cách nhận diện khuôn mặt ({request.FaceMatchScore:F2}) vượt quá ngưỡng khoảng cách cho phép (tối đa 0.45).");
@@ -1320,7 +1315,7 @@ public class ScheduleService : IScheduleService
 
         schedule.CheckOutTime = vnNow;
         schedule.CheckOutMethod = "FACE_ID";
-        schedule.CheckOutFaceImageUrl = snapshotUrl;
+        schedule.CheckOutFaceImageUrl = snapshotUrl ?? schedule.CheckOutFaceImageUrl;
         schedule.FaceMatchScore = request.FaceMatchScore;
         schedule.EarlyLeaveMinutes = earlyLeaveMinutes;
         schedule.OvertimeMinutes = approvedOtMinutes;
