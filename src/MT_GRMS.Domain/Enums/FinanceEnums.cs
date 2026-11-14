@@ -119,7 +119,9 @@ public enum BusinessDayClosingStatus
 {
     Closing = 1,
     Closed = 2,
-    Failed = 3
+    Failed = 3,
+    Reopened = 4,
+    Superseded = 5
 }
 
 /// <summary>

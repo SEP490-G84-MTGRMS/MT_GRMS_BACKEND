@@ -9,6 +9,10 @@ public class BusinessDayClosing : BaseTenantEntity
     public DateOnly BusinessDate { get; set; }
     public TimeSpan BusinessDayStartTime { get; set; }
     public BusinessDayClosingStatus Status { get; set; } = BusinessDayClosingStatus.Closing;
+    public int Version { get; set; } = 1;
+    public bool IsActive { get; set; } = true;
+    public Guid? SupersedesClosingId { get; set; }
+    public string PreviewToken { get; set; } = string.Empty;
     public int TotalShifts { get; set; }
     public int TotalOrders { get; set; }
     public decimal TotalCashSales { get; set; }
@@ -23,5 +27,9 @@ public class BusinessDayClosing : BaseTenantEntity
     public Guid ClosedByUserId { get; set; }
     public DateTime? ClosedAtUtc { get; set; }
     public string? Note { get; set; }
+    public DateTime? ReopenedAtUtc { get; set; }
+    public Guid? ReopenedByUserId { get; set; }
+    public string? ReopenReason { get; set; }
     public string ReferenceCode { get; set; } = string.Empty;
+    public BusinessDayClosing? SupersedesClosing { get; set; }
 }
