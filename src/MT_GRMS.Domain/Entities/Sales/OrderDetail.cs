@@ -12,6 +12,9 @@ public class OrderDetail : BaseEntity
     public Guid OrderId { get; set; }
     public Guid ProductId { get; set; }
     public Guid? PromotionId { get; set; }
+    public Guid? BatchId { get; set; }
+    public string? BatchCode { get; set; }
+    public DateTime? BatchExpiryDate { get; set; }
     public int LineNumber { get; set; } = 1;
     public decimal Qty { get; set; } = 1.00m;
     public decimal UnitPrice { get; set; } = 0.00m;

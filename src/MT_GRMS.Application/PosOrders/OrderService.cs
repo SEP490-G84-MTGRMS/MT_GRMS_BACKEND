@@ -241,8 +241,31 @@ public class OrderService : IOrderService
             return 1.00m;
         }
 
+        var selectedStocks = new Dictionary<Guid, Domain.Entities.Inventory.BranchStock>();
+        foreach (var item in request.Items.Where(i => !i.IsGift && i.BatchId.HasValue))
+        {
+            var batchId = item.BatchId!.Value;
+            if (!selectedStocks.TryGetValue(batchId, out var selectedStock))
+            {
+                selectedStock = await _orderRepository.GetBranchStockByIdAsync(branchId, item.ProductId, batchId, cancellationToken)
+                    ?? throw new BusinessException("BATCH_NOT_FOUND", "Lô được chọn không tồn tại hoặc không thuộc sản phẩm/chi nhánh hiện tại.");
+                selectedStocks[batchId] = selectedStock;
+            }
+
+            if (selectedStock.ExpiryDate.HasValue && selectedStock.ExpiryDate.Value.Date < DateTime.UtcNow.Date)
+                throw new BusinessException("BATCH_EXPIRED", $"Lô {selectedStock.BatchCode} đã hết hạn và không được phép bán.");
+
+            var required = item.Quantity * GetConversionRate(item);
+            var available = Math.Max(0m, selectedStock.QuantityOnHand - selectedStock.QuantityReserved - selectedStock.QuantityQuarantined);
+            if (available < required)
+                throw new BusinessException("BATCH_INSUFFICIENT_STOCK", $"Lô {selectedStock.BatchCode} không đủ tồn khả dụng (còn {available:0.##}, cần {required:0.##}).");
+
+            selectedStock.QuantityOnHand -= required;
+            selectedStock.UpdatedAt = DateTime.UtcNow;
+        }
+
         var productRequiredBaseQty = new Dictionary<Guid, decimal>();
-        foreach (var item in request.Items.Where(i => !i.IsGift))
+        foreach (var item in request.Items.Where(i => !i.IsGift && !i.BatchId.HasValue))
         {
             var baseQty = item.Quantity * GetConversionRate(item);
             if (productRequiredBaseQty.ContainsKey(item.ProductId))
@@ -407,7 +430,11 @@ public class OrderService : IOrderService
             }
 
             decimal lineTotal = item.Quantity * effectiveUnitPrice;
-            decimal itemDiscount = item.DiscountAmount ?? 0m;
+            selectedStocks.TryGetValue(item.BatchId ?? Guid.Empty, out var selectedStockForLine);
+            decimal fefoDiscount = selectedStockForLine is { IsFefoDiscountActive: true, FefoDiscountPercent: > 0m }
+                ? Math.Round(lineTotal * selectedStockForLine.FefoDiscountPercent / 100m, 2)
+                : 0m;
+            decimal itemDiscount = Math.Max(item.DiscountAmount ?? 0m, fefoDiscount);
             decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : effectiveUnitPrice;
 
             // Tính VAT theo tỷ lệ của sản phẩm (hoặc mặc định 1% cho tạp hóa)
@@ -434,7 +461,12 @@ public class OrderService : IOrderService
                 UnitPrice = effectiveUnitPrice,
                 DiscountAmount = itemDiscount,
                 ActualPrice = actualPrice,
-                CostPriceAtSale = (prod.CostPrice ?? 0m) * itemConvRate, // Chốt cứng giá vốn COGS (FE-10)
+                CostPriceAtSale = (selectedStockForLine?.LandedCostPerUnit > 0m
+                    ? selectedStockForLine.LandedCostPerUnit
+                    : (prod.CostPrice ?? 0m)) * itemConvRate, // Chốt cứng giá vốn COGS (FE-10)
+                BatchId = selectedStockForLine?.Id,
+                BatchCode = selectedStockForLine?.BatchCode,
+                BatchExpiryDate = selectedStockForLine?.ExpiryDate,
                 IsGift = false,
                 AppliedVatRate = vatRate,
                 VatAmount = vatAmount,
@@ -493,18 +525,17 @@ public class OrderService : IOrderService
                 throw new InvalidOperationException("Bán nợ (ghi sổ) bắt buộc phải chọn thông tin khách hàng.");
             }
 
-            var roleUpper = (request.CreatorRole ?? string.Empty).Trim().ToUpperInvariant();
-            bool isManagerRole = roleUpper == "STOREOWNER" || roleUpper == "MANAGER" || roleUpper == "ADMIN";
-            bool isManagerBypass = !string.IsNullOrWhiteSpace(request.ManagerBypassCode) &&
-                                  (isManagerRole ||
-                                   request.ManagerBypassCode.Trim().StartsWith("BYPASS", StringComparison.OrdinalIgnoreCase) ||
-                                   request.ManagerBypassCode.Trim().StartsWith("MGR-", StringComparison.OrdinalIgnoreCase));
+            // Quyền phải lấy từ token/server context, không tin CreatorRole do client gửi lên.
+            var trustedRole = _tenantContext?.CurrentRole;
+            var roleUpper = (!string.IsNullOrWhiteSpace(trustedRole) ? trustedRole : request.CreatorRole ?? string.Empty)
+                .Trim().ToUpperInvariant();
+            bool isManagerRole = roleUpper is "STORE_OWNER" or "STOREOWNER" or "MANAGER" or "ADMIN";
+            // Chủ/Admin chủ động chọn Ghi nợ chính là phê duyệt cho đơn hiện tại.
+            bool isManagerBypass = isManagerRole;
 
             if (!isManagerBypass)
             {
-                if (!string.IsNullOrWhiteSpace(request.CreatorRole) &&
-                    (request.CreatorRole.Equals("CASHIER", StringComparison.OrdinalIgnoreCase) ||
-                     request.CreatorRole.Equals("STAFF", StringComparison.OrdinalIgnoreCase)))
+                if (roleUpper is "CASHIER" or "STAFF")
                 {
                     throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng hoặc Quản trị viên mới có quyền bán nợ / ghi nợ đơn hàng. Nhân viên thu ngân không được phép thực hiện chức năng này.");
                 }
@@ -531,7 +562,7 @@ public class OrderService : IOrderService
                     OrderCode: $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}",
                     BranchId: branchId,
                     DebtAmount: finalAmount,
-                    ManagerBypassCode: request.ManagerBypassCode,
+                    ManagerBypassCode: isManagerRole ? "OWNER_DIRECT_APPROVAL" : request.ManagerBypassCode,
                     Notes: request.Note ?? $"Bán nợ POS đơn"
                 ), cancellationToken);
             }
@@ -2178,7 +2209,7 @@ public class OrderService : IOrderService
             TotalLineAmount: d.ActualPrice * d.Qty,
             AppliedVatRate: d.AppliedVatRate,
             VatAmount: d.VatAmount,
-            BatchCode: null,
+            BatchCode: d.BatchCode,
             IsGift: d.IsGift,
             PromotionId: d.PromotionId
         )).ToList();

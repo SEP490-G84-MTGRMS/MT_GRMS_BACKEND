@@ -41,7 +41,8 @@ public record OrderItemCreateDto(
     string? UnitName = null,
     bool IsGift = false,
     Guid? PromotionId = null,
-    decimal ConversionRate = 1.00m
+    decimal ConversionRate = 1.00m,
+    Guid? BatchId = null
 );
 
 public record OrderResponse(
