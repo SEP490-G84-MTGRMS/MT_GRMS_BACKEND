@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.GoodsReceipts.Dtos;
 using MT_GRMS.Application.SupplierReturns;
+using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Domain.Enums;
@@ -122,7 +123,7 @@ public class GoodsReceiptService : IGoodsReceiptService
                 ProductId = d.ProductId,
                 ProductCode = d.Product?.ProductCode ?? string.Empty,
                 ProductName = d.Product?.Name ?? string.Empty,
-                Unit = d.Product?.BaseUnit ?? "Cái",
+                Unit = ResolveInboundUnit(d.DeliveryUoM, d.PurchaseUnitNameSnapshot, d.Product),
                 HasBatches = d.Product?.HasBatches ?? false,
                 OrderedQty = d.OrderedQty ?? d.FinalQty ?? 0,
                 UnitPrice = d.UnitPrice,
@@ -618,9 +619,87 @@ public class GoodsReceiptService : IGoodsReceiptService
 
     /// <summary>
     /// Chỉ cho phép nhập kho từ ngày giao PO trở đi (so theo lịch VN UTC+7).
+    /// TEMP (test/UAT): bỏ chặn ngày giao — đặt lại false khi ship thật.
     /// </summary>
+    private const bool AllowReceiveBeforeDeliveryDate = true;
+
+    /// <summary>Đơn vị nhập: DeliveryUoM / snapshot PO → ProductUnit IsPurchaseUnit → BaseUnit.</summary>
+    private static string ResolveInboundUnit(string? deliveryUoM, string? purchaseUnitSnapshot, Product? product)
+    {
+        if (!string.IsNullOrWhiteSpace(deliveryUoM))
+        {
+            return deliveryUoM.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(purchaseUnitSnapshot))
+        {
+            return purchaseUnitSnapshot.Trim();
+        }
+
+        if (product?.Units != null)
+        {
+            var active = product.Units.Where(u => !u.IsDeleted).ToList();
+            var purchase = active.FirstOrDefault(u => u.IsPurchaseUnit)
+                           ?? active.FirstOrDefault(u => u.IsBaseUnit);
+            if (purchase != null && !string.IsNullOrWhiteSpace(purchase.UnitName))
+            {
+                return purchase.UnitName.Trim();
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(product?.BaseUnit) ? "Cái" : product!.BaseUnit.Trim();
+    }
+
+    /// <summary>
+    /// 1 đơn vị nhập = bao nhiêu đơn vị tồn (base). BranchStock.QuantityOnHand luôn theo base (giống POS).
+    /// </summary>
+    private static decimal ResolvePurchaseToStockRate(
+        Product? product,
+        string? deliveryUoM,
+        string? purchaseUnitSnapshot)
+    {
+        if (product?.Units == null)
+        {
+            return 1m;
+        }
+
+        var active = product.Units.Where(u => !u.IsDeleted).ToList();
+        if (active.Count == 0)
+        {
+            return 1m;
+        }
+
+        ProductUnit? matched = null;
+        if (!string.IsNullOrWhiteSpace(deliveryUoM))
+        {
+            matched = active.FirstOrDefault(u =>
+                string.Equals(u.UnitName, deliveryUoM.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (matched == null && !string.IsNullOrWhiteSpace(purchaseUnitSnapshot))
+        {
+            matched = active.FirstOrDefault(u =>
+                string.Equals(u.UnitName, purchaseUnitSnapshot.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        matched ??= active.FirstOrDefault(u => u.IsPurchaseUnit)
+                    ?? active.FirstOrDefault(u => u.IsBaseUnit);
+
+        if (matched == null || matched.ConversionRate <= 0)
+        {
+            return 1m;
+        }
+
+        return matched.ConversionRate;
+    }
+
     private static void EnsureDeliveryDateReachedForReceipt(PurchaseOrder po)
     {
+        if (AllowReceiveBeforeDeliveryDate)
+        {
+            return;
+        }
+
         if (!po.DeliveryDate.HasValue)
         {
             return;
@@ -758,21 +837,34 @@ public class GoodsReceiptService : IGoodsReceiptService
 
             var existingTotalStock = await _repository.GetTotalProductStockAsync(tenantId, line.ProductId, cancellationToken);
             var product = line.Product ?? await _repository.GetProductByIdAsync(tenantId, line.ProductId, cancellationToken);
+            var pod = line.PurchaseOrderDetailId.HasValue && po != null
+                ? po.Details.FirstOrDefault(d => d.Id == line.PurchaseOrderDetailId.Value)
+                : line.PurchaseOrderDetail;
 
-            // Tính MovingAverageCost cho sản phẩm
+            // AcceptedQty trên GRN/PO theo đơn vị nhập; BranchStock theo đơn vị tồn (base) — giống POS.
+            var purchaseToStockRate = ResolvePurchaseToStockRate(
+                product,
+                pod?.DeliveryUoM,
+                pod?.PurchaseUnitNameSnapshot);
+            var stockQtyDelta = Math.Round(line.AcceptedQty * purchaseToStockRate, 3);
+            var landedCostPerStockUnit = purchaseToStockRate > 0
+                ? Math.Round(line.LandedUnitCost / purchaseToStockRate, 4)
+                : line.LandedUnitCost;
+
+            // Tính MovingAverageCost theo đơn vị tồn (base)
             if (product != null)
             {
-                var oldCost = product.CostPrice ?? line.UnitPrice;
-                var totalNewQty = existingTotalStock + line.AcceptedQty;
+                var oldCost = product.CostPrice ?? landedCostPerStockUnit;
+                var totalNewQty = existingTotalStock + stockQtyDelta;
                 if (totalNewQty > 0)
                 {
                     product.CostPrice = Math.Round(
-                        ((existingTotalStock * oldCost) + (line.AcceptedQty * line.LandedUnitCost)) / totalNewQty,
+                        ((existingTotalStock * oldCost) + (stockQtyDelta * landedCostPerStockUnit)) / totalNewQty,
                         2);
                 }
                 else
                 {
-                    product.CostPrice = line.LandedUnitCost;
+                    product.CostPrice = landedCostPerStockUnit;
                 }
                 product.UpdatedAt = DateTime.UtcNow;
             }
@@ -787,10 +879,10 @@ public class GoodsReceiptService : IGoodsReceiptService
             if (stock != null)
             {
                 var prevQty = Math.Max(0, stock.QuantityOnHand);
-                var nextQty = prevQty + line.AcceptedQty;
+                var nextQty = prevQty + stockQtyDelta;
                 stock.LandedCostPerUnit = nextQty > 0
-                    ? Math.Round(((prevQty * stock.LandedCostPerUnit) + (line.AcceptedQty * line.LandedUnitCost)) / nextQty, 2)
-                    : line.LandedUnitCost;
+                    ? Math.Round(((prevQty * stock.LandedCostPerUnit) + (stockQtyDelta * landedCostPerStockUnit)) / nextQty, 4)
+                    : landedCostPerStockUnit;
                 stock.QuantityOnHand = nextQty;
                 if (!hasBatches)
                 {
@@ -818,16 +910,16 @@ public class GoodsReceiptService : IGoodsReceiptService
                     BatchCode = hasBatches ? line.BatchCode : null,
                     ManufactureDate = hasBatches ? line.ManufactureDate : null,
                     ExpiryDate = hasBatches ? line.ExpiryDate : null,
-                    QuantityOnHand = line.AcceptedQty,
+                    QuantityOnHand = stockQtyDelta,
                     QuantityReserved = 0,
-                    LandedCostPerUnit = line.LandedUnitCost,
+                    LandedCostPerUnit = landedCostPerStockUnit,
                     CreatedAt = DateTime.UtcNow
                 };
                 await _repository.AddBranchStockAsync(newStock, cancellationToken);
                 line.BranchStockId = newStock.Id;
             }
 
-            // Tạo bản ghi lô hàng FEFO (Batch / ProductBatch)
+            // Tạo bản ghi lô hàng FEFO (Batch / ProductBatch) — InitialQuantity theo đơn vị tồn
             if (!string.IsNullOrWhiteSpace(line.BatchCode) || line.ExpiryDate.HasValue)
             {
                 var newBatch = new Batch
@@ -839,8 +931,8 @@ public class GoodsReceiptService : IGoodsReceiptService
                     BatchCode = !string.IsNullOrWhiteSpace(line.BatchCode) ? line.BatchCode : $"LOT-{receipt.Code}",
                     ManufactureDate = line.ManufactureDate ?? receipt.ReceivedAtUtc.Date,
                     ExpiryDate = line.ExpiryDate ?? receipt.ReceivedAtUtc.Date.AddMonths(6),
-                    InitialQuantity = line.AcceptedQty,
-                    LandedCostPerUnit = line.LandedUnitCost,
+                    InitialQuantity = stockQtyDelta,
+                    LandedCostPerUnit = landedCostPerStockUnit,
                     CreatedAt = DateTime.UtcNow
                 };
                 await _repository.AddBatchAsync(newBatch, cancellationToken);
@@ -1095,7 +1187,10 @@ public class GoodsReceiptService : IGoodsReceiptService
                 ProductId = l.ProductId,
                 ProductCode = l.Product?.ProductCode ?? string.Empty,
                 ProductName = l.Product?.Name ?? string.Empty,
-                Unit = l.Product?.BaseUnit ?? "Cái",
+                Unit = ResolveInboundUnit(
+                    l.PurchaseOrderDetail?.DeliveryUoM,
+                    l.PurchaseOrderDetail?.PurchaseUnitNameSnapshot,
+                    l.Product),
                 HasBatches = l.Product?.HasBatches ?? false,
                 PurchaseOrderDetailId = l.PurchaseOrderDetailId,
                 OrderedQty = l.OrderedQty,

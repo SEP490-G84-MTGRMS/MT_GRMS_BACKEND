@@ -255,6 +255,127 @@ public class PurchaseOrderService : IPurchaseOrderService
                 "Không lưu được bản thảo: nhà cung cấp trên ma trận không còn tồn tại (có thể vừa xóa/tạo lại NCC). Vui lòng tải lại trang rồi nhập lại số lượng.");
         }
 
+        // Chặn lưu bản thảo khi còn ô SL > 0 nhưng dưới MOQ (cùng rule với chốt PO).
+        var moqErrors = new List<string>();
+        foreach (var supplierGroup in cellsBySupplier)
+        {
+            var supplierId = supplierGroup.Key;
+            foreach (var (cell, _) in supplierGroup)
+            {
+                var cellDate = cell.DeliveryDate.Date;
+                if (configBySupplier.TryGetValue(supplierId, out var cellCfg))
+                {
+                    string? committedCode = null;
+                    Guid? committedId = null;
+                    if (committedDict.TryGetValue((supplierId, cellDate), out var committed))
+                    {
+                        committedId = committed.Id;
+                        committedCode = committed.Code;
+                    }
+
+                    var daySt = OrderMatrixRules.EvaluateDayStatus(
+                        supplierId, cellDate, cellCfg, nowVn, committedCode, committedId);
+                    if (!OrderMatrixRules.IsEditableStatus(daySt.DeliveryDateStatus))
+                    {
+                        continue;
+                    }
+                }
+
+                productByKey.TryGetValue((cell.ProductId, supplierId), out var matrixRow);
+                if (matrixRow == null) continue;
+
+                decimal finalQty;
+                if (isStoreOwner)
+                {
+                    var isOwnerAdjusted = cell.IsOwnerAdjusted || cell.StoreQty.HasValue;
+                    finalQty = isOwnerAdjusted ? (cell.StoreQty ?? 0m) : cell.EmployeeQty;
+                }
+                else
+                {
+                    finalQty = cell.EmployeeQty;
+                }
+
+                if (OrderMatrixRules.ViolatesMoq(finalQty, matrixRow.Moq))
+                {
+                    var label = !string.IsNullOrWhiteSpace(matrixRow.Sku) ? matrixRow.Sku : matrixRow.Name;
+                    moqErrors.Add($"{label} ({cellDate:dd/MM}): SL {finalQty} < MOQ SP {matrixRow.Moq}");
+                }
+            }
+        }
+
+        // MOQ tổng đơn NCC theo từng ngày giao (cấu hình MinOrderQuantity).
+        var orderMoqErrors = new List<string>();
+        foreach (var supplierGroup in cellsBySupplier)
+        {
+            var supplierId = supplierGroup.Key;
+            if (!configBySupplier.TryGetValue(supplierId, out var orderCfg) || orderCfg.MinOrderQuantity <= 0)
+            {
+                continue;
+            }
+
+            var dayTotals = new Dictionary<DateTime, decimal>();
+            foreach (var (cell, _) in supplierGroup)
+            {
+                var cellDate = cell.DeliveryDate.Date;
+                string? committedCode = null;
+                Guid? committedId = null;
+                if (committedDict.TryGetValue((supplierId, cellDate), out var committed))
+                {
+                    committedId = committed.Id;
+                    committedCode = committed.Code;
+                }
+
+                var daySt = OrderMatrixRules.EvaluateDayStatus(
+                    supplierId, cellDate, orderCfg, nowVn, committedCode, committedId);
+                if (!OrderMatrixRules.IsEditableStatus(daySt.DeliveryDateStatus))
+                {
+                    continue;
+                }
+
+                decimal finalQty;
+                if (isStoreOwner)
+                {
+                    var isOwnerAdjusted = cell.IsOwnerAdjusted || cell.StoreQty.HasValue;
+                    finalQty = isOwnerAdjusted ? (cell.StoreQty ?? 0m) : cell.EmployeeQty;
+                }
+                else
+                {
+                    finalQty = cell.EmployeeQty;
+                }
+
+                dayTotals[cellDate] = dayTotals.GetValueOrDefault(cellDate) + finalQty;
+            }
+
+            foreach (var (day, total) in dayTotals.OrderBy(x => x.Key))
+            {
+                if (OrderMatrixRules.ViolatesSupplierOrderMoq(total, orderCfg.MinOrderQuantity))
+                {
+                    var name = !string.IsNullOrWhiteSpace(orderCfg.SupplierName)
+                        ? orderCfg.SupplierName
+                        : orderCfg.SupplierCode;
+                    orderMoqErrors.Add(
+                        $"{name} ({day:dd/MM}): tổng SL {total} < MOQ đơn {orderCfg.MinOrderQuantity}");
+                }
+            }
+        }
+
+        if (moqErrors.Count > 0 || orderMoqErrors.Count > 0)
+        {
+            var parts = new List<string>();
+            if (moqErrors.Count > 0)
+            {
+                parts.Add($"MOQ sản phẩm ({moqErrors.Count}): {string.Join("; ", moqErrors.Take(3))}");
+            }
+            if (orderMoqErrors.Count > 0)
+            {
+                parts.Add($"MOQ đơn NCC ({orderMoqErrors.Count}): {string.Join("; ", orderMoqErrors.Take(3))}");
+            }
+
+            throw new BusinessException(
+                "MOQ_NOT_MET",
+                $"Không lưu được bản thảo — {string.Join(" | ", parts)}");
+        }
+
         PurchaseOrder? lastDraft = null;
         var submittedBy = await ResolveValidUserIdAsync(cancellationToken);
 

@@ -262,6 +262,10 @@ public static class OrderMatrixRules
     public static bool ViolatesMoq(decimal finalQty, int moq)
         => finalQty > 0 && moq > 0 && finalQty < moq;
 
+    /// <summary>MOQ tổng đơn theo NCC × ngày giao: có đặt hàng nhưng tổng SL &lt; MinOrderQuantity.</summary>
+    public static bool ViolatesSupplierOrderMoq(decimal dayTotalQty, int minOrderQuantity)
+        => dayTotalQty > 0 && minOrderQuantity > 0 && dayTotalQty < minOrderQuantity;
+
     public static bool ViolatesOrderMultiple(decimal finalQty, int orderMultiple)
     {
         if (finalQty <= 0) return false;

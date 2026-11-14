@@ -61,6 +61,8 @@ public class OrderMatrixSupplierDeliveryConfigDto
     public string CutoffTime { get; set; } = "15:00";
     /// <summary>Số ngày trước ngày giao để chốt đơn (0 = cùng ngày giao). Mặc định 1.</summary>
     public int CutoffDayOffset { get; set; } = 1;
+    /// <summary>MOQ tổng đơn theo ngày giao (từ cấu hình NCC). 0 = không áp dụng.</summary>
+    public int MinOrderQuantity { get; set; }
     public List<int> ActiveDeliveryDays { get; set; } = new() { 1, 2, 3, 4, 5, 6 };
     public List<string> BlackoutDates { get; set; } = new();
 }

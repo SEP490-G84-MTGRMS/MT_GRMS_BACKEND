@@ -307,7 +307,8 @@ public class BranchProductRepository : IBranchProductRepository
                     u.UnitName,
                     u.ConversionRate,
                     u.Price,
-                    u.IsBaseUnit
+                    u.IsBaseUnit,
+                    u.IsPurchaseUnit
                 }).ToList()
             })
             .ToListAsync(cancellationToken);
@@ -335,6 +336,7 @@ public class BranchProductRepository : IBranchProductRepository
                 x.Unit,
                 x.RetailPrice,
                 unitOverrides);
+            var catalogPurchaseUnitName = extra?.Units.FirstOrDefault(u => u.IsPurchaseUnit)?.UnitName;
 
             spLookup.TryGetValue(x.ProductId, out var spList);
             var sourcing = (spList ?? new List<SupplierProduct>())
@@ -375,6 +377,12 @@ public class BranchProductRepository : IBranchProductRepository
                     : 0;
                 var hasSource = sp != null;
 
+                // Đơn vị nhập: DeliveryUoM (SupplierProduct) → IsPurchaseUnit → BaseUnit (giống màn NCC)
+                var inboundUnit = ResolveInboundUnit(
+                    deliveryUoM: sp?.DeliveryUoM,
+                    purchaseUnitName: catalogPurchaseUnitName,
+                    baseUnitName: extra?.BaseUnit ?? x.Unit);
+
                 return new BranchProductDto
                 {
                     Id = x.Id,
@@ -386,7 +394,7 @@ public class BranchProductRepository : IBranchProductRepository
                     Sku = x.ProductCode,
                     Barcode = x.Barcode,
                     Category = x.CategoryName,
-                    Unit = x.Unit,
+                    Unit = inboundUnit,
                     ImageUrl = extra?.ImageUrl,
                     RetailPrice = x.RetailPrice,
                     CostPrice = cost,
@@ -423,6 +431,21 @@ public class BranchProductRepository : IBranchProductRepository
         }).ToList();
 
         return (dtos, totalCount);
+    }
+
+    /// <summary>
+    /// Đơn vị nhập (cùng logic màn NCC): DeliveryUoM → đơn vị IsPurchaseUnit → BaseUnit.
+    /// </summary>
+    private static string ResolveInboundUnit(
+        string? deliveryUoM,
+        string? purchaseUnitName,
+        string? baseUnitName)
+    {
+        if (!string.IsNullOrWhiteSpace(deliveryUoM))
+            return deliveryUoM.Trim();
+        if (!string.IsNullOrWhiteSpace(purchaseUnitName))
+            return purchaseUnitName.Trim();
+        return string.IsNullOrWhiteSpace(baseUnitName) ? "Cái" : baseUnitName.Trim();
     }
 
     /// <summary>

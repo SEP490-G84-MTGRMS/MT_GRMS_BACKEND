@@ -35,7 +35,10 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
             .Include(gr => gr.Branch)
             .Include(gr => gr.PurchaseOrder)
             .Include(gr => gr.Lines)
-                .ThenInclude(l => l.Product)
+                .ThenInclude(l => l.Product!)
+                    .ThenInclude(p => p.Units)
+            .Include(gr => gr.Lines)
+                .ThenInclude(l => l.PurchaseOrderDetail)
             .Where(gr => gr.TenantId == tenantId && !gr.IsDeleted)
             .AsNoTracking();
 
@@ -136,7 +139,10 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
                 ProductId = l.ProductId,
                 ProductCode = l.Product?.ProductCode ?? string.Empty,
                 ProductName = l.Product?.Name ?? string.Empty,
-                Unit = l.Product?.BaseUnit ?? "Cái",
+                Unit = ResolveInboundUnit(
+                    l.PurchaseOrderDetail?.DeliveryUoM,
+                    l.PurchaseOrderDetail?.PurchaseUnitNameSnapshot,
+                    l.Product),
                 HasBatches = l.Product?.HasBatches ?? false,
                 PurchaseOrderDetailId = l.PurchaseOrderDetailId,
                 OrderedQty = l.OrderedQty,
@@ -174,7 +180,10 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
             .Include(gr => gr.Branch)
             .Include(gr => gr.PurchaseOrder)
             .Include(gr => gr.Lines)
-                .ThenInclude(l => l.Product)
+                .ThenInclude(l => l.Product!)
+                    .ThenInclude(p => p.Units)
+            .Include(gr => gr.Lines)
+                .ThenInclude(l => l.PurchaseOrderDetail)
             .FirstOrDefaultAsync(gr => gr.Id == id && gr.TenantId == tenantId && !gr.IsDeleted, cancellationToken);
     }
 
@@ -242,7 +251,8 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
             .Include(po => po.Supplier)
             .Include(po => po.Branch)
             .Include(po => po.Details)
-                .ThenInclude(d => d.Product)
+                .ThenInclude(d => d.Product!)
+                    .ThenInclude(p => p.Units)
             .FirstOrDefaultAsync(po => po.Id == poId && po.TenantId == tenantId && !po.IsDeleted, cancellationToken);
     }
 
@@ -256,7 +266,8 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
             .Include(po => po.Supplier)
             .Include(po => po.Branch)
             .Include(po => po.Details)
-                .ThenInclude(d => d.Product)
+                .ThenInclude(d => d.Product!)
+                    .ThenInclude(p => p.Units)
             .FirstOrDefaultAsync(po => po.Code.ToLower() == normalized && po.TenantId == tenantId && !po.IsDeleted, cancellationToken);
     }
 
@@ -348,6 +359,7 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
     public async Task<Product?> GetProductByIdAsync(string tenantId, Guid productId, CancellationToken cancellationToken = default)
     {
         return await _context.Products
+            .Include(p => p.Units)
             .FirstOrDefaultAsync(p => p.Id == productId && p.TenantId == tenantId && !p.IsDeleted, cancellationToken);
     }
 
@@ -379,5 +391,31 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
         return await _context.Users
             .IgnoreQueryFilters()
             .AnyAsync(u => u.Id == userId, cancellationToken);
+    }
+
+    private static string ResolveInboundUnit(string? deliveryUoM, string? purchaseUnitSnapshot, Product? product)
+    {
+        if (!string.IsNullOrWhiteSpace(deliveryUoM))
+        {
+            return deliveryUoM.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(purchaseUnitSnapshot))
+        {
+            return purchaseUnitSnapshot.Trim();
+        }
+
+        if (product?.Units != null)
+        {
+            var active = product.Units.Where(u => !u.IsDeleted).ToList();
+            var purchase = active.FirstOrDefault(u => u.IsPurchaseUnit)
+                           ?? active.FirstOrDefault(u => u.IsBaseUnit);
+            if (purchase != null && !string.IsNullOrWhiteSpace(purchase.UnitName))
+            {
+                return purchase.UnitName.Trim();
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(product?.BaseUnit) ? "Cái" : product!.BaseUnit.Trim();
     }
 }
