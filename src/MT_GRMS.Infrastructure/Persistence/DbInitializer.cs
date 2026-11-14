@@ -782,6 +782,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""AppliedVatRate"" numeric(5,2) NOT NULL DEFAULT 0.00;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""VatAmount"" numeric(18,2) NOT NULL DEFAULT 0.00;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""BatchCode"" character varying(100);", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""BatchID"" uuid NULL;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""BatchExpiryDate"" timestamp without time zone NULL;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""FefoDiscountPercent"" numeric(5,2) NOT NULL DEFAULT 0;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""IsFefoDiscountActive"" boolean NOT NULL DEFAULT false;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitId"" uuid;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitName"" character varying(50);", logger);
 
@@ -980,6 +984,24 @@ END $$;
                     logger?.LogWarning(ex, "Cảnh báo khi chạy DDL nâng cấp bảng Users");
                 }
 
+                // Keep the shift-closing compatibility columns in an isolated command. If a later
+                // legacy DDL statement fails, checkout queries must still be able to read shifts.
+                try
+                {
+                    await context.Database.ExecuteSqlRawAsync(@"
+                        ALTER TABLE IF EXISTS ""ShiftZReports""
+                            ADD COLUMN IF NOT EXISTS ""ClosingVersion"" bigint NOT NULL DEFAULT 1;
+                        ALTER TABLE IF EXISTS ""ShiftZReports""
+                            ADD COLUMN IF NOT EXISTS ""DestinationFundId"" uuid;
+                        ALTER TABLE IF EXISTS ""ShiftZReports""
+                            ADD COLUMN IF NOT EXISTS ""DiscrepancyReason"" character varying(500);
+                    ");
+                }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(ex, "Không thể bổ sung các cột tương thích chốt ca");
+                }
+
                 try
                 {
                     await context.Database.ExecuteSqlRawAsync(@"
@@ -1014,6 +1036,8 @@ END $$;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ShiftCode"" text;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ShiftName"" text;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""CashierUserId"" uuid;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpenedScheduleId"" uuid;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosedScheduleId"" uuid;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ReceiverUserId"" text;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""PrevShiftId"" uuid;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""OpeningFloatExpected"" numeric(18,2) DEFAULT 0;
@@ -1040,6 +1064,9 @@ END $$;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""SnapshotLocked"" boolean DEFAULT false;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""CashbookPostingStatus"" integer DEFAULT 1;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""BusinessDayClosingId"" uuid;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""DiscrepancyReason"" character varying(500);
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""ClosingVersion"" bigint NOT NULL DEFAULT 1;
+                        ALTER TABLE IF EXISTS ""ShiftZReports"" ADD COLUMN IF NOT EXISTS ""DestinationFundId"" uuid;
                         UPDATE ""ShiftZReports"" SET ""BusinessDate"" = (""OpenedAtUtc"" + interval '7 hours' - interval '6 hours')::date WHERE ""BusinessDate"" IS NULL;
                         ALTER TABLE IF EXISTS ""ShiftZReports"" ALTER COLUMN ""BusinessDate"" SET NOT NULL;
                         ALTER TABLE IF EXISTS ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""PostedCashbookEntryId"" uuid;
@@ -1060,6 +1087,16 @@ END $$;
                             ""UpdatedAt"" timestamp without time zone, ""IsDeleted"" boolean NOT NULL DEFAULT false
                         );
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BusinessDayClosings_Tenant_Branch_Date"" ON ""BusinessDayClosings"" (""TenantId"", ""BranchId"", ""BusinessDate"");
+                        ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""Version"" integer NOT NULL DEFAULT 1;
+                        ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""IsActive"" boolean NOT NULL DEFAULT true;
+                        ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""SupersedesClosingId"" uuid;
+                        ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""PreviewToken"" character varying(128) NOT NULL DEFAULT '';
+                        ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""ReopenedAtUtc"" timestamp without time zone;
+                        ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""ReopenedByUserId"" uuid;
+                        ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""ReopenReason"" character varying(500);
+                        DROP INDEX IF EXISTS ""IX_BusinessDayClosings_Tenant_Branch_Date"";
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate_Version"" ON ""BusinessDayClosings"" (""TenantId"", ""BranchId"", ""BusinessDate"", ""Version"");
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate_IsActive"" ON ""BusinessDayClosings"" (""TenantId"", ""BranchId"", ""BusinessDate"", ""IsActive"") WHERE ""IsActive"" = TRUE;
 
                         CREATE TABLE IF NOT EXISTS ""ShiftParticipants"" (
                             ""Id"" uuid NOT NULL PRIMARY KEY,

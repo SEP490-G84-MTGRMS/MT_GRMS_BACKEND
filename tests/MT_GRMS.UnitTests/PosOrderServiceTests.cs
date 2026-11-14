@@ -400,7 +400,10 @@ public class PosOrderServiceTests
     public async Task REQ_POS_05_CreateOrder_DebtByStoreOwner_Success()
     {
         // Arrange: Chủ cửa hàng duyệt đơn ghi nợ -> Thành công
-        var initialDebt = _orderRepo.Customers.First(c => c.Id == _customerId).TotalDebt;
+        var ownerApprovedCustomer = _orderRepo.Customers.First(c => c.Id == _customerId);
+        ownerApprovedCustomer.AllowDebt = false;
+        ownerApprovedCustomer.DebtLimit = 0;
+        var initialDebt = ownerApprovedCustomer.TotalDebt;
         var request = new OrderCreateRequest(
             BranchId: _branchId,
             CustomerId: _customerId,
@@ -3194,6 +3197,9 @@ public class FakeOrderRepository : IOrderRepository
 
         return Task.FromResult<IReadOnlyList<BranchStock>>(list);
     }
+
+    public Task<BranchStock?> GetBranchStockByIdAsync(Guid branchId, Guid productId, Guid batchId, CancellationToken cancellationToken = default)
+        => Task.FromResult(BranchStocks.FirstOrDefault(s => s.Id == batchId && s.BranchId == branchId && s.ProductId == productId));
 
     public Task<Order?> GetOrderWithDetailsAsync(Guid id, CancellationToken cancellationToken = default)
     {

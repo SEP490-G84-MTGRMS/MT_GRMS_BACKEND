@@ -78,6 +78,9 @@ public class BatchExpiryTests
             return Task.FromResult<BatchListItemDto?>(null);
         }
 
+        public Task<BranchStock?> GetBranchStockForUpdateAsync(string tenantId, Guid id, CancellationToken cancellationToken = default)
+            => Task.FromResult<BranchStock?>(null);
+
         public Task<Batch> AddBatchAsync(Batch batch, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(batch);
