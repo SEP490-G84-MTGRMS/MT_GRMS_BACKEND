@@ -229,6 +229,10 @@ public class EmployeeService : IEmployeeService
             OtSunday = string.IsNullOrWhiteSpace(request.OtSunday) ? null : request.OtSunday.Trim(),
             SalaryType = ParseSalaryType(request.SalaryType),
             BaseRate = request.BaseRate,
+            HasLaborContract = ParseSalaryType(request.SalaryType) == SalaryType.Monthly && request.HasLaborContract,
+            InsuranceBaseSalary = ParseSalaryType(request.SalaryType) == SalaryType.Monthly && request.HasLaborContract
+                ? (request.InsuranceBaseSalary ?? request.BaseRate)
+                : null,
             BankAccountNumber = string.IsNullOrWhiteSpace(request.BankAccountNumber) ? null : request.BankAccountNumber.Trim(),
             BankName = string.IsNullOrWhiteSpace(request.BankName) ? null : request.BankName.Trim(),
             BankAccountHolder = string.IsNullOrWhiteSpace(request.BankAccountHolder) ? null : request.BankAccountHolder.Trim().ToUpperInvariant(),
@@ -349,6 +353,9 @@ public class EmployeeService : IEmployeeService
         employee.Gender = request.Gender;
         employee.SalaryType = ParseSalaryType(request.SalaryType);
         employee.BaseRate = request.BaseRate;
+        var isMonthlyContract = employee.SalaryType == SalaryType.Monthly && request.HasLaborContract;
+        employee.HasLaborContract = isMonthlyContract;
+        employee.InsuranceBaseSalary = isMonthlyContract ? (request.InsuranceBaseSalary ?? request.BaseRate) : null;
         if (request.Allowances != null)
         {
             _employeeRepository.SyncAllowances(employee, request.Allowances, employee.TenantId);
@@ -781,7 +788,9 @@ public class EmployeeService : IEmployeeService
             e.UpdatedAt,
             e.FaceDescriptor,
             e.FaceImageUrls,
-            e.FaceRegisteredAt
+            e.FaceRegisteredAt,
+            e.HasLaborContract,
+            e.InsuranceBaseSalary
         );
     }
 

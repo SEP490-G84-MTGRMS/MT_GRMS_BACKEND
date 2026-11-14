@@ -209,9 +209,21 @@ public class PayslipService : IPayslipService
             var totalEarnings = baseSalaryEarned + overtimePay + totalAllowance;
 
             decimal socialInsurance = 0m;
-            if (emp.SalaryType == SalaryType.Monthly && emp.BaseRate > 0)
+            decimal insuranceBase = 0m;
+            if (emp.SalaryType == SalaryType.Monthly && emp.HasLaborContract)
             {
-                socialInsurance = Math.Round(emp.BaseRate * 0.105m, 0, MidpointRounding.AwayFromZero);
+                insuranceBase = emp.InsuranceBaseSalary ?? emp.BaseRate;
+                if (insuranceBase > 0)
+                {
+                    var bhxh = Math.Round(insuranceBase * 0.08m, 0, MidpointRounding.AwayFromZero);
+                    var bhyt = Math.Round(insuranceBase * 0.015m, 0, MidpointRounding.AwayFromZero);
+                    var bhtn = Math.Round(insuranceBase * 0.01m, 0, MidpointRounding.AwayFromZero);
+                    socialInsurance = bhxh + bhyt + bhtn;
+                }
+                else
+                {
+                    insuranceBase = 0m;
+                }
             }
 
             var currentDebt = emp.DebtAmount > 0 ? emp.DebtAmount : 0m;
@@ -242,6 +254,7 @@ public class PayslipService : IPayslipService
             {
                 payslip = existingPayslip;
                 payslip.BaseRate = emp.BaseRate;
+                payslip.InsuranceBaseSalary = insuranceBase;
                 payslip.SalaryType = emp.SalaryType;
                 payslip.StandardDays = standardDays;
                 payslip.StandardDayHours = standardDayHours;
@@ -288,6 +301,7 @@ public class PayslipService : IPayslipService
                     PeriodMonth = request.PeriodMonth,
                     SalaryType = emp.SalaryType,
                     BaseRate = emp.BaseRate,
+                    InsuranceBaseSalary = insuranceBase,
                     StandardDays = standardDays,
                     StandardDayHours = standardDayHours,
                     WorkedDays = workedDays,
@@ -785,9 +799,10 @@ public class PayslipService : IPayslipService
 
         if (p.SocialInsurance > 0 && p.SalaryType == SalaryType.Monthly)
         {
-            bhxhAmount = Math.Round(p.BaseRate * 0.08m, 0, MidpointRounding.AwayFromZero);
-            bhytAmount = Math.Round(p.BaseRate * 0.015m, 0, MidpointRounding.AwayFromZero);
-            bhtnAmount = Math.Round(p.BaseRate * 0.01m, 0, MidpointRounding.AwayFromZero);
+            var insuranceBase = p.InsuranceBaseSalary > 0 ? p.InsuranceBaseSalary : p.BaseRate;
+            bhxhAmount = Math.Round(insuranceBase * 0.08m, 0, MidpointRounding.AwayFromZero);
+            bhytAmount = Math.Round(insuranceBase * 0.015m, 0, MidpointRounding.AwayFromZero);
+            bhtnAmount = Math.Round(insuranceBase * 0.01m, 0, MidpointRounding.AwayFromZero);
         }
 
         return new PayslipResponse(
@@ -839,7 +854,8 @@ public class PayslipService : IPayslipService
             CreatedAt: p.CreatedAt,
             UserId: p.Employee?.UserId,
             OtWeekday: p.Employee?.OtWeekday ?? "150%",
-            OtSunday: p.Employee?.OtSunday ?? "200%"
+            OtSunday: p.Employee?.OtSunday ?? "200%",
+            InsuranceBaseSalary: p.InsuranceBaseSalary
         );
     }
 }

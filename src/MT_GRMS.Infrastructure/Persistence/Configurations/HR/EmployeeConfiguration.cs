@@ -39,6 +39,8 @@ public class EmployeeConfiguration : IEntityTypeConfiguration<Employee>
             .HasMaxLength(30)
             .HasDefaultValue(SalaryType.Monthly);
         builder.Property(x => x.BaseRate).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
+        builder.Property(x => x.HasLaborContract).HasDefaultValue(false);
+        builder.Property(x => x.InsuranceBaseSalary).HasColumnType("decimal(18,2)");
         builder.Property(x => x.BankAccountNumber).HasMaxLength(30);
         builder.Property(x => x.BankName).HasMaxLength(100);
         builder.Property(x => x.BankAccountHolder).HasMaxLength(100);

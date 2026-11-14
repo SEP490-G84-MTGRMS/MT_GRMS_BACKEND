@@ -326,6 +326,7 @@ public class PayslipServiceTests
             FullName = "Nguyen Van A",
             SalaryType = SalaryType.Monthly,
             BaseRate = 10_400_000m,
+            HasLaborContract = true,
             Status = EmployeeStatus.Active
         };
         empRepo.Employees.Add(employee);
@@ -1096,5 +1097,90 @@ public class PayslipServiceTests
         // 15.5 giờ * 50,000 = 775,000 đ (chuẩn decimal, không bị sai số 705,000 đ)
         Assert.Equal(775_000m, payslip.BaseSalaryEarned);
         Assert.Equal(775_000m, payslip.NetSalary);
+    }
+
+    [Fact]
+    public async Task GenerateMonthlyPayroll_MonthlyWithCustomInsuranceBase_CalculatesInsuranceFromConfiguredBase()
+    {
+        var (service, _, empRepo, schedRepo, _, _, _) = CreateService();
+        var branchId = Guid.NewGuid();
+
+        var employee = new Employee
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            EmployeeCode = "NV0098",
+            FullName = "Monthly Contract Custom Insurance",
+            SalaryType = SalaryType.Monthly,
+            BaseRate = 10_400_000m,
+            HasLaborContract = true,
+            InsuranceBaseSalary = 5_000_000m,
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(employee);
+
+        for (int day = 1; day <= 26; day++)
+        {
+            schedRepo.Schedules.Add(new EmployeeSchedule
+            {
+                Id = Guid.NewGuid(),
+                EmployeeId = employee.Id,
+                BranchId = branchId,
+                WorkDate = new DateTime(2026, 11, day),
+                Status = ScheduleStatus.Completed,
+                ActualWorkHours = 8.0m
+            });
+        }
+
+        var result = await service.GenerateMonthlyPayrollAsync(new GeneratePayrollBatchRequest("2026-11", branchId));
+        var payslip = Assert.Single(result);
+
+        Assert.Equal(10_400_000m, payslip.BaseSalaryEarned);
+        Assert.Equal(5_000_000m, payslip.InsuranceBaseSalary);
+        Assert.Equal(525_000m, payslip.SocialInsurance); // 10.5% * 5,000,000
+        Assert.Equal(400_000m, payslip.BhxhAmount);
+        Assert.Equal(75_000m, payslip.BhytAmount);
+        Assert.Equal(50_000m, payslip.BhtnAmount);
+        Assert.Equal(9_875_000m, payslip.NetSalary);
+    }
+
+    [Fact]
+    public async Task GenerateMonthlyPayroll_MonthlyWithoutLaborContract_HasZeroSocialInsurance()
+    {
+        var (service, _, empRepo, schedRepo, _, _, _) = CreateService();
+        var branchId = Guid.NewGuid();
+
+        var employee = new Employee
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            EmployeeCode = "NV0099",
+            FullName = "Monthly Without Contract",
+            SalaryType = SalaryType.Monthly,
+            BaseRate = 10_400_000m,
+            HasLaborContract = false,
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(employee);
+
+        for (int day = 1; day <= 26; day++)
+        {
+            schedRepo.Schedules.Add(new EmployeeSchedule
+            {
+                Id = Guid.NewGuid(),
+                EmployeeId = employee.Id,
+                BranchId = branchId,
+                WorkDate = new DateTime(2026, 11, day),
+                Status = ScheduleStatus.Completed,
+                ActualWorkHours = 8.0m
+            });
+        }
+
+        var result = await service.GenerateMonthlyPayrollAsync(new GeneratePayrollBatchRequest("2026-11", branchId));
+        var payslip = Assert.Single(result);
+
+        Assert.Equal(10_400_000m, payslip.BaseSalaryEarned);
+        Assert.Equal(0m, payslip.SocialInsurance);
+        Assert.Equal(10_400_000m, payslip.NetSalary);
     }
 }

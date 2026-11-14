@@ -136,6 +136,20 @@ public class CreateEmployeeRequestValidator : AbstractValidator<CreateEmployeeRe
                 .MaximumLength(20).WithMessage("Hệ số làm thêm Chủ nhật không vượt quá 20 ký tự.");
         });
 
+        When(x => x.InsuranceBaseSalary.HasValue, () =>
+        {
+            RuleFor(x => x.InsuranceBaseSalary!.Value)
+                .GreaterThanOrEqualTo(0).WithMessage("Mức lương đóng bảo hiểm không được âm.")
+                .LessThanOrEqualTo(1_000_000_000m).WithMessage("Mức lương đóng bảo hiểm không được vượt quá 1.000.000.000 đ.");
+        });
+
+        When(x => x.HasLaborContract && string.Equals(x.SalaryType?.Trim(), "monthly", StringComparison.OrdinalIgnoreCase), () =>
+        {
+            RuleFor(x => x.InsuranceBaseSalary)
+                .Must((req, insBase) => (insBase ?? req.BaseRate) > 0)
+                .WithMessage("Mức lương đóng bảo hiểm phải lớn hơn 0 khi nhân viên có hợp đồng lao động.");
+        });
+
         When(x => !string.IsNullOrWhiteSpace(x.EmployeeCode), () =>
         {
             RuleFor(x => x.EmployeeCode!)
@@ -268,6 +282,20 @@ public class UpdateEmployeeRequestValidator : AbstractValidator<UpdateEmployeeRe
         {
             RuleFor(x => x.OtSunday)
                 .MaximumLength(20).WithMessage("Hệ số làm thêm Chủ nhật không vượt quá 20 ký tự.");
+        });
+
+        When(x => x.InsuranceBaseSalary.HasValue, () =>
+        {
+            RuleFor(x => x.InsuranceBaseSalary!.Value)
+                .GreaterThanOrEqualTo(0).WithMessage("Mức lương đóng bảo hiểm không được âm.")
+                .LessThanOrEqualTo(1_000_000_000m).WithMessage("Mức lương đóng bảo hiểm không được vượt quá 1.000.000.000 đ.");
+        });
+
+        When(x => x.HasLaborContract && string.Equals(x.SalaryType?.Trim(), "monthly", StringComparison.OrdinalIgnoreCase), () =>
+        {
+            RuleFor(x => x.InsuranceBaseSalary)
+                .Must((req, insBase) => (insBase ?? req.BaseRate) > 0)
+                .WithMessage("Mức lương đóng bảo hiểm phải lớn hơn 0 khi nhân viên có hợp đồng lao động.");
         });
 
         When(x => !string.IsNullOrWhiteSpace(x.EmployeeCode), () =>

@@ -29,6 +29,7 @@ public class PayslipConfiguration : IEntityTypeConfiguration<Payslip>
             .HasDefaultValue(SalaryType.Monthly);
 
         builder.Property(x => x.BaseRate).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
+        builder.Property(x => x.InsuranceBaseSalary).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.StandardDays).HasColumnType("decimal(5,2)").HasDefaultValue(26.00m);
         builder.Property(x => x.StandardDayHours).HasColumnType("decimal(5,2)").HasDefaultValue(8.00m);
 

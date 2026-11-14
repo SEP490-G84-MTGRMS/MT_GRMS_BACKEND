@@ -109,6 +109,7 @@ public record PayslipResponse(
     DateTime CreatedAt,
     string? UserId = null,
     string? OtWeekday = null,
-    string? OtSunday = null
+    string? OtSunday = null,
+    decimal InsuranceBaseSalary = 0.00m
 );
 
