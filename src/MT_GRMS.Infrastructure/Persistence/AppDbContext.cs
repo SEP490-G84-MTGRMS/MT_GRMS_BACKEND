@@ -190,6 +190,23 @@ public partial class AppDbContext : DbContext
 
     private void ApplyAuditAndTenantInfo()
     {
+        foreach (var userEntry in ChangeTracker.Entries<User>())
+        {
+            if (userEntry.State is EntityState.Added or EntityState.Modified)
+            {
+                if (!string.IsNullOrWhiteSpace(userEntry.Entity.Email))
+                {
+                    userEntry.Entity.NormalizedEmail = userEntry.Entity.Email.Trim().ToLowerInvariant();
+                }
+
+                if (string.IsNullOrWhiteSpace(userEntry.Entity.NormalizedPhone) &&
+                    !string.IsNullOrWhiteSpace(userEntry.Entity.Phone))
+                {
+                    userEntry.Entity.NormalizedPhone = userEntry.Entity.Phone.Trim();
+                }
+            }
+        }
+
         var tenantId = _tenantContext?.CurrentTenantId;
 
         foreach (var entry in ChangeTracker.Entries<BaseTenantEntity>())

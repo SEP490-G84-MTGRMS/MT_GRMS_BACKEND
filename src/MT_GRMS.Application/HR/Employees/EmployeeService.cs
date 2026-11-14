@@ -921,14 +921,16 @@ public class EmployeeService : IEmployeeService
         var candidateEmail = string.IsNullOrWhiteSpace(employeeEmail)
             ? $"{normalizedUsername}@mtgrms.vn"
             : employeeEmail.Trim();
+        var normalizedEmail = candidateEmail.Trim().ToLowerInvariant();
 
-        // Tránh vi phạm Unique Index IX_Users_Email và IX_Users_Phone nếu SĐT/Email đã thuộc về một User khác (ví dụ StoreOwner hoặc tài khoản cũ)
+        // Tránh vi phạm Unique Index IX_Users_Email, IX_Users_NormalizedEmail và IX_Users_Phone nếu SĐT/Email đã thuộc về một User khác (ví dụ StoreOwner hoặc tài khoản cũ)
         var emailConflict = await _userRepository.FindAsync(
-            u => u.Email.ToLower() == candidateEmail.ToLower(),
+            u => u.NormalizedEmail == normalizedEmail || u.Email.ToLower() == normalizedEmail,
             cancellationToken);
         if (emailConflict.Count > 0)
         {
             candidateEmail = $"{normalizedUsername}.{newUserId[..6]}@mtgrms.vn";
+            normalizedEmail = candidateEmail.ToLowerInvariant();
         }
 
         string? candidatePhone = string.IsNullOrWhiteSpace(employeePhone) ? null : NormalizePhoneNumber(employeePhone);
@@ -951,7 +953,9 @@ public class EmployeeService : IEmployeeService
             PasswordHash = !string.IsNullOrWhiteSpace(password) ? password : "Staff@123456",
             FullName = fullName,
             Email = candidateEmail,
+            NormalizedEmail = normalizedEmail,
             Phone = candidatePhone,
+            NormalizedPhone = candidatePhone,
             IsActive = true
         };
     }

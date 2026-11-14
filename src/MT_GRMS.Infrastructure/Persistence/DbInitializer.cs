@@ -502,6 +502,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""NormalizedPhone"" character varying(20) NULL;
                 ALTER TABLE ""Users"" ADD COLUMN IF NOT EXISTS ""TrialConsumedAt"" timestamp with time zone NULL;
 
+                UPDATE ""Users""
+                SET ""NormalizedEmail"" = LOWER(TRIM(""Email""))
+                WHERE ""NormalizedEmail"" = '' AND ""Email"" IS NOT NULL AND TRIM(""Email"") <> '';
+
                 CREATE TABLE IF NOT EXISTS ""RegistrationOtpChallenges"" (
                     ""Key"" character varying(120) NOT NULL PRIMARY KEY,
                     ""NormalizedEmail"" character varying(100) NOT NULL,
