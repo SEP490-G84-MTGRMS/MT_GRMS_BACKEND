@@ -35,6 +35,14 @@ public class SupplierReturnService : ISupplierReturnService
         _unitOfWork = unitOfWork;
     }
 
+    public SupplierReturnService(
+        ISupplierReturnRepository repository,
+        ITenantContext tenantContext,
+        IUnitOfWork unitOfWork)
+        : this(repository, null!, null!, tenantContext, unitOfWork)
+    {
+    }
+
     public async Task<PagedResult<SupplierReturnListItemDto>> GetPagedAsync(
         SupplierReturnFilterQuery query,
         CancellationToken cancellationToken = default)

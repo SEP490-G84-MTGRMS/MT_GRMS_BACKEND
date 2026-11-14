@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Debt.Dtos;
+using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
@@ -38,7 +39,23 @@ public class CustomersController : BaseApiController
         if (!string.IsNullOrWhiteSpace(search))
         {
             var s = search.Trim().ToLower();
-            query = query.Where(c => c.Name.ToLower().Contains(s) || c.Phone.Contains(s) || c.CustomerCode.ToLower().Contains(s));
+
+            // Match debt repayment reference / entry code e.g. REC-xxx or DPR-xxx
+            var customerIdsFromDebt = await _context.CustomerDebtEntries
+                .AsNoTracking()
+                .Where(e => e.TenantId == tenantId && (e.EntryCode.ToLower().Contains(s) || e.ReferenceCode.ToLower().Contains(s) || (e.SourceId.HasValue && e.SourceId.Value.ToString().ToLower() == s)))
+                .Select(e => e.CustomerId)
+                .Distinct()
+                .ToListAsync(ct);
+
+            if (Guid.TryParse(s, out var guidId))
+            {
+                query = query.Where(c => c.Id == guidId || customerIdsFromDebt.Contains(c.Id) || c.Name.ToLower().Contains(s) || c.Phone.Contains(s) || c.CustomerCode.ToLower().Contains(s));
+            }
+            else
+            {
+                query = query.Where(c => c.Name.ToLower().Contains(s) || c.Phone.Contains(s) || c.CustomerCode.ToLower().Contains(s) || customerIdsFromDebt.Contains(c.Id));
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(tier) && !tier.Equals("ALL", StringComparison.OrdinalIgnoreCase))
@@ -163,13 +180,22 @@ public class CustomersController : BaseApiController
     public async Task<ActionResult<ApiResponse<CustomerResponse>>> CreateCustomer([FromBody] CreateCustomerRequest request, CancellationToken ct)
     {
         var tenantId = _tenantContext.CurrentTenantId;
-        if (string.IsNullOrWhiteSpace(request.FullName))
+        var cleanFullName = System.Text.RegularExpressions.Regex.Replace(request.FullName ?? string.Empty, @"<[^>]*>", string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(cleanFullName))
         {
-            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không được để trống."));
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không được để trống hoặc chỉ chứa thẻ HTML."));
+        }
+        if (request.FullName != null && (request.FullName.Contains('<') || request.FullName.Contains('>')))
+        {
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không được chứa thẻ HTML hoặc ký tự đặc biệt < >."));
         }
         if (string.IsNullOrWhiteSpace(request.PhoneNumber))
         {
             return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Số điện thoại không được để trống."));
+        }
+        if (request.DebtLimit < 0)
+        {
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Hạn mức nợ không thể là số âm."));
         }
 
         var existingPhone = await _context.Customers
@@ -188,15 +214,15 @@ public class CustomersController : BaseApiController
             Id = customerId,
             TenantId = tenantId,
             CustomerCode = code,
-            Name = request.FullName.Trim(),
+            Name = cleanFullName,
             Phone = request.PhoneNumber.Trim(),
             Email = request.Email?.Trim(),
-            Address = request.Address?.Trim(),
+            Address = request.Address != null ? System.Text.RegularExpressions.Regex.Replace(request.Address, @"<[^>]*>", string.Empty).Trim() : null,
             MembershipTier = request.MembershipTier ?? "Standard",
             RewardPoints = 0,
             TotalSpending = 0m,
             TotalDebt = 0m,
-            DebtLimit = request.DebtLimit,
+            DebtLimit = Math.Max(0m, request.DebtLimit),
             AllowDebt = request.DebtLimit > 0,
             IsBlockedForDebt = false,
             PrepaymentBalance = 0m,
@@ -240,15 +266,31 @@ public class CustomersController : BaseApiController
             return NotFound(ApiResponse<object>.Fail("NOT_FOUND", "Khách hàng không tồn tại."));
         }
 
-        if (request.FullName != null) customer.Name = request.FullName.Trim();
+        if (request.FullName != null)
+        {
+            if (request.FullName.Contains('<') || request.FullName.Contains('>'))
+            {
+                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không được chứa thẻ HTML hoặc ký tự đặc biệt < >."));
+            }
+            var cleanUpdateName = System.Text.RegularExpressions.Regex.Replace(request.FullName, @"<[^>]*>", string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(cleanUpdateName))
+            {
+                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không được để trống."));
+            }
+            customer.Name = cleanUpdateName;
+        }
         if (request.Email != null) customer.Email = request.Email.Trim();
-        if (request.Address != null) customer.Address = request.Address.Trim();
+        if (request.Address != null) customer.Address = System.Text.RegularExpressions.Regex.Replace(request.Address, @"<[^>]*>", string.Empty).Trim();
         if (request.MembershipTier != null) customer.MembershipTier = request.MembershipTier;
         if (request.Status != null) customer.IsBlockedForDebt = request.Status.Equals("Inactive", StringComparison.OrdinalIgnoreCase);
 
         if (request.DebtLimit.HasValue)
         {
-            customer.DebtLimit = request.DebtLimit.Value;
+            if (request.DebtLimit.Value < 0)
+            {
+                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Hạn mức nợ không thể là số âm."));
+            }
+            customer.DebtLimit = Math.Max(0m, request.DebtLimit.Value);
             customer.AllowDebt = customer.DebtLimit > 0;
 
             if (customer.TotalDebt > customer.DebtLimit)

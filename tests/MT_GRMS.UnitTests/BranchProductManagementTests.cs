@@ -680,7 +680,7 @@ public class BranchProductManagementTests
                         Name = prod?.Name ?? string.Empty,
                         CategoryName = "Lương thực",
                         BaseUoM = prod?.BaseUnit ?? "Cái",
-                        CostPrice = sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice : (prod?.CostPrice ?? 0m),
+                        CostPrice = sp.AgreedWholesalePrice > 0 ? sp.AgreedWholesalePrice.Value : (prod?.CostPrice ?? 0m),
                         Moq = sp.MinimumOrderQuantity > 0 ? sp.MinimumOrderQuantity : 1,
                         SupplierId = sp.SupplierId,
                         SupplierCode = sp.Supplier?.Code ?? string.Empty,

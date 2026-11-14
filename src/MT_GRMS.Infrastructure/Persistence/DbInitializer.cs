@@ -3,6 +3,7 @@ using OrderItem = MT_GRMS.Domain.Entities.Sales.OrderDetail;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using MT_GRMS.Domain.Enums;
 using Promotion = MT_GRMS.Domain.Entities.Sales.Promotion;
@@ -898,6 +899,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
     public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null, bool seedSampleData = true)
     {
+        var schemaTimer = Stopwatch.StartNew();
         // 0. Bổ sung các cột schema còn thiếu trên Cloud DB
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""ProductUnits"" ADD COLUMN IF NOT EXISTS ""TenantId"" character varying(50);", logger);
@@ -1733,12 +1735,15 @@ END $$;
             logger?.LogWarning(ex, "Lỗi trong quá trình kiểm tra cấu trúc CSDL hoặc migrations (bỏ qua nếu bảng đã tồn tại).");
         }
 
+        schemaTimer.Stop();
+        logger?.LogInformation("Database schema initialization phase completed in {ElapsedMilliseconds} ms.", schemaTimer.ElapsedMilliseconds);
         if (!seedSampleData)
         {
             logger?.LogInformation("SeedSampleData=false — chỉ đồng bộ schema, bỏ qua nạp dữ liệu mẫu.");
             return;
         }
 
+        var seedTimer = Stopwatch.StartNew();
         // 2. PHÂN HỆ SAAS: Nạp danh sách các gói cước SubscriptionPlans (Idempotent: TRIAL 0k, STANDARD 99k & PRO 249k)
         var planTrial = await context.SubscriptionPlans.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.PlanCode == "TRIAL");
         if (planTrial == null)
@@ -2489,6 +2494,9 @@ END $$;
 
         // Backfill đơn vị tính cơ bản (BaseUnit, IsPurchaseUnit = true) cho mọi sản phẩm chưa có ProductUnit
         await EnsureAllProductsHaveBaseUnitAsync(context);
+
+        seedTimer.Stop();
+        logger?.LogInformation("Demo data seeding phase completed in {ElapsedMilliseconds} ms.", seedTimer.ElapsedMilliseconds);
     }
 
     private static async Task EnsureAllProductsHaveBaseUnitAsync(AppDbContext context)
