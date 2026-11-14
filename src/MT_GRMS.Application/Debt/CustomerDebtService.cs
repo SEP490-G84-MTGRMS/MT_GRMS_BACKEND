@@ -51,6 +51,7 @@ public class CustomerDebtService : ICustomerDebtService
         // DEBT-01 & CONC-02: Kiểm tra quyền quản lý động (StoreOwner, Manager, ADMIN) thay vì hardcode bypass code
         var isManagerRole = !string.IsNullOrWhiteSpace(_tenantContext.CurrentRole) &&
             (_tenantContext.CurrentRole.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase)
+             || _tenantContext.CurrentRole.Equals("STORE_OWNER", StringComparison.OrdinalIgnoreCase)
              || _tenantContext.CurrentRole.Equals("Manager", StringComparison.OrdinalIgnoreCase)
              || _tenantContext.CurrentRole.Equals("ADMIN", StringComparison.OrdinalIgnoreCase));
 
@@ -71,7 +72,7 @@ public class CustomerDebtService : ICustomerDebtService
         }
 
         var projectedDebt = customer.TotalDebt + request.DebtAmount;
-        if (projectedDebt > customer.DebtLimit && !isManagerBypass)
+        if (customer.DebtLimit > 0 && projectedDebt > customer.DebtLimit && !isManagerBypass)
         {
             customer.DebtStatus = CustomerDebtStatus.LimitExceededBlocked;
             customer.IsBlockedForDebt = true;

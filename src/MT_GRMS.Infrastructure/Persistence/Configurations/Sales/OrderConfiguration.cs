@@ -39,6 +39,7 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.HasIndex(x => new { x.TenantId, x.BranchId, x.BusinessDate });
         builder.HasIndex(x => x.AppliedPromotionId);
         builder.HasIndex(x => x.AppliedVoucherCode);
+        builder.HasIndex(x => x.PaymentAccountId);
 
         builder.HasOne(x => x.Shift)
             .WithMany()
@@ -53,6 +54,11 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.HasOne(x => x.Customer)
             .WithMany(c => c.Orders)
             .HasForeignKey(x => x.CustomerId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(x => x.PaymentAccount)
+            .WithMany()
+            .HasForeignKey(x => x.PaymentAccountId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

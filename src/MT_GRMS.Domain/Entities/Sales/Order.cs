@@ -14,6 +14,8 @@ public class Order : BaseTenantEntity
     public Guid BranchId { get; set; }
     public Guid? CustomerId { get; set; }
     public Guid? ShiftId { get; set; }
+    /// <summary>Snapshot tài khoản ngân hàng được chọn khi tạo thanh toán chuyển khoản.</summary>
+    public Guid? PaymentAccountId { get; set; }
     public string OrderCode { get; set; } = string.Empty;
     public DateTime OrderDate { get; set; } = DateTime.UtcNow;
     public DateOnly BusinessDate { get; set; }
@@ -61,5 +63,6 @@ public class Order : BaseTenantEntity
     public Branch? Branch { get; set; }
     public Customer? Customer { get; set; }
     public ShiftZReport? Shift { get; set; }
+    public PaymentAccount? PaymentAccount { get; set; }
     public ICollection<OrderDetail> Details { get; set; } = new List<OrderDetail>();
 }

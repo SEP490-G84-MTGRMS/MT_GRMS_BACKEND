@@ -150,7 +150,8 @@ public record CreateCustomerRequest(
     string? Address,
     string? TaxCode,
     decimal DebtLimit,
-    string? MembershipTier
+    string? MembershipTier,
+    bool AllowDebt = false
 );
 
 public record UpdateCustomerRequest(
@@ -160,5 +161,6 @@ public record UpdateCustomerRequest(
     string? TaxCode,
     decimal? DebtLimit,
     string? MembershipTier,
-    string? Status
+    string? Status,
+    bool? AllowDebt = null
 );

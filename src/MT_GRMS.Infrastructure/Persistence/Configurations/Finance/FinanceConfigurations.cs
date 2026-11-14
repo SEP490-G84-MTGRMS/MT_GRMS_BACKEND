@@ -65,6 +65,9 @@ public class FinanceAccountConfiguration : IEntityTypeConfiguration<FinanceAccou
 
         builder.HasIndex(a => new { a.TenantId, a.BranchId });
         builder.HasIndex(a => new { a.TenantId, a.AccountType });
+        builder.HasIndex(a => new { a.TenantId, a.BranchId, a.PaymentAccountId });
+        builder.HasOne(a => a.PaymentAccount).WithMany().HasForeignKey(a => a.PaymentAccountId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }
 

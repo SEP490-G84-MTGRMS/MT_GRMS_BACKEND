@@ -99,6 +99,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<BusinessDayClosing> BusinessDayClosings { get; set; } = null!;
     public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!;
     public virtual DbSet<StorePaymentConfig> StorePaymentConfigs { get; set; } = null!;
+    public virtual DbSet<PaymentAccount> PaymentAccounts { get; set; } = null!;
+    public virtual DbSet<BranchPaymentAccount> BranchPaymentAccounts { get; set; } = null!;
     public virtual DbSet<PaymentTransaction> PaymentTransactions { get; set; } = null!;
     public virtual DbSet<IdempotencyRecord> IdempotencyRecords { get; set; } = null!;
     public virtual DbSet<MT_GRMS.Infrastructure.Services.RegistrationOtpChallenge> RegistrationOtpChallenges { get; set; } = null!;
