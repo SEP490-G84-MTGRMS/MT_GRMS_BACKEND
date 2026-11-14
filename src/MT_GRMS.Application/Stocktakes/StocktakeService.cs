@@ -52,6 +52,8 @@ public class StocktakeService : IStocktakeService
         if (detail == null)
             throw new NotFoundException($"Không tìm thấy phiếu kiểm kê với ID {id}.");
 
+        EnsureEmployeeCanAccessBranch(detail.BranchId);
+
         return detail;
     }
 
@@ -60,17 +62,18 @@ public class StocktakeService : IStocktakeService
         CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        var branchId = command.BranchId;
-
-        if (IsEmployeeRole() && _tenantContext.CurrentBranchId.HasValue && _tenantContext.CurrentBranchId.Value != Guid.Empty)
-        {
-            branchId = _tenantContext.CurrentBranchId.Value;
-        }
+        var branchId = ResolveBranchIdForCreate(command.BranchId);
 
         if (branchId == Guid.Empty)
-            throw new BusinessException("Vui lòng chọn chi nhánh thực hiện kiểm kê.");
+            throw new BusinessException(
+                IsEmployeeRole()
+                    ? "Tài khoản chưa được gán chi nhánh — không thể lập phiếu kiểm kê."
+                    : "Vui lòng chọn chi nhánh thực hiện kiểm kê.");
 
-        var scope = string.IsNullOrWhiteSpace(command.Scope) ? "LOT" : command.Scope.Trim().ToUpperInvariant();
+        // Employee: luôn kiểm kê toàn bộ tồn có QOH > 0 của chi nhánh được phân công (không tin scope từ FE).
+        var scope = IsEmployeeRole()
+            ? "ALL"
+            : (string.IsNullOrWhiteSpace(command.Scope) ? "LOT" : command.Scope.Trim().ToUpperInvariant());
         var reasonType = string.IsNullOrWhiteSpace(command.ReasonType) ? "PERIODIC" : command.ReasonType.Trim().ToUpperInvariant();
 
         var stocks = await _repository.GetBranchStocksForScopeAsync(
@@ -168,11 +171,7 @@ public class StocktakeService : IStocktakeService
 
         await _repository.AddAsync(stocktake, cancellationToken);
 
-        if (command.AutoSubmit)
-        {
-            await ApplyQuarantineOnSubmitAsync(tenantId, lines, cancellationToken);
-        }
-
+        // Draft / gửi duyệt: không điều chỉnh OnHand / Quarantine — chỉ Owner APPROVE mới đổi tồn theo từng BranchStockId.
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return await GetByIdAsync(stocktake.Id, cancellationToken);
@@ -188,6 +187,8 @@ public class StocktakeService : IStocktakeService
         if (entity == null)
             throw new NotFoundException($"Không tìm thấy phiếu kiểm kê với ID {id}.");
 
+        EnsureEmployeeCanAccessBranch(entity.BranchId);
+
         if (entity.Status != "DRAFT" && entity.Status != "NEEDS_RECOUNT")
             throw new BusinessException($"Chỉ được sửa phiếu kiểm kê ở trạng thái DRAFT hoặc NEEDS_RECOUNT (hiện tại: {entity.Status}).");
 
@@ -201,10 +202,10 @@ public class StocktakeService : IStocktakeService
         {
             foreach (var input in command.Lines)
             {
+                // Match theo line Id hoặc BranchStockId (lô). Không fallback ProductId — 1 SP nhiều lô.
                 var line = entity.Lines.FirstOrDefault(l =>
                     (input.Id.HasValue && l.Id == input.Id.Value) ||
-                    (input.BranchStockId.HasValue && l.BranchStockId == input.BranchStockId.Value) ||
-                    l.ProductId == input.ProductId);
+                    (input.BranchStockId.HasValue && l.BranchStockId == input.BranchStockId.Value));
 
                 if (line == null) continue;
 
@@ -241,7 +242,6 @@ public class StocktakeService : IStocktakeService
         {
             entity.Status = "PENDING_APPROVAL";
             entity.SubmittedAt = DateTime.UtcNow;
-            await ApplyQuarantineOnSubmitAsync(tenantId, entity.Lines, cancellationToken);
         }
 
         await _repository.UpdateAsync(entity, cancellationToken);
@@ -259,14 +259,15 @@ public class StocktakeService : IStocktakeService
         if (entity == null)
             throw new NotFoundException($"Không tìm thấy phiếu kiểm kê với ID {id}.");
 
+        EnsureEmployeeCanAccessBranch(entity.BranchId);
+
         if (entity.Status != "DRAFT" && entity.Status != "NEEDS_RECOUNT")
             throw new BusinessException($"Chỉ có thể gửi duyệt phiếu kiểm kê từ trạng thái DRAFT hoặc NEEDS_RECOUNT (hiện tại: {entity.Status}).");
 
         entity.Status = "PENDING_APPROVAL";
         entity.SubmittedAt = DateTime.UtcNow;
 
-        await ApplyQuarantineOnSubmitAsync(tenantId, entity.Lines, cancellationToken);
-
+        // Không quarantine / không đổi tồn khi gửi duyệt.
         await _repository.UpdateAsync(entity, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -308,47 +309,43 @@ public class StocktakeService : IStocktakeService
 
             entity.Status = "APPROVED";
 
+            // Chỉ điều chỉnh đúng BranchStock gắn với dòng (Batch/lô). Không FEFO / không phân bổ sang lô khác.
             foreach (var line in entity.Lines)
             {
                 if (!line.BranchStockId.HasValue) continue;
                 var stock = await _repository.GetBranchStockByIdAsync(tenantId, line.BranchStockId.Value, cancellationToken);
                 if (stock == null) continue;
 
-                // 1. Hàng hỏng tại cửa hàng & hết hạn → write-off (trừ OnHand + giảm Quarantine)
+                // 1. Hết hạn + hư hỏng (nằm trong Actual) → write-off OnHand của đúng lô
                 var writeOffQty = line.DamagedQty + line.ExpiredQty;
                 if (writeOffQty > 0)
                 {
-                    stock.QuantityQuarantined = Math.Max(0, stock.QuantityQuarantined - writeOffQty);
                     stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - writeOffQty);
                 }
 
-                // 2. Thiếu (Variance < 0) → điều chỉnh giảm OnHand
+                // 2. Thiếu (Variance < 0) → giảm OnHand đúng lô
                 if (line.VarianceQty < 0)
                 {
                     var missingQty = Math.Abs(line.VarianceQty);
                     stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - missingQty);
                 }
 
-                // 3. Thừa (Variance > 0) — chỉ khi Owner đã ConfirmSurplusFound
+                // 3. Thừa (Variance > 0) — chỉ khi Owner ConfirmSurplusFound → cộng đúng lô
                 if (line.VarianceQty > 0 && command.ConfirmSurplusFound)
                 {
                     stock.QuantityOnHand += line.VarianceQty;
                 }
 
-                // 4. Defective + NearExpiry RETURN: giữ OnHand + Quarantine chờ Supplier Return
-                //    NearExpiry MARKDOWN (Q6-A): không quarantine lúc submit — vẫn bán được
                 stock.UpdatedAt = DateTime.UtcNow;
             }
         }
         else if (decision == "REJECT" || decision == "REJECTED")
         {
             entity.Status = "REJECTED";
-            await ReleaseQuarantineAsync(tenantId, entity.Lines, cancellationToken);
         }
         else if (decision == "NEEDS_RECOUNT" || decision == "RECOUNT")
         {
             entity.Status = "NEEDS_RECOUNT";
-            await ReleaseQuarantineAsync(tenantId, entity.Lines, cancellationToken);
         }
         else
         {
@@ -463,55 +460,6 @@ public class StocktakeService : IStocktakeService
         return line.DefectiveQty + nearExpiryReturnable;
     }
 
-    /// <summary>
-    /// RULE-03 Q6-A: NearExpiry MARKDOWN không đưa vào quarantine (vẫn bán được).
-    /// Chỉ NearExpiry RETURN + Defective + Damaged + Expired bị cách ly lúc submit.
-    /// </summary>
-    private static decimal GetLineQuarantineQty(StocktakeLine line)
-    {
-        var nearExpiryHold = line.NearExpiryAction == "NEAR_EXPIRY_RETURN" ? line.NearExpiryQty : 0m;
-        return line.DefectiveQty + line.DamagedQty + line.ExpiredQty + nearExpiryHold;
-    }
-
-    private async Task ApplyQuarantineOnSubmitAsync(
-        string tenantId,
-        IEnumerable<StocktakeLine> lines,
-        CancellationToken cancellationToken)
-    {
-        foreach (var line in lines)
-        {
-            if (!line.BranchStockId.HasValue) continue;
-            var holdQty = GetLineQuarantineQty(line);
-            if (holdQty <= 0) continue;
-
-            var stock = await _repository.GetBranchStockByIdAsync(tenantId, line.BranchStockId.Value, cancellationToken);
-            if (stock != null)
-            {
-                var maxCanQuarantine = Math.Max(0, stock.QuantityOnHand - stock.QuantityReserved - stock.QuantityQuarantined);
-                stock.QuantityQuarantined += Math.Min(holdQty, maxCanQuarantine);
-            }
-        }
-    }
-
-    private async Task ReleaseQuarantineAsync(
-        string tenantId,
-        IEnumerable<StocktakeLine> lines,
-        CancellationToken cancellationToken)
-    {
-        foreach (var line in lines)
-        {
-            if (!line.BranchStockId.HasValue) continue;
-            var holdQty = GetLineQuarantineQty(line);
-            if (holdQty <= 0) continue;
-
-            var stock = await _repository.GetBranchStockByIdAsync(tenantId, line.BranchStockId.Value, cancellationToken);
-            if (stock != null)
-            {
-                stock.QuantityQuarantined = Math.Max(0, stock.QuantityQuarantined - holdQty);
-            }
-        }
-    }
-
     private static void ValidateNonNegativeQuantities(params decimal[] values)
     {
         if (values.Any(v => v < 0))
@@ -522,6 +470,40 @@ public class StocktakeService : IStocktakeService
     {
         var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
         return role == "EMPLOYEE" || role == "STAFF" || role == "CASHIER";
+    }
+
+    /// <summary>
+    /// Employee: BranchId luôn lấy từ token/tenant context — không tin giá trị frontend gửi lên.
+    /// Store Owner / Admin: dùng BranchId từ command (Owner thường không gắn 1 CN cố định).
+    /// </summary>
+    private Guid ResolveBranchIdForCreate(Guid requestedBranchId)
+    {
+        if (IsEmployeeRole())
+        {
+            if (_tenantContext.CurrentBranchId.HasValue && _tenantContext.CurrentBranchId.Value != Guid.Empty)
+            {
+                if (requestedBranchId != Guid.Empty && requestedBranchId != _tenantContext.CurrentBranchId.Value)
+                    throw new BusinessException("Nhân viên chỉ được lập phiếu kiểm kê cho chi nhánh được phân công.");
+
+                return _tenantContext.CurrentBranchId.Value;
+            }
+
+            throw new BusinessException("Tài khoản nhân viên chưa được gán chi nhánh — không thể lập phiếu kiểm kê.");
+        }
+
+        // Store Owner / Admin: tin BranchId trên phiếu (đã chọn trên UI).
+        return requestedBranchId;
+    }
+
+    private void EnsureEmployeeCanAccessBranch(Guid stocktakeBranchId)
+    {
+        if (!IsEmployeeRole()) return;
+
+        if (!_tenantContext.CurrentBranchId.HasValue || _tenantContext.CurrentBranchId.Value == Guid.Empty)
+            throw new BusinessException("Tài khoản nhân viên chưa được gán chi nhánh.");
+
+        if (stocktakeBranchId != _tenantContext.CurrentBranchId.Value)
+            throw new BusinessException("Bạn không có quyền xem hoặc chỉnh sửa phiếu kiểm kê của chi nhánh khác.");
     }
 
     private StocktakeFilterQuery EnforceBranchScopeForEmployee(StocktakeFilterQuery query)

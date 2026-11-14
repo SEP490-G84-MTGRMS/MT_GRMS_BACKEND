@@ -1363,7 +1363,7 @@ public class SupplierService : ISupplierService
         var purchasePrice = SupplierProductPricing.NormalizeAgreedPriceToPersist(command.AgreedWholesalePrice);
 
         var deliveryUoM = string.IsNullOrWhiteSpace(command.DeliveryUoM)
-            ? (product.BaseUnit ?? "Cái")
+            ? ResolveDefaultDeliveryUoM(product)
             : command.DeliveryUoM.Trim();
 
         // BR-SP02: Độc quyền Primary Supplier — nếu đặt làm Primary thì tự động gỡ cờ Primary của NCC cũ
@@ -1477,7 +1477,7 @@ public class SupplierService : ISupplierService
             {
                 var deliveryUoM = !string.IsNullOrWhiteSpace(command.DeliveryUoM) && command.DeliveryUoM != "Theo ĐVT cơ sở"
                     ? command.DeliveryUoM
-                    : (product.BaseUnit ?? "Cái");
+                    : ResolveDefaultDeliveryUoM(product);
 
                 var entity = new SupplierProduct
                 {
@@ -1565,7 +1565,7 @@ public class SupplierService : ISupplierService
         }
         else if (product != null)
         {
-            entity.DeliveryUoM = product.BaseUnit ?? entity.DeliveryUoM;
+            entity.DeliveryUoM = ResolveDefaultDeliveryUoM(product);
         }
 
         entity.AgreedWholesalePrice = purchasePrice;
@@ -1723,6 +1723,19 @@ public class SupplierService : ISupplierService
                 AllowedShortageQuantity = command.AllowedShortageQuantity
             })
             .ToList();
+    }
+
+    private static string ResolveDefaultDeliveryUoM(Product product)
+    {
+        var purchaseFromUnits = product.Units?
+            .Where(u => !u.IsDeleted && u.IsPurchaseUnit)
+            .Select(u => u.UnitName)
+            .FirstOrDefault(n => !string.IsNullOrWhiteSpace(n));
+
+        if (!string.IsNullOrWhiteSpace(purchaseFromUnits))
+            return purchaseFromUnits.Trim();
+
+        return string.IsNullOrWhiteSpace(product.BaseUnit) ? "Cái" : product.BaseUnit.Trim();
     }
 
     private static string ResolvePurchaseUnitName(SupplierProduct sp)

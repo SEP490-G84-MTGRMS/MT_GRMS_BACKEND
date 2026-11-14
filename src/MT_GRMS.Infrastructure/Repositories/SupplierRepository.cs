@@ -538,6 +538,7 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
     {
         return await _context.Products
             .Include(p => p.Category)
+            .Include(p => p.Units)
             .FirstOrDefaultAsync(p => p.Id == productId, cancellationToken);
     }
 

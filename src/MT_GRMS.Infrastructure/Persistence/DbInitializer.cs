@@ -463,6 +463,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 CREATE INDEX IF NOT EXISTS ""IX_Packages_BranchStock_Status""
                     ON ""Packages"" (""BranchStockId"", ""Status"");
 
+                ALTER TABLE IF EXISTS ""Packages"" ADD COLUMN IF NOT EXISTS ""ManufactureDate"" timestamp without time zone NULL;
+
                 ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""PackageId"" uuid NULL;
             ");
             logger?.LogInformation("[MT-GRMS] Đã đồng bộ schema Weight / Repack / Package.");

@@ -46,6 +46,10 @@ public class BranchProductDto
     public string? ShelfLocation { get; set; }
     public DateTime AssignedDate { get; set; }
     public List<BranchProductUnitPriceDto> UnitPrices { get; set; } = new();
+    /// <summary>Master AllowRepack — bật giá đóng khay (PROCESSED đ/kg).</summary>
+    public bool AllowRepack { get; set; }
+    /// <summary>Giá đ/kg khi đóng khay. Null/≤0 → dùng RetailPrice (RAW).</summary>
+    public decimal? ProcessedSellingPricePerKg { get; set; }
 }
 
 /// <summary>

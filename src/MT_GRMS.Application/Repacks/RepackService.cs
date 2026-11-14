@@ -154,6 +154,14 @@ public class RepackService : IRepackService
                 $"Khối lượng lấy ra vượt nguyên quả còn bán được ({rawSellable:0.###} kg).");
         }
 
+        var processedPerKg = ResolveProcessedPricePerKg(product, stock);
+        if (processedPerKg <= 0)
+        {
+            throw new BusinessException(
+                "PROCESSED_PRICE_MISSING",
+                "Chưa cấu hình giá bán theo khay (đ/kg). Cập nhật giá đóng khay trên sản phẩm master trước.");
+        }
+
         foreach (var line in request.Packages)
         {
             if (line.NetWeight <= 0)
@@ -161,15 +169,18 @@ public class RepackService : IRepackService
                 throw new BusinessException("PACKAGE_WEIGHT_INVALID", "Mỗi khay phải có khối lượng > 0.");
             }
 
-            if (line.SellingPrice <= 0)
-            {
-                throw new BusinessException("PACKAGE_PRICE_INVALID", "Mỗi khay phải có giá bán > 0.");
-            }
-
             if (line.ExpiryDate.HasValue && stock.ExpiryDate.HasValue
                 && line.ExpiryDate.Value.Date > stock.ExpiryDate.Value.Date)
             {
                 throw new BusinessException("PACKAGE_EXPIRY_INVALID", "Hạn dùng khay không được vượt hạn dùng của lô.");
+            }
+
+            var mfg = (line.ManufactureDate ?? DateTime.UtcNow).Date;
+            if (line.ExpiryDate.HasValue && mfg > line.ExpiryDate.Value.Date)
+            {
+                throw new BusinessException(
+                    "PACKAGE_MFG_INVALID",
+                    "Ngày sản xuất khay không được sau hạn dùng.");
             }
 
             if (!string.IsNullOrWhiteSpace(line.Barcode)
@@ -185,8 +196,7 @@ public class RepackService : IRepackService
 
         var unitCost = stock.LandedCostPerUnit;
         var wasteCost = Math.Round(request.WasteWeight * unitCost, 2, MidpointRounding.AwayFromZero);
-        var defaultPerKg = request.DefaultUnitPricePerKg
-            ?? ResolveProcessedPricePerKg(product, stock);
+        var defaultPerKg = processedPerKg;
 
         var order = new RepackOrder
         {
@@ -221,6 +231,13 @@ public class RepackService : IRepackService
                 internalCode = $"PKG-{now:yyMMdd}-{Guid.NewGuid().ToString("N")[..8].ToUpperInvariant()}";
             }
 
+            // Giá bán khay = NetWeight(kg) × giá đóng khay đ/kg đã cấu hình (không nhận giá tay từ client).
+            var autoPrice = WeightProductHelper.RoundPackagePrice(line.NetWeight * processedPerKg);
+            if (autoPrice <= 0)
+            {
+                throw new BusinessException("PACKAGE_PRICE_INVALID", "Giá bán khay tính được phải > 0.");
+            }
+
             createdPackages.Add(new Package
             {
                 TenantId = tenantId,
@@ -230,7 +247,8 @@ public class RepackService : IRepackService
                 InternalCode = internalCode,
                 Barcode = string.IsNullOrWhiteSpace(line.Barcode) ? null : line.Barcode.Trim(),
                 NetWeight = line.NetWeight,
-                SellingPrice = WeightProductHelper.RoundPackagePrice(line.SellingPrice),
+                SellingPrice = autoPrice,
+                ManufactureDate = (line.ManufactureDate ?? now).Date,
                 ExpiryDate = line.ExpiryDate ?? stock.ExpiryDate,
                 RepackType = repackType,
                 RepackOrderId = order.Id,
@@ -251,6 +269,11 @@ public class RepackService : IRepackService
         await _repository.AddRepackOrderAsync(order, ct);
         await _repository.AddPackagesAsync(createdPackages, ct);
         await _unitOfWork.SaveChangesAsync(ct);
+
+        foreach (var pkg in createdPackages)
+        {
+            pkg.RepackOrder = order;
+        }
 
         return new RepackOrderDto(
             Id: order.Id,
@@ -412,10 +435,13 @@ public class RepackService : IRepackService
         Barcode: p.Barcode,
         NetWeight: p.NetWeight,
         SellingPrice: p.SellingPrice,
+        ManufactureDate: p.ManufactureDate ?? p.CreatedAt.Date,
         ExpiryDate: p.ExpiryDate,
         RepackType: p.RepackType,
         Status: p.Status,
         RepackOrderId: p.RepackOrderId,
+        RepackOrderCode: p.RepackOrder?.Code,
+        SoldAt: p.SoldAt,
         CreatedAt: p.CreatedAt
     );
 

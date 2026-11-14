@@ -74,6 +74,7 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
 
         var productsQuery = _appContext.Products.AsNoTracking()
             .Include(p => p.Category)
+            .Include(p => p.Units)
             .Where(p => p.TenantId == tenantId && !p.IsDeleted && productIds.Contains(p.Id));
 
         if (!string.IsNullOrWhiteSpace(query.Category) && !query.Category.Equals("ALL", StringComparison.OrdinalIgnoreCase))
@@ -93,6 +94,26 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
         var products = await productsQuery.ToListAsync(cancellationToken);
         var productById = products.ToDictionary(p => p.Id);
         productIds = products.Select(p => p.Id).ToList();
+
+        // DeliveryUoM theo product (ưu tiên NCC chính) — cùng logic DVN màn SP cửa hàng / lô
+        var deliveryUomByProductId = new Dictionary<Guid, string>();
+        if (productIds.Count > 0)
+        {
+            var spRows = await _appContext.SupplierProducts.AsNoTracking()
+                .Where(sp => !sp.IsDeleted
+                    && productIds.Contains(sp.ProductId)
+                    && sp.DeliveryUoM != null
+                    && sp.DeliveryUoM != "")
+                .Select(sp => new { sp.ProductId, sp.DeliveryUoM, sp.IsPrimarySupplier })
+                .ToListAsync(cancellationToken);
+
+            foreach (var g in spRows.GroupBy(x => x.ProductId))
+            {
+                var pick = g.FirstOrDefault(x => x.IsPrimarySupplier) ?? g.First();
+                if (!string.IsNullOrWhiteSpace(pick.DeliveryUoM))
+                    deliveryUomByProductId[g.Key] = pick.DeliveryUoM.Trim();
+            }
+        }
 
         var branchStocks = productIds.Count == 0
             ? new List<BranchStock>()
@@ -184,6 +205,9 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
             else if (batchDtos.Any(b => b.DaysLeft <= 30 && b.DaysLeft < 9999)) status = "NEAR_EXPIRY";
             else status = "OK";
 
+            deliveryUomByProductId.TryGetValue(product.Id, out var deliveryUom);
+            var inboundUnit = ResolveInboundUnit(deliveryUom, product);
+
             allItems.Add(new InventoryStockItemDto(
                 ProductId: product.Id,
                 Sku: product.ProductCode,
@@ -192,7 +216,7 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
                 CategoryName: product.Category?.Name ?? "Chung",
                 BranchId: branch.Id,
                 BranchName: branch.Name,
-                Unit: product.BaseUnit,
+                Unit: inboundUnit,
                 PhysicalQty: physicalQty,
                 AvailableQty: availableQty,
                 PendingReturnQty: pendingQty,
@@ -282,5 +306,24 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
                 status
             );
         }).ToList();
+    }
+
+    /// <summary>
+    /// Đơn vị nhập (DVN): DeliveryUoM → IsPurchaseUnit → BaseUnit.
+    /// </summary>
+    private static string ResolveInboundUnit(
+        string? deliveryUoM,
+        Domain.Entities.Catalog.Product product)
+    {
+        if (!string.IsNullOrWhiteSpace(deliveryUoM))
+            return deliveryUoM.Trim();
+
+        var purchase = product.Units?
+            .Where(u => !u.IsDeleted)
+            .FirstOrDefault(u => u.IsPurchaseUnit);
+        if (purchase != null && !string.IsNullOrWhiteSpace(purchase.UnitName))
+            return purchase.UnitName.Trim();
+
+        return string.IsNullOrWhiteSpace(product.BaseUnit) ? "Cái" : product.BaseUnit.Trim();
     }
 }
