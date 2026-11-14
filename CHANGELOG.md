@@ -6,6 +6,9 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ## [Unreleased] - 2026-11-14
 
+### Changed
+- Thu gọn luồng access/refresh dùng các trường hiện có trên Users, access mặc định 15 phút và refresh cố định 7 ngày. Lưu hash token mới, đồng bộ hạn cookie và hỗ trợ logout khi access hết hạn. [worklog: docs/worklogs/2026-11-14_AUTH-REFRESH_AI_user-token-flow.md]
+
 ### Added
 - **Đồng bộ trường `IsTwoFactorEnabled` trong `UserInfo` DTO**: Bổ sung `IsTwoFactorEnabled` vào `UserInfo` record và gán từ entity `User.IsTwoFactorEnabled` tại các luồng xác thực (`Login`, `VerifyLoginOtp`, `GetMe`, `Register`), giúp Frontend và thanh điều hướng TopNav nhận diện chính xác trạng thái xác thực 2 bước của tài khoản thời gian thực [FEAT-AUTH] [worklog: docs/worklogs/2026-11-14_FEAT-AUTH_AI_sync-two-factor-auth-status-in-user-info.md].
 

@@ -241,12 +241,12 @@ public class AuthService : IAuthService
             IsTwoFactorEnabled: user.IsTwoFactorEnabled
         );
 
-        var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
+        var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) && parsedMins > 0 ? parsedMins : 15;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
         var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt, branchId);
-        var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
+        var refreshToken = GenerateRefreshToken();
 
-        user.RefreshToken = refreshToken;
+        user.RefreshToken = HashRefreshToken(refreshToken);
         user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
         user.LastLoginAt = DateTime.UtcNow;
         _userRepository.Update(user);
@@ -256,9 +256,15 @@ public class AuthService : IAuthService
             AccessToken: accessToken,
             RefreshToken: refreshToken,
             ExpiresAt: expiresAt,
-            User: userInfo
+            User: userInfo,
+            RefreshExpiresAt: user.RefreshTokenExpiryTime
         );
     }
+
+    private static string GenerateRefreshToken() => "mt_refresh_" + Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
+
+    private static string HashRefreshToken(string token)
+        => "sha256:" + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
 
     /// <summary>
     /// Kiểm tra mật khẩu (hỗ trợ PBKDF2 PasswordHasher, SHA256, Plaintext và demo password tiện lợi)
@@ -367,7 +373,11 @@ public class AuthService : IAuthService
             throw new ArgumentException("RefreshToken không được để trống.");
         }
 
-        var matchingUsers = await _userRepository.FindAsync(u => u.RefreshToken == request.RefreshToken, cancellationToken);
+        if (request.RefreshToken.Length > 256) throw new UnauthorizedAccessException("RefreshToken không hợp lệ.");
+        var tokenHash = HashRefreshToken(request.RefreshToken);
+        // Existing raw tokens remain valid until their original expiry.
+        var matchingUsers = await _userRepository.FindAsync(u => u.RefreshToken == tokenHash ||
+            (u.RefreshToken != null && !u.RefreshToken.StartsWith("sha256:") && u.RefreshToken == request.RefreshToken), cancellationToken);
         var user = matchingUsers.FirstOrDefault();
 
         if (user == null || user.RefreshTokenExpiryTime == null || user.RefreshTokenExpiryTime <= DateTime.UtcNow)
@@ -396,21 +406,17 @@ public class AuthService : IAuthService
             IsTwoFactorEnabled: user.IsTwoFactorEnabled
         );
 
-        var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
+        var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) && parsedMins > 0 ? parsedMins : 15;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
+        if (expiresAt > user.RefreshTokenExpiryTime.Value) expiresAt = user.RefreshTokenExpiryTime.Value;
         var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt, branchId);
-
-        var newRefreshToken = $"mt_refresh_{Guid.NewGuid():N}";
-        user.RefreshToken = newRefreshToken;
-        user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
-        _userRepository.Update(user);
-        await _userRepository.SaveChangesAsync(cancellationToken);
 
         return new LoginResponse(
             AccessToken: accessToken,
-            RefreshToken: newRefreshToken,
+            RefreshToken: request.RefreshToken,
             ExpiresAt: expiresAt,
-            User: userInfo
+            User: userInfo,
+            RefreshExpiresAt: user.RefreshTokenExpiryTime
         );
     }
 
@@ -443,11 +449,20 @@ public class AuthService : IAuthService
         );
     }
 
-    public async Task RevokeRefreshTokenAsync(string userId, CancellationToken cancellationToken = default)
+    public async Task RevokeRefreshTokenAsync(string userId, CancellationToken cancellationToken = default, string? refreshToken = null)
     {
-        if (string.IsNullOrWhiteSpace(userId)) return;
-
-        var user = await _userRepository.GetByIdAsync(userId, cancellationToken);
+        User? user = null;
+        if (!string.IsNullOrWhiteSpace(refreshToken) && refreshToken.Length <= 256)
+        {
+            var tokenHash = HashRefreshToken(refreshToken);
+            var matches = await _userRepository.FindAsync(u => u.RefreshToken == tokenHash ||
+                (u.RefreshToken != null && !u.RefreshToken.StartsWith("sha256:") && u.RefreshToken == refreshToken), cancellationToken);
+            user = matches.FirstOrDefault();
+        }
+        else if (!string.IsNullOrWhiteSpace(userId))
+        {
+            user = await _userRepository.GetByIdAsync(userId, cancellationToken);
+        }
         if (user != null)
         {
             user.RefreshToken = null;
@@ -546,7 +561,7 @@ public class AuthService : IAuthService
         };
 
         var userId = $"usr_{Guid.NewGuid():N}";
-        var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
+        var refreshToken = GenerateRefreshToken();
         var user = new User
         {
             Id = userId,
@@ -562,7 +577,7 @@ public class AuthService : IAuthService
             IsAdmin = false,
             IsEmailVerified = true,
             IsTwoFactorEnabled = false,
-            RefreshToken = refreshToken,
+            RefreshToken = HashRefreshToken(refreshToken),
             RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7),
             CreatedAt = DateTime.UtcNow
         };
@@ -609,7 +624,7 @@ public class AuthService : IAuthService
 
         await ConsumeRegistrationOtpAsync(challenge.ChallengeId, idempotencyKey, cancellationToken);
 
-        var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
+        var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) && parsedMins > 0 ? parsedMins : 15;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
         var accessToken = GenerateJwtToken(user.Id, user.UserName, user.Email, UserRoleNames.StoreOwner, tenant.Id, false, expiresAt, branch.Id);
 
@@ -629,7 +644,8 @@ public class AuthService : IAuthService
             AccessToken: accessToken,
             RefreshToken: refreshToken,
             ExpiresAt: expiresAt,
-            User: userInfo
+            User: userInfo,
+            RefreshExpiresAt: user.RefreshTokenExpiryTime
         );
     }
 
@@ -781,6 +797,8 @@ public class AuthService : IAuthService
         user.PasswordHash = _passwordHasher.HashPassword(request.NewPassword);
         user.PasswordResetOtp = null;
         user.OtpExpiry = null;
+        user.RefreshToken = null;
+        user.RefreshTokenExpiryTime = null;
 
         _userRepository.Update(user);
         await _userRepository.SaveChangesAsync(cancellationToken);
