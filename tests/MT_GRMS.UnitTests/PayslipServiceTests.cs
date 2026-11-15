@@ -377,6 +377,50 @@ public class PayslipServiceTests
     }
 
     [Fact]
+    public async Task GenerateMonthlyPayroll_MonthlySalary_UsesAssignedShiftsAsStandardDays()
+    {
+        var (service, _, empRepo, schedRepo, _, _, _) = CreateService();
+        var branchId = Guid.NewGuid();
+
+        var employee = new Employee
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            EmployeeCode = "NV_STD",
+            FullName = "Tran Van B",
+            SalaryType = SalaryType.Monthly,
+            BaseRate = 10_000_000m,
+            HasLaborContract = false,
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(employee);
+
+        // 20 ca được giao trong tháng: 18 ca Completed (8h), 2 ca Published (chưa làm)
+        for (int day = 1; day <= 20; day++)
+        {
+            schedRepo.Schedules.Add(new EmployeeSchedule
+            {
+                Id = Guid.NewGuid(),
+                EmployeeId = employee.Id,
+                BranchId = branchId,
+                WorkDate = new DateTime(2026, 11, day),
+                DurationHours = 8.0m,
+                Status = day <= 18 ? ScheduleStatus.Completed : ScheduleStatus.Published,
+                ActualWorkHours = day <= 18 ? 8.0m : 0m
+            });
+        }
+
+        var result = await service.GenerateMonthlyPayrollAsync(new GeneratePayrollBatchRequest("2026-11", branchId));
+
+        Assert.Single(result);
+        var payslip = result[0];
+        Assert.Equal(20m, payslip.StandardDays);
+        Assert.Equal(18m, payslip.WorkedDays);
+        // 18 / 20 * 10,000,000 = 9,000,000 (không chia cứng cho 26)
+        Assert.Equal(9_000_000m, payslip.BaseSalaryEarned);
+    }
+
+    [Fact]
     public async Task GenerateMonthlyPayroll_HourlySalary_NoInsurance_CalculatesHourlyWages()
     {
         // Arrange

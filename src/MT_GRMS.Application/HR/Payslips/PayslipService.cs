@@ -194,7 +194,7 @@ public class PayslipService : IPayslipService
 
             decimal baseSalaryEarned = emp.SalaryType switch
             {
-                SalaryType.Monthly => monthlyFormulaStandardDays > 0 ? Math.Round(((workedDays + paidLeaveDays) / monthlyFormulaStandardDays) * emp.BaseRate, 0, MidpointRounding.AwayFromZero) : 0m,
+                SalaryType.Monthly => standardDays > 0 ? Math.Round(((workedDays + paidLeaveDays) / standardDays) * emp.BaseRate, 0, MidpointRounding.AwayFromZero) : 0m,
                 SalaryType.Shift => Math.Round((totalShifts + paidLeaveDays) * emp.BaseRate, 0, MidpointRounding.AwayFromZero),
                 SalaryType.Hourly => Math.Round((roundedWorkHours + (paidLeaveDays * standardDayHours)) * emp.BaseRate, 0, MidpointRounding.AwayFromZero),
                 _ => emp.BaseRate
