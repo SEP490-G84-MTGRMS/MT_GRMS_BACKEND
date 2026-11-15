@@ -65,6 +65,9 @@ public class FinanceAccountConfiguration : IEntityTypeConfiguration<FinanceAccou
 
         builder.HasIndex(a => new { a.TenantId, a.BranchId });
         builder.HasIndex(a => new { a.TenantId, a.AccountType });
+        builder.HasIndex(a => new { a.TenantId, a.BranchId, a.PaymentAccountId });
+        builder.HasOne(a => a.PaymentAccount).WithMany().HasForeignKey(a => a.PaymentAccountId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }
 
@@ -119,9 +122,12 @@ public class ShiftZReportConfiguration : IEntityTypeConfiguration<ShiftZReport>
         builder.Property(s => s.TotalCashIn).HasColumnType("decimal(18,2)");
         builder.Property(s => s.TotalCashOut).HasColumnType("decimal(18,2)");
         builder.Property(s => s.TotalBankRevenue).HasColumnType("decimal(18,2)");
+        builder.Property(s => s.TotalCashSales).HasColumnType("decimal(18,2)");
         builder.Property(s => s.ExpectedCash).HasColumnType("decimal(18,2)");
         builder.Property(s => s.ActualCashCounted).HasColumnType("decimal(18,2)");
         builder.Property(s => s.Discrepancy).HasColumnType("decimal(18,2)");
+        builder.Property(s => s.DiscrepancyReason).HasMaxLength(500);
+        builder.Property(s => s.ClosingVersion).IsConcurrencyToken().HasDefaultValue(1L);
         builder.Property(s => s.RetainedFloatAmount).HasColumnType("decimal(18,2)");
         builder.Property(s => s.DroppedToSafeAmount).HasColumnType("decimal(18,2)");
 
@@ -133,6 +139,11 @@ public class ShiftZReportConfiguration : IEntityTypeConfiguration<ShiftZReport>
         builder.HasOne(s => s.Branch)
             .WithMany()
             .HasForeignKey(s => s.BranchId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(s => s.DestinationFund)
+            .WithMany()
+            .HasForeignKey(s => s.DestinationFundId)
             .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasMany(s => s.CashMovements)
@@ -153,6 +164,7 @@ public class ShiftZReportConfiguration : IEntityTypeConfiguration<ShiftZReport>
         builder.HasIndex(s => new { s.TenantId, s.BranchId, s.Status });
         builder.HasIndex(s => new { s.TenantId, s.TillId, s.Status });
         builder.HasIndex(s => new { s.TenantId, s.ShiftCode });
+        builder.HasIndex(s => new { s.TenantId, s.BranchId, s.BusinessDate });
     }
 }
 
@@ -164,7 +176,7 @@ public class ShiftParticipantConfiguration : IEntityTypeConfiguration<ShiftParti
         builder.HasKey(p => p.Id);
         builder.Property(p => p.UserName).HasMaxLength(100);
         builder.Property(p => p.FullName).HasMaxLength(150);
-        builder.HasIndex(p => new { p.TenantId, p.ShiftId, p.UserId });
+        builder.HasIndex(p => new { p.ShiftId, p.UserId }).IsUnique();
     }
 }
 
