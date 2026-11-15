@@ -301,6 +301,8 @@ public class BranchProductRepository : IBranchProductRepository
                 p.ImageUrl,
                 p.BaseUnit,
                 p.SellingPrice,
+                p.AllowRepack,
+                p.ProcessedSellingPricePerKg,
                 Units = p.Units.Select(u => new
                 {
                     u.Id,
@@ -410,7 +412,9 @@ public class BranchProductRepository : IBranchProductRepository
                     Status = x.ProductStatus,
                     ShelfLocation = x.ShelfLocation,
                     AssignedDate = x.AssignedDate,
-                    UnitPrices = unitPrices
+                    UnitPrices = unitPrices,
+                    AllowRepack = extra?.AllowRepack ?? false,
+                    ProcessedSellingPricePerKg = extra?.ProcessedSellingPricePerKg
                 };
             }
 

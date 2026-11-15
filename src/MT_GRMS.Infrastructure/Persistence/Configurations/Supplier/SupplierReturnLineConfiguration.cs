@@ -25,6 +25,12 @@ public class SupplierReturnLineConfiguration : IEntityTypeConfiguration<Supplier
         builder.Property(x => x.ExchangePoOrderedQty).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);
         builder.Property(x => x.UnitCost).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.ReplacementUnitPrice).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
+        builder.Property(x => x.CategoryName).HasMaxLength(200);
+        builder.Property(x => x.StoreCostSharePercentSnapshot).HasColumnType("decimal(5,2)");
+        builder.Property(x => x.SupplierCostSharePercentSnapshot).HasColumnType("decimal(5,2)");
+        builder.Property(x => x.LineReplacementValue).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
+        builder.Property(x => x.StorePayableAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
+        builder.Property(x => x.SupplierBearAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
 
         builder.Property(x => x.RejectionReason).HasMaxLength(500);
         builder.Property(x => x.Notes).HasMaxLength(500);

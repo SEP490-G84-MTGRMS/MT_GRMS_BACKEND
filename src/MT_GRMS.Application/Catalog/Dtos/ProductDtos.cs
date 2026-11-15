@@ -32,7 +32,8 @@ public record ProductResponse(
     string? PurchaseUnit = null,
     List<ProductUnitResponse>? UnitPrices = null,
     bool AllowRepack = false,
-    bool SellRawByWeight = true
+    bool SellRawByWeight = true,
+    decimal? ProcessedSellingPricePerKg = null
 )
 {
     // Backward compatibility aliases
@@ -68,7 +69,8 @@ public record ProductCreateRequest(
     string TaxCategory = "STANDARD_1PCT",
     bool IsBaseUnitPurchaseUnit = true,
     bool AllowRepack = false,
-    bool SellRawByWeight = true
+    bool SellRawByWeight = true,
+    decimal? ProcessedSellingPricePerKg = null
 )
 {
     // Backward compatibility constructor
@@ -116,7 +118,8 @@ public record ProductUpdateRequest(
     string TaxCategory = "STANDARD_1PCT",
     bool? IsBaseUnitPurchaseUnit = null,
     bool AllowRepack = false,
-    bool SellRawByWeight = true
+    bool SellRawByWeight = true,
+    decimal? ProcessedSellingPricePerKg = null
 );
 
 public class ProductQueryFilter

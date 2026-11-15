@@ -517,7 +517,9 @@ public class BranchProductService : IBranchProductService
             MinOrderQuantity = moq,
             Status = catalog.Status,
             ShelfLocation = catalog.ShelfLocation,
-            AssignedDate = catalog.CreatedAt
+            AssignedDate = catalog.CreatedAt,
+            AllowRepack = product.AllowRepack,
+            ProcessedSellingPricePerKg = product.ProcessedSellingPricePerKg
         };
     }
 

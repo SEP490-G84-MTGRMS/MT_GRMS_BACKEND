@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PurchaseOrders;
+using MT_GRMS.Application.PurchaseOrders.Dispatch;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Application.SupplierReturns.Dtos;
 using MT_GRMS.Domain.Entities.Supplier;
@@ -20,19 +22,22 @@ public class SupplierReturnService : ISupplierReturnService
     private readonly ISupplierRepository _supplierRepository;
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly ISupplierOrderEmailSender? _emailSender;
 
     public SupplierReturnService(
         ISupplierReturnRepository repository,
         IPurchaseOrderRepository purchaseOrderRepository,
         ISupplierRepository supplierRepository,
         ITenantContext tenantContext,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        ISupplierOrderEmailSender? emailSender = null)
     {
         _repository = repository;
         _purchaseOrderRepository = purchaseOrderRepository;
         _supplierRepository = supplierRepository;
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
+        _emailSender = emailSender;
     }
 
     public SupplierReturnService(
@@ -147,6 +152,24 @@ public class SupplierReturnService : ISupplierReturnService
         var code = await _repository.GenerateCodeAsync(tenantId, cancellationToken);
         var totalQty = linesToCreate.Sum(l => l.RequestedQty);
         var totalAmount = linesToCreate.Sum(l => l.LineTotal);
+        var resolutionType = SupplierReturnPolicyRules.NormalizeResolutionType(command.ResolutionType);
+        var returnReasonType = SupplierReturnPolicyRules.NormalizeReturnReasonType(
+            command.ReturnReasonType,
+            command.Reason);
+
+        var policy = _supplierRepository != null
+            ? await _supplierRepository.GetActiveReturnPolicyAsync(grnInfo.SupplierId, cancellationToken)
+            : null;
+
+        // Phiếu từ kiểm kê đã bắt buộc ảnh từng dòng; phiếu trả thủ công kiểm theo policy.
+        var hasEvidence = !string.IsNullOrWhiteSpace(command.AttachmentUrl) || command.StocktakeId.HasValue;
+        SupplierReturnPolicyRules.EnsureReturnAllowed(
+            policy,
+            resolutionType,
+            returnReasonType,
+            grnInfo.ReceivedDate,
+            requireEvidence: false,
+            hasEvidence: hasEvidence);
 
         var supplierReturn = new SupplierReturn
         {
@@ -156,44 +179,37 @@ public class SupplierReturnService : ISupplierReturnService
             SupplierId = grnInfo.SupplierId,
             BranchId = grnInfo.BranchId,
             StocktakeId = command.StocktakeId,
-            Status = command.AutoSubmit ? "PENDING_SUPPLIER" : "DRAFT",
+            Status = "DRAFT",
             Reason = command.Reason,
-            ReasonNotes = command.ReasonNotes,
+            ReasonNotes = string.IsNullOrWhiteSpace(command.ReasonNotes)
+                ? $"[REASON:{returnReasonType}]"
+                : (command.ReasonNotes!.Contains("[REASON:", StringComparison.OrdinalIgnoreCase)
+                    ? command.ReasonNotes
+                    : $"[REASON:{returnReasonType}] {command.ReasonNotes}"),
             AttachmentUrl = command.AttachmentUrl,
-            ResolutionType = NormalizeResolutionType(command.ResolutionType),
+            ResolutionType = resolutionType,
             SettlementStatus = "UNSETTLED",
             ReplacementStatus = "NOT_REQUIRED",
             TotalRequestedQty = totalQty,
             TotalApprovedQty = 0,
             TotalHandedOverQty = 0,
             TotalEstimatedAmount = totalAmount,
-            SubmittedAt = command.AutoSubmit ? DateTime.UtcNow : null,
             Lines = linesToCreate
         };
-
-        if (IsExchangeResolution(supplierReturn.ResolutionType))
-            await ValidateExchangeAllowedByPolicyAsync(grnInfo.SupplierId, cancellationToken);
 
         await _repository.AddAsync(supplierReturn, cancellationToken);
 
         if (command.AutoSubmit)
         {
-            foreach (var line in linesToCreate)
-            {
-                var stock = await _repository.GetBranchStockAsync(tenantId, grnInfo.BranchId, line.ProductId, line.BatchCode, cancellationToken);
-                if (stock != null)
-                {
-                    if (stock.QuantityQuarantined > 0)
-                    {
-                        var releaseQuarantine = Math.Min(stock.QuantityQuarantined, line.RequestedQty);
-                        stock.QuantityQuarantined -= releaseQuarantine;
-                    }
-                    stock.QuantityReserved += line.RequestedQty;
-                }
-            }
+            await ReserveReturnStockAsync(supplierReturn, releaseQuarantine: true, cancellationToken);
+            await AutoConfirmByPolicyAsync(supplierReturn, cancellationToken);
+            await TryNotifySupplierEmailAsync(supplierReturn, cancellationToken);
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        if (command.AutoSubmit)
+            await TryAutoCreateExchangePurchaseOrderAsync(supplierReturn.Id, cancellationToken);
 
         return await GetByIdAsync(supplierReturn.Id, cancellationToken);
     }
@@ -211,25 +227,24 @@ public class SupplierReturnService : ISupplierReturnService
         if (entity.Status != "DRAFT")
             throw new BusinessException($"Chỉ có thể gửi yêu cầu khi phiếu ở trạng thái DRAFT (Trạng thái hiện tại: {entity.Status}).");
 
-        entity.Status = "PENDING_SUPPLIER";
         entity.SubmittedAt = DateTime.UtcNow;
         if (!string.IsNullOrWhiteSpace(notes))
         {
             entity.ReasonNotes = string.IsNullOrWhiteSpace(entity.ReasonNotes) ? notes : $"{entity.ReasonNotes} | {notes}";
         }
 
-        // Khóa tồn kho sang trạng thái chờ trả
-        foreach (var line in entity.Lines)
-        {
-            var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
-            if (stock != null)
-            {
-                stock.QuantityReserved += line.RequestedQty;
-            }
-        }
+        // Khóa tồn kho sang trạng thái chờ trả / đổi
+        await ReserveReturnStockAsync(entity, releaseQuarantine: false, cancellationToken);
+
+        // Không chờ NCC duyệt: tự xác nhận theo chính sách + gửi email thông báo.
+        await AutoConfirmByPolicyAsync(entity, cancellationToken);
+        await TryNotifySupplierEmailAsync(entity, cancellationToken);
 
         await _repository.UpdateAsync(entity, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        // EXCHANGE: sau xác nhận + email → tự tạo PO đổi hàng (hiện trên danh sách PO).
+        await TryAutoCreateExchangePurchaseOrderAsync(entity.Id, cancellationToken);
 
         return await GetByIdAsync(entity.Id, cancellationToken);
     }
@@ -364,8 +379,8 @@ public class SupplierReturnService : ISupplierReturnService
             line.HandedOverQty += currentBatchHandoverQty;
             totalHandedOver += line.HandedOverQty;
 
-            // Giảm tồn kho chi nhánh đúng bằng số lượng thực tế bàn giao đợt này và giải phóng tồn đã khóa tương ứng
-            if (currentBatchHandoverQty > 0)
+            // EXCHANGE: không trừ OnHand lúc bàn giao — trừ khi nhập GRN đổi thành công.
+            if (!IsExchangeResolution(entity.ResolutionType) && currentBatchHandoverQty > 0)
             {
                 var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
                 if (stock != null)
@@ -376,7 +391,6 @@ public class SupplierReturnService : ISupplierReturnService
             }
         }
 
-        entity.Status = totalHandedOver >= entity.TotalApprovedQty ? "COMPLETED" : "PARTIALLY_HANDED_OVER";
         entity.HandedOverAt = DateTime.UtcNow;
         entity.HandedOverBy = command.HandedOverBy ?? "Nhân viên kho";
         entity.HandoverNote = command.Notes;
@@ -384,17 +398,19 @@ public class SupplierReturnService : ISupplierReturnService
 
         if (IsExchangeResolution(entity.ResolutionType))
         {
-            // Exchange: không đóng Return khi mới bàn giao — chờ nhận hàng đổi đủ.
-            if (entity.Status == "COMPLETED")
-                entity.Status = "APPROVED";
-
+            // Giữ APPROVED — bàn giao hoàn tất (COMPLETED) chỉ khi nhập đủ hàng đổi.
+            entity.Status = "APPROVED";
             var canCreatePo = entity.Lines.Any(l =>
             {
-                var eligible = Math.Min(l.SupplierAcceptedQty > 0 ? l.SupplierAcceptedQty : l.ApprovedQty, l.HandedOverQty);
+                var eligible = l.SupplierAcceptedQty > 0 ? l.SupplierAcceptedQty : l.ApprovedQty;
                 return eligible > l.ExchangePoOrderedQty;
             });
             entity.ReplacementStatus = canCreatePo ? "WAITING_PURCHASE_ORDER" : entity.ReplacementStatus;
             RecalculateExchangeAmounts(entity);
+        }
+        else
+        {
+            entity.Status = totalHandedOver >= entity.TotalApprovedQty ? "COMPLETED" : "PARTIALLY_HANDED_OVER";
         }
 
         await _repository.UpdateAsync(entity, cancellationToken);
@@ -457,7 +473,7 @@ public class SupplierReturnService : ISupplierReturnService
             throw new BusinessException("NOT_EXCHANGE", "Chỉ tạo PO đổi hàng khi ResolutionType là EXCHANGE.");
 
         if (entity.Status is not ("APPROVED" or "PARTIALLY_HANDED_OVER" or "SUPPLIER_CONFIRMED"))
-            throw new BusinessException("INVALID_STATUS", "Phiếu phải đã được NCC xác nhận trước khi tạo PO đổi hàng.");
+            throw new BusinessException("INVALID_STATUS", "Phiếu phải đã xác nhận theo chính sách trước khi tạo PO đổi hàng.");
 
         if (entity.StorePayableAmount > 0
             && entity.StorePaidAmount < entity.StorePayableAmount
@@ -472,10 +488,11 @@ public class SupplierReturnService : ISupplierReturnService
             }
         }
 
+        // Không phụ thuộc bàn giao vật lý — trừ tồn khi nhập GRN đổi thành công.
         var linesToCover = entity.Lines
             .Select(l =>
             {
-                var eligible = Math.Min(l.SupplierAcceptedQty > 0 ? l.SupplierAcceptedQty : l.ApprovedQty, l.HandedOverQty);
+                var eligible = l.SupplierAcceptedQty > 0 ? l.SupplierAcceptedQty : l.ApprovedQty;
                 var remaining = Math.Max(0, eligible - l.ExchangePoOrderedQty);
                 return (Line: l, Qty: remaining);
             })
@@ -483,11 +500,11 @@ public class SupplierReturnService : ISupplierReturnService
             .ToList();
 
         if (linesToCover.Count == 0)
-            throw new BusinessException("NO_QTY", "Không còn số lượng đủ điều kiện (đã bàn giao) để tạo PO đổi hàng.");
+            throw new BusinessException("NO_QTY", "Không còn số lượng đủ điều kiện để tạo PO đổi hàng.");
 
         var branch = await _purchaseOrderRepository.GetBranchByIdAsync(entity.BranchId, cancellationToken);
         var supplier = await _purchaseOrderRepository.GetSupplierByIdAsync(entity.SupplierId, cancellationToken);
-        var deliveryDate = DateTime.SpecifyKind(DateTime.UtcNow.Date, DateTimeKind.Utc);
+        var deliveryDate = ResolveNextSupplierDeliveryDate(supplier);
         var poCode = await _purchaseOrderRepository.GeneratePoCodeAsync(deliveryDate, cancellationToken);
 
         decimal totalQty = 0;
@@ -603,35 +620,196 @@ public class SupplierReturnService : ISupplierReturnService
         else
             entity.SettlementStatus = "UNPAID";
 
+        if (IsExchangeResolution(entity.ResolutionType)
+            && entity.SettlementStatus is "PAID" or "NOT_REQUIRED"
+            && entity.ReplacementStatus is "WAITING_PAYMENT" or "WAITING_HANDOVER" or "WAITING_PURCHASE_ORDER" or null or "")
+        {
+            entity.ReplacementStatus = "WAITING_PURCHASE_ORDER";
+        }
+
         await _repository.UpdateAsync(entity, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        if (entity.SettlementStatus is "PAID" or "NOT_REQUIRED")
+            await TryAutoCreateExchangePurchaseOrderAsync(entity.Id, cancellationToken);
+
         return await GetByIdAsync(entity.Id, cancellationToken);
     }
 
+    /// <summary>
+    /// Tự tạo PO đổi hàng sau khi xác nhận/email (hoặc sau khi CH thanh toán đủ phần cost-share).
+    /// Không ném lỗi nghiệp vụ ra ngoài — nếu chưa đủ điều kiện thì giữ trạng thái chờ.
+    /// </summary>
+    private async Task TryAutoCreateExchangePurchaseOrderAsync(
+        Guid supplierReturnId,
+        CancellationToken cancellationToken)
+    {
+        if (_purchaseOrderRepository == null)
+            return;
+
+        try
+        {
+            await CreateExchangePurchaseOrdersAsync(supplierReturnId, cancellationToken);
+        }
+        catch (BusinessException)
+        {
+            // COST_SHARE_UNPAID / NO_QTY / NOT_EXCHANGE / INVALID_STATUS → giữ luồng thủ công.
+        }
+        catch (NotFoundException)
+        {
+        }
+    }
+
+    private async Task ReserveReturnStockAsync(
+        SupplierReturn entity,
+        bool releaseQuarantine,
+        CancellationToken cancellationToken)
+    {
+        foreach (var line in entity.Lines)
+        {
+            var stock = await _repository.GetBranchStockAsync(
+                entity.TenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+            if (stock == null) continue;
+
+            if (releaseQuarantine && stock.QuantityQuarantined > 0)
+            {
+                var release = Math.Min(stock.QuantityQuarantined, line.RequestedQty);
+                stock.QuantityQuarantined -= release;
+            }
+
+            stock.QuantityReserved += line.RequestedQty;
+        }
+    }
+
+    private async Task AutoConfirmByPolicyAsync(SupplierReturn entity, CancellationToken cancellationToken)
+    {
+        foreach (var line in entity.Lines)
+        {
+            line.SupplierAcceptedQty = line.RequestedQty;
+            line.ApprovedQty = line.RequestedQty;
+            line.RejectedQty = 0;
+        }
+
+        entity.TotalApprovedQty = entity.TotalRequestedQty;
+        entity.Status = "APPROVED";
+        entity.SubmittedAt ??= DateTime.UtcNow;
+        entity.RespondedAt = DateTime.UtcNow;
+        entity.SupplierConfirmedBy = _tenantContext.CurrentUserId != Guid.Empty
+            ? _tenantContext.CurrentUserId.ToString()
+            : null;
+        entity.SupplierResponseNote =
+            "Tự động xác nhận theo chính sách NCC. Đã gửi email thông báo (không chờ NCC duyệt).";
+
+        await ApplyExchangePolicySnapshotAsync(entity, cancellationToken);
+    }
+
+    private async Task TryNotifySupplierEmailAsync(SupplierReturn entity, CancellationToken cancellationToken)
+    {
+        if (_emailSender == null || _purchaseOrderRepository == null)
+            return;
+
+        try
+        {
+            var supplier = await _purchaseOrderRepository.GetSupplierByIdAsync(entity.SupplierId, cancellationToken);
+            var to = supplier?.Email?.Trim();
+            if (string.IsNullOrWhiteSpace(to))
+                return;
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"Kính gửi {supplier!.Name},");
+            sb.AppendLine();
+            sb.AppendLine($"Cửa hàng đã lập phiếu trả/đổi hàng {entity.Code} theo chính sách đã thỏa thuận.");
+            sb.AppendLine($"Lý do: {entity.Reason}");
+            sb.AppendLine($"Hình thức: {entity.ResolutionType}");
+            sb.AppendLine($"Tổng SL: {entity.TotalApprovedQty:0.###}");
+            if (IsExchangeResolution(entity.ResolutionType))
+            {
+                sb.AppendLine($"Giá trị thay thế ước tính: {entity.ReplacementValue:N0} đ");
+                sb.AppendLine($"Phần cửa hàng chịu: {entity.StorePayableAmount:N0} đ");
+                sb.AppendLine($"Phần NCC chịu: {entity.SupplierBearAmount:N0} đ");
+                sb.AppendLine("Hàng đổi sẽ được đặt theo lịch giao gần nhất của quý công ty.");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("Chi tiết dòng hàng:");
+            foreach (var line in entity.Lines)
+            {
+                var name = line.Product?.Name ?? line.ProductId.ToString();
+                sb.AppendLine(
+                    $"- {name} | Lô {line.BatchCode ?? "—"} | SL {line.ApprovedQty:0.###} | Đơn giá {line.UnitCost:N0}");
+            }
+
+            sb.AppendLine();
+            sb.AppendLine("Email này chỉ mang tính thông báo — không yêu cầu duyệt trên hệ thống.");
+            sb.AppendLine("Trân trọng.");
+
+            await _emailSender.SendSupplierOrderAsync(
+                new SupplierOrderEmailMessage
+                {
+                    To = to,
+                    Subject = $"[MT-GRMS] Thông báo trả/đổi hàng {entity.Code}",
+                    BodyText = sb.ToString(),
+                },
+                cancellationToken);
+        }
+        catch
+        {
+            // Không chặn luồng nghiệp vụ nếu SMTP lỗi / chưa cấu hình.
+        }
+    }
+
+    private static DateTime ResolveNextSupplierDeliveryDate(Supplier? supplier)
+    {
+        var now = DateTime.UtcNow;
+        if (supplier == null)
+            return DateTime.SpecifyKind(now.Date.AddDays(1), DateTimeKind.Utc);
+
+        var mask = supplier.DeliveryWeekdaysMask > 0 ? supplier.DeliveryWeekdaysMask : 127;
+        var cutoff = string.IsNullOrWhiteSpace(supplier.CutoffTime) ? "17:00" : supplier.CutoffTime;
+        var earliest = DeliveryScheduleCalculator.CalculateEarliestDeliveryDate(
+            now,
+            cutoff,
+            mask,
+            supplier.BlackoutDates);
+
+        return DateTime.SpecifyKind(earliest.Date, DateTimeKind.Utc);
+    }
+
     private static bool IsExchangeResolution(string? resolutionType) =>
-        !string.IsNullOrWhiteSpace(resolutionType)
-        && resolutionType.Contains("EXCHANGE", StringComparison.OrdinalIgnoreCase);
+        SupplierReturnPolicyRules.IsExchangeResolution(resolutionType);
 
     private async Task ApplyExchangePolicySnapshotAsync(SupplierReturn entity, CancellationToken cancellationToken)
     {
         if (!IsExchangeResolution(entity.ResolutionType))
         {
             entity.ReplacementStatus = "NOT_REQUIRED";
+            foreach (var line in entity.Lines)
+            {
+                line.StoreCostSharePercentSnapshot = null;
+                line.SupplierCostSharePercentSnapshot = null;
+                line.LineReplacementValue = 0;
+                line.StorePayableAmount = 0;
+                line.SupplierBearAmount = 0;
+            }
             return;
         }
 
-        var policy = await _supplierRepository.GetActiveReturnPolicyAsync(entity.SupplierId, cancellationToken);
+        var policy = _supplierRepository != null
+            ? await _supplierRepository.GetActiveReturnPolicyAsync(entity.SupplierId, cancellationToken)
+            : null;
         if (policy != null)
         {
-            if (!policy.AllowReturn)
-                throw new BusinessException("RETURN_NOT_ALLOWED", "NCC không cho phép trả/đổi hàng theo chính sách.");
-
-            var allowed = ParseJsonList(policy.AllowedResolutionTypesJson);
-            if (allowed.Count > 0 && !allowed.Any(a => a.Contains("EXCHANGE", StringComparison.OrdinalIgnoreCase)))
-                throw new BusinessException("EXCHANGE_NOT_ALLOWED", "Chính sách NCC không cho phép đổi hàng.");
+            SupplierReturnPolicyRules.EnsureReturnAllowed(
+                policy,
+                "EXCHANGE",
+                SupplierReturnPolicyRules.NormalizeReturnReasonType(null, entity.Reason),
+                receiptDateUtc: null,
+                requireEvidence: false,
+                hasEvidence: true);
 
             entity.PolicyId = policy.Id;
-            entity.StoreCostSharePercentSnapshot = policy.CostShareEnabled ? policy.StoreCostSharePercent : 0m;
+            // Header % = mặc định NCC (fallback). Tổng tiền tính theo từng dòng.
+            entity.StoreCostSharePercentSnapshot = policy.CostShareEnabled ? (policy.StoreCostSharePercent ?? 0m) : 0m;
             entity.SupplierCostSharePercentSnapshot = policy.CostShareEnabled
                 ? (policy.SupplierCostSharePercent ?? (100m - (policy.StoreCostSharePercent ?? 0m)))
                 : 100m;
@@ -639,10 +817,20 @@ public class SupplierReturnService : ISupplierReturnService
             {
                 policy.AllowReturn,
                 policy.CostShareEnabled,
+                policy.CostShareByCategoryEnabled,
                 policy.StoreCostSharePercent,
                 policy.SupplierCostSharePercent,
                 policy.RequireStorePaymentBeforeReplacement,
-                policy.DefaultResolutionType
+                policy.DefaultResolutionType,
+                CategoryCostShares = (policy.CategoryCostShares ?? [])
+                    .Where(c => !c.IsDeleted)
+                    .Select(c => new
+                    {
+                        c.CategoryId,
+                        CategoryName = c.Category?.Name,
+                        c.StoreCostSharePercent,
+                        c.SupplierCostSharePercent
+                    })
             });
         }
         else
@@ -651,40 +839,72 @@ public class SupplierReturnService : ISupplierReturnService
             entity.SupplierCostSharePercentSnapshot = 100m;
         }
 
-        RecalculateExchangeAmounts(entity);
-        entity.ReplacementStatus = "WAITING_HANDOVER";
+        RecalculateExchangeAmounts(entity, policy);
         entity.SettlementStatus = (entity.StorePayableAmount > 0) ? "UNPAID" : "NOT_REQUIRED";
+        entity.ReplacementStatus = entity.StorePayableAmount > 0
+            ? "WAITING_PAYMENT"
+            : "WAITING_PURCHASE_ORDER";
     }
 
-    private static void RecalculateExchangeAmounts(SupplierReturn entity)
+    /// <summary>
+    /// Hướng A: tính StorePayable theo từng dòng (Category → % riêng, fallback % mặc định NCC).
+    /// </summary>
+    private static void RecalculateExchangeAmounts(SupplierReturn entity, SupplierReturnPolicy? policy = null)
     {
+        var defaultStorePct = entity.StoreCostSharePercentSnapshot ?? 0m;
+        var byCategory = policy?.CostShareEnabled == true && policy.CostShareByCategoryEnabled;
+        var categoryMap = (policy?.CategoryCostShares ?? [])
+            .Where(c => !c.IsDeleted)
+            .GroupBy(c => c.CategoryId)
+            .ToDictionary(g => g.Key, g => g.First());
+
         decimal replacementValue = 0;
+        decimal storePayable = 0;
         foreach (var line in entity.Lines)
         {
             var qty = line.SupplierAcceptedQty > 0 ? line.SupplierAcceptedQty : line.ApprovedQty;
             if (line.ReplacementUnitPrice <= 0)
                 line.ReplacementUnitPrice = line.UnitCost;
-            replacementValue += qty * line.ReplacementUnitPrice;
+
+            var lineValue = Math.Round(qty * line.ReplacementUnitPrice, 2);
+            line.LineReplacementValue = lineValue;
+            replacementValue += lineValue;
+
+            var categoryId = line.Product?.CategoryId ?? line.CategoryId;
+            var categoryName = line.Product?.Category?.Name ?? line.CategoryName;
+            line.CategoryId = categoryId;
+            line.CategoryName = categoryName;
+
+            decimal storePct;
+            if (policy != null)
+            {
+                storePct = defaultStorePct;
+                if (!policy.CostShareEnabled)
+                    storePct = 0m;
+                else if (byCategory && categoryId.HasValue && categoryMap.TryGetValue(categoryId.Value, out var catShare))
+                    storePct = catShare.StoreCostSharePercent;
+            }
+            else
+            {
+                // Tính lại sau khi đã snapshot: giữ % theo dòng đã chốt.
+                storePct = line.StoreCostSharePercentSnapshot ?? defaultStorePct;
+            }
+
+            var supplierPct = 100m - storePct;
+            line.StoreCostSharePercentSnapshot = storePct;
+            line.SupplierCostSharePercentSnapshot = supplierPct;
+            line.StorePayableAmount = Math.Round(lineValue * storePct / 100m, 2);
+            line.SupplierBearAmount = lineValue - line.StorePayableAmount;
+            storePayable += line.StorePayableAmount;
         }
 
         entity.ReplacementValue = Math.Round(replacementValue, 2);
-        var storePct = entity.StoreCostSharePercentSnapshot ?? 0m;
-        entity.StorePayableAmount = Math.Round(entity.ReplacementValue * storePct / 100m, 2);
+        entity.StorePayableAmount = Math.Round(storePayable, 2);
         entity.SupplierBearAmount = entity.ReplacementValue - entity.StorePayableAmount;
     }
 
-    private static List<string> ParseJsonList(string? json)
-    {
-        if (string.IsNullOrWhiteSpace(json)) return [];
-        try
-        {
-            return JsonSerializer.Deserialize<List<string>>(json) ?? [];
-        }
-        catch
-        {
-            return [];
-        }
-    }
+    private static List<string> ParseJsonList(string? json) =>
+        SupplierReturnPolicyRules.ParseJsonList(json);
 
     private static SupplierReturnDetailDto MapToDetailDto(
         SupplierReturn entity,
@@ -751,7 +971,15 @@ public class SupplierReturnService : ISupplierReturnService
                     l.Notes,
                     l.StocktakeLineId,
                     l.SupplierAcceptedQty > 0 ? l.SupplierAcceptedQty : l.ApprovedQty,
-                    stockOnHandQty
+                    stockOnHandQty,
+                    l.CategoryId,
+                    l.CategoryName ?? l.Product?.Category?.Name,
+                    l.StoreCostSharePercentSnapshot,
+                    l.SupplierCostSharePercentSnapshot,
+                    l.LineReplacementValue,
+                    l.StorePayableAmount,
+                    l.SupplierBearAmount,
+                    l.ReplacementUnitPrice
                 );
             }).ToList(),
             entity.StocktakeId,
@@ -768,36 +996,6 @@ public class SupplierReturnService : ISupplierReturnService
         );
     }
 
-    private static string NormalizeResolutionType(string? resolutionType)
-    {
-        if (string.IsNullOrWhiteSpace(resolutionType))
-            return "REDUCE_PAYABLE";
-
-        var raw = resolutionType.Trim().ToUpperInvariant();
-        return raw switch
-        {
-            "REPLACE_GOODS" or "EXCHANGE" => "EXCHANGE",
-            "DEDUCT_INVOICE" or "REDUCE_PAYABLE" => "REDUCE_PAYABLE",
-            "REFUND" => "REFUND",
-            "SUPPLIER_CREDIT" or "OTHER" => "OTHER",
-            _ => resolutionType.Trim()
-        };
-    }
-
-    private async Task ValidateExchangeAllowedByPolicyAsync(Guid supplierId, CancellationToken cancellationToken)
-    {
-        var policy = await _supplierRepository.GetActiveReturnPolicyAsync(supplierId, cancellationToken);
-        if (policy == null)
-            return;
-
-        if (!policy.AllowReturn)
-            throw new BusinessException("RETURN_NOT_ALLOWED", "NCC không cho phép trả/đổi hàng theo chính sách.");
-
-        var allowed = ParseJsonList(policy.AllowedResolutionTypesJson);
-        if (allowed.Count > 0 && !allowed.Any(a => a.Contains("EXCHANGE", StringComparison.OrdinalIgnoreCase)
-            || a.Contains("REPLACE", StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new BusinessException("EXCHANGE_NOT_ALLOWED", "Chính sách NCC không cho phép đổi hàng.");
-        }
-    }
+    private static string NormalizeResolutionType(string? resolutionType) =>
+        SupplierReturnPolicyRules.NormalizeResolutionType(resolutionType);
 }

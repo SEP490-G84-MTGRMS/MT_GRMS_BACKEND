@@ -17,6 +17,8 @@ public class Package : BaseTenantEntity
     public string? Barcode { get; set; }
     public decimal NetWeight { get; set; } = 0.000m;
     public decimal SellingPrice { get; set; } = 0.00m;
+    /// <summary>Ngày sản xuất / ngày đóng khay (mặc định = ngày tạo).</summary>
+    public DateTime? ManufactureDate { get; set; }
     public DateTime? ExpiryDate { get; set; }
 
     /// <summary>PORTIONING | PROCESSING | SUPPLIER_TRAY</summary>
