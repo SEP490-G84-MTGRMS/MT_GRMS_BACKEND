@@ -17,6 +17,22 @@ public interface ICashbookService
     Task<List<CashbookEntryResponse>> GetEntriesAsync(Guid? accountId, Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CashbookEntryType? entryType = null, string? sourceType = null, string? keyword = null, CancellationToken ct = default);
     Task<FinanceAccount> GetOrCreateTillAsync(Guid branchId, string tillName, CancellationToken ct = default);
     Task<FinanceAccount> GetOrCreateSafeAsync(Guid branchId, CancellationToken ct = default);
+    Task<FinanceAccount> ResolveDisbursementAccountAsync(
+        Guid branchId,
+        string paymentMethod,
+        Guid? cashbookAccountId = null,
+        CancellationToken ct = default)
+    {
+        var normalized = (paymentMethod ?? string.Empty).Trim().ToUpperInvariant();
+        var isBank = normalized.Contains("BANK")
+            || normalized.Contains("TRANSFER")
+            || normalized.Contains("VIETQR")
+            || normalized == "QR";
+
+        return isBank
+            ? GetOrCreateBankAccountAsync(branchId, ct: ct)
+            : GetOrCreateSafeAsync(branchId, ct);
+    }
     Task<FinanceAccount> GetOrCreateBankAccountAsync(Guid? branchId = null, string? bankName = null, string? accountNumber = null, string? accountHolderName = null, CancellationToken ct = default) =>
         Task.FromResult(new FinanceAccount
         {

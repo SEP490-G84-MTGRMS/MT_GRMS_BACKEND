@@ -30,7 +30,9 @@ public record CreateEmployeeRequest(
     string? UserName = null,
     string? Password = null,
     string? Role = SystemRoles.Staff,
-    string? EmployeeCode = null
+    string? EmployeeCode = null,
+    bool HasLaborContract = false,
+    decimal? InsuranceBaseSalary = null
 );
 
 public record UpdateEmployeeRequest(
@@ -59,7 +61,9 @@ public record UpdateEmployeeRequest(
     string? UserName = null,
     string? Password = null,
     string? Role = SystemRoles.Staff,
-    string? EmployeeCode = null
+    string? EmployeeCode = null,
+    bool HasLaborContract = false,
+    decimal? InsuranceBaseSalary = null
 );
 
 public record UpdateEmployeeStatusRequest(
@@ -115,7 +119,9 @@ public record EmployeeResponse(
     DateTime? UpdatedAt,
     string? FaceDescriptor = null,
     string? FaceImageUrls = null,
-    DateTime? FaceRegisteredAt = null
+    DateTime? FaceRegisteredAt = null,
+    bool HasLaborContract = false,
+    decimal? InsuranceBaseSalary = null
 );
 
 public record EmployeeSummaryDto(
