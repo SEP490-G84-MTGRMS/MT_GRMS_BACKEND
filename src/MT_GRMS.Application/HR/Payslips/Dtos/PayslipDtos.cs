@@ -50,18 +50,6 @@ public record BatchPayResultDto(
     IReadOnlyList<string> Errors
 );
 
-public record BatchFinalizePayslipsRequest(
-    List<Guid> PayslipIds
-);
-
-public record BatchFinalizeResultDto(
-    int TotalRequested,
-    int SuccessCount,
-    int FailedCount,
-    IReadOnlyList<string> FinalizedPayslipCodes,
-    IReadOnlyList<string> Errors
-);
-
 public record PayslipSummaryDto(
     Guid Id,
     string PayslipCode,

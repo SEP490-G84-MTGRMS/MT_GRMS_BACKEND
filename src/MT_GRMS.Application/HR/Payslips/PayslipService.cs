@@ -107,7 +107,7 @@ public class PayslipService : IPayslipService
 
             if (existingDict.TryGetValue(emp.Id, out var existingPayslip))
             {
-                if (existingPayslip.Status == PayslipStatus.Paid || existingPayslip.ApprovedAt != null)
+                if (existingPayslip.Status == PayslipStatus.Paid)
                 {
                     resultList.Add(existingPayslip);
                     continue;
@@ -409,105 +409,6 @@ public class PayslipService : IPayslipService
         return MapToResponse(payslip);
     }
 
-    public async Task<PayslipResponse> FinalizePayslipAsync(
-        Guid id,
-        CancellationToken cancellationToken = default)
-    {
-        var payslip = await _payslipRepository.GetByIdAsync(id, cancellationToken);
-        if (payslip == null)
-        {
-            throw new NotFoundException("Payslip", id);
-        }
-
-        if (payslip.Status == PayslipStatus.Paid)
-        {
-            throw new BusinessException($"Phiếu lương {payslip.PayslipCode} đã được thanh toán.");
-        }
-
-        if (!payslip.ApprovedAt.HasValue)
-        {
-            payslip.ApprovedAt = VnNow;
-            payslip.ApprovedBy = _tenantContext.CurrentUserId.ToString();
-            _payslipRepository.Update(payslip);
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
-        }
-
-        return MapToResponse(payslip);
-    }
-
-    public async Task<BatchFinalizeResultDto> BatchFinalizePayslipsAsync(
-        BatchFinalizePayslipsRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        var finalizedCodes = new List<string>();
-        var errors = new List<string>();
-        var now = VnNow;
-        var approver = _tenantContext.CurrentUserId.ToString();
-
-        foreach (var id in request.PayslipIds)
-        {
-            var payslip = await _payslipRepository.GetByIdAsync(id, cancellationToken);
-            if (payslip == null)
-            {
-                errors.Add($"Phiếu lương {id} không tồn tại.");
-                continue;
-            }
-
-            if (payslip.Status == PayslipStatus.Paid)
-            {
-                errors.Add($"Phiếu lương {payslip.PayslipCode} đã được thanh toán.");
-                continue;
-            }
-
-            if (payslip.ApprovedAt.HasValue)
-            {
-                errors.Add($"Phiếu lương {payslip.PayslipCode} đã được chốt trước đó.");
-                continue;
-            }
-
-            payslip.ApprovedAt = now;
-            payslip.ApprovedBy = approver;
-            _payslipRepository.Update(payslip);
-            finalizedCodes.Add(payslip.PayslipCode);
-        }
-
-        if (finalizedCodes.Count > 0)
-        {
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
-        }
-
-        return new BatchFinalizeResultDto(
-            TotalRequested: request.PayslipIds.Count,
-            SuccessCount: finalizedCodes.Count,
-            FailedCount: errors.Count,
-            FinalizedPayslipCodes: finalizedCodes,
-            Errors: errors
-        );
-    }
-
-    public async Task<PayslipResponse> UnfinalizePayslipAsync(
-        Guid id,
-        CancellationToken cancellationToken = default)
-    {
-        var payslip = await _payslipRepository.GetByIdAsync(id, cancellationToken);
-        if (payslip == null)
-        {
-            throw new NotFoundException("Payslip", id);
-        }
-
-        if (payslip.Status == PayslipStatus.Paid)
-        {
-            throw new BusinessException($"Phiếu lương {payslip.PayslipCode} đã thanh toán nên không thể mở chốt.");
-        }
-
-        payslip.ApprovedAt = null;
-        payslip.ApprovedBy = null;
-        _payslipRepository.Update(payslip);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
-
-        return MapToResponse(payslip);
-    }
-
     public async Task<PayslipResponse> AdvanceSalaryAsync(
         Guid id,
         SalaryAdvanceRequest request,
@@ -631,11 +532,6 @@ public class PayslipService : IPayslipService
             throw new BusinessException($"Phiếu lương {payslip.PayslipCode} đã được thanh toán trước đó.");
         }
 
-        if (!payslip.ApprovedAt.HasValue)
-        {
-            throw new BusinessException($"Phiếu lương {payslip.PayslipCode} chưa được chốt. Vui lòng chốt bảng lương trước khi thanh toán.");
-        }
-
         var method = request.PaymentMethod.Trim().ToUpper();
         var (paidAtVn, paidAtUtc) = ResolvePaymentTimes(request.PaidAt);
         var employeeName = payslip.Employee?.FullName ?? payslip.EmployeeId.ToString();
@@ -716,12 +612,6 @@ public class PayslipService : IPayslipService
             if (payslip.Status == PayslipStatus.Paid)
             {
                 errors.Add($"Phiếu lương {payslip.PayslipCode} đã được thanh toán trước đó.");
-                continue;
-            }
-
-            if (!payslip.ApprovedAt.HasValue)
-            {
-                errors.Add($"Phiếu lương {payslip.PayslipCode} chưa được chốt trước khi thanh toán.");
                 continue;
             }
 
@@ -952,11 +842,6 @@ public class PayslipService : IPayslipService
             throw new BusinessException("Không được phép xóa phiếu lương đã ở trạng thái Đã thanh toán (Paid).");
         }
 
-        if (payslip.ApprovedAt.HasValue)
-        {
-            throw new BusinessException("Phiếu lương đã chốt. Vui lòng mở chốt trước khi xóa.");
-        }
-
         _payslipRepository.Delete(payslip);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -1145,16 +1030,13 @@ public class PayslipService : IPayslipService
 
         foreach (var sch in empSchedules)
         {
-            if (sch.Status != ScheduleStatus.Cancelled || IsUnpaidLeaveSchedule(sch))
-            {
-                sch.PayslipId = payslip.Id;
-                // Tránh DbSet.Update(sch) attach lại navigation từ AsNoTracking() gây xung đột tracking Branch/Employee.
-                sch.Employee = null;
-                sch.Branch = null;
-                sch.ShiftConfig = null;
-                sch.Payslip = null;
-                _scheduleRepository.Update(sch);
-            }
+            sch.PayslipId = payslip.Id;
+            // Tránh DbSet.Update(sch) attach lại navigation từ AsNoTracking() gây xung đột tracking Branch/Employee.
+            sch.Employee = null;
+            sch.Branch = null;
+            sch.ShiftConfig = null;
+            sch.Payslip = null;
+            _scheduleRepository.Update(sch);
         }
     }
 

@@ -17,18 +17,6 @@ public interface IPayslipService
         Guid id,
         CancellationToken cancellationToken = default);
 
-    Task<PayslipResponse> FinalizePayslipAsync(
-        Guid id,
-        CancellationToken cancellationToken = default);
-
-    Task<BatchFinalizeResultDto> BatchFinalizePayslipsAsync(
-        BatchFinalizePayslipsRequest request,
-        CancellationToken cancellationToken = default);
-
-    Task<PayslipResponse> UnfinalizePayslipAsync(
-        Guid id,
-        CancellationToken cancellationToken = default);
-
     Task<PayslipResponse> AdvanceSalaryAsync(
         Guid id,
         SalaryAdvanceRequest request,

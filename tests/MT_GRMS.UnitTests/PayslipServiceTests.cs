@@ -653,15 +653,17 @@ public class PayslipServiceTests
     }
 
     [Fact]
-    public async Task PayPayslip_NotFinalized_ThrowsBusinessException()
+    public async Task PayPayslip_UnpaidWithoutApproval_SucceedsAndLocksAllSchedulesInPeriod()
     {
-        var (service, payslipRepo, _, _, _, _, _) = CreateService();
+        var (service, payslipRepo, _, schedRepo, _, _, _) = CreateService();
+        var branchId = Guid.NewGuid();
+        var employeeId = Guid.NewGuid();
         var payslip = new Payslip
         {
             Id = Guid.NewGuid(),
             TenantId = "tenant_test_01",
-            BranchId = Guid.NewGuid(),
-            EmployeeId = Guid.NewGuid(),
+            BranchId = branchId,
+            EmployeeId = employeeId,
             PayslipCode = "PL-202611-0099",
             PeriodMonth = "2026-11",
             NetSalary = 5_000_000m,
@@ -670,35 +672,30 @@ public class PayslipServiceTests
         };
         payslipRepo.Payslips.Add(payslip);
 
-        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
-            service.PayPayslipAsync(payslip.Id, new PayPayslipRequest("CASH")));
-        Assert.Contains("chưa được chốt", ex.Message);
-    }
-
-    [Fact]
-    public async Task FinalizeAndUnfinalizePayslip_TogglesApprovalAndAllowsPaymentOnlyWhenFinalized()
-    {
-        var (service, payslipRepo, _, _, _, tenantContext, _) = CreateService();
-        var payslip = new Payslip
+        var s1 = new EmployeeSchedule
         {
             Id = Guid.NewGuid(),
-            TenantId = "tenant_test_01",
-            BranchId = Guid.NewGuid(),
-            EmployeeId = Guid.NewGuid(),
-            PayslipCode = "PL-202611-0100",
-            PeriodMonth = "2026-11",
-            NetSalary = 4_500_000m,
-            Status = PayslipStatus.Unpaid
+            EmployeeId = employeeId,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 5),
+            Status = ScheduleStatus.Completed
         };
-        payslipRepo.Payslips.Add(payslip);
+        var s2 = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = employeeId,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 10),
+            Status = ScheduleStatus.Cancelled
+        };
+        schedRepo.Schedules.Add(s1);
+        schedRepo.Schedules.Add(s2);
 
-        var finalized = await service.FinalizePayslipAsync(payslip.Id);
-        Assert.NotNull(finalized.ApprovedAt);
-        Assert.Equal(tenantContext.CurrentUserId.ToString(), finalized.ApprovedBy);
+        var result = await service.PayPayslipAsync(payslip.Id, new PayPayslipRequest("CASH"));
 
-        var unfinalized = await service.UnfinalizePayslipAsync(payslip.Id);
-        Assert.Null(unfinalized.ApprovedAt);
-        Assert.Null(unfinalized.ApprovedBy);
+        Assert.Equal(PayslipStatus.Paid, result.Status);
+        Assert.Equal(payslip.Id, s1.PayslipId);
+        Assert.Equal(payslip.Id, s2.PayslipId);
     }
 
     [Fact]
@@ -1146,7 +1143,6 @@ public class PayslipServiceTests
         Assert.Single(generated);
         Assert.Equal(1.5m, generated[0].WorkedDays); // 0.5 + 1.0 = 1.5 công
 
-        await service.FinalizePayslipAsync(generated[0].Id);
         await service.PayPayslipAsync(generated[0].Id, new PayPayslipRequest("CASH", "Chi luong"));
         Assert.Equal(generated[0].Id, s1.PayslipId);
         Assert.Equal(generated[0].Id, s2.PayslipId);
