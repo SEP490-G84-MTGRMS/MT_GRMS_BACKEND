@@ -156,8 +156,8 @@ public class PayslipService : IPayslipService
             var workedDays = CalculateWorkedDays(workingSchedules, totalWorkHours, standardDayHours, policy);
             var paidLeaveDays = (decimal)paidLeaveSchedules.Count;
             var unpaidLeaveDays = (decimal)unpaidLeaveSchedules.Count;
-            var totalLateMinutes = workingSchedules.Sum(s => s.LateMinutes);
-            var totalEarlyLeaveMinutes = workingSchedules.Sum(s => s.EarlyLeaveMinutes);
+            var totalLateMinutes = workingSchedules.Sum(s => CalculateEffectiveLateMinutes(s, policy));
+            var totalEarlyLeaveMinutes = workingSchedules.Sum(s => CalculateEffectiveEarlyLeaveMinutes(s, policy));
 
             decimal otHours = 0m;
             decimal overtimePay = 0m;
@@ -923,6 +923,59 @@ public class PayslipService : IPayslipService
         return s.ActualWorkHours;
     }
 
+    private static int CalculateEffectiveLateMinutes(EmployeeSchedule s, BranchAttendancePolicy? policy)
+    {
+        if (policy == null)
+        {
+            return s.LateMinutes;
+        }
+
+        if (!policy.EnableLateThreshold)
+        {
+            return 0;
+        }
+
+        if (s.CheckInTime.HasValue)
+        {
+            var plannedStart = s.WorkDate.Date.Add(s.PlannedStartTime);
+            var rawLate = s.CheckInTime.Value > plannedStart
+                ? (int)(s.CheckInTime.Value - plannedStart).TotalMinutes
+                : 0;
+            return rawLate > policy.LateThresholdMinutes ? rawLate : 0;
+        }
+
+        return s.LateMinutes > policy.LateThresholdMinutes ? s.LateMinutes : 0;
+    }
+
+    private static int CalculateEffectiveEarlyLeaveMinutes(EmployeeSchedule s, BranchAttendancePolicy? policy)
+    {
+        if (policy == null)
+        {
+            return s.EarlyLeaveMinutes;
+        }
+
+        if (!policy.EnableEarlyLeaveThreshold)
+        {
+            return 0;
+        }
+
+        if (s.CheckOutTime.HasValue)
+        {
+            var plannedEnd = s.WorkDate.Date.Add(s.PlannedEndTime);
+            if (s.PlannedEndTime <= s.PlannedStartTime)
+            {
+                plannedEnd = plannedEnd.AddDays(1);
+            }
+
+            var rawEarly = s.CheckOutTime.Value < plannedEnd
+                ? (int)(plannedEnd - s.CheckOutTime.Value).TotalMinutes
+                : 0;
+            return rawEarly > policy.EarlyLeaveThresholdMinutes ? rawEarly : 0;
+        }
+
+        return s.EarlyLeaveMinutes > policy.EarlyLeaveThresholdMinutes ? s.EarlyLeaveMinutes : 0;
+    }
+
     private static decimal CalculateWorkedDays(
         IReadOnlyList<EmployeeSchedule> workingSchedules,
         decimal totalWorkHours,
@@ -993,10 +1046,6 @@ public class PayslipService : IPayslipService
                             if (matched)
                             {
                                 convertedDays += matchedUnits;
-                            }
-                            else if (standardDayHours > 0)
-                            {
-                                convertedDays += Math.Round(dayHours / standardDayHours, 2);
                             }
                         }
 
