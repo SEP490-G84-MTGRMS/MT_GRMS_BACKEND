@@ -111,6 +111,15 @@ public class EndToEndBusinessFlowIntegrationTests
         };
         context.Products.Add(prodA);
 
+        // 2b. Danh mục sản phẩm chi nhánh (BranchProduct)
+        context.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            ProductId = prodAId,
+            Status = "Active"
+        });
+
         // 3. Nhà cung cấp
         context.Suppliers.Add(new Domain.Entities.Supplier.Supplier
         {
@@ -581,7 +590,11 @@ public class EndToEndBusinessFlowIntegrationTests
             unitOfWork,
             thermalPrint,
             null, // debtService
-            cashbookService);
+            cashbookService,
+            null, // validator
+            null, // shiftRepository
+            null, // promotionRepository
+            tenantContext);
 
         // Thao tác bán lẻ: Bán 20 sản phẩm A (giá 15.000 đ), chiết khấu đơn 10.000 đ
         var createRequest = new OrderCreateRequest(
@@ -616,8 +629,11 @@ public class EndToEndBusinessFlowIntegrationTests
         Assert.NotNull(updatedStock);
         Assert.Equal(80m, updatedStock.QuantityOnHand);
 
-        // Kiểm tra tự động đổ vào Sổ quỹ Cashbook qua CashbookService
-        var cashEntries = await context.CashbookEntries.Where(c => c.SourceId == response.Id).ToListAsync();
+        // Kiểm tra tự động đổ vào Sổ quỹ Cashbook qua SettleOwnerDailyOrdersAsync (FE-17 Consolidated)
+        tenantContext.SetRole("STORE_OWNER");
+        await orderService.SettleOwnerDailyOrdersAsync(new SettleOwnerDailyRequest(branchId, "Chốt doanh thu cuối ngày"));
+
+        var cashEntries = await context.CashbookEntries.Where(c => c.SourceType == "POS_SALE").ToListAsync();
         Assert.Single(cashEntries);
         var entry = cashEntries.First();
         Assert.Equal(290_000m, entry.Amount);
@@ -625,10 +641,10 @@ public class EndToEndBusinessFlowIntegrationTests
         Assert.Equal("POS_SALE", entry.SourceType);
         Assert.False(string.IsNullOrWhiteSpace(entry.AuditHash)); // Chuỗi băm bảo mật SHA-256 được thiết lập
 
-        // Kiểm tra số dư tài khoản két quầy tăng lên 290.000 đ
-        var till = await context.FinanceAccounts.FindAsync(DefaultTillId);
-        Assert.NotNull(till);
-        Assert.Equal(290_000m, till.CurrentBalance);
+        // Kiểm tra số dư tài khoản két quầy / két sắt tăng lên 290.000 đ
+        var safe = await context.FinanceAccounts.FirstOrDefaultAsync(a => a.BranchId == branchId && a.AccountType == FinanceAccountType.Safe);
+        Assert.NotNull(safe);
+        Assert.Equal(290_000m, safe.CurrentBalance);
     }
 
     [Fact]

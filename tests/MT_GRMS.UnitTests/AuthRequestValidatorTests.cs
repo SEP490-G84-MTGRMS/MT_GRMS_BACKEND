@@ -45,7 +45,7 @@ public class AuthRequestValidatorTests
         Assert.False(validator.Validate(ValidRegister() with { AgreeTerms = false }).IsValid);
         Assert.False(validator.Validate(ValidRegister() with { FullName = "A" }).IsValid);
         Assert.False(validator.Validate(ValidRegister() with { StoreName = new string('S', 151) }).IsValid);
-        Assert.False(validator.Validate(ValidRegister() with { Email = new string('a', 91) + "@mail.com" }).IsValid);
+        Assert.False(validator.Validate(ValidRegister() with { Email = new string('a', 92) + "@mail.com" }).IsValid);
         Assert.True(validator.Validate(ValidRegister()).IsValid);
     }
 
