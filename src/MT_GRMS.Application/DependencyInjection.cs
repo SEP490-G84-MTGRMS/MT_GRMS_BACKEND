@@ -66,6 +66,7 @@ public static class DependencyInjection
         // 3. Đăng ký các Service cho Master Admin Portal
         services.AddScoped<ISubscriptionPlanService, SubscriptionPlanService>();
         services.AddScoped<ITenantService, TenantService>();
+        services.AddScoped<TenantProvisioningService>();
         services.AddScoped<IAdminDashboardService, AdminDashboardService>();
 
         return services;
