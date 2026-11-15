@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Stocktakes.Dtos;
+using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Application.SupplierReturns;
 using MT_GRMS.Application.SupplierReturns.Dtos;
 using MT_GRMS.Domain.Entities.Inventory;
@@ -17,6 +18,7 @@ public class StocktakeService : IStocktakeService
     private readonly IStocktakeRepository _repository;
     private readonly ISupplierReturnService _supplierReturnService;
     private readonly ISupplierReturnRepository _supplierReturnRepository;
+    private readonly ISupplierRepository _supplierRepository;
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
 
@@ -24,12 +26,14 @@ public class StocktakeService : IStocktakeService
         IStocktakeRepository repository,
         ISupplierReturnService supplierReturnService,
         ISupplierReturnRepository supplierReturnRepository,
+        ISupplierRepository supplierRepository,
         ITenantContext tenantContext,
         IUnitOfWork unitOfWork)
     {
         _repository = repository;
         _supplierReturnService = supplierReturnService;
         _supplierReturnRepository = supplierReturnRepository;
+        _supplierRepository = supplierRepository;
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
     }
@@ -307,6 +311,9 @@ public class StocktakeService : IStocktakeService
                     $"Phiếu có hàng thừa (tổng +{surplusTotal:0.##}). Store Owner phải xác minh nguồn thừa (ConfirmSurplusFound=true) trước khi duyệt cộng tồn.");
             }
 
+            ApplyLineDispositionActions(entity, command.LineActions);
+            await ValidateReturnDispositionsAgainstPolicyAsync(tenantId, entity, cancellationToken);
+
             entity.Status = "APPROVED";
 
             // Chỉ điều chỉnh đúng BranchStock gắn với dòng (Batch/lô). Không FEFO / không phân bổ sang lô khác.
@@ -316,11 +323,18 @@ public class StocktakeService : IStocktakeService
                 var stock = await _repository.GetBranchStockByIdAsync(tenantId, line.BranchStockId.Value, cancellationToken);
                 if (stock == null) continue;
 
-                // 1. Hết hạn + hư hỏng (nằm trong Actual) → write-off OnHand của đúng lô
-                var writeOffQty = line.DamagedQty + line.ExpiredQty;
+                // 1. Hết hạn / hư hỏng chọn WRITE_OFF → trừ OnHand.
+                //    Chọn RETURN_SUPPLIER → giữ OnHand + đưa vào Quarantine (không bán được) đến khi gửi phiếu trả.
+                var writeOffQty = GetLineWriteOffQty(line);
                 if (writeOffQty > 0)
                 {
                     stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - writeOffQty);
+                }
+
+                var returnHoldQty = GetLineEligibleReturnQty(line);
+                if (returnHoldQty > 0)
+                {
+                    stock.QuantityQuarantined += returnHoldQty;
                 }
 
                 // 2. Thiếu (Variance < 0) → giảm OnHand đúng lô
@@ -358,7 +372,7 @@ public class StocktakeService : IStocktakeService
         return await GetByIdAsync(entity.Id, cancellationToken);
     }
 
-    public async Task<SupplierReturnDetailDto> CreateReturnFromStocktakeAsync(
+    public async Task<IReadOnlyList<SupplierReturnDetailDto>> CreateReturnFromStocktakeAsync(
         Guid stocktakeId,
         CreateReturnFromStocktakeCommand command,
         CancellationToken cancellationToken = default)
@@ -377,9 +391,8 @@ public class StocktakeService : IStocktakeService
         if (command.Lines == null || !command.Lines.Any())
             throw new BusinessException("Vui lòng chọn ít nhất một dòng hàng đủ điều kiện trả nhà cung cấp.");
 
-        var returnLinesToCreate = new List<CreateSupplierReturnLineDto>();
-        Guid targetGrnId = command.GoodsReceiptId;
-        var primaryReason = "Hàng hư hỏng, lỗi chất lượng";
+        var fallbackGrnId = command.GoodsReceiptId;
+        var prepared = new List<(StocktakeLine StLine, CreateReturnFromStocktakeLineItemDto Req, Guid GrnId, string ReasonType, string ReasonText)>();
 
         foreach (var reqItem in command.Lines)
         {
@@ -397,67 +410,145 @@ public class StocktakeService : IStocktakeService
                 throw new BusinessException(
                     $"Số lượng đề nghị trả ({reqItem.RequestedQty}) vượt quá số lượng lỗi/cận hạn còn lại trên dòng kiểm kê ({remainingEligibleQty}).");
 
-            var resolvedGrnId = reqItem.GoodsReceiptId ?? stLine.OriginalGrnId ?? targetGrnId;
+            var resolvedGrnId = reqItem.GoodsReceiptId ?? stLine.OriginalGrnId ?? fallbackGrnId;
             if (resolvedGrnId == Guid.Empty)
                 throw new BusinessException("Vui lòng chọn Phiếu nhập kho gốc (GRN) để xác định nguồn nhập và Nhà cung cấp.");
 
-            targetGrnId = resolvedGrnId;
-
-            if (stLine.DefectiveReasonCode == "RECALLED")
-                primaryReason = "Thỏa thuận thu hồi từ hãng";
-            else if (stLine.DefectiveReasonCode == "WRONG_SPEC_DISCOVERED")
-                primaryReason = "Giao sai quy cách / mẫu mã";
-            else if (stLine.NearExpiryAction == "NEAR_EXPIRY_RETURN" && stLine.DefectiveQty == 0)
-                primaryReason = "Sắp hết hạn (Near-Expiry)";
-
-            returnLinesToCreate.Add(new CreateSupplierReturnLineDto(
-                ProductId: stLine.ProductId,
-                GoodsReceiptLineId: reqItem.GoodsReceiptLineId ?? stLine.OriginalGrnLineId,
-                BatchCode: stLine.BatchCode,
-                ExpiryDate: stLine.ExpiryDate,
-                RequestedQty: reqItem.RequestedQty,
-                UnitCost: stLine.UnitCost,
-                Notes: reqItem.Notes ?? stLine.Note ?? $"Từ phiếu kiểm kê {stocktake.Code}",
-                StocktakeLineId: stLine.Id
-            ));
-
+            var (reasonText, reasonType) = ResolveReturnReason([stLine]);
+            prepared.Add((stLine, reqItem, resolvedGrnId, reasonType, reasonText));
             stLine.ReturnedQty += reqItem.RequestedQty;
         }
 
         await _repository.UpdateAsync(stocktake, cancellationToken);
 
-        var createReturnCmd = new CreateSupplierReturnCommand(
-            GoodsReceiptId: targetGrnId,
-            Reason: primaryReason,
-            ReasonNotes: string.IsNullOrWhiteSpace(command.ReasonNotes)
-                ? $"Khởi tạo từ Phiếu kiểm kê {stocktake.Code}"
-                : command.ReasonNotes,
-            AttachmentUrl: command.AttachmentUrl ?? stocktake.Lines.Select(l => l.EvidenceUrl).FirstOrDefault(u => !string.IsNullOrWhiteSpace(u)),
-            Lines: returnLinesToCreate,
-            AutoSubmit: command.AutoSubmit,
-            StocktakeId: stocktake.Id,
-            ResolutionType: NormalizeStocktakeResolution(command.ResolutionType)
-        );
+        var created = new List<SupplierReturnDetailDto>();
+        var groups = prepared.GroupBy(x => (x.GrnId, x.ReasonType));
 
-        var createdReturn = await _supplierReturnService.CreateAsync(createReturnCmd, cancellationToken);
-
-        // Cập nhật StocktakeCode trên SupplierReturn
-        var returnEntity = await _supplierReturnRepository.GetByIdAsync(tenantId, createdReturn.Id, cancellationToken);
-        if (returnEntity != null)
+        foreach (var group in groups)
         {
-            returnEntity.StocktakeId = stocktake.Id;
-            returnEntity.StocktakeCode = stocktake.Code;
-            await _supplierReturnRepository.UpdateAsync(returnEntity, cancellationToken);
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            var groupLines = group.ToList();
+            var reasonType = group.Key.ReasonType;
+            var primaryReason = groupLines[0].ReasonText;
+            var attachment = command.AttachmentUrl
+                ?? string.Join(
+                    ";",
+                    groupLines
+                        .Select(x => x.StLine.EvidenceUrl)
+                        .Where(u => !string.IsNullOrWhiteSpace(u))
+                        .Distinct());
+            if (string.IsNullOrWhiteSpace(attachment))
+                attachment = stocktake.Lines.Select(l => l.EvidenceUrl).FirstOrDefault(u => !string.IsNullOrWhiteSpace(u));
+
+            var returnLinesToCreate = groupLines.Select(x => new CreateSupplierReturnLineDto(
+                ProductId: x.StLine.ProductId,
+                GoodsReceiptLineId: x.Req.GoodsReceiptLineId ?? x.StLine.OriginalGrnLineId,
+                BatchCode: x.StLine.BatchCode,
+                ExpiryDate: x.StLine.ExpiryDate,
+                RequestedQty: x.Req.RequestedQty,
+                UnitCost: x.StLine.UnitCost,
+                Notes: x.Req.Notes ?? x.StLine.Note ?? $"Từ phiếu kiểm kê {stocktake.Code}",
+                StocktakeLineId: x.StLine.Id
+            )).ToList();
+
+            var createReturnCmd = new CreateSupplierReturnCommand(
+                GoodsReceiptId: group.Key.GrnId,
+                Reason: primaryReason,
+                ReasonNotes: string.IsNullOrWhiteSpace(command.ReasonNotes)
+                    ? $"Khởi tạo từ Phiếu kiểm kê {stocktake.Code}"
+                    : command.ReasonNotes,
+                AttachmentUrl: attachment,
+                Lines: returnLinesToCreate,
+                AutoSubmit: command.AutoSubmit,
+                StocktakeId: stocktake.Id,
+                ResolutionType: NormalizeStocktakeResolution(command.ResolutionType),
+                ReturnReasonType: reasonType
+            );
+
+            var createdReturn = await _supplierReturnService.CreateAsync(createReturnCmd, cancellationToken);
+
+            var returnEntity = await _supplierReturnRepository.GetByIdAsync(tenantId, createdReturn.Id, cancellationToken);
+            if (returnEntity != null)
+            {
+                returnEntity.StocktakeId = stocktake.Id;
+                returnEntity.StocktakeCode = stocktake.Code;
+                await _supplierReturnRepository.UpdateAsync(returnEntity, cancellationToken);
+            }
+
+            created.Add(await _supplierReturnService.GetByIdAsync(createdReturn.Id, cancellationToken));
         }
 
-        return await _supplierReturnService.GetByIdAsync(createdReturn.Id, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return created;
     }
 
     public static decimal GetLineEligibleReturnQty(StocktakeLine line)
     {
         var nearExpiryReturnable = line.NearExpiryAction == "NEAR_EXPIRY_RETURN" ? line.NearExpiryQty : 0m;
-        return line.DefectiveQty + nearExpiryReturnable;
+        var damagedReturnable = IsReturnDisposition(line.DamagedAction) ? line.DamagedQty : 0m;
+        var expiredReturnable = IsReturnDisposition(line.ExpiredAction) ? line.ExpiredQty : 0m;
+        return line.DefectiveQty + nearExpiryReturnable + damagedReturnable + expiredReturnable;
+    }
+
+    public static decimal GetLineWriteOffQty(StocktakeLine line)
+    {
+        var damaged = IsReturnDisposition(line.DamagedAction) ? 0m : line.DamagedQty;
+        var expired = IsReturnDisposition(line.ExpiredAction) ? 0m : line.ExpiredQty;
+        return damaged + expired;
+    }
+
+    public static bool IsReturnDisposition(string? action)
+    {
+        if (string.IsNullOrWhiteSpace(action)) return false;
+        var raw = action.Trim().ToUpperInvariant();
+        return raw is "RETURN_SUPPLIER" or "NEAR_EXPIRY_RETURN" or "RETURN";
+    }
+
+    private static string? NormalizeDispositionAction(string? action, decimal qty)
+    {
+        if (qty <= 0) return null;
+        if (IsReturnDisposition(action)) return "RETURN_SUPPLIER";
+        return "WRITE_OFF";
+    }
+
+    private static void ApplyLineDispositionActions(
+        Stocktake entity,
+        List<ReviewStocktakeLineActionDto>? lineActions)
+    {
+        if (lineActions == null || lineActions.Count == 0)
+        {
+            foreach (var line in entity.Lines)
+            {
+                if (line.DamagedQty > 0 && string.IsNullOrWhiteSpace(line.DamagedAction))
+                    line.DamagedAction = "WRITE_OFF";
+                if (line.ExpiredQty > 0 && string.IsNullOrWhiteSpace(line.ExpiredAction))
+                    line.ExpiredAction = "WRITE_OFF";
+            }
+            return;
+        }
+
+        var lookup = lineActions
+            .GroupBy(x => x.StocktakeLineId)
+            .ToDictionary(g => g.Key, g => g.First());
+
+        foreach (var line in entity.Lines)
+        {
+            if (lookup.TryGetValue(line.Id, out var action))
+            {
+                line.DamagedAction = line.DamagedQty > 0
+                    ? NormalizeDispositionAction(action.DamagedAction, line.DamagedQty)
+                    : null;
+                line.ExpiredAction = line.ExpiredQty > 0
+                    ? NormalizeDispositionAction(action.ExpiredAction, line.ExpiredQty)
+                    : null;
+            }
+            else
+            {
+                if (line.DamagedQty > 0 && string.IsNullOrWhiteSpace(line.DamagedAction))
+                    line.DamagedAction = "WRITE_OFF";
+                if (line.ExpiredQty > 0 && string.IsNullOrWhiteSpace(line.ExpiredAction))
+                    line.ExpiredAction = "WRITE_OFF";
+            }
+        }
     }
 
     private static void ValidateNonNegativeQuantities(params decimal[] values)
@@ -515,20 +606,104 @@ public class StocktakeService : IStocktakeService
         return query;
     }
 
-    private static string NormalizeStocktakeResolution(string? resolutionType)
-    {
-        if (string.IsNullOrWhiteSpace(resolutionType))
-            return "REDUCE_PAYABLE";
+    private static string NormalizeStocktakeResolution(string? resolutionType) =>
+        SupplierReturnPolicyRules.NormalizeResolutionType(resolutionType);
 
-        var raw = resolutionType.Trim().ToUpperInvariant();
-        return raw switch
+    private static (string ReasonText, string ReasonType) ResolveReturnReason(IEnumerable<StocktakeLine> lines)
+    {
+        var list = lines.ToList();
+        if (list.Any(l => l.DefectiveReasonCode == "RECALLED"))
+            return ("Thỏa thuận thu hồi từ hãng", "RECALL");
+        if (list.Any(l => l.DefectiveReasonCode == "WRONG_SPEC_DISCOVERED"))
+            return ("Giao sai quy cách / mẫu mã", "WRONG_ITEM");
+        if (list.Any(l => IsReturnDisposition(l.ExpiredAction) && l.ExpiredQty > 0))
+            return ("Hàng hết hạn phát hiện khi kiểm kê", "EXPIRED");
+        if (list.Any(l => l.NearExpiryAction == "NEAR_EXPIRY_RETURN" && l.NearExpiryQty > 0))
+            return ("Sắp hết hạn (Near-Expiry)", "NEAR_EXPIRY");
+        if (list.Any(l => IsReturnDisposition(l.DamagedAction) && l.DamagedQty > 0))
+            return ("Hàng hư hỏng phát hiện khi kiểm kê", "QUALITY_DEFECT");
+        return ("Hàng hư hỏng, lỗi chất lượng", "QUALITY_DEFECT");
+    }
+
+    private async Task ValidateReturnDispositionsAgainstPolicyAsync(
+        string tenantId,
+        Stocktake entity,
+        CancellationToken cancellationToken)
+    {
+        var returnLines = entity.Lines
+            .Where(l =>
+                (IsReturnDisposition(l.DamagedAction) && l.DamagedQty > 0)
+                || (IsReturnDisposition(l.ExpiredAction) && l.ExpiredQty > 0)
+                || (l.NearExpiryAction == "NEAR_EXPIRY_RETURN" && l.NearExpiryQty > 0))
+            .ToList();
+        if (returnLines.Count == 0) return;
+
+        var grnDates = new Dictionary<Guid, DateTime>();
+        var grnIds = returnLines
+            .Where(l => l.OriginalGrnId.HasValue && l.OriginalGrnId.Value != Guid.Empty)
+            .Select(l => l.OriginalGrnId!.Value)
+            .Distinct()
+            .ToList();
+        if (grnIds.Count > 0)
         {
-            "REPLACE_GOODS" or "EXCHANGE" => "EXCHANGE",
-            "DEDUCT_INVOICE" or "REDUCE_PAYABLE" => "REDUCE_PAYABLE",
-            "REFUND" => "REFUND",
-            "SUPPLIER_CREDIT" or "OTHER" => "OTHER",
-            _ => resolutionType.Trim()
-        };
+            var eligible = await _supplierReturnRepository.GetEligibleGrnsAsync(
+                tenantId,
+                entity.BranchId,
+                null,
+                cancellationToken);
+            foreach (var g in eligible.Where(x => grnIds.Contains(x.Id)))
+                grnDates[g.Id] = g.ReceivedDate;
+        }
+
+        var policyCache = new Dictionary<Guid, Domain.Entities.Supplier.SupplierReturnPolicy?>();
+
+        foreach (var line in returnLines)
+        {
+            if (!line.SupplierId.HasValue || line.SupplierId.Value == Guid.Empty)
+                throw new BusinessException(
+                    "SUPPLIER_REQUIRED",
+                    $"Lô {(string.IsNullOrWhiteSpace(line.BatchCode) ? line.ProductId.ToString() : line.BatchCode)} chọn đổi/trả NCC nhưng chưa xác định nhà cung cấp.");
+
+            var supplierId = line.SupplierId.Value;
+            if (!policyCache.TryGetValue(supplierId, out var policy))
+            {
+                policy = await _supplierRepository.GetActiveReturnPolicyAsync(supplierId, cancellationToken);
+                policyCache[supplierId] = policy;
+            }
+
+            DateTime? receiptDate = null;
+            if (line.OriginalGrnId.HasValue && grnDates.TryGetValue(line.OriginalGrnId.Value, out var d))
+                receiptDate = d;
+
+            var hasEvidence = !string.IsNullOrWhiteSpace(line.EvidenceUrl);
+
+            if (IsReturnDisposition(line.DamagedAction) && line.DamagedQty > 0)
+            {
+                SupplierReturnPolicyRules.EnsureDispositionAllowed(
+                    policy,
+                    "DAMAGED",
+                    receiptDate,
+                    hasEvidence);
+            }
+
+            if (IsReturnDisposition(line.ExpiredAction) && line.ExpiredQty > 0)
+            {
+                SupplierReturnPolicyRules.EnsureDispositionAllowed(
+                    policy,
+                    "EXPIRED",
+                    receiptDate,
+                    hasEvidence);
+            }
+
+            if (line.NearExpiryAction == "NEAR_EXPIRY_RETURN" && line.NearExpiryQty > 0)
+            {
+                SupplierReturnPolicyRules.EnsureDispositionAllowed(
+                    policy,
+                    "NEAR_EXPIRY",
+                    receiptDate,
+                    hasEvidence);
+            }
+        }
     }
 }
 

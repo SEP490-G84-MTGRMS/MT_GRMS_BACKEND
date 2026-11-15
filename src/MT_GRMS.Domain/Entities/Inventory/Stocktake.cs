@@ -80,6 +80,16 @@ public class StocktakeLine : BaseTenantEntity
     public string? NearExpiryAction { get; set; }
 
     /// <summary>
+    /// Hướng xử lý hàng hư hỏng: WRITE_OFF (xuất hủy trừ tồn) | RETURN_SUPPLIER (giữ tồn để tạo phiếu trả/đổi NCC)
+    /// </summary>
+    public string? DamagedAction { get; set; }
+
+    /// <summary>
+    /// Hướng xử lý hàng hết hạn: WRITE_OFF | RETURN_SUPPLIER
+    /// </summary>
+    public string? ExpiredAction { get; set; }
+
+    /// <summary>
     /// Số lượng hàng lỗi/cận hạn đủ điều kiện trả NCC đã được chuyển sang tạo Phiếu trả hàng
     /// </summary>
     public decimal ReturnedQty { get; set; } = 0m;

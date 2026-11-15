@@ -135,8 +135,20 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
             var grnId = lotGroup
                 .Select(x => grnIdLookup.TryGetValue(x.Id, out var gid) ? gid : null)
                 .FirstOrDefault(g => g.HasValue);
-            var initQty = lotGroup
-                .Sum(x => initialQtyLookup.TryGetValue(x.Id, out var iq) ? iq : x.QuantityOnHand);
+            products.TryGetValue(representative.ProductId, out var lotProduct);
+            string? lotDeliveryUom = null;
+            if (representative.SupplierId.HasValue
+                && deliveryUomBySupplierProduct != null
+                && deliveryUomBySupplierProduct.TryGetValue((representative.SupplierId.Value, representative.ProductId), out var lotDu))
+            {
+                lotDeliveryUom = lotDu;
+            }
+            var (_, lotPurchaseToStockRate) = ResolveInboundUnitAndRate(lotDeliveryUom, lotProduct);
+            // AcceptedQty trên GRN theo ĐVT nhập → quy về ĐVT tồn (cùng hệ với QuantityOnHand).
+            var initQty = lotGroup.Sum(x =>
+                initialQtyLookup.TryGetValue(x.Id, out var iq)
+                    ? Math.Round(iq * lotPurchaseToStockRate, 3)
+                    : x.QuantityOnHand);
 
             decimal packagedQty = 0m;
             var packageCount = 0;
@@ -201,8 +213,21 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
             var grnId = group
                 .Select(x => grnIdLookup.TryGetValue(x.Id, out var gid) ? gid : null)
                 .FirstOrDefault(g => g.HasValue);
-            var initQty = group
-                .Sum(x => initialQtyLookup.TryGetValue(x.Id, out var iq) ? iq : x.QuantityOnHand);
+            products.TryGetValue(representative.ProductId, out var nonBatchProduct);
+            var nonBatchSupplierId = representative.SupplierId
+                ?? group.Select(x => x.SupplierId).FirstOrDefault(s => s.HasValue);
+            string? nonBatchDeliveryUom = null;
+            if (nonBatchSupplierId.HasValue
+                && deliveryUomBySupplierProduct != null
+                && deliveryUomBySupplierProduct.TryGetValue((nonBatchSupplierId.Value, representative.ProductId), out var nonBatchDu))
+            {
+                nonBatchDeliveryUom = nonBatchDu;
+            }
+            var (_, nonBatchPurchaseToStockRate) = ResolveInboundUnitAndRate(nonBatchDeliveryUom, nonBatchProduct);
+            var initQty = group.Sum(x =>
+                initialQtyLookup.TryGetValue(x.Id, out var iq)
+                    ? Math.Round(iq * nonBatchPurchaseToStockRate, 3)
+                    : x.QuantityOnHand);
 
             var mergedNonBatchStock = new BranchStock
             {
@@ -210,7 +235,7 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 TenantId = representative.TenantId,
                 BranchId = representative.BranchId,
                 ProductId = representative.ProductId,
-                SupplierId = representative.SupplierId ?? group.Select(x => x.SupplierId).FirstOrDefault(s => s.HasValue),
+                SupplierId = nonBatchSupplierId,
                 BatchCode = null,
                 ManufactureDate = null,
                 ExpiryDate = null,
@@ -287,7 +312,11 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
             allItems = allItems.Where(x => x.Status.Equals(query.Status, StringComparison.OrdinalIgnoreCase)).ToList();
         }
 
-        allItems = allItems.OrderBy(x => x.DaysLeft).ToList();
+        // Gom cùng SKU, trong mỗi SKU sắp theo HSD (FEFO / DaysLeft)
+        allItems = allItems
+            .OrderBy(x => x.Sku, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.DaysLeft)
+            .ToList();
 
         var totalCount = allItems.Count;
         var pageIndex = query.PageIndex < 1 ? 1 : query.PageIndex;

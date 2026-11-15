@@ -35,7 +35,7 @@ public interface IStocktakeService
         ReviewStocktakeCommand command,
         CancellationToken cancellationToken = default);
 
-    Task<SupplierReturnDetailDto> CreateReturnFromStocktakeAsync(
+    Task<IReadOnlyList<SupplierReturnDetailDto>> CreateReturnFromStocktakeAsync(
         Guid stocktakeId,
         CreateReturnFromStocktakeCommand command,
         CancellationToken cancellationToken = default);

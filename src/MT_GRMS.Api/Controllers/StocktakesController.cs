@@ -86,7 +86,7 @@ public class StocktakesController : BaseApiController
         CancellationToken cancellationToken)
     {
         var result = await _service.CreateReturnFromStocktakeAsync(id, command, cancellationToken);
-        return Ok(ApiResponse<SupplierReturnDetailDto>.Ok(result, "Đã tạo phiếu yêu cầu trả hàng nhà cung cấp từ phiếu kiểm kê."));
+        return Ok(ApiResponse<object>.Ok(result, "Đã tạo phiếu yêu cầu trả hàng nhà cung cấp từ phiếu kiểm kê."));
     }
 }
 

@@ -181,6 +181,9 @@ public class PoReceiptDetailsDto
     public DateTime? DeliveryDate { get; set; }
     public decimal TotalQty { get; set; }
     public decimal TotalAmount { get; set; }
+    /// <summary>MANUAL / SUPPLIER_RETURN (đổi hàng từ phiếu trả).</summary>
+    public string? SourceType { get; set; }
+    public Guid? SourceSupplierReturnId { get; set; }
     public List<PoReceiptLineItemDto> Items { get; set; } = new();
 }
 

@@ -2,6 +2,7 @@ using Moq;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Stocktakes;
 using MT_GRMS.Application.Stocktakes.Dtos;
+using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Application.SupplierReturns;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Exceptions;
@@ -60,6 +61,10 @@ public class StocktakeLotAdjustmentTests
         var repo = new Mock<IStocktakeRepository>(MockBehavior.Strict);
         var returnSvc = new Mock<ISupplierReturnService>(MockBehavior.Loose);
         var returnRepo = new Mock<ISupplierReturnRepository>(MockBehavior.Loose);
+        var supplierRepo = new Mock<ISupplierRepository>(MockBehavior.Loose);
+        supplierRepo
+            .Setup(x => x.GetActiveReturnPolicyAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Domain.Entities.Supplier.SupplierReturnPolicy?)null);
         var uow = new Mock<IUnitOfWork>();
         uow.Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
@@ -149,6 +154,7 @@ public class StocktakeLotAdjustmentTests
             repo.Object,
             returnSvc.Object,
             returnRepo.Object,
+            supplierRepo.Object,
             tenant,
             uow.Object);
 
@@ -185,6 +191,7 @@ public class StocktakeLotAdjustmentTests
         var repo = new Mock<IStocktakeRepository>(MockBehavior.Strict);
         var returnSvc = new Mock<ISupplierReturnService>(MockBehavior.Loose);
         var returnRepo = new Mock<ISupplierReturnRepository>(MockBehavior.Loose);
+        var supplierRepo = new Mock<ISupplierRepository>(MockBehavior.Loose);
         var uow = new Mock<IUnitOfWork>();
         uow.Setup(x => x.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
 
@@ -235,7 +242,13 @@ public class StocktakeLotAdjustmentTests
         repo.Setup(r => r.GetBranchStockByIdAsync(It.IsAny<string>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("Submit không được đụng BranchStock"));
 
-        var svc = new StocktakeService(repo.Object, returnSvc.Object, returnRepo.Object, tenant, uow.Object);
+        var svc = new StocktakeService(
+            repo.Object,
+            returnSvc.Object,
+            returnRepo.Object,
+            supplierRepo.Object,
+            tenant,
+            uow.Object);
 
         var result = await svc.SubmitAsync(stocktakeId, CancellationToken.None);
 
@@ -262,5 +275,71 @@ public class StocktakeLotAdjustmentTests
                 CancellationToken.None));
 
         Assert.Equal(100m, lotA.QuantityOnHand);
+    }
+
+    [Fact]
+    public async Task Approve_WhenDamagedMarkedReturn_ShouldNotWriteOffDamaged()
+    {
+        var (svc, repo, lotA, lotB, stocktakeId) = BuildServiceWithTwoLots();
+        var entity = await repo.Object.GetByIdAsync("tenant-test", stocktakeId, CancellationToken.None);
+        var lineA = entity!.Lines.First();
+        // Chỉ hư hỏng 5, khớp tồn (không thiếu) — variance 0
+        lineA.GoodQty = 95m;
+        lineA.DamagedQty = 5m;
+        lineA.ActualQty = 100m;
+        lineA.VarianceQty = 0m;
+        lineA.SupplierId = Guid.NewGuid();
+        lineA.EvidenceUrl = "https://example.com/evidence.jpg";
+
+        await svc.ReviewAsync(
+            stocktakeId,
+            new ReviewStocktakeCommand(
+                "APPROVE",
+                null,
+                null,
+                false,
+                new List<ReviewStocktakeLineActionDto>
+                {
+                    new(lineA.Id, "RETURN_SUPPLIER", null),
+                }),
+            CancellationToken.None);
+
+        // Damaged RETURN → không trừ OnHand; đưa vào quarantine; LOT-B không đổi
+        Assert.Equal(100m, lotA.QuantityOnHand);
+        Assert.Equal(5m, lotA.QuantityQuarantined);
+        Assert.Equal(50m, lotB.QuantityOnHand);
+        Assert.Equal("RETURN_SUPPLIER", lineA.DamagedAction);
+        Assert.Equal(5m, StocktakeService.GetLineEligibleReturnQty(lineA));
+    }
+
+    [Fact]
+    public async Task Approve_WhenReturnWithoutSupplier_ShouldFail()
+    {
+        var (svc, repo, lotA, _, stocktakeId) = BuildServiceWithTwoLots();
+        var entity = await repo.Object.GetByIdAsync("tenant-test", stocktakeId, CancellationToken.None);
+        var lineA = entity!.Lines.First();
+        lineA.GoodQty = 95m;
+        lineA.DamagedQty = 5m;
+        lineA.ActualQty = 100m;
+        lineA.VarianceQty = 0m;
+        lineA.SupplierId = null;
+        lineA.EvidenceUrl = "https://example.com/e.jpg";
+
+        await Assert.ThrowsAsync<BusinessException>(() =>
+            svc.ReviewAsync(
+                stocktakeId,
+                new ReviewStocktakeCommand(
+                    "APPROVE",
+                    null,
+                    null,
+                    false,
+                    new List<ReviewStocktakeLineActionDto>
+                    {
+                        new(lineA.Id, "RETURN_SUPPLIER", null),
+                    }),
+                CancellationToken.None));
+
+        Assert.Equal(100m, lotA.QuantityOnHand);
+        Assert.Equal(0m, lotA.QuantityQuarantined);
     }
 }

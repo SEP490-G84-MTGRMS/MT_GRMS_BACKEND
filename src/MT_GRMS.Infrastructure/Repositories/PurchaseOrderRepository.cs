@@ -35,6 +35,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
     public async Task<Domain.Entities.Supplier.Supplier?> GetSupplierByIdAsync(Guid supplierId, CancellationToken cancellationToken = default)
     {
         return await _context.Suppliers
+            .Include(s => s.BlackoutDates)
             .FirstOrDefaultAsync(s => s.Id == supplierId, cancellationToken);
     }
 

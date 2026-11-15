@@ -95,13 +95,18 @@ public class GoodsReceiptService : IGoodsReceiptService
 
         EnsureDeliveryDateReachedForReceipt(po);
 
-        // Kiểm tra xem PO đã có phiếu nhập kho DRAFT hoặc COMPLETED chưa (Mục 4)
+        // PO thường: chặn nếu đã có GRN active. PO đổi hàng: chỉ chặn khi còn phiếu nháp.
         var existingReceipt = await _repository.GetActiveReceiptByPoIdAsync(tenantId, po.Id, cancellationToken);
         if (existingReceipt != null)
         {
-            throw new BusinessException(
-                "PO_HAS_ACTIVE_RECEIPT",
-                $"Đơn hàng {po.Code} đã có phiếu nhập kho {existingReceipt.Code} ở trạng thái {existingReceipt.Status}. Không thể tạo thêm phiếu nhập mới.");
+            var isExchangePoDetails = string.Equals(po.SourceType, "SUPPLIER_RETURN", StringComparison.OrdinalIgnoreCase);
+            if (!isExchangePoDetails
+                || string.Equals(existingReceipt.Status, "DRAFT", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new BusinessException(
+                    "PO_HAS_ACTIVE_RECEIPT",
+                    $"Đơn hàng {po.Code} đã có phiếu nhập kho {existingReceipt.Code} ở trạng thái {existingReceipt.Status}. Không thể tạo thêm phiếu nhập mới.");
+            }
         }
 
         return new PoReceiptDetailsDto
@@ -117,6 +122,8 @@ public class GoodsReceiptService : IGoodsReceiptService
             DeliveryDate = po.DeliveryDate,
             TotalQty = po.TotalQty,
             TotalAmount = po.TotalAmount,
+            SourceType = po.SourceType,
+            SourceSupplierReturnId = po.SourceSupplierReturnId,
             Items = po.Details.Select(d => new PoReceiptLineItemDto
             {
                 PurchaseOrderDetailId = d.Id,
@@ -817,6 +824,13 @@ public class GoodsReceiptService : IGoodsReceiptService
         IReadOnlyDictionary<Guid, (bool HasBatches, string Name)>? productFlags,
         CancellationToken cancellationToken)
     {
+        var isExchangePo = po != null
+            && string.Equals(po.SourceType, "SUPPLIER_RETURN", StringComparison.OrdinalIgnoreCase);
+
+        // PO đổi hàng: lô nhập phải khác lô hàng trả — tránh cộng/trừ cùng một BranchStock (net = 0).
+        if (isExchangePo)
+            await EnsureExchangeIncomingBatchesAreDistinctAsync(tenantId, po!, receipt, productFlags, cancellationToken);
+
         // 1. Cập nhật tồn kho chi nhánh BranchStocks, tạo lô FEFO (ProductBatch) và tính giá vốn bình quân gia quyền (MovingAverageCost)
         foreach (var line in receipt.Lines.Where(l => l.AcceptedQty > 0))
         {
@@ -942,8 +956,6 @@ public class GoodsReceiptService : IGoodsReceiptService
         // 2. Cập nhật PO nguồn
         if (po != null)
         {
-            var isExchangePo = string.Equals(po.SourceType, "SUPPLIER_RETURN", StringComparison.OrdinalIgnoreCase);
-
             foreach (var line in receipt.Lines)
             {
                 if (line.PurchaseOrderDetailId.HasValue)
@@ -971,15 +983,17 @@ public class GoodsReceiptService : IGoodsReceiptService
             if (isExchangePo)
             {
                 // PO đổi hàng: bắt buộc nhận đủ — không đóng thiếu; có thể nhận nhiều đợt.
+                // Trừ tồn hàng trả + cộng tồn GRN (đã cộng ở bước trên) khi nhập thành công từng đợt.
                 if (receivedTotal + 0.0001m < orderedTotal)
                 {
                     po.Status = "PARTIALLY_RECEIVED";
                     var remainNote =
                         $"[EXCHANGE] Đã nhận {receivedTotal:0.##}/{orderedTotal:0.##}, còn thiếu {orderedTotal - receivedTotal:0.##}. Chờ NCC giao đủ trên cùng PO.";
                     po.Note = string.IsNullOrWhiteSpace(po.Note) ? remainNote : $"{po.Note} | {remainNote}";
-                    await UpdateExchangeReturnReplacementStatusAsync(
+                    await ApplyExchangeReceiptToSupplierReturnAsync(
                         tenantId,
-                        po.SourceSupplierReturnId,
+                        po,
+                        receipt,
                         "PARTIALLY_RECEIVED",
                         completeReturn: false,
                         cancellationToken);
@@ -987,9 +1001,10 @@ public class GoodsReceiptService : IGoodsReceiptService
                 else
                 {
                     po.Status = "COMPLETED";
-                    await UpdateExchangeReturnReplacementStatusAsync(
+                    await ApplyExchangeReceiptToSupplierReturnAsync(
                         tenantId,
-                        po.SourceSupplierReturnId,
+                        po,
+                        receipt,
                         "COMPLETED",
                         completeReturn: true,
                         cancellationToken);
@@ -1213,28 +1228,164 @@ public class GoodsReceiptService : IGoodsReceiptService
         };
     }
 
-    private async Task UpdateExchangeReturnReplacementStatusAsync(
+    /// <summary>
+    /// Đảm bảo mã lô hàng đổi khác mã lô hàng trả — tránh cộng rồi trừ cùng một BranchStock.
+    /// </summary>
+    private async Task EnsureExchangeIncomingBatchesAreDistinctAsync(
         string tenantId,
-        Guid? sourceSupplierReturnId,
+        PurchaseOrder po,
+        GoodsReceipt receipt,
+        IReadOnlyDictionary<Guid, (bool HasBatches, string Name)>? productFlags,
+        CancellationToken cancellationToken)
+    {
+        Domain.Entities.Supplier.SupplierReturn? ret = null;
+        if (po.SourceSupplierReturnId.HasValue && _supplierReturnRepository != null)
+        {
+            ret = await _supplierReturnRepository.GetByIdAsync(
+                tenantId, po.SourceSupplierReturnId.Value, cancellationToken);
+        }
+
+        var usedCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var returnBatchByProduct = new Dictionary<Guid, HashSet<string>>();
+
+        if (ret != null)
+        {
+            foreach (var rl in ret.Lines)
+            {
+                if (string.IsNullOrWhiteSpace(rl.BatchCode))
+                    continue;
+                if (!returnBatchByProduct.TryGetValue(rl.ProductId, out var set))
+                {
+                    set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    returnBatchByProduct[rl.ProductId] = set;
+                }
+
+                set.Add(rl.BatchCode.Trim());
+            }
+        }
+
+        foreach (var line in receipt.Lines.Where(l => l.AcceptedQty > 0))
+        {
+            var hasBatches = productFlags != null && productFlags.TryGetValue(line.ProductId, out var flag)
+                ? flag.HasBatches
+                : line.Product?.HasBatches == true;
+            if (!hasBatches)
+                continue;
+
+            string? linkedReturnBatch = null;
+            if (line.PurchaseOrderDetailId.HasValue)
+            {
+                var pod = po.Details.FirstOrDefault(d => d.Id == line.PurchaseOrderDetailId.Value);
+                if (pod?.SourceSupplierReturnLineId != null && ret != null)
+                {
+                    linkedReturnBatch = ret.Lines
+                        .FirstOrDefault(l => l.Id == pod.SourceSupplierReturnLineId.Value)
+                        ?.BatchCode;
+                }
+            }
+
+            var current = string.IsNullOrWhiteSpace(line.BatchCode) ? null : line.BatchCode.Trim();
+            var conflictsReturn = !string.IsNullOrWhiteSpace(current)
+                && (
+                    (!string.IsNullOrWhiteSpace(linkedReturnBatch)
+                     && string.Equals(current, linkedReturnBatch.Trim(), StringComparison.OrdinalIgnoreCase))
+                    || (returnBatchByProduct.TryGetValue(line.ProductId, out var retBatches)
+                        && retBatches.Contains(current))
+                );
+
+            var needsNew = string.IsNullOrWhiteSpace(current) || conflictsReturn
+                || (current != null && usedCodes.Contains(current));
+
+            if (needsNew)
+            {
+                var sku = !string.IsNullOrWhiteSpace(line.Product?.ProductCode)
+                    ? line.Product!.ProductCode!
+                    : line.ProductId.ToString("N")[..8].ToUpperInvariant();
+                sku = sku.Replace(" ", "", StringComparison.Ordinal).ToUpperInvariant();
+                var ymd = receipt.ReceivedAtUtc.ToString("yyyyMMdd");
+                var baseCode = $"BAT-EX-{sku}-{ymd}";
+                var candidate = baseCode;
+                var n = 1;
+                while (usedCodes.Contains(candidate)
+                       || (returnBatchByProduct.TryGetValue(line.ProductId, out var rb) && rb.Contains(candidate)))
+                {
+                    n++;
+                    candidate = $"{baseCode}-{n}";
+                }
+
+                line.BatchCode = candidate;
+                usedCodes.Add(candidate);
+            }
+            else if (current != null)
+            {
+                usedCodes.Add(current);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Khi nhập GRN từ PO đổi hàng: trừ tồn lô trả (giải phóng Reserved + giảm OnHand)
+    /// và ghi nhận HandedOverQty. Nhập đủ → Status = COMPLETED (bàn giao hoàn tất).
+    /// </summary>
+    private async Task ApplyExchangeReceiptToSupplierReturnAsync(
+        string tenantId,
+        PurchaseOrder po,
+        GoodsReceipt receipt,
         string replacementStatus,
         bool completeReturn,
         CancellationToken cancellationToken)
     {
-        if (!sourceSupplierReturnId.HasValue || _supplierReturnRepository == null)
+        if (!po.SourceSupplierReturnId.HasValue || _supplierReturnRepository == null)
             return;
 
-        var ret = await _supplierReturnRepository.GetByIdAsync(tenantId, sourceSupplierReturnId.Value, cancellationToken);
+        var ret = await _supplierReturnRepository.GetByIdAsync(
+            tenantId, po.SourceSupplierReturnId.Value, cancellationToken);
         if (ret == null)
             return;
 
-        ret.ReplacementStatus = replacementStatus;
-        if (completeReturn
-            && ret.TotalApprovedQty > 0
-            && ret.TotalHandedOverQty + 0.0001m >= ret.TotalApprovedQty
-            && (ret.SettlementStatus is "PAID" or "NOT_REQUIRED" or "SETTLED"
-                || ret.StorePayableAmount <= 0
-                || ret.StorePaidAmount + 0.0001m >= ret.StorePayableAmount))
+        foreach (var grLine in receipt.Lines.Where(l => l.AcceptedQty > 0))
         {
+            if (!grLine.PurchaseOrderDetailId.HasValue)
+                continue;
+
+            var pod = po.Details.FirstOrDefault(d => d.Id == grLine.PurchaseOrderDetailId.Value);
+            if (pod?.SourceSupplierReturnLineId == null)
+                continue;
+
+            var retLine = ret.Lines.FirstOrDefault(l => l.Id == pod.SourceSupplierReturnLineId.Value);
+            if (retLine == null)
+                continue;
+
+            var approved = retLine.SupplierAcceptedQty > 0 ? retLine.SupplierAcceptedQty : retLine.ApprovedQty;
+            var remaining = Math.Max(0, approved - retLine.HandedOverQty);
+            if (remaining <= 0)
+                continue;
+
+            // PO đổi / GRN exchange dùng ĐVT tồn (base) giống dòng phiếu trả.
+            var deduct = Math.Min(grLine.AcceptedQty, remaining);
+            if (deduct <= 0)
+                continue;
+
+            retLine.HandedOverQty += deduct;
+
+            var stock = await _repository.GetBranchStockAsync(
+                tenantId, ret.BranchId, retLine.ProductId, retLine.BatchCode, cancellationToken);
+            if (stock != null)
+            {
+                stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - deduct);
+                stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - deduct);
+                stock.UpdatedAt = DateTime.UtcNow;
+            }
+        }
+
+        ret.TotalHandedOverQty = ret.Lines.Sum(l => l.HandedOverQty);
+        ret.ReplacementStatus = replacementStatus;
+        ret.HandedOverAt ??= DateTime.UtcNow;
+        ret.HandedOverBy ??= "Hệ thống (nhập GRN đổi hàng)";
+
+        if (completeReturn)
+        {
+            // Nhập đủ hàng đổi → bàn giao hoàn tất.
             ret.Status = "COMPLETED";
         }
 

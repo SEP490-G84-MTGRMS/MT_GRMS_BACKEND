@@ -56,6 +56,8 @@ public record StocktakeLineDto(
     decimal VarianceQty,
     string? DefectiveReasonCode,
     string? NearExpiryAction,
+    string? DamagedAction,
+    string? ExpiredAction,
     decimal ReturnedQty,
     decimal EligibleReturnQty,
     Guid? OriginalGrnId,
@@ -120,6 +122,12 @@ public record UpdateStocktakeCommand(
     bool AutoSubmit = false
 );
 
+public record ReviewStocktakeLineActionDto(
+    Guid StocktakeLineId,
+    string? DamagedAction, // WRITE_OFF | RETURN_SUPPLIER
+    string? ExpiredAction  // WRITE_OFF | RETURN_SUPPLIER
+);
+
 public record ReviewStocktakeCommand(
     string Decision, // APPROVE, REJECT, NEEDS_RECOUNT
     string? ReviewNote,
@@ -127,7 +135,11 @@ public record ReviewStocktakeCommand(
     /// <summary>
     /// RULE-03 Q7: bắt buộc true khi phiếu có dòng VarianceQty &gt; 0 (SURPLUS) mới được cộng tồn.
     /// </summary>
-    bool ConfirmSurplusFound = false
+    bool ConfirmSurplusFound = false,
+    /// <summary>
+    /// Quyết định xử lý hư hỏng / hết hạn theo từng dòng trước khi trừ tồn hoặc giữ để trả NCC.
+    /// </summary>
+    List<ReviewStocktakeLineActionDto>? LineActions = null
 );
 
 public record CreateReturnFromStocktakeLineItemDto(

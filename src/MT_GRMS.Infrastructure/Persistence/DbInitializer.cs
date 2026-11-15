@@ -521,6 +521,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
                 ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""ExchangePoOrderedQty"" numeric(18,3) NOT NULL DEFAULT 0;
                 ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""ReplacementUnitPrice"" numeric(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""CategoryId"" uuid NULL;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""CategoryName"" character varying(200) NULL;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""StoreCostSharePercentSnapshot"" numeric(5,2) NULL;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""SupplierCostSharePercentSnapshot"" numeric(5,2) NULL;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""LineReplacementValue"" numeric(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""StorePayableAmount"" numeric(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""SupplierBearAmount"" numeric(18,2) NOT NULL DEFAULT 0;
+
+                ALTER TABLE ""SupplierReturnPolicies"" ADD COLUMN IF NOT EXISTS ""CostShareByCategoryEnabled"" boolean NOT NULL DEFAULT FALSE;
+
+                CREATE TABLE IF NOT EXISTS ""SupplierReturnPolicyCategoryCostShares"" (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""PolicyId"" uuid NOT NULL,
+                    ""CategoryId"" uuid NOT NULL,
+                    ""StoreCostSharePercent"" numeric(5,2) NOT NULL DEFAULT 0,
+                    ""SupplierCostSharePercent"" numeric(5,2) NOT NULL DEFAULT 0,
+                    ""CreatedBy"" uuid NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""UpdatedAt"" timestamp without time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT FALSE
+                );
+
+                DROP INDEX IF EXISTS ""IX_SupplierReturnPolicyCategoryCostShares_Tenant_Policy_Category"";
+                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_SupplierReturnPolicyCategoryCostShares_Tenant_Policy_Category""
+                    ON ""SupplierReturnPolicyCategoryCostShares"" (""TenantId"", ""PolicyId"", ""CategoryId"")
+                    WHERE (""IsDeleted"" = FALSE);
 
                 ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SourceType"" character varying(50) NULL;
                 ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SourceSupplierReturnId"" uuid NULL;
