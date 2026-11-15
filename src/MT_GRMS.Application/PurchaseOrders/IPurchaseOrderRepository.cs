@@ -46,6 +46,7 @@ public interface IPurchaseOrderRepository
         DateTime? dateTo,
         int pageIndex,
         int pageSize,
+        string? keyword,
         CancellationToken cancellationToken = default);
 
     Task<PurchaseOrder?> GetPurchaseOrderByIdAsync(

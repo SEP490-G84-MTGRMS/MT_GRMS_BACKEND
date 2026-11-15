@@ -15,9 +15,7 @@ public class ShiftConfig : BaseTenantEntity
     public TimeSpan StartTime { get; set; }               // Giờ bắt đầu chuẩn (VD: 17:00:00)
     public TimeSpan EndTime { get; set; }                 // Giờ kết thúc chuẩn (VD: 21:00:00)
     public decimal DurationHours { get; set; } = 4.00m;   // Tổng giờ làm việc (VD: 4.00)
-    public TimeSpan AllowedCheckInStart { get; set; }     // Khung check-in sớm (VD: 14:00:00)
-    public TimeSpan AllowedCheckInEnd { get; set; }       // Khung check-in trễ (VD: 00:00:00)
-    public bool IsCheckInNextDay { get; set; } = false;   // Kết thúc chấm công vào hôm sau
+    public bool IsCheckInNextDay { get; set; } = false;   // Kết thúc ca vào hôm sau (ca qua đêm)
     public string? Description { get; set; }              // Ghi chú ca làm việc
     public bool IsActive { get; set; } = true;            // Trạng thái hoạt động (true: đang dùng, false: ngừng hoạt động)
 

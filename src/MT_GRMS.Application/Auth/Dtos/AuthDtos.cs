@@ -13,7 +13,8 @@ public record LoginResponse(
     string AccessToken,
     string RefreshToken,
     DateTime ExpiresAt,
-    UserInfo User
+    UserInfo User,
+    DateTime? RefreshExpiresAt = null
 );
 
 public record SendLoginOtpResponse(
@@ -47,7 +48,8 @@ public record UserInfo(
     string RoleName,
     Guid? BranchId,
     string TenantId,
-    bool IsAdmin = false
+    bool IsAdmin = false,
+    bool IsTwoFactorEnabled = false
 )
 {
     public string Role => RoleName;

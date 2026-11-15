@@ -39,5 +39,18 @@ public interface IScheduleApprovalService
         string reviewerUserId,
         ReviewScheduleApprovalRequestDto dto,
         CancellationToken cancellationToken = default);
+
+    Task<ScheduleApprovalRequestDto> UpdateRequestAsync(
+        Guid requestId,
+        string currentUserId,
+        bool isOwnerOrAdmin,
+        CreateScheduleApprovalRequestDto dto,
+        CancellationToken cancellationToken = default);
+
+    Task<bool> DeleteRequestAsync(
+        Guid requestId,
+        string currentUserId,
+        bool isOwnerOrAdmin,
+        CancellationToken cancellationToken = default);
 }
 

@@ -29,7 +29,8 @@ public record CreateEmployeeRequest(
     string? UserId = null,
     string? UserName = null,
     string? Password = null,
-    string? Role = SystemRoles.Staff
+    string? Role = SystemRoles.Staff,
+    string? EmployeeCode = null
 );
 
 public record UpdateEmployeeRequest(
@@ -57,7 +58,8 @@ public record UpdateEmployeeRequest(
     string? UserId = null,
     string? UserName = null,
     string? Password = null,
-    string? Role = SystemRoles.Staff
+    string? Role = SystemRoles.Staff,
+    string? EmployeeCode = null
 );
 
 public record UpdateEmployeeStatusRequest(

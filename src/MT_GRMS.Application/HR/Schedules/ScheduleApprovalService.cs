@@ -8,6 +8,7 @@ namespace MT_GRMS.Application.HR.Schedules;
 
 public class ScheduleApprovalService : IScheduleApprovalService
 {
+    private static DateTime VnNow => DateTime.UtcNow.AddHours(7);
     private readonly IScheduleApprovalRequestRepository _approvalRepository;
     private readonly IScheduleRepository _scheduleRepository;
     private readonly IEmployeeRepository _employeeRepository;
@@ -37,7 +38,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
         var schedule = await _scheduleRepository.GetByIdAsync(scheduleId, cancellationToken)
             ?? throw new KeyNotFoundException("Không tìm thấy ca làm việc chỉ định.");
 
-        if (schedule.PayslipId.HasValue)
+        if (schedule.PayslipId.HasValue && (schedule.Payslip == null || schedule.Payslip.Status != PayslipStatus.Unpaid))
         {
             throw new InvalidOperationException("Ca làm việc đã được chốt bảng lương, không thể gửi yêu cầu.");
         }
@@ -48,61 +49,13 @@ public class ScheduleApprovalService : IScheduleApprovalService
             throw new UnauthorizedAccessException("Bạn chỉ được phép gửi yêu cầu cho ca làm việc của chính mình.");
         }
 
-        var hasDuplicate = await _approvalRepository.HasPendingRequestOfTypeAsync(scheduleId, dto.RequestType, cancellationToken);
-        if (hasDuplicate)
-        {
-            throw new InvalidOperationException("Đã có yêu cầu cùng loại đang chờ phê duyệt cho ca làm này.");
-        }
+        var existingRequests = await _approvalRepository.GetByScheduleIdAsync(scheduleId, cancellationToken);
+        ValidateRequestCompatibility(schedule, existingRequests, dto.RequestType);
 
-        if (dto.RequestType == ScheduleRequestType.ShiftSwap)
-        {
-            if (schedule.Status == ScheduleStatus.Completed || schedule.Status == ScheduleStatus.Cancelled)
-            {
-                throw new InvalidOperationException("Chỉ có thể xin đổi ca khi ca chưa kết thúc.");
-            }
-
-            if (!dto.TargetEmployeeId.HasValue || dto.TargetEmployeeId.Value == Guid.Empty)
-            {
-                throw new ArgumentException("Vui lòng chọn đồng nghiệp muốn đổi ca cùng.");
-            }
-
-            if (dto.TargetEmployeeId.Value == schedule.EmployeeId)
-            {
-                throw new InvalidOperationException("Không thể tự đổi ca với chính mình.");
-            }
-
-            if (dto.SwapType == ShiftSwapType.CrossSwap)
-            {
-                if (!dto.TargetScheduleId.HasValue || dto.TargetScheduleId.Value == Guid.Empty)
-                {
-                    throw new ArgumentException("Vui lòng chọn ca của đồng nghiệp muốn đổi chéo.");
-                }
-
-                var targetSchedule = await _scheduleRepository.GetByIdAsync(dto.TargetScheduleId.Value, cancellationToken)
-                    ?? throw new KeyNotFoundException("Không tìm thấy ca của đồng nghiệp muốn đổi.");
-
-                if (targetSchedule.PayslipId.HasValue)
-                {
-                    throw new InvalidOperationException("Ca làm việc của đồng nghiệp đã chốt bảng lương, không thể đổi.");
-                }
-
-                if (targetSchedule.BranchId != schedule.BranchId)
-                {
-                    throw new InvalidOperationException("Chỉ được đổi ca với đồng nghiệp làm cùng chi nhánh.");
-                }
-            }
-        }
-        else if (dto.RequestType == ScheduleRequestType.LeaveRequest)
-        {
-            if (schedule.Status == ScheduleStatus.Completed || schedule.Status == ScheduleStatus.Cancelled)
-            {
-                throw new InvalidOperationException("Chỉ có thể xin nghỉ cho ca chưa kết thúc.");
-            }
-        }
-        else if (dto.RequestType == ScheduleRequestType.CheckInIncident)
+        if (dto.RequestType == ScheduleRequestType.CheckInIncident)
         {
             // Tự động kích hoạt CheckInTime theo giờ UTC+7 để nhân viên đủ điều kiện mở phiên bán hàng POS ngay lập tức
-            var checkIn = dto.RequestedCheckInTime ?? DateTime.UtcNow.AddHours(7);
+            var checkIn = dto.RequestedCheckInTime ?? VnNow;
             if (!schedule.CheckInTime.HasValue)
             {
                 schedule.CheckInTime = checkIn;
@@ -131,16 +84,13 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 _scheduleRepository.Update(schedule);
             }
         }
+        else if (dto.RequestType == ScheduleRequestType.Overtime)
+        {
+            var requestedOtMinutes = dto.RequestedOvertimeMinutes ?? CalculateExtraMinutesOutsideShift(schedule);
+            await ValidateDailyWorkAndOvertimeLimitAsync(schedule, requestedOtMinutes, null, cancellationToken);
+        }
 
-        var imageUrls = new List<string>();
-        if (dto.EvidenceImageUrls != null && dto.EvidenceImageUrls.Count > 0)
-        {
-            imageUrls.AddRange(dto.EvidenceImageUrls.Where(u => !string.IsNullOrWhiteSpace(u)).Select(u => u.Trim()));
-        }
-        if (!string.IsNullOrWhiteSpace(dto.EvidenceImageUrl) && !imageUrls.Contains(dto.EvidenceImageUrl.Trim()))
-        {
-            imageUrls.Insert(0, dto.EvidenceImageUrl.Trim());
-        }
+        var imageUrls = BuildImageUrls(dto);
 
         var request = new ScheduleApprovalRequest
         {
@@ -150,19 +100,14 @@ public class ScheduleApprovalService : IScheduleApprovalService
             RequestType = dto.RequestType,
             Status = ScheduleApprovalStatus.Pending,
             Reason = dto.Reason.Trim(),
-            EvidenceImageUrl = imageUrls.FirstOrDefault(),
             EvidenceImageUrls = imageUrls,
             LeaveType = dto.LeaveType,
             IsPaidLeave = dto.IsPaidLeaveRequested,
-            SwapType = dto.SwapType,
-            TargetEmployeeId = dto.TargetEmployeeId,
-            TargetScheduleId = dto.TargetScheduleId,
-            PeerConfirmed = (dto.RequestType == ScheduleRequestType.ShiftSwap) ? false : null,
             RequestedCheckInTime = dto.RequestedCheckInTime,
             RequestedCheckOutTime = dto.RequestedCheckOutTime,
             RequestedOvertimeMinutes = dto.RequestedOvertimeMinutes,
             TenantId = schedule.TenantId,
-            CreatedAt = DateTime.UtcNow
+            CreatedAt = VnNow
         };
 
         await _approvalRepository.AddAsync(request, cancellationToken);
@@ -213,38 +158,13 @@ public class ScheduleApprovalService : IScheduleApprovalService
         return new PendingApprovalRequestsResponse(dtos.Count, dtos);
     }
 
-    public async Task<bool> PeerConfirmShiftSwapAsync(
+    public Task<bool> PeerConfirmShiftSwapAsync(
         Guid requestId,
         string currentUserId,
         PeerConfirmShiftSwapDto dto,
         CancellationToken cancellationToken = default)
     {
-        var request = await _approvalRepository.GetByIdWithDetailsAsync(requestId, cancellationToken)
-            ?? throw new KeyNotFoundException("Không tìm thấy yêu cầu.");
-
-        if (request.RequestType != ScheduleRequestType.ShiftSwap || request.Status != ScheduleApprovalStatus.Pending)
-        {
-            throw new InvalidOperationException("Yêu cầu này không phải là đơn đổi ca đang chờ xử lý.");
-        }
-
-        var currentEmployee = await ResolveEmployeeAsync(currentUserId, cancellationToken);
-        if (currentEmployee == null || currentEmployee.Id != request.TargetEmployeeId)
-        {
-            throw new UnauthorizedAccessException("Chỉ đồng nghiệp được đề nghị đổi ca mới có quyền xác nhận yêu cầu này.");
-        }
-
-        request.PeerConfirmed = dto.IsAgreed;
-        request.PeerConfirmedAt = DateTime.UtcNow;
-
-        if (!dto.IsAgreed)
-        {
-            request.Status = ScheduleApprovalStatus.Rejected;
-            request.ReviewNote = $"Đồng nghiệp từ chối đổi ca: {dto.Note}";
-        }
-
-        _approvalRepository.Update(request);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
-        return true;
+        throw new InvalidOperationException("Quy trình đổi ca hiện do Quản lý / Chủ cửa hàng phê duyệt trực tiếp.");
     }
 
     public async Task<bool> ReviewRequestAsync(
@@ -265,13 +185,13 @@ public class ScheduleApprovalService : IScheduleApprovalService
             ?? await _scheduleRepository.GetByIdAsync(request.ScheduleId, cancellationToken)
             ?? throw new KeyNotFoundException("Không tìm thấy ca làm việc liên kết.");
 
-        if (schedule.PayslipId.HasValue)
+        if (schedule.PayslipId.HasValue && (schedule.Payslip == null || schedule.Payslip.Status != PayslipStatus.Unpaid))
         {
             throw new InvalidOperationException("Ca làm việc đã được chốt bảng lương, không thể phê duyệt.");
         }
 
         request.ApprovedBy = reviewerUserId;
-        request.ApprovedAt = DateTime.UtcNow;
+        request.ApprovedAt = VnNow;
         request.ReviewNote = dto.ReviewNote;
 
         if (!dto.IsApproved)
@@ -294,36 +214,14 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
                 schedule.ApprovalType = schedule.IsPaidLeave ? "PAID_LEAVE" : "UNPAID_LEAVE";
                 schedule.ApprovedBy = reviewerUserId;
-                schedule.ApprovedAt = DateTime.UtcNow;
+                schedule.ApprovedAt = VnNow;
                 break;
 
             case ScheduleRequestType.ShiftSwap:
                 schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
                 schedule.ApprovalType = "SHIFT_SWAP";
                 schedule.ApprovedBy = reviewerUserId;
-                schedule.ApprovedAt = DateTime.UtcNow;
-
-                if (request.SwapType == ShiftSwapType.CrossSwap && request.TargetScheduleId.HasValue)
-                {
-                    var targetSchedule = request.TargetSchedule
-                        ?? await _scheduleRepository.GetByIdAsync(request.TargetScheduleId.Value, cancellationToken);
-
-                    if (targetSchedule != null)
-                    {
-                        var tempEmployeeId = schedule.EmployeeId;
-                        schedule.EmployeeId = targetSchedule.EmployeeId;
-                        targetSchedule.EmployeeId = tempEmployeeId;
-                        targetSchedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
-                        targetSchedule.ApprovalType = "SHIFT_SWAP";
-                        targetSchedule.ApprovedBy = reviewerUserId;
-                        targetSchedule.ApprovedAt = DateTime.UtcNow;
-                        _scheduleRepository.Update(targetSchedule);
-                    }
-                }
-                else if (request.TargetEmployeeId.HasValue)
-                {
-                    schedule.EmployeeId = request.TargetEmployeeId.Value;
-                }
+                schedule.ApprovedAt = VnNow;
                 break;
 
             case ScheduleRequestType.CheckInIncident:
@@ -340,21 +238,28 @@ public class ScheduleApprovalService : IScheduleApprovalService
                         : 0;
                 }
 
+                var checkOutFromIncident = dto.ApprovedCheckOutTime ?? request.RequestedCheckOutTime;
+                if (checkOutFromIncident.HasValue && !schedule.CheckOutTime.HasValue)
+                {
+                    schedule.CheckOutTime = checkOutFromIncident.Value;
+                    schedule.CheckOutMethod = "INCIDENT_EXPLAINED";
+                    request.ApprovedCheckOutTime = checkOutFromIncident.Value;
+                }
+
                 schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
                 schedule.ApprovalType = "INCIDENT_RESOLVED";
                 schedule.ApprovedBy = reviewerUserId;
-                schedule.ApprovedAt = DateTime.UtcNow;
+                schedule.ApprovedAt = VnNow;
 
                 if (schedule.CheckInTime.HasValue && schedule.CheckOutTime.HasValue)
                 {
-                    var hours = (decimal)(schedule.CheckOutTime.Value - schedule.CheckInTime.Value).TotalHours;
-                    schedule.ActualWorkHours = Math.Max(0, Math.Round(hours, 2));
+                    schedule.ActualWorkHours = CalculateClampedInShiftHours(schedule);
                     schedule.Status = ScheduleStatus.Completed;
                 }
                 break;
 
             case ScheduleRequestType.CheckOutIncident:
-                var checkOut = dto.ApprovedCheckOutTime ?? request.RequestedCheckOutTime ?? DateTime.UtcNow;
+                var checkOut = dto.ApprovedCheckOutTime ?? request.RequestedCheckOutTime ?? VnNow;
                 schedule.CheckOutTime = checkOut;
                 schedule.CheckOutMethod = "INCIDENT_EXPLAINED";
                 request.ApprovedCheckOutTime = checkOut;
@@ -367,32 +272,278 @@ public class ScheduleApprovalService : IScheduleApprovalService
 
                 if (schedule.CheckInTime.HasValue)
                 {
-                    var hours = (decimal)(schedule.CheckOutTime.Value - schedule.CheckInTime.Value).TotalHours;
-                    schedule.ActualWorkHours = Math.Max(0, Math.Round(hours, 2));
+                    schedule.ActualWorkHours = CalculateClampedInShiftHours(schedule);
                 }
 
                 schedule.Status = ScheduleStatus.Completed;
                 schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
                 schedule.ApprovalType = "INCIDENT_RESOLVED";
                 schedule.ApprovedBy = reviewerUserId;
-                schedule.ApprovedAt = DateTime.UtcNow;
+                schedule.ApprovedAt = VnNow;
                 break;
 
             case ScheduleRequestType.Overtime:
-                var overtimeMinutes = dto.ApprovedOvertimeMinutes ?? request.RequestedOvertimeMinutes ?? 0;
+                var extraOutsideMinutes = CalculateExtraMinutesOutsideShift(schedule);
+                int overtimeMinutes;
+                if (dto.ApprovedOvertimeMinutes.HasValue)
+                {
+                    overtimeMinutes = dto.ApprovedOvertimeMinutes.Value;
+                }
+                else if (extraOutsideMinutes > 0)
+                {
+                    overtimeMinutes = request.RequestedOvertimeMinutes.HasValue && request.RequestedOvertimeMinutes.Value > 0
+                        ? Math.Min(request.RequestedOvertimeMinutes.Value, extraOutsideMinutes)
+                        : extraOutsideMinutes;
+                }
+                else
+                {
+                    overtimeMinutes = request.RequestedOvertimeMinutes ?? 0;
+                }
+
+                await ValidateDailyWorkAndOvertimeLimitAsync(schedule, overtimeMinutes, request.Id, cancellationToken);
                 request.ApprovedOvertimeMinutes = overtimeMinutes;
                 schedule.OvertimeMinutes += overtimeMinutes;
                 schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
                 schedule.ApprovalType = "OVERTIME";
                 schedule.ApprovedBy = reviewerUserId;
-                schedule.ApprovedAt = DateTime.UtcNow;
+                schedule.ApprovedAt = VnNow;
                 break;
         }
 
         _scheduleRepository.Update(schedule);
         _approvalRepository.Update(request);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
         return true;
+    }
+
+    public async Task<ScheduleApprovalRequestDto> UpdateRequestAsync(
+        Guid requestId,
+        string currentUserId,
+        bool isOwnerOrAdmin,
+        CreateScheduleApprovalRequestDto dto,
+        CancellationToken cancellationToken = default)
+    {
+        var (request, schedule) = await LoadModifiablePendingRequestAsync(
+            requestId,
+            currentUserId,
+            isOwnerOrAdmin,
+            "chỉnh sửa",
+            cancellationToken);
+
+        if (dto.RequestType != request.RequestType)
+        {
+            throw new InvalidOperationException("Không thể thay đổi loại yêu cầu khi chỉnh sửa phiếu.");
+        }
+
+        if (schedule != null)
+        {
+            if (request.RequestType == ScheduleRequestType.CheckInIncident &&
+                dto.RequestedCheckInTime.HasValue &&
+                schedule.CheckInMethod == "INCIDENT_PENDING")
+            {
+                schedule.CheckInTime = dto.RequestedCheckInTime.Value;
+                var shiftStart = schedule.WorkDate.Date + schedule.PlannedStartTime;
+                schedule.LateMinutes = schedule.CheckInTime > shiftStart
+                    ? (int)(schedule.CheckInTime.Value - shiftStart).TotalMinutes
+                    : 0;
+                _scheduleRepository.Update(schedule);
+            }
+            else if (request.RequestType == ScheduleRequestType.CheckOutIncident &&
+                     dto.RequestedCheckOutTime.HasValue &&
+                     schedule.CheckOutMethod == "INCIDENT_PENDING")
+            {
+                schedule.CheckOutTime = dto.RequestedCheckOutTime.Value;
+                _scheduleRepository.Update(schedule);
+            }
+            else if (request.RequestType == ScheduleRequestType.Overtime)
+            {
+                var requestedOtMinutes = dto.RequestedOvertimeMinutes ?? CalculateExtraMinutesOutsideShift(schedule);
+                await ValidateDailyWorkAndOvertimeLimitAsync(schedule, requestedOtMinutes, request.Id, cancellationToken);
+            }
+        }
+
+        var imageUrls = BuildImageUrls(dto);
+        request.Reason = dto.Reason.Trim();
+        request.EvidenceImageUrls = imageUrls;
+        request.LeaveType = request.RequestType == ScheduleRequestType.LeaveRequest ? dto.LeaveType : null;
+        request.IsPaidLeave = request.RequestType == ScheduleRequestType.LeaveRequest && dto.IsPaidLeaveRequested;
+        request.RequestedCheckInTime = request.RequestType == ScheduleRequestType.CheckInIncident ? dto.RequestedCheckInTime : null;
+        request.RequestedCheckOutTime = request.RequestType == ScheduleRequestType.CheckOutIncident ? dto.RequestedCheckOutTime : null;
+        request.RequestedOvertimeMinutes = request.RequestType == ScheduleRequestType.Overtime ? dto.RequestedOvertimeMinutes : null;
+
+        _approvalRepository.Update(request);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        var updated = await _approvalRepository.GetByIdWithDetailsAsync(request.Id, cancellationToken);
+        return MapToDto(updated ?? request);
+    }
+
+    public async Task<bool> DeleteRequestAsync(
+        Guid requestId,
+        string currentUserId,
+        bool isOwnerOrAdmin,
+        CancellationToken cancellationToken = default)
+    {
+        var (request, schedule) = await LoadModifiablePendingRequestAsync(
+            requestId,
+            currentUserId,
+            isOwnerOrAdmin,
+            "xóa",
+            cancellationToken);
+
+        if (schedule != null)
+        {
+            if (request.RequestType == ScheduleRequestType.CheckInIncident && schedule.CheckInMethod == "INCIDENT_PENDING")
+            {
+                schedule.CheckInTime = null;
+                schedule.CheckInMethod = null;
+                schedule.LateMinutes = 0;
+                if (schedule.Status == ScheduleStatus.InProgress)
+                {
+                    schedule.Status = ScheduleStatus.Published;
+                }
+                _scheduleRepository.Update(schedule);
+            }
+            else if (request.RequestType == ScheduleRequestType.CheckOutIncident && schedule.CheckOutMethod == "INCIDENT_PENDING")
+            {
+                schedule.CheckOutTime = null;
+                schedule.CheckOutMethod = null;
+                _scheduleRepository.Update(schedule);
+            }
+        }
+
+        _approvalRepository.Delete(request);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
+    private async Task<(ScheduleApprovalRequest Request, EmployeeSchedule? Schedule)> LoadModifiablePendingRequestAsync(
+        Guid requestId,
+        string currentUserId,
+        bool isOwnerOrAdmin,
+        string actionLabel,
+        CancellationToken cancellationToken)
+    {
+        var request = await _approvalRepository.GetByIdWithDetailsAsync(requestId, cancellationToken)
+            ?? throw new KeyNotFoundException("Không tìm thấy phiếu yêu cầu.");
+
+        if (request.Status != ScheduleApprovalStatus.Pending)
+        {
+            throw new InvalidOperationException($"Chỉ có thể {actionLabel} phiếu yêu cầu đang ở trạng thái chờ duyệt.");
+        }
+
+        var schedule = await _scheduleRepository.GetByIdAsync(request.ScheduleId, cancellationToken);
+        if (schedule != null && schedule.PayslipId.HasValue && (schedule.Payslip == null || schedule.Payslip.Status != PayslipStatus.Unpaid))
+        {
+            throw new InvalidOperationException("Ca làm việc đã được chốt bảng lương, không thể thao tác.");
+        }
+
+        if (!isOwnerOrAdmin)
+        {
+            var currentEmployee = await ResolveEmployeeAsync(currentUserId, cancellationToken);
+            if (currentEmployee == null || currentEmployee.Id != request.EmployeeId)
+            {
+                throw new UnauthorizedAccessException($"Bạn chỉ được phép {actionLabel} phiếu yêu cầu của chính mình.");
+            }
+        }
+
+        return (request, schedule);
+    }
+
+    private static void ValidateRequestCompatibility(
+        EmployeeSchedule schedule,
+        IReadOnlyList<ScheduleApprovalRequest> existingRequests,
+        ScheduleRequestType targetType)
+    {
+        var pendingRequests = existingRequests
+            .Where(r => !r.IsDeleted && r.Status == ScheduleApprovalStatus.Pending)
+            .ToList();
+        var approvedRequests = existingRequests
+            .Where(r => !r.IsDeleted && r.Status == ScheduleApprovalStatus.Approved)
+            .ToList();
+
+        if (pendingRequests.Any(r => r.RequestType == targetType))
+        {
+            throw new InvalidOperationException("Đã có yêu cầu cùng loại đang chờ phê duyệt cho ca làm này.");
+        }
+
+        if (schedule.Status == ScheduleStatus.Cancelled)
+        {
+            throw new InvalidOperationException("Không thể gửi yêu cầu cho ca làm việc đã hủy.");
+        }
+
+        var hasActiveLeave = schedule.Status == ScheduleStatus.OnLeave
+            || pendingRequests.Any(r => r.RequestType == ScheduleRequestType.LeaveRequest)
+            || approvedRequests.Any(r => r.RequestType == ScheduleRequestType.LeaveRequest);
+
+        if (hasActiveLeave)
+        {
+            throw new InvalidOperationException("Ca làm việc đã có đơn xin nghỉ hoặc đã nghỉ, không thể gửi thêm yêu cầu khác.");
+        }
+
+        var hasPendingShiftSwap = pendingRequests.Any(r => r.RequestType == ScheduleRequestType.ShiftSwap);
+        if (hasPendingShiftSwap && targetType != ScheduleRequestType.ShiftSwap)
+        {
+            throw new InvalidOperationException("Ca làm việc đang có đơn đổi ca chờ duyệt, không thể gửi thêm yêu cầu khác.");
+        }
+
+        switch (targetType)
+        {
+            case ScheduleRequestType.LeaveRequest:
+                if (schedule.Status == ScheduleStatus.Completed || schedule.Status == ScheduleStatus.InProgress || schedule.CheckInTime.HasValue)
+                {
+                    throw new InvalidOperationException("Không thể xin nghỉ cho ca đã chấm công, đang làm việc hoặc đã kết thúc.");
+                }
+                if (pendingRequests.Any(r => r.RequestType != ScheduleRequestType.LeaveRequest))
+                {
+                    throw new InvalidOperationException("Ca làm việc đang có đơn làm thêm giờ, đổi ca hoặc sự cố chờ duyệt, không thể xin nghỉ.");
+                }
+                break;
+
+            case ScheduleRequestType.ShiftSwap:
+                if (schedule.Status == ScheduleStatus.Completed || schedule.Status == ScheduleStatus.InProgress || schedule.CheckInTime.HasValue)
+                {
+                    throw new InvalidOperationException("Chỉ có thể xin đổi ca khi ca chưa bắt đầu và chưa chấm công.");
+                }
+                if (pendingRequests.Any(r => r.RequestType != ScheduleRequestType.ShiftSwap))
+                {
+                    throw new InvalidOperationException("Ca làm việc đang có đơn khác chờ duyệt, không thể xin đổi ca.");
+                }
+                break;
+
+            case ScheduleRequestType.CheckInIncident:
+                if (approvedRequests.Any(r => r.RequestType == ScheduleRequestType.CheckInIncident))
+                {
+                    throw new InvalidOperationException("Sự cố Check-in của ca làm việc này đã được duyệt.");
+                }
+                if (schedule.CheckInTime.HasValue && schedule.CheckInMethod != "INCIDENT_PENDING")
+                {
+                    throw new InvalidOperationException("Ca làm việc đã được ghi nhận giờ vào, không cần gửi sự cố Check-in.");
+                }
+                break;
+
+            case ScheduleRequestType.CheckOutIncident:
+                if (approvedRequests.Any(r => r.RequestType == ScheduleRequestType.CheckOutIncident))
+                {
+                    throw new InvalidOperationException("Sự cố Check-out của ca làm việc này đã được duyệt.");
+                }
+                if (schedule.CheckOutTime.HasValue && schedule.CheckOutMethod != "INCIDENT_PENDING")
+                {
+                    throw new InvalidOperationException("Ca làm việc đã được ghi nhận giờ ra, không cần gửi sự cố Check-out.");
+                }
+                break;
+        }
+    }
+
+    private static List<string> BuildImageUrls(CreateScheduleApprovalRequestDto dto)
+    {
+        var imageUrls = new List<string>();
+        if (dto.EvidenceImageUrls != null && dto.EvidenceImageUrls.Count > 0)
+        {
+            imageUrls.AddRange(dto.EvidenceImageUrls.Where(u => !string.IsNullOrWhiteSpace(u)).Select(u => u.Trim()));
+        }
+        return imageUrls;
     }
 
     private async Task<Employee?> ResolveEmployeeAsync(string userId, CancellationToken cancellationToken)
@@ -408,10 +559,6 @@ public class ScheduleApprovalService : IScheduleApprovalService
     private static ScheduleApprovalRequestDto MapToDto(ScheduleApprovalRequest r)
     {
         var imageUrls = r.EvidenceImageUrls?.ToList() ?? new List<string>();
-        if (imageUrls.Count == 0 && !string.IsNullOrWhiteSpace(r.EvidenceImageUrl))
-        {
-            imageUrls.Add(r.EvidenceImageUrl);
-        }
 
         return new ScheduleApprovalRequestDto(
             r.Id,
@@ -424,17 +571,9 @@ public class ScheduleApprovalService : IScheduleApprovalService
             r.RequestType,
             r.Status,
             r.Reason,
-            r.EvidenceImageUrl ?? imageUrls.FirstOrDefault(),
             imageUrls,
             r.LeaveType,
             r.IsPaidLeave,
-            r.SwapType,
-            r.TargetEmployeeId,
-            r.TargetEmployee?.FullName,
-            r.TargetEmployee?.EmployeeCode,
-            r.TargetScheduleId,
-            r.PeerConfirmed,
-            r.PeerConfirmedAt.HasValue ? DateTime.SpecifyKind(r.PeerConfirmedAt.Value, DateTimeKind.Utc) : null,
             r.RequestedCheckInTime,
             r.RequestedCheckOutTime,
             r.ApprovedCheckInTime,
@@ -450,5 +589,115 @@ public class ScheduleApprovalService : IScheduleApprovalService
             r.Schedule?.PlannedStartTime ?? TimeSpan.Zero,
             r.Schedule?.PlannedEndTime ?? TimeSpan.Zero
         );
+    }
+
+    private static decimal CalculateClampedInShiftHours(EmployeeSchedule schedule)
+    {
+        if (!schedule.CheckInTime.HasValue || !schedule.CheckOutTime.HasValue)
+        {
+            return 0m;
+        }
+
+        var workDate = schedule.WorkDate.Date;
+        var plannedStart = workDate.Add(schedule.PlannedStartTime);
+        var isNextDay = schedule.IsCheckInNextDay || schedule.PlannedEndTime < schedule.PlannedStartTime;
+        var plannedEnd = isNextDay
+            ? workDate.AddDays(1).Add(schedule.PlannedEndTime)
+            : workDate.Add(schedule.PlannedEndTime);
+
+        if (schedule.PlannedStartTime == TimeSpan.Zero && schedule.PlannedEndTime == TimeSpan.Zero)
+        {
+            var rawHours = (decimal)(schedule.CheckOutTime.Value - schedule.CheckInTime.Value).TotalHours;
+            return Math.Max(0m, Math.Round(rawHours, 2));
+        }
+
+        var effectiveStart = schedule.CheckInTime.Value < plannedStart ? plannedStart : schedule.CheckInTime.Value;
+        var effectiveEnd = schedule.CheckOutTime.Value > plannedEnd ? plannedEnd : schedule.CheckOutTime.Value;
+        var inShiftMinutes = Math.Max(0, (int)(effectiveEnd - effectiveStart).TotalMinutes);
+        return Math.Round((decimal)inShiftMinutes / 60m, 2);
+    }
+
+    private static int CalculateExtraMinutesOutsideShift(EmployeeSchedule schedule)
+    {
+        if (!schedule.CheckInTime.HasValue || !schedule.CheckOutTime.HasValue)
+        {
+            return 0;
+        }
+
+        if (schedule.PlannedStartTime == TimeSpan.Zero && schedule.PlannedEndTime == TimeSpan.Zero)
+        {
+            return 0;
+        }
+
+        var workDate = schedule.WorkDate.Date;
+        var plannedStart = workDate.Add(schedule.PlannedStartTime);
+        var isNextDay = schedule.IsCheckInNextDay || schedule.PlannedEndTime < schedule.PlannedStartTime;
+        var plannedEnd = isNextDay
+            ? workDate.AddDays(1).Add(schedule.PlannedEndTime)
+            : workDate.Add(schedule.PlannedEndTime);
+
+        var earlyExtraMinutes = schedule.CheckInTime.Value < plannedStart
+            ? Math.Max(0, (int)(plannedStart - schedule.CheckInTime.Value).TotalMinutes)
+            : 0;
+        var lateExtraMinutes = schedule.CheckOutTime.Value > plannedEnd
+            ? Math.Max(0, (int)(schedule.CheckOutTime.Value - plannedEnd).TotalMinutes)
+            : 0;
+
+        return earlyExtraMinutes + lateExtraMinutes;
+    }
+
+    private static decimal GetSchedulePlannedHours(EmployeeSchedule schedule)
+    {
+        if (schedule.PlannedStartTime != TimeSpan.Zero || schedule.PlannedEndTime != TimeSpan.Zero)
+        {
+            var isNextDay = schedule.IsCheckInNextDay || schedule.PlannedEndTime < schedule.PlannedStartTime;
+            var duration = isNextDay
+                ? (TimeSpan.FromHours(24) - schedule.PlannedStartTime) + schedule.PlannedEndTime
+                : schedule.PlannedEndTime - schedule.PlannedStartTime;
+            var plannedHours = Math.Round((decimal)duration.TotalHours, 2);
+            if (plannedHours > 0m)
+            {
+                return plannedHours;
+            }
+        }
+
+        return schedule.DurationHours > 0m ? schedule.DurationHours : 0m;
+    }
+
+    private async Task ValidateDailyWorkAndOvertimeLimitAsync(
+        EmployeeSchedule targetSchedule,
+        int additionalOvertimeMinutes,
+        Guid? excludeRequestId,
+        CancellationToken cancellationToken)
+    {
+        if (additionalOvertimeMinutes <= 0)
+        {
+            return;
+        }
+
+        var daySchedules = await _scheduleRepository.GetByEmployeeAndDateRangeAsync(
+            targetSchedule.EmployeeId,
+            targetSchedule.WorkDate.Date,
+            targetSchedule.WorkDate.Date,
+            cancellationToken);
+
+        var activeDaySchedules = daySchedules
+            .Where(s => !s.IsLeave && s.Status != ScheduleStatus.OnLeave && s.Status != ScheduleStatus.Cancelled)
+            .ToList();
+
+        if (!activeDaySchedules.Any(s => s.Id == targetSchedule.Id))
+        {
+            activeDaySchedules.Add(targetSchedule);
+        }
+
+        decimal totalPlannedHours = activeDaySchedules.Sum(GetSchedulePlannedHours);
+        int existingApprovedOtMinutes = activeDaySchedules.Sum(s => s.OvertimeMinutes);
+
+        var totalHoursWithOt = totalPlannedHours + ((existingApprovedOtMinutes + additionalOvertimeMinutes) / 60m);
+        if (totalHoursWithOt > 12m)
+        {
+            throw new InvalidOperationException(
+                $"Tổng giờ làm việc và làm thêm giờ (OT) trong ngày {targetSchedule.WorkDate:dd/MM/yyyy} là {totalHoursWithOt:0.##}h, vượt quá giới hạn tối đa 12 giờ/ngày.");
+        }
     }
 }

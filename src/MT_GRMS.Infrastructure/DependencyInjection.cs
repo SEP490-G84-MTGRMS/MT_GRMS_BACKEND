@@ -94,6 +94,7 @@ public static class DependencyInjection
         services.AddScoped<Application.Expenses.IExpenseRepository, ExpenseRepository>();
         services.AddScoped<Application.Debt.ICustomerDebtRepository, CustomerDebtRepository>();
         services.AddScoped<Application.Reports.IPnLReportRepository, PnLReportRepository>();
+        services.AddScoped<Application.Reports.IStoreOwnerDashboardService, StoreOwnerDashboardService>();
         services.AddScoped<Application.Tax.IHouseholdTaxRepository, HouseholdTaxRepository>();
         services.AddScoped<Application.Tax.ITaxExportService, Services.TaxExportService>();
         services.AddScoped<Application.Tax.Security.IPinVerificationService, Services.PinVerificationService>();
@@ -101,9 +102,11 @@ public static class DependencyInjection
         services.AddScoped<IBranchRepository, BranchRepository>();
         services.AddScoped<IBranchProductRepository, BranchProductRepository>();
         services.AddScoped<MT_GRMS.Application.PurchaseOrders.IPurchaseOrderRepository, PurchaseOrderRepository>();
+        services.AddScoped<MT_GRMS.Application.PurchaseOrders.IMatrixExcelImportService, Services.MatrixExcelImportService>();
         services.AddScoped<MT_GRMS.Application.GoodsReceipts.IGoodsReceiptRepository, GoodsReceiptRepository>();
         services.AddScoped<MT_GRMS.Application.SupplierReturns.ISupplierReturnRepository, SupplierReturnRepository>();
         services.AddScoped<MT_GRMS.Application.Stocktakes.IStocktakeRepository, StocktakeRepository>();
+        services.AddScoped<MT_GRMS.Application.Repacks.IRepackRepository, RepackRepository>();
         services.AddScoped<Application.Promotions.IPromotionRepository, PromotionRepository>();
         services.AddScoped<IEmployeeRepository, EmployeeRepository>();
         services.AddScoped<IShiftConfigRepository, ShiftConfigRepository>();
@@ -124,6 +127,7 @@ public static class DependencyInjection
         // Supplier order Excel + email + local storage + package
         services.AddScoped<IFileStorage, LocalFileStorage>();
         services.AddScoped<ISupplierOrderExcelGenerator, SupplierOrderExcelGenerator>();
+        services.AddScoped<ISupplierProductExcelService, Services.SupplierProductExcelService>();
         services.AddScoped<ISupplierOrderEmailSender, SmtpSupplierOrderEmailSender>();
         services.AddScoped<ISupplierDispatchPackageService, SupplierDispatchPackageService>();
         services.AddHostedService<SupplierOrderDispatchWorker>();

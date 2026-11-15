@@ -105,3 +105,13 @@ public class PublishSchedulesRequestValidator : AbstractValidator<PublishSchedul
     }
 }
 
+public class ResetAttendanceRequestValidator : AbstractValidator<ResetAttendanceRequest>
+{
+    public ResetAttendanceRequestValidator()
+    {
+        RuleFor(x => x.Reason)
+            .MaximumLength(255).WithMessage("Lý do hủy chấm công tối đa 255 ký tự.")
+            .When(x => !string.IsNullOrWhiteSpace(x.Reason));
+    }
+}
+

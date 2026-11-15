@@ -29,6 +29,7 @@ public class PurchaseOrderDetailConfiguration : IEntityTypeConfiguration<Purchas
         builder.Property(x => x.ProductCodeSnapshot).HasMaxLength(50);
         builder.Property(x => x.ProductNameSnapshot).HasMaxLength(250);
         builder.Property(x => x.PurchaseUnitNameSnapshot).HasMaxLength(50);
+        builder.Property(x => x.SourceSupplierReturnLineId);
 
         builder.HasOne(x => x.PurchaseOrder)
             .WithMany(p => p.Details)

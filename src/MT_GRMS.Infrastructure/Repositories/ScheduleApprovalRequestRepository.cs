@@ -18,8 +18,6 @@ public class ScheduleApprovalRequestRepository : GenericRepository<ScheduleAppro
             .Include(r => r.Schedule)
                 .ThenInclude(s => s.Branch)
             .Include(r => r.Employee)
-            .Include(r => r.TargetEmployee)
-            .Include(r => r.TargetSchedule)
             .FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
     }
 
@@ -28,7 +26,6 @@ public class ScheduleApprovalRequestRepository : GenericRepository<ScheduleAppro
         return await _dbSet
             .Include(r => r.Schedule)
             .Include(r => r.Employee)
-            .Include(r => r.TargetEmployee)
             .Where(r => r.ScheduleId == scheduleId)
             .OrderByDescending(r => r.CreatedAt)
             .ToListAsync(cancellationToken);
@@ -45,8 +42,6 @@ public class ScheduleApprovalRequestRepository : GenericRepository<ScheduleAppro
             .Include(r => r.Schedule)
                 .ThenInclude(s => s.Branch)
             .Include(r => r.Employee)
-            .Include(r => r.TargetEmployee)
-            .Include(r => r.TargetSchedule)
             .AsQueryable();
 
         if (status.HasValue)

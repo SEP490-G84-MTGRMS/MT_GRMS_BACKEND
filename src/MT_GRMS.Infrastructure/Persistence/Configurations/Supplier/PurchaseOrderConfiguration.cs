@@ -28,6 +28,10 @@ public class PurchaseOrderConfiguration : IEntityTypeConfiguration<PurchaseOrder
         builder.Property(x => x.RowVersion).IsConcurrencyToken().HasDefaultValue(1);
         builder.Property(x => x.RevisionNumber).HasDefaultValue(1);
         builder.Property(x => x.LastAmendedByUserId).HasMaxLength(50);
+        builder.Property(x => x.SourceType).HasMaxLength(50);
+        builder.Property(x => x.SourceSupplierReturnId);
+
+        builder.HasIndex(x => new { x.TenantId, x.SourceType, x.SourceSupplierReturnId });
 
         builder.Property(x => x.SupplierCodeSnapshot).HasMaxLength(50);
         builder.Property(x => x.SupplierNameSnapshot).HasMaxLength(250);

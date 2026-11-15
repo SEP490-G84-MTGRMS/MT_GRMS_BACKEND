@@ -113,7 +113,8 @@ public class EmployeeRepository : IEmployeeRepository
         var pageSize = filter.PageSize > 0 ? filter.PageSize : 20;
 
         var items = await query
-            .OrderByDescending(e => e.CreatedAt)
+            .OrderBy(e => e.Status == EmployeeStatus.Active ? 0 : 1)
+            .ThenByDescending(e => e.CreatedAt)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(cancellationToken);
@@ -135,6 +136,23 @@ public class EmployeeRepository : IEmployeeRepository
     public async Task<bool> ExistsAsync(Expression<Func<Employee, bool>> predicate, CancellationToken cancellationToken = default)
     {
         return await _dbSet.AnyAsync(predicate, cancellationToken);
+    }
+
+    public async Task<bool> ExistsIgnoringFiltersAsync(Expression<Func<Employee, bool>> predicate, CancellationToken cancellationToken = default)
+    {
+        return await _dbSet.IgnoreQueryFilters().AnyAsync(predicate, cancellationToken);
+    }
+
+    public async Task<Employee?> GetDeletedDuplicateAsync(string tenantId, string citizenId, string phone, string? employeeCode = null, Guid? excludeId = null, CancellationToken cancellationToken = default)
+    {
+        return await _dbSet
+            .IgnoreQueryFilters()
+            .Where(e => e.TenantId == tenantId && e.IsDeleted && (!excludeId.HasValue || e.Id != excludeId.Value))
+            .FirstOrDefaultAsync(e =>
+                e.CitizenId == citizenId
+                || e.Phone == phone
+                || (!string.IsNullOrEmpty(employeeCode) && e.EmployeeCode == employeeCode),
+                cancellationToken);
     }
 
     public async Task AddAsync(Employee employee, CancellationToken cancellationToken = default)

@@ -14,6 +14,7 @@ public interface IScheduleService
     Task<IReadOnlyList<ScheduleResponse>> GetMySchedulesAsync(string userId, DateTime? fromDate, DateTime? toDate, CancellationToken cancellationToken = default);
     Task<PublishSchedulesResponse> PublishAsync(PublishSchedulesRequest request, CancellationToken cancellationToken = default);
     Task<ScheduleResponse> RecordManualAttendanceAsync(Guid id, ManualAttendanceRequest request, CancellationToken cancellationToken = default);
+    Task<ResetAttendanceResponse> ResetManualAttendanceAsync(Guid id, ResetAttendanceRequest? request, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<TodayStaffDescriptorDto>> GetTodayStaffDescriptorsAsync(Guid branchId, CancellationToken cancellationToken = default);
     Task<ScheduleResponse> CheckInFaceIdAsync(FaceIdCheckInRequest request, CancellationToken cancellationToken = default);
     Task<ScheduleResponse> CheckOutFaceIdAsync(FaceIdCheckOutRequest request, CancellationToken cancellationToken = default);

@@ -38,6 +38,8 @@ public class ExpenseService : IExpenseService
             throw new BusinessException("INVALID_AMOUNT", "Số tiền chi phí phải lớn hơn 0.");
         }
 
+        EnsureNatureInScope(request.Nature);
+
         if (request.Nature == FinancialNature.OwnerDraw || request.Nature == FinancialNature.TaxPayment)
         {
             ValidateFinancialManagementRole("thực hiện rút vốn hoặc nộp thuế");
@@ -349,152 +351,6 @@ public class ExpenseService : IExpenseService
         );
     }
 
-    public async Task<ExpenseVoucherResponse> CreateDepositAsync(CreateDepositRequest request, CancellationToken ct = default)
-    {
-        if (request.Amount <= 0)
-        {
-            throw new BusinessException("INVALID_AMOUNT", "Số tiền thu cọc phải lớn hơn 0.");
-        }
-        if (string.IsNullOrWhiteSpace(request.CustomerName))
-        {
-            throw new BusinessException("CUSTOMER_REQUIRED", "Tên khách hàng đặt cọc là bắt buộc.");
-        }
-
-        var voucher = new ExpenseVoucher
-        {
-            VoucherCode = "DEP-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff"),
-            BranchId = request.BranchId,
-            BeneficiaryName = request.CustomerName.Trim(),
-            Category = "Thu cọc vỏ",
-            Amount = request.Amount,
-            Status = ExpenseVoucherStatus.Paid,
-            Nature = FinancialNature.Deposit,
-            ReferenceCode = null,
-            RefundedAmount = 0,
-            IsSettled = false,
-            PaymentSourceType = request.PaymentSourceType,
-            PaymentSourceAccountId = request.PaymentSourceAccountId,
-            IsTaxDeductible = false,
-            PaidAtUtc = DateTime.UtcNow,
-            ExpenseDate = DateTime.UtcNow,
-            Note = request.Note
-        };
-
-        await _cashbookService.ReceiveCashAsync(
-            request.PaymentSourceAccountId,
-            request.PaymentSourceType,
-            request.Amount,
-            "DEPOSIT",
-            voucher.Id,
-            voucher.VoucherCode,
-            $"Thu tiền cọc vỏ: {voucher.BeneficiaryName}{(string.IsNullOrWhiteSpace(voucher.Note) ? "" : " - " + voucher.Note)}",
-            ct
-        );
-
-        await _expenseRepo.AddAsync(voucher, ct);
-        await _unitOfWork.SaveChangesAsync(ct);
-
-        return MapVoucherResponse(voucher);
-    }
-
-    public async Task<List<DepositSearchResponse>> SearchDepositsAsync(string? keyword, Guid? branchId, CancellationToken ct = default)
-    {
-        var kw = keyword?.Trim().ToLowerInvariant();
-        var vouchers = await _expenseRepo.FindAsync(e =>
-            e.Nature == FinancialNature.Deposit &&
-            e.Status == ExpenseVoucherStatus.Paid &&
-            !e.IsSettled &&
-            (!branchId.HasValue || e.BranchId == branchId.Value) &&
-            (string.IsNullOrEmpty(kw) ||
-             e.BeneficiaryName.ToLower().Contains(kw) ||
-             e.VoucherCode.ToLower().Contains(kw) ||
-             (e.Note != null && e.Note.ToLower().Contains(kw))),
-            ct
-        );
-
-        return vouchers
-            .OrderByDescending(v => v.CreatedAt)
-            .Select(v => new DepositSearchResponse(
-                v.Id,
-                v.VoucherCode,
-                v.BeneficiaryName,
-                v.Amount,
-                v.RefundedAmount,
-                v.Amount - v.RefundedAmount,
-                v.IsSettled,
-                v.CreatedAt,
-                v.Note
-            ))
-            .ToList();
-    }
-
-    public async Task<ExpenseVoucherResponse> RefundDepositAsync(Guid depositId, RefundDepositRequest request, CancellationToken ct = default)
-    {
-        if (request.Amount <= 0)
-        {
-            throw new BusinessException("INVALID_AMOUNT", "Số tiền hoàn cọc phải lớn hơn 0.");
-        }
-
-        var deposit = await _expenseRepo.GetByIdAsync(depositId, ct)
-            ?? throw new NotFoundException("Không tìm thấy phiếu thu cọc.");
-
-        if (deposit.Nature != FinancialNature.Deposit)
-        {
-            throw new BusinessException("INVALID_NATURE", "Phiếu được chỉ định không phải là phiếu thu cọc.");
-        }
-
-        if (deposit.IsSettled)
-        {
-            throw new BusinessException("ALREADY_SETTLED", "Phiếu cọc này đã được tất toán hoàn toàn.");
-        }
-
-        var remaining = deposit.Amount - deposit.RefundedAmount;
-        if (request.Amount > remaining)
-        {
-            throw new BusinessException("EXCEEDS_REMAINING_DEPOSIT", $"Số tiền hoàn cọc ({request.Amount:N0}đ) vượt quá số dư cọc còn lại ({remaining:N0}đ).");
-        }
-
-        await _cashbookService.DisburseCashAsync(
-            request.PaymentSourceAccountId,
-            request.PaymentSourceType,
-            request.Amount,
-            "REFUND_DEPOSIT",
-            deposit.Id,
-            deposit.VoucherCode,
-            $"Hoàn trả tiền cọc vỏ cho {deposit.BeneficiaryName} (Phiếu cọc gốc: {deposit.VoucherCode})",
-            ct
-        );
-
-        var refundVoucher = new ExpenseVoucher
-        {
-            VoucherCode = "REF-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff"),
-            BranchId = deposit.BranchId,
-            BeneficiaryName = deposit.BeneficiaryName,
-            Category = "Trả cọc vỏ",
-            Amount = request.Amount,
-            Status = ExpenseVoucherStatus.Paid,
-            Nature = FinancialNature.RefundDeposit,
-            ReferenceCode = deposit.VoucherCode,
-            PaymentSourceType = request.PaymentSourceType,
-            PaymentSourceAccountId = request.PaymentSourceAccountId,
-            IsTaxDeductible = false,
-            PaidAtUtc = DateTime.UtcNow,
-            ExpenseDate = DateTime.UtcNow,
-            Note = request.Note ?? $"Hoàn trả cọc vỏ theo phiếu gốc {deposit.VoucherCode}"
-        };
-
-        deposit.RefundedAmount += request.Amount;
-        if (deposit.RefundedAmount >= deposit.Amount)
-        {
-            deposit.IsSettled = true;
-        }
-
-        await _expenseRepo.AddAsync(refundVoucher, ct);
-        await _unitOfWork.SaveChangesAsync(ct);
-
-        return MapVoucherResponse(refundVoucher);
-    }
-
     public async Task<List<ExpenseVoucherResponse>> GetPendingTriageAsync(Guid? branchId, CancellationToken ct = default)
     {
         ValidateFinancialManagementRole("xem danh sách Triage Inbox");
@@ -514,6 +370,7 @@ public class ExpenseService : IExpenseService
     public async Task<ExpenseVoucherResponse> ResolveTriageAsync(Guid voucherId, ResolveTriageRequest request, CancellationToken ct = default)
     {
         ValidateFinancialManagementRole("xử lý mục tài chính trong Triage Inbox");
+        EnsureNatureInScope(request.Nature);
 
         var voucher = await _expenseRepo.GetByIdAsync(voucherId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi/mục cần xử lý trong Triage Inbox.");
@@ -539,6 +396,17 @@ public class ExpenseService : IExpenseService
 
         await _unitOfWork.SaveChangesAsync(ct);
         return MapVoucherResponse(voucher);
+    }
+
+    /// <summary>
+    /// Rejects financial natures that are out of scope (bottle/container deposit and its refund).
+    /// </summary>
+    private static void EnsureNatureInScope(FinancialNature nature)
+    {
+        if (nature == FinancialNature.Deposit || nature == FinancialNature.RefundDeposit)
+        {
+            throw new BusinessException("FEATURE_OUT_OF_SCOPE", "Nghiệp vụ thu/hoàn cọc vỏ bình/két nằm ngoài phạm vi hệ thống.");
+        }
     }
 
     private void ValidateFinancialManagementRole(string actionDescription = "thực hiện thao tác tài chính này")

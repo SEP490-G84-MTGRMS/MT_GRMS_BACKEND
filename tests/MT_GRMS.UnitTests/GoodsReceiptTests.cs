@@ -421,6 +421,8 @@ public class FakeGoodsReceiptRepository : IGoodsReceiptRepository
     public List<Batch> Batches { get; } = new();
     public List<SupplierAPLedger> Ledgers { get; } = new();
 
+    public Task<bool> UserExistsAsync(string userId, CancellationToken cancellationToken = default) => Task.FromResult(true);
+
     public Task<PagedResult<GoodsReceiptDto>> GetPagedAsync(string tenantId, GoodsReceiptFilterQuery query, CancellationToken cancellationToken = default)
     {
         var dtos = Receipts.Where(r => r.TenantId == tenantId && !r.IsDeleted).Select(r => new GoodsReceiptDto

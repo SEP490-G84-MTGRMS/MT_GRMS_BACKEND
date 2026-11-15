@@ -4,13 +4,32 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ---
 
+## [Unreleased] - 2026-11-15
+
+### Fixed
+- **Triệt tiêu toàn bộ cảnh báo EF Core Model Validation ([20601] & [10620]) & Query First Without OrderBy ([10103])**: Cấu hình `.HasSentinel(...)` cho các thuộc tính Enum có database default (`Product.Status`, `Employee.SalaryType`, `Employee.Status`, `Payslip.SalaryType`, `Payslip.Status`, `ScheduleApprovalRequest.Status`, `Transfer.Status`) và bổ sung `ValueComparer<List<string>>` cho `ScheduleApprovalRequest.EvidenceImageUrls`. Bổ sung điều kiện deterministic ordering `.OrderBy(x => x.Id)` và filter tenant cho các truy vấn `FirstOrDefaultAsync` trong `DbInitializer.cs`, `CashbookRepository.cs`, `PurchaseOrderRepository.cs`, `ShiftRepository.cs`, `TaxExportService.cs`, `WalletService.cs` và `OrderRepository.cs` [FIX-WARN] [worklog: docs/worklogs/2026-11-15_FIX-WARN_AI_fix-efcore-validation-warnings.md].
+
+## [Unreleased] - 2026-11-14
+
+### Added
+- API `GET /api/store-owner/dashboard` tổng hợp số liệu thật về doanh số, P&L, nhập hàng, kho và nhân viên theo tenant/chi nhánh; kiểm tra role StoreOwner. [worklog: docs/worklogs/2026-11-14_FE10_AI_store-owner-dashboard-real-data.md]
+
+### Changed
+- Dashboard Chủ cửa hàng hiển thị doanh thu theo 24 giờ Việt Nam khi chọn Hôm nay/Hôm qua; các kỳ dài hơn tiếp tục theo ngày. [worklog: docs/worklogs/2026-11-14_FE10_AI_store-owner-dashboard-real-data.md]
+- Thu gọn luồng access/refresh dùng các trường hiện có trên Users, access mặc định 15 phút và refresh cố định 7 ngày. Lưu hash token mới, đồng bộ hạn cookie và hỗ trợ logout khi access hết hạn. [worklog: docs/worklogs/2026-11-14_AUTH-REFRESH_AI_user-token-flow.md]
+
+### Added
+- **Đồng bộ trường `IsTwoFactorEnabled` trong `UserInfo` DTO**: Bổ sung `IsTwoFactorEnabled` vào `UserInfo` record và gán từ entity `User.IsTwoFactorEnabled` tại các luồng xác thực (`Login`, `VerifyLoginOtp`, `GetMe`, `Register`), giúp Frontend và thanh điều hướng TopNav nhận diện chính xác trạng thái xác thực 2 bước của tài khoản thời gian thực [FEAT-AUTH] [worklog: docs/worklogs/2026-11-14_FEAT-AUTH_AI_sync-two-factor-auth-status-in-user-info.md].
+
 ## [Unreleased] - 2026-11-13
 
 ### Changed
+- **Mặc định tắt xác thực 2 bước (2FA OTP Email) khi tạo tài khoản**: Chuyển cờ `User.IsTwoFactorEnabled` mặc định thành `false` cho toàn bộ tài khoản mới đăng ký/tạo mới, giúp người dùng đăng nhập ngay sau mật khẩu mà không bị bắt buộc xác thực 2FA OTP qua email [BE-AUTH] [worklog: docs/worklogs/2026-11-13_BE-AUTH_AI_default-disable-two-factor-auth-on-registration.md].
 - **Cập nhật nhận diện thương hiệu THViet cho Email OTP & Cấu hình**: Chuyển đổi tên thương hiệu hệ thống sang `THViet - QUẢN LÝ TẠP HÓA VIỆT`, cập nhật tiêu đề email `[THViet]`, Header logo thương hiệu, SenderName (`.env`, `EmailSettings.cs`, `appsettings.json`) và phóng to mã OTP lên 38px nổi bật trên nền xanh thương hiệu `#0F766E` [BRAND-THVIET] [worklog: docs/worklogs/2026-11-13_BRAND-THVIET_AI_rebrand-email-and-settings.md].
 - **Giao diện Email OTP tối giản phong cách hiện đại (Minimalist NVIDIA Style)**: Tối ưu hóa HTML template trong `EmailService.cs`, chuyển sang layout nền trắng phẳng, căn lề trái, hiển thị mã OTP dạng badge thanh lịch và chân trang tinh gọn [AUTH-OTP] [worklog: docs/worklogs/2026-11-13_AUTH-OTP_AI_minimalist-email-template.md].
 
 ### Fixed
+- **Sửa lỗi upload/xóa ảnh trả 500 trên PostgreSQL**: Chuẩn hóa câu lệnh khóa bản ghi tenant trong `MediaController` sử dụng đúng khóa chính vật lý `Tenants.TenantID` thay vì cột không tồn tại `Id`; bổ sung unit test xác nhận ánh xạ khóa tenant [MEDIA-UPLOAD] [worklog: docs/worklogs/2026-11-14_MEDIA-UPLOAD_AI_fix-tenant-lock-column.md].
 - **Gửi Email OTP chạy nền không chặn luồng (Non-blocking Background Dispatch)**: Chuyển tác vụ gửi thư qua giao thức SMTP trong `EmailService.cs` sang background task (`Task.Run`), giúp API phản hồi tức thì (< 15ms) khi thông tin đăng nhập/đăng ký hợp lệ, popup modal OTP hiển thị ngay lập tức không bị chờ độ trễ mạng SMTP [AUTH-OTP] [worklog: docs/worklogs/2026-11-13_AUTH-OTP_AI_non-blocking-background-smtp-dispatch.md].
 - **Khắc phục hiện tượng đơ lag khi gửi mã OTP Email (`EmailService.cs`)**: Tinh gọn nhánh xử lý fallback dev của `EmailService.cs`, phản hồi tức thì (< 100ms) và in mã OTP ra console khi cấu hình SMTP chưa hoàn tất ở môi trường local/dev, loại bỏ triệt để việc treo luồng mạng [AUTH-OTP] [worklog: docs/worklogs/2026-11-13_AUTH-OTP_AI_fix-email-otp-lag-fallback.md].
 

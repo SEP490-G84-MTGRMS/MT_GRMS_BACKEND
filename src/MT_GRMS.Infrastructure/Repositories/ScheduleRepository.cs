@@ -24,6 +24,8 @@ public class ScheduleRepository : IScheduleRepository
             .Include(s => s.Employee)
             .Include(s => s.Branch)
             .Include(s => s.ShiftConfig)
+            .Include(s => s.Payslip)
+            .Include(s => s.ApprovalRequests)
             .FirstOrDefaultAsync(s => s.Id == id && !s.IsDeleted, cancellationToken);
     }
 
@@ -125,7 +127,9 @@ public class ScheduleRepository : IScheduleRepository
             .Where(s => idList.Contains(s.EmployeeId)
                         && s.WorkDate >= from
                         && s.WorkDate <= to
-                        && (s.Status == ScheduleStatus.Completed || (s.Status == ScheduleStatus.OnLeave && s.ApprovalStatus == ScheduleApprovalStatus.Approved))
+                        && (s.Status == ScheduleStatus.Completed
+                            || (s.Status == ScheduleStatus.OnLeave && s.ApprovalStatus == ScheduleApprovalStatus.Approved)
+                            || ((s.ApprovalType == "PAID_LEAVE" || s.ApprovalType == "UNPAID_LEAVE") && s.ApprovalStatus == ScheduleApprovalStatus.Approved))
                         && !s.IsDeleted)
             .ToListAsync(cancellationToken);
     }

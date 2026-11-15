@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Enums;
@@ -18,8 +19,6 @@ public class ScheduleApprovalRequestConfiguration : IEntityTypeConfiguration<Sch
         builder.Property(x => x.ScheduleId).HasColumnName("ScheduleID").IsRequired();
         builder.Property(x => x.EmployeeId).HasColumnName("EmployeeID").IsRequired();
         builder.Property(x => x.BranchId).HasColumnName("BranchID").IsRequired();
-        builder.Property(x => x.TargetEmployeeId).HasColumnName("TargetEmployeeID");
-        builder.Property(x => x.TargetScheduleId).HasColumnName("TargetScheduleID");
 
         builder.Property(x => x.RequestType)
             .HasConversion(
@@ -33,13 +32,8 @@ public class ScheduleApprovalRequestConfiguration : IEntityTypeConfiguration<Sch
                 v => v.ToString(),
                 v => Enum.Parse<ScheduleApprovalStatus>(v, true))
             .HasMaxLength(30)
-            .HasDefaultValue(ScheduleApprovalStatus.Pending);
-
-        builder.Property(x => x.SwapType)
-            .HasConversion(
-                v => v.HasValue ? v.Value.ToString() : null,
-                v => string.IsNullOrEmpty(v) ? (ShiftSwapType?)null : Enum.Parse<ShiftSwapType>(v, true))
-            .HasMaxLength(30);
+            .HasDefaultValue(ScheduleApprovalStatus.Pending)
+            .HasSentinel(ScheduleApprovalStatus.None);
 
         builder.Property(x => x.LeaveType)
             .HasConversion(
@@ -48,13 +42,19 @@ public class ScheduleApprovalRequestConfiguration : IEntityTypeConfiguration<Sch
             .HasMaxLength(30);
 
         builder.Property(x => x.Reason).HasMaxLength(500).IsRequired();
-        builder.Property(x => x.EvidenceImageUrl).HasMaxLength(1000);
+
+        var stringListComparer = new ValueComparer<List<string>>(
+            (c1, c2) => (c1 == null && c2 == null) || (c1 != null && c2 != null && c1.SequenceEqual(c2)),
+            c => c.Aggregate(0, (a, v) => HashCode.Combine(a, v == null ? 0 : v.GetHashCode())),
+            c => c == null ? new List<string>() : c.ToList());
+
         builder.Property(x => x.EvidenceImageUrls)
             .HasConversion(
                 v => JsonSerializer.Serialize(v ?? new List<string>(), (JsonSerializerOptions?)null),
                 v => string.IsNullOrWhiteSpace(v)
                     ? new List<string>()
-                    : (JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>()))
+                    : (JsonSerializer.Deserialize<List<string>>(v, (JsonSerializerOptions?)null) ?? new List<string>()),
+                stringListComparer)
             .HasColumnType("text")
             .HasDefaultValueSql("'[]'::text");
         builder.Property(x => x.ReviewNote).HasMaxLength(500);
@@ -72,16 +72,6 @@ public class ScheduleApprovalRequestConfiguration : IEntityTypeConfiguration<Sch
         builder.HasOne(x => x.Employee)
             .WithMany()
             .HasForeignKey(x => x.EmployeeId)
-            .OnDelete(DeleteBehavior.Restrict);
-
-        builder.HasOne(x => x.TargetEmployee)
-            .WithMany()
-            .HasForeignKey(x => x.TargetEmployeeId)
-            .OnDelete(DeleteBehavior.Restrict);
-
-        builder.HasOne(x => x.TargetSchedule)
-            .WithMany()
-            .HasForeignKey(x => x.TargetScheduleId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

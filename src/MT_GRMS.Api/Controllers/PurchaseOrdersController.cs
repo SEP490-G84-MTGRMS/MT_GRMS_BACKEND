@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
@@ -14,13 +15,16 @@ public class PurchaseOrdersController : BaseApiController
 {
     private readonly IPurchaseOrderService _poService;
     private readonly ISupplierDispatchPackageService _dispatchPackageService;
+    private readonly IMatrixExcelImportService _matrixExcelImportService;
 
     public PurchaseOrdersController(
         IPurchaseOrderService poService,
-        ISupplierDispatchPackageService dispatchPackageService)
+        ISupplierDispatchPackageService dispatchPackageService,
+        IMatrixExcelImportService matrixExcelImportService)
     {
         _poService = poService;
         _dispatchPackageService = dispatchPackageService;
+        _matrixExcelImportService = matrixExcelImportService;
     }
 
     /// <summary>
@@ -102,6 +106,70 @@ public class PurchaseOrdersController : BaseApiController
     {
         var result = await _poService.SaveMatrixDraftAsync(command, cancellationToken);
         return Ok(ApiResponse<PurchaseOrderDto>.Ok(result, "Lưu bản thảo ma trận đặt hàng thành công."));
+    }
+
+    /// <summary>
+    /// Preview nạp Excel ma trận — kiểm tra khớp CN / NCC / SP theo filter trước khi ghi.
+    /// </summary>
+    [HttpPost("matrix/excel/preview")]
+    [RequestSizeLimit(20_000_000)]
+    public async Task<IActionResult> PreviewMatrixExcel(
+        IFormFile file,
+        [FromForm] Guid branchId,
+        [FromForm] DateTime viewFrom,
+        [FromForm] int durationDays = 7,
+        [FromForm] Guid? supplierId = null,
+        [FromForm] string? allowedProducts = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (file == null || file.Length == 0)
+        {
+            return BadRequest(ApiResponse<object>.Fail("FILE_REQUIRED", "Chưa chọn file Excel."));
+        }
+
+        var allowed = new List<MatrixExcelAllowedProductDto>();
+        if (!string.IsNullOrWhiteSpace(allowedProducts))
+        {
+            try
+            {
+                allowed = JsonSerializer.Deserialize<List<MatrixExcelAllowedProductDto>>(
+                    allowedProducts,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true }) ?? new();
+            }
+            catch
+            {
+                return BadRequest(ApiResponse<object>.Fail("FORMAT_INVALID", "allowedProducts JSON không hợp lệ."));
+            }
+        }
+
+        await using var stream = file.OpenReadStream();
+        var result = await _matrixExcelImportService.PreviewAsync(stream, new MatrixExcelPreviewQuery
+        {
+            BranchId = branchId,
+            SupplierId = supplierId,
+            ViewFrom = viewFrom,
+            DurationDays = durationDays,
+            AllowedProducts = allowed,
+            FileName = file.FileName,
+            FileSize = file.Length
+        }, cancellationToken);
+
+        return Ok(ApiResponse<MatrixExcelValidationResultDto>.Ok(result, "Đã kiểm tra file Excel ma trận."));
+    }
+
+    /// <summary>
+    /// Import số lượng từ Excel vào draft ma trận (sau khi user confirm preview).
+    /// </summary>
+    [HttpPost("matrix/excel/import")]
+    public async Task<IActionResult> ImportMatrixExcel(
+        [FromBody] ImportMatrixExcelCommand command,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _matrixExcelImportService.ImportAsync(command, cancellationToken);
+        var msg = result.Success
+            ? $"Đã nạp {result.Summary.AppliedCells} ô vào {result.Summary.SuccessDayCount} ngày giao."
+            : "Không nạp được ô hợp lệ từ file Excel.";
+        return Ok(ApiResponse<MatrixExcelImportResultDto>.Ok(result, msg));
     }
 
     /// <summary>

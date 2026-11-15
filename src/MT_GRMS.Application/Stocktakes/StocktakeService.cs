@@ -297,6 +297,15 @@ public class StocktakeService : IStocktakeService
 
         if (decision == "APPROVE" || decision == "APPROVED")
         {
+            var surplusLines = entity.Lines.Where(l => l.VarianceQty > 0).ToList();
+            var surplusTotal = surplusLines.Sum(l => l.VarianceQty);
+            if (surplusTotal > 0 && !command.ConfirmSurplusFound)
+            {
+                throw new BusinessException(
+                    "SURPLUS_CONFIRM_REQUIRED",
+                    $"Phiếu có hàng thừa (tổng +{surplusTotal:0.##}). Store Owner phải xác minh nguồn thừa (ConfirmSurplusFound=true) trước khi duyệt cộng tồn.");
+            }
+
             entity.Status = "APPROVED";
 
             foreach (var line in entity.Lines)
@@ -305,7 +314,7 @@ public class StocktakeService : IStocktakeService
                 var stock = await _repository.GetBranchStockByIdAsync(tenantId, line.BranchStockId.Value, cancellationToken);
                 if (stock == null) continue;
 
-                // 1. Hàng hỏng tại cửa hàng (DAMAGED_IN_STORE) & Hàng hết hạn (EXPIRED) -> Xuất hủy nội bộ (Write-off), giải phóng khỏi cách ly và trừ tồn thực tế
+                // 1. Hàng hỏng tại cửa hàng & hết hạn → write-off (trừ OnHand + giảm Quarantine)
                 var writeOffQty = line.DamagedQty + line.ExpiredQty;
                 if (writeOffQty > 0)
                 {
@@ -313,15 +322,22 @@ public class StocktakeService : IStocktakeService
                     stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - writeOffQty);
                 }
 
-                // 2. Hàng thiếu (VarianceQty < 0: MISSING_LOST) -> Điều chỉnh giảm tồn kho (Stock Adjustment -)
+                // 2. Thiếu (Variance < 0) → điều chỉnh giảm OnHand
                 if (line.VarianceQty < 0)
                 {
                     var missingQty = Math.Abs(line.VarianceQty);
                     stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - missingQty);
                 }
 
-                // 3. Hàng lỗi NCC (DefectiveQty) & Hàng cận hạn đề nghị trả (NearExpiryAction == NEAR_EXPIRY_RETURN):
-                // Giữ nguyên trong QuantityOnHand và tiếp tục giữ cách ly (QuantityQuarantined) chờ Store Owner tạo Phiếu trả hàng NCC.
+                // 3. Thừa (Variance > 0) — chỉ khi Owner đã ConfirmSurplusFound
+                if (line.VarianceQty > 0 && command.ConfirmSurplusFound)
+                {
+                    stock.QuantityOnHand += line.VarianceQty;
+                }
+
+                // 4. Defective + NearExpiry RETURN: giữ OnHand + Quarantine chờ Supplier Return
+                //    NearExpiry MARKDOWN (Q6-A): không quarantine lúc submit — vẫn bán được
+                stock.UpdatedAt = DateTime.UtcNow;
             }
         }
         else if (decision == "REJECT" || decision == "REJECTED")
@@ -423,7 +439,7 @@ public class StocktakeService : IStocktakeService
             Lines: returnLinesToCreate,
             AutoSubmit: command.AutoSubmit,
             StocktakeId: stocktake.Id,
-            ResolutionType: command.ResolutionType ?? "REDUCE_PAYABLE"
+            ResolutionType: NormalizeStocktakeResolution(command.ResolutionType)
         );
 
         var createdReturn = await _supplierReturnService.CreateAsync(createReturnCmd, cancellationToken);
@@ -447,6 +463,10 @@ public class StocktakeService : IStocktakeService
         return line.DefectiveQty + nearExpiryReturnable;
     }
 
+    /// <summary>
+    /// RULE-03 Q6-A: NearExpiry MARKDOWN không đưa vào quarantine (vẫn bán được).
+    /// Chỉ NearExpiry RETURN + Defective + Damaged + Expired bị cách ly lúc submit.
+    /// </summary>
     private static decimal GetLineQuarantineQty(StocktakeLine line)
     {
         var nearExpiryHold = line.NearExpiryAction == "NEAR_EXPIRY_RETURN" ? line.NearExpiryQty : 0m;
@@ -511,6 +531,22 @@ public class StocktakeService : IStocktakeService
             return query with { BranchId = _tenantContext.CurrentBranchId.Value };
         }
         return query;
+    }
+
+    private static string NormalizeStocktakeResolution(string? resolutionType)
+    {
+        if (string.IsNullOrWhiteSpace(resolutionType))
+            return "REDUCE_PAYABLE";
+
+        var raw = resolutionType.Trim().ToUpperInvariant();
+        return raw switch
+        {
+            "REPLACE_GOODS" or "EXCHANGE" => "EXCHANGE",
+            "DEDUCT_INVOICE" or "REDUCE_PAYABLE" => "REDUCE_PAYABLE",
+            "REFUND" => "REFUND",
+            "SUPPLIER_CREDIT" or "OTHER" => "OTHER",
+            _ => resolutionType.Trim()
+        };
     }
 }
 

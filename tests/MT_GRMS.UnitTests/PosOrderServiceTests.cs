@@ -113,7 +113,7 @@ public class PosOrderServiceTests
                 BranchId = _branchId,
                 ProductId = _prodHaoHaoId,
                 BatchCode = "BATCH-A-2026-01",
-                ExpiryDate = new DateTime(2026, 1, 1),
+                ExpiryDate = DateTime.UtcNow.AddMonths(2),
                 QuantityOnHand = 10m,
                 LandedCostPerUnit = 3800m
             },
@@ -125,7 +125,7 @@ public class PosOrderServiceTests
                 BranchId = _branchId,
                 ProductId = _prodHaoHaoId,
                 BatchCode = "BATCH-B-2026-06",
-                ExpiryDate = new DateTime(2026, 6, 1),
+                ExpiryDate = DateTime.UtcNow.AddMonths(6),
                 QuantityOnHand = 20m,
                 LandedCostPerUnit = 4000m
             },
@@ -299,7 +299,7 @@ public class PosOrderServiceTests
 
         // Act & Assert
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreateOrderAsync(request));
-        Assert.Contains("không đủ tồn kho tại chi nhánh", ex.Message);
+        Assert.Contains("không đủ tồn", ex.Message);
     }
 
     [Fact]
@@ -1179,7 +1179,7 @@ public class PosOrderServiceTests
 
         // Act & Assert
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(request));
-        Assert.Contains("không đủ tồn kho", ex.Message);
+        Assert.Contains("không đủ tồn", ex.Message);
     }
 
     [Fact]
@@ -1503,7 +1503,7 @@ public class PosOrderServiceTests
 
         // Act & Assert
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreateOrderAsync(request));
-        Assert.Contains("không đủ tồn kho tại chi nhánh", ex.Message);
+        Assert.Contains("không đủ tồn", ex.Message);
         Assert.Contains("30", ex.Message);
         Assert.Contains("48", ex.Message);
     }

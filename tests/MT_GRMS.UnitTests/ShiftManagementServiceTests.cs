@@ -219,8 +219,6 @@ public class ShiftManagementServiceTests
                     WorkDate = workDate.Date,
                     PlannedStartTime = TimeSpan.Zero,
                     PlannedEndTime = new TimeSpan(23, 59, 59),
-                    AllowedCheckInStart = TimeSpan.Zero,
-                    AllowedCheckInEnd = new TimeSpan(23, 59, 59),
                     Status = ScheduleStatus.Scheduled
                 });
             }

@@ -224,6 +224,43 @@ public class UpdateSupplierDeliveryConfigCommand
     public List<SupplierBlackoutDateDto>? BlackoutDates { get; set; }
 }
 
+public class SupplierReturnPolicyDto
+{
+    public Guid Id { get; set; }
+    public Guid SupplierId { get; set; }
+    public bool AllowReturn { get; set; } = true;
+    public List<string> AllowedReturnTypes { get; set; } = ["QUALITY_DEFECT", "NEAR_EXPIRY", "WRONG_ITEM"];
+    public List<string> AllowedResolutionTypes { get; set; } = ["REDUCE_PAYABLE", "EXCHANGE", "REFUND"];
+    public string DefaultResolutionType { get; set; } = "REDUCE_PAYABLE";
+    public int? NearExpiryMinDaysLeft { get; set; }
+    public bool RequireEvidenceImage { get; set; } = true;
+    public int? MaxReturnDaysAfterReceipt { get; set; }
+    public bool CostShareEnabled { get; set; }
+    public decimal? StoreCostSharePercent { get; set; }
+    public decimal? SupplierCostSharePercent { get; set; }
+    public string CostShareBase { get; set; } = "REPLACEMENT_VALUE";
+    public bool RequireStorePaymentBeforeReplacement { get; set; } = true;
+    public string? Notes { get; set; }
+    public bool IsActive { get; set; } = true;
+}
+
+public class UpdateSupplierReturnPolicyCommand
+{
+    public bool AllowReturn { get; set; } = true;
+    public List<string> AllowedReturnTypes { get; set; } = ["QUALITY_DEFECT", "NEAR_EXPIRY", "WRONG_ITEM"];
+    public List<string> AllowedResolutionTypes { get; set; } = ["REDUCE_PAYABLE", "EXCHANGE", "REFUND"];
+    public string DefaultResolutionType { get; set; } = "REDUCE_PAYABLE";
+    public int? NearExpiryMinDaysLeft { get; set; }
+    public bool RequireEvidenceImage { get; set; } = true;
+    public int? MaxReturnDaysAfterReceipt { get; set; }
+    public bool CostShareEnabled { get; set; }
+    public decimal? StoreCostSharePercent { get; set; }
+    public decimal? SupplierCostSharePercent { get; set; }
+    public string CostShareBase { get; set; } = "REPLACEMENT_VALUE";
+    public bool RequireStorePaymentBeforeReplacement { get; set; } = true;
+    public string? Notes { get; set; }
+}
+
 public class SupplierBlackoutDateDto
 {
     public Guid? Id { get; set; }

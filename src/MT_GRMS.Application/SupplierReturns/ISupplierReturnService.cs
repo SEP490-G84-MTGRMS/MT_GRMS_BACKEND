@@ -49,4 +49,17 @@ public interface ISupplierReturnService
         Guid id,
         CancelSupplierReturnCommand command,
         CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ExchangePurchaseOrderSummaryDto>> CreateExchangePurchaseOrdersAsync(
+        Guid id,
+        CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<ExchangePurchaseOrderSummaryDto>> GetRelatedPurchaseOrdersAsync(
+        Guid id,
+        CancellationToken cancellationToken = default);
+
+    Task<SupplierReturnDetailDto> RecordCostSharePaymentAsync(
+        Guid id,
+        RecordCostSharePaymentCommand command,
+        CancellationToken cancellationToken = default);
 }

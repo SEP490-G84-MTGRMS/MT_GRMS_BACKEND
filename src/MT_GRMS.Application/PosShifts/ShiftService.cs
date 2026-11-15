@@ -119,8 +119,8 @@ public class ShiftService : IShiftService
         {
             foreach (var sched in branchSchedules)
             {
-                var start = sched.AllowedCheckInStart != TimeSpan.Zero ? sched.AllowedCheckInStart : sched.PlannedStartTime;
-                var end = sched.AllowedCheckInEnd != TimeSpan.Zero ? sched.AllowedCheckInEnd : sched.PlannedEndTime;
+                var start = sched.PlannedStartTime;
+                var end = sched.PlannedEndTime;
                 var currentTime = nowVn.TimeOfDay;
                 var isCurrentSchedule = (!sched.IsCheckInNextDay && end >= start)
                     ? currentTime >= start && currentTime <= end
@@ -1292,13 +1292,10 @@ public class ShiftService : IShiftService
         var buffer = TimeSpan.FromMinutes(30);
         foreach (var s in schedules)
         {
-            var startWindow = (s.PlannedStartTime == TimeSpan.Zero || s.AllowedCheckInStart != TimeSpan.Zero)
-                ? s.AllowedCheckInStart
-                : (s.PlannedStartTime > buffer ? s.PlannedStartTime.Subtract(buffer) : TimeSpan.Zero);
-
-            var endWindow = (s.AllowedCheckInEnd >= new TimeSpan(23, 59, 0) || s.PlannedEndTime >= new TimeSpan(23, 59, 0))
+            var startWindow = s.PlannedStartTime > buffer ? s.PlannedStartTime.Subtract(buffer) : TimeSpan.Zero;
+            var endWindow = s.PlannedEndTime >= new TimeSpan(23, 59, 0)
                 ? TimeSpan.FromDays(1)
-                : (s.AllowedCheckInEnd != TimeSpan.Zero ? s.AllowedCheckInEnd : s.PlannedEndTime.Add(buffer));
+                : s.PlannedEndTime.Add(buffer);
 
             bool isInShift;
             if (!s.IsCheckInNextDay && endWindow >= startWindow)

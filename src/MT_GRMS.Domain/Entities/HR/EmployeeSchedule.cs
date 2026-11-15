@@ -22,8 +22,6 @@ public class EmployeeSchedule : BaseTenantEntity
     public TimeSpan PlannedStartTime { get; set; }
     public TimeSpan PlannedEndTime { get; set; }
     public decimal DurationHours { get; set; } = 4.00m;
-    public TimeSpan AllowedCheckInStart { get; set; }
-    public TimeSpan AllowedCheckInEnd { get; set; }
     public bool IsCheckInNextDay { get; set; } = false;       // Ca kết thúc vào ngày hôm sau
 
     // Dữ liệu chấm công thực tế
@@ -50,7 +48,6 @@ public class EmployeeSchedule : BaseTenantEntity
     public string? ApprovalType { get; set; }
     public ScheduleApprovalStatus ApprovalStatus { get; set; } = ScheduleApprovalStatus.None;
     public string? ApprovalReason { get; set; }
-    public string? EvidenceImageUrl { get; set; }
     public string? ApprovedBy { get; set; }
     public DateTime? ApprovedAt { get; set; }
 

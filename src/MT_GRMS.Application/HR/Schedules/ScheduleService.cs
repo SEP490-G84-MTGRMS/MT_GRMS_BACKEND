@@ -2,6 +2,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
+using MT_GRMS.Application.HR.Payslips;
 using MT_GRMS.Application.HR.Schedules.Dtos;
 using MT_GRMS.Application.HR.ShiftConfigs;
 using MT_GRMS.Domain.Entities.HR;
@@ -17,6 +18,7 @@ public class ScheduleService : IScheduleService
     private readonly IShiftConfigRepository _shiftConfigRepository;
     private readonly IBranchAttendancePolicyRepository? _policyRepository;
     private readonly ICloudinaryService? _cloudinaryService;
+    private readonly IPayslipRepository? _payslipRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
 
@@ -27,7 +29,8 @@ public class ScheduleService : IScheduleService
         IUnitOfWork unitOfWork,
         ITenantContext tenantContext,
         IBranchAttendancePolicyRepository? policyRepository = null,
-        ICloudinaryService? cloudinaryService = null)
+        ICloudinaryService? cloudinaryService = null,
+        IPayslipRepository? payslipRepository = null)
     {
         _scheduleRepository = scheduleRepository;
         _employeeRepository = employeeRepository;
@@ -36,6 +39,7 @@ public class ScheduleService : IScheduleService
         _tenantContext = tenantContext;
         _policyRepository = policyRepository;
         _cloudinaryService = cloudinaryService;
+        _payslipRepository = payslipRepository;
     }
 
     public async Task<ScheduleResponse> CreateAsync(
@@ -44,6 +48,18 @@ public class ScheduleService : IScheduleService
     {
         var employee = await _employeeRepository.GetByIdAsync(request.EmployeeId, cancellationToken)
             ?? throw new NotFoundException($"Nhân viên với ID {request.EmployeeId} không tồn tại.");
+
+        if (employee.Status != EmployeeStatus.Active)
+        {
+            throw new BusinessException("EMPLOYEE_INACTIVE", $"Không thể phân ca cho nhân viên \"{employee.FullName}\" vì đã ngừng làm việc.");
+        }
+
+        if (employee.StartDate.HasValue && request.WorkDate.Date < employee.StartDate.Value.Date)
+        {
+            throw new BusinessException(
+                "WORK_DATE_BEFORE_START_DATE",
+                $"Không thể phân ca cho nhân viên \"{employee.FullName}\" vào ngày {request.WorkDate:dd/MM/yyyy} trước ngày bắt đầu làm việc ({employee.StartDate.Value:dd/MM/yyyy}).");
+        }
 
         ShiftConfig? shiftConfig = null;
         if (request.ShiftConfigId.HasValue)
@@ -64,7 +80,7 @@ public class ScheduleService : IScheduleService
             workDate.AddDays(1),
             cancellationToken);
 
-        CheckConflict(employee, resolved.ShiftName, startDateTime, endDateTime, workDate, existingSchedules);
+        CheckConflict(employee, request.ShiftConfigId, resolved.ShiftName, startDateTime, endDateTime, resolved.DurationHours, workDate, existingSchedules);
 
         var schedule = new EmployeeSchedule
         {
@@ -78,8 +94,6 @@ public class ScheduleService : IScheduleService
             PlannedStartTime = resolved.StartTime,
             PlannedEndTime = resolved.EndTime,
             DurationHours = resolved.DurationHours,
-            AllowedCheckInStart = resolved.AllowedCheckInStart,
-            AllowedCheckInEnd = resolved.AllowedCheckInEnd,
             IsCheckInNextDay = resolved.IsNextDay,
             Status = ScheduleStatus.Draft
         };
@@ -128,6 +142,10 @@ public class ScheduleService : IScheduleService
         {
             var emp = await _employeeRepository.GetByIdAsync(empId, cancellationToken)
                 ?? throw new NotFoundException($"Nhân viên với ID {empId} không tồn tại.");
+            if (emp.Status != EmployeeStatus.Active)
+            {
+                throw new BusinessException("EMPLOYEE_INACTIVE", $"Không thể phân ca cho nhân viên \"{emp.FullName}\" vì đã ngừng làm việc.");
+            }
             employees[empId] = emp;
         }
 
@@ -155,11 +173,17 @@ public class ScheduleService : IScheduleService
             cancellationToken)).ToList();
 
         var newSchedules = new List<EmployeeSchedule>();
-        var batchIntervals = new List<(Guid EmployeeId, string ShiftName, DateTime Start, DateTime End, DateTime WorkDate)>();
+        var batchIntervals = new List<(Guid EmployeeId, Guid? ShiftConfigId, string ShiftName, DateTime Start, DateTime End, DateTime WorkDate, decimal DurationHours)>();
 
         foreach (var item in schedulesToProcess)
         {
             var employee = employees[item.EmployeeId];
+            if (employee.StartDate.HasValue && item.WorkDate.Date < employee.StartDate.Value.Date)
+            {
+                throw new BusinessException(
+                    "WORK_DATE_BEFORE_START_DATE",
+                    $"Không thể phân ca cho nhân viên \"{employee.FullName}\" vào ngày {item.WorkDate:dd/MM/yyyy} trước ngày bắt đầu làm việc ({employee.StartDate.Value:dd/MM/yyyy}).");
+            }
             ShiftConfig? shiftConfig = item.ShiftConfigId.HasValue ? shiftConfigs[item.ShiftConfigId.Value] : null;
 
             var resolved = ResolveShiftInfo(item, shiftConfig);
@@ -167,35 +191,36 @@ public class ScheduleService : IScheduleService
             var startDateTime = GetStartDateTime(workDate, resolved.StartTime);
             var endDateTime = GetEndDateTime(workDate, resolved.StartTime, resolved.EndTime, resolved.IsNextDay);
 
-            // 1. Kiểm tra xung đột với nội bộ danh sách batch gửi lên (cho phép nhiều ca, miễn trùng không quá 12 giờ)
-            var intraBatchOverlap = TimeSpan.Zero;
+            // 1. Kiểm tra xung đột với nội bộ danh sách batch gửi lên (không trùng ca, không chồng lấn giờ, tổng giờ <= 12h/ngày)
             foreach (var b in batchIntervals.Where(b => b.EmployeeId == item.EmployeeId && b.WorkDate >= workDate.AddDays(-1) && b.WorkDate <= workDate.AddDays(1)))
             {
+                if (b.WorkDate == workDate && (
+                    (item.ShiftConfigId.HasValue && b.ShiftConfigId == item.ShiftConfigId) ||
+                    string.Equals(b.ShiftName.Trim(), resolved.ShiftName.Trim(), StringComparison.OrdinalIgnoreCase)))
+                {
+                    throw new BusinessException(
+                        "SCHEDULE_DUPLICATE_SHIFT",
+                        $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) đã được phân ca [{resolved.ShiftName}] vào ngày {workDate:dd/MM/yyyy}, không thể thêm trùng cùng một ca.");
+                }
+
                 var overlap = CalculateOverlap(startDateTime, endDateTime, b.Start, b.End);
                 if (overlap > TimeSpan.Zero)
                 {
-                    if (overlap.TotalHours > 12)
-                    {
-                        throw new BusinessException(
-                            "SCHEDULE_OVERLAP_EXCEEDED",
-                            $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) bị trùng lặp thời gian làm việc vượt quá 12 giờ vào ngày {workDate:dd/MM/yyyy} ({overlap.TotalHours:0.#} giờ) giữa ca [{resolved.ShiftName} {resolved.StartTime:hh\\:mm}-{resolved.EndTime:hh\\:mm}] và ca [{b.ShiftName} {b.Start:HH:mm}-{b.End:HH:mm}].");
-                    }
-                    intraBatchOverlap += overlap;
+                    throw new BusinessException(
+                        "SCHEDULE_TIME_OVERLAP",
+                        $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) bị trùng khung giờ làm việc vào ngày {workDate:dd/MM/yyyy} giữa ca [{resolved.ShiftName} {resolved.StartTime:hh\\:mm}-{resolved.EndTime:hh\\:mm}] và ca [{b.ShiftName} {b.Start:HH:mm}-{b.End:HH:mm}].");
                 }
             }
 
-            if (intraBatchOverlap.TotalHours > 12)
-            {
-                throw new BusinessException(
-                    "SCHEDULE_OVERLAP_EXCEEDED",
-                    $"Tổng thời gian trùng lặp các ca trong ngày {workDate:dd/MM/yyyy} của nhân viên {employee.FullName} ({employee.EmployeeCode}) trong danh sách phân ca vượt quá 12 giờ ({intraBatchOverlap.TotalHours:0.#} giờ).");
-            }
+            var intraBatchSameDayHours = batchIntervals
+                .Where(b => b.EmployeeId == item.EmployeeId && b.WorkDate == workDate)
+                .Sum(b => b.DurationHours);
 
             // 2. Kiểm tra xung đột với dữ liệu hiện có trong CSDL
             var empDbSchedules = existingSchedules.Where(s => s.EmployeeId == item.EmployeeId).ToList();
-            CheckConflict(employee, resolved.ShiftName, startDateTime, endDateTime, workDate, empDbSchedules, intraBatchOverlap);
+            CheckConflict(employee, item.ShiftConfigId, resolved.ShiftName, startDateTime, endDateTime, resolved.DurationHours, workDate, empDbSchedules, intraBatchSameDayHours);
 
-            batchIntervals.Add((item.EmployeeId, resolved.ShiftName, startDateTime, endDateTime, workDate));
+            batchIntervals.Add((item.EmployeeId, item.ShiftConfigId, resolved.ShiftName, startDateTime, endDateTime, workDate, resolved.DurationHours));
 
             var schedule = new EmployeeSchedule
             {
@@ -209,8 +234,6 @@ public class ScheduleService : IScheduleService
                 PlannedStartTime = resolved.StartTime,
                 PlannedEndTime = resolved.EndTime,
                 DurationHours = resolved.DurationHours,
-                AllowedCheckInStart = resolved.AllowedCheckInStart,
-                AllowedCheckInEnd = resolved.AllowedCheckInEnd,
                 IsCheckInNextDay = resolved.IsNextDay,
                 Status = ScheduleStatus.Draft,
                 Employee = employee
@@ -279,8 +302,6 @@ public class ScheduleService : IScheduleService
                         request.PlannedStartTime,
                         request.PlannedEndTime,
                         request.DurationHours,
-                        request.AllowedCheckInStart,
-                        request.AllowedCheckInEnd,
                         request.IsCheckInNextDay
                     ));
                 }
@@ -327,6 +348,12 @@ public class ScheduleService : IScheduleService
         }
 
         var workDate = (request.WorkDate ?? schedule.WorkDate).Date;
+        if (employee.StartDate.HasValue && workDate < employee.StartDate.Value.Date)
+        {
+            throw new BusinessException(
+                "WORK_DATE_BEFORE_START_DATE",
+                $"Không thể phân ca cho nhân viên \"{employee.FullName}\" vào ngày {workDate:dd/MM/yyyy} trước ngày bắt đầu làm việc ({employee.StartDate.Value:dd/MM/yyyy}).");
+        }
         var startTime = request.PlannedStartTime ?? (shiftConfig != null ? shiftConfig.StartTime : schedule.PlannedStartTime);
         var endTime = request.PlannedEndTime ?? (shiftConfig != null ? shiftConfig.EndTime : schedule.PlannedEndTime);
         var isNextDay = request.IsCheckInNextDay ?? (shiftConfig != null ? shiftConfig.IsCheckInNextDay : schedule.IsCheckInNextDay);
@@ -346,7 +373,8 @@ public class ScheduleService : IScheduleService
             workDate.AddDays(1),
             cancellationToken)).Where(s => s.Id != id).ToList();
 
-        CheckConflict(employee, shiftName, startDateTime, endDateTime, workDate, existingSchedules);
+        var newDurationHours = request.DurationHours ?? shiftConfig?.DurationHours ?? (decimal)(endDateTime - startDateTime).TotalHours;
+        CheckConflict(employee, shiftConfigId, shiftName, startDateTime, endDateTime, newDurationHours, workDate, existingSchedules);
 
         schedule.EmployeeId = employeeId;
         if (request.BranchId.HasValue && request.BranchId.Value != Guid.Empty)
@@ -370,23 +398,6 @@ public class ScheduleService : IScheduleService
             schedule.DurationHours = shiftConfig.DurationHours;
         }
 
-        if (request.AllowedCheckInStart.HasValue)
-        {
-            schedule.AllowedCheckInStart = request.AllowedCheckInStart.Value;
-        }
-        else if (shiftConfig != null)
-        {
-            schedule.AllowedCheckInStart = shiftConfig.AllowedCheckInStart;
-        }
-
-        if (request.AllowedCheckInEnd.HasValue)
-        {
-            schedule.AllowedCheckInEnd = request.AllowedCheckInEnd.Value;
-        }
-        else if (shiftConfig != null)
-        {
-            schedule.AllowedCheckInEnd = shiftConfig.AllowedCheckInEnd;
-        }
 
         if (request.Status.HasValue)
         {
@@ -404,6 +415,18 @@ public class ScheduleService : IScheduleService
     {
         var schedule = await _scheduleRepository.GetByIdAsync(id, cancellationToken)
             ?? throw new NotFoundException($"Lịch làm việc với ID {id} không tồn tại.");
+
+        var isLeaveSchedule = schedule.IsLeave
+            || schedule.Status == ScheduleStatus.OnLeave
+            || string.Equals(schedule.ApprovalType, "PAID_LEAVE", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(schedule.ApprovalType, "UNPAID_LEAVE", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(schedule.CheckInMethod, "MANUAL_PAID_LEAVE", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(schedule.CheckInMethod, "MANUAL_UNPAID_LEAVE", StringComparison.OrdinalIgnoreCase);
+
+        if (isLeaveSchedule)
+        {
+            throw new BusinessException("Không thể xóa ca làm việc đang ở trạng thái nghỉ phép (nghỉ phép có lương hoặc không lương).");
+        }
 
         if (schedule.Status == ScheduleStatus.Completed)
         {
@@ -509,7 +532,7 @@ public class ScheduleService : IScheduleService
         return new PublishSchedulesResponse(count, $"Đã ban hành thành công {count} ca làm việc.");
     }
 
-    private static (string ShiftCode, string ShiftName, TimeSpan StartTime, TimeSpan EndTime, decimal DurationHours, TimeSpan AllowedCheckInStart, TimeSpan AllowedCheckInEnd, bool IsNextDay)
+    private static (string ShiftCode, string ShiftName, TimeSpan StartTime, TimeSpan EndTime, decimal DurationHours, bool IsNextDay)
         ResolveShiftInfo(CreateScheduleItemRequest item, ShiftConfig? config)
     {
         if (config != null)
@@ -523,9 +546,7 @@ public class ScheduleService : IScheduleService
             var end = item.PlannedEndTime ?? config.EndTime;
             var isNext = item.IsCheckInNextDay ?? config.IsCheckInNextDay;
             var dur = item.DurationHours ?? config.DurationHours;
-            var inStart = item.AllowedCheckInStart ?? config.AllowedCheckInStart;
-            var inEnd = item.AllowedCheckInEnd ?? config.AllowedCheckInEnd;
-            return (code, name, start, end, dur, inStart, inEnd, isNext);
+            return (code, name, start, end, dur, isNext);
         }
         else
         {
@@ -536,9 +557,7 @@ public class ScheduleService : IScheduleService
             var end = item.PlannedEndTime ?? TimeSpan.FromHours(17);
             var isNext = item.IsCheckInNextDay ?? (end <= start);
             var dur = item.DurationHours ?? (decimal)(isNext ? (end.Add(TimeSpan.FromDays(1)) - start).TotalHours : (end - start).TotalHours);
-            var inStart = item.AllowedCheckInStart ?? (start >= TimeSpan.FromMinutes(15) ? start.Subtract(TimeSpan.FromMinutes(15)) : TimeSpan.Zero);
-            var inEnd = item.AllowedCheckInEnd ?? start.Add(TimeSpan.FromMinutes(30));
-            return (code, name, start, end, dur, inStart, inEnd, isNext);
+            return (code, name, start, end, dur, isNext);
         }
     }
 
@@ -572,41 +591,64 @@ public class ScheduleService : IScheduleService
 
     private static void CheckConflict(
         Employee employee,
+        Guid? newShiftConfigId,
         string newShiftName,
         DateTime newStart,
         DateTime newEnd,
+        decimal newDurationHours,
         DateTime workDate,
         IEnumerable<EmployeeSchedule> existingSchedules,
-        TimeSpan existingOverlapOffset = default)
+        decimal existingDayHoursOffset = 0m)
     {
-        var totalOverlap = existingOverlapOffset;
+        var totalDayHours = existingDayHoursOffset + newDurationHours;
 
         foreach (var ex in existingSchedules)
         {
             if (ex.Status == ScheduleStatus.Cancelled) continue;
 
+            // 1. Kiểm tra trùng lặp cùng ca trong cùng một ngày
+            if (ex.WorkDate.Date == workDate.Date)
+            {
+                var isSameShift = (newShiftConfigId.HasValue && ex.ShiftConfigId.HasValue && ex.ShiftConfigId.Value == newShiftConfigId.Value) ||
+                                  string.Equals((ex.ShiftName ?? string.Empty).Trim(), (newShiftName ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase);
+
+                if (isSameShift)
+                {
+                    throw new BusinessException(
+                        "SCHEDULE_DUPLICATE_SHIFT",
+                        $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) đã có ca [{ex.ShiftName}] vào ngày {workDate:dd/MM/yyyy}, không thể phân trùng cùng một ca.");
+                }
+
+                var exHours = ex.DurationHours > 0
+                    ? ex.DurationHours
+                    : (decimal)(GetEndDateTime(ex.WorkDate, ex.PlannedStartTime, ex.PlannedEndTime, ex.IsCheckInNextDay) - GetStartDateTime(ex.WorkDate, ex.PlannedStartTime)).TotalHours;
+
+                var exOtHours = (ex.OvertimeMinutes > 0 && ex.ApprovalStatus == ScheduleApprovalStatus.Approved)
+                    ? Math.Round((decimal)ex.OvertimeMinutes / 60m, 2)
+                    : 0m;
+
+                totalDayHours += exHours + exOtHours;
+            }
+
+            // 2. Kiểm tra chồng lấn khung giờ làm việc giữa các ca
             var exStart = GetStartDateTime(ex.WorkDate, ex.PlannedStartTime);
             var exEnd = GetEndDateTime(ex.WorkDate, ex.PlannedStartTime, ex.PlannedEndTime, ex.IsCheckInNextDay);
 
             var overlap = CalculateOverlap(newStart, newEnd, exStart, exEnd);
             if (overlap > TimeSpan.Zero)
             {
-                if (overlap.TotalHours > 12)
-                {
-                    throw new BusinessException(
-                        "SCHEDULE_OVERLAP_EXCEEDED",
-                        $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) có thời gian trùng giữa các ca ngày {workDate:dd/MM/yyyy} vượt quá 12 giờ ({overlap.TotalHours:0.#} giờ) giữa ca [{newShiftName} {newStart:HH:mm}-{newEnd:HH:mm}] và ca [{ex.ShiftName} {ex.PlannedStartTime:hh\\:mm}-{ex.PlannedEndTime:hh\\:mm}].");
-                }
-
-                totalOverlap += overlap;
+                throw new BusinessException(
+                    "SCHEDULE_TIME_OVERLAP",
+                    $"Nhân viên {employee.FullName} ({employee.EmployeeCode}) bị trùng thời gian làm việc vào ngày {workDate:dd/MM/yyyy} giữa ca [{newShiftName} {newStart:HH:mm}-{newEnd:HH:mm}] và ca [{ex.ShiftName} {ex.PlannedStartTime:hh\\:mm}-{ex.PlannedEndTime:hh\\:mm}].");
             }
         }
 
-        if (totalOverlap.TotalHours > 12)
+        // 3. Kiểm tra tổng thời gian làm việc các ca trong ngày không vượt quá 12 giờ
+        if (totalDayHours > 12m)
         {
             throw new BusinessException(
-                "SCHEDULE_OVERLAP_EXCEEDED",
-                $"Tổng thời gian trùng lặp các ca trong ngày {workDate:dd/MM/yyyy} của nhân viên {employee.FullName} ({employee.EmployeeCode}) vượt quá 12 giờ ({totalOverlap.TotalHours:0.#} giờ).");
+                "SCHEDULE_DAILY_HOURS_EXCEEDED",
+                $"Tổng thời gian các ca trong ngày {workDate:dd/MM/yyyy} của nhân viên {employee.FullName} ({employee.EmployeeCode}) là {totalDayHours:0.#}h, vượt quá giới hạn tối đa 12h/ngày.");
         }
     }
 
@@ -708,8 +750,6 @@ public class ScheduleService : IScheduleService
             s.PlannedStartTime,
             s.PlannedEndTime,
             s.DurationHours,
-            s.AllowedCheckInStart,
-            s.AllowedCheckInEnd,
             s.IsCheckInNextDay,
             s.CheckInTime,
             s.CheckOutTime,
@@ -726,7 +766,6 @@ public class ScheduleService : IScheduleService
             s.ApprovalType,
             s.ApprovalStatus,
             s.ApprovalReason,
-            s.EvidenceImageUrl,
             s.ApprovedBy,
             s.ApprovedAt,
             s.CreatedAt,
@@ -769,7 +808,7 @@ public class ScheduleService : IScheduleService
         schedule.ApprovedBy = _tenantContext.CurrentUserId != Guid.Empty
             ? _tenantContext.CurrentUserId.ToString()
             : "Manager";
-        schedule.ApprovedAt = DateTime.UtcNow;
+        schedule.ApprovedAt = DateTime.UtcNow.AddHours(7);
 
         _scheduleRepository.Update(schedule);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -780,6 +819,129 @@ public class ScheduleService : IScheduleService
         }
 
         return MapToResponse(schedule);
+    }
+
+    public async Task<ResetAttendanceResponse> ResetManualAttendanceAsync(
+        Guid id,
+        ResetAttendanceRequest? request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!string.IsNullOrWhiteSpace(_tenantContext.CurrentRole)
+            && !string.Equals(_tenantContext.CurrentRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(_tenantContext.CurrentRole, "ADMIN", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new BusinessException("FORBIDDEN", "Chỉ Chủ cửa hàng hoặc Quản trị viên mới có quyền hủy chấm công.");
+        }
+
+        var schedule = await _scheduleRepository.GetByIdAsync(id, cancellationToken)
+            ?? throw new NotFoundException($"Lịch làm việc với ID {id} không tồn tại.");
+
+        // 1. Kiểm tra khóa bảng lương: chặn hủy nếu ca hoặc kỳ lương tháng của nhân viên đã thanh toán (Paid/Partial)
+        if (schedule.Payslip != null && schedule.Payslip.Status is PayslipStatus.Paid or PayslipStatus.Partial)
+        {
+            throw new BusinessException(
+                "PAYSLIP_LOCKED",
+                "Không thể hủy chấm công vì ca làm việc này đã được chốt và thanh toán trong phiếu lương.");
+        }
+
+        var periodMonth = schedule.WorkDate.ToString("yyyy-MM");
+        var periodPayslip = _payslipRepository != null
+            ? await _payslipRepository.GetByEmployeeAndPeriodAsync(schedule.EmployeeId, periodMonth, cancellationToken)
+            : null;
+
+        if (periodPayslip != null && periodPayslip.Status is PayslipStatus.Paid or PayslipStatus.Partial)
+        {
+            throw new BusinessException(
+                "PAYSLIP_LOCKED",
+                $"Không thể hủy chấm công vì phiếu lương tháng {schedule.WorkDate:MM/yyyy} của nhân viên đã được thanh toán.");
+        }
+
+        var hasUnpaidPayslip = (periodPayslip != null && periodPayslip.Status == PayslipStatus.Unpaid)
+            || (schedule.Payslip != null && schedule.Payslip.Status == PayslipStatus.Unpaid);
+
+        // 2. Chặn hủy nếu đang có phiếu yêu cầu chờ duyệt gắn với ca làm việc này
+        if (schedule.ApprovalRequests.Any(r => !r.IsDeleted && r.Status == ScheduleApprovalStatus.Pending))
+        {
+            throw new BusinessException(
+                "PENDING_APPROVAL_REQUESTS",
+                "Ca làm việc đang có phiếu yêu cầu chờ duyệt. Vui lòng xử lý phiếu yêu cầu trước khi hủy chấm công.");
+        }
+
+        // 3. Chặn hủy nếu ca làm việc chưa có dữ liệu chấm công
+        var hasAttendanceData = schedule.CheckInTime.HasValue
+            || schedule.CheckOutTime.HasValue
+            || schedule.IsLeave
+            || string.Equals(schedule.ApprovalType, "PAID_LEAVE", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(schedule.ApprovalType, "UNPAID_LEAVE", StringComparison.OrdinalIgnoreCase)
+            || schedule.Status is ScheduleStatus.InProgress or ScheduleStatus.Completed or ScheduleStatus.Cancelled or ScheduleStatus.OnLeave;
+
+        if (!hasAttendanceData)
+        {
+            throw new BusinessException(
+                "NO_ATTENDANCE_DATA",
+                "Ca làm việc chưa có dữ liệu chấm công để hủy.");
+        }
+
+        // 4. Kiểm tra lý do hủy chấm công (bắt buộc nếu đã điểm danh bằng FaceID)
+        var trimmedReason = request?.Reason?.Trim();
+        if (!string.IsNullOrEmpty(trimmedReason) && trimmedReason.Length > 255)
+        {
+            throw new BusinessException(
+                "INVALID_RESET_REASON",
+                "Lý do hủy chấm công tối đa 255 ký tự.");
+        }
+
+        var isFaceIdAttendance = string.Equals(schedule.CheckInMethod, "FACE_ID", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(schedule.CheckOutMethod, "FACE_ID", StringComparison.OrdinalIgnoreCase);
+
+        if (isFaceIdAttendance && string.IsNullOrWhiteSpace(trimmedReason))
+        {
+            throw new BusinessException(
+                "RESET_REASON_REQUIRED",
+                "Ca làm việc đã chấm công bằng FaceID. Vui lòng nhập lý do khi hủy chấm công.");
+        }
+
+        // 5. Reset dữ liệu chấm công và giữ nguyên thông tin ca phân bổ
+        var vnNow = DateTime.UtcNow.AddHours(7);
+        var actor = _tenantContext.CurrentUserId != Guid.Empty
+            ? _tenantContext.CurrentUserId.ToString()
+            : "Manager";
+
+        schedule.Status = ScheduleStatus.Published;
+        schedule.CheckInTime = null;
+        schedule.CheckOutTime = null;
+        schedule.CheckInMethod = null;
+        schedule.CheckOutMethod = null;
+        schedule.CheckInFaceImageUrl = null;
+        schedule.CheckOutFaceImageUrl = null;
+        schedule.FaceMatchScore = null;
+        schedule.LateMinutes = 0;
+        schedule.EarlyLeaveMinutes = 0;
+        schedule.OvertimeMinutes = 0;
+        schedule.ActualWorkHours = 0.00m;
+        schedule.IsLeave = false;
+        schedule.IsPaidLeave = false;
+        schedule.ApprovalType = null;
+        schedule.ApprovalStatus = ScheduleApprovalStatus.None;
+        schedule.PayslipId = null;
+        schedule.ApprovalReason = string.IsNullOrWhiteSpace(trimmedReason) ? null : trimmedReason;
+        schedule.ApprovedBy = string.IsNullOrWhiteSpace(trimmedReason) ? null : actor;
+        schedule.ApprovedAt = string.IsNullOrWhiteSpace(trimmedReason) ? null : vnNow;
+        schedule.UpdatedAt = vnNow;
+
+        _scheduleRepository.Update(schedule);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        if (schedule.Employee == null)
+        {
+            schedule.Employee = await _employeeRepository.GetByIdAsync(schedule.EmployeeId, cancellationToken);
+        }
+
+        var message = hasUnpaidPayslip
+            ? $"Đã hủy chấm công. Lưu ý: nhân viên đang có phiếu lương tháng {schedule.WorkDate:MM/yyyy} ở trạng thái chưa thanh toán, vui lòng tính lại lương để cập nhật công."
+            : "Đã hủy chấm công và đưa ca làm việc về trạng thái chờ vào ca.";
+
+        return new ResetAttendanceResponse(MapToResponse(schedule), hasUnpaidPayslip, message);
     }
 
     private static void ApplyWorkingAttendance(
@@ -847,21 +1009,35 @@ public class ScheduleService : IScheduleService
             }
         }
 
-        // Không tự tiện tính OT khi check-in sớm hoặc về muộn khi chưa có đơn xin OT được duyệt (ScheduleRequestType.Overtime)
-        // Đơn OT bắt buộc phải được chấp thuận (ApprovalType == "OVERTIME") mới được ghi nhận giờ làm thêm
-        var approvedOtMinutes = 0;
-        if (schedule.ApprovalType == "OVERTIME" || (schedule.ApprovalStatus == ScheduleApprovalStatus.Approved && schedule.OvertimeMinutes > 0))
-        {
-            approvedOtMinutes = schedule.OvertimeMinutes;
-        }
-
-        // Thời gian làm việc thực tế chỉ tính trong khung ca kế hoạch, không tính dôi ra ngoài ca nếu không có đơn OT được duyệt
+        // Thời gian làm việc thực tế trong ca chỉ tính trong khung ca kế hoạch (không cộng dồn giờ OT vào ActualWorkHours để tránh tính trùng lương chính + lương OT)
         var effectiveStart = checkInDateTime < plannedStartDateTime ? plannedStartDateTime : checkInDateTime;
         var effectiveEnd = checkOutDateTime > plannedEndDateTime ? plannedEndDateTime : checkOutDateTime;
         var inShiftMinutes = Math.Max(0, (int)(effectiveEnd - effectiveStart).TotalMinutes);
         var inShiftHours = Math.Round((decimal)inShiftMinutes / 60m, 2);
-        var otHours = Math.Round((decimal)approvedOtMinutes / 60m, 2);
-        var actualHours = inShiftHours + otHours;
+
+        // Không tự tiện tính OT khi check-in sớm hoặc về muộn khi chưa có đơn xin OT được duyệt (ScheduleRequestType.Overtime).
+        // Chỉ khi có đơn OT được Chủ cửa hàng phê duyệt thì thời gian đi sớm / về muộn dôi ra ngoài khung ca mới được tính OT, và tổng Giờ làm + OT không vượt quá 12h (720 phút)/ngày.
+        var earlyExtraMinutes = checkInDateTime < plannedStartDateTime ? (int)(plannedStartDateTime - checkInDateTime).TotalMinutes : 0;
+        var lateExtraMinutes = checkOutDateTime > plannedEndDateTime ? (int)(checkOutDateTime - plannedEndDateTime).TotalMinutes : 0;
+        var extraOutsideMinutes = Math.Max(0, earlyExtraMinutes + lateExtraMinutes);
+
+        var approvedOtMinutes = 0;
+        if (schedule.ApprovalType == "OVERTIME" || (schedule.ApprovalStatus == ScheduleApprovalStatus.Approved && schedule.OvertimeMinutes > 0))
+        {
+            if (schedule.OvertimeMinutes > 0)
+            {
+                approvedOtMinutes = extraOutsideMinutes > 0
+                    ? Math.Min(schedule.OvertimeMinutes, extraOutsideMinutes)
+                    : schedule.OvertimeMinutes;
+            }
+            else
+            {
+                approvedOtMinutes = extraOutsideMinutes;
+            }
+
+            var maxAllowedOtMinutes = Math.Max(0, 720 - inShiftMinutes);
+            approvedOtMinutes = Math.Min(approvedOtMinutes, maxAllowedOtMinutes);
+        }
 
         schedule.CheckInTime = checkInDateTime;
         schedule.CheckOutTime = checkOutDateTime;
@@ -870,7 +1046,7 @@ public class ScheduleService : IScheduleService
         schedule.LateMinutes = lateMinutes;
         schedule.EarlyLeaveMinutes = earlyLeaveMinutes;
         schedule.OvertimeMinutes = approvedOtMinutes;
-        schedule.ActualWorkHours = actualHours;
+        schedule.ActualWorkHours = inShiftHours;
         schedule.Status = ScheduleStatus.Completed;
         if (schedule.ApprovalType != "OVERTIME")
         {
@@ -892,6 +1068,8 @@ public class ScheduleService : IScheduleService
         schedule.EarlyLeaveMinutes = 0;
         schedule.OvertimeMinutes = 0;
         schedule.ActualWorkHours = schedule.DurationHours;
+        schedule.IsLeave = true;
+        schedule.IsPaidLeave = true;
         schedule.Status = ScheduleStatus.Completed;
         schedule.ApprovalType = "PAID_LEAVE";
         schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
@@ -910,6 +1088,8 @@ public class ScheduleService : IScheduleService
         schedule.EarlyLeaveMinutes = 0;
         schedule.OvertimeMinutes = 0;
         schedule.ActualWorkHours = 0.00m;
+        schedule.IsLeave = true;
+        schedule.IsPaidLeave = false;
         schedule.Status = ScheduleStatus.Cancelled;
         schedule.ApprovalType = "UNPAID_LEAVE";
         schedule.ApprovalStatus = ScheduleApprovalStatus.Approved;
@@ -1011,11 +1191,17 @@ public class ScheduleService : IScheduleService
             policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
         }
 
-        var lateThreshold = policy?.LateThresholdMinutes ?? 0;
         if (vnNow > plannedStartDateTime)
         {
             var diff = (int)(vnNow - plannedStartDateTime).TotalMinutes;
-            if (diff > lateThreshold)
+            if (policy != null)
+            {
+                if (policy.EnableLateThreshold && diff > policy.LateThresholdMinutes)
+                {
+                    lateMinutes = diff;
+                }
+            }
+            else
             {
                 lateMinutes = diff;
             }
@@ -1083,35 +1269,54 @@ public class ScheduleService : IScheduleService
             policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
         }
 
-        var earlyLeaveThreshold = policy?.EarlyLeaveThresholdMinutes ?? 0;
         var earlyLeaveMinutes = 0;
         if (vnNow < plannedEndDateTime)
         {
             var diff = (int)(plannedEndDateTime - vnNow).TotalMinutes;
-            if (diff > earlyLeaveThreshold)
+            if (policy != null)
+            {
+                if (policy.EnableEarlyLeaveThreshold && diff > policy.EarlyLeaveThresholdMinutes)
+                {
+                    earlyLeaveMinutes = diff;
+                }
+            }
+            else
             {
                 earlyLeaveMinutes = diff;
             }
         }
 
-        // Tăng ca (OT) bắt buộc phải có đơn xin OT được phê duyệt (ScheduleRequestType.Overtime)
-        // Khi check-out FaceID, không tự tiện tính OT khi check-in sớm hoặc về muộn nếu chưa có đơn OT được duyệt.
-        // Nếu không có đơn xin OT được chấp thuận, thời gian dôi ra ngoài ca không được tính là OT và nhân viên vẫn bị tính đi muộn / về sớm.
-        var approvedOtMinutes = 0;
-        if (schedule.ApprovalType == "OVERTIME" || (schedule.ApprovalStatus == ScheduleApprovalStatus.Approved && schedule.OvertimeMinutes > 0))
-        {
-            approvedOtMinutes = schedule.OvertimeMinutes;
-        }
-
-        // Tính giờ làm việc thực tế chuẩn trong khung ca + OT đã duyệt (nếu có)
+        // Tính giờ làm việc thực tế chuẩn trong khung ca (không cộng dồn giờ OT vào ActualWorkHours để tránh tính trùng lương chính + lương OT)
         // CheckInTime đã được lưu theo giờ UTC+7
         var checkInVn = schedule.CheckInTime.Value;
         var effectiveStart = checkInVn < plannedStartDateTime ? plannedStartDateTime : checkInVn;
         var effectiveEnd = vnNow > plannedEndDateTime ? plannedEndDateTime : vnNow;
         var inShiftMinutes = Math.Max(0, (int)(effectiveEnd - effectiveStart).TotalMinutes);
         var inShiftHours = Math.Round((decimal)inShiftMinutes / 60m, 2);
-        var approvedOtHours = Math.Round((decimal)approvedOtMinutes / 60m, 2);
-        var actualHours = inShiftHours + approvedOtHours;
+
+        // Tăng ca (OT) bắt buộc phải có đơn xin OT được phê duyệt (ScheduleRequestType.Overtime).
+        // Chỉ khi có đơn OT được Chủ cửa hàng phê duyệt thì thời gian đi sớm / về muộn dôi ra ngoài khung ca mới được tính OT, và tổng Giờ làm + OT không vượt quá 12h (720 phút)/ngày.
+        var earlyExtraMinutes = checkInVn < plannedStartDateTime ? (int)(plannedStartDateTime - checkInVn).TotalMinutes : 0;
+        var lateExtraMinutes = vnNow > plannedEndDateTime ? (int)(vnNow - plannedEndDateTime).TotalMinutes : 0;
+        var extraOutsideMinutes = Math.Max(0, earlyExtraMinutes + lateExtraMinutes);
+
+        var approvedOtMinutes = 0;
+        if (schedule.ApprovalType == "OVERTIME" || (schedule.ApprovalStatus == ScheduleApprovalStatus.Approved && schedule.OvertimeMinutes > 0))
+        {
+            if (schedule.OvertimeMinutes > 0)
+            {
+                approvedOtMinutes = extraOutsideMinutes > 0
+                    ? Math.Min(schedule.OvertimeMinutes, extraOutsideMinutes)
+                    : schedule.OvertimeMinutes;
+            }
+            else
+            {
+                approvedOtMinutes = extraOutsideMinutes;
+            }
+
+            var maxAllowedOtMinutes = Math.Max(0, 720 - inShiftMinutes);
+            approvedOtMinutes = Math.Min(approvedOtMinutes, maxAllowedOtMinutes);
+        }
 
         schedule.CheckOutTime = vnNow;
         schedule.CheckOutMethod = "FACE_ID";
@@ -1119,7 +1324,7 @@ public class ScheduleService : IScheduleService
         schedule.FaceMatchScore = request.FaceMatchScore;
         schedule.EarlyLeaveMinutes = earlyLeaveMinutes;
         schedule.OvertimeMinutes = approvedOtMinutes;
-        schedule.ActualWorkHours = actualHours;
+        schedule.ActualWorkHours = inShiftHours;
         schedule.Status = ScheduleStatus.Completed;
         schedule.UpdatedAt = vnNow;
 
@@ -1211,13 +1416,10 @@ public class ScheduleService : IScheduleService
         }
 
         var buffer = TimeSpan.FromMinutes(30);
-        var startWindow = (schedule.PlannedStartTime == TimeSpan.Zero || schedule.AllowedCheckInStart != TimeSpan.Zero)
-            ? schedule.AllowedCheckInStart
-            : (schedule.PlannedStartTime > buffer ? schedule.PlannedStartTime.Subtract(buffer) : TimeSpan.Zero);
-
-        var endWindow = (schedule.AllowedCheckInEnd >= new TimeSpan(23, 59, 0) || schedule.PlannedEndTime >= new TimeSpan(23, 59, 0))
+        var startWindow = schedule.PlannedStartTime > buffer ? schedule.PlannedStartTime.Subtract(buffer) : TimeSpan.Zero;
+        var endWindow = schedule.PlannedEndTime >= new TimeSpan(23, 59, 0)
             ? TimeSpan.FromDays(1)
-            : (schedule.AllowedCheckInEnd != TimeSpan.Zero ? schedule.AllowedCheckInEnd : schedule.PlannedEndTime.Add(buffer));
+            : schedule.PlannedEndTime.Add(buffer);
 
         var currentTimeOfDay = vnNow.TimeOfDay;
         bool isInWindow = (!schedule.IsCheckInNextDay && endWindow >= startWindow)

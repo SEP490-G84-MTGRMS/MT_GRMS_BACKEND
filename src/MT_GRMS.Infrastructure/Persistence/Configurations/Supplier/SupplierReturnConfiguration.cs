@@ -26,6 +26,16 @@ public class SupplierReturnConfiguration : IEntityTypeConfiguration<SupplierRetu
         builder.Property(x => x.StocktakeCode).HasMaxLength(50);
         builder.Property(x => x.ResolutionType).HasMaxLength(50).HasDefaultValue("REDUCE_PAYABLE");
         builder.Property(x => x.SettlementStatus).HasMaxLength(50).HasDefaultValue("UNSETTLED");
+        builder.Property(x => x.ReplacementStatus).HasMaxLength(50).HasDefaultValue("NOT_REQUIRED");
+        builder.Property(x => x.PolicySnapshotJson);
+        builder.Property(x => x.StoreCostSharePercentSnapshot).HasColumnType("decimal(5,2)");
+        builder.Property(x => x.SupplierCostSharePercentSnapshot).HasColumnType("decimal(5,2)");
+        builder.Property(x => x.ReplacementValue).HasColumnType("decimal(18,2)").HasDefaultValue(0m);
+        builder.Property(x => x.StorePayableAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0m);
+        builder.Property(x => x.StorePaidAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0m);
+        builder.Property(x => x.SupplierBearAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0m);
+        builder.Property(x => x.SupplierConfirmedBy).HasMaxLength(100);
+        builder.Property(x => x.HandoverNote).HasMaxLength(1000);
 
         builder.Property(x => x.TotalRequestedQty).HasColumnType("decimal(18,3)").IsRequired();
         builder.Property(x => x.TotalApprovedQty).HasColumnType("decimal(18,3)").IsRequired();

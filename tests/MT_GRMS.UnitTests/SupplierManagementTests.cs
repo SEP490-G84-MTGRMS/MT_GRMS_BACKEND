@@ -42,6 +42,15 @@ public class SupplierManagementTests
         public List<Supplier> Suppliers { get; } = new();
         public List<SupplierAPLedger> Ledgers { get; } = new();
         public List<SupplierBlackoutDate> BlackoutDates { get; } = new();
+        public List<SupplierReturnPolicy> ReturnPolicies { get; } = new();
+
+        public Task<SupplierReturnPolicy?> GetActiveReturnPolicyAsync(Guid supplierId, CancellationToken cancellationToken = default)
+            => Task.FromResult(ReturnPolicies.FirstOrDefault(p => p.SupplierId == supplierId && p.IsActive));
+        public Task AddReturnPolicyAsync(SupplierReturnPolicy policy, CancellationToken cancellationToken = default)
+        {
+            ReturnPolicies.Add(policy);
+            return Task.CompletedTask;
+        }
 
         public Task AddAsync(Supplier entity, CancellationToken cancellationToken = default)
         {

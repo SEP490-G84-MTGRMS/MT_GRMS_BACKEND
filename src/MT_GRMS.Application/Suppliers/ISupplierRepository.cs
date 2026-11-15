@@ -49,6 +49,9 @@ public interface ISupplierRepository : IRepository<Supplier>
     Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default);
     Task ReplaceBlackoutDatesAsync(Guid supplierId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default);
 
+    Task<SupplierReturnPolicy?> GetActiveReturnPolicyAsync(Guid supplierId, CancellationToken cancellationToken = default);
+    Task AddReturnPolicyAsync(SupplierReturnPolicy policy, CancellationToken cancellationToken = default);
+
     // Supplier Product Management (REQ-SP01 đến REQ-SP06)
     Task<SupplierProduct?> GetSupplierProductAsync(Guid supplierId, Guid productId, CancellationToken cancellationToken = default);
     Task<(IReadOnlyList<SupplierProduct> Items, int TotalCount)> GetPagedSupplierProductsAsync(

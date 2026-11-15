@@ -103,7 +103,14 @@ public record SupplierReturnDetailDto(
     Guid? StocktakeId = null,
     string? StocktakeCode = null,
     string? ResolutionType = "REDUCE_PAYABLE",
-    string? SettlementStatus = "UNSETTLED"
+    string? SettlementStatus = "UNSETTLED",
+    string? ReplacementStatus = "NOT_REQUIRED",
+    decimal? StoreCostSharePercentSnapshot = null,
+    decimal? SupplierCostSharePercentSnapshot = null,
+    decimal ReplacementValue = 0m,
+    decimal StorePayableAmount = 0m,
+    decimal StorePaidAmount = 0m,
+    decimal SupplierBearAmount = 0m
 );
 
 public record EligibleGrnLookupDto(
@@ -182,4 +189,19 @@ public record CompleteHandoverCommand(
 
 public record CancelSupplierReturnCommand(
     string Reason
+);
+
+public record RecordCostSharePaymentCommand(
+    decimal Amount,
+    string? Note = null
+);
+
+public record ExchangePurchaseOrderSummaryDto(
+    Guid Id,
+    string Code,
+    string Status,
+    decimal TotalQty,
+    decimal TotalAmount,
+    DateTime? DeliveryDate,
+    DateTime CreatedAt
 );

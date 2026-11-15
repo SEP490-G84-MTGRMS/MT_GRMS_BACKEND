@@ -61,6 +61,8 @@ public class OrderMatrixSupplierDeliveryConfigDto
     public string CutoffTime { get; set; } = "15:00";
     /// <summary>Số ngày trước ngày giao để chốt đơn (0 = cùng ngày giao). Mặc định 1.</summary>
     public int CutoffDayOffset { get; set; } = 1;
+    /// <summary>MOQ tổng đơn theo ngày giao (từ cấu hình NCC). 0 = không áp dụng.</summary>
+    public int MinOrderQuantity { get; set; }
     public List<int> ActiveDeliveryDays { get; set; } = new() { 1, 2, 3, 4, 5, 6 };
     public List<string> BlackoutDates { get; set; } = new();
 }
@@ -281,6 +283,10 @@ public class PurchaseOrderDto
     public string? CreatedByRole { get; set; }
     public Guid? ParentDraftId { get; set; }
     public DateTime CreatedAt { get; set; }
+    /// <summary>null/MANUAL_MATRIX = mua thường; SUPPLIER_RETURN = đổi hàng.</summary>
+    public string? SourceType { get; set; }
+    public Guid? SourceSupplierReturnId { get; set; }
+    public string? SourceReturnCode { get; set; }
     /// <summary>Phiếu nhập kho DRAFT/COMPLETED đang gắn PO (nếu có).</summary>
     public Guid? ActiveGoodsReceiptId { get; set; }
     public string? ActiveGoodsReceiptCode { get; set; }
@@ -513,4 +519,136 @@ public class DispatchSupplierDetailResponse
     public string Urgency { get; set; } = "later";
     public string Status { get; set; } = "draft";
     public IReadOnlyList<DispatchSupplierDetailBranchDto> Branches { get; set; } = new List<DispatchSupplierDetailBranchDto>();
+}
+
+// ── Matrix Excel Import / Preview ──────────────────────────────────────────
+
+public class MatrixExcelAllowedProductDto
+{
+    public Guid ProductId { get; set; }
+    public Guid SupplierId { get; set; }
+}
+
+public class MatrixExcelPreviewQuery
+{
+    public Guid BranchId { get; set; }
+    public Guid? SupplierId { get; set; }
+    public DateTime ViewFrom { get; set; }
+    public int DurationDays { get; set; } = 7;
+    public List<MatrixExcelAllowedProductDto> AllowedProducts { get; set; } = new();
+    public string? FileName { get; set; }
+    public long FileSize { get; set; }
+}
+
+public class MatrixExcelIssueDto
+{
+    public string Type { get; set; } = "ERROR"; // ERROR | WARNING
+    public int Row { get; set; }
+    public string ProductCode { get; set; } = "-";
+    public string ProductName { get; set; } = "-";
+    public string DeliveryDate { get; set; } = "-";
+    public string DateLabel { get; set; } = "-";
+    public string InputValue { get; set; } = "-";
+    public string Code { get; set; } = string.Empty;
+    public string Message { get; set; } = string.Empty;
+}
+
+public class MatrixExcelCellApplyDto
+{
+    public int ExcelRow { get; set; }
+    public Guid ProductId { get; set; }
+    public Guid SupplierId { get; set; }
+    public DateTime DeliveryDate { get; set; }
+    public string DateLabel { get; set; } = string.Empty;
+    public string ProductCode { get; set; } = string.Empty;
+    public string ProductName { get; set; } = string.Empty;
+    public decimal CurrentQty { get; set; }
+    public decimal Quantity { get; set; }
+}
+
+public class MatrixExcelScopeStatusDto
+{
+    public bool BranchMatched { get; set; }
+    public string BranchExpected { get; set; } = string.Empty;
+    public string? BranchActual { get; set; }
+    public bool SupplierMatched { get; set; }
+    public string SupplierExpected { get; set; } = string.Empty;
+    public string? SupplierActual { get; set; }
+    public bool PeriodMatched { get; set; }
+    public string PeriodExpected { get; set; } = string.Empty;
+    public int ProductsInFilterCount { get; set; }
+}
+
+public class MatrixExcelValidationSummaryDto
+{
+    public int TotalCells { get; set; }
+    public int ValidCells { get; set; }
+    public int ErrorCount { get; set; }
+    public int WarningCount { get; set; }
+    public int IgnoredCells { get; set; }
+    public int SkippedOwnerLocked { get; set; }
+    public int OutOfFilterCount { get; set; }
+}
+
+public class MatrixExcelValidationResultDto
+{
+    public bool Valid { get; set; }
+    public string FileName { get; set; } = string.Empty;
+    public long FileSize { get; set; }
+    public MatrixExcelScopeStatusDto ScopeStatus { get; set; } = new();
+    public MatrixExcelValidationSummaryDto Summary { get; set; } = new();
+    public List<MatrixExcelIssueDto> Errors { get; set; } = new();
+    public List<MatrixExcelIssueDto> Warnings { get; set; } = new();
+    public List<MatrixExcelCellApplyDto> CellsToApply { get; set; } = new();
+}
+
+public class ImportMatrixExcelCellDto
+{
+    public Guid ProductId { get; set; }
+    public Guid SupplierId { get; set; }
+    public DateTime DeliveryDate { get; set; }
+    public decimal Quantity { get; set; }
+    public int? ExcelRow { get; set; }
+    public string? ProductCode { get; set; }
+    public string? ProductName { get; set; }
+    public string? DateLabel { get; set; }
+}
+
+public class ImportMatrixExcelCommand
+{
+    public Guid BranchId { get; set; }
+    public Guid? SupplierId { get; set; }
+    public DateTime ViewFrom { get; set; }
+    public DateTime ViewTo { get; set; }
+    public string? FileName { get; set; }
+    public List<MatrixExcelAllowedProductDto> AllowedProducts { get; set; } = new();
+    public List<ImportMatrixExcelCellDto> Cells { get; set; } = new();
+}
+
+public class MatrixExcelSuccessDayDto
+{
+    public DateTime DeliveryDate { get; set; }
+    public string DateLabel { get; set; } = string.Empty;
+    public int AppliedCells { get; set; }
+    public int ProductCount { get; set; }
+}
+
+public class MatrixExcelImportSummaryDto
+{
+    public int AppliedCells { get; set; }
+    public int SkippedOwnerLocked { get; set; }
+    public int ErrorCount { get; set; }
+    public int WarningCount { get; set; }
+    public int SuccessDayCount { get; set; }
+}
+
+public class MatrixExcelImportResultDto
+{
+    public bool Success { get; set; }
+    public string FileName { get; set; } = string.Empty;
+    public MatrixExcelImportSummaryDto Summary { get; set; } = new();
+    public List<MatrixExcelSuccessDayDto> SuccessDays { get; set; } = new();
+    public List<MatrixExcelIssueDto> Errors { get; set; } = new();
+    public List<MatrixExcelIssueDto> Warnings { get; set; } = new();
+    public Guid? DraftPoId { get; set; }
 }

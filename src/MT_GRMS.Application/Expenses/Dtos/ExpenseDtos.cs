@@ -82,37 +82,9 @@ public record ExpenseSummaryResponse(
     int NonTaxDeductibleCount
 );
 
-public record CreateDepositRequest(
-    Guid? BranchId,
-    string CustomerName,
-    decimal Amount,
-    FinanceAccountType PaymentSourceType,
-    Guid PaymentSourceAccountId,
-    string? Note
-);
-
-public record RefundDepositRequest(
-    decimal Amount,
-    FinanceAccountType PaymentSourceType,
-    Guid PaymentSourceAccountId,
-    string? Note
-);
-
 public record ResolveTriageRequest(
     FinancialNature Nature,
     bool IsTaxDeductible,
     string? Category,
     string ResolutionNote
-);
-
-public record DepositSearchResponse(
-    Guid Id,
-    string VoucherCode,
-    string CustomerName,
-    decimal OriginalAmount,
-    decimal RefundedAmount,
-    decimal RemainingAmount,
-    bool IsSettled,
-    DateTime CreatedAt,
-    string? Note
 );

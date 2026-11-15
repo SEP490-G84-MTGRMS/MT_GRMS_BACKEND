@@ -154,8 +154,6 @@ public class ShiftConfigServiceTests
         Assert.Equal("SANG", result.ShiftCode);
         Assert.Equal("Ca sáng chuẩn", result.ShiftName);
         Assert.Equal(8.00m, result.DurationHours);
-        Assert.Equal(new TimeSpan(5, 30, 0), result.AllowedCheckInStart);
-        Assert.Equal(new TimeSpan(7, 0, 0), result.AllowedCheckInEnd);
         Assert.True(result.IsActive);
         Assert.True(uow.SaveChangesCalled);
 
@@ -187,8 +185,6 @@ public class ShiftConfigServiceTests
 
         // Assert
         Assert.Equal(8.00m, result.DurationHours);
-        Assert.Equal(new TimeSpan(21, 30, 0), result.AllowedCheckInStart);
-        Assert.Equal(new TimeSpan(23, 0, 0), result.AllowedCheckInEnd);
     }
 
     [Fact]
@@ -463,6 +459,72 @@ public class ShiftConfigServiceTests
 
         // Khi truy vấn lại thì không tìm thấy
         await Assert.ThrowsAsync<NotFoundException>(() => service.GetShiftConfigByIdAsync(shiftId));
+    }
+
+    [Fact]
+    public async Task UpdateShiftConfig_SHF_VAL_04_DuplicateCodeInSameBranch_ThrowsBusinessException()
+    {
+        var repo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        var service = new ShiftConfigService(repo, uow, tenantContext);
+
+        var branchId = Guid.NewGuid();
+        var shift1Id = Guid.NewGuid();
+        var shift2Id = Guid.NewGuid();
+
+        repo.ShiftConfigs.Add(new ShiftConfig
+        {
+            Id = shift1Id,
+            TenantId = "tenant_test_01",
+            BranchId = branchId,
+            ShiftCode = "CA_SANG",
+            ShiftName = "Ca Sáng",
+            StartTime = new TimeSpan(7, 0, 0),
+            EndTime = new TimeSpan(15, 0, 0),
+            DurationHours = 8m
+        });
+        repo.ShiftConfigs.Add(new ShiftConfig
+        {
+            Id = shift2Id,
+            TenantId = "tenant_test_01",
+            BranchId = branchId,
+            ShiftCode = "CA_CHIEU",
+            ShiftName = "Ca Chiều",
+            StartTime = new TimeSpan(14, 0, 0),
+            EndTime = new TimeSpan(22, 0, 0),
+            DurationHours = 8m
+        });
+
+        var updateReq = new UpdateShiftConfigRequest(
+            ShiftName: "Ca Chiều Đổi Mã",
+            ShiftCode: "CA_SANG",
+            StartTime: new TimeSpan(14, 0, 0),
+            EndTime: new TimeSpan(22, 0, 0),
+            BranchId: branchId
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.UpdateShiftConfigAsync(shift2Id, updateReq));
+        Assert.Equal("DUPLICATE_SHIFT_CODE", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreateShiftConfig_SHF_VAL_03_SameStartAndEndTimeWithoutDuration_ThrowsBusinessException()
+    {
+        var repo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        var service = new ShiftConfigService(repo, uow, tenantContext);
+
+        var createReq = new CreateShiftConfigRequest(
+            ShiftName: "Ca Lỗi 0 Giờ",
+            StartTime: new TimeSpan(8, 0, 0),
+            EndTime: new TimeSpan(8, 0, 0),
+            BranchId: Guid.NewGuid()
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateShiftConfigAsync(createReq));
+        Assert.Equal("INVALID_SHIFT_DURATION", ex.ErrorCode);
     }
 }
 

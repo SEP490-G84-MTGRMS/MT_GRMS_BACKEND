@@ -113,7 +113,9 @@ public class CatalogService : ICatalogService
             p.EligibleForVatReduction,
             isBaseUnitPurchaseUnit,
             purchaseUnitName,
-            unitPrices
+            unitPrices,
+            p.AllowRepack,
+            p.SellRawByWeight
         );
     }
 
@@ -283,7 +285,9 @@ public class CatalogService : ICatalogService
             ImageUrls = imageUrls,
             Description = trimmedDescription,
             InternalNote = trimmedInternalNote,
-            HasBatches = request.HasBatches,
+            HasBatches = request.HasBatches || request.AllowRepack,
+            AllowRepack = request.AllowRepack,
+            SellRawByWeight = request.SellRawByWeight,
             IsFavorite = request.IsFavorite,
             IsActive = true,
             TaxCategory = "STANDARD_1PCT",
@@ -434,7 +438,9 @@ public class CatalogService : ICatalogService
         }
         product.Description = trimmedDescription;
         product.InternalNote = trimmedInternalNote;
-        product.HasBatches = request.HasBatches;
+        product.HasBatches = request.HasBatches || request.AllowRepack;
+        product.AllowRepack = request.AllowRepack;
+        product.SellRawByWeight = request.SellRawByWeight;
         product.IsFavorite = request.IsFavorite;
         product.TaxCategory = request.TaxCategory ?? product.TaxCategory ?? "STANDARD_1PCT";
         product.EligibleForVatReduction = request.EligibleForVatReduction;

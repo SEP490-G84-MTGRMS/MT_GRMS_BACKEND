@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using MT_GRMS.Api.Filters;
@@ -35,9 +36,12 @@ public class ShiftsController : BaseApiController
         [FromBody] OpenShiftRequest request,
         CancellationToken cancellationToken)
     {
-        var cashierId = _tenantContext.CurrentUserId != Guid.Empty
-            ? _tenantContext.CurrentUserId
-            : Guid.NewGuid();
+        if (_tenantContext.CurrentUserId == Guid.Empty)
+        {
+            return Unauthorized();
+        }
+
+        var cashierId = _tenantContext.CurrentUserId;
 
         var shift = await _shiftService.OpenShiftAsync(request, cashierId, cancellationToken);
         return Ok(ApiResponse<ShiftDetailResponse>.Ok(shift, "Mở ca làm việc thành công."));
@@ -123,9 +127,12 @@ public class ShiftsController : BaseApiController
         [FromBody] ConfirmHandoverRequest request,
         CancellationToken cancellationToken)
     {
-        var receiverId = !string.IsNullOrWhiteSpace(_tenantContext.CurrentUserId.ToString()) && _tenantContext.CurrentUserId != Guid.Empty
-            ? _tenantContext.CurrentUserId.ToString()
-            : "cashier_next";
+        if (_tenantContext.CurrentUserId == Guid.Empty)
+        {
+            return Unauthorized();
+        }
+
+        var receiverId = _tenantContext.CurrentUserId.ToString();
 
         var result = await _shiftService.ConfirmHandoverAsync(id, request, receiverId, cancellationToken);
         return Ok(ApiResponse<ShiftDetailResponse>.Ok(result, "Xác nhận bàn giao ca thành công."));
@@ -281,9 +288,12 @@ public class ShiftsController : BaseApiController
         [FromBody] StartClosingShiftRequest request,
         CancellationToken cancellationToken)
     {
-        var userId = _tenantContext.CurrentUserId != Guid.Empty
-            ? _tenantContext.CurrentUserId
-            : Guid.NewGuid();
+        if (_tenantContext.CurrentUserId == Guid.Empty)
+        {
+            return Unauthorized();
+        }
+
+        var userId = _tenantContext.CurrentUserId;
 
         var result = await _shiftService.StartClosingShiftAsync(id, userId, request, cancellationToken);
         return Ok(ApiResponse<ShiftDetailResponse>.Ok(result, "Đã bắt đầu kiểm đếm chốt ca. Quầy đã tạm thời khóa bán hàng."));
@@ -299,9 +309,12 @@ public class ShiftsController : BaseApiController
         [FromBody] CancelClosingShiftRequest request,
         CancellationToken cancellationToken)
     {
-        var userId = _tenantContext.CurrentUserId != Guid.Empty
-            ? _tenantContext.CurrentUserId
-            : Guid.NewGuid();
+        if (_tenantContext.CurrentUserId == Guid.Empty)
+        {
+            return Unauthorized();
+        }
+
+        var userId = _tenantContext.CurrentUserId;
 
         var result = await _shiftService.CancelClosingShiftAsync(id, userId, request, cancellationToken);
         return Ok(ApiResponse<ShiftDetailResponse>.Ok(result, "Đã hủy kiểm đếm chốt ca. Quầy đã mở lại để tiếp tục bán hàng."));
@@ -317,9 +330,12 @@ public class ShiftsController : BaseApiController
         [FromBody] UpdateCountedCashRequest request,
         CancellationToken cancellationToken)
     {
-        var userId = _tenantContext.CurrentUserId != Guid.Empty
-            ? _tenantContext.CurrentUserId
-            : Guid.NewGuid();
+        if (_tenantContext.CurrentUserId == Guid.Empty)
+        {
+            return Unauthorized();
+        }
+
+        var userId = _tenantContext.CurrentUserId;
 
         var result = await _shiftService.UpdateCountedCashAsync(id, userId, request, cancellationToken);
         return Ok(ApiResponse<ShiftDetailResponse>.Ok(result, "Cập nhật số tiền thực đếm thành công."));
@@ -335,9 +351,12 @@ public class ShiftsController : BaseApiController
         [FromBody] ConfirmCloseShiftRequest request,
         CancellationToken cancellationToken)
     {
-        var userId = _tenantContext.CurrentUserId != Guid.Empty
-            ? _tenantContext.CurrentUserId
-            : Guid.NewGuid();
+        if (_tenantContext.CurrentUserId == Guid.Empty)
+        {
+            return Unauthorized();
+        }
+
+        var userId = _tenantContext.CurrentUserId;
 
         var userName = !string.IsNullOrWhiteSpace(User.Identity?.Name)
             ? User.Identity.Name
@@ -357,18 +376,17 @@ public class ShiftsController : BaseApiController
         [FromBody] ForceCloseShiftRequest request,
         CancellationToken cancellationToken)
     {
-        var role = _tenantContext.CurrentRole;
-        if (!string.Equals(role, "STORE_OWNER", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase) &&
-            !User.IsInRole("STORE_OWNER") &&
-            !User.IsInRole("ADMIN"))
+        if (!User.IsInRole("STORE_OWNER") && !User.IsInRole("ADMIN"))
         {
             return Forbid();
         }
 
-        var ownerId = _tenantContext.CurrentUserId != Guid.Empty
-            ? _tenantContext.CurrentUserId
-            : Guid.NewGuid();
+        if (_tenantContext.CurrentUserId == Guid.Empty)
+        {
+            return Unauthorized();
+        }
+
+        var ownerId = _tenantContext.CurrentUserId;
 
         var result = await _shiftService.ForceCloseShiftAsync(id, ownerId, request, cancellationToken);
         return Ok(ApiResponse<ShiftDetailResponse>.Ok(result, "Đóng ca cưỡng bức thành công."));

@@ -6,13 +6,9 @@ public class CreateScheduleApprovalRequestDto
 {
     public ScheduleRequestType RequestType { get; set; }
     public string Reason { get; set; } = string.Empty;
-    public string? EvidenceImageUrl { get; set; }
     public List<string>? EvidenceImageUrls { get; set; }
     public LeaveType? LeaveType { get; set; }
     public bool IsPaidLeaveRequested { get; set; } = false;
-    public ShiftSwapType? SwapType { get; set; }
-    public Guid? TargetEmployeeId { get; set; }
-    public Guid? TargetScheduleId { get; set; }
     public DateTime? RequestedCheckInTime { get; set; }
     public DateTime? RequestedCheckOutTime { get; set; }
     public int? RequestedOvertimeMinutes { get; set; }
@@ -23,13 +19,9 @@ public class CreateScheduleApprovalRequestDto
     public CreateScheduleApprovalRequestDto(
         ScheduleRequestType RequestType,
         string Reason,
-        string? EvidenceImageUrl = null,
         List<string>? EvidenceImageUrls = null,
         LeaveType? LeaveType = null,
         bool IsPaidLeaveRequested = false,
-        ShiftSwapType? SwapType = null,
-        Guid? TargetEmployeeId = null,
-        Guid? TargetScheduleId = null,
         DateTime? RequestedCheckInTime = null,
         DateTime? RequestedCheckOutTime = null,
         int? RequestedOvertimeMinutes = null,
@@ -37,13 +29,9 @@ public class CreateScheduleApprovalRequestDto
     {
         this.RequestType = RequestType;
         this.Reason = Reason;
-        this.EvidenceImageUrl = EvidenceImageUrl;
         this.EvidenceImageUrls = EvidenceImageUrls;
         this.LeaveType = LeaveType;
         this.IsPaidLeaveRequested = IsPaidLeaveRequested;
-        this.SwapType = SwapType;
-        this.TargetEmployeeId = TargetEmployeeId;
-        this.TargetScheduleId = TargetScheduleId;
         this.RequestedCheckInTime = RequestedCheckInTime;
         this.RequestedCheckOutTime = RequestedCheckOutTime;
         this.RequestedOvertimeMinutes = RequestedOvertimeMinutes;
@@ -104,17 +92,9 @@ public record ScheduleApprovalRequestDto(
     ScheduleRequestType RequestType,
     ScheduleApprovalStatus Status,
     string Reason,
-    string? EvidenceImageUrl,
     IReadOnlyList<string> EvidenceImageUrls,
     LeaveType? LeaveType,
     bool IsPaidLeave,
-    ShiftSwapType? SwapType,
-    Guid? TargetEmployeeId,
-    string? TargetEmployeeName,
-    string? TargetEmployeeCode,
-    Guid? TargetScheduleId,
-    bool? PeerConfirmed,
-    DateTime? PeerConfirmedAt,
     DateTime? RequestedCheckInTime,
     DateTime? RequestedCheckOutTime,
     DateTime? ApprovedCheckInTime,

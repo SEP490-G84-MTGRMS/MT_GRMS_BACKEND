@@ -44,7 +44,6 @@ public class EmployeeScheduleConfiguration : IEntityTypeConfiguration<EmployeeSc
             .HasMaxLength(30)
             .HasDefaultValue(ScheduleApprovalStatus.None);
         builder.Property(x => x.ApprovalReason).HasMaxLength(255);
-        builder.Property(x => x.EvidenceImageUrl).HasMaxLength(255);
         builder.Property(x => x.ApprovedBy).HasMaxLength(100);
 
         builder.HasIndex(x => new { x.TenantId, x.BranchId, x.WorkDate });

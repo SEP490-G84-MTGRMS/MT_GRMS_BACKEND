@@ -44,7 +44,7 @@ public class AuthController : BaseApiController
         {
             var result = await _authService.SendLoginOtpAsync(request, cancellationToken);
             if (result.Session is not null)
-                SetAuthCookies(result.Session.AccessToken, result.Session.RefreshToken, result.Session.ExpiresAt);
+                SetAuthCookies(result.Session.AccessToken, result.Session.RefreshToken, result.Session.ExpiresAt, result.Session.RefreshExpiresAt);
             return Ok(ApiResponse<SendLoginOtpResponse>.Ok(result, result.Message, StatusCodes.Status200OK));
         }
         catch (UnauthorizedAccessException ex)
@@ -79,7 +79,7 @@ public class AuthController : BaseApiController
         {
             var result = await _authService.SendLoginOtpAsync(request, cancellationToken);
             if (result.Session is not null)
-                SetAuthCookies(result.Session.AccessToken, result.Session.RefreshToken, result.Session.ExpiresAt);
+                SetAuthCookies(result.Session.AccessToken, result.Session.RefreshToken, result.Session.ExpiresAt, result.Session.RefreshExpiresAt);
             return Ok(ApiResponse<SendLoginOtpResponse>.Ok(result, result.Message, StatusCodes.Status200OK));
         }
         catch (UnauthorizedAccessException ex)
@@ -113,7 +113,7 @@ public class AuthController : BaseApiController
         try
         {
             var result = await _authService.VerifyLoginOtpAsync(request, cancellationToken);
-            SetAuthCookies(result.AccessToken, result.RefreshToken, result.ExpiresAt);
+            SetAuthCookies(result.AccessToken, result.RefreshToken, result.ExpiresAt, result.RefreshExpiresAt);
             return Ok(ApiResponse<UserInfo>.Ok(result.User, "Xác thực OTP và đăng nhập thành công.", StatusCodes.Status200OK));
         }
         catch (UnauthorizedAccessException ex)
@@ -209,7 +209,7 @@ public class AuthController : BaseApiController
         try
         {
             var result = await _authService.RegisterTenantAsync(request, cancellationToken);
-            SetAuthCookies(result.AccessToken, result.RefreshToken, result.ExpiresAt);
+            SetAuthCookies(result.AccessToken, result.RefreshToken, result.ExpiresAt, result.RefreshExpiresAt);
             return Ok(ApiResponse<UserInfo>.Ok(result.User, "Đăng ký tài khoản và cửa hàng thành công.", StatusCodes.Status200OK));
         }
         catch (ArgumentException ex)
@@ -248,13 +248,14 @@ public class AuthController : BaseApiController
 
         if (string.IsNullOrWhiteSpace(refreshToken))
         {
+            DeleteAuthCookies();
             return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", "RefreshToken không tồn tại hoặc đã hết hạn.", StatusCodes.Status401Unauthorized));
         }
 
         try
         {
             var result = await _authService.RefreshTokenAsync(new RefreshTokenRequest(refreshToken), cancellationToken);
-            SetAuthCookies(result.AccessToken, result.RefreshToken, result.ExpiresAt);
+            SetAuthCookies(result.AccessToken, result.RefreshToken, result.ExpiresAt, result.RefreshExpiresAt);
             return Ok(ApiResponse<UserInfo>.Ok(result.User, "Làm mới phiên thành công.", StatusCodes.Status200OK));
         }
         catch (UnauthorizedAccessException ex)
@@ -343,19 +344,14 @@ public class AuthController : BaseApiController
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
     public async Task<IActionResult> Logout(CancellationToken cancellationToken = default)
     {
-        var userId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value
-                     ?? User?.FindFirst("sub")?.Value;
-
-        if (!string.IsNullOrEmpty(userId))
-        {
-            await _authService.RevokeRefreshTokenAsync(userId, cancellationToken);
-        }
+        var userId = User?.FindFirstValue(ClaimTypes.NameIdentifier) ?? User?.FindFirstValue("sub") ?? string.Empty;
+        await _authService.RevokeRefreshTokenAsync(userId, cancellationToken, Request?.Cookies["refresh_token"]);
 
         DeleteAuthCookies();
         return Ok(ApiResponse<object>.Ok(new { success = true }, "Đăng xuất thành công.", StatusCodes.Status200OK));
     }
 
-    private void SetAuthCookies(string accessToken, string refreshToken, DateTime expiresAt)
+    private void SetAuthCookies(string accessToken, string refreshToken, DateTime expiresAt, DateTime? refreshExpiresAt = null)
     {
         if (Response?.Cookies == null) return;
         var isHttps = Request?.IsHttps ?? false;
@@ -371,13 +367,15 @@ public class AuthController : BaseApiController
         };
         Response.Cookies.Append("access_token", accessToken, accessCookieOptions);
 
+        // Remove the legacy narrow-path cookie before issuing the shared API cookie.
+        Response.Cookies.Delete("refresh_token", new CookieOptions { Path = "/api/auth" });
         var refreshCookieOptions = new CookieOptions
         {
             HttpOnly = true,
             Secure = isHttps,
             SameSite = SameSiteMode.Lax,
-            Path = "/api/auth",
-            Expires = DateTime.UtcNow.AddDays(7),
+            Path = "/api",
+            Expires = refreshExpiresAt ?? DateTime.UtcNow.AddDays(7),
             IsEssential = true
         };
         Response.Cookies.Append("refresh_token", refreshToken, refreshCookieOptions);
@@ -388,6 +386,7 @@ public class AuthController : BaseApiController
         if (Response?.Cookies == null) return;
         Response.Cookies.Delete("access_token", new CookieOptions { Path = "/" });
         Response.Cookies.Delete("refresh_token", new CookieOptions { Path = "/api/auth" });
+        Response.Cookies.Delete("refresh_token", new CookieOptions { Path = "/api" });
     }
 
     /// <summary>

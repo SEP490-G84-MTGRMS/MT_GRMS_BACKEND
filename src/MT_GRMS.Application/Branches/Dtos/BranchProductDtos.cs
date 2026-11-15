@@ -37,6 +37,10 @@ public class BranchProductDto
     public string PrimarySupplierName { get; set; } = string.Empty;
     /// <summary>NCC chính (tenant-wide) trên quan hệ SupplierProduct — chỉ để badge/gợi ý.</summary>
     public bool IsPrimarySupplier { get; set; }
+    /// <summary>true = còn ít nhất 1 NCC Active phục vụ CN cho SP này.</summary>
+    public bool HasActiveSupplierSource { get; set; } = true;
+    /// <summary>true = SP đang bán tại CN nhưng mất nguồn NCC (không còn assignment Active).</summary>
+    public bool LostSupplierSource { get; set; }
     public int MinOrderQuantity { get; set; } = 1;
     public string Status { get; set; } = "Active";
     public string? ShelfLocation { get; set; }

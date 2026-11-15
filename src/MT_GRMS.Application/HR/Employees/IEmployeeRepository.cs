@@ -14,6 +14,10 @@ public interface IEmployeeRepository
     Task<(IReadOnlyList<Employee> Items, int TotalCount)> GetPagedListAsync(EmployeeQueryFilter filter, CancellationToken cancellationToken = default);
     Task<string?> GetMaxSequentialCodeAsync(string prefix, int totalLength, CancellationToken cancellationToken = default);
     Task<bool> ExistsAsync(Expression<Func<Employee, bool>> predicate, CancellationToken cancellationToken = default);
+    Task<bool> ExistsIgnoringFiltersAsync(Expression<Func<Employee, bool>> predicate, CancellationToken cancellationToken = default)
+        => ExistsAsync(predicate, cancellationToken);
+    Task<Employee?> GetDeletedDuplicateAsync(string tenantId, string citizenId, string phone, string? employeeCode = null, Guid? excludeId = null, CancellationToken cancellationToken = default)
+        => Task.FromResult<Employee?>(null);
     Task AddAsync(Employee employee, CancellationToken cancellationToken = default);
     void Update(Employee employee);
     void Delete(Employee employee);

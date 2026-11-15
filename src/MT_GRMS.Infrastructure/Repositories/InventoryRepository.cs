@@ -27,9 +27,54 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
     {
         var now = DateTime.UtcNow.Date;
 
+        var branches = await _appContext.Branches.AsNoTracking()
+            .Where(b => b.TenantId == tenantId && !b.IsDeleted)
+            .ToListAsync(cancellationToken);
+
+        if (query.BranchId.HasValue && query.BranchId.Value != Guid.Empty)
+        {
+            branches = branches.Where(b => b.Id == query.BranchId.Value).ToList();
+        }
+
+        var branchIds = branches.Select(b => b.Id).ToList();
+
+        // Catalog theo chi nhánh: hiện mọi SP đã gán CN, kể cả chưa có BranchStock.
+        var branchCatalogQuery = _appContext.BranchProducts.AsNoTracking()
+            .Where(bp =>
+                bp.TenantId == tenantId
+                && !bp.IsDeleted
+                && branchIds.Contains(bp.BranchId)
+                && bp.Status != "Inactive"
+                && bp.Status != "Deleted");
+
+        var catalogPairs = await branchCatalogQuery
+            .Select(bp => new { bp.BranchId, bp.ProductId })
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        // Gộp thêm SP đang có tồn nhưng chưa (hoặc không còn) trong catalog để không mất dòng tồn thực tế.
+        var stockOnlyPairs = await _appContext.BranchStocks.AsNoTracking()
+            .Where(bs =>
+                bs.TenantId == tenantId
+                && !bs.IsDeleted
+                && branchIds.Contains(bs.BranchId)
+                && (bs.QuantityOnHand > 0 || bs.QuantityReserved > 0 || bs.QuantityQuarantined > 0))
+            .Select(bs => new { bs.BranchId, bs.ProductId })
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        var pairSet = catalogPairs
+            .Concat(stockOnlyPairs)
+            .GroupBy(x => (x.BranchId, x.ProductId))
+            .Select(g => g.First())
+            .ToList();
+        catalogPairs = pairSet;
+
+        var productIds = catalogPairs.Select(x => x.ProductId).Distinct().ToList();
+
         var productsQuery = _appContext.Products.AsNoTracking()
             .Include(p => p.Category)
-            .Where(p => p.TenantId == tenantId && !p.IsDeleted);
+            .Where(p => p.TenantId == tenantId && !p.IsDeleted && productIds.Contains(p.Id));
 
         if (!string.IsNullOrWhiteSpace(query.Category) && !query.Category.Equals("ALL", StringComparison.OrdinalIgnoreCase))
         {
@@ -46,136 +91,107 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
         }
 
         var products = await productsQuery.ToListAsync(cancellationToken);
-        var productIds = products.Select(p => p.Id).ToList();
+        var productById = products.ToDictionary(p => p.Id);
+        productIds = products.Select(p => p.Id).ToList();
 
-        // Branches
-        var branches = await _appContext.Branches.AsNoTracking()
-            .Where(b => b.TenantId == tenantId && !b.IsDeleted)
-            .ToListAsync(cancellationToken);
+        var branchStocks = productIds.Count == 0
+            ? new List<BranchStock>()
+            : await _appContext.BranchStocks.AsNoTracking()
+                .Where(bs =>
+                    bs.TenantId == tenantId
+                    && !bs.IsDeleted
+                    && branchIds.Contains(bs.BranchId)
+                    && productIds.Contains(bs.ProductId))
+                .ToListAsync(cancellationToken);
 
-        if (query.BranchId.HasValue && query.BranchId.Value != Guid.Empty)
-        {
-            branches = branches.Where(b => b.Id == query.BranchId.Value).ToList();
-        }
-
-        // BranchStocks
-        var branchStocks = await _appContext.BranchStocks.AsNoTracking()
-            .Where(bs => bs.TenantId == tenantId && productIds.Contains(bs.ProductId) && !bs.IsDeleted)
-            .ToListAsync(cancellationToken);
-
-        // Batches (legacy fallback nếu sản phẩm chưa có dữ liệu BranchStocks)
-        var batches = await _appContext.Batches.AsNoTracking()
-            .Where(b => b.TenantId == tenantId && productIds.Contains(b.ProductId))
-            .ToListAsync(cancellationToken);
-
-        // Pending Returns
-        var pendingReturnLines = await _appContext.SupplierReturnLines.AsNoTracking()
-            .Include(l => l.SupplierReturn)
-            .Where(l => l.TenantId == tenantId && productIds.Contains(l.ProductId) &&
-                        l.SupplierReturn != null &&
-                        (l.SupplierReturn.Status == "PENDING_SUPPLIER" || l.SupplierReturn.Status == "APPROVED"))
-            .ToListAsync(cancellationToken);
+        var pendingReturnLines = productIds.Count == 0
+            ? new List<(Guid BranchId, Guid ProductId, decimal RequestedQty)>()
+            : (await _appContext.SupplierReturnLines.AsNoTracking()
+                .Include(l => l.SupplierReturn)
+                .Where(l => l.TenantId == tenantId && productIds.Contains(l.ProductId) &&
+                            l.SupplierReturn != null &&
+                            (l.SupplierReturn.Status == "PENDING_SUPPLIER" || l.SupplierReturn.Status == "APPROVED"))
+                .Select(l => new { l.SupplierReturn!.BranchId, l.ProductId, l.RequestedQty })
+                .ToListAsync(cancellationToken))
+                .Select(x => (x.BranchId, x.ProductId, x.RequestedQty))
+                .ToList();
 
         var allItems = new List<InventoryStockItemDto>();
+        var branchById = branches.ToDictionary(b => b.Id);
 
-        foreach (var branch in branches)
+        foreach (var pair in catalogPairs)
         {
-            foreach (var product in products)
+            if (!productById.TryGetValue(pair.ProductId, out var product))
+                continue;
+            if (!branchById.TryGetValue(pair.BranchId, out var branch))
+                continue;
+
+            var stocks = branchStocks
+                .Where(bs => bs.BranchId == branch.Id && bs.ProductId == product.Id)
+                .ToList();
+
+            var physicalQty = stocks.Sum(s => s.QuantityOnHand);
+            var reservedQty = stocks.Sum(s => s.QuantityReserved);
+            var quarantinedQty = stocks.Sum(s => s.QuantityQuarantined);
+            var expiredQty = stocks
+                .Where(s => s.ExpiryDate.HasValue && s.ExpiryDate.Value.Date <= now)
+                .Sum(s => s.QuantityOnHand);
+            var availableQty = BranchStockAvailability.SumSellableAvailable(stocks, now);
+            var pendingQty = pendingReturnLines
+                .Where(l => l.BranchId == branch.Id && l.ProductId == product.Id)
+                .Sum(l => l.RequestedQty);
+
+            var minStock = product.MinStock > 0 ? product.MinStock : 10;
+            var weightedCost = physicalQty > 0
+                ? stocks.Sum(s => s.QuantityOnHand * s.LandedCostPerUnit) / physicalQty
+                : (product.CostPrice ?? 0m);
+            if (weightedCost <= 0)
             {
-                var productBranchStocks = branchStocks
-                    .Where(bs => bs.BranchId == branch.Id && bs.ProductId == product.Id)
-                    .ToList();
-                var productBatches = batches.Where(b => b.BranchId == branch.Id && b.ProductId == product.Id).ToList();
-                var pendingQty = pendingReturnLines.Where(l => l.SupplierReturn?.BranchId == branch.Id && l.ProductId == product.Id).Sum(l => l.RequestedQty);
-
-                decimal physicalQty;
-                decimal reservedQty;
-                decimal expiredQty;
-                List<InventoryBatchSummaryDto> batchDtos;
-
-                if (productBranchStocks.Count > 0)
-                {
-                    physicalQty = productBranchStocks.Sum(s => s.QuantityOnHand);
-                    reservedQty = productBranchStocks.Sum(s => s.QuantityReserved);
-                    expiredQty = productBranchStocks
-                        .Where(s => s.ExpiryDate.HasValue && s.ExpiryDate.Value.Date <= now)
-                        .Sum(s => s.QuantityOnHand);
-
-                    batchDtos = productBranchStocks
-                        .Where(s => !string.IsNullOrWhiteSpace(s.BatchCode) || s.ExpiryDate.HasValue)
-                        .OrderBy(s => s.ExpiryDate ?? DateTime.MaxValue)
-                        .ThenBy(s => s.ManufactureDate ?? DateTime.MaxValue)
-                        .Select(s => MapBranchStockToBatchSummary(s, now))
-                        .ToList();
-                }
-                else
-                {
-                    var expiredBatches = productBatches.Where(b => b.ExpiryDate.Date <= now).ToList();
-                    expiredQty = expiredBatches.Sum(b => b.InitialQuantity);
-                    physicalQty = productBatches.Sum(b => b.InitialQuantity);
-                    reservedQty = 0m;
-
-                    batchDtos = productBatches.Select(b =>
-                    {
-                        var days = (b.ExpiryDate.Date - now).Days;
-                        string bStatus = days switch
-                        {
-                            <= 0 => "Expired",
-                            <= 3 => "Critical",
-                            <= 30 => "Warning",
-                            _ => "Normal"
-                        };
-                        return new InventoryBatchSummaryDto(
-                            b.Id,
-                            b.BatchCode,
-                            b.ManufactureDate,
-                            b.ExpiryDate,
-                            days,
-                            b.InitialQuantity,
-                            0m,
-                            b.InitialQuantity,
-                            bStatus
-                        );
-                    }).OrderBy(b => b.DaysLeft).ToList();
-                }
-
-                decimal availableQty = Math.Max(0, physicalQty - reservedQty - pendingQty - expiredQty);
-                decimal minStock = product.MinStock > 0 ? product.MinStock : 10;
-                decimal costPrice = product.CostPrice ?? (product.SellingPrice * 0.7m);
-                decimal totalValue = physicalQty * costPrice;
-
-                string status;
-                if (physicalQty <= 0) status = "OUT_OF_STOCK";
-                else if (physicalQty <= minStock) status = "LOW_STOCK";
-                else if (batchDtos.Any(b => b.DaysLeft.HasValue && b.DaysLeft.Value <= 30 && b.QuantityOnHand > 0)) status = "NEAR_EXPIRY";
-                else status = "OK";
-
-                allItems.Add(new InventoryStockItemDto(
-                    ProductId: product.Id,
-                    Sku: product.ProductCode,
-                    Barcode: product.Barcode ?? string.Empty,
-                    ProductName: product.Name,
-                    CategoryName: product.Category?.Name ?? "Chung",
-                    BranchId: branch.Id,
-                    BranchName: branch.Name,
-                    Unit: product.BaseUnit,
-                    PhysicalQty: physicalQty,
-                    AvailableQty: availableQty,
-                    PendingReturnQty: pendingQty,
-                    ExpiredQty: expiredQty,
-                    DamagedQty: 0,
-                    MinStock: minStock,
-                    AvgCost: costPrice,
-                    TotalValue: totalValue,
-                    Status: status,
-                    Batches: batchDtos
-                ));
+                weightedCost = product.CostPrice ?? (product.SellingPrice * 0.7m);
             }
+
+            var totalValue = physicalQty * weightedCost;
+
+            var batchDtos = stocks
+                .Where(s => !string.IsNullOrWhiteSpace(s.BatchCode) || s.ExpiryDate.HasValue)
+                .OrderBy(s => s.ExpiryDate ?? DateTime.MaxValue)
+                .ThenBy(s => s.ManufactureDate ?? DateTime.MaxValue)
+                .Select(s => MapBranchStockToBatchSummary(s, now))
+                .ToList();
+
+            string status;
+            if (availableQty <= 0) status = "OUT_OF_STOCK";
+            else if (availableQty <= minStock) status = "LOW_STOCK";
+            else if (batchDtos.Any(b => b.DaysLeft.HasValue && b.DaysLeft.Value <= 30 && b.QuantityOnHand > 0)) status = "NEAR_EXPIRY";
+            else status = "OK";
+
+            allItems.Add(new InventoryStockItemDto(
+                ProductId: product.Id,
+                Sku: product.ProductCode,
+                Barcode: product.Barcode ?? string.Empty,
+                ProductName: product.Name,
+                CategoryName: product.Category?.Name ?? "Chung",
+                BranchId: branch.Id,
+                BranchName: branch.Name,
+                Unit: product.BaseUnit,
+                PhysicalQty: physicalQty,
+                AvailableQty: availableQty,
+                PendingReturnQty: pendingQty,
+                ExpiredQty: expiredQty,
+                DamagedQty: 0,
+                QuarantinedQty: quarantinedQty,
+                ReservedQty: reservedQty,
+                MinStock: minStock,
+                AvgCost: Math.Round(weightedCost, 2),
+                TotalValue: Math.Round(totalValue, 2),
+                Status: status,
+                BatchCount: stocks.Count,
+                Batches: batchDtos
+            ));
         }
 
-        // Calculate KPI summary
         var kpis = new InventoryKpiSummaryDto(
-            TotalSkus: allItems.Count,
+            TotalSkus: allItems.Select(x => x.ProductId).Distinct().Count(),
             TotalValue: allItems.Sum(x => x.TotalValue),
             LowStockCount: allItems.Count(x => x.Status == "LOW_STOCK"),
             OutOfStockCount: allItems.Count(x => x.Status == "OUT_OF_STOCK"),
@@ -186,6 +202,12 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
         {
             allItems = allItems.Where(x => x.Status.Equals(query.Status, StringComparison.OrdinalIgnoreCase)).ToList();
         }
+
+        // Giữ toàn bộ sản phẩm theo chi nhánh, kể cả chưa có tồn (PhysicalQty = 0).
+        allItems = allItems
+            .OrderBy(x => x.BranchName)
+            .ThenBy(x => x.ProductName)
+            .ToList();
 
         var totalItems = allItems.Count;
         var pagedItems = allItems
@@ -256,4 +278,3 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
         );
     }
 }
-

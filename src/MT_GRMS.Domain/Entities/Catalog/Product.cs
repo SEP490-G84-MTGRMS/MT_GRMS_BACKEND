@@ -28,6 +28,12 @@ public class Product : BaseTenantEntity
     public bool HasBatches { get; set; } = false;
     public bool IsFavorite { get; set; } = false;
 
+    /// <summary>Cho phép chia khay / sơ chế (chỉ có ý nghĩa với SP cân kg).</summary>
+    public bool AllowRepack { get; set; } = false;
+
+    /// <summary>Cho bán nguyên quả (cân kg tại quầy). Chỉ có ý nghĩa với SP cân kg.</summary>
+    public bool SellRawByWeight { get; set; } = true;
+
     /// <summary>
     /// True nếu hàng hóa thuộc nhóm đủ điều kiện giảm 20% thuế GTGT
     /// theo NQ 204/2025/QH15 & khoản 3 Điều 9 Luật GTGT 48/2024.

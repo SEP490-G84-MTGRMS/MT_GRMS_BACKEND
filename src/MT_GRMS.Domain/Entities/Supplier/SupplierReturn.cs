@@ -24,7 +24,18 @@ public class SupplierReturn : BaseTenantEntity
     public string? CancellationReason { get; set; }
     public string? AttachmentUrl { get; set; }
     public string? ResolutionType { get; set; } = "REDUCE_PAYABLE"; // REDUCE_PAYABLE, REFUND, EXCHANGE, OTHER
-    public string? SettlementStatus { get; set; } = "UNSETTLED"; // UNSETTLED, SETTLED, NOT_REQUIRED
+    public string? SettlementStatus { get; set; } = "UNSETTLED"; // NOT_REQUIRED, UNPAID, PARTIALLY_PAID, PAID (legacy: UNSETTLED/SETTLED)
+    /// <summary>NOT_REQUIRED | WAITING_HANDOVER | WAITING_PURCHASE_ORDER | WAITING_RECEIPT | PARTIALLY_RECEIVED | COMPLETED | CANCELLED</summary>
+    public string ReplacementStatus { get; set; } = "NOT_REQUIRED";
+
+    public Guid? PolicyId { get; set; }
+    public string? PolicySnapshotJson { get; set; }
+    public decimal? StoreCostSharePercentSnapshot { get; set; }
+    public decimal? SupplierCostSharePercentSnapshot { get; set; }
+    public decimal ReplacementValue { get; set; } = 0;
+    public decimal StorePayableAmount { get; set; } = 0;
+    public decimal StorePaidAmount { get; set; } = 0;
+    public decimal SupplierBearAmount { get; set; } = 0;
 
     public decimal TotalRequestedQty { get; set; } = 0;
     public decimal TotalApprovedQty { get; set; } = 0;
@@ -33,8 +44,10 @@ public class SupplierReturn : BaseTenantEntity
 
     public DateTime? SubmittedAt { get; set; }
     public DateTime? RespondedAt { get; set; }
+    public string? SupplierConfirmedBy { get; set; }
     public DateTime? HandedOverAt { get; set; }
     public string? HandedOverBy { get; set; }
+    public string? HandoverNote { get; set; }
 
     // Navigation properties
     public virtual GoodsReceipt? GoodsReceipt { get; set; }
@@ -60,8 +73,11 @@ public class SupplierReturnLine : BaseTenantEntity
     public decimal ApprovedQty { get; set; } = 0;
     public decimal RejectedQty { get; set; } = 0;
     public decimal HandedOverQty { get; set; } = 0;
+    /// <summary>Qty đã gắn vào PO đổi hàng (chưa hủy).</summary>
+    public decimal ExchangePoOrderedQty { get; set; } = 0;
 
     public decimal UnitCost { get; set; } = 0;
+    public decimal ReplacementUnitPrice { get; set; } = 0;
     public decimal LineTotal => RequestedQty * UnitCost;
     public string? RejectionReason { get; set; }
     public string? Notes { get; set; }
