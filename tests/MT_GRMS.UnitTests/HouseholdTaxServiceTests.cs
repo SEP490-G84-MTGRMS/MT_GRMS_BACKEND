@@ -42,6 +42,8 @@ public class HouseholdTaxServiceTests
 
         public List<HouseholdTaxSnapshot> SavedSnapshots { get; } = new();
 
+        public HouseholdTaxpayerProfileDto TaxpayerProfile { get; set; } = new();
+
         public decimal PriorYearAccumulatedRevenue { get; set; } = 0m;
         public Dictionary<int, decimal> AnnualRevenuesByYear { get; } = new();
 
@@ -170,6 +172,9 @@ public class HouseholdTaxServiceTests
 
         public Task<List<HouseholdTaxSnapshot>> GetSnapshotsAsync(int? year, Guid? branchId, CancellationToken cancellationToken = default) =>
             Task.FromResult(SavedSnapshots);
+
+        public Task<HouseholdTaxpayerProfileDto> GetTaxpayerProfileAsync(Guid? branchId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(TaxpayerProfile);
 
         public Task<HouseholdTaxSnapshot> AddSnapshotAsync(HouseholdTaxSnapshot snapshot, CancellationToken cancellationToken = default)
         {
@@ -2058,6 +2063,125 @@ public class HouseholdTaxServiceTests
 
         // Tổng doanh thu tính thuế của cả 2 chi nhánh khớp chính xác 1.1 tỷ của Tenant
         Assert.Equal(1_100_000_000m, resultA.TaxableRevenueInPeriod + resultB.TaxableRevenueInPeriod);
+    }
+
+    [Fact]
+    public void GetFilingDeadlineLocal_QuarterDeadlineOnWeekend_RollsToMonday()
+    {
+        var deadline = HouseholdTaxService.GetFilingDeadlineLocal(2026, TaxPeriodType.Quarter, 3);
+
+        Assert.Equal(new DateTime(2026, 11, 2), deadline);
+        Assert.Equal(DayOfWeek.Monday, deadline.DayOfWeek);
+    }
+
+    [Fact]
+    public async Task GetDeclarationPreview_ReturnsTaxpayerIndicatorsAndAppendixData()
+    {
+        _fakeRepo.AnnualAccumulatedRevenue = 1_500_000_000m;
+        _fakeRepo.GrossRevenue = 400_000_000m;
+        _fakeRepo.CogsAmount = 180_000_000m;
+        _fakeRepo.OpexAmount = 40_000_000m;
+        _fakeRepo.TaxpayerProfile = new HouseholdTaxpayerProfileDto
+        {
+            TaxpayerName = "Hộ kinh doanh Minh Tâm",
+            TaxCode = "0312345678",
+            BusinessLocation = "Quận 1, TP.HCM",
+            PhoneNumber = "0909000000",
+            TaxAuthorityName = "Thuế cơ sở 1 TP.HCM"
+        };
+
+        var result = await _service.GetDeclarationPreviewAsync(new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.DeclarationBased
+        });
+
+        Assert.Equal("01/CNKD", result.FormCode);
+        Assert.Equal("0312345678", result.Taxpayer.TaxCode);
+        Assert.True(result.IsProfileComplete);
+        Assert.True(result.RequiresBusinessActivityAppendix);
+        Assert.Equal("01-2/BK-HĐKD", result.AppendixCode);
+        Assert.Single(result.Lines);
+        Assert.Equal(result.TotalTaxAmount, result.TotalVatAmount + result.TotalPitAmount);
+    }
+
+    [Fact]
+    public async Task ExportDeclarationXml_FinalizedAndValidSnapshot_ReturnsServerXmlWithEscapedText()
+    {
+        var signatureService = new TaxSnapshotSignatureService();
+        var snapshot = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-a",
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            TaxableRevenueInPeriod = 250_000_000m,
+            VatRate = 0.8m,
+            VatAmount = 2_000_000m,
+            PitRate = 0.5m,
+            PitAmount = 1_250_000m,
+            TotalTaxAmount = 3_250_000m,
+            Status = TaxSnapshotStatus.Finalized,
+            FinalizedAtUtc = new DateTime(2026, 4, 10, 2, 0, 0, DateTimeKind.Utc),
+            FinalizedBy = "owner-a",
+            BookDataJson = "{}"
+        };
+        snapshot.AuditSignatureHash = signatureService.ComputeSignature(snapshot);
+        _fakeRepo.SavedSnapshots.Add(snapshot);
+        _fakeRepo.TaxpayerProfile = new HouseholdTaxpayerProfileDto
+        {
+            TaxpayerName = "HKD A & B <!ENTITY xxe SYSTEM 'file:///etc/passwd'>",
+            TaxCode = "0312345678"
+        };
+
+        var result = await _service.ExportDeclarationXmlAsync(snapshot.Id);
+        var xml = System.Text.Encoding.UTF8.GetString(result.Content).TrimStart('\uFEFF');
+        var document = System.Xml.Linq.XDocument.Parse(xml);
+
+        Assert.StartsWith("ToKhai_01_CNKD", result.FileName);
+        Assert.DoesNotContain("<!DOCTYPE", xml, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(document.DocumentType);
+        Assert.Contains("HKD A &amp; B &lt;!ENTITY", xml);
+    }
+
+    [Fact]
+    public async Task ExportDeclarationXml_NonFinalizedSnapshot_IsRejected()
+    {
+        var snapshot = new HouseholdTaxSnapshot { Id = Guid.NewGuid(), Status = TaxSnapshotStatus.Superseded };
+        _fakeRepo.SavedSnapshots.Add(snapshot);
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() => _service.ExportDeclarationXmlAsync(snapshot.Id));
+
+        Assert.Equal("SNAPSHOT_NOT_ACTIVE", error.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ExportDeclarationXml_TamperedSnapshot_IsRejected()
+    {
+        var signatureService = new TaxSnapshotSignatureService();
+        var snapshot = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-a",
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 2,
+            TaxableRevenueInPeriod = 200_000_000m,
+            TotalTaxAmount = 2_000_000m,
+            Status = TaxSnapshotStatus.Finalized,
+            FinalizedAtUtc = DateTime.UtcNow,
+            FinalizedBy = "owner-a"
+        };
+        snapshot.AuditSignatureHash = signatureService.ComputeSignature(snapshot);
+        snapshot.TotalTaxAmount = 99_000_000m;
+        _fakeRepo.SavedSnapshots.Add(snapshot);
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() => _service.ExportDeclarationXmlAsync(snapshot.Id));
+
+        Assert.Equal("SNAPSHOT_INTEGRITY_INVALID", error.ErrorCode);
     }
 
 }

@@ -39,6 +39,7 @@ public static class DependencyInjection
         services.AddScoped<Expenses.IExpenseService, Expenses.ExpenseService>();
         services.AddScoped<Debt.ICustomerDebtService, Debt.CustomerDebtService>();
         services.AddScoped<Reports.IPnLReportService, Reports.PnLReportService>();
+        services.AddScoped<FinanceOverview.IFinanceOverviewService, FinanceOverview.FinanceOverviewService>();
         services.AddScoped<Tax.IHouseholdTaxService, Tax.HouseholdTaxService>();
         services.AddScoped<Tax.Strategies.ITaxCalculationStrategy, Tax.Strategies.RevenuePercentageTaxStrategy>();
         services.AddScoped<Tax.Strategies.ITaxCalculationStrategy, Tax.Strategies.DeclarationBasedTaxStrategy>();

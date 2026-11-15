@@ -6,6 +6,7 @@ using System.Data;
 using System.Text;
 
 using System.Text.Json;
+using System.Xml.Linq;
 
 using MT_GRMS.Application.Tax.Dtos;
 
@@ -87,6 +88,22 @@ public class HouseholdTaxService : IHouseholdTaxService
         var vnTz = GetVietnamTimeZone();
         // Mốc chuyển giao hết hạn giảm thuế GTGT theo giờ VN: 01/01/2027 00:00:00 VN = 31/12/2026 17:00:00 UTC
         return TimeZoneInfo.ConvertTimeToUtc(new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Unspecified), vnTz);
+    }
+
+    public static DateTime GetFilingDeadlineLocal(int year, TaxPeriodType periodType, int periodNumber)
+    {
+        DateTime deadline = periodType switch
+        {
+            TaxPeriodType.Month => new DateTime(year, Math.Clamp(periodNumber, 1, 12), 1).AddMonths(1).AddDays(19),
+            TaxPeriodType.Quarter => new DateTime(year, (Math.Clamp(periodNumber, 1, 4) - 1) * 3 + 1, 1).AddMonths(4).AddDays(-1),
+            TaxPeriodType.Year => new DateTime(year + 1, 1, 31),
+            _ => new DateTime(year, 1, 31)
+        };
+
+        while (deadline.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+            deadline = deadline.AddDays(1);
+
+        return DateTime.SpecifyKind(deadline, DateTimeKind.Unspecified);
     }
 
     private async Task<(TaxCalculationMethod? Method, int? StartYear)> GetRequiredPitMethodAsync(int year, CancellationToken ct)
@@ -625,6 +642,10 @@ public class HouseholdTaxService : IHouseholdTaxService
 
             BranchName = filter.BranchId.HasValue ? $"Chi nhánh {filter.BranchId.Value.ToString()[..8]}" : "Toàn bộ hộ kinh doanh (Tenant)",
 
+            FilingDeadlineLocal = GetFilingDeadlineLocal(filter.Year, filter.PeriodType, filter.PeriodNumber),
+
+            FilingDeadlineNote = "Thời hạn dự kiến theo loại kỳ; đã điều chỉnh nếu rơi vào cuối tuần.",
+
             AnnualAccumulatedRevenue = annualAccumulatedRevenue,
 
             PriorPeriodsAccumulatedRevenue = priorPeriodsRevenue,
@@ -747,6 +768,134 @@ public class HouseholdTaxService : IHouseholdTaxService
 
         };
 
+    }
+
+    public async Task<HouseholdTaxDeclarationPreviewDto> GetDeclarationPreviewAsync(
+        HouseholdTaxFilterDto filter,
+        CancellationToken cancellationToken = default)
+    {
+        var summary = await GetTaxSummaryAsync(filter, cancellationToken);
+        var profile = await _repository.GetTaxpayerProfileAsync(filter.BranchId, cancellationToken);
+        var missingFields = new List<string>();
+        if (string.IsNullOrWhiteSpace(profile.TaxpayerName)) missingFields.Add("Tên người nộp thuế");
+        if (string.IsNullOrWhiteSpace(profile.TaxCode)) missingFields.Add("Mã số thuế");
+        if (string.IsNullOrWhiteSpace(profile.BusinessLocation)) missingFields.Add("Địa điểm kinh doanh");
+        if (string.IsNullOrWhiteSpace(profile.TaxAuthorityName)) missingFields.Add("Cơ quan thuế quản lý");
+
+        var periodLabel = filter.PeriodType switch
+        {
+            TaxPeriodType.Month => $"Tháng {filter.PeriodNumber}/{filter.Year}",
+            TaxPeriodType.Quarter => $"Quý {filter.PeriodNumber}/{filter.Year}",
+            TaxPeriodType.Year => $"Năm {filter.Year}",
+            _ => $"Kỳ {filter.PeriodNumber}/{filter.Year}"
+        };
+
+        return new HouseholdTaxDeclarationPreviewDto
+        {
+            IsFinalized = summary.IsFinalized,
+            SnapshotId = summary.SnapshotId,
+            GeneratedAtUtc = DateTime.UtcNow,
+            Year = filter.Year,
+            PeriodType = filter.PeriodType,
+            PeriodNumber = filter.PeriodNumber,
+            PeriodLabel = periodLabel,
+            FilingDeadlineLocal = summary.FilingDeadlineLocal,
+            Taxpayer = profile,
+            Lines = new List<TaxDeclarationLineDto>
+            {
+                new()
+                {
+                    Sequence = 1,
+                    BusinessSector = "Hoạt động sản xuất, kinh doanh hàng hóa, cung cấp dịch vụ",
+                    TaxCode = "HKD-BAN-LE",
+                    TotalRevenue = summary.TaxableRevenueInPeriod,
+                    VatNonTaxableRevenue = Math.Max(0, summary.TaxableRevenueInPeriod - summary.VatTaxableRevenue),
+                    VatTaxableRevenue = summary.VatTaxableRevenue,
+                    VatZeroRateRevenue = 0,
+                    VatRate = summary.VatRate,
+                    VatAmount = summary.VatAmount,
+                    PitTaxableRevenue = summary.PitTaxableRevenue,
+                    PitRevenueDeduction = 0,
+                    PitRate = summary.PitRate,
+                    PitAmount = summary.PitAmount
+                }
+            },
+            TotalVatAmount = summary.VatAmount,
+            TotalPitAmount = summary.PitAmount,
+            TotalTaxAmount = summary.TotalTaxAmount,
+            RequiresBusinessActivityAppendix = summary.CalculationMethod == TaxCalculationMethod.DeclarationBased,
+            AppendixRevenue = summary.TaxableRevenueInPeriod,
+            AppendixCogs = summary.CogsAmount,
+            AppendixOpex = summary.OpexAmount,
+            AppendixTaxableIncome = summary.TaxableIncomeDeclaration,
+            IsProfileComplete = missingFields.Count == 0,
+            MissingProfileFields = missingFields,
+            DataNotice = summary.IsFinalized
+                ? "Bản xem trước được lập từ kỳ đã chốt."
+                : "Bản xem trước tạm tính; chưa phải hồ sơ đã chốt để xuất XML."
+        };
+    }
+
+    public async Task<TaxDeclarationXmlResult> ExportDeclarationXmlAsync(
+        Guid snapshotId,
+        CancellationToken cancellationToken = default)
+    {
+        var snapshot = await _repository.GetSnapshotByIdAsync(snapshotId, cancellationToken)
+            ?? throw new BusinessException("SNAPSHOT_NOT_FOUND", "Không tìm thấy bản chốt kỳ tính thuế.");
+
+        if (snapshot.Status != TaxSnapshotStatus.Finalized)
+            throw new BusinessException("SNAPSHOT_NOT_ACTIVE", "Chỉ được xuất XML từ bản chốt đang có hiệu lực.");
+
+        if (!_signatureService.VerifySignature(snapshot))
+            throw new BusinessException("SNAPSHOT_INTEGRITY_INVALID", "Không thể xuất XML vì chữ ký toàn vẹn của bản chốt không hợp lệ.");
+
+        var profile = await _repository.GetTaxpayerProfileAsync(snapshot.BranchId, cancellationToken);
+        var filingDeadline = GetFilingDeadlineLocal(snapshot.Year, snapshot.PeriodType, snapshot.PeriodNumber);
+        XNamespace ns = "urn:mt-grms:tax:01-cnkd:1.0";
+        var document = new XDocument(
+            new XDeclaration("1.0", "utf-8", null),
+            new XElement(ns + "HouseholdTaxDeclaration",
+                new XAttribute("formCode", "01/CNKD"),
+                new XAttribute("schemaVersion", "MT-GRMS-1.0"),
+                new XElement(ns + "DocumentStatus", "FINALIZED"),
+                new XElement(ns + "SnapshotId", snapshot.Id),
+                new XElement(ns + "RevisionNumber", snapshot.RevisionNumber),
+                new XElement(ns + "Taxpayer",
+                    new XElement(ns + "Name", profile.TaxpayerName),
+                    new XElement(ns + "TaxCode", profile.TaxCode),
+                    new XElement(ns + "BusinessLocation", profile.BusinessLocation),
+                    new XElement(ns + "PhoneNumber", profile.PhoneNumber),
+                    new XElement(ns + "TaxAuthority", profile.TaxAuthorityName)),
+                new XElement(ns + "Period",
+                    new XElement(ns + "Year", snapshot.Year),
+                    new XElement(ns + "PeriodType", snapshot.PeriodType.ToString()),
+                    new XElement(ns + "PeriodNumber", snapshot.PeriodNumber),
+                    new XElement(ns + "FilingDeadline", filingDeadline.ToString("yyyy-MM-dd"))),
+                new XElement(ns + "TaxAmounts",
+                    new XElement(ns + "TaxableRevenue", snapshot.TaxableRevenueInPeriod),
+                    new XElement(ns + "VatRate", snapshot.VatRate),
+                    new XElement(ns + "VatAmount", snapshot.VatAmount),
+                    new XElement(ns + "PitRate", snapshot.PitRate),
+                    new XElement(ns + "PitAmount", snapshot.PitAmount),
+                    new XElement(ns + "TotalTaxAmount", snapshot.TotalTaxAmount)),
+                new XElement(ns + "Integrity",
+                    new XElement(ns + "FinalizedAtUtc", snapshot.FinalizedAtUtc.ToString("O")),
+                    new XElement(ns + "FinalizedBy", snapshot.FinalizedBy),
+                    new XElement(ns + "AuditSignatureHash", snapshot.AuditSignatureHash)),
+                new XElement(ns + "CompatibilityNotice",
+                    "XML do MT-GRMS sinh từ snapshot đã chốt; cần đối chiếu XSD của cổng thuế trước khi nộp điện tử.")));
+
+        using var stream = new MemoryStream();
+        document.Save(stream);
+        var periodCode = snapshot.PeriodType == TaxPeriodType.Quarter
+            ? $"Q{snapshot.PeriodNumber}"
+            : snapshot.PeriodType == TaxPeriodType.Month ? $"T{snapshot.PeriodNumber}" : "NAM";
+
+        return new TaxDeclarationXmlResult
+        {
+            Content = stream.ToArray(),
+            FileName = $"ToKhai_01_CNKD_{snapshot.Year}_{periodCode}_R{snapshot.RevisionNumber}.xml"
+        };
     }
 
     public async Task<List<AccountingBookEntryDto>> GetBookDetailsAsync(

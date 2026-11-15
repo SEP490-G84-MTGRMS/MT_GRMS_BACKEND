@@ -21,4 +21,5 @@ public interface IHouseholdTaxRepository
     Task UpdateSnapshotAsync(HouseholdTaxSnapshot snapshot, CancellationToken cancellationToken = default);
     Task<HouseholdTaxYearSetting?> GetYearSettingAsync(int year, CancellationToken cancellationToken = default);
     Task UpsertYearSettingAsync(HouseholdTaxYearSetting setting, CancellationToken cancellationToken = default);
+    Task<HouseholdTaxpayerProfileDto> GetTaxpayerProfileAsync(Guid? branchId, CancellationToken cancellationToken = default);
 }

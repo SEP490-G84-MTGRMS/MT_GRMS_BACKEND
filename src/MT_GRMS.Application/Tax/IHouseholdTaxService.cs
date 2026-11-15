@@ -11,6 +11,8 @@ public interface IHouseholdTaxService
     Task<List<HouseholdTaxSnapshotDto>> GetSnapshotsAsync(int? year, Guid? branchId, CancellationToken cancellationToken = default);
     Task<HouseholdTaxSnapshotDto?> GetSnapshotByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<bool> VerifySnapshotIntegrityAsync(Guid snapshotId, CancellationToken cancellationToken = default);
+    Task<HouseholdTaxDeclarationPreviewDto> GetDeclarationPreviewAsync(HouseholdTaxFilterDto filter, CancellationToken cancellationToken = default);
+    Task<TaxDeclarationXmlResult> ExportDeclarationXmlAsync(Guid snapshotId, CancellationToken cancellationToken = default);
     Task ChangeSecurityPinAsync(string userId, ChangeSecurityPinRequest request, CancellationToken cancellationToken = default);
     Task ResetSecurityPinAsync(string userId, ResetSecurityPinRequest request, CancellationToken cancellationToken = default);
 }

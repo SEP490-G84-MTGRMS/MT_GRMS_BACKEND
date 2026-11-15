@@ -70,6 +70,46 @@ public class HouseholdTaxController : BaseApiController
         return Ok(ApiResponse<List<AccountingBookEntryDto>>.Ok(result));
     }
 
+    [HttpGet("declarations/01-cnkd/preview")]
+    public async Task<ActionResult<ApiResponse<HouseholdTaxDeclarationPreviewDto>>> PreviewDeclaration(
+        [FromQuery] int? year,
+        [FromQuery] TaxPeriodType? periodType,
+        [FromQuery] int? periodNumber,
+        [FromQuery] Guid? branchId,
+        [FromQuery] TaxCalculationMethod? method,
+        [FromQuery] TaxCalculationMethod? calculationMethod,
+        [FromQuery] string? tier2Method,
+        [FromQuery] bool? applyVatReduction,
+        [FromQuery] decimal? vatReductionPercentage,
+        [FromQuery] decimal? customVatRate,
+        [FromQuery] decimal? customPitRate,
+        CancellationToken ct)
+    {
+        var filter = new HouseholdTaxFilterDto
+        {
+            Year = year ?? DateTime.UtcNow.Year,
+            PeriodType = periodType ?? TaxPeriodType.Quarter,
+            PeriodNumber = periodNumber ?? 1,
+            BranchId = branchId,
+            CalculationMethod = calculationMethod ?? method ?? TaxCalculationMethod.RevenuePercentage,
+            Tier2Method = tier2Method ?? "REVENUE_EXCESS",
+            ApplyVatReduction2026 = applyVatReduction ?? false,
+            VatReductionPercentage = vatReductionPercentage,
+            CustomVatRate = customVatRate,
+            CustomPitRate = customPitRate
+        };
+
+        var result = await _taxService.GetDeclarationPreviewAsync(filter, ct);
+        return Ok(ApiResponse<HouseholdTaxDeclarationPreviewDto>.Ok(result));
+    }
+
+    [HttpGet("snapshots/{id:guid}/declaration-xml")]
+    public async Task<IActionResult> ExportDeclarationXml([FromRoute] Guid id, CancellationToken ct)
+    {
+        var result = await _taxService.ExportDeclarationXmlAsync(id, ct);
+        return File(result.Content, "application/xml; charset=utf-8", result.FileName);
+    }
+
     [HttpPost("snapshots")]
     [RequireIdempotency]
     public async Task<ActionResult<ApiResponse<HouseholdTaxSnapshotDto>>> CreateSnapshot(

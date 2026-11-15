@@ -16,6 +16,30 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         _context = context;
     }
 
+    public async Task<HouseholdTaxpayerProfileDto> GetTaxpayerProfileAsync(
+        Guid? branchId,
+        CancellationToken cancellationToken = default)
+    {
+        var branchQuery = _context.Branches
+            .AsNoTracking()
+            .Include(b => b.Tenant)
+            .Where(b => b.IsActive);
+
+        var branch = branchId.HasValue
+            ? await branchQuery.FirstOrDefaultAsync(b => b.Id == branchId.Value, cancellationToken)
+            : await branchQuery.OrderByDescending(b => b.IsHeadquarter).ThenBy(b => b.CreatedAt).FirstOrDefaultAsync(cancellationToken);
+
+        var tenant = branch?.Tenant;
+        return new HouseholdTaxpayerProfileDto
+        {
+            TaxpayerName = tenant?.Name ?? string.Empty,
+            TaxCode = tenant?.TaxCode ?? string.Empty,
+            BusinessLocation = branch?.Address ?? tenant?.Address ?? string.Empty,
+            PhoneNumber = branch?.Phone ?? tenant?.Hotline ?? string.Empty,
+            TaxAuthorityName = string.Empty
+        };
+    }
+
     public async Task<decimal> GetAnnualAccumulatedRevenueAsync(int year, DateTime upToDateUtc, CancellationToken cancellationToken = default)
     {
         var vnTz = HouseholdTaxService.GetVietnamTimeZone();
