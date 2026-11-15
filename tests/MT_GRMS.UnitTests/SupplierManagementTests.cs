@@ -185,15 +185,22 @@ public class SupplierManagementTests
             DateTime? toDate,
             int pageIndex,
             int pageSize,
-            CancellationToken cancellationToken = default)
+            CancellationToken cancellationToken = default,
+            APDocType? docType = null)
         {
             var query = Ledgers.Where(l => l.SupplierId == supplierId).AsEnumerable();
             if (fromDate.HasValue) query = query.Where(l => l.TransactionDate >= fromDate.Value);
             if (toDate.HasValue) query = query.Where(l => l.TransactionDate <= toDate.Value);
+            if (docType.HasValue) query = query.Where(l => l.DocType == docType.Value);
 
             var list = query.OrderByDescending(l => l.TransactionDate).ToList();
             var paged = list.Skip((pageIndex - 1) * pageSize).Take(pageSize).ToList();
             return Task.FromResult(((IReadOnlyList<SupplierAPLedger>)paged, list.Count));
+        }
+
+        public Task<int> CountLedgersByDocNoPrefixAsync(string docNoPrefix, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(Ledgers.Count(l => l.DocNo.StartsWith(docNoPrefix, StringComparison.Ordinal)));
         }
 
         public Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default)
@@ -618,6 +625,78 @@ public class SupplierManagementTests
         // ASSERT
         Assert.Equal(15000000, result.BalanceAfter);
         Assert.Equal(15000000, supplier.CurrentDebt);
+        Assert.Single(repo.Ledgers);
+    }
+
+    [Fact]
+    public async Task REQ04_RecordAPTransaction_PaymentVoucher_Overpay_Throws()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid(),
+            Code = "SUP-PAY-01",
+            Name = "NCC Overpay",
+            CurrentDebt = 1_000_000,
+            Phone = "0901111222"
+        };
+        await repo.AddAsync(supplier);
+
+        var cmd = new RecordAPTransactionCommand
+        {
+            SupplierId = supplier.Id,
+            Amount = 1_500_000,
+            Direction = -1,
+            DocType = APDocType.PaymentVoucher,
+            Description = "Trả vượt",
+            PaymentMethod = "CASH",
+            IdempotencyKey = "PAY-OVER-1"
+        };
+
+        await Assert.ThrowsAsync<BusinessException>(() => service.RecordAPTransactionAsync(cmd));
+        Assert.Equal(1_000_000, supplier.CurrentDebt);
+        Assert.Empty(repo.Ledgers);
+    }
+
+    [Fact]
+    public async Task REQ04_RecordAPTransaction_PaymentVoucher_GeneratesDocNoAndDecreasesDebt()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid(),
+            Code = "SUP-PAY-02",
+            Name = "NCC Pay",
+            CurrentDebt = 2_000_000,
+            Phone = "0903333444"
+        };
+        await repo.AddAsync(supplier);
+
+        var cmd = new RecordAPTransactionCommand
+        {
+            SupplierId = supplier.Id,
+            Amount = 500_000,
+            Direction = -1,
+            DocType = APDocType.PaymentVoucher,
+            Description = "Thanh toán một phần",
+            PaymentMethod = "BANK_TRANSFER",
+            ReferenceNo = "FT001",
+            IdempotencyKey = "PAY-OK-1"
+        };
+
+        var result = await service.RecordAPTransactionAsync(cmd);
+
+        Assert.StartsWith($"PAY-{DateTime.UtcNow:yyyyMMdd}-", result.DocNo);
+        Assert.Equal(1_500_000, result.BalanceAfter);
+        Assert.Equal(1_500_000, supplier.CurrentDebt);
+        Assert.Equal("BANK_TRANSFER", result.PaymentMethod);
+        Assert.Equal("FT001", result.ReferenceNo);
         Assert.Single(repo.Ledgers);
     }
 

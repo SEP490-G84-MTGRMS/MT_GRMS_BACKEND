@@ -726,10 +726,16 @@ public class SupplierProductManagementTests
         public Task<bool> HasLedgerTransactionsAsync(Guid supplierId, APDocType docType, CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task<SupplierAPLedger?> GetLedgerByIdempotencyKeyAsync(string idempotencyKey, CancellationToken cancellationToken = default) => Task.FromResult<SupplierAPLedger?>(null);
         public Task AddLedgerAsync(SupplierAPLedger ledger, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task<(IReadOnlyList<SupplierAPLedger> Items, int TotalCount)> GetPagedLedgerAsync(Guid supplierId, DateTime? fromDate, DateTime? toDate, int pageIndex, int pageSize, CancellationToken cancellationToken = default)
+        public Task<(IReadOnlyList<SupplierAPLedger> Items, int TotalCount)> GetPagedLedgerAsync(Guid supplierId, DateTime? fromDate, DateTime? toDate, int pageIndex, int pageSize, CancellationToken cancellationToken = default, APDocType? docType = null)
         {
-            return Task.FromResult(((IReadOnlyList<SupplierAPLedger>)Ledgers, Ledgers.Count));
+            var list = Ledgers.AsEnumerable();
+            if (docType.HasValue) list = list.Where(l => l.DocType == docType.Value);
+            var filtered = list.ToList();
+            return Task.FromResult(((IReadOnlyList<SupplierAPLedger>)filtered, filtered.Count));
         }
+
+        public Task<int> CountLedgersByDocNoPrefixAsync(string docNoPrefix, CancellationToken cancellationToken = default)
+            => Task.FromResult(Ledgers.Count(l => l.DocNo.StartsWith(docNoPrefix, StringComparison.Ordinal)));
 
         public Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default) => Task.FromResult((IReadOnlyList<SupplierBlackoutDate>)BlackoutDates);
         public Task ReplaceBlackoutDatesAsync(Guid supplierId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default) => Task.CompletedTask;

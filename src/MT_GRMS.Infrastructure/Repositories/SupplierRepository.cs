@@ -313,7 +313,8 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         DateTime? toDate,
         int pageIndex,
         int pageSize,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        APDocType? docType = null)
     {
         var query = _context.SupplierAPLedgers
             .Where(l => l.SupplierId == supplierId)
@@ -329,6 +330,11 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             query = query.Where(l => l.TransactionDate <= toDate.Value);
         }
 
+        if (docType.HasValue)
+        {
+            query = query.Where(l => l.DocType == docType.Value);
+        }
+
         var totalCount = await query.CountAsync(cancellationToken);
 
         var items = await query
@@ -339,6 +345,13 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             .ToListAsync(cancellationToken);
 
         return (items, totalCount);
+    }
+
+    public async Task<int> CountLedgersByDocNoPrefixAsync(string docNoPrefix, CancellationToken cancellationToken = default)
+    {
+        return await _context.SupplierAPLedgers
+            .AsNoTracking()
+            .CountAsync(l => l.DocNo.StartsWith(docNoPrefix), cancellationToken);
     }
 
     public async Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default)

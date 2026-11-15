@@ -1028,8 +1028,10 @@ public class GoodsReceiptService : IGoodsReceiptService
             po.UpdatedAt = DateTime.UtcNow;
         }
 
-        // 3. Sinh công nợ phải trả nhà cung cấp (SupplierAPLedger) nếu CreateApOnConfirm = true và GrandTotal > 0
-        if (receipt.CreateApOnConfirm && receipt.GrandTotal > 0)
+        // 3. Sinh công nợ AP khi CreateApOnConfirm = true và GrandTotal > 0.
+        // PO đổi hàng (SUPPLIER_RETURN): không ghi PurchaseInvoice full — tránh đếm nợ trùng.
+        // CASH/BANK: ghi cặp PurchaseInvoice (+X) + PaymentVoucher (−X), dư nợ không đổi.
+        if (receipt.CreateApOnConfirm && receipt.GrandTotal > 0 && !isExchangePo)
         {
             var supplier = await _repository.GetSupplierByIdAsync(tenantId, receipt.SupplierId, cancellationToken);
             if (supplier != null)
@@ -1037,28 +1039,60 @@ public class GoodsReceiptService : IGoodsReceiptService
                 var isImmediatePaid = string.Equals(receipt.PaymentMethod, "CASH", StringComparison.OrdinalIgnoreCase)
                                    || string.Equals(receipt.PaymentMethod, "BANK", StringComparison.OrdinalIgnoreCase);
 
-                var newDebt = isImmediatePaid ? supplier.CurrentDebt : supplier.CurrentDebt + receipt.GrandTotal;
+                var txDate = receipt.ConfirmedAtUtc ?? DateTime.UtcNow;
+                var actor = receipt.ConfirmedByUserId ?? "Hệ thống";
+                var poNote = po != null ? $" (PO: {po.Code})" : string.Empty;
+                var debtAfterInvoice = supplier.CurrentDebt + receipt.GrandTotal;
+
                 var apEntry = new SupplierAPLedger
                 {
                     Id = Guid.NewGuid(),
                     TenantId = tenantId,
                     SupplierId = supplier.Id,
-                    TransactionDate = receipt.ConfirmedAtUtc ?? DateTime.UtcNow,
+                    TransactionDate = txDate,
                     DocType = APDocType.PurchaseInvoice,
                     DocNo = receipt.Code,
-                    Description = $"Nhập kho theo phiếu {receipt.Code}" + (po != null ? $" (PO: {po.Code})" : string.Empty),
+                    Description = $"Nhập kho theo phiếu {receipt.Code}{poNote}",
                     Amount = receipt.GrandTotal,
                     Direction = 1,
-                    BalanceAfter = newDebt,
-                    CreatedByName = receipt.ConfirmedByUserId ?? "Hệ thống",
+                    BalanceAfter = debtAfterInvoice,
+                    CreatedByName = actor,
                     IdempotencyKey = $"GRN-CONFIRM-{receipt.Id}",
                     CreatedAt = DateTime.UtcNow
                 };
 
                 await _repository.AddSupplierLedgerAsync(apEntry, cancellationToken);
-                if (!isImmediatePaid)
+
+                if (isImmediatePaid)
                 {
-                    supplier.CurrentDebt = newDebt;
+                    var payMethod = string.Equals(receipt.PaymentMethod, "CASH", StringComparison.OrdinalIgnoreCase)
+                        ? "CASH"
+                        : "BANK_TRANSFER";
+
+                    var payEntry = new SupplierAPLedger
+                    {
+                        Id = Guid.NewGuid(),
+                        TenantId = tenantId,
+                        SupplierId = supplier.Id,
+                        TransactionDate = txDate,
+                        DocType = APDocType.PaymentVoucher,
+                        DocNo = $"PAY-{receipt.Code}",
+                        Description = $"Thanh toán ngay khi nhập kho {receipt.Code}{poNote}",
+                        Amount = receipt.GrandTotal,
+                        Direction = -1,
+                        BalanceAfter = supplier.CurrentDebt,
+                        CreatedByName = actor,
+                        IdempotencyKey = $"GRN-CONFIRM-{receipt.Id}-PAY",
+                        PaymentMethod = payMethod,
+                        CreatedAt = DateTime.UtcNow
+                    };
+
+                    await _repository.AddSupplierLedgerAsync(payEntry, cancellationToken);
+                    // CurrentDebt không đổi
+                }
+                else
+                {
+                    supplier.CurrentDebt = debtAfterInvoice;
                     supplier.UpdatedAt = DateTime.UtcNow;
                 }
             }

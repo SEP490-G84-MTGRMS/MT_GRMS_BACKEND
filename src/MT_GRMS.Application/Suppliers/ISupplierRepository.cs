@@ -44,7 +44,10 @@ public interface ISupplierRepository : IRepository<Supplier>
         DateTime? toDate,
         int pageIndex,
         int pageSize,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        APDocType? docType = null);
+
+    Task<int> CountLedgersByDocNoPrefixAsync(string docNoPrefix, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default);
     Task ReplaceBlackoutDatesAsync(Guid supplierId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default);
