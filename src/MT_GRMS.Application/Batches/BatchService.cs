@@ -89,6 +89,25 @@ public class BatchService : IBatchService
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
         return await _repository.GetNearExpiryBatchesAsync(tenantId, daysThreshold, branchId, cancellationToken);
     }
+
+    public async Task<FefoDiscountResponse> ApplyFefoDiscountAsync(Guid id, ApplyFefoDiscountRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request.DiscountPercent < 0m || request.DiscountPercent > 90m)
+            throw new ArgumentOutOfRangeException(nameof(request.DiscountPercent), "Mức giảm FEFO phải từ 0% đến 90%.");
+
+        var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
+        var stock = await _repository.GetBranchStockForUpdateAsync(tenantId, id, cancellationToken)
+            ?? throw new KeyNotFoundException($"Không tìm thấy lô hàng với ID {id}.");
+
+        if (stock.ExpiryDate.HasValue && stock.ExpiryDate.Value.Date < DateTime.UtcNow.Date)
+            throw new InvalidOperationException("Lô đã hết hạn không được phép áp dụng giảm giá để bán.");
+
+        stock.FefoDiscountPercent = request.IsActive ? request.DiscountPercent : 0m;
+        stock.IsFefoDiscountActive = request.IsActive && request.DiscountPercent > 0m;
+        stock.UpdatedAt = DateTime.UtcNow;
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        return new FefoDiscountResponse(stock.Id, stock.FefoDiscountPercent, stock.IsFefoDiscountActive);
+    }
 }
 
 

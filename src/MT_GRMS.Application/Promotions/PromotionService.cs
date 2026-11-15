@@ -1,8 +1,10 @@
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using FluentValidation;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Promotions.Dtos;
+using MT_GRMS.Application.Promotions.Validators;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Exceptions;
@@ -44,6 +46,8 @@ public class PromotionService : IPromotionService
 
     public async Task<PromotionResponse> CreatePromotionAsync(PromotionCreateRequest request, CancellationToken cancellationToken = default)
     {
+        await ValidateRequestAsync(new PromotionCreateRequestValidator(), request, cancellationToken);
+
         if (await _promotionRepository.ExistsByCodeAsync(request.PromotionCode, cancellationToken))
             throw new BusinessException("DUPLICATE_CODE", $"Mã khuyến mại '{request.PromotionCode}' đã tồn tại trong hệ thống.");
 
@@ -93,6 +97,8 @@ public class PromotionService : IPromotionService
 
     public async Task<PromotionResponse> UpdatePromotionAsync(Guid id, PromotionUpdateRequest request, CancellationToken cancellationToken = default)
     {
+        await ValidateRequestAsync(new PromotionUpdateRequestValidator(), request, cancellationToken);
+
         var promo = await _promotionRepository.GetByIdWithConditionsAsync(id, cancellationToken);
         if (promo == null)
             throw new NotFoundException("Chương trình khuyến mại", id);
@@ -157,6 +163,10 @@ public class PromotionService : IPromotionService
         var promo = await _promotionRepository.GetByIdAsync(id, cancellationToken);
         if (promo == null)
             throw new NotFoundException("Chương trình khuyến mại", id);
+
+        var now = DateTime.UtcNow;
+        if (promo.IsActive && promo.StartDate <= now && promo.EndDate >= now)
+            throw new BusinessException("PROMOTION_IS_RUNNING", "Không thể xóa voucher/khuyến mãi đang trong thời gian áp dụng. Hãy tạm dừng chương trình trước khi xóa.");
 
         promo.IsDeleted = true;
         _promotionRepository.Update(promo);
@@ -719,6 +729,8 @@ public class PromotionService : IPromotionService
 
     public async Task<VoucherBatchResponse> CreateVoucherBatchAsync(VoucherBatchCreateRequest request, CancellationToken cancellationToken = default)
     {
+        await ValidateRequestAsync(new VoucherBatchCreateRequestValidator(), request, cancellationToken);
+
         if (await _promotionRepository.ExistsByCodeAsync(request.BatchCode, cancellationToken))
             throw new BusinessException("DUPLICATE_CODE", $"Mã đợt voucher '{request.BatchCode}' đã tồn tại.");
 
@@ -764,6 +776,8 @@ public class PromotionService : IPromotionService
 
     public async Task<int> GenerateVoucherCodesAsync(Guid batchId, GenerateVoucherCodesRequest request, CancellationToken cancellationToken = default)
     {
+        await ValidateRequestAsync(new GenerateVoucherCodesRequestValidator(), request, cancellationToken);
+
         var batch = await _promotionRepository.GetByIdAsync(batchId, cancellationToken);
         if (batch == null || batch.Type != "VOUCHER")
             throw new NotFoundException("Đợt phát hành voucher", batchId);
@@ -835,6 +849,9 @@ public class PromotionService : IPromotionService
     {
         if (string.IsNullOrWhiteSpace(request.Code))
             return new ValidateVoucherResponse(false, "Mã voucher không được để trống", 0);
+
+        if (request.CartTotal < 0m)
+            return new ValidateVoucherResponse(false, "Tổng giá trị đơn hàng không được âm", 0);
 
         var codeEntity = await _promotionRepository.GetVoucherCodeAsync(request.Code.Trim().ToUpper(), cancellationToken);
         if (codeEntity == null)
@@ -921,6 +938,8 @@ public class PromotionService : IPromotionService
 
     public async Task<RedeemVoucherResponse> RedeemVoucherAsync(RedeemVoucherRequest request, CancellationToken cancellationToken = default)
     {
+        await ValidateRequestAsync(new RedeemVoucherRequestValidator(), request, cancellationToken);
+
         var success = await _promotionRepository.RedeemVoucherCodeAtomicAsync(
             request.Code.Trim().ToUpper(),
             request.OrderId,
@@ -1259,6 +1278,18 @@ public class PromotionService : IPromotionService
             p.CreatedAt,
             allowWithPromotions
         );
+    }
+
+    private static async Task ValidateRequestAsync<TRequest>(
+        IValidator<TRequest> validator,
+        TRequest request,
+        CancellationToken cancellationToken)
+    {
+        var validationResult = await validator.ValidateAsync(request, cancellationToken);
+        if (!validationResult.IsValid)
+        {
+            throw new BusinessException("VALIDATION_ERROR", validationResult.Errors[0].ErrorMessage);
+        }
     }
 
     private static string GenerateRandomAlphanumeric(int length)

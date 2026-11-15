@@ -57,6 +57,7 @@ public class OrderRepository : GenericRepository<Order>, IOrderRepository
                     WHERE ""BranchId"" = {branchId}
                       AND ""ProductId"" = {productId}
                       AND ""QuantityOnHand"" > 0
+                      AND (""ExpiryDate"" IS NULL OR ""ExpiryDate""::date >= CURRENT_DATE)
                       AND NOT ""IsDeleted""
                     ORDER BY ""ExpiryDate"" ASC NULLS LAST, ""ManufactureDate"" ASC NULLS LAST
                     FOR UPDATE")
@@ -64,10 +65,31 @@ public class OrderRepository : GenericRepository<Order>, IOrderRepository
         }
 
         return await _context.BranchStocks
-            .Where(s => s.BranchId == branchId && s.ProductId == productId && s.QuantityOnHand > 0 && !s.IsDeleted)
+            .Where(s => s.BranchId == branchId && s.ProductId == productId && s.QuantityOnHand > 0 && !s.IsDeleted
+                && (!s.ExpiryDate.HasValue || s.ExpiryDate.Value.Date >= DateTime.UtcNow.Date))
             .OrderBy(s => s.ExpiryDate ?? DateTime.MaxValue)
             .ThenBy(s => s.ManufactureDate ?? DateTime.MaxValue)
             .ToListAsync(cancellationToken);
+    }
+
+    public async Task<BranchStock?> GetBranchStockByIdAsync(Guid branchId, Guid productId, Guid batchId, CancellationToken cancellationToken = default)
+    {
+        if (_context.Database.IsNpgsql())
+        {
+            return await _context.BranchStocks
+                .FromSqlInterpolated($@"
+                    SELECT * FROM ""BranchStocks""
+                    WHERE ""Id"" = {batchId}
+                      AND ""BranchId"" = {branchId}
+                      AND ""ProductId"" = {productId}
+                      AND NOT ""IsDeleted""
+                    FOR UPDATE")
+                .FirstOrDefaultAsync(cancellationToken);
+        }
+
+        return await _context.BranchStocks.FirstOrDefaultAsync(
+            s => s.Id == batchId && s.BranchId == branchId && s.ProductId == productId && !s.IsDeleted,
+            cancellationToken);
     }
 
     public async Task<Order?> GetOrderWithDetailsAsync(Guid id, CancellationToken cancellationToken = default)
