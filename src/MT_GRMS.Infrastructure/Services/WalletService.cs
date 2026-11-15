@@ -40,10 +40,19 @@ public class WalletService : IWalletService
         var orderCode = $"{Random.Shared.Next(100000, 999999)}";
         var transferContent = $"WAL {orderCode}";
 
-        var bankCode = !string.IsNullOrWhiteSpace(_sepaySettings.BankCode) ? _sepaySettings.BankCode : "MBBank";
-        var bankName = !string.IsNullOrWhiteSpace(_sepaySettings.BankName) ? _sepaySettings.BankName : "MB Bank (Ngân hàng Quân Đội)";
-        var accountNumber = !string.IsNullOrWhiteSpace(_sepaySettings.AccountNumber) ? _sepaySettings.AccountNumber : "190065228888";
-        var accountName = !string.IsNullOrWhiteSpace(_sepaySettings.AccountName) ? _sepaySettings.AccountName : "CONG TY TNHH PHAN MEM MT-GRMS";
+        var platformSetting = await _context.PlatformSettings.AsNoTracking().FirstOrDefaultAsync(cancellationToken);
+        var bankCode = !string.IsNullOrWhiteSpace(platformSetting?.MasterBankCode)
+            ? platformSetting.MasterBankCode
+            : (!string.IsNullOrWhiteSpace(_sepaySettings.BankCode) ? _sepaySettings.BankCode : "MBBank");
+        var bankName = !string.IsNullOrWhiteSpace(platformSetting?.MasterBankName)
+            ? platformSetting.MasterBankName
+            : (!string.IsNullOrWhiteSpace(_sepaySettings.BankName) ? _sepaySettings.BankName : "MB Bank (Ngân hàng Quân Đội)");
+        var accountNumber = !string.IsNullOrWhiteSpace(platformSetting?.MasterAccountNumber)
+            ? platformSetting.MasterAccountNumber
+            : (!string.IsNullOrWhiteSpace(_sepaySettings.AccountNumber) ? _sepaySettings.AccountNumber : "190065228888");
+        var accountName = !string.IsNullOrWhiteSpace(platformSetting?.MasterAccountName)
+            ? platformSetting.MasterAccountName
+            : (!string.IsNullOrWhiteSpace(_sepaySettings.AccountName) ? _sepaySettings.AccountName : "CONG TY TNHH PHAN MEM MT-GRMS");
 
         var qrUrl = $"https://qr.sepay.vn/img?acc={accountNumber}&bank={bankCode}&amount={(long)request.Amount}&des={Uri.EscapeDataString(transferContent)}";
         var expiresAt = DateTime.UtcNow.AddMinutes(15);

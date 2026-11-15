@@ -68,6 +68,7 @@ public static class DependencyInjection
         services.AddScoped<ITenantService, TenantService>();
         services.AddScoped<TenantProvisioningService>();
         services.AddScoped<IAdminDashboardService, AdminDashboardService>();
+        services.AddScoped<IMasterCatalogService, MasterCatalogService>();
 
         return services;
     }

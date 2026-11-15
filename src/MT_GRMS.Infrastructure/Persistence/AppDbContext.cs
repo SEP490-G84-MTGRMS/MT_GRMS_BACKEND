@@ -41,6 +41,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<AuditLog> AuditLogs { get; set; } = null!;
     public virtual DbSet<WalletTransaction> WalletTransactions { get; set; } = null!;
     public virtual DbSet<WalletTopupOrder> WalletTopupOrders { get; set; } = null!;
+    public virtual DbSet<MT_GRMS.Domain.Entities.SaaS.PlatformSetting> PlatformSettings { get; set; } = null!;
 
     // 2. Phân hệ Catalog & Hàng hóa
     public virtual DbSet<Category> Categories { get; set; } = null!;
@@ -49,6 +50,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<BranchProduct> BranchProducts { get; set; } = null!;
     public virtual DbSet<BranchProductUnitPrice> BranchProductUnitPrices { get; set; } = null!;
     public virtual DbSet<ProductPriceHistory> ProductPriceHistories { get; set; } = null!;
+    public virtual DbSet<MasterProduct> MasterProducts { get; set; } = null!;
+    public virtual DbSet<MasterProductUnit> MasterProductUnits { get; set; } = null!;
 
     // 3. Phân hệ Chi nhánh, Kho & Điều chuyển (tồn theo lô)
     public virtual DbSet<Branch> Branches { get; set; } = null!;

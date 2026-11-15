@@ -117,6 +117,8 @@ public class UserRepository : IUserRepository
 
         await _context.Branches.AddAsync(branch, cancellationToken);
 
+        await TenantCatalogInitializer.AddAsync(_context, tenant.Id, branch.Id, cancellationToken);
+
         if (auditLog != null)
         {
             await _context.AuditLogs.AddAsync(auditLog, cancellationToken);

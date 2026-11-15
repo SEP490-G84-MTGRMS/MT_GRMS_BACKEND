@@ -7,6 +7,10 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-15
 
 ### Added
+- Khởi tạo danh mục sản phẩm, nhóm hàng, đơn vị quy đổi và gán chi nhánh chính từ MasterProducts đang bật trong transaction đăng ký cửa hàng. [worklog: docs/worklogs/2026-11-15_ADMIN-CATALOG_AI_new-tenant-default-data.md]
+- **Kho Danh mục Hàng hóa Mẫu Toàn Cầu (Global FMCG Master Catalog)**: Xây dựng thực thể nền tảng `MasterProduct` & `MasterProductUnit`, bộ API quản trị cho Super Admin `AdminMasterCatalogController` (`/api/admin/master-catalog`), xử lý ClosedXML xuất template và import Excel hàng loạt (>5.000 SKU) cùng API tra cứu mã vạch công khai `GET /api/products/lookup-master` phục vụ auto-fill tức thì khi tiệm tạp hóa onboard [REQ-MC-01 -> REQ-MC-04] [worklog: docs/worklogs/2026-11-15_FMCG-MASTER-CATALOG_Ortus24_add-global-master-catalog.md].
+- API Admin `GET /api/admin/audit-logs` đọc nhật ký thật, lọc hành động/từ khóa/thời gian Việt Nam, phân trang và che trường bí mật trong dữ liệu trước/sau. [worklog: docs/worklogs/2026-11-15_ADMIN-AUDIT_AI_audit-log-query.md]
+- **Cấu hình Nền tảng Toàn cục SaaS (Global Platform Settings)**: Xây dựng thực thể Singleton `PlatformSetting` và bộ APIs quản trị `AdminSettingsController` (`GET/PUT /api/v1/admin/settings`) cùng API công khai `PlatformPublicConfigController` (`GET /api/v1/platform/public-config`). Thay thế triệt để các giá trị cấu hình hardcode trong `TenantBranchAddonController` (đơn giá chi nhánh 80k), `TenantStorageController` (đơn giá dung lượng 15k), `WalletService` (tài khoản Master VietQR) và `AuthService` (số ngày dùng thử 3 ngày). Hỗ trợ Bật/Tắt chế độ bảo trì toàn hệ thống [REQ-FE-ADMIN-05] [worklog: docs/worklogs/2026-11-15_REQ-FE-ADMIN-05_AI_global-platform-settings-integration.md].
 - API Admin `POST /api/admin/tenants` tạo cửa hàng, tài khoản chủ sở hữu và chi nhánh chính trong một transaction, kiểm tra dữ liệu trùng và ghi audit log. Cửa hàng khởi tạo ở trạng thái `NO_PLAN`. [worklog: docs/worklogs/2026-11-15_ADMIN-TENANT_AI_create-tenant.md]
 
 ### Fixed

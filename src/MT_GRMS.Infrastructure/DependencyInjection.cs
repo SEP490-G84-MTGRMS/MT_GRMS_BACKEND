@@ -116,6 +116,9 @@ public static class DependencyInjection
         services.AddScoped<IPayslipRepository, PayslipRepository>();
         services.AddScoped<ISubscriptionPlanRepository, SubscriptionPlanRepository>();
         services.AddScoped<ITenantRepository, TenantRepository>();
+        services.AddScoped<IMasterProductRepository, MasterProductRepository>();
+        services.AddScoped<Application.Admin.Services.IMasterCatalogExcelService, Services.MasterCatalogExcelService>();
+        services.AddScoped<Application.Admin.Services.IPlatformSettingService, Services.PlatformSettingService>();
 
         // Đăng ký dịch vụ máy in nhiệt hóa đơn POS-58 (khổ in 43mm siêu thị mini)
         services.AddScoped<IThermalPrintService, ThermalPrintService>();
