@@ -55,6 +55,9 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<BranchStock> BranchStocks { get; set; } = null!;
     public virtual DbSet<Transfer> Transfers { get; set; } = null!;
     public virtual DbSet<TransferDetail> TransferDetails { get; set; } = null!;
+    public virtual DbSet<TransferRequest> TransferRequests { get; set; } = null!;
+    public virtual DbSet<TransferRequestDetail> TransferRequestDetails { get; set; } = null!;
+    public virtual DbSet<TransferStatusHistory> TransferStatusHistories { get; set; } = null!;
     public virtual DbSet<Batch> Batches { get; set; } = null!;
     public virtual DbSet<StockOnHand> StockOnHands { get; set; } = null!;
     public virtual DbSet<Stocktake> Stocktakes { get; set; } = null!;

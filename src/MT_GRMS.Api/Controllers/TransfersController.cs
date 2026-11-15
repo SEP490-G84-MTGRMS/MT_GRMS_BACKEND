@@ -26,6 +26,10 @@ public sealed class TransfersController(ITransferService service) : BaseApiContr
     public async Task<ActionResult<ApiResponse<TransferDto>>> Create([FromBody] CreateTransferRequest request, CancellationToken ct)
         => Ok(ApiResponse<TransferDto>.Ok(await service.CreateTransferAsync(request, ct), "Tạo phiếu điều chuyển thành công."));
 
+    [HttpPost("{id:guid}/submit")]
+    public async Task<ActionResult<ApiResponse<TransferDto>>> Submit(Guid id, CancellationToken ct)
+        => Ok(ApiResponse<TransferDto>.Ok(await service.SubmitTransferAsync(id, ct), "Đã gửi phiếu đến chi nhánh nguồn."));
+
     [HttpPut("{id:guid}/receive")]
     public async Task<ActionResult<ApiResponse<TransferDto>>> Receive(Guid id, [FromBody] ReceiveTransferRequest request, CancellationToken ct)
         => Ok(ApiResponse<TransferDto>.Ok(await service.ReceiveTransferAsync(id, request, ct), "Xác nhận nhận hàng thành công."));
@@ -37,4 +41,8 @@ public sealed class TransfersController(ITransferService service) : BaseApiContr
     [HttpPost("{id:guid}/cancel")]
     public async Task<ActionResult<ApiResponse<TransferDto>>> Cancel(Guid id, [FromBody] CancelTransferRequest request, CancellationToken ct)
         => Ok(ApiResponse<TransferDto>.Ok(await service.CancelTransferAsync(id, request, ct), "Hủy phiếu điều chuyển thành công."));
+
+    [HttpPost("{id:guid}/return")]
+    public async Task<ActionResult<ApiResponse<TransferDto>>> Return(Guid id, [FromBody] ReturnTransferRequest request, CancellationToken ct)
+        => Ok(ApiResponse<TransferDto>.Ok(await service.ReturnTransferAsync(id, request, ct), "Đã xác nhận hàng thực tế quay về chi nhánh nguồn."));
 }

@@ -63,6 +63,7 @@ public class TransferBusinessFlowIntegrationTests
         var stocksRepo = new GenericRepository<BranchStock>(context);
         var productsRepo = new GenericRepository<Product>(context);
         var branchesRepo = new GenericRepository<Branch>(context);
+        var historyRepo = new GenericRepository<TransferStatusHistory>(context);
         var uow = new UnitOfWork(context);
 
         var service = new TransferService(
@@ -71,6 +72,7 @@ public class TransferBusinessFlowIntegrationTests
             stocksRepo,
             productsRepo,
             branchesRepo,
+            historyRepo,
             tenantContext,
             uow);
 
@@ -185,6 +187,7 @@ public class TransferBusinessFlowIntegrationTests
         Assert.Equal(100m, stockInDbA.QuantityOnHand); // Tồn kho gửi chưa bị trừ
 
         // ACT 2: Xuất chuyển hàng (Dispatch)
+        await service.SubmitTransferAsync(created.Id, CancellationToken.None);
         var dispatched = await service.DispatchTransferAsync(created.Id, CancellationToken.None);
 
         // ASSERT 2: Phiếu chuyển InTransit và tồn kho CN A bị trừ ngay trong DB
@@ -210,7 +213,7 @@ public class TransferBusinessFlowIntegrationTests
         var received = await service.ReceiveTransferAsync(created.Id, receiveRequest, CancellationToken.None);
 
         // ASSERT 3: Phiếu chuyển Received, tồn kho CN B được tạo mới và tăng đúng 30 lon
-        Assert.Equal("Received", received.Status);
+        Assert.Equal("Completed", received.Status);
         Assert.NotNull(received.ReceivedAt);
 
         var stockAtB = await context.BranchStocks.AsNoTracking().FirstOrDefaultAsync(s => s.BranchId == branchB && s.ProductId == prodA && s.BatchCode == "L01");
@@ -261,6 +264,8 @@ public class TransferBusinessFlowIntegrationTests
             });
 
         var transfer = await service.CreateTransferAsync(createRequest, CancellationToken.None);
+        await service.SubmitTransferAsync(transfer.Id, CancellationToken.None);
+        transfer = await service.DispatchTransferAsync(transfer.Id, CancellationToken.None);
         Assert.Equal("InTransit", transfer.Status);
 
         // ACT: Chi nhánh B nhận hàng: 32 gói tốt, 8 gói bị rách nát do ngấm nước
@@ -275,7 +280,7 @@ public class TransferBusinessFlowIntegrationTests
         var received = await service.ReceiveTransferAsync(transfer.Id, receiveRequest, CancellationToken.None);
 
         // ASSERT:
-        Assert.Equal("Received", received.Status);
+        Assert.Equal("Completed", received.Status);
         var receivedLine = received.Items.First();
         Assert.Equal(32m, receivedLine.ReceivedQuantity);
         Assert.Equal(8m, receivedLine.DamagedQuantity);
@@ -293,7 +298,7 @@ public class TransferBusinessFlowIntegrationTests
     }
 
     [Fact]
-    public async Task CancelInTransitTransfer_ByStoreOwner_RollsBackStockToSourceBranchImmediately()
+    public async Task CancelInTransitTransfer_ByStoreOwner_IsRejectedWithoutCreatingPhantomStock()
     {
         // ARRANGE: Xuất chuyển 50 lon bia
         var dbName = $"TransferDb_CancelRollback_{Guid.NewGuid()}";
@@ -329,20 +334,20 @@ public class TransferBusinessFlowIntegrationTests
             });
 
         var transfer = await service.CreateTransferAsync(createRequest, CancellationToken.None);
+        await service.SubmitTransferAsync(transfer.Id, CancellationToken.None);
+        transfer = await service.DispatchTransferAsync(transfer.Id, CancellationToken.None);
 
         // Tồn kho nguồn sau khi xuất: 80 - 50 = 30
         var stockAfterDispatch = await context.BranchStocks.AsNoTracking().FirstAsync(s => s.BranchId == branchA && s.ProductId == prodA);
         Assert.Equal(30m, stockAfterDispatch.QuantityOnHand);
 
         // ACT: Chủ shop hủy phiếu chuyển đang vận chuyển
-        var cancelResult = await service.CancelTransferAsync(transfer.Id, new CancelTransferRequest("Hủy do chi nhánh nhận không đủ diện tích chứa hàng"), CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.CancelTransferAsync(transfer.Id, new CancelTransferRequest("Hủy do chi nhánh nhận không đủ diện tích chứa hàng"), CancellationToken.None));
 
         // ASSERT: Phiếu bị Cancelled và Tồn kho nguồn được hoàn trả 100% về 80 trong DB
-        Assert.Equal("Cancelled", cancelResult.Status);
-        Assert.Equal("Hủy do chi nhánh nhận không đủ diện tích chứa hàng", cancelResult.CancelReason);
-
         var stockAfterCancel = await context.BranchStocks.AsNoTracking().FirstAsync(s => s.BranchId == branchA && s.ProductId == prodA);
-        Assert.Equal(80m, stockAfterCancel.QuantityOnHand); // Tự động phục hồi tồn ban đầu
+        Assert.Equal(30m, stockAfterCancel.QuantityOnHand);
     }
 
     [Fact]
@@ -369,16 +374,17 @@ public class TransferBusinessFlowIntegrationTests
         await context.SaveChangesAsync();
 
         var transfer = await service.CreateTransferAsync(new CreateTransferRequest(branchA, branchB, true, null, null, new List<TransferLineRequest> { new(prodA, 10m, "Lon", null, null, 18_000m) }), CancellationToken.None);
+        await service.SubmitTransferAsync(transfer.Id, CancellationToken.None);
+        transfer = await service.DispatchTransferAsync(transfer.Id, CancellationToken.None);
 
         // Đổi quyền sang Nhân viên thường của chi nhánh gửi
         tenant.SetRole("STAFF");
         tenant.CurrentBranchId = branchA;
 
         // ACT & ASSERT: Nhân viên thường không được phép hủy phiếu đang vận chuyển
-        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.CancelTransferAsync(transfer.Id, new CancelTransferRequest("Nhân viên tự hủy"), CancellationToken.None));
-
-        Assert.Contains("Chỉ chủ cửa hàng hoặc quản trị viên", ex.Message);
+        Assert.Contains("trước khi xuất hàng", ex.Message);
     }
 
     [Fact]
@@ -449,6 +455,8 @@ public class TransferBusinessFlowIntegrationTests
         await context.SaveChangesAsync();
 
         var transfer = await service.CreateTransferAsync(new CreateTransferRequest(branchA, branchB, true, null, null, new List<TransferLineRequest> { new(prodA, 10m, "Lon", null, null, 18_000m) }), CancellationToken.None);
+        await service.SubmitTransferAsync(transfer.Id, CancellationToken.None);
+        transfer = await service.DispatchTransferAsync(transfer.Id, CancellationToken.None);
 
         // Đổi quyền sang Nhân viên chỉ trực thuộc Chi nhánh A (kho gửi), không có thẩm quyền tại Chi nhánh B (kho nhận)
         tenant.SetRole("STAFF");
@@ -462,5 +470,60 @@ public class TransferBusinessFlowIntegrationTests
             service.ReceiveTransferAsync(transfer.Id, receiveRequest, CancellationToken.None));
 
         Assert.Contains("Không có quyền thao tác tại chi nhánh này", ex.Message);
+    }
+
+    [Fact]
+    public async Task UrgentRequest_AllocatesAcrossTwoSourceBranches_AndCreatesOnePendingTransferPerSource()
+    {
+        var dbName = $"TransferDb_MultiSource_{Guid.NewGuid()}";
+        var tenant = new FakeTenantContext();
+        var (transferService, context) = CreateServiceScope(dbName, tenant);
+        var (sourceA, destination, productId, _) = await SeedBaseDataAsync(context, tenant.CurrentTenantId);
+        var sourceB = Guid.NewGuid();
+        context.Branches.Add(new Branch { Id = sourceB, TenantId = tenant.CurrentTenantId, BranchCode = "CN-NGUON-B", Name = "Chi nhánh nguồn B", Address = "B", IsActive = true });
+        context.BranchStocks.AddRange(
+            new BranchStock { Id = Guid.NewGuid(), TenantId = tenant.CurrentTenantId, BranchId = sourceA, ProductId = productId, QuantityOnHand = 12m, LandedCostPerUnit = 18_000m },
+            new BranchStock { Id = Guid.NewGuid(), TenantId = tenant.CurrentTenantId, BranchId = sourceB, ProductId = productId, QuantityOnHand = 8m, LandedCostPerUnit = 18_500m });
+        await context.SaveChangesAsync();
+
+        var requestService = new TransferRequestService(
+            new GenericRepository<TransferRequest>(context),
+            new GenericRepository<TransferRequestDetail>(context),
+            new GenericRepository<Transfer>(context),
+            new GenericRepository<TransferDetail>(context),
+            new GenericRepository<TransferStatusHistory>(context),
+            new GenericRepository<BranchStock>(context),
+            new GenericRepository<Product>(context),
+            new GenericRepository<Branch>(context),
+            transferService,
+            tenant,
+            new UnitOfWork(context));
+
+        var request = new CreateTransferRequestGroupRequest(destination, DateTime.UtcNow.AddHours(2), null,
+            "Khách đang chờ", [new TransferDemandLineRequest(productId, 20m, "Lon")]);
+        var preview = await requestService.PreviewAllocationAsync(request, CancellationToken.None);
+        Assert.True(preview.IsFullyAllocated);
+        Assert.Equal(2, preview.Sources.Count);
+        Assert.Equal(20m, preview.Sources.Sum(x => x.Items.Sum(line => line.AllocatedQuantity)));
+
+        var created = await requestService.CreateAndAllocateAsync(request, CancellationToken.None);
+        Assert.Equal("Open", created.Status);
+        Assert.Equal(2, created.Transfers.Count);
+        Assert.All(created.Transfers, transfer => Assert.Equal("Pending", transfer.Status));
+        Assert.Equal(20m, created.Transfers.SelectMany(x => x.Items).Sum(x => x.SentQuantity));
+
+        var reservedStocks = context.BranchStocks.Where(x => x.ProductId == productId).ToList();
+        Assert.Equal(20m, reservedStocks.Sum(x => x.QuantityReserved));
+
+        var secondPreview = await requestService.PreviewAllocationAsync(request, CancellationToken.None);
+        Assert.False(secondPreview.IsFullyAllocated);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            requestService.CreateAndAllocateAsync(request, CancellationToken.None));
+
+        var firstTransfer = created.Transfers.First();
+        await transferService.DispatchTransferAsync(firstTransfer.Id, CancellationToken.None);
+        var dispatchedSourceStock = context.BranchStocks.Single(x => x.BranchId == firstTransfer.FromBranchId && x.ProductId == productId);
+        Assert.Equal(0m, dispatchedSourceStock.QuantityReserved);
+        Assert.Equal(0m, dispatchedSourceStock.QuantityOnHand);
     }
 }

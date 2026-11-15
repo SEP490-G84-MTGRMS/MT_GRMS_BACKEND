@@ -26,14 +26,14 @@ public class TransferAuthorizationTests
         var tenant = new TestTenantContext("ADMIN", branchId);
         var service = CreateService(transfers.Object, tenant);
 
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.CancelTransferAsync(transfer.Id, new CancelTransferRequest("test"), CancellationToken.None));
 
         transfers.Verify(x => x.Update(It.IsAny<Transfer>()), Times.Never);
     }
 
     [Fact]
-    public async Task EmployeeFromSendingBranch_CanCancelInTransitTransfer()
+    public async Task EmployeeFromSendingBranch_CannotCancelInTransitTransfer()
     {
         var branchId = Guid.NewGuid();
         var transfer = new Transfer
@@ -54,12 +54,9 @@ public class TransferAuthorizationTests
         var unitOfWork = new Mock<IUnitOfWork>();
         var service = CreateService(transfers.Object, new TestTenantContext("EMPLOYEE", branchId), details.Object, branches.Object, unitOfWork.Object);
 
-        var result = await service.CancelTransferAsync(transfer.Id, new CancelTransferRequest("approved by sending branch"), CancellationToken.None);
-
-        Assert.Equal(TransferStatus.Cancelled.ToString(), result.Status);
-        Assert.Equal("approved by sending branch", transfer.CancelReason);
-        unitOfWork.Verify(x => x.BeginTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
-        unitOfWork.Verify(x => x.CommitTransactionAsync(It.IsAny<CancellationToken>()), Times.Once);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.CancelTransferAsync(transfer.Id, new CancelTransferRequest("approved by sending branch"), CancellationToken.None));
+        unitOfWork.Verify(x => x.BeginTransactionAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     private static TransferService CreateService(
@@ -74,6 +71,7 @@ public class TransferAuthorizationTests
             Mock.Of<IRepository<BranchStock>>(),
             Mock.Of<IRepository<Product>>(),
             branches ?? Mock.Of<IRepository<Branch>>(),
+            Mock.Of<IRepository<TransferStatusHistory>>(),
             tenant,
             unitOfWork ?? Mock.Of<IUnitOfWork>());
 
