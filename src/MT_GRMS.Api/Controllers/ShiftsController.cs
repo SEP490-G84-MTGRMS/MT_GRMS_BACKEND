@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PosShifts;

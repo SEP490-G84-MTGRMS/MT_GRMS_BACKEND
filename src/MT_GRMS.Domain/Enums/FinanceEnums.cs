@@ -108,6 +108,22 @@ public enum HandoverStatus
     DISPUTED = 3    // Ca sau khiếu nại thiếu/sai tiền
 }
 
+public enum CashbookPostingStatus
+{
+    NotPosted = 1,
+    Posted = 2,
+    Failed = 3
+}
+
+public enum BusinessDayClosingStatus
+{
+    Closing = 1,
+    Closed = 2,
+    Failed = 3,
+    Reopened = 4,
+    Superseded = 5
+}
+
 /// <summary>
 /// Trạng thái phê duyệt của phiếu thu/chi ca POS.
 /// </summary>

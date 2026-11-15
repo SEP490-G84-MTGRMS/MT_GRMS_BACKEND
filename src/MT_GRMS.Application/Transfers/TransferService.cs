@@ -17,10 +17,7 @@ public sealed class TransferService(
 {
     private bool IsOwner =>
         string.Equals(tenant.CurrentRole?.Trim(), "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(tenant.CurrentRole?.Trim(), "StoreOwner", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(tenant.CurrentRole?.Trim(), "ADMIN", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(tenant.CurrentRole?.Trim(), "Admin", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(tenant.CurrentRole?.Trim(), "SystemAdmin", StringComparison.OrdinalIgnoreCase);
+        || string.Equals(tenant.CurrentRole?.Trim(), "StoreOwner", StringComparison.OrdinalIgnoreCase);
 
     private bool IsBranchEmployee =>
         string.Equals(tenant.CurrentRole?.Trim(), "STAFF", StringComparison.OrdinalIgnoreCase)
@@ -253,7 +250,7 @@ public sealed class TransferService(
         if (string.IsNullOrWhiteSpace(request.Reason)) throw new InvalidOperationException("Cần nhập lý do hủy.");
         var transfer = await RequireAsync(id, ct); EnsureBranch(transfer.FromBranchId);
         if (transfer.Status is not (TransferStatus.Draft or TransferStatus.InTransit)) throw new InvalidOperationException("Chỉ hủy phiếu nháp hoặc đang vận chuyển.");
-        if (transfer.Status == TransferStatus.InTransit && !IsOwner) throw new UnauthorizedAccessException("Chỉ chủ cửa hàng hoặc quản trị viên được hủy phiếu đã xuất chuyển.");
+        if (transfer.Status == TransferStatus.InTransit && !IsOwner && !IsBranchEmployee) throw new UnauthorizedAccessException("Chỉ chủ cửa hàng hoặc nhân viên chi nhánh gửi được hủy phiếu đã xuất chuyển.");
         await unitOfWork.BeginTransactionAsync(ct);
         try
         {

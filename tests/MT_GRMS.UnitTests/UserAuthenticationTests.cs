@@ -255,7 +255,11 @@ public class UserAuthenticationTests
         // GIVEN
         var repo = new FakeUserRepository();
         await repo.AddAsync(new User { Id = "usr_01", Username = "user01", Password = "123", IsAdmin = true, IsTwoFactorEnabled = false });
-        var authService = new AuthService(repo);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Jwt:ExpiresMinutes"] = "120"
+        }).Build();
+        var authService = new AuthService(repo, config);
 
         // WHEN
         var before = DateTime.UtcNow;

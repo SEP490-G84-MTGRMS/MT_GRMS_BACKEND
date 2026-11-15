@@ -290,6 +290,8 @@ public class GoodsReceiptService : IGoodsReceiptService
             var landedTotal = landedSubtotal + vatAlloc;
             var landedUnitCost = l.AcceptedQty > 0 ? Math.Round(landedTotal / l.AcceptedQty, 2) : l.UnitPrice;
 
+            var shouldManageBatch = l.ManageBatch || !string.IsNullOrWhiteSpace(l.BatchCode) || l.ExpiryDate.HasValue || l.ManufactureDate.HasValue;
+
             var line = new GoodsReceiptLine
             {
                 Id = Guid.NewGuid(),
@@ -303,9 +305,9 @@ public class GoodsReceiptService : IGoodsReceiptService
                 RejectedQty = rejectedQty,
                 UnitPrice = l.UnitPrice,
                 LineAmount = lineAmount,
-                BatchCode = l.ManageBatch && !string.IsNullOrWhiteSpace(l.BatchCode) ? l.BatchCode.Trim() : null,
-                ManufactureDate = l.ManageBatch ? l.ManufactureDate : null,
-                ExpiryDate = l.ManageBatch ? l.ExpiryDate : null,
+                BatchCode = shouldManageBatch && !string.IsNullOrWhiteSpace(l.BatchCode) ? l.BatchCode.Trim() : null,
+                ManufactureDate = shouldManageBatch ? l.ManufactureDate : null,
+                ExpiryDate = shouldManageBatch ? l.ExpiryDate : null,
                 FreightAllocated = freightAlloc,
                 DiscountAllocated = discountAlloc,
                 VatAllocated = vatAlloc,

@@ -153,35 +153,16 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
             var totalValue = physicalQty * weightedCost;
 
             var batchDtos = stocks
+                .Where(s => !string.IsNullOrWhiteSpace(s.BatchCode) || s.ExpiryDate.HasValue)
                 .OrderBy(s => s.ExpiryDate ?? DateTime.MaxValue)
-                .Select(s =>
-                {
-                    var days = s.ExpiryDate.HasValue ? (s.ExpiryDate.Value.Date - now).Days : 9999;
-                    var bStatus = !s.ExpiryDate.HasValue
-                        ? "Normal"
-                        : days switch
-                        {
-                            <= 0 => "Expired",
-                            <= 3 => "Critical",
-                            <= 30 => "Warning",
-                            _ => "Normal"
-                        };
-                    return new InventoryBatchSummaryDto(
-                        s.Id,
-                        string.IsNullOrWhiteSpace(s.BatchCode) ? "—" : s.BatchCode!,
-                        s.ManufactureDate ?? DateTime.MinValue,
-                        s.ExpiryDate ?? DateTime.MaxValue.Date,
-                        days,
-                        BranchStockAvailability.GetSellableAvailable(s, now),
-                        bStatus
-                    );
-                })
+                .ThenBy(s => s.ManufactureDate ?? DateTime.MaxValue)
+                .Select(s => MapBranchStockToBatchSummary(s, now))
                 .ToList();
 
             string status;
             if (availableQty <= 0) status = "OUT_OF_STOCK";
             else if (availableQty <= minStock) status = "LOW_STOCK";
-            else if (batchDtos.Any(b => b.DaysLeft <= 30 && b.DaysLeft < 9999)) status = "NEAR_EXPIRY";
+            else if (batchDtos.Any(b => b.DaysLeft.HasValue && b.DaysLeft.Value <= 30 && b.QuantityOnHand > 0)) status = "NEAR_EXPIRY";
             else status = "OK";
 
             allItems.Add(new InventoryStockItemDto(
@@ -250,37 +231,50 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
         CancellationToken cancellationToken = default)
     {
         var now = DateTime.UtcNow.Date;
-        var stocks = await _appContext.BranchStocks.AsNoTracking()
-            .Where(bs => bs.TenantId == tenantId
-                         && bs.BranchId == branchId
-                         && bs.ProductId == productId
-                         && !bs.IsDeleted
-                         && bs.QuantityOnHand > 0)
-            .OrderBy(bs => bs.ExpiryDate ?? DateTime.MaxValue)
+        // BranchStocks mới là nguồn tồn theo lô mà POS/GRN đang cập nhật.
+        // Không dùng Batches.InitialQuantity vì đó chỉ là số lượng nhập ban đầu,
+        // không phản ánh tồn còn lại sau bán, giữ hàng hoặc trả nhà cung cấp.
+        var batchStocks = await _appContext.BranchStocks.AsNoTracking()
+            .Where(stock =>
+                stock.TenantId == tenantId &&
+                stock.BranchId == branchId &&
+                stock.ProductId == productId &&
+                !stock.IsDeleted &&
+                (!string.IsNullOrWhiteSpace(stock.BatchCode) || stock.ExpiryDate.HasValue))
+            .OrderBy(stock => stock.ExpiryDate ?? DateTime.MaxValue)
+            .ThenBy(stock => stock.ManufactureDate ?? DateTime.MaxValue)
             .ToListAsync(cancellationToken);
 
-        return stocks.Select(s =>
-        {
-            var days = s.ExpiryDate.HasValue ? (s.ExpiryDate.Value.Date - now).Days : 9999;
-            var status = !s.ExpiryDate.HasValue
-                ? "Normal"
-                : days switch
-                {
-                    <= 0 => "Expired",
-                    <= 3 => "Critical",
-                    <= 30 => "Warning",
-                    _ => "Normal"
-                };
+        return batchStocks.Select(stock => MapBranchStockToBatchSummary(stock, now)).ToList();
+    }
 
-            return new InventoryBatchSummaryDto(
-                s.Id,
-                string.IsNullOrWhiteSpace(s.BatchCode) ? "—" : s.BatchCode!,
-                s.ManufactureDate ?? DateTime.MinValue,
-                s.ExpiryDate ?? DateTime.MaxValue.Date,
-                days,
-                BranchStockAvailability.GetSellableAvailable(s, now),
-                status
-            );
-        }).ToList();
+    private static InventoryBatchSummaryDto MapBranchStockToBatchSummary(BranchStock stock, DateTime now)
+    {
+        var days = stock.ExpiryDate.HasValue
+            ? (stock.ExpiryDate.Value.Date - now).Days
+            : (int?)null;
+        var status = days switch
+        {
+            <= 0 => "Expired",
+            <= 3 => "Critical",
+            <= 30 => "Warning",
+            null => "NoExpiry",
+            _ => "Normal"
+        };
+        var availableQty = Math.Max(0m, stock.QuantityOnHand - stock.QuantityReserved - stock.QuantityQuarantined);
+
+        return new InventoryBatchSummaryDto(
+            stock.Id,
+            string.IsNullOrWhiteSpace(stock.BatchCode) ? "—" : stock.BatchCode,
+            stock.ManufactureDate,
+            stock.ExpiryDate,
+            days,
+            stock.QuantityOnHand,
+            stock.QuantityReserved,
+            availableQty,
+            status,
+            stock.FefoDiscountPercent,
+            stock.IsFefoDiscountActive
+        );
     }
 }
