@@ -35,11 +35,12 @@ public record CloseShiftRequest(
     decimal RetainedFloatAmount,
     decimal DroppedToSafeAmount,
     string? ReceiverUserId = null,
-    string? Notes = null
+    string? Notes = null,
+    string? EarlyOrLateReason = null
 );
 
 /// <summary>
-/// Yêu cầu xác nhận hoặc khiếu nại bàn giao ca từ nhân viên ca kế tiếp.
+/// Yêu cầu xác nhận hoặc khiếu nại bàn giao ca từ nhân viên ca kế tiếp hoặc Chủ cửa hàng.
 /// </summary>
 public record ConfirmHandoverRequest(
     HandoverStatus Status,
@@ -76,7 +77,9 @@ public record ConfirmCloseShiftRequest(
     decimal RetainedFloatAmount,
     decimal DroppedToSafeAmount,
     string? ReceiverUserId = null,
-    string? Notes = null
+    string? Notes = null,
+    string? EarlyOrLateReason = null,
+    string? DiscrepancyReason = null
 );
 
 /// <summary>
@@ -211,7 +214,11 @@ public record ShiftDetailResponse(
     Guid? ClosedByUserId = null,
     string? ForceCloseReason = null,
     IReadOnlyList<ShiftParticipantDto>? Participants = null,
-    IReadOnlyList<ShiftCloseConfirmationDto>? CloseConfirmations = null
+    IReadOnlyList<ShiftCloseConfirmationDto>? CloseConfirmations = null,
+    DateOnly? BusinessDate = null,
+    string? DiscrepancyReason = null,
+    Guid? OpenedScheduleId = null,
+    Guid? ClosedScheduleId = null
 );
 
 /// <summary>
@@ -252,7 +259,10 @@ public record CashierShiftEligibilityDto(
     string? Role,
     string? EmployeeName,
     string? Reason,
-    CashierShiftInfo? ActiveSchedule
+    CashierShiftInfo? ActiveSchedule,
+    bool IsFullTime = true,
+    bool HasClosedShiftToday = false,
+    string? SalaryType = null
 );
 
 public record CashierShiftInfo(
