@@ -684,6 +684,7 @@ public class CashbookService : ICashbookService
         {
             throw new BusinessException("TAX_REASON_REQUIRED", "Khoản thu không tính thuế bắt buộc có lý do.");
         }
+        ValidateTaxReason(request.TaxTreatmentReason);
         return new EntryClassification("OTHER_INCOME", FinancialNature.OtherIncome, request.TaxTreatment.Value, request.TaxTreatmentReason?.Trim());
     }
 
@@ -712,6 +713,9 @@ public class CashbookService : ICashbookService
         {
             throw new BusinessException("EVIDENCE_REQUIRED", "Chi phí được trừ bắt buộc có số hoặc mã chứng từ.");
         }
+        if (request.ReferenceCode?.Trim().Length > 100)
+            throw new BusinessException("REFERENCE_TOO_LONG", "Mã chứng từ không được vượt quá 100 ký tự.");
+        ValidateTaxReason(request.TaxTreatmentReason);
         return new EntryClassification("OTHER_PAYMENT", FinancialNature.OperatingExpense, request.TaxTreatment.Value, request.TaxTreatmentReason?.Trim());
     }
 
@@ -730,6 +734,12 @@ public class CashbookService : ICashbookService
         {
             throw new BusinessException("DESCRIPTION_TOO_LONG", "Diễn giải không được vượt quá 255 ký tự.");
         }
+    }
+
+    private static void ValidateTaxReason(string? reason)
+    {
+        if (reason?.Trim().Length > 255)
+            throw new BusinessException("TAX_REASON_TOO_LONG", "Lý do xử lý thuế không được vượt quá 255 ký tự.");
     }
 
     public async Task<TaxPaymentResponse> RecordTaxPaymentAsync(RecordTaxPaymentRequest request, CancellationToken ct = default)
