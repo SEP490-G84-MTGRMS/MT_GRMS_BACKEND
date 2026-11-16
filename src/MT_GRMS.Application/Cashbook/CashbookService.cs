@@ -395,9 +395,9 @@ public class CashbookService : ICashbookService
     {
         RequireOwner();
         var existingList = await _accountRepo.FindAsync(
-            s => s.BranchId == branchId && s.AccountType == FinanceAccountType.Safe && !s.IsDeleted,
+            s => s.BranchId == branchId && s.AccountType == FinanceAccountType.Safe && s.IsActive && !s.IsDeleted,
             ct);
-        var existing = existingList.FirstOrDefault();
+        var existing = existingList.OrderBy(s => s.CreatedAt).FirstOrDefault();
         if (existing != null) return existing;
 
         var safe = new FinanceAccount
@@ -416,6 +416,58 @@ public class CashbookService : ICashbookService
         return safe;
     }
 
+    public async Task<FinanceAccount> ResolveDisbursementAccountAsync(
+        Guid branchId,
+        string paymentMethod,
+        Guid? cashbookAccountId = null,
+        CancellationToken ct = default)
+    {
+        var normalized = (paymentMethod ?? string.Empty).Trim().ToUpperInvariant();
+        var isBank = normalized.Contains("BANK")
+            || normalized.Contains("TRANSFER")
+            || normalized.Contains("VIETQR")
+            || normalized == "QR";
+
+        if (!cashbookAccountId.HasValue)
+        {
+            return isBank
+                ? await GetOrCreateBankAccountAsync(branchId, ct: ct)
+                : await GetOrCreateSafeAsync(branchId, ct);
+        }
+
+        var account = await _accountRepo.GetByIdAsync(cashbookAccountId.Value, ct);
+        if (account == null || account.IsDeleted || !account.IsActive)
+        {
+            throw new NotFoundException("Tài khoản quỹ được chọn không tồn tại hoặc đang ngừng hoạt động.");
+        }
+
+        var currentTenantId = _tenantContext.CurrentTenantId;
+        if (!string.IsNullOrEmpty(currentTenantId) && account.TenantId != currentTenantId)
+        {
+            throw new NotFoundException("Tài khoản quỹ được chọn không thuộc cửa hàng hiện tại.");
+        }
+
+        if (isBank && account.AccountType != FinanceAccountType.Bank)
+        {
+            throw new BusinessException("INVALID_CASHBOOK_ACCOUNT", "Phương thức chuyển khoản chỉ áp dụng cho tài khoản ngân hàng.");
+        }
+
+        if (!isBank && account.AccountType == FinanceAccountType.Bank)
+        {
+            throw new BusinessException("INVALID_CASHBOOK_ACCOUNT", "Phương thức tiền mặt không áp dụng cho tài khoản ngân hàng.");
+        }
+
+        if (account.AccountType != FinanceAccountType.Bank
+            && account.BranchId.HasValue
+            && branchId != Guid.Empty
+            && account.BranchId.Value != branchId)
+        {
+            throw new BusinessException("INVALID_CASHBOOK_ACCOUNT", "Tài khoản quỹ được chọn không thuộc chi nhánh của phiếu lương.");
+        }
+
+        return account;
+    }
+
     public async Task<FinanceAccount> GetOrCreateBankAccountAsync(
         Guid? branchId = null,
         string? bankName = null,
@@ -426,10 +478,9 @@ public class CashbookService : ICashbookService
         RequireOwner();
         var existingBanks = await _accountRepo.FindAsync(b => b.AccountType == FinanceAccountType.Bank && !b.IsDeleted, ct);
         var matchedBank = existingBanks
-            .Where(b => b.IsActive && (!branchId.HasValue || !b.BranchId.HasValue || b.BranchId == branchId.Value))
+            .Where(b => b.IsActive && b.BranchId == branchId)
             .FirstOrDefault()
-            ?? existingBanks.FirstOrDefault(b => b.IsActive)
-            ?? existingBanks.FirstOrDefault();
+            ?? existingBanks.FirstOrDefault(b => b.BranchId == branchId);
 
         if (matchedBank != null)
         {
@@ -447,7 +498,9 @@ public class CashbookService : ICashbookService
         {
             Id = Guid.NewGuid(),
             TenantId = _tenantContext.CurrentTenantId ?? string.Empty,
-            BranchId = null,
+            // Sổ ngân hàng phục vụ chốt ngày phải tách theo chi nhánh. Tài khoản vật lý
+            // dùng chung được biểu diễn bằng PaymentAccount/BranchPaymentAccount.
+            BranchId = branchId,
             AccountType = FinanceAccountType.Bank,
             AccountName = resolvedName,
             BankName = resolvedName,

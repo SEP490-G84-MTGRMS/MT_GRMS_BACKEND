@@ -163,6 +163,8 @@ public class StocktakeRepository : GenericRepository<Stocktake>, IStocktakeRepos
                 VarianceQty: l.VarianceQty,
                 DefectiveReasonCode: l.DefectiveReasonCode,
                 NearExpiryAction: l.NearExpiryAction,
+                DamagedAction: l.DamagedAction,
+                ExpiredAction: l.ExpiredAction,
                 ReturnedQty: l.ReturnedQty,
                 EligibleReturnQty: eligibleReturnQty,
                 OriginalGrnId: l.OriginalGrnId,

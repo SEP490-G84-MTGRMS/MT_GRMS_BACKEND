@@ -301,13 +301,16 @@ public class BranchProductRepository : IBranchProductRepository
                 p.ImageUrl,
                 p.BaseUnit,
                 p.SellingPrice,
+                p.AllowRepack,
+                p.ProcessedSellingPricePerKg,
                 Units = p.Units.Select(u => new
                 {
                     u.Id,
                     u.UnitName,
                     u.ConversionRate,
                     u.Price,
-                    u.IsBaseUnit
+                    u.IsBaseUnit,
+                    u.IsPurchaseUnit
                 }).ToList()
             })
             .ToListAsync(cancellationToken);
@@ -335,6 +338,7 @@ public class BranchProductRepository : IBranchProductRepository
                 x.Unit,
                 x.RetailPrice,
                 unitOverrides);
+            var catalogPurchaseUnitName = extra?.Units.FirstOrDefault(u => u.IsPurchaseUnit)?.UnitName;
 
             spLookup.TryGetValue(x.ProductId, out var spList);
             var sourcing = (spList ?? new List<SupplierProduct>())
@@ -375,6 +379,12 @@ public class BranchProductRepository : IBranchProductRepository
                     : 0;
                 var hasSource = sp != null;
 
+                // Đơn vị nhập: DeliveryUoM (SupplierProduct) → IsPurchaseUnit → BaseUnit (giống màn NCC)
+                var inboundUnit = ResolveInboundUnit(
+                    deliveryUoM: sp?.DeliveryUoM,
+                    purchaseUnitName: catalogPurchaseUnitName,
+                    baseUnitName: extra?.BaseUnit ?? x.Unit);
+
                 return new BranchProductDto
                 {
                     Id = x.Id,
@@ -386,7 +396,7 @@ public class BranchProductRepository : IBranchProductRepository
                     Sku = x.ProductCode,
                     Barcode = x.Barcode,
                     Category = x.CategoryName,
-                    Unit = x.Unit,
+                    Unit = inboundUnit,
                     ImageUrl = extra?.ImageUrl,
                     RetailPrice = x.RetailPrice,
                     CostPrice = cost,
@@ -402,7 +412,9 @@ public class BranchProductRepository : IBranchProductRepository
                     Status = x.ProductStatus,
                     ShelfLocation = x.ShelfLocation,
                     AssignedDate = x.AssignedDate,
-                    UnitPrices = unitPrices
+                    UnitPrices = unitPrices,
+                    AllowRepack = extra?.AllowRepack ?? false,
+                    ProcessedSellingPricePerKg = extra?.ProcessedSellingPricePerKg
                 };
             }
 
@@ -423,6 +435,21 @@ public class BranchProductRepository : IBranchProductRepository
         }).ToList();
 
         return (dtos, totalCount);
+    }
+
+    /// <summary>
+    /// Đơn vị nhập (cùng logic màn NCC): DeliveryUoM → đơn vị IsPurchaseUnit → BaseUnit.
+    /// </summary>
+    private static string ResolveInboundUnit(
+        string? deliveryUoM,
+        string? purchaseUnitName,
+        string? baseUnitName)
+    {
+        if (!string.IsNullOrWhiteSpace(deliveryUoM))
+            return deliveryUoM.Trim();
+        if (!string.IsNullOrWhiteSpace(purchaseUnitName))
+            return purchaseUnitName.Trim();
+        return string.IsNullOrWhiteSpace(baseUnitName) ? "Cái" : baseUnitName.Trim();
     }
 
     /// <summary>
@@ -620,6 +647,32 @@ public class BranchProductRepository : IBranchProductRepository
             .Include(bs => bs.Supplier)
             .Where(bs => bs.BranchId == branchId && bs.ProductId == productId)
             .ToListAsync(cancellationToken);
+    }
+
+    public async Task SyncBranchStockCatalogAsync(
+        Guid branchId,
+        Guid productId,
+        decimal retailPrice,
+        string status,
+        string? shelfLocation,
+        CancellationToken cancellationToken = default)
+    {
+        // Catalog metadata is independent from stock quantities. Updating it in bulk avoids
+        // using BranchStock.RowVersion loaded earlier in the request and therefore does not
+        // overwrite, or spuriously conflict with, a concurrent sale/receipt stock movement.
+        await _context.BranchStocks
+            .Where(bs => bs.BranchId == branchId && bs.ProductId == productId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(bs => bs.RetailPrice, retailPrice)
+                .SetProperty(bs => bs.Status, status)
+                .SetProperty(bs => bs.ShelfLocation, shelfLocation)
+                .SetProperty(bs => bs.UpdatedAt, DateTime.UtcNow),
+                cancellationToken);
+    }
+
+    public async Task AddUnitPriceOverrideAsync(BranchProductUnitPrice unitPrice, CancellationToken cancellationToken = default)
+    {
+        await _context.BranchProductUnitPrices.AddAsync(unitPrice, cancellationToken);
     }
 
     public async Task AddBranchStockAsync(

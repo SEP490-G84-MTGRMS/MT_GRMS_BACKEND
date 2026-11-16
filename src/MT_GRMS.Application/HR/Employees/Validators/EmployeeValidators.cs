@@ -136,6 +136,20 @@ public class CreateEmployeeRequestValidator : AbstractValidator<CreateEmployeeRe
                 .MaximumLength(20).WithMessage("Hệ số làm thêm Chủ nhật không vượt quá 20 ký tự.");
         });
 
+        When(x => x.InsuranceBaseSalary.HasValue, () =>
+        {
+            RuleFor(x => x.InsuranceBaseSalary!.Value)
+                .GreaterThanOrEqualTo(0).WithMessage("Mức lương đóng bảo hiểm không được âm.")
+                .LessThanOrEqualTo(1_000_000_000m).WithMessage("Mức lương đóng bảo hiểm không được vượt quá 1.000.000.000 đ.");
+        });
+
+        When(x => x.HasLaborContract && string.Equals(x.SalaryType?.Trim(), "monthly", StringComparison.OrdinalIgnoreCase), () =>
+        {
+            RuleFor(x => x.InsuranceBaseSalary)
+                .Must((req, insBase) => (insBase ?? req.BaseRate) > 0)
+                .WithMessage("Mức lương đóng bảo hiểm phải lớn hơn 0 khi nhân viên có hợp đồng lao động.");
+        });
+
         When(x => !string.IsNullOrWhiteSpace(x.EmployeeCode), () =>
         {
             RuleFor(x => x.EmployeeCode!)
@@ -162,7 +176,7 @@ public class CreateEmployeeRequestValidator : AbstractValidator<CreateEmployeeRe
                 .MaximumLength(100).WithMessage("Chủ tài khoản ngân hàng không vượt quá 100 ký tự.");
         });
 
-        When(x => !string.IsNullOrWhiteSpace(x.AvatarUrl), () =>
+        When(x => !string.IsNullOrWhiteSpace(x.AvatarUrl) && !x.AvatarUrl!.TrimStart().StartsWith("data:image/", StringComparison.OrdinalIgnoreCase), () =>
         {
             RuleFor(x => x.AvatarUrl)
                 .MaximumLength(255).WithMessage("Đường dẫn ảnh đại diện không vượt quá 255 ký tự.");
@@ -270,6 +284,20 @@ public class UpdateEmployeeRequestValidator : AbstractValidator<UpdateEmployeeRe
                 .MaximumLength(20).WithMessage("Hệ số làm thêm Chủ nhật không vượt quá 20 ký tự.");
         });
 
+        When(x => x.InsuranceBaseSalary.HasValue, () =>
+        {
+            RuleFor(x => x.InsuranceBaseSalary!.Value)
+                .GreaterThanOrEqualTo(0).WithMessage("Mức lương đóng bảo hiểm không được âm.")
+                .LessThanOrEqualTo(1_000_000_000m).WithMessage("Mức lương đóng bảo hiểm không được vượt quá 1.000.000.000 đ.");
+        });
+
+        When(x => x.HasLaborContract && string.Equals(x.SalaryType?.Trim(), "monthly", StringComparison.OrdinalIgnoreCase), () =>
+        {
+            RuleFor(x => x.InsuranceBaseSalary)
+                .Must((req, insBase) => (insBase ?? req.BaseRate) > 0)
+                .WithMessage("Mức lương đóng bảo hiểm phải lớn hơn 0 khi nhân viên có hợp đồng lao động.");
+        });
+
         When(x => !string.IsNullOrWhiteSpace(x.EmployeeCode), () =>
         {
             RuleFor(x => x.EmployeeCode!)
@@ -296,7 +324,7 @@ public class UpdateEmployeeRequestValidator : AbstractValidator<UpdateEmployeeRe
                 .MaximumLength(100).WithMessage("Chủ tài khoản ngân hàng không vượt quá 100 ký tự.");
         });
 
-        When(x => !string.IsNullOrWhiteSpace(x.AvatarUrl), () =>
+        When(x => !string.IsNullOrWhiteSpace(x.AvatarUrl) && !x.AvatarUrl!.TrimStart().StartsWith("data:image/", StringComparison.OrdinalIgnoreCase), () =>
         {
             RuleFor(x => x.AvatarUrl)
                 .MaximumLength(255).WithMessage("Đường dẫn ảnh đại diện không vượt quá 255 ký tự.");

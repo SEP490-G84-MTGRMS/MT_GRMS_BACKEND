@@ -113,6 +113,25 @@ public class CashbookServiceTests
     }
 
     [Fact]
+    public async Task GetOrCreateBankAccountAsync_MustNotReuseAnotherBranchLedger()
+    {
+        var branchA = Guid.NewGuid();
+        var branchB = Guid.NewGuid();
+        _accountRepo.Items.Add(new FinanceAccount
+        {
+            Id = Guid.NewGuid(), TenantId = _tenantContext.CurrentTenantId,
+            BranchId = branchA, AccountType = FinanceAccountType.Bank,
+            AccountName = "Bank A", CurrentBalance = 1_000_000m, IsActive = true
+        });
+
+        var branchBBank = await _service.GetOrCreateBankAccountAsync(branchB);
+
+        Assert.Equal(branchB, branchBBank.BranchId);
+        Assert.NotEqual(_accountRepo.Items.Single(x => x.BranchId == branchA).Id, branchBBank.Id);
+        Assert.Equal(2, _accountRepo.Items.Count(x => x.AccountType == FinanceAccountType.Bank));
+    }
+
+    [Fact]
     public async Task OpenShiftAsync_WhenNoActiveShift_ShouldSucceedAndSetOpeningFloat()
     {
         var branchId = Guid.NewGuid();

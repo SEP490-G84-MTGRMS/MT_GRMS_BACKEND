@@ -67,6 +67,32 @@ public class UserAuthenticationTests
             CreateAuthService(repo).LoginAsync(new LoginRequest("owner", "StrongPassword", "tenant-b")));
     }
 
+    [Fact]
+    public async Task Refresh_RotatesHashedTokenAndRejectsReplays_PreservingSecurityStamp()
+    {
+        var repo = new FakeUserRepository();
+        var user = new User { Id = "refresh-owner", Username = "refresh-owner", Password = "StrongPassword123!", IsTwoFactorEnabled = false };
+        user.TenantUsers.Add(new TenantUser { TenantId = "tenant-a", UserId = user.Id, Role = "STORE_OWNER" });
+        await repo.AddAsync(user);
+        var service = CreateAuthService(repo);
+        var login = await service.LoginAsync(new LoginRequest(user.Username, "StrongPassword123!", "tenant-a"));
+        var stamp = user.SecurityStamp;
+        var storedLoginToken = user.RefreshToken;
+        Assert.StartsWith("sha256:", storedLoginToken);
+        Assert.NotEqual(login.RefreshToken, storedLoginToken);
+        Assert.False(string.IsNullOrWhiteSpace(stamp));
+
+        var refreshed = await service.RefreshTokenAsync(new RefreshTokenRequest(login.RefreshToken));
+        Assert.NotEqual(login.RefreshToken, refreshed.RefreshToken);
+        Assert.NotEqual(storedLoginToken, user.RefreshToken);
+        Assert.Equal("sha256:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(refreshed.RefreshToken))), user.RefreshToken);
+        Assert.Equal(stamp, user.SecurityStamp);
+        var jwt = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ReadJwtToken(refreshed.AccessToken);
+        Assert.Contains(jwt.Claims, claim => claim.Type == "security_stamp" && claim.Value == stamp);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.RefreshTokenAsync(new RefreshTokenRequest(login.RefreshToken)));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.RefreshTokenAsync(new RefreshTokenRequest(user.RefreshToken!)));
+    }
+
     private static AuthService CreateAuthService(FakeUserRepository repository) =>
         new(repository, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -320,7 +346,12 @@ public class UserAuthenticationTests
         // GIVEN
         var repo = new FakeUserRepository();
         await repo.AddAsync(new User { Id = "usr_01", Username = "user01", Password = "123", IsAdmin = true, IsTwoFactorEnabled = false });
-        var authService = CreateAuthService(repo);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Jwt:ExpiresMinutes"] = "120",
+            ["Jwt:Key"] = TestJwtKey
+        }).Build();
+        var authService = new AuthService(repo, config, passwordHasher: new PasswordHasher());
 
         // WHEN
         var before = DateTime.UtcNow;

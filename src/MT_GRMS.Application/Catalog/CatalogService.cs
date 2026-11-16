@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
@@ -16,13 +17,14 @@ public class CatalogService : ICatalogService
     private readonly IProductPriceHistoryRepository? _priceHistoryRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
+    private readonly ICloudinaryService? _cloudinaryService;
 
     public CatalogService(
         IProductRepository productRepository,
         ICategoryRepository categoryRepository,
         IUnitOfWork unitOfWork,
         ITenantContext tenantContext)
-        : this(productRepository, categoryRepository, null, unitOfWork, tenantContext)
+        : this(productRepository, categoryRepository, null, unitOfWork, tenantContext, null)
     {
     }
 
@@ -31,51 +33,21 @@ public class CatalogService : ICatalogService
         ICategoryRepository categoryRepository,
         IProductPriceHistoryRepository? priceHistoryRepository,
         IUnitOfWork unitOfWork,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        ICloudinaryService? cloudinaryService = null)
     {
         _productRepository = productRepository;
         _categoryRepository = categoryRepository;
         _priceHistoryRepository = priceHistoryRepository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
+        _cloudinaryService = cloudinaryService;
     }
 
     private static ProductResponse MapToResponse(Product p, bool canViewCostPrice = true, bool hasOrders = false)
     {
         var imageUrls = p.ImageUrls != null && p.ImageUrls.Any() ? p.ImageUrls : new List<string>();
         var avatar = imageUrls.FirstOrDefault();
-
-        var unitPrices = new List<ProductUnitResponse>
-        {
-            new()
-            {
-                Id = Guid.Empty,
-                ProductId = p.Id,
-                UnitName = p.BaseUnit,
-                ConversionRate = 1.00m,
-                Price = p.SellingPrice,
-                Barcode = p.Barcode,
-                IsBaseUnit = true,
-                CreatedAt = p.CreatedAt,
-                UpdatedAt = p.UpdatedAt
-            }
-        };
-
-        if (p.Units != null && p.Units.Any())
-        {
-            unitPrices.AddRange(p.Units.Where(u => !u.IsDeleted).Select(u => new ProductUnitResponse
-            {
-                Id = u.Id,
-                ProductId = u.ProductId,
-                UnitName = u.UnitName,
-                ConversionRate = u.ConversionRate,
-                Price = u.Price,
-                Barcode = u.Barcode,
-                IsBaseUnit = false,
-                CreatedAt = u.CreatedAt,
-                UpdatedAt = u.UpdatedAt
-            }));
-        }
 
         var activeUnits = p.Units?.Where(u => !u.IsDeleted).ToList() ?? new List<ProductUnit>();
         var purchaseUnitEntity = activeUnits.FirstOrDefault(u => u.IsPurchaseUnit);
@@ -84,6 +56,40 @@ public class CatalogService : ICatalogService
             ? purchaseUnitEntity.IsBaseUnit
             : (baseUnitEntity?.IsPurchaseUnit ?? !activeUnits.Any(u => !u.IsBaseUnit && u.IsPurchaseUnit));
         var purchaseUnitName = purchaseUnitEntity?.UnitName ?? p.BaseUnit;
+
+        var unitPrices = new List<ProductUnitResponse>
+        {
+            new()
+            {
+                Id = baseUnitEntity?.Id ?? Guid.Empty,
+                ProductId = p.Id,
+                UnitName = p.BaseUnit,
+                ConversionRate = 1.00m,
+                Price = p.SellingPrice,
+                Barcode = p.Barcode,
+                IsBaseUnit = true,
+                IsPurchaseUnit = isBaseUnitPurchaseUnit,
+                CreatedAt = p.CreatedAt,
+                UpdatedAt = p.UpdatedAt
+            }
+        };
+
+        if (activeUnits.Count > 0)
+        {
+            unitPrices.AddRange(activeUnits.Where(u => !u.IsBaseUnit).Select(u => new ProductUnitResponse
+            {
+                Id = u.Id,
+                ProductId = u.ProductId,
+                UnitName = u.UnitName,
+                ConversionRate = u.ConversionRate,
+                Price = u.Price,
+                Barcode = u.Barcode,
+                IsBaseUnit = false,
+                IsPurchaseUnit = u.IsPurchaseUnit,
+                CreatedAt = u.CreatedAt,
+                UpdatedAt = u.UpdatedAt
+            }));
+        }
 
         return new ProductResponse(
             p.Id,
@@ -115,7 +121,8 @@ public class CatalogService : ICatalogService
             purchaseUnitName,
             unitPrices,
             p.AllowRepack,
-            p.SellRawByWeight
+            p.SellRawByWeight,
+            p.ProcessedSellingPricePerKg
         );
     }
 
@@ -256,10 +263,17 @@ public class CatalogService : ICatalogService
             imageUrls.Add(request.ImageUrl.Trim());
         }
 
-        if (imageUrls.Any(u => u.Length > 500))
+        if (imageUrls.Any(u => !CloudinaryDataUrlHelper.IsDataImageUrl(u) && u.Length > 500))
         {
             throw new ArgumentException("Đường dẫn ảnh hàng hóa không được vượt quá 500 ký tự.");
         }
+
+        imageUrls = await CloudinaryDataUrlHelper.ResolveImageUrlsAsync(
+            _cloudinaryService,
+            imageUrls,
+            "mtgrms/products",
+            $"product-{code}",
+            cancellationToken);
 
         var productStatus = !string.IsNullOrWhiteSpace(request.Status) && Enum.TryParse<ProductStatus>(request.Status, true, out var parsedStatus)
             ? parsedStatus
@@ -288,6 +302,7 @@ public class CatalogService : ICatalogService
             HasBatches = request.HasBatches || request.AllowRepack,
             AllowRepack = request.AllowRepack,
             SellRawByWeight = request.SellRawByWeight,
+            ProcessedSellingPricePerKg = ResolveProcessedPrice(request.AllowRepack, request.ProcessedSellingPricePerKg, request.SellingPrice),
             IsFavorite = request.IsFavorite,
             IsActive = true,
             TaxCategory = "STANDARD_1PCT",
@@ -403,6 +418,7 @@ public class CatalogService : ICatalogService
                 Id = Guid.NewGuid(),
                 TenantId = _tenantContext.CurrentTenantId,
                 ProductId = product.Id,
+                ProductUnitId = product.Units.FirstOrDefault(u => u.IsBaseUnit && !u.IsDeleted)?.Id,
                 BranchId = null,
                 PriceScope = "MASTER",
                 PriceType = "SELLING_PRICE",
@@ -410,8 +426,8 @@ public class CatalogService : ICatalogService
                 NewPrice = newPrice,
                 CostPriceSnapshot = costSnapshot,
                 IsBelowCost = isBelowCost,
-                ManagerApprovedBy = isBelowCost ? (_tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "STORE_OWNER") : null,
-                ManagerApprovalReason = isBelowCost ? "Xác nhận bán dưới giá vốn" : null,
+                ManagerApprovedBy = null,
+                ManagerApprovalReason = null,
                 ChangedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM",
                 ChangedByUserName = !string.IsNullOrEmpty(_tenantContext.CurrentRole) ? _tenantContext.CurrentRole : "Quản lý",
                 Reason = isBelowCost ? "Điều chỉnh giá bán (Dưới giá vốn)" : "Điều chỉnh giá bán",
@@ -441,6 +457,7 @@ public class CatalogService : ICatalogService
         product.HasBatches = request.HasBatches || request.AllowRepack;
         product.AllowRepack = request.AllowRepack;
         product.SellRawByWeight = request.SellRawByWeight;
+        product.ProcessedSellingPricePerKg = ResolveProcessedPrice(request.AllowRepack, request.ProcessedSellingPricePerKg, request.SellingPrice);
         product.IsFavorite = request.IsFavorite;
         product.TaxCategory = request.TaxCategory ?? product.TaxCategory ?? "STANDARD_1PCT";
         product.EligibleForVatReduction = request.EligibleForVatReduction;
@@ -505,7 +522,12 @@ public class CatalogService : ICatalogService
 
         if (request.ImageUrls != null)
         {
-            product.ImageUrls = request.ImageUrls.Where(u => !string.IsNullOrWhiteSpace(u)).Select(u => u.Trim()).ToList();
+            product.ImageUrls = await CloudinaryDataUrlHelper.ResolveImageUrlsAsync(
+                _cloudinaryService,
+                request.ImageUrls,
+                "mtgrms/products",
+                $"product-{product.ProductCode}",
+                cancellationToken);
         }
         else if (request.ImageUrl != null)
         {
@@ -515,7 +537,16 @@ public class CatalogService : ICatalogService
             }
             else if (!product.ImageUrls.Contains(request.ImageUrl.Trim()))
             {
-                product.ImageUrls = new List<string> { request.ImageUrl.Trim() };
+                var resolvedUrl = await CloudinaryDataUrlHelper.ResolveImageUrlAsync(
+                    _cloudinaryService,
+                    request.ImageUrl,
+                    "mtgrms/products",
+                    $"product-{product.ProductCode}",
+                    cancellationToken);
+                if (!string.IsNullOrWhiteSpace(resolvedUrl))
+                {
+                    product.ImageUrls = new List<string> { resolvedUrl };
+                }
             }
         }
 
@@ -562,15 +593,43 @@ public class CatalogService : ICatalogService
         return items.Select(p => MapToResponse(p, canSeeCost, productIdsWithOrders.Contains(p.Id))).ToList();
     }
 
-    public async Task<IReadOnlyList<ProductPriceHistoryDto>> GetPriceHistoryAsync(Guid productId, Guid? branchId = null, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<ProductPriceHistoryDto>> GetPriceHistoryAsync(Guid productId, ProductPriceHistoryQuery query, CancellationToken cancellationToken = default)
     {
-        if (_priceHistoryRepository == null) return Array.Empty<ProductPriceHistoryDto>();
-        var list = await _priceHistoryRepository.GetByProductIdAsync(productId, branchId, cancellationToken);
-        return list.Select(h => new ProductPriceHistoryDto(
+        if (productId == Guid.Empty)
+            throw new ArgumentException("Mã sản phẩm không hợp lệ.", nameof(productId));
+        ArgumentNullException.ThrowIfNull(query);
+
+        query.Page = Math.Max(1, query.Page);
+        query.PageSize = Math.Clamp(query.PageSize, 1, 100);
+        query.SearchTerm = string.IsNullOrWhiteSpace(query.SearchTerm) ? null : query.SearchTerm.Trim();
+        if (query.SearchTerm?.Length > 100)
+            throw new ArgumentException("Từ khóa tìm kiếm không được vượt quá 100 ký tự.", nameof(query.SearchTerm));
+
+        query.PriceScope = string.IsNullOrWhiteSpace(query.PriceScope)
+            ? null
+            : query.PriceScope.Trim().ToUpperInvariant();
+        if (query.PriceScope is not null and not "MASTER" and not "BRANCH")
+            throw new ArgumentException("Phạm vi giá chỉ nhận MASTER hoặc BRANCH.", nameof(query.PriceScope));
+        if (query.BranchId == Guid.Empty)
+            query.BranchId = null;
+        if (!query.BranchId.HasValue)
+            query.PriceScope = "MASTER";
+        if (query.ProductUnitId == Guid.Empty)
+            query.ProductUnitId = null;
+        if (query.FromDate.HasValue && query.ToDate.HasValue && query.FromDate > query.ToDate)
+            throw new ArgumentException("Ngày bắt đầu không được sau ngày kết thúc.");
+
+        if (_priceHistoryRepository == null)
+            return new PagedResult<ProductPriceHistoryDto> { Page = query.Page, PageSize = query.PageSize };
+
+        var (items, totalCount) = await _priceHistoryRepository.GetPagedByProductIdAsync(productId, query, cancellationToken);
+        var dtos = items.Select(h => new ProductPriceHistoryDto(
             h.Id,
             h.ProductId,
             h.BranchId,
             h.Branch?.Name,
+            h.ProductUnitId,
+            h.ProductUnit?.UnitName,
             h.PriceScope,
             h.PriceType,
             h.OldPrice,
@@ -584,11 +643,37 @@ public class CatalogService : ICatalogService
             h.Reason,
             h.CreatedAt
         )).ToList();
+
+        return new PagedResult<ProductPriceHistoryDto>
+        {
+            Items = dtos,
+            Page = query.Page,
+            PageSize = query.PageSize,
+            TotalItems = totalCount
+        };
     }
 
     private bool CanViewCostPrice()
     {
         var role = _tenantContext.CurrentRole;
         return role is "SUPER_ADMIN" or "STORE_OWNER" or "BRANCH_MANAGER" or "StoreOwner" or "Manager";
+    }
+
+    /// <summary>
+    /// AllowRepack tắt → null. Bật mà không gửi / ≤ 0 → mặc định = RAW (SellingPrice).
+    /// </summary>
+    private static decimal? ResolveProcessedPrice(bool allowRepack, decimal? processed, decimal sellingPrice)
+    {
+        if (!allowRepack)
+        {
+            return null;
+        }
+
+        if (processed is > 0)
+        {
+            return processed;
+        }
+
+        return sellingPrice > 0 ? sellingPrice : null;
     }
 }

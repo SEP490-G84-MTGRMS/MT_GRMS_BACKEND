@@ -90,10 +90,12 @@ public static class DependencyInjection
         services.AddScoped<IProductUnitRepository, ProductUnitRepository>();
         services.AddScoped<IBatchRepository, BatchRepository>();
         services.AddScoped<ICashbookRepository, CashbookRepository>();
+        services.AddScoped<Application.BusinessDays.IBusinessDayClosingRepository, BusinessDayClosingRepository>();
         services.AddScoped<Application.Expenses.IExpenseRepository, ExpenseRepository>();
         services.AddScoped<Application.Debt.ICustomerDebtRepository, CustomerDebtRepository>();
         services.AddScoped<Application.Reports.IPnLReportRepository, PnLReportRepository>();
         services.AddScoped<Application.FinanceOverview.IFinanceOverviewRepository, FinanceOverviewRepository>();
+        services.AddScoped<Application.Reports.IStoreOwnerDashboardService, StoreOwnerDashboardService>();
         services.AddScoped<Application.Tax.IHouseholdTaxRepository, HouseholdTaxRepository>();
         services.AddScoped<Application.Tax.ITaxExportService, Services.TaxExportService>();
         services.AddScoped<Application.Tax.Security.IPinVerificationService, Services.PinVerificationService>();
@@ -128,6 +130,7 @@ public static class DependencyInjection
         services.AddScoped<IFileStorage, LocalFileStorage>();
         services.AddScoped<ISupplierOrderExcelGenerator, SupplierOrderExcelGenerator>();
         services.AddScoped<ISupplierProductExcelService, Services.SupplierProductExcelService>();
+        services.AddScoped<IBranchProductExcelService, Services.BranchProductExcelService>();
         services.AddScoped<ISupplierOrderEmailSender, SmtpSupplierOrderEmailSender>();
         services.AddScoped<ISupplierDispatchPackageService, SupplierDispatchPackageService>();
         services.AddHostedService<SupplierOrderDispatchWorker>();

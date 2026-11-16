@@ -62,4 +62,19 @@ public interface IOrderService
     /// Lấy thống kê tổng hợp số lượng đơn, doanh thu ca / ngày, tiền mặt vs QR, và đơn đặt trước
     /// </summary>
     Task<OrderSummaryResponse> GetOrderSummaryAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Xác nhận thanh toán thành công cho đơn hàng đang ở trạng thái chờ thanh toán (PendingPayment -> Completed/PAID)
+    /// </summary>
+    Task<OrderResponse> ConfirmOrderPaymentAsync(Guid orderId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lấy thống kê các đơn hàng Chủ tiệm tự bán (không gắn ca) chưa chốt vào Sổ quỹ cuối ngày
+    /// </summary>
+    Task<OwnerUnsettledSummaryResponse> GetOwnerUnsettledSummaryAsync(Guid? branchId = null, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Chốt doanh thu cuối ngày cho Chủ tiệm: gộp toàn bộ các đơn bán lẻ không gắn ca thành 1 bút toán Két sắt + 1 bút toán Ngân hàng
+    /// </summary>
+    Task<OwnerDailySettlementResponse> SettleOwnerDailyOrdersAsync(SettleOwnerDailyRequest request, CancellationToken cancellationToken = default);
 }

@@ -215,7 +215,10 @@ public class AuthControllerTests
             ["Jwt:Key"] = "IntegrationTestSigningKey_OnlyForTests_0123456789"
         }).Build();
         var authService = new AuthService(repo, config);
-        var controller = new AuthController(authService);
+        var controller = new AuthController(authService)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext() }
+        };
 
         // WHEN
         var result = await controller.Refresh(new RefreshTokenRequest("valid_refresh_token_123"), CancellationToken.None);
@@ -230,7 +233,11 @@ public class AuthControllerTests
 
         // Verify Token Rotation
         Assert.NotEqual("valid_refresh_token_123", user.RefreshToken);
-        Assert.StartsWith("mt_refresh_", user.RefreshToken);
+        Assert.StartsWith("sha256:", user.RefreshToken);
+        var cookie = controller.Response.Headers["Set-Cookie"].Single(value => value != null && value.StartsWith("refresh_token=mt_refresh_", StringComparison.Ordinal))!;
+        var rawToken = cookie.Split(';', 2)[0]["refresh_token=".Length..];
+        Assert.Equal("sha256:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(rawToken))), user.RefreshToken);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => authService.RefreshTokenAsync(new RefreshTokenRequest("valid_refresh_token_123")));
     }
 
     [Fact]

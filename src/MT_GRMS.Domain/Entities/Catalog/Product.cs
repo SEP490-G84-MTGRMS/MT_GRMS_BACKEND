@@ -35,6 +35,12 @@ public class Product : BaseTenantEntity
     public bool SellRawByWeight { get; set; } = true;
 
     /// <summary>
+    /// Giá bán đ/kg khi đóng khay / sau chế biến (PROCESSED).
+    /// Null = dùng SellingPrice (RAW) — case chia khay không đổi giá (vd. thịt CP).
+    /// </summary>
+    public decimal? ProcessedSellingPricePerKg { get; set; }
+
+    /// <summary>
     /// True nếu hàng hóa thuộc nhóm đủ điều kiện giảm 20% thuế GTGT
     /// theo NQ 204/2025/QH15 & khoản 3 Điều 9 Luật GTGT 48/2024.
     /// Mặc định false — người dùng phải chủ động đánh dấu khi tạo/sửa sản phẩm.

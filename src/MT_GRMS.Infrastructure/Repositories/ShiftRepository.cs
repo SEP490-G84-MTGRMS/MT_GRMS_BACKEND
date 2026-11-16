@@ -45,6 +45,13 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
         return await query.OrderByDescending(s => s.OpenedAtUtc).FirstOrDefaultAsync(cancellationToken);
     }
 
+    public async Task<TimeSpan> GetBusinessDayStartTimeAsync(Guid branchId, CancellationToken cancellationToken = default)
+    {
+        var value = await _context.Branches.Where(b => b.Id == branchId)
+            .Select(b => b.BusinessDayStartTime).FirstOrDefaultAsync(cancellationToken);
+        return value == default ? new TimeSpan(6, 0, 0) : value;
+    }
+
     public async Task<ShiftZReport?> GetLatestClosedShiftAsync(Guid branchId, Guid? tillId = null, CancellationToken cancellationToken = default)
     {
         var query = _context.ShiftZReports
@@ -100,7 +107,7 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
         CancellationToken cancellationToken = default)
     {
         var orders = await _context.Orders
-            .Where(o => o.ShiftId == shiftId && o.Status != "Cancelled")
+            .Where(o => o.ShiftId == shiftId && o.Status != "Cancelled" && o.Status != "PendingPayment" && o.PaymentStatus != "PENDING_PAYMENT")
             .ToListAsync(cancellationToken);
 
         decimal cashSales = orders
@@ -203,7 +210,7 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
     {
         if (string.IsNullOrWhiteSpace(branchIdOrCode))
         {
-            var defaultBranch = await _context.Branches.FirstOrDefaultAsync(cancellationToken);
+            var defaultBranch = await _context.Branches.OrderBy(b => b.Id).FirstOrDefaultAsync(cancellationToken);
             return defaultBranch?.Id;
         }
 
@@ -217,7 +224,7 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
 
         if (branch != null) return branch.Id;
 
-        var fallback = await _context.Branches.FirstOrDefaultAsync(cancellationToken);
+        var fallback = await _context.Branches.OrderBy(b => b.Id).FirstOrDefaultAsync(cancellationToken);
         return fallback?.Id;
     }
 

@@ -36,6 +36,17 @@ public static class SessionTokenValidator
                 return;
             }
 
+            var employeeRepository = context.HttpContext.RequestServices.GetService<MT_GRMS.Application.HR.Employees.IEmployeeRepository>();
+            if (employeeRepository != null)
+            {
+                var employee = await employeeRepository.GetByUserIdAsync(userId, context.HttpContext.RequestAborted);
+                if (employee?.Status == EmployeeStatus.Inactive)
+                {
+                    context.Fail("Tài khoản đã bị khóa do nhân viên đã ngừng làm việc.");
+                    return;
+                }
+            }
+
             if (user.IsAdmin)
             {
                 if (roles[0] != UserRoleNames.Admin || tenantClaims.Length != 0 || branchClaims.Length != 0)

@@ -9,6 +9,8 @@ namespace MT_GRMS.Domain.Entities.Finance;
 public class FinanceAccount : BaseTenantEntity
 {
     public Guid? BranchId { get; set; }
+    /// <summary>Tài khoản ngân hàng vật lý mà sổ chi nhánh này đại diện.</summary>
+    public Guid? PaymentAccountId { get; set; }
     public FinanceAccountType AccountType { get; set; }
     public string AccountName { get; set; } = string.Empty;
     public decimal CurrentBalance { get; set; }
@@ -27,5 +29,6 @@ public class FinanceAccount : BaseTenantEntity
     public Guid? ManagerUserId { get; set; }
     public bool IsActive { get; set; } = true;
     public byte[]? RowVersion { get; set; }
+    public PaymentAccount? PaymentAccount { get; set; }
 }
 

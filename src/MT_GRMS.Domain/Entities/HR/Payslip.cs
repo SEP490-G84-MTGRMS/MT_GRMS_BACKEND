@@ -18,6 +18,7 @@ public class Payslip : BaseTenantEntity
     // ─── 1. Snapshot Cấu hình lương tại thời điểm chốt công ───
     public SalaryType SalaryType { get; set; } = SalaryType.Monthly;    // Monthly, Hourly, Shift
     public decimal BaseRate { get; set; } = 0.00m;                      // Lương tháng hoặc đơn giá giờ/ca
+    public decimal InsuranceBaseSalary { get; set; } = 0.00m;         // Mức lương căn cứ đóng bảo hiểm tại thời điểm chốt công
     public decimal StandardDays { get; set; } = 26.00m;                 // Số ngày công chuẩn của tháng
     public decimal StandardDayHours { get; set; } = 8.00m;              // Giờ chuẩn 1 công (từ BranchAttendancePolicy)
 

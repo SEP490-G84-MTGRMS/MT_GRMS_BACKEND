@@ -106,7 +106,8 @@ public class AuthenticationHttpTests : IAsyncLifetime
     {
         var prefix = name + "=";
         var header = response.Headers.GetValues("Set-Cookie")
-            .Single(value => value.StartsWith(prefix, StringComparison.Ordinal));
+            .Single(value => value.StartsWith(prefix, StringComparison.Ordinal)
+                && value.Split(';', 2)[0].Length > prefix.Length);
         return header.Split(';', 2)[0];
     }
 
@@ -117,6 +118,9 @@ public class AuthenticationHttpTests : IAsyncLifetime
         login.EnsureSuccessStatusCode();
         var accessCookie = Cookie(login, "access_token");
         var refreshCookie = Cookie(login, "refresh_token");
+        var cookieHeaders = login.Headers.GetValues("Set-Cookie").ToArray();
+        Assert.Contains(cookieHeaders, value => value.StartsWith("refresh_token=;", StringComparison.Ordinal) && value.Contains("path=/api/auth", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(cookieHeaders, value => value.StartsWith(refreshCookie + ";", StringComparison.Ordinal) && value.Contains("path=/api;", StringComparison.OrdinalIgnoreCase));
 
         using var meRequest = new HttpRequestMessage(HttpMethod.Get, "/api/auth/me");
         meRequest.Headers.Add("Cookie", accessCookie);

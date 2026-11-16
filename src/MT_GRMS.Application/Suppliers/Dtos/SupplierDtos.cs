@@ -224,6 +224,15 @@ public class UpdateSupplierDeliveryConfigCommand
     public List<SupplierBlackoutDateDto>? BlackoutDates { get; set; }
 }
 
+public class SupplierReturnPolicyCategoryCostShareDto
+{
+    public Guid? Id { get; set; }
+    public Guid CategoryId { get; set; }
+    public string CategoryName { get; set; } = string.Empty;
+    public decimal StoreCostSharePercent { get; set; }
+    public decimal SupplierCostSharePercent { get; set; }
+}
+
 public class SupplierReturnPolicyDto
 {
     public Guid Id { get; set; }
@@ -236,12 +245,14 @@ public class SupplierReturnPolicyDto
     public bool RequireEvidenceImage { get; set; } = true;
     public int? MaxReturnDaysAfterReceipt { get; set; }
     public bool CostShareEnabled { get; set; }
+    public bool CostShareByCategoryEnabled { get; set; }
     public decimal? StoreCostSharePercent { get; set; }
     public decimal? SupplierCostSharePercent { get; set; }
     public string CostShareBase { get; set; } = "REPLACEMENT_VALUE";
     public bool RequireStorePaymentBeforeReplacement { get; set; } = true;
     public string? Notes { get; set; }
     public bool IsActive { get; set; } = true;
+    public List<SupplierReturnPolicyCategoryCostShareDto> CategoryCostShares { get; set; } = [];
 }
 
 public class UpdateSupplierReturnPolicyCommand
@@ -254,11 +265,13 @@ public class UpdateSupplierReturnPolicyCommand
     public bool RequireEvidenceImage { get; set; } = true;
     public int? MaxReturnDaysAfterReceipt { get; set; }
     public bool CostShareEnabled { get; set; }
+    public bool CostShareByCategoryEnabled { get; set; }
     public decimal? StoreCostSharePercent { get; set; }
     public decimal? SupplierCostSharePercent { get; set; }
     public string CostShareBase { get; set; } = "REPLACEMENT_VALUE";
     public bool RequireStorePaymentBeforeReplacement { get; set; } = true;
     public string? Notes { get; set; }
+    public List<SupplierReturnPolicyCategoryCostShareDto>? CategoryCostShares { get; set; }
 }
 
 public class SupplierBlackoutDateDto

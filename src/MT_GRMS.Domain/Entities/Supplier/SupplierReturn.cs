@@ -82,6 +82,15 @@ public class SupplierReturnLine : BaseTenantEntity
     public string? RejectionReason { get; set; }
     public string? Notes { get; set; }
 
+    /// <summary>Snapshot nhóm SP khi chốt điều kiện đổi hàng (EXCHANGE).</summary>
+    public Guid? CategoryId { get; set; }
+    public string? CategoryName { get; set; }
+    public decimal? StoreCostSharePercentSnapshot { get; set; }
+    public decimal? SupplierCostSharePercentSnapshot { get; set; }
+    public decimal LineReplacementValue { get; set; } = 0;
+    public decimal StorePayableAmount { get; set; } = 0;
+    public decimal SupplierBearAmount { get; set; } = 0;
+
     // Navigation properties
     public virtual SupplierReturn? SupplierReturn { get; set; }
     public virtual Product? Product { get; set; }

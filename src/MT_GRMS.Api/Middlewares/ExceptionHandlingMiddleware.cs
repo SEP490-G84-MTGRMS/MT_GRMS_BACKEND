@@ -82,6 +82,20 @@ public class ExceptionHandlingMiddleware
                 _logger.LogWarning(unauthEx, "Unauthorized access: {Message}", unauthEx.Message);
                 break;
 
+            case DbUpdateConcurrencyException concurrencyEx:
+                statusCode = (int)HttpStatusCode.Conflict;
+                apiResponse = ApiResponse<object>.Fail(
+                    "CONCURRENCY_CONFLICT",
+                    "Dữ liệu đã thay đổi trong lúc cập nhật. Vui lòng tải lại và thử lại.",
+                    statusCode);
+                _logger.LogWarning(concurrencyEx,
+                    "Concurrency conflict on {Method} {Path}. Entries: {Entries}",
+                    context.Request.Method,
+                    context.Request.Path,
+                    string.Join(", ", concurrencyEx.Entries.Select(entry =>
+                        $"{entry.Metadata.ClrType.Name}({string.Join(",", entry.Metadata.FindPrimaryKey()?.Properties.Select(property => entry.Property(property.Name).CurrentValue) ?? [])})")));
+                break;
+
             case DbUpdateException dbUpdateEx when dbUpdateEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505":
                 statusCode = (int)HttpStatusCode.Conflict;
                 var friendlyMsg = pgEx.ConstraintName switch

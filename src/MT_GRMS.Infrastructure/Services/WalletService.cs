@@ -96,7 +96,7 @@ public class WalletService : IWalletService
             query = query.Where(o => o.OrderCode == orderCode || o.TransferContent.Contains(orderCode));
         }
 
-        var order = await query.FirstOrDefaultAsync(cancellationToken);
+        var order = await query.OrderByDescending(o => o.CreatedAt).FirstOrDefaultAsync(cancellationToken);
         if (order == null)
         {
             return null;
@@ -240,7 +240,7 @@ public class WalletService : IWalletService
         // Nếu vẫn chưa tìm thấy tenant, fallback tìm tenant đầu tiên nếu có một tenant duy nhất trong hệ thống
         if (tenant == null)
         {
-            tenant = await _context.Tenants.FirstOrDefaultAsync(cancellationToken);
+            tenant = await _context.Tenants.OrderBy(t => t.Id).FirstOrDefaultAsync(cancellationToken);
         }
 
         if (tenant == null)
@@ -349,7 +349,7 @@ public class WalletService : IWalletService
     {
         if (string.IsNullOrWhiteSpace(tenantId) || tenantId == "DEFAULT")
         {
-            return await _context.Tenants.FirstOrDefaultAsync(cancellationToken);
+            return await _context.Tenants.OrderBy(t => t.Id).FirstOrDefaultAsync(cancellationToken);
         }
 
         return await _context.Tenants.FirstOrDefaultAsync(

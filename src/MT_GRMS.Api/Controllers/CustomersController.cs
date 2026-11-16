@@ -78,9 +78,9 @@ public class CustomersController : BaseApiController
             {
                 if (debtStatus.Equals("NO_DEBT", StringComparison.OrdinalIgnoreCase) && currentDebt > 0)
                     continue;
-                if (debtStatus.Equals("IN_LIMIT", StringComparison.OrdinalIgnoreCase) && (currentDebt <= 0 || currentDebt > debtLimit))
+                if (debtStatus.Equals("IN_LIMIT", StringComparison.OrdinalIgnoreCase) && (currentDebt <= 0 || (debtLimit > 0 && currentDebt > debtLimit)))
                     continue;
-                if (debtStatus.Equals("OVER_LIMIT", StringComparison.OrdinalIgnoreCase) && currentDebt <= debtLimit)
+                if (debtStatus.Equals("OVER_LIMIT", StringComparison.OrdinalIgnoreCase) && (debtLimit <= 0 || currentDebt <= debtLimit))
                     continue;
             }
 
@@ -208,6 +208,10 @@ public class CustomersController : BaseApiController
 
         var customerId = Guid.NewGuid();
         var code = "KH" + DateTime.UtcNow.ToString("yyMMddHHmmss") + Random.Shared.Next(10, 99);
+        var role = _tenantContext.CurrentRole ?? string.Empty;
+        var canGrantDebt = role.Equals("STORE_OWNER", StringComparison.OrdinalIgnoreCase) ||
+                           role.Equals("STOREOWNER", StringComparison.OrdinalIgnoreCase) ||
+                           role.Equals("ADMIN", StringComparison.OrdinalIgnoreCase);
 
         var customer = new Customer
         {
@@ -223,7 +227,7 @@ public class CustomersController : BaseApiController
             TotalSpending = 0m,
             TotalDebt = 0m,
             DebtLimit = Math.Max(0m, request.DebtLimit),
-            AllowDebt = true,
+            AllowDebt = canGrantDebt && (request.AllowDebt || request.DebtLimit > 0),
             IsBlockedForDebt = false,
             PrepaymentBalance = 0m,
             MaxDebtDays = 30,
@@ -291,7 +295,10 @@ public class CustomersController : BaseApiController
                 return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Hạn mức nợ không thể là số âm."));
             }
             customer.DebtLimit = Math.Max(0m, request.DebtLimit.Value);
-            customer.AllowDebt = true;
+            if (!request.AllowDebt.HasValue)
+            {
+                customer.AllowDebt = customer.DebtLimit > 0;
+            }
 
             if (customer.DebtLimit > 0 && customer.TotalDebt > customer.DebtLimit)
             {
@@ -303,6 +310,15 @@ public class CustomersController : BaseApiController
                 customer.DebtStatus = CustomerDebtStatus.GoodStanding;
                 customer.IsBlockedForDebt = false;
             }
+        }
+        if (request.AllowDebt.HasValue)
+        {
+            var role = _tenantContext.CurrentRole ?? string.Empty;
+            if (!role.Equals("STORE_OWNER", StringComparison.OrdinalIgnoreCase) &&
+                !role.Equals("STOREOWNER", StringComparison.OrdinalIgnoreCase) &&
+                !role.Equals("ADMIN", StringComparison.OrdinalIgnoreCase))
+                throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng hoặc Admin được thay đổi quyền mua nợ.");
+            customer.AllowDebt = request.AllowDebt.Value;
         }
 
         await _context.SaveChangesAsync(ct);
@@ -339,7 +355,7 @@ public class CustomersController : BaseApiController
 
         var totalCustomers = customers.Count;
         decimal totalDebtAR = customers.Sum(c => c.TotalDebt);
-        int overLimitCount = customers.Count(c => c.TotalDebt > c.DebtLimit);
+        int overLimitCount = customers.Count(c => c.DebtLimit > 0 && c.TotalDebt > c.DebtLimit);
         int totalLoyaltyPoints = customers.Sum(c => c.RewardPoints);
 
         var summary = new CustomerKpiSummaryResponse(

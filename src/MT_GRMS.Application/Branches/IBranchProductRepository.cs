@@ -48,6 +48,16 @@ public interface IBranchProductRepository
         Guid productId,
         CancellationToken cancellationToken = default);
 
+    Task SyncBranchStockCatalogAsync(
+        Guid branchId,
+        Guid productId,
+        decimal retailPrice,
+        string status,
+        string? shelfLocation,
+        CancellationToken cancellationToken = default);
+
+    Task AddUnitPriceOverrideAsync(BranchProductUnitPrice unitPrice, CancellationToken cancellationToken = default);
+
     Task AddBranchStockAsync(
         BranchStock branchStock,
         CancellationToken cancellationToken = default);

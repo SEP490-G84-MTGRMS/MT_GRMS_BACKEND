@@ -157,6 +157,21 @@ public class PayslipsController : BaseApiController
     }
 
     /// <summary>
+    /// POST /api/v1/payslips/{id}/advance
+    /// Tạo khoản tạm ứng lương cho nhân viên, tự động hạch toán Sổ quỹ.
+    /// </summary>
+    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [HttpPost("{id:guid}/advance")]
+    public async Task<ActionResult<ApiResponse<PayslipResponse>>> AdvanceSalary(
+        Guid id,
+        [FromBody] SalaryAdvanceRequest request,
+        CancellationToken ct = default)
+    {
+        var result = await _payslipService.AdvanceSalaryAsync(id, request, ct);
+        return Ok(ApiResponse<PayslipResponse>.Ok(result, "Tạm ứng lương thành công."));
+    }
+
+    /// <summary>
     /// POST /api/v1/payslips/{id}/pay
     /// Thực hiện chi trả một phiếu lương đơn lẻ, tự động sinh phiếu chi Sổ quỹ.
     /// </summary>

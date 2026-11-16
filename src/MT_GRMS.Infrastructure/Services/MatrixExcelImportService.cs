@@ -300,10 +300,10 @@ public class MatrixExcelImportService : IMatrixExcelImportService
 
                 if (qty > 0 && OrderMatrixRules.ViolatesMoq(qty, product.Moq))
                 {
-                    result.Summary.WarningCount++;
-                    result.Warnings.Add(new MatrixExcelIssueDto
+                    result.Summary.ErrorCount++;
+                    result.Errors.Add(new MatrixExcelIssueDto
                     {
-                        Type = "WARNING",
+                        Type = "ERROR",
                         Row = excelRow,
                         ProductCode = rawSku,
                         ProductName = product.Name,
@@ -311,8 +311,9 @@ public class MatrixExcelImportService : IMatrixExcelImportService
                         DateLabel = dayCol.Label,
                         InputValue = qty.ToString(CultureInfo.InvariantCulture),
                         Code = "MOQ_NOT_MET",
-                        Message = $"Số lượng {qty} nhỏ hơn MOQ {product.Moq}."
+                        Message = $"Số lượng {qty} nhỏ hơn MOQ {product.Moq}. Không được lưu bản thảo."
                     });
+                    continue;
                 }
 
                 if (qty > 0 && OrderMatrixRules.ViolatesOrderMultiple(qty, product.OrderMultiple))
@@ -434,6 +435,13 @@ public class MatrixExcelImportService : IMatrixExcelImportService
                 result.Summary.SkippedOwnerLocked++;
                 result.Warnings.Add(Issue("WARNING", row, sku, product.Name, dateKey, label, cell.Quantity,
                     "OWNER_LOCKED_SKIPPED", "Ô đã được Store Owner chốt — bỏ qua."));
+                continue;
+            }
+
+            if (cell.Quantity > 0 && OrderMatrixRules.ViolatesMoq(cell.Quantity, product.Moq))
+            {
+                result.Errors.Add(Issue("ERROR", row, sku, product.Name, dateKey, label, cell.Quantity,
+                    "MOQ_NOT_MET", $"Số lượng {cell.Quantity} nhỏ hơn MOQ {product.Moq}. Không được lưu bản thảo."));
                 continue;
             }
 

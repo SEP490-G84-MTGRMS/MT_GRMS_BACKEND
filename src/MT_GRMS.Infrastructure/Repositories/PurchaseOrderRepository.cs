@@ -35,6 +35,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
     public async Task<Domain.Entities.Supplier.Supplier?> GetSupplierByIdAsync(Guid supplierId, CancellationToken cancellationToken = default)
     {
         return await _context.Suppliers
+            .Include(s => s.BlackoutDates)
             .FirstOrDefaultAsync(s => s.Id == supplierId, cancellationToken);
     }
 
@@ -97,6 +98,8 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         var spQuery = _context.SupplierProducts
             .Include(sp => sp.Product)
                 .ThenInclude(p => p!.Category)
+            .Include(sp => sp.Product)
+                .ThenInclude(p => p!.Units)
             .Include(sp => sp.Supplier)
             .Where(sp => assignedSupplierIds.Contains(sp.SupplierId)
                          && !sp.IsDeleted
@@ -130,6 +133,18 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         var stockLookup = stocks
             .GroupBy(bs => bs.ProductId)
             .ToDictionary(g => g.Key, g => g.Sum(x => x.QuantityOnHand));
+
+        // Tra cứu ĐVT nhập (IsPurchaseUnit) riêng — không phụ thuộc Include Units trên Product
+        var purchaseUnitByProductId = await _context.Set<ProductUnit>()
+            .AsNoTracking()
+            .Where(u => productIds.Contains(u.ProductId) && !u.IsDeleted && u.IsPurchaseUnit)
+            .GroupBy(u => u.ProductId)
+            .Select(g => new
+            {
+                ProductId = g.Key,
+                UnitName = g.OrderByDescending(x => x.ConversionRate).Select(x => x.UnitName).FirstOrDefault()
+            })
+            .ToDictionaryAsync(x => x.ProductId, x => x.UnitName ?? string.Empty, cancellationToken);
 
         var list = new List<OrderMatrixProductDto>();
 
@@ -202,7 +217,11 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 Name = p.Name,
                 Sku = p.ProductCode,
                 Barcode = p.Barcode,
-                Unit = !string.IsNullOrWhiteSpace(sp.DeliveryUoM) ? sp.DeliveryUoM : (p.BaseUnit ?? "Gói"),
+                // Đơn vị nhập (DVN): IsPurchaseUnit → DeliveryUoM NCC → BaseUnit
+                Unit = ResolvePurchaseUnitName(
+                    sp,
+                    p,
+                    purchaseUnitByProductId.TryGetValue(p.Id, out var pu) ? pu : null),
                 Price = price,
                 Moq = moq,
                 OrderMultiple = 1,
@@ -310,6 +329,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 InactiveReason = inactiveReason,
                 CutoffTime = !string.IsNullOrWhiteSpace(s.CutoffTime) ? s.CutoffTime : "15:00",
                 CutoffDayOffset = s.CutoffDayOffset >= 0 ? s.CutoffDayOffset : 1,
+                MinOrderQuantity = s.MinOrderQuantity > 0 ? s.MinOrderQuantity : 0,
                 ActiveDeliveryDays = activeDays,
                 BlackoutDates = blackoutDates.OrderBy(x => x).ToList()
             });
@@ -380,7 +400,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             query = query.Where(po => po.SupplierId == supplierId.Value);
         }
 
-        return await query.FirstOrDefaultAsync(cancellationToken);
+        return await query.OrderByDescending(po => po.CreatedAt).FirstOrDefaultAsync(cancellationToken);
     }
 
     public async Task<IReadOnlyList<PurchaseOrder>> GetDraftMatrixPosAsync(
@@ -659,6 +679,32 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                         .First();
                     return (best.Id, best.Code, best.Status);
                 });
+    }
+
+    /// <summary>
+    /// Đơn vị nhập (DVN) trên matrix: ưu tiên ProductUnit.IsPurchaseUnit (vd. Thùng),
+    /// rồi DeliveryUoM trên SupplierProduct, cuối cùng BaseUnit — khớp màn NCC.
+    /// </summary>
+    private static string ResolvePurchaseUnitName(
+        SupplierProduct sp,
+        Product product,
+        string? purchaseUnitFromLookup = null)
+    {
+        if (!string.IsNullOrWhiteSpace(purchaseUnitFromLookup))
+            return purchaseUnitFromLookup.Trim();
+
+        var purchaseFromUnits = product.Units?
+            .Where(u => !u.IsDeleted && u.IsPurchaseUnit)
+            .Select(u => u.UnitName)
+            .FirstOrDefault(n => !string.IsNullOrWhiteSpace(n));
+
+        if (!string.IsNullOrWhiteSpace(purchaseFromUnits))
+            return purchaseFromUnits.Trim();
+
+        if (!string.IsNullOrWhiteSpace(sp.DeliveryUoM))
+            return sp.DeliveryUoM.Trim();
+
+        return string.IsNullOrWhiteSpace(product.BaseUnit) ? "Cái" : product.BaseUnit.Trim();
     }
 }
 

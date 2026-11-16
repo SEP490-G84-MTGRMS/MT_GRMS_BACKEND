@@ -583,10 +583,8 @@ public class PurchaseOrderMatrixTests
     [Fact]
     public async Task REQ_PO_11_DispatchHub_PartialSuccess_OneGroupFailsMoqOthersSucceed()
     {
-        // Arrange: Matrix product 1 có Moq = 50, nhưng đặt FinalQty = 5 -> Vi phạm MOQ -> FAIL
+        // Arrange: lưu bản thảo hợp lệ trước, rồi nâng MOQ sau để mô phỏng vi phạm khi chốt
         var p1 = _repo.MatrixProducts.First(p => p.Id == _prod1Id);
-        p1.Moq = 50;
-
         var deliveryDate = DateTime.Today.AddDays(4);
 
         await _service.SaveMatrixDraftAsync(new SaveMatrixDraftCommand
@@ -596,10 +594,12 @@ public class PurchaseOrderMatrixTests
             ViewTo = deliveryDate.AddDays(2),
             Cells = new List<OrderMatrixCellDto>
             {
-                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = deliveryDate, EmployeeQty = 5m, FinalQty = 5m },  // 5 < 50 MOQ -> FAILED
-                new OrderMatrixCellDto { ProductId = _prod2Id, DeliveryDate = deliveryDate, EmployeeQty = 20m, FinalQty = 20m }  // MOQ 20 -> SUCCESS
+                new OrderMatrixCellDto { ProductId = _prod1Id, DeliveryDate = deliveryDate, EmployeeQty = 5m, FinalQty = 5m },
+                new OrderMatrixCellDto { ProductId = _prod2Id, DeliveryDate = deliveryDate, EmployeeQty = 20m, FinalQty = 20m }
             }
         });
+
+        p1.Moq = 50; // 5 < 50 -> FAIL khi chốt
 
         // Act
         var result = await _service.SplitMatrixPoBatchAsync(new SplitMatrixPoCommand
@@ -622,6 +622,35 @@ public class PurchaseOrderMatrixTests
 
         // Teardown
         p1.Moq = 1;
+    }
+
+    [Fact]
+    public async Task REQ_PO_02b_SaveMatrixDraft_RejectsWhenQtyBelowMoq()
+    {
+        var p1 = _repo.MatrixProducts.First(p => p.Id == _prod1Id);
+        p1.Moq = 50;
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.SaveMatrixDraftAsync(new SaveMatrixDraftCommand
+            {
+                BranchId = _branchId,
+                SupplierId = _supplier1Id,
+                ViewFrom = _viewFrom,
+                ViewTo = _viewFrom.AddDays(7),
+                Cells = new List<OrderMatrixCellDto>
+                {
+                    new OrderMatrixCellDto
+                    {
+                        ProductId = _prod1Id,
+                        DeliveryDate = _deliveryA,
+                        EmployeeQty = 5m,
+                        FinalQty = 5m
+                    }
+                }
+            }));
+
+        Assert.Equal("MOQ_NOT_MET", ex.ErrorCode);
+        p1.Moq = 5;
     }
 
     [Fact]
@@ -927,6 +956,7 @@ public class PurchaseOrderMatrixTests
                 IsActive = s.Status == SupplierStatus.Active,
                 IsAssignedToBranch = true,
                 CutoffTime = "23:59",
+                MinOrderQuantity = s.MinOrderQuantity,
                 BlackoutDates = new List<string>(),
                 ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 }
             }).ToList();

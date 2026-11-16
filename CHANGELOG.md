@@ -4,7 +4,19 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ---
 
+## [Unreleased] - 2026-11-15
+
+### Fixed
+- **Triệt tiêu toàn bộ cảnh báo EF Core Model Validation ([20601] & [10620]) & Query First Without OrderBy ([10103])**: Cấu hình `.HasSentinel(...)` cho các thuộc tính Enum có database default (`Product.Status`, `Employee.SalaryType`, `Employee.Status`, `Payslip.SalaryType`, `Payslip.Status`, `ScheduleApprovalRequest.Status`, `Transfer.Status`) và bổ sung `ValueComparer<List<string>>` cho `ScheduleApprovalRequest.EvidenceImageUrls`. Bổ sung điều kiện deterministic ordering `.OrderBy(x => x.Id)` và filter tenant cho các truy vấn `FirstOrDefaultAsync` trong `DbInitializer.cs`, `CashbookRepository.cs`, `PurchaseOrderRepository.cs`, `ShiftRepository.cs`, `TaxExportService.cs`, `WalletService.cs` và `OrderRepository.cs` [FIX-WARN] [worklog: docs/worklogs/2026-11-15_FIX-WARN_AI_fix-efcore-validation-warnings.md].
+
 ## [Unreleased] - 2026-11-14
+
+### Added
+- API `GET /api/store-owner/dashboard` tổng hợp số liệu thật về doanh số, P&L, nhập hàng, kho và nhân viên theo tenant/chi nhánh; kiểm tra role StoreOwner. [worklog: docs/worklogs/2026-11-14_FE10_AI_store-owner-dashboard-real-data.md]
+
+### Changed
+- Dashboard Chủ cửa hàng hiển thị doanh thu theo 24 giờ Việt Nam khi chọn Hôm nay/Hôm qua; các kỳ dài hơn tiếp tục theo ngày. [worklog: docs/worklogs/2026-11-14_FE10_AI_store-owner-dashboard-real-data.md]
+- Thu gọn luồng access/refresh dùng các trường hiện có trên Users, access mặc định 15 phút và refresh cố định 7 ngày. Lưu hash token mới, đồng bộ hạn cookie và hỗ trợ logout khi access hết hạn. [worklog: docs/worklogs/2026-11-14_AUTH-REFRESH_AI_user-token-flow.md]
 
 ### Added
 - **Đồng bộ trường `IsTwoFactorEnabled` trong `UserInfo` DTO**: Bổ sung `IsTwoFactorEnabled` vào `UserInfo` record và gán từ entity `User.IsTwoFactorEnabled` tại các luồng xác thực (`Login`, `VerifyLoginOtp`, `GetMe`, `Register`), giúp Frontend và thanh điều hướng TopNav nhận diện chính xác trạng thái xác thực 2 bước của tài khoản thời gian thực [FEAT-AUTH] [worklog: docs/worklogs/2026-11-14_FEAT-AUTH_AI_sync-two-factor-auth-status-in-user-info.md].

@@ -369,8 +369,11 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
 
     public async Task<SupplierReturnPolicy?> GetActiveReturnPolicyAsync(Guid supplierId, CancellationToken cancellationToken = default)
     {
+        // Global filter đã loại IsDeleted; unique index lọc IsDeleted=FALSE nên upsert soft-delete + add lại OK.
         return await _context.SupplierReturnPolicies
-            .Where(p => p.SupplierId == supplierId && p.IsActive)
+            .Include(p => p.CategoryCostShares)
+                .ThenInclude(c => c.Category)
+            .Where(p => p.SupplierId == supplierId && p.IsActive && !p.IsDeleted)
             .OrderByDescending(p => p.CreatedAt)
             .FirstOrDefaultAsync(cancellationToken);
     }
@@ -538,6 +541,7 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
     {
         return await _context.Products
             .Include(p => p.Category)
+            .Include(p => p.Units)
             .FirstOrDefaultAsync(p => p.Id == productId, cancellationToken);
     }
 

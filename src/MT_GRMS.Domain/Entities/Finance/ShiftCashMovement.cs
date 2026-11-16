@@ -21,6 +21,8 @@ public class ShiftCashMovement : BaseTenantEntity
     public string? RejectionReason { get; set; }
     public bool IsConfirmedByOwner { get; set; } = false;
     public DateTime? ConfirmedByOwnerAtUtc { get; set; }
+    public Guid? PostedCashbookEntryId { get; set; }
+    public DateTime? PostedAtUtc { get; set; }
 
     // Navigation
     public ShiftZReport? Shift { get; set; }
