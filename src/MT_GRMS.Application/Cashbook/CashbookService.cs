@@ -50,6 +50,7 @@ public class CashbookService : ICashbookService
 
     public async Task<ShiftResponse> OpenShiftAsync(OpenShiftRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         var till = await _cashbookRepo.GetAccountWithLockAsync(request.TillId, ct)
             ?? throw new NotFoundException($"Không tìm thấy két quầy với Id: {request.TillId}");
 
@@ -86,6 +87,7 @@ public class CashbookService : ICashbookService
 
     public async Task<ShiftResponse> CloseShiftZReportAsync(CloseShiftRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         var shift = await _shiftRepo.GetByIdAsync(request.ShiftId, ct)
             ?? throw new NotFoundException($"Không tìm thấy ca làm việc: {request.ShiftId}");
 
@@ -126,6 +128,7 @@ public class CashbookService : ICashbookService
 
     public async Task<bool> ProcessCashDropAsync(CashDropRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         if (request.Amount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền cash drop phải lớn hơn 0.");
@@ -158,6 +161,7 @@ public class CashbookService : ICashbookService
 
     public async Task<CashInTransitResponse> CreateDepositToBankAsync(DepositToBankRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         if (request.Amount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền nộp ngân hàng phải lớn hơn 0.");
@@ -196,6 +200,7 @@ public class CashbookService : ICashbookService
 
     public async Task<CashInTransitResponse> ConfirmBankDepositAsync(ConfirmBankDepositRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         var transit = await _transitRepo.GetByIdAsync(request.TransitId, ct)
             ?? throw new NotFoundException("Không tìm thấy lệnh nộp tiền đang chuyển.");
 
@@ -338,6 +343,7 @@ public class CashbookService : ICashbookService
         string? keyword = null,
         CancellationToken ct = default)
     {
+        RequireOwner();
         var kw = keyword?.Trim().ToLowerInvariant();
         var isGuid = Guid.TryParse(kw, out var searchGuid);
 
@@ -365,6 +371,7 @@ public class CashbookService : ICashbookService
 
     public async Task<FinanceAccount> GetOrCreateTillAsync(Guid branchId, string tillName, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole();
         var existingList = await _accountRepo.FindAsync(t => t.BranchId == branchId && t.AccountType == FinanceAccountType.Till, ct);
         var existing = existingList.FirstOrDefault(t => t.AccountName == tillName) ?? existingList.FirstOrDefault();
@@ -386,6 +393,7 @@ public class CashbookService : ICashbookService
 
     public async Task<FinanceAccount> GetOrCreateSafeAsync(Guid branchId, CancellationToken ct = default)
     {
+        RequireOwner();
         var existingList = await _accountRepo.FindAsync(
             s => s.BranchId == branchId && s.AccountType == FinanceAccountType.Safe && !s.IsDeleted,
             ct);
@@ -415,6 +423,7 @@ public class CashbookService : ICashbookService
         string? accountHolderName = null,
         CancellationToken ct = default)
     {
+        RequireOwner();
         var existingBanks = await _accountRepo.FindAsync(b => b.AccountType == FinanceAccountType.Bank && !b.IsDeleted, ct);
         var matchedBank = existingBanks
             .Where(b => b.IsActive && (!branchId.HasValue || !b.BranchId.HasValue || b.BranchId == branchId.Value))
@@ -455,6 +464,7 @@ public class CashbookService : ICashbookService
 
     public async Task<List<CashAccountResponse>> GetAccountsAsync(Guid? branchId = null, CancellationToken ct = default)
     {
+        RequireOwner();
         var accounts = await _accountRepo.GetAllAsync(ct);
         var defaultBranchId = accounts.FirstOrDefault(a => a.BranchId.HasValue)?.BranchId ?? branchId ?? Guid.NewGuid();
         var currentTenantId = _tenantContext.CurrentTenantId ?? string.Empty;
@@ -566,6 +576,7 @@ public class CashbookService : ICashbookService
 
     public async Task<CashbookSummaryResponse> GetSummaryAsync(Guid? branchId = null, CancellationToken ct = default)
     {
+        RequireOwner();
         var accounts = await GetAccountsAsync(branchId, ct);
         var accountIds = accounts.Select(a => a.Id).ToHashSet();
         var entries = await _cashbookRepo.FindAsync(
@@ -602,6 +613,7 @@ public class CashbookService : ICashbookService
 
     public async Task<CashbookEntryResponse> CreateReceiptAsync(CreateReceiptRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole();
         if (request.Amount <= 0)
         {
@@ -625,6 +637,7 @@ public class CashbookService : ICashbookService
 
     public async Task<CashbookEntryResponse> CreatePaymentAsync(CreatePaymentRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole();
         if (request.Amount <= 0)
         {
@@ -744,6 +757,7 @@ public class CashbookService : ICashbookService
 
     public async Task<TaxPaymentResponse> RecordTaxPaymentAsync(RecordTaxPaymentRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole();
         if (_expenseVoucherRepo == null || _taxRepository == null)
         {
@@ -831,6 +845,7 @@ public class CashbookService : ICashbookService
 
     public async Task<TransferFundResponse> TransferFundsAsync(TransferFundRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         if (request.Amount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền chuyển quỹ phải lớn hơn 0.");
@@ -870,6 +885,7 @@ public class CashbookService : ICashbookService
 
     public async Task<CashbookEntryResponse?> ReconcileCashAccountAsync(ReconcileAccountRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole();
         var account = await _accountRepo.GetByIdAsync(request.AccountId, ct)
             ?? throw new NotFoundException("Không tìm thấy tài khoản quỹ.");
@@ -900,6 +916,7 @@ public class CashbookService : ICashbookService
 
     public async Task<CashbookEntryResponse> VoidTransactionAsync(Guid entryId, VoidEntryRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole();
         if (string.IsNullOrWhiteSpace(request.Reason))
         {
@@ -1025,22 +1042,13 @@ public class CashbookService : ICashbookService
             e.TaxTreatmentReason
         );
 
-    private void ValidateFinancialManagementRole()
-    {
-        var role = _tenantContext.CurrentRole;
-        if (string.IsNullOrWhiteSpace(_tenantContext.CurrentTenantId) ||
-            string.IsNullOrWhiteSpace(role) ||
-            (!role.Equals("STORE_OWNER", StringComparison.OrdinalIgnoreCase) &&
-             !role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase) &&
-             !role.Equals("ADMIN", StringComparison.OrdinalIgnoreCase) &&
-             !role.Equals("Admin", StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new UnauthorizedAccessException("Chỉ Chủ hộ kinh doanh hoặc Quản trị viên đã xác thực mới có thẩm quyền thực hiện thao tác tài chính này.");
-        }
-    }
+    private void ValidateFinancialManagementRole() => RequireOwner();
+
+    private void RequireOwner() => TenantRoleGuard.RequireStoreOwner(_tenantContext, "sổ quỹ và tài chính");
 
     public async Task<bool> VerifyChainIntegrityAsync(Guid accountId, CancellationToken ct = default)
     {
+        RequireOwner();
         var entries = await _cashbookRepo.FindAsync(e => e.AccountId == accountId, ct);
         var sortedEntries = entries
             .OrderBy(e => e.OccurredAtUtc)

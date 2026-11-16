@@ -62,11 +62,11 @@ public class MultiTenantMiddlewareTests
 
         await middleware.InvokeAsync(httpContext, tenantContext);
 
-        Assert.Equal("tenant-claims", tenantContext.CurrentTenantId);
+        Assert.Equal(string.Empty, tenantContext.CurrentTenantId);
     }
 
     [Fact]
-    public async Task InvokeAsync_WhenSystemAdminSwitchesTenant_UsesTenantSwitchHeader()
+    public async Task InvokeAsync_WhenSystemAdminProvidesTenantSwitchHeader_IgnoresHeaderAndKeepsEmptyTenant()
     {
         var tenantContext = new TenantContext();
         var httpContext = CreateAuthenticatedContext(
@@ -80,7 +80,7 @@ public class MultiTenantMiddlewareTests
 
         await middleware.InvokeAsync(httpContext, tenantContext);
 
-        Assert.Equal("tenant-other", tenantContext.CurrentTenantId);
+        Assert.Equal(string.Empty, tenantContext.CurrentTenantId);
         Assert.Equal("ADMIN", tenantContext.CurrentRole);
     }
 

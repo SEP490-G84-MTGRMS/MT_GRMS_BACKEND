@@ -421,7 +421,7 @@ public class HouseholdTaxPinManagementTests
     }
 
     [Fact]
-    public async Task ResetSecurityPin_AdminTargetsAnotherUser_Succeeds()
+    public async Task ResetSecurityPin_AdminTargetsAnotherUser_ThrowsForbidden()
     {
         using var context = CreateDbContext(Guid.NewGuid().ToString());
         var admin = CreateStoreOwnerUser(userId: "admin-01", username: "system_admin");
@@ -440,10 +440,9 @@ public class HouseholdTaxPinManagementTests
             NewPin = "888888"
         };
 
-        await pinService.ResetSecurityPinAsync(admin.Id, request);
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            pinService.ResetSecurityPinAsync(admin.Id, request));
 
-        // Target user has new PIN
-        var verify = await pinService.VerifyStoreOwnerPinAsync(targetUser.Id, "888888");
-        Assert.True(verify.IsSuccess);
+        Assert.Equal("FORBIDDEN", ex.ErrorCode);
     }
 }

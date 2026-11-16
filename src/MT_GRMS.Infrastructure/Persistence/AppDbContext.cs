@@ -183,15 +183,59 @@ public partial class AppDbContext : DbContext
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        => SaveChangesAsync(true, cancellationToken);
+
+    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
+        RevokeChangedIdentitySessions();
         ApplyAuditAndTenantInfo();
-        return base.SaveChangesAsync(cancellationToken);
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
     public override int SaveChanges()
+        => SaveChanges(true);
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
+        RevokeChangedIdentitySessions();
         ApplyAuditAndTenantInfo();
-        return base.SaveChanges();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    private void RevokeChangedIdentitySessions()
+    {
+        ChangeTracker.DetectChanges();
+        var affected = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in ChangeTracker.Entries().ToArray())
+        {
+            bool Changed(params string[] names) => entry.State == EntityState.Modified && entry.Properties.Any(p =>
+                names.Contains(p.Metadata.Name) && p.IsModified && !Equals(p.OriginalValue, p.CurrentValue));
+
+            if (entry.Entity is User user && Changed(nameof(User.IsAdmin), nameof(User.IsActive),
+                nameof(User.PasswordHash), nameof(User.SecurityPinHash)))
+                affected.Add(user.Id);
+
+            if (entry.Entity is TenantUser membership && (entry.State == EntityState.Deleted ||
+                Changed(nameof(TenantUser.Role), nameof(TenantUser.IsActive))))
+                affected.Add(membership.UserId);
+
+            if (entry.Entity is Employee employee && (entry.State == EntityState.Deleted ||
+                Changed(nameof(Employee.BranchId), nameof(Employee.TenantId), nameof(Employee.UserId), nameof(Employee.Status), nameof(Employee.IsDeleted))))
+            {
+                if (!string.IsNullOrWhiteSpace(employee.UserId)) affected.Add(employee.UserId);
+                var previousUserId = entry.Property(nameof(Employee.UserId)).OriginalValue as string;
+                if (!string.IsNullOrWhiteSpace(previousUserId)) affected.Add(previousUserId);
+            }
+        }
+
+        foreach (var id in affected)
+        {
+            var user = Users.Local.FirstOrDefault(u => u.Id == id) ?? Users.IgnoreQueryFilters().SingleOrDefault(u => u.Id == id);
+            if (user == null || Entry(user).State == EntityState.Deleted) continue;
+            user.SecurityStamp = Guid.NewGuid().ToString("N");
+            user.RefreshToken = null;
+            user.RefreshTokenExpiryTime = null;
+        }
     }
 
     private void ApplyAuditAndTenantInfo()

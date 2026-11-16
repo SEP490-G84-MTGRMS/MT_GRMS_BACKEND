@@ -8,7 +8,7 @@ using MT_GRMS.Domain.Constants;
 namespace MT_GRMS.Api.Controllers;
 
 [Route("api/finance/overview")]
-[Authorize(Roles = RoleConstants.StoreOwner + "," + RoleConstants.StoreOwnerUpper)]
+[Authorize(Roles = SystemRoles.StoreOwner)]
 public sealed class FinanceOverviewController : BaseApiController
 {
     private readonly IFinanceOverviewService _service;

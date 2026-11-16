@@ -225,9 +225,7 @@ public class AuthService : IAuthService
         var userRole = ResolveUserRole(user, tenantUser);
         var role = userRole.ToStringRole();
         var isAdmin = userRole == UserRole.Admin;
-        var branchId = !string.IsNullOrWhiteSpace(tenantId)
-            ? await _userRepository.GetEmployeeBranchIdAsync(user.Id, tenantId, cancellationToken)
-            : null;
+        var branchId = await ResolveBranchAsync(user, userRole, tenantId, cancellationToken);
 
         var userInfo = new UserInfo(
             Id: user.Id,
@@ -243,7 +241,10 @@ public class AuthService : IAuthService
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
-        var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt, branchId);
+        if (string.IsNullOrWhiteSpace(user.SecurityStamp))
+        {
+            user.SecurityStamp = Guid.NewGuid().ToString("N");
+        }
         var refreshToken = $"mt_refresh_{Guid.NewGuid():N}";
 
         user.RefreshToken = refreshToken;
@@ -251,6 +252,8 @@ public class AuthService : IAuthService
         user.LastLoginAt = DateTime.UtcNow;
         _userRepository.Update(user);
         await _userRepository.SaveChangesAsync(cancellationToken);
+
+        var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt, branchId, user.SecurityStamp);
 
         return new LoginResponse(
             AccessToken: accessToken,
@@ -295,17 +298,6 @@ public class AuthService : IAuthService
             rehashNeeded = true;
         }
 
-        // Fallback 3: Cho phép mật khẩu demo "password123" hoặc "123456" cho tài khoản seed
-        if (!isPasswordValid && (requestPassword is "password123" or "123456"))
-        {
-            if (user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase) ||
-                user.UserName.Equals("manager01", StringComparison.OrdinalIgnoreCase) ||
-                user.UserName.Equals("cashier01", StringComparison.OrdinalIgnoreCase))
-            {
-                isPasswordValid = true;
-            }
-        }
-
         if (!isPasswordValid)
         {
             throw new UnauthorizedAccessException("Tài khoản hoặc mật khẩu không chính xác.");
@@ -336,28 +328,45 @@ public class AuthService : IAuthService
         }
     }
 
+    private async Task<Guid?> ResolveBranchAsync(User user, UserRole role, string tenantId, CancellationToken cancellationToken)
+    {
+        if (role != UserRole.Staff) return null;
+        var branch = await _userRepository.GetEmployeeBranchIdAsync(user.Id, tenantId, cancellationToken);
+        if (!branch.HasValue || branch == Guid.Empty)
+            throw new UnauthorizedAccessException("Nhân viên chưa có chi nhánh phân công hợp lệ.");
+        return branch;
+    }
+
     private static (string TenantId, TenantUser? TenantUser) ResolveTenant(User user, string? tenantCode)
     {
-        var tenantUser = user.TenantUsers?.FirstOrDefault(tu => !string.IsNullOrWhiteSpace(tenantCode) && tu.TenantId == tenantCode)
-                         ?? user.TenantUsers?.FirstOrDefault();
-
-        var tenantId = tenantUser?.TenantId ?? (!string.IsNullOrWhiteSpace(tenantCode) ? tenantCode : "tenant_mt_mart_01");
-        if (tenantId is "default-tenant" or "TENANT-HCM-01" or "TENANT-DEFAULT" or "DEFAULT")
+        if (user.IsAdmin)
         {
-            tenantId = "tenant_mt_mart_01";
+            return (string.Empty, null);
         }
 
-        return (tenantId, tenantUser);
+        var memberships = user.TenantUsers?.Where(tu => tu.IsActive && !string.IsNullOrWhiteSpace(tu.TenantId)).ToList();
+        if (memberships?.Count != 1 || (!string.IsNullOrWhiteSpace(tenantCode) && tenantCode != memberships[0].TenantId))
+            throw new UnauthorizedAccessException("Tài khoản không có tenant hợp lệ.");
+        return (memberships[0].TenantId, memberships[0]);
     }
 
     private static UserRole ResolveUserRole(User user, TenantUser? tenantUser)
     {
-        if (user.IsAdmin || user.UserName.Equals("admin", StringComparison.OrdinalIgnoreCase))
+        if (user.IsAdmin)
         {
             return UserRole.Admin;
         }
 
-        return UserRoleNames.FromString(tenantUser?.Role ?? UserRoleNames.StoreOwner);
+        try
+        {
+            var role = LegacyRoleReader.ReadStoredRole(tenantUser?.Role);
+            if (role == UserRole.Admin) throw new UnauthorizedAccessException("Role tenant không hợp lệ.");
+            return role;
+        }
+        catch (ArgumentException)
+        {
+            throw new UnauthorizedAccessException("Role tenant không hợp lệ.");
+        }
     }
 
     public async Task<LoginResponse> RefreshTokenAsync(RefreshTokenRequest request, CancellationToken cancellationToken = default)
@@ -380,9 +389,7 @@ public class AuthService : IAuthService
         var userRole = ResolveUserRole(user, tenantUser);
         var role = userRole.ToStringRole();
         var isAdmin = userRole == UserRole.Admin;
-        var branchId = !string.IsNullOrWhiteSpace(tenantId)
-            ? await _userRepository.GetEmployeeBranchIdAsync(user.Id, tenantId, cancellationToken)
-            : null;
+        var branchId = await ResolveBranchAsync(user, userRole, tenantId, cancellationToken);
 
         var userInfo = new UserInfo(
             Id: user.Id,
@@ -398,13 +405,17 @@ public class AuthService : IAuthService
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
-        var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt, branchId);
-
+        if (string.IsNullOrWhiteSpace(user.SecurityStamp))
+        {
+            user.SecurityStamp = Guid.NewGuid().ToString("N");
+        }
         var newRefreshToken = $"mt_refresh_{Guid.NewGuid():N}";
         user.RefreshToken = newRefreshToken;
         user.RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7);
         _userRepository.Update(user);
         await _userRepository.SaveChangesAsync(cancellationToken);
+
+        var accessToken = GenerateJwtToken(user.Id, user.Username, userInfo.Email, role, tenantId, isAdmin, expiresAt, branchId, user.SecurityStamp);
 
         return new LoginResponse(
             AccessToken: accessToken,
@@ -426,9 +437,7 @@ public class AuthService : IAuthService
         var userRole = ResolveUserRole(user, tenantUser);
         var role = userRole.ToStringRole();
         var isAdmin = userRole == UserRole.Admin;
-        var branchId = !string.IsNullOrWhiteSpace(tenantId)
-            ? await _userRepository.GetEmployeeBranchIdAsync(user.Id, tenantId, cancellationToken)
-            : null;
+        var branchId = await ResolveBranchAsync(user, userRole, tenantId, cancellationToken);
 
         return new UserInfo(
             Id: user.Id,
@@ -450,6 +459,7 @@ public class AuthService : IAuthService
         var user = await _userRepository.GetByIdAsync(userId, cancellationToken);
         if (user != null)
         {
+            user.SecurityStamp = Guid.NewGuid().ToString("N");
             user.RefreshToken = null;
             user.RefreshTokenExpiryTime = null;
             _userRepository.Update(user);
@@ -562,6 +572,7 @@ public class AuthService : IAuthService
             IsAdmin = false,
             IsEmailVerified = true,
             IsTwoFactorEnabled = false,
+            SecurityStamp = Guid.NewGuid().ToString("N"),
             RefreshToken = refreshToken,
             RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7),
             CreatedAt = DateTime.UtcNow
@@ -611,7 +622,7 @@ public class AuthService : IAuthService
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) ? parsedMins : 120;
         var expiresAt = DateTime.UtcNow.AddMinutes(expiresMinutes);
-        var accessToken = GenerateJwtToken(user.Id, user.UserName, user.Email, UserRoleNames.StoreOwner, tenant.Id, false, expiresAt, branch.Id);
+        var accessToken = GenerateJwtToken(user.Id, user.UserName, user.Email, UserRoleNames.StoreOwner, tenant.Id, false, expiresAt, branch.Id, user.SecurityStamp);
 
         var userInfo = new UserInfo(
             Id: user.Id,
@@ -633,7 +644,10 @@ public class AuthService : IAuthService
         );
     }
 
-    private string GenerateJwtToken(string userId, string username, string email, string role, string tenantId, bool isAdmin, DateTime expiresAt, Guid? branchId = null)
+    /// <summary>
+    /// Generates a signed JWT token containing user identity, roles, and security stamp claims.
+    /// </summary>
+    public string GenerateJwtToken(string userId, string username, string email, string role, string tenantId, bool isAdmin, DateTime expiresAt, Guid? branchId = null, string? securityStamp = null)
     {
         var secretKey = _configuration?["Jwt:Key"];
         if (string.IsNullOrWhiteSpace(secretKey) || Encoding.UTF8.GetByteCount(secretKey) < 32)
@@ -644,22 +658,10 @@ public class AuthService : IAuthService
         var issuer = _configuration?["Jwt:Issuer"] ?? "MTGRMS_API";
         var audience = _configuration?["Jwt:Audience"] ?? "MTGRMS_CLIENT";
 
-        var rolesToAdd = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { role };
-        if (role.Equals("STORE_OWNER", StringComparison.OrdinalIgnoreCase) || role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase))
-        {
-            rolesToAdd.Add("StoreOwner");
-            rolesToAdd.Add("STORE_OWNER");
-        }
-        else if (role.Equals("ADMIN", StringComparison.OrdinalIgnoreCase) || role.Equals("Admin", StringComparison.OrdinalIgnoreCase))
-        {
-            rolesToAdd.Add("Admin");
-            rolesToAdd.Add("ADMIN");
-        }
-        else
-        {
-            rolesToAdd.Add("Employee");
-            rolesToAdd.Add("EMPLOYEE");
-        }
+        if (role is not (UserRoleNames.Admin or UserRoleNames.StoreOwner or UserRoleNames.Staff) ||
+            isAdmin != (role == UserRoleNames.Admin) ||
+            (!isAdmin && string.IsNullOrWhiteSpace(tenantId)) || string.IsNullOrWhiteSpace(securityStamp))
+            throw new InvalidOperationException("Không thể phát token với ngữ cảnh xác thực không hợp lệ.");
 
         var claims = new List<Claim>
         {
@@ -667,20 +669,26 @@ public class AuthService : IAuthService
             new Claim(ClaimTypes.Name, username),
             new Claim(ClaimTypes.Email, email),
             new Claim("role", role),
-            new Claim("tenant_id", tenantId),
             new Claim("is_admin", isAdmin ? "true" : "false"),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString())
         };
+
+        if (!isAdmin && !string.IsNullOrWhiteSpace(tenantId))
+        {
+            claims.Add(new Claim("tenant_id", tenantId));
+        }
+
+        if (!string.IsNullOrWhiteSpace(securityStamp))
+        {
+            claims.Add(new Claim("security_stamp", securityStamp));
+        }
 
         if (branchId.HasValue)
         {
             claims.Add(new Claim("branch_id", branchId.Value.ToString()));
         }
 
-        foreach (var r in rolesToAdd)
-        {
-            claims.Add(new Claim(ClaimTypes.Role, r));
-        }
+        claims.Add(new Claim(ClaimTypes.Role, role));
 
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
         var creds = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
@@ -779,6 +787,9 @@ public class AuthService : IAuthService
         }
 
         user.PasswordHash = _passwordHasher.HashPassword(request.NewPassword);
+        user.SecurityStamp = Guid.NewGuid().ToString("N");
+        user.RefreshToken = null;
+        user.RefreshTokenExpiryTime = null;
         user.PasswordResetOtp = null;
         user.OtpExpiry = null;
 

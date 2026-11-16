@@ -2,11 +2,12 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Transfers;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
 [Route("api/transfer-requests")]
-[Authorize]
+[Authorize(Roles = SystemRoles.StoreOwner + "," + SystemRoles.Staff)]
 public sealed class TransferRequestsController(ITransferRequestService service) : BaseApiController
 {
     [HttpPost("allocation-preview")]

@@ -10,7 +10,7 @@ using MT_GRMS.Domain.Enums;
 namespace MT_GRMS.Api.Controllers;
 
 [Route("api/tax/household")]
-[Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+[Authorize(Roles = SystemRoles.StoreOwner)]
 public class HouseholdTaxController : BaseApiController
 {
     private readonly IHouseholdTaxService _taxService;

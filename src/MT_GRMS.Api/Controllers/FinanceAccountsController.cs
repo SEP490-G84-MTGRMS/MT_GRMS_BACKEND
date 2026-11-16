@@ -14,7 +14,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/finance-accounts")]
-[Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+[Authorize(Roles = SystemRoles.StoreOwner)]
 public class FinanceAccountsController : BaseApiController
 {
     private readonly AppDbContext _db;

@@ -405,7 +405,11 @@ public class AccountingInvariantsTests
         };
         Assert.False(hashService.VerifyEntryHash("GENESIS", tamperedEntry), "Hệ thống phải phát hiện giả mạo khi nội dung giao dịch bị sửa đổi.");
 
-        // 4. Phát hiện gian lận: Giả mạo chuỗi liên kết (Previous Hash bị sai)
+        // 4. Phân loại thuế là một phần của bằng chứng bất biến ở audit schema v2.
+        entry1.TaxTreatment = CashbookTaxTreatment.TaxableRevenue;
+        Assert.False(hashService.VerifyEntryHash("GENESIS", entry1), "Hệ thống phải phát hiện khi cách xử lý thuế bị sửa sau ghi sổ.");
+
+        // 5. Phát hiện gian lận: Giả mạo chuỗi liên kết (Previous Hash bị sai)
         Assert.False(hashService.VerifyEntryHash("TAMPERED_PREV_HASH", entry2), "Hệ thống phải phát hiện chuỗi bị đứt gãy nếu hash trước đó bị thay đổi.");
     }
 

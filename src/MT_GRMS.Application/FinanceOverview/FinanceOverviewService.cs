@@ -1,3 +1,4 @@
+using MT_GRMS.Application.Common;
 using MT_GRMS.Application.FinanceOverview.Dtos;
 using MT_GRMS.Domain.Exceptions;
 
@@ -7,10 +8,12 @@ public sealed class FinanceOverviewService : IFinanceOverviewService
 {
     private static readonly TimeSpan MaximumRange = TimeSpan.FromDays(366);
     private readonly IFinanceOverviewRepository _repository;
+    private readonly ITenantContext _tenantContext;
 
-    public FinanceOverviewService(IFinanceOverviewRepository repository)
+    public FinanceOverviewService(IFinanceOverviewRepository repository, ITenantContext tenantContext)
     {
         _repository = repository;
+        _tenantContext = tenantContext;
     }
 
     public Task<FinanceOverviewResponse> GetOverviewAsync(
@@ -19,6 +22,7 @@ public sealed class FinanceOverviewService : IFinanceOverviewService
         DateTime toUtc,
         CancellationToken ct = default)
     {
+        TenantRoleGuard.RequireStoreOwner(_tenantContext, "tổng quan tài chính");
         if (fromUtc.Kind != DateTimeKind.Utc || toUtc.Kind != DateTimeKind.Utc)
         {
             throw new BusinessException("INVALID_PERIOD", "fromDate và toDate phải là thời gian UTC.");

@@ -2,12 +2,13 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Transfers;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Api.Controllers;
 
 [Route("api/transfers")]
-[Authorize]
+[Authorize(Roles = SystemRoles.StoreOwner + "," + SystemRoles.Staff)]
 public sealed class TransfersController(ITransferService service) : BaseApiController
 {
     [HttpGet]
@@ -23,10 +24,12 @@ public sealed class TransfersController(ITransferService service) : BaseApiContr
         => Ok(ApiResponse<IReadOnlyList<TransferStockBatchDto>>.Ok(await service.GetStockBatchesAsync(branchId, ct)));
 
     [HttpPost]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<TransferDto>>> Create([FromBody] CreateTransferRequest request, CancellationToken ct)
         => Ok(ApiResponse<TransferDto>.Ok(await service.CreateTransferAsync(request, ct), "Tạo phiếu điều chuyển thành công."));
 
     [HttpPost("{id:guid}/submit")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<TransferDto>>> Submit(Guid id, CancellationToken ct)
         => Ok(ApiResponse<TransferDto>.Ok(await service.SubmitTransferAsync(id, ct), "Đã gửi phiếu đến chi nhánh nguồn."));
 

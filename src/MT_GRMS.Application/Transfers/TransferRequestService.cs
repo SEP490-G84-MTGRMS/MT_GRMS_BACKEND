@@ -1,4 +1,5 @@
 using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
@@ -21,8 +22,8 @@ public sealed class TransferRequestService(
 {
     private sealed record Allocation(Guid BranchId, BranchStock Stock, Product Product, decimal Quantity, string Unit);
 
-    private bool IsOwner => tenant.CurrentRole?.Trim().ToUpperInvariant() is "STORE_OWNER" or "ADMIN" or "SYSTEMADMIN";
-    private bool IsStaff => tenant.CurrentRole?.Trim().ToUpperInvariant() is "STAFF" or "EMPLOYEE" or "BRANCH_MANAGER" or "CASHIER";
+    private bool IsOwner => tenant.CurrentRole == SystemRoles.StoreOwner;
+    private bool IsStaff => tenant.CurrentRole == SystemRoles.Staff;
 
     public async Task<TransferAllocationPreviewDto> PreviewAllocationAsync(CreateTransferRequestGroupRequest request, CancellationToken ct)
     {
@@ -151,6 +152,8 @@ public sealed class TransferRequestService(
     public async Task<TransferRequestGroupDto> GetAsync(Guid id, CancellationToken ct)
     {
         var group = await requests.GetByIdAsync(id, ct) ?? throw new KeyNotFoundException("Không tìm thấy yêu cầu điều chuyển.");
+        if (group.TenantId != tenant.CurrentTenantId)
+            throw new KeyNotFoundException("Không tìm thấy yêu cầu điều chuyển.");
         EnsureDestinationAccess(group.ToBranchId);
         var detailRows = await requestDetails.FindAsync(x => x.TransferRequestId == id, ct);
         var transferRows = await transfers.FindAsync(x => x.TransferRequestId == id, ct);
@@ -212,7 +215,7 @@ public sealed class TransferRequestService(
         {
             var product = await products.GetByIdAsync(input.ProductId, ct) ?? throw new KeyNotFoundException("Không tìm thấy sản phẩm.");
             if (product.TenantId != tenant.CurrentTenantId) throw new KeyNotFoundException("Không tìm thấy sản phẩm.");
-            var candidates = (await stocks.FindAsync(x => x.ProductId == input.ProductId && x.BranchId != request.ToBranchId, ct))
+            var candidates = (await stocks.FindAsync(x => x.TenantId == tenant.CurrentTenantId && x.ProductId == input.ProductId && x.BranchId != request.ToBranchId, ct))
                 .Where(x => activeBranches.ContainsKey(x.BranchId) && (!x.ExpiryDate.HasValue || x.ExpiryDate.Value.Date >= DateTime.UtcNow.Date))
                 .Select(x => new { Stock = x, Available = Math.Max(0, x.QuantityOnHand - x.QuantityReserved - x.QuantityQuarantined) })
                 .Where(x => x.Available > 0)
@@ -262,8 +265,10 @@ public sealed class TransferRequestService(
 
     private void EnsureDestinationAccess(Guid destinationBranchId)
     {
+        if (string.IsNullOrWhiteSpace(tenant.CurrentTenantId) || !IsOwner && !IsStaff)
+            throw new UnauthorizedAccessException("Role không có quyền truy cập yêu cầu điều chuyển.");
         if (IsOwner) return;
-        if (!IsStaff || tenant.CurrentBranchId != destinationBranchId)
+        if (tenant.CurrentBranchId is not Guid assignedBranch || assignedBranch != destinationBranchId)
             throw new UnauthorizedAccessException("Staff chỉ được yêu cầu hàng cho chi nhánh hiện tại.");
     }
 }

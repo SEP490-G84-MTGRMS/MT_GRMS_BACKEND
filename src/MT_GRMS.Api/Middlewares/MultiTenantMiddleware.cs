@@ -29,17 +29,14 @@ public class MultiTenantMiddleware
 
             tenantContext.SetRawUserId(userIdClaim);
 
-            // Tenant switching is reserved for a token explicitly issued to a system admin.
-            // A role/header supplied by the client must never establish or replace tenant scope.
-            var isSystemAdmin = string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(context.User.FindFirst("is_admin")?.Value, "true", StringComparison.OrdinalIgnoreCase);
+            // SaaS Admin never has tenant context. X-Tenant-Id header must never establish tenant scope for Admin.
+            var isSystemAdmin = string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(context.User.FindFirst("is_admin")?.Value, "true", StringComparison.OrdinalIgnoreCase);
+
             if (isSystemAdmin)
             {
-                var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
-                if (!string.IsNullOrWhiteSpace(headerTenantId))
-                {
-                    tenantId = headerTenantId;
-                }
+                tenantId = string.Empty;
+                branchId = null;
             }
 
             if (!string.IsNullOrWhiteSpace(tenantId))

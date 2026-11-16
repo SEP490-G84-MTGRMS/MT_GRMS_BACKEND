@@ -36,6 +36,7 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> CreateExpenseAsync(CreateExpenseRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         if (request.Amount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền chi phí phải lớn hơn 0.");
@@ -153,6 +154,7 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> ApproveExpenseAsync(ApproveExpenseRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole("phê duyệt phiếu chi");
 
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
@@ -199,6 +201,7 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> RejectExpenseAsync(RejectExpenseRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole("từ chối phê duyệt phiếu chi");
 
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
@@ -228,15 +231,7 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> CancelExpenseAsync(CancelExpenseRequest request, CancellationToken ct = default)
     {
-        var role = _tenantContext.CurrentRole;
-        if (!string.IsNullOrWhiteSpace(role) &&
-            !role.Equals("Owner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) && !role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Admin", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Manager", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new UnauthorizedAccessException("Chỉ Chủ hộ kinh doanh hoặc Quản lý cửa hàng mới có thẩm quyền hủy phiếu chi.");
-        }
+        RequireOwner();
 
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
@@ -300,6 +295,7 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> DisburseExpenseAsync(DisburseExpenseRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole("xuất quỹ chi trả phiếu chi");
 
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
@@ -375,6 +371,7 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> GetExpenseByIdAsync(Guid expenseId, CancellationToken ct = default)
     {
+        RequireOwner();
         var voucher = await _expenseRepo.GetByIdAsync(expenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
@@ -383,6 +380,7 @@ public class ExpenseService : IExpenseService
 
     public async Task<List<ExpenseVoucherResponse>> GetExpensesAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CancellationToken ct = default)
     {
+        RequireOwner();
         var vouchers = await _expenseRepo.FindAsync(e =>
             (!branchId.HasValue || e.BranchId == branchId.Value) &&
             (!fromDate.HasValue || e.CreatedAt >= fromDate.Value) &&
@@ -398,6 +396,7 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseSummaryResponse> GetExpenseSummaryAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, CancellationToken ct = default)
     {
+        RequireOwner();
         var vouchers = await _expenseRepo.FindAsync(e =>
             (!branchId.HasValue || e.BranchId == branchId.Value) &&
             (!fromDate.HasValue || e.CreatedAt >= fromDate.Value) &&
@@ -434,6 +433,7 @@ public class ExpenseService : IExpenseService
 
     public async Task<List<ExpenseVoucherResponse>> GetPendingTriageAsync(Guid? branchId, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole("xem danh sách Triage Inbox");
 
         var vouchers = await _expenseRepo.FindAsync(e =>
@@ -450,6 +450,7 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> ResolveTriageAsync(Guid voucherId, ResolveTriageRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole("xử lý mục tài chính trong Triage Inbox");
         EnsureNatureInScope(request.Nature);
 
@@ -495,19 +496,9 @@ public class ExpenseService : IExpenseService
         }
     }
 
-    private void ValidateFinancialManagementRole(string actionDescription = "thực hiện thao tác tài chính này")
-    {
-        var role = _tenantContext.CurrentRole;
-        if (!string.IsNullOrWhiteSpace(role) &&
-            !role.Equals("Owner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Admin", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Manager", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new UnauthorizedAccessException($"Chỉ Chủ hộ kinh doanh hoặc Quản lý cửa hàng mới có thẩm quyền {actionDescription}.");
-        }
-    }
+    private void ValidateFinancialManagementRole(string actionDescription = "thực hiện thao tác tài chính này") => RequireOwner();
+
+    private void RequireOwner() => TenantRoleGuard.RequireStoreOwner(_tenantContext, "chi phí và phiếu chi");
 
     private static ExpenseVoucherResponse MapVoucherResponse(ExpenseVoucher v) =>
         new(v.Id, v.VoucherCode, v.BranchId, v.BeneficiaryName, v.Category, v.Amount, v.Status.ToString(), v.PaymentSourceType.ToString(), v.PaymentSourceAccountId, v.IsTaxDeductible, v.InvoiceNumber, v.SellerTaxCode, v.EvidenceAttachmentUrl, v.IsFlaggedAsSuspiciousSplit, v.SuspiciousReason, v.ApprovedByUserId, v.ApprovedAtUtc, v.PaidAtUtc, v.ExpenseDate, v.Note, v.Nature, v.ReferenceCode, v.RefundedAmount, v.IsSettled);

@@ -32,7 +32,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
     private readonly Security.ITaxSnapshotSignatureService _signatureService;
     private readonly IConfiguration? _configuration;
-    private readonly Common.ITenantContext? _tenantContext;
+    private readonly Common.ITenantContext _tenantContext;
     private readonly Common.IUnitOfWork? _unitOfWork;
 
     public const decimal TaxExemptionThreshold = RevenuePercentageTaxStrategy.TaxExemptionThreshold;
@@ -43,7 +43,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
     public const decimal DeclarationDefaultPitRate = DeclarationBasedTaxStrategy.DeclarationDefaultPitRate;
 
-    public HouseholdTaxService(IHouseholdTaxRepository repository, Common.IUnitOfWork? unitOfWork = null)
+    public HouseholdTaxService(IHouseholdTaxRepository repository, Common.ITenantContext tenantContext, Common.IUnitOfWork? unitOfWork = null)
 
         : this(repository, new TaxCalculationStrategyFactory(new ITaxCalculationStrategy[]
 
@@ -53,7 +53,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
             new DeclarationBasedTaxStrategy()
 
-        }), null, null, null, null, unitOfWork)
+        }), null, null, null, tenantContext, unitOfWork)
 
     {
 
@@ -73,7 +73,7 @@ public class HouseholdTaxService : IHouseholdTaxService
         _pinService = pinService;
         _signatureService = signatureService ?? new Security.TaxSnapshotSignatureService();
         _configuration = configuration;
-        _tenantContext = tenantContext;
+        _tenantContext = tenantContext ?? throw new ArgumentNullException(nameof(tenantContext));
         _unitOfWork = unitOfWork;
     }
 
@@ -171,6 +171,7 @@ public class HouseholdTaxService : IHouseholdTaxService
     public async Task<HouseholdTaxSummaryDto> GetTaxSummaryAsync(HouseholdTaxFilterDto filter, CancellationToken cancellationToken = default)
 
     {
+        RequireOwner();
 
         var (fromDateUtc, toDateUtc, priorPeriodToDateUtc) = GetDateRangesForPeriod(filter.Year, filter.PeriodType, filter.PeriodNumber);
 
@@ -774,6 +775,7 @@ public class HouseholdTaxService : IHouseholdTaxService
         HouseholdTaxFilterDto filter,
         CancellationToken cancellationToken = default)
     {
+        RequireOwner();
         var summary = await GetTaxSummaryAsync(filter, cancellationToken);
         var profile = await _repository.GetTaxpayerProfileAsync(filter.BranchId, cancellationToken);
         var missingFields = new List<string>();
@@ -840,6 +842,7 @@ public class HouseholdTaxService : IHouseholdTaxService
         Guid snapshotId,
         CancellationToken cancellationToken = default)
     {
+        RequireOwner();
         var snapshot = await _repository.GetSnapshotByIdAsync(snapshotId, cancellationToken)
             ?? throw new BusinessException("SNAPSHOT_NOT_FOUND", "Không tìm thấy bản chốt kỳ tính thuế.");
 
@@ -913,6 +916,7 @@ public class HouseholdTaxService : IHouseholdTaxService
         CancellationToken cancellationToken = default)
 
     {
+        RequireOwner();
 
         var (fromDateUtc, toDateUtc, _) = GetDateRangesForPeriod(year, periodType, periodNumber);
 
@@ -959,6 +963,7 @@ public class HouseholdTaxService : IHouseholdTaxService
         CancellationToken cancellationToken = default)
 
     {
+        RequireOwner();
         if (_unitOfWork == null)
         {
             return await FinalizeTaxSnapshotCoreAsync(request, finalizedBy, userId, cancellationToken);
@@ -987,28 +992,25 @@ public class HouseholdTaxService : IHouseholdTaxService
 
         // 1. Xác thực bảo mật mã PIN chủ hộ
 
-        if (_pinService != null && !string.IsNullOrEmpty(userId))
-
+        if (string.IsNullOrWhiteSpace(userId))
         {
+            throw new BusinessException("USER_ID_REQUIRED", "Không xác định được chủ cửa hàng thực hiện chốt kỳ tính thuế.");
+        }
 
-            if (string.IsNullOrWhiteSpace(request.SecurityPin))
+        if (_pinService == null)
+        {
+            throw new BusinessException("PIN_SERVICE_UNAVAILABLE", "Không thể chốt kỳ khi dịch vụ xác thực lại không khả dụng.");
+        }
 
-            {
+        if (string.IsNullOrWhiteSpace(request.SecurityPin))
+        {
+            throw new BusinessException("PIN_REQUIRED", "Yêu cầu mã PIN bảo mật của chủ cửa hàng để chốt kỳ tính thuế.");
+        }
 
-                throw new BusinessException("PIN_REQUIRED", "Yêu cầu mã PIN bảo mật của chủ hộ để chốt kỳ tính thuế.");
-
-            }
-
-            var pinResult = await _pinService.VerifyStoreOwnerPinAsync(userId, request.SecurityPin, cancellationToken);
-
-            if (!pinResult.IsSuccess)
-
-            {
-
-                throw new BusinessException(pinResult.ErrorCode ?? "INVALID_PIN", pinResult.ErrorMessage ?? "Mã PIN xác thực chốt kỳ không chính xác.");
-
-            }
-
+        var pinResult = await _pinService.VerifyStoreOwnerPinAsync(userId, request.SecurityPin, cancellationToken);
+        if (!pinResult.IsSuccess)
+        {
+            throw new BusinessException(pinResult.ErrorCode ?? "INVALID_PIN", pinResult.ErrorMessage ?? "Mã PIN xác thực chốt kỳ không chính xác.");
         }
 
         // Tìm toàn bộ các bản ghi snapshot hiện hành của kỳ này (bao gồm cả tenant-wide và chi nhánh cũ nếu có)
@@ -1403,6 +1405,7 @@ public class HouseholdTaxService : IHouseholdTaxService
     public async Task<HouseholdTaxSnapshotDto?> GetSnapshotByIdAsync(Guid id, CancellationToken cancellationToken = default)
 
     {
+        RequireOwner();
 
         var s = await _repository.GetSnapshotByIdAsync(id, cancellationToken);
 
@@ -1468,6 +1471,7 @@ public class HouseholdTaxService : IHouseholdTaxService
     public async Task<bool> VerifySnapshotIntegrityAsync(Guid snapshotId, CancellationToken cancellationToken = default)
 
     {
+        RequireOwner();
 
         var s = await _repository.GetSnapshotByIdAsync(snapshotId, cancellationToken);
 
@@ -1480,6 +1484,7 @@ public class HouseholdTaxService : IHouseholdTaxService
     public async Task<List<HouseholdTaxSnapshotDto>> GetSnapshotsAsync(int? year, Guid? branchId, CancellationToken cancellationToken = default)
 
     {
+        RequireOwner();
 
         var snapshots = await _repository.GetSnapshotsAsync(year, branchId, cancellationToken);
 
@@ -1674,6 +1679,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
     public async Task ChangeSecurityPinAsync(string userId, ChangeSecurityPinRequest request, CancellationToken cancellationToken = default)
     {
+        RequireOwner();
         if (_pinService == null)
         {
             throw new BusinessException("PIN_SERVICE_UNAVAILABLE", "Dịch vụ xác thực mã PIN không khả dụng.");
@@ -1684,6 +1690,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
     public async Task ResetSecurityPinAsync(string userId, ResetSecurityPinRequest request, CancellationToken cancellationToken = default)
     {
+        RequireOwner();
         if (_pinService == null)
         {
             throw new BusinessException("PIN_SERVICE_UNAVAILABLE", "Dịch vụ xác thực mã PIN không khả dụng.");
@@ -1710,5 +1717,7 @@ public class HouseholdTaxService : IHouseholdTaxService
             }
         }
     }
+
+    private void RequireOwner() => Common.TenantRoleGuard.RequireStoreOwner(_tenantContext, "thuế hộ kinh doanh");
 
 }

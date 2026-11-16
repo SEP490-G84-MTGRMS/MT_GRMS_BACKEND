@@ -24,7 +24,7 @@ public class ExpenseServiceTests
             CurrentUserId = userId;
             CurrentBranchId = branchId;
         }
-        public string CurrentRole { get; set; } = "ADMIN";
+        public string CurrentRole { get; set; } = "STORE_OWNER";
         public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
     }
 

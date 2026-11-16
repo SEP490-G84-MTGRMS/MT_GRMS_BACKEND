@@ -341,12 +341,16 @@ public class PurchaseOrderService : IPurchaseOrderService
                         && (detail.IsOwnerAdjusted || detail.StoreQty.HasValue);
                     if (ownerLocked)
                     {
-                        continue;
+                        employeeQty = cell.EmployeeQty;
+                        storeQty = detail!.StoreQty;
+                        isOwnerAdjusted = true;
                     }
-
-                    employeeQty = cell.EmployeeQty;
-                    storeQty = null;
-                    isOwnerAdjusted = false;
+                    else
+                    {
+                        employeeQty = cell.EmployeeQty;
+                        storeQty = null;
+                        isOwnerAdjusted = false;
+                    }
                 }
 
                 decimal finalQty = isOwnerAdjusted

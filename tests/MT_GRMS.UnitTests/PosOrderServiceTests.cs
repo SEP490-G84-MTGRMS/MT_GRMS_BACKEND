@@ -113,7 +113,7 @@ public class PosOrderServiceTests
                 BranchId = _branchId,
                 ProductId = _prodHaoHaoId,
                 BatchCode = "BATCH-A-2026-01",
-                ExpiryDate = new DateTime(2026, 1, 1),
+                ExpiryDate = DateTime.UtcNow.AddMonths(1),
                 QuantityOnHand = 10m,
                 LandedCostPerUnit = 3800m
             },
@@ -125,7 +125,7 @@ public class PosOrderServiceTests
                 BranchId = _branchId,
                 ProductId = _prodHaoHaoId,
                 BatchCode = "BATCH-B-2026-06",
-                ExpiryDate = new DateTime(2026, 6, 1),
+                ExpiryDate = DateTime.UtcNow.AddMonths(6),
                 QuantityOnHand = 20m,
                 LandedCostPerUnit = 4000m
             },
@@ -1680,6 +1680,7 @@ public class PosOrderServiceTests
         mockTenantContext.Setup(c => c.CurrentTenantId).Returns("tenant-01");
         mockTenantContext.Setup(c => c.CurrentUserId).Returns(cashierUserId);
         mockTenantContext.Setup(c => c.CurrentRole).Returns("CASHIER");
+        mockTenantContext.Setup(c => c.CurrentBranchId).Returns(_branchId);
 
         var orderService = new OrderService(
             _orderRepo,

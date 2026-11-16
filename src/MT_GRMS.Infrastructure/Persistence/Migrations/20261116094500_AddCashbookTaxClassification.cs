@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -9,6 +10,8 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations;
 /// Existing manual entries deliberately remain ReviewRequired: free-text is
 /// not a safe basis for an accounting or tax migration.
 /// </summary>
+[DbContext(typeof(AppDbContext))]
+[Migration("20261116094500_AddCashbookTaxClassification")]
 public partial class AddCashbookTaxClassification : Migration
 {
     protected override void Up(MigrationBuilder migrationBuilder)

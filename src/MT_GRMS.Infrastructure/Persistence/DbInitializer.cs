@@ -1184,7 +1184,6 @@ END $$;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinSalt"" text;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""FailedPinAttempts"" integer DEFAULT 0;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""PinLockedUntilUtc"" timestamp without time zone;
-                        UPDATE ""Users"" SET ""IsAdmin"" = true WHERE LOWER(""UserName"") = 'admin';
                     ");
                 }
                 catch (Exception ex)
@@ -2027,19 +2026,11 @@ END $$;
 
             await context.Users.AddRangeAsync(userAdmin, userStoreManager, userCashier, userStoreOwner, userStaff);
 
-            var tenantUserAdmin = new TenantUser
-            {
-                TenantId = defaultTenantId,
-                UserId = userAdmin.Id,
-                Role = "SUPER_ADMIN",
-                IsActive = true
-            };
-
             var tenantUserManager = new TenantUser
             {
                 TenantId = defaultTenantId,
                 UserId = userStoreManager.Id,
-                Role = "BRANCH_MANAGER",
+                Role = SystemRoles.Staff,
                 IsActive = true
             };
 
@@ -2067,7 +2058,7 @@ END $$;
                 IsActive = true
             };
 
-            await context.TenantUsers.AddRangeAsync(tenantUserAdmin, tenantUserManager, tenantUserCashier, tenantUserOwner, tenantUserStaff);
+            await context.TenantUsers.AddRangeAsync(tenantUserManager, tenantUserCashier, tenantUserOwner, tenantUserStaff);
             await context.SaveChangesAsync();
         }
 

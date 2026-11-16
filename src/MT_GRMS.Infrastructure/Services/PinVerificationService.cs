@@ -226,14 +226,11 @@ public class PinVerificationService : IPinVerificationService
 
         var targetUserId = !string.IsNullOrWhiteSpace(request.UserId) ? request.UserId : userId;
 
-        // IDOR check: nếu caller cố tình reset PIN của user khác, chỉ Admin mới được phép
+        // PIN thuế là bí mật xác thực lại của chính STORE_OWNER; không role nào, kể cả ADMIN,
+        // được reset thay cho một người dùng khác.
         if (!string.IsNullOrWhiteSpace(request.UserId) && !string.Equals(request.UserId, userId, StringComparison.OrdinalIgnoreCase))
         {
-            var caller = await _context.Users.FirstOrDefaultAsync(u => u.Id == userId || u.UserName == userId, ct);
-            if (caller == null || !caller.IsAdmin)
-            {
-                throw new BusinessException("FORBIDDEN", "Bạn không có quyền khôi phục mã PIN cho tài khoản người dùng khác.");
-            }
+            throw new BusinessException("FORBIDDEN", "Không được khôi phục mã PIN thuế cho tài khoản người dùng khác.");
         }
 
         var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == targetUserId || u.UserName == targetUserId, ct);

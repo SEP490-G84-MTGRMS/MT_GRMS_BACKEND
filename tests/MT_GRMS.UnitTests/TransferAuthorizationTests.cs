@@ -11,7 +11,7 @@ namespace MT_GRMS.UnitTests;
 public class TransferAuthorizationTests
 {
     [Fact]
-    public async Task SaaSAdmin_CannotCancelTransferEvenWhenAssignedTransferBranch()
+    public async Task SaaSAdmin_CannotEnterTransferServiceEvenWithForgedTenantAndBranchContext()
     {
         var branchId = Guid.NewGuid();
         var transfer = new Transfer
@@ -26,14 +26,14 @@ public class TransferAuthorizationTests
         var tenant = new TestTenantContext("ADMIN", branchId);
         var service = CreateService(transfers.Object, tenant);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             service.CancelTransferAsync(transfer.Id, new CancelTransferRequest("test"), CancellationToken.None));
 
         transfers.Verify(x => x.Update(It.IsAny<Transfer>()), Times.Never);
     }
 
     [Fact]
-    public async Task EmployeeFromSendingBranch_CannotCancelInTransitTransfer()
+    public async Task LegacyEmployeeAlias_IsRejectedBeforeTransferStateIsEvaluated()
     {
         var branchId = Guid.NewGuid();
         var transfer = new Transfer
@@ -54,9 +54,39 @@ public class TransferAuthorizationTests
         var unitOfWork = new Mock<IUnitOfWork>();
         var service = CreateService(transfers.Object, new TestTenantContext("EMPLOYEE", branchId), details.Object, branches.Object, unitOfWork.Object);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             service.CancelTransferAsync(transfer.Id, new CancelTransferRequest("approved by sending branch"), CancellationToken.None));
         unitOfWork.Verify(x => x.BeginTransactionAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Theory]
+    [InlineData("CASHIER")]
+    [InlineData("BRANCH_MANAGER")]
+    [InlineData("EMPLOYEE")]
+    [InlineData("OWNER")]
+    [InlineData("StoreOwner")]
+    public async Task LegacyRoleAliases_CannotListTransfers(string role)
+    {
+        var transfers = new Mock<IRepository<Transfer>>();
+        var service = CreateService(transfers.Object, new TestTenantContext(role, Guid.NewGuid()));
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.GetTransfersAsync(
+            new TransferFilterParams(null, null, null, null, null, null), CancellationToken.None));
+        transfers.Verify(x => x.GetAllAsync(It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Staff_CannotCreateDirectTransfer()
+    {
+        var branchId = Guid.NewGuid();
+        var service = CreateService(Mock.Of<IRepository<Transfer>>(), new TestTenantContext("STAFF", branchId));
+        var request = new CreateTransferRequest(
+            Guid.NewGuid(), branchId, false, null, null,
+            [new TransferLineRequest(Guid.NewGuid(), 1, "Cái", null, null, 0)],
+            TransferOrigin.StaffUrgentRequest);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            service.CreateTransferAsync(request, CancellationToken.None));
     }
 
     private static TransferService CreateService(

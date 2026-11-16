@@ -45,9 +45,27 @@ public class FinanceControllerAuthorizationTests
     }
 
     [Fact]
-    public void ManualCashbookAndTaxPaymentCommands_RequireOwnerOrAdminAndIdempotency()
+    public void M7Controllers_RequireCanonicalStoreOwner()
     {
-        var ownerOrAdmin = RoleConstants.StoreOwnerOrAdmin;
+        foreach (var controller in new[]
+        {
+            typeof(CashbookController),
+            typeof(ExpensesController),
+            typeof(CustomerDebtController),
+            typeof(FinanceOverviewController),
+            typeof(FinanceAccountsController),
+            typeof(PnLReportController)
+        })
+        {
+            var authorization = controller.GetCustomAttribute<AuthorizeAttribute>();
+            Assert.NotNull(authorization);
+            Assert.Equal(SystemRoles.StoreOwner, authorization!.Roles);
+        }
+    }
+
+    [Fact]
+    public void ManualCashbookCommands_RequireIdempotency()
+    {
         var controller = typeof(CashbookController);
 
         foreach (var actionName in new[]
@@ -60,7 +78,7 @@ public class FinanceControllerAuthorizationTests
         {
             var action = controller.GetMethod(actionName);
             Assert.NotNull(action);
-            Assert.Contains(action!.GetCustomAttributes<AuthorizeAttribute>(), attribute => attribute.Roles == ownerOrAdmin);
+            Assert.Contains(action!.GetCustomAttributes<AuthorizeAttribute>(), attribute => attribute.Roles == SystemRoles.StoreOwner);
         }
 
         foreach (var actionName in new[]
@@ -75,11 +93,11 @@ public class FinanceControllerAuthorizationTests
     }
 
     [Fact]
-    public void HouseholdTaxController_And_PinEndpoints_RequireStoreOwnerOrAdmin()
+    public void HouseholdTaxController_And_PinEndpoints_RequireCanonicalStoreOwner()
     {
         var authAttr = typeof(HouseholdTaxController).GetCustomAttribute<AuthorizeAttribute>();
         Assert.NotNull(authAttr);
-        Assert.Equal(RoleConstants.StoreOwnerOrAdmin, authAttr!.Roles);
+        Assert.Equal(SystemRoles.StoreOwner, authAttr!.Roles);
 
         var changePinMethod = typeof(HouseholdTaxController).GetMethod(nameof(HouseholdTaxController.ChangePin));
         Assert.NotNull(changePinMethod);

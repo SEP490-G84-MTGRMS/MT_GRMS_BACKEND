@@ -1,6 +1,7 @@
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Debt.Dtos;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
@@ -38,6 +39,7 @@ public class CustomerDebtService : ICustomerDebtService
 
     public async Task<CustomerDebtInvoiceResponse> RecordSaleDebtAsync(RecordSaleDebtRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         if (request.DebtAmount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền ghi nợ phải lớn hơn 0.");
@@ -48,21 +50,17 @@ public class CustomerDebtService : ICustomerDebtService
 
         var hasOverdue = await _debtRepo.HasOverdueInvoicesAsync(request.CustomerId, now, ct);
 
-        // DEBT-01 & CONC-02: Kiểm tra quyền quản lý động (StoreOwner, Manager, ADMIN) thay vì hardcode bypass code
-        var isManagerRole = !string.IsNullOrWhiteSpace(_tenantContext.CurrentRole) &&
-            (_tenantContext.CurrentRole.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase)
-             || _tenantContext.CurrentRole.Equals("Manager", StringComparison.OrdinalIgnoreCase)
-             || _tenantContext.CurrentRole.Equals("ADMIN", StringComparison.OrdinalIgnoreCase));
+        var isOwnerRole = _tenantContext.CurrentRole == SystemRoles.StoreOwner;
 
         var isBypassRequested = !string.IsNullOrWhiteSpace(request.ManagerBypassCode);
-        if (isBypassRequested && !isManagerRole)
+        if (isBypassRequested && !isOwnerRole)
         {
-            throw new BusinessException("UNAUTHORIZED_BYPASS", "Chỉ người dùng có vai trò Quản lý (StoreOwner, Manager, ADMIN) mới có quyền duyệt bypass hạn mức hoặc nợ quá hạn.");
+            throw new BusinessException("UNAUTHORIZED_BYPASS", "Chỉ STORE_OWNER mới có quyền duyệt vượt hạn mức hoặc nợ quá hạn.");
         }
 
-        var isManagerBypass = isBypassRequested && isManagerRole;
+        var isOwnerBypass = isBypassRequested && isOwnerRole;
 
-        if (hasOverdue && !isManagerBypass)
+        if (hasOverdue && !isOwnerBypass)
         {
             customer.DebtStatus = CustomerDebtStatus.OverdueBlocked;
             customer.IsBlockedForDebt = true;
@@ -71,7 +69,7 @@ public class CustomerDebtService : ICustomerDebtService
         }
 
         var projectedDebt = customer.TotalDebt + request.DebtAmount;
-        if (projectedDebt > customer.DebtLimit && !isManagerBypass)
+        if (projectedDebt > customer.DebtLimit && !isOwnerBypass)
         {
             customer.DebtStatus = CustomerDebtStatus.LimitExceededBlocked;
             customer.IsBlockedForDebt = true;
@@ -88,8 +86,8 @@ public class CustomerDebtService : ICustomerDebtService
             actualDebtAmount -= offsetFromPrepayment;
         }
 
-        string? auditNote = isManagerBypass
-            ? $"[ManagerBypass Approved by UserId: {_tenantContext.CurrentUserId}, Role: {_tenantContext.CurrentRole} at {now:yyyy-MM-dd HH:mm:ss} UTC, Code: {request.ManagerBypassCode}]"
+        string? auditNote = isOwnerBypass
+            ? $"[StoreOwnerOverride approved by UserId: {_tenantContext.CurrentUserId}, Role: {_tenantContext.CurrentRole} at {now:yyyy-MM-dd HH:mm:ss} UTC, Code: {request.ManagerBypassCode}]"
             : null;
 
         var combinedNotes = string.IsNullOrWhiteSpace(request.Notes)
@@ -131,7 +129,7 @@ public class CustomerDebtService : ICustomerDebtService
             SourceId = request.OrderId,
             CreatedByUserId = _tenantContext.CurrentUserId,
             OccurredAtUtc = now,
-            Description = $"Bán chịu đơn hàng {request.OrderCode}" + (isManagerBypass ? $" (Bypass bởi Quản lý: {_tenantContext.CurrentUserId} [{_tenantContext.CurrentRole}] lúc {now:yyyy-MM-dd HH:mm:ss} UTC)" : "")
+            Description = $"Bán chịu đơn hàng {request.OrderCode}" + (isOwnerBypass ? $" (Duyệt vượt hạn mức bởi STORE_OWNER: {_tenantContext.CurrentUserId} lúc {now:yyyy-MM-dd HH:mm:ss} UTC)" : "")
         };
 
         await _entryRepo.AddAsync(entry, ct);
@@ -142,6 +140,7 @@ public class CustomerDebtService : ICustomerDebtService
 
     public async Task<RepaymentResultResponse> RepayDebtAsync(RepayDebtRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         if (request.Amount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền trả nợ phải lớn hơn 0.");
@@ -241,6 +240,7 @@ public class CustomerDebtService : ICustomerDebtService
 
     public async Task<CustomerDebtEntryResponse> OffsetGoodsReturnDebtAsync(OffsetGoodsReturnDebtRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         if (request.ReturnAmount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền hàng trả phải lớn hơn 0.");
@@ -367,6 +367,7 @@ public class CustomerDebtService : ICustomerDebtService
 
     public async Task<CustomerDebtEntryResponse> AdjustDebtAsync(AdjustDebtRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         if (request.AdjustmentAmount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền điều chỉnh nợ phải lớn hơn 0.");
@@ -413,6 +414,7 @@ public class CustomerDebtService : ICustomerDebtService
 
     public async Task<CustomerDebtEntryResponse> WriteOffBadDebtAsync(WriteOffBadDebtRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         if (request.WriteOffAmount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền xóa nợ xấu phải lớn hơn 0.");
@@ -451,6 +453,7 @@ public class CustomerDebtService : ICustomerDebtService
 
     public async Task<CustomerDebtProfileResponse> GetProfileAsync(Guid customerId, CancellationToken ct = default)
     {
+        RequireOwner();
         var customer = await GetCustomerWithLockAsync(customerId, ct);
         var openInvoices = await _debtRepo.GetOpenInvoicesAsync(customerId, ct);
 
@@ -470,6 +473,7 @@ public class CustomerDebtService : ICustomerDebtService
 
     public async Task<List<CustomerDebtEntryResponse>> GetLedgerAsync(Guid customerId, int page = 1, int pageSize = 50, CancellationToken ct = default)
     {
+        RequireOwner();
         var entries = await _entryRepo.FindAsync(e => e.CustomerId == customerId, ct);
         return entries
             .OrderByDescending(e => e.OccurredAtUtc)
@@ -478,6 +482,8 @@ public class CustomerDebtService : ICustomerDebtService
             .Select(MapEntryResponse)
             .ToList();
     }
+
+    private void RequireOwner() => TenantRoleGuard.RequireStoreOwner(_tenantContext, "công nợ khách hàng");
 
     private async Task<Customer> GetCustomerWithLockAsync(Guid customerId, CancellationToken ct)
     {

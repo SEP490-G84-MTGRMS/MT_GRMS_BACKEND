@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Promotions;
@@ -7,6 +8,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/loyalty-config")]
+[Authorize]
 public class LoyaltyConfigController : BaseApiController
 {
     private readonly ILoyaltyService _loyaltyService;
@@ -20,6 +22,7 @@ public class LoyaltyConfigController : BaseApiController
     /// Lấy cấu hình hệ thống tích điểm và tiêu điểm thành viên (REQ-LOYALTY-01)
     /// </summary>
     [HttpGet]
+    [Authorize(Policy = "TenantOwnerOrAssignedBranchStaff")]
     public async Task<IActionResult> GetConfig(CancellationToken cancellationToken)
     {
         var config = await _loyaltyService.GetConfigAsync(cancellationToken);
@@ -30,6 +33,7 @@ public class LoyaltyConfigController : BaseApiController
     /// Cập nhật cấu hình tích điểm và tiêu điểm thành viên (REQ-LOYALTY-01)
     /// </summary>
     [HttpPut]
+    [Authorize(Policy = "StoreOwnerOnly")]
     public async Task<IActionResult> UpdateConfig([FromBody] UpdateLoyaltyConfigRequest request, CancellationToken cancellationToken)
     {
         var updated = await _loyaltyService.UpdateConfigAsync(request, cancellationToken);

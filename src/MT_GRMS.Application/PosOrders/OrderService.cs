@@ -87,10 +87,39 @@ public class OrderService : IOrderService
             throw new ValidationException("Giỏ hàng không được để trống.");
         }
 
-        // 1. Kiểm tra chi nhánh
-        var branchId = request.BranchId.HasValue && request.BranchId != Guid.Empty
-            ? request.BranchId.Value
-            : Guid.Parse("cd5e8d1b-b08b-448d-beff-b85ea5873d52");
+        // 1. Kiểm tra quyền hạn và vai trò
+        if (_tenantContext != null)
+        {
+            var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+            if (role is "ADMIN")
+            {
+                throw new UnauthorizedAccessException("Quản trị viên hệ thống không được phép thực hiện giao dịch của cửa hàng.");
+            }
+        }
+        else if (string.Equals(request.CreatorRole, "ADMIN", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException("Quản trị viên hệ thống không được phép thực hiện giao dịch của cửa hàng.");
+        }
+
+        // 1a. Kiểm tra chi nhánh
+        if (!request.BranchId.HasValue || request.BranchId.Value == Guid.Empty)
+        {
+            throw new ValidationException("Chi nhánh (BranchId) là bắt buộc.");
+        }
+        var branchId = request.BranchId.Value;
+
+        if (_tenantContext != null)
+        {
+            var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+            if (role is "STAFF" or "EMPLOYEE" or "CASHIER")
+            {
+                if (!_tenantContext.CurrentBranchId.HasValue || _tenantContext.CurrentBranchId.Value == Guid.Empty ||
+                    _tenantContext.CurrentBranchId.Value != branchId)
+                {
+                    throw new UnauthorizedAccessException("Không có quyền thao tác tại chi nhánh khác.");
+                }
+            }
+        }
 
         var branch = await _orderRepository.GetBranchByIdAsync(branchId, cancellationToken);
         if (branch == null)
@@ -98,8 +127,16 @@ public class OrderService : IOrderService
             throw new InvalidOperationException($"Chi nhánh với ID '{branchId}' không tồn tại trong hệ thống.");
         }
 
+        if (_tenantContext != null && !string.IsNullOrWhiteSpace(_tenantContext.CurrentTenantId))
+        {
+            if (!string.Equals(branch.TenantId, _tenantContext.CurrentTenantId, StringComparison.Ordinal))
+            {
+                throw new UnauthorizedAccessException("Chi nhánh không thuộc cửa hàng hiện tại.");
+            }
+        }
+
         // 1b. Kiểm tra ca bán hàng của chi nhánh (REQ-SHIFT-SHARED-03 & REQ-OWNER-SHIFTLESS-04)
-        bool isOwnerOrAdmin = IsOwnerOrAdminCaller();
+        bool isOwnerOrAdmin = IsOwnerCaller();
         ShiftZReport? activeShift = null;
         if (_shiftRepository != null)
         {
@@ -472,7 +509,7 @@ public class OrderService : IOrderService
             }
 
             var roleUpper = (request.CreatorRole ?? string.Empty).Trim().ToUpperInvariant();
-            bool isManagerRole = roleUpper == "STOREOWNER" || roleUpper == "MANAGER" || roleUpper == "ADMIN";
+            bool isManagerRole = roleUpper == "STOREOWNER" || roleUpper == "MANAGER";
             bool isManagerBypass = !string.IsNullOrWhiteSpace(request.ManagerBypassCode) &&
                                   (isManagerRole ||
                                    request.ManagerBypassCode.Trim().StartsWith("BYPASS", StringComparison.OrdinalIgnoreCase) ||
@@ -892,10 +929,45 @@ public class OrderService : IOrderService
             throw new InvalidOperationException("Đơn đặt trước bắt buộc phải có thông tin khách hàng định danh.");
         }
 
+        if (_tenantContext != null)
+        {
+            var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+            if (role is "ADMIN")
+            {
+                throw new UnauthorizedAccessException("Quản trị viên hệ thống không được phép thực hiện giao dịch của cửa hàng.");
+            }
+        }
+
+        if (request.BranchId == Guid.Empty)
+        {
+            throw new ValidationException("Chi nhánh (BranchId) là bắt buộc.");
+        }
+
+        if (_tenantContext != null)
+        {
+            var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+            if (role is "STAFF" or "EMPLOYEE" or "CASHIER")
+            {
+                if (!_tenantContext.CurrentBranchId.HasValue || _tenantContext.CurrentBranchId.Value == Guid.Empty ||
+                    _tenantContext.CurrentBranchId.Value != request.BranchId)
+                {
+                    throw new UnauthorizedAccessException("Không có quyền thao tác tại chi nhánh khác.");
+                }
+            }
+        }
+
         var branch = await _orderRepository.GetBranchByIdAsync(request.BranchId, cancellationToken);
         if (branch == null)
         {
             throw new InvalidOperationException($"Chi nhánh với ID '{request.BranchId}' không tồn tại.");
+        }
+
+        if (_tenantContext != null && !string.IsNullOrWhiteSpace(_tenantContext.CurrentTenantId))
+        {
+            if (!string.Equals(branch.TenantId, _tenantContext.CurrentTenantId, StringComparison.Ordinal))
+            {
+                throw new UnauthorizedAccessException("Chi nhánh không thuộc cửa hàng hiện tại.");
+            }
         }
 
         var customer = await _orderRepository.GetCustomerByIdAsync(request.CustomerId, cancellationToken);
@@ -1159,8 +1231,8 @@ public class OrderService : IOrderService
                 throw new InvalidOperationException($"Tiền đặt cọc tối thiểu phải bằng 10% tổng giá trị đơn hàng (Tối thiểu: {minDeposit:N0} đ, Thực tế: {request.DepositAmount:N0} đ).");
             }
 
-            bool isOwnerOrAdminPreOrder = IsOwnerOrAdminCaller();
-            Guid? preOrderShiftId = request.ShiftId ?? (!isOwnerOrAdminPreOrder && _shiftRepository != null
+            bool isOwnerPreOrder = IsOwnerCaller();
+            Guid? preOrderShiftId = request.ShiftId ?? (!isOwnerPreOrder && _shiftRepository != null
                 ? (await _shiftRepository.GetActiveShiftAsync(request.BranchId, cancellationToken: cancellationToken))?.Id
                 : null);
 
@@ -1237,10 +1309,32 @@ public class OrderService : IOrderService
 
     public async Task<OrderResponse> FulfillPreOrderAsync(Guid orderId, PreOrderFulfillRequest request, CancellationToken cancellationToken = default)
     {
+        if (_tenantContext != null)
+        {
+            var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+            if (role is "ADMIN")
+            {
+                throw new UnauthorizedAccessException("Quản trị viên hệ thống không được phép thực hiện giao dịch của cửa hàng.");
+            }
+        }
+
         var order = await _orderRepository.GetOrderWithDetailsAsync(orderId, cancellationToken);
         if (order == null)
         {
             throw new InvalidOperationException($"Không tìm thấy đơn hàng với ID '{orderId}'.");
+        }
+
+        if (_tenantContext != null)
+        {
+            var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+            if (role is "STAFF" or "EMPLOYEE" or "CASHIER")
+            {
+                if (!_tenantContext.CurrentBranchId.HasValue || _tenantContext.CurrentBranchId.Value == Guid.Empty ||
+                    _tenantContext.CurrentBranchId.Value != order.BranchId)
+                {
+                    throw new UnauthorizedAccessException("Không có quyền thao tác tại chi nhánh khác.");
+                }
+            }
         }
 
         if (order.Status != "PendingPickup")
@@ -1270,7 +1364,7 @@ public class OrderService : IOrderService
         }
 
         // Tự động ghi nhận khoản thu phần còn lại (tách Két sắt chi nhánh nếu Chủ cửa hàng giao hàng không mở ca)
-        bool isOwnerOrAdminFulfill = IsOwnerOrAdminCaller();
+        bool isOwnerOrAdminFulfill = IsOwnerCaller();
         if (remainingAmount > 0)
         {
             if (isOwnerOrAdminFulfill && !request.ShiftId.HasValue)
@@ -1391,13 +1485,20 @@ public class OrderService : IOrderService
                 cancellationToken);
         }
 
-        var effectiveRole = !string.IsNullOrWhiteSpace(request.UserRole) ? request.UserRole : _tenantContext?.CurrentRole;
-        bool isStoreOwnerOrAdmin = string.Equals(effectiveRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(effectiveRole, "StoreOwner", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(effectiveRole, "ADMIN", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(effectiveRole, "Admin", StringComparison.OrdinalIgnoreCase);
+        if (_tenantContext != null)
+        {
+            var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+            if (role is "ADMIN")
+            {
+                throw new UnauthorizedAccessException("Quản trị viên hệ thống không được phép thực hiện giao dịch của cửa hàng.");
+            }
+        }
 
-        if (order.Status == "Completed" && !isStoreOwnerOrAdmin)
+        var effectiveRole = !string.IsNullOrWhiteSpace(request.UserRole) ? request.UserRole : _tenantContext?.CurrentRole;
+        bool isStoreOwner = string.Equals(effectiveRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(effectiveRole, "StoreOwner", StringComparison.OrdinalIgnoreCase);
+
+        if (order.Status == "Completed" && !isStoreOwner)
         {
             throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền hủy hóa đơn đã thanh toán. Nhân viên không được phép tự ý hủy.");
         }
@@ -1448,10 +1549,32 @@ public class OrderService : IOrderService
 
     public async Task<OrderResponse> ProcessReturnExchangeAsync(Guid orderId, ReturnExchangeRequest request, CancellationToken cancellationToken = default)
     {
+        if (_tenantContext != null)
+        {
+            var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+            if (role is "ADMIN")
+            {
+                throw new UnauthorizedAccessException("Quản trị viên hệ thống không được phép thực hiện giao dịch của cửa hàng.");
+            }
+        }
+
         var originalOrder = await _orderRepository.GetOrderWithDetailsAsync(orderId, cancellationToken);
         if (originalOrder == null)
         {
             throw new InvalidOperationException($"Không tìm thấy đơn hàng với ID '{orderId}'.");
+        }
+
+        if (_tenantContext != null)
+        {
+            var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
+            if (role is "STAFF" or "EMPLOYEE" or "CASHIER")
+            {
+                if (!_tenantContext.CurrentBranchId.HasValue || _tenantContext.CurrentBranchId.Value == Guid.Empty ||
+                    _tenantContext.CurrentBranchId.Value != originalOrder.BranchId)
+                {
+                    throw new UnauthorizedAccessException("Không có quyền thao tác tại chi nhánh khác.");
+                }
+            }
         }
 
         if (originalOrder.Status != "Completed")
@@ -1634,7 +1757,7 @@ public class OrderService : IOrderService
                 changeAmount = refundAmount;
 
                 // Tự động kiểm tra két và ghi nhận phiếu chi hoàn tiền (Chủ cửa hàng chi từ Két sắt chi nhánh, không đụng két ca thu ngân)
-                if (IsOwnerOrAdminCaller())
+                if (IsOwnerCaller())
                 {
                     if (_cashbookService != null)
                     {
@@ -1814,11 +1937,10 @@ public class OrderService : IOrderService
         );
     }
 
-    private bool IsOwnerOrAdminCaller()
+    private bool IsOwnerCaller()
     {
         var role = _tenantContext?.CurrentRole;
-        return string.Equals(role, "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase);
+        return string.Equals(role, "STORE_OWNER", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -1839,7 +1961,7 @@ public class OrderService : IOrderService
             if (throwIfInsufficient)
             {
                 throw new InvalidOperationException(
-                    $"Sản phẩm '{productName}' không đủ tồn khả dụng để {actionLabel} (Khả dụng: {totalAvailable:0.##}, Cần: {requiredBaseQty:0.##}).");
+                    $"Sản phẩm '{productName}' không đủ tồn kho tại chi nhánh (khả dụng để {actionLabel}: {totalAvailable:0.##}, cần: {requiredBaseQty:0.##}).");
             }
         }
 

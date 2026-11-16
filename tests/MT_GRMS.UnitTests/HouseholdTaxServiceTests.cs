@@ -19,6 +19,29 @@ namespace MT_GRMS.UnitTests;
 public class HouseholdTaxServiceTests
 
 {
+    private sealed class OwnerTenantContext : ITenantContext
+    {
+        public string CurrentTenantId { get; set; } = "tenant-tax-test";
+        public Guid CurrentUserId { get; set; } = Guid.NewGuid();
+        public Guid? CurrentBranchId { get; set; }
+        public string CurrentRole { get; set; } = "STORE_OWNER";
+        public void SetContext(string tenantId, Guid userId, Guid? branchId)
+        {
+            CurrentTenantId = tenantId;
+            CurrentUserId = userId;
+            CurrentBranchId = branchId;
+        }
+        public void SetRole(string? role) => CurrentRole = role ?? string.Empty;
+    }
+
+    private sealed class AcceptingPinService : IPinVerificationService
+    {
+        public Task<PinVerificationResult> VerifyStoreOwnerPinAsync(string userId, string inputPin, CancellationToken ct = default) =>
+            Task.FromResult(new PinVerificationResult(true));
+        public Task SetStoreOwnerPinAsync(string userId, string newPin, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ChangeSecurityPinAsync(string userId, ChangeSecurityPinRequest request, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ResetSecurityPinAsync(string userId, ResetSecurityPinRequest request, CancellationToken ct = default) => Task.CompletedTask;
+    }
 
     private class FakeHouseholdTaxRepository : IHouseholdTaxRepository
 
@@ -279,8 +302,35 @@ public class HouseholdTaxServiceTests
 
     {
 
-        _service = new HouseholdTaxService(_fakeRepo);
+        _service = CreateService(_fakeRepo);
 
+    }
+
+    private static HouseholdTaxService CreateService(
+        IHouseholdTaxRepository repository,
+        IUnitOfWork? unitOfWork = null,
+        ITenantContext? tenantContext = null,
+        IPinVerificationService? pinService = null) =>
+        new(
+            repository,
+            new MT_GRMS.Application.Tax.Strategies.TaxCalculationStrategyFactory(new MT_GRMS.Application.Tax.Strategies.ITaxCalculationStrategy[]
+            {
+                new MT_GRMS.Application.Tax.Strategies.RevenuePercentageTaxStrategy(),
+                new MT_GRMS.Application.Tax.Strategies.DeclarationBasedTaxStrategy()
+            }),
+            pinService ?? new AcceptingPinService(),
+            null,
+            null,
+            tenantContext ?? new OwnerTenantContext(),
+            unitOfWork);
+
+    private static Task<HouseholdTaxSnapshotDto> FinalizeAsync(
+        HouseholdTaxService service,
+        CreateTaxSnapshotRequest request,
+        string actor)
+    {
+        request.SecurityPin = "123456";
+        return service.FinalizeTaxSnapshotAsync(request, actor, "owner-user-id");
     }
 
     [Fact]
@@ -719,7 +769,7 @@ public class HouseholdTaxServiceTests
 
         var ex = await Assert.ThrowsAsync<BusinessException>(() =>
 
-            _service.FinalizeTaxSnapshotAsync(request, "accountant-user"));
+            FinalizeAsync(_service, request, "accountant-user"));
 
         Assert.Equal("TAX_PERIOD_LOCKED", ex.ErrorCode);
 
@@ -750,7 +800,7 @@ public class HouseholdTaxServiceTests
 
         // Act & Assert
         var ex = await Assert.ThrowsAsync<BusinessException>(() =>
-            _service.FinalizeTaxSnapshotAsync(request, "store-owner"));
+            FinalizeAsync(_service, request, "store-owner"));
 
         Assert.Equal("RECTIFICATION_REASON_REQUIRED", ex.ErrorCode);
     }
@@ -782,7 +832,7 @@ public class HouseholdTaxServiceTests
         };
 
         // Act
-        var result = await _service.FinalizeTaxSnapshotAsync(request, "store-owner");
+        var result = await FinalizeAsync(_service, request, "store-owner");
 
         // Assert
         Assert.NotNull(result);
@@ -821,7 +871,7 @@ public class HouseholdTaxServiceTests
             AllowSupersedeExisting = true,
             RectificationReason = "Lý do lần 1"
         };
-        var res1 = await _service.FinalizeTaxSnapshotAsync(req1, "owner-01");
+        var res1 = await FinalizeAsync(_service, req1, "owner-01");
         Assert.Equal(1, res1.RevisionNumber);
 
         // Lần 2: Supersede Rev 1 -> Rev 2
@@ -833,7 +883,7 @@ public class HouseholdTaxServiceTests
             AllowSupersedeExisting = true,
             RectificationReason = "Lý do lần 2: Điều chỉnh tiếp lần hai"
         };
-        var res2 = await _service.FinalizeTaxSnapshotAsync(req2, "owner-01");
+        var res2 = await FinalizeAsync(_service, req2, "owner-01");
 
         // Assert: Rev 2 nối với Id của Rev 1
         Assert.Equal(2, res2.RevisionNumber);
@@ -868,7 +918,7 @@ public class HouseholdTaxServiceTests
 
         var ex = await Assert.ThrowsAsync<BusinessException>(() =>
 
-            _service.FinalizeTaxSnapshotAsync(request, "accountant-user"));
+            FinalizeAsync(_service, request, "accountant-user"));
 
         Assert.Equal("PRIOR_PERIOD_NOT_FINALIZED", ex.ErrorCode);
 
@@ -1194,7 +1244,7 @@ public class HouseholdTaxServiceTests
 
         var unitOfWork = new RecordingUnitOfWork();
 
-        var service = new HouseholdTaxService(_fakeRepo, unitOfWork);
+        var service = CreateService(_fakeRepo, unitOfWork);
 
         var request = new CreateTaxSnapshotRequest
 
@@ -1210,7 +1260,7 @@ public class HouseholdTaxServiceTests
 
 
 
-        var result = await service.FinalizeTaxSnapshotAsync(request, "store_owner");
+        var result = await FinalizeAsync(service, request, "store_owner");
 
 
 
@@ -1254,7 +1304,7 @@ public class HouseholdTaxServiceTests
 
         var ex = await Assert.ThrowsAsync<BusinessException>(() =>
 
-            _service.FinalizeTaxSnapshotAsync(request, "admin_user"));
+            FinalizeAsync(_service, request, "admin_user"));
 
         Assert.Equal("ESTIMATED_COGS_CONFIRMATION_REQUIRED", ex.ErrorCode);
 
@@ -1292,7 +1342,7 @@ public class HouseholdTaxServiceTests
 
         };
 
-        var result = await _service.FinalizeTaxSnapshotAsync(request, "store_owner_nguyen");
+        var result = await FinalizeAsync(_service, request, "store_owner_nguyen");
 
         Assert.NotNull(result);
 
@@ -1541,7 +1591,7 @@ public class HouseholdTaxServiceTests
         };
 
         // Act
-        var snapshotDto = await _service.FinalizeTaxSnapshotAsync(request, "owner-01");
+        var snapshotDto = await FinalizeAsync(_service, request, "owner-01");
 
         // Assert: Phương pháp snapshot kỳ hiện tại vẫn là tỷ lệ %
         Assert.Equal(TaxCalculationMethod.RevenuePercentage, snapshotDto.CalculationMethod);
@@ -1700,7 +1750,7 @@ public class HouseholdTaxServiceTests
         };
 
         // Act
-        var snapshotDto = await _service.FinalizeTaxSnapshotAsync(request, "owner-01");
+        var snapshotDto = await FinalizeAsync(_service, request, "owner-01");
 
         // Assert: Năm 2026 được khóa ổn định 2 năm (2026-2027) theo NĐ 68
         var currentSetting = await _fakeRepo.GetYearSettingAsync(2026);
@@ -2182,6 +2232,72 @@ public class HouseholdTaxServiceTests
         var error = await Assert.ThrowsAsync<BusinessException>(() => _service.ExportDeclarationXmlAsync(snapshot.Id));
 
         Assert.Equal("SNAPSHOT_INTEGRITY_INVALID", error.ErrorCode);
+    }
+
+    [Theory]
+    [InlineData("ADMIN")]
+    [InlineData("STAFF")]
+    [InlineData("MANAGER")]
+    [InlineData("CASHIER")]
+    [InlineData("StoreOwner")]
+    public async Task GetTaxSummary_WhenRoleIsNotCanonicalOwner_Rejects(string role)
+    {
+        var context = new OwnerTenantContext { CurrentRole = role };
+        var service = CreateService(_fakeRepo, tenantContext: context);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.GetTaxSummaryAsync(new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1
+        }));
+    }
+
+    [Fact]
+    public async Task GetTaxSummary_WhenTenantIsMissing_Rejects()
+    {
+        var context = new OwnerTenantContext { CurrentTenantId = string.Empty };
+        var service = CreateService(_fakeRepo, tenantContext: context);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.GetTaxSummaryAsync(new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1
+        }));
+    }
+
+    [Fact]
+    public async Task FinalizeTaxSnapshot_WhenPinIsMissing_RejectsReauthentication()
+    {
+        var request = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1
+        };
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.FinalizeTaxSnapshotAsync(request, "owner", "owner-user-id"));
+
+        Assert.Equal("PIN_REQUIRED", error.ErrorCode);
+    }
+
+    [Fact]
+    public async Task FinalizeTaxSnapshot_WhenUserIdentityIsMissing_RejectsReauthentication()
+    {
+        var request = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            SecurityPin = "123456"
+        };
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.FinalizeTaxSnapshotAsync(request, "owner"));
+
+        Assert.Equal("USER_ID_REQUIRED", error.ErrorCode);
     }
 
 }

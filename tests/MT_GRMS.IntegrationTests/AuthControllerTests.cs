@@ -81,7 +81,8 @@ public class AuthControllerTests
         {
             Id = "usr_super_admin_01",
             Username = "admin",
-            Password = "Admin@123"
+            Password = "Admin@123",
+            IsTwoFactorEnabled = true
         });
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -108,7 +109,7 @@ public class AuthControllerTests
     public async Task AuthController_Login_Should_Reject_When_Email_Unavailable_In_Production()
     {
         var repo = new FakeUserRepository();
-        await repo.AddAsync(new User { Username = "admin", Password = "Admin@123" });
+        await repo.AddAsync(new User { Username = "admin", Password = "Admin@123", IsTwoFactorEnabled = true });
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ASPNETCORE_ENVIRONMENT"] = "Production"
@@ -151,7 +152,8 @@ public class AuthControllerTests
         var repo = new FakeUserRepository();
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+            ["ASPNETCORE_ENVIRONMENT"] = "Development",
+            ["Jwt:Key"] = "IntegrationTestSigningKey_OnlyForTests_0123456789"
         }).Build();
         var authService = new AuthService(repo, config);
         var controller = new AuthController(authService);
@@ -206,8 +208,13 @@ public class AuthControllerTests
             RefreshToken = "valid_refresh_token_123",
             RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(5)
         };
+        user.TenantUsers.Add(new TenantUser { UserId = user.Id, TenantId = "tenant-refresh", Role = "STORE_OWNER" });
         await repo.AddAsync(user);
-        var authService = new AuthService(repo);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Jwt:Key"] = "IntegrationTestSigningKey_OnlyForTests_0123456789"
+        }).Build();
+        var authService = new AuthService(repo, config);
         var controller = new AuthController(authService);
 
         // WHEN
