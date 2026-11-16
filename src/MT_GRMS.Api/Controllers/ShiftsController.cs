@@ -4,11 +4,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Authorization;
 using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PosShifts;
 using MT_GRMS.Application.PosShifts.Dtos;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
@@ -99,7 +99,12 @@ public class ShiftsController : BaseApiController
         [FromBody] CashMovementRequest request,
         CancellationToken cancellationToken)
     {
-        var result = await _shiftService.AddCashMovementAsync(id, request, cancellationToken);
+        if (_tenantContext.CurrentUserId == Guid.Empty)
+        {
+            return Unauthorized();
+        }
+
+        var result = await _shiftService.AddCashMovementAsync(id, request, _tenantContext.CurrentUserId, cancellationToken);
         return Ok(ApiResponse<ShiftCashMovementDto>.Ok(result, "Tạo phiếu thu/chi két thành công."));
     }
 
@@ -113,7 +118,12 @@ public class ShiftsController : BaseApiController
         [FromBody] CloseShiftRequest request,
         CancellationToken cancellationToken)
     {
-        var result = await _shiftService.CloseShiftAsync(id, request, cancellationToken);
+        if (_tenantContext.CurrentUserId == Guid.Empty)
+        {
+            return Unauthorized();
+        }
+
+        var result = await _shiftService.CloseShiftAsync(id, request, _tenantContext.CurrentUserId, cancellationToken);
         return Ok(ApiResponse<ShiftDetailResponse>.Ok(result, "Chốt ca làm việc thành công."));
     }
 
@@ -176,6 +186,7 @@ public class ShiftsController : BaseApiController
     /// </summary>
     [HttpPost("/api/pos/cash-movements/{id:guid}/approve")]
     [RequireIdempotency]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<ShiftCashMovementDto>>> ApproveCashMovement(
         [FromRoute] Guid id,
         [FromBody] ApproveCashMovementRequest? request,
@@ -194,6 +205,7 @@ public class ShiftsController : BaseApiController
     /// </summary>
     [HttpPost("/api/pos/cash-movements/{id:guid}/reject")]
     [RequireIdempotency]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<ShiftCashMovementDto>>> RejectCashMovement(
         [FromRoute] Guid id,
         [FromBody] RejectCashMovementRequest request,
@@ -225,6 +237,7 @@ public class ShiftsController : BaseApiController
     /// </summary>
     [HttpPost("/api/pos/cash-movements/{id:guid}/confirm-drop")]
     [RequireIdempotency]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<ShiftCashMovementDto>>> ConfirmCashDrop(
         [FromRoute] Guid id,
         CancellationToken cancellationToken)
@@ -242,6 +255,7 @@ public class ShiftsController : BaseApiController
     /// Hỗ trợ lọc theo branchId hoặc xem toàn bộ chi nhánh thuộc Tenant (nếu branchId để trống/null).
     /// </summary>
     [HttpGet("/api/pos/cash-movements/pending")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<PendingMovementsSummaryResponse>>> GetPendingMovements(
         [FromQuery] Guid? branchId,
         CancellationToken cancellationToken)
@@ -270,6 +284,7 @@ public class ShiftsController : BaseApiController
     /// </summary>
     [HttpPut("/api/pos/settings/cash-movement")]
     [RequireIdempotency]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<CashMovementSettingsDto>>> UpdateCashMovementSettings(
         [FromBody] UpdateCashMovementSettingsRequest request,
         CancellationToken cancellationToken)

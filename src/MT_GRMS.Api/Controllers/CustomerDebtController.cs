@@ -9,7 +9,7 @@ using MT_GRMS.Domain.Constants;
 namespace MT_GRMS.Api.Controllers;
 
 [Route("api/customers/debt")]
-[Authorize]
+[Authorize(Roles = SystemRoles.StoreOwner)]
 public class CustomerDebtController : BaseApiController
 {
     private readonly ICustomerDebtService _debtService;
@@ -27,7 +27,7 @@ public class CustomerDebtController : BaseApiController
         return Ok(ApiResponse<CustomerDebtInvoiceResponse>.Ok(result, "Ghi nợ đơn hàng thành công."));
     }
 
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("repay")]
     [RequireIdempotency]
     public async Task<ActionResult<ApiResponse<RepaymentResultResponse>>> RepayDebt([FromBody] RepayDebtRequest request, CancellationToken ct)
@@ -44,18 +44,18 @@ public class CustomerDebtController : BaseApiController
         return Ok(ApiResponse<CustomerDebtEntryResponse>.Ok(result, "Cấn trừ nợ trả hàng thành công."));
     }
 
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("adjust")]
-    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<CustomerDebtEntryResponse>>> AdjustDebt([FromBody] AdjustDebtRequest request, CancellationToken ct)
     {
         var result = await _debtService.AdjustDebtAsync(request, ct);
         return Ok(ApiResponse<CustomerDebtEntryResponse>.Ok(result, "Điều chỉnh nợ thành công."));
     }
 
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("write-off")]
-    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<CustomerDebtEntryResponse>>> WriteOffBadDebt([FromBody] WriteOffBadDebtRequest request, CancellationToken ct)
     {
         var result = await _debtService.WriteOffBadDebtAsync(request, ct);

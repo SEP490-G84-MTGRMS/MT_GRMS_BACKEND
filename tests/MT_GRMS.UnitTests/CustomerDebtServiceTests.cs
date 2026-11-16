@@ -25,7 +25,7 @@ public class CustomerDebtServiceTests
             CurrentUserId = userId;
             CurrentBranchId = branchId;
         }
-        public string CurrentRole { get; set; } = "ADMIN";
+        public string CurrentRole { get; set; } = "STORE_OWNER";
         public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
     }
 
@@ -298,7 +298,7 @@ public class CustomerDebtServiceTests
     }
 
     [Fact]
-    public async Task RecordSaleDebtAsync_WhenNonManagerRoleAttemptsBypass_ShouldThrowUnauthorizedBypass()
+    public async Task RecordSaleDebtAsync_WhenLegacyCashierAliasAttemptsBypass_ShouldRejectRole()
     {
         _tenantContext.SetRole("Cashier");
         var customerId = Guid.NewGuid();
@@ -306,14 +306,13 @@ public class CustomerDebtServiceTests
         _debtRepo.Items.Add(customer);
 
         var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-BYPASS-FAIL", Guid.NewGuid(), 500_000m, "SOME-CODE", "Thử bypass trái phép");
-        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.RecordSaleDebtAsync(request));
-        Assert.Equal("UNAUTHORIZED_BYPASS", ex.ErrorCode);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _service.RecordSaleDebtAsync(request));
     }
 
     [Fact]
-    public async Task RecordSaleDebtAsync_WhenManagerRoleBypasses_ShouldSucceedAndRecordAuditTrailInInvoiceNotes()
+    public async Task RecordSaleDebtAsync_WhenStoreOwnerOverrides_ShouldSucceedAndRecordAuditTrailInInvoiceNotes()
     {
-        _tenantContext.SetRole("StoreOwner");
+        _tenantContext.SetRole("STORE_OWNER");
         var customerId = Guid.NewGuid();
         var customer = new Customer { Id = customerId, DebtLimit = 1_000_000m, TotalDebt = 800_000m };
         _debtRepo.Items.Add(customer);
@@ -324,8 +323,8 @@ public class CustomerDebtServiceTests
         Assert.NotNull(response);
         Assert.Equal(1_300_000m, customer.TotalDebt);
         var createdInvoice = _invoiceRepo.Items.Last();
-        Assert.Contains("ManagerBypass Approved", createdInvoice.Notes);
+        Assert.Contains("StoreOwnerOverride approved", createdInvoice.Notes);
         Assert.Contains(_tenantContext.CurrentUserId.ToString(), createdInvoice.Notes);
-        Assert.Contains("StoreOwner", createdInvoice.Notes);
+        Assert.Contains("STORE_OWNER", createdInvoice.Notes);
     }
 }

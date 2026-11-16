@@ -5,14 +5,17 @@ namespace MT_GRMS.Application.Reports;
 public class PnLReportService : IPnLReportService
 {
     private readonly IPnLReportRepository _pnlRepo;
+    private readonly MT_GRMS.Application.Common.ITenantContext _tenantContext;
 
-    public PnLReportService(IPnLReportRepository pnlRepo)
+    public PnLReportService(IPnLReportRepository pnlRepo, MT_GRMS.Application.Common.ITenantContext tenantContext)
     {
         _pnlRepo = pnlRepo;
+        _tenantContext = tenantContext;
     }
 
     public async Task<PnLSummaryResponse> GetPnLSummaryAsync(PnLFilterRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         var revenue = await _pnlRepo.GetRevenueAsync(request.BranchId, request.FromDate, request.ToDate, ct);
         var cogsData = await _pnlRepo.GetCogsAsync(request.BranchId, request.FromDate, request.ToDate, ct);
         var expenseItems = await _pnlRepo.GetOperatingExpensesAsync(request.BranchId, request.FromDate, request.ToDate, ct);
@@ -104,12 +107,14 @@ public class PnLReportService : IPnLReportService
 
     public async Task<OperatingExpenseSummary> GetExpenseBreakdownAsync(PnLFilterRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         var summary = await GetPnLSummaryAsync(request, ct);
         return summary.OperatingExpenses;
     }
 
     public async Task<PnLComparisonResponse> GetComparisonAsync(PnLFilterRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         var currentSummary = await GetPnLSummaryAsync(request, ct);
 
         // Tính toán khoảng thời gian kỳ trước có độ dài tương đương
@@ -136,6 +141,7 @@ public class PnLReportService : IPnLReportService
 
     public async Task<List<PnLTrendPointResponse>> GetTrendAsync(PnLFilterRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         // Tối ưu hóa: Thay thế vòng lặp N+1 queries bằng 1 lần gom toàn kỳ qua GetDailyTrendAsync
         var dailyItems = await _pnlRepo.GetDailyTrendAsync(request.BranchId, request.FromDate, request.ToDate, ct);
 
@@ -147,4 +153,6 @@ public class PnLReportService : IPnLReportService
             d.NetRevenue - d.Cogs - d.Expenses - d.BadDebt
         )).ToList();
     }
+
+    private void RequireOwner() => MT_GRMS.Application.Common.TenantRoleGuard.RequireStoreOwner(_tenantContext, "báo cáo lãi lỗ");
 }

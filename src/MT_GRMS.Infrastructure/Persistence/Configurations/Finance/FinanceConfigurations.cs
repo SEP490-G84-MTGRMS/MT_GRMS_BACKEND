@@ -26,6 +26,13 @@ public class CashbookEntryConfiguration : IEntityTypeConfiguration<CashbookEntry
             .HasMaxLength(50)
             .IsRequired();
 
+        builder.Property(e => e.CategoryCode)
+            .HasMaxLength(50)
+            .IsRequired();
+
+        builder.Property(e => e.TaxTreatmentReason)
+            .HasMaxLength(255);
+
         builder.Property(e => e.ReferenceCode)
             .HasMaxLength(100);
 
@@ -34,6 +41,7 @@ public class CashbookEntryConfiguration : IEntityTypeConfiguration<CashbookEntry
 
         builder.HasIndex(e => new { e.TenantId, e.AccountId, e.OccurredAtUtc });
         builder.HasIndex(e => new { e.TenantId, e.SourceType, e.SourceId });
+        builder.HasIndex(e => new { e.TenantId, e.TaxTreatment, e.OccurredAtUtc });
     }
 }
 
@@ -60,11 +68,19 @@ public class FinanceAccountConfiguration : IEntityTypeConfiguration<FinanceAccou
         builder.Property(a => a.AccountHolderName)
             .HasMaxLength(200);
 
+        builder.Property(a => a.BankCode).HasMaxLength(30);
+        builder.Property(a => a.Currency).HasMaxLength(3).HasDefaultValue("VND");
+        builder.Property(a => a.SepayApiKeyEncrypted).HasMaxLength(4000);
+        builder.Property(a => a.SepayWebhookSecret).HasMaxLength(200);
+        builder.Property(a => a.SepayConnectionStatus).HasMaxLength(30).HasDefaultValue("NotConfigured");
+        builder.Property(a => a.SepayLastError).HasMaxLength(500);
+
         builder.Property(a => a.RowVersion)
             .IsRowVersion();
 
         builder.HasIndex(a => new { a.TenantId, a.BranchId });
         builder.HasIndex(a => new { a.TenantId, a.AccountType });
+        builder.HasIndex(a => new { a.TenantId, a.BankCode, a.AccountNumber });
         builder.HasIndex(a => new { a.TenantId, a.BranchId, a.PaymentAccountId });
         builder.HasOne(a => a.PaymentAccount).WithMany().HasForeignKey(a => a.PaymentAccountId)
             .OnDelete(DeleteBehavior.Restrict);
@@ -252,10 +268,16 @@ public class ExpenseVoucherConfiguration : IEntityTypeConfiguration<ExpenseVouch
         builder.Property(e => e.SellerTaxCode)
             .HasMaxLength(50);
 
+        builder.HasOne<HouseholdTaxSnapshot>()
+            .WithMany()
+            .HasForeignKey(e => e.HouseholdTaxSnapshotId)
+            .OnDelete(DeleteBehavior.Restrict);
+
         builder.HasIndex(e => new { e.TenantId, e.BranchId, e.ExpenseDate });
         builder.HasIndex(e => new { e.TenantId, e.Status });
         builder.HasIndex(e => new { e.TenantId, e.ReferenceCode });
         builder.HasIndex(e => new { e.TenantId, e.Nature });
+        builder.HasIndex(e => new { e.TenantId, e.HouseholdTaxSnapshotId });
     }
 }
 

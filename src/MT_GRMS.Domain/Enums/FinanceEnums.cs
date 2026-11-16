@@ -54,6 +54,21 @@ public enum FinancialNature
 }
 
 /// <summary>
+/// Explicit tax treatment for a cashbook entry. Never infer this value from a
+/// localized category label or free-text description.
+/// </summary>
+public enum CashbookTaxTreatment
+{
+    ReviewRequired = 0,
+    TaxableRevenue = 1,
+    NonTaxableReceipt = 2,
+    DeductibleExpense = 3,
+    NonDeductibleExpense = 4,
+    TaxPayment = 5,
+    InternalTransfer = 6
+}
+
+/// <summary>
 /// Cash in transit status for 2-phase bank deposits.
 /// </summary>
 public enum CashInTransitStatus

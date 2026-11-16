@@ -14,6 +14,7 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -38,6 +39,7 @@ public class PaymentsController : BaseApiController
     private readonly IConfiguration _configuration;
     private readonly ILogger<PaymentsController> _logger;
     private readonly ITenantContext _tenantContext;
+    private readonly IDataProtector _sepayProtector;
     private readonly IWebHostEnvironment _environment;
 
     private const string EncryptedPrefix = "AES256:";
@@ -53,6 +55,7 @@ public class PaymentsController : BaseApiController
         IConfiguration configuration,
         ILogger<PaymentsController> logger,
         ITenantContext tenantContext,
+        IDataProtectionProvider dataProtectionProvider,
         IWebHostEnvironment environment)
     {
         _context = context;
@@ -60,6 +63,7 @@ public class PaymentsController : BaseApiController
         _configuration = configuration;
         _logger = logger;
         _tenantContext = tenantContext;
+        _sepayProtector = dataProtectionProvider.CreateProtector("MT_GRMS.SePay.ApiToken.v1");
         _environment = environment;
     }
 
@@ -139,7 +143,8 @@ public class PaymentsController : BaseApiController
             });
         }
 
-        var tenantId = ResolveTenantId();
+        var tenantId = GetAuthenticatedTenantId();
+        if (tenantId == null) return Forbid();
         var tenantPrefix = GetTenantPrefix(tenantId);
         var config = await _context.StorePaymentConfigs
             .AsNoTracking()
@@ -245,7 +250,8 @@ public class PaymentsController : BaseApiController
             return BadRequest(new { message = "Tên chủ tài khoản không được vượt quá 150 ký tự." });
         }
 
-        var tenantId = ResolveTenantId();
+        var tenantId = GetAuthenticatedTenantId();
+        if (tenantId == null) return Forbid();
         var tenantPrefix = GetTenantPrefix(tenantId);
         var branchIds = (request.BranchIds ?? []).Where(x => x != Guid.Empty).Distinct().ToList();
         if (branchIds.Count > 0)
@@ -447,7 +453,8 @@ public class PaymentsController : BaseApiController
             });
         }
 
-        var tenantId = ResolveTenantId();
+        var tenantId = GetAuthenticatedTenantId();
+        if (tenantId == null) return Forbid();
         var config = await _context.StorePaymentConfigs
             .FirstOrDefaultAsync(c => c.TenantId == tenantId && !c.IsDeleted, ct);
 
@@ -486,7 +493,8 @@ public class PaymentsController : BaseApiController
             });
         }
 
-        var tenantId = ResolveTenantId();
+        var tenantId = GetAuthenticatedTenantId();
+        if (tenantId == null) return Forbid();
         var config = await _context.StorePaymentConfigs
             .AsNoTracking()
             .FirstOrDefaultAsync(c => c.TenantId == tenantId && !c.IsDeleted, ct);
@@ -595,7 +603,8 @@ public class PaymentsController : BaseApiController
             return StatusCode(StatusCodes.Status403Forbidden, new { message = "Chỉ Chủ cửa hàng mới được phép chạy kiểm định bảo mật." });
         }
 
-        var tenantId = ResolveTenantId();
+        var tenantId = GetAuthenticatedTenantId();
+        if (tenantId == null) return Forbid();
         var tenantPrefix = GetTenantPrefix(tenantId);
         var config = await _context.StorePaymentConfigs
             .AsNoTracking()
@@ -739,13 +748,38 @@ public class PaymentsController : BaseApiController
             .FirstOrDefaultAsync(c => c.TenantId == order.TenantId && !c.IsDeleted, ct);
         var paymentAccount = await ResolvePaymentAccountAsync(order.TenantId, order.BranchId, payload.AccountNumber, ct);
 
-        string decryptedApiKey = storeConfig != null ? DecryptSecret(storeConfig.SepayApiKeyEncrypted) : string.Empty;
+        var bankAccount = await _context.FinanceAccounts.FirstOrDefaultAsync(a =>
+            a.TenantId == order.TenantId &&
+            a.AccountType == MT_GRMS.Domain.Enums.FinanceAccountType.Bank &&
+            a.AccountNumber == payload.AccountNumber &&
+            a.SepayConnectionStatus == "Connected" &&
+            a.IsActive && !a.IsDeleted, ct);
+
+        if (bankAccount == null && (paymentAccount == null || storeConfig?.IsActive != true))
+            return BadRequest(new { message = "Receiving account is not connected or active." });
+
+        string decryptedApiKey;
+        try
+        {
+            decryptedApiKey = !string.IsNullOrWhiteSpace(bankAccount?.SepayApiKeyEncrypted)
+                ? _sepayProtector.Unprotect(bankAccount.SepayApiKeyEncrypted)
+                : storeConfig != null ? DecryptSecret(storeConfig.SepayApiKeyEncrypted) : string.Empty;
+        }
+        catch (CryptographicException ex)
+        {
+            _logger.LogError(ex, "Unable to decrypt SePay account token.");
+            return StatusCode(StatusCodes.Status503ServiceUnavailable);
+        }
+        var webhookSecret = !string.IsNullOrWhiteSpace(bankAccount?.SepayWebhookSecret)
+            ? bankAccount.SepayWebhookSecret : storeConfig?.SepayWebhookSecret ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(decryptedApiKey) && string.IsNullOrWhiteSpace(webhookSecret))
+            return Unauthorized(new { message = "SePay credentials are not configured." });
 
         // LỚP 1B: So khớp Constant-Time API Key / Webhook Secret của cửa hàng (Chống Timing Attack)
-        if (storeConfig != null && (!string.IsNullOrEmpty(decryptedApiKey) || !string.IsNullOrEmpty(storeConfig.SepayWebhookSecret)))
+        if (!string.IsNullOrEmpty(decryptedApiKey) || !string.IsNullOrEmpty(webhookSecret))
         {
             bool keyMatched = FixedTimeEquals(incomingKey, decryptedApiKey) ||
-                              FixedTimeEquals(incomingKey, storeConfig.SepayWebhookSecret);
+                              FixedTimeEquals(incomingKey, webhookSecret);
 
             if (!keyMatched)
             {
@@ -755,7 +789,7 @@ public class PaymentsController : BaseApiController
         }
 
         // LỚP 4B: Kiểm tra Số tài khoản ngân hàng nhận tiền (nếu payload có gửi kèm accountNumber)
-        var expectedAccountNumber = paymentAccount?.AccountNumber ?? storeConfig?.BankAccountNumber;
+        var expectedAccountNumber = paymentAccount?.AccountNumber ?? bankAccount?.AccountNumber ?? storeConfig?.BankAccountNumber;
         if (!string.IsNullOrWhiteSpace(expectedAccountNumber) &&
             !string.IsNullOrWhiteSpace(payload.AccountNumber) &&
             !string.Equals(payload.AccountNumber.Trim(), expectedAccountNumber.Trim(), StringComparison.OrdinalIgnoreCase))
@@ -926,6 +960,11 @@ public class PaymentsController : BaseApiController
             order.DepositAmount = order.FinalAmount;
         }
         order.UpdatedAt = DateTime.UtcNow;
+        if (bankAccount != null)
+        {
+            bankAccount.CurrentBalance += verifiedAmountIn;
+            bankAccount.UpdatedAt = DateTime.UtcNow;
+        }
 
         await _context.SaveChangesAsync(ct);
         _logger.LogInformation("TING TING [Lớp 6]: Thanh toán thành công đơn hàng {OrderCode} ({Amount:N0}đ) qua VietQR SePay!",
@@ -945,7 +984,6 @@ public class PaymentsController : BaseApiController
     /// Kiểm tra trạng thái thanh toán của đơn hàng theo OrderCode (dành cho POS Polling 2.5s)
     /// </summary>
     [HttpGet("check-order/{orderCode}")]
-    [AllowAnonymous]
     public async Task<IActionResult> CheckOrderStatus([FromRoute] string orderCode, CancellationToken ct)
     {
         var normalized = orderCode.Trim().ToUpperInvariant();
@@ -1033,25 +1071,7 @@ public class PaymentsController : BaseApiController
 
     private bool IsStoreOwnerOrAdminIfAuthenticated()
     {
-        // Nếu request có đính kèm JWT của nhân viên (STAFF / CASHIER), chặn truy cập cấu hình nhạy cảm
-        if (User?.Identity?.IsAuthenticated == true)
-        {
-            var roles = User.FindAll(ClaimTypes.Role)
-                .Concat(User.FindAll("role"))
-                .Select(c => c.Value.ToUpperInvariant())
-                .ToList();
-
-            if (roles.Count > 0)
-            {
-                bool isOwnerOrAdmin = roles.Any(r =>
-                    r.Contains("OWNER") ||
-                    r.Contains("ADMIN") ||
-                    r.Contains("MANAGER"));
-
-                return isOwnerOrAdmin;
-            }
-        }
-        return true;
+        return User?.Identity?.IsAuthenticated == true && IsStoreOwnerOrAdmin();
     }
 
     private byte[] GetAes256MasterKey()
@@ -1219,7 +1239,7 @@ public class PaymentsController : BaseApiController
 
     private bool IsStoreOwnerOrAdmin()
     {
-        return User.IsInRole("STORE_OWNER") || User.IsInRole("ADMIN") || IsStoreOwnerOrAdminIfAuthenticated();
+        return User.IsInRole("STORE_OWNER") || User.IsInRole("ADMIN");
     }
 
     private string? GetAuthenticatedTenantId()

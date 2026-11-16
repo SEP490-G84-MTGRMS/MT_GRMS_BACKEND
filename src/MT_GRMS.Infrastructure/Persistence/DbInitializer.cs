@@ -952,13 +952,84 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
     }
 
+    private static async Task EnsureHouseholdTaxSnapshotSchemaAsync(AppDbContext context, ILogger? logger = null)
+    {
+        if (!context.Database.IsRelational()) return;
+
+        try
+        {
+            // 1. Bổ sung các cột Status, RevisionNumber, SupersededSnapshotId, RectificationReason nếu chưa có
+            await ExecuteSqlSafeAsync(context, @"
+                ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""Status"" integer NOT NULL DEFAULT 1;
+                ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""RevisionNumber"" integer NOT NULL DEFAULT 0;
+                ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""SupersededSnapshotId"" uuid NULL;
+                ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""RectificationReason"" character varying(1000) NULL;
+            ", logger);
+
+            // 2. Cập nhật Status = 1 (Finalized) và RevisionNumber = 0 cho các bản ghi cũ
+            await ExecuteSqlSafeAsync(context, @"
+                UPDATE ""HouseholdTaxSnapshots"" SET ""Status"" = 1 WHERE ""Status"" = 0 OR ""Status"" IS NULL;
+                UPDATE ""HouseholdTaxSnapshots"" SET ""RevisionNumber"" = 0 WHERE ""RevisionNumber"" IS NULL;
+            ", logger);
+
+            // 3. Xóa các Unique Index cũ không lọc theo Status = 1 khiến thao tác Supersede bị vi phạm ràng buộc trùng lặp
+            await ExecuteSqlSafeAsync(context, @"
+DO $$
+DECLARE r RECORD;
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'HouseholdTaxSnapshots') THEN
+        FOR r IN (
+            SELECT indexname
+            FROM pg_indexes
+            WHERE tablename = 'HouseholdTaxSnapshots'
+              AND (
+                  indexname LIKE 'IX_HouseholdTaxSnapshots_TenantId_BranchId_PeriodType_Year%'
+                  OR indexname = 'UX_HouseholdTaxSnapshots_Tenant_Period_NullSafe'
+                  OR indexname = 'IX_HouseholdTaxSnapshots_Tenant_Period_Revision'
+              )
+        ) LOOP
+            EXECUTE 'DROP INDEX IF EXISTS ' || quote_ident(r.indexname);
+        END LOOP;
+    END IF;
+END $$;
+            ", logger);
+
+            // 4. Tạo Unique Index cho active snapshot duy nhất (Status = 1) và cho Revision
+            await ExecuteSqlSafeAsync(context, @"
+CREATE UNIQUE INDEX IF NOT EXISTS ""UX_HouseholdTaxSnapshots_ActiveFinalized_NullSafe""
+ON ""HouseholdTaxSnapshots"" (
+    ""TenantId"",
+    COALESCE(""BranchId"", '00000000-0000-0000-0000-000000000000'::uuid),
+    ""PeriodType"",
+    ""Year"",
+    ""PeriodNumber"")
+WHERE ""Status"" = 1;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ""UX_HouseholdTaxSnapshots_Revision_NullSafe""
+ON ""HouseholdTaxSnapshots"" (
+    ""TenantId"",
+    COALESCE(""BranchId"", '00000000-0000-0000-0000-000000000000'::uuid),
+    ""PeriodType"",
+    ""Year"",
+    ""PeriodNumber"",
+    ""RevisionNumber"");
+            ", logger);
+
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ schema và partial unique index cho HouseholdTaxSnapshots phục vụ Supersede.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ schema cho bảng HouseholdTaxSnapshots");
+        }
+    }
+
     public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null, bool seedSampleData = true)
     {
         try
         {
             if (!await context.Database.CanConnectAsync())
             {
-                logger?.LogError("❌ Không thể kết nối tới cơ sở dữ liệu PostgreSQL tại '{DataSource}'. Vui lòng bật Docker container 'mtgrms-postgres' (docker compose up -d postgres) hoặc kiểm tra dịch vụ PostgreSQL!", 
+                logger?.LogError("❌ Không thể kết nối tới cơ sở dữ liệu PostgreSQL tại '{DataSource}'. Vui lòng bật Docker container 'mtgrms-postgres' (docker compose up -d postgres) hoặc kiểm tra dịch vụ PostgreSQL!",
                     context.Database.GetDbConnection().DataSource);
                 return;
             }
@@ -1187,7 +1258,6 @@ END $$;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinSalt"" text;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""FailedPinAttempts"" integer DEFAULT 0;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""PinLockedUntilUtc"" timestamp without time zone;
-                        UPDATE ""Users"" SET ""IsAdmin"" = true WHERE LOWER(""UserName"") = 'admin';
                     ");
                 }
                 catch (Exception ex)
@@ -1559,9 +1629,9 @@ END $$;
                             ""IsDeleted"" boolean NOT NULL DEFAULT false,
                             ""CreatedBy"" uuid
                         );
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BranchAttendancePolicies_TenantID_BranchID"" 
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BranchAttendancePolicies_TenantID_BranchID""
                         ON ""BranchAttendancePolicies"" (""TenantID"", ""BranchID"") WHERE ""IsDeleted"" = false;
-                        CREATE INDEX IF NOT EXISTS ""IX_BranchAttendancePolicies_BranchID"" 
+                        CREATE INDEX IF NOT EXISTS ""IX_BranchAttendancePolicies_BranchID""
                         ON ""BranchAttendancePolicies"" (""BranchID"");
                     ");
                 }
@@ -1589,7 +1659,7 @@ END $$;
                             ""IsDeleted"" boolean NOT NULL DEFAULT false,
                             ""CreatedBy"" uuid
                         );
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_ShiftConfigs_TenantID_BranchID_ShiftCode"" 
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_ShiftConfigs_TenantID_BranchID_ShiftCode""
                         ON ""ShiftConfigs"" (""TenantID"", ""BranchID"", ""ShiftCode"") WHERE ""IsDeleted"" = false;
                     ");
                 }
@@ -1629,9 +1699,9 @@ END $$;
                             ""IsDeleted"" boolean NOT NULL DEFAULT false,
                             ""CreatedBy"" uuid
                         );
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Employees_TenantID_CitizenId"" 
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Employees_TenantID_CitizenId""
                         ON ""Employees"" (""TenantID"", ""CitizenId"") WHERE ""IsDeleted"" = false;
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Employees_TenantID_EmployeeCode"" 
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Employees_TenantID_EmployeeCode""
                         ON ""Employees"" (""TenantID"", ""EmployeeCode"") WHERE ""IsDeleted"" = false;
                     ");
                 }
@@ -1789,7 +1859,7 @@ END $$;
                             ""IsDeleted"" boolean NOT NULL DEFAULT false,
                             ""CreatedBy"" uuid
                         );
-                        CREATE INDEX IF NOT EXISTS ""IX_EmployeeSchedules_TenantId_BranchID_WorkDate"" 
+                        CREATE INDEX IF NOT EXISTS ""IX_EmployeeSchedules_TenantId_BranchID_WorkDate""
                         ON ""EmployeeSchedules"" (""TenantId"", ""BranchID"", ""WorkDate"");
                     ");
                 }
@@ -1873,8 +1943,8 @@ END $$;
                         DO $$
                         BEGIN
                             IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'FK_BranchAttendancePolicies_Branches_BranchID') THEN
-                                ALTER TABLE ""BranchAttendancePolicies"" 
-                                ADD CONSTRAINT ""FK_BranchAttendancePolicies_Branches_BranchID"" 
+                                ALTER TABLE ""BranchAttendancePolicies""
+                                ADD CONSTRAINT ""FK_BranchAttendancePolicies_Branches_BranchID""
                                 FOREIGN KEY (""BranchID"") REFERENCES ""Branches"" (""BranchID"") ON DELETE RESTRICT;
                             END IF;
                         END $$;
@@ -1892,6 +1962,7 @@ END $$;
                     await EnsureSupplierExchangeSchemaAsync(context, logger);
                     await EnsureWeightRepackSchemaAsync(context, logger);
                     await EnsureMissingModelSchemaAsync(context, logger);
+                    await EnsureHouseholdTaxSnapshotSchemaAsync(context, logger);
                 }
                 catch (Exception ex)
                 {
@@ -2142,19 +2213,11 @@ END $$;
 
             await context.Users.AddRangeAsync(userAdmin, userStoreManager, userCashier, userStoreOwner, userStaff);
 
-            var tenantUserAdmin = new TenantUser
-            {
-                TenantId = defaultTenantId,
-                UserId = userAdmin.Id,
-                Role = "SUPER_ADMIN",
-                IsActive = true
-            };
-
             var tenantUserManager = new TenantUser
             {
                 TenantId = defaultTenantId,
                 UserId = userStoreManager.Id,
-                Role = "BRANCH_MANAGER",
+                Role = SystemRoles.Staff,
                 IsActive = true
             };
 
@@ -2182,7 +2245,7 @@ END $$;
                 IsActive = true
             };
 
-            await context.TenantUsers.AddRangeAsync(tenantUserAdmin, tenantUserManager, tenantUserCashier, tenantUserOwner, tenantUserStaff);
+            await context.TenantUsers.AddRangeAsync(tenantUserManager, tenantUserCashier, tenantUserOwner, tenantUserStaff);
             await context.SaveChangesAsync();
         }
 

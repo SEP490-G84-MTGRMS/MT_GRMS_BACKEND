@@ -49,7 +49,7 @@ public class EndToEndBusinessFlowIntegrationTests
         public string CurrentTenantId { get; set; } = "tenant-e2e-retail-01";
         public Guid CurrentUserId { get; set; } = Guid.Parse("22222222-2222-2222-2222-222222222222");
         public Guid? CurrentBranchId { get; set; } = null;
-        public string CurrentRole { get; set; } = "STOREOWNER";
+        public string CurrentRole { get; set; } = "STORE_OWNER";
 
         public void SetContext(string tenantId, Guid userId, Guid? branchId)
         {
@@ -59,6 +59,15 @@ public class EndToEndBusinessFlowIntegrationTests
         }
 
         public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
+    }
+
+    private sealed class AcceptingPinService : IPinVerificationService
+    {
+        public Task<PinVerificationResult> VerifyStoreOwnerPinAsync(string userId, string inputPin, CancellationToken ct = default) =>
+            Task.FromResult(new PinVerificationResult(true));
+        public Task SetStoreOwnerPinAsync(string userId, string newPin, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ChangeSecurityPinAsync(string userId, ChangeSecurityPinRequest request, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ResetSecurityPinAsync(string userId, ResetSecurityPinRequest request, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private class FakeThermalPrintService : IThermalPrintService
@@ -358,9 +367,9 @@ public class EndToEndBusinessFlowIntegrationTests
             Amount = 50_000m,
             Status = ExpenseVoucherStatus.Paid,
             Nature = FinancialNature.OperatingExpense,
+            IsTaxDeductible = true,
             PaymentSourceType = FinanceAccountType.Till,
             PaymentSourceAccountId = DefaultTillId,
-            IsTaxDeductible = true,
             InvoiceNumber = "ELEC-INV-9988",
             ExpenseDate = expenseDate,
             CreatedAt = expenseDate,
@@ -867,6 +876,7 @@ public class EndToEndBusinessFlowIntegrationTests
             Amount = 50_000m,
             Status = ExpenseVoucherStatus.Paid,
             Nature = FinancialNature.OperatingExpense,
+            IsTaxDeductible = true,
             ExpenseDate = orderDate,
             CreatedAt = orderDate
         });
@@ -884,7 +894,7 @@ public class EndToEndBusinessFlowIntegrationTests
         var taxService = new HouseholdTaxService(
             taxRepo,
             strategyFactory,
-            null, // Không bắt buộc PIN trong integration test
+            new AcceptingPinService(),
             signatureService,
             null,
             tenantContext);
@@ -916,9 +926,11 @@ public class EndToEndBusinessFlowIntegrationTests
                 BranchId = branchId,
                 CalculationMethod = TaxCalculationMethod.DeclarationBased,
                 Tier2Method = "PROFIT_15",
-                ConfirmEstimatedCogsResponsible = true
+                ConfirmEstimatedCogsResponsible = true,
+                SecurityPin = "123456"
             },
-            finalizedBy: "store_owner_an");
+            finalizedBy: "store_owner_an",
+            userId: "owner-user-id");
 
         Assert.NotNull(snapshotResult);
         Assert.True(snapshotResult.IsIntegrityValid);
@@ -936,9 +948,11 @@ public class EndToEndBusinessFlowIntegrationTests
                 PeriodType = TaxPeriodType.Quarter,
                 PeriodNumber = 1,
                 BranchId = branchId,
-                CalculationMethod = TaxCalculationMethod.DeclarationBased
+                CalculationMethod = TaxCalculationMethod.DeclarationBased,
+                SecurityPin = "123456"
             },
-            finalizedBy: "attacker"));
+            finalizedBy: "attacker",
+            userId: "owner-user-id"));
 
         Assert.Equal("TAX_PERIOD_LOCKED", ex.ErrorCode);
     }

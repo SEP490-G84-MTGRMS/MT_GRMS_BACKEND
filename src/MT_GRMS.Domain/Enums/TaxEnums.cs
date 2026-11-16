@@ -11,6 +11,22 @@ public enum TaxPeriodType
 }
 
 /// <summary>
+/// Trạng thái của snapshot kỳ tính thuế hộ kinh doanh.
+/// </summary>
+public enum TaxSnapshotStatus
+{
+    /// <summary>
+    /// Snapshot đang hiệu lực và khóa sổ kỳ tính thuế.
+    /// </summary>
+    Finalized = 1,
+
+    /// <summary>
+    /// Snapshot lịch sử đã bị thay thế bởi bản điều chỉnh hồi tố mới hơn.
+    /// </summary>
+    Superseded = 2
+}
+
+/// <summary>
 /// Phương pháp tính thuế hộ kinh doanh theo Luật thuế TNCN, NĐ 68/2026/NĐ-CP và NĐ 141/2026/NĐ-CP.
 /// </summary>
 public enum TaxCalculationMethod

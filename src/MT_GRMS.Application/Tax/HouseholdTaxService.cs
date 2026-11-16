@@ -1,9 +1,12 @@
 using Microsoft.Extensions.Configuration;
 ﻿using System.Security.Cryptography;
 
+using System.Data;
+
 using System.Text;
 
 using System.Text.Json;
+using System.Xml.Linq;
 
 using MT_GRMS.Application.Tax.Dtos;
 
@@ -29,7 +32,8 @@ public class HouseholdTaxService : IHouseholdTaxService
 
     private readonly Security.ITaxSnapshotSignatureService _signatureService;
     private readonly IConfiguration? _configuration;
-    private readonly Common.ITenantContext? _tenantContext;
+    private readonly Common.ITenantContext _tenantContext;
+    private readonly Common.IUnitOfWork? _unitOfWork;
 
     public const decimal TaxExemptionThreshold = RevenuePercentageTaxStrategy.TaxExemptionThreshold;
 
@@ -39,7 +43,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
     public const decimal DeclarationDefaultPitRate = DeclarationBasedTaxStrategy.DeclarationDefaultPitRate;
 
-    public HouseholdTaxService(IHouseholdTaxRepository repository)
+    public HouseholdTaxService(IHouseholdTaxRepository repository, Common.ITenantContext tenantContext, Common.IUnitOfWork? unitOfWork = null)
 
         : this(repository, new TaxCalculationStrategyFactory(new ITaxCalculationStrategy[]
 
@@ -49,7 +53,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
             new DeclarationBasedTaxStrategy()
 
-        }), null, null)
+        }), null, null, null, tenantContext, unitOfWork)
 
     {
 
@@ -61,14 +65,16 @@ public class HouseholdTaxService : IHouseholdTaxService
         Security.IPinVerificationService? pinService = null,
         Security.ITaxSnapshotSignatureService? signatureService = null,
         IConfiguration? configuration = null,
-        Common.ITenantContext? tenantContext = null)
+        Common.ITenantContext? tenantContext = null,
+        Common.IUnitOfWork? unitOfWork = null)
     {
         _repository = repository;
         _strategyFactory = strategyFactory;
         _pinService = pinService;
         _signatureService = signatureService ?? new Security.TaxSnapshotSignatureService();
         _configuration = configuration;
-        _tenantContext = tenantContext;
+        _tenantContext = tenantContext ?? throw new ArgumentNullException(nameof(tenantContext));
+        _unitOfWork = unitOfWork;
     }
 
     private DateTime GetVatReductionDeadlineUtc()
@@ -82,6 +88,22 @@ public class HouseholdTaxService : IHouseholdTaxService
         var vnTz = GetVietnamTimeZone();
         // Mốc chuyển giao hết hạn giảm thuế GTGT theo giờ VN: 01/01/2027 00:00:00 VN = 31/12/2026 17:00:00 UTC
         return TimeZoneInfo.ConvertTimeToUtc(new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Unspecified), vnTz);
+    }
+
+    public static DateTime GetFilingDeadlineLocal(int year, TaxPeriodType periodType, int periodNumber)
+    {
+        DateTime deadline = periodType switch
+        {
+            TaxPeriodType.Month => new DateTime(year, Math.Clamp(periodNumber, 1, 12), 1).AddMonths(1).AddDays(19),
+            TaxPeriodType.Quarter => new DateTime(year, (Math.Clamp(periodNumber, 1, 4) - 1) * 3 + 1, 1).AddMonths(4).AddDays(-1),
+            TaxPeriodType.Year => new DateTime(year + 1, 1, 31),
+            _ => new DateTime(year, 1, 31)
+        };
+
+        while (deadline.DayOfWeek is DayOfWeek.Saturday or DayOfWeek.Sunday)
+            deadline = deadline.AddDays(1);
+
+        return DateTime.SpecifyKind(deadline, DateTimeKind.Unspecified);
     }
 
     private async Task<(TaxCalculationMethod? Method, int? StartYear)> GetRequiredPitMethodAsync(int year, CancellationToken ct)
@@ -149,6 +171,7 @@ public class HouseholdTaxService : IHouseholdTaxService
     public async Task<HouseholdTaxSummaryDto> GetTaxSummaryAsync(HouseholdTaxFilterDto filter, CancellationToken cancellationToken = default)
 
     {
+        RequireOwner();
 
         var (fromDateUtc, toDateUtc, priorPeriodToDateUtc) = GetDateRangesForPeriod(filter.Year, filter.PeriodType, filter.PeriodNumber);
 
@@ -363,41 +386,31 @@ public class HouseholdTaxService : IHouseholdTaxService
                 priorDeclaredPitTax = filter.PriorDeclaredPitTaxOverride.Value;
 
             }
-
             else
-
             {
-
                 var priorSnapshots = await _repository.GetSnapshotsAsync(filter.Year, null, cancellationToken);
-
                 priorDeclaredPitTax = priorSnapshots
-
-                    .Where(s => s.Year == filter.Year && s.PeriodType == filter.PeriodType && s.PeriodNumber < filter.PeriodNumber)
-
+                    .Where(s => s.Status == TaxSnapshotStatus.Finalized && s.Year == filter.Year && s.PeriodType == filter.PeriodType && s.PeriodNumber < filter.PeriodNumber)
                     .Sum(s => s.PitAmount);
 
+                if (filter.PriorDeclaredVatTaxOverride.HasValue)
+                {
+                    priorDeclaredVatTax = filter.PriorDeclaredVatTaxOverride.Value;
+                }
+                else
+                {
+                    priorDeclaredVatTax = priorSnapshots
+                        .Where(s => s.Status == TaxSnapshotStatus.Finalized && s.Year == filter.Year && s.PeriodType == filter.PeriodType && s.PeriodNumber < filter.PeriodNumber)
+                        .Sum(s => s.VatAmount);
+                }
             }
 
-            if (filter.PriorDeclaredVatTaxOverride.HasValue)
-
+            if (filter.PriorDeclaredPitTaxOverride.HasValue && !filter.PriorDeclaredVatTaxOverride.HasValue)
             {
-
-                priorDeclaredVatTax = filter.PriorDeclaredVatTaxOverride.Value;
-
-            }
-
-            else
-
-            {
-
                 var priorSnapshots = await _repository.GetSnapshotsAsync(filter.Year, null, cancellationToken);
-
                 priorDeclaredVatTax = priorSnapshots
-
-                    .Where(s => s.Year == filter.Year && s.PeriodType == filter.PeriodType && s.PeriodNumber < filter.PeriodNumber)
-
+                    .Where(s => s.Status == TaxSnapshotStatus.Finalized && s.Year == filter.Year && s.PeriodType == filter.PeriodType && s.PeriodNumber < filter.PeriodNumber)
                     .Sum(s => s.VatAmount);
-
             }
 
         }
@@ -630,6 +643,10 @@ public class HouseholdTaxService : IHouseholdTaxService
 
             BranchName = filter.BranchId.HasValue ? $"Chi nhánh {filter.BranchId.Value.ToString()[..8]}" : "Toàn bộ hộ kinh doanh (Tenant)",
 
+            FilingDeadlineLocal = GetFilingDeadlineLocal(filter.Year, filter.PeriodType, filter.PeriodNumber),
+
+            FilingDeadlineNote = "Thời hạn dự kiến theo loại kỳ; đã điều chỉnh nếu rơi vào cuối tuần.",
+
             AnnualAccumulatedRevenue = annualAccumulatedRevenue,
 
             PriorPeriodsAccumulatedRevenue = priorPeriodsRevenue,
@@ -754,6 +771,136 @@ public class HouseholdTaxService : IHouseholdTaxService
 
     }
 
+    public async Task<HouseholdTaxDeclarationPreviewDto> GetDeclarationPreviewAsync(
+        HouseholdTaxFilterDto filter,
+        CancellationToken cancellationToken = default)
+    {
+        RequireOwner();
+        var summary = await GetTaxSummaryAsync(filter, cancellationToken);
+        var profile = await _repository.GetTaxpayerProfileAsync(filter.BranchId, cancellationToken);
+        var missingFields = new List<string>();
+        if (string.IsNullOrWhiteSpace(profile.TaxpayerName)) missingFields.Add("Tên người nộp thuế");
+        if (string.IsNullOrWhiteSpace(profile.TaxCode)) missingFields.Add("Mã số thuế");
+        if (string.IsNullOrWhiteSpace(profile.BusinessLocation)) missingFields.Add("Địa điểm kinh doanh");
+        if (string.IsNullOrWhiteSpace(profile.TaxAuthorityName)) missingFields.Add("Cơ quan thuế quản lý");
+
+        var periodLabel = filter.PeriodType switch
+        {
+            TaxPeriodType.Month => $"Tháng {filter.PeriodNumber}/{filter.Year}",
+            TaxPeriodType.Quarter => $"Quý {filter.PeriodNumber}/{filter.Year}",
+            TaxPeriodType.Year => $"Năm {filter.Year}",
+            _ => $"Kỳ {filter.PeriodNumber}/{filter.Year}"
+        };
+
+        return new HouseholdTaxDeclarationPreviewDto
+        {
+            IsFinalized = summary.IsFinalized,
+            SnapshotId = summary.SnapshotId,
+            GeneratedAtUtc = DateTime.UtcNow,
+            Year = filter.Year,
+            PeriodType = filter.PeriodType,
+            PeriodNumber = filter.PeriodNumber,
+            PeriodLabel = periodLabel,
+            FilingDeadlineLocal = summary.FilingDeadlineLocal,
+            Taxpayer = profile,
+            Lines = new List<TaxDeclarationLineDto>
+            {
+                new()
+                {
+                    Sequence = 1,
+                    BusinessSector = "Hoạt động sản xuất, kinh doanh hàng hóa, cung cấp dịch vụ",
+                    TaxCode = "HKD-BAN-LE",
+                    TotalRevenue = summary.TaxableRevenueInPeriod,
+                    VatNonTaxableRevenue = Math.Max(0, summary.TaxableRevenueInPeriod - summary.VatTaxableRevenue),
+                    VatTaxableRevenue = summary.VatTaxableRevenue,
+                    VatZeroRateRevenue = 0,
+                    VatRate = summary.VatRate,
+                    VatAmount = summary.VatAmount,
+                    PitTaxableRevenue = summary.PitTaxableRevenue,
+                    PitRevenueDeduction = 0,
+                    PitRate = summary.PitRate,
+                    PitAmount = summary.PitAmount
+                }
+            },
+            TotalVatAmount = summary.VatAmount,
+            TotalPitAmount = summary.PitAmount,
+            TotalTaxAmount = summary.TotalTaxAmount,
+            RequiresBusinessActivityAppendix = summary.CalculationMethod == TaxCalculationMethod.DeclarationBased,
+            AppendixRevenue = summary.TaxableRevenueInPeriod,
+            AppendixCogs = summary.CogsAmount,
+            AppendixOpex = summary.OpexAmount,
+            AppendixTaxableIncome = summary.TaxableIncomeDeclaration,
+            IsProfileComplete = missingFields.Count == 0,
+            MissingProfileFields = missingFields,
+            DataNotice = summary.IsFinalized
+                ? "Bản xem trước được lập từ kỳ đã chốt."
+                : "Bản xem trước tạm tính; chưa phải hồ sơ đã chốt để xuất XML."
+        };
+    }
+
+    public async Task<TaxDeclarationXmlResult> ExportDeclarationXmlAsync(
+        Guid snapshotId,
+        CancellationToken cancellationToken = default)
+    {
+        RequireOwner();
+        var snapshot = await _repository.GetSnapshotByIdAsync(snapshotId, cancellationToken)
+            ?? throw new BusinessException("SNAPSHOT_NOT_FOUND", "Không tìm thấy bản chốt kỳ tính thuế.");
+
+        if (snapshot.Status != TaxSnapshotStatus.Finalized)
+            throw new BusinessException("SNAPSHOT_NOT_ACTIVE", "Chỉ được xuất XML từ bản chốt đang có hiệu lực.");
+
+        if (!_signatureService.VerifySignature(snapshot))
+            throw new BusinessException("SNAPSHOT_INTEGRITY_INVALID", "Không thể xuất XML vì chữ ký toàn vẹn của bản chốt không hợp lệ.");
+
+        var profile = await _repository.GetTaxpayerProfileAsync(snapshot.BranchId, cancellationToken);
+        var filingDeadline = GetFilingDeadlineLocal(snapshot.Year, snapshot.PeriodType, snapshot.PeriodNumber);
+        XNamespace ns = "urn:mt-grms:tax:01-cnkd:1.0";
+        var document = new XDocument(
+            new XDeclaration("1.0", "utf-8", null),
+            new XElement(ns + "HouseholdTaxDeclaration",
+                new XAttribute("formCode", "01/CNKD"),
+                new XAttribute("schemaVersion", "MT-GRMS-1.0"),
+                new XElement(ns + "DocumentStatus", "FINALIZED"),
+                new XElement(ns + "SnapshotId", snapshot.Id),
+                new XElement(ns + "RevisionNumber", snapshot.RevisionNumber),
+                new XElement(ns + "Taxpayer",
+                    new XElement(ns + "Name", profile.TaxpayerName),
+                    new XElement(ns + "TaxCode", profile.TaxCode),
+                    new XElement(ns + "BusinessLocation", profile.BusinessLocation),
+                    new XElement(ns + "PhoneNumber", profile.PhoneNumber),
+                    new XElement(ns + "TaxAuthority", profile.TaxAuthorityName)),
+                new XElement(ns + "Period",
+                    new XElement(ns + "Year", snapshot.Year),
+                    new XElement(ns + "PeriodType", snapshot.PeriodType.ToString()),
+                    new XElement(ns + "PeriodNumber", snapshot.PeriodNumber),
+                    new XElement(ns + "FilingDeadline", filingDeadline.ToString("yyyy-MM-dd"))),
+                new XElement(ns + "TaxAmounts",
+                    new XElement(ns + "TaxableRevenue", snapshot.TaxableRevenueInPeriod),
+                    new XElement(ns + "VatRate", snapshot.VatRate),
+                    new XElement(ns + "VatAmount", snapshot.VatAmount),
+                    new XElement(ns + "PitRate", snapshot.PitRate),
+                    new XElement(ns + "PitAmount", snapshot.PitAmount),
+                    new XElement(ns + "TotalTaxAmount", snapshot.TotalTaxAmount)),
+                new XElement(ns + "Integrity",
+                    new XElement(ns + "FinalizedAtUtc", snapshot.FinalizedAtUtc.ToString("O")),
+                    new XElement(ns + "FinalizedBy", snapshot.FinalizedBy),
+                    new XElement(ns + "AuditSignatureHash", snapshot.AuditSignatureHash)),
+                new XElement(ns + "CompatibilityNotice",
+                    "XML do MT-GRMS sinh từ snapshot đã chốt; cần đối chiếu XSD của cổng thuế trước khi nộp điện tử.")));
+
+        using var stream = new MemoryStream();
+        document.Save(stream);
+        var periodCode = snapshot.PeriodType == TaxPeriodType.Quarter
+            ? $"Q{snapshot.PeriodNumber}"
+            : snapshot.PeriodType == TaxPeriodType.Month ? $"T{snapshot.PeriodNumber}" : "NAM";
+
+        return new TaxDeclarationXmlResult
+        {
+            Content = stream.ToArray(),
+            FileName = $"ToKhai_01_CNKD_{snapshot.Year}_{periodCode}_R{snapshot.RevisionNumber}.xml"
+        };
+    }
+
     public async Task<List<AccountingBookEntryDto>> GetBookDetailsAsync(
 
         int year,
@@ -769,6 +916,7 @@ public class HouseholdTaxService : IHouseholdTaxService
         CancellationToken cancellationToken = default)
 
     {
+        RequireOwner();
 
         var (fromDateUtc, toDateUtc, _) = GetDateRangesForPeriod(year, periodType, periodNumber);
 
@@ -815,51 +963,103 @@ public class HouseholdTaxService : IHouseholdTaxService
         CancellationToken cancellationToken = default)
 
     {
+        RequireOwner();
+        if (_unitOfWork == null)
+        {
+            return await FinalizeTaxSnapshotCoreAsync(request, finalizedBy, userId, cancellationToken);
+        }
+
+        return await _unitOfWork.ExecuteInTransactionAsync(
+            token => FinalizeTaxSnapshotCoreAsync(request, finalizedBy, userId, token),
+            cancellationToken,
+            IsolationLevel.Serializable);
+    }
+
+    private async Task<HouseholdTaxSnapshotDto> FinalizeTaxSnapshotCoreAsync(
+
+        CreateTaxSnapshotRequest request,
+
+        string finalizedBy,
+
+        string? userId = null,
+
+        CancellationToken cancellationToken = default)
+
+    {
+
+        // Chốt kỳ tính thuế luôn ở cấp toàn bộ hộ kinh doanh (Tenant-wide)
+        request.BranchId = null;
 
         // 1. Xác thực bảo mật mã PIN chủ hộ
 
-        if (_pinService != null && !string.IsNullOrEmpty(userId))
-
+        if (string.IsNullOrWhiteSpace(userId))
         {
-
-            if (string.IsNullOrWhiteSpace(request.SecurityPin))
-
-            {
-
-                throw new BusinessException("PIN_REQUIRED", "Yêu cầu mã PIN bảo mật của chủ hộ để chốt kỳ tính thuế.");
-
-            }
-
-            var pinResult = await _pinService.VerifyStoreOwnerPinAsync(userId, request.SecurityPin, cancellationToken);
-
-            if (!pinResult.IsSuccess)
-
-            {
-
-                throw new BusinessException(pinResult.ErrorCode ?? "INVALID_PIN", pinResult.ErrorMessage ?? "Mã PIN xác thực chốt kỳ không chính xác.");
-
-            }
-
+            throw new BusinessException("USER_ID_REQUIRED", "Không xác định được chủ cửa hàng thực hiện chốt kỳ tính thuế.");
         }
 
-        var existing = await _repository.GetSnapshotAsync(
+        if (_pinService == null)
+        {
+            throw new BusinessException("PIN_SERVICE_UNAVAILABLE", "Không thể chốt kỳ khi dịch vụ xác thực lại không khả dụng.");
+        }
 
+        if (string.IsNullOrWhiteSpace(request.SecurityPin))
+        {
+            throw new BusinessException("PIN_REQUIRED", "Yêu cầu mã PIN bảo mật của chủ cửa hàng để chốt kỳ tính thuế.");
+        }
+
+        var pinResult = await _pinService.VerifyStoreOwnerPinAsync(userId, request.SecurityPin, cancellationToken);
+        if (!pinResult.IsSuccess)
+        {
+            throw new BusinessException(pinResult.ErrorCode ?? "INVALID_PIN", pinResult.ErrorMessage ?? "Mã PIN xác thực chốt kỳ không chính xác.");
+        }
+
+        // Tìm toàn bộ các bản ghi snapshot hiện hành của kỳ này (bao gồm cả tenant-wide và chi nhánh cũ nếu có)
+        var existingList = await _repository.GetSnapshotsAsync(
             request.Year,
-
-            request.PeriodType,
-
-            request.PeriodNumber,
-
             request.BranchId,
-
             cancellationToken);
 
-        if (existing != null)
+        var activeSnapshots = existingList
+            .Where(s => s.PeriodType == request.PeriodType &&
+                        s.PeriodNumber == request.PeriodNumber &&
+                        s.Status != TaxSnapshotStatus.Superseded)
+            .OrderByDescending(s => s.RevisionNumber)
+            .ToList();
 
+        var existing = activeSnapshots.FirstOrDefault();
+
+        if (existing == null)
         {
+            // Fallback phòng trường hợp GetSnapshotsAsync có filter ngặt nghèo
+            existing = await _repository.GetSnapshotAsync(
+                request.Year,
+                request.PeriodType,
+                request.PeriodNumber,
+                request.BranchId,
+                cancellationToken);
+            if (existing != null)
+            {
+                activeSnapshots.Add(existing);
+            }
+        }
 
-            throw new BusinessException("TAX_PERIOD_LOCKED", $"Kỳ tính thuế {request.PeriodType} {request.PeriodNumber}/{request.Year} đã được chốt và khóa sổ.");
+        if (existing != null)
+        {
+            if (!request.AllowSupersedeExisting)
+            {
+                throw new BusinessException("TAX_PERIOD_LOCKED", $"Kỳ tính thuế {request.PeriodType} {request.PeriodNumber}/{request.Year} đã được chốt và khóa sổ.");
+            }
 
+            if (string.IsNullOrWhiteSpace(request.RectificationReason))
+            {
+                throw new BusinessException("RECTIFICATION_REASON_REQUIRED", "Bắt buộc phải nhập lý do thay thế / số biên bản điều chỉnh khi chốt lại kỳ tính thuế đã khóa.");
+            }
+
+            foreach (var activeSnap in activeSnapshots)
+            {
+                activeSnap.Status = TaxSnapshotStatus.Superseded;
+                await _repository.UpdateSnapshotAsync(activeSnap, cancellationToken);
+            }
         }
 
         // Kiểm tra tính tuần tự: Kỳ k-1 cùng năm phải được chốt trước khi chốt kỳ k
@@ -1095,17 +1295,16 @@ public class HouseholdTaxService : IHouseholdTaxService
             BookDataJson = bookDataJson,
 
             FinalizedBy = finalizedBy,
-
             FinalizedAtUtc = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, DateTime.UtcNow.Day, DateTime.UtcNow.Hour, DateTime.UtcNow.Minute, DateTime.UtcNow.Second, DateTimeKind.Utc),
-
-            Notes = request.Notes
-
+            Notes = request.Notes,
+            Status = TaxSnapshotStatus.Finalized,
+            RevisionNumber = existing != null ? existing.RevisionNumber + 1 : 0,
+            SupersededSnapshotId = existing?.Id,
+            RectificationReason = existing != null ? request.RectificationReason : null
         };
 
         // Ký số HMAC-SHA256 trên Canonical JSON snapshot (Bao gồm cả mã băm BookDataHash)
-
         snapshot.AuditSignatureHash = _signatureService.ComputeSignature(snapshot);
-
         var created = await _repository.AddSnapshotAsync(snapshot, cancellationToken);
 
         // 1. Khoá phương pháp năm hiện tại nếu chưa có và không miễn thuế
@@ -1193,11 +1392,12 @@ public class HouseholdTaxService : IHouseholdTaxService
             IsIntegrityValid = true,
 
             FinalizedBy = created.FinalizedBy,
-
             FinalizedAtUtc = created.FinalizedAtUtc,
-
-            Notes = created.Notes
-
+            Notes = created.Notes,
+            Status = created.Status,
+            RevisionNumber = created.RevisionNumber,
+            SupersededSnapshotId = created.SupersededSnapshotId,
+            RectificationReason = created.RectificationReason
         };
 
     }
@@ -1205,6 +1405,7 @@ public class HouseholdTaxService : IHouseholdTaxService
     public async Task<HouseholdTaxSnapshotDto?> GetSnapshotByIdAsync(Guid id, CancellationToken cancellationToken = default)
 
     {
+        RequireOwner();
 
         var s = await _repository.GetSnapshotByIdAsync(id, cancellationToken);
 
@@ -1255,15 +1456,14 @@ public class HouseholdTaxService : IHouseholdTaxService
             TotalTaxAmount = s.TotalTaxAmount,
 
             AuditSignatureHash = s.AuditSignatureHash,
-
             IsIntegrityValid = _signatureService.VerifySignature(s),
-
             FinalizedBy = s.FinalizedBy,
-
             FinalizedAtUtc = s.FinalizedAtUtc,
-
-            Notes = s.Notes
-
+            Notes = s.Notes,
+            Status = s.Status,
+            RevisionNumber = s.RevisionNumber,
+            SupersededSnapshotId = s.SupersededSnapshotId,
+            RectificationReason = s.RectificationReason
         };
 
     }
@@ -1271,6 +1471,7 @@ public class HouseholdTaxService : IHouseholdTaxService
     public async Task<bool> VerifySnapshotIntegrityAsync(Guid snapshotId, CancellationToken cancellationToken = default)
 
     {
+        RequireOwner();
 
         var s = await _repository.GetSnapshotByIdAsync(snapshotId, cancellationToken);
 
@@ -1283,6 +1484,7 @@ public class HouseholdTaxService : IHouseholdTaxService
     public async Task<List<HouseholdTaxSnapshotDto>> GetSnapshotsAsync(int? year, Guid? branchId, CancellationToken cancellationToken = default)
 
     {
+        RequireOwner();
 
         var snapshots = await _repository.GetSnapshotsAsync(year, branchId, cancellationToken);
 
@@ -1331,15 +1533,14 @@ public class HouseholdTaxService : IHouseholdTaxService
             TotalTaxAmount = s.TotalTaxAmount,
 
             AuditSignatureHash = s.AuditSignatureHash,
-
             IsIntegrityValid = _signatureService.VerifySignature(s),
-
             FinalizedBy = s.FinalizedBy,
-
             FinalizedAtUtc = s.FinalizedAtUtc,
-
-            Notes = s.Notes
-
+            Notes = s.Notes,
+            Status = s.Status,
+            RevisionNumber = s.RevisionNumber,
+            SupersededSnapshotId = s.SupersededSnapshotId,
+            RectificationReason = s.RectificationReason
         }).ToList();
 
     }
@@ -1476,6 +1677,28 @@ public class HouseholdTaxService : IHouseholdTaxService
 
     }
 
+    public async Task ChangeSecurityPinAsync(string userId, ChangeSecurityPinRequest request, CancellationToken cancellationToken = default)
+    {
+        RequireOwner();
+        if (_pinService == null)
+        {
+            throw new BusinessException("PIN_SERVICE_UNAVAILABLE", "Dịch vụ xác thực mã PIN không khả dụng.");
+        }
+
+        await _pinService.ChangeSecurityPinAsync(userId, request, cancellationToken);
+    }
+
+    public async Task ResetSecurityPinAsync(string userId, ResetSecurityPinRequest request, CancellationToken cancellationToken = default)
+    {
+        RequireOwner();
+        if (_pinService == null)
+        {
+            throw new BusinessException("PIN_SERVICE_UNAVAILABLE", "Dịch vụ xác thực mã PIN không khả dụng.");
+        }
+
+        await _pinService.ResetSecurityPinAsync(userId, request, cancellationToken);
+    }
+
     public static TimeZoneInfo GetVietnamTimeZone()
     {
         try
@@ -1494,5 +1717,7 @@ public class HouseholdTaxService : IHouseholdTaxService
             }
         }
     }
+
+    private void RequireOwner() => Common.TenantRoleGuard.RequireStoreOwner(_tenantContext, "thuế hộ kinh doanh");
 
 }

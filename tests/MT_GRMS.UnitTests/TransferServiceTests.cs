@@ -23,6 +23,7 @@ public class TransferServiceTests
     private readonly FakeRepository<Product> _productsRepo = new();
     private readonly FakeRepository<Branch> _branchesRepo = new();
     private readonly FakeRepository<Transfer> _transfersRepo = new();
+    private readonly FakeRepository<TransferStatusHistory> _statusHistoryRepo = new();
     private readonly FakeTenantContext _tenantContext = new();
     private readonly Mock<IUnitOfWork> _mockUow = new();
     private readonly TransferService _service;
@@ -45,6 +46,7 @@ public class TransferServiceTests
             _stocksRepo,
             _productsRepo,
             _branchesRepo,
+            _statusHistoryRepo,
             _tenantContext,
             _mockUow.Object);
 
@@ -102,6 +104,12 @@ public class TransferServiceTests
         });
     }
 
+    private async Task<TransferDto> SubmitAndDispatchAsync(Guid id)
+    {
+        await _service.SubmitTransferAsync(id, CancellationToken.None);
+        return await _service.DispatchTransferAsync(id, CancellationToken.None);
+    }
+
     [Fact]
     public async Task CreateTransferAsync_Draft_Success()
     {
@@ -144,7 +152,7 @@ public class TransferServiceTests
             TenantId = _tenantContext.CurrentTenantId,
             FromBranchId = _fromBranchId,
             ToBranchId = _toBranchId,
-            Status = TransferStatus.Received,
+            Status = TransferStatus.Completed,
             CreatedAt = DateTime.UtcNow,
             Details = new List<TransferDetail>
             {
@@ -156,7 +164,7 @@ public class TransferServiceTests
             TenantId = _tenantContext.CurrentTenantId,
             FromBranchId = _fromBranchId,
             ToBranchId = _toBranchId,
-            Status = TransferStatus.Received,
+            Status = TransferStatus.Completed,
             CreatedAt = DateTime.UtcNow.AddMinutes(-1),
             Details = new List<TransferDetail>
             {
@@ -166,7 +174,7 @@ public class TransferServiceTests
         _transfersRepo.Items.AddRange([matching, mismatched]);
 
         var result = await _service.GetTransfersAsync(
-            new TransferFilterParams(null, null, null, null, null, null, 1, 10, [TransferStatus.Received], null, "match"),
+            new TransferFilterParams(null, null, null, null, null, null, 1, 10, [TransferStatus.Completed], null, "match"),
             CancellationToken.None);
 
         Assert.Single(result.Items);
@@ -175,7 +183,7 @@ public class TransferServiceTests
     }
 
     [Fact]
-    public async Task CreateTransferAsync_DispatchNow_SufficientStock_DeductsFromBranchStock()
+    public async Task CreateTransferAsync_DispatchNow_IsIgnoredAndDoesNotBypassApproval()
     {
         // Arrange
         var request = new CreateTransferRequest(
@@ -194,12 +202,12 @@ public class TransferServiceTests
 
         // Assert
         Assert.NotNull(result);
-        Assert.Equal("InTransit", result.Status);
-        Assert.NotNull(result.DispatchedAt);
+        Assert.Equal("Draft", result.Status);
+        Assert.Null(result.DispatchedAt);
 
         // Available was 100 - 10 - 5 = 85. Stock after dispatch: 100 - 30 = 70
         var stock = _stocksRepo.Items.First(s => s.BranchId == _fromBranchId && s.ProductId == _productId);
-        Assert.Equal(70m, stock.QuantityOnHand);
+        Assert.Equal(100m, stock.QuantityOnHand);
     }
 
     [Fact]
@@ -345,7 +353,8 @@ public class TransferServiceTests
             });
         var created = await _service.CreateTransferAsync(createRequest, CancellationToken.None);
 
-        // Act: Dispatch the draft
+        await _service.SubmitTransferAsync(created.Id, CancellationToken.None);
+        // Act: Dispatch the pending transfer
         var result = await _service.DispatchTransferAsync(created.Id, CancellationToken.None);
 
         // Assert
@@ -371,11 +380,12 @@ public class TransferServiceTests
                 new(_productId, 10m, "Hộp", "BATCH-01", new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc), 25000m)
             });
         var created = await _service.CreateTransferAsync(createRequest, CancellationToken.None);
+        await SubmitAndDispatchAsync(created.Id);
 
         // Act & Assert
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _service.DispatchTransferAsync(created.Id, CancellationToken.None));
-        Assert.Equal("Chỉ có thể xuất chuyển phiếu nháp.", ex.Message);
+        Assert.Equal("Chỉ có thể xuất phiếu đang chờ chi nhánh nguồn xử lý.", ex.Message);
     }
 
     [Fact]
@@ -418,6 +428,7 @@ public class TransferServiceTests
                 new(_productId, 20m, "Hộp", "BATCH-01", new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc), 25000m)
             });
         var created = await _service.CreateTransferAsync(createRequest, CancellationToken.None);
+        created = await SubmitAndDispatchAsync(created.Id);
         var detailId = created.Items[0].Id;
 
         var receiveRequest = new ReceiveTransferRequest(
@@ -431,7 +442,8 @@ public class TransferServiceTests
         var result = await _service.ReceiveTransferAsync(created.Id, receiveRequest, CancellationToken.None);
 
         // Assert
-        Assert.Equal("Received", result.Status);
+        Assert.Equal("Completed", result.Status);
+        Assert.Equal("Received", result.CompletionResult);
         Assert.NotNull(result.ReceivedAt);
         Assert.Equal(20m, result.Items[0].ReceivedQuantity);
         Assert.Equal(0m, result.Items[0].DamagedQuantity);
@@ -458,6 +470,7 @@ public class TransferServiceTests
                 new(_productId, 20m, "Hộp", "BATCH-01", new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc), 25000m)
             });
         var created = await _service.CreateTransferAsync(createRequest, CancellationToken.None);
+        created = await SubmitAndDispatchAsync(created.Id);
         var detailId = created.Items[0].Id;
 
         // Receive 16 good, 4 damaged
@@ -472,7 +485,8 @@ public class TransferServiceTests
         var result = await _service.ReceiveTransferAsync(created.Id, receiveRequest, CancellationToken.None);
 
         // Assert
-        Assert.Equal("Received", result.Status);
+        Assert.Equal("Completed", result.Status);
+        Assert.Equal("ReceivedWithDiscrepancy", result.CompletionResult);
         Assert.Equal(16m, result.Items[0].ReceivedQuantity);
         Assert.Equal(4m, result.Items[0].DamagedQuantity);
         Assert.Equal("Móp méo khi vận chuyển", result.Items[0].DiscrepancyReason);
@@ -499,6 +513,7 @@ public class TransferServiceTests
                 new(_productId, 10m, "Hộp", "BATCH-01", new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc), 25000m)
             });
         var created = await _service.CreateTransferAsync(createRequest, CancellationToken.None);
+        created = await SubmitAndDispatchAsync(created.Id);
         var detailId = created.Items[0].Id;
 
         var receiveRequest = new ReceiveTransferRequest(
@@ -529,6 +544,7 @@ public class TransferServiceTests
                 new(_productId, 10m, "Hộp", "BATCH-01", new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc), 25000m)
             });
         var created = await _service.CreateTransferAsync(createRequest, CancellationToken.None);
+        created = await SubmitAndDispatchAsync(created.Id);
         var detailId = created.Items[0].Id;
 
         // Received + Damaged = 10 + 1 = 11 > 10
@@ -560,6 +576,7 @@ public class TransferServiceTests
                 new(_productId, 10m, "Hộp", "BATCH-01", new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc), 25000m)
             });
         var created = await _service.CreateTransferAsync(createRequest, CancellationToken.None);
+        created = await SubmitAndDispatchAsync(created.Id);
         var detailId = created.Items[0].Id;
 
         // User is staff of FromBranch, not ToBranch
@@ -611,7 +628,7 @@ public class TransferServiceTests
     }
 
     [Fact]
-    public async Task CancelTransferAsync_InTransit_SendingBranchStaff_Success_RefundsStock()
+    public async Task CancelTransferAsync_InTransit_SendingBranchStaff_IsRejectedWithoutFakeRollback()
     {
         // Arrange: InTransit transfer
         var createRequest = new CreateTransferRequest(
@@ -625,21 +642,22 @@ public class TransferServiceTests
                 new(_productId, 10m, "Hộp", "BATCH-01", new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc), 25000m)
             });
         var created = await _service.CreateTransferAsync(createRequest, CancellationToken.None);
+        created = await SubmitAndDispatchAsync(created.Id);
 
         // Sending-branch staff may cancel an in-transit transfer per FE-15 authorization rules.
         _tenantContext.SetRole("STAFF");
         _tenantContext.CurrentBranchId = _fromBranchId;
 
         // Act
-        var result = await _service.CancelTransferAsync(created.Id, new CancelTransferRequest("Hủy giữa đường"), CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _service.CancelTransferAsync(created.Id, new CancelTransferRequest("Hủy giữa đường"), CancellationToken.None));
 
         // Assert
-        Assert.Equal("Cancelled", result.Status);
-        Assert.Equal(100m, _stocksRepo.Items.First(s => s.BranchId == _fromBranchId && s.ProductId == _productId).QuantityOnHand);
+        Assert.Equal(90m, _stocksRepo.Items.First(s => s.BranchId == _fromBranchId && s.ProductId == _productId).QuantityOnHand);
     }
 
     [Fact]
-    public async Task CancelTransferAsync_InTransit_Owner_Success_RefundsStock()
+    public async Task CancelTransferAsync_InTransit_Owner_IsRejectedWithoutFakeRollback()
     {
         // Arrange: InTransit transfer created by Owner
         var createRequest = new CreateTransferRequest(
@@ -653,21 +671,51 @@ public class TransferServiceTests
                 new(_productId, 20m, "Hộp", "BATCH-01", new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc), 25000m)
             });
         var created = await _service.CreateTransferAsync(createRequest, CancellationToken.None);
+        created = await SubmitAndDispatchAsync(created.Id);
 
         // Stock was 100 - 20 = 80
         var stockBefore = _stocksRepo.Items.First(s => s.BranchId == _fromBranchId && s.ProductId == _productId);
         Assert.Equal(80m, stockBefore.QuantityOnHand);
 
         // Act: Owner cancels InTransit transfer
-        var result = await _service.CancelTransferAsync(created.Id, new CancelTransferRequest("Xe hỏng quay đầu kho"), CancellationToken.None);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _service.CancelTransferAsync(created.Id, new CancelTransferRequest("Xe hỏng quay đầu kho"), CancellationToken.None));
 
         // Assert
-        Assert.Equal("Cancelled", result.Status);
-        Assert.Equal("Xe hỏng quay đầu kho", result.CancelReason);
-
-        // Stock is refunded back: 80 + 20 = 100
+        // Inventory remains physically in transit until a real return is received.
         var stockAfter = _stocksRepo.Items.First(s => s.BranchId == _fromBranchId && s.ProductId == _productId);
-        Assert.Equal(100m, stockAfter.QuantityOnHand);
+        Assert.Equal(80m, stockAfter.QuantityOnHand);
+    }
+
+    [Fact]
+    public async Task ReturnTransferAsync_InTransit_RestoresSourceStockAndRecordsPhysicalReturn()
+    {
+        var createRequest = new CreateTransferRequest(
+            _fromBranchId,
+            _toBranchId,
+            DispatchNow: false,
+            ExpectedDeliveryDate: null,
+            Note: "Điều chuyển theo kế hoạch",
+            Items: new List<TransferLineRequest>
+            {
+                new(_productId, 20m, "Hộp", "BATCH-01", new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Utc), 25000m)
+            });
+        var created = await _service.CreateTransferAsync(createRequest, CancellationToken.None);
+        created = await SubmitAndDispatchAsync(created.Id);
+        Assert.Equal(80m, _stocksRepo.Items.Single(s => s.BranchId == _fromBranchId).QuantityOnHand);
+
+        _tenantContext.SetRole("STAFF");
+        _tenantContext.CurrentBranchId = _fromBranchId;
+
+        var result = await _service.ReturnTransferAsync(
+            created.Id,
+            new ReturnTransferRequest("Xe quay lại và kho nguồn đã kiểm đếm đủ"),
+            CancellationToken.None);
+
+        Assert.Equal("Completed", result.Status);
+        Assert.Equal("Returned", result.CompletionResult);
+        Assert.Equal(100m, _stocksRepo.Items.Single(s => s.BranchId == _fromBranchId).QuantityOnHand);
+        Assert.Contains(result.History, x => x.Action == "ReturnedToSource" && x.ToStatus == "Completed");
     }
 
     [Fact]

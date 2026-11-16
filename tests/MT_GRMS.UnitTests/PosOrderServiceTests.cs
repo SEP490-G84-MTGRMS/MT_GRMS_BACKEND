@@ -379,6 +379,11 @@ public class PosOrderServiceTests
     [Fact]
     public async Task REQ_POS_05_CreateOrder_DebtByCashier_ThrowsUnauthorizedAccessException()
     {
+        var tenant = new Mock<ITenantContext>();
+        tenant.SetupGet(t => t.CurrentTenantId).Returns("tenant-01");
+        tenant.SetupGet(t => t.CurrentRole).Returns("STAFF");
+        tenant.SetupGet(t => t.CurrentBranchId).Returns(_branchId);
+        var service = new OrderService(_orderRepo, _uow, _printService, validator: new OrderCreateRequestValidator(), tenantContext: tenant.Object);
         // Arrange: Thu ngân gửi yêu cầu thanh toán ghi nợ -> Phải bị chặn với mã lỗi 403 / UnauthorizedAccessException
         var request = new OrderCreateRequest(
             BranchId: _branchId,
@@ -388,17 +393,22 @@ public class PosOrderServiceTests
             {
                 new OrderItemCreateDto(_prodCocaId, 1m, 10000m)
             },
-            CreatorRole: "CASHIER"
+            CreatorRole: "STORE_OWNER"
         );
 
         // Act & Assert
-        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _orderService.CreateOrderAsync(request));
+        var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.CreateOrderAsync(request));
         Assert.Contains("Chỉ Chủ cửa hàng hoặc Quản trị viên", ex.Message);
     }
 
     [Fact]
     public async Task REQ_POS_05_CreateOrder_DebtByStoreOwner_Success()
     {
+        var tenant = new Mock<ITenantContext>();
+        tenant.SetupGet(t => t.CurrentTenantId).Returns("tenant-01");
+        tenant.SetupGet(t => t.CurrentRole).Returns("STORE_OWNER");
+        tenant.SetupGet(t => t.CurrentBranchId).Returns(_branchId);
+        var service = new OrderService(_orderRepo, _uow, _printService, validator: new OrderCreateRequestValidator(), tenantContext: tenant.Object);
         // Arrange: Chủ cửa hàng duyệt đơn ghi nợ -> Thành công
         var ownerApprovedCustomer = _orderRepo.Customers.First(c => c.Id == _customerId);
         ownerApprovedCustomer.AllowDebt = false;
@@ -416,7 +426,7 @@ public class PosOrderServiceTests
         );
 
         // Act
-        var result = await _orderService.CreateOrderAsync(request);
+        var result = await service.CreateOrderAsync(request);
 
         // Assert
         Assert.NotNull(result);
@@ -1683,6 +1693,7 @@ public class PosOrderServiceTests
         mockTenantContext.Setup(c => c.CurrentTenantId).Returns("tenant-01");
         mockTenantContext.Setup(c => c.CurrentUserId).Returns(cashierUserId);
         mockTenantContext.Setup(c => c.CurrentRole).Returns("CASHIER");
+        mockTenantContext.Setup(c => c.CurrentBranchId).Returns(_branchId);
 
         var orderService = new OrderService(
             _orderRepo,
@@ -2854,7 +2865,8 @@ public class PosOrderServiceTests
 
         var mockTenant = new Moq.Mock<ITenantContext>();
         mockTenant.Setup(t => t.CurrentTenantId).Returns("tenant-01");
-        mockTenant.Setup(t => t.CurrentRole).Returns("CASHIER");
+        mockTenant.Setup(t => t.CurrentRole).Returns("STAFF");
+        mockTenant.Setup(t => t.CurrentBranchId).Returns(_branchId);
 
         var cashierOrderService = new OrderService(
             _orderRepo,

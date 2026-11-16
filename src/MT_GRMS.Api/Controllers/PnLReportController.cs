@@ -9,7 +9,7 @@ using MT_GRMS.Domain.Constants;
 namespace MT_GRMS.Api.Controllers;
 
 [Route("api/finance/reports/pnl")]
-[Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+[Authorize(Roles = SystemRoles.StoreOwner)]
 public class PnLReportController : BaseApiController
 {
     private readonly IPnLReportService _pnlService;

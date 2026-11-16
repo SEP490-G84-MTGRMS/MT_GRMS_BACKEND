@@ -30,6 +30,10 @@ public class ExceptionHandlingMiddleware
         {
             await _next(context);
         }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            _logger.LogInformation("Request was canceled by the client.");
+        }
         catch (Exception ex)
         {
             await HandleExceptionAsync(context, ex);
@@ -38,6 +42,12 @@ public class ExceptionHandlingMiddleware
 
     private async Task HandleExceptionAsync(HttpContext context, Exception exception)
     {
+        if (exception is OperationCanceledException || context.RequestAborted.IsCancellationRequested)
+        {
+            _logger.LogInformation("Request was canceled by the client.");
+            return;
+        }
+
         var statusCode = (int)HttpStatusCode.InternalServerError;
         ApiResponse<object> apiResponse;
 

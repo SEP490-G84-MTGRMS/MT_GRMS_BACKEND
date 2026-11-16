@@ -49,8 +49,32 @@ public class HouseholdTaxSnapshotConfiguration : IEntityTypeConfiguration<Househ
             .HasColumnType("text")
             .IsRequired();
 
-        builder.HasIndex(x => new { x.TenantId, x.BranchId, x.PeriodType, x.Year, x.PeriodNumber })
+        builder.Property(x => x.Status)
+            .HasConversion<int>()
+            .HasDefaultValue(MT_GRMS.Domain.Enums.TaxSnapshotStatus.Finalized)
+            .IsRequired();
+
+        builder.Property(x => x.RevisionNumber)
+            .HasDefaultValue(0)
+            .IsRequired();
+
+        builder.Property(x => x.SupersededSnapshotId)
+            .IsRequired(false);
+
+        builder.Property(x => x.RectificationReason)
+            .HasMaxLength(1000)
+            .IsRequired(false);
+
+        // Unique index cho từng revision (tên gọn <= 63 ký tự tương thích PostgreSQL)
+        builder.HasIndex(x => new { x.TenantId, x.BranchId, x.PeriodType, x.Year, x.PeriodNumber, x.RevisionNumber })
+            .HasDatabaseName("IX_HouseholdTaxSnapshots_Tenant_Period_Revision")
             .IsUnique();
+
+        // Unique index cho active snapshot duy nhất đang khóa kỳ (Status = Finalized = 1)
+        builder.HasIndex(x => new { x.TenantId, x.BranchId, x.PeriodType, x.Year, x.PeriodNumber })
+            .HasDatabaseName("IX_HouseholdTaxSnapshots_Tenant_Period_Active")
+            .IsUnique()
+            .HasFilter("\"Status\" = 1");
     }
 }
 

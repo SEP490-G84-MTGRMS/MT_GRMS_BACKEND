@@ -55,6 +55,9 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<BranchStock> BranchStocks { get; set; } = null!;
     public virtual DbSet<Transfer> Transfers { get; set; } = null!;
     public virtual DbSet<TransferDetail> TransferDetails { get; set; } = null!;
+    public virtual DbSet<TransferRequest> TransferRequests { get; set; } = null!;
+    public virtual DbSet<TransferRequestDetail> TransferRequestDetails { get; set; } = null!;
+    public virtual DbSet<TransferStatusHistory> TransferStatusHistories { get; set; } = null!;
     public virtual DbSet<Batch> Batches { get; set; } = null!;
     public virtual DbSet<StockOnHand> StockOnHands { get; set; } = null!;
     public virtual DbSet<Stocktake> Stocktakes { get; set; } = null!;
@@ -185,15 +188,59 @@ public partial class AppDbContext : DbContext
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        => SaveChangesAsync(true, cancellationToken);
+
+    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
+        RevokeChangedIdentitySessions();
         ApplyAuditAndTenantInfo();
-        return base.SaveChangesAsync(cancellationToken);
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
     public override int SaveChanges()
+        => SaveChanges(true);
+
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
+        RevokeChangedIdentitySessions();
         ApplyAuditAndTenantInfo();
-        return base.SaveChanges();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    private void RevokeChangedIdentitySessions()
+    {
+        ChangeTracker.DetectChanges();
+        var affected = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var entry in ChangeTracker.Entries().ToArray())
+        {
+            bool Changed(params string[] names) => entry.State == EntityState.Modified && entry.Properties.Any(p =>
+                names.Contains(p.Metadata.Name) && p.IsModified && !Equals(p.OriginalValue, p.CurrentValue));
+
+            if (entry.Entity is User user && Changed(nameof(User.IsAdmin), nameof(User.IsActive),
+                nameof(User.PasswordHash), nameof(User.SecurityPinHash)))
+                affected.Add(user.Id);
+
+            if (entry.Entity is TenantUser membership && (entry.State == EntityState.Deleted ||
+                Changed(nameof(TenantUser.Role), nameof(TenantUser.IsActive))))
+                affected.Add(membership.UserId);
+
+            if (entry.Entity is Employee employee && (entry.State == EntityState.Deleted ||
+                Changed(nameof(Employee.BranchId), nameof(Employee.TenantId), nameof(Employee.UserId), nameof(Employee.Status), nameof(Employee.IsDeleted))))
+            {
+                if (!string.IsNullOrWhiteSpace(employee.UserId)) affected.Add(employee.UserId);
+                var previousUserId = entry.Property(nameof(Employee.UserId)).OriginalValue as string;
+                if (!string.IsNullOrWhiteSpace(previousUserId)) affected.Add(previousUserId);
+            }
+        }
+
+        foreach (var id in affected)
+        {
+            var user = Users.Local.FirstOrDefault(u => u.Id == id) ?? Users.IgnoreQueryFilters().SingleOrDefault(u => u.Id == id);
+            if (user == null || Entry(user).State == EntityState.Deleted) continue;
+            user.SecurityStamp = Guid.NewGuid().ToString("N");
+            user.RefreshToken = null;
+            user.RefreshTokenExpiryTime = null;
+        }
     }
 
     private void ApplyAuditAndTenantInfo()
@@ -231,7 +278,25 @@ public partial class AppDbContext : DbContext
                 }
                 if (entry.State == EntityState.Modified)
                 {
-                    throw new InvalidOperationException($"Cấm chỉnh sửa (Modified) thực thể sổ cái tài chính bất biến: {entry.Entity.GetType().Name}. Sổ cái chỉ hỗ trợ cơ chế append-only và điều chỉnh qua bút toán đảo.");
+                    // Đối với HouseholdTaxSnapshot: Cho phép duy nhất thao tác chuyển trạng thái sang Superseded khi thực hiện điều chỉnh hồi tố.
+                    // Nghiêm cấm sửa đổi bất kỳ số liệu tài chính, doanh thu, thuế hoặc chữ ký số nào của bản ghi lịch sử.
+                    if (entry.Entity is HouseholdTaxSnapshot taxSnapshot && taxSnapshot.Status == MT_GRMS.Domain.Enums.TaxSnapshotStatus.Superseded)
+                    {
+                        var modifiedProps = entry.Properties
+                            .Where(p => p.IsModified && !Equals(p.OriginalValue, p.CurrentValue))
+                            .Select(p => p.Metadata.Name)
+                            .ToHashSet();
+                        modifiedProps.Remove(nameof(HouseholdTaxSnapshot.Status));
+                        modifiedProps.Remove(nameof(HouseholdTaxSnapshot.UpdatedAt));
+                        if (modifiedProps.Count > 0)
+                        {
+                            throw new InvalidOperationException($"Cấm chỉnh sửa số liệu tài chính của snapshot bất biến: {string.Join(", ", modifiedProps)}. Chỉ cho phép chuyển trạng thái sang Superseded.");
+                        }
+                    }
+                    else
+                    {
+                        throw new InvalidOperationException($"Cấm chỉnh sửa (Modified) thực thể sổ cái tài chính bất biến: {entry.Entity.GetType().Name}. Sổ cái chỉ hỗ trợ cơ chế append-only và điều chỉnh qua bút toán đảo.");
+                    }
                 }
             }
 

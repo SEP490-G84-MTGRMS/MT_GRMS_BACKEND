@@ -23,4 +23,3 @@ public class UpdateLoyaltyConfigRequestValidator : AbstractValidator<UpdateLoyal
             .GreaterThanOrEqualTo(0).WithMessage("Mức điểm tối thiểu để đổi không được âm");
     }
 }
-
