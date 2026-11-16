@@ -539,4 +539,59 @@ public class CashbookServiceTests
         var entry = await _service.ReceiveCashAsync(bankResp.Id, FinanceAccountType.Bank, 150_000m, "POS_SALE", Guid.NewGuid(), "HD-TEST-01", "Doanh thu bán hàng POS (BANK)");
         Assert.Equal(150_000m, entry.BalanceAfter);
     }
+
+    [Fact]
+    public async Task CreateReceiptAsync_OffPosSale_PersistsTaxableRevenueClassification()
+    {
+        var account = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Till,
+            AccountName = "Két test", CurrentBalance = 1_000_000m
+        };
+        _accountRepo.Items.Add(account);
+        _cashbookRepo.Accounts.Add(account);
+
+        var response = await _service.CreateReceiptAsync(new CreateReceiptRequest(
+            account.Id, 250_000m, "Thu bán hàng ngoài POS", "Bán lẻ ngoài POS", null,
+            "OFF_POS_SALE", CashbookTaxTreatment.TaxableRevenue));
+
+        Assert.Equal("OFF_POS_SALE", response.CategoryCode);
+        Assert.Equal(CashbookTaxTreatment.TaxableRevenue, response.TaxTreatment);
+        Assert.Equal(FinancialNature.OtherIncome, response.FinancialNature);
+    }
+
+    [Fact]
+    public async Task CreateReceiptAsync_OtherIncomeWithoutTaxChoice_IsRejected()
+    {
+        var account = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), AccountType = FinanceAccountType.Till,
+            AccountName = "Két test", CurrentBalance = 1_000_000m
+        };
+        _accountRepo.Items.Add(account);
+        _cashbookRepo.Accounts.Add(account);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.CreateReceiptAsync(
+            new CreateReceiptRequest(account.Id, 100_000m, "Thu nhập khác", "Khoản thu khác", null, "OTHER_INCOME")));
+
+        Assert.Equal("TAX_TREATMENT_REQUIRED", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreatePaymentAsync_DeductibleExpenseWithoutEvidence_IsRejected()
+    {
+        var account = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), AccountType = FinanceAccountType.Till,
+            AccountName = "Két test", CurrentBalance = 1_000_000m
+        };
+        _accountRepo.Items.Add(account);
+        _cashbookRepo.Accounts.Add(account);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.CreatePaymentAsync(
+            new CreatePaymentRequest(account.Id, 100_000m, "Chi khác", "Văn phòng phẩm", null,
+                "OTHER_PAYMENT", CashbookTaxTreatment.DeductibleExpense)));
+
+        Assert.Equal("EVIDENCE_REQUIRED", ex.ErrorCode);
+    }
 }
