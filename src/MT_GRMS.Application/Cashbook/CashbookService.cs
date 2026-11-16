@@ -10,6 +10,12 @@ namespace MT_GRMS.Application.Cashbook;
 
 public class CashbookService : ICashbookService
 {
+    private sealed record EntryClassification(
+        string CategoryCode,
+        FinancialNature FinancialNature,
+        CashbookTaxTreatment TaxTreatment,
+        string? TaxTreatmentReason = null);
+
     private readonly ICashbookRepository _cashbookRepo;
     private readonly IRepository<FinanceAccount> _accountRepo;
     private readonly IRepository<CashInTransit> _transitRepo;
@@ -215,7 +221,10 @@ public class CashbookService : ICashbookService
         return new CashInTransitResponse(transit.Id, transit.TransitCode, transit.SourceAccountId, transit.TargetBankAccountId, transit.AmountSent, transit.AmountReceived, transit.DiscrepancyAmount, transit.CarrierUserId, transit.Status.ToString(), transit.CreatedAt);
     }
 
-    public async Task<CashbookEntryResponse> DisburseCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default)
+    public Task<CashbookEntryResponse> DisburseCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default) =>
+        DisburseCashCoreAsync(accountId, amount, sourceType, sourceId, referenceCode, description, null, ct);
+
+    private async Task<CashbookEntryResponse> DisburseCashCoreAsync(Guid accountId, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, EntryClassification? classification, CancellationToken ct)
     {
         if (amount <= 0)
         {
@@ -247,7 +256,7 @@ public class CashbookService : ICashbookService
                 if (shift != null) shift.TotalCashOut += amount;
             }
 
-            var entry = await RecordEntryInternalAsync(accountId, account.AccountType, branchId, CashbookEntryType.Payment, amount, sourceType, sourceId, referenceCode, description, ct);
+            var entry = await RecordEntryInternalAsync(accountId, account.AccountType, branchId, CashbookEntryType.Payment, amount, sourceType, sourceId, referenceCode, description, classification, ct);
             await _unitOfWork.SaveChangesAsync(ct);
 
             if (shouldManageTransaction)
@@ -267,7 +276,10 @@ public class CashbookService : ICashbookService
         }
     }
 
-    public async Task<CashbookEntryResponse> ReceiveCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default)
+    public Task<CashbookEntryResponse> ReceiveCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default) =>
+        ReceiveCashCoreAsync(accountId, amount, sourceType, sourceId, referenceCode, description, null, ct);
+
+    private async Task<CashbookEntryResponse> ReceiveCashCoreAsync(Guid accountId, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, EntryClassification? classification, CancellationToken ct)
     {
         if (amount <= 0)
         {
@@ -294,7 +306,7 @@ public class CashbookService : ICashbookService
                 if (shift != null) shift.TotalCashIn += amount;
             }
 
-            var entry = await RecordEntryInternalAsync(accountId, account.AccountType, branchId, CashbookEntryType.Receipt, amount, sourceType, sourceId, referenceCode, description, ct);
+            var entry = await RecordEntryInternalAsync(accountId, account.AccountType, branchId, CashbookEntryType.Receipt, amount, sourceType, sourceId, referenceCode, description, classification, ct);
             await _unitOfWork.SaveChangesAsync(ct);
 
             if (shouldManageTransaction)
@@ -596,6 +608,9 @@ public class CashbookService : ICashbookService
             throw new BusinessException("INVALID_AMOUNT", "Số tiền thu phải lớn hơn 0.");
         }
 
+        var classification = ResolveReceiptClassification(request);
+        ValidateDescription(request.Description);
+
         var accountType = await ResolveAccountTypeAsync(request.AccountId, ct);
         var refCode = string.IsNullOrWhiteSpace(request.ReferenceCode)
             ? "PT-" + DateTime.UtcNow.ToString("yyyyMMdd") + "-" + Random.Shared.Next(100, 999)
@@ -605,7 +620,7 @@ public class CashbookService : ICashbookService
             ? request.Category
             : request.Description.Trim();
 
-        return await ReceiveCashAsync(request.AccountId, accountType, request.Amount, "MANUAL", null, refCode, description, ct);
+        return await ReceiveCashCoreAsync(request.AccountId, request.Amount, "MANUAL", null, refCode, description, classification, ct);
     }
 
     public async Task<CashbookEntryResponse> CreatePaymentAsync(CreatePaymentRequest request, CancellationToken ct = default)
@@ -629,6 +644,9 @@ public class CashbookService : ICashbookService
             throw new BusinessException("INSUFFICIENT_FUNDS", $"Số tiền chi ({request.Amount:N0} đ) vượt quá số dư két sắt hiện có ({account.CurrentBalance:N0} đ).");
         }
 
+        var classification = ResolvePaymentClassification(request);
+        ValidateDescription(request.Description);
+
         var refCode = string.IsNullOrWhiteSpace(request.ReferenceCode)
             ? "PC-" + DateTime.UtcNow.ToString("yyyyMMdd") + "-" + Random.Shared.Next(100, 999)
             : request.ReferenceCode.Trim();
@@ -637,7 +655,81 @@ public class CashbookService : ICashbookService
             ? request.Category
             : request.Description.Trim();
 
-        return await DisburseCashAsync(request.AccountId, account.AccountType, request.Amount, "MANUAL", null, refCode, description, ct);
+        return await DisburseCashCoreAsync(request.AccountId, request.Amount, "MANUAL", null, refCode, description, classification, ct);
+    }
+
+    private static EntryClassification ResolveReceiptClassification(CreateReceiptRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.CategoryCode))
+            throw new BusinessException("CATEGORY_REQUIRED", "Phiếu thu bắt buộc có mã danh mục nghiệp vụ.");
+        var code = request.CategoryCode.Trim().ToUpperInvariant();
+        return code switch
+        {
+            "OWNER_DEPOSIT" => RequireTreatment(code, FinancialNature.OwnerDeposit, CashbookTaxTreatment.NonTaxableReceipt, request.TaxTreatment),
+            "OFF_POS_SALE" => RequireTreatment(code, FinancialNature.OtherIncome, CashbookTaxTreatment.TaxableRevenue, request.TaxTreatment),
+            "INTERNAL_REIMBURSEMENT" => RequireTreatment(code, FinancialNature.OtherIncome, CashbookTaxTreatment.NonTaxableReceipt, request.TaxTreatment),
+            "BANK_INTEREST" => RequireTreatment(code, FinancialNature.OtherIncome, CashbookTaxTreatment.TaxableRevenue, request.TaxTreatment),
+            "OTHER_INCOME" => ResolveOtherIncome(request),
+            _ => throw new BusinessException("INVALID_CATEGORY", $"Danh mục thu '{request.CategoryCode}' không hợp lệ.")
+        };
+    }
+
+    private static EntryClassification ResolveOtherIncome(CreateReceiptRequest request)
+    {
+        if (request.TaxTreatment is not (CashbookTaxTreatment.TaxableRevenue or CashbookTaxTreatment.NonTaxableReceipt))
+        {
+            throw new BusinessException("TAX_TREATMENT_REQUIRED", "Thu nhập khác bắt buộc chọn tính vào doanh thu chịu thuế hoặc không tính thuế.");
+        }
+        if (request.TaxTreatment == CashbookTaxTreatment.NonTaxableReceipt && string.IsNullOrWhiteSpace(request.TaxTreatmentReason))
+        {
+            throw new BusinessException("TAX_REASON_REQUIRED", "Khoản thu không tính thuế bắt buộc có lý do.");
+        }
+        return new EntryClassification("OTHER_INCOME", FinancialNature.OtherIncome, request.TaxTreatment.Value, request.TaxTreatmentReason?.Trim());
+    }
+
+    private static EntryClassification ResolvePaymentClassification(CreatePaymentRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.CategoryCode))
+            throw new BusinessException("CATEGORY_REQUIRED", "Phiếu chi bắt buộc có mã danh mục nghiệp vụ.");
+        var code = request.CategoryCode.Trim().ToUpperInvariant();
+        return code switch
+        {
+            "OWNER_DRAW" => RequireTreatment(code, FinancialNature.OwnerDraw, CashbookTaxTreatment.NonDeductibleExpense, request.TaxTreatment),
+            "ASSET_PURCHASE" => RequireTreatment(code, FinancialNature.OperatingExpense, CashbookTaxTreatment.NonDeductibleExpense, request.TaxTreatment),
+            "OTHER_PAYMENT" => ResolveOtherPayment(request),
+            "TAX_PAYMENT" => throw new BusinessException("USE_TAX_PAYMENT_ENDPOINT", "Nộp thuế phải được ghi nhận qua nghiệp vụ nộp thuế chuyên dụng và có chứng từ tham chiếu."),
+            _ => throw new BusinessException("INVALID_CATEGORY", $"Danh mục chi '{request.CategoryCode}' không hợp lệ.")
+        };
+    }
+
+    private static EntryClassification ResolveOtherPayment(CreatePaymentRequest request)
+    {
+        if (request.TaxTreatment is not (CashbookTaxTreatment.DeductibleExpense or CashbookTaxTreatment.NonDeductibleExpense))
+        {
+            throw new BusinessException("TAX_TREATMENT_REQUIRED", "Chi khác bắt buộc chọn chi phí được trừ hoặc không được trừ.");
+        }
+        if (request.TaxTreatment == CashbookTaxTreatment.DeductibleExpense && string.IsNullOrWhiteSpace(request.ReferenceCode))
+        {
+            throw new BusinessException("EVIDENCE_REQUIRED", "Chi phí được trừ bắt buộc có số hoặc mã chứng từ.");
+        }
+        return new EntryClassification("OTHER_PAYMENT", FinancialNature.OperatingExpense, request.TaxTreatment.Value, request.TaxTreatmentReason?.Trim());
+    }
+
+    private static EntryClassification RequireTreatment(string categoryCode, FinancialNature nature, CashbookTaxTreatment expected, CashbookTaxTreatment? requested)
+    {
+        if (requested.HasValue && requested.Value != expected)
+        {
+            throw new BusinessException("INVALID_TAX_TREATMENT", $"Cách xử lý thuế không phù hợp với danh mục {categoryCode}.");
+        }
+        return new EntryClassification(categoryCode, nature, expected);
+    }
+
+    private static void ValidateDescription(string? description)
+    {
+        if (description?.Trim().Length > 255)
+        {
+            throw new BusinessException("DESCRIPTION_TOO_LONG", "Diễn giải không được vượt quá 255 ký tự.");
+        }
     }
 
     public async Task<TaxPaymentResponse> RecordTaxPaymentAsync(RecordTaxPaymentRequest request, CancellationToken ct = default)
@@ -820,16 +912,22 @@ public class CashbookService : ICashbookService
 
         if (origEntry.EntryType == CashbookEntryType.Receipt)
         {
-            return await DisburseCashAsync(origEntry.AccountId, origEntry.AccountType, origEntry.Amount, "COMPENSATING", origEntry.Id, compRefCode, compDescription, ct);
+            return await DisburseCashCoreAsync(origEntry.AccountId, origEntry.Amount, "COMPENSATING", origEntry.Id, compRefCode, compDescription,
+                new EntryClassification(origEntry.CategoryCode, origEntry.FinancialNature, origEntry.TaxTreatment, origEntry.TaxTreatmentReason), ct);
         }
         else
         {
-            return await ReceiveCashAsync(origEntry.AccountId, origEntry.AccountType, origEntry.Amount, "COMPENSATING", origEntry.Id, compRefCode, compDescription, ct);
+            return await ReceiveCashCoreAsync(origEntry.AccountId, origEntry.Amount, "COMPENSATING", origEntry.Id, compRefCode, compDescription,
+                new EntryClassification(origEntry.CategoryCode, origEntry.FinancialNature, origEntry.TaxTreatment, origEntry.TaxTreatmentReason), ct);
         }
     }
 
-    private async Task<CashbookEntry> RecordEntryInternalAsync(Guid accountId, FinanceAccountType accountType, Guid? branchId, CashbookEntryType entryType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct)
+    private Task<CashbookEntry> RecordEntryInternalAsync(Guid accountId, FinanceAccountType accountType, Guid? branchId, CashbookEntryType entryType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct) =>
+        RecordEntryInternalAsync(accountId, accountType, branchId, entryType, amount, sourceType, sourceId, referenceCode, description, null, ct);
+
+    private async Task<CashbookEntry> RecordEntryInternalAsync(Guid accountId, FinanceAccountType accountType, Guid? branchId, CashbookEntryType entryType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, EntryClassification? classification, CancellationToken ct)
     {
+        classification ??= InferClassification(sourceType, entryType);
         var prevHash = await _cashbookRepo.GetLastAuditHashAsync(accountId, ct);
         var acc = await _accountRepo.GetByIdAsync(accountId, ct);
         decimal balanceAfter = acc?.CurrentBalance ?? 0;
@@ -845,6 +943,10 @@ public class CashbookService : ICashbookService
             Amount = amount,
             BalanceAfter = balanceAfter,
             SourceType = sourceType,
+            CategoryCode = classification.CategoryCode,
+            FinancialNature = classification.FinancialNature,
+            TaxTreatment = classification.TaxTreatment,
+            TaxTreatmentReason = classification.TaxTreatmentReason,
             SourceId = sourceId,
             ReversedEntryId = (sourceType == "COMPENSATING" || sourceType == "REVERSAL") ? sourceId : null,
             ReferenceCode = referenceCode,
@@ -856,6 +958,21 @@ public class CashbookService : ICashbookService
         await _cashbookRepo.AddAsync(entry, ct);
 
         return entry;
+    }
+
+    private static EntryClassification InferClassification(string sourceType, CashbookEntryType entryType)
+    {
+        var source = sourceType.ToUpperInvariant();
+        if (source is "INTERNAL_TRANSFER" or "CASH_DROP" or "BANK_DEPOSIT")
+            return new EntryClassification(source, FinancialNature.InternalTransfer, CashbookTaxTreatment.InternalTransfer);
+        if (source == "TAX_PAYMENT")
+            return new EntryClassification("TAX_PAYMENT", FinancialNature.TaxPayment, CashbookTaxTreatment.TaxPayment);
+        if (source is "POS" or "POS_SALE")
+            return new EntryClassification("POS_SALE", FinancialNature.OtherIncome, CashbookTaxTreatment.TaxableRevenue);
+        if (source is "DEBT" or "DEBT_REPAYMENT")
+            return new EntryClassification("DEBT_COLLECTION", FinancialNature.OtherIncome, CashbookTaxTreatment.NonTaxableReceipt);
+        return new EntryClassification("REVIEW_REQUIRED", FinancialNature.Suspense, CashbookTaxTreatment.ReviewRequired,
+            $"Chưa có quy tắc phân loại tự động cho nguồn {sourceType}/{entryType}");
     }
 
     private static ShiftResponse MapShiftResponse(ShiftZReport s) =>
@@ -891,7 +1008,11 @@ public class CashbookService : ICashbookService
             e.ReferenceCode,
             e.AuditHash,
             e.Description,
-            e.OccurredAtUtc
+            e.OccurredAtUtc,
+            e.CategoryCode,
+            e.FinancialNature,
+            e.TaxTreatment,
+            e.TaxTreatmentReason
         );
 
     private void ValidateFinancialManagementRole()

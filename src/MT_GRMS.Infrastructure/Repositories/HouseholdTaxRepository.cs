@@ -58,7 +58,15 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= startOfYearUtc && e.OccurredAtUtc < upToDateUtc)
             .SumAsync(e => (decimal?)e.Amount, cancellationToken) ?? 0m;
 
-        var netRevenue = orderGross - orderDiscounts - returns;
+        // Manual off-POS revenue is not represented by an Order. Include only
+        // entries explicitly classified by the backend and net compensating
+        // payments so a voided receipt cannot inflate taxable revenue.
+        var manualTaxableReceipts = await _context.CashbookEntries
+            .Where(e => e.OccurredAtUtc >= startOfYearUtc && e.OccurredAtUtc < upToDateUtc &&
+                        e.SourceType == "MANUAL" && e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue)
+            .SumAsync(e => (decimal?)(e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount), cancellationToken) ?? 0m;
+
+        var netRevenue = orderGross - orderDiscounts - returns + manualTaxableReceipts;
         return netRevenue;
     }
 
@@ -89,7 +97,17 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc < toDateUtc)
             .SumAsync(e => (decimal?)e.Amount, cancellationToken) ?? 0m;
 
-        return (gross, discounts, returns);
+        var manualRevenueQuery = _context.CashbookEntries.Where(e =>
+            e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc < toDateUtc &&
+            e.SourceType == "MANUAL" && e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue);
+        if (branchId.HasValue)
+        {
+            manualRevenueQuery = manualRevenueQuery.Where(e => e.BranchId == branchId.Value);
+        }
+        var manualTaxableRevenue = await manualRevenueQuery
+            .SumAsync(e => (decimal?)(e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount), cancellationToken) ?? 0m;
+
+        return (gross + manualTaxableRevenue, discounts, returns);
     }
 
     public async Task<decimal> GetPeriodOpexAsync(
@@ -110,13 +128,26 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             (v.Status == ExpenseVoucherStatus.Paid || v.Status == ExpenseVoucherStatus.Approved));
 
         // Lọc chi phí vận hành hợp lệ và loại trừ rút vốn chủ sở hữu / tiền cọc / nộp thuế
-        return await voucherQuery
+        var voucherExpenses = await voucherQuery
             .Where(v => v.Nature == FinancialNature.OperatingExpense &&
+                        v.IsTaxDeductible &&
                         !v.Category.ToLower().Contains("capital") &&
                         !v.Category.ToLower().Contains("equity") &&
                         !v.Category.ToLower().Contains("vốn") &&
                         !v.Category.ToLower().Contains("rút vốn"))
             .SumAsync(v => (decimal?)v.Amount, cancellationToken) ?? 0m;
+
+        var manualExpenseQuery = _context.CashbookEntries.Where(e =>
+            e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc <= toDateUtc &&
+            e.SourceType == "MANUAL" && e.TaxTreatment == CashbookTaxTreatment.DeductibleExpense);
+        if (branchId.HasValue)
+        {
+            manualExpenseQuery = manualExpenseQuery.Where(e => e.BranchId == branchId.Value);
+        }
+        var manualDeductibleExpenses = await manualExpenseQuery
+            .SumAsync(e => (decimal?)(e.EntryType == CashbookEntryType.Payment ? e.Amount : -e.Amount), cancellationToken) ?? 0m;
+
+        return Math.Max(0m, voucherExpenses + manualDeductibleExpenses);
     }
 
     public Task<decimal> GetPeriodDeductibleExpensesAsync(

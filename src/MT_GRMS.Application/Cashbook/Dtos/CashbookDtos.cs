@@ -80,7 +80,11 @@ public record CashbookEntryResponse(
     string ReferenceCode,
     string AuditHash,
     string Description,
-    DateTime OccurredAtUtc
+    DateTime OccurredAtUtc,
+    string CategoryCode = "REVIEW_REQUIRED",
+    FinancialNature FinancialNature = FinancialNature.Suspense,
+    CashbookTaxTreatment TaxTreatment = CashbookTaxTreatment.ReviewRequired,
+    string? TaxTreatmentReason = null
 );
 public record CashbookCreateRequest(
     Guid BranchId,
@@ -120,7 +124,10 @@ public record CreateReceiptRequest(
     decimal Amount,
     string Category,
     string? Description,
-    string? ReferenceCode
+    string? ReferenceCode,
+    string CategoryCode = "OTHER_INCOME",
+    CashbookTaxTreatment? TaxTreatment = null,
+    string? TaxTreatmentReason = null
 );
 
 public record CreatePaymentRequest(
@@ -128,7 +135,10 @@ public record CreatePaymentRequest(
     decimal Amount,
     string Category,
     string? Description,
-    string? ReferenceCode
+    string? ReferenceCode,
+    string CategoryCode = "OTHER_PAYMENT",
+    CashbookTaxTreatment? TaxTreatment = null,
+    string? TaxTreatmentReason = null
 );
 
 /// <summary>

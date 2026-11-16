@@ -58,6 +58,7 @@ ehthumbs.db
 *.Designer.cs
 !src/MT_GRMS.Infrastructure/Persistence/Migrations/20261114193000_AddTaxPaymentSnapshotReference.cs
 !src/MT_GRMS.Infrastructure/Persistence/Migrations/20261114203000_AddTaxSnapshotSupersedeAndRevision.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261116094500_AddCashbookTaxClassification.cs
 
 ## Supplier order Excel local storage
 **/storage/supplier-orders/
