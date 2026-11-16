@@ -1968,7 +1968,7 @@ END $$;
 
     private static User CreateUser(string id, string username, string name, string phone, string password, bool admin = false)
     {
-        var email = username + "@demo.thviet.example";
+        var email = username + (admin || id.StartsWith("demo-owner-", StringComparison.Ordinal) ? "@mtgrms.vn" : "@demo.thviet.example");
         return new User {
             Id = id, UserName = username, FullName = name, Phone = phone, NormalizedPhone = phone,
             Email = email, NormalizedEmail = email.ToLowerInvariant(), PasswordHash = PasswordHasher.Hash(password),

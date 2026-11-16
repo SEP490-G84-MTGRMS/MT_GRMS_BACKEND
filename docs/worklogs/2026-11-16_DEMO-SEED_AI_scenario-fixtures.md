@@ -13,3 +13,5 @@
 - Tài khoản và cách dùng được ghi trong docs/DEMO_ACCOUNTS.md. Không đổi mật khẩu Admin hiện có, không xóa nhóm dữ liệu cũ. Chưa kiểm tra trực tiếp giao diện browser.
 
 - Theo yêu cầu, chuyển toàn bộ seed và helper trực tiếp vào DbInitializer.cs, xóa DemoScenarioSeedData.cs. Program và test gọi DbInitializer.SeedDemoAsync; giữ nguyên dữ liệu và hành vi seed.
+
+- Đổi email seed Admin thành admin@mtgrms.vn và owner thành demo.<kịch bản>@mtgrms.vn theo yêu cầu. Đồng bộ email hiện có của đúng ID demo trong PostgreSQL, frontend hiển thị email để đăng nhập; giữ mật khẩu và vai trò.

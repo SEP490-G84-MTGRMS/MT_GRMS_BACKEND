@@ -9,7 +9,7 @@ dotnet run --launch-profile http -- --seed-demo-only true
 Lệnh này chỉ nạp demo và thoát, không chạy đồng bộ schema. Database cần được khởi tạo bằng backend trước.
 Khởi động backend bình thường trong Development cũng nạp bộ mẫu nếu `Database:SeedSampleData` không bị tắt.
 
-Mật khẩu các chủ cửa hàng và nhân viên demo là `Demo@123456`. Email dùng miền `.example`, tài khoản demo đã xác minh email và tắt 2FA để đăng nhập không gửi thư ra ngoài.
+Mật khẩu các chủ cửa hàng và nhân viên demo là `Demo@123456`. Admin dùng `admin@mtgrms.vn`; chủ cửa hàng dùng `<tên đăng nhập>@mtgrms.vn` (ví dụ `demo.standard@mtgrms.vn`). Nhân viên giữ miền `.example`. tài khoản demo đã xác minh email và tắt 2FA để đăng nhập không gửi thư ra ngoài.
 
 | Điện thoại | Tên đăng nhập | Kịch bản | Chi nhánh | Nhân viên |
 |---|---|---|---|---|

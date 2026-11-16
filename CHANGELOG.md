@@ -7,6 +7,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-15
 
 ### Changed
+- Đồng bộ email Admin và chủ cửa hàng mẫu sang miền mtgrms.vn. [worklog: docs/worklogs/2026-11-16_DEMO-SEED_AI_scenario-fixtures.md]
 - Tập trung seed trực tiếp trong DbInitializer.cs, thay seed demo cũ bằng bộ 8 kịch bản SaaS có owner, nhân viên, chi nhánh và dữ liệu vận hành, nạp idempotent không ghi đè dữ liệu cũ. Thêm lệnh Development `--seed-demo-only true`. [worklog: docs/worklogs/2026-11-16_DEMO-SEED_AI_scenario-fixtures.md]
 - Dashboard Admin bỏ dữ liệu mẫu, thêm tổng hợp mua gói và điểm bán theo kỳ UTC+7, sửa trạng thái cảnh báo và cách đếm giao dịch mua gói. [worklog: docs/worklogs/2026-11-16_ADMIN-DASHBOARD_AI_real-data.md]
 - Hợp nhất yêu cầu nạp VietQR và giao dịch ví vào `WalletTransactions`. Giữ hợp đồng API, chuyển dữ liệu đơn cũ qua đối soát và ngăn webhook cộng trùng số dư. [worklog: docs/worklogs/2026-11-16_WALLET_AI_merge-topup-orders.md]
@@ -20,6 +21,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - API Admin `POST /api/admin/tenants` tạo cửa hàng, tài khoản chủ sở hữu và chi nhánh chính trong một transaction, kiểm tra dữ liệu trùng và ghi audit log. Cửa hàng khởi tạo ở trạng thái `NO_PLAN`. [worklog: docs/worklogs/2026-11-15_ADMIN-TENANT_AI_create-tenant.md]
 
 ### Fixed
+- Không áp điều kiện mua gói tenant cho Admin đã xác thực, sửa API quản trị trả 403 sau reset dữ liệu. [worklog: docs/worklogs/2026-11-16_ADMIN-AUTH_AI_subscription-bypass.md]
 - Bổ sung CreatedAt và IsDeleted trong khởi tạo PlatformSettings để tránh lỗi PostgreSQL 23502 khi chạy backend. [worklog: docs/worklogs/2026-11-16_PLATFORM-SETTINGS_AI_fix-startup-seed.md]
 - **Triệt tiêu toàn bộ cảnh báo EF Core Model Validation ([20601] & [10620]) & Query First Without OrderBy ([10103])**: Cấu hình `.HasSentinel(...)` cho các thuộc tính Enum có database default (`Product.Status`, `Employee.SalaryType`, `Employee.Status`, `Payslip.SalaryType`, `Payslip.Status`, `ScheduleApprovalRequest.Status`, `Transfer.Status`) và bổ sung `ValueComparer<List<string>>` cho `ScheduleApprovalRequest.EvidenceImageUrls`. Bổ sung điều kiện deterministic ordering `.OrderBy(x => x.Id)` và filter tenant cho các truy vấn `FirstOrDefaultAsync` trong `DbInitializer.cs`, `CashbookRepository.cs`, `PurchaseOrderRepository.cs`, `ShiftRepository.cs`, `TaxExportService.cs`, `WalletService.cs` và `OrderRepository.cs` [FIX-WARN] [worklog: docs/worklogs/2026-11-15_FIX-WARN_AI_fix-efcore-validation-warnings.md].
 
@@ -29,6 +31,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - API `GET /api/store-owner/dashboard` tổng hợp số liệu thật về doanh số, P&L, nhập hàng, kho và nhân viên theo tenant/chi nhánh; kiểm tra role StoreOwner. [worklog: docs/worklogs/2026-11-14_FE10_AI_store-owner-dashboard-real-data.md]
 
 ### Changed
+- Đồng bộ email Admin và chủ cửa hàng mẫu sang miền mtgrms.vn. [worklog: docs/worklogs/2026-11-16_DEMO-SEED_AI_scenario-fixtures.md]
 - Dashboard Chủ cửa hàng hiển thị doanh thu theo 24 giờ Việt Nam khi chọn Hôm nay/Hôm qua; các kỳ dài hơn tiếp tục theo ngày. [worklog: docs/worklogs/2026-11-14_FE10_AI_store-owner-dashboard-real-data.md]
 - Thu gọn luồng access/refresh dùng các trường hiện có trên Users, access mặc định 15 phút và refresh cố định 7 ngày. Lưu hash token mới, đồng bộ hạn cookie và hỗ trợ logout khi access hết hạn. [worklog: docs/worklogs/2026-11-14_AUTH-REFRESH_AI_user-token-flow.md]
 
@@ -38,11 +41,13 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-13
 
 ### Changed
+- Đồng bộ email Admin và chủ cửa hàng mẫu sang miền mtgrms.vn. [worklog: docs/worklogs/2026-11-16_DEMO-SEED_AI_scenario-fixtures.md]
 - **Mặc định tắt xác thực 2 bước (2FA OTP Email) khi tạo tài khoản**: Chuyển cờ `User.IsTwoFactorEnabled` mặc định thành `false` cho toàn bộ tài khoản mới đăng ký/tạo mới, giúp người dùng đăng nhập ngay sau mật khẩu mà không bị bắt buộc xác thực 2FA OTP qua email [BE-AUTH] [worklog: docs/worklogs/2026-11-13_BE-AUTH_AI_default-disable-two-factor-auth-on-registration.md].
 - **Cập nhật nhận diện thương hiệu THViet cho Email OTP & Cấu hình**: Chuyển đổi tên thương hiệu hệ thống sang `THViet - QUẢN LÝ TẠP HÓA VIỆT`, cập nhật tiêu đề email `[THViet]`, Header logo thương hiệu, SenderName (`.env`, `EmailSettings.cs`, `appsettings.json`) và phóng to mã OTP lên 38px nổi bật trên nền xanh thương hiệu `#0F766E` [BRAND-THVIET] [worklog: docs/worklogs/2026-11-13_BRAND-THVIET_AI_rebrand-email-and-settings.md].
 - **Giao diện Email OTP tối giản phong cách hiện đại (Minimalist NVIDIA Style)**: Tối ưu hóa HTML template trong `EmailService.cs`, chuyển sang layout nền trắng phẳng, căn lề trái, hiển thị mã OTP dạng badge thanh lịch và chân trang tinh gọn [AUTH-OTP] [worklog: docs/worklogs/2026-11-13_AUTH-OTP_AI_minimalist-email-template.md].
 
 ### Fixed
+- Không áp điều kiện mua gói tenant cho Admin đã xác thực, sửa API quản trị trả 403 sau reset dữ liệu. [worklog: docs/worklogs/2026-11-16_ADMIN-AUTH_AI_subscription-bypass.md]
 - **Sửa lỗi upload/xóa ảnh trả 500 trên PostgreSQL**: Chuẩn hóa câu lệnh khóa bản ghi tenant trong `MediaController` sử dụng đúng khóa chính vật lý `Tenants.TenantID` thay vì cột không tồn tại `Id`; bổ sung unit test xác nhận ánh xạ khóa tenant [MEDIA-UPLOAD] [worklog: docs/worklogs/2026-11-14_MEDIA-UPLOAD_AI_fix-tenant-lock-column.md].
 - **Gửi Email OTP chạy nền không chặn luồng (Non-blocking Background Dispatch)**: Chuyển tác vụ gửi thư qua giao thức SMTP trong `EmailService.cs` sang background task (`Task.Run`), giúp API phản hồi tức thì (< 15ms) khi thông tin đăng nhập/đăng ký hợp lệ, popup modal OTP hiển thị ngay lập tức không bị chờ độ trễ mạng SMTP [AUTH-OTP] [worklog: docs/worklogs/2026-11-13_AUTH-OTP_AI_non-blocking-background-smtp-dispatch.md].
 - **Khắc phục hiện tượng đơ lag khi gửi mã OTP Email (`EmailService.cs`)**: Tinh gọn nhánh xử lý fallback dev của `EmailService.cs`, phản hồi tức thì (< 100ms) và in mã OTP ra console khi cấu hình SMTP chưa hoàn tất ở môi trường local/dev, loại bỏ triệt để việc treo luồng mạng [AUTH-OTP] [worklog: docs/worklogs/2026-11-13_AUTH-OTP_AI_fix-email-otp-lag-fallback.md].
@@ -64,6 +69,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-11
 
 ### Fixed
+- Không áp điều kiện mua gói tenant cho Admin đã xác thực, sửa API quản trị trả 403 sau reset dữ liệu. [worklog: docs/worklogs/2026-11-16_ADMIN-AUTH_AI_subscription-bypass.md]
 - Chặn `POST /api/auth/login` cấp phiên bỏ qua Email OTP; giới hạn chờ SMTP 5 giây và không trả/log mã fallback ở production [BE-AUTH] [worklog: docs/worklogs/2026-11-11_BE-AUTH_AI_close-login-otp-bypass-and-smtp-timeout.md].
 - Khắc phục lỗi `DUPLICATE_KEY` (`23505: duplicate key value violates unique constraint "IX_Branches_TenantID_BranchCode"`) khi xác nhận OTP đăng ký mở cửa hàng mới: tinh chỉnh `AppDbContext.ApplyAuditAndTenantInfo` không ghi đè `TenantId` của chi nhánh khi thực thể đã mang `TenantId` của gian hàng mới được khởi tạo; ngăn `MultiTenantMiddleware` gán ép fallback tenant `tenant_mt_mart_01` cho các request đăng ký `/api/auth/register`; bổ sung `IgnoreQueryFilters()` và kiểm tra đồng bộ cả `UserName`, `Phone`, `Email` trong `UserRepository.ExistsByPhoneOrEmailAsync` [BE-AUTH] [worklog: docs/worklogs/2026-11-11_BE-AUTH_AI_fix-tenant-registration-branch-unique-constraint.md].
 
@@ -79,6 +85,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - Chuyển đổi toàn diện cơ chế xác thực sang HttpOnly Cookie: AccessToken và RefreshToken được lưu trong HttpOnly Cookie (chống XSS), loại bỏ token nhạy cảm khỏi response body, triển khai Token Rotation trong CSDL PostgreSQL bảng Users, bổ sung endpoint `GET /api/auth/me` và `POST /api/auth/refresh` đọc Cookie [FE-AUTH] [worklog: docs/worklogs/2026-11-09_FE-AUTH_AI_httponly-cookie-and-session-expiry.md].
 
 ### Fixed
+- Không áp điều kiện mua gói tenant cho Admin đã xác thực, sửa API quản trị trả 403 sau reset dữ liệu. [worklog: docs/worklogs/2026-11-16_ADMIN-AUTH_AI_subscription-bypass.md]
 - Khắc phục lỗi DB khi khởi động Backend sau merge (`column "DebtStatus"/"FaceDescriptor" does not exist`, `relation "ShiftZReports" does not exist`, duplicate key khi seed): chạy script tạo schema theo từng câu lệnh, tự bổ sung cột thiếu theo EF model (`SyncMissingColumnsAsync`), seed dùng `IgnoreQueryFilters()` để không trùng bản ghi soft-delete, sửa thêm phụ cấp nhân viên bằng `DbSet` [BUG-DB] [worklog: docs/worklogs/2026-11-10_BUG-DB_AI_fix-schema-drift-and-seed-after-merge.md].
 - Sửa lỗi tạo tài khoản chủ cửa hàng mới (`RegisterTenantAsync` trong `AuthService.cs`) và kích hoạt dùng thử (`TenantStoreController.cs`, `BranchService.cs`) tự động gán `CurrentPlan = "PRO"` thay vì `"TRIAL"`: chuyển về `CurrentPlan = "TRIAL"` (Gói Dùng Thử 3 ngày, hạn mức 1 chi nhánh), đồng thời lưu `RefreshToken` vào CSDL ngay khi đăng ký để tránh lỗi `401 Unauthorized` khi làm mới phiên qua HttpOnly Cookie [FE-AUTH] [worklog: docs/worklogs/2026-11-09_FE-AUTH_AI_login-refactor-clean-code.md].
 - Khắc phục lỗi `InvalidOperationException` (NpgsqlRetryingExecutionStrategy không hỗ trợ user-initiated transaction) khi xử lý Webhook SePay nạp tiền ví trong `WalletService.cs`: bọc toàn bộ khối transaction cập nhật số dư ví trong `_context.Database.CreateExecutionStrategy().ExecuteAsync()`, đảm bảo luồng nạp tiền và thanh toán gói dịch vụ hoạt động hoàn hảo 100% [BE-WALLET] [worklog: docs/worklogs/2026-11-09_BE-BRANCH_AI_fix-branch-detail-schema-fallback.md].
@@ -104,17 +111,20 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - Bổ sung 3 thuộc tính mới vào bảng `Branches`: `Email` (email thông báo), `ManagerName` (bỏ `[NotMapped]`, lưu chính thức vào DB), và `IsHeadquarter` (đánh dấu cơ sở chính), đồng thời tự động cập nhật DDL trong `DbInitializer.cs` và ánh xạ đầy đủ trong `BranchService.cs` [BE-BRANCH] [worklog: docs/worklogs/2026-11-07_BE-BRANCH_AI_fix-branch-requests-deserialization.md].
 
 ### Fixed
+- Không áp điều kiện mua gói tenant cho Admin đã xác thực, sửa API quản trị trả 403 sau reset dữ liệu. [worklog: docs/worklogs/2026-11-16_ADMIN-AUTH_AI_subscription-bypass.md]
 - Sửa lỗi `400 Bad Request` ("The JSON value could not be converted to MT_GRMS.Application.Branches.Dtos.UpdateBranchRequest. Path: $.name") khi gọi API Tạo mới chi nhánh (`POST /api/branches`) hoặc Cập nhật chi nhánh (`PUT /api/branches/{id}`): chuyển đổi `CreateBranchRequest`, `UpdateBranchRequest` và `UpdateBranchStatusRequest` từ C# positional `record` sang POCO `class` có constructor mặc định và các getter/setter an toàn, giúp `System.Text.Json` model binding chuẩn xác dữ liệu JSON gửi từ Frontend React [BE-BRANCH] [worklog: docs/worklogs/2026-11-07_BE-BRANCH_AI_fix-branch-requests-deserialization.md].
 
 ## [Unreleased] - 2026-11-06
 
 ### Fixed
+- Không áp điều kiện mua gói tenant cho Admin đã xác thực, sửa API quản trị trả 403 sau reset dữ liệu. [worklog: docs/worklogs/2026-11-16_ADMIN-AUTH_AI_subscription-bypass.md]
 - Khắc phục lỗi lặp liên tục `42P01: relation "OutboxMessages" does not exist` từ worker `SupplierOrderDispatchWorker`: chuẩn hóa thứ tự thực thi câu lệnh DDL trong `DbInitializer.cs` bằng cách đưa các lệnh `CREATE TABLE IF NOT EXISTS` cho 4 bảng (`OutboxMessages`, `SupplierDispatchPackages`, `SupplierDispatchPackageItems`, `PurchaseOrderRevisions`) lên trước các lệnh `ALTER TABLE`, loại bỏ xung đột phụ thuộc bảng khi khởi động [BUG-DB] [worklog: docs/worklogs/2026-11-07_BUG-DB_AI_fix-outboxmessages-ddl-order.md].
 - Khắc phục lỗi `42P01: relation "BranchAttendancePolicies" does not exist` và `relation "ShiftConfigs" does not exist` khi khởi động Backend sau khi merge code phân hệ Nhân sự (HR): tự động khởi tạo an toàn và lũy đẳng (`CREATE TABLE IF NOT EXISTS`) cho toàn bộ 6 bảng HR (`BranchAttendancePolicies`, `ShiftConfigs`, `Employees`, `EmployeeAllowances`, `EmployeeSchedules`, `Payslips`, `CashbookTransaction`) và cập nhật các cột mới còn thiếu trong `DbInitializer.cs` [BUG-DB] [worklog: docs/worklogs/2026-11-06_BUG-DB_AI_fix-missing-hr-attendance-tables.md].
 - Khắc phục lỗi `fail: Microsoft.EntityFrameworkCore.Database.Command[20102]` khi khởi động Backend: tự động phát hiện các cột PIN bảo mật đã tồn tại trong bảng `Users` và đồng bộ vào bảng lịch sử `__EFMigrationsHistory`, ngăn chặn hoàn toàn việc chạy lại lệnh `ALTER TABLE "Users" ADD "FailedPinAttempts"` gây trùng lặp cột [BUG-DB] [worklog: docs/worklogs/2026-11-06_BUG-DB_AI_fix-duplicate-column-migration-error.md].
 - Khắc phục toàn bộ các cảnh báo Model Validation `warn: Microsoft.EntityFrameworkCore.Model.Validation[10622]` (QueryFilter tương tác với Required Navigation) và `[20601]` (Sentinel Value cho enum mặc định `CustomerDebtStatus` và `SupplierStatus`), làm sạch 100% console log khi khởi động ứng dụng [BUG-DB] [worklog: docs/worklogs/2026-11-06_BUG-DB_AI_fix-duplicate-column-migration-error.md].
 
 ### Changed
+- Đồng bộ email Admin và chủ cửa hàng mẫu sang miền mtgrms.vn. [worklog: docs/worklogs/2026-11-16_DEMO-SEED_AI_scenario-fixtures.md]
 - Cải thiện API cập nhật thông tin gian hàng `PUT /api/tenant/store-info`: hỗ trợ cơ chế fallback `X-Tenant-Id` header và an toàn null-safety khi lưu tên chuỗi cửa hàng, bảo vệ toàn vẹn dữ liệu khách thuê [FE-STORE] [worklog: docs/worklogs/2026-11-06_FE-STORE_AI_tenant-store-update-enhancement.md].
 - Bổ sung API `GET /api/tenant/subscriptions/history` và DTO `SubscriptionOrderHistoryDto`: trả về danh sách lịch sử hợp đồng và giao dịch gói dịch vụ của gian hàng (kết hợp các giao dịch mua/gia hạn từ `WalletTransactions` và gói khởi tạo ban đầu), chấm dứt tình trạng frontend phải dùng dữ liệu giả định [FE-STORE] [worklog: docs/worklogs/2026-11-06_FE-STORE_AI_tenant-store-update-enhancement.md].
 
@@ -142,6 +152,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - Tích hợp cổng thanh toán SePay và Ví gian hàng: thêm thực thể `WalletTransaction`, `WalletTopupOrder`, cột `Tenants.WalletBalance`, API nạp ví VietQR động, Webhook SePay Idempotent và khấu trừ ví khi mua gói cước [FE-WALLET] [worklog: docs/worklogs/2026-11-04_FE-WALLET_AI_sepay-wallet-integration.md].
 
 ### Changed
+- Đồng bộ email Admin và chủ cửa hàng mẫu sang miền mtgrms.vn. [worklog: docs/worklogs/2026-11-16_DEMO-SEED_AI_scenario-fixtures.md]
 - Cấu hình explicit bridge network mtgrms_network và PGWEB_DATABASE_URL trong docker-compose.yml, triệt tiêu hoàn toàn lỗi crash-loop DNS lookup postgres trên container mtgrms-pgweb (cổng 8081) [BE-DOCKER] [worklog: docs/worklogs/2026-11-04_BE-DOCKER_AI_fix-pgweb-network-crashloop.md].
 - Cấu hình `.gitignore` bỏ qua toàn bộ thư mục `**/Migrations/`, `AppDbContextModelSnapshot.cs` và untrack các migration cũ khỏi Git nhằm triệt tiêu hoàn toàn lỗi merge conflicts khi hợp nhất mã nguồn giữa các nhánh [BE-CONFIG] [worklog: docs/worklogs/2026-11-03_BE-CONFIG_AI_ignore-migrations-to-prevent-merge-conflicts.md].
 - Nâng cấp `DbInitializer.cs` với cơ chế fallback tự động `EnsureCreatedAsync()`, đảm bảo khởi tạo CSDL 34 bảng và dữ liệu mẫu an toàn kể cả khi repository không còn track migrations.
@@ -176,6 +187,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - Thư mục quản lý worklog nội bộ: `docs/worklogs/`.
 
 ### Fixed
+- Không áp điều kiện mua gói tenant cho Admin đã xác thực, sửa API quản trị trả 403 sau reset dữ liệu. [worklog: docs/worklogs/2026-11-16_ADMIN-AUTH_AI_subscription-bypass.md]
 - Khắc phục lỗi lặp liên tục `42P01: relation "OutboxMessages" does not exist` từ worker `SupplierOrderDispatchWorker`: chuẩn hóa thứ tự thực thi câu lệnh DDL trong `DbInitializer.cs` bằng cách đưa các lệnh `CREATE TABLE IF NOT EXISTS` cho 4 bảng (`OutboxMessages`, `SupplierDispatchPackages`, `SupplierDispatchPackageItems`, `PurchaseOrderRevisions`) lên trước các lệnh `ALTER TABLE`, loại bỏ xung đột phụ thuộc bảng khi khởi động [BUG-DB] [worklog: docs/worklogs/2026-11-07_BUG-DB_AI_fix-outboxmessages-ddl-order.md].
 
 - Lỗ hổng cô lập người thuê đa tầng (Multi-Tenant Isolation) trong `AppDbContext.cs`: chuyển sang đánh giá động runtime trong `HasQueryFilter`.
