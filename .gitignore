@@ -60,6 +60,7 @@ ehthumbs.db
 !src/MT_GRMS.Infrastructure/Persistence/Migrations/20261114203000_AddTaxSnapshotSupersedeAndRevision.cs
 !src/MT_GRMS.Infrastructure/Persistence/Migrations/20261116094500_AddCashbookTaxClassification.cs
 !src/MT_GRMS.Infrastructure/Persistence/Migrations/20261116230000_CanonicalizeTenantRoles.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261117030000_AddEmployeeLaborContractColumns.cs
 
 ## Supplier order Excel local storage
 **/storage/supplier-orders/
