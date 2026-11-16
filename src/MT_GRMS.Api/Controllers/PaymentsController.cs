@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -26,17 +27,20 @@ public class PaymentsController : BaseApiController
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<PaymentsController> _logger;
     private readonly ITenantContext _tenantContext;
+    private readonly IDataProtector _sepayProtector;
 
     public PaymentsController(
         AppDbContext context,
         IHttpClientFactory httpClientFactory,
         ILogger<PaymentsController> logger,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        IDataProtectionProvider dataProtectionProvider)
     {
         _context = context;
         _httpClientFactory = httpClientFactory;
         _logger = logger;
         _tenantContext = tenantContext;
+        _sepayProtector = dataProtectionProvider.CreateProtector("MT_GRMS.SePay.ApiToken.v1");
     }
 
     /// <summary>
@@ -210,14 +214,26 @@ public class PaymentsController : BaseApiController
             return NotFound(new { message = $"Đơn hàng {orderCode} không tồn tại." });
         }
 
-        // Lấy cấu hình của Tenant sở hữu đơn hàng này
-        var storeConfig = await _context.StorePaymentConfigs
-            .FirstOrDefaultAsync(c => c.TenantId == order.TenantId && !c.IsDeleted, ct);
+        // Bắt buộc webhook phải khớp đúng tài khoản ngân hàng đã kết nối SePay.
+        var bankAccount = await _context.FinanceAccounts.FirstOrDefaultAsync(a =>
+            a.TenantId == order.TenantId &&
+            a.AccountType == MT_GRMS.Domain.Enums.FinanceAccountType.Bank &&
+            a.AccountNumber == payload.AccountNumber &&
+            a.SepayConnectionStatus == "Connected" &&
+            a.IsActive && !a.IsDeleted, ct);
+
+        if (bankAccount == null)
+        {
+            _logger.LogWarning("Webhook SePay không khớp tài khoản đã kích hoạt. Tenant={TenantId}, Account={Account}", order.TenantId, payload.AccountNumber);
+            return BadRequest(new { message = "Tài khoản nhận chưa kết nối SePay hoặc không được kích hoạt." });
+        }
 
         // Kiểm tra API Key có khớp với cấu hình của Tenant hay không (nếu có cấu hình)
-        if (storeConfig != null && !string.IsNullOrEmpty(storeConfig.SepayApiKeyEncrypted))
+        if (!string.IsNullOrEmpty(bankAccount.SepayWebhookSecret))
         {
-            if (incomingKey != storeConfig.SepayApiKeyEncrypted)
+            if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+                System.Text.Encoding.UTF8.GetBytes(incomingKey),
+                System.Text.Encoding.UTF8.GetBytes(bankAccount.SepayWebhookSecret)))
             {
                 _logger.LogWarning("API Key webhook không khớp với Tenant {TenantId}", order.TenantId);
                 return Unauthorized(new { message = "Invalid API Key for this store." });
@@ -237,12 +253,13 @@ public class PaymentsController : BaseApiController
 
         // LỚP 3 (THEN CHỐT): Double-Check - Gọi ngược lại SePay API để đối soát nếu có API Key
         bool verifiedBySePay = false;
-        if (storeConfig != null && !string.IsNullOrEmpty(storeConfig.SepayApiKeyEncrypted) && !storeConfig.SepayApiKeyEncrypted.StartsWith("mock_"))
+        if (!string.IsNullOrEmpty(bankAccount.SepayApiKeyEncrypted))
         {
             try
             {
                 var client = _httpClientFactory.CreateClient();
-                client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", storeConfig.SepayApiKeyEncrypted);
+                var apiToken = _sepayProtector.Unprotect(bankAccount.SepayApiKeyEncrypted);
+                client.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiToken);
                 var verifyRes = await client.GetAsync($"https://my.sepay.vn/userapi/transactions/details/{payload.Id}", ct);
 
                 if (!verifyRes.IsSuccessStatusCode)
@@ -294,6 +311,8 @@ public class PaymentsController : BaseApiController
         // Gạch nợ đơn hàng
         order.PaymentStatus = "PAID";
         order.UpdatedAt = DateTime.UtcNow;
+        bankAccount.CurrentBalance = payload.Accumulated is > 0 ? payload.Accumulated.Value : bankAccount.CurrentBalance + payload.AmountIn;
+        bankAccount.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync(ct);
         _logger.LogInformation("Thanh toán thành công đơn hàng {OrderCode} qua VietQR SePay!", order.OrderCode);

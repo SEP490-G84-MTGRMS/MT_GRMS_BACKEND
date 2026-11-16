@@ -15,6 +15,14 @@ public class FinanceAccount : BaseTenantEntity
     public string? BankName { get; set; }
     public string? AccountNumber { get; set; }
     public string? AccountHolderName { get; set; }
+    public string? BankCode { get; set; }
+    public string Currency { get; set; } = "VND";
+    public bool IsDefaultForVietQr { get; set; }
+    public string? SepayApiKeyEncrypted { get; set; }
+    public string? SepayWebhookSecret { get; set; }
+    public string SepayConnectionStatus { get; set; } = "NotConfigured";
+    public DateTime? SepayLastVerifiedAtUtc { get; set; }
+    public string? SepayLastError { get; set; }
     public Guid? ActiveShiftId { get; set; }
     public Guid? ManagerUserId { get; set; }
     public bool IsActive { get; set; } = true;
