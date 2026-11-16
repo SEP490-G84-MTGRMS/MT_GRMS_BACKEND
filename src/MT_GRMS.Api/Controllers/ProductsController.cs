@@ -185,11 +185,11 @@ public class ProductsController : BaseApiController
     [HttpGet("{id:guid}/price-history")]
     public async Task<IActionResult> GetPriceHistory(
         Guid id,
-        [FromQuery] Guid? branchId,
+        [FromQuery] ProductPriceHistoryQuery query,
         CancellationToken cancellationToken = default)
     {
-        var result = await _catalogService.GetPriceHistoryAsync(id, branchId, cancellationToken);
-        return Ok(ApiResponse<IReadOnlyList<ProductPriceHistoryDto>>.Ok(result));
+        var result = await _catalogService.GetPriceHistoryAsync(id, query, cancellationToken);
+        return Ok(ApiResponse<PagedResult<ProductPriceHistoryDto>>.Ok(result));
     }
 }
 

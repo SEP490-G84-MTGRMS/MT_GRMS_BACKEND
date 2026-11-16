@@ -40,5 +40,6 @@ public class ProductPriceHistory : BaseTenantEntity
     // Navigations
     public Product? Product { get; set; }
     public Branch? Branch { get; set; }
+    public ProductUnit? ProductUnit { get; set; }
 }
 
