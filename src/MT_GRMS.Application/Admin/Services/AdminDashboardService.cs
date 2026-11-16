@@ -26,7 +26,7 @@ public class AdminDashboardService : IAdminDashboardService
         // Tính MRR từ danh sách Tenant Active
         var activeTenantsWithPlans = await _tenantRepository.GetAllActiveWithPlanAsync(cancellationToken);
         decimal mrr = activeTenantsWithPlans
-            .Where(t => t.Status == "ACTIVE" && t.LockType == null)
+            .Where(t => t.Status == "ACTIVE" && t.LockType == null && (t.SubscriptionExpiresAt == null || t.SubscriptionExpiresAt > DateTime.UtcNow))
             .Sum(t => t.SubscriptionPlan?.PriceMonthly ?? 0);
 
         return new List<KpiMetricResponse>
@@ -59,10 +59,10 @@ public class AdminDashboardService : IAdminDashboardService
             ),
             new(
                 Id: "successful_upgrades",
-                Title: "Nâng cấp gói thành công",
+                Title: "Lượt mua gói thành công",
                 Value: successfulUpgrades.ToString(),
                 Unit: "giao dịch",
-                SubText: "Chỉ tính giao dịch chuyển lên gói cao hơn",
+                SubText: "Tất cả giao dịch mua gói thành công, không gồm mua thêm",
                 TrendText: null,
                 TrendType: "neutral",
                 Icon: "ApartmentOutlined",
@@ -128,7 +128,7 @@ public class AdminDashboardService : IAdminDashboardService
             if (t.LockType != null || t.Status == "LOCKED")
             {
                 statusText = $"Đã khóa ({t.LockType ?? "SOFT"})";
-                statusType = "error";
+                statusType = "locked";
                 expiryNotice = !string.IsNullOrEmpty(t.LockReason) ? $"Lý do: {t.LockReason}" : "Đang bị tạm khóa";
             }
             else if (t.Status == "GRACE_PERIOD" || (t.SubscriptionExpiresAt != null && t.SubscriptionExpiresAt <= now))
@@ -137,7 +137,7 @@ public class AdminDashboardService : IAdminDashboardService
                     ? (int)Math.Ceiling((t.GracePeriodExpiresAt.Value - now).TotalDays)
                     : 0;
                 statusText = "Đang ân hạn";
-                statusType = "error";
+                statusType = "grace";
                 expiryNotice = remainingDays > 0 ? $"Còn {remainingDays} ngày ân hạn" : "Hết hạn hôm nay";
             }
             else
@@ -146,7 +146,7 @@ public class AdminDashboardService : IAdminDashboardService
                     ? (int)Math.Ceiling((t.SubscriptionExpiresAt.Value - now).TotalDays)
                     : 0;
                 statusText = "Sắp hết hạn";
-                statusType = "warning";
+                statusType = "expiring";
                 expiryNotice = $"Còn {daysLeft} ngày (hết hạn: {t.SubscriptionExpiresAt:dd/MM/yyyy})";
             }
 

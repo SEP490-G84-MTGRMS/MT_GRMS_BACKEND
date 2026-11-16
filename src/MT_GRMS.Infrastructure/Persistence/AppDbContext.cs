@@ -40,7 +40,6 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<TenantUser> TenantUsers { get; set; } = null!;
     public virtual DbSet<AuditLog> AuditLogs { get; set; } = null!;
     public virtual DbSet<WalletTransaction> WalletTransactions { get; set; } = null!;
-    public virtual DbSet<WalletTopupOrder> WalletTopupOrders { get; set; } = null!;
     public virtual DbSet<MT_GRMS.Domain.Entities.SaaS.PlatformSetting> PlatformSettings { get; set; } = null!;
 
     // 2. Phân hệ Catalog & Hàng hóa

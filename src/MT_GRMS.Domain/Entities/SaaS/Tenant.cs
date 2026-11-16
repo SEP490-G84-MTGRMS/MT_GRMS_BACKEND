@@ -44,5 +44,4 @@ public class Tenant : BaseEntity<string>
     public ICollection<TenantUser> TenantUsers { get; set; } = new List<TenantUser>();
     public ICollection<Branch> Branches { get; set; } = new List<Branch>();
     public ICollection<WalletTransaction> WalletTransactions { get; set; } = new List<WalletTransaction>();
-    public ICollection<WalletTopupOrder> WalletTopupOrders { get; set; } = new List<WalletTopupOrder>();
 }

@@ -6,7 +6,13 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 
 ## [Unreleased] - 2026-11-15
 
+### Changed
+- Tập trung seed trực tiếp trong DbInitializer.cs, thay seed demo cũ bằng bộ 8 kịch bản SaaS có owner, nhân viên, chi nhánh và dữ liệu vận hành, nạp idempotent không ghi đè dữ liệu cũ. Thêm lệnh Development `--seed-demo-only true`. [worklog: docs/worklogs/2026-11-16_DEMO-SEED_AI_scenario-fixtures.md]
+- Dashboard Admin bỏ dữ liệu mẫu, thêm tổng hợp mua gói và điểm bán theo kỳ UTC+7, sửa trạng thái cảnh báo và cách đếm giao dịch mua gói. [worklog: docs/worklogs/2026-11-16_ADMIN-DASHBOARD_AI_real-data.md]
+- Hợp nhất yêu cầu nạp VietQR và giao dịch ví vào `WalletTransactions`. Giữ hợp đồng API, chuyển dữ liệu đơn cũ qua đối soát và ngăn webhook cộng trùng số dư. [worklog: docs/worklogs/2026-11-16_WALLET_AI_merge-topup-orders.md]
+
 ### Added
+- API Admin xem lịch sử mua gói dịch vụ theo tenant, phân trang và giới hạn truy cập Admin. Chi tiết tenant không trả danh sách chi nhánh. [worklog: docs/worklogs/2026-11-16_ADMIN-TENANT_AI_tenant-records.md]
 - Khởi tạo danh mục sản phẩm, nhóm hàng, đơn vị quy đổi và gán chi nhánh chính từ MasterProducts đang bật trong transaction đăng ký cửa hàng. [worklog: docs/worklogs/2026-11-15_ADMIN-CATALOG_AI_new-tenant-default-data.md]
 - **Kho Danh mục Hàng hóa Mẫu Toàn Cầu (Global FMCG Master Catalog)**: Xây dựng thực thể nền tảng `MasterProduct` & `MasterProductUnit`, bộ API quản trị cho Super Admin `AdminMasterCatalogController` (`/api/admin/master-catalog`), xử lý ClosedXML xuất template và import Excel hàng loạt (>5.000 SKU) cùng API tra cứu mã vạch công khai `GET /api/products/lookup-master` phục vụ auto-fill tức thì khi tiệm tạp hóa onboard [REQ-MC-01 -> REQ-MC-04] [worklog: docs/worklogs/2026-11-15_FMCG-MASTER-CATALOG_Ortus24_add-global-master-catalog.md].
 - API Admin `GET /api/admin/audit-logs` đọc nhật ký thật, lọc hành động/từ khóa/thời gian Việt Nam, phân trang và che trường bí mật trong dữ liệu trước/sau. [worklog: docs/worklogs/2026-11-15_ADMIN-AUDIT_AI_audit-log-query.md]
@@ -14,6 +20,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - API Admin `POST /api/admin/tenants` tạo cửa hàng, tài khoản chủ sở hữu và chi nhánh chính trong một transaction, kiểm tra dữ liệu trùng và ghi audit log. Cửa hàng khởi tạo ở trạng thái `NO_PLAN`. [worklog: docs/worklogs/2026-11-15_ADMIN-TENANT_AI_create-tenant.md]
 
 ### Fixed
+- Bổ sung CreatedAt và IsDeleted trong khởi tạo PlatformSettings để tránh lỗi PostgreSQL 23502 khi chạy backend. [worklog: docs/worklogs/2026-11-16_PLATFORM-SETTINGS_AI_fix-startup-seed.md]
 - **Triệt tiêu toàn bộ cảnh báo EF Core Model Validation ([20601] & [10620]) & Query First Without OrderBy ([10103])**: Cấu hình `.HasSentinel(...)` cho các thuộc tính Enum có database default (`Product.Status`, `Employee.SalaryType`, `Employee.Status`, `Payslip.SalaryType`, `Payslip.Status`, `ScheduleApprovalRequest.Status`, `Transfer.Status`) và bổ sung `ValueComparer<List<string>>` cho `ScheduleApprovalRequest.EvidenceImageUrls`. Bổ sung điều kiện deterministic ordering `.OrderBy(x => x.Id)` và filter tenant cho các truy vấn `FirstOrDefaultAsync` trong `DbInitializer.cs`, `CashbookRepository.cs`, `PurchaseOrderRepository.cs`, `ShiftRepository.cs`, `TaxExportService.cs`, `WalletService.cs` và `OrderRepository.cs` [FIX-WARN] [worklog: docs/worklogs/2026-11-15_FIX-WARN_AI_fix-efcore-validation-warnings.md].
 
 ## [Unreleased] - 2026-11-14

@@ -196,9 +196,21 @@ using (var scope = app.Services.CreateScope())
     try
     {
         var dbContext = services.GetRequiredService<AppDbContext>();
+        if (args.Contains("--seed-demo-only"))
+        {
+            if (!app.Environment.IsDevelopment())
+                throw new InvalidOperationException("Seed demo chỉ hỗ trợ môi trường Development.");
+            await DbInitializer.SeedDemoAsync(dbContext);
+            var demoCount = await dbContext.Tenants.CountAsync(t => t.Id.StartsWith("thviet-demo-"));
+            var branchCount = await dbContext.Branches.IgnoreQueryFilters().CountAsync(b => b.TenantId.StartsWith("thviet-demo-"));
+            var employeeCount = await dbContext.Employees.IgnoreQueryFilters().CountAsync(e => e.TenantId.StartsWith("thviet-demo-"));
+            var orderCount = await dbContext.Orders.IgnoreQueryFilters().CountAsync(o => o.TenantId.StartsWith("thviet-demo-"));
+            logger.LogInformation("Demo THViet: {Tenants} tenant, {Branches} chi nhánh, {Employees} nhân viên, {Orders} hóa đơn. Dữ liệu hiện có được giữ nguyên.", demoCount, branchCount, employeeCount, orderCount);
+            return;
+        }
         var seedSampleData = app.Configuration.GetValue<bool?>("Database:SeedSampleData")
             ?? app.Configuration.GetValue<bool?>("Database:SeedDemoData")
-            ?? true;
+            ?? app.Environment.IsDevelopment();
 
         logger.LogInformation(
             "Initializing database schema{0}...",
@@ -210,7 +222,7 @@ using (var scope = app.Services.CreateScope())
                 : "Database schema sync completed in {0} ms (sample seed skipped).",
             startupInitializationTimer.ElapsedMilliseconds);
     }
-    catch (Exception ex)
+    catch (Exception ex) when (ex is not WalletTopupSchemaMigrationException && !args.Contains("--seed-demo-only"))
     {
         logger.LogError(ex, "Lỗi khi tự động áp dụng schema hoặc nạp dữ liệu mẫu vào CSDL sau {ElapsedMilliseconds} ms.", startupInitializationTimer.ElapsedMilliseconds);
     }

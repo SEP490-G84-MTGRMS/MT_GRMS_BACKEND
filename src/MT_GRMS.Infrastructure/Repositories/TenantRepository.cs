@@ -23,9 +23,10 @@ public class TenantRepository : ITenantRepository
     public async Task<Tenant?> GetByIdWithDetailsAsync(string id, CancellationToken cancellationToken = default)
     {
         return await _context.Tenants
+            .IgnoreQueryFilters()
             .Include(t => t.SubscriptionPlan)
             .Include(t => t.Branches.Where(b => !b.IsDeleted))
-            .Include(t => t.TenantUsers.Where(tu => tu.IsActive))
+            .Include(t => t.TenantUsers.Where(tu => tu.IsActive && tu.User != null && !tu.User.IsDeleted))
                 .ThenInclude(tu => tu.User)
             .FirstOrDefaultAsync(t => t.Id == id && !t.IsDeleted, cancellationToken);
     }

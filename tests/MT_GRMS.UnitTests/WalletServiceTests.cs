@@ -75,10 +75,14 @@ public class WalletServiceTests
         Assert.Contains("WAL", result.TransferContent);
         Assert.Contains("https://qr.sepay.vn/img", result.QrUrl);
 
-        var savedOrder = await context.WalletTopupOrders.FirstOrDefaultAsync(o => o.OrderCode == result.OrderCode);
+        var savedOrder = await context.WalletTransactions.SingleAsync(o => o.OrderCode == result.OrderCode);
         Assert.NotNull(savedOrder);
         Assert.Equal("PENDING", savedOrder.Status);
         Assert.Equal("tenant-001", savedOrder.TenantId);
+        Assert.Equal("PENDING", (await service.GetTopupOrderStatusAsync("tenant-001", result.OrderCode))!.Status);
+        Assert.Null(await service.GetTopupOrderStatusAsync("other-tenant", result.OrderCode));
+        Assert.Empty(await service.GetWalletTransactionsAsync("tenant-001"));
+        Assert.Equal(0, (await service.GetWalletBalanceAsync("tenant-001")).TotalTopup);
     }
 
     [Fact]
@@ -107,21 +111,19 @@ public class WalletServiceTests
         };
         context.Tenants.Add(tenant);
 
-        var order = new WalletTopupOrder
+        var order = new WalletTransaction
         {
             TenantId = "tenant-001",
             OrderCode = "839201",
+            TransactionCode = "WAL-ORDER-839201",
+            Type = "TOPUP",
             Amount = 1000000,
+            RequestedAmount = 1000000,
             TransferContent = "WAL 839201",
-            BankCode = "MBBank",
-            BankName = "MB Bank",
-            AccountNumber = "190065228888",
-            AccountName = "MT-GRMS",
-            QrUrl = "https://qr.sepay.vn/img?...",
             Status = "PENDING",
             ExpiresAt = DateTime.UtcNow.AddMinutes(15)
         };
-        context.WalletTopupOrders.Add(order);
+        context.WalletTransactions.Add(order);
         await context.SaveChangesAsync();
 
         var service = new WalletService(context, CreateDefaultSettings());
@@ -147,15 +149,26 @@ public class WalletServiceTests
         var updatedTenant = await context.Tenants.FindAsync("tenant-001");
         Assert.Equal(1200000, updatedTenant!.WalletBalance);
 
-        var updatedOrder = await context.WalletTopupOrders.FirstOrDefaultAsync(o => o.OrderCode == "839201");
+        var updatedOrder = await service.GetTopupOrderStatusAsync("tenant-001", "839201");
         Assert.Equal("COMPLETED", updatedOrder!.Status);
 
-        var tx = await context.WalletTransactions.FirstOrDefaultAsync(t => t.ReferenceCode == "FT2401019912");
+        var tx = await context.WalletTransactions.SingleAsync();
         Assert.NotNull(tx);
+        Assert.Equal(order.Id, tx.Id);
+        Assert.Equal("FT2401019912", tx.ReferenceCode);
+        Assert.Equal("SUCCESS", tx.Status);
         Assert.Equal("TOPUP", tx.Type);
         Assert.Equal(1000000, tx.Amount);
         Assert.Equal(200000, tx.BalanceBefore);
         Assert.Equal(1200000, tx.BalanceAfter);
+
+        webhookPayload.Id++;
+        webhookPayload.ReferenceCode = "FT_SECOND_TRANSFER";
+        Assert.True((await service.ProcessSepayWebhookAsync(webhookPayload)).Success);
+        var review = await context.WalletTransactions.SingleAsync(t => t.Status == "REVIEW");
+        Assert.Equal(order.OrderCode, review.ReconciliationOrderCode);
+        Assert.Equal(1200000, updatedTenant.WalletBalance);
+        Assert.Single(await service.GetWalletTransactionsAsync("tenant-001"));
     }
 
     [Fact]
