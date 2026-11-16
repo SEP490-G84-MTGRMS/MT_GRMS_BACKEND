@@ -18,7 +18,7 @@ public class AuditHashService : IAuditHashService
     public string ComputeEntryHash(string prevHash, CashbookEntry entry)
     {
         // Canonical string format ensuring field ordering and fixed culture
-        var canonical = string.Format(
+        var canonicalV1 = string.Format(
             System.Globalization.CultureInfo.InvariantCulture,
             "{0}|{1}|{2}|{3}|{4}|{5:F2}|{6:F2}|{7}|{8}|{9}|{10:O}",
             prevHash,
@@ -33,6 +33,15 @@ public class AuditHashService : IAuditHashService
             entry.ReversedEntryId?.ToString() ?? string.Empty,
             entry.OccurredAtUtc
         );
+        var canonical = entry.AuditSchemaVersion >= 2
+            ? string.Join("|",
+                canonicalV1,
+                entry.CategoryCode,
+                ((int)entry.FinancialNature).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ((int)entry.TaxTreatment).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                entry.TaxTreatmentReason ?? string.Empty,
+                entry.AuditSchemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture))
+            : canonicalV1;
 
         using var hmac = new HMACSHA256(_secretKey);
         var hashBytes = hmac.ComputeHash(Encoding.UTF8.GetBytes(canonical));

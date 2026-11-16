@@ -24,6 +24,7 @@ public class CashbookEntry : BaseTenantEntity
     public string ReferenceCode { get; set; } = string.Empty;
     public Guid? ReversedEntryId { get; set; }
     public string AuditHash { get; set; } = string.Empty;
+    public int AuditSchemaVersion { get; set; } = 2;
     public string Description { get; set; } = string.Empty;
     public DateTime OccurredAtUtc { get; set; } = DateTime.UtcNow;
 }
