@@ -14,10 +14,12 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Finance;
@@ -36,6 +38,7 @@ public class PaymentsController : BaseApiController
     private readonly IConfiguration _configuration;
     private readonly ILogger<PaymentsController> _logger;
     private readonly ITenantContext _tenantContext;
+    private readonly IWebHostEnvironment _environment;
 
     private const string EncryptedPrefix = "AES256:";
     private const string DefaultMasterSecret = "MT_GRMS_SEPAY_AES256_MASTER_SECRET_KEY_2026_V4";
@@ -44,31 +47,20 @@ public class PaymentsController : BaseApiController
     private static readonly ConcurrentDictionary<string, Queue<DateTime>> _ipRateLimitTracker = new();
     private const int MaxWebhookRequestsPerSecond = 10;
 
-    // LỚP 2A: Danh sách dải IP mặc định của SePay Webhook & Localhost Dev/Test
-    private static readonly string[] DefaultAllowedIpPrefixes = new[]
-    {
-        "127.0.0.1",
-        "::1",
-        "localhost",
-        "103.255.238.", // SePay Webhook IP range
-        "103.161.178.", // SePay Cloud IP range
-        "10.",          // Private internal network / Docker bridge
-        "172.",         // Docker bridge network
-        "192.168."      // Local LAN testing
-    };
-
     public PaymentsController(
         AppDbContext context,
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
         ILogger<PaymentsController> logger,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        IWebHostEnvironment environment)
     {
         _context = context;
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _logger = logger;
         _tenantContext = tenantContext;
+        _environment = environment;
     }
 
     /// <summary>
@@ -612,7 +604,6 @@ public class PaymentsController : BaseApiController
         string decryptedKey = config != null ? DecryptSecret(config.SepayApiKeyEncrypted) : string.Empty;
         bool hasKey = !string.IsNullOrWhiteSpace(decryptedKey);
         string clientIp = GetClientIpAddress();
-        bool ipAllowed = IsIpWhitelisted(clientIp);
 
         var checks = new[]
         {
@@ -628,9 +619,9 @@ public class PaymentsController : BaseApiController
             new
             {
                 layer = 2,
-                name = "Lớp 2: Giới hạn IP (IP Whitelisting) & Chống DDoS (Rate Limit 10 req/s)",
-                passed = ipAllowed,
-                detail = $"Đạt: IP hiện tại ({clientIp}) hợp lệ. Bộ lọc chặn IP lạ (403 Forbidden) và giới hạn tối đa {MaxWebhookRequestsPerSecond} req/giây/IP."
+                name = "Lớp 2: Giới hạn tần suất Webhook (Rate Limit 10 req/s/IP)",
+                passed = true,
+                detail = $"Đạt: Backend giới hạn tối đa {MaxWebhookRequestsPerSecond} request/giây cho mỗi IP. IP kiểm thử hiện tại: {clientIp}."
             },
             new
             {
@@ -673,7 +664,7 @@ public class PaymentsController : BaseApiController
     }
 
     /// <summary>
-    /// Tiếp nhận Webhook từ SePay với mô hình 6 lớp bảo mật (Defense-in-Depth: Rate Limit + IP Whitelist + Secret Token + Double-Check + Amount/Prefix + Idempotency)
+    /// Tiếp nhận Webhook từ SePay với mô hình phòng thủ nhiều lớp (Rate Limit + Secret Token + Double-Check + Amount/Prefix + Idempotency)
     /// </summary>
     [HttpPost("sepay-webhook")]
     [AllowAnonymous]
@@ -681,7 +672,7 @@ public class PaymentsController : BaseApiController
     {
         string clientIp = GetClientIpAddress();
 
-        // LỚP 2B: Kiểm tra Rate Limiting (Tối đa 10 requests/giây trên mỗi IP)
+        // LỚP 2: Kiểm tra Rate Limiting (Tối đa 10 requests/giây trên mỗi IP)
         if (!CheckRateLimit(clientIp))
         {
             _logger.LogWarning("CẢNH BÁO BẢO MẬT [Lớp 2B - Rate Limit]: IP {Ip} vượt quá {Max} requests/giây vào SePay Webhook!",
@@ -689,16 +680,6 @@ public class PaymentsController : BaseApiController
             return StatusCode(StatusCodes.Status429TooManyRequests, new
             {
                 message = "Too Many Requests: Vượt quá giới hạn tần suất gọi Webhook (10 req/s)."
-            });
-        }
-
-        // LỚP 2A: Kiểm tra IP Whitelisting (Chỉ nhận từ dải IP SePay hoặc mạng nội bộ được phép)
-        if (!IsIpWhitelisted(clientIp))
-        {
-            _logger.LogWarning("CẢNH BÁO BẢO MẬT [Lớp 2A - IP Whitelist]: Từ chối Webhook từ IP lạ không nằm trong Whitelist: {Ip}", clientIp);
-            return StatusCode(StatusCodes.Status403Forbidden, new
-            {
-                message = $"Forbidden: IP {clientIp} không nằm trong danh sách IP Whitelist của SePay."
             });
         }
 
@@ -806,6 +787,15 @@ public class PaymentsController : BaseApiController
                                     decryptedApiKey.StartsWith("mock_", StringComparison.OrdinalIgnoreCase) ||
                                     decryptedApiKey.Contains("_demo_", StringComparison.OrdinalIgnoreCase) ||
                                     decryptedApiKey.EndsWith("_8899", StringComparison.OrdinalIgnoreCase);
+
+        if (isLocalDemoOrMockKey && !_environment.IsDevelopment())
+        {
+            _logger.LogError("Từ chối xử lý Webhook ở production vì cửa hàng {TenantId} chưa cấu hình API Key SePay thật.", order.TenantId);
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+            {
+                message = "Cửa hàng chưa cấu hình API Key SePay thật nên hệ thống không thể xác minh giao dịch."
+            });
+        }
 
         if (!isLocalDemoOrMockKey)
         {
@@ -1157,26 +1147,9 @@ public class PaymentsController : BaseApiController
 
     private string GetClientIpAddress()
     {
-        if (Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor) && !string.IsNullOrWhiteSpace(forwardedFor))
-        {
-            return forwardedFor.ToString().Split(',')[0].Trim();
-        }
+        // ForwardedHeadersMiddleware đã chuẩn hóa RemoteIpAddress từ proxy tin cậy.
+        // Không tự đọc X-Forwarded-For vì client có thể giả mạo header này để né rate limit.
         return HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
-    }
-
-    private bool IsIpWhitelisted(string clientIp)
-    {
-        if (string.IsNullOrWhiteSpace(clientIp)) return false;
-
-        var customWhitelist = _configuration["SePaySettings:AllowedWebhookIps"];
-        if (!string.IsNullOrWhiteSpace(customWhitelist))
-        {
-            var customIps = customWhitelist.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (customIps.Any(ip => clientIp.StartsWith(ip, StringComparison.OrdinalIgnoreCase)))
-                return true;
-        }
-
-        return DefaultAllowedIpPrefixes.Any(prefix => clientIp.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool CheckRateLimit(string clientIp)
@@ -1236,7 +1209,7 @@ public class PaymentsController : BaseApiController
         return new object[]
         {
             new { layer = 1, title = "Lớp 1: Secret Token & Mã hóa AES-256", active = hasApiKey && isEncrypted },
-            new { layer = 2, title = "Lớp 2: IP Whitelisting & Rate Limit (10 req/s)", active = isActive },
+            new { layer = 2, title = "Lớp 2: Rate Limit (10 req/s/IP)", active = isActive },
             new { layer = 3, title = "Lớp 3: Đối soát 2 chiều SePay Bank API", active = hasApiKey },
             new { layer = 4, title = "Lớp 4: Khớp Số Tiền & Tiền tố Cửa hàng", active = isActive },
             new { layer = 5, title = "Lớp 5: Chống Replay Attack (Idempotency)", active = isActive },

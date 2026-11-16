@@ -44,6 +44,11 @@ public class ProductPriceHistoryConfiguration : IEntityTypeConfiguration<Product
             .WithMany()
             .HasForeignKey(x => x.BranchId)
             .OnDelete(DeleteBehavior.SetNull);
+
+        builder.HasOne(x => x.ProductUnit)
+            .WithMany()
+            .HasForeignKey(x => x.ProductUnitId)
+            .OnDelete(DeleteBehavior.SetNull);
     }
 }
 
