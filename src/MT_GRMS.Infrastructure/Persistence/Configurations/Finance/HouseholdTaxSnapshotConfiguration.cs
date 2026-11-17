@@ -49,6 +49,10 @@ public class HouseholdTaxSnapshotConfiguration : IEntityTypeConfiguration<Househ
             .HasColumnType("text")
             .IsRequired();
 
+        builder.Property(x => x.TaxPolicyJson)
+            .HasColumnType("jsonb")
+            .IsRequired();
+
         builder.Property(x => x.Status)
             .HasConversion<int>()
             .HasDefaultValue(MT_GRMS.Domain.Enums.TaxSnapshotStatus.Finalized)

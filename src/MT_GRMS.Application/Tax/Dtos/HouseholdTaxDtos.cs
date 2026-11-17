@@ -263,6 +263,7 @@ public class CreateTaxSnapshotRequest
 public class HouseholdTaxSnapshotDto
 {
     public Guid Id { get; set; }
+    public string TaxPolicyJson { get; set; } = "{}";
     public Guid? BranchId { get; set; }
     public TaxPeriodType PeriodType { get; set; }
     public int Year { get; set; }

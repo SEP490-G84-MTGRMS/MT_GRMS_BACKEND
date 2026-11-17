@@ -579,13 +579,11 @@ public class EndToEndBusinessFlowIntegrationTests
         var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build();
         var auditHashService = new AuditHashService(config);
         var accountRepo = new GenericRepository<FinanceAccount>(context);
-        var transitRepo = new GenericRepository<CashInTransit>(context);
         var shiftRepo = new GenericRepository<ShiftZReport>(context);
 
         var cashbookService = new CashbookService(
             cashbookRepo,
             accountRepo,
-            transitRepo,
             shiftRepo,
             auditHashService,
             tenantContext,
@@ -598,7 +596,6 @@ public class EndToEndBusinessFlowIntegrationTests
             orderRepo,
             unitOfWork,
             thermalPrint,
-            null, // debtService
             cashbookService,
             null, // validator
             null, // shiftRepository
@@ -660,10 +657,10 @@ public class EndToEndBusinessFlowIntegrationTests
     public async Task EndToEnd_CreditSale_CustomerDebt_And_ElectronicInvoiceLinkage()
     {
         // =========================================================================================
-        // KIỂM THỬ PHÂN HỆ KHÁCH HÀNG & BÁN NỢ FIFO (FE-08 + FE-17)
-        // 1. Bán nợ tạo CustomerDebtInvoice (Hóa đơn công nợ / EInvoice) liên kết OrderId
+        // KIỂM THỬ PHÂN HỆ KHÁCH HÀNG & BÁN NỢ (FE-08 + FE-17)
+        // 1. Bán nợ ghi trên Order và cộng TotalDebt của khách hàng
         // 2. Không tăng quỹ tiền mặt cho đến khi khách trả nợ
-        // 3. Khách hàng trả nợ (RepayDebt) -> Phân bổ FIFO và sinh phiếu thu CashbookEntry
+        // 3. Khách hàng trả nợ (RepayDebt) -> trừ TotalDebt và sinh phiếu thu CashbookEntry
         // =========================================================================================
 
         var dbName = $"MT_GRMS_E2E_DebtInt_{Guid.NewGuid()}";
@@ -684,10 +681,7 @@ public class EndToEndBusinessFlowIntegrationTests
             CustomerCode = "KH-001",
             Name = "Khách hàng Trần Văn C",
             Phone = "0987654321",
-            AllowDebt = true,
-            DebtLimit = 10_000_000m,
-            TotalDebt = 0m,
-            DebtStatus = CustomerDebtStatus.GoodStanding
+            TotalDebt = 0m
         };
         context.Customers.Add(customer);
 
@@ -711,28 +705,19 @@ public class EndToEndBusinessFlowIntegrationTests
         var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build();
         var auditHashService = new AuditHashService(config);
         var accountRepo = new GenericRepository<FinanceAccount>(context);
-        var transitRepo = new GenericRepository<CashInTransit>(context);
         var shiftRepo = new GenericRepository<ShiftZReport>(context);
 
         var cashbookService = new CashbookService(
             cashbookRepo,
             accountRepo,
-            transitRepo,
             shiftRepo,
             auditHashService,
             tenantContext,
             unitOfWork);
 
         var debtRepo = new CustomerDebtRepository(context);
-        var invoiceRepo = new GenericRepository<CustomerDebtInvoice>(context);
-        var entryRepo = new GenericRepository<CustomerDebtEntry>(context);
-        var allocationRepo = new GenericRepository<CustomerDebtAllocation>(context);
-
         var debtService = new CustomerDebtService(
             debtRepo,
-            invoiceRepo,
-            entryRepo,
-            allocationRepo,
             cashbookService,
             tenantContext,
             unitOfWork);
@@ -744,8 +729,8 @@ public class EndToEndBusinessFlowIntegrationTests
             orderRepo,
             unitOfWork,
             thermalPrint,
-            debtService,
-            cashbookService);
+            cashbookService: cashbookService,
+            tenantContext: tenantContext);
 
         // Bước A: Bán nợ 10 sản phẩm A (giá 15.000 đ) = 150.000 đ
         var orderResponse = await orderService.CreateOrderAsync(new OrderCreateRequest(
@@ -756,19 +741,16 @@ public class EndToEndBusinessFlowIntegrationTests
             {
                 new(prodAId, 10m, 15_000m, 0m, "Sản phẩm A")
             },
-            CreatorRole: "STOREOWNER",
+            CreatorRole: "STORE_OWNER",
             Note: "Đơn bán nợ ghi sổ"
         ));
 
-        Assert.Equal("UNPAID", orderResponse.PaymentStatus);
+        Assert.Equal("DEBT", orderResponse.PaymentStatus);
         Assert.Equal(150_000m, orderResponse.FinalAmount);
 
-        // Kiểm tra Hóa đơn nợ / EInvoice liên kết chặt chẽ với OrderId
-        var debtInvoices = await context.CustomerDebtInvoices.Where(i => i.CustomerId == customerId).ToListAsync();
-        Assert.Single(debtInvoices);
-        var invoice = debtInvoices.First();
-        Assert.Equal(orderResponse.Id, invoice.OrderId);
-        Assert.Equal(150_000m, invoice.RemainingDebtAmount);
+        Assert.Equal(150_000m, customer.TotalDebt);
+        var debtOrder = await context.Orders.SingleAsync(o => o.Id == orderResponse.Id);
+        Assert.Equal(customerId, debtOrder.CustomerId);
 
         // Quỹ tiền mặt chưa thu tiền -> Số dư vẫn bằng 0
         var till = await context.FinanceAccounts.FindAsync(DefaultTillId);
@@ -781,18 +763,14 @@ public class EndToEndBusinessFlowIntegrationTests
             Amount: 150_000m,
             PaymentSourceType: FinanceAccountType.Till,
             PaymentSourceAccountId: DefaultTillId,
-            ReferenceCode: invoice.OrderCode,
+            ReferenceCode: debtOrder.OrderCode,
             Notes: "Khách thanh toán toàn bộ nợ tiền mặt"
         ));
 
         Assert.NotNull(repayResult);
         Assert.Equal(0m, repayResult.RemainingDebt);
 
-        // Hóa đơn nợ chuyển sang FullyPaid
-        var updatedInvoice = await context.CustomerDebtInvoices.FindAsync(invoice.Id);
-        Assert.NotNull(updatedInvoice);
-        Assert.Equal(DebtInvoiceStatus.FullyPaid, updatedInvoice.Status);
-        Assert.Equal(0m, updatedInvoice.RemainingDebtAmount);
+        Assert.Equal(0m, customer.TotalDebt);
 
         // Tiền mặt chính thức đổ vào Sổ quỹ Cashbook
         var repayCashEntry = await context.CashbookEntries.FirstOrDefaultAsync(c => c.SourceType == "DEBT_REPAYMENT");
@@ -963,7 +941,7 @@ public class EndToEndBusinessFlowIntegrationTests
         // =========================================================================================
         // KIỂM THỬ TÍNH BẤT BIẾN CỦA SỔ CÁI TÀI CHÍNH (IMMUTABLE LEDGER INVARIANTS)
         // Chặn tuyệt đối hành vi DELETE, Soft-Delete (IsDeleted=true) hoặc Modified trên:
-        // CashbookEntry, CustomerDebtEntry, HouseholdTaxSnapshot
+        // CashbookEntry, Order, HouseholdTaxSnapshot
         // =========================================================================================
 
         var dbName = $"MT_GRMS_E2E_LedgerImmutability_{Guid.NewGuid()}";

@@ -88,6 +88,7 @@ public class HouseholdTaxDatabaseIntegrationTests
             SubTotal = 10_000_000m,
             DiscountAmount = 500_000m,
             FinalAmount = 9_500_000m,
+            ReturnedAmount = 1_000_000m,
             PaymentStatus = "PAID",
             CreatedAt = new DateTime(2026, 2, 10, 10, 0, 0, DateTimeKind.Utc)
         };
@@ -103,16 +104,7 @@ public class HouseholdTaxDatabaseIntegrationTests
             CreatedAt = new DateTime(2026, 2, 15, 14, 0, 0, DateTimeKind.Utc)
         };
 
-        var returnEntry = new CustomerDebtEntry
-        {
-            BranchId = branchId,
-            EntryType = CustomerDebtType.GoodsReturnOffset,
-            Amount = 1_000_000m,
-            OccurredAtUtc = new DateTime(2026, 2, 20, 9, 0, 0, DateTimeKind.Utc)
-        };
-
         context.Orders.AddRange(order1, order2);
-        context.CustomerDebtEntries.Add(returnEntry);
         await context.SaveChangesAsync();
 
         // Act

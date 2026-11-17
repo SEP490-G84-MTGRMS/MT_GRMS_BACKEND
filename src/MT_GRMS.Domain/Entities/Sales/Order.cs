@@ -23,6 +23,8 @@ public class Order : BaseTenantEntity
     public decimal TotalAmount { get; set; } = 0.00m;
     public decimal DiscountAmount { get; set; } = 0.00m;
     public decimal FinalAmount { get; set; } = 0.00m;
+    public decimal ReturnedAmount { get; set; } = 0.00m;
+    public decimal DebtOffsetAmount { get; set; } = 0.00m;
     public decimal DepositAmount { get; set; } = 0.00m;
     public string PaymentMethod { get; set; } = "CASH";
     public string PaymentStatus { get; set; } = "PAID";

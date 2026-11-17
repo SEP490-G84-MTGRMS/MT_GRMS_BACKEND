@@ -67,10 +67,7 @@ public class PosOrderServiceTests
             Phone = "0912345678",
             RewardPoints = 50,
             TotalSpending = 1000000m,
-            TotalDebt = 200000m,
-            DebtLimit = 2000000m,
-            AllowDebt = true,
-            IsBlockedForDebt = false
+            TotalDebt = 200000m
         });
 
         // Seed Products
@@ -163,6 +160,15 @@ public class PosOrderServiceTests
                 Status = "Active"
             }
         });
+    }
+
+    private OrderService CreateOwnerOrderService()
+    {
+        var tenant = new Mock<ITenantContext>();
+        tenant.SetupGet(t => t.CurrentTenantId).Returns("tenant-01");
+        tenant.SetupGet(t => t.CurrentRole).Returns("STORE_OWNER");
+        tenant.SetupGet(t => t.CurrentBranchId).Returns(_branchId);
+        return new OrderService(_orderRepo, _uow, _printService, validator: new OrderCreateRequestValidator(), tenantContext: tenant.Object);
     }
 
     [Fact]
@@ -305,6 +311,7 @@ public class PosOrderServiceTests
     [Fact]
     public async Task REQ_POS_05_CreateOrder_Debt_Success_IncrementsCustomerDebt()
     {
+        var ownerService = CreateOwnerOrderService();
         // Arrange: Khách nợ 50.000đ (Hiện tại nợ 200.000, Hạn mức 2.000.000)
         var request = new OrderCreateRequest(
             BranchId: _branchId,
@@ -317,12 +324,12 @@ public class PosOrderServiceTests
         );
 
         // Act
-        var result = await _orderService.CreateOrderAsync(request);
+        var result = await ownerService.CreateOrderAsync(request);
 
         // Assert
         Assert.NotNull(result);
         Assert.Equal("DEBT", result.PaymentMethod);
-        Assert.Equal("UNPAID", result.PaymentStatus);
+        Assert.Equal("DEBT", result.PaymentStatus);
 
         var cust = _orderRepo.Customers.First(c => c.Id == _customerId);
         Assert.Equal(210000m, cust.TotalDebt); // 200.000 + 10.000
@@ -331,9 +338,9 @@ public class PosOrderServiceTests
     [Fact]
     public async Task REQ_POS_05_CreateOrder_DebtWithoutLimit_Succeeds()
     {
+        var ownerService = CreateOwnerOrderService();
         // Arrange: Không áp dụng hạn mức nợ, khách mua thêm 10.000đ thì nợ được cộng dồn bình thường
         var cust = _orderRepo.Customers.First(c => c.Id == _customerId);
-        cust.DebtLimit = 205000m;
 
         var request = new OrderCreateRequest(
             BranchId: _branchId,
@@ -346,20 +353,20 @@ public class PosOrderServiceTests
         );
 
         // Act
-        var result = await _orderService.CreateOrderAsync(request);
+        var result = await ownerService.CreateOrderAsync(request);
 
         // Assert
         Assert.NotNull(result);
-        Assert.Equal("UNPAID", result.PaymentStatus);
+        Assert.Equal("DEBT", result.PaymentStatus);
         Assert.Equal(210000m, cust.TotalDebt);
     }
 
     [Fact]
-    public async Task REQ_POS_05_CreateOrder_DebtBlockedCustomer_ThrowsInvalidOperationException()
+    public async Task REQ_POS_05_CreateOrder_ExistingDebtDoesNotBlockSale()
     {
-        // Arrange: Khách hàng bị khóa nợ
+        var ownerService = CreateOwnerOrderService();
+        // Khoản nợ cũ không chặn chủ cửa hàng bán nợ tiếp.
         var cust = _orderRepo.Customers.First(c => c.Id == _customerId);
-        cust.IsBlockedForDebt = true;
 
         var request = new OrderCreateRequest(
             BranchId: _branchId,
@@ -371,9 +378,9 @@ public class PosOrderServiceTests
             }
         );
 
-        // Act & Assert
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreateOrderAsync(request));
-        Assert.Contains("đang bị khóa nợ", ex.Message);
+        var result = await ownerService.CreateOrderAsync(request);
+        Assert.Equal("DEBT", result.PaymentStatus);
+        Assert.Equal(210000m, cust.TotalDebt);
     }
 
     [Fact]
@@ -398,7 +405,7 @@ public class PosOrderServiceTests
 
         // Act & Assert
         var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.CreateOrderAsync(request));
-        Assert.Contains("Chỉ Chủ cửa hàng hoặc Quản trị viên", ex.Message);
+        Assert.Contains("Chỉ Chủ cửa hàng", ex.Message);
     }
 
     [Fact]
@@ -411,8 +418,6 @@ public class PosOrderServiceTests
         var service = new OrderService(_orderRepo, _uow, _printService, validator: new OrderCreateRequestValidator(), tenantContext: tenant.Object);
         // Arrange: Chủ cửa hàng duyệt đơn ghi nợ -> Thành công
         var ownerApprovedCustomer = _orderRepo.Customers.First(c => c.Id == _customerId);
-        ownerApprovedCustomer.AllowDebt = false;
-        ownerApprovedCustomer.DebtLimit = 0;
         var initialDebt = ownerApprovedCustomer.TotalDebt;
         var request = new OrderCreateRequest(
             BranchId: _branchId,
@@ -513,7 +518,6 @@ public class PosOrderServiceTests
             _orderRepo,
             _uow,
             _printService,
-            debtService: null,
             cashbookService: null,
             validator: new OrderCreateRequestValidator(),
             shiftRepository: null,
@@ -1590,8 +1594,7 @@ public class PosOrderServiceTests
             Name = "Khach Hang Than Thiet",
             Phone = "0988112233",
             RewardPoints = 100, // Đang có sẵn 100 điểm
-            TotalSpending = 500000m,
-            AllowDebt = false
+            TotalSpending = 500000m
         };
         _orderRepo.Customers.Add(customer);
 
@@ -1643,7 +1646,6 @@ public class PosOrderServiceTests
             _orderRepo,
             _uow,
             _printService,
-            null,
             null,
             new OrderCreateRequestValidator(),
             mockShiftRepo.Object,
@@ -1699,7 +1701,6 @@ public class PosOrderServiceTests
             _orderRepo,
             _uow,
             _printService,
-            null,
             null,
             new OrderCreateRequestValidator(),
             mockShiftRepo.Object,
@@ -1928,7 +1929,6 @@ public class PosOrderServiceTests
             _orderRepo,
             _uow,
             _printService,
-            debtService: null,
             cashbookService: null,
             validator: new OrderCreateRequestValidator(),
             shiftRepository: null,
@@ -1978,7 +1978,6 @@ public class PosOrderServiceTests
             _orderRepo,
             _uow,
             _printService,
-            debtService: null,
             cashbookService: null,
             validator: new OrderCreateRequestValidator(),
             shiftRepository: null,
@@ -2212,7 +2211,6 @@ public class PosOrderServiceTests
             _orderRepo,
             _uow,
             _printService,
-            debtService: null,
             cashbookService: null,
             validator: new OrderCreateRequestValidator(),
             shiftRepository: null,
@@ -2342,7 +2340,6 @@ public class PosOrderServiceTests
             _orderRepo,
             _uow,
             _printService,
-            debtService: null,
             cashbookService: null,
             validator: new OrderCreateRequestValidator(),
             shiftRepository: null,
@@ -2872,7 +2869,6 @@ public class PosOrderServiceTests
             _orderRepo,
             _uow,
             _printService,
-            null,
             null,
             new OrderCreateRequestValidator(),
             mockShiftRepo.Object,

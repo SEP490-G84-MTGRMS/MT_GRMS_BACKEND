@@ -18,7 +18,6 @@ public class CashbookService : ICashbookService
 
     private readonly ICashbookRepository _cashbookRepo;
     private readonly IRepository<FinanceAccount> _accountRepo;
-    private readonly IRepository<CashInTransit> _transitRepo;
     private readonly IRepository<ShiftZReport> _shiftRepo;
     private readonly IAuditHashService _auditHashService;
     private readonly ITenantContext _tenantContext;
@@ -29,7 +28,6 @@ public class CashbookService : ICashbookService
     public CashbookService(
         ICashbookRepository cashbookRepo,
         IRepository<FinanceAccount> accountRepo,
-        IRepository<CashInTransit> transitRepo,
         IRepository<ShiftZReport> shiftRepo,
         IAuditHashService auditHashService,
         ITenantContext tenantContext,
@@ -39,7 +37,6 @@ public class CashbookService : ICashbookService
     {
         _cashbookRepo = cashbookRepo;
         _accountRepo = accountRepo;
-        _transitRepo = transitRepo;
         _shiftRepo = shiftRepo;
         _auditHashService = auditHashService;
         _tenantContext = tenantContext;
@@ -157,73 +154,6 @@ public class CashbookService : ICashbookService
 
         await _unitOfWork.SaveChangesAsync(ct);
         return true;
-    }
-
-    public async Task<CashInTransitResponse> CreateDepositToBankAsync(DepositToBankRequest request, CancellationToken ct = default)
-    {
-        RequireOwner();
-        if (request.Amount <= 0)
-        {
-            throw new BusinessException("INVALID_AMOUNT", "Số tiền nộp ngân hàng phải lớn hơn 0.");
-        }
-
-        var safe = await _cashbookRepo.GetAccountWithLockAsync(request.SourceAccountId, ct)
-            ?? throw new NotFoundException("Không tìm thấy két sắt nguồn.");
-
-        if (safe.CurrentBalance < request.Amount)
-        {
-            throw new InsufficientStockException($"Két sắt không đủ tiền để nộp ngân hàng (Hiện có: {safe.CurrentBalance:N0}đ).");
-        }
-
-        safe.CurrentBalance -= request.Amount;
-
-        var transit = new CashInTransit
-        {
-            TransitCode = "CIT-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss"),
-            SourceAccountId = safe.Id,
-            SourceAccountType = FinanceAccountType.Safe,
-            TargetBankAccountId = request.TargetBankAccountId,
-            AmountSent = request.Amount,
-            CarrierUserId = request.CarrierUserId,
-            Status = CashInTransitStatus.PendingBankConfirmation,
-            Note = request.Note
-        };
-
-        await _transitRepo.AddAsync(transit, ct);
-
-        await RecordEntryInternalAsync(safe.Id, FinanceAccountType.Safe, safe.BranchId, CashbookEntryType.Payment, request.Amount, "BANK_DEPOSIT", transit.Id, transit.TransitCode, "Xuất két sắt nộp tiền vào tài khoản ngân hàng", ct);
-
-        await _unitOfWork.SaveChangesAsync(ct);
-
-        return new CashInTransitResponse(transit.Id, transit.TransitCode, transit.SourceAccountId, transit.TargetBankAccountId, transit.AmountSent, transit.AmountReceived, transit.DiscrepancyAmount, transit.CarrierUserId, transit.Status.ToString(), transit.CreatedAt);
-    }
-
-    public async Task<CashInTransitResponse> ConfirmBankDepositAsync(ConfirmBankDepositRequest request, CancellationToken ct = default)
-    {
-        RequireOwner();
-        var transit = await _transitRepo.GetByIdAsync(request.TransitId, ct)
-            ?? throw new NotFoundException("Không tìm thấy lệnh nộp tiền đang chuyển.");
-
-        if (transit.Status != CashInTransitStatus.PendingBankConfirmation)
-        {
-            throw new BusinessException("INVALID_STATUS", "Lệnh nộp tiền này không ở trạng thái chờ xác nhận.");
-        }
-
-        var bankAccount = await _cashbookRepo.GetAccountWithLockAsync(transit.TargetBankAccountId, ct)
-            ?? throw new NotFoundException("Không tìm thấy tài khoản ngân hàng thụ hưởng.");
-
-        transit.AmountReceived = request.ActualReceivedAmount;
-        transit.DiscrepancyAmount = request.ActualReceivedAmount - transit.AmountSent;
-        transit.ConfirmedAtUtc = DateTime.UtcNow;
-        transit.Status = transit.DiscrepancyAmount != 0 ? CashInTransitStatus.Discrepancy : CashInTransitStatus.Completed;
-
-        bankAccount.CurrentBalance += request.ActualReceivedAmount;
-
-        await RecordEntryInternalAsync(bankAccount.Id, FinanceAccountType.Bank, null, CashbookEntryType.Receipt, request.ActualReceivedAmount, "BANK_DEPOSIT", transit.Id, transit.TransitCode, "Xác nhận tiền nộp đã vào tài khoản ngân hàng", ct);
-
-        await _unitOfWork.SaveChangesAsync(ct);
-
-        return new CashInTransitResponse(transit.Id, transit.TransitCode, transit.SourceAccountId, transit.TargetBankAccountId, transit.AmountSent, transit.AmountReceived, transit.DiscrepancyAmount, transit.CarrierUserId, transit.Status.ToString(), transit.CreatedAt);
     }
 
     public Task<CashbookEntryResponse> DisburseCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default) =>

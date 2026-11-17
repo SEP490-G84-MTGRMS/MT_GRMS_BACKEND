@@ -34,6 +34,9 @@ public class HouseholdTaxSnapshot : BaseTenantEntity
     /// </summary>
     public string BookDataJson { get; set; } = "{}";
 
+    /// <summary>Quy tắc thuế và khóa phương pháp tại thời điểm chốt, lưu dạng JSON.</summary>
+    public string TaxPolicyJson { get; set; } = "{}";
+
     /// <summary>
     /// Chữ ký số HMAC-SHA256 bảo đảm tính toàn vẹn và chống giả mạo số liệu của snapshot chốt kỳ.
     /// </summary>

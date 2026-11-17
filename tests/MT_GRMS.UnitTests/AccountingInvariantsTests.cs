@@ -139,7 +139,6 @@ public class AccountingInvariantsTests
     {
         var cashbookRepo = new FakeCashbookRepository();
         var accountRepo = new FakeGenericRepository<FinanceAccount>();
-        var transitRepo = new FakeGenericRepository<CashInTransit>();
         var shiftRepo = new FakeGenericRepository<ShiftZReport>();
         var hashService = CreateRealAuditHashService();
         var tenantContext = new FakeTenantContext();
@@ -156,7 +155,7 @@ public class AccountingInvariantsTests
         cashbookRepo.Accounts.Add(tillAccount);
         accountRepo.Items.Add(tillAccount);
 
-        var service = new CashbookService(cashbookRepo, accountRepo, transitRepo, shiftRepo, hashService, tenantContext, uow);
+        var service = new CashbookService(cashbookRepo, accountRepo, shiftRepo, hashService, tenantContext, uow);
 
         var request = new CreatePaymentRequest(tillAccount.Id, 150_000m, "Chi mua đá", "Chi quá tiền két", null);
 
@@ -171,7 +170,6 @@ public class AccountingInvariantsTests
     {
         var cashbookRepo = new FakeCashbookRepository();
         var accountRepo = new FakeGenericRepository<FinanceAccount>();
-        var transitRepo = new FakeGenericRepository<CashInTransit>();
         var shiftRepo = new FakeGenericRepository<ShiftZReport>();
         var hashService = CreateRealAuditHashService();
         var tenantContext = new FakeTenantContext();
@@ -184,7 +182,7 @@ public class AccountingInvariantsTests
         cashbookRepo.Accounts.AddRange(new[] { till, safe, bank });
         accountRepo.Items.AddRange(new[] { till, safe, bank });
 
-        var service = new CashbookService(cashbookRepo, accountRepo, transitRepo, shiftRepo, hashService, tenantContext, uow);
+        var service = new CashbookService(cashbookRepo, accountRepo, shiftRepo, hashService, tenantContext, uow);
         var summary = await service.GetSummaryAsync();
 
         Assert.Equal(67_000_000m, summary.TotalClosingBalance);
@@ -198,7 +196,6 @@ public class AccountingInvariantsTests
     {
         var cashbookRepo = new FakeCashbookRepository();
         var accountRepo = new FakeGenericRepository<FinanceAccount>();
-        var transitRepo = new FakeGenericRepository<CashInTransit>();
         var shiftRepo = new FakeGenericRepository<ShiftZReport>();
         var hashService = CreateRealAuditHashService();
         var tenantContext = new FakeTenantContext();
@@ -210,7 +207,7 @@ public class AccountingInvariantsTests
         cashbookRepo.Accounts.AddRange(new[] { till, safe });
         accountRepo.Items.AddRange(new[] { till, safe });
 
-        var service = new CashbookService(cashbookRepo, accountRepo, transitRepo, shiftRepo, hashService, tenantContext, uow);
+        var service = new CashbookService(cashbookRepo, accountRepo, shiftRepo, hashService, tenantContext, uow);
 
         var transferAmount = 2_000_000m;
         var transferReq = new TransferFundRequest(till.Id, safe.Id, transferAmount, "Chuyển két thu ngân sang két sắt");
@@ -310,7 +307,6 @@ public class AccountingInvariantsTests
     {
         var cashbookRepo = new FakeCashbookRepository();
         var accountRepo = new FakeGenericRepository<FinanceAccount>();
-        var transitRepo = new FakeGenericRepository<CashInTransit>();
         var shiftRepo = new FakeGenericRepository<ShiftZReport>();
         var hashService = CreateRealAuditHashService();
         var tenantContext = new FakeTenantContext();
@@ -334,7 +330,7 @@ public class AccountingInvariantsTests
         };
         cashbookRepo.Entries.Add(originalEntry);
 
-        var service = new CashbookService(cashbookRepo, accountRepo, transitRepo, shiftRepo, hashService, tenantContext, uow);
+        var service = new CashbookService(cashbookRepo, accountRepo, shiftRepo, hashService, tenantContext, uow);
 
         var voidReq = new VoidEntryRequest("Thu nhầm tiền của khách");
         var compResult = await service.VoidTransactionAsync(originalEntry.Id, voidReq);

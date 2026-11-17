@@ -1726,30 +1726,6 @@ END $$;
                 }
                 catch (Exception ex) { logger?.LogWarning(ex, "EmployeeAllowances DDL warning"); }
 
-                // 5. Bảng Giao dịch Sổ quỹ liên kết lương (CashbookTransaction)
-                try
-                {
-                    await context.Database.ExecuteSqlRawAsync(@"
-                        CREATE TABLE IF NOT EXISTS ""CashbookTransaction"" (
-                            ""Id"" uuid NOT NULL PRIMARY KEY,
-                            ""TransactionCode"" text NOT NULL,
-                            ""BranchId"" uuid NOT NULL,
-                            ""Type"" integer NOT NULL,
-                            ""Category"" text NOT NULL,
-                            ""Amount"" numeric NOT NULL,
-                            ""ReferenceCode"" text NOT NULL,
-                            ""Description"" text NOT NULL,
-                            ""CreatedByUserId"" uuid NOT NULL,
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
-                            ""TenantId"" text NOT NULL,
-                            ""CreatedBy"" uuid
-                        );
-                    ");
-                }
-                catch (Exception ex) { logger?.LogWarning(ex, "CashbookTransaction DDL warning"); }
-
                 // 6. Bảng Phiếu lương (Payslips)
                 try
                 {
@@ -1759,7 +1735,7 @@ END $$;
                             ""TenantId"" character varying(64) NOT NULL,
                             ""BranchID"" uuid NOT NULL,
                             ""EmployeeID"" uuid NOT NULL,
-                            ""CashbookTransactionId"" uuid,
+                            ""CashbookEntryId"" uuid,
                             ""CashbookVoucherCode"" character varying(50),
                             ""PayslipCode"" character varying(50) NOT NULL,
                             ""PeriodMonth"" character varying(7) NOT NULL,
@@ -1803,7 +1779,7 @@ END $$;
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""BranchID"" uuid;
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""PeriodMonth"" character varying(7);
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""UnpaidLeaveDays"" numeric(5,2) DEFAULT 0.00;
-                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookTransactionId"" uuid;
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookEntryId"" uuid;
 
                         DO $$
                         BEGIN
@@ -1926,7 +1902,7 @@ END $$;
                         ALTER TABLE IF EXISTS ""ScheduleApprovalRequests"" DROP COLUMN IF EXISTS ""PeerConfirmedAt"";
 
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""UnpaidLeaveDays"" numeric(5,2) DEFAULT 0.00;
-                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookTransactionId"" uuid;
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookEntryId"" uuid;
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookVoucherCode"" character varying(50);
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""PaidBy"" character varying(100);
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""BankAccountNumber"" character varying(30);
@@ -2683,9 +2659,7 @@ END $$;
             Address = "24 Đường số 5, Phường Đa Kao, Quận 1",
             MembershipTier = "Gold",
             RewardPoints = 250,
-            TotalSpending = 12500000.00m,
-            AllowDebt = true,
-            DebtLimit = 5000000.00m
+            TotalSpending = 12500000.00m
         };
 
         var promoOpening = new Promotion
@@ -2943,7 +2917,6 @@ END $$;
                 MembershipTier = "Gold",
                 RewardPoints = 250,
                 TotalSpending = 12500000m,
-                AllowDebt = true,
                 TotalDebt = 0m,
             };
             await context.Customers.AddAsync(custHung);
@@ -2963,7 +2936,6 @@ END $$;
                 MembershipTier = "Gold",
                 RewardPoints = 250,
                 TotalSpending = 5500000m,
-                AllowDebt = true,
                 TotalDebt = 350000m,
             };
             await context.Customers.AddAsync(custKhach);
@@ -2983,7 +2955,6 @@ END $$;
                 MembershipTier = "VIP",
                 RewardPoints = 580,
                 TotalSpending = 18500000m,
-                AllowDebt = true,
                 TotalDebt = 2100000m,
             };
             await context.Customers.AddAsync(custLan);
@@ -4261,7 +4232,6 @@ END $$;
                 MembershipTier = "Gold",
                 RewardPoints = 150,
                 TotalSpending = 4500000m,
-                AllowDebt = true,
                 TotalDebt = 0m
             };
             await context.Customers.AddAsync(custMinh);
@@ -4281,7 +4251,6 @@ END $$;
                 MembershipTier = "Silver",
                 RewardPoints = 80,
                 TotalSpending = 2800000m,
-                AllowDebt = true,
                 TotalDebt = 250000m
             };
             await context.Customers.AddAsync(custHa);
@@ -5001,7 +4970,7 @@ END $$;
                 await context.SaveChangesAsync(ct);
             }
 
-            // 7. Seed Customers, CustomerDebtProfiles & CustomerDebtInvoices (Công nợ FIFO & Phân loại nợ)
+            // 7. Seed Customers với tổng dư nợ hợp nhất
             var customer1Id = Guid.Parse("11111111-aaaa-aaaa-aaaa-111111111111");
             var customer2Id = Guid.Parse("22222222-aaaa-aaaa-aaaa-222222222222");
             var customer3Id = Guid.Parse("33333333-aaaa-aaaa-aaaa-333333333333");
@@ -5025,9 +4994,6 @@ END $$;
                         RewardPoints = 1250,
                         TotalSpending = 45000000m,
                         TotalDebt = 8000000m,
-                        DebtLimit = 20000000m,
-                        AllowDebt = true,
-                        IsBlockedForDebt = false
                     },
                     new MT_GRMS.Domain.Entities.Sales.Customer
                     {
@@ -5042,9 +5008,6 @@ END $$;
                         RewardPoints = 540,
                         TotalSpending = 18000000m,
                         TotalDebt = 12000000m,
-                        DebtLimit = 10000000m,
-                        AllowDebt = true,
-                        IsBlockedForDebt = true
                     },
                     new MT_GRMS.Domain.Entities.Sales.Customer
                     {
@@ -5059,9 +5022,6 @@ END $$;
                         RewardPoints = 3200,
                         TotalSpending = 98000000m,
                         TotalDebt = 0m,
-                        DebtLimit = 15000000m,
-                        AllowDebt = true,
-                        IsBlockedForDebt = false
                     },
                     new MT_GRMS.Domain.Entities.Sales.Customer
                     {
@@ -5076,9 +5036,6 @@ END $$;
                         RewardPoints = 50,
                         TotalSpending = 520000m,
                         TotalDebt = 0m,
-                        DebtLimit = 0m,
-                        AllowDebt = false,
-                        IsBlockedForDebt = false
                     }
                 };
 
@@ -5091,54 +5048,6 @@ END $$;
                 }
                 await context.SaveChangesAsync(ct);
 
-                var debtInvoices = new List<CustomerDebtInvoice>
-                {
-                    new CustomerDebtInvoice
-                    {
-                        Id = Guid.NewGuid(),
-                        TenantId = DefaultTenantId,
-                        CustomerId = customer1Id,
-                        OrderId = Guid.NewGuid(),
-                        OrderCode = "HD-20261001-001",
-                        BranchId = branchId,
-                        TotalDebtAmount = 5000000m,
-                        RemainingDebtAmount = 5000000m,
-                        DueDate = new DateTime(2026, 10, 31, 23, 59, 59, DateTimeKind.Utc),
-                        Status = DebtInvoiceStatus.Unpaid,
-                        Notes = "Đơn hàng bán nợ sỉ ngày 01/10/2026 (FIFO 1)"
-                    },
-                    new CustomerDebtInvoice
-                    {
-                        Id = Guid.NewGuid(),
-                        TenantId = DefaultTenantId,
-                        CustomerId = customer1Id,
-                        OrderId = Guid.NewGuid(),
-                        OrderCode = "HD-20261015-002",
-                        BranchId = branchId,
-                        TotalDebtAmount = 3000000m,
-                        RemainingDebtAmount = 3000000m,
-                        DueDate = new DateTime(2026, 11, 15, 23, 59, 59, DateTimeKind.Utc),
-                        Status = DebtInvoiceStatus.Unpaid,
-                        Notes = "Đơn hàng bán nợ sỉ ngày 15/10/2026 (FIFO 2)"
-                    },
-                    new CustomerDebtInvoice
-                    {
-                        Id = Guid.NewGuid(),
-                        TenantId = DefaultTenantId,
-                        CustomerId = customer2Id,
-                        OrderId = Guid.NewGuid(),
-                        OrderCode = "HD-20260901-003",
-                        BranchId = branchId,
-                        TotalDebtAmount = 12000000m,
-                        RemainingDebtAmount = 12000000m,
-                        DueDate = new DateTime(2026, 9, 30, 23, 59, 59, DateTimeKind.Utc),
-                        Status = DebtInvoiceStatus.Unpaid,
-                        Notes = "Đơn hàng quá hạn nợ"
-                    }
-                };
-
-                await context.CustomerDebtInvoices.AddRangeAsync(debtInvoices, ct);
-                await context.SaveChangesAsync(ct);
             }
 
             // 8. Seed Additional Products & Supplier Linkages for Order Matrix
@@ -5926,9 +5835,6 @@ END $$;
                     RewardPoints = 250,
                     TotalSpending = 5500000m,
                     TotalDebt = 350000m,
-                    DebtLimit = 5000000m,
-                    AllowDebt = true,
-                    IsBlockedForDebt = false
                 },
                 new Domain.Entities.Sales.Customer
                 {
@@ -5942,9 +5848,6 @@ END $$;
                     RewardPoints = 520,
                     TotalSpending = 18000000m,
                     TotalDebt = 2100000m,
-                    DebtLimit = 10000000m,
-                    AllowDebt = true,
-                    IsBlockedForDebt = false
                 },
                 new Domain.Entities.Sales.Customer
                 {
@@ -5958,9 +5861,6 @@ END $$;
                     RewardPoints = 20,
                     TotalSpending = 1200000m,
                     TotalDebt = 1200000m,
-                    DebtLimit = 1000000m,
-                    AllowDebt = false,
-                    IsBlockedForDebt = true
                 }
             };
             foreach (var cust in customers)

@@ -62,12 +62,9 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
                         x.Status != ExpenseVoucherStatus.Paid)
             .ToListAsync(ct);
 
-        var debtInvoices = await _context.CustomerDebtInvoices
+        var customerDebts = await _context.Customers
             .AsNoTracking()
-            .Where(x => (!branchId.HasValue || x.BranchId == branchId.Value) &&
-                        x.RemainingDebtAmount > 0 &&
-                        x.Status != DebtInvoiceStatus.FullyPaid &&
-                        x.Status != DebtInvoiceStatus.Cancelled)
+            .Where(x => x.TotalDebt > 0)
             .ToListAsync(ct);
 
         var movements = await _context.ShiftCashMovements
@@ -94,7 +91,6 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
             branchAccounts,
             entries.Where(x => branchAccountIds.Contains(x.AccountId)).ToList(),
             expenses.Where(x => x.BranchId == branch.Id).ToList(),
-            debtInvoices.Where(x => x.BranchId == branch.Id).ToList(),
             movements.Where(x => x.Shift?.BranchId == branch.Id).ToList(),
             fromUtc,
             toUtc,
@@ -103,8 +99,8 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
 
         var totals = BuildTotals(accounts, entries, branchRows, fromUtc, toUtc);
         var attention = new FinanceAttentionDto(
-            ReceivableAmount: currentSnapshot ? debtInvoices.Sum(x => x.RemainingDebtAmount) : 0,
-            DebtorCount: currentSnapshot ? debtInvoices.Select(x => x.CustomerId).Distinct().Count() : 0,
+            ReceivableAmount: currentSnapshot && !branchId.HasValue ? customerDebts.Sum(x => x.TotalDebt) : 0,
+            DebtorCount: currentSnapshot && !branchId.HasValue ? customerDebts.Count : 0,
             PendingPayableAmount: currentSnapshot ? expenses.Sum(x => x.Amount) : 0,
             PendingPayableCount: currentSnapshot ? expenses.Count : 0,
             CashInTransit: currentSnapshot ? movements.Sum(x => x.Amount) : 0,
@@ -131,7 +127,6 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
         IReadOnlyCollection<FinanceAccount> accounts,
         IReadOnlyCollection<CashbookEntry> entries,
         IReadOnlyCollection<ExpenseVoucher> expenses,
-        IReadOnlyCollection<CustomerDebtInvoice> debts,
         IReadOnlyCollection<ShiftCashMovement> movements,
         DateTime fromUtc,
         DateTime toUtc,
@@ -161,7 +156,7 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
             cashAtRegisters,
             safeDeposit,
             cashInTransit,
-            currentSnapshot ? debts.Sum(x => x.RemainingDebtAmount) : 0,
+            0,
             pendingPayable,
             currentSnapshot ? expenses.Count : 0,
             status);

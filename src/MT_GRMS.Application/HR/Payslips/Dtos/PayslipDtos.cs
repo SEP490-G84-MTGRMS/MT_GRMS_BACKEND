@@ -114,7 +114,7 @@ public record PayslipResponse(
     string? BankAccountNumber,
     string? BankName,
     string? BankAccountHolder,
-    Guid? CashbookTransactionId,
+    Guid? CashbookEntryId,
     string? CashbookVoucherCode,
     string? Note,
     string? ApprovedBy,

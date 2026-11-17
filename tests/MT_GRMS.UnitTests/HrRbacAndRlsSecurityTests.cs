@@ -206,7 +206,7 @@ public class HrRbacAndRlsSecurityTests
             BankAccountNumber: null,
             BankName: null,
             BankAccountHolder: null,
-            CashbookTransactionId: null,
+            CashbookEntryId: null,
             CashbookVoucherCode: null,
             Note: null,
             ApprovedBy: null,

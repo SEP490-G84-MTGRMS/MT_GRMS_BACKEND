@@ -51,24 +51,6 @@ public class CashbookController : BaseApiController
         return Ok(ApiResponse<bool>.Ok(result, "Thực hiện cash drop bàn giao tiền sang két sắt thành công."));
     }
 
-    [HttpPost("deposits/bank")]
-    [RequireIdempotency]
-    [Authorize(Roles = SystemRoles.StoreOwner)]
-    public async Task<ActionResult<ApiResponse<CashInTransitResponse>>> CreateDepositToBank([FromBody] DepositToBankRequest request, CancellationToken ct)
-    {
-        var result = await _cashbookService.CreateDepositToBankAsync(request, ct);
-        return Ok(ApiResponse<CashInTransitResponse>.Ok(result, "Tạo lệnh nộp tiền vào ngân hàng thành công."));
-    }
-
-    [HttpPost("deposits/confirm")]
-    [RequireIdempotency]
-    [Authorize(Roles = SystemRoles.StoreOwner)]
-    public async Task<ActionResult<ApiResponse<CashInTransitResponse>>> ConfirmBankDeposit([FromBody] ConfirmBankDepositRequest request, CancellationToken ct)
-    {
-        var result = await _cashbookService.ConfirmBankDepositAsync(request, ct);
-        return Ok(ApiResponse<CashInTransitResponse>.Ok(result, "Xác nhận tiền nộp đã vào tài khoản ngân hàng thành công."));
-    }
-
     [HttpGet("entries")]
     public async Task<ActionResult<ApiResponse<List<CashbookEntryResponse>>>> GetEntries(
         [FromQuery] Guid? accountId,

@@ -60,8 +60,7 @@ public class PnLReportServiceTests
                     current,
                     93_000_000m,
                     60_000_000m,
-                    10_000_000m,
-                    1_000_000m
+                    10_000_000m
                 ));
                 current = current.AddDays(1);
             }
@@ -103,10 +102,10 @@ public class PnLReportServiceTests
         Assert.Equal(10_000_000m, response.OperatingExpenses.TotalAmount);
         Assert.Equal(2, response.OperatingExpenses.Categories.Count);
 
-        // NetProfit = 33tr - 10tr (OPEX) - 1tr (BadDebt) = 22tr
-        Assert.Equal(22_000_000m, response.NetProfit);
-        // NetMargin % = (22tr / 93tr) * 100 = 23.66%
-        Assert.Equal(23.66m, response.NetMarginPercentage);
+        // NetProfit = 33tr - 10tr (OPEX) = 23tr
+        Assert.Equal(23_000_000m, response.NetProfit);
+        // NetMargin % = (23tr / 93tr) * 100 = 24.73%
+        Assert.Equal(24.73m, response.NetMarginPercentage);
 
         Assert.Equal("Toàn chuỗi (Consolidated)", response.BranchName);
         Assert.Equal("ACTUAL", response.CogsSource);

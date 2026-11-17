@@ -35,14 +35,14 @@ public class PnLReportRepository : IPnLReportRepository
         var totalOrders = await query.CountAsync(ct);
 
         // Doanh thu hàng trả lại từ các bút toán hoàn hàng trong sổ nợ/sổ quỹ
-        var returnQuery = _context.CustomerDebtEntries.AsQueryable();
+        var returnQuery = _context.Orders.AsQueryable();
         if (branchId.HasValue)
         {
-            returnQuery = returnQuery.Where(e => e.BranchId == branchId.Value);
+            returnQuery = returnQuery.Where(o => o.BranchId == branchId.Value);
         }
         var salesReturns = await returnQuery
-            .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= fromDate && e.OccurredAtUtc <= toDate)
-            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
+            .Where(o => o.CreatedAt >= fromDate && o.CreatedAt <= toDate)
+            .SumAsync(o => (decimal?)o.ReturnedAmount, ct) ?? 0m;
 
         return new RevenueAggregation(gross, discounts, salesReturns, totalOrders);
     }
@@ -144,14 +144,14 @@ public class PnLReportRepository : IPnLReportRepository
         }
 
         // Tính hàng trả lại trong kỳ để đối soát đồng nhất 100% với Sổ S2c-HKD (FE-19)
-        var returnQuery = _context.CustomerDebtEntries.AsQueryable();
+        var returnQuery = _context.Orders.AsQueryable();
         if (branchId.HasValue)
         {
-            returnQuery = returnQuery.Where(e => e.BranchId == branchId.Value);
+            returnQuery = returnQuery.Where(o => o.BranchId == branchId.Value);
         }
         var salesReturns = await returnQuery
-            .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= fromDate && e.OccurredAtUtc <= toDate)
-            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
+            .Where(o => o.CreatedAt >= fromDate && o.CreatedAt <= toDate)
+            .SumAsync(o => (decimal?)o.ReturnedAmount, ct) ?? 0m;
 
         if (totalItemsCount == 0 && orders.Count == 0)
         {
@@ -237,20 +237,6 @@ public class PnLReportRepository : IPnLReportRepository
             .ToListAsync(ct);
 
         return groups;
-    }
-
-    public async Task<decimal> GetBadDebtExpenseAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default)
-    {
-        var query = _context.CustomerDebtEntries.AsQueryable();
-
-        if (branchId.HasValue)
-        {
-            query = query.Where(e => e.BranchId == branchId.Value);
-        }
-
-        return await query
-            .Where(e => e.EntryType == CustomerDebtType.BadDebtWriteOff && e.OccurredAtUtc >= fromDate && e.OccurredAtUtc <= toDate)
-            .SumAsync(e => (decimal?)e.Amount, ct) ?? 0m;
     }
 
     public async Task<List<TopProductPnLItem>> GetTopProductsAsync(Guid? branchId, DateTime fromDate, DateTime toDate, int limit = 10, CancellationToken ct = default)
@@ -363,13 +349,6 @@ public class PnLReportRepository : IPnLReportRepository
                 !e.Category.ToLower().Contains("rút vốn"))
             .ToListAsync(ct);
 
-        // 3. Gom nợ xấu và hoàn hàng trong toàn kỳ (1 query)
-        var debtQuery = _context.CustomerDebtEntries.AsQueryable();
-        if (branchId.HasValue) debtQuery = debtQuery.Where(e => e.BranchId == branchId.Value);
-        var debts = await debtQuery
-            .Where(e => e.OccurredAtUtc >= fromDate && e.OccurredAtUtc <= toDate)
-            .ToListAsync(ct);
-
         // Khi cả fromDate và toDate có TimeOfDay > 0 hoặc thuộc UTC, chuẩn hóa về ngày theo múi giờ truy vấn để không lệch 1 ngày khi test Date thuần
         var vnOffset = TimeSpan.FromHours(7);
         bool useVnShift = fromDate.Kind == DateTimeKind.Utc && (fromDate.Hour == 17 || toDate.Hour == 16);
@@ -379,10 +358,8 @@ public class PnLReportRepository : IPnLReportRepository
 
         var ordersByDay = orders.GroupBy(o => ToReportDate(o.CreatedAt)).ToDictionary(g => g.Key, g => g.ToList());
         var expensesByDay = expenses.GroupBy(e => ToReportDate(GetEffectiveExpenseDate(e))).ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
-        var returnsByDay = debts.Where(d => d.EntryType == CustomerDebtType.GoodsReturnOffset)
-            .GroupBy(d => ToReportDate(d.OccurredAtUtc)).ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
-        var badDebtsByDay = debts.Where(d => d.EntryType == CustomerDebtType.BadDebtWriteOff)
-            .GroupBy(d => ToReportDate(d.OccurredAtUtc)).ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
+        var returnsByDay = orders.Where(o => o.ReturnedAmount > 0)
+            .GroupBy(o => ToReportDate(o.CreatedAt)).ToDictionary(g => g.Key, g => g.Sum(x => x.ReturnedAmount));
 
         var result = new List<DailyPnLItem>();
         var current = ToReportDate(fromDate);
@@ -425,14 +402,12 @@ public class PnLReportRepository : IPnLReportRepository
             var dayReturns = returnsByDay.GetValueOrDefault(current, 0m);
             var netRev = Math.Max(0, grossRev - discounts - dayReturns);
             var dayExp = expensesByDay.GetValueOrDefault(current, 0m);
-            var dayBadDebt = badDebtsByDay.GetValueOrDefault(current, 0m);
 
             result.Add(new DailyPnLItem(
                 current,
                 netRev,
                 dayCogs,
-                dayExp,
-                dayBadDebt
+                dayExp
             ));
 
             current = current.AddDays(1);
