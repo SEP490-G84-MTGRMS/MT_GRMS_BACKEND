@@ -881,6 +881,92 @@ public class PurchaseOrderMatrixTests
         _repo.CustomSupplierConfigs = null;
     }
 
+    [Fact]
+    public async Task SplitMatrixPoBatchAsync_WhenUpdatingExistingPo_SoftDeletesOmittedLines()
+    {
+        // Arrange existing PO with 2 products
+        var existingPo = new PurchaseOrder
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-test-1",
+            Code = "PO-EXISTING-001",
+            BranchId = _branchId,
+            SupplierId = _supplier1Id,
+            DeliveryDate = _deliveryA,
+            Status = "SENT",
+            Details = new List<PurchaseOrderDetail>
+            {
+                new()
+                {
+                    Id = Guid.NewGuid(),
+                    TenantId = "tenant-test-1",
+                    ProductId = _prod1Id,
+                    OrderedQty = 10,
+                    FinalQty = 10,
+                    UnitPrice = 10000,
+                    LineAmount = 100000,
+                    Product = _repo.Products.First(p => p.Id == _prod1Id)
+                },
+                new()
+                {
+                    Id = Guid.NewGuid(),
+                    TenantId = "tenant-test-1",
+                    ProductId = _prod2Id,
+                    OrderedQty = 5,
+                    FinalQty = 5,
+                    UnitPrice = 20000,
+                    LineAmount = 100000,
+                    Product = _repo.Products.First(p => p.Id == _prod2Id)
+                }
+            }
+        };
+        _repo.PurchaseOrders.Add(existingPo);
+
+        var draft = await _service.SaveMatrixDraftAsync(new SaveMatrixDraftCommand
+        {
+            BranchId = _branchId,
+            ViewFrom = _viewFrom,
+            ViewTo = _deliveryB,
+            Cells = new List<OrderMatrixCellDto>
+            {
+                new() { ProductId = _prod1Id, SupplierId = _supplier1Id, DeliveryDate = _deliveryA, EmployeeQty = 15, StoreQty = 15 }
+            }
+        });
+
+        // Act: Split with only prod1Id (omitting prod2Id)
+        var cmd = new SplitMatrixPoCommand
+        {
+            BranchId = _branchId,
+            ParentDraftId = draft.Id,
+            Groups = new List<SplitMatrixPoGroupCommand>
+            {
+                new()
+                {
+                    SupplierId = _supplier1Id,
+                    DeliveryDate = _deliveryA,
+                    Items = new List<SplitMatrixPoItemCommand>
+                    {
+                        new() { ProductId = _prod1Id, Quantity = 15, UnitPrice = 10000, Unit = "Thùng" }
+                    }
+                }
+            }
+        };
+
+        var res = await _service.SplitMatrixPoBatchAsync(cmd);
+        Assert.NotNull(res);
+
+        // Assert: prod2 line was soft-deleted
+        var prod2Line = existingPo.Details.First(d => d.ProductId == _prod2Id);
+        Assert.True(prod2Line.IsDeleted);
+        Assert.Equal(0m, prod2Line.OrderedQty);
+        Assert.Equal(0m, prod2Line.FinalQty);
+        Assert.Equal(0m, prod2Line.LineAmount);
+
+        // Assert: prod1 line updated
+        var prod1Line = existingPo.Details.First(d => d.ProductId == _prod1Id && !d.IsDeleted);
+        Assert.Equal(15m, prod1Line.FinalQty);
+    }
+
     // =========================================================================
     // FAKE REPOSITORY
     // =========================================================================

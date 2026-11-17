@@ -241,5 +241,70 @@ public class SubscriptionPlanTests
         Assert.Contains(result.Errors, e => e.PropertyName == "MonthlyPrice");
         Assert.Contains(result.Errors, e => e.PropertyName == "YearlyPrice");
     }
+
+    [Fact]
+    public async Task GetKpiBannerAsync_CalculatesMetricsCorrectly()
+    {
+        var banner = await _service.GetKpisAsync();
+        Assert.NotNull(banner);
+        Assert.Equal(2, banner.TotalPlans);
+        Assert.Equal(2, banner.ActivePlans);
+        Assert.Equal(4, banner.TotalActiveTenants);
+        Assert.True(banner.EstimatedMrr > 0);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_NotFound_And_ProPlan_Quotas()
+    {
+        // Not found
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => _service.GetByIdAsync("non-existent"));
+
+        // PRO plan
+        _repo.Plans.Add(new SubscriptionPlan
+        {
+            Id = "plan-pro",
+            PlanCode = "PRO",
+            PlanName = "Pro Plan",
+            PriceMonthly = 1500000,
+            PriceYearly = 15000000,
+            MaxBranches = 10,
+            MaxStaff = 30,
+            EnabledModulesJson = "{ malformed json",
+            IsActive = true
+        });
+
+        var proDetail = await _service.GetByIdAsync("plan-pro");
+        Assert.NotNull(proDetail);
+        Assert.Equal(2, proDetail.Quotas?.MaxStorageGb);
+    }
+
+    [Fact]
+    public async Task UpdatePlanAsync_NotFound_And_Success()
+    {
+        var req = new UpdatePlanRequest(
+            Name: "Gói Cơ Bản Mới",
+            Description: "Mô tả mới",
+            MonthlyPrice: 550000,
+            YearlyPrice: 5500000,
+            Quotas: new PlanQuotaDto(2, 6, 4, "Daily"),
+            Features: new PlanFeatureDto()
+        );
+
+        // Not found
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => _service.UpdatePlanAsync("non-existent", req));
+
+        // Success
+        var updated = await _service.UpdatePlanAsync("plan-starter", req);
+        Assert.NotNull(updated);
+        Assert.Equal("Gói Cơ Bản Mới", updated.Name);
+        Assert.Equal(550000, updated.MonthlyPrice);
+    }
+
+    [Fact]
+    public async Task ToggleStatus_And_DeletePlan_NotFound_ThrowsKeyNotFoundException()
+    {
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => _service.ToggleStatusAsync("non-existent"));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => _service.DeletePlanAsync("non-existent"));
+    }
 }
 

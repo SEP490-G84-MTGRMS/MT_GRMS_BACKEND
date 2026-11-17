@@ -281,4 +281,56 @@ public class PnLReportDatabaseIntegrationTests
         Assert.Equal(taxCogs, pnlCogs.TotalCogs); // 2,500,000 - 250,000 (return COGS) = 2,250,000
         Assert.Equal(taxOpex, pnlTotalOpex);      // 500,000 (Owner draw excluded)
     }
+
+    [Fact]
+    public async Task PnLReportRepository_GetTopProducts_And_DailyTrend_ShouldWork()
+    {
+        using var context = CreateDbContext();
+        var repo = new PnLReportRepository(context);
+
+        var branchId = Guid.NewGuid();
+        var prodId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+
+        context.Products.Add(new MT_GRMS.Domain.Entities.Catalog.Product
+        {
+            Id = prodId,
+            ProductCode = "SP-TOP-01",
+            Name = "Top Ban Chay",
+            CostPrice = 20_000m,
+            SellingPrice = 30_000m
+        });
+
+        var order = new Order
+        {
+            OrderCode = "ORD-TOP-01",
+            BranchId = branchId,
+            SubTotal = 300_000m,
+            FinalAmount = 300_000m,
+            PaymentStatus = "PAID",
+            Status = "Completed",
+            CreatedAt = now
+        };
+        order.Details.Add(new OrderDetail
+        {
+            Id = Guid.NewGuid(),
+            OrderId = order.Id,
+            ProductId = prodId,
+            ProductName = "Top Ban Chay",
+            Qty = 10,
+            UnitPrice = 30_000m,
+            ActualPrice = 30_000m,
+            CostPriceAtSale = 20_000m
+        });
+
+        context.Orders.Add(order);
+        await context.SaveChangesAsync();
+
+        var topProducts = await repo.GetTopProductsAsync(branchId, now.AddDays(-1), now.AddDays(1), 5);
+        Assert.NotEmpty(topProducts);
+        Assert.Equal("SP-TOP-01", topProducts[0].ProductCode);
+
+        var dailyTrend = await repo.GetDailyTrendAsync(branchId, now.AddDays(-1), now.AddDays(1));
+        Assert.NotEmpty(dailyTrend);
+    }
 }

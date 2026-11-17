@@ -168,8 +168,7 @@ public class HouseholdTaxServiceTests
             Task.FromResult(SavedSnapshots.FirstOrDefault(s => s.Id == id) ?? ExistingSnapshot);
 
         public Task<List<HouseholdTaxSnapshot>> GetSnapshotsAsync(int? year, Guid? branchId, CancellationToken cancellationToken = default) =>
-
-            Task.FromResult(SavedSnapshots);
+            Task.FromResult(SavedSnapshots.Where(s => (!year.HasValue || s.Year == year.Value) && (!branchId.HasValue || s.BranchId == branchId.Value)).ToList());
 
         public Task<HouseholdTaxSnapshot> AddSnapshotAsync(HouseholdTaxSnapshot snapshot, CancellationToken cancellationToken = default)
 
@@ -1883,4 +1882,162 @@ public class HouseholdTaxServiceTests
         Assert.Equal(1_100_000_000m, resultA.TaxableRevenueInPeriod + resultB.TaxableRevenueInPeriod);
     }
 
+    [Fact]
+    public async Task GetSnapshotByIdAsync_NotFound_ReturnsNull()
+    {
+        var result = await _service.GetSnapshotByIdAsync(Guid.NewGuid());
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task GetSnapshotByIdAsync_Found_ReturnsMappedDto_ForAllHouseholdGroups()
+    {
+        // 1. Group 1 (Under 1B) -> Exempt
+        var snap1 = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            HouseholdGroup = HouseholdTaxGroup.Group1_Under1B,
+            AnnualAccumulatedRevenue = 500_000_000m,
+            TaxableRevenueInPeriod = 200_000_000m,
+            IsTaxExempt = true,
+            AuditSignatureHash = "sig-1"
+        };
+        _fakeRepo.SavedSnapshots.Add(snap1);
+
+        var dto1 = await _service.GetSnapshotByIdAsync(snap1.Id);
+        Assert.NotNull(dto1);
+        Assert.Equal(snap1.Id, dto1.Id);
+        Assert.Equal(TaxCalculationMethod.Exempt, dto1.CalculationMethod);
+        Assert.True(dto1.IsTaxExempt);
+
+        // 2. Group 3 (3B to 50B) -> DeclarationBased
+        var snap3 = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 2,
+            HouseholdGroup = HouseholdTaxGroup.Group3_3BTo50B,
+            AnnualAccumulatedRevenue = 4_000_000_000m,
+            TaxableRevenueInPeriod = 1_000_000_000m,
+            IsTaxExempt = false,
+            AuditSignatureHash = "sig-3"
+        };
+        _fakeRepo.SavedSnapshots.Add(snap3);
+
+        var dto3 = await _service.GetSnapshotByIdAsync(snap3.Id);
+        Assert.NotNull(dto3);
+        Assert.Equal(TaxCalculationMethod.DeclarationBased, dto3.CalculationMethod);
+
+        // 3. Group 2 (1B to 3B) -> RevenuePercentage
+        var snap2 = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 3,
+            HouseholdGroup = HouseholdTaxGroup.Group2_1BTo3B,
+            AnnualAccumulatedRevenue = 2_000_000_000m,
+            TaxableRevenueInPeriod = 600_000_000m,
+            IsTaxExempt = false,
+            AuditSignatureHash = "sig-2"
+        };
+        _fakeRepo.SavedSnapshots.Add(snap2);
+
+        var dto2 = await _service.GetSnapshotByIdAsync(snap2.Id);
+        Assert.NotNull(dto2);
+        Assert.Equal(TaxCalculationMethod.RevenuePercentage, dto2.CalculationMethod);
+    }
+
+    [Fact]
+    public async Task GetSnapshotsAsync_FiltersByYearAndBranch()
+    {
+        var branch1 = Guid.NewGuid();
+        var branch2 = Guid.NewGuid();
+
+        _fakeRepo.SavedSnapshots.Clear();
+        _fakeRepo.SavedSnapshots.Add(new HouseholdTaxSnapshot { Id = Guid.NewGuid(), Year = 2025, BranchId = branch1 });
+        _fakeRepo.SavedSnapshots.Add(new HouseholdTaxSnapshot { Id = Guid.NewGuid(), Year = 2026, BranchId = branch1 });
+        _fakeRepo.SavedSnapshots.Add(new HouseholdTaxSnapshot { Id = Guid.NewGuid(), Year = 2026, BranchId = branch2 });
+
+        // Filter by Year
+        var list2026 = await _service.GetSnapshotsAsync(2026, null);
+        Assert.Equal(2, list2026.Count);
+
+        // Filter by Branch
+        var listBranch1 = await _service.GetSnapshotsAsync(null, branch1);
+        Assert.Equal(2, listBranch1.Count);
+
+        // Filter by both
+        var listBoth = await _service.GetSnapshotsAsync(2025, branch1);
+        Assert.Single(listBoth);
+    }
+
+    [Fact]
+    public async Task GetBookDetailsAsync_ExercisesAllBookTypes_And_Groups()
+    {
+        var branchId = Guid.NewGuid();
+        _fakeRepo.BookEntries = new List<AccountingBookEntryDto>
+        {
+            new() { VoucherNumber = "DOC-001", VoucherDate = DateTime.UtcNow, Description = "Bán hàng", Amount = 100_000m }
+        };
+
+        // 1. Group 1 (< 1B) with S1a (RevenueGroup1)
+        _fakeRepo.AnnualAccumulatedRevenue = 500_000_000m;
+        var entriesS1a = await _service.GetBookDetailsAsync(2026, TaxPeriodType.Month, 3, branchId, AccountingBookType.S1a_RevenueGroup1);
+        Assert.Single(entriesS1a);
+
+        // 2. DeclarationBased books (S2b, S2c, S2d, S2e, S3a)
+        var s2b = await _service.GetBookDetailsAsync(2026, TaxPeriodType.Quarter, 1, branchId, AccountingBookType.S2b_RevenueDeclaration);
+        Assert.Single(s2b);
+
+        var s2c = await _service.GetBookDetailsAsync(2026, TaxPeriodType.Quarter, 2, branchId, AccountingBookType.S2c_RevenueAndExpense);
+        Assert.Single(s2c);
+
+        var s2d = await _service.GetBookDetailsAsync(2026, TaxPeriodType.Quarter, 3, branchId, AccountingBookType.S2d_MaterialsAndGoods);
+        Assert.Single(s2d);
+
+        var s2e = await _service.GetBookDetailsAsync(2026, TaxPeriodType.Quarter, 4, branchId, AccountingBookType.S2e_CashAndBank);
+        Assert.Single(s2e);
+
+        var s3a = await _service.GetBookDetailsAsync(2026, TaxPeriodType.Year, 1, branchId, AccountingBookType.S3a_TaxObligation);
+        Assert.Single(s3a);
+
+        // 3. High revenue (> 3B) automatically forces DeclarationBased calculation
+        _fakeRepo.AnnualAccumulatedRevenue = 5_000_000_000m;
+        var entriesHighRev = await _service.GetBookDetailsAsync(2026, TaxPeriodType.Month, 6, branchId, AccountingBookType.S1a_RevenueGroup1);
+        Assert.Single(entriesHighRev);
+    }
+
+    [Fact]
+    public async Task VerifySnapshotIntegrityAsync_ValidatesCorrectly()
+    {
+        // Non-existent snapshot -> false
+        var notFound = await _service.VerifySnapshotIntegrityAsync(Guid.NewGuid());
+        Assert.False(notFound);
+
+        // Existing snapshot
+        var snap = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            HouseholdGroup = HouseholdTaxGroup.Group2_1BTo3B,
+            TaxableRevenueInPeriod = 500_000_000m,
+            TotalTaxAmount = 7_500_000m,
+            FinalizedAtUtc = DateTime.UtcNow,
+            FinalizedBy = "admin"
+        };
+        // Sign it with signature service
+        var sigService = new MT_GRMS.Application.Tax.Security.TaxSnapshotSignatureService();
+        snap.AuditSignatureHash = sigService.ComputeSignature(snap);
+        _fakeRepo.SavedSnapshots.Add(snap);
+
+        var isValid = await _service.VerifySnapshotIntegrityAsync(snap.Id);
+        Assert.True(isValid);
+    }
 }

@@ -222,6 +222,91 @@ public class BranchManagementTests
         Assert.Equal("Inactive", result.Status);
     }
 
+    [Theory]
+    [InlineData("", "Valid Name")]
+    [InlineData("BR-01", "")]
+    public async Task REQ_BR02_CreateBranch_InvalidInput_ThrowsBusinessException(string code, string name)
+    {
+        var req = new CreateBranchRequest(code, name, "Address");
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.CreateBranchAsync(req));
+        Assert.Equal("INVALID_INPUT", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task REQ_BR02_CreateBranch_Headquarter_Success()
+    {
+        _repo.Branches.RemoveAll(b => b.Code == "DC-01");
+        var req = new CreateBranchRequest("BR-HQ", "Trá»¥ Sá»Ÿ ChÃ­nh", "HÃ  Ná»™i", "0912345678", "Admin", isHeadquarter: true);
+        var result = await _service.CreateBranchAsync(req);
+        Assert.NotNull(result);
+        Assert.True(result.IsHeadquarter);
+    }
+
+    [Fact]
+    public async Task REQ_BR03_UpdateBranch_InvalidInput_OrNotFound_Throws()
+    {
+        var id = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        await Assert.ThrowsAsync<BusinessException>(() => _service.UpdateBranchAsync(id, new UpdateBranchRequest("", "Address")));
+        await Assert.ThrowsAsync<NotFoundException>(() => _service.UpdateBranchAsync(Guid.NewGuid(), new UpdateBranchRequest("Name", "Address")));
+    }
+
+    [Fact]
+    public async Task REQ_BR03_UpdateBranch_SetHeadquarter_ClearsOtherHeadquarters()
+    {
+        var id1 = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        var id2 = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        _repo.Branches.First(b => b.Id == id1).IsHeadquarter = true;
+
+        var result = await _service.UpdateBranchAsync(id2, new UpdateBranchRequest("Chi nhÃ¡nh Ä á»‘ng Ä a", "ThÃ¡i HÃ ", isHeadquarter: true));
+        Assert.True(result.IsHeadquarter);
+        Assert.False(_repo.Branches.First(b => b.Id == id1).IsHeadquarter);
+    }
+
+    [Fact]
+    public async Task REQ_BR04_ToggleBranchStatus_NotFound_Throws()
+    {
+        await Assert.ThrowsAsync<NotFoundException>(() => _service.ToggleBranchStatusAsync(Guid.NewGuid(), new UpdateBranchStatusRequest(true)));
+    }
+
+    [Fact]
+    public async Task REQ_BR05_DeleteBranch_Cases()
+    {
+        // Not found
+        await Assert.ThrowsAsync<NotFoundException>(() => _service.DeleteBranchAsync(Guid.NewGuid()));
+
+        // Headquarter cannot be deleted
+        var hqId = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        _repo.Branches.First(b => b.Id == hqId).IsHeadquarter = true;
+        var exHq = await Assert.ThrowsAsync<BusinessException>(() => _service.DeleteBranchAsync(hqId));
+        Assert.Equal("CANNOT_DELETE_HEADQUARTER", exHq.ErrorCode);
+
+        // Success delete non-headquarter
+        var normalId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        await _service.DeleteBranchAsync(normalId);
+        Assert.True(_repo.Branches.First(b => b.Id == normalId).IsDeleted);
+        Assert.False(_repo.Branches.First(b => b.Id == normalId).IsActive);
+    }
+
+    [Fact]
+    public async Task REQ_BR06_GetBranchQuota_DifferentPlans()
+    {
+        // Trial plan
+        _tenantRepo.Tenant!.CurrentPlan = "TRIAL";
+        _planRepo.Plan = null;
+        var quotaTrial = await _service.GetBranchQuotaAsync();
+        Assert.Equal(1, quotaTrial.MaxBranches);
+
+        // Normal/Basic plan
+        _tenantRepo.Tenant.CurrentPlan = "BASIC";
+        var quotaBasic = await _service.GetBranchQuotaAsync();
+        Assert.Equal(1, quotaBasic.MaxBranches);
+
+        // Tenant null fallback
+        _tenantRepo.Tenant = null;
+        var quotaFallback = await _service.GetBranchQuotaAsync();
+        Assert.Equal(1, quotaFallback.MaxBranches);
+    }
+
     // Helper classes
     private class FakeBranchRepository : IBranchRepository
     {

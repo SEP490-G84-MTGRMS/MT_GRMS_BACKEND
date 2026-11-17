@@ -110,6 +110,39 @@ public class CustomerDebtDatabaseIntegrationTests
 
         var hasOverdue = await repo.HasOverdueInvoicesAsync(customerId, now);
         Assert.True(hasOverdue);
+
+        // 3. GetCustomerWithLockAsync (in-memory fallback path)
+        var customer = new Customer
+        {
+            Id = customerId,
+            CustomerCode = "KH-LOCK",
+            Name = "Khach Lock",
+            Phone = "0988888888"
+        };
+        context.Customers.Add(customer);
+        await context.SaveChangesAsync();
+
+        var lockedCustomer = await repo.GetCustomerWithLockAsync(customerId);
+        Assert.NotNull(lockedCustomer);
+        Assert.Equal("KH-LOCK", lockedCustomer!.CustomerCode);
+
+        // 4. GetInvoiceByOrderIdAsync
+        var orderId = Guid.NewGuid();
+        var invWithOrder = new CustomerDebtInvoice
+        {
+            CustomerId = customerId,
+            OrderId = orderId,
+            OrderCode = "ORD-WITH-ID",
+            TotalDebtAmount = 150_000m,
+            RemainingDebtAmount = 150_000m,
+            Status = DebtInvoiceStatus.Unpaid
+        };
+        context.CustomerDebtInvoices.Add(invWithOrder);
+        await context.SaveChangesAsync();
+
+        var foundByOrder = await repo.GetInvoiceByOrderIdAsync(orderId);
+        Assert.NotNull(foundByOrder);
+        Assert.Equal("ORD-WITH-ID", foundByOrder!.OrderCode);
     }
 
     [Fact]

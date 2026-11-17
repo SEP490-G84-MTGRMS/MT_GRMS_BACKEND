@@ -558,4 +558,278 @@ public class CashbookServiceTests
         var entry = await _service.ReceiveCashAsync(bankResp.Id, FinanceAccountType.Bank, 150_000m, "POS_SALE", Guid.NewGuid(), "HD-TEST-01", "Doanh thu bán hàng POS (BANK)");
         Assert.Equal(150_000m, entry.BalanceAfter);
     }
+
+    [Fact]
+    public async Task CreateReceiptAsync_Cases_ShouldWork()
+    {
+        var acc = new FinanceAccount { Id = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy 1", CurrentBalance = 100_000m };
+        _accountRepo.Items.Add(acc);
+        _cashbookRepo.Accounts.Add(acc);
+
+        // Invalid amount
+        await Assert.ThrowsAsync<BusinessException>(() => _service.CreateReceiptAsync(new CreateReceiptRequest(acc.Id, 0, "THU", "Thu", null)));
+
+        // Valid receipt
+        var res = await _service.CreateReceiptAsync(new CreateReceiptRequest(acc.Id, 50_000m, "THU", "Thu khác", "PT-01"));
+        Assert.NotNull(res);
+        Assert.Equal(150_000m, res.BalanceAfter);
+    }
+
+    [Fact]
+    public async Task CreatePaymentAsync_Cases_ShouldWork()
+    {
+        var till = new FinanceAccount { Id = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy 1", CurrentBalance = 100_000m };
+        var safe = new FinanceAccount { Id = Guid.NewGuid(), AccountType = FinanceAccountType.Safe, AccountName = "Két", CurrentBalance = 200_000m };
+        _accountRepo.Items.Add(till);
+        _accountRepo.Items.Add(safe);
+        _cashbookRepo.Accounts.Add(till);
+        _cashbookRepo.Accounts.Add(safe);
+
+        // Invalid amount
+        await Assert.ThrowsAsync<BusinessException>(() => _service.CreatePaymentAsync(new CreatePaymentRequest(till.Id, -10, "CHI", "Chi", null)));
+
+        // Not found
+        await Assert.ThrowsAsync<NotFoundException>(() => _service.CreatePaymentAsync(new CreatePaymentRequest(Guid.NewGuid(), 10, "CHI", "Chi", null)));
+
+        // Till insufficient
+        await Assert.ThrowsAsync<BusinessException>(() => _service.CreatePaymentAsync(new CreatePaymentRequest(till.Id, 150_000m, "CHI", "Chi", null)));
+
+        // Safe insufficient
+        await Assert.ThrowsAsync<BusinessException>(() => _service.CreatePaymentAsync(new CreatePaymentRequest(safe.Id, 250_000m, "CHI", "Chi", null)));
+
+        // Valid payment
+        var res = await _service.CreatePaymentAsync(new CreatePaymentRequest(till.Id, 30_000m, "CHI", "Chi tiền", "PC-01"));
+        Assert.NotNull(res);
+        Assert.Equal(70_000m, res.BalanceAfter);
+    }
+
+    [Fact]
+    public async Task TransferFundsAsync_Cases_ShouldWork()
+    {
+        var accA = new FinanceAccount { Id = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy 1", CurrentBalance = 500_000m };
+        var accB = new FinanceAccount { Id = Guid.NewGuid(), AccountType = FinanceAccountType.Safe, AccountName = "Két", CurrentBalance = 100_000m };
+        _accountRepo.Items.Add(accA);
+        _accountRepo.Items.Add(accB);
+        _cashbookRepo.Accounts.Add(accA);
+        _cashbookRepo.Accounts.Add(accB);
+
+        // Invalid amount
+        await Assert.ThrowsAsync<BusinessException>(() => _service.TransferFundsAsync(new TransferFundRequest(accA.Id, accB.Id, 0, "Trf")));
+
+        // Same accounts
+        await Assert.ThrowsAsync<BusinessException>(() => _service.TransferFundsAsync(new TransferFundRequest(accA.Id, accA.Id, 50_000m, "Trf")));
+
+        // Valid transfer
+        var res = await _service.TransferFundsAsync(new TransferFundRequest(accA.Id, accB.Id, 100_000m, "Chuyển tiền két"));
+        Assert.NotNull(res);
+        Assert.Equal(400_000m, res.Payment.BalanceAfter);
+        Assert.Equal(200_000m, res.Receipt.BalanceAfter);
+    }
+
+    [Fact]
+    public async Task ReconcileCashAccountAsync_Cases_ShouldWork()
+    {
+        var acc = new FinanceAccount { Id = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy 1", CurrentBalance = 500_000m };
+        _accountRepo.Items.Add(acc);
+        _cashbookRepo.Accounts.Add(acc);
+
+        // Not found
+        await Assert.ThrowsAsync<NotFoundException>(() => _service.ReconcileCashAccountAsync(new ReconcileAccountRequest(Guid.NewGuid(), 500_000m, "Reason")));
+
+        // Diff != 0 without reason
+        await Assert.ThrowsAsync<BusinessException>(() => _service.ReconcileCashAccountAsync(new ReconcileAccountRequest(acc.Id, 550_000m, "")));
+
+        // Diff == 0
+        var resZero = await _service.ReconcileCashAccountAsync(new ReconcileAccountRequest(acc.Id, 500_000m, "Khớp"));
+        Assert.Null(resZero);
+
+        // Diff > 0 (surplus)
+        var resSurplus = await _service.ReconcileCashAccountAsync(new ReconcileAccountRequest(acc.Id, 520_000m, "Thừa"));
+        Assert.NotNull(resSurplus);
+        Assert.Equal(520_000m, resSurplus.BalanceAfter);
+
+        // Diff < 0 (shortage)
+        var resShortage = await _service.ReconcileCashAccountAsync(new ReconcileAccountRequest(acc.Id, 510_000m, "Thiếu"));
+        Assert.NotNull(resShortage);
+        Assert.Equal(510_000m, resShortage.BalanceAfter);
+    }
+
+    [Fact]
+    public async Task VoidTransactionAsync_Cases_ShouldWork()
+    {
+        var acc = new FinanceAccount { Id = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy 1", CurrentBalance = 500_000m };
+        _accountRepo.Items.Add(acc);
+        _cashbookRepo.Accounts.Add(acc);
+
+        var receiptEntry = new CashbookEntry
+        {
+            Id = Guid.NewGuid(),
+            AccountId = acc.Id,
+            AccountType = acc.AccountType,
+            EntryType = CashbookEntryType.Receipt,
+            Amount = 50_000m,
+            EntryCode = "PT-01",
+            SourceType = "MANUAL",
+            OccurredAtUtc = DateTime.UtcNow
+        };
+        var paymentEntry = new CashbookEntry
+        {
+            Id = Guid.NewGuid(),
+            AccountId = acc.Id,
+            AccountType = acc.AccountType,
+            EntryType = CashbookEntryType.Payment,
+            Amount = 30_000m,
+            EntryCode = "PC-01",
+            SourceType = "MANUAL",
+            OccurredAtUtc = DateTime.UtcNow
+        };
+        _cashbookRepo.Items.Add(receiptEntry);
+        _cashbookRepo.Items.Add(paymentEntry);
+
+        // Reason required
+        await Assert.ThrowsAsync<BusinessException>(() => _service.VoidTransactionAsync(receiptEntry.Id, new VoidEntryRequest("")));
+
+        // Not found
+        await Assert.ThrowsAsync<NotFoundException>(() => _service.VoidTransactionAsync(Guid.NewGuid(), new VoidEntryRequest("Reason")));
+
+        // Void receipt -> generates payment
+        var voidReceipt = await _service.VoidTransactionAsync(receiptEntry.Id, new VoidEntryRequest("Gạch thu"));
+        Assert.NotNull(voidReceipt);
+
+        // Already voided
+        await Assert.ThrowsAsync<BusinessException>(() => _service.VoidTransactionAsync(receiptEntry.Id, new VoidEntryRequest("Gạch lại")));
+
+        // Void payment -> generates receipt
+        var voidPayment = await _service.VoidTransactionAsync(paymentEntry.Id, new VoidEntryRequest("Gạch chi"));
+        Assert.NotNull(voidPayment);
+    }
+
+    [Fact]
+    public async Task GetSummaryAsync_ShouldCalculateCorrectly()
+    {
+        var branchId = Guid.NewGuid();
+        var till = new FinanceAccount { Id = Guid.NewGuid(), BranchId = branchId, AccountType = FinanceAccountType.Till, AccountName = "Quầy", CurrentBalance = 1_000_000m, IsActive = true };
+        var safe = new FinanceAccount { Id = Guid.NewGuid(), BranchId = branchId, AccountType = FinanceAccountType.Safe, AccountName = "Két", CurrentBalance = 2_000_000m, IsActive = true };
+        _accountRepo.Items.Add(till);
+        _accountRepo.Items.Add(safe);
+        _cashbookRepo.Accounts.Add(till);
+        _cashbookRepo.Accounts.Add(safe);
+
+        var summary = await _service.GetSummaryAsync(branchId);
+        Assert.NotNull(summary);
+        Assert.Equal(1_000_000m, summary.TotalCashInDrawers);
+        Assert.Equal(2_000_000m, summary.TotalSafeDepositBalance);
+        Assert.Equal(3_000_000m, summary.TotalClosingBalance);
+    }
+
+    [Theory]
+    [InlineData("BANK", FinanceAccountType.Bank)]
+    [InlineData("VIETQR", FinanceAccountType.Bank)]
+    [InlineData("TRANSFER", FinanceAccountType.Bank)]
+    [InlineData("QR", FinanceAccountType.Bank)]
+    [InlineData("CASH", FinanceAccountType.Safe)]
+    [InlineData("TIEN_MAT", FinanceAccountType.Safe)]
+    public async Task ResolveDisbursementAccountAsync_ResolvesBankOrSafe(string paymentMethod, FinanceAccountType expectedType)
+    {
+        var branchId = Guid.NewGuid();
+        var account = await _service.ResolveDisbursementAccountAsync(branchId, paymentMethod);
+        Assert.NotNull(account);
+        Assert.Equal(expectedType, account.AccountType);
+        Assert.Equal(branchId, account.BranchId);
+    }
+
+    [Fact]
+    public async Task VerifyChainIntegrityAsync_ValidatesIntegrity()
+    {
+        var accId = Guid.NewGuid();
+
+        // 1. Empty entries returns true
+        var emptyRes = await _service.VerifyChainIntegrityAsync(accId);
+        Assert.True(emptyRes);
+
+        // 2. Add entries
+        var e1 = new CashbookEntry
+        {
+            Id = Guid.NewGuid(),
+            AccountId = accId,
+            Amount = 100_000m,
+            EntryCode = "PT-01",
+            AuditHash = "HASH-1",
+            OccurredAtUtc = DateTime.UtcNow.AddMinutes(-10),
+            CreatedAt = DateTime.UtcNow.AddMinutes(-10)
+        };
+        var e2 = new CashbookEntry
+        {
+            Id = Guid.NewGuid(),
+            AccountId = accId,
+            Amount = 50_000m,
+            EntryCode = "PC-02",
+            AuditHash = "HASH-2",
+            OccurredAtUtc = DateTime.UtcNow,
+            CreatedAt = DateTime.UtcNow
+        };
+        _cashbookRepo.Items.Add(e1);
+        _cashbookRepo.Items.Add(e2);
+
+        // Fake audit hash service returns true for valid, or test false condition
+        var validRes = await _service.VerifyChainIntegrityAsync(accId);
+        Assert.True(validRes);
+    }
+
+    [Fact]
+    public async Task ReceiveCashAsync_Validations_And_Success()
+    {
+        var branchId = Guid.NewGuid();
+        var shiftId = Guid.NewGuid();
+        var till = new FinanceAccount
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            AccountType = FinanceAccountType.Till,
+            AccountName = "Quầy 1",
+            CurrentBalance = 500_000m,
+            ActiveShiftId = shiftId,
+            IsActive = true
+        };
+        _accountRepo.Items.Add(till);
+        _cashbookRepo.Accounts.Add(till);
+
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            BranchId = branchId,
+            Status = ShiftState.Open,
+            TotalCashIn = 0m
+        };
+        _shiftRepo.Items.Add(shift);
+
+        // 1. Invalid amount throws
+        var exAmount = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.ReceiveCashAsync(till.Id, till.AccountType, 0m, "DEBT", null, "REF-0", "Thu"));
+        Assert.Equal("INVALID_AMOUNT", exAmount.ErrorCode);
+
+        // 2. Account not found
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            _service.ReceiveCashAsync(Guid.NewGuid(), FinanceAccountType.Safe, 100_000m, "DEBT", null, "REF-0", "Thu"));
+
+        // 3. Success updates account balance and shift TotalCashIn
+        var res = await _service.ReceiveCashAsync(till.Id, till.AccountType, 200_000m, "DEBT", null, "REF-01", "Thu nợ khách");
+        Assert.NotNull(res);
+        Assert.Equal(700_000m, till.CurrentBalance);
+        Assert.Equal(200_000m, shift.TotalCashIn);
+        Assert.Equal("Receipt", res.EntryType);
+    }
+
+    [Fact]
+    public async Task GetAccountsAsync_ReturnsFilteredAccounts()
+    {
+        var b1 = Guid.NewGuid();
+        var b2 = Guid.NewGuid();
+
+        _cashbookRepo.Accounts.Add(new FinanceAccount { Id = Guid.NewGuid(), BranchId = b1, AccountName = "Acc 1", IsActive = true });
+        _cashbookRepo.Accounts.Add(new FinanceAccount { Id = Guid.NewGuid(), BranchId = b2, AccountName = "Acc 2", IsActive = true });
+
+        var accs1 = await _service.GetAccountsAsync(b1);
+        Assert.NotEmpty(accs1);
+    }
 }

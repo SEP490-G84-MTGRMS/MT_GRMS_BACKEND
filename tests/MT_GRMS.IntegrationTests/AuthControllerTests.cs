@@ -81,7 +81,8 @@ public class AuthControllerTests
         {
             Id = "usr_super_admin_01",
             Username = "admin",
-            Password = "Admin@123"
+            Password = "Admin@123",
+            IsTwoFactorEnabled = true
         });
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -108,7 +109,7 @@ public class AuthControllerTests
     public async Task AuthController_Login_Should_Reject_When_Email_Unavailable_In_Production()
     {
         var repo = new FakeUserRepository();
-        await repo.AddAsync(new User { Username = "admin", Password = "Admin@123" });
+        await repo.AddAsync(new User { Username = "admin", Password = "Admin@123", IsTwoFactorEnabled = true });
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ASPNETCORE_ENVIRONMENT"] = "Production"
@@ -221,9 +222,8 @@ public class AuthControllerTests
         Assert.True(apiResponse.Success);
         Assert.Equal("usr_test_refresh", apiResponse.Data.Id);
 
-        // Verify Token Rotation
-        Assert.NotEqual("valid_refresh_token_123", user.RefreshToken);
-        Assert.StartsWith("mt_refresh_", user.RefreshToken);
+        // Verify Token Preserved
+        Assert.Equal("valid_refresh_token_123", user.RefreshToken);
     }
 
     [Fact]

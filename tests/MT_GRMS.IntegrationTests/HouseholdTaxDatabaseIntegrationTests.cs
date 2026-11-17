@@ -653,6 +653,146 @@ public class HouseholdTaxDatabaseIntegrationTests
         Assert.Contains(s3aEntries, e => e.SectionGroup == "2. Thuế Thu nhập cá nhân (TNCN)" && e.InAmount == 1_000_000m);
         Assert.Contains(s3aEntries, e => e.OutAmount == 1_000_000m); // PC-THUE-NOP
     }
+
+    [Fact]
+    public async Task HouseholdTaxRepository_GetDeductibleExpenseVouchersAsync_ShouldFilterByDateBranchAndTaxDeductible()
+    {
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+
+        var branchId = Guid.NewGuid();
+        var fromDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var toDate = new DateTime(2026, 1, 31, 23, 59, 59, DateTimeKind.Utc);
+
+        var ev1 = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            VoucherCode = "PC-TAX-01",
+            ExpenseDate = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc),
+            Amount = 2_000_000m,
+            IsTaxDeductible = true,
+            Status = ExpenseVoucherStatus.Paid,
+            CreatedAt = DateTime.UtcNow
+        };
+        var ev2 = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            VoucherCode = "PC-NOT-DEDUCTIBLE",
+            ExpenseDate = new DateTime(2026, 1, 16, 0, 0, 0, DateTimeKind.Utc),
+            Amount = 1_000_000m,
+            IsTaxDeductible = false,
+            Status = ExpenseVoucherStatus.Paid,
+            CreatedAt = DateTime.UtcNow
+        };
+        var ev3 = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            BranchId = Guid.NewGuid(),
+            VoucherCode = "PC-DIFF-BRANCH",
+            ExpenseDate = new DateTime(2026, 1, 17, 0, 0, 0, DateTimeKind.Utc),
+            Amount = 3_000_000m,
+            IsTaxDeductible = true,
+            Status = ExpenseVoucherStatus.Paid,
+            CreatedAt = DateTime.UtcNow
+        };
+        await context.ExpenseVouchers.AddRangeAsync(ev1, ev2, ev3);
+        await context.SaveChangesAsync();
+
+        var resultWithBranch = await repo.GetDeductibleExpenseVouchersAsync(fromDate, toDate, branchId);
+        Assert.Single(resultWithBranch);
+        Assert.Equal("PC-TAX-01", resultWithBranch[0].VoucherCode);
+
+        var resultAllBranches = await repo.GetDeductibleExpenseVouchersAsync(fromDate, toDate, null);
+        Assert.Equal(2, resultAllBranches.Count);
+    }
+
+    [Fact]
+    public async Task HouseholdTaxRepository_UpsertYearSettingAsync_ShouldUpdateExistingSettings()
+    {
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+
+        var setting = new HouseholdTaxYearSetting
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-tax-01",
+            Year = 2026,
+            PitMethod = TaxCalculationMethod.RevenuePercentage,
+            LockedUntilYear = 2027,
+            LockReason = "Initial setup",
+            LockedBySystem = "MANUAL",
+            LockedAtUtc = DateTime.UtcNow
+        };
+        await repo.UpsertYearSettingAsync(setting);
+
+        // Update properties
+        setting.PitMethod = TaxCalculationMethod.DeclarationBased;
+        setting.LockedUntilYear = 2028;
+        setting.LockReason = "Chuyển phương pháp kê khai 2 năm";
+        setting.LockedBySystem = "AUTO";
+        setting.LockedAtUtc = DateTime.UtcNow;
+
+        await repo.UpsertYearSettingAsync(setting);
+
+        var fetched = await repo.GetYearSettingAsync(2026);
+        Assert.NotNull(fetched);
+        Assert.Equal(TaxCalculationMethod.DeclarationBased, fetched!.PitMethod);
+        Assert.Equal(2028, fetched.LockedUntilYear);
+        Assert.Equal("AUTO", fetched.LockedBySystem);
+    }
+
+    [Fact]
+    public async Task HouseholdTaxRepository_GetSnapshotsAsync_ShouldFilterByBranch()
+    {
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+
+        var branchA = Guid.NewGuid();
+        var branchB = Guid.NewGuid();
+
+        var snapA = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-tax-01",
+            BranchId = branchA,
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            HouseholdGroup = HouseholdTaxGroup.Group2_1BTo3B,
+            CreatedAt = DateTime.UtcNow
+        };
+        var snapB = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-tax-01",
+            BranchId = branchB,
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 2,
+            HouseholdGroup = HouseholdTaxGroup.Group3_3BTo50B,
+            CreatedAt = DateTime.UtcNow
+        };
+        await repo.AddSnapshotAsync(snapA);
+        await repo.AddSnapshotAsync(snapB);
+
+        var snapshotA = await repo.GetSnapshotAsync(2026, TaxPeriodType.Quarter, 1, branchA);
+        Assert.NotNull(snapshotA);
+        Assert.Equal(1, snapshotA!.PeriodNumber);
+        Assert.Equal(branchA, snapshotA.BranchId);
+
+        var listA = await repo.GetSnapshotsAsync(2026, branchA);
+        Assert.Single(listA);
+        Assert.Equal(branchA, listA[0].BranchId);
+
+        var listB = await repo.GetSnapshotsAsync(2026, branchB);
+        Assert.Single(listB);
+        Assert.Equal(branchB, listB[0].BranchId);
+
+        var listAll = await repo.GetSnapshotsAsync(2026, null);
+        Assert.Equal(2, listAll.Count);
+    }
 }
 
 

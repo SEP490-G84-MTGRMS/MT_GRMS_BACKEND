@@ -1775,6 +1775,885 @@ public class SupplierManagementTests
         // Ensure no dummy BranchStocks are created
         Assert.Empty(repo.BranchStocks);
     }
+
+    [Fact]
+    public async Task GetBranchAssignmentsAsync_WithVariousFilters_ReturnsExpected()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var suppId = Guid.NewGuid();
+        var bId = Guid.NewGuid();
+        repo.BranchAssignments.Add(new SupplierBranchAssignment
+        {
+            SupplierId = suppId,
+            BranchId = bId,
+            Status = SupplierStatus.Active
+        });
+
+        // 1. Filter status Active
+        var activeRes = await service.GetBranchAssignmentsAsync(new SupplierBranchAssignmentQueryFilter { Status = "Active" });
+        Assert.Single(activeRes.Items);
+
+        // 2. Filter status Inactive
+        var inactiveRes = await service.GetBranchAssignmentsAsync(new SupplierBranchAssignmentQueryFilter { Status = "Inactive" });
+        Assert.Empty(inactiveRes.Items);
+
+        // 3. Filter status default
+        var defaultRes = await service.GetBranchAssignmentsAsync(new SupplierBranchAssignmentQueryFilter { Status = "All" });
+        Assert.Single(defaultRes.Items);
+    }
+
+    [Fact]
+    public async Task AssignSupplierToBranchesAsync_ValidationsAndSuccess()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        tenantContext.SetRole("STORE_OWNER");
+        var service = new SupplierService(repo, uow, tenantContext);
+
+        var suppId = Guid.NewGuid();
+        var branch1 = Guid.NewGuid();
+        var branch2 = Guid.NewGuid();
+
+        // 1. Supplier not found -> NotFoundException
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.AssignSupplierToBranchesAsync(new AssignSupplierToBranchesCommand { SupplierId = suppId, BranchIds = new List<Guid> { branch1 } }));
+
+        // Add supplier
+        var supp = new Supplier { Id = suppId, Code = "SUP-01", Name = "Supplier 1", Status = SupplierStatus.Active };
+        await repo.AddAsync(supp);
+
+        // 2. Empty branch ids -> returns empty list
+        var emptyResult = await service.AssignSupplierToBranchesAsync(new AssignSupplierToBranchesCommand { SupplierId = suppId, BranchIds = new List<Guid>() });
+        Assert.Empty(emptyResult);
+
+        // 3. Valid branch ids -> creates assignments
+        var validResult = await service.AssignSupplierToBranchesAsync(new AssignSupplierToBranchesCommand { SupplierId = suppId, BranchIds = new List<Guid> { branch1, branch2 } });
+        Assert.Equal(2, validResult.Count);
+        Assert.Equal(2, repo.BranchAssignments.Count);
+    }
+
+    [Fact]
+    public async Task AssignSuppliersToBranchAsync_ValidationBranches()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        tenantContext.SetRole("STORE_OWNER");
+        var service = new SupplierService(repo, uow, tenantContext);
+
+        // 1. Empty branch ID -> BusinessException
+        await Assert.ThrowsAsync<BusinessException>(() =>
+            service.AssignSuppliersToBranchAsync(new AssignSuppliersToBranchCommand { BranchId = Guid.Empty }));
+
+        var branchId = Guid.NewGuid();
+
+        // 2. Branch not found -> NotFoundException
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.AssignSuppliersToBranchAsync(new AssignSuppliersToBranchCommand { BranchId = branchId }));
+
+        // Add inactive branch
+        repo.Branches.Add(new MT_GRMS.Domain.Entities.SaaS.Branch { Id = branchId, BranchCode = "BR-01", Name = "Branch 1", IsActive = false });
+
+        // 3. Branch inactive -> BusinessException
+        await Assert.ThrowsAsync<BusinessException>(() =>
+            service.AssignSuppliersToBranchAsync(new AssignSuppliersToBranchCommand { BranchId = branchId }));
+
+        // Make branch active
+        repo.Branches[0].IsActive = true;
+
+        // 4. Empty supplier IDs -> BusinessException
+        await Assert.ThrowsAsync<BusinessException>(() =>
+            service.AssignSuppliersToBranchAsync(new AssignSuppliersToBranchCommand { BranchId = branchId, SupplierIds = new List<Guid>() }));
+
+        var suppId = Guid.NewGuid();
+
+        // 5. Supplier not found -> NotFoundException
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.AssignSuppliersToBranchAsync(new AssignSuppliersToBranchCommand { BranchId = branchId, SupplierIds = new List<Guid> { suppId } }));
+
+        // Add inactive supplier
+        var supp = new Supplier { Id = suppId, Code = "SUP-INACT", Name = "Inactive Supp", Status = SupplierStatus.Inactive };
+        await repo.AddAsync(supp);
+
+        // 6. Supplier inactive -> BusinessException
+        await Assert.ThrowsAsync<BusinessException>(() =>
+            service.AssignSuppliersToBranchAsync(new AssignSuppliersToBranchCommand { BranchId = branchId, SupplierIds = new List<Guid> { suppId } }));
+
+        // 7. Valid supplier with Items
+        supp.Status = SupplierStatus.Active;
+        var cmd = new AssignSuppliersToBranchCommand
+        {
+            BranchId = branchId,
+            Items = new List<AssignSupplierToBranchItemDto>
+            {
+                new() { SupplierId = suppId, DeliveryDays = new List<string> { "Monday", "Wednesday" } }
+            }
+        };
+        var res = await service.AssignSuppliersToBranchAsync(cmd);
+        Assert.Single(res);
+    }
+
+    [Fact]
+    public async Task BranchAssignment_DeliveryDaysAndCustomerLink_ShouldWork()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        tenantContext.SetRole("STORE_OWNER");
+        var service = new SupplierService(repo, uow, tenantContext);
+
+        var suppId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        var supp = new Supplier { Id = suppId, Code = "SUP-02", Name = "Supplier 2", Status = SupplierStatus.Active };
+        await repo.AddAsync(supp);
+
+        // UpdateBranchAssignmentDeliveryDaysAsync not found
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.UpdateBranchAssignmentDeliveryDaysAsync(suppId, branchId, new UpdateSupplierBranchAssignmentDeliveryDaysRequest { DeliveryDays = new List<string> { "Monday" } }));
+
+        // Add assignment
+        var assign = new SupplierBranchAssignment { SupplierId = suppId, BranchId = branchId, Status = SupplierStatus.Active };
+        repo.BranchAssignments.Add(assign);
+
+        var updatedDays = await service.UpdateBranchAssignmentDeliveryDaysAsync(suppId, branchId, new UpdateSupplierBranchAssignmentDeliveryDaysRequest { DeliveryDays = new List<string> { "Monday", "Friday" } });
+        Assert.NotNull(updatedDays);
+
+        // Link customer not found
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.LinkCustomerAsync(Guid.NewGuid(), new LinkCustomerRequest { CustomerId = Guid.NewGuid() }));
+
+        // Link customer success
+        var customerId = Guid.NewGuid();
+        var linked = await service.LinkCustomerAsync(suppId, new LinkCustomerRequest { CustomerId = customerId });
+        Assert.Equal(customerId, linked.LinkedCustomerId);
+
+        // Unassign branch
+        await service.UnassignSupplierBranchAsync(suppId, branchId);
+        Assert.Empty(repo.BranchAssignments);
+    }
+
+    [Fact]
+    public async Task GetSuppliersForProduct_SearchSuggestions_Transactions()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        tenantContext.SetRole("STORE_OWNER");
+        var service = new SupplierService(repo, uow, tenantContext);
+
+        var pId = Guid.NewGuid();
+
+        // Product not found
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.GetSuppliersForProductAsync(pId));
+
+        // Add product
+        repo.Products.Add(new MT_GRMS.Domain.Entities.Catalog.Product { Id = pId, ProductName = "Milk", SKU = "MILK-01" });
+        var suppliers = await service.GetSuppliersForProductAsync(pId, onlyActive: true);
+        Assert.Empty(suppliers);
+
+        // Search suggestions with whitespace
+        var emptySug = await service.GetSearchSuggestionsAsync("   ");
+        Assert.NotNull(emptySug);
+
+        // Transactions not found
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.GetTransactionsAsync(Guid.NewGuid()));
+
+        // Transactions found
+        var suppId = Guid.NewGuid();
+        var supp = new Supplier { Id = suppId, Code = "S01", Name = "Supp One", Status = SupplierStatus.Active };
+        await repo.AddAsync(supp);
+        var txs = await service.GetTransactionsAsync(suppId);
+        Assert.NotNull(txs);
+        Assert.Empty(txs.Items);
+    }
+
+    [Fact]
+    public async Task DeleteSupplierAsync_ShouldEnforceRole_NotFound_AndHistoryRules()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        var service = new SupplierService(repo, uow, tenantContext);
+
+        var suppId = Guid.NewGuid();
+        var supp = new Supplier { Id = suppId, Code = "SUP-DEL", Name = "Supplier To Delete", CurrentDebt = 0 };
+        await repo.AddAsync(supp);
+
+        // 1. Role check: Cashier forbidden
+        tenantContext.SetRole("CASHIER");
+        var exForbidden = await Assert.ThrowsAsync<BusinessException>(() => service.DeleteSupplierAsync(suppId));
+        Assert.Equal("FORBIDDEN", exForbidden.ErrorCode);
+
+        // 2. Owner role: Not found
+        tenantContext.SetRole("STORE_OWNER");
+        await Assert.ThrowsAsync<NotFoundException>(() => service.DeleteSupplierAsync(Guid.NewGuid()));
+
+        // 3. Current debt > 0: BusinessException
+        supp.CurrentDebt = 500_000m;
+        var exDebt = await Assert.ThrowsAsync<BusinessException>(() => service.DeleteSupplierAsync(suppId));
+        Assert.Equal("SUPPLIER_HAS_HISTORY", exDebt.ErrorCode);
+
+        // 4. Ledger history > 0: BusinessException
+        supp.CurrentDebt = 0m;
+        await repo.AddLedgerAsync(new SupplierAPLedger
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = suppId,
+            TransactionDate = DateTime.UtcNow,
+            DocType = APDocType.PurchaseInvoice,
+            DocNo = "INV-001",
+            Amount = 1_000_000m
+        });
+        var exLedger = await Assert.ThrowsAsync<BusinessException>(() => service.DeleteSupplierAsync(suppId));
+        Assert.Equal("SUPPLIER_HAS_HISTORY", exLedger.ErrorCode);
+
+        // 5. Clean supplier: Successful deletion
+        var cleanId = Guid.NewGuid();
+        var cleanSupp = new Supplier { Id = cleanId, Code = "CLEAN-SUP", Name = "Clean", CurrentDebt = 0 };
+        await repo.AddAsync(cleanSupp);
+
+        await service.DeleteSupplierAsync(cleanId);
+        Assert.True(cleanSupp.IsDeleted);
+        Assert.True(uow.SaveChangesCallCount > 0);
+    }
+
+    [Fact]
+    public async Task GetDeliveryConfigAsync_ShouldReturnConfig_OrThrowNotFound()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        tenantContext.SetRole("STORE_OWNER");
+        var service = new SupplierService(repo, uow, tenantContext);
+
+        // Not found
+        await Assert.ThrowsAsync<NotFoundException>(() => service.GetDeliveryConfigAsync(Guid.NewGuid()));
+
+        // Found
+        var suppId = Guid.NewGuid();
+        var supp = new Supplier
+        {
+            Id = suppId,
+            Code = "DELIV-SUP",
+            Name = "Delivery Supp",
+            CutoffTime = "14:00",
+            DeliveryWeekdaysMask = 31, // Mon-Fri
+            MinOrderQuantity = 5,
+            UrgentLeadTimeHours = 4
+        };
+        await repo.AddAsync(supp);
+
+        var config = await service.GetDeliveryConfigAsync(suppId);
+        Assert.NotNull(config);
+        Assert.Equal(suppId, config.SupplierId);
+        Assert.Equal(5, config.MinOrderQuantity);
+        Assert.Equal(4, config.UrgentLeadTimeHours);
+    }
+
+    [Fact]
+    public async Task ReturnPolicy_Lifecycle_And_Validations()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        tenantContext.SetRole("STORE_OWNER");
+        var service = new SupplierService(repo, uow, tenantContext);
+
+        var suppId = Guid.NewGuid();
+        var supp = new Supplier { Id = suppId, Code = "RP-SUP", Name = "Return Policy Supplier" };
+        await repo.AddAsync(supp);
+
+        // 1. GetReturnPolicy when not found supplier
+        await Assert.ThrowsAsync<NotFoundException>(() => service.GetReturnPolicyAsync(Guid.NewGuid()));
+
+        // 2. GetReturnPolicy when no active policy exists: returns default
+        var defaultPolicy = await service.GetReturnPolicyAsync(suppId);
+        Assert.NotNull(defaultPolicy);
+        Assert.True(defaultPolicy.AllowReturn);
+        Assert.Equal("REDUCE_PAYABLE", defaultPolicy.DefaultResolutionType);
+
+        // 3. Validation errors on UpsertReturnPolicyAsync
+        // Null or empty AllowedReturnTypes
+        await Assert.ThrowsAsync<BusinessException>(() => service.UpsertReturnPolicyAsync(suppId, new UpdateSupplierReturnPolicyCommand
+        {
+            AllowedReturnTypes = []
+        }));
+
+        // Null or empty AllowedResolutionTypes
+        await Assert.ThrowsAsync<BusinessException>(() => service.UpsertReturnPolicyAsync(suppId, new UpdateSupplierReturnPolicyCommand
+        {
+            AllowedReturnTypes = ["DEFECT"],
+            AllowedResolutionTypes = []
+        }));
+
+        // DefaultResolutionType not in AllowedResolutionTypes
+        await Assert.ThrowsAsync<BusinessException>(() => service.UpsertReturnPolicyAsync(suppId, new UpdateSupplierReturnPolicyCommand
+        {
+            AllowedReturnTypes = ["DEFECT"],
+            AllowedResolutionTypes = ["REFUND"],
+            DefaultResolutionType = "EXCHANGE"
+        }));
+
+        // CostShareEnabled true but StoreCostSharePercent null
+        await Assert.ThrowsAsync<BusinessException>(() => service.UpsertReturnPolicyAsync(suppId, new UpdateSupplierReturnPolicyCommand
+        {
+            AllowedReturnTypes = ["DEFECT"],
+            AllowedResolutionTypes = ["REFUND"],
+            DefaultResolutionType = "REFUND",
+            CostShareEnabled = true,
+            StoreCostSharePercent = null
+        }));
+
+        // StoreCostSharePercent out of bounds (< 0 or > 100)
+        await Assert.ThrowsAsync<BusinessException>(() => service.UpsertReturnPolicyAsync(suppId, new UpdateSupplierReturnPolicyCommand
+        {
+            AllowedReturnTypes = ["DEFECT"],
+            AllowedResolutionTypes = ["REFUND"],
+            DefaultResolutionType = "REFUND",
+            CostShareEnabled = true,
+            StoreCostSharePercent = 120m
+        }));
+
+        // Store + Supplier != 100
+        await Assert.ThrowsAsync<BusinessException>(() => service.UpsertReturnPolicyAsync(suppId, new UpdateSupplierReturnPolicyCommand
+        {
+            AllowedReturnTypes = ["DEFECT"],
+            AllowedResolutionTypes = ["REFUND"],
+            DefaultResolutionType = "REFUND",
+            CostShareEnabled = true,
+            StoreCostSharePercent = 40m,
+            SupplierCostSharePercent = 40m
+        }));
+
+        // CostShareByCategoryEnabled validation: empty category
+        var catId1 = Guid.NewGuid();
+        await Assert.ThrowsAsync<BusinessException>(() => service.UpsertReturnPolicyAsync(suppId, new UpdateSupplierReturnPolicyCommand
+        {
+            AllowedReturnTypes = ["DEFECT"],
+            AllowedResolutionTypes = ["REFUND"],
+            DefaultResolutionType = "REFUND",
+            CostShareEnabled = true,
+            CostShareByCategoryEnabled = true,
+            StoreCostSharePercent = 30m,
+            SupplierCostSharePercent = 70m,
+            CategoryCostShares = [
+                new SupplierReturnPolicyCategoryCostShareDto { CategoryId = Guid.Empty, StoreCostSharePercent = 50, SupplierCostSharePercent = 50 }
+            ]
+        }));
+
+        // Duplicate category IDs
+        await Assert.ThrowsAsync<BusinessException>(() => service.UpsertReturnPolicyAsync(suppId, new UpdateSupplierReturnPolicyCommand
+        {
+            AllowedReturnTypes = ["DEFECT"],
+            AllowedResolutionTypes = ["REFUND"],
+            DefaultResolutionType = "REFUND",
+            CostShareEnabled = true,
+            CostShareByCategoryEnabled = true,
+            StoreCostSharePercent = 30m,
+            SupplierCostSharePercent = 70m,
+            CategoryCostShares = [
+                new SupplierReturnPolicyCategoryCostShareDto { CategoryId = catId1, StoreCostSharePercent = 50, SupplierCostSharePercent = 50 },
+                new SupplierReturnPolicyCategoryCostShareDto { CategoryId = catId1, StoreCostSharePercent = 50, SupplierCostSharePercent = 50 }
+            ]
+        }));
+
+        // Invalid sum in category
+        await Assert.ThrowsAsync<BusinessException>(() => service.UpsertReturnPolicyAsync(suppId, new UpdateSupplierReturnPolicyCommand
+        {
+            AllowedReturnTypes = ["DEFECT"],
+            AllowedResolutionTypes = ["REFUND"],
+            DefaultResolutionType = "REFUND",
+            CostShareEnabled = true,
+            CostShareByCategoryEnabled = true,
+            StoreCostSharePercent = 30m,
+            SupplierCostSharePercent = 70m,
+            CategoryCostShares = [
+                new SupplierReturnPolicyCategoryCostShareDto { CategoryId = catId1, StoreCostSharePercent = 50, SupplierCostSharePercent = 40 }
+            ]
+        }));
+
+        // 4. Successful insert of new ReturnPolicy with categories
+        var catId2 = Guid.NewGuid();
+        var upsertCmd = new UpdateSupplierReturnPolicyCommand
+        {
+            AllowReturn = true,
+            AllowedReturnTypes = ["DEFECT", "EXPIRED"],
+            AllowedResolutionTypes = ["REFUND", "EXCHANGE"],
+            DefaultResolutionType = "REFUND",
+            CostShareEnabled = true,
+            CostShareByCategoryEnabled = true,
+            StoreCostSharePercent = 30m,
+            SupplierCostSharePercent = 70m,
+            CostShareBase = "REPLACEMENT_VALUE",
+            CategoryCostShares = [
+                new SupplierReturnPolicyCategoryCostShareDto { CategoryId = catId1, StoreCostSharePercent = 40, SupplierCostSharePercent = 60 },
+                new SupplierReturnPolicyCategoryCostShareDto { CategoryId = catId2, StoreCostSharePercent = 20, SupplierCostSharePercent = 80 }
+            ],
+            Notes = "Custom policy notes"
+        };
+
+        var policyResult = await service.UpsertReturnPolicyAsync(suppId, upsertCmd);
+        Assert.NotNull(policyResult);
+        Assert.Equal("REFUND", policyResult.DefaultResolutionType);
+        Assert.Equal(2, policyResult.CategoryCostShares.Count);
+
+        // 5. GetReturnPolicyAsync now returns the configured policy
+        var fetchedPolicy = await service.GetReturnPolicyAsync(suppId);
+        Assert.NotNull(fetchedPolicy);
+        Assert.Equal("REFUND", fetchedPolicy.DefaultResolutionType);
+        Assert.Equal(2, fetchedPolicy.CategoryCostShares.Count);
+
+        // 6. Update existing policy to turn off category cost shares
+        upsertCmd.CostShareByCategoryEnabled = false;
+        var updatedPolicy = await service.UpsertReturnPolicyAsync(suppId, upsertCmd);
+        Assert.False(updatedPolicy.CostShareByCategoryEnabled);
+        Assert.Empty(updatedPolicy.CategoryCostShares);
+    }
+
+    [Fact]
+    public async Task APLedger_And_AssignedBranches_Lifecycle()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        tenantContext.SetRole("STORE_OWNER");
+        var service = new SupplierService(repo, uow, tenantContext);
+
+        var suppId = Guid.NewGuid();
+        var supp = new Supplier
+        {
+            Id = suppId,
+            Code = "SUP-LEDGER",
+            Name = "Ledger Supplier",
+            CurrentDebt = 1_500_000m,
+            OverdueDebt = 500_000m,
+            CreditLimit = 10_000_000m
+        };
+        await repo.AddAsync(supp);
+
+        // 1. GetApSummaryAsync
+        var summary = await service.GetApSummaryAsync(suppId);
+        Assert.Equal(suppId, summary.SupplierId);
+        Assert.Equal(1_500_000m, summary.CurrentDebt);
+        Assert.Equal(500_000m, summary.OverdueDebt);
+
+        // 2. GetAPLedgerAsync
+        await repo.AddLedgerAsync(new SupplierAPLedger
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = suppId,
+            TransactionDate = DateTime.UtcNow.AddDays(-1),
+            DocType = APDocType.PurchaseInvoice,
+            DocNo = "INV-001",
+            Amount = 1_000_000m
+        });
+        await repo.AddLedgerAsync(new SupplierAPLedger
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = suppId,
+            TransactionDate = DateTime.UtcNow,
+            DocType = APDocType.PaymentVoucher,
+            DocNo = "PAY-001",
+            Amount = 500_000m
+        });
+
+        var ledgerResult = await service.GetAPLedgerAsync(suppId, null, null, 1, 10, default, APDocType.PaymentVoucher);
+        Assert.Equal(1, ledgerResult.TotalItems);
+        Assert.Equal("PAY-001", ledgerResult.Items[0].DocNo);
+
+        // 3. GetAssignedBranchesAsync & ReplaceAssignedBranchesAsync
+        var b1 = Guid.NewGuid();
+        var b2 = Guid.NewGuid();
+        var assigned = await service.ReplaceAssignedBranchesAsync(suppId, new ReplaceSupplierBranchesCommand
+        {
+            BranchIds = [b1, b2, b1] // Duplicate b1 should be de-duped
+        });
+        Assert.Equal(2, assigned.Count);
+
+        var fetchedBranches = await service.GetAssignedBranchesAsync(suppId);
+        Assert.Equal(2, fetchedBranches.Count);
+
+        // Replace with empty list
+        var emptyAssigned = await service.ReplaceAssignedBranchesAsync(suppId, new ReplaceSupplierBranchesCommand { BranchIds = [] });
+        Assert.Empty(emptyAssigned);
+    }
+
+    [Fact]
+    public async Task LinkCustomerAsync_Success_And_NotFound()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new SupplierService(repo, uow, tenantCtx);
+
+        var suppId = Guid.NewGuid();
+        var supplier = new Supplier
+        {
+            Id = suppId,
+            TenantId = "tenant_test_01",
+            Code = "SUP-LINK-01",
+            Name = "NCC Link Test",
+            Phone = "0987654321",
+            Status = SupplierStatus.Active
+        };
+        await repo.AddAsync(supplier);
+
+        // 1. Success
+        var custId = Guid.NewGuid();
+        var res = await service.LinkCustomerAsync(suppId, new LinkCustomerRequest { CustomerId = custId });
+        Assert.NotNull(res);
+        Assert.Equal(custId, res.LinkedCustomerId);
+
+        // 2. Not found
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.LinkCustomerAsync(Guid.NewGuid(), new LinkCustomerRequest { CustomerId = custId }));
+    }
+
+    [Fact]
+    public async Task UpdateBranchAssignmentStatusAsync_InactiveRequiresReason_ActiveClearsReason()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new SupplierService(repo, uow, tenantCtx);
+
+        var suppId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        var assignment = new SupplierBranchAssignment
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            SupplierId = suppId,
+            BranchId = branchId,
+            Status = SupplierStatus.Active
+        };
+        repo.BranchAssignments.Add(assignment);
+
+        // 1. Inactive without reason throws INACTIVE_REASON_REQUIRED
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateBranchAssignmentStatusAsync(suppId, branchId, new UpdateSupplierBranchAssignmentStatusRequest
+            {
+                Status = SupplierStatus.Inactive,
+                Reason = null
+            }));
+        Assert.Equal("INACTIVE_REASON_REQUIRED", ex.ErrorCode);
+
+        // 2. Inactive with reason succeeds
+        var resInactive = await service.UpdateBranchAssignmentStatusAsync(suppId, branchId, new UpdateSupplierBranchAssignmentStatusRequest
+        {
+            Status = SupplierStatus.Inactive,
+            Reason = "Tạm ngưng cung cấp cho chi nhánh này"
+        });
+        Assert.Equal("Inactive", resInactive.Status);
+        Assert.Equal("Tạm ngưng cung cấp cho chi nhánh này", resInactive.InactiveReason);
+
+        // 3. Active again clears reason
+        var resActive = await service.UpdateBranchAssignmentStatusAsync(suppId, branchId, new UpdateSupplierBranchAssignmentStatusRequest
+        {
+            Status = SupplierStatus.Active
+        });
+        Assert.Equal("Active", resActive.Status);
+        Assert.Null(resActive.InactiveReason);
+
+        // 4. Not found throws NotFoundException
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.UpdateBranchAssignmentStatusAsync(suppId, Guid.NewGuid(), new UpdateSupplierBranchAssignmentStatusRequest { Status = SupplierStatus.Active }));
+    }
+
+    [Fact]
+    public async Task UpdateBranchAssignmentDeliveryDaysAsync_Success_And_NotFound()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new SupplierService(repo, uow, tenantCtx);
+
+        var suppId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        var supplier = new Supplier
+        {
+            Id = suppId,
+            TenantId = "tenant_test_01",
+            Code = "SUP-DAYS-01",
+            Name = "NCC Giao Hang",
+            Phone = "0988111222",
+            Status = SupplierStatus.Active
+        };
+        await repo.AddAsync(supplier);
+
+        var assignment = new SupplierBranchAssignment
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            SupplierId = suppId,
+            BranchId = branchId,
+            Status = SupplierStatus.Active
+        };
+        repo.BranchAssignments.Add(assignment);
+
+        // 1. Success updating delivery days
+        var res = await service.UpdateBranchAssignmentDeliveryDaysAsync(suppId, branchId, new UpdateSupplierBranchAssignmentDeliveryDaysRequest
+        {
+            DeliveryDays = ["Mon", "Wed"]
+        });
+        Assert.NotNull(res);
+        Assert.Contains("T2", res.DeliveryDaysDisplay);
+
+        // 2. Not found
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.UpdateBranchAssignmentDeliveryDaysAsync(suppId, Guid.NewGuid(), new UpdateSupplierBranchAssignmentDeliveryDaysRequest { DeliveryDays = ["Mon"] }));
+    }
+
+    [Fact]
+    public async Task UnassignSupplierBranchAsync_RemovesAssignment()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new SupplierService(repo, uow, tenantCtx);
+
+        var suppId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        var assignment = new SupplierBranchAssignment
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            SupplierId = suppId,
+            BranchId = branchId,
+            Status = SupplierStatus.Active
+        };
+        repo.BranchAssignments.Add(assignment);
+
+        await service.UnassignSupplierBranchAsync(suppId, branchId);
+        Assert.Empty(repo.BranchAssignments);
+    }
+
+    [Fact]
+    public async Task UpdateSupplier_NarrowToService_WhenPurchaseInvoiceExists_ThrowsBusinessException()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new SupplierService(repo, uow, tenantCtx);
+
+        var suppId = Guid.NewGuid();
+        var supplier = new Supplier
+        {
+            Id = suppId,
+            TenantId = "tenant_test_01",
+            Code = "SUP-NARROW",
+            Name = "NCC Narrow Test",
+            Phone = "0988111222",
+            SupplierType = SupplierType.Both,
+            Status = SupplierStatus.Active
+        };
+        await repo.AddAsync(supplier);
+
+        // Add PurchaseInvoice ledger
+        repo.Ledgers.Add(new SupplierAPLedger
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = suppId,
+            DocType = APDocType.PurchaseInvoice,
+            Amount = 100000m
+        });
+
+        var cmd = new UpdateSupplierCommand
+        {
+            Name = "NCC Narrow Test",
+            Phone = "0988111222",
+            SupplierType = SupplierType.Service
+        };
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.UpdateSupplierAsync(suppId, cmd));
+        Assert.Equal("INVALID_SUPPLIER_TYPE_NARROWING", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task SupplierService_NotFound_Scenarios_ThrowNotFoundException()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new SupplierService(repo, uow, tenantCtx);
+
+        var nonexistentId = Guid.NewGuid();
+
+        // 1. UpdateSupplierAsync
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.UpdateSupplierAsync(nonexistentId, new UpdateSupplierCommand { Name = "X", Phone = "0909" }));
+
+        // 2. GetByIdAsync returns null
+        var notFound = await service.GetByIdAsync(nonexistentId);
+        Assert.Null(notFound);
+
+        // 3. RecordAPTransactionAsync
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.RecordAPTransactionAsync(new RecordAPTransactionCommand
+            {
+                SupplierId = nonexistentId,
+                Amount = 10000m,
+                DocType = APDocType.PurchaseInvoice,
+                Direction = 1
+            }));
+    }
+
+    [Fact]
+    public async Task RecordAPPayment_WhenCurrentDebtIsZero_ThrowsBusinessException_AP_NO_DEBT()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new SupplierService(repo, uow, tenantCtx);
+
+        var suppId = Guid.NewGuid();
+        var supplier = new Supplier
+        {
+            Id = suppId,
+            TenantId = "tenant_test_01",
+            Code = "SUP-NODEBT",
+            Name = "NCC Zero Debt",
+            Phone = "0988111222",
+            CurrentDebt = 0m,
+            Status = SupplierStatus.Active
+        };
+        await repo.AddAsync(supplier);
+
+        var cmd = new RecordAPTransactionCommand
+        {
+            SupplierId = suppId,
+            Amount = 50000m,
+            DocType = APDocType.PaymentVoucher,
+            Direction = -1
+        };
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.RecordAPTransactionAsync(cmd));
+        Assert.Equal("AP_NO_DEBT", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task UpdateDeliveryConfig_WithBlackoutDates_PersistsAndMapsProperly()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new SupplierService(repo, uow, tenantCtx);
+
+        var suppId = Guid.NewGuid();
+        var supplier = new Supplier
+        {
+            Id = suppId,
+            TenantId = "tenant_test_01",
+            Code = "SUP-BO",
+            Name = "NCC Blackout",
+            Phone = "0988111222",
+            Status = SupplierStatus.Active
+        };
+        await repo.AddAsync(supplier);
+
+        var cmd = new UpdateSupplierDeliveryConfigCommand
+        {
+            DeliveryDays = ["Mon", "Tue", "Wed"],
+            CutoffDayOffset = 1,
+            CutoffTime = "17:00",
+            MinOrderQuantity = 5,
+            BlackoutDates = new List<SupplierBlackoutDateDto>
+            {
+                new()
+                {
+                    StartDate = new DateTime(2026, 12, 25),
+                    EndDate = new DateTime(2026, 12, 26),
+                    Reason = "Nghỉ lễ Giáng sinh",
+                    IsRecurringAnnual = true
+                }
+            }
+        };
+
+        var res = await service.UpdateDeliveryConfigAsync(suppId, cmd);
+        Assert.NotNull(res);
+        Assert.Single(repo.BlackoutDates);
+
+        // Verify GetByIdAsync maps BlackoutDates properly
+        var fetched = await service.GetByIdAsync(suppId);
+        Assert.NotNull(fetched);
+        Assert.Single(fetched.BlackoutDates);
+        Assert.Equal("Nghỉ lễ Giáng sinh", fetched.BlackoutDates[0].Reason);
+    }
+
+    [Fact]
+    public async Task UpdateDeliveryDaysAsync_InvalidDayNames_ThrowsBusinessException()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new SupplierService(repo, uow, tenantCtx);
+
+        var suppId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        var assignment = new SupplierBranchAssignment
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            SupplierId = suppId,
+            BranchId = branchId,
+            Status = SupplierStatus.Active
+        };
+        repo.BranchAssignments.Add(assignment);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateBranchAssignmentDeliveryDaysAsync(suppId, branchId, new UpdateSupplierBranchAssignmentDeliveryDaysRequest
+            {
+                DeliveryDays = ["NonExistentDay"]
+            }));
+        Assert.Contains("ít nhất 1 ngày", ex.Message);
+    }
+
+    [Fact]
+    public async Task GetDeliveryConfigAsync_InvalidJson_FallsBackToMask()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new SupplierService(repo, uow, tenantCtx);
+
+        var suppId = Guid.NewGuid();
+        var supplier = new Supplier
+        {
+            Id = suppId,
+            TenantId = "tenant_test_01",
+            Name = "NCC Test Fallback",
+            Status = SupplierStatus.Active,
+            DeliveryDaysJson = "{INVALID_JSON}",
+            DeliveryWeekdaysMask = 2 // Tuesday
+        };
+        repo.Suppliers.Add(supplier);
+
+        var config = await service.GetDeliveryConfigAsync(suppId);
+        Assert.NotNull(config);
+        Assert.Contains("Tue", config.DeliveryDays);
+    }
+
+    [Fact]
+    public async Task GetSupplierProductsAsync_SupplierNotFound_ThrowsNotFoundException()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new SupplierService(repo, uow, tenantCtx);
+
+        var nonExistentId = Guid.NewGuid();
+        var filter = new SupplierProductQueryFilter();
+
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.GetSupplierProductsAsync(nonExistentId, filter));
+    }
 }
+
 
 

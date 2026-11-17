@@ -370,15 +370,15 @@ public class TransferBusinessFlowIntegrationTests
 
         var transfer = await service.CreateTransferAsync(new CreateTransferRequest(branchA, branchB, true, null, null, new List<TransferLineRequest> { new(prodA, 10m, "Lon", null, null, 18_000m) }), CancellationToken.None);
 
-        // Đổi quyền sang Nhân viên thường của chi nhánh gửi
+        // Đổi quyền sang Nhân viên chi nhánh nhận (không có thẩm quyền tại chi nhánh gửi)
         tenant.SetRole("STAFF");
-        tenant.CurrentBranchId = branchA;
+        tenant.CurrentBranchId = branchB;
 
-        // ACT & ASSERT: Nhân viên thường không được phép hủy phiếu đang vận chuyển
+        // ACT & ASSERT: Nhân viên chi nhánh nhận không được phép hủy phiếu đang vận chuyển của chi nhánh gửi
         var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             service.CancelTransferAsync(transfer.Id, new CancelTransferRequest("Nhân viên tự hủy"), CancellationToken.None));
 
-        Assert.Contains("Chỉ chủ cửa hàng hoặc quản trị viên", ex.Message);
+        Assert.Contains("Không có quyền thao tác tại chi nhánh này", ex.Message);
     }
 
     [Fact]

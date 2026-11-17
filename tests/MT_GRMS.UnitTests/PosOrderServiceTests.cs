@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentValidation;
+using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PosOrders;
@@ -28,6 +29,24 @@ namespace MT_GRMS.UnitTests;
 
 public class PosOrderServiceTests
 {
+    private class FakeTenantContext : ITenantContext
+    {
+        public string CurrentTenantId { get; set; } = "tenant-01";
+        public Guid CurrentUserId { get; set; } = Guid.Parse("11111111-1111-1111-1111-111111111111");
+        public Guid? CurrentBranchId { get; set; } = Guid.Parse("11111111-aaaa-bbbb-cccc-111111111111");
+        public string CurrentRole { get; set; } = string.Empty;
+
+        public void SetContext(string tenantId, Guid userId, Guid? branchId)
+        {
+            CurrentTenantId = tenantId;
+            CurrentUserId = userId;
+            CurrentBranchId = branchId;
+        }
+
+        public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
+    }
+
+    private readonly FakeTenantContext _tenantContext;
     private readonly FakeOrderRepository _orderRepo;
     private readonly FakeUnitOfWork _uow;
     private readonly ThermalPrintService _printService;
@@ -40,10 +59,11 @@ public class PosOrderServiceTests
 
     public PosOrderServiceTests()
     {
+        _tenantContext = new FakeTenantContext();
         _orderRepo = new FakeOrderRepository();
         _uow = new FakeUnitOfWork();
         _printService = new ThermalPrintService();
-        _orderService = new OrderService(_orderRepo, _uow, _printService, new OrderCreateRequestValidator());
+        _orderService = new OrderService(_orderRepo, _uow, _printService, validator: new OrderCreateRequestValidator(), tenantContext: _tenantContext);
 
         // Seed Branch
         _orderRepo.Branches.Add(new Branch
@@ -3139,6 +3159,920 @@ public class PosOrderServiceTests
 
         Assert.Equal("Completed", res.Status);
         Assert.Equal(0, walkIn.RewardPoints);
+    }
+
+    [Fact]
+    public async Task PrintOrderInvoice_And_GetOrderReceiptEscPosBytes_ShouldWork()
+    {
+        // 1. Not found
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.PrintOrderInvoiceAsync(Guid.NewGuid()));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.GetOrderReceiptEscPosBytesAsync(Guid.NewGuid()));
+
+        // 2. Found
+        var order = new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            OrderCode = "HDPRINT01",
+            FinalAmount = 100000m,
+            PaymentMethod = "CASH",
+            DepositAmount = 100000m,
+            Status = "Completed",
+            OrderDate = DateTime.UtcNow
+        };
+        _orderRepo.Orders.Add(order);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.PrintOrderInvoiceAsync(Guid.NewGuid()));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.GetOrderReceiptEscPosBytesAsync(Guid.NewGuid()));
+
+        var printResult = await _orderService.PrintOrderInvoiceAsync(order.Id);
+        // PrintOrderInvoice returns false when no physical printer is attached in test environment
+        Assert.False(printResult);
+
+        var bytes = await _orderService.GetOrderReceiptEscPosBytesAsync(order.Id);
+        Assert.NotNull(bytes);
+        Assert.NotEmpty(bytes);
+    }
+
+    [Fact]
+    public async Task GetOrdersAsync_PagedAndFiltered_ShouldReturnOrders()
+    {
+        var order = new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            OrderCode = "HDGET01",
+            FinalAmount = 50000m,
+            Status = "Completed",
+            OrderDate = DateTime.UtcNow
+        };
+        _orderRepo.Orders.Add(order);
+
+        // Filter request
+        var (items, total) = await _orderService.GetOrdersAsync(new OrderFilterRequest { BranchId = _branchId });
+        Assert.True(total >= 1);
+        Assert.NotEmpty(items);
+
+        // Overload with parameters
+        var list = await _orderService.GetOrdersAsync(_branchId, null, null, null);
+        Assert.NotEmpty(list);
+    }
+
+    [Fact]
+    public async Task ConfirmOrderPaymentAsync_AllBranches()
+    {
+        // 1. Not found
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ConfirmOrderPaymentAsync(Guid.NewGuid()));
+
+        // 2. Cancelled order
+        var cancelledOrder = new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            OrderCode = "HDCANCEL01",
+            Status = "Cancelled"
+        };
+        _orderRepo.Orders.Add(cancelledOrder);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ConfirmOrderPaymentAsync(cancelledOrder.Id));
+
+        // 3. Already completed & paid
+        var alreadyPaid = new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            OrderCode = "HDALREADYPAID",
+            Status = "Completed",
+            PaymentStatus = "PAID",
+            FinalAmount = 20000m
+        };
+        _orderRepo.Orders.Add(alreadyPaid);
+        var resAlready = await _orderService.ConfirmOrderPaymentAsync(alreadyPaid.Id);
+        Assert.Equal("Completed", resAlready.Status);
+
+        // 4. PendingPayment with Customer -> awards loyalty points
+        var customer = new Customer
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            CustomerCode = "KH-CONFIRM",
+            Name = "VIP Customer",
+            RewardPoints = 10,
+            TotalSpending = 100000m
+        };
+        _orderRepo.Customers.Add(customer);
+
+        var pendingOrder = new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            CustomerId = customer.Id,
+            OrderCode = "HDPENDINGPAY",
+            Status = "PendingPayment",
+            PaymentStatus = "UNPAID",
+            FinalAmount = 50000m,
+            OrderDate = DateTime.UtcNow
+        };
+        _orderRepo.Orders.Add(pendingOrder);
+
+        var confirmedRes = await _orderService.ConfirmOrderPaymentAsync(pendingOrder.Id);
+        Assert.Equal("Completed", confirmedRes.Status);
+        Assert.Equal("PAID", pendingOrder.PaymentStatus);
+        Assert.True(customer.RewardPoints > 10);
+    }
+
+    [Fact]
+    public async Task OwnerUnsettledSummary_And_DailySettlement_ShouldWork()
+    {
+        // 1. Caller not owner -> UnauthorizedAccessException
+        _tenantContext.SetRole("STAFF");
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _orderService.SettleOwnerDailyOrdersAsync(new SettleOwnerDailyRequest(_branchId)));
+
+        // 2. Caller is owner, but no unsettled orders -> InvalidOperationException
+        _tenantContext.SetRole("STORE_OWNER");
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.SettleOwnerDailyOrdersAsync(new SettleOwnerDailyRequest(_branchId)));
+
+        // 3. Add unsettled cash & bank orders
+        var cashOrder = new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            OrderCode = "HDCASHUNSETTLED",
+            PaymentMethod = "CASH",
+            FinalAmount = 250000m,
+            Status = "Completed",
+            OrderDate = DateTime.UtcNow
+        };
+        var bankOrder = new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            OrderCode = "HDBANKUNSETTLED",
+            PaymentMethod = "VIETQR",
+            FinalAmount = 150000m,
+            Status = "Completed",
+            OrderDate = DateTime.UtcNow
+        };
+        _orderRepo.Orders.Add(cashOrder);
+        _orderRepo.Orders.Add(bankOrder);
+
+        // Get summary
+        var summary = await _orderService.GetOwnerUnsettledSummaryAsync(_branchId);
+        Assert.Equal(2, summary.UnsettledOrdersCount);
+        Assert.Equal(250000m, summary.CashRevenue);
+        Assert.Equal(150000m, summary.BankRevenue);
+        Assert.Equal(400000m, summary.TotalRevenue);
+
+        // Settle
+        var settleRes = await _orderService.SettleOwnerDailyOrdersAsync(new SettleOwnerDailyRequest(_branchId, "Chốt ca tối"));
+        Assert.NotNull(settleRes);
+        Assert.Equal(2, settleRes.SettledOrdersCount);
+        Assert.Contains("[CHỐT CUỐI NGÀY:", cashOrder.Note);
+        Assert.Contains("[CHỐT CUỐI NGÀY:", bankOrder.Note);
+    }
+
+    [Fact]
+    public async Task GetOrderByIdAsync_And_GetOrdersAsync_FilterOverloads_ShouldWork()
+    {
+        // 1. GetOrderByIdAsync null
+        var notFound = await _orderService.GetOrderByIdAsync(Guid.NewGuid());
+        Assert.Null(notFound);
+
+        // 2. GetOrderByIdAsync found with Cash payment
+        var ordId = Guid.NewGuid();
+        var order = new Order
+        {
+            Id = ordId,
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            OrderCode = "HDGETBYID01",
+            PaymentMethod = "CASH",
+            FinalAmount = 80_000m,
+            DepositAmount = 100_000m,
+            Status = "Completed",
+            OrderDate = DateTime.UtcNow,
+            Details = [
+                new OrderDetail
+                {
+                    Id = Guid.NewGuid(),
+                    OrderId = ordId,
+                    ProductId = Guid.NewGuid(),
+                    ProductName = "Coca Cola",
+                    Quantity = 2,
+                    UnitPrice = 40_000m,
+                    ActualPrice = 40_000m
+                }
+            ]
+        };
+        _orderRepo.Orders.Add(order);
+
+        var response = await _orderService.GetOrderByIdAsync(ordId);
+        Assert.NotNull(response);
+        Assert.Equal("HDGETBYID01", response.OrderCode);
+        Assert.Equal(100_000m, response.CashTendered);
+        Assert.Equal(20_000m, response.ChangeAmount);
+
+        // 3. GetOrdersAsync with OrderFilterRequest
+        var (items, count) = await _orderService.GetOrdersAsync(new OrderFilterRequest
+        {
+            BranchId = _branchId,
+            PageNumber = 1,
+            PageSize = 10
+        });
+        Assert.True(count >= 1);
+        Assert.Contains(items, i => i.Id == ordId);
+
+        // 4. GetOrdersAsync with simple parameter overload
+        var list = await _orderService.GetOrdersAsync(branchId: _branchId);
+        Assert.NotNull(list);
+        Assert.Contains(list, i => i.Id == ordId);
+    }
+
+    [Fact]
+    public async Task FulfillPreOrderAsync_Validation_And_EdgeCases()
+    {
+        var ordId = Guid.NewGuid();
+        var preOrder = new Order
+        {
+            Id = ordId,
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            OrderCode = "HDFULFILL01",
+            PaymentMethod = "CASH",
+            FinalAmount = 200_000m,
+            DepositAmount = 50_000m,
+            Status = "PendingPickup",
+            OrderDate = DateTime.UtcNow
+        };
+        _orderRepo.Orders.Add(preOrder);
+
+        // 1. Null request
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.FulfillPreOrderAsync(ordId, null!));
+
+        // 2. Empty payment method
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.FulfillPreOrderAsync(ordId, new PreOrderFulfillRequest("   ", 150_000m)));
+
+        // 3. Unsupported payment method
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.FulfillPreOrderAsync(ordId, new PreOrderFulfillRequest("BITCOIN", 150_000m)));
+
+        // 4. Note > 500 chars
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.FulfillPreOrderAsync(ordId, new PreOrderFulfillRequest("CASH", 150_000m, new string('A', 501))));
+
+        // 5. AmountPaid < 0
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.FulfillPreOrderAsync(ordId, new PreOrderFulfillRequest("CASH", -10_000m)));
+
+        // 6. Order not found
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.FulfillPreOrderAsync(Guid.NewGuid(), new PreOrderFulfillRequest("CASH", 200_000m)));
+
+        // 7. Order status not PendingPickup
+        preOrder.Status = "Completed";
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.FulfillPreOrderAsync(ordId, new PreOrderFulfillRequest("CASH", 200_000m)));
+
+        // 8. AmountPaid < remaining (remaining is 150_000)
+        preOrder.Status = "PendingPickup";
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.FulfillPreOrderAsync(ordId, new PreOrderFulfillRequest("CASH", 100_000m)));
+
+        // 9. Success fulfillment by Store Owner without shift
+        _tenantContext.SetRole("STORE_OWNER");
+        var fulfilled = await _orderService.FulfillPreOrderAsync(ordId, new PreOrderFulfillRequest(
+            PaymentMethod: "CASH",
+            AmountPaid: 150_000m,
+            Note: "Giao cho anh Nam"
+        ));
+
+        Assert.NotNull(fulfilled);
+        Assert.Equal("Completed", fulfilled.Status);
+        Assert.Equal("PAID", preOrder.PaymentStatus);
+        Assert.Equal(200_000m, preOrder.DepositAmount);
+        Assert.Contains("Giao cho anh Nam", preOrder.Note);
+    }
+
+    [Fact]
+    public async Task ConfirmOrderPaymentAsync_EdgeCases()
+    {
+        // 1. Not found -> InvalidOperationException
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ConfirmOrderPaymentAsync(Guid.NewGuid()));
+
+        // 2. Cancelled order -> InvalidOperationException
+        var cancelledId = Guid.NewGuid();
+        _orderRepo.Orders.Add(new Order
+        {
+            Id = cancelledId,
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            OrderCode = "HDCANCELLED01",
+            Status = "Cancelled",
+            FinalAmount = 50_000m
+        });
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ConfirmOrderPaymentAsync(cancelledId));
+
+        // 3. Already Completed & PAID -> idempotent return
+        var paidId = Guid.NewGuid();
+        _orderRepo.Orders.Add(new Order
+        {
+            Id = paidId,
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            OrderCode = "HDALREADYPAID01",
+            Status = "Completed",
+            PaymentStatus = "PAID",
+            FinalAmount = 120_000m
+        });
+        var idempotentRes = await _orderService.ConfirmOrderPaymentAsync(paidId);
+        Assert.Equal("Completed", idempotentRes.Status);
+    }
+
+    [Fact]
+    public async Task FulfillPreOrderAsync_CashAndShift_AndLoyaltyPoints_ShouldWork()
+    {
+        var mockCashbook = new Mock<ICashbookService>();
+        var mockShiftRepo = new Mock<IShiftRepository>();
+        var mockShiftService = new Mock<IShiftService>();
+        var mockPromotionRepo = new Mock<IPromotionRepository>();
+
+        var safeAccount = new FinanceAccount { Id = Guid.NewGuid(), AccountName = "Ket Sat", AccountType = FinanceAccountType.Safe };
+        mockCashbook.Setup(c => c.GetOrCreateSafeAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(safeAccount);
+
+        var activeShift = new ShiftZReport
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            Status = ShiftState.Open,
+            ExpectedCash = 100_000m,
+            TotalCashIn = 0m,
+            TotalBankRevenue = 0m
+        };
+        mockShiftRepo.Setup(r => r.GetActiveShiftAsync(_branchId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(activeShift);
+
+        mockPromotionRepo.Setup(p => p.GetLoyaltySettingAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new LoyaltySetting
+            {
+                IsEnabled = true,
+                EarningRateAmount = 10_000m,
+                EarningPoints = 2
+            });
+
+        // 1. Owner fulfills pre-order with CASH
+        var ownerContext = new FakeTenantContext();
+        ownerContext.SetRole("STORE_OWNER");
+        var serviceOwner = new OrderService(
+            _orderRepo, _uow, _printService,
+            cashbookService: mockCashbook.Object,
+            shiftRepository: mockShiftRepo.Object,
+            promotionRepository: mockPromotionRepo.Object,
+            tenantContext: ownerContext
+        );
+
+        var preOrderId1 = Guid.NewGuid();
+        var preOrder1 = new Order
+        {
+            Id = preOrderId1,
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            CustomerId = _customerId,
+            OrderCode = "DH_PRE_01",
+            Status = "PendingPickup",
+            TotalAmount = 200_000m,
+            DepositAmount = 50_000m,
+            FinalAmount = 200_000m,
+            Details = new List<OrderDetail>
+            {
+                new OrderDetail { ProductId = _prodHaoHaoId, Qty = 10, UnitPrice = 20_000m }
+            }
+        };
+        _orderRepo.Orders.Add(preOrder1);
+
+        var fulfillReqOwner = new PreOrderFulfillRequest(
+            PaymentMethod: "CASH",
+            AmountPaid: 150_000m,
+            Note: "Giao tại quầy"
+        );
+
+        var resOwner = await serviceOwner.FulfillPreOrderAsync(preOrderId1, fulfillReqOwner);
+        Assert.NotNull(resOwner);
+        Assert.Equal("Completed", resOwner.Status);
+        mockCashbook.Verify(c => c.ReceiveCashAsync(
+            safeAccount.Id,
+            FinanceAccountType.Safe,
+            150_000m,
+            "PREORDER_PICKUP",
+            preOrderId1,
+            "DH_PRE_01",
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()
+        ), Times.Once);
+
+        // 2. Staff fulfills pre-order with CASH (records shift movement)
+        var staffContext = new FakeTenantContext();
+        staffContext.SetRole("STAFF");
+        var serviceStaff = new OrderService(
+            _orderRepo, _uow, _printService,
+            cashbookService: mockCashbook.Object,
+            shiftRepository: mockShiftRepo.Object,
+            promotionRepository: mockPromotionRepo.Object,
+            tenantContext: staffContext
+        );
+
+        var preOrderId2 = Guid.NewGuid();
+        var preOrder2 = new Order
+        {
+            Id = preOrderId2,
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            CustomerId = _customerId,
+            OrderCode = "DH_PRE_02",
+            Status = "PendingPickup",
+            TotalAmount = 100_000m,
+            DepositAmount = 20_000m,
+            FinalAmount = 100_000m,
+            Details = new List<OrderDetail>
+            {
+                new OrderDetail { ProductId = _prodHaoHaoId, Qty = 5, UnitPrice = 20_000m }
+            }
+        };
+        _orderRepo.Orders.Add(preOrder2);
+
+        var fulfillReqStaff = new PreOrderFulfillRequest(
+            PaymentMethod: "CASH",
+            AmountPaid: 80_000m,
+            Note: "Giao tận tay"
+        );
+
+        var resStaff = await serviceStaff.FulfillPreOrderAsync(preOrderId2, fulfillReqStaff);
+        Assert.NotNull(resStaff);
+        Assert.Equal(80_000m, activeShift.TotalCashIn);
+        Assert.Equal(180_000m, activeShift.ExpectedCash);
+        mockShiftRepo.Verify(r => r.AddCashMovementAsync(It.IsAny<ShiftCashMovement>(), It.IsAny<CancellationToken>()), Times.Once);
+
+        // 3. Staff fulfills with BANK -> updates TotalBankRevenue
+        var preOrderId3 = Guid.NewGuid();
+        var preOrder3 = new Order
+        {
+            Id = preOrderId3,
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            CustomerId = _customerId,
+            OrderCode = "DH_PRE_03",
+            Status = "PendingPickup",
+            TotalAmount = 100_000m,
+            DepositAmount = 20_000m,
+            FinalAmount = 100_000m,
+            Details = new List<OrderDetail>
+            {
+                new OrderDetail { ProductId = _prodHaoHaoId, Qty = 5, UnitPrice = 20_000m }
+            }
+        };
+        _orderRepo.Orders.Add(preOrder3);
+
+        var fulfillReqBank = new PreOrderFulfillRequest(
+            PaymentMethod: "BANK",
+            AmountPaid: 80_000m,
+            Note: "Chuyển khoản VietQR"
+        );
+
+        var resBank = await serviceStaff.FulfillPreOrderAsync(preOrderId3, fulfillReqBank);
+        Assert.NotNull(resBank);
+        Assert.Equal(80_000m, activeShift.TotalBankRevenue);
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchangeAsync_Refund_OwnerSafeAndStaffShift_ShouldWork()
+    {
+        var mockCashbook = new Mock<ICashbookService>();
+        var mockShiftRepo = new Mock<IShiftRepository>();
+
+        var safeAccount = new FinanceAccount { Id = Guid.NewGuid(), AccountName = "Ket Sat", AccountType = FinanceAccountType.Safe };
+        mockCashbook.Setup(c => c.GetOrCreateSafeAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(safeAccount);
+
+        var openShift = new ShiftZReport
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            Status = ShiftState.Open,
+            ExpectedCash = 500_000m,
+            TotalCashOut = 0m
+        };
+        mockShiftRepo.Setup(r => r.GetActiveShiftAsync(_branchId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(openShift);
+
+        // 1. Owner refund
+        var ownerContext = new FakeTenantContext();
+        ownerContext.SetRole("STORE_OWNER");
+        var serviceOwner = new OrderService(
+            _orderRepo, _uow, _printService,
+            cashbookService: mockCashbook.Object,
+            shiftRepository: mockShiftRepo.Object,
+            tenantContext: ownerContext
+        );
+
+        var origOrderId1 = Guid.NewGuid();
+        var origOrder1 = new Order
+        {
+            Id = origOrderId1,
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            CustomerId = _customerId,
+            OrderCode = "HD_ORIG_01",
+            Status = "Completed",
+            TotalAmount = 100_000m,
+            FinalAmount = 100_000m,
+            Details = new List<OrderDetail>
+            {
+                new OrderDetail { ProductId = _prodHaoHaoId, Qty = 5, UnitPrice = 20_000m, ActualPrice = 20_000m }
+            }
+        };
+        _orderRepo.Orders.Add(origOrder1);
+
+        var returnReq1 = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto>
+            {
+                new ReturnItemDto(_prodHaoHaoId, 2, 20_000m, "Damaged")
+            },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH",
+            Reason: "Khách đổi ý"
+        );
+
+        var resReturnOwner = await serviceOwner.ProcessReturnExchangeAsync(origOrderId1, returnReq1);
+        Assert.NotNull(resReturnOwner);
+        mockCashbook.Verify(c => c.DisburseCashAsync(
+            safeAccount.Id,
+            FinanceAccountType.Safe,
+            40_000m,
+            "RETURN_REFUND",
+            origOrderId1,
+            "HD_ORIG_01",
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()
+        ), Times.Once);
+
+        // 2. Staff refund (records ShiftCashMovement)
+        var staffContext = new FakeTenantContext();
+        staffContext.SetRole("STAFF");
+        var serviceStaff = new OrderService(
+            _orderRepo, _uow, _printService,
+            cashbookService: mockCashbook.Object,
+            shiftRepository: mockShiftRepo.Object,
+            tenantContext: staffContext
+        );
+
+        var origOrderId2 = Guid.NewGuid();
+        var origOrder2 = new Order
+        {
+            Id = origOrderId2,
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            CustomerId = _customerId,
+            OrderCode = "HD_ORIG_02",
+            Status = "Completed",
+            TotalAmount = 60_000m,
+            FinalAmount = 60_000m,
+            Details = new List<OrderDetail>
+            {
+                new OrderDetail { ProductId = _prodHaoHaoId, Qty = 3, UnitPrice = 20_000m, ActualPrice = 20_000m }
+            }
+        };
+        _orderRepo.Orders.Add(origOrder2);
+
+        var returnReq2 = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto>
+            {
+                new ReturnItemDto(_prodHaoHaoId, 1, 20_000m, "Damaged")
+            },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH",
+            Reason: "Khách trả 1 gói"
+        );
+
+        var resReturnStaff = await serviceStaff.ProcessReturnExchangeAsync(origOrderId2, returnReq2);
+        Assert.NotNull(resReturnStaff);
+        Assert.Equal(20_000m, openShift.TotalCashOut);
+        Assert.Equal(480_000m, openShift.ExpectedCash);
+    }
+
+    [Fact]
+    public async Task SettleOwnerDailyOrdersAsync_ValidOrders_SettlesCashAndBankCorrectly()
+    {
+        var mockCashbook = new Mock<ICashbookService>();
+        var safeAcc = new FinanceAccount { Id = Guid.NewGuid(), AccountName = "Ket Sat", AccountType = FinanceAccountType.Safe };
+        var bankAcc = new FinanceAccount { Id = Guid.NewGuid(), AccountName = "Tai Khoan Bank", AccountType = FinanceAccountType.Bank };
+
+        mockCashbook.Setup(c => c.GetOrCreateSafeAsync(_branchId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(safeAcc);
+        mockCashbook.Setup(c => c.GetOrCreateBankAccountAsync(_branchId, null, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(bankAcc);
+
+        // 1. Non-owner caller -> throws UnauthorizedAccessException
+        var staffContext = new FakeTenantContext();
+        staffContext.SetRole("STAFF");
+        var serviceStaff = new OrderService(_orderRepo, _uow, _printService, cashbookService: mockCashbook.Object, tenantContext: staffContext);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            serviceStaff.SettleOwnerDailyOrdersAsync(new SettleOwnerDailyRequest(_branchId)));
+
+        // 2. Owner caller with no unsettled orders -> throws InvalidOperationException
+        var ownerContext = new FakeTenantContext();
+        ownerContext.SetRole("STORE_OWNER");
+        var serviceOwner = new OrderService(_orderRepo, _uow, _printService, cashbookService: mockCashbook.Object, tenantContext: ownerContext);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            serviceOwner.SettleOwnerDailyOrdersAsync(new SettleOwnerDailyRequest(Guid.NewGuid())));
+
+        // 3. Unsettled cash + bank orders -> processes settlement
+        var cashOrder = new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            OrderCode = "HD_CASH_01",
+            Status = "Completed",
+            PaymentMethod = "CASH",
+            FinalAmount = 150_000m,
+            ShiftId = null
+        };
+        var bankOrder = new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            OrderCode = "HD_BANK_01",
+            Status = "Completed",
+            PaymentMethod = "VIETQR",
+            FinalAmount = 250_000m,
+            ShiftId = null
+        };
+        _orderRepo.Orders.Add(cashOrder);
+        _orderRepo.Orders.Add(bankOrder);
+
+        var settlementRes = await serviceOwner.SettleOwnerDailyOrdersAsync(new SettleOwnerDailyRequest(_branchId, "Chốt ca tối"));
+        Assert.NotNull(settlementRes);
+        Assert.Equal(150_000m, settlementRes.CashSettledAmount);
+        Assert.Equal(250_000m, settlementRes.BankSettledAmount);
+        Assert.Equal(400_000m, settlementRes.TotalSettledAmount);
+        Assert.Contains("[CHỐT CUỐI NGÀY:", cashOrder.Note);
+        Assert.Contains("[CHỐT CUỐI NGÀY:", bankOrder.Note);
+    }
+
+    [Fact]
+    public async Task CreateOrderAsync_ShiftClosing_ThrowsBusinessException()
+    {
+        var mockShiftRepo = new Mock<IShiftRepository>();
+        var closingShift = new ShiftZReport
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            Status = ShiftState.Closing
+        };
+        mockShiftRepo.Setup(r => r.GetByIdAsync(closingShift.Id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(closingShift);
+        mockShiftRepo.Setup(r => r.GetActiveShiftAsync(_branchId, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(closingShift);
+
+        var staffContext = new FakeTenantContext();
+        staffContext.SetRole("STAFF");
+
+        var service = new OrderService(
+            _orderRepo, _uow, _printService,
+            shiftRepository: mockShiftRepo.Object,
+            tenantContext: staffContext
+        );
+
+        var req = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto>
+            {
+                new OrderItemCreateDto(_prodHaoHaoId, 1, 20_000m)
+            },
+            ShiftId: closingShift.Id
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateOrderAsync(req));
+        Assert.Equal("SHIFT_CLOSING_LOCKDOWN", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreateOrderAsync_EmptyCart_ThrowsValidationException()
+    {
+        var req = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto>()
+        );
+
+        await Assert.ThrowsAsync<ValidationException>(() => _orderService.CreateOrderAsync(req));
+    }
+
+    [Fact]
+    public async Task CreateOrderAsync_BranchNotFound_ThrowsInvalidOperation()
+    {
+        var req = new OrderCreateRequest(
+            BranchId: Guid.NewGuid(),
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto> { new OrderItemCreateDto(_prodHaoHaoId, 1, 10000m) }
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreateOrderAsync(req));
+    }
+
+    [Fact]
+    public async Task CreateOrderAsync_CustomerNotFound_ThrowsInvalidOperation()
+    {
+        var req = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: Guid.NewGuid(),
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto> { new OrderItemCreateDto(_prodHaoHaoId, 1, 10000m) }
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreateOrderAsync(req));
+    }
+
+    [Fact]
+    public async Task CreateOrderAsync_ProductNotFound_ThrowsInvalidOperation()
+    {
+        var req = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto> { new OrderItemCreateDto(Guid.NewGuid(), 1, 10000m) }
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreateOrderAsync(req));
+    }
+
+    [Fact]
+    public async Task CreateOrderAsync_OnlyGifts_ThrowsValidationException()
+    {
+        var req = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto> { new OrderItemCreateDto(_prodHaoHaoId, 1, 10000m, IsGift: true) }
+        );
+
+        await Assert.ThrowsAsync<ValidationException>(() => _orderService.CreateOrderAsync(req));
+    }
+
+    [Fact]
+    public async Task CreateOrderAsync_BatchNotFound_ThrowsBusinessException()
+    {
+        var req = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto> { new OrderItemCreateDto(_prodHaoHaoId, 1, 10000m, BatchId: Guid.NewGuid()) }
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _orderService.CreateOrderAsync(req));
+        Assert.Equal("BATCH_NOT_FOUND", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreateOrderAsync_BatchExpired_ThrowsBusinessException()
+    {
+        var batchId = Guid.NewGuid();
+        _orderRepo.BranchStocks.Add(new BranchStock
+        {
+            Id = batchId,
+            BranchId = _branchId,
+            ProductId = _prodHaoHaoId,
+            BatchCode = "EXPIRED-01",
+            QuantityOnHand = 100,
+            ExpiryDate = DateTime.UtcNow.AddDays(-1)
+        });
+
+        var req = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto> { new OrderItemCreateDto(_prodHaoHaoId, 1, 10000m, BatchId: batchId) }
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _orderService.CreateOrderAsync(req));
+        Assert.Equal("BATCH_EXPIRED", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreateOrderAsync_BatchInsufficientStock_ThrowsBusinessException()
+    {
+        var batchId = Guid.NewGuid();
+        _orderRepo.BranchStocks.Add(new BranchStock
+        {
+            Id = batchId,
+            BranchId = _branchId,
+            ProductId = _prodHaoHaoId,
+            BatchCode = "LOW-STOCK",
+            QuantityOnHand = 2,
+            ExpiryDate = DateTime.UtcNow.AddDays(10)
+        });
+
+        var req = new OrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: null,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto> { new OrderItemCreateDto(_prodHaoHaoId, 10, 10000m, BatchId: batchId) }
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _orderService.CreateOrderAsync(req));
+        Assert.Equal("BATCH_INSUFFICIENT_STOCK", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CancelOrderAsync_NotFound_ThrowsInvalidOperation()
+    {
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.CancelOrderAsync(Guid.NewGuid(), new CancelOrderRequest("Reason")));
+    }
+
+    [Fact]
+    public async Task CancelOrderAsync_AlreadyCancelled_ThrowsInvalidOperation()
+    {
+        var orderId = Guid.NewGuid();
+        _orderRepo.Orders.Add(new Order
+        {
+            Id = orderId,
+            BranchId = _branchId,
+            Status = "Cancelled",
+            OrderCode = "ORD-CANCELLED"
+        });
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.CancelOrderAsync(orderId, new CancelOrderRequest("Reason")));
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchangeAsync_InvalidPayloads_ThrowInvalidOperation()
+    {
+        var dummyOrderId = Guid.NewGuid();
+
+        // Null payload
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(dummyOrderId, null!));
+
+        // Negative discount on new item
+        var reqNegativeDiscount = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto>(),
+            NewItems: new List<OrderItemCreateDto> { new OrderItemCreateDto(_prodHaoHaoId, 1, 10000m, DiscountAmount: -5000m) },
+            SettlementMethod: "CASH",
+            Reason: "Test"
+        );
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(dummyOrderId, reqNegativeDiscount));
+
+        // Negative unit price on return item
+        var reqNegativeReturnPrice = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new ReturnItemDto(_prodHaoHaoId, 1, -1000m) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH",
+            Reason: "Test"
+        );
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _orderService.ProcessReturnExchangeAsync(dummyOrderId, reqNegativeReturnPrice));
+    }
+
+    [Fact]
+    public async Task CreatePreOrderAsync_NegativeDeposit_ThrowsInvalidOperation()
+    {
+        var req = new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(2),
+            DepositAmount: -10000m,
+            PaymentMethod: "CASH",
+            Items: new List<OrderItemCreateDto> { new OrderItemCreateDto(_prodHaoHaoId, 1, 10000m) }
+        );
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orderService.CreatePreOrderAsync(req));
     }
 }
 

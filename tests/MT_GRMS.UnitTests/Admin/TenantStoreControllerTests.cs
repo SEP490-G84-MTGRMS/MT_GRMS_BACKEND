@@ -219,4 +219,95 @@ public class TenantStoreControllerTests
         Assert.False(resp.Success);
         Assert.Equal("DOWNGRADE_NOT_ALLOWED", resp.ErrorCode);
     }
+
+    [Fact]
+    public async Task PurchaseSubscription_ValidationBranches_ShouldReturnBadRequest()
+    {
+        // 1. TRIAL plan code -> TRIAL_ENDPOINT_REQUIRED
+        var reqTrial = new PurchaseSubscriptionRequest(
+            PlanCode: "TRIAL",
+            Months: 1,
+            ExtraBranches: 0,
+            ExtraWarehouses: 0,
+            PaymentMethod: "Wallet"
+        );
+        var resTrial = await _controller.PurchaseSubscription(reqTrial, CancellationToken.None);
+        var badTrial = Assert.IsType<BadRequestObjectResult>(resTrial);
+        var respTrial = Assert.IsType<ApiResponse<PurchaseSubscriptionResponse>>(badTrial.Value);
+        Assert.Equal("TRIAL_ENDPOINT_REQUIRED", respTrial.ErrorCode);
+
+        // 2. Invalid plan code -> INVALID_PLAN_CODE
+        var reqInvalid = new PurchaseSubscriptionRequest(
+            PlanCode: "ENTERPRISE_CUSTOM",
+            Months: 1,
+            ExtraBranches: 0,
+            ExtraWarehouses: 0,
+            PaymentMethod: "Wallet"
+        );
+        var resInvalid = await _controller.PurchaseSubscription(reqInvalid, CancellationToken.None);
+        var badInvalid = Assert.IsType<BadRequestObjectResult>(resInvalid);
+        var respInvalid = Assert.IsType<ApiResponse<PurchaseSubscriptionResponse>>(badInvalid.Value);
+        Assert.Equal("INVALID_PLAN_CODE", respInvalid.ErrorCode);
+
+        // 3. Trial with extra storage -> INVALID_TRIAL_ADDON
+        var reqTrialAddon = new PurchaseSubscriptionRequest(
+            PlanCode: "PRO",
+            Months: 0,
+            ExtraBranches: 0,
+            ExtraWarehouses: 0,
+            PaymentMethod: "TRIAL",
+            ExtraStorageGb: 10
+        );
+        var resTrialAddon = await _controller.PurchaseSubscription(reqTrialAddon, CancellationToken.None);
+        var badTrialAddon = Assert.IsType<BadRequestObjectResult>(resTrialAddon);
+        var respTrialAddon = Assert.IsType<ApiResponse<PurchaseSubscriptionResponse>>(badTrialAddon.Value);
+        Assert.Equal("INVALID_TRIAL_ADDON", respTrialAddon.ErrorCode);
+
+        // 4. Insufficient balance -> INSUFFICIENT_WALLET_BALANCE
+        var tenant = await _dbContext.Tenants.FindAsync("tenant-01");
+        tenant!.WalletBalance = 0m;
+        await _dbContext.SaveChangesAsync();
+
+        var reqLowBal = new PurchaseSubscriptionRequest(
+            PlanCode: "PRO",
+            Months: 12,
+            ExtraBranches: 0,
+            ExtraWarehouses: 0,
+            PaymentMethod: "Wallet"
+        );
+        var resLowBal = await _controller.PurchaseSubscription(reqLowBal, CancellationToken.None);
+        var badLowBal = Assert.IsType<BadRequestObjectResult>(resLowBal);
+        var respLowBal = Assert.IsType<ApiResponse<PurchaseSubscriptionResponse>>(badLowBal.Value);
+        Assert.Equal("INSUFFICIENT_WALLET_BALANCE", respLowBal.ErrorCode);
+    }
+
+    [Fact]
+    public async Task GetSubscriptionOrderHistory_ShouldReturnTransactionsAndTrialHistory()
+    {
+        var tenant = await _dbContext.Tenants.FindAsync("tenant-01");
+        tenant!.TrialStartedAt = DateTime.UtcNow.AddDays(-10);
+        tenant.TrialExpiresAt = DateTime.UtcNow.AddDays(-7);
+        tenant.SubscriptionExpiresAt = DateTime.UtcNow.AddMonths(1);
+
+        _dbContext.WalletTransactions.Add(new WalletTransaction
+        {
+            Id = Guid.NewGuid().ToString(),
+            TenantId = "tenant-01",
+            TransactionCode = "WT-SUB-001",
+            Type = "PURCHASE_PLAN",
+            Description = "Thanh toán gói dịch vụ Gói Pro",
+            Amount = 3300000m,
+            PaymentMethod = "WALLET",
+            CreatedAt = DateTime.UtcNow.AddDays(-5)
+        });
+        await _dbContext.SaveChangesAsync();
+
+        var result = await _controller.GetSubscriptionOrderHistory(CancellationToken.None);
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var resp = Assert.IsType<ApiResponse<IReadOnlyList<SubscriptionOrderHistoryDto>>>(ok.Value);
+        Assert.True(resp.Success);
+        Assert.NotEmpty(resp.Data!);
+        Assert.Contains(resp.Data!, h => h.Code == "WT-SUB-001");
+        Assert.Contains(resp.Data!, h => h.PlanName.Contains("Gói"));
+    }
 }

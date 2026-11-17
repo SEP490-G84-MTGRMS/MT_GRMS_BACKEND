@@ -1,3 +1,7 @@
+using Moq;
+using MT_GRMS.Application.Cashbook;
+using MT_GRMS.Application.Cashbook.Dtos;
+using MT_GRMS.Application.Expenses;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
@@ -1363,5 +1367,493 @@ public class PayslipServiceTests
         Assert.Equal(10_400_000m, payslip.BaseSalaryEarned);
         Assert.Equal(0m, payslip.SocialInsurance);
         Assert.Equal(10_400_000m, payslip.NetSalary);
+    }
+
+    [Theory]
+    [InlineData(0.0, 0.0)]
+    [InlineData(1.2, 1.0)] // 1h 12m -> 1.0h
+    [InlineData(1.4, 1.5)] // 1h 24m -> 1.5h
+    [InlineData(1.8, 2.0)] // 1h 48m -> 2.0h
+    public void RoundTo30MinuteBlock_Tests(decimal raw, decimal expected)
+    {
+        var result = PayslipService.RoundTo30MinuteBlock(raw);
+        Assert.Equal(expected, result);
+    }
+
+    [Fact]
+    public async Task GetPayslipsPaged_And_GetById_ShouldWork()
+    {
+        var (service, payslipRepo, _, _, _, _, _) = CreateService();
+        var id = Guid.NewGuid();
+        var payslip = new Payslip
+        {
+            Id = id,
+            PayslipCode = "PL-001",
+            EmployeeId = Guid.NewGuid(),
+            PeriodMonth = "2026-11",
+            Status = PayslipStatus.Unpaid,
+            Employee = new Employee { FullName = "Test Emp", SalaryType = SalaryType.Monthly }
+        };
+        payslipRepo.Payslips.Add(payslip);
+
+        // Paged
+        var paged = await service.GetPayslipsPagedAsync(new PayslipQueryFilter { PeriodMonth = "2026-11" });
+        Assert.Single(paged.Items);
+
+        // Get by ID
+        var detail = await service.GetPayslipByIdAsync(id);
+        Assert.NotNull(detail);
+        Assert.Equal("PL-001", detail.PayslipCode);
+
+        // Get by ID Not found
+        await Assert.ThrowsAsync<NotFoundException>(() => service.GetPayslipByIdAsync(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task AdvanceSalaryAsync_Validation_And_Success()
+    {
+        var (service, payslipRepo, empRepo, _, _, _, _) = CreateService();
+        var emp = new Employee { Id = Guid.NewGuid(), FullName = "Emp Advance", SalaryType = SalaryType.Monthly, DebtAmount = 0 };
+        empRepo.Employees.Add(emp);
+
+        var payslip = new Payslip
+        {
+            Id = Guid.NewGuid(),
+            PayslipCode = "PL-ADV",
+            EmployeeId = emp.Id,
+            PeriodMonth = "2026-11",
+            Status = PayslipStatus.Unpaid,
+            TotalEarnings = 10_000_000m,
+            SocialInsurance = 1_000_000m,
+            AdvanceDeduction = 0,
+            Employee = emp
+        };
+        payslipRepo.Payslips.Add(payslip);
+
+        // Invalid amount
+        await Assert.ThrowsAsync<BusinessException>(() =>
+            service.AdvanceSalaryAsync(payslip.Id, new SalaryAdvanceRequest(0)));
+
+        // Not found
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.AdvanceSalaryAsync(Guid.NewGuid(), new SalaryAdvanceRequest(500_000m)));
+
+        // Exceeds max advanceable (max is 9M)
+        await Assert.ThrowsAsync<BusinessException>(() =>
+            service.AdvanceSalaryAsync(payslip.Id, new SalaryAdvanceRequest(10_000_000m)));
+
+        // Valid advance
+        var resp = await service.AdvanceSalaryAsync(payslip.Id, new SalaryAdvanceRequest(2_000_000m));
+        Assert.NotNull(resp);
+        Assert.Equal(2_000_000m, payslip.AdvanceDeduction);
+        Assert.Equal(2_000_000m, emp.DebtAmount);
+
+        // Already paid
+        payslip.Status = PayslipStatus.Paid;
+        await Assert.ThrowsAsync<BusinessException>(() =>
+            service.AdvanceSalaryAsync(payslip.Id, new SalaryAdvanceRequest(500_000m)));
+    }
+
+    [Fact]
+    public async Task PayPayslipAsync_And_BatchPay_ShouldWork()
+    {
+        var (service, payslipRepo, empRepo, _, _, _, _) = CreateService();
+        var emp = new Employee { Id = Guid.NewGuid(), FullName = "Emp Pay", SalaryType = SalaryType.Monthly, DebtAmount = 1_000_000m };
+        empRepo.Employees.Add(emp);
+
+        var payslip = new Payslip
+        {
+            Id = Guid.NewGuid(),
+            PayslipCode = "PL-PAY",
+            EmployeeId = emp.Id,
+            PeriodMonth = "2026-11",
+            Status = PayslipStatus.Unpaid,
+            NetSalary = 8_000_000m,
+            AdvanceDeduction = 1_000_000m,
+            Employee = emp
+        };
+        payslipRepo.Payslips.Add(payslip);
+
+        // Valid pay
+        var payReq = new PayPayslipRequest("CASH", "Thanh toan luong", null, DateTime.UtcNow);
+        var resp = await service.PayPayslipAsync(payslip.Id, payReq);
+        Assert.NotNull(resp);
+        Assert.Equal(PayslipStatus.Paid, payslip.Status);
+        Assert.Equal(0m, emp.DebtAmount); // Debt deducted
+
+        // Already paid
+        await Assert.ThrowsAsync<BusinessException>(() => service.PayPayslipAsync(payslip.Id, payReq));
+
+        // Batch pay with a new unpaid payslip + already paid + non-existent
+        var unpaidBatch = new Payslip { Id = Guid.NewGuid(), PayslipCode = "PL-BATCH", EmployeeId = emp.Id, Status = PayslipStatus.Unpaid, NetSalary = 5_000_000m, Employee = emp };
+        payslipRepo.Payslips.Add(unpaidBatch);
+
+        var batchResp = await service.BatchPayPayslipsAsync(new BatchPayPayslipsRequest(new List<Guid> { unpaidBatch.Id, payslip.Id, Guid.NewGuid() }, "CASH"));
+        Assert.NotNull(batchResp);
+        Assert.Equal(1, batchResp.SuccessCount);
+        Assert.Equal(2, batchResp.FailedCount);
+        Assert.Equal(2, batchResp.Errors.Count);
+    }
+
+    [Fact]
+    public async Task DeletePayslipAsync_Cases_ShouldWork()
+    {
+        var (service, payslipRepo, _, _, _, _, _) = CreateService();
+
+        // Not found
+        await Assert.ThrowsAsync<NotFoundException>(() => service.DeletePayslipAsync(Guid.NewGuid()));
+
+        var paidPayslip = new Payslip { Id = Guid.NewGuid(), Status = PayslipStatus.Paid };
+        payslipRepo.Payslips.Add(paidPayslip);
+        await Assert.ThrowsAsync<BusinessException>(() => service.DeletePayslipAsync(paidPayslip.Id));
+
+        var unpaidPayslip = new Payslip { Id = Guid.NewGuid(), Status = PayslipStatus.Unpaid };
+        payslipRepo.Payslips.Add(unpaidPayslip);
+        var deleted = await service.DeletePayslipAsync(unpaidPayslip.Id);
+        Assert.True(deleted);
+    }
+
+    private (PayslipService service, FakePayslipRepository payslipRepo, FakeEmployeeRepository empRepo, Mock<ICashbookService> cashbookMock, Mock<IExpenseRepository> expenseMock) CreateServiceWithCashbookAndExpense()
+    {
+        var payslipRepo = new FakePayslipRepository();
+        var empRepo = new FakeEmployeeRepository();
+        var schedRepo = new FakeScheduleRepository();
+        var policyRepo = new FakeAttendancePolicyRepository();
+        var tenantContext = new FakeTenantContext();
+        var uow = new FakeUnitOfWork();
+        var cashbookMock = new Mock<ICashbookService>();
+        var expenseMock = new Mock<IExpenseRepository>();
+
+        var service = new PayslipService(
+            payslipRepo,
+            empRepo,
+            schedRepo,
+            policyRepo,
+            tenantContext,
+            uow,
+            cashbookMock.Object,
+            expenseMock.Object);
+
+        return (service, payslipRepo, empRepo, cashbookMock, expenseMock);
+    }
+
+    [Fact]
+    public async Task PayPayslipAsync_WithCashbookAndExpense_DisbursesAndRecordsExpense()
+    {
+        var (service, payslipRepo, empRepo, cashbookMock, expenseMock) = CreateServiceWithCashbookAndExpense();
+        var branchId = Guid.NewGuid();
+        var emp = new Employee { Id = Guid.NewGuid(), BranchId = branchId, FullName = "Bank Emp", SalaryType = SalaryType.Monthly };
+        empRepo.Employees.Add(emp);
+
+        var bankAccount = new FinanceAccount
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            AccountType = FinanceAccountType.Bank,
+            AccountName = "Bank Test"
+        };
+        cashbookMock
+            .Setup(c => c.ResolveDisbursementAccountAsync(branchId, "BANK", It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(bankAccount);
+
+        cashbookMock
+            .Setup(c => c.DisburseCashAsync(
+                bankAccount.Id,
+                FinanceAccountType.Bank,
+                5_000_000m,
+                "SALARY",
+                It.IsAny<Guid?>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CashbookEntryResponse(
+                Guid.NewGuid(),
+                "PC-BANK-01",
+                bankAccount.Id,
+                "Bank",
+                branchId,
+                "Payment",
+                5_000_000m,
+                50_000_000m,
+                "SALARY",
+                null,
+                "PL-BANK-01",
+                null,
+                "Chi lương",
+                DateTime.UtcNow));
+
+        expenseMock
+            .Setup(e => e.AddAsync(It.IsAny<ExpenseVoucher>(), It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+
+        var payslip = new Payslip
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            PayslipCode = "PL-BANK-01",
+            EmployeeId = emp.Id,
+            PeriodMonth = "2026-11",
+            Status = PayslipStatus.Unpaid,
+            NetSalary = 5_000_000m,
+            Employee = emp
+        };
+        payslipRepo.Payslips.Add(payslip);
+
+        // ACT: Pay with BANK
+        var payReq = new PayPayslipRequest("BANK", "Chi lương chuyển khoản", bankAccount.Id, DateTime.UtcNow);
+        var resp = await service.PayPayslipAsync(payslip.Id, payReq);
+
+        // ASSERT
+        Assert.NotNull(resp);
+        Assert.Equal(PayslipStatus.Paid, resp.Status);
+        cashbookMock.Verify(c => c.DisburseCashAsync(
+            bankAccount.Id,
+            FinanceAccountType.Bank,
+            5_000_000m,
+            "SALARY",
+            payslip.Id,
+            payslip.PayslipCode,
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+
+        expenseMock.Verify(e => e.AddAsync(It.Is<ExpenseVoucher>(v =>
+            v.Amount == 5_000_000m &&
+            v.PaymentSourceType == FinanceAccountType.Bank &&
+            v.BeneficiaryName == emp.FullName), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Theory]
+    [InlineData("VIETQR", FinanceAccountType.Bank)]
+    [InlineData("TRANSFER", FinanceAccountType.Bank)]
+    [InlineData("QR", FinanceAccountType.Bank)]
+    [InlineData("CASH", FinanceAccountType.Safe)]
+    [InlineData("TIEN_MAT", FinanceAccountType.Safe)]
+    public async Task PayPayslipAsync_InferPaymentSourceTypes_CorrectMapping(string paymentMethod, FinanceAccountType expectedAccountType)
+    {
+        var (service, payslipRepo, empRepo, cashbookMock, expenseMock) = CreateServiceWithCashbookAndExpense();
+        var branchId = Guid.NewGuid();
+        var emp = new Employee { Id = Guid.NewGuid(), BranchId = branchId, FullName = $"Emp {paymentMethod}", SalaryType = SalaryType.Monthly };
+        empRepo.Employees.Add(emp);
+
+        var account = new FinanceAccount
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            AccountType = expectedAccountType,
+            AccountName = $"Account {paymentMethod}"
+        };
+        cashbookMock
+            .Setup(c => c.ResolveDisbursementAccountAsync(branchId, paymentMethod, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(account);
+
+        cashbookMock
+            .Setup(c => c.DisburseCashAsync(
+                account.Id,
+                expectedAccountType,
+                3_000_000m,
+                "SALARY",
+                It.IsAny<Guid?>(),
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CashbookEntryResponse(
+                Guid.NewGuid(), "PC-01", account.Id, "Acc", branchId, "Payment", 3_000_000m, 10_000_000m, "SALARY", null, "REF", null, "Desc", DateTime.UtcNow));
+
+        var payslip = new Payslip
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            PayslipCode = $"PL-{paymentMethod}",
+            EmployeeId = emp.Id,
+            PeriodMonth = "2026-11",
+            Status = PayslipStatus.Unpaid,
+            NetSalary = 3_000_000m,
+            Employee = emp
+        };
+        payslipRepo.Payslips.Add(payslip);
+
+        var resp = await service.PayPayslipAsync(payslip.Id, new PayPayslipRequest(paymentMethod, "Thanh toan"));
+        Assert.NotNull(resp);
+        Assert.Equal(PayslipStatus.Paid, resp.Status);
+    }
+
+    [Fact]
+    public async Task GenerateMonthlyPayroll_InvalidPeriodMonth_ThrowsBusinessException()
+    {
+        var (service, _, _, _, _, _, _) = CreateService();
+        await Assert.ThrowsAsync<BusinessException>(() =>
+            service.GenerateMonthlyPayrollAsync(new GeneratePayrollBatchRequest("invalid-month", Guid.NewGuid())));
+    }
+
+    [Fact]
+    public async Task GenerateMonthlyPayroll_EmptyEmployees_ReturnsEmptyList()
+    {
+        var (service, _, _, _, _, _, _) = CreateService();
+        var result = await service.GenerateMonthlyPayrollAsync(new GeneratePayrollBatchRequest("2026-11", Guid.NewGuid()));
+        Assert.Empty(result);
+    }
+
+    [Fact]
+    public async Task GenerateMonthlyPayroll_NoSchedulesInPeriod_ThrowsBusinessException()
+    {
+        var (service, _, empRepo, _, _, _, _) = CreateService();
+        var branchId = Guid.NewGuid();
+        empRepo.Employees.Add(new Employee
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            EmployeeCode = "NV-NOSCHED",
+            FullName = "No Schedule Employee",
+            SalaryType = SalaryType.Monthly,
+            BaseRate = 5000000m,
+            Status = EmployeeStatus.Active
+        });
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.GenerateMonthlyPayrollAsync(new GeneratePayrollBatchRequest("2026-11", branchId)));
+        Assert.Equal("NO_SCHEDULES_IN_PERIOD", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task GenerateMonthlyPayroll_ExistingPayslip_UpdatesExistingPayslip()
+    {
+        var (service, payslipRepo, empRepo, schedRepo, _, _, _) = CreateService();
+        var branchId = Guid.NewGuid();
+        var emp = new Employee
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            EmployeeCode = "NV-UPDATE",
+            FullName = "Update Payslip Employee",
+            SalaryType = SalaryType.Monthly,
+            BaseRate = 8000000m,
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(emp);
+
+        schedRepo.Schedules.Add(new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            EmployeeId = emp.Id,
+            BranchId = branchId,
+            WorkDate = new DateTime(2026, 11, 5),
+            Status = ScheduleStatus.Completed,
+            ActualWorkHours = 8.0m
+        });
+
+        // First run creates
+        var first = await service.GenerateMonthlyPayrollAsync(new GeneratePayrollBatchRequest("2026-11", branchId));
+        Assert.Single(first);
+
+        // Second run updates
+        var second = await service.GenerateMonthlyPayrollAsync(new GeneratePayrollBatchRequest("2026-11", branchId));
+        Assert.Single(second);
+    }
+
+    [Fact]
+    public async Task AdvanceSalaryAsync_ExceedsLimitOrNotFound_ThrowsExpected()
+    {
+        var (service, payslipRepo, empRepo, _, _, _, _) = CreateService();
+        var branchId = Guid.NewGuid();
+
+        // Payslip not found
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.AdvanceSalaryAsync(Guid.NewGuid(), new SalaryAdvanceRequest(1000000m, "Advance")));
+
+        var emp = new Employee
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            EmployeeCode = "NV-ADV",
+            FullName = "Advance Emp",
+            SalaryType = SalaryType.Monthly,
+            BaseRate = 5000000m,
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(emp);
+
+        var payslip = new Payslip
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            PayslipCode = "PL-ADV",
+            EmployeeId = emp.Id,
+            PeriodMonth = "2026-11",
+            Status = PayslipStatus.Unpaid,
+            NetSalary = 0m,
+            WorkedDays = 0m,
+            Employee = emp
+        };
+        payslipRepo.Payslips.Add(payslip);
+
+        // Advance with 0 earned salary throws BusinessException
+        await Assert.ThrowsAsync<BusinessException>(() =>
+            service.AdvanceSalaryAsync(payslip.Id, new SalaryAdvanceRequest(1000000m, "Advance")));
+    }
+
+    [Fact]
+    public async Task PayPayslipAsync_NotFound_ThrowsNotFoundException()
+    {
+        var (service, _, _, _, _, _, _) = CreateService();
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.PayPayslipAsync(Guid.NewGuid(), new PayPayslipRequest("CASH", "Note")));
+    }
+
+    [Fact]
+    public async Task AdvanceSalaryAsync_EmployeeNotFound_ThrowsNotFoundException()
+    {
+        var (service, payslipRepo, _, _, _, _, _) = CreateService();
+        var payslip = new Payslip
+        {
+            Id = Guid.NewGuid(),
+            BranchId = Guid.NewGuid(),
+            PayslipCode = "PL-NO-EMP",
+            EmployeeId = Guid.NewGuid(), // Not in empRepo
+            PeriodMonth = "2026-11",
+            Status = PayslipStatus.Unpaid,
+            TotalEarnings = 10_000_000m,
+            NetSalary = 10_000_000m
+        };
+        payslipRepo.Payslips.Add(payslip);
+
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.AdvanceSalaryAsync(payslip.Id, new SalaryAdvanceRequest(1_000_000m, "Payment")));
+    }
+
+    [Fact]
+    public async Task PayPayslipBatchAsync_DisbursementFails_CollectsError()
+    {
+        var (service, payslipRepo, empRepo, cashbookMock, expenseMock) = CreateServiceWithCashbookAndExpense();
+        var branchId = Guid.NewGuid();
+        var emp = new Employee { Id = Guid.NewGuid(), BranchId = branchId, FullName = "Batch Fail Emp", SalaryType = SalaryType.Monthly };
+        empRepo.Employees.Add(emp);
+
+        var payslip = new Payslip
+        {
+            Id = Guid.NewGuid(),
+            BranchId = branchId,
+            PayslipCode = "PL-FAIL-01",
+            EmployeeId = emp.Id,
+            PeriodMonth = "2026-11",
+            Status = PayslipStatus.Unpaid,
+            NetSalary = 4_000_000m,
+            Employee = emp
+        };
+        payslipRepo.Payslips.Add(payslip);
+
+        // Make cashbook throw an exception
+        cashbookMock
+            .Setup(c => c.ResolveDisbursementAccountAsync(branchId, "VIETQR", It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("Bank connection down"));
+
+        var response = await service.BatchPayPayslipsAsync(new BatchPayPayslipsRequest(
+            PayslipIds: new List<Guid> { payslip.Id },
+            PaymentMethod: "VIETQR",
+            Note: "Batch test"
+        ));
+
+        Assert.Equal(0, response.SuccessCount);
+        Assert.Single(response.Errors);
+        Assert.Contains("Bank connection down", response.Errors[0]);
     }
 }
