@@ -36,80 +36,30 @@ public class CustomerDebtDatabaseIntegrationTests
     }
 
     [Fact]
-    public async Task CustomerDebtRepository_GetOpenInvoices_ShouldReturnOrderedByCreatedAt()
+    public async Task CustomerDebtRepository_GetLedger_ShouldReadOrdersAndReceipts()
     {
         using var context = CreateDbContext();
         var repo = new CustomerDebtRepository(context);
 
         var customerId = Guid.NewGuid();
 
-        var invNew = new CustomerDebtInvoice
+        context.Orders.Add(new Order
         {
-            CustomerId = customerId,
-            OrderCode = "ORD-NEW",
-            TotalDebtAmount = 300_000m,
-            RemainingDebtAmount = 300_000m,
-            Status = DebtInvoiceStatus.Unpaid,
-            DueDate = DateTime.UtcNow.AddDays(15),
-            CreatedAt = DateTime.UtcNow.AddDays(-1)
-        };
-
-        var invOld = new CustomerDebtInvoice
+            CustomerId = customerId, OrderCode = "ORD-01", PaymentMethod = "DEBT",
+            PaymentStatus = "DEBT", Status = "Completed", FinalAmount = 300_000m,
+            OrderDate = DateTime.UtcNow.AddDays(-1)
+        });
+        context.CashbookEntries.Add(new CashbookEntry
         {
-            CustomerId = customerId,
-            OrderCode = "ORD-OLD",
-            TotalDebtAmount = 500_000m,
-            RemainingDebtAmount = 500_000m,
-            Status = DebtInvoiceStatus.Unpaid,
-            DueDate = DateTime.UtcNow.AddDays(5),
-            CreatedAt = DateTime.UtcNow.AddDays(-10)
-        };
-
-        var invPaid = new CustomerDebtInvoice
-        {
-            CustomerId = customerId,
-            OrderCode = "ORD-PAID",
-            TotalDebtAmount = 200_000m,
-            RemainingDebtAmount = 0,
-            Status = DebtInvoiceStatus.FullyPaid,
-            DueDate = DateTime.UtcNow.AddDays(5),
-            CreatedAt = DateTime.UtcNow.AddDays(-15)
-        };
-
-        context.CustomerDebtInvoices.AddRange(invNew, invOld, invPaid);
+            Id = Guid.NewGuid(), SourceType = "DEBT_REPAYMENT", SourceId = customerId,
+            EntryCode = "PT-01", Amount = 100_000m, AccountId = Guid.NewGuid(),
+            EntryType = CashbookEntryType.Receipt, OccurredAtUtc = DateTime.UtcNow
+        });
         await context.SaveChangesAsync();
-
-        var openInvoices = await repo.GetOpenInvoicesAsync(customerId);
-
-        Assert.Equal(2, openInvoices.Count);
-        Assert.Equal("ORD-OLD", openInvoices.First().OrderCode); // Cũ nhất lên đầu theo FIFO
-        Assert.Equal("ORD-NEW", openInvoices.Last().OrderCode);
-    }
-
-    [Fact]
-    public async Task CustomerDebtRepository_HasOverdueInvoices_ShouldDetectPastDueInvoices()
-    {
-        using var context = CreateDbContext();
-        var repo = new CustomerDebtRepository(context);
-
-        var customerId = Guid.NewGuid();
-        var now = DateTime.UtcNow;
-
-        var invOverdue = new CustomerDebtInvoice
-        {
-            CustomerId = customerId,
-            OrderCode = "ORD-OVERDUE",
-            TotalDebtAmount = 400_000m,
-            RemainingDebtAmount = 400_000m,
-            Status = DebtInvoiceStatus.Unpaid,
-            DueDate = now.AddDays(-2) // Quá hạn 2 ngày
-        };
-
-        context.CustomerDebtInvoices.Add(invOverdue);
-        await context.SaveChangesAsync();
-
-        var hasOverdue = await repo.HasOverdueInvoicesAsync(customerId, now);
-        Assert.True(hasOverdue);
+        var ledger = await repo.GetLedgerAsync(customerId, 1, 20);
+        Assert.Equal(2, ledger.Count);
+        Assert.Equal("DebtRepayment", ledger[0].EntryType);
+        Assert.Equal("DebtIncurred", ledger[1].EntryType);
     }
 
     [Fact]
@@ -131,7 +81,6 @@ public class CustomerDebtDatabaseIntegrationTests
                 CustomerCode = "KH-TEST-TENANT",
                 Name = "Khách Hàng Test Đa Tenant",
                 Phone = "0909999999",
-                DebtLimit = 5_000_000m,
                 TotalDebt = 1_000_000m
             });
             await ctx1.SaveChangesAsync();

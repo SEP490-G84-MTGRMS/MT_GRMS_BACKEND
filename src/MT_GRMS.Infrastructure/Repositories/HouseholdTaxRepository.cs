@@ -54,9 +54,9 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             .Where(o => o.CreatedAt >= startOfYearUtc && o.CreatedAt < upToDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid" || o.PaymentStatus == "DEBT" || o.PaymentStatus == "Debt") && o.Status != "Cancelled")
             .SumAsync(o => (decimal?)o.DiscountAmount, cancellationToken) ?? 0m;
 
-        var returns = await _context.CustomerDebtEntries
-            .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= startOfYearUtc && e.OccurredAtUtc < upToDateUtc)
-            .SumAsync(e => (decimal?)e.Amount, cancellationToken) ?? 0m;
+        var returns = await _context.Orders
+            .Where(o => o.CreatedAt >= startOfYearUtc && o.CreatedAt < upToDateUtc)
+            .SumAsync(o => (decimal?)o.ReturnedAmount, cancellationToken) ?? 0m;
 
         // Manual off-POS revenue is not represented by an Order. Include only
         // entries explicitly classified by the backend and net compensating
@@ -87,15 +87,15 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         var gross = await orderQuery.SumAsync(o => (decimal?)o.TotalAmount, cancellationToken) ?? 0m;
         var discounts = await orderQuery.SumAsync(o => (decimal?)o.DiscountAmount, cancellationToken) ?? 0m;
 
-        var returnQuery = _context.CustomerDebtEntries.AsQueryable();
+        var returnQuery = _context.Orders.AsQueryable();
         if (branchId.HasValue)
         {
-            returnQuery = returnQuery.Where(e => e.BranchId == branchId.Value);
+            returnQuery = returnQuery.Where(o => o.BranchId == branchId.Value);
         }
 
         var returns = await returnQuery
-            .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc < toDateUtc)
-            .SumAsync(e => (decimal?)e.Amount, cancellationToken) ?? 0m;
+            .Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt < toDateUtc)
+            .SumAsync(o => (decimal?)o.ReturnedAmount, cancellationToken) ?? 0m;
 
         var manualRevenueQuery = _context.CashbookEntries.Where(e =>
             e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc < toDateUtc &&
@@ -231,14 +231,14 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         }
 
         // Tính hàng trả lại trong kỳ
-        var returnQuery = _context.CustomerDebtEntries.AsQueryable();
+        var returnQuery = _context.Orders.AsQueryable();
         if (branchId.HasValue)
         {
-            returnQuery = returnQuery.Where(e => e.BranchId == branchId.Value);
+            returnQuery = returnQuery.Where(o => o.BranchId == branchId.Value);
         }
         var salesReturns = await returnQuery
-            .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc < toDateUtc)
-            .SumAsync(e => (decimal?)e.Amount, cancellationToken) ?? 0m;
+            .Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt < toDateUtc)
+            .SumAsync(o => (decimal?)o.ReturnedAmount, cancellationToken) ?? 0m;
 
         if (!hasAnyRealCost)
         {
@@ -1085,32 +1085,4 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         return (reduced, standard);
     }
 
-    public async Task<HouseholdTaxYearSetting?> GetYearSettingAsync(int year, CancellationToken cancellationToken = default)
-    {
-        return await _context.HouseholdTaxYearSettings
-            .Where(s => s.Year == year || (s.Year <= year && s.LockedUntilYear >= year))
-            .OrderByDescending(s => s.Year)
-            .FirstOrDefaultAsync(cancellationToken);
-    }
-
-    public async Task UpsertYearSettingAsync(HouseholdTaxYearSetting setting, CancellationToken cancellationToken = default)
-    {
-        var existing = await _context.HouseholdTaxYearSettings
-            .FirstOrDefaultAsync(s => s.Year == setting.Year, cancellationToken);
-
-        if (existing == null)
-        {
-            _context.HouseholdTaxYearSettings.Add(setting);
-        }
-        else
-        {
-            existing.PitMethod = setting.PitMethod;
-            existing.LockedUntilYear = setting.LockedUntilYear;
-            existing.LockReason = setting.LockReason;
-            existing.LockedBySystem = setting.LockedBySystem;
-            existing.LockedAtUtc = setting.LockedAtUtc;
-        }
-
-        await _context.SaveChangesAsync(cancellationToken);
-    }
 }

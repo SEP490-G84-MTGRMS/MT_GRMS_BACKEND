@@ -23,7 +23,7 @@ public class PayslipRepository : IPayslipRepository
         return await _context.Payslips
             .Include(p => p.Employee)
             .Include(p => p.Branch)
-            .Include(p => p.CashbookTransaction)
+            .Include(p => p.CashbookEntry)
             .FirstOrDefaultAsync(p => p.Id == id && p.TenantId == _tenantContext.CurrentTenantId, cancellationToken);
     }
 
@@ -32,7 +32,7 @@ public class PayslipRepository : IPayslipRepository
         return await _context.Payslips
             .Include(p => p.Employee)
             .Include(p => p.Branch)
-            .Include(p => p.CashbookTransaction)
+            .Include(p => p.CashbookEntry)
             .FirstOrDefaultAsync(p => p.EmployeeId == employeeId && p.PeriodMonth == periodMonth && p.TenantId == _tenantContext.CurrentTenantId, cancellationToken);
     }
 
@@ -44,7 +44,7 @@ public class PayslipRepository : IPayslipRepository
             .AsNoTracking()
             .Include(p => p.Employee)
             .Include(p => p.Branch)
-            .Include(p => p.CashbookTransaction)
+            .Include(p => p.CashbookEntry)
             .Where(p => p.TenantId == _tenantContext.CurrentTenantId);
 
         if (!string.IsNullOrWhiteSpace(filter.PeriodMonth))
@@ -136,8 +136,4 @@ public class PayslipRepository : IPayslipRepository
             .CountAsync(cancellationToken);
     }
 
-    public async Task AddCashbookTransactionAsync(Domain.Entities.Finance.CashbookTransaction transaction, CancellationToken cancellationToken = default)
-    {
-        await _context.CashbookTransactions.AddAsync(transaction, cancellationToken);
-    }
 }

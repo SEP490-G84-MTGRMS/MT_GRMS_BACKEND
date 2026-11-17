@@ -116,7 +116,6 @@ public class TaxPaymentCashbookServiceTests
         return new CashbookService(
             cashbookRepo,
             accountRepo,
-            new FakeRepository<CashInTransit>(),
             new FakeRepository<ShiftZReport>(),
             new FakeAuditHashService(),
             tenantContext,
@@ -187,7 +186,5 @@ public class TaxPaymentCashbookServiceTests
         public Task<MT_GRMS.Application.Tax.Dtos.HouseholdTaxpayerProfileDto> GetTaxpayerProfileAsync(Guid? branchId, CancellationToken cancellationToken = default) => Task.FromResult(new MT_GRMS.Application.Tax.Dtos.HouseholdTaxpayerProfileDto());
         public Task<HouseholdTaxSnapshot> AddSnapshotAsync(HouseholdTaxSnapshot taxSnapshot, CancellationToken cancellationToken = default) => Task.FromResult(taxSnapshot);
         public Task UpdateSnapshotAsync(HouseholdTaxSnapshot taxSnapshot, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task<HouseholdTaxYearSetting?> GetYearSettingAsync(int year, CancellationToken cancellationToken = default) => Task.FromResult<HouseholdTaxYearSetting?>(null);
-        public Task UpsertYearSettingAsync(HouseholdTaxYearSetting setting, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 }

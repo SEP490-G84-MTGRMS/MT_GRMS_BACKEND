@@ -69,18 +69,6 @@ public enum CashbookTaxTreatment
 }
 
 /// <summary>
-/// Cash in transit status for 2-phase bank deposits.
-/// </summary>
-public enum CashInTransitStatus
-{
-    PendingBankConfirmation = 1, // Đang mang đi nộp
-    Completed = 2,               // Đã vào tài khoản ngân hàng
-    Discrepancy = 3,             // Tiền thực nhận bị lệch
-    Cancelled = 4,               // Đã hủy trước khi nộp
-    LossInTransit = 5            // Thất thoát trên đường mang tiền
-}
-
-/// <summary>
 /// Cashier shift status.
 /// </summary>
 public enum ShiftState

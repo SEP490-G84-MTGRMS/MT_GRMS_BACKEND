@@ -50,7 +50,6 @@ public class OrderServiceTaxLockTests
             _orderRepo,
             _uow,
             _printServiceMock.Object,
-            debtService: null,
             cashbookService: null,
             validator: null,
             shiftRepository: null,

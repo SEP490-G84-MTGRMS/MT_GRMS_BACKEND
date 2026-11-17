@@ -22,20 +22,6 @@ public record CashDropRequest(
     string? Notes
 );
 
-public record DepositToBankRequest(
-    Guid SourceAccountId,
-    Guid TargetBankAccountId,
-    decimal Amount,
-    Guid CarrierUserId,
-    string? Note
-);
-
-public record ConfirmBankDepositRequest(
-    Guid TransitId,
-    decimal ActualReceivedAmount,
-    string? Note
-);
-
 public record ShiftResponse(
     Guid Id,
     Guid TillId,
@@ -51,19 +37,6 @@ public record ShiftResponse(
     string Status,
     DateTime OpenedAtUtc,
     DateTime? ClosedAtUtc
-);
-
-public record CashInTransitResponse(
-    Guid Id,
-    string TransitCode,
-    Guid SourceAccountId,
-    Guid TargetBankAccountId,
-    decimal AmountSent,
-    decimal? AmountReceived,
-    decimal DiscrepancyAmount,
-    Guid CarrierUserId,
-    string Status,
-    DateTime CreatedAtUtc
 );
 
 public record CashbookEntryResponse(

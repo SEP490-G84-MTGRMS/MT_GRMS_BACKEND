@@ -1,4 +1,6 @@
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Cashbook;
+using MT_GRMS.Application.Cashbook.Dtos;
 using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Employees.Dtos;
@@ -11,6 +13,7 @@ using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 using Xunit;
+using Moq;
 
 namespace MT_GRMS.UnitTests;
 
@@ -50,7 +53,7 @@ public class PayslipServiceTests
     private class FakePayslipRepository : IPayslipRepository
     {
         public List<Payslip> Payslips { get; } = new();
-        public List<CashbookTransaction> CashbookTransactions { get; } = new();
+        public List<CashbookEntryResponse> CashbookEntries { get; } = new();
 
         public Task<Payslip?> GetByIdAsync(Guid id, CancellationToken ct = default)
         {
@@ -104,12 +107,6 @@ public class PayslipServiceTests
         public Task AddRangeAsync(IEnumerable<Payslip> payslips, CancellationToken ct = default)
         {
             Payslips.AddRange(payslips);
-            return Task.CompletedTask;
-        }
-
-        public Task AddCashbookTransactionAsync(CashbookTransaction transaction, CancellationToken ct = default)
-        {
-            CashbookTransactions.Add(transaction);
             return Task.CompletedTask;
         }
 
@@ -307,7 +304,25 @@ public class PayslipServiceTests
         var tenantContext = new FakeTenantContext();
         var uow = new FakeUnitOfWork();
 
-        var service = new PayslipService(payslipRepo, empRepo, schedRepo, policyRepo, tenantContext, uow);
+        var cashbook = new Mock<ICashbookService>();
+        cashbook.Setup(x => x.ResolveDisbursementAccountAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid branchId, string method, Guid? _, CancellationToken _) => new FinanceAccount
+            {
+                Id = Guid.NewGuid(), BranchId = branchId,
+                AccountType = method.Contains("BANK") || method.Contains("TRANSFER") || method.Contains("VIETQR") ? FinanceAccountType.Bank : FinanceAccountType.Safe,
+                AccountName = "Test account"
+            });
+        cashbook.Setup(x => x.DisburseCashAsync(It.IsAny<Guid>(), It.IsAny<FinanceAccountType>(), It.IsAny<decimal>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken _) =>
+            {
+                var entry = new CashbookEntryResponse(Guid.NewGuid(), $"PC-{payslipRepo.CashbookEntries.Count + 1}", accountId, accountType.ToString(), null, "Payment", amount, 0m, sourceType, sourceId, referenceCode, "", description, DateTime.UtcNow);
+                payslipRepo.CashbookEntries.Add(entry);
+                return entry;
+            });
+        cashbook.Setup(x => x.GetEntriesAsync(It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<DateTime?>(), It.IsAny<DateTime?>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CashbookEntryType?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid? _, Guid? _, DateTime? _, DateTime? _, int _, int _, CashbookEntryType? _, string? sourceType, string? _, CancellationToken _) =>
+                payslipRepo.CashbookEntries.Where(e => e.SourceType == sourceType).ToList());
+        var service = new PayslipService(payslipRepo, empRepo, schedRepo, policyRepo, tenantContext, uow, cashbook.Object);
         return (service, payslipRepo, empRepo, schedRepo, policyRepo, tenantContext, uow);
     }
 
@@ -582,7 +597,7 @@ public class PayslipServiceTests
     }
 
     [Fact]
-    public async Task PayPayslip_UnpaidPayslip_MarksPaidAndGeneratesCashbookTransaction()
+    public async Task PayPayslip_UnpaidPayslip_MarksPaidAndGeneratesCashbookEntry()
     {
         // Arrange
         var (service, payslipRepo, empRepo, schedRepo, policyRepo, tenantContext, uow) = CreateService();
@@ -617,12 +632,13 @@ public class PayslipServiceTests
         Assert.Equal(tenantContext.CurrentUserId.ToString(), result.PaidBy);
 
         // Cashbook check
-        Assert.Single(payslipRepo.CashbookTransactions);
-        var tx = payslipRepo.CashbookTransactions[0];
-        Assert.Equal(CashbookType.Payment, tx.Type);
+        Assert.Single(payslipRepo.CashbookEntries);
+        var tx = payslipRepo.CashbookEntries[0];
+        Assert.Equal("Payment", tx.EntryType);
         Assert.Equal(5_000_000m, tx.Amount);
-        Assert.Equal(branchId, tx.BranchId);
-        Assert.StartsWith("PC-", tx.TransactionCode);
+        Assert.Equal("SALARY", tx.SourceType);
+        Assert.Equal(payslip.Id, tx.SourceId);
+        Assert.StartsWith("PC-", tx.EntryCode);
         Assert.True(uow.SaveChangesCalled);
     }
 
@@ -738,8 +754,8 @@ public class PayslipServiceTests
         Assert.Equal(2_000_000m, result.AdvanceDeduction);
         Assert.Equal(3_050_000m, result.TotalDeductions);
         Assert.Equal(6_950_000m, result.NetSalary);
-        Assert.Single(payslipRepo.CashbookTransactions);
-        Assert.Equal("Tạm ứng lương nhân viên", payslipRepo.CashbookTransactions[0].Category);
+        Assert.Single(payslipRepo.CashbookEntries);
+        Assert.Equal("SALARY_ADVANCE", payslipRepo.CashbookEntries[0].SourceType);
     }
 
     [Fact]
@@ -959,7 +975,7 @@ public class PayslipServiceTests
         Assert.Equal(0, result.FailedCount);
         Assert.Equal(PayslipStatus.Paid, p1.Status);
         Assert.Equal(PayslipStatus.Paid, p2.Status);
-        Assert.Equal(2, payslipRepo.CashbookTransactions.Count);
+        Assert.Equal(2, payslipRepo.CashbookEntries.Count);
         Assert.True(uow.SaveChangesCalled);
     }
 

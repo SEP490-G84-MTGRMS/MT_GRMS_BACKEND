@@ -94,9 +94,9 @@ public class PayslipConfiguration : IEntityTypeConfiguration<Payslip>
             .HasForeignKey(x => x.BranchId)
             .OnDelete(DeleteBehavior.Restrict);
 
-        builder.HasOne(x => x.CashbookTransaction)
+        builder.HasOne(x => x.CashbookEntry)
             .WithMany()
-            .HasForeignKey(x => x.CashbookTransactionId)
+            .HasForeignKey(x => x.CashbookEntryId)
             .OnDelete(DeleteBehavior.SetNull);
     }
 }

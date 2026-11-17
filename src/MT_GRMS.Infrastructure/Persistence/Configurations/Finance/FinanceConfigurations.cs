@@ -87,31 +87,6 @@ public class FinanceAccountConfiguration : IEntityTypeConfiguration<FinanceAccou
     }
 }
 
-public class CashInTransitConfiguration : IEntityTypeConfiguration<CashInTransit>
-{
-    public void Configure(EntityTypeBuilder<CashInTransit> builder)
-    {
-        builder.ToTable("CashInTransits");
-
-        builder.Property(c => c.TransitCode)
-            .HasMaxLength(50)
-            .IsRequired();
-
-        builder.Property(c => c.AmountSent)
-            .HasColumnType("decimal(18,2)")
-            .IsRequired();
-
-        builder.Property(c => c.AmountReceived)
-            .HasColumnType("decimal(18,2)");
-
-        builder.Property(c => c.DiscrepancyAmount)
-            .HasColumnType("decimal(18,2)")
-            .HasDefaultValue(0);
-
-        builder.HasIndex(c => new { c.TenantId, c.Status });
-    }
-}
-
 public class ShiftZReportConfiguration : IEntityTypeConfiguration<ShiftZReport>
 {
     public void Configure(EntityTypeBuilder<ShiftZReport> builder)
@@ -278,32 +253,5 @@ public class ExpenseVoucherConfiguration : IEntityTypeConfiguration<ExpenseVouch
         builder.HasIndex(e => new { e.TenantId, e.ReferenceCode });
         builder.HasIndex(e => new { e.TenantId, e.Nature });
         builder.HasIndex(e => new { e.TenantId, e.HouseholdTaxSnapshotId });
-    }
-}
-
-public class IdempotencyRecordConfiguration : IEntityTypeConfiguration<IdempotencyRecord>
-{
-    public void Configure(EntityTypeBuilder<IdempotencyRecord> builder)
-    {
-        builder.ToTable("IdempotencyRecords");
-
-        builder.Property(i => i.Key)
-            .HasMaxLength(100)
-            .IsRequired();
-
-        builder.Property(i => i.Endpoint)
-            .HasMaxLength(200)
-            .IsRequired();
-
-        builder.Property(i => i.PayloadHash)
-            .HasMaxLength(128)
-            .IsRequired();
-
-        builder.Property(i => i.Status)
-            .HasMaxLength(20)
-            .IsRequired()
-            .HasDefaultValue("PENDING");
-
-        builder.HasIndex(i => new { i.TenantId, i.Endpoint, i.Key }).IsUnique();
     }
 }

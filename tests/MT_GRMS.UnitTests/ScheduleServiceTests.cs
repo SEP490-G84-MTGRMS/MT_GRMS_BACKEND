@@ -296,8 +296,6 @@ public class ScheduleServiceTests
         public void Delete(Payslip payslip) => payslip.IsDeleted = true;
         public Task<int> GetCountByPeriodMonthAsync(string periodMonth, CancellationToken cancellationToken = default)
             => Task.FromResult(Payslips.Count(p => p.PeriodMonth == periodMonth));
-        public Task AddCashbookTransactionAsync(MT_GRMS.Domain.Entities.Finance.CashbookTransaction transaction, CancellationToken cancellationToken = default)
-            => Task.CompletedTask;
     }
 
     [Fact]

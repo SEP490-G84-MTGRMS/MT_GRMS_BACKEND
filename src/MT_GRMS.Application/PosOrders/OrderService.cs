@@ -6,8 +6,6 @@ using System.Threading.Tasks;
 using FluentValidation;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
-using MT_GRMS.Application.Debt;
-using MT_GRMS.Application.Debt.Dtos;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders.Dtos;
 using MT_GRMS.Domain.Entities.Catalog;
@@ -24,7 +22,6 @@ public class OrderService : IOrderService
     private readonly IOrderRepository _orderRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IThermalPrintService _thermalPrintService;
-    private readonly ICustomerDebtService? _debtService;
     private readonly ICashbookService? _cashbookService;
     private readonly IValidator<OrderCreateRequest>? _validator;
     private readonly PosShifts.IShiftRepository? _shiftRepository;
@@ -40,7 +37,6 @@ public class OrderService : IOrderService
         IOrderRepository orderRepository,
         IUnitOfWork unitOfWork,
         IThermalPrintService thermalPrintService,
-        ICustomerDebtService? debtService = null,
         ICashbookService? cashbookService = null,
         IValidator<OrderCreateRequest>? validator = null,
         PosShifts.IShiftRepository? shiftRepository = null,
@@ -52,7 +48,6 @@ public class OrderService : IOrderService
         _orderRepository = orderRepository;
         _unitOfWork = unitOfWork;
         _thermalPrintService = thermalPrintService;
-        _debtService = debtService;
         _cashbookService = cashbookService;
         _validator = validator;
         _shiftRepository = shiftRepository;
@@ -67,7 +62,7 @@ public class OrderService : IOrderService
         IUnitOfWork unitOfWork,
         IThermalPrintService thermalPrintService,
         IValidator<OrderCreateRequest>? validator)
-        : this(orderRepository, unitOfWork, thermalPrintService, null, null, validator, null, null, null, null, null)
+        : this(orderRepository, unitOfWork, thermalPrintService, null, validator, null, null, null, null, null)
     {
     }
 
@@ -531,7 +526,6 @@ public class OrderService : IOrderService
         decimal cashTendered = request.CashTendered ?? finalAmount;
         decimal changeAmount = 0m;
         string paymentStatus = "PAID";
-        CustomerDebtInvoiceResponse? debtInvoiceResponse = null;
 
         if (paymentMethodUpper == "CREDIT" || paymentMethodUpper == "DEBT")
         {
@@ -541,46 +535,14 @@ public class OrderService : IOrderService
             }
 
             var roleUpper = (_tenantContext?.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
-            bool isManagerRole = roleUpper == "STORE_OWNER";
-            bool isManagerBypass = isManagerRole;
+            if (roleUpper != "STORE_OWNER")
+                throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng mới có quyền bán nợ / ghi nợ đơn hàng.");
 
-            if (!isManagerBypass)
-            {
-                if (roleUpper is "CASHIER" or "STAFF")
-                {
-                    throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng hoặc Quản trị viên mới có quyền bán nợ / ghi nợ đơn hàng. Nhân viên thu ngân không được phép thực hiện chức năng này.");
-                }
-
-                if (!customer.AllowDebt)
-                {
-                    throw new InvalidOperationException($"Khách hàng '{customer.Name}' chưa được kích hoạt quyền mua nợ.");
-                }
-                if (customer.IsBlockedForDebt)
-                {
-                    throw new InvalidOperationException($"Khách hàng '{customer.Name}' đang bị khóa nợ do nợ quá hạn.");
-                }
-            }
-
-            paymentStatus = "UNPAID";
+            paymentStatus = "DEBT";
             cashTendered = 0m;
             changeAmount = 0m;
-
-            if (_debtService != null)
-            {
-                debtInvoiceResponse = await _debtService.RecordSaleDebtAsync(new RecordSaleDebtRequest(
-                    CustomerId: customer.Id,
-                    OrderId: Guid.NewGuid(), // Will be updated
-                    OrderCode: $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}",
-                    BranchId: branchId,
-                    DebtAmount: finalAmount,
-                    ManagerBypassCode: isManagerRole ? "OWNER_DIRECT_APPROVAL" : request.ManagerBypassCode,
-                    Notes: request.Note ?? $"Bán nợ POS đơn"
-                ), cancellationToken);
-            }
-            else
-            {
-                customer.TotalDebt += finalAmount;
-            }
+            customer.TotalDebt += finalAmount;
+            customer.LastDebtIncurredAtUtc = DateTime.UtcNow;
             customer.UpdatedAt = DateTime.UtcNow;
         }
         else if (paymentMethodUpper == "CASH")
@@ -684,11 +646,11 @@ public class OrderService : IOrderService
             ? null
             : combinedPromoSummary;
 
-        string orderCode = debtInvoiceResponse != null ? debtInvoiceResponse.OrderCode : $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
+        string orderCode = $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
         var orderBusinessDate = activeShift?.BusinessDate ?? BusinessDateResolver.Resolve(DateTime.UtcNow, new TimeSpan(6, 0, 0));
         var order = new Order
         {
-            Id = debtInvoiceResponse != null ? debtInvoiceResponse.OrderId : Guid.NewGuid(),
+            Id = Guid.NewGuid(),
             TenantId = branch.TenantId ?? (_tenantContext?.CurrentTenantId ?? string.Empty),
             BranchId = branchId,
             CustomerId = request.CustomerId,
@@ -795,7 +757,7 @@ public class OrderService : IOrderService
             }
         }
 
-        return MapToOrderResponse(order, cashTendered, changeAmount, debtInvoiceResponse, giftStockWarning);
+        return MapToOrderResponse(order, cashTendered, changeAmount, giftStockWarning);
     }
 
     public async Task<OrderResponse?> GetOrderByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -805,7 +767,7 @@ public class OrderService : IOrderService
 
         decimal cash = order.DepositAmount;
         decimal change = order.PaymentMethod == "CASH" ? Math.Max(0, cash - order.FinalAmount) : 0m;
-        return MapToOrderResponse(order, cash, change, null);
+        return MapToOrderResponse(order, cash, change);
     }
 
     public async Task<(IReadOnlyList<OrderResponse> Items, int TotalCount)> GetOrdersAsync(OrderFilterRequest filter, CancellationToken cancellationToken = default)
@@ -834,7 +796,7 @@ public class OrderService : IOrderService
         {
             decimal cash = o.DepositAmount;
             decimal change = o.PaymentMethod == "CASH" ? Math.Max(0, cash - o.FinalAmount) : 0m;
-            return MapToOrderResponse(o, cash, change, null);
+            return MapToOrderResponse(o, cash, change);
         }).ToList();
 
         return (responses, totalCount);
@@ -1358,7 +1320,7 @@ public class OrderService : IOrderService
             createdGiftWarning = giftStockWarning;
         }, cancellationToken);
 
-        return MapToOrderResponse(createdOrder!, request.DepositAmount, 0m, null, createdGiftWarning);
+        return MapToOrderResponse(createdOrder!, request.DepositAmount, 0m, createdGiftWarning);
     }
 
     public async Task<OrderResponse> FulfillPreOrderAsync(Guid orderId, PreOrderFulfillRequest request, CancellationToken cancellationToken = default)
@@ -1540,7 +1502,7 @@ public class OrderService : IOrderService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         decimal changeAmount = Math.Max(0, request.AmountPaid - remainingAmount);
-        return MapToOrderResponse(order, request.AmountPaid, changeAmount, null);
+        return MapToOrderResponse(order, request.AmountPaid, changeAmount);
     }
 
     public async Task<OrderResponse> CancelOrderAsync(Guid orderId, CancelOrderRequest request, CancellationToken cancellationToken = default)
@@ -1633,7 +1595,7 @@ public class OrderService : IOrderService
             );
         }
 
-        return MapToOrderResponse(order, 0m, 0m, null);
+        return MapToOrderResponse(order, 0m, 0m);
     }
 
     public async Task<OrderResponse> ProcessReturnExchangeAsync(Guid orderId, ReturnExchangeRequest request, CancellationToken cancellationToken = default)
@@ -1944,13 +1906,17 @@ public class OrderService : IOrderService
         decimal changeAmount = 0m;
         string? exchangeCashierName = originalOrder.CashierName ?? (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân POS");
 
+        decimal debtOffsetAmount = 0m;
         if (netAmount > 0)
         {
             if (settlementMethodUpper == "DEBT")
             {
+                if (!IsOwnerCaller())
+                    throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng mới có quyền ghi nợ phần chênh lệch đổi/trả.");
                 customer!.TotalDebt += netAmount;
+                customer.LastDebtIncurredAtUtc = DateTime.UtcNow;
                 customer.UpdatedAt = DateTime.UtcNow;
-                paymentStatus = "UNPAID";
+                paymentStatus = "DEBT";
             }
             else
             {
@@ -1962,7 +1928,10 @@ public class OrderService : IOrderService
             decimal refundAmount = Math.Abs(netAmount);
             if (settlementMethodUpper == "REDUCE_DEBT" || settlementMethodUpper == "DEBT")
             {
-                customer!.TotalDebt = Math.Max(0, customer.TotalDebt - refundAmount);
+                if (customer!.TotalDebt < refundAmount)
+                    throw new InvalidOperationException("Số tiền hoàn lớn hơn tổng nợ của khách. Hãy chọn hoàn tiền thay vì trừ nợ.");
+                debtOffsetAmount = refundAmount;
+                customer.TotalDebt -= debtOffsetAmount;
                 customer.UpdatedAt = DateTime.UtcNow;
             }
             else
@@ -2026,6 +1995,8 @@ public class OrderService : IOrderService
             TotalAmount = totalNewAmount,
             DiscountAmount = 0m,
             FinalAmount = Math.Max(0, netAmount),
+            ReturnedAmount = totalReturnAmount,
+            DebtOffsetAmount = debtOffsetAmount,
             DepositAmount = netAmount > 0 ? netAmount : 0m,
             PaymentMethod = settlementMethodUpper,
             PaymentStatus = paymentStatus,
@@ -2046,7 +2017,7 @@ public class OrderService : IOrderService
         await _orderRepository.AddAsync(exchangeOrder, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapToOrderResponse(exchangeOrder, cashTendered, changeAmount, null);
+        return MapToOrderResponse(exchangeOrder, cashTendered, changeAmount);
     }
 
     public async Task<OrderSummaryResponse> GetOrderSummaryAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, CancellationToken cancellationToken = default)
@@ -2097,7 +2068,7 @@ public class OrderService : IOrderService
 
         if (order.Status == "Completed" && order.PaymentStatus == "PAID")
         {
-            return MapToOrderResponse(order, order.FinalAmount, 0m, null);
+            return MapToOrderResponse(order, order.FinalAmount, 0m);
         }
 
         bool wasPendingPayment = string.Equals(order.Status, "PendingPayment", StringComparison.OrdinalIgnoreCase);
@@ -2138,7 +2109,7 @@ public class OrderService : IOrderService
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
-        return MapToOrderResponse(order, order.FinalAmount, 0m, null);
+        return MapToOrderResponse(order, order.FinalAmount, 0m);
     }
 
     public async Task<OwnerUnsettledSummaryResponse> GetOwnerUnsettledSummaryAsync(Guid? branchId = null, CancellationToken cancellationToken = default)
@@ -2264,7 +2235,6 @@ public class OrderService : IOrderService
         Order order,
         decimal cashTendered,
         decimal changeAmount,
-        CustomerDebtInvoiceResponse? debtInvoice = null,
         string? giftStockWarning = null)
     {
         var items = order.Details.Select(d => new OrderItemResponse(
@@ -2306,7 +2276,6 @@ public class OrderService : IOrderService
             CustomerPhone: order.Customer?.Phone,
             DepositAmount: order.DepositAmount,
             Note: order.Note,
-            DebtInvoice: debtInvoice,
             ShiftId: order.ShiftId,
             CashierName: order.CashierName ?? (order.Shift != null ? "Thu ngân POS" : null),
             FulfilledByCashierName: order.FulfilledByCashierName,

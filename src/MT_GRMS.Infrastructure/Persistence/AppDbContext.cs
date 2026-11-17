@@ -95,10 +95,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<LoyaltyPointAdjustment> LoyaltyPointAdjustments { get; set; } = null!;
 
     // 6. Phân hệ Tài chính, Sổ quỹ & Chi phí (FE-07, FE-17) - Đã hợp nhất FinanceAccounts
-    public virtual DbSet<CashbookTransaction> CashbookTransactions { get; set; } = null!;
     public virtual DbSet<CashbookEntry> CashbookEntries { get; set; } = null!;
     public virtual DbSet<FinanceAccount> FinanceAccounts { get; set; } = null!;
-    public virtual DbSet<CashInTransit> CashInTransits { get; set; } = null!;
     public virtual DbSet<ShiftZReport> ShiftZReports { get; set; } = null!;
     public virtual DbSet<ShiftCashMovement> ShiftCashMovements { get; set; } = null!;
     public virtual DbSet<ShiftParticipant> ShiftParticipants { get; set; } = null!;
@@ -113,12 +111,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<MT_GRMS.Infrastructure.Services.RegistrationOtpChallenge> RegistrationOtpChallenges { get; set; } = null!;
 
     // 7. Customer Debt Module (FE-08) - Đã hợp nhất công nợ vào Customers
-    public virtual DbSet<CustomerDebtInvoice> CustomerDebtInvoices { get; set; } = null!;
-    public virtual DbSet<CustomerDebtEntry> CustomerDebtEntries { get; set; } = null!;
-    public virtual DbSet<CustomerDebtAllocation> CustomerDebtAllocations { get; set; } = null!;
     // 8. Household Tax Module (FE-19 TT 152/2025/TT-BTC)
     public virtual DbSet<HouseholdTaxSnapshot> HouseholdTaxSnapshots { get; set; } = null!;
-    public virtual DbSet<HouseholdTaxYearSetting> HouseholdTaxYearSettings { get; set; } = null!;
 
     // 9. Phân hệ Nhân sự, Ca kíp & Tiền lương (4 bảng)
     public virtual DbSet<Employee> Employees { get; set; } = null!;
@@ -266,7 +260,7 @@ public partial class AppDbContext : DbContext
 
         foreach (var entry in ChangeTracker.Entries<BaseTenantEntity>())
         {
-            if (entry.Entity is CashbookEntry || entry.Entity is CustomerDebtEntry || entry.Entity is HouseholdTaxSnapshot)
+            if (entry.Entity is CashbookEntry || entry.Entity is HouseholdTaxSnapshot)
             {
                 if (entry.State == EntityState.Deleted)
                 {

@@ -31,11 +31,9 @@ public class HouseholdTaxService : IHouseholdTaxService
     private readonly Security.IPinVerificationService? _pinService;
 
     private readonly Security.ITaxSnapshotSignatureService _signatureService;
-    private readonly IConfiguration? _configuration;
+    private readonly TaxPolicy _taxPolicy;
     private readonly Common.ITenantContext _tenantContext;
     private readonly Common.IUnitOfWork? _unitOfWork;
-
-    public const decimal TaxExemptionThreshold = RevenuePercentageTaxStrategy.TaxExemptionThreshold;
 
     public const decimal RetailVatRate = RevenuePercentageTaxStrategy.RetailVatRate;
 
@@ -72,23 +70,12 @@ public class HouseholdTaxService : IHouseholdTaxService
         _strategyFactory = strategyFactory;
         _pinService = pinService;
         _signatureService = signatureService ?? new Security.TaxSnapshotSignatureService();
-        _configuration = configuration;
+        _taxPolicy = TaxPolicy.Load(configuration);
         _tenantContext = tenantContext ?? throw new ArgumentNullException(nameof(tenantContext));
         _unitOfWork = unitOfWork;
     }
 
-    private DateTime GetVatReductionDeadlineUtc()
-    {
-        var configVal = _configuration?["TaxSettings:VatReductionDeadlineUtc"];
-        if (!string.IsNullOrWhiteSpace(configVal) && DateTime.TryParse(configVal, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsedDate))
-        {
-            return DateTime.SpecifyKind(parsedDate, DateTimeKind.Utc);
-        }
-
-        var vnTz = GetVietnamTimeZone();
-        // Mốc chuyển giao hết hạn giảm thuế GTGT theo giờ VN: 01/01/2027 00:00:00 VN = 31/12/2026 17:00:00 UTC
-        return TimeZoneInfo.ConvertTimeToUtc(new DateTime(2027, 1, 1, 0, 0, 0, DateTimeKind.Unspecified), vnTz);
-    }
+    private DateTime GetVatReductionDeadlineUtc() => _taxPolicy.VatReductionDeadlineUtc;
 
     public static DateTime GetFilingDeadlineLocal(int year, TaxPeriodType periodType, int periodNumber)
     {
@@ -108,63 +95,16 @@ public class HouseholdTaxService : IHouseholdTaxService
 
     private async Task<(TaxCalculationMethod? Method, int? StartYear)> GetRequiredPitMethodAsync(int year, CancellationToken ct)
     {
-        var thisYear = await _repository.GetYearSettingAsync(year, ct);
-        if (thisYear != null && thisYear.LockedUntilYear >= year)
-            return (thisYear.PitMethod, thisYear.Year);
-
-        var prevYear = await _repository.GetYearSettingAsync(year - 1, ct);
-        if (prevYear != null && prevYear.LockedUntilYear >= year)
-            return (prevYear.PitMethod, prevYear.Year);
-
-        // Fallback tự động khi chưa có bản ghi setting trong DB (chủ hộ chưa từng bấm chốt kỳ)
-        // Duyệt tuần tự các năm trước để xác định chính xác chu kỳ ổn định 2 năm bắt đầu từ đâu
-        if (year > 2020)
+        var snapshots = await _repository.GetSnapshotsAsync(null, null, ct);
+        foreach (var snapshot in snapshots.Where(s => s.Status == TaxSnapshotStatus.Finalized && s.Year <= year)
+                     .OrderByDescending(s => s.Year).ThenByDescending(s => s.PeriodNumber))
         {
-            int historyStartYear = Math.Max(2024, year - 5);
-            int? activeCycleStartYear = null;
-            int? activeCycleEndYear = null;
-
-            for (int y = historyStartYear; y < year; y++)
-            {
-                var settingY = await _repository.GetYearSettingAsync(y, ct);
-                if (settingY != null && settingY.PitMethod == TaxCalculationMethod.DeclarationBased)
-                {
-                    activeCycleStartYear = settingY.Year;
-                    activeCycleEndYear = settingY.LockedUntilYear;
-                    continue;
-                }
-
-                var (_, yToDateUtc, _) = GetDateRangesForPeriod(y, TaxPeriodType.Year, 1);
-                var yRevenue = await _repository.GetAnnualAccumulatedRevenueAsync(y, yToDateUtc, ct);
-
-                bool isCurrentlyInCycle = activeCycleEndYear.HasValue && y <= activeCycleEndYear.Value;
-
-                if (!isCurrentlyInCycle)
-                {
-                    if (yRevenue > 3_000_000_000m)
-                    {
-                        activeCycleStartYear = y + 1;
-                        activeCycleEndYear = y + 2;
-                    }
-                }
-                else
-                {
-                    // Đang trong chu kỳ: Chỉ khi ở năm cuối của chu kỳ (y == activeCycleEndYear) và doanh thu năm y tiếp tục > 3B
-                    // mới kích hoạt chu kỳ 2 năm tiếp theo. Nếu năm y <= 3B, chu kỳ kết thúc đúng hạn.
-                    if (activeCycleEndYear.HasValue && y == activeCycleEndYear.Value && yRevenue > 3_000_000_000m)
-                    {
-                        activeCycleStartYear = y + 1;
-                        activeCycleEndYear = y + 2;
-                    }
-                }
-            }
-
-            if (activeCycleEndYear.HasValue && year <= activeCycleEndYear.Value)
-            {
-                return (TaxCalculationMethod.DeclarationBased, activeCycleStartYear);
-            }
+            if (string.IsNullOrWhiteSpace(snapshot.TaxPolicyJson) || snapshot.TaxPolicyJson == "{}") continue;
+            var policy = JsonSerializer.Deserialize<TaxSnapshotPolicy>(snapshot.TaxPolicyJson);
+            var methodLock = policy?.MethodLock;
+            if (methodLock != null && methodLock.StartYear <= year && methodLock.EndYear >= year)
+                return (methodLock.Method, methodLock.StartYear);
         }
-
         return (null, null);
     }
 
@@ -213,8 +153,8 @@ public class HouseholdTaxService : IHouseholdTaxService
         var startOfYearUtcInit = TimeZoneInfo.ConvertTimeToUtc(startOfYearVnInit, vnTzInit);
         var (annualGross, _, _) = await _repository.GetPeriodRevenueAsync(startOfYearUtcInit, toDateUtc, null, cancellationToken);
 
-        var isGrossOver1BNetUnder1B = annualGross > TaxExemptionThreshold && annualAccumulatedRevenue <= TaxExemptionThreshold;
-        var isGrossOver3BNetUnder3B = annualGross > 3_000_000_000m && annualAccumulatedRevenue <= 3_000_000_000m;
+        var isGrossOver1BNetUnder1B = annualGross > _taxPolicy.ExemptionThreshold && annualAccumulatedRevenue <= _taxPolicy.ExemptionThreshold;
+        var isGrossOver3BNetUnder3B = annualGross > _taxPolicy.MethodSwitchRevenueThreshold && annualAccumulatedRevenue <= _taxPolicy.MethodSwitchRevenueThreshold;
         string? netVsGrossWarning = null;
         decimal? grossBasedEstimatedTax = null;
 
@@ -223,12 +163,12 @@ public class HouseholdTaxService : IHouseholdTaxService
         var isExceedingGroup4 = annualAccumulatedRevenue >= 50_000_000_000m;
 
         // Cảnh báo tiến trình ngưỡng 3 tỷ VNĐ (Điểm d Khoản 5 Điều 4 Nghị định 68/2026/NĐ-CP)
-        var isApproaching3B = annualAccumulatedRevenue >= 2_700_000_000m && annualAccumulatedRevenue < 3_000_000_000m;
-        var isExceeding3B = annualAccumulatedRevenue > 3_000_000_000m;
-        var is3BCrossedMidYear = priorPeriodsRevenue <= 3_000_000_000m && annualAccumulatedRevenue > 3_000_000_000m;
+        var isApproaching3B = annualAccumulatedRevenue >= _taxPolicy.MethodSwitchRevenueThreshold * 0.9m && annualAccumulatedRevenue < _taxPolicy.MethodSwitchRevenueThreshold;
+        var isExceeding3B = annualAccumulatedRevenue > _taxPolicy.MethodSwitchRevenueThreshold;
+        var is3BCrossedMidYear = priorPeriodsRevenue <= _taxPolicy.MethodSwitchRevenueThreshold && annualAccumulatedRevenue > _taxPolicy.MethodSwitchRevenueThreshold;
 
         // Cảnh báo vượt ngưỡng miễn thuế 1 tỷ VNĐ giữa năm (từ <= 1 tỷ lên > 1 tỷ)
-        var isThresholdCrossedMidYear = priorPeriodsRevenue <= TaxExemptionThreshold && annualAccumulatedRevenue > TaxExemptionThreshold;
+        var isThresholdCrossedMidYear = priorPeriodsRevenue <= _taxPolicy.ExemptionThreshold && annualAccumulatedRevenue > _taxPolicy.ExemptionThreshold;
 
         string? thresholdExceededNote = null;
 
@@ -236,7 +176,7 @@ public class HouseholdTaxService : IHouseholdTaxService
         {
             // Tính số ước tính GTGT nếu cơ quan thuế truy thu trên toàn bộ doanh thu lũy kế cả năm (để chủ hộ dự phòng)
             var retrospectiveVatEstimate = Math.Round(annualAccumulatedRevenue * 0.01m, 0, MidpointRounding.AwayFromZero);
-            thresholdExceededNote = $"Doanh thu lũy kế năm đã vượt ngưỡng 1 tỷ VNĐ trong kỳ này (từ {priorPeriodsRevenue:N0}đ lên {annualAccumulatedRevenue:N0}đ). Theo quy định, hộ kinh doanh bắt đầu khai và nộp thuế kể từ quý phát sinh doanh thu vượt (Điều 10 NĐ 68/2026/NĐ-CP). Thuế TNCN tính trên phần vượt ngưỡng ({Math.Max(0, annualAccumulatedRevenue - TaxExemptionThreshold):N0}đ). Về thuế GTGT: Hệ thống đang ước tính trên doanh thu phát sinh trong kỳ; trường hợp cơ quan thuế yêu cầu nộp GTGT trên toàn bộ doanh thu cả năm, số thuế GTGT dự kiến khoảng {retrospectiveVatEstimate:N0}đ. Khuyến nghị chủ hộ tham vấn cơ quan thuế địa bàn để xác định chính xác phương án kê khai.";
+            thresholdExceededNote = $"Doanh thu lũy kế năm đã vượt ngưỡng 1 tỷ VNĐ trong kỳ này (từ {priorPeriodsRevenue:N0}đ lên {annualAccumulatedRevenue:N0}đ). Theo quy định, hộ kinh doanh bắt đầu khai và nộp thuế kể từ quý phát sinh doanh thu vượt (Điều 10 NĐ 68/2026/NĐ-CP). Thuế TNCN tính trên phần vượt ngưỡng ({Math.Max(0, annualAccumulatedRevenue - _taxPolicy.ExemptionThreshold):N0}đ). Về thuế GTGT: Hệ thống đang ước tính trên doanh thu phát sinh trong kỳ; trường hợp cơ quan thuế yêu cầu nộp GTGT trên toàn bộ doanh thu cả năm, số thuế GTGT dự kiến khoảng {retrospectiveVatEstimate:N0}đ. Khuyến nghị chủ hộ tham vấn cơ quan thuế địa bàn để xác định chính xác phương án kê khai.";
         }
 
         else if (is3BCrossedMidYear)
@@ -262,6 +202,10 @@ public class HouseholdTaxService : IHouseholdTaxService
         int? declarationMethodStartYear = null;
 
         var (requiredMethod, lockStartYear) = await GetRequiredPitMethodAsync(filter.Year, cancellationToken);
+
+        if (requiredMethod == TaxCalculationMethod.RevenuePercentage &&
+            (filter.Tier2Method == "PROFIT_15" || filter.CalculationMethod == TaxCalculationMethod.DeclarationBased))
+            throw new BusinessException("TAX_METHOD_LOCKED", $"Phương pháp TNCN của năm {filter.Year} đã được chốt theo tỷ lệ doanh thu.");
 
         bool isDeclaration;
 
@@ -295,7 +239,7 @@ public class HouseholdTaxService : IHouseholdTaxService
             else
             {
                 // Vượt ngưỡng 3 tỷ: Nếu vừa vượt giữa năm thì tiếp tục phương pháp tỷ lệ % đến hết năm, chưa bị ép chuyển
-                bool crossedMidYear = priorPeriodsRevenue <= 3_000_000_000m;
+                bool crossedMidYear = priorPeriodsRevenue <= _taxPolicy.MethodSwitchRevenueThreshold;
                 isDeclaration = !crossedMidYear;
             }
         }
@@ -320,11 +264,11 @@ public class HouseholdTaxService : IHouseholdTaxService
 
             : "N/A";
 
-        var nextYearSetting = await _repository.GetYearSettingAsync(filter.Year + 1, cancellationToken);
+        var (nextYearMethod, nextYearStart) = await GetRequiredPitMethodAsync(filter.Year + 1, cancellationToken);
 
-        declarationMethodStartYear ??= nextYearSetting?.PitMethod == TaxCalculationMethod.DeclarationBased
+        declarationMethodStartYear ??= nextYearMethod == TaxCalculationMethod.DeclarationBased
 
-            ? nextYearSetting.Year
+            ? nextYearStart
 
             : (is3BCrossedMidYear ? filter.Year + 1 : null);
 
@@ -468,6 +412,7 @@ public class HouseholdTaxService : IHouseholdTaxService
         {
 
             Group = group,
+            ExemptionThreshold = _taxPolicy.ExemptionThreshold,
 
             IsExempt = isExempt,
 
@@ -546,7 +491,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
         if (isThresholdCrossedMidYear)
         {
-            thresholdExceededNote = $"Doanh thu lũy kế năm đã vượt ngưỡng 1 tỷ VNĐ trong kỳ này (từ {priorPeriodsRevenue:N0}đ lên {annualAccumulatedRevenue:N0}đ). Theo quy định, hộ kinh doanh bắt đầu khai và nộp thuế kể từ quý phát sinh vượt (Điều 10 NĐ 68/2026/NĐ-CP). Thuế TNCN tính trên phần vượt ngưỡng ({Math.Max(0, annualAccumulatedRevenue - TaxExemptionThreshold):N0}đ). Về thuế GTGT: Mặc định áp dụng phương án thận trọng tính trên toàn bộ doanh thu lũy kế cả năm ({retrospectiveVatAmount:N0}đ, đã tách nhóm 0.8% và 1.0%); trường hợp cơ quan thuế chỉ yêu cầu nộp trên doanh thu phát sinh trong quý vượt, số thuế GTGT dự kiến là {quarterlyVatAmount:N0}đ. Khuyến nghị chủ hộ tham vấn cơ quan thuế địa bàn để xác định chính xác phương án kê khai.";
+            thresholdExceededNote = $"Doanh thu lũy kế năm đã vượt ngưỡng 1 tỷ VNĐ trong kỳ này (từ {priorPeriodsRevenue:N0}đ lên {annualAccumulatedRevenue:N0}đ). Theo quy định, hộ kinh doanh bắt đầu khai và nộp thuế kể từ quý phát sinh vượt (Điều 10 NĐ 68/2026/NĐ-CP). Thuế TNCN tính trên phần vượt ngưỡng ({Math.Max(0, annualAccumulatedRevenue - _taxPolicy.ExemptionThreshold):N0}đ). Về thuế GTGT: Mặc định áp dụng phương án thận trọng tính trên toàn bộ doanh thu lũy kế cả năm ({retrospectiveVatAmount:N0}đ, đã tách nhóm 0.8% và 1.0%); trường hợp cơ quan thuế chỉ yêu cầu nộp trên doanh thu phát sinh trong quý vượt, số thuế GTGT dự kiến là {quarterlyVatAmount:N0}đ. Khuyến nghị chủ hộ tham vấn cơ quan thuế địa bàn để xác định chính xác phương án kê khai.";
         }
 
         // 7. Lấy chứng từ sổ kế toán Thông tư 152/2025/TT-BTC
@@ -619,7 +564,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
             var grossEstVat = Math.Round(Math.Max(0, ytdGrossReduced) * 0.008m, 0, MidpointRounding.AwayFromZero)
                 + Math.Round(Math.Max(0, ytdGrossStandard) * 0.010m, 0, MidpointRounding.AwayFromZero);
-            var grossEstPit = Math.Round(Math.Max(0m, annualGross - TaxExemptionThreshold) * 0.005m, 0, MidpointRounding.AwayFromZero);
+            var grossEstPit = Math.Round(Math.Max(0m, annualGross - _taxPolicy.ExemptionThreshold) * 0.005m, 0, MidpointRounding.AwayFromZero);
             grossBasedEstimatedTax = grossEstVat + grossEstPit;
 
             netVsGrossWarning = $"Doanh thu gộp (Gross) lũy kế đã đạt {annualGross:N0}đ (vượt ngưỡng 1 tỷ VNĐ) nhưng Doanh thu thuần (Net sau chiết khấu/trả hàng) là {annualAccumulatedRevenue:N0}đ (vẫn dưới 1 tỷ VNĐ). Theo giả định thiết kế hệ thống, hộ kinh doanh vẫn thuộc diện chưa chịu thuế (Nhóm 1). Tuy nhiên, để dự phòng rủi ro nếu cơ quan thuế không chấp nhận trừ chiết khấu đối với ngưỡng miễn thuế hộ kinh doanh, số thuế ước tính nếu tính theo Doanh thu gộp (Gross) lũy kế là {grossBasedEstimatedTax:N0}đ (gồm GTGT ước tính {grossEstVat:N0}đ và TNCN ước tính {grossEstPit:N0}đ). Chủ hộ cần chủ động đối chiếu với cơ quan thuế địa phương.";
@@ -661,7 +606,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
             IsTaxExempt = isExempt,
 
-            TaxExemptionThreshold = TaxExemptionThreshold,
+            TaxExemptionThreshold = _taxPolicy.ExemptionThreshold,
 
             IsApproachingGroup4Threshold = isApproachingGroup4,
 
@@ -1182,7 +1127,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
                 tier2Method = summary.Tier2Method,
 
-                exemptionThreshold = TaxExemptionThreshold
+                exemptionThreshold = _taxPolicy.ExemptionThreshold
 
             },
 
@@ -1258,6 +1203,21 @@ public class HouseholdTaxService : IHouseholdTaxService
 
         var bookDataJson = JsonSerializer.Serialize(fullBookData, jsonOptions);
 
+        var rules = _taxPolicy;
+        var (_, existingLockStart) = await GetRequiredPitMethodAsync(request.Year, cancellationToken);
+        TaxMethodLock? methodLock = null;
+        if (!summary.IsTaxExempt)
+        {
+            methodLock = summary.Is3BCrossedMidYear && summary.CalculationMethod == TaxCalculationMethod.RevenuePercentage
+                ? new TaxMethodLock(request.Year + 1, request.Year + rules.MethodLockYears,
+                    TaxCalculationMethod.DeclarationBased, "REVENUE_THRESHOLD_CROSSED")
+                : new TaxMethodLock(existingLockStart ?? request.Year,
+                    summary.CalculationMethod == TaxCalculationMethod.DeclarationBased
+                        ? (existingLockStart ?? request.Year) + rules.MethodLockYears - 1
+                        : request.Year,
+                    summary.CalculationMethod, "FINALIZED_METHOD");
+        }
+
         var snapshot = new HouseholdTaxSnapshot
 
         {
@@ -1294,6 +1254,8 @@ public class HouseholdTaxService : IHouseholdTaxService
 
             BookDataJson = bookDataJson,
 
+            TaxPolicyJson = JsonSerializer.Serialize(new TaxSnapshotPolicy(rules, methodLock)),
+
             FinalizedBy = finalizedBy,
             FinalizedAtUtc = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, DateTime.UtcNow.Day, DateTime.UtcNow.Hour, DateTime.UtcNow.Minute, DateTime.UtcNow.Second, DateTimeKind.Utc),
             Notes = request.Notes,
@@ -1306,46 +1268,6 @@ public class HouseholdTaxService : IHouseholdTaxService
         // Ký số HMAC-SHA256 trên Canonical JSON snapshot (Bao gồm cả mã băm BookDataHash)
         snapshot.AuditSignatureHash = _signatureService.ComputeSignature(snapshot);
         var created = await _repository.AddSnapshotAsync(snapshot, cancellationToken);
-
-        // 1. Khoá phương pháp năm hiện tại nếu chưa có và không miễn thuế
-        if (!summary.IsTaxExempt)
-        {
-            var existingCurrentYear = await _repository.GetYearSettingAsync(request.Year, cancellationToken);
-            if (existingCurrentYear == null || existingCurrentYear.Year != request.Year)
-            {
-                // Nếu Nhóm 2 tự nguyện chọn Kê khai -> Khóa ổn định 2 năm liên tiếp theo Điểm d Khoản 5 Điều 4 NĐ 68
-                var isVoluntaryDeclaration = summary.HouseholdGroup == HouseholdTaxGroup.Group2_1BTo3B && summary.CalculationMethod == TaxCalculationMethod.DeclarationBased;
-                var lockedUntil = isVoluntaryDeclaration ? request.Year + 1 : request.Year;
-                var lockReason = isVoluntaryDeclaration ? "VOLUNTARY_DECLARATION_GROUP2" : "FIRST_FINALIZED_PERIOD";
-
-                await _repository.UpsertYearSettingAsync(new HouseholdTaxYearSetting
-                {
-                    Year = request.Year,
-                    PitMethod = summary.CalculationMethod,
-                    LockedUntilYear = lockedUntil,
-                    LockReason = lockReason,
-                    LockedBySystem = finalizedBy
-                }, cancellationToken);
-            }
-        }
-
-        // 2. Nếu vượt 3 tỷ giữa năm -> khoá phương pháp kê khai cho năm sau (ổn định 2 năm theo Điểm d Khoản 5 Điều 4 NĐ 68/2026/NĐ-CP)
-        if (summary.Is3BCrossedMidYear && summary.CalculationMethod == TaxCalculationMethod.RevenuePercentage)
-        {
-            var nextYear = request.Year + 1;
-            var existingNextYear = await _repository.GetYearSettingAsync(nextYear, cancellationToken);
-            if (existingNextYear == null)
-            {
-                await _repository.UpsertYearSettingAsync(new HouseholdTaxYearSetting
-                {
-                    Year = nextYear,
-                    PitMethod = TaxCalculationMethod.DeclarationBased,
-                    LockedUntilYear = nextYear + 1,
-                    LockReason = "REVENUE_EXCEEDED_3B",
-                    LockedBySystem = "AUTO"
-                }, cancellationToken);
-            }
-        }
 
         return new HouseholdTaxSnapshotDto
 
@@ -1388,6 +1310,7 @@ public class HouseholdTaxService : IHouseholdTaxService
             IsCogsEstimated = summary.IsCogsEstimated,
 
             AuditSignatureHash = created.AuditSignatureHash,
+            TaxPolicyJson = created.TaxPolicyJson,
 
             IsIntegrityValid = true,
 
@@ -1456,6 +1379,7 @@ public class HouseholdTaxService : IHouseholdTaxService
             TotalTaxAmount = s.TotalTaxAmount,
 
             AuditSignatureHash = s.AuditSignatureHash,
+            TaxPolicyJson = s.TaxPolicyJson,
             IsIntegrityValid = _signatureService.VerifySignature(s),
             FinalizedBy = s.FinalizedBy,
             FinalizedAtUtc = s.FinalizedAtUtc,
@@ -1533,6 +1457,7 @@ public class HouseholdTaxService : IHouseholdTaxService
             TotalTaxAmount = s.TotalTaxAmount,
 
             AuditSignatureHash = s.AuditSignatureHash,
+            TaxPolicyJson = s.TaxPolicyJson,
             IsIntegrityValid = _signatureService.VerifySignature(s),
             FinalizedBy = s.FinalizedBy,
             FinalizedAtUtc = s.FinalizedAtUtc,
@@ -1613,11 +1538,11 @@ public class HouseholdTaxService : IHouseholdTaxService
 
     }
 
-    private static (HouseholdTaxGroup Group, string GroupName, bool IsExempt) DetermineHouseholdGroup(decimal annualAccumulatedRevenue)
+    private (HouseholdTaxGroup Group, string GroupName, bool IsExempt) DetermineHouseholdGroup(decimal annualAccumulatedRevenue)
 
     {
 
-        if (annualAccumulatedRevenue <= TaxExemptionThreshold)
+        if (annualAccumulatedRevenue <= _taxPolicy.ExemptionThreshold)
 
         {
 
@@ -1633,7 +1558,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
         }
 
-        if (annualAccumulatedRevenue <= 3_000_000_000m)
+        if (annualAccumulatedRevenue <= _taxPolicy.MethodSwitchRevenueThreshold)
 
         {
 

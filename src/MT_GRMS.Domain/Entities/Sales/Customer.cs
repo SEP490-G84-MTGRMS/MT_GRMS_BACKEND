@@ -17,14 +17,8 @@ public class Customer : BaseTenantEntity
     public int RewardPoints { get; set; } = 0;
     public decimal TotalSpending { get; set; } = 0.00m;
     
-    // Quản lý công nợ khách hàng (Đã hợp nhất từ CustomerDebtProfiles)
-    public bool AllowDebt { get; set; } = false;
+    // Tổng dư nợ khách hàng. Chỉ StoreOwner được phép phát sinh đơn bán nợ.
     public decimal TotalDebt { get; set; } = 0.00m;
-    public decimal DebtLimit { get; set; } = 5000000.00m;
-    public decimal PrepaymentBalance { get; set; } = 0.00m;
-    public int MaxDebtDays { get; set; } = 30;
-    public CustomerDebtStatus DebtStatus { get; set; } = CustomerDebtStatus.GoodStanding;
-    public bool IsBlockedForDebt { get; set; } = false;
     public DateTime? LastDebtIncurredAtUtc { get; set; }
     public DateTime? LastRepaymentAtUtc { get; set; }
     public string? Notes { get; set; }

@@ -25,8 +25,7 @@ public record DailyPnLItem(
     DateTime Date,
     decimal NetRevenue,
     decimal Cogs,
-    decimal Expenses,
-    decimal BadDebt
+    decimal Expenses
 );
 
 public record TopProductPnLItem(
@@ -45,7 +44,6 @@ public interface IPnLReportRepository
     Task<RevenueAggregation> GetRevenueAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default);
     Task<CogsAggregation> GetCogsAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default);
     Task<List<CategoryExpenseItem>> GetOperatingExpensesAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default);
-    Task<decimal> GetBadDebtExpenseAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default);
     Task<List<DailyPnLItem>> GetDailyTrendAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default);
     Task<List<TopProductPnLItem>> GetTopProductsAsync(Guid? branchId, DateTime fromDate, DateTime toDate, int limit = 10, CancellationToken ct = default);
 }

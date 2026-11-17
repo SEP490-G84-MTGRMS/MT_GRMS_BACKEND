@@ -52,7 +52,6 @@ public record PnLSummaryResponse(
     decimal GrossProfit,
     decimal GrossMarginPercentage,
     OperatingExpenseSummary OperatingExpenses,
-    decimal BadDebtExpense,
     decimal NetProfit,
     decimal NetMarginPercentage,
     string CogsSource = "ACTUAL",

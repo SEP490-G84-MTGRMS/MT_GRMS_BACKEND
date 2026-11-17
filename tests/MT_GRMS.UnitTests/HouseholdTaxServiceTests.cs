@@ -1,4 +1,4 @@
-﻿using System.Data;
+using System.Data;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Tax.Security;
 
@@ -225,8 +225,6 @@ public class HouseholdTaxServiceTests
 
         public decimal StandardVatRevenue { get; set; } = 0m;
 
-        public Dictionary<int, HouseholdTaxYearSetting> YearSettings { get; } = new();
-
         public Task<(decimal ReducedVatRevenue, decimal StandardVatRevenue)> GetPeriodRevenueSplitAsync(
             DateTime fromDateUtc,
             DateTime toDateUtc,
@@ -244,36 +242,6 @@ public class HouseholdTaxServiceTests
                 : Math.Max(0, GrossRevenue - DiscountAmount - ReturnAmount);
 
             return Task.FromResult((net, 0m));
-        }
-
-        public Task<HouseholdTaxYearSetting?> GetYearSettingAsync(int year, CancellationToken cancellationToken = default)
-
-        {
-
-            if (YearSettings.TryGetValue(year, out var direct))
-
-                return Task.FromResult<HouseholdTaxYearSetting?>(direct);
-
-            var locked = YearSettings.Values
-
-                .Where(s => s.Year <= year && s.LockedUntilYear >= year)
-
-                .OrderByDescending(s => s.Year)
-
-                .FirstOrDefault();
-
-            return Task.FromResult(locked);
-
-        }
-
-        public Task UpsertYearSettingAsync(HouseholdTaxYearSetting setting, CancellationToken cancellationToken = default)
-
-        {
-
-            YearSettings[setting.Year] = setting;
-
-            return Task.CompletedTask;
-
         }
 
     }
@@ -1356,6 +1324,9 @@ public class HouseholdTaxServiceTests
 
         Assert.Contains("ownerConfirmation", savedSnapshot.BookDataJson);
 
+        Assert.Contains("ExemptionThreshold", savedSnapshot.TaxPolicyJson);
+        Assert.Equal(savedSnapshot.TaxPolicyJson, result.TaxPolicyJson);
+
         Assert.Contains("store_owner_nguyen", savedSnapshot.BookDataJson);
 
         Assert.Contains("Tôi cam kết chịu trách nhiệm pháp lý", savedSnapshot.BookDataJson);
@@ -1404,6 +1375,26 @@ public class HouseholdTaxServiceTests
 
         Assert.False(sigService.VerifySignature(snapshot));
 
+    }
+
+    [Fact]
+    public void TaxSnapshotSignatureService_WhenTaxPolicyJsonTampered_VerificationFails()
+    {
+        var signatureService = new TaxSnapshotSignatureService();
+        var snapshot = new HouseholdTaxSnapshot
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            TaxPolicyJson = "{\"version\":\"2026\"}",
+            FinalizedAtUtc = DateTime.UtcNow,
+            FinalizedBy = "owner"
+        };
+        snapshot.AuditSignatureHash = signatureService.ComputeSignature(snapshot);
+        Assert.True(signatureService.VerifySignature(snapshot));
+
+        snapshot.TaxPolicyJson = "{\"version\":\"tampered\"}";
+        Assert.False(signatureService.VerifySignature(snapshot));
     }
 
     [Fact]
@@ -1542,68 +1533,6 @@ public class HouseholdTaxServiceTests
     }
 
     [Fact]
-    public async Task GetTaxSummary_WhenLockedFromPriorYear_ShouldEnforceDeclarationMethod()
-    {
-        // Arrange: Năm trước (2026) đã khóa bắt buộc kê khai cho 2027-2028
-        await _fakeRepo.UpsertYearSettingAsync(new HouseholdTaxYearSetting
-        {
-            Year = 2027,
-            PitMethod = TaxCalculationMethod.DeclarationBased,
-            LockedUntilYear = 2028,
-            LockReason = "REVENUE_EXCEEDED_3B"
-        });
-
-        _fakeRepo.AnnualAccumulatedRevenue = 400_000_000m; // Doanh thu mới đầu năm
-        _fakeRepo.GrossRevenue = 400_000_000m;
-        _fakeRepo.CogsAmount = 250_000_000m;
-
-        var filter = new HouseholdTaxFilterDto
-        {
-            Year = 2027,
-            PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 1,
-            CalculationMethod = TaxCalculationMethod.RevenuePercentage // Người dùng cố chọn % nhưng bị khóa
-        };
-
-        // Act
-        var result = await _service.GetTaxSummaryAsync(filter);
-
-        // Assert: Bắt buộc dùng phương pháp kê khai theo khóa
-        Assert.Equal(TaxCalculationMethod.DeclarationBased, result.CalculationMethod);
-    }
-
-    [Fact]
-    public async Task FinalizeTaxSnapshot_WhenCrossed3BMidYear_ShouldLockDeclarationMethodForNextTwoYears()
-    {
-        // Arrange: Chốt kỳ 1 trước để thỏa mãn tính tuần tự
-        _fakeRepo.SavedSnapshots.Add(new HouseholdTaxSnapshot { Year = 2026, PeriodType = TaxPeriodType.Quarter, PeriodNumber = 1 });
-
-        _fakeRepo.AnnualAccumulatedRevenue = 3_200_000_000m;
-        _fakeRepo.PriorPeriodsAccumulatedRevenue = 2_100_000_000m; // Vừa vượt 3 tỷ giữa năm (tại Q2)
-        _fakeRepo.GrossRevenue = 1_100_000_000m;
-
-        var request = new CreateTaxSnapshotRequest
-        {
-            Year = 2026,
-            PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 2,
-            CalculationMethod = TaxCalculationMethod.RevenuePercentage
-        };
-
-        // Act
-        var snapshotDto = await FinalizeAsync(_service, request, "owner-01");
-
-        // Assert: Phương pháp snapshot kỳ hiện tại vẫn là tỷ lệ %
-        Assert.Equal(TaxCalculationMethod.RevenuePercentage, snapshotDto.CalculationMethod);
-
-        // Kiểm tra setting năm sau (2027) đã được khóa tự động ổn định 2 năm (2027-2028)
-        var nextYearSetting = await _fakeRepo.GetYearSettingAsync(2027);
-        Assert.NotNull(nextYearSetting);
-        Assert.Equal(TaxCalculationMethod.DeclarationBased, nextYearSetting.PitMethod);
-        Assert.Equal(2028, nextYearSetting.LockedUntilYear);
-        Assert.Equal("REVENUE_EXCEEDED_3B", nextYearSetting.LockReason);
-    }
-    [Fact]
     public async Task GetTaxSummary_ThresholdBoundaryExact3Billion_ShouldNotBeExceeding3B()
     {
         // Arrange: Doanh thu đúng tròn 3 tỷ VNĐ (biên)
@@ -1626,56 +1555,6 @@ public class HouseholdTaxServiceTests
         Assert.False(result.IsExceeding3BThreshold);
         Assert.False(result.Is3BCrossedMidYear);
         Assert.Equal(TaxCalculationMethod.RevenuePercentage, result.CalculationMethod);
-    }
-
-    [Fact]
-    public async Task GetTaxSummary_Year2028_InheritsLockFrom2027Setting()
-    {
-        // Arrange: Năm 2027 đã khóa kê khai ổn định 2 năm (2027-2028)
-        _fakeRepo.YearSettings[2027] = new HouseholdTaxYearSetting
-        {
-            Year = 2027,
-            PitMethod = TaxCalculationMethod.DeclarationBased,
-            LockedUntilYear = 2028,
-            LockReason = "REVENUE_EXCEEDED_3B"
-        };
-
-        var filter = new HouseholdTaxFilterDto
-        {
-            Year = 2028,
-            PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 1,
-            CalculationMethod = TaxCalculationMethod.RevenuePercentage // User yêu cầu tỷ lệ %
-        };
-
-        // Act
-        var result = await _service.GetTaxSummaryAsync(filter);
-
-        // Assert: Năm 2028 vẫn bị khóa kê khai do thừa kế khóa 2 năm 2027-2028
-        Assert.Equal(TaxCalculationMethod.DeclarationBased, result.CalculationMethod);
-    }
-
-    [Fact]
-    public async Task GetTaxSummary_WhenPriorYearExceeded3B_WithoutPriorFinalize_ShouldFallbackToDeclaration()
-    {
-        // Arrange: Chưa có bản ghi khóa nào trong YearSettings, nhưng năm 2025 doanh thu đã là 3.5 tỷ
-        _fakeRepo.PriorYearAccumulatedRevenue = 3_500_000_000m;
-        _fakeRepo.AnnualAccumulatedRevenue = 500_000_000m;
-
-        var filter = new HouseholdTaxFilterDto
-        {
-            Year = 2026,
-            PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 1,
-            CalculationMethod = TaxCalculationMethod.RevenuePercentage
-        };
-
-        // Act
-        var result = await _service.GetTaxSummaryAsync(filter);
-
-        // Assert: Tự động suy ra năm nay phải Kê khai theo NĐ 68
-        Assert.Equal(TaxCalculationMethod.DeclarationBased, result.CalculationMethod);
-        Assert.Equal(2026, result.DeclarationMethodStartYear);
     }
 
     [Fact]
@@ -1731,59 +1610,6 @@ public class HouseholdTaxServiceTests
         // Assert: An toàn tuyệt đối, thuế = 0
         Assert.Equal(0m, result.TaxableRevenueInPeriod);
         Assert.Equal(0m, result.TotalTaxAmount);
-    }
-
-    [Fact]
-    public async Task FinalizeTaxSnapshot_WhenGroup2VoluntaryDeclaration_ShouldLockTwoYears()
-    {
-        // Arrange: Hộ Nhóm 2 (1-3 tỷ) tự nguyện chọn Kê khai
-        _fakeRepo.AnnualAccumulatedRevenue = 1_800_000_000m;
-        _fakeRepo.PriorPeriodsAccumulatedRevenue = 0m;
-        _fakeRepo.GrossRevenue = 1_800_000_000m;
-
-        var request = new CreateTaxSnapshotRequest
-        {
-            Year = 2026,
-            PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 1,
-            CalculationMethod = TaxCalculationMethod.DeclarationBased
-        };
-
-        // Act
-        var snapshotDto = await FinalizeAsync(_service, request, "owner-01");
-
-        // Assert: Năm 2026 được khóa ổn định 2 năm (2026-2027) theo NĐ 68
-        var currentSetting = await _fakeRepo.GetYearSettingAsync(2026);
-        Assert.NotNull(currentSetting);
-        Assert.Equal(TaxCalculationMethod.DeclarationBased, currentSetting.PitMethod);
-        Assert.Equal(2027, currentSetting.LockedUntilYear);
-        Assert.Equal("VOLUNTARY_DECLARATION_GROUP2", currentSetting.LockReason);
-    }
-    [Fact]
-    public async Task GetTaxSummary_FallbackTwoYears_WhenYearMinus2Exceeded3B_YearMinus1Dropped_ShouldStillBeDeclarationAndStartAtYearMinus1()
-    {
-        // Arrange: Năm 2026 vượt 3.5 tỷ nhưng chủ hộ chưa từng bấm chốt kỳ.
-        // Năm 2027 doanh thu rớt xuống 2.2 tỷ (chưa chốt).
-        // Sang năm 2028 (năm thứ 2 của chu kỳ 2 năm): vẫn phải bắt buộc Kê khai, startYear = 2027!
-        _fakeRepo.AnnualRevenuesByYear[2026] = 3_500_000_000m;
-        _fakeRepo.AnnualRevenuesByYear[2027] = 2_200_000_000m;
-        _fakeRepo.AnnualAccumulatedRevenue = 500_000_000m; // Đầu năm 2028 mới 500tr
-        _fakeRepo.PriorPeriodsAccumulatedRevenue = 0m;
-        _fakeRepo.GrossRevenue = 500_000_000m;
-
-        var filter = new HouseholdTaxFilterDto
-        {
-            Year = 2028,
-            PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 1
-        };
-
-        // Act
-        var result = await _service.GetTaxSummaryAsync(filter);
-
-        // Assert: Thừa kế bắt buộc Kê khai từ chu kỳ 2027-2028, startYear là 2027
-        Assert.Equal(TaxCalculationMethod.DeclarationBased, result.CalculationMethod);
-        Assert.Equal(2027, result.DeclarationMethodStartYear);
     }
 
     [Fact]
@@ -1910,37 +1736,6 @@ public class HouseholdTaxServiceTests
         Assert.Contains("vượt ngưỡng 1 tỷ VNĐ", result.NetVsGrossThresholdWarning);
         Assert.NotNull(result.GrossBasedEstimatedTaxAmount);
         Assert.True(result.GrossBasedEstimatedTaxAmount > 0);
-    }
-
-    [Fact]
-    public async Task GetTaxSummary_WhenLockedDeclaration_ButRevenueUnder1B_ShouldStillBeExempt()
-    {
-        // Arrange: Hộ bị khóa Kê khai (2027-2028), sang 2028 doanh thu rớt xuống 800 triệu (<= 1 tỷ)
-        _fakeRepo.YearSettings[2027] = new HouseholdTaxYearSetting
-        {
-            Year = 2027,
-            LockedUntilYear = 2028,
-            PitMethod = TaxCalculationMethod.DeclarationBased,
-            LockReason = "REVENUE_EXCEEDED_3B"
-        };
-
-        _fakeRepo.AnnualAccumulatedRevenue = 800_000_000m; // Dưới 1 tỷ
-        _fakeRepo.GrossRevenue = 800_000_000m;
-
-        var filter = new HouseholdTaxFilterDto
-        {
-            Year = 2028,
-            PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 1
-        };
-
-        // Act
-        var result = await _service.GetTaxSummaryAsync(filter);
-
-        // Assert: Theo Điều 10 NĐ 141, doanh thu <= 1 tỷ được miễn thuế hoàn toàn dù có khóa Kê khai
-        Assert.True(result.IsTaxExempt);
-        Assert.Equal(0m, result.TotalTaxAmount);
-        Assert.Equal(HouseholdTaxGroup.Group1_Under1B, result.HouseholdGroup);
     }
 
     [Fact]
