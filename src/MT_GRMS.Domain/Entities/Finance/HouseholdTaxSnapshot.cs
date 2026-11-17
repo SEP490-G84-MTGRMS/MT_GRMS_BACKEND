@@ -34,6 +34,9 @@ public class HouseholdTaxSnapshot : BaseTenantEntity
     /// </summary>
     public string BookDataJson { get; set; } = "{}";
 
+    /// <summary>Quy tắc thuế và khóa phương pháp tại thời điểm chốt, lưu dạng JSON.</summary>
+    public string TaxPolicyJson { get; set; } = "{}";
+
     /// <summary>
     /// Chữ ký số HMAC-SHA256 bảo đảm tính toàn vẹn và chống giả mạo số liệu của snapshot chốt kỳ.
     /// </summary>
@@ -42,4 +45,24 @@ public class HouseholdTaxSnapshot : BaseTenantEntity
     public string FinalizedBy { get; set; } = string.Empty;
     public DateTime FinalizedAtUtc { get; set; } = DateTime.UtcNow;
     public string? Notes { get; set; }
+
+    /// <summary>
+    /// Trạng thái của snapshot: Finalized (đang khóa kỳ) hoặc Superseded (lịch sử đã bị sửa đổi).
+    /// </summary>
+    public TaxSnapshotStatus Status { get; set; } = TaxSnapshotStatus.Finalized;
+
+    /// <summary>
+    /// Phiên bản điều chỉnh (0: bản gốc, 1, 2...: các bản sửa đổi hồi tố).
+    /// </summary>
+    public int RevisionNumber { get; set; } = 0;
+
+    /// <summary>
+    /// Id của snapshot trước đó mà bản ghi này thay thế (nếu có).
+    /// </summary>
+    public Guid? SupersededSnapshotId { get; set; }
+
+    /// <summary>
+    /// Lý do thay thế / số biên bản điều chỉnh khi chốt lại kỳ tính thuế đã khóa.
+    /// </summary>
+    public string? RectificationReason { get; set; }
 }

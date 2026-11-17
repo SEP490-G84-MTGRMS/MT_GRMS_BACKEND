@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Auth.Dtos;
 using MT_GRMS.Application.Common;
-using MT_GRMS.Domain.Entities.Finance;
+using MT_GRMS.Domain.Entities.System;
 using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Api.Filters;

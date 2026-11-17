@@ -111,7 +111,8 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
             .Include(r => r.Branch)
             .Include(r => r.GoodsReceipt)
             .Include(r => r.Lines)
-                .ThenInclude(l => l.Product)
+                .ThenInclude(l => l.Product!)
+                    .ThenInclude(p => p.Category)
             .FirstOrDefaultAsync(r => r.TenantId == tenantId && r.Id == id && !r.IsDeleted, cancellationToken);
     }
 
@@ -187,7 +188,10 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
     {
         var grn = await _appContext.GoodsReceipts.AsNoTracking()
             .Include(g => g.Lines)
-                .ThenInclude(l => l.Product)
+                .ThenInclude(l => l.Product!)
+                    .ThenInclude(p => p.Units)
+            .Include(g => g.Lines)
+                .ThenInclude(l => l.PurchaseOrderDetail)
             .FirstOrDefaultAsync(g => g.TenantId == tenantId && g.Id == grnId && !g.IsDeleted, cancellationToken);
 
         if (grn == null) return new List<GrnReturnableLineDto>();
@@ -209,22 +213,30 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
 
         foreach (var line in grn.Lines.Where(l => l.AcceptedQty > 0))
         {
+            // AcceptedQty trên GRN theo ĐVT nhập; tồn kho / phiếu trả / kiểm kê theo ĐVT tồn (base).
+            var purchaseToStockRate = ResolvePurchaseToStockRate(
+                line.Product,
+                line.PurchaseOrderDetail?.DeliveryUoM,
+                line.PurchaseOrderDetail?.PurchaseUnitNameSnapshot);
+            var receivedStockQty = Math.Round(line.AcceptedQty * purchaseToStockRate, 3);
+
             var relatedReturns = existingReturns
                 .Where(r => r.GoodsReceiptLineId == line.Id ||
                             (r.ProductId == line.ProductId && r.BatchCode == line.BatchCode))
                 .ToList();
 
+            // RequestedQty / HandedOverQty của phiếu trả lưu theo ĐVT tồn (base).
             var returnedQty = relatedReturns
                 .Where(r => r.SupplierReturn?.Status == "COMPLETED" || r.SupplierReturn?.Status == "PARTIALLY_HANDED_OVER")
                 .Sum(r => r.HandedOverQty > 0 ? r.HandedOverQty : r.ApprovedQty);
 
             var pendingReturnQty = relatedReturns
-                .Where(r => r.SupplierReturn?.Status == "PENDING_SUPPLIER" || r.SupplierReturn?.Status == "APPROVED")
+                .Where(r => r.SupplierReturn?.Status == "PENDING_SUPPLIER" || r.SupplierReturn?.Status == "APPROVED" || r.SupplierReturn?.Status == "DRAFT")
                 .Sum(r => r.SupplierReturn?.Status == "APPROVED" ? r.ApprovedQty : r.RequestedQty);
 
-            var grnCeilingQty = Math.Max(0, line.AcceptedQty - returnedQty - pendingReturnQty);
+            var grnCeilingQty = Math.Max(0, receivedStockQty - returnedQty - pendingReturnQty);
 
-            // Giới hạn 2: Số lượng thực tế còn trong kho tại chi nhánh (BranchStock)
+            // Giới hạn 2: Số lượng thực tế còn trong kho tại chi nhánh (BranchStock — base)
             var matchedStocks = line.BranchStockId.HasValue
                 ? branchStocks.Where(s => s.Id == line.BranchStockId.Value).ToList()
                 : branchStocks.Where(s => s.ProductId == line.ProductId && (string.IsNullOrEmpty(line.BatchCode) || s.BatchCode == line.BatchCode)).ToList();
@@ -234,6 +246,9 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
             var stockAvailableQty = Math.Max(0, stockOnHandQty - stockReservedQty);
 
             var availableReturnQty = Math.Min(grnCeilingQty, stockAvailableQty);
+            var unitCostPerStock = purchaseToStockRate > 0
+                ? Math.Round((line.LandedUnitCost > 0 ? line.LandedUnitCost : line.UnitPrice) / purchaseToStockRate, 4)
+                : (line.LandedUnitCost > 0 ? line.LandedUnitCost : line.UnitPrice);
 
             result.Add(new GrnReturnableLineDto(
                 GoodsReceiptLineId: line.Id,
@@ -243,17 +258,54 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
                 Unit: line.Product?.BaseUnit ?? "Cái",
                 BatchCode: line.BatchCode,
                 ExpiryDate: line.ExpiryDate,
-                ReceivedQty: line.AcceptedQty,
+                ReceivedQty: receivedStockQty,
                 ReturnedQty: returnedQty,
                 PendingReturnQty: pendingReturnQty,
                 AvailableReturnQty: availableReturnQty,
-                UnitCost: line.UnitPrice,
+                UnitCost: unitCostPerStock,
                 StockOnHandQty: stockOnHandQty,
                 StockReservedQty: stockReservedQty
             ));
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// 1 ĐVT nhập = bao nhiêu ĐVT tồn (base). Đồng bộ với GoodsReceiptService.
+    /// </summary>
+    private static decimal ResolvePurchaseToStockRate(
+        MT_GRMS.Domain.Entities.Catalog.Product? product,
+        string? deliveryUoM,
+        string? purchaseUnitSnapshot)
+    {
+        if (product?.Units == null)
+            return 1m;
+
+        var active = product.Units.Where(u => !u.IsDeleted).ToList();
+        if (active.Count == 0)
+            return 1m;
+
+        MT_GRMS.Domain.Entities.Catalog.ProductUnit? matched = null;
+        if (!string.IsNullOrWhiteSpace(deliveryUoM))
+        {
+            matched = active.FirstOrDefault(u =>
+                string.Equals(u.UnitName, deliveryUoM.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (matched == null && !string.IsNullOrWhiteSpace(purchaseUnitSnapshot))
+        {
+            matched = active.FirstOrDefault(u =>
+                string.Equals(u.UnitName, purchaseUnitSnapshot.Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+
+        matched ??= active.FirstOrDefault(u => u.IsPurchaseUnit)
+                    ?? active.FirstOrDefault(u => u.IsBaseUnit);
+
+        if (matched == null || matched.ConversionRate <= 0)
+            return 1m;
+
+        return matched.ConversionRate;
     }
 
     public async Task<BranchStock?> GetBranchStockAsync(

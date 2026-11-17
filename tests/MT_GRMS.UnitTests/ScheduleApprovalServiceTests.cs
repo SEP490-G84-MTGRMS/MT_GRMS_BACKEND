@@ -302,7 +302,9 @@ public class ScheduleApprovalServiceTests
         );
 
         // Act & Assert
-        await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateRequestAsync(schedule.Id, emp.UserId, dto));
+        var ex = await Assert.ThrowsAsync<MT_GRMS.Domain.Exceptions.BusinessException>(
+            () => service.CreateRequestAsync(schedule.Id, emp.UserId, dto));
+        Assert.Equal("PAYSLIP_LOCKED", ex.ErrorCode);
     }
 
     [Fact]

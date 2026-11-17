@@ -1,331 +1,111 @@
-using MT_GRMS.Domain.Entities.Sales;
-using System.Linq.Expressions;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Cashbook.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Debt;
 using MT_GRMS.Application.Debt.Dtos;
 using MT_GRMS.Domain.Entities.Finance;
+using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
+using System.Linq.Expressions;
 using Xunit;
 
 namespace MT_GRMS.UnitTests;
 
 public class CustomerDebtServiceTests
 {
-    private class FakeTenantContext : ITenantContext
+    private sealed class Tenant : ITenantContext
     {
-        public string CurrentTenantId { get; set; } = "tenant-test-01";
-        public Guid CurrentUserId { get; set; } = Guid.Parse("11111111-1111-1111-1111-111111111111");
-        public Guid? CurrentBranchId { get; set; } = Guid.Parse("22222222-2222-2222-2222-222222222222");
-        public void SetContext(string tenantId, Guid userId, Guid? branchId)
-        {
-            CurrentTenantId = tenantId;
-            CurrentUserId = userId;
-            CurrentBranchId = branchId;
-        }
-        public string CurrentRole { get; set; } = "ADMIN";
-        public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
+        public string CurrentTenantId => "tenant-test";
+        public Guid CurrentUserId => Guid.NewGuid();
+        public Guid? CurrentBranchId => null;
+        public string CurrentRole { get; private set; } = "STORE_OWNER";
+        public void SetContext(string tenantId, Guid userId, Guid? branchId) { }
+        public void SetRole(string? role) => CurrentRole = role ?? "";
     }
 
-    private class FakeUnitOfWork : IUnitOfWork
+    private sealed class UnitOfWork : IUnitOfWork
     {
-        public int SaveChangesCount { get; private set; }
+        public int SaveCount { get; private set; }
         public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
         {
-            SaveChangesCount++;
+            SaveCount++;
             return Task.FromResult(1);
         }
     }
 
-    private class FakeGenericRepository<T> : IRepository<T> where T : MT_GRMS.Domain.Common.BaseTenantEntity
+    private sealed class Customers : ICustomerDebtRepository
     {
-        public List<T> Items { get; } = new();
-
-        public Task<T?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Items.FirstOrDefault(x => x.Id == id));
-
-        public Task<IReadOnlyList<T>> GetAllAsync(CancellationToken cancellationToken = default) =>
-            Task.FromResult((IReadOnlyList<T>)Items.ToList());
-
-        public Task<IReadOnlyList<T>> FindAsync(Expression<Func<T, bool>> predicate, CancellationToken cancellationToken = default) =>
-            Task.FromResult((IReadOnlyList<T>)Items.AsQueryable().Where(predicate).ToList());
-
-        public Task AddAsync(T entity, CancellationToken cancellationToken = default)
-        {
-            if (entity.Id == Guid.Empty) entity.Id = Guid.NewGuid();
-            Items.Add(entity);
-            return Task.CompletedTask;
-        }
-
-        public void Update(T entity) { }
-        public void Delete(T entity) => Items.Remove(entity);
+        public Customer? Customer { get; set; }
+        public Task<Customer?> GetCustomerWithLockAsync(Guid id, CancellationToken ct = default) => Task.FromResult(Customer?.Id == id ? Customer : null);
+        public Task<List<CustomerDebtLedgerItemResponse>> GetLedgerAsync(Guid id, int page, int pageSize, CancellationToken ct = default) => Task.FromResult(new List<CustomerDebtLedgerItemResponse>());
+        public Task<Customer?> GetByIdAsync(Guid id, CancellationToken ct = default) => GetCustomerWithLockAsync(id, ct);
+        public Task<IReadOnlyList<Customer>> GetAllAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<Customer>>(Customer == null ? [] : [Customer]);
+        public Task<IReadOnlyList<Customer>> FindAsync(Expression<Func<Customer, bool>> predicate, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<Customer>>(Customer == null ? [] : [Customer]);
+        public Task AddAsync(Customer entity, CancellationToken ct = default) { Customer = entity; return Task.CompletedTask; }
+        public void Update(Customer entity) => Customer = entity;
+        public void Delete(Customer entity) => Customer = null;
     }
 
-    private class FakeCustomerDebtRepository : FakeGenericRepository<Customer>, ICustomerDebtRepository
+    private sealed class Cashbook : ICashbookService
     {
-        public List<CustomerDebtInvoice> Invoices { get; } = new();
-        public bool SimulateOverdue { get; set; }
-
-        public Task<Customer?> GetCustomerWithLockAsync(Guid customerId, CancellationToken ct = default) => Task.FromResult(Items.FirstOrDefault(p => p.Id == customerId));
-
-        public Task<List<CustomerDebtInvoice>> GetOpenInvoicesAsync(Guid customerId, CancellationToken ct = default) =>
-            Task.FromResult(Invoices.Where(i => i.CustomerId == customerId && (i.Status == DebtInvoiceStatus.Unpaid || i.Status == DebtInvoiceStatus.PartiallyPaid)).OrderBy(i => i.CreatedAt).ToList());
-
-        public Task<CustomerDebtInvoice?> GetInvoiceByOrderIdAsync(Guid orderId, CancellationToken ct = default) =>
-            Task.FromResult(Invoices.FirstOrDefault(i => i.OrderId == orderId));
-
-        public Task<bool> HasOverdueInvoicesAsync(Guid customerId, DateTime asOfUtc, CancellationToken ct = default) =>
-            Task.FromResult(SimulateOverdue || Invoices.Any(i => i.CustomerId == customerId && (i.Status == DebtInvoiceStatus.Unpaid || i.Status == DebtInvoiceStatus.PartiallyPaid) && i.DueDate < asOfUtc));
-    }
-
-    private class FakeCashbookService : ICashbookService
-    {
-        public decimal ReceivedCashAmount { get; private set; }
-        public decimal DisbursedCashAmount { get; private set; }
-
+        public decimal Received { get; private set; }
+        public Guid? SourceId { get; private set; }
         public Task<CashbookEntryResponse> ReceiveCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default)
         {
-            ReceivedCashAmount += amount;
-            return Task.FromResult(new CashbookEntryResponse(Guid.NewGuid(), "CB-01", accountId, accountType.ToString(), null, "Receipt", amount, 1_000_000m, sourceType, sourceId, referenceCode, "HASH-01", description, DateTime.UtcNow));
+            Received += amount;
+            SourceId = sourceId;
+            return Task.FromResult(new CashbookEntryResponse(Guid.NewGuid(), "PT-001", accountId, accountType.ToString(), null, "Receipt", amount, amount, sourceType, sourceId, referenceCode, "HASH", description, DateTime.UtcNow));
         }
-
-        public Task<CashbookEntryResponse> DisburseCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default)
-        {
-            DisbursedCashAmount += amount;
-            return Task.FromResult(new CashbookEntryResponse(Guid.NewGuid(), "CB-02", accountId, accountType.ToString(), null, "Payment", amount, 500_000m, sourceType, sourceId, referenceCode, "HASH-02", description, DateTime.UtcNow));
-        }
-
+        public Task<CashbookEntryResponse> DisburseCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<ShiftResponse> OpenShiftAsync(OpenShiftRequest request, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<ShiftResponse> CloseShiftZReportAsync(CloseShiftRequest request, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<bool> ProcessCashDropAsync(CashDropRequest request, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<CashInTransitResponse> CreateDepositToBankAsync(DepositToBankRequest request, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<CashInTransitResponse> ConfirmBankDepositAsync(ConfirmBankDepositRequest request, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<List<CashbookEntryResponse>> GetEntriesAsync(Guid? accountId, Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CashbookEntryType? entryType = null, string? sourceType = null, string? keyword = null, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<FinanceAccount> GetOrCreateTillAsync(Guid branchId, string tillName, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<FinanceAccount> GetOrCreateSafeAsync(Guid branchId, CancellationToken ct = default) => throw new NotImplementedException();
     }
 
-    private readonly FakeCustomerDebtRepository _debtRepo = new();
-    private readonly FakeGenericRepository<CustomerDebtInvoice> _invoiceRepo = new();
-    private readonly FakeGenericRepository<CustomerDebtEntry> _entryRepo = new();
-    private readonly FakeGenericRepository<CustomerDebtAllocation> _allocationRepo = new();
-    private readonly FakeCashbookService _cashbookService = new();
-    private readonly FakeTenantContext _tenantContext = new();
-    private readonly FakeUnitOfWork _unitOfWork = new();
-    private readonly CustomerDebtService _service;
-
-    public CustomerDebtServiceTests()
+    [Fact]
+    public async Task Repayment_UpdatesTotalDebtAndCreatesOneReceipt()
     {
-        _service = new CustomerDebtService(
-            _debtRepo,
-            _invoiceRepo,
-            _entryRepo,
-            _allocationRepo,
-            _cashbookService,
-            _tenantContext,
-            _unitOfWork
-        );
+        var customer = new Customer { Id = Guid.NewGuid(), Name = "Khách", TotalDebt = 700_000m };
+        var cashbook = new Cashbook();
+        var uow = new UnitOfWork();
+        var service = new CustomerDebtService(new Customers { Customer = customer }, cashbook, new Tenant(), uow);
+
+        var result = await service.RepayDebtAsync(new RepayDebtRequest(customer.Id, 250_000m, FinanceAccountType.Safe, Guid.NewGuid(), null, null));
+
+        Assert.Equal(450_000m, customer.TotalDebt);
+        Assert.Equal(250_000m, cashbook.Received);
+        Assert.Equal(customer.Id, cashbook.SourceId);
+        Assert.Equal(450_000m, result.RemainingDebt);
+        Assert.Equal(1, uow.SaveCount);
     }
 
     [Fact]
-    public async Task RecordSaleDebtAsync_WhenWithinLimit_ShouldSucceedAndCreateInvoice()
+    public async Task Repayment_ExceedingBalance_DoesNotChangeDebt()
     {
-        var customerId = Guid.NewGuid();
-        var customer = new Customer { Id = customerId, DebtLimit = 2_000_000m, TotalDebt = 500_000m };
-        _debtRepo.Items.Add(customer);
+        var customer = new Customer { Id = Guid.NewGuid(), TotalDebt = 100_000m };
+        var cashbook = new Cashbook();
+        var service = new CustomerDebtService(new Customers { Customer = customer }, cashbook, new Tenant(), new UnitOfWork());
+        var request = new RepayDebtRequest(customer.Id, 150_000m, FinanceAccountType.Safe, Guid.NewGuid(), null, null);
 
-        var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-001", Guid.NewGuid(), 300_000m, null, "Mua chịu đợt 1");
-        var response = await _service.RecordSaleDebtAsync(request);
+        var error = await Assert.ThrowsAsync<BusinessException>(() => service.RepayDebtAsync(request));
 
-        Assert.NotNull(response);
-        Assert.Equal(300_000m, response.RemainingDebtAmount);
-        Assert.Equal(800_000m, customer.TotalDebt);
-        Assert.Single(_entryRepo.Items);
+        Assert.Equal("REPAYMENT_EXCEEDS_DEBT", error.ErrorCode);
+        Assert.Equal(100_000m, customer.TotalDebt);
+        Assert.Equal(0, cashbook.Received);
     }
 
     [Fact]
-    public async Task RecordSaleDebtAsync_WhenExceedsCreditLimit_ShouldThrowBusinessException()
+    public async Task Repayment_RequiresStoreOwner()
     {
-        var customerId = Guid.NewGuid();
-        var customer = new Customer { Id = customerId, DebtLimit = 1_000_000m, TotalDebt = 800_000m };
-        _debtRepo.Items.Add(customer);
+        var tenant = new Tenant();
+        tenant.SetRole("Cashier");
+        var service = new CustomerDebtService(new Customers(), new Cashbook(), tenant, new UnitOfWork());
+        var request = new RepayDebtRequest(Guid.NewGuid(), 1m, FinanceAccountType.Safe, Guid.NewGuid(), null, null);
 
-        // Nợ hiện tại 800k + đơn mới 300k = 1.1tr > hạn mức 1tr
-        var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-002", Guid.NewGuid(), 300_000m, null, "Mua vượt mức");
-        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.RecordSaleDebtAsync(request));
-        Assert.Equal("CREDIT_LIMIT_EXCEEDED", ex.ErrorCode);
-    }
-
-    [Fact]
-    public async Task RecordSaleDebtAsync_WhenExceedsLimitWithManagerBypass_ShouldSucceed()
-    {
-        var customerId = Guid.NewGuid();
-        var customer = new Customer { Id = customerId, DebtLimit = 1_000_000m, TotalDebt = 800_000m };
-        _debtRepo.Items.Add(customer);
-
-        var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-003", Guid.NewGuid(), 500_000m, "MGR-BYPASS-2026", "Quản lý duyệt bảo lãnh");
-        var response = await _service.RecordSaleDebtAsync(request);
-
-        Assert.NotNull(response);
-        Assert.Equal(1_300_000m, customer.TotalDebt);
-    }
-
-    [Fact]
-    public async Task RecordSaleDebtAsync_WhenHasOverdueInvoices_ShouldThrowBusinessException()
-    {
-        var customerId = Guid.NewGuid();
-        var customer = new Customer { Id = customerId, DebtLimit = 5_000_000m, TotalDebt = 500_000m };
-        _debtRepo.Items.Add(customer);
-        _debtRepo.SimulateOverdue = true;
-
-        var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-004", Guid.NewGuid(), 200_000m, null, "Khách có nợ quá hạn");
-        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.RecordSaleDebtAsync(request));
-        Assert.Equal("DEBT_OVERDUE_BLOCKED", ex.ErrorCode);
-    }
-
-    [Fact]
-    public async Task RecordSaleDebtAsync_WhenHasOverdueWithManagerBypass_ShouldSucceed()
-    {
-        var customerId = Guid.NewGuid();
-        var customer = new Customer { Id = customerId, DebtLimit = 5_000_000m, TotalDebt = 500_000m };
-        _debtRepo.Items.Add(customer);
-        _debtRepo.SimulateOverdue = true;
-
-        var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-005", Guid.NewGuid(), 200_000m, "MGR-BYPASS-2026", "Quản lý duyệt bảo lãnh quá hạn");
-        var response = await _service.RecordSaleDebtAsync(request);
-
-        Assert.NotNull(response);
-    }
-
-    [Fact]
-    public async Task RecordSaleDebtAsync_WhenCustomerHasPrepayment_ShouldOffsetPrepaymentFirst()
-    {
-        var customerId = Guid.NewGuid();
-        var customer = new Customer { Id = customerId, DebtLimit = 2_000_000m, TotalDebt = 0, PrepaymentBalance = 200_000m };
-        _debtRepo.Items.Add(customer);
-
-        // Đơn nợ 500k, khách có sẵn 200k tiền đặt cọc -> chỉ ghi nợ 300k, Prepayment về 0
-        var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-006", Guid.NewGuid(), 500_000m, null, "Mua cấn trừ tiền cọc");
-        var response = await _service.RecordSaleDebtAsync(request);
-
-        Assert.Equal(300_000m, response.RemainingDebtAmount);
-        Assert.Equal(300_000m, customer.TotalDebt);
-        Assert.Equal(0, customer.PrepaymentBalance);
-    }
-
-    [Fact]
-    public async Task AdjustDebtAsync_WhenIncrease_ShouldIncreaseDebtBalance()
-    {
-        var customerId = Guid.NewGuid();
-        var customer = new Customer { Id = customerId, TotalDebt = 1_000_000m };
-        _debtRepo.Items.Add(customer);
-
-        var request = new AdjustDebtRequest(customerId, 100_000m, true, "Bù sai sót tính thiếu", "MGR-ADJUST-2026");
-        var response = await _service.AdjustDebtAsync(request);
-
-        Assert.Equal(1_100_000m, customer.TotalDebt);
-        Assert.Equal(1_100_000m, response.BalanceAfter);
-    }
-
-    [Fact]
-    public async Task AdjustDebtAsync_WhenDecrease_ShouldDecreaseDebtBalance()
-    {
-        var customerId = Guid.NewGuid();
-        var customer = new Customer { Id = customerId, TotalDebt = 1_000_000m };
-        _debtRepo.Items.Add(customer);
-
-        var request = new AdjustDebtRequest(customerId, 100_000m, false, "Giảm do tính nhầm", "MGR-ADJUST-2026");
-        var response = await _service.AdjustDebtAsync(request);
-
-        Assert.Equal(900_000m, customer.TotalDebt);
-        Assert.Equal(900_000m, response.BalanceAfter);
-    }
-
-    [Fact]
-    public async Task AdjustDebtAsync_WhenInvalidApprovalCode_ShouldThrowBusinessException()
-    {
-        var customerId = Guid.NewGuid();
-        var customer = new Customer { Id = customerId, TotalDebt = 1_000_000m };
-        _debtRepo.Items.Add(customer);
-
-        var request = new AdjustDebtRequest(customerId, 100_000m, true, "Lỗi", "WRONG-CODE");
-        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.AdjustDebtAsync(request));
-        Assert.Equal("UNAUTHORIZED_ADJUSTMENT", ex.ErrorCode);
-    }
-
-    [Fact]
-    public async Task WriteOffBadDebtAsync_WhenValidAmount_ShouldDecreaseDebtBalance()
-    {
-        var customerId = Guid.NewGuid();
-        var customer = new Customer { Id = customerId, TotalDebt = 500_000m };
-        _debtRepo.Items.Add(customer);
-
-        var request = new WriteOffBadDebtRequest(customerId, 500_000m, "Khách chuyển đi nơi khác không đòi được", "https://docs.store.vn/bien-ban-xoa-no.pdf");
-        var response = await _service.WriteOffBadDebtAsync(request);
-
-        Assert.Equal(0, customer.TotalDebt);
-        Assert.Equal(0, response.BalanceAfter);
-        Assert.Equal(CustomerDebtType.BadDebtWriteOff.ToString(), response.EntryType);
-    }
-
-    [Fact]
-    public async Task WriteOffBadDebtAsync_WhenAmountExceedsDebt_ShouldThrowBusinessException()
-    {
-        var customerId = Guid.NewGuid();
-        var customer = new Customer { Id = customerId, TotalDebt = 300_000m };
-        _debtRepo.Items.Add(customer);
-
-        var request = new WriteOffBadDebtRequest(customerId, 500_000m, "Xóa quá tay", "link");
-        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.WriteOffBadDebtAsync(request));
-        Assert.Equal("INVALID_WRITEOFF", ex.ErrorCode);
-    }
-
-    [Fact]
-    public async Task GetProfileAsync_ShouldReturnProfileWithOpenInvoices()
-    {
-        var customerId = Guid.NewGuid();
-        var customer = new Customer { Id = customerId, DebtLimit = 3_000_000m, TotalDebt = 700_000m };
-        var inv = new CustomerDebtInvoice { CustomerId = customerId, OrderCode = "ORD-99", TotalDebtAmount = 700_000m, RemainingDebtAmount = 700_000m, Status = DebtInvoiceStatus.Unpaid, DueDate = DateTime.UtcNow.AddDays(10) };
-        _debtRepo.Items.Add(customer);
-        _debtRepo.Invoices.Add(inv);
-
-        var response = await _service.GetProfileAsync(customerId);
-        Assert.NotNull(response);
-        Assert.Equal(700_000m, response.CurrentDebtBalance);
-        Assert.Single(response.OpenInvoices);
-    }
-
-    [Fact]
-    public async Task RecordSaleDebtAsync_WhenNonManagerRoleAttemptsBypass_ShouldThrowUnauthorizedBypass()
-    {
-        _tenantContext.SetRole("Cashier");
-        var customerId = Guid.NewGuid();
-        var customer = new Customer { Id = customerId, DebtLimit = 1_000_000m, TotalDebt = 800_000m };
-        _debtRepo.Items.Add(customer);
-
-        var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-BYPASS-FAIL", Guid.NewGuid(), 500_000m, "SOME-CODE", "Thử bypass trái phép");
-        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.RecordSaleDebtAsync(request));
-        Assert.Equal("UNAUTHORIZED_BYPASS", ex.ErrorCode);
-    }
-
-    [Fact]
-    public async Task RecordSaleDebtAsync_WhenManagerRoleBypasses_ShouldSucceedAndRecordAuditTrailInInvoiceNotes()
-    {
-        _tenantContext.SetRole("StoreOwner");
-        var customerId = Guid.NewGuid();
-        var customer = new Customer { Id = customerId, DebtLimit = 1_000_000m, TotalDebt = 800_000m };
-        _debtRepo.Items.Add(customer);
-
-        var request = new RecordSaleDebtRequest(customerId, Guid.NewGuid(), "ORD-BYPASS-OK", Guid.NewGuid(), 500_000m, "OWNER-APPROVAL-888", "Chủ cửa hàng duyệt");
-        var response = await _service.RecordSaleDebtAsync(request);
-
-        Assert.NotNull(response);
-        Assert.Equal(1_300_000m, customer.TotalDebt);
-        var createdInvoice = _invoiceRepo.Items.Last();
-        Assert.Contains("ManagerBypass Approved", createdInvoice.Notes);
-        Assert.Contains(_tenantContext.CurrentUserId.ToString(), createdInvoice.Notes);
-        Assert.Contains("StoreOwner", createdInvoice.Notes);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.RepayDebtAsync(request));
     }
 }

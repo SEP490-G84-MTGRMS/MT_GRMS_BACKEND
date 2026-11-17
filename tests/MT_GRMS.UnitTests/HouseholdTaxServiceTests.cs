@@ -1,4 +1,6 @@
-﻿using MT_GRMS.Application.Tax.Security;
+using System.Data;
+using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Tax.Security;
 
 using MT_GRMS.Application.Tax;
 
@@ -17,6 +19,29 @@ namespace MT_GRMS.UnitTests;
 public class HouseholdTaxServiceTests
 
 {
+    private sealed class OwnerTenantContext : ITenantContext
+    {
+        public string CurrentTenantId { get; set; } = "tenant-tax-test";
+        public Guid CurrentUserId { get; set; } = Guid.NewGuid();
+        public Guid? CurrentBranchId { get; set; }
+        public string CurrentRole { get; set; } = "STORE_OWNER";
+        public void SetContext(string tenantId, Guid userId, Guid? branchId)
+        {
+            CurrentTenantId = tenantId;
+            CurrentUserId = userId;
+            CurrentBranchId = branchId;
+        }
+        public void SetRole(string? role) => CurrentRole = role ?? string.Empty;
+    }
+
+    private sealed class AcceptingPinService : IPinVerificationService
+    {
+        public Task<PinVerificationResult> VerifyStoreOwnerPinAsync(string userId, string inputPin, CancellationToken ct = default) =>
+            Task.FromResult(new PinVerificationResult(true));
+        public Task SetStoreOwnerPinAsync(string userId, string newPin, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ChangeSecurityPinAsync(string userId, ChangeSecurityPinRequest request, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ResetSecurityPinAsync(string userId, ResetSecurityPinRequest request, CancellationToken ct = default) => Task.CompletedTask;
+    }
 
     private class FakeHouseholdTaxRepository : IHouseholdTaxRepository
 
@@ -39,6 +64,8 @@ public class HouseholdTaxServiceTests
         public HouseholdTaxSnapshot? ExistingSnapshot { get; set; }
 
         public List<HouseholdTaxSnapshot> SavedSnapshots { get; } = new();
+
+        public HouseholdTaxpayerProfileDto TaxpayerProfile { get; set; } = new();
 
         public decimal PriorYearAccumulatedRevenue { get; set; } = 0m;
         public Dictionary<int, decimal> AnnualRevenuesByYear { get; } = new();
@@ -161,35 +188,42 @@ public class HouseholdTaxServiceTests
         }
 
         public Task<HouseholdTaxSnapshot?> GetSnapshotAsync(int year, TaxPeriodType periodType, int periodNumber, Guid? branchId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(SavedSnapshots.FirstOrDefault(s => s.Year == year && s.PeriodType == periodType && s.PeriodNumber == periodNumber && (branchId == null || s.BranchId == branchId)) ?? (ExistingSnapshot != null && ExistingSnapshot.PeriodNumber == periodNumber ? ExistingSnapshot : null));
+            Task.FromResult(SavedSnapshots.LastOrDefault(s => s.Year == year && s.PeriodType == periodType && s.PeriodNumber == periodNumber && (branchId == null || s.BranchId == branchId || s.BranchId == null) && s.Status == TaxSnapshotStatus.Finalized) ?? (ExistingSnapshot != null && ExistingSnapshot.PeriodNumber == periodNumber && ExistingSnapshot.Status == TaxSnapshotStatus.Finalized ? ExistingSnapshot : null));
 
         public Task<HouseholdTaxSnapshot?> GetSnapshotByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
-
             Task.FromResult(SavedSnapshots.FirstOrDefault(s => s.Id == id) ?? ExistingSnapshot);
 
         public Task<List<HouseholdTaxSnapshot>> GetSnapshotsAsync(int? year, Guid? branchId, CancellationToken cancellationToken = default) =>
-
             Task.FromResult(SavedSnapshots);
 
+        public Task<HouseholdTaxpayerProfileDto> GetTaxpayerProfileAsync(Guid? branchId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(TaxpayerProfile);
+
         public Task<HouseholdTaxSnapshot> AddSnapshotAsync(HouseholdTaxSnapshot snapshot, CancellationToken cancellationToken = default)
-
         {
-
             snapshot.Id = Guid.NewGuid();
-
             SavedSnapshots.Add(snapshot);
-
             ExistingSnapshot = snapshot;
-
             return Task.FromResult(snapshot);
+        }
 
+        public Task UpdateSnapshotAsync(HouseholdTaxSnapshot snapshot, CancellationToken cancellationToken = default)
+        {
+            var idx = SavedSnapshots.FindIndex(s => s.Id == snapshot.Id);
+            if (idx >= 0)
+            {
+                SavedSnapshots[idx] = snapshot;
+            }
+            if (ExistingSnapshot?.Id == snapshot.Id)
+            {
+                ExistingSnapshot = snapshot;
+            }
+            return Task.CompletedTask;
         }
 
         public decimal ReducedVatRevenue { get; set; } = 0m;
 
         public decimal StandardVatRevenue { get; set; } = 0m;
-
-        public Dictionary<int, HouseholdTaxYearSetting> YearSettings { get; } = new();
 
         public Task<(decimal ReducedVatRevenue, decimal StandardVatRevenue)> GetPeriodRevenueSplitAsync(
             DateTime fromDateUtc,
@@ -210,36 +244,22 @@ public class HouseholdTaxServiceTests
             return Task.FromResult((net, 0m));
         }
 
-        public Task<HouseholdTaxYearSetting?> GetYearSettingAsync(int year, CancellationToken cancellationToken = default)
+    }
 
+    private sealed class RecordingUnitOfWork : IUnitOfWork
+    {
+        public IsolationLevel? RequestedIsolationLevel { get; private set; }
+
+        public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
+
+        public Task<T> ExecuteInTransactionAsync<T>(
+            Func<CancellationToken, Task<T>> operation,
+            CancellationToken cancellationToken = default,
+            IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
         {
-
-            if (YearSettings.TryGetValue(year, out var direct))
-
-                return Task.FromResult<HouseholdTaxYearSetting?>(direct);
-
-            var locked = YearSettings.Values
-
-                .Where(s => s.Year <= year && s.LockedUntilYear >= year)
-
-                .OrderByDescending(s => s.Year)
-
-                .FirstOrDefault();
-
-            return Task.FromResult(locked);
-
+            RequestedIsolationLevel = isolationLevel;
+            return operation(cancellationToken);
         }
-
-        public Task UpsertYearSettingAsync(HouseholdTaxYearSetting setting, CancellationToken cancellationToken = default)
-
-        {
-
-            YearSettings[setting.Year] = setting;
-
-            return Task.CompletedTask;
-
-        }
-
     }
 
     private readonly FakeHouseholdTaxRepository _fakeRepo = new();
@@ -250,8 +270,35 @@ public class HouseholdTaxServiceTests
 
     {
 
-        _service = new HouseholdTaxService(_fakeRepo);
+        _service = CreateService(_fakeRepo);
 
+    }
+
+    private static HouseholdTaxService CreateService(
+        IHouseholdTaxRepository repository,
+        IUnitOfWork? unitOfWork = null,
+        ITenantContext? tenantContext = null,
+        IPinVerificationService? pinService = null) =>
+        new(
+            repository,
+            new MT_GRMS.Application.Tax.Strategies.TaxCalculationStrategyFactory(new MT_GRMS.Application.Tax.Strategies.ITaxCalculationStrategy[]
+            {
+                new MT_GRMS.Application.Tax.Strategies.RevenuePercentageTaxStrategy(),
+                new MT_GRMS.Application.Tax.Strategies.DeclarationBasedTaxStrategy()
+            }),
+            pinService ?? new AcceptingPinService(),
+            null,
+            null,
+            tenantContext ?? new OwnerTenantContext(),
+            unitOfWork);
+
+    private static Task<HouseholdTaxSnapshotDto> FinalizeAsync(
+        HouseholdTaxService service,
+        CreateTaxSnapshotRequest request,
+        string actor)
+    {
+        request.SecurityPin = "123456";
+        return service.FinalizeTaxSnapshotAsync(request, actor, "owner-user-id");
     }
 
     [Fact]
@@ -690,10 +737,127 @@ public class HouseholdTaxServiceTests
 
         var ex = await Assert.ThrowsAsync<BusinessException>(() =>
 
-            _service.FinalizeTaxSnapshotAsync(request, "accountant-user"));
+            FinalizeAsync(_service, request, "accountant-user"));
 
         Assert.Equal("TAX_PERIOD_LOCKED", ex.ErrorCode);
 
+    }
+
+    [Fact]
+    public async Task FinalizeTaxSnapshot_WhenAllowSupersedeWithoutReason_ShouldThrowBusinessException()
+    {
+        // Arrange: Đã tồn tại snapshot nhưng yêu cầu supersede không cung cấp lý do
+        _fakeRepo.ExistingSnapshot = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            Status = TaxSnapshotStatus.Finalized,
+            RevisionNumber = 0
+        };
+
+        var request = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            AllowSupersedeExisting = true,
+            RectificationReason = "" // Rỗng
+        };
+
+        // Act & Assert
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            FinalizeAsync(_service, request, "store-owner"));
+
+        Assert.Equal("RECTIFICATION_REASON_REQUIRED", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task FinalizeTaxSnapshot_WhenAllowSupersedeWithValidReason_ShouldSupersedeAndIncrementRevision()
+    {
+        // Arrange: Snapshot ban đầu (Revision 0)
+        var initialSnapshotId = Guid.NewGuid();
+        var initialSnapshot = new HouseholdTaxSnapshot
+        {
+            Id = initialSnapshotId,
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            Status = TaxSnapshotStatus.Finalized,
+            RevisionNumber = 0
+        };
+        _fakeRepo.SavedSnapshots.Add(initialSnapshot);
+        _fakeRepo.ExistingSnapshot = initialSnapshot;
+
+        var request = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            AllowSupersedeExisting = true,
+            RectificationReason = "BBĐC-01/2026: Điều chỉnh bổ sung 2 hóa đơn đầu vào bỏ sót"
+        };
+
+        // Act
+        var result = await FinalizeAsync(_service, request, "store-owner");
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(TaxSnapshotStatus.Finalized, result.Status);
+        Assert.Equal(1, result.RevisionNumber);
+        Assert.Equal(initialSnapshotId, result.SupersededSnapshotId);
+        Assert.Equal("BBĐC-01/2026: Điều chỉnh bổ sung 2 hóa đơn đầu vào bỏ sót", result.RectificationReason);
+        Assert.True(result.IsIntegrityValid);
+
+        // Snapshot cũ phải được cập nhật sang Superseded
+        Assert.Equal(TaxSnapshotStatus.Superseded, initialSnapshot.Status);
+    }
+
+    [Fact]
+    public async Task FinalizeTaxSnapshot_WhenSupersededTwice_ShouldIncrementRevisionToTwoAndLinkPrevious()
+    {
+        // Arrange: Tạo snapshot gốc (Rev 0)
+        var rev0 = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            Status = TaxSnapshotStatus.Finalized,
+            RevisionNumber = 0
+        };
+        _fakeRepo.SavedSnapshots.Add(rev0);
+        _fakeRepo.ExistingSnapshot = rev0;
+
+        // Lần 1: Supersede Rev 0 -> Rev 1
+        var req1 = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            AllowSupersedeExisting = true,
+            RectificationReason = "Lý do lần 1"
+        };
+        var res1 = await FinalizeAsync(_service, req1, "owner-01");
+        Assert.Equal(1, res1.RevisionNumber);
+
+        // Lần 2: Supersede Rev 1 -> Rev 2
+        var req2 = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            AllowSupersedeExisting = true,
+            RectificationReason = "Lý do lần 2: Điều chỉnh tiếp lần hai"
+        };
+        var res2 = await FinalizeAsync(_service, req2, "owner-01");
+
+        // Assert: Rev 2 nối với Id của Rev 1
+        Assert.Equal(2, res2.RevisionNumber);
+        Assert.Equal(res1.Id, res2.SupersededSnapshotId);
+        Assert.Equal(TaxSnapshotStatus.Finalized, res2.Status);
+        Assert.Equal(TaxSnapshotStatus.Superseded, _fakeRepo.SavedSnapshots.First(s => s.Id == res1.Id).Status);
     }
 
     [Fact]
@@ -722,7 +886,7 @@ public class HouseholdTaxServiceTests
 
         var ex = await Assert.ThrowsAsync<BusinessException>(() =>
 
-            _service.FinalizeTaxSnapshotAsync(request, "accountant-user"));
+            FinalizeAsync(_service, request, "accountant-user"));
 
         Assert.Equal("PRIOR_PERIOD_NOT_FINALIZED", ex.ErrorCode);
 
@@ -1042,6 +1206,42 @@ public class HouseholdTaxServiceTests
 
     [Fact]
 
+    public async Task FinalizeTaxSnapshot_UsesSerializableTransaction_WhenUnitOfWorkIsAvailable()
+
+    {
+
+        var unitOfWork = new RecordingUnitOfWork();
+
+        var service = CreateService(_fakeRepo, unitOfWork);
+
+        var request = new CreateTaxSnapshotRequest
+
+        {
+
+            Year = 2026,
+
+            PeriodType = TaxPeriodType.Quarter,
+
+            PeriodNumber = 1
+
+        };
+
+
+
+        var result = await FinalizeAsync(service, request, "store_owner");
+
+
+
+        Assert.Equal(IsolationLevel.Serializable, unitOfWork.RequestedIsolationLevel);
+
+        Assert.Equal(2026, result.Year);
+
+        Assert.Single(_fakeRepo.SavedSnapshots);
+
+    }
+
+    [Fact]
+
     public async Task FinalizeTaxSnapshot_WhenCogsEstimatedWithoutConfirmation_ThrowsBusinessException()
 
     {
@@ -1072,7 +1272,7 @@ public class HouseholdTaxServiceTests
 
         var ex = await Assert.ThrowsAsync<BusinessException>(() =>
 
-            _service.FinalizeTaxSnapshotAsync(request, "admin_user"));
+            FinalizeAsync(_service, request, "admin_user"));
 
         Assert.Equal("ESTIMATED_COGS_CONFIRMATION_REQUIRED", ex.ErrorCode);
 
@@ -1110,7 +1310,7 @@ public class HouseholdTaxServiceTests
 
         };
 
-        var result = await _service.FinalizeTaxSnapshotAsync(request, "store_owner_nguyen");
+        var result = await FinalizeAsync(_service, request, "store_owner_nguyen");
 
         Assert.NotNull(result);
 
@@ -1123,6 +1323,9 @@ public class HouseholdTaxServiceTests
         Assert.NotNull(savedSnapshot);
 
         Assert.Contains("ownerConfirmation", savedSnapshot.BookDataJson);
+
+        Assert.Contains("ExemptionThreshold", savedSnapshot.TaxPolicyJson);
+        Assert.Equal(savedSnapshot.TaxPolicyJson, result.TaxPolicyJson);
 
         Assert.Contains("store_owner_nguyen", savedSnapshot.BookDataJson);
 
@@ -1172,6 +1375,26 @@ public class HouseholdTaxServiceTests
 
         Assert.False(sigService.VerifySignature(snapshot));
 
+    }
+
+    [Fact]
+    public void TaxSnapshotSignatureService_WhenTaxPolicyJsonTampered_VerificationFails()
+    {
+        var signatureService = new TaxSnapshotSignatureService();
+        var snapshot = new HouseholdTaxSnapshot
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            TaxPolicyJson = "{\"version\":\"2026\"}",
+            FinalizedAtUtc = DateTime.UtcNow,
+            FinalizedBy = "owner"
+        };
+        snapshot.AuditSignatureHash = signatureService.ComputeSignature(snapshot);
+        Assert.True(signatureService.VerifySignature(snapshot));
+
+        snapshot.TaxPolicyJson = "{\"version\":\"tampered\"}";
+        Assert.False(signatureService.VerifySignature(snapshot));
     }
 
     [Fact]
@@ -1310,68 +1533,6 @@ public class HouseholdTaxServiceTests
     }
 
     [Fact]
-    public async Task GetTaxSummary_WhenLockedFromPriorYear_ShouldEnforceDeclarationMethod()
-    {
-        // Arrange: Năm trước (2026) đã khóa bắt buộc kê khai cho 2027-2028
-        await _fakeRepo.UpsertYearSettingAsync(new HouseholdTaxYearSetting
-        {
-            Year = 2027,
-            PitMethod = TaxCalculationMethod.DeclarationBased,
-            LockedUntilYear = 2028,
-            LockReason = "REVENUE_EXCEEDED_3B"
-        });
-
-        _fakeRepo.AnnualAccumulatedRevenue = 400_000_000m; // Doanh thu mới đầu năm
-        _fakeRepo.GrossRevenue = 400_000_000m;
-        _fakeRepo.CogsAmount = 250_000_000m;
-
-        var filter = new HouseholdTaxFilterDto
-        {
-            Year = 2027,
-            PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 1,
-            CalculationMethod = TaxCalculationMethod.RevenuePercentage // Người dùng cố chọn % nhưng bị khóa
-        };
-
-        // Act
-        var result = await _service.GetTaxSummaryAsync(filter);
-
-        // Assert: Bắt buộc dùng phương pháp kê khai theo khóa
-        Assert.Equal(TaxCalculationMethod.DeclarationBased, result.CalculationMethod);
-    }
-
-    [Fact]
-    public async Task FinalizeTaxSnapshot_WhenCrossed3BMidYear_ShouldLockDeclarationMethodForNextTwoYears()
-    {
-        // Arrange: Chốt kỳ 1 trước để thỏa mãn tính tuần tự
-        _fakeRepo.SavedSnapshots.Add(new HouseholdTaxSnapshot { Year = 2026, PeriodType = TaxPeriodType.Quarter, PeriodNumber = 1 });
-
-        _fakeRepo.AnnualAccumulatedRevenue = 3_200_000_000m;
-        _fakeRepo.PriorPeriodsAccumulatedRevenue = 2_100_000_000m; // Vừa vượt 3 tỷ giữa năm (tại Q2)
-        _fakeRepo.GrossRevenue = 1_100_000_000m;
-
-        var request = new CreateTaxSnapshotRequest
-        {
-            Year = 2026,
-            PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 2,
-            CalculationMethod = TaxCalculationMethod.RevenuePercentage
-        };
-
-        // Act
-        var snapshotDto = await _service.FinalizeTaxSnapshotAsync(request, "owner-01");
-
-        // Assert: Phương pháp snapshot kỳ hiện tại vẫn là tỷ lệ %
-        Assert.Equal(TaxCalculationMethod.RevenuePercentage, snapshotDto.CalculationMethod);
-
-        // Kiểm tra setting năm sau (2027) đã được khóa tự động ổn định 2 năm (2027-2028)
-        var nextYearSetting = await _fakeRepo.GetYearSettingAsync(2027);
-        Assert.NotNull(nextYearSetting);
-        Assert.Equal(TaxCalculationMethod.DeclarationBased, nextYearSetting.PitMethod);
-        Assert.Equal(2028, nextYearSetting.LockedUntilYear);
-        Assert.Equal("REVENUE_EXCEEDED_3B", nextYearSetting.LockReason);
-    }
-    [Fact]
     public async Task GetTaxSummary_ThresholdBoundaryExact3Billion_ShouldNotBeExceeding3B()
     {
         // Arrange: Doanh thu đúng tròn 3 tỷ VNĐ (biên)
@@ -1394,56 +1555,6 @@ public class HouseholdTaxServiceTests
         Assert.False(result.IsExceeding3BThreshold);
         Assert.False(result.Is3BCrossedMidYear);
         Assert.Equal(TaxCalculationMethod.RevenuePercentage, result.CalculationMethod);
-    }
-
-    [Fact]
-    public async Task GetTaxSummary_Year2028_InheritsLockFrom2027Setting()
-    {
-        // Arrange: Năm 2027 đã khóa kê khai ổn định 2 năm (2027-2028)
-        _fakeRepo.YearSettings[2027] = new HouseholdTaxYearSetting
-        {
-            Year = 2027,
-            PitMethod = TaxCalculationMethod.DeclarationBased,
-            LockedUntilYear = 2028,
-            LockReason = "REVENUE_EXCEEDED_3B"
-        };
-
-        var filter = new HouseholdTaxFilterDto
-        {
-            Year = 2028,
-            PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 1,
-            CalculationMethod = TaxCalculationMethod.RevenuePercentage // User yêu cầu tỷ lệ %
-        };
-
-        // Act
-        var result = await _service.GetTaxSummaryAsync(filter);
-
-        // Assert: Năm 2028 vẫn bị khóa kê khai do thừa kế khóa 2 năm 2027-2028
-        Assert.Equal(TaxCalculationMethod.DeclarationBased, result.CalculationMethod);
-    }
-
-    [Fact]
-    public async Task GetTaxSummary_WhenPriorYearExceeded3B_WithoutPriorFinalize_ShouldFallbackToDeclaration()
-    {
-        // Arrange: Chưa có bản ghi khóa nào trong YearSettings, nhưng năm 2025 doanh thu đã là 3.5 tỷ
-        _fakeRepo.PriorYearAccumulatedRevenue = 3_500_000_000m;
-        _fakeRepo.AnnualAccumulatedRevenue = 500_000_000m;
-
-        var filter = new HouseholdTaxFilterDto
-        {
-            Year = 2026,
-            PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 1,
-            CalculationMethod = TaxCalculationMethod.RevenuePercentage
-        };
-
-        // Act
-        var result = await _service.GetTaxSummaryAsync(filter);
-
-        // Assert: Tự động suy ra năm nay phải Kê khai theo NĐ 68
-        Assert.Equal(TaxCalculationMethod.DeclarationBased, result.CalculationMethod);
-        Assert.Equal(2026, result.DeclarationMethodStartYear);
     }
 
     [Fact]
@@ -1499,59 +1610,6 @@ public class HouseholdTaxServiceTests
         // Assert: An toàn tuyệt đối, thuế = 0
         Assert.Equal(0m, result.TaxableRevenueInPeriod);
         Assert.Equal(0m, result.TotalTaxAmount);
-    }
-
-    [Fact]
-    public async Task FinalizeTaxSnapshot_WhenGroup2VoluntaryDeclaration_ShouldLockTwoYears()
-    {
-        // Arrange: Hộ Nhóm 2 (1-3 tỷ) tự nguyện chọn Kê khai
-        _fakeRepo.AnnualAccumulatedRevenue = 1_800_000_000m;
-        _fakeRepo.PriorPeriodsAccumulatedRevenue = 0m;
-        _fakeRepo.GrossRevenue = 1_800_000_000m;
-
-        var request = new CreateTaxSnapshotRequest
-        {
-            Year = 2026,
-            PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 1,
-            CalculationMethod = TaxCalculationMethod.DeclarationBased
-        };
-
-        // Act
-        var snapshotDto = await _service.FinalizeTaxSnapshotAsync(request, "owner-01");
-
-        // Assert: Năm 2026 được khóa ổn định 2 năm (2026-2027) theo NĐ 68
-        var currentSetting = await _fakeRepo.GetYearSettingAsync(2026);
-        Assert.NotNull(currentSetting);
-        Assert.Equal(TaxCalculationMethod.DeclarationBased, currentSetting.PitMethod);
-        Assert.Equal(2027, currentSetting.LockedUntilYear);
-        Assert.Equal("VOLUNTARY_DECLARATION_GROUP2", currentSetting.LockReason);
-    }
-    [Fact]
-    public async Task GetTaxSummary_FallbackTwoYears_WhenYearMinus2Exceeded3B_YearMinus1Dropped_ShouldStillBeDeclarationAndStartAtYearMinus1()
-    {
-        // Arrange: Năm 2026 vượt 3.5 tỷ nhưng chủ hộ chưa từng bấm chốt kỳ.
-        // Năm 2027 doanh thu rớt xuống 2.2 tỷ (chưa chốt).
-        // Sang năm 2028 (năm thứ 2 của chu kỳ 2 năm): vẫn phải bắt buộc Kê khai, startYear = 2027!
-        _fakeRepo.AnnualRevenuesByYear[2026] = 3_500_000_000m;
-        _fakeRepo.AnnualRevenuesByYear[2027] = 2_200_000_000m;
-        _fakeRepo.AnnualAccumulatedRevenue = 500_000_000m; // Đầu năm 2028 mới 500tr
-        _fakeRepo.PriorPeriodsAccumulatedRevenue = 0m;
-        _fakeRepo.GrossRevenue = 500_000_000m;
-
-        var filter = new HouseholdTaxFilterDto
-        {
-            Year = 2028,
-            PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 1
-        };
-
-        // Act
-        var result = await _service.GetTaxSummaryAsync(filter);
-
-        // Assert: Thừa kế bắt buộc Kê khai từ chu kỳ 2027-2028, startYear là 2027
-        Assert.Equal(TaxCalculationMethod.DeclarationBased, result.CalculationMethod);
-        Assert.Equal(2027, result.DeclarationMethodStartYear);
     }
 
     [Fact]
@@ -1678,37 +1736,6 @@ public class HouseholdTaxServiceTests
         Assert.Contains("vượt ngưỡng 1 tỷ VNĐ", result.NetVsGrossThresholdWarning);
         Assert.NotNull(result.GrossBasedEstimatedTaxAmount);
         Assert.True(result.GrossBasedEstimatedTaxAmount > 0);
-    }
-
-    [Fact]
-    public async Task GetTaxSummary_WhenLockedDeclaration_ButRevenueUnder1B_ShouldStillBeExempt()
-    {
-        // Arrange: Hộ bị khóa Kê khai (2027-2028), sang 2028 doanh thu rớt xuống 800 triệu (<= 1 tỷ)
-        _fakeRepo.YearSettings[2027] = new HouseholdTaxYearSetting
-        {
-            Year = 2027,
-            LockedUntilYear = 2028,
-            PitMethod = TaxCalculationMethod.DeclarationBased,
-            LockReason = "REVENUE_EXCEEDED_3B"
-        };
-
-        _fakeRepo.AnnualAccumulatedRevenue = 800_000_000m; // Dưới 1 tỷ
-        _fakeRepo.GrossRevenue = 800_000_000m;
-
-        var filter = new HouseholdTaxFilterDto
-        {
-            Year = 2028,
-            PeriodType = TaxPeriodType.Quarter,
-            PeriodNumber = 1
-        };
-
-        // Act
-        var result = await _service.GetTaxSummaryAsync(filter);
-
-        // Assert: Theo Điều 10 NĐ 141, doanh thu <= 1 tỷ được miễn thuế hoàn toàn dù có khóa Kê khai
-        Assert.True(result.IsTaxExempt);
-        Assert.Equal(0m, result.TotalTaxAmount);
-        Assert.Equal(HouseholdTaxGroup.Group1_Under1B, result.HouseholdGroup);
     }
 
     [Fact]
@@ -1881,6 +1908,191 @@ public class HouseholdTaxServiceTests
 
         // Tổng doanh thu tính thuế của cả 2 chi nhánh khớp chính xác 1.1 tỷ của Tenant
         Assert.Equal(1_100_000_000m, resultA.TaxableRevenueInPeriod + resultB.TaxableRevenueInPeriod);
+    }
+
+    [Fact]
+    public void GetFilingDeadlineLocal_QuarterDeadlineOnWeekend_RollsToMonday()
+    {
+        var deadline = HouseholdTaxService.GetFilingDeadlineLocal(2026, TaxPeriodType.Quarter, 3);
+
+        Assert.Equal(new DateTime(2026, 11, 2), deadline);
+        Assert.Equal(DayOfWeek.Monday, deadline.DayOfWeek);
+    }
+
+    [Fact]
+    public async Task GetDeclarationPreview_ReturnsTaxpayerIndicatorsAndAppendixData()
+    {
+        _fakeRepo.AnnualAccumulatedRevenue = 1_500_000_000m;
+        _fakeRepo.GrossRevenue = 400_000_000m;
+        _fakeRepo.CogsAmount = 180_000_000m;
+        _fakeRepo.OpexAmount = 40_000_000m;
+        _fakeRepo.TaxpayerProfile = new HouseholdTaxpayerProfileDto
+        {
+            TaxpayerName = "Hộ kinh doanh Minh Tâm",
+            TaxCode = "0312345678",
+            BusinessLocation = "Quận 1, TP.HCM",
+            PhoneNumber = "0909000000",
+            TaxAuthorityName = "Thuế cơ sở 1 TP.HCM"
+        };
+
+        var result = await _service.GetDeclarationPreviewAsync(new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.DeclarationBased
+        });
+
+        Assert.Equal("01/CNKD", result.FormCode);
+        Assert.Equal("0312345678", result.Taxpayer.TaxCode);
+        Assert.True(result.IsProfileComplete);
+        Assert.True(result.RequiresBusinessActivityAppendix);
+        Assert.Equal("01-2/BK-HĐKD", result.AppendixCode);
+        Assert.Single(result.Lines);
+        Assert.Equal(result.TotalTaxAmount, result.TotalVatAmount + result.TotalPitAmount);
+    }
+
+    [Fact]
+    public async Task ExportDeclarationXml_FinalizedAndValidSnapshot_ReturnsServerXmlWithEscapedText()
+    {
+        var signatureService = new TaxSnapshotSignatureService();
+        var snapshot = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-a",
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            TaxableRevenueInPeriod = 250_000_000m,
+            VatRate = 0.8m,
+            VatAmount = 2_000_000m,
+            PitRate = 0.5m,
+            PitAmount = 1_250_000m,
+            TotalTaxAmount = 3_250_000m,
+            Status = TaxSnapshotStatus.Finalized,
+            FinalizedAtUtc = new DateTime(2026, 4, 10, 2, 0, 0, DateTimeKind.Utc),
+            FinalizedBy = "owner-a",
+            BookDataJson = "{}"
+        };
+        snapshot.AuditSignatureHash = signatureService.ComputeSignature(snapshot);
+        _fakeRepo.SavedSnapshots.Add(snapshot);
+        _fakeRepo.TaxpayerProfile = new HouseholdTaxpayerProfileDto
+        {
+            TaxpayerName = "HKD A & B <!ENTITY xxe SYSTEM 'file:///etc/passwd'>",
+            TaxCode = "0312345678"
+        };
+
+        var result = await _service.ExportDeclarationXmlAsync(snapshot.Id);
+        var xml = System.Text.Encoding.UTF8.GetString(result.Content).TrimStart('\uFEFF');
+        var document = System.Xml.Linq.XDocument.Parse(xml);
+
+        Assert.StartsWith("ToKhai_01_CNKD", result.FileName);
+        Assert.DoesNotContain("<!DOCTYPE", xml, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(document.DocumentType);
+        Assert.Contains("HKD A &amp; B &lt;!ENTITY", xml);
+    }
+
+    [Fact]
+    public async Task ExportDeclarationXml_NonFinalizedSnapshot_IsRejected()
+    {
+        var snapshot = new HouseholdTaxSnapshot { Id = Guid.NewGuid(), Status = TaxSnapshotStatus.Superseded };
+        _fakeRepo.SavedSnapshots.Add(snapshot);
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() => _service.ExportDeclarationXmlAsync(snapshot.Id));
+
+        Assert.Equal("SNAPSHOT_NOT_ACTIVE", error.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ExportDeclarationXml_TamperedSnapshot_IsRejected()
+    {
+        var signatureService = new TaxSnapshotSignatureService();
+        var snapshot = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-a",
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 2,
+            TaxableRevenueInPeriod = 200_000_000m,
+            TotalTaxAmount = 2_000_000m,
+            Status = TaxSnapshotStatus.Finalized,
+            FinalizedAtUtc = DateTime.UtcNow,
+            FinalizedBy = "owner-a"
+        };
+        snapshot.AuditSignatureHash = signatureService.ComputeSignature(snapshot);
+        snapshot.TotalTaxAmount = 99_000_000m;
+        _fakeRepo.SavedSnapshots.Add(snapshot);
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() => _service.ExportDeclarationXmlAsync(snapshot.Id));
+
+        Assert.Equal("SNAPSHOT_INTEGRITY_INVALID", error.ErrorCode);
+    }
+
+    [Theory]
+    [InlineData("ADMIN")]
+    [InlineData("STAFF")]
+    [InlineData("MANAGER")]
+    [InlineData("CASHIER")]
+    [InlineData("StoreOwner")]
+    public async Task GetTaxSummary_WhenRoleIsNotCanonicalOwner_Rejects(string role)
+    {
+        var context = new OwnerTenantContext { CurrentRole = role };
+        var service = CreateService(_fakeRepo, tenantContext: context);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.GetTaxSummaryAsync(new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1
+        }));
+    }
+
+    [Fact]
+    public async Task GetTaxSummary_WhenTenantIsMissing_Rejects()
+    {
+        var context = new OwnerTenantContext { CurrentTenantId = string.Empty };
+        var service = CreateService(_fakeRepo, tenantContext: context);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.GetTaxSummaryAsync(new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1
+        }));
+    }
+
+    [Fact]
+    public async Task FinalizeTaxSnapshot_WhenPinIsMissing_RejectsReauthentication()
+    {
+        var request = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1
+        };
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.FinalizeTaxSnapshotAsync(request, "owner", "owner-user-id"));
+
+        Assert.Equal("PIN_REQUIRED", error.ErrorCode);
+    }
+
+    [Fact]
+    public async Task FinalizeTaxSnapshot_WhenUserIdentityIsMissing_RejectsReauthentication()
+    {
+        var request = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            SecurityPin = "123456"
+        };
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.FinalizeTaxSnapshotAsync(request, "owner"));
+
+        Assert.Equal("USER_ID_REQUIRED", error.ErrorCode);
     }
 
 }

@@ -49,12 +49,30 @@ public class CloudinaryService : ICloudinaryService
             throw new InvalidOperationException("Dịch vụ lưu trữ Cloudinary chưa được cấu hình (thiếu CloudName, ApiKey hoặc ApiSecret). Vui lòng liên hệ quản trị viên.");
         }
 
+        // Không dùng tên file gốc làm public_id — tên dài dễ vượt giới hạn Cloudinary → 500.
+        var safeName = Path.GetFileNameWithoutExtension(fileName ?? string.Empty);
+        if (string.IsNullOrWhiteSpace(safeName) || safeName.Length > 40)
+            safeName = Guid.NewGuid().ToString("N")[..12];
+        else
+            safeName = new string(safeName.Where(c => char.IsLetterOrDigit(c) || c is '-' or '_').ToArray());
+        if (string.IsNullOrWhiteSpace(safeName))
+            safeName = Guid.NewGuid().ToString("N")[..12];
+
+        var publicId = $"{safeName}_{Guid.NewGuid():N}";
+        if (publicId.Length > 80)
+            publicId = publicId[..80];
+
+        var extension = Path.GetExtension(fileName);
+        if (string.IsNullOrWhiteSpace(extension))
+            extension = ".jpg";
+
         var uploadParams = new ImageUploadParams
         {
-            File = new FileDescription(fileName, fileStream),
+            File = new FileDescription($"{safeName}{extension}", fileStream),
             Folder = string.IsNullOrWhiteSpace(folder) ? "mtgrms/products" : folder,
-            UseFilename = true,
-            UniqueFilename = true,
+            PublicId = publicId,
+            UseFilename = false,
+            UniqueFilename = false,
             Overwrite = false
         };
 

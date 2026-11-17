@@ -338,6 +338,102 @@ public class ProductUnitServiceTests
     }
 
     [Fact]
+    public async Task Update_WhenPriceChanges_WritesPriceHistoryWithUnitAndUserContext()
+    {
+        var unitId = Guid.NewGuid();
+        var productId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var unit = new ProductUnit
+        {
+            Id = unitId,
+            ProductId = productId,
+            UnitName = "Thùng 24",
+            ConversionRate = 24m,
+            Price = 420000m
+        };
+        var product = new Product
+        {
+            Id = productId,
+            TenantId = "tenant-test",
+            CostPrice = 15000m
+        };
+        var request = new ProductUnitUpdateRequest
+        {
+            UnitName = "Thùng 24",
+            ConversionRate = 24m,
+            Price = 450000m
+        };
+        var historyRepository = new Mock<IProductPriceHistoryRepository>();
+        var tenantContext = new Mock<ITenantContext>();
+        tenantContext.SetupGet(x => x.CurrentTenantId).Returns("tenant-test");
+        tenantContext.SetupGet(x => x.CurrentUserId).Returns(userId);
+        tenantContext.SetupGet(x => x.CurrentRole).Returns("STORE_OWNER");
+
+        _mockUnitRepo.Setup(r => r.GetByIdAsync(unitId, It.IsAny<CancellationToken>())).ReturnsAsync(unit);
+        _mockUnitRepo.Setup(r => r.ExistsByNameAsync(productId, "Thùng 24", unitId, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+        _mockProductRepo.Setup(r => r.GetByIdAsync(productId, It.IsAny<CancellationToken>())).ReturnsAsync(product);
+
+        var service = new ProductUnitService(
+            _mockUnitRepo.Object,
+            _mockProductRepo.Object,
+            _mockUnitOfWork.Object,
+            historyRepository.Object,
+            tenantContext.Object);
+
+        await service.UpdateAsync(unitId, request);
+
+        historyRepository.Verify(r => r.AddAsync(
+            It.Is<ProductPriceHistory>(h =>
+                h.ProductId == productId &&
+                h.ProductUnitId == unitId &&
+                h.PriceScope == "MASTER" &&
+                h.OldPrice == 420000m &&
+                h.NewPrice == 450000m &&
+                h.CostPriceSnapshot == 360000m &&
+                h.ChangedByUserId == userId.ToString()),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task Update_WhenPriceDoesNotChange_DoesNotWritePriceHistory()
+    {
+        var unitId = Guid.NewGuid();
+        var productId = Guid.NewGuid();
+        var unit = new ProductUnit
+        {
+            Id = unitId,
+            ProductId = productId,
+            UnitName = "Lốc 6",
+            ConversionRate = 6m,
+            Price = 110000m
+        };
+        var request = new ProductUnitUpdateRequest
+        {
+            UnitName = "Lốc 6",
+            ConversionRate = 6m,
+            Price = 110000m
+        };
+        var historyRepository = new Mock<IProductPriceHistoryRepository>();
+        var tenantContext = new Mock<ITenantContext>();
+
+        _mockUnitRepo.Setup(r => r.GetByIdAsync(unitId, It.IsAny<CancellationToken>())).ReturnsAsync(unit);
+        _mockUnitRepo.Setup(r => r.ExistsByNameAsync(productId, "Lốc 6", unitId, It.IsAny<CancellationToken>())).ReturnsAsync(false);
+
+        var service = new ProductUnitService(
+            _mockUnitRepo.Object,
+            _mockProductRepo.Object,
+            _mockUnitOfWork.Object,
+            historyRepository.Object,
+            tenantContext.Object);
+
+        await service.UpdateAsync(unitId, request);
+
+        historyRepository.Verify(r => r.AddAsync(
+            It.IsAny<ProductPriceHistory>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Delete_WhenUnitNotFound_ThrowsKeyNotFoundException()
     {
         var unitId = Guid.NewGuid();

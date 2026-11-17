@@ -1,8 +1,11 @@
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.HR.Employees;
+using MT_GRMS.Application.HR.Payslips;
 using MT_GRMS.Application.HR.Schedules.Dtos;
 using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Enums;
+using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.HR.Schedules;
 
@@ -12,21 +15,27 @@ public class ScheduleApprovalService : IScheduleApprovalService
     private readonly IScheduleApprovalRequestRepository _approvalRepository;
     private readonly IScheduleRepository _scheduleRepository;
     private readonly IEmployeeRepository _employeeRepository;
+    private readonly IPayslipRepository? _payslipRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
+    private readonly ICloudinaryService? _cloudinaryService;
 
     public ScheduleApprovalService(
         IScheduleApprovalRequestRepository approvalRepository,
         IScheduleRepository scheduleRepository,
         IEmployeeRepository employeeRepository,
         IUnitOfWork unitOfWork,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        ICloudinaryService? cloudinaryService = null,
+        IPayslipRepository? payslipRepository = null)
     {
         _approvalRepository = approvalRepository;
         _scheduleRepository = scheduleRepository;
         _employeeRepository = employeeRepository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
+        _cloudinaryService = cloudinaryService;
+        _payslipRepository = payslipRepository;
     }
 
     public async Task<ScheduleApprovalRequestDto> CreateRequestAsync(
@@ -38,10 +47,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
         var schedule = await _scheduleRepository.GetByIdAsync(scheduleId, cancellationToken)
             ?? throw new KeyNotFoundException("Không tìm thấy ca làm việc chỉ định.");
 
-        if (schedule.PayslipId.HasValue && (schedule.Payslip == null || schedule.Payslip.Status != PayslipStatus.Unpaid))
-        {
-            throw new InvalidOperationException("Ca làm việc đã được chốt bảng lương, không thể gửi yêu cầu.");
-        }
+        await EnsureScheduleNotLockedByPaidPayslipAsync(schedule, cancellationToken);
 
         var currentEmployee = await ResolveEmployeeAsync(currentUserId, cancellationToken);
         if (currentEmployee != null && currentEmployee.Id != schedule.EmployeeId)
@@ -90,7 +96,12 @@ public class ScheduleApprovalService : IScheduleApprovalService
             await ValidateDailyWorkAndOvertimeLimitAsync(schedule, requestedOtMinutes, null, cancellationToken);
         }
 
-        var imageUrls = BuildImageUrls(dto);
+        var imageUrls = await CloudinaryDataUrlHelper.ResolveImageUrlsAsync(
+            _cloudinaryService,
+            BuildImageUrls(dto),
+            "mtgrms/schedule-requests",
+            $"schedule-{scheduleId:N}",
+            cancellationToken);
 
         var request = new ScheduleApprovalRequest
         {
@@ -185,10 +196,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
             ?? await _scheduleRepository.GetByIdAsync(request.ScheduleId, cancellationToken)
             ?? throw new KeyNotFoundException("Không tìm thấy ca làm việc liên kết.");
 
-        if (schedule.PayslipId.HasValue && (schedule.Payslip == null || schedule.Payslip.Status != PayslipStatus.Unpaid))
-        {
-            throw new InvalidOperationException("Ca làm việc đã được chốt bảng lương, không thể phê duyệt.");
-        }
+        await EnsureScheduleNotLockedByPaidPayslipAsync(schedule, cancellationToken);
 
         request.ApprovedBy = reviewerUserId;
         request.ApprovedAt = VnNow;
@@ -363,7 +371,12 @@ public class ScheduleApprovalService : IScheduleApprovalService
             }
         }
 
-        var imageUrls = BuildImageUrls(dto);
+        var imageUrls = await CloudinaryDataUrlHelper.ResolveImageUrlsAsync(
+            _cloudinaryService,
+            BuildImageUrls(dto),
+            "mtgrms/schedule-requests",
+            $"schedule-{request.ScheduleId:N}",
+            cancellationToken);
         request.Reason = dto.Reason.Trim();
         request.EvidenceImageUrls = imageUrls;
         request.LeaveType = request.RequestType == ScheduleRequestType.LeaveRequest ? dto.LeaveType : null;
@@ -434,9 +447,9 @@ public class ScheduleApprovalService : IScheduleApprovalService
         }
 
         var schedule = await _scheduleRepository.GetByIdAsync(request.ScheduleId, cancellationToken);
-        if (schedule != null && schedule.PayslipId.HasValue && (schedule.Payslip == null || schedule.Payslip.Status != PayslipStatus.Unpaid))
+        if (schedule != null)
         {
-            throw new InvalidOperationException("Ca làm việc đã được chốt bảng lương, không thể thao tác.");
+            await EnsureScheduleNotLockedByPaidPayslipAsync(schedule, cancellationToken);
         }
 
         if (!isOwnerOrAdmin)
@@ -698,6 +711,32 @@ public class ScheduleApprovalService : IScheduleApprovalService
         {
             throw new InvalidOperationException(
                 $"Tổng giờ làm việc và làm thêm giờ (OT) trong ngày {targetSchedule.WorkDate:dd/MM/yyyy} là {totalHoursWithOt:0.##}h, vượt quá giới hạn tối đa 12 giờ/ngày.");
+        }
+    }
+
+    private async Task EnsureScheduleNotLockedByPaidPayslipAsync(
+        EmployeeSchedule schedule,
+        CancellationToken cancellationToken)
+    {
+        if (schedule.PayslipId.HasValue
+            && (schedule.Payslip == null || schedule.Payslip.Status is PayslipStatus.Paid or PayslipStatus.Partial))
+        {
+            throw new BusinessException(
+                "PAYSLIP_LOCKED",
+                "Ca làm việc đã bị khóa vì kỳ lương của nhân viên đã được thanh toán, không thể thực hiện thao tác.");
+        }
+
+        if (_payslipRepository != null)
+        {
+            var periodMonth = schedule.WorkDate.ToString("yyyy-MM");
+            var periodPayslip = await _payslipRepository.GetByEmployeeAndPeriodAsync(
+                schedule.EmployeeId, periodMonth, cancellationToken);
+            if (periodPayslip != null && periodPayslip.Status is PayslipStatus.Paid or PayslipStatus.Partial)
+            {
+                throw new BusinessException(
+                    "PAYSLIP_LOCKED",
+                    $"Ca làm việc tháng {schedule.WorkDate:MM/yyyy} đã bị khóa vì phiếu lương của nhân viên đã được thanh toán, không thể gửi hoặc xử lý yêu cầu.");
+            }
         }
     }
 }

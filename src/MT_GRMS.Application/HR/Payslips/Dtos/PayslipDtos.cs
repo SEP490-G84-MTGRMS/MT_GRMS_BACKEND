@@ -12,13 +12,24 @@ public record GeneratePayrollBatchRequest(
 public record PayPayslipRequest(
     string PaymentMethod,
     string? Note = null,
-    Guid? CashbookAccountId = null
+    Guid? CashbookAccountId = null,
+    DateTime? PaidAt = null
+);
+
+public record SalaryAdvanceRequest(
+    decimal Amount,
+    string PaymentMethod = "CASH",
+    string? Note = null,
+    Guid? CashbookAccountId = null,
+    DateTime? PaidAt = null
 );
 
 public record BatchPayPayslipsRequest(
     List<Guid> PayslipIds,
     string PaymentMethod,
-    string? Note = null
+    string? Note = null,
+    Guid? CashbookAccountId = null,
+    DateTime? PaidAt = null
 );
 
 public record PayslipQueryFilter(
@@ -57,7 +68,9 @@ public record PayslipSummaryDto(
     PayslipStatus Status,
     DateTime? PaidAt,
     string? PaymentMethod,
-    string? CashbookVoucherCode
+    string? CashbookVoucherCode,
+    DateTime? ApprovedAt = null,
+    string? ApprovedBy = null
 );
 
 public record PayslipResponse(
@@ -101,7 +114,7 @@ public record PayslipResponse(
     string? BankAccountNumber,
     string? BankName,
     string? BankAccountHolder,
-    Guid? CashbookTransactionId,
+    Guid? CashbookEntryId,
     string? CashbookVoucherCode,
     string? Note,
     string? ApprovedBy,
@@ -109,6 +122,7 @@ public record PayslipResponse(
     DateTime CreatedAt,
     string? UserId = null,
     string? OtWeekday = null,
-    string? OtSunday = null
+    string? OtSunday = null,
+    decimal InsuranceBaseSalary = 0.00m
 );
 

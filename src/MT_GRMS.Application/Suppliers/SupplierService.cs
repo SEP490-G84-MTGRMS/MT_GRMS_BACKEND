@@ -475,6 +475,7 @@ public class SupplierService : ISupplierService
         policy.RequireEvidenceImage = command.RequireEvidenceImage;
         policy.MaxReturnDaysAfterReceipt = command.MaxReturnDaysAfterReceipt;
         policy.CostShareEnabled = command.CostShareEnabled;
+        policy.CostShareByCategoryEnabled = command.CostShareEnabled && command.CostShareByCategoryEnabled;
         policy.StoreCostSharePercent = command.CostShareEnabled ? command.StoreCostSharePercent : null;
         policy.SupplierCostSharePercent = command.CostShareEnabled
             ? (command.SupplierCostSharePercent ?? (100m - (command.StoreCostSharePercent ?? 0m)))
@@ -484,8 +485,50 @@ public class SupplierService : ISupplierService
         policy.Notes = command.Notes;
         policy.IsActive = true;
 
+        await ReplaceCategoryCostSharesAsync(policy, command, cancellationToken);
+
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return MapReturnPolicyDto(policy);
+    }
+
+    private async Task ReplaceCategoryCostSharesAsync(
+        SupplierReturnPolicy policy,
+        UpdateSupplierReturnPolicyCommand command,
+        CancellationToken cancellationToken)
+    {
+        var existing = policy.CategoryCostShares?.ToList() ?? [];
+        foreach (var row in existing)
+        {
+            row.IsDeleted = true;
+            row.UpdatedAt = DateTime.UtcNow;
+        }
+
+        if (!command.CostShareEnabled || !command.CostShareByCategoryEnabled)
+            return;
+
+        var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
+        var incoming = command.CategoryCostShares ?? [];
+        foreach (var item in incoming)
+        {
+            if (item.CategoryId == Guid.Empty) continue;
+            var storePct = item.StoreCostSharePercent;
+            var supplierPct = item.SupplierCostSharePercent;
+            if (Math.Abs(storePct + supplierPct - 100m) > 0.01m)
+                supplierPct = 100m - storePct;
+
+            // Không revive: global filter không load soft-delete; unique index đã lọc IsDeleted=FALSE.
+            (policy.CategoryCostShares ??= new List<SupplierReturnPolicyCategoryCostShare>()).Add(
+                new SupplierReturnPolicyCategoryCostShare
+                {
+                    TenantId = tenantId,
+                    PolicyId = policy.Id,
+                    CategoryId = item.CategoryId,
+                    StoreCostSharePercent = storePct,
+                    SupplierCostSharePercent = supplierPct,
+                });
+        }
+
+        await Task.CompletedTask;
     }
 
     private static void ValidateReturnPolicyCommand(UpdateSupplierReturnPolicyCommand command)
@@ -503,7 +546,7 @@ public class SupplierService : ISupplierService
         if (command.CostShareEnabled)
         {
             if (!command.StoreCostSharePercent.HasValue)
-                throw new BusinessException("INVALID_COST_SHARE", "Khi bật chia sẻ chi phí phải nhập % cửa hàng chịu.");
+                throw new BusinessException("INVALID_COST_SHARE", "Khi bật chia sẻ chi phí phải nhập % cửa hàng chịu (mặc định NCC).");
 
             var storePct = command.StoreCostSharePercent.Value;
             if (storePct < 0 || storePct > 100)
@@ -512,6 +555,25 @@ public class SupplierService : ISupplierService
             var supplierPct = command.SupplierCostSharePercent ?? (100m - storePct);
             if (Math.Abs(storePct + supplierPct - 100m) > 0.01m)
                 throw new BusinessException("INVALID_COST_SHARE", "Tổng % cửa hàng và % NCC phải bằng 100.");
+
+            if (command.CostShareByCategoryEnabled)
+            {
+                var rows = command.CategoryCostShares ?? [];
+                var ids = rows.Select(r => r.CategoryId).Where(id => id != Guid.Empty).ToList();
+                if (ids.Count != ids.Distinct().Count())
+                    throw new BusinessException("INVALID_COST_SHARE_CATEGORY", "Mỗi nhóm sản phẩm chỉ được cấu hình một lần.");
+
+                foreach (var row in rows)
+                {
+                    if (row.CategoryId == Guid.Empty)
+                        throw new BusinessException("INVALID_COST_SHARE_CATEGORY", "Vui lòng chọn nhóm sản phẩm.");
+                    if (row.StoreCostSharePercent < 0 || row.StoreCostSharePercent > 100)
+                        throw new BusinessException("INVALID_COST_SHARE_CATEGORY", "% cửa hàng theo nhóm phải trong khoảng 0–100.");
+                    var rowSupplier = row.SupplierCostSharePercent;
+                    if (Math.Abs(row.StoreCostSharePercent + rowSupplier - 100m) > 0.01m)
+                        throw new BusinessException("INVALID_COST_SHARE_CATEGORY", "Tổng % NCC và cửa hàng theo nhóm phải bằng 100.");
+                }
+            }
         }
     }
 
@@ -520,14 +582,16 @@ public class SupplierService : ISupplierService
         Id = Guid.Empty,
         SupplierId = supplierId,
         AllowReturn = true,
-        AllowedReturnTypes = ["QUALITY_DEFECT", "NEAR_EXPIRY", "WRONG_ITEM"],
-        AllowedResolutionTypes = ["REDUCE_PAYABLE", "EXCHANGE", "REFUND"],
+        AllowedReturnTypes = ["QUALITY_DEFECT", "NEAR_EXPIRY", "EXPIRED", "WRONG_ITEM"],
+        AllowedResolutionTypes = ["REDUCE_PAYABLE", "EXCHANGE", "REFUND", "SUPPLIER_CREDIT"],
         DefaultResolutionType = "REDUCE_PAYABLE",
         RequireEvidenceImage = true,
         CostShareEnabled = false,
+        CostShareByCategoryEnabled = false,
         CostShareBase = "REPLACEMENT_VALUE",
         RequireStorePaymentBeforeReplacement = true,
-        IsActive = true
+        IsActive = true,
+        CategoryCostShares = []
     };
 
     private static SupplierReturnPolicyDto MapReturnPolicyDto(SupplierReturnPolicy policy)
@@ -545,6 +609,19 @@ public class SupplierService : ISupplierService
             }
         }
 
+        var categoryShares = (policy.CategoryCostShares ?? [])
+            .Where(c => !c.IsDeleted)
+            .Select(c => new SupplierReturnPolicyCategoryCostShareDto
+            {
+                Id = c.Id,
+                CategoryId = c.CategoryId,
+                CategoryName = c.Category?.Name ?? string.Empty,
+                StoreCostSharePercent = c.StoreCostSharePercent,
+                SupplierCostSharePercent = c.SupplierCostSharePercent
+            })
+            .OrderBy(c => c.CategoryName)
+            .ToList();
+
         return new SupplierReturnPolicyDto
         {
             Id = policy.Id,
@@ -557,12 +634,14 @@ public class SupplierService : ISupplierService
             RequireEvidenceImage = policy.RequireEvidenceImage,
             MaxReturnDaysAfterReceipt = policy.MaxReturnDaysAfterReceipt,
             CostShareEnabled = policy.CostShareEnabled,
+            CostShareByCategoryEnabled = policy.CostShareByCategoryEnabled,
             StoreCostSharePercent = policy.StoreCostSharePercent,
             SupplierCostSharePercent = policy.SupplierCostSharePercent,
             CostShareBase = policy.CostShareBase,
             RequireStorePaymentBeforeReplacement = policy.RequireStorePaymentBeforeReplacement,
             Notes = policy.Notes,
-            IsActive = policy.IsActive
+            IsActive = policy.IsActive,
+            CategoryCostShares = categoryShares
         };
     }
 
@@ -1363,7 +1442,7 @@ public class SupplierService : ISupplierService
         var purchasePrice = SupplierProductPricing.NormalizeAgreedPriceToPersist(command.AgreedWholesalePrice);
 
         var deliveryUoM = string.IsNullOrWhiteSpace(command.DeliveryUoM)
-            ? (product.BaseUnit ?? "Cái")
+            ? ResolveDefaultDeliveryUoM(product)
             : command.DeliveryUoM.Trim();
 
         // BR-SP02: Độc quyền Primary Supplier — nếu đặt làm Primary thì tự động gỡ cờ Primary của NCC cũ
@@ -1477,7 +1556,7 @@ public class SupplierService : ISupplierService
             {
                 var deliveryUoM = !string.IsNullOrWhiteSpace(command.DeliveryUoM) && command.DeliveryUoM != "Theo ĐVT cơ sở"
                     ? command.DeliveryUoM
-                    : (product.BaseUnit ?? "Cái");
+                    : ResolveDefaultDeliveryUoM(product);
 
                 var entity = new SupplierProduct
                 {
@@ -1565,7 +1644,7 @@ public class SupplierService : ISupplierService
         }
         else if (product != null)
         {
-            entity.DeliveryUoM = product.BaseUnit ?? entity.DeliveryUoM;
+            entity.DeliveryUoM = ResolveDefaultDeliveryUoM(product);
         }
 
         entity.AgreedWholesalePrice = purchasePrice;
@@ -1723,6 +1802,19 @@ public class SupplierService : ISupplierService
                 AllowedShortageQuantity = command.AllowedShortageQuantity
             })
             .ToList();
+    }
+
+    private static string ResolveDefaultDeliveryUoM(Product product)
+    {
+        var purchaseFromUnits = product.Units?
+            .Where(u => !u.IsDeleted && u.IsPurchaseUnit)
+            .Select(u => u.UnitName)
+            .FirstOrDefault(n => !string.IsNullOrWhiteSpace(n));
+
+        if (!string.IsNullOrWhiteSpace(purchaseFromUnits))
+            return purchaseFromUnits.Trim();
+
+        return string.IsNullOrWhiteSpace(product.BaseUnit) ? "Cái" : product.BaseUnit.Trim();
     }
 
     private static string ResolvePurchaseUnitName(SupplierProduct sp)

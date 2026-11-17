@@ -778,4 +778,111 @@ public class AccountingBooksTT152Tests
     Assert.Equal("1. Thuế Giá trị gia tăng (GTGT)", vatPaid.SectionGroup);
     Assert.Equal(4_000_000m, vatPaid.Amount);
   }
+
+  [Fact]
+  public async Task Test_S3a_WhenSnapshotSuperseded_ShouldNotDoubleCountSupersededSnapshot()
+  {
+    var dbName = $"TT152_S3a_Supersede_{Guid.NewGuid()}";
+    using var context = CreateInMemoryDbContext(dbName);
+    var repo = new HouseholdTaxRepository(context);
+
+    var branchId = Guid.NewGuid();
+    var fromDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+    var toDate = new DateTime(2026, 3, 31, 23, 59, 59, DateTimeKind.Utc);
+
+    var oldSnapshotId = Guid.NewGuid();
+    // 1. Snapshot cũ (bị supersede): VAT = 4,000,000 VND
+    context.HouseholdTaxSnapshots.Add(new HouseholdTaxSnapshot
+    {
+      Id = oldSnapshotId,
+      TenantId = "tenant-test-tt152",
+      BranchId = null, // Tenant-wide
+      Year = 2026,
+      PeriodType = TaxPeriodType.Quarter,
+      PeriodNumber = 1,
+      HouseholdGroup = HouseholdTaxGroup.Group2_1BTo3B,
+      TaxableRevenueInPeriod = 400_000_000m,
+      VatAmount = 4_000_000m,
+      PitAmount = 2_000_000m,
+      TotalTaxAmount = 6_000_000m,
+      Status = TaxSnapshotStatus.Superseded,
+      RevisionNumber = 0,
+      CreatedAt = new DateTime(2026, 3, 20, 0, 0, 0, DateTimeKind.Utc)
+    });
+
+    // 2. Snapshot mới (điều chỉnh thay thế): VAT = 5,000,000 VND
+    context.HouseholdTaxSnapshots.Add(new HouseholdTaxSnapshot
+    {
+      Id = Guid.NewGuid(),
+      TenantId = "tenant-test-tt152",
+      BranchId = null, // Tenant-wide
+      Year = 2026,
+      PeriodType = TaxPeriodType.Quarter,
+      PeriodNumber = 1,
+      HouseholdGroup = HouseholdTaxGroup.Group2_1BTo3B,
+      TaxableRevenueInPeriod = 500_000_000m,
+      VatAmount = 5_000_000m,
+      PitAmount = 2_500_000m,
+      TotalTaxAmount = 7_500_000m,
+      Status = TaxSnapshotStatus.Finalized,
+      RevisionNumber = 1,
+      SupersededSnapshotId = oldSnapshotId,
+      RectificationReason = "Biên bản điều chỉnh số 01/2026",
+      CreatedAt = new DateTime(2026, 3, 25, 0, 0, 0, DateTimeKind.Utc)
+    });
+
+    await context.SaveChangesAsync();
+
+    // Act: Query S3a entries cho branchId cụ thể (phải tìm được tenant-wide snapshot và chỉ lấy Finalized)
+    var entries = await repo.GetBookEntriesAsync(
+      fromDate,
+      toDate,
+      branchId,
+      HouseholdTaxGroup.Group2_1BTo3B,
+      TaxCalculationMethod.RevenuePercentage,
+      AccountingBookType.S3a_TaxObligation
+    );
+
+    // Assert: S3a chỉ chứa 1 dòng VAT của snapshot Finalized (5tr), KHÔNG bị nhân đôi với snapshot Superseded (4tr)
+    var vatEntries = entries.Where(e => e.SectionGroup == "1. Thuế Giá trị gia tăng (GTGT)").ToList();
+    Assert.Single(vatEntries);
+    Assert.Equal(5_000_000m, vatEntries[0].Amount);
+
+    var pitEntries = entries.Where(e => e.SectionGroup == "2. Thuế Thu nhập cá nhân (TNCN)").ToList();
+    Assert.Single(pitEntries);
+    Assert.Equal(2_500_000m, pitEntries[0].Amount);
+  }
+
+  [Fact]
+  public async Task GetSnapshotAsync_WhenTenantWideSnapshotExists_ShouldMatchSpecificBranchQuery()
+  {
+    var dbName = $"TT152_BranchFallback_{Guid.NewGuid()}";
+    using var context = CreateInMemoryDbContext(dbName);
+    var repo = new HouseholdTaxRepository(context);
+
+    // Tenant-wide snapshot (BranchId = null)
+    context.HouseholdTaxSnapshots.Add(new HouseholdTaxSnapshot
+    {
+      Id = Guid.NewGuid(),
+      TenantId = "tenant-test-branch",
+      BranchId = null,
+      Year = 2026,
+      PeriodType = TaxPeriodType.Quarter,
+      PeriodNumber = 1,
+      TotalTaxAmount = 5_000_000m,
+      Status = TaxSnapshotStatus.Finalized
+    });
+    await context.SaveChangesAsync();
+
+    var branchId = Guid.NewGuid();
+
+    // Query với branchId cụ thể
+    var snapshot = await repo.GetSnapshotAsync(2026, TaxPeriodType.Quarter, 1, branchId);
+    Assert.NotNull(snapshot);
+    Assert.Equal(5_000_000m, snapshot.TotalTaxAmount);
+
+    // GetSnapshotsAsync với branchId cụ thể
+    var list = await repo.GetSnapshotsAsync(2026, branchId);
+    Assert.Single(list);
+  }
 }

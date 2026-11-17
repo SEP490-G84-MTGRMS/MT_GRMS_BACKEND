@@ -38,6 +38,8 @@ public class HouseholdTaxSummaryDto
     public int PeriodNumber { get; set; }
     public Guid? BranchId { get; set; }
     public string BranchName { get; set; } = string.Empty;
+    public DateTime FilingDeadlineLocal { get; set; }
+    public string FilingDeadlineNote { get; set; } = string.Empty;
 
     public decimal AnnualAccumulatedRevenue { get; set; }
     public decimal PriorPeriodsAccumulatedRevenue { get; set; }
@@ -121,6 +123,70 @@ public class HouseholdTaxSummaryDto
     public string? FinalizedBy { get; set; }
 }
 
+public class HouseholdTaxpayerProfileDto
+{
+    public string TaxpayerName { get; set; } = string.Empty;
+    public string TaxCode { get; set; } = string.Empty;
+    public string BusinessLocation { get; set; } = string.Empty;
+    public string PhoneNumber { get; set; } = string.Empty;
+    public string TaxAuthorityName { get; set; } = string.Empty;
+}
+
+public class TaxDeclarationLineDto
+{
+    public int Sequence { get; set; }
+    public string BusinessSector { get; set; } = string.Empty;
+    public string TaxCode { get; set; } = string.Empty;
+    public decimal TotalRevenue { get; set; }
+    public decimal VatNonTaxableRevenue { get; set; }
+    public decimal VatTaxableRevenue { get; set; }
+    public decimal VatZeroRateRevenue { get; set; }
+    public decimal VatRate { get; set; }
+    public decimal VatAmount { get; set; }
+    public decimal PitTaxableRevenue { get; set; }
+    public decimal PitRevenueDeduction { get; set; }
+    public decimal PitRate { get; set; }
+    public decimal PitAmount { get; set; }
+}
+
+public class HouseholdTaxDeclarationPreviewDto
+{
+    public string FormCode { get; set; } = "01/CNKD";
+    public string FormTitle { get; set; } = "Tờ khai thuế đối với hộ kinh doanh, cá nhân kinh doanh";
+    public string LegalBasis { get; set; } = "Mẫu 01/CNKD";
+    public bool IsFinalized { get; set; }
+    public Guid? SnapshotId { get; set; }
+    public int RevisionNumber { get; set; }
+    public DateTime GeneratedAtUtc { get; set; }
+    public int Year { get; set; }
+    public TaxPeriodType PeriodType { get; set; }
+    public int PeriodNumber { get; set; }
+    public string PeriodLabel { get; set; } = string.Empty;
+    public DateTime FilingDeadlineLocal { get; set; }
+    public bool IsFirstDeclaration { get; set; } = true;
+    public bool IsSupplementaryDeclaration { get; set; }
+    public HouseholdTaxpayerProfileDto Taxpayer { get; set; } = new();
+    public List<TaxDeclarationLineDto> Lines { get; set; } = new();
+    public decimal TotalVatAmount { get; set; }
+    public decimal TotalPitAmount { get; set; }
+    public decimal TotalTaxAmount { get; set; }
+    public bool RequiresBusinessActivityAppendix { get; set; }
+    public string AppendixCode { get; set; } = "01-2/BK-HĐKD";
+    public decimal AppendixRevenue { get; set; }
+    public decimal AppendixCogs { get; set; }
+    public decimal AppendixOpex { get; set; }
+    public decimal AppendixTaxableIncome { get; set; }
+    public bool IsProfileComplete { get; set; }
+    public List<string> MissingProfileFields { get; set; } = new();
+    public string DataNotice { get; set; } = string.Empty;
+}
+
+public class TaxDeclarationXmlResult
+{
+    public byte[] Content { get; set; } = Array.Empty<byte>();
+    public string FileName { get; set; } = string.Empty;
+}
+
 public class TaxBooksSummaryDto
 {
     public string PrimaryBookCode { get; set; } = "S2a-HKD";
@@ -181,12 +247,23 @@ public class CreateTaxSnapshotRequest
     public bool ConfirmEstimatedCogsResponsible { get; set; } = false;
     public string? EstimatedCogsConfirmationStatement { get; set; }
 
+    /// <summary>
+    /// Cho phép chốt lại (điều chỉnh hồi tố) kỳ tính thuế đã khóa trước đó.
+    /// </summary>
+    public bool AllowSupersedeExisting { get; set; } = false;
+
+    /// <summary>
+    /// Bắt buộc khi AllowSupersedeExisting = true: Lý do thay thế / số biên bản điều chỉnh.
+    /// </summary>
+    public string? RectificationReason { get; set; }
+
     public string? Notes { get; set; }
 }
 
 public class HouseholdTaxSnapshotDto
 {
     public Guid Id { get; set; }
+    public string TaxPolicyJson { get; set; } = "{}";
     public Guid? BranchId { get; set; }
     public TaxPeriodType PeriodType { get; set; }
     public int Year { get; set; }
@@ -209,4 +286,28 @@ public class HouseholdTaxSnapshotDto
     public string FinalizedBy { get; set; } = string.Empty;
     public DateTime FinalizedAtUtc { get; set; }
     public string? Notes { get; set; }
+    public TaxSnapshotStatus Status { get; set; } = TaxSnapshotStatus.Finalized;
+    public int RevisionNumber { get; set; } = 0;
+    public Guid? SupersededSnapshotId { get; set; }
+    public string? RectificationReason { get; set; }
+}
+
+/// <summary>
+/// DTO yêu cầu thiết lập / đổi mã PIN bảo mật của chủ hộ kinh doanh.
+/// </summary>
+public class ChangeSecurityPinRequest
+{
+    public string? CurrentPassword { get; set; }
+    public string? CurrentPin { get; set; }
+    public string NewPin { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// DTO yêu cầu khôi phục mã PIN bảo mật khi quên (xác thực qua mật khẩu đăng nhập).
+/// </summary>
+public class ResetSecurityPinRequest
+{
+    public string? UserId { get; set; }
+    public string Password { get; set; } = string.Empty;
+    public string NewPin { get; set; } = string.Empty;
 }

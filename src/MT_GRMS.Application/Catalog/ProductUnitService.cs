@@ -11,6 +11,8 @@ public class ProductUnitService : IProductUnitService
     private readonly IProductUnitRepository _unitRepository;
     private readonly IProductRepository _productRepository;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IProductPriceHistoryRepository? _priceHistoryRepository;
+    private readonly ITenantContext? _tenantContext;
 
     public ProductUnitService(
         IProductUnitRepository unitRepository,
@@ -20,6 +22,18 @@ public class ProductUnitService : IProductUnitService
         _unitRepository = unitRepository;
         _productRepository = productRepository;
         _unitOfWork = unitOfWork;
+    }
+
+    public ProductUnitService(
+        IProductUnitRepository unitRepository,
+        IProductRepository productRepository,
+        IUnitOfWork unitOfWork,
+        IProductPriceHistoryRepository priceHistoryRepository,
+        ITenantContext tenantContext)
+        : this(unitRepository, productRepository, unitOfWork)
+    {
+        _priceHistoryRepository = priceHistoryRepository;
+        _tenantContext = tenantContext;
     }
 
     public async Task<IReadOnlyList<ProductUnitResponse>> GetUnitsByProductIdAsync(Guid productId, CancellationToken cancellationToken = default)
@@ -123,6 +137,8 @@ public class ProductUnitService : IProductUnitService
             throw new KeyNotFoundException("Không tìm thấy đơn vị tính.");
         }
 
+        var oldPrice = unit.Price;
+
         var nameExists = await _unitRepository.ExistsByNameAsync(unit.ProductId, request.UnitName.Trim(), id, cancellationToken);
         if (nameExists)
         {
@@ -184,6 +200,29 @@ public class ProductUnitService : IProductUnitService
         unit.Barcode = string.IsNullOrWhiteSpace(request.Barcode) ? null : request.Barcode.Trim();
         unit.IsBaseUnit = request.IsBaseUnit;
         unit.IsPurchaseUnit = request.IsPurchaseUnit;
+
+        if (oldPrice != request.Price && _priceHistoryRepository != null)
+        {
+            var productForAudit = await _productRepository.GetByIdAsync(unit.ProductId, cancellationToken);
+            decimal? costSnapshot = productForAudit?.CostPrice is decimal cost
+                ? cost * (request.IsBaseUnit ? 1m : request.ConversionRate)
+                : (decimal?)null;
+            await _priceHistoryRepository.AddAsync(new ProductPriceHistory
+            {
+                TenantId = _tenantContext?.CurrentTenantId ?? productForAudit?.TenantId ?? string.Empty,
+                ProductId = unit.ProductId,
+                ProductUnitId = unit.Id,
+                PriceScope = "MASTER",
+                PriceType = "SELLING_PRICE",
+                OldPrice = oldPrice,
+                NewPrice = request.Price,
+                CostPriceSnapshot = costSnapshot,
+                IsBelowCost = costSnapshot.HasValue && request.Price < costSnapshot.Value,
+                ChangedByUserId = _tenantContext?.CurrentUserId.ToString() ?? "SYSTEM",
+                ChangedByUserName = _tenantContext?.CurrentRole ?? "SYSTEM",
+                Reason = $"Cập nhật giá đơn vị {request.UnitName.Trim()}"
+            }, cancellationToken);
+        }
 
         _unitRepository.Update(unit);
         await _unitOfWork.SaveChangesAsync(cancellationToken);

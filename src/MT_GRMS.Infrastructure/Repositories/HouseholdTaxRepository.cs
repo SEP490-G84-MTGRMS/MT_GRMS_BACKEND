@@ -16,6 +16,30 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         _context = context;
     }
 
+    public async Task<HouseholdTaxpayerProfileDto> GetTaxpayerProfileAsync(
+        Guid? branchId,
+        CancellationToken cancellationToken = default)
+    {
+        var branchQuery = _context.Branches
+            .AsNoTracking()
+            .Include(b => b.Tenant)
+            .Where(b => b.IsActive);
+
+        var branch = branchId.HasValue
+            ? await branchQuery.FirstOrDefaultAsync(b => b.Id == branchId.Value, cancellationToken)
+            : await branchQuery.OrderByDescending(b => b.IsHeadquarter).ThenBy(b => b.CreatedAt).FirstOrDefaultAsync(cancellationToken);
+
+        var tenant = branch?.Tenant;
+        return new HouseholdTaxpayerProfileDto
+        {
+            TaxpayerName = tenant?.Name ?? string.Empty,
+            TaxCode = tenant?.TaxCode ?? string.Empty,
+            BusinessLocation = branch?.Address ?? tenant?.Address ?? string.Empty,
+            PhoneNumber = branch?.Phone ?? tenant?.Hotline ?? string.Empty,
+            TaxAuthorityName = string.Empty
+        };
+    }
+
     public async Task<decimal> GetAnnualAccumulatedRevenueAsync(int year, DateTime upToDateUtc, CancellationToken cancellationToken = default)
     {
         var vnTz = HouseholdTaxService.GetVietnamTimeZone();
@@ -30,11 +54,19 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             .Where(o => o.CreatedAt >= startOfYearUtc && o.CreatedAt < upToDateUtc && (o.PaymentStatus == "PAID" || o.PaymentStatus == "Paid" || o.PaymentStatus == "DEBT" || o.PaymentStatus == "Debt") && o.Status != "Cancelled")
             .SumAsync(o => (decimal?)o.DiscountAmount, cancellationToken) ?? 0m;
 
-        var returns = await _context.CustomerDebtEntries
-            .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= startOfYearUtc && e.OccurredAtUtc < upToDateUtc)
-            .SumAsync(e => (decimal?)e.Amount, cancellationToken) ?? 0m;
+        var returns = await _context.Orders
+            .Where(o => o.CreatedAt >= startOfYearUtc && o.CreatedAt < upToDateUtc)
+            .SumAsync(o => (decimal?)o.ReturnedAmount, cancellationToken) ?? 0m;
 
-        var netRevenue = orderGross - orderDiscounts - returns;
+        // Manual off-POS revenue is not represented by an Order. Include only
+        // entries explicitly classified by the backend and net compensating
+        // payments so a voided receipt cannot inflate taxable revenue.
+        var manualTaxableReceipts = await _context.CashbookEntries
+            .Where(e => e.OccurredAtUtc >= startOfYearUtc && e.OccurredAtUtc < upToDateUtc &&
+                        e.SourceType == "MANUAL" && e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue)
+            .SumAsync(e => (decimal?)(e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount), cancellationToken) ?? 0m;
+
+        var netRevenue = orderGross - orderDiscounts - returns + manualTaxableReceipts;
         return netRevenue;
     }
 
@@ -55,17 +87,27 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         var gross = await orderQuery.SumAsync(o => (decimal?)o.TotalAmount, cancellationToken) ?? 0m;
         var discounts = await orderQuery.SumAsync(o => (decimal?)o.DiscountAmount, cancellationToken) ?? 0m;
 
-        var returnQuery = _context.CustomerDebtEntries.AsQueryable();
+        var returnQuery = _context.Orders.AsQueryable();
         if (branchId.HasValue)
         {
-            returnQuery = returnQuery.Where(e => e.BranchId == branchId.Value);
+            returnQuery = returnQuery.Where(o => o.BranchId == branchId.Value);
         }
 
         var returns = await returnQuery
-            .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc < toDateUtc)
-            .SumAsync(e => (decimal?)e.Amount, cancellationToken) ?? 0m;
+            .Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt < toDateUtc)
+            .SumAsync(o => (decimal?)o.ReturnedAmount, cancellationToken) ?? 0m;
 
-        return (gross, discounts, returns);
+        var manualRevenueQuery = _context.CashbookEntries.Where(e =>
+            e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc < toDateUtc &&
+            e.SourceType == "MANUAL" && e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue);
+        if (branchId.HasValue)
+        {
+            manualRevenueQuery = manualRevenueQuery.Where(e => e.BranchId == branchId.Value);
+        }
+        var manualTaxableRevenue = await manualRevenueQuery
+            .SumAsync(e => (decimal?)(e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount), cancellationToken) ?? 0m;
+
+        return (gross + manualTaxableRevenue, discounts, returns);
     }
 
     public async Task<decimal> GetPeriodOpexAsync(
@@ -86,13 +128,26 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             (v.Status == ExpenseVoucherStatus.Paid || v.Status == ExpenseVoucherStatus.Approved));
 
         // Lọc chi phí vận hành hợp lệ và loại trừ rút vốn chủ sở hữu / tiền cọc / nộp thuế
-        return await voucherQuery
+        var voucherExpenses = await voucherQuery
             .Where(v => v.Nature == FinancialNature.OperatingExpense &&
+                        v.IsTaxDeductible &&
                         !v.Category.ToLower().Contains("capital") &&
                         !v.Category.ToLower().Contains("equity") &&
                         !v.Category.ToLower().Contains("vốn") &&
                         !v.Category.ToLower().Contains("rút vốn"))
             .SumAsync(v => (decimal?)v.Amount, cancellationToken) ?? 0m;
+
+        var manualExpenseQuery = _context.CashbookEntries.Where(e =>
+            e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc <= toDateUtc &&
+            e.SourceType == "MANUAL" && e.TaxTreatment == CashbookTaxTreatment.DeductibleExpense);
+        if (branchId.HasValue)
+        {
+            manualExpenseQuery = manualExpenseQuery.Where(e => e.BranchId == branchId.Value);
+        }
+        var manualDeductibleExpenses = await manualExpenseQuery
+            .SumAsync(e => (decimal?)(e.EntryType == CashbookEntryType.Payment ? e.Amount : -e.Amount), cancellationToken) ?? 0m;
+
+        return Math.Max(0m, voucherExpenses + manualDeductibleExpenses);
     }
 
     public Task<decimal> GetPeriodDeductibleExpensesAsync(
@@ -176,14 +231,14 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         }
 
         // Tính hàng trả lại trong kỳ
-        var returnQuery = _context.CustomerDebtEntries.AsQueryable();
+        var returnQuery = _context.Orders.AsQueryable();
         if (branchId.HasValue)
         {
-            returnQuery = returnQuery.Where(e => e.BranchId == branchId.Value);
+            returnQuery = returnQuery.Where(o => o.BranchId == branchId.Value);
         }
         var salesReturns = await returnQuery
-            .Where(e => e.EntryType == CustomerDebtType.GoodsReturnOffset && e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc < toDateUtc)
-            .SumAsync(e => (decimal?)e.Amount, cancellationToken) ?? 0m;
+            .Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt < toDateUtc)
+            .SumAsync(o => (decimal?)o.ReturnedAmount, cancellationToken) ?? 0m;
 
         if (!hasAnyRealCost)
         {
@@ -658,10 +713,10 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             var priorSnapshotQuery = _context.HouseholdTaxSnapshots.AsQueryable();
             if (branchId.HasValue)
             {
-                priorSnapshotQuery = priorSnapshotQuery.Where(s => s.BranchId == branchId.Value);
+                priorSnapshotQuery = priorSnapshotQuery.Where(s => s.BranchId == branchId.Value || s.BranchId == null);
             }
             var priorTaxAccrued = await priorSnapshotQuery
-                .Where(s => s.CreatedAt < fromDateUtc)
+                .Where(s => s.Status == TaxSnapshotStatus.Finalized && s.CreatedAt < fromDateUtc)
                 .SumAsync(s => (decimal?)s.TotalTaxAmount, cancellationToken) ?? 0m;
 
             var priorVoucherQuery = _context.ExpenseVouchers.AsQueryable();
@@ -699,9 +754,9 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             var snapshotQuery = _context.HouseholdTaxSnapshots.AsQueryable();
             if (branchId.HasValue)
             {
-                snapshotQuery = snapshotQuery.Where(s => s.BranchId == branchId.Value);
+                snapshotQuery = snapshotQuery.Where(s => s.BranchId == branchId.Value || s.BranchId == null);
             }
-            snapshotQuery = snapshotQuery.Where(s => s.CreatedAt >= fromDateUtc && s.CreatedAt <= toDateUtc);
+            snapshotQuery = snapshotQuery.Where(s => s.Status == TaxSnapshotStatus.Finalized && s.CreatedAt >= fromDateUtc && s.CreatedAt <= toDateUtc);
             var snapshots = await snapshotQuery.OrderBy(s => s.CreatedAt).ToListAsync(cancellationToken);
 
             foreach (var s in snapshots)
@@ -879,13 +934,27 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         Guid? branchId,
         CancellationToken cancellationToken = default)
     {
-        return await _context.HouseholdTaxSnapshots
-            .FirstOrDefaultAsync(s =>
+        var query = _context.HouseholdTaxSnapshots
+            .Where(s =>
                 s.Year == year &&
                 s.PeriodType == periodType &&
                 s.PeriodNumber == periodNumber &&
-                s.BranchId == branchId,
-                cancellationToken);
+                s.Status != TaxSnapshotStatus.Superseded);
+
+        if (branchId.HasValue)
+        {
+            query = query.Where(s => s.BranchId == branchId.Value || s.BranchId == null)
+                         .OrderByDescending(s => s.BranchId.HasValue)
+                         .ThenByDescending(s => s.RevisionNumber);
+        }
+        else
+        {
+            // Tenant-wide: Ưu tiên bản ghi toàn hộ (BranchId == null), fallback về bản ghi theo chi nhánh nếu có
+            query = query.OrderBy(s => s.BranchId.HasValue)
+                         .ThenByDescending(s => s.RevisionNumber);
+        }
+
+        return await query.FirstOrDefaultAsync(cancellationToken);
     }
 
     public async Task<HouseholdTaxSnapshot?> GetSnapshotByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -905,12 +974,13 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
 
         if (branchId.HasValue)
         {
-            query = query.Where(s => s.BranchId == branchId.Value);
+            query = query.Where(s => s.BranchId == branchId.Value || s.BranchId == null);
         }
 
         return await query
             .OrderByDescending(s => s.Year)
             .ThenByDescending(s => s.PeriodNumber)
+            .ThenByDescending(s => s.RevisionNumber)
             .ToListAsync(cancellationToken);
     }
 
@@ -922,11 +992,23 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             await _context.SaveChangesAsync(cancellationToken);
             return snapshot;
         }
-        catch (DbUpdateException)
+        catch (DbUpdateException ex) when (ex.InnerException is Npgsql.PostgresException { SqlState: "23505" } ||
+                                           ex.GetBaseException() is Npgsql.PostgresException { SqlState: "23505" })
         {
             // Bắt ngoại lệ vi phạm Unique Index khi có race condition (chốt kỳ song song)
             throw new MT_GRMS.Domain.Exceptions.BusinessException("TAX_PERIOD_LOCKED", $"Kỳ tính thuế {snapshot.PeriodType} {snapshot.PeriodNumber}/{snapshot.Year} đã được chốt và khóa sổ.");
         }
+    }
+
+    public async Task UpdateSnapshotAsync(HouseholdTaxSnapshot snapshot, CancellationToken cancellationToken = default)
+    {
+        var entry = _context.Entry(snapshot);
+        if (entry.State == EntityState.Detached)
+        {
+            _context.HouseholdTaxSnapshots.Attach(snapshot);
+        }
+        entry.Property(s => s.Status).IsModified = true;
+        await _context.SaveChangesAsync(cancellationToken);
     }
 
     public async Task<(decimal ReducedVatRevenue, decimal StandardVatRevenue)> GetPeriodRevenueSplitAsync(
@@ -1003,32 +1085,4 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         return (reduced, standard);
     }
 
-    public async Task<HouseholdTaxYearSetting?> GetYearSettingAsync(int year, CancellationToken cancellationToken = default)
-    {
-        return await _context.HouseholdTaxYearSettings
-            .Where(s => s.Year == year || (s.Year <= year && s.LockedUntilYear >= year))
-            .OrderByDescending(s => s.Year)
-            .FirstOrDefaultAsync(cancellationToken);
-    }
-
-    public async Task UpsertYearSettingAsync(HouseholdTaxYearSetting setting, CancellationToken cancellationToken = default)
-    {
-        var existing = await _context.HouseholdTaxYearSettings
-            .FirstOrDefaultAsync(s => s.Year == setting.Year, cancellationToken);
-
-        if (existing == null)
-        {
-            _context.HouseholdTaxYearSettings.Add(setting);
-        }
-        else
-        {
-            existing.PitMethod = setting.PitMethod;
-            existing.LockedUntilYear = setting.LockedUntilYear;
-            existing.LockReason = setting.LockReason;
-            existing.LockedBySystem = setting.LockedBySystem;
-            existing.LockedAtUtc = setting.LockedAtUtc;
-        }
-
-        await _context.SaveChangesAsync(cancellationToken);
-    }
 }

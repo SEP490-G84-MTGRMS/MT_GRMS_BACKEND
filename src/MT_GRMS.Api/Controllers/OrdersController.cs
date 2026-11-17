@@ -12,14 +12,21 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/orders")]
-[Authorize]
+[Authorize(Policy = "TenantOwnerOrAssignedBranchStaff")]
 public class OrdersController : BaseApiController
 {
     private readonly IOrderService _orderService;
+    private readonly ITenantContext _tenantContext;
+    private readonly IAuthorizationService _authorizationService;
 
-    public OrdersController(IOrderService orderService)
+    public OrdersController(
+        IOrderService orderService,
+        ITenantContext tenantContext,
+        IAuthorizationService authorizationService)
     {
         _orderService = orderService;
+        _tenantContext = tenantContext;
+        _authorizationService = authorizationService;
     }
 
     /// <summary>
@@ -30,6 +37,10 @@ public class OrdersController : BaseApiController
     [RequireIdempotency]
     public async Task<ActionResult<ApiResponse<OrderResponse>>> CreateOrder([FromBody] OrderCreateRequest request, CancellationToken cancellationToken)
     {
+        var scope = new TenantBranchScope(_tenantContext.CurrentTenantId, request.BranchId);
+        var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
+        if (!authResult.Succeeded) return Forbid();
+
         var response = await _orderService.CreateOrderAsync(request, cancellationToken);
         return Ok(ApiResponse<OrderResponse>.Ok(response, "Tạo đơn hàng POS thành công."));
     }
@@ -45,6 +56,11 @@ public class OrdersController : BaseApiController
         {
             return NotFound(ApiResponse<OrderResponse>.Fail("ORDER_NOT_FOUND", $"Không tìm thấy đơn hàng với ID '{id}'."));
         }
+
+        var scope = new TenantBranchScope(_tenantContext.CurrentTenantId, order.BranchId);
+        var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
+        if (!authResult.Succeeded) return Forbid();
+
         return Ok(ApiResponse<OrderResponse>.Ok(order));
     }
 
@@ -54,7 +70,16 @@ public class OrdersController : BaseApiController
     [HttpGet]
     public async Task<IActionResult> GetOrders([FromQuery] OrderFilterRequest filter, CancellationToken cancellationToken)
     {
-        var (items, totalCount) = await _orderService.GetOrdersAsync(filter, cancellationToken);
+        var effectiveBranchId = filter.BranchId ?? (User.IsInRole("STORE_OWNER") ? null : _tenantContext.CurrentBranchId);
+        var scope = new TenantBranchScope(_tenantContext.CurrentTenantId, effectiveBranchId);
+        var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
+        if (!authResult.Succeeded) return Forbid();
+
+        var effectiveFilter = !User.IsInRole("STORE_OWNER") && !filter.BranchId.HasValue && effectiveBranchId.HasValue
+            ? filter with { BranchId = effectiveBranchId }
+            : filter;
+
+        var (items, totalCount) = await _orderService.GetOrdersAsync(effectiveFilter, cancellationToken);
         return Ok(new
         {
             items,
@@ -70,6 +95,10 @@ public class OrdersController : BaseApiController
     [HttpPost("pre-orders")]
     public async Task<IActionResult> CreatePreOrder([FromBody] PreOrderCreateRequest request, CancellationToken cancellationToken)
     {
+        var scope = new TenantBranchScope(_tenantContext.CurrentTenantId, request.BranchId);
+        var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
+        if (!authResult.Succeeded) return Forbid();
+
         try
         {
             var response = await _orderService.CreatePreOrderAsync(request, cancellationToken);
@@ -103,6 +132,16 @@ public class OrdersController : BaseApiController
     [HttpPut("{id:guid}/fulfill")]
     public async Task<IActionResult> FulfillPreOrder([FromRoute] Guid id, [FromBody] PreOrderFulfillRequest request, CancellationToken cancellationToken)
     {
+        var order = await _orderService.GetOrderByIdAsync(id, cancellationToken);
+        if (order == null)
+        {
+            return NotFound(new { message = $"Không tìm thấy đơn hàng với ID '{id}'." });
+        }
+
+        var scope = new TenantBranchScope(_tenantContext.CurrentTenantId, order.BranchId);
+        var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
+        if (!authResult.Succeeded) return Forbid();
+
         try
         {
             var response = await _orderService.FulfillPreOrderAsync(id, request, cancellationToken);
@@ -132,6 +171,16 @@ public class OrdersController : BaseApiController
     [HttpPut("{id:guid}/cancel")]
     public async Task<IActionResult> CancelOrder([FromRoute] Guid id, [FromBody] CancelOrderRequest request, CancellationToken cancellationToken)
     {
+        var order = await _orderService.GetOrderByIdAsync(id, cancellationToken);
+        if (order == null)
+        {
+            return NotFound(new { message = $"Không tìm thấy đơn hàng với ID '{id}'." });
+        }
+
+        var scope = new TenantBranchScope(_tenantContext.CurrentTenantId, order.BranchId);
+        var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
+        if (!authResult.Succeeded) return Forbid();
+
         try
         {
             var userRole = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value 
@@ -165,6 +214,16 @@ public class OrdersController : BaseApiController
     [HttpPost("{id:guid}/return-exchange")]
     public async Task<IActionResult> ReturnExchange([FromRoute] Guid id, [FromBody] ReturnExchangeRequest request, CancellationToken cancellationToken)
     {
+        var order = await _orderService.GetOrderByIdAsync(id, cancellationToken);
+        if (order == null)
+        {
+            return NotFound(new { message = $"Không tìm thấy đơn hàng với ID '{id}'." });
+        }
+
+        var scope = new TenantBranchScope(_tenantContext.CurrentTenantId, order.BranchId);
+        var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
+        if (!authResult.Succeeded) return Forbid();
+
         try
         {
             var response = await _orderService.ProcessReturnExchangeAsync(id, request, cancellationToken);
@@ -198,9 +257,14 @@ public class OrdersController : BaseApiController
         [FromQuery] DateTime? toDate,
         CancellationToken cancellationToken)
     {
+        var effectiveBranchId = branchId ?? (User.IsInRole("STORE_OWNER") ? null : _tenantContext.CurrentBranchId);
+        var scope = new TenantBranchScope(_tenantContext.CurrentTenantId, effectiveBranchId);
+        var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
+        if (!authResult.Succeeded) return Forbid();
+
         try
         {
-            var summary = await _orderService.GetOrderSummaryAsync(branchId, fromDate, toDate, cancellationToken);
+            var summary = await _orderService.GetOrderSummaryAsync(effectiveBranchId, fromDate, toDate, cancellationToken);
             return Ok(summary);
         }
         catch (Exception ex)
@@ -215,6 +279,16 @@ public class OrdersController : BaseApiController
     [HttpPost("{id:guid}/print")]
     public async Task<IActionResult> PrintOrder([FromRoute] Guid id, [FromBody] PrintOrderRequest? printRequest, CancellationToken cancellationToken)
     {
+        var order = await _orderService.GetOrderByIdAsync(id, cancellationToken);
+        if (order == null)
+        {
+            return NotFound(new { message = $"Không tìm thấy đơn hàng với ID '{id}'." });
+        }
+
+        var scope = new TenantBranchScope(_tenantContext.CurrentTenantId, order.BranchId);
+        var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
+        if (!authResult.Succeeded) return Forbid();
+
         try
         {
             bool printed = await _orderService.PrintOrderInvoiceAsync(id, printRequest, cancellationToken);
@@ -324,6 +398,16 @@ public class OrdersController : BaseApiController
     [HttpGet("{id:guid}/receipt-bytes")]
     public async Task<IActionResult> GetReceiptBytes([FromRoute] Guid id, [FromQuery] decimal? cashReceived, [FromQuery] string? cashierName, CancellationToken cancellationToken)
     {
+        var order = await _orderService.GetOrderByIdAsync(id, cancellationToken);
+        if (order == null)
+        {
+            return NotFound(new { message = $"Không tìm thấy đơn hàng với ID '{id}'." });
+        }
+
+        var scope = new TenantBranchScope(_tenantContext.CurrentTenantId, order.BranchId);
+        var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
+        if (!authResult.Succeeded) return Forbid();
+
         try
         {
             byte[] bytes = await _orderService.GetOrderReceiptEscPosBytesAsync(id, cashReceived, cashierName, cancellationToken);

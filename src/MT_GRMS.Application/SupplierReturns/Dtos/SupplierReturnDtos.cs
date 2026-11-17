@@ -70,7 +70,15 @@ public record SupplierReturnLineDto(
     string? Notes,
     Guid? StocktakeLineId = null,
     decimal SupplierAcceptedQty = 0m,
-    decimal StockOnHandQty = 0m
+    decimal StockOnHandQty = 0m,
+    Guid? CategoryId = null,
+    string? CategoryName = null,
+    decimal? StoreCostSharePercentSnapshot = null,
+    decimal? SupplierCostSharePercentSnapshot = null,
+    decimal LineReplacementValue = 0m,
+    decimal StorePayableAmount = 0m,
+    decimal SupplierBearAmount = 0m,
+    decimal ReplacementUnitPrice = 0m
 );
 
 public record SupplierReturnDetailDto(
@@ -160,7 +168,9 @@ public record CreateSupplierReturnCommand(
     List<CreateSupplierReturnLineDto> Lines,
     bool AutoSubmit = false,
     Guid? StocktakeId = null,
-    string? ResolutionType = "REDUCE_PAYABLE"
+    string? ResolutionType = "REDUCE_PAYABLE",
+    /// <summary>Mã lý do theo chính sách: QUALITY_DEFECT, EXPIRED, NEAR_EXPIRY, WRONG_ITEM, RECALL, OTHER.</summary>
+    string? ReturnReasonType = null
 );
 
 public record SupplierResponseLineDto(

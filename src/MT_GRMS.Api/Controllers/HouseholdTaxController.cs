@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Tax;
 using MT_GRMS.Application.Tax.Dtos;
@@ -9,7 +10,7 @@ using MT_GRMS.Domain.Enums;
 namespace MT_GRMS.Api.Controllers;
 
 [Route("api/tax/household")]
-[Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+[Authorize(Roles = SystemRoles.StoreOwner)]
 public class HouseholdTaxController : BaseApiController
 {
     private readonly IHouseholdTaxService _taxService;
@@ -69,23 +70,59 @@ public class HouseholdTaxController : BaseApiController
         return Ok(ApiResponse<List<AccountingBookEntryDto>>.Ok(result));
     }
 
+    [HttpGet("declarations/01-cnkd/preview")]
+    public async Task<ActionResult<ApiResponse<HouseholdTaxDeclarationPreviewDto>>> PreviewDeclaration(
+        [FromQuery] int? year,
+        [FromQuery] TaxPeriodType? periodType,
+        [FromQuery] int? periodNumber,
+        [FromQuery] Guid? branchId,
+        [FromQuery] TaxCalculationMethod? method,
+        [FromQuery] TaxCalculationMethod? calculationMethod,
+        [FromQuery] string? tier2Method,
+        [FromQuery] bool? applyVatReduction,
+        [FromQuery] decimal? vatReductionPercentage,
+        [FromQuery] decimal? customVatRate,
+        [FromQuery] decimal? customPitRate,
+        CancellationToken ct)
+    {
+        var filter = new HouseholdTaxFilterDto
+        {
+            Year = year ?? DateTime.UtcNow.Year,
+            PeriodType = periodType ?? TaxPeriodType.Quarter,
+            PeriodNumber = periodNumber ?? 1,
+            BranchId = branchId,
+            CalculationMethod = calculationMethod ?? method ?? TaxCalculationMethod.RevenuePercentage,
+            Tier2Method = tier2Method ?? "REVENUE_EXCESS",
+            ApplyVatReduction2026 = applyVatReduction ?? false,
+            VatReductionPercentage = vatReductionPercentage,
+            CustomVatRate = customVatRate,
+            CustomPitRate = customPitRate
+        };
+
+        var result = await _taxService.GetDeclarationPreviewAsync(filter, ct);
+        return Ok(ApiResponse<HouseholdTaxDeclarationPreviewDto>.Ok(result));
+    }
+
+    [HttpGet("snapshots/{id:guid}/declaration-xml")]
+    public async Task<IActionResult> ExportDeclarationXml([FromRoute] Guid id, CancellationToken ct)
+    {
+        var result = await _taxService.ExportDeclarationXmlAsync(id, ct);
+        return File(result.Content, "application/xml; charset=utf-8", result.FileName);
+    }
+
     [HttpPost("snapshots")]
+    [RequireIdempotency]
     public async Task<ActionResult<ApiResponse<HouseholdTaxSnapshotDto>>> CreateSnapshot(
         [FromBody] CreateTaxSnapshotRequest request,
         CancellationToken ct)
     {
         var userId = User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
             ?? User?.FindFirst("sub")?.Value
-            ?? User?.FindFirst("id")?.Value
-            ?? User?.Identity?.Name
-            ?? Request.Headers["X-User-Id"].FirstOrDefault()
-            ?? "user-owner-001";
+            ?? User?.FindFirst("id")?.Value;
 
         var finalizedBy = User?.Identity?.Name
             ?? User?.FindFirst(System.Security.Claims.ClaimTypes.Name)?.Value
-            ?? User?.FindFirst("username")?.Value
-            ?? Request.Headers["X-Username"].FirstOrDefault()
-            ?? "store_owner";
+            ?? User?.FindFirst("username")?.Value;
 
         if (string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(finalizedBy))
         {
@@ -127,6 +164,52 @@ public class HouseholdTaxController : BaseApiController
     {
         var isValid = await _taxService.VerifySnapshotIntegrityAsync(id, ct);
         return Ok(ApiResponse<object>.Ok(new { SnapshotId = id, IsIntegrityValid = isValid }, isValid ? "Chữ ký số hợp lệ, dữ liệu toàn vẹn." : "Cảnh báo: Dữ liệu snapshot có dấu hiệu bị can thiệp trái phép!"));
+    }
+
+    [HttpPost("pin/change")]
+    public async Task<ActionResult<ApiResponse<bool>>> ChangePin(
+        [FromBody] ChangeSecurityPinRequest request,
+        CancellationToken ct)
+    {
+        if (request == null)
+        {
+            return BadRequest(ApiResponse<bool>.Fail("BAD_REQUEST", "Dữ liệu yêu cầu đổi mã PIN không hợp lệ."));
+        }
+
+        var userId = User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+            ?? User?.FindFirst("sub")?.Value
+            ?? User?.FindFirst("id")?.Value;
+
+        if (string.IsNullOrEmpty(userId))
+        {
+            return Unauthorized(ApiResponse<bool>.Fail("UNAUTHORIZED", "Không xác định được danh tính người dùng."));
+        }
+
+        await _taxService.ChangeSecurityPinAsync(userId, request, ct);
+        return Ok(ApiResponse<bool>.Ok(true, "Thiết lập / Đổi mã PIN bảo mật thành công."));
+    }
+
+    [HttpPost("pin/reset")]
+    public async Task<ActionResult<ApiResponse<bool>>> ResetPin(
+        [FromBody] ResetSecurityPinRequest request,
+        CancellationToken ct)
+    {
+        if (request == null)
+        {
+            return BadRequest(ApiResponse<bool>.Fail("BAD_REQUEST", "Dữ liệu yêu cầu khôi phục mã PIN không hợp lệ."));
+        }
+
+        var userId = User?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+            ?? User?.FindFirst("sub")?.Value
+            ?? User?.FindFirst("id")?.Value;
+
+        if (string.IsNullOrEmpty(userId))
+        {
+            return Unauthorized(ApiResponse<bool>.Fail("UNAUTHORIZED", "Không xác định được danh tính người dùng."));
+        }
+
+        await _taxService.ResetSecurityPinAsync(userId, request, ct);
+        return Ok(ApiResponse<bool>.Ok(true, "Khôi phục mã PIN bảo mật thành công."));
     }
 
     [HttpGet("export-excel")]

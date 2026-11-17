@@ -59,7 +59,7 @@ public class SupplierReturnTests
             GoodsReceiptId: _grnId,
             Reason: "Hàng sắp hết hạn",
             ReasonNotes: "Date còn dưới 10 ngày",
-            AttachmentUrl: null,
+            AttachmentUrl: "https://example.com/evidence.jpg",
             Lines: new List<CreateSupplierReturnLineDto>
             {
                 new CreateSupplierReturnLineDto(_prodId, null, "B01", null, 20, 30000, null)
@@ -97,7 +97,7 @@ public class SupplierReturnTests
     }
 
     [Fact]
-    public async Task SubmitAsync_ShouldChangeStatusToPendingSupplier()
+    public async Task SubmitAsync_ShouldAutoConfirmByPolicy_WithoutWaitingSupplierApproval()
     {
         // Arrange
         var ret = new SupplierReturn
@@ -108,15 +108,28 @@ public class SupplierReturnTests
             Status = "DRAFT",
             GoodsReceiptId = _grnId,
             SupplierId = _supplierId,
-            BranchId = _branchId
+            BranchId = _branchId,
+            ResolutionType = "REDUCE_PAYABLE",
+            TotalRequestedQty = 10,
+            Lines = new List<SupplierReturnLine>
+            {
+                new SupplierReturnLine
+                {
+                    Id = Guid.NewGuid(),
+                    ProductId = _prodId,
+                    RequestedQty = 10,
+                    UnitCost = 30000
+                }
+            }
         };
         _repo.Returns.Add(ret);
 
         // Act
         var result = await _service.SubmitAsync(ret.Id, "Đã gửi thông báo cho NCC");
 
-        // Assert
-        Assert.Equal("PENDING_SUPPLIER", result.Status);
+        // Assert — không còn chờ NCC duyệt
+        Assert.Equal("APPROVED", result.Status);
+        Assert.Equal(10, result.TotalApprovedQty);
     }
 
     [Fact]

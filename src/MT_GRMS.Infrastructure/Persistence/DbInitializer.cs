@@ -400,6 +400,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
             await context.Database.ExecuteSqlRawAsync(@"
                 ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""AllowRepack"" boolean NOT NULL DEFAULT FALSE;
                 ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""SellRawByWeight"" boolean NOT NULL DEFAULT TRUE;
+                ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""ProcessedSellingPricePerKg"" numeric(18,2) NULL;
 
                 CREATE TABLE IF NOT EXISTS ""RepackOrders"" (
                     ""Id"" uuid NOT NULL PRIMARY KEY,
@@ -463,6 +464,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 CREATE INDEX IF NOT EXISTS ""IX_Packages_BranchStock_Status""
                     ON ""Packages"" (""BranchStockId"", ""Status"");
 
+                ALTER TABLE IF EXISTS ""Packages"" ADD COLUMN IF NOT EXISTS ""ManufactureDate"" timestamp without time zone NULL;
+
                 ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""PackageId"" uuid NULL;
             ");
             logger?.LogInformation("[MT-GRMS] Đã đồng bộ schema Weight / Repack / Package.");
@@ -519,6 +522,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
                 ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""ExchangePoOrderedQty"" numeric(18,3) NOT NULL DEFAULT 0;
                 ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""ReplacementUnitPrice"" numeric(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""CategoryId"" uuid NULL;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""CategoryName"" character varying(200) NULL;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""StoreCostSharePercentSnapshot"" numeric(5,2) NULL;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""SupplierCostSharePercentSnapshot"" numeric(5,2) NULL;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""LineReplacementValue"" numeric(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""StorePayableAmount"" numeric(18,2) NOT NULL DEFAULT 0;
+                ALTER TABLE ""SupplierReturnLines"" ADD COLUMN IF NOT EXISTS ""SupplierBearAmount"" numeric(18,2) NOT NULL DEFAULT 0;
+
+                ALTER TABLE ""SupplierReturnPolicies"" ADD COLUMN IF NOT EXISTS ""CostShareByCategoryEnabled"" boolean NOT NULL DEFAULT FALSE;
+
+                CREATE TABLE IF NOT EXISTS ""SupplierReturnPolicyCategoryCostShares"" (
+                    ""Id"" uuid NOT NULL PRIMARY KEY,
+                    ""TenantId"" character varying(50) NOT NULL,
+                    ""PolicyId"" uuid NOT NULL,
+                    ""CategoryId"" uuid NOT NULL,
+                    ""StoreCostSharePercent"" numeric(5,2) NOT NULL DEFAULT 0,
+                    ""SupplierCostSharePercent"" numeric(5,2) NOT NULL DEFAULT 0,
+                    ""CreatedBy"" uuid NULL,
+                    ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    ""UpdatedAt"" timestamp without time zone NULL,
+                    ""IsDeleted"" boolean NOT NULL DEFAULT FALSE
+                );
+
+                DROP INDEX IF EXISTS ""IX_SupplierReturnPolicyCategoryCostShares_Tenant_Policy_Category"";
+                CREATE UNIQUE INDEX IF NOT EXISTS ""IX_SupplierReturnPolicyCategoryCostShares_Tenant_Policy_Category""
+                    ON ""SupplierReturnPolicyCategoryCostShares"" (""TenantId"", ""PolicyId"", ""CategoryId"")
+                    WHERE (""IsDeleted"" = FALSE);
 
                 ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SourceType"" character varying(50) NULL;
                 ALTER TABLE ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SourceSupplierReturnId"" uuid NULL;
@@ -922,13 +952,84 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
         }
     }
 
+    private static async Task EnsureHouseholdTaxSnapshotSchemaAsync(AppDbContext context, ILogger? logger = null)
+    {
+        if (!context.Database.IsRelational()) return;
+
+        try
+        {
+            // 1. Bổ sung các cột Status, RevisionNumber, SupersededSnapshotId, RectificationReason nếu chưa có
+            await ExecuteSqlSafeAsync(context, @"
+                ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""Status"" integer NOT NULL DEFAULT 1;
+                ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""RevisionNumber"" integer NOT NULL DEFAULT 0;
+                ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""SupersededSnapshotId"" uuid NULL;
+                ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""RectificationReason"" character varying(1000) NULL;
+            ", logger);
+
+            // 2. Cập nhật Status = 1 (Finalized) và RevisionNumber = 0 cho các bản ghi cũ
+            await ExecuteSqlSafeAsync(context, @"
+                UPDATE ""HouseholdTaxSnapshots"" SET ""Status"" = 1 WHERE ""Status"" = 0 OR ""Status"" IS NULL;
+                UPDATE ""HouseholdTaxSnapshots"" SET ""RevisionNumber"" = 0 WHERE ""RevisionNumber"" IS NULL;
+            ", logger);
+
+            // 3. Xóa các Unique Index cũ không lọc theo Status = 1 khiến thao tác Supersede bị vi phạm ràng buộc trùng lặp
+            await ExecuteSqlSafeAsync(context, @"
+DO $$
+DECLARE r RECORD;
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'HouseholdTaxSnapshots') THEN
+        FOR r IN (
+            SELECT indexname
+            FROM pg_indexes
+            WHERE tablename = 'HouseholdTaxSnapshots'
+              AND (
+                  indexname LIKE 'IX_HouseholdTaxSnapshots_TenantId_BranchId_PeriodType_Year%'
+                  OR indexname = 'UX_HouseholdTaxSnapshots_Tenant_Period_NullSafe'
+                  OR indexname = 'IX_HouseholdTaxSnapshots_Tenant_Period_Revision'
+              )
+        ) LOOP
+            EXECUTE 'DROP INDEX IF EXISTS ' || quote_ident(r.indexname);
+        END LOOP;
+    END IF;
+END $$;
+            ", logger);
+
+            // 4. Tạo Unique Index cho active snapshot duy nhất (Status = 1) và cho Revision
+            await ExecuteSqlSafeAsync(context, @"
+CREATE UNIQUE INDEX IF NOT EXISTS ""UX_HouseholdTaxSnapshots_ActiveFinalized_NullSafe""
+ON ""HouseholdTaxSnapshots"" (
+    ""TenantId"",
+    COALESCE(""BranchId"", '00000000-0000-0000-0000-000000000000'::uuid),
+    ""PeriodType"",
+    ""Year"",
+    ""PeriodNumber"")
+WHERE ""Status"" = 1;
+
+CREATE UNIQUE INDEX IF NOT EXISTS ""UX_HouseholdTaxSnapshots_Revision_NullSafe""
+ON ""HouseholdTaxSnapshots"" (
+    ""TenantId"",
+    COALESCE(""BranchId"", '00000000-0000-0000-0000-000000000000'::uuid),
+    ""PeriodType"",
+    ""Year"",
+    ""PeriodNumber"",
+    ""RevisionNumber"");
+            ", logger);
+
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ schema và partial unique index cho HouseholdTaxSnapshots phục vụ Supersede.");
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ schema cho bảng HouseholdTaxSnapshots");
+        }
+    }
+
     public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null, bool seedSampleData = true)
     {
         try
         {
             if (!await context.Database.CanConnectAsync())
             {
-                logger?.LogError("❌ Không thể kết nối tới cơ sở dữ liệu PostgreSQL tại '{DataSource}'. Vui lòng bật Docker container 'mtgrms-postgres' (docker compose up -d postgres) hoặc kiểm tra dịch vụ PostgreSQL!", 
+                logger?.LogError("❌ Không thể kết nối tới cơ sở dữ liệu PostgreSQL tại '{DataSource}'. Vui lòng bật Docker container 'mtgrms-postgres' (docker compose up -d postgres) hoặc kiểm tra dịch vụ PostgreSQL!",
                     context.Database.GetDbConnection().DataSource);
                 return;
             }
@@ -1157,7 +1258,6 @@ END $$;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""SecurityPinSalt"" text;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""FailedPinAttempts"" integer DEFAULT 0;
                         ALTER TABLE IF EXISTS ""Users"" ADD COLUMN IF NOT EXISTS ""PinLockedUntilUtc"" timestamp without time zone;
-                        UPDATE ""Users"" SET ""IsAdmin"" = true WHERE LOWER(""UserName"") = 'admin';
                     ");
                 }
                 catch (Exception ex)
@@ -1529,9 +1629,9 @@ END $$;
                             ""IsDeleted"" boolean NOT NULL DEFAULT false,
                             ""CreatedBy"" uuid
                         );
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BranchAttendancePolicies_TenantID_BranchID"" 
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BranchAttendancePolicies_TenantID_BranchID""
                         ON ""BranchAttendancePolicies"" (""TenantID"", ""BranchID"") WHERE ""IsDeleted"" = false;
-                        CREATE INDEX IF NOT EXISTS ""IX_BranchAttendancePolicies_BranchID"" 
+                        CREATE INDEX IF NOT EXISTS ""IX_BranchAttendancePolicies_BranchID""
                         ON ""BranchAttendancePolicies"" (""BranchID"");
                     ");
                 }
@@ -1559,7 +1659,7 @@ END $$;
                             ""IsDeleted"" boolean NOT NULL DEFAULT false,
                             ""CreatedBy"" uuid
                         );
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_ShiftConfigs_TenantID_BranchID_ShiftCode"" 
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_ShiftConfigs_TenantID_BranchID_ShiftCode""
                         ON ""ShiftConfigs"" (""TenantID"", ""BranchID"", ""ShiftCode"") WHERE ""IsDeleted"" = false;
                     ");
                 }
@@ -1599,9 +1699,9 @@ END $$;
                             ""IsDeleted"" boolean NOT NULL DEFAULT false,
                             ""CreatedBy"" uuid
                         );
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Employees_TenantID_CitizenId"" 
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Employees_TenantID_CitizenId""
                         ON ""Employees"" (""TenantID"", ""CitizenId"") WHERE ""IsDeleted"" = false;
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Employees_TenantID_EmployeeCode"" 
+                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_Employees_TenantID_EmployeeCode""
                         ON ""Employees"" (""TenantID"", ""EmployeeCode"") WHERE ""IsDeleted"" = false;
                     ");
                 }
@@ -1626,30 +1726,6 @@ END $$;
                 }
                 catch (Exception ex) { logger?.LogWarning(ex, "EmployeeAllowances DDL warning"); }
 
-                // 5. Bảng Giao dịch Sổ quỹ liên kết lương (CashbookTransaction)
-                try
-                {
-                    await context.Database.ExecuteSqlRawAsync(@"
-                        CREATE TABLE IF NOT EXISTS ""CashbookTransaction"" (
-                            ""Id"" uuid NOT NULL PRIMARY KEY,
-                            ""TransactionCode"" text NOT NULL,
-                            ""BranchId"" uuid NOT NULL,
-                            ""Type"" integer NOT NULL,
-                            ""Category"" text NOT NULL,
-                            ""Amount"" numeric NOT NULL,
-                            ""ReferenceCode"" text NOT NULL,
-                            ""Description"" text NOT NULL,
-                            ""CreatedByUserId"" uuid NOT NULL,
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
-                            ""TenantId"" text NOT NULL,
-                            ""CreatedBy"" uuid
-                        );
-                    ");
-                }
-                catch (Exception ex) { logger?.LogWarning(ex, "CashbookTransaction DDL warning"); }
-
                 // 6. Bảng Phiếu lương (Payslips)
                 try
                 {
@@ -1659,7 +1735,7 @@ END $$;
                             ""TenantId"" character varying(64) NOT NULL,
                             ""BranchID"" uuid NOT NULL,
                             ""EmployeeID"" uuid NOT NULL,
-                            ""CashbookTransactionId"" uuid,
+                            ""CashbookEntryId"" uuid,
                             ""CashbookVoucherCode"" character varying(50),
                             ""PayslipCode"" character varying(50) NOT NULL,
                             ""PeriodMonth"" character varying(7) NOT NULL,
@@ -1703,7 +1779,7 @@ END $$;
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""BranchID"" uuid;
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""PeriodMonth"" character varying(7);
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""UnpaidLeaveDays"" numeric(5,2) DEFAULT 0.00;
-                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookTransactionId"" uuid;
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookEntryId"" uuid;
 
                         DO $$
                         BEGIN
@@ -1759,7 +1835,7 @@ END $$;
                             ""IsDeleted"" boolean NOT NULL DEFAULT false,
                             ""CreatedBy"" uuid
                         );
-                        CREATE INDEX IF NOT EXISTS ""IX_EmployeeSchedules_TenantId_BranchID_WorkDate"" 
+                        CREATE INDEX IF NOT EXISTS ""IX_EmployeeSchedules_TenantId_BranchID_WorkDate""
                         ON ""EmployeeSchedules"" (""TenantId"", ""BranchID"", ""WorkDate"");
                     ");
                 }
@@ -1826,7 +1902,7 @@ END $$;
                         ALTER TABLE IF EXISTS ""ScheduleApprovalRequests"" DROP COLUMN IF EXISTS ""PeerConfirmedAt"";
 
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""UnpaidLeaveDays"" numeric(5,2) DEFAULT 0.00;
-                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookTransactionId"" uuid;
+                        ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookEntryId"" uuid;
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""CashbookVoucherCode"" character varying(50);
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""PaidBy"" character varying(100);
                         ALTER TABLE IF EXISTS ""Payslips"" ADD COLUMN IF NOT EXISTS ""BankAccountNumber"" character varying(30);
@@ -1843,8 +1919,8 @@ END $$;
                         DO $$
                         BEGIN
                             IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'FK_BranchAttendancePolicies_Branches_BranchID') THEN
-                                ALTER TABLE ""BranchAttendancePolicies"" 
-                                ADD CONSTRAINT ""FK_BranchAttendancePolicies_Branches_BranchID"" 
+                                ALTER TABLE ""BranchAttendancePolicies""
+                                ADD CONSTRAINT ""FK_BranchAttendancePolicies_Branches_BranchID""
                                 FOREIGN KEY (""BranchID"") REFERENCES ""Branches"" (""BranchID"") ON DELETE RESTRICT;
                             END IF;
                         END $$;
@@ -1862,6 +1938,7 @@ END $$;
                     await EnsureSupplierExchangeSchemaAsync(context, logger);
                     await EnsureWeightRepackSchemaAsync(context, logger);
                     await EnsureMissingModelSchemaAsync(context, logger);
+                    await EnsureHouseholdTaxSnapshotSchemaAsync(context, logger);
                 }
                 catch (Exception ex)
                 {
@@ -2112,19 +2189,11 @@ END $$;
 
             await context.Users.AddRangeAsync(userAdmin, userStoreManager, userCashier, userStoreOwner, userStaff);
 
-            var tenantUserAdmin = new TenantUser
-            {
-                TenantId = defaultTenantId,
-                UserId = userAdmin.Id,
-                Role = "SUPER_ADMIN",
-                IsActive = true
-            };
-
             var tenantUserManager = new TenantUser
             {
                 TenantId = defaultTenantId,
                 UserId = userStoreManager.Id,
-                Role = "BRANCH_MANAGER",
+                Role = SystemRoles.Staff,
                 IsActive = true
             };
 
@@ -2152,7 +2221,7 @@ END $$;
                 IsActive = true
             };
 
-            await context.TenantUsers.AddRangeAsync(tenantUserAdmin, tenantUserManager, tenantUserCashier, tenantUserOwner, tenantUserStaff);
+            await context.TenantUsers.AddRangeAsync(tenantUserManager, tenantUserCashier, tenantUserOwner, tenantUserStaff);
             await context.SaveChangesAsync();
         }
 
@@ -2590,9 +2659,7 @@ END $$;
             Address = "24 Đường số 5, Phường Đa Kao, Quận 1",
             MembershipTier = "Gold",
             RewardPoints = 250,
-            TotalSpending = 12500000.00m,
-            AllowDebt = true,
-            DebtLimit = 5000000.00m
+            TotalSpending = 12500000.00m
         };
 
         var promoOpening = new Promotion
@@ -2850,7 +2917,6 @@ END $$;
                 MembershipTier = "Gold",
                 RewardPoints = 250,
                 TotalSpending = 12500000m,
-                AllowDebt = true,
                 TotalDebt = 0m,
             };
             await context.Customers.AddAsync(custHung);
@@ -2870,7 +2936,6 @@ END $$;
                 MembershipTier = "Gold",
                 RewardPoints = 250,
                 TotalSpending = 5500000m,
-                AllowDebt = true,
                 TotalDebt = 350000m,
             };
             await context.Customers.AddAsync(custKhach);
@@ -2890,7 +2955,6 @@ END $$;
                 MembershipTier = "VIP",
                 RewardPoints = 580,
                 TotalSpending = 18500000m,
-                AllowDebt = true,
                 TotalDebt = 2100000m,
             };
             await context.Customers.AddAsync(custLan);
@@ -4168,7 +4232,6 @@ END $$;
                 MembershipTier = "Gold",
                 RewardPoints = 150,
                 TotalSpending = 4500000m,
-                AllowDebt = true,
                 TotalDebt = 0m
             };
             await context.Customers.AddAsync(custMinh);
@@ -4188,7 +4251,6 @@ END $$;
                 MembershipTier = "Silver",
                 RewardPoints = 80,
                 TotalSpending = 2800000m,
-                AllowDebt = true,
                 TotalDebt = 250000m
             };
             await context.Customers.AddAsync(custHa);
@@ -4908,7 +4970,7 @@ END $$;
                 await context.SaveChangesAsync(ct);
             }
 
-            // 7. Seed Customers, CustomerDebtProfiles & CustomerDebtInvoices (Công nợ FIFO & Phân loại nợ)
+            // 7. Seed Customers với tổng dư nợ hợp nhất
             var customer1Id = Guid.Parse("11111111-aaaa-aaaa-aaaa-111111111111");
             var customer2Id = Guid.Parse("22222222-aaaa-aaaa-aaaa-222222222222");
             var customer3Id = Guid.Parse("33333333-aaaa-aaaa-aaaa-333333333333");
@@ -4932,9 +4994,6 @@ END $$;
                         RewardPoints = 1250,
                         TotalSpending = 45000000m,
                         TotalDebt = 8000000m,
-                        DebtLimit = 20000000m,
-                        AllowDebt = true,
-                        IsBlockedForDebt = false
                     },
                     new MT_GRMS.Domain.Entities.Sales.Customer
                     {
@@ -4949,9 +5008,6 @@ END $$;
                         RewardPoints = 540,
                         TotalSpending = 18000000m,
                         TotalDebt = 12000000m,
-                        DebtLimit = 10000000m,
-                        AllowDebt = true,
-                        IsBlockedForDebt = true
                     },
                     new MT_GRMS.Domain.Entities.Sales.Customer
                     {
@@ -4966,9 +5022,6 @@ END $$;
                         RewardPoints = 3200,
                         TotalSpending = 98000000m,
                         TotalDebt = 0m,
-                        DebtLimit = 15000000m,
-                        AllowDebt = true,
-                        IsBlockedForDebt = false
                     },
                     new MT_GRMS.Domain.Entities.Sales.Customer
                     {
@@ -4983,9 +5036,6 @@ END $$;
                         RewardPoints = 50,
                         TotalSpending = 520000m,
                         TotalDebt = 0m,
-                        DebtLimit = 0m,
-                        AllowDebt = false,
-                        IsBlockedForDebt = false
                     }
                 };
 
@@ -4998,54 +5048,6 @@ END $$;
                 }
                 await context.SaveChangesAsync(ct);
 
-                var debtInvoices = new List<CustomerDebtInvoice>
-                {
-                    new CustomerDebtInvoice
-                    {
-                        Id = Guid.NewGuid(),
-                        TenantId = DefaultTenantId,
-                        CustomerId = customer1Id,
-                        OrderId = Guid.NewGuid(),
-                        OrderCode = "HD-20261001-001",
-                        BranchId = branchId,
-                        TotalDebtAmount = 5000000m,
-                        RemainingDebtAmount = 5000000m,
-                        DueDate = new DateTime(2026, 10, 31, 23, 59, 59, DateTimeKind.Utc),
-                        Status = DebtInvoiceStatus.Unpaid,
-                        Notes = "Đơn hàng bán nợ sỉ ngày 01/10/2026 (FIFO 1)"
-                    },
-                    new CustomerDebtInvoice
-                    {
-                        Id = Guid.NewGuid(),
-                        TenantId = DefaultTenantId,
-                        CustomerId = customer1Id,
-                        OrderId = Guid.NewGuid(),
-                        OrderCode = "HD-20261015-002",
-                        BranchId = branchId,
-                        TotalDebtAmount = 3000000m,
-                        RemainingDebtAmount = 3000000m,
-                        DueDate = new DateTime(2026, 11, 15, 23, 59, 59, DateTimeKind.Utc),
-                        Status = DebtInvoiceStatus.Unpaid,
-                        Notes = "Đơn hàng bán nợ sỉ ngày 15/10/2026 (FIFO 2)"
-                    },
-                    new CustomerDebtInvoice
-                    {
-                        Id = Guid.NewGuid(),
-                        TenantId = DefaultTenantId,
-                        CustomerId = customer2Id,
-                        OrderId = Guid.NewGuid(),
-                        OrderCode = "HD-20260901-003",
-                        BranchId = branchId,
-                        TotalDebtAmount = 12000000m,
-                        RemainingDebtAmount = 12000000m,
-                        DueDate = new DateTime(2026, 9, 30, 23, 59, 59, DateTimeKind.Utc),
-                        Status = DebtInvoiceStatus.Unpaid,
-                        Notes = "Đơn hàng quá hạn nợ"
-                    }
-                };
-
-                await context.CustomerDebtInvoices.AddRangeAsync(debtInvoices, ct);
-                await context.SaveChangesAsync(ct);
             }
 
             // 8. Seed Additional Products & Supplier Linkages for Order Matrix
@@ -5833,9 +5835,6 @@ END $$;
                     RewardPoints = 250,
                     TotalSpending = 5500000m,
                     TotalDebt = 350000m,
-                    DebtLimit = 5000000m,
-                    AllowDebt = true,
-                    IsBlockedForDebt = false
                 },
                 new Domain.Entities.Sales.Customer
                 {
@@ -5849,9 +5848,6 @@ END $$;
                     RewardPoints = 520,
                     TotalSpending = 18000000m,
                     TotalDebt = 2100000m,
-                    DebtLimit = 10000000m,
-                    AllowDebt = true,
-                    IsBlockedForDebt = false
                 },
                 new Domain.Entities.Sales.Customer
                 {
@@ -5865,9 +5861,6 @@ END $$;
                     RewardPoints = 20,
                     TotalSpending = 1200000m,
                     TotalDebt = 1200000m,
-                    DebtLimit = 1000000m,
-                    AllowDebt = false,
-                    IsBlockedForDebt = true
                 }
             };
             foreach (var cust in customers)

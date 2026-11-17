@@ -14,10 +14,13 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Finance;
@@ -36,6 +39,8 @@ public class PaymentsController : BaseApiController
     private readonly IConfiguration _configuration;
     private readonly ILogger<PaymentsController> _logger;
     private readonly ITenantContext _tenantContext;
+    private readonly IDataProtector _sepayProtector;
+    private readonly IWebHostEnvironment _environment;
 
     private const string EncryptedPrefix = "AES256:";
     private const string DefaultMasterSecret = "MT_GRMS_SEPAY_AES256_MASTER_SECRET_KEY_2026_V4";
@@ -44,31 +49,22 @@ public class PaymentsController : BaseApiController
     private static readonly ConcurrentDictionary<string, Queue<DateTime>> _ipRateLimitTracker = new();
     private const int MaxWebhookRequestsPerSecond = 10;
 
-    // LỚP 2A: Danh sách dải IP mặc định của SePay Webhook & Localhost Dev/Test
-    private static readonly string[] DefaultAllowedIpPrefixes = new[]
-    {
-        "127.0.0.1",
-        "::1",
-        "localhost",
-        "103.255.238.", // SePay Webhook IP range
-        "103.161.178.", // SePay Cloud IP range
-        "10.",          // Private internal network / Docker bridge
-        "172.",         // Docker bridge network
-        "192.168."      // Local LAN testing
-    };
-
     public PaymentsController(
         AppDbContext context,
         IHttpClientFactory httpClientFactory,
         IConfiguration configuration,
         ILogger<PaymentsController> logger,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        IDataProtectionProvider dataProtectionProvider,
+        IWebHostEnvironment environment)
     {
         _context = context;
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _logger = logger;
         _tenantContext = tenantContext;
+        _sepayProtector = dataProtectionProvider.CreateProtector("MT_GRMS.SePay.ApiToken.v1");
+        _environment = environment;
     }
 
     /// <summary>
@@ -147,7 +143,8 @@ public class PaymentsController : BaseApiController
             });
         }
 
-        var tenantId = ResolveTenantId();
+        var tenantId = GetAuthenticatedTenantId();
+        if (tenantId == null) return Forbid();
         var tenantPrefix = GetTenantPrefix(tenantId);
         var config = await _context.StorePaymentConfigs
             .AsNoTracking()
@@ -253,7 +250,8 @@ public class PaymentsController : BaseApiController
             return BadRequest(new { message = "Tên chủ tài khoản không được vượt quá 150 ký tự." });
         }
 
-        var tenantId = ResolveTenantId();
+        var tenantId = GetAuthenticatedTenantId();
+        if (tenantId == null) return Forbid();
         var tenantPrefix = GetTenantPrefix(tenantId);
         var branchIds = (request.BranchIds ?? []).Where(x => x != Guid.Empty).Distinct().ToList();
         if (branchIds.Count > 0)
@@ -455,7 +453,8 @@ public class PaymentsController : BaseApiController
             });
         }
 
-        var tenantId = ResolveTenantId();
+        var tenantId = GetAuthenticatedTenantId();
+        if (tenantId == null) return Forbid();
         var config = await _context.StorePaymentConfigs
             .FirstOrDefaultAsync(c => c.TenantId == tenantId && !c.IsDeleted, ct);
 
@@ -494,7 +493,8 @@ public class PaymentsController : BaseApiController
             });
         }
 
-        var tenantId = ResolveTenantId();
+        var tenantId = GetAuthenticatedTenantId();
+        if (tenantId == null) return Forbid();
         var config = await _context.StorePaymentConfigs
             .AsNoTracking()
             .FirstOrDefaultAsync(c => c.TenantId == tenantId && !c.IsDeleted, ct);
@@ -603,7 +603,8 @@ public class PaymentsController : BaseApiController
             return StatusCode(StatusCodes.Status403Forbidden, new { message = "Chỉ Chủ cửa hàng mới được phép chạy kiểm định bảo mật." });
         }
 
-        var tenantId = ResolveTenantId();
+        var tenantId = GetAuthenticatedTenantId();
+        if (tenantId == null) return Forbid();
         var tenantPrefix = GetTenantPrefix(tenantId);
         var config = await _context.StorePaymentConfigs
             .AsNoTracking()
@@ -612,7 +613,6 @@ public class PaymentsController : BaseApiController
         string decryptedKey = config != null ? DecryptSecret(config.SepayApiKeyEncrypted) : string.Empty;
         bool hasKey = !string.IsNullOrWhiteSpace(decryptedKey);
         string clientIp = GetClientIpAddress();
-        bool ipAllowed = IsIpWhitelisted(clientIp);
 
         var checks = new[]
         {
@@ -628,9 +628,9 @@ public class PaymentsController : BaseApiController
             new
             {
                 layer = 2,
-                name = "Lớp 2: Giới hạn IP (IP Whitelisting) & Chống DDoS (Rate Limit 10 req/s)",
-                passed = ipAllowed,
-                detail = $"Đạt: IP hiện tại ({clientIp}) hợp lệ. Bộ lọc chặn IP lạ (403 Forbidden) và giới hạn tối đa {MaxWebhookRequestsPerSecond} req/giây/IP."
+                name = "Lớp 2: Giới hạn tần suất Webhook (Rate Limit 10 req/s/IP)",
+                passed = true,
+                detail = $"Đạt: Backend giới hạn tối đa {MaxWebhookRequestsPerSecond} request/giây cho mỗi IP. IP kiểm thử hiện tại: {clientIp}."
             },
             new
             {
@@ -673,7 +673,7 @@ public class PaymentsController : BaseApiController
     }
 
     /// <summary>
-    /// Tiếp nhận Webhook từ SePay với mô hình 6 lớp bảo mật (Defense-in-Depth: Rate Limit + IP Whitelist + Secret Token + Double-Check + Amount/Prefix + Idempotency)
+    /// Tiếp nhận Webhook từ SePay với mô hình phòng thủ nhiều lớp (Rate Limit + Secret Token + Double-Check + Amount/Prefix + Idempotency)
     /// </summary>
     [HttpPost("sepay-webhook")]
     [AllowAnonymous]
@@ -681,7 +681,7 @@ public class PaymentsController : BaseApiController
     {
         string clientIp = GetClientIpAddress();
 
-        // LỚP 2B: Kiểm tra Rate Limiting (Tối đa 10 requests/giây trên mỗi IP)
+        // LỚP 2: Kiểm tra Rate Limiting (Tối đa 10 requests/giây trên mỗi IP)
         if (!CheckRateLimit(clientIp))
         {
             _logger.LogWarning("CẢNH BÁO BẢO MẬT [Lớp 2B - Rate Limit]: IP {Ip} vượt quá {Max} requests/giây vào SePay Webhook!",
@@ -689,16 +689,6 @@ public class PaymentsController : BaseApiController
             return StatusCode(StatusCodes.Status429TooManyRequests, new
             {
                 message = "Too Many Requests: Vượt quá giới hạn tần suất gọi Webhook (10 req/s)."
-            });
-        }
-
-        // LỚP 2A: Kiểm tra IP Whitelisting (Chỉ nhận từ dải IP SePay hoặc mạng nội bộ được phép)
-        if (!IsIpWhitelisted(clientIp))
-        {
-            _logger.LogWarning("CẢNH BÁO BẢO MẬT [Lớp 2A - IP Whitelist]: Từ chối Webhook từ IP lạ không nằm trong Whitelist: {Ip}", clientIp);
-            return StatusCode(StatusCodes.Status403Forbidden, new
-            {
-                message = $"Forbidden: IP {clientIp} không nằm trong danh sách IP Whitelist của SePay."
             });
         }
 
@@ -758,13 +748,38 @@ public class PaymentsController : BaseApiController
             .FirstOrDefaultAsync(c => c.TenantId == order.TenantId && !c.IsDeleted, ct);
         var paymentAccount = await ResolvePaymentAccountAsync(order.TenantId, order.BranchId, payload.AccountNumber, ct);
 
-        string decryptedApiKey = storeConfig != null ? DecryptSecret(storeConfig.SepayApiKeyEncrypted) : string.Empty;
+        var bankAccount = await _context.FinanceAccounts.FirstOrDefaultAsync(a =>
+            a.TenantId == order.TenantId &&
+            a.AccountType == MT_GRMS.Domain.Enums.FinanceAccountType.Bank &&
+            a.AccountNumber == payload.AccountNumber &&
+            a.SepayConnectionStatus == "Connected" &&
+            a.IsActive && !a.IsDeleted, ct);
+
+        if (bankAccount == null && (paymentAccount == null || storeConfig?.IsActive != true))
+            return BadRequest(new { message = "Receiving account is not connected or active." });
+
+        string decryptedApiKey;
+        try
+        {
+            decryptedApiKey = !string.IsNullOrWhiteSpace(bankAccount?.SepayApiKeyEncrypted)
+                ? _sepayProtector.Unprotect(bankAccount.SepayApiKeyEncrypted)
+                : storeConfig != null ? DecryptSecret(storeConfig.SepayApiKeyEncrypted) : string.Empty;
+        }
+        catch (CryptographicException ex)
+        {
+            _logger.LogError(ex, "Unable to decrypt SePay account token.");
+            return StatusCode(StatusCodes.Status503ServiceUnavailable);
+        }
+        var webhookSecret = !string.IsNullOrWhiteSpace(bankAccount?.SepayWebhookSecret)
+            ? bankAccount.SepayWebhookSecret : storeConfig?.SepayWebhookSecret ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(decryptedApiKey) && string.IsNullOrWhiteSpace(webhookSecret))
+            return Unauthorized(new { message = "SePay credentials are not configured." });
 
         // LỚP 1B: So khớp Constant-Time API Key / Webhook Secret của cửa hàng (Chống Timing Attack)
-        if (storeConfig != null && (!string.IsNullOrEmpty(decryptedApiKey) || !string.IsNullOrEmpty(storeConfig.SepayWebhookSecret)))
+        if (!string.IsNullOrEmpty(decryptedApiKey) || !string.IsNullOrEmpty(webhookSecret))
         {
             bool keyMatched = FixedTimeEquals(incomingKey, decryptedApiKey) ||
-                              FixedTimeEquals(incomingKey, storeConfig.SepayWebhookSecret);
+                              FixedTimeEquals(incomingKey, webhookSecret);
 
             if (!keyMatched)
             {
@@ -774,7 +789,7 @@ public class PaymentsController : BaseApiController
         }
 
         // LỚP 4B: Kiểm tra Số tài khoản ngân hàng nhận tiền (nếu payload có gửi kèm accountNumber)
-        var expectedAccountNumber = paymentAccount?.AccountNumber ?? storeConfig?.BankAccountNumber;
+        var expectedAccountNumber = paymentAccount?.AccountNumber ?? bankAccount?.AccountNumber ?? storeConfig?.BankAccountNumber;
         if (!string.IsNullOrWhiteSpace(expectedAccountNumber) &&
             !string.IsNullOrWhiteSpace(payload.AccountNumber) &&
             !string.Equals(payload.AccountNumber.Trim(), expectedAccountNumber.Trim(), StringComparison.OrdinalIgnoreCase))
@@ -806,6 +821,15 @@ public class PaymentsController : BaseApiController
                                     decryptedApiKey.StartsWith("mock_", StringComparison.OrdinalIgnoreCase) ||
                                     decryptedApiKey.Contains("_demo_", StringComparison.OrdinalIgnoreCase) ||
                                     decryptedApiKey.EndsWith("_8899", StringComparison.OrdinalIgnoreCase);
+
+        if (isLocalDemoOrMockKey && !_environment.IsDevelopment())
+        {
+            _logger.LogError("Từ chối xử lý Webhook ở production vì cửa hàng {TenantId} chưa cấu hình API Key SePay thật.", order.TenantId);
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new
+            {
+                message = "Cửa hàng chưa cấu hình API Key SePay thật nên hệ thống không thể xác minh giao dịch."
+            });
+        }
 
         if (!isLocalDemoOrMockKey)
         {
@@ -936,6 +960,11 @@ public class PaymentsController : BaseApiController
             order.DepositAmount = order.FinalAmount;
         }
         order.UpdatedAt = DateTime.UtcNow;
+        if (bankAccount != null)
+        {
+            bankAccount.CurrentBalance += verifiedAmountIn;
+            bankAccount.UpdatedAt = DateTime.UtcNow;
+        }
 
         await _context.SaveChangesAsync(ct);
         _logger.LogInformation("TING TING [Lớp 6]: Thanh toán thành công đơn hàng {OrderCode} ({Amount:N0}đ) qua VietQR SePay!",
@@ -955,7 +984,6 @@ public class PaymentsController : BaseApiController
     /// Kiểm tra trạng thái thanh toán của đơn hàng theo OrderCode (dành cho POS Polling 2.5s)
     /// </summary>
     [HttpGet("check-order/{orderCode}")]
-    [AllowAnonymous]
     public async Task<IActionResult> CheckOrderStatus([FromRoute] string orderCode, CancellationToken ct)
     {
         var normalized = orderCode.Trim().ToUpperInvariant();
@@ -1043,25 +1071,7 @@ public class PaymentsController : BaseApiController
 
     private bool IsStoreOwnerOrAdminIfAuthenticated()
     {
-        // Nếu request có đính kèm JWT của nhân viên (STAFF / CASHIER), chặn truy cập cấu hình nhạy cảm
-        if (User?.Identity?.IsAuthenticated == true)
-        {
-            var roles = User.FindAll(ClaimTypes.Role)
-                .Concat(User.FindAll("role"))
-                .Select(c => c.Value.ToUpperInvariant())
-                .ToList();
-
-            if (roles.Count > 0)
-            {
-                bool isOwnerOrAdmin = roles.Any(r =>
-                    r.Contains("OWNER") ||
-                    r.Contains("ADMIN") ||
-                    r.Contains("MANAGER"));
-
-                return isOwnerOrAdmin;
-            }
-        }
-        return true;
+        return User?.Identity?.IsAuthenticated == true && IsStoreOwnerOrAdmin();
     }
 
     private byte[] GetAes256MasterKey()
@@ -1157,26 +1167,9 @@ public class PaymentsController : BaseApiController
 
     private string GetClientIpAddress()
     {
-        if (Request.Headers.TryGetValue("X-Forwarded-For", out var forwardedFor) && !string.IsNullOrWhiteSpace(forwardedFor))
-        {
-            return forwardedFor.ToString().Split(',')[0].Trim();
-        }
+        // ForwardedHeadersMiddleware đã chuẩn hóa RemoteIpAddress từ proxy tin cậy.
+        // Không tự đọc X-Forwarded-For vì client có thể giả mạo header này để né rate limit.
         return HttpContext.Connection.RemoteIpAddress?.ToString() ?? "127.0.0.1";
-    }
-
-    private bool IsIpWhitelisted(string clientIp)
-    {
-        if (string.IsNullOrWhiteSpace(clientIp)) return false;
-
-        var customWhitelist = _configuration["SePaySettings:AllowedWebhookIps"];
-        if (!string.IsNullOrWhiteSpace(customWhitelist))
-        {
-            var customIps = customWhitelist.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (customIps.Any(ip => clientIp.StartsWith(ip, StringComparison.OrdinalIgnoreCase)))
-                return true;
-        }
-
-        return DefaultAllowedIpPrefixes.Any(prefix => clientIp.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
     }
 
     private static bool CheckRateLimit(string clientIp)
@@ -1236,7 +1229,7 @@ public class PaymentsController : BaseApiController
         return new object[]
         {
             new { layer = 1, title = "Lớp 1: Secret Token & Mã hóa AES-256", active = hasApiKey && isEncrypted },
-            new { layer = 2, title = "Lớp 2: IP Whitelisting & Rate Limit (10 req/s)", active = isActive },
+            new { layer = 2, title = "Lớp 2: Rate Limit (10 req/s/IP)", active = isActive },
             new { layer = 3, title = "Lớp 3: Đối soát 2 chiều SePay Bank API", active = hasApiKey },
             new { layer = 4, title = "Lớp 4: Khớp Số Tiền & Tiền tố Cửa hàng", active = isActive },
             new { layer = 5, title = "Lớp 5: Chống Replay Attack (Idempotency)", active = isActive },
@@ -1246,7 +1239,7 @@ public class PaymentsController : BaseApiController
 
     private bool IsStoreOwnerOrAdmin()
     {
-        return User.IsInRole("STORE_OWNER") || User.IsInRole("ADMIN") || IsStoreOwnerOrAdminIfAuthenticated();
+        return User.IsInRole("STORE_OWNER") || User.IsInRole("ADMIN");
     }
 
     private string? GetAuthenticatedTenantId()

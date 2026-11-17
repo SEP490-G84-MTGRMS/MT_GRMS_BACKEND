@@ -18,7 +18,9 @@ public sealed class VerifyLoginOtpRequestValidator : AbstractValidator<VerifyLog
     public VerifyLoginOtpRequestValidator()
     {
         RuleFor(x => x.TempToken).NotEmpty().MaximumLength(128);
-        RuleFor(x => x.OtpCode).NotEmpty().Matches("^[0-9]{6}$");
+        RuleFor(x => x.OtpCode)
+            .NotEmpty().WithMessage("OTP_REQUIRED: Mã xác thực OTP không được để trống.")
+            .Matches("^[0-9]{6}$").WithMessage("OTP_REQUIRED: Mã xác thực OTP phải gồm 6 chữ số.");
     }
 }
 
@@ -66,7 +68,9 @@ public sealed class VerifyRegistrationOtpRequestValidator : AbstractValidator<Ve
     public VerifyRegistrationOtpRequestValidator()
     {
         RuleFor(x => x.EmailOrPhone).NotEmpty().MaximumLength(100).EmailAddress();
-        RuleFor(x => x.OtpCode).NotEmpty().Matches("^[0-9]{6}$");
+        RuleFor(x => x.OtpCode)
+            .NotEmpty().WithMessage("OTP_REQUIRED: Mã xác thực OTP không được để trống.")
+            .Matches("^[0-9]{6}$").WithMessage("OTP_REQUIRED: Mã xác thực OTP phải gồm 6 chữ số.");
     }
 }
 

@@ -2,12 +2,13 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Transfers;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Api.Controllers;
 
 [Route("api/transfers")]
-[Authorize]
+[Authorize(Roles = SystemRoles.StoreOwner + "," + SystemRoles.Staff)]
 public sealed class TransfersController(ITransferService service) : BaseApiController
 {
     [HttpGet]
@@ -23,8 +24,14 @@ public sealed class TransfersController(ITransferService service) : BaseApiContr
         => Ok(ApiResponse<IReadOnlyList<TransferStockBatchDto>>.Ok(await service.GetStockBatchesAsync(branchId, ct)));
 
     [HttpPost]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<TransferDto>>> Create([FromBody] CreateTransferRequest request, CancellationToken ct)
         => Ok(ApiResponse<TransferDto>.Ok(await service.CreateTransferAsync(request, ct), "Tạo phiếu điều chuyển thành công."));
+
+    [HttpPost("{id:guid}/submit")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
+    public async Task<ActionResult<ApiResponse<TransferDto>>> Submit(Guid id, CancellationToken ct)
+        => Ok(ApiResponse<TransferDto>.Ok(await service.SubmitTransferAsync(id, ct), "Đã gửi phiếu đến chi nhánh nguồn."));
 
     [HttpPut("{id:guid}/receive")]
     public async Task<ActionResult<ApiResponse<TransferDto>>> Receive(Guid id, [FromBody] ReceiveTransferRequest request, CancellationToken ct)
@@ -37,4 +44,8 @@ public sealed class TransfersController(ITransferService service) : BaseApiContr
     [HttpPost("{id:guid}/cancel")]
     public async Task<ActionResult<ApiResponse<TransferDto>>> Cancel(Guid id, [FromBody] CancelTransferRequest request, CancellationToken ct)
         => Ok(ApiResponse<TransferDto>.Ok(await service.CancelTransferAsync(id, request, ct), "Hủy phiếu điều chuyển thành công."));
+
+    [HttpPost("{id:guid}/return")]
+    public async Task<ActionResult<ApiResponse<TransferDto>>> Return(Guid id, [FromBody] ReturnTransferRequest request, CancellationToken ct)
+        => Ok(ApiResponse<TransferDto>.Ok(await service.ReturnTransferAsync(id, request, ct), "Đã xác nhận hàng thực tế quay về chi nhánh nguồn."));
 }
