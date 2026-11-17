@@ -232,6 +232,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
     private static async Task ExecuteSqlSafeAsync(AppDbContext context, string sql, ILogger? logger = null)
     {
+        if (!context.Database.IsRelational())
+        {
+            return;
+        }
         try
         {
             await context.Database.ExecuteSqlRawAsync(sql);
@@ -954,19 +958,22 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
     public static async Task InitializeAsync(AppDbContext context, ILogger? logger = null, bool seedSampleData = true)
     {
-        try
+        if (context.Database.IsRelational())
         {
-            if (!await context.Database.CanConnectAsync())
+            try
             {
-                logger?.LogError("❌ Không thể kết nối tới cơ sở dữ liệu PostgreSQL tại '{DataSource}'. Vui lòng bật Docker container 'mtgrms-postgres' (docker compose up -d postgres) hoặc kiểm tra dịch vụ PostgreSQL!", 
-                    context.Database.GetDbConnection().DataSource);
+                if (!await context.Database.CanConnectAsync())
+                {
+                    logger?.LogError("❌ Không thể kết nối tới cơ sở dữ liệu PostgreSQL tại '{DataSource}'. Vui lòng bật Docker container 'mtgrms-postgres' (docker compose up -d postgres) hoặc kiểm tra dịch vụ PostgreSQL!", 
+                        context.Database.GetDbConnection().DataSource);
+                    return;
+                }
+            }
+            catch (Exception ex)
+            {
+                logger?.LogError(ex, "❌ Không thể kết nối tới cơ sở dữ liệu PostgreSQL: {Message}. Vui lòng bật Docker container 'mtgrms-postgres' trước khi khởi động API!", ex.Message);
                 return;
             }
-        }
-        catch (Exception ex)
-        {
-            logger?.LogError(ex, "❌ Không thể kết nối tới cơ sở dữ liệu PostgreSQL: {Message}. Vui lòng bật Docker container 'mtgrms-postgres' trước khi khởi động API!", ex.Message);
-            return;
         }
 
         var schemaTimer = Stopwatch.StartNew();

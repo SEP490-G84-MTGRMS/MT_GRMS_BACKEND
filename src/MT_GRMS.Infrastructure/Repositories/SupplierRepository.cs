@@ -248,14 +248,14 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         }
 
         result.Products = await spQuery
-            .Where(sp => sp.Product.ProductName.ToLower().Contains(term) || (sp.Product.SKU != null && sp.Product.SKU.ToLower().Contains(term)))
-            .OrderBy(sp => sp.Product.ProductName)
+            .Where(sp => sp.Product.Name.ToLower().Contains(term) || (sp.Product.ProductCode != null && sp.Product.ProductCode.ToLower().Contains(term)))
+            .OrderBy(sp => sp.Product.Name)
             .Take(limit)
             .Select(sp => new ProductSuggestionItemDto
             {
                 Id = sp.ProductId,
-                Sku = sp.Product.SKU ?? string.Empty,
-                Name = sp.Product.ProductName,
+                Sku = sp.Product.ProductCode ?? string.Empty,
+                Name = sp.Product.Name,
                 SupplierId = sp.SupplierId,
                 SupplierName = sp.Supplier.Name
             })
