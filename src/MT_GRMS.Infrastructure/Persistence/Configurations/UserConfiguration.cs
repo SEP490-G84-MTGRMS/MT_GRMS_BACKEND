@@ -29,9 +29,9 @@ public class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(x => x.IsEmailVerified).HasDefaultValue(false);
         builder.Property(x => x.MustChangePassword).HasDefaultValue(false);
         builder.Property(x => x.LastLoginIp).HasMaxLength(45);
-        builder.Property(x => x.SecurityStamp).HasMaxLength(100);
+        builder.Property(x => x.SecurityStamp).HasMaxLength(100).IsConcurrencyToken();
         builder.Property(x => x.PasswordResetOtp).HasMaxLength(20);
-        builder.Property(x => x.RefreshToken).HasMaxLength(255);
+        builder.Property(x => x.RefreshToken).HasMaxLength(255).IsConcurrencyToken();
         builder.Property(x => x.AccessFailedCount).HasDefaultValue(0);
 
         builder.HasIndex(x => x.UserName).IsUnique();

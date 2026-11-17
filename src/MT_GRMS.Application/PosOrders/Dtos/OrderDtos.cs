@@ -65,7 +65,6 @@ public record OrderResponse(
     string? CustomerPhone = null,
     decimal DepositAmount = 0m,
     string? Note = null,
-    CustomerDebtInvoiceResponse? DebtInvoice = null,
     Guid? ShiftId = null,
     string? CashierName = null,
     string? FulfilledByCashierName = null,

@@ -132,7 +132,8 @@ public class TrialOnboardingIntegrationTests
         var otpStore = new RegistrationOtpStore(db);
         var devConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+            ["ASPNETCORE_ENVIRONMENT"] = "Development",
+            ["Jwt:Key"] = "TrialTestSigningKey_Explicit_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         }).Build();
 
         var realRepo = new UserRepository(db);
@@ -175,7 +176,8 @@ public class TrialOnboardingIntegrationTests
         var seedOtpStore = new RegistrationOtpStore(seedDb);
         var devConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+            ["ASPNETCORE_ENVIRONMENT"] = "Development",
+            ["Jwt:Key"] = "TrialTestSigningKey_Explicit_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         }).Build();
         var seederAuth = new AuthService(new UserRepository(seedDb), devConfig, registrationOtpStore: seedOtpStore);
         var otp = await seederAuth.SendRegistrationOtpAsync(new SendRegistrationOtpRequest(

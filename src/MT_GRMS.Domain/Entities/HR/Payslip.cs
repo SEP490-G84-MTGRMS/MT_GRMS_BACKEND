@@ -18,6 +18,7 @@ public class Payslip : BaseTenantEntity
     // ─── 1. Snapshot Cấu hình lương tại thời điểm chốt công ───
     public SalaryType SalaryType { get; set; } = SalaryType.Monthly;    // Monthly, Hourly, Shift
     public decimal BaseRate { get; set; } = 0.00m;                      // Lương tháng hoặc đơn giá giờ/ca
+    public decimal InsuranceBaseSalary { get; set; } = 0.00m;         // Mức lương căn cứ đóng bảo hiểm tại thời điểm chốt công
     public decimal StandardDays { get; set; } = 26.00m;                 // Số ngày công chuẩn của tháng
     public decimal StandardDayHours { get; set; } = 8.00m;              // Giờ chuẩn 1 công (từ BranchAttendancePolicy)
 
@@ -55,7 +56,7 @@ public class Payslip : BaseTenantEntity
     public string? BankAccountNumber { get; set; }                      // Snapshot tài khoản nhận
     public string? BankName { get; set; }
     public string? BankAccountHolder { get; set; }
-    public Guid? CashbookTransactionId { get; set; }                    // Bút toán Phiếu chi tương ứng
+    public Guid? CashbookEntryId { get; set; }                          // Bút toán Phiếu chi tương ứng
     public string? CashbookVoucherCode { get; set; }                    // Mã phiếu chi: PC-xxxxxx
 
     // ─── 7. Quy trình phê duyệt & Ghi chú ───
@@ -66,6 +67,6 @@ public class Payslip : BaseTenantEntity
     // ─── Navigations ───
     public Employee? Employee { get; set; }
     public Branch? Branch { get; set; }
-    public CashbookTransaction? CashbookTransaction { get; set; }
+    public CashbookEntry? CashbookEntry { get; set; }
     public ICollection<EmployeeSchedule> Schedules { get; set; } = new List<EmployeeSchedule>();
 }

@@ -29,14 +29,14 @@ public class MultiTenantMiddleware
 
             tenantContext.SetRawUserId(userIdClaim);
 
-            // INV-1 & TEN-05: Chỉ System Admin mới có quyền switch tenant qua header X-Tenant-Id
-            if (string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase))
+            // SaaS Admin never has tenant context. X-Tenant-Id header must never establish tenant scope for Admin.
+            var isSystemAdmin = string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(context.User.FindFirst("is_admin")?.Value, "true", StringComparison.OrdinalIgnoreCase);
+
+            if (isSystemAdmin)
             {
-                var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
-                if (!string.IsNullOrWhiteSpace(headerTenantId))
-                {
-                    tenantId = headerTenantId;
-                }
+                tenantId = string.Empty;
+                branchId = null;
             }
 
             if (!string.IsNullOrWhiteSpace(tenantId))
@@ -51,34 +51,6 @@ public class MultiTenantMiddleware
             }
         }
 
-        // Bỏ qua ép fallback tenant cho các endpoint đăng ký tài khoản / mở cửa hàng mới
-        var reqPath = context.Request.Path.Value?.ToLowerInvariant() ?? string.Empty;
-        var isRegistration = reqPath.StartsWith("/api/auth/register", StringComparison.OrdinalIgnoreCase);
-
-        // Hỗ trợ header X-Tenant-Id hoặc fallback tenant cho môi trường dev/standalone
-        if (!isRegistration && (string.IsNullOrWhiteSpace(tenantContext.CurrentTenantId) ||
-            tenantContext.CurrentTenantId == "default-tenant" ||
-            tenantContext.CurrentTenantId == "DEFAULT" ||
-            tenantContext.CurrentTenantId == "TENANT-HCM-01"))
-        {
-            var headerTenantId = context.Request.Headers["X-Tenant-Id"].FirstOrDefault();
-            var fallbackTenant = !string.IsNullOrWhiteSpace(headerTenantId) ? headerTenantId : "tenant_mt_mart_01";
-            if (fallbackTenant is "default-tenant" or "DEFAULT" or "TENANT-HCM-01")
-            {
-                fallbackTenant = "tenant_mt_mart_01";
-            }
-            tenantContext.SetContext(fallbackTenant, Guid.Empty, null);
-
-            var headerRole = context.Request.Headers["X-User-Role"].FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(headerRole))
-            {
-                tenantContext.SetRole(headerRole);
-            }
-            else if (string.IsNullOrWhiteSpace(tenantContext.CurrentRole))
-            {
-                tenantContext.SetRole("STORE_OWNER");
-            }
-        }
         await _next(context);
     }
 }

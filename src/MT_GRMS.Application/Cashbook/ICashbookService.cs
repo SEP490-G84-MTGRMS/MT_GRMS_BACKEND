@@ -10,13 +10,27 @@ public interface ICashbookService
     Task<ShiftResponse> OpenShiftAsync(OpenShiftRequest request, CancellationToken ct = default);
     Task<ShiftResponse> CloseShiftZReportAsync(CloseShiftRequest request, CancellationToken ct = default);
     Task<bool> ProcessCashDropAsync(CashDropRequest request, CancellationToken ct = default);
-    Task<CashInTransitResponse> CreateDepositToBankAsync(DepositToBankRequest request, CancellationToken ct = default);
-    Task<CashInTransitResponse> ConfirmBankDepositAsync(ConfirmBankDepositRequest request, CancellationToken ct = default);
     Task<CashbookEntryResponse> DisburseCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default);
     Task<CashbookEntryResponse> ReceiveCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default);
     Task<List<CashbookEntryResponse>> GetEntriesAsync(Guid? accountId, Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CashbookEntryType? entryType = null, string? sourceType = null, string? keyword = null, CancellationToken ct = default);
     Task<FinanceAccount> GetOrCreateTillAsync(Guid branchId, string tillName, CancellationToken ct = default);
     Task<FinanceAccount> GetOrCreateSafeAsync(Guid branchId, CancellationToken ct = default);
+    Task<FinanceAccount> ResolveDisbursementAccountAsync(
+        Guid branchId,
+        string paymentMethod,
+        Guid? cashbookAccountId = null,
+        CancellationToken ct = default)
+    {
+        var normalized = (paymentMethod ?? string.Empty).Trim().ToUpperInvariant();
+        var isBank = normalized.Contains("BANK")
+            || normalized.Contains("TRANSFER")
+            || normalized.Contains("VIETQR")
+            || normalized == "QR";
+
+        return isBank
+            ? GetOrCreateBankAccountAsync(branchId, ct: ct)
+            : GetOrCreateSafeAsync(branchId, ct);
+    }
     Task<FinanceAccount> GetOrCreateBankAccountAsync(Guid? branchId = null, string? bankName = null, string? accountNumber = null, string? accountHolderName = null, CancellationToken ct = default) =>
         Task.FromResult(new FinanceAccount
         {
@@ -38,6 +52,8 @@ public interface ICashbookService
         Task.FromResult(new CashbookEntryResponse(Guid.NewGuid(), "CB-REC", request.AccountId, "Till", null, "Receipt", request.Amount, request.Amount, "MANUAL", null, request.ReferenceCode ?? "", "", request.Description ?? "", DateTime.UtcNow));
     Task<CashbookEntryResponse> CreatePaymentAsync(CreatePaymentRequest request, CancellationToken ct = default) =>
         Task.FromResult(new CashbookEntryResponse(Guid.NewGuid(), "CB-PAY", request.AccountId, "Till", null, "Payment", request.Amount, 0, "MANUAL", null, request.ReferenceCode ?? "", "", request.Description ?? "", DateTime.UtcNow));
+    Task<TaxPaymentResponse> RecordTaxPaymentAsync(RecordTaxPaymentRequest request, CancellationToken ct = default) =>
+        Task.FromResult(new TaxPaymentResponse(Guid.NewGuid(), request.HouseholdTaxSnapshotId, new CashbookEntryResponse(Guid.NewGuid(), "CB-TAX", request.SourceAccountId, "Bank", null, "Payment", request.Amount, 0, "TAX_PAYMENT", null, request.PaymentReference, "", request.Note ?? string.Empty, DateTime.UtcNow)));
     Task<TransferFundResponse> TransferFundsAsync(TransferFundRequest request, CancellationToken ct = default) =>
         Task.FromResult(new TransferFundResponse(
             new CashbookEntryResponse(Guid.NewGuid(), "CB-TRF-OUT", request.FromAccountId, "Till", null, "Payment", request.Amount, 0, "INTERNAL_TRANSFER", null, "", "", request.Note ?? "", DateTime.UtcNow),

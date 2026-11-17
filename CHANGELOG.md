@@ -7,6 +7,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-15
 
 ### Changed
+- Resolve the `dev` merge in `DbInitializer.cs` by keeping the wallet branch's scenario seeder and incorporating `dev` schema updates. [worklog: docs/worklogs/2026-11-17_WALLET-MERGE_AI_resolve-initializer.md]
 - Đồng bộ email Admin và chủ cửa hàng mẫu sang miền mtgrms.vn. [worklog: docs/worklogs/2026-11-16_DEMO-SEED_AI_scenario-fixtures.md]
 - Tập trung seed trực tiếp trong DbInitializer.cs, thay seed demo cũ bằng bộ 8 kịch bản SaaS có owner, nhân viên, chi nhánh và dữ liệu vận hành, nạp idempotent không ghi đè dữ liệu cũ. Thêm lệnh Development `--seed-demo-only true`. [worklog: docs/worklogs/2026-11-16_DEMO-SEED_AI_scenario-fixtures.md]
 - Dashboard Admin bỏ dữ liệu mẫu, thêm tổng hợp mua gói và điểm bán theo kỳ UTC+7, sửa trạng thái cảnh báo và cách đếm giao dịch mua gói. [worklog: docs/worklogs/2026-11-16_ADMIN-DASHBOARD_AI_real-data.md]

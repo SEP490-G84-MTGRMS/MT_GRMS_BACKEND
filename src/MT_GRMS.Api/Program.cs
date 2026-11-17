@@ -26,86 +26,32 @@ builder.Services.AddControllers()
         options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
     });
 builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddHttpClient();
 builder.Services.AddSwaggerGen(options =>
 {
     options.CustomSchemaIds(type => type.FullName?.Replace("+", ".") ?? type.Name);
 });
 
-// 2. Cấu hình JWT Bearer Authentication
-// appsettings often has Jwt:Key="" — treat empty as missing so the fallback still applies
-var jwtKey = builder.Configuration["Jwt:Key"];
-if (string.IsNullOrWhiteSpace(jwtKey))
-    jwtKey = "MT_GRMS_Super_Secret_Key_For_JWT_Authentication_2026_FPTU_Capstone_Project!";
-var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "MTGRMS_API";
-var jwtAudience = builder.Configuration["Jwt:Audience"] ?? "MTGRMS_CLIENT";
+MT_GRMS.Api.Authorization.AuthenticationRegistration.AddSessionAuthentication(builder.Services, builder.Configuration);
 
-builder.Services.AddAuthentication(options =>
+builder.Services.AddAuthorization(options =>
 {
-    options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
-    options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
-})
-.AddJwtBearer(options =>
-{
-    options.RequireHttpsMetadata = false;
-    options.SaveToken = true;
-    options.TokenValidationParameters = new TokenValidationParameters
-    {
-        ValidateIssuerSigningKey = true,
-        IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtKey)),
-        ValidateIssuer = true,
-        ValidIssuer = jwtIssuer,
-        ValidateAudience = true,
-        ValidAudience = jwtAudience,
-        ValidateLifetime = true,
-        ClockSkew = TimeSpan.Zero
-    };
-    options.Events = new JwtBearerEvents
-    {
-        OnMessageReceived = context =>
-        {
-            // Ưu tiên đọc access_token từ HttpOnly Cookie
-            if (context.Request.Cookies.TryGetValue("access_token", out var cookieToken) && !string.IsNullOrWhiteSpace(cookieToken))
-            {
-                context.Token = cookieToken;
-            }
-            return Task.CompletedTask;
-        },
-        OnTokenValidated = async context =>
-        {
-            var userId = context.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
-            if (string.IsNullOrWhiteSpace(userId))
-            {
-                context.Fail("Tài khoản không hợp lệ.");
-                return;
-            }
+    options.AddPolicy("PlatformAdminOnly", policy =>
+        policy.RequireRole("ADMIN")
+              .RequireAssertion(ctx => string.IsNullOrEmpty(ctx.User.FindFirst("tenant_id")?.Value)));
 
-            var userRepo = context.HttpContext.RequestServices.GetService<MT_GRMS.Application.Auth.IUserRepository>();
-            if (userRepo != null)
-            {
-                var user = await userRepo.GetByIdAsync(userId, context.HttpContext.RequestAborted);
-                if (user == null || !user.IsActive || (user.TenantUsers.Any() && user.TenantUsers.All(t => !t.IsActive)))
-                {
-                    context.Fail("Tài khoản đã bị khóa hoặc ngừng hoạt động.");
-                    return;
-                }
-            }
+    options.AddPolicy("StoreOwnerOnly", policy =>
+        policy.RequireRole("STORE_OWNER")
+              .RequireAssertion(ctx => !string.IsNullOrEmpty(ctx.User.FindFirst("tenant_id")?.Value)));
 
-            var empRepo = context.HttpContext.RequestServices.GetService<MT_GRMS.Application.HR.Employees.IEmployeeRepository>();
-            if (empRepo != null)
-            {
-                var linkedEmployee = await empRepo.GetByUserIdAsync(userId, context.HttpContext.RequestAborted);
-                if (linkedEmployee != null && linkedEmployee.Status == MT_GRMS.Domain.Enums.EmployeeStatus.Inactive)
-                {
-                    context.Fail("Tài khoản đã bị khóa do nhân viên đã ngừng làm việc.");
-                    return;
-                }
-            }
-        }
-    };
+    options.AddPolicy("TenantOwnerOrAssignedBranchStaff", policy =>
+        policy.RequireRole("STORE_OWNER", "STAFF")
+              .RequireAssertion(ctx => !string.IsNullOrEmpty(ctx.User.FindFirst("tenant_id")?.Value))
+              .AddRequirements(new MT_GRMS.Api.Authorization.BranchScopedOperationRequirement("BranchResourceAccess")));
 });
 
-builder.Services.AddAuthorization();
-builder.Services.AddHttpClient();
+builder.Services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, MT_GRMS.Api.Authorization.BranchScopedResourceAuthorizationHandler>();
+builder.Services.AddDataProtection();
 
 // 3. Đăng ký Scoped Context đa người thuê
 builder.Services.AddScoped<ITenantContext, TenantContext>();
@@ -188,8 +134,10 @@ app.UseAuthorization();
 app.MapControllers();
 
 // 8. Tự động áp dụng Migration (Auto-migration); Seed mẫu chỉ khi Database:SeedSampleData=true
-using (var scope = app.Services.CreateScope())
+var skipDbInit = app.Configuration.GetValue<bool>("Database:SkipDbInitialization");
+if (!skipDbInit)
 {
+    using var scope = app.Services.CreateScope();
     var services = scope.ServiceProvider;
     var logger = services.GetRequiredService<ILogger<Program>>();
     var startupInitializationTimer = System.Diagnostics.Stopwatch.StartNew();

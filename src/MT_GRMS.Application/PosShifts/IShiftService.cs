@@ -30,10 +30,22 @@ public interface IShiftService
     Task<ShiftCashMovementDto> AddCashMovementAsync(Guid shiftId, CashMovementRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Canonical API command that binds a cash movement to the authenticated actor.
+    /// </summary>
+    Task<ShiftCashMovementDto> AddCashMovementAsync(Guid shiftId, CashMovementRequest request, Guid actorUserId, CancellationToken cancellationToken = default)
+        => AddCashMovementAsync(shiftId, request, cancellationToken);
+
+    /// <summary>
     /// Chốt ca bán hàng POS: Tính toán doanh thu thực tế từ Orders, kiểm đếm chênh lệch két,
     /// và kiểm tra ràng buộc RetainedFloatAmount + DroppedToSafeAmount == ActualCashCounted.
     /// </summary>
     Task<ShiftDetailResponse> CloseShiftAsync(Guid shiftId, CloseShiftRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Canonical API command that binds shift closing to the authenticated actor.
+    /// </summary>
+    Task<ShiftDetailResponse> CloseShiftAsync(Guid shiftId, CloseShiftRequest request, Guid actorUserId, CancellationToken cancellationToken = default)
+        => CloseShiftAsync(shiftId, request, cancellationToken);
 
     /// <summary>
     /// Người nhận ca tiếp theo xác nhận bàn giao (CONFIRMED hoặc DISPUTED).

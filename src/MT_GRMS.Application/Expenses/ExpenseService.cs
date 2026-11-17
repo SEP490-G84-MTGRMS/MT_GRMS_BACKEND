@@ -1,5 +1,6 @@
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.Expenses.Dtos;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Enums;
@@ -13,6 +14,8 @@ public class ExpenseService : IExpenseService
     private readonly ICashbookService _cashbookService;
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly Tax.ITaxPeriodLockGuard? _taxPeriodLockGuard;
+    private readonly ICloudinaryService? _cloudinaryService;
 
     // Định mức thẩm quyền theo BR-17-06 / TT 152/2025/TT-BTC
     private const decimal T1_AutoApprovalThreshold = 500_000m; // Ngưỡng tự duyệt chi dưới 500k
@@ -23,16 +26,21 @@ public class ExpenseService : IExpenseService
         IExpenseRepository expenseRepo,
         ICashbookService cashbookService,
         ITenantContext tenantContext,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        Tax.ITaxPeriodLockGuard? taxPeriodLockGuard = null,
+        ICloudinaryService? cloudinaryService = null)
     {
         _expenseRepo = expenseRepo;
         _cashbookService = cashbookService;
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
+        _taxPeriodLockGuard = taxPeriodLockGuard;
+        _cloudinaryService = cloudinaryService;
     }
 
     public async Task<ExpenseVoucherResponse> CreateExpenseAsync(CreateExpenseRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         if (request.Amount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền chi phí phải lớn hơn 0.");
@@ -45,9 +53,23 @@ public class ExpenseService : IExpenseService
             ValidateFinancialManagementRole("thực hiện rút vốn hoặc nộp thuế");
         }
 
+        var expenseDate = request.ExpenseDate ?? DateTime.UtcNow;
+
+        if (_taxPeriodLockGuard != null)
+        {
+            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(expenseDate, "tạo phiếu chi", request.BranchId, ct);
+        }
+        var voucherCode = "EXP-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff");
+        var resolvedEvidenceUrl = await CloudinaryDataUrlHelper.ResolveImageUrlAsync(
+            _cloudinaryService,
+            request.EvidenceAttachmentUrl,
+            "mtgrms/expenses",
+            voucherCode,
+            ct);
+
         var voucher = new ExpenseVoucher
         {
-            VoucherCode = "EXP-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff"),
+            VoucherCode = voucherCode,
             BranchId = request.BranchId,
             BeneficiaryName = request.BeneficiaryName,
             Category = request.Category,
@@ -57,8 +79,8 @@ public class ExpenseService : IExpenseService
             IsTaxDeductible = request.IsTaxDeductible,
             InvoiceNumber = request.InvoiceNumber,
             SellerTaxCode = request.SellerTaxCode,
-            EvidenceAttachmentUrl = request.EvidenceAttachmentUrl,
-            ExpenseDate = DateTime.UtcNow,
+            EvidenceAttachmentUrl = resolvedEvidenceUrl,
+            ExpenseDate = expenseDate,
             Note = request.Note,
             Nature = request.Nature,
             ReferenceCode = request.ReferenceCode,
@@ -143,18 +165,33 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> ApproveExpenseAsync(ApproveExpenseRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole("phê duyệt phiếu chi");
 
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
-        if (voucher.Status != ExpenseVoucherStatus.PendingApproval)
+        if (_taxPeriodLockGuard != null)
+        {
+            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(voucher.ExpenseDate, "phê duyệt phiếu chi", voucher.BranchId, ct);
+        }
+
+        // Idempotent: Nếu đã duyệt hoặc đã thanh toán thành công thì không báo lỗi 422
+        if (voucher.Status == ExpenseVoucherStatus.Approved || voucher.Status == ExpenseVoucherStatus.Paid)
+        {
+            return MapVoucherResponse(voucher);
+        }
+
+        if (voucher.Status != ExpenseVoucherStatus.PendingApproval &&
+            voucher.Status != ExpenseVoucherStatus.Draft &&
+            voucher.Status != ExpenseVoucherStatus.PaymentFailed &&
+            voucher.Status != ExpenseVoucherStatus.Unresolved)
         {
             throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể phê duyệt.");
         }
 
         // Kiểm toán tiệm 1 chủ solo: Nếu phiếu bị cảnh báo xé nhỏ hạn mức thì bắt buộc phải nhập lý do/ghi chú giải trình
-        if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note))
+        if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note) && string.IsNullOrWhiteSpace(voucher.Note))
         {
             throw new BusinessException("NOTE_REQUIRED_FOR_SUSPICIOUS_EXPENSE", "Phiếu chi bị gắn cờ nghi vấn xé nhỏ hạn mức. Bắt buộc nhập ghi chú giải trình khi phê duyệt.");
         }
@@ -162,7 +199,12 @@ public class ExpenseService : IExpenseService
         voucher.Status = ExpenseVoucherStatus.Approved;
         voucher.ApprovedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId : Guid.NewGuid();
         voucher.ApprovedAtUtc = DateTime.UtcNow;
-        if (!string.IsNullOrEmpty(request.Note)) voucher.Note = request.Note;
+        if (!string.IsNullOrWhiteSpace(request.Note))
+        {
+            voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
+                ? request.Note.Trim()
+                : $"{voucher.Note} | {request.Note.Trim()}";
+        }
 
         await _unitOfWork.SaveChangesAsync(ct);
         return MapVoucherResponse(voucher);
@@ -170,12 +212,20 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> RejectExpenseAsync(RejectExpenseRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole("từ chối phê duyệt phiếu chi");
 
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
-        if (voucher.Status != ExpenseVoucherStatus.PendingApproval)
+        if (_taxPeriodLockGuard != null)
+        {
+            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(voucher.ExpenseDate, "từ chối phê duyệt phiếu chi", voucher.BranchId, ct);
+        }
+
+        if (voucher.Status != ExpenseVoucherStatus.PendingApproval &&
+            voucher.Status != ExpenseVoucherStatus.Draft &&
+            voucher.Status != ExpenseVoucherStatus.Unresolved)
         {
             throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể từ chối duyệt.");
         }
@@ -192,18 +242,15 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> CancelExpenseAsync(CancelExpenseRequest request, CancellationToken ct = default)
     {
-        var role = _tenantContext.CurrentRole;
-        if (!string.IsNullOrWhiteSpace(role) &&
-            !role.Equals("Owner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) && !role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Admin", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Manager", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new UnauthorizedAccessException("Chỉ Chủ hộ kinh doanh hoặc Quản lý cửa hàng mới có thẩm quyền hủy phiếu chi.");
-        }
+        RequireOwner();
 
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
+
+        if (_taxPeriodLockGuard != null)
+        {
+            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(voucher.ExpenseDate, "hủy phiếu chi", voucher.BranchId, ct);
+        }
 
         if (string.IsNullOrWhiteSpace(request.Reason))
         {
@@ -240,7 +287,8 @@ public class ExpenseService : IExpenseService
         else if (voucher.Status == ExpenseVoucherStatus.Draft ||
                  voucher.Status == ExpenseVoucherStatus.PendingApproval ||
                  voucher.Status == ExpenseVoucherStatus.Approved ||
-                 voucher.Status == ExpenseVoucherStatus.PaymentFailed)
+                 voucher.Status == ExpenseVoucherStatus.PaymentFailed ||
+                 voucher.Status == ExpenseVoucherStatus.Unresolved)
         {
             voucher.Status = ExpenseVoucherStatus.Cancelled;
             voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
@@ -258,12 +306,48 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> DisburseExpenseAsync(DisburseExpenseRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
+        ValidateFinancialManagementRole("xuất quỹ chi trả phiếu chi");
+
         var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
-        if (voucher.Status != ExpenseVoucherStatus.Approved && voucher.Status != ExpenseVoucherStatus.PaymentFailed)
+        if (_taxPeriodLockGuard != null)
         {
-            throw new BusinessException("INVALID_STATUS", $"Phiếu chi chưa được phê duyệt hoặc đã được chi trả (Trạng thái hiện tại: {voucher.Status}).");
+            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(voucher.ExpenseDate, "chi tiền cho phiếu chi", voucher.BranchId, ct);
+        }
+
+        // Idempotent: Nếu đã xuất quỹ thành công từ trước thì trả về luôn không thực hiện trừ quỹ kép
+        if (voucher.Status == ExpenseVoucherStatus.Paid)
+        {
+            return MapVoucherResponse(voucher);
+        }
+
+        // Tự động phê duyệt cho Chủ cửa hàng / Quản lý nếu phiếu đang ở Draft, PendingApproval hoặc Unresolved (1-click payment flow)
+        if (voucher.Status == ExpenseVoucherStatus.Draft ||
+            voucher.Status == ExpenseVoucherStatus.PendingApproval ||
+            voucher.Status == ExpenseVoucherStatus.Unresolved)
+        {
+            if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note) && string.IsNullOrWhiteSpace(voucher.Note))
+            {
+                throw new BusinessException("NOTE_REQUIRED_FOR_SUSPICIOUS_EXPENSE", "Phiếu chi bị gắn cờ nghi vấn xé nhỏ hạn mức. Bắt buộc nhập ghi chú giải trình khi phê duyệt và xuất quỹ.");
+            }
+
+            voucher.Status = ExpenseVoucherStatus.Approved;
+            voucher.ApprovedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId : Guid.NewGuid();
+            voucher.ApprovedAtUtc = DateTime.UtcNow;
+        }
+        else if (voucher.Status != ExpenseVoucherStatus.Approved && voucher.Status != ExpenseVoucherStatus.PaymentFailed)
+        {
+            throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể xuất quỹ chi trả.");
+        }
+
+        // Cập nhật/bổ sung ghi chú giải trình hoặc thanh toán nếu có (áp dụng cho mọi trường hợp xuất quỹ)
+        if (!string.IsNullOrWhiteSpace(request.Note))
+        {
+            voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
+                ? request.Note.Trim()
+                : $"{voucher.Note} | {request.Note.Trim()}";
         }
 
         voucher.PaymentSourceType = request.PaymentSourceType;
@@ -298,6 +382,7 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> GetExpenseByIdAsync(Guid expenseId, CancellationToken ct = default)
     {
+        RequireOwner();
         var voucher = await _expenseRepo.GetByIdAsync(expenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
@@ -306,6 +391,7 @@ public class ExpenseService : IExpenseService
 
     public async Task<List<ExpenseVoucherResponse>> GetExpensesAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CancellationToken ct = default)
     {
+        RequireOwner();
         var vouchers = await _expenseRepo.FindAsync(e =>
             (!branchId.HasValue || e.BranchId == branchId.Value) &&
             (!fromDate.HasValue || e.CreatedAt >= fromDate.Value) &&
@@ -321,19 +407,24 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseSummaryResponse> GetExpenseSummaryAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, CancellationToken ct = default)
     {
+        RequireOwner();
         var vouchers = await _expenseRepo.FindAsync(e =>
             (!branchId.HasValue || e.BranchId == branchId.Value) &&
             (!fromDate.HasValue || e.CreatedAt >= fromDate.Value) &&
             (!toDate.HasValue || e.CreatedAt <= toDate.Value), ct);
 
-        var totalAmount = vouchers.Sum(v => v.Amount);
-        var totalCount = vouchers.Count;
+        var activeVouchers = vouchers
+            .Where(v => v.Status != ExpenseVoucherStatus.Cancelled && v.Status != ExpenseVoucherStatus.Reversed)
+            .ToList();
 
-        var paidVouchers = vouchers.Where(v => v.Status == ExpenseVoucherStatus.Paid).ToList();
-        var pendingVouchers = vouchers.Where(v => v.Status == ExpenseVoucherStatus.PendingApproval).ToList();
-        var suspiciousVouchers = vouchers.Where(v => v.IsFlaggedAsSuspiciousSplit).ToList();
-        var taxDeductibleVouchers = vouchers.Where(v => v.IsTaxDeductible).ToList();
-        var nonTaxDeductibleVouchers = vouchers.Where(v => !v.IsTaxDeductible).ToList();
+        var totalAmount = activeVouchers.Sum(v => v.Amount);
+        var totalCount = activeVouchers.Count;
+
+        var paidVouchers = activeVouchers.Where(v => v.Status == ExpenseVoucherStatus.Paid).ToList();
+        var pendingVouchers = activeVouchers.Where(v => v.Status != ExpenseVoucherStatus.Paid).ToList();
+        var suspiciousVouchers = activeVouchers.Where(v => v.IsFlaggedAsSuspiciousSplit).ToList();
+        var taxDeductibleVouchers = activeVouchers.Where(v => v.IsTaxDeductible).ToList();
+        var nonTaxDeductibleVouchers = activeVouchers.Where(v => !v.IsTaxDeductible).ToList();
 
         return new ExpenseSummaryResponse(
             TotalAmount: totalAmount,
@@ -353,6 +444,7 @@ public class ExpenseService : IExpenseService
 
     public async Task<List<ExpenseVoucherResponse>> GetPendingTriageAsync(Guid? branchId, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole("xem danh sách Triage Inbox");
 
         var vouchers = await _expenseRepo.FindAsync(e =>
@@ -369,11 +461,17 @@ public class ExpenseService : IExpenseService
 
     public async Task<ExpenseVoucherResponse> ResolveTriageAsync(Guid voucherId, ResolveTriageRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole("xử lý mục tài chính trong Triage Inbox");
         EnsureNatureInScope(request.Nature);
 
         var voucher = await _expenseRepo.GetByIdAsync(voucherId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi/mục cần xử lý trong Triage Inbox.");
+
+        if (_taxPeriodLockGuard != null)
+        {
+            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(voucher.ExpenseDate, "xử lý mục tài chính trong Triage Inbox", voucher.BranchId, ct);
+        }
 
         if (voucher.Status != ExpenseVoucherStatus.Unresolved && voucher.Nature != FinancialNature.Suspense)
         {
@@ -409,19 +507,9 @@ public class ExpenseService : IExpenseService
         }
     }
 
-    private void ValidateFinancialManagementRole(string actionDescription = "thực hiện thao tác tài chính này")
-    {
-        var role = _tenantContext.CurrentRole;
-        if (!string.IsNullOrWhiteSpace(role) &&
-            !role.Equals("Owner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Admin", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Manager", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new UnauthorizedAccessException($"Chỉ Chủ hộ kinh doanh hoặc Quản lý cửa hàng mới có thẩm quyền {actionDescription}.");
-        }
-    }
+    private void ValidateFinancialManagementRole(string actionDescription = "thực hiện thao tác tài chính này") => RequireOwner();
+
+    private void RequireOwner() => TenantRoleGuard.RequireStoreOwner(_tenantContext, "chi phí và phiếu chi");
 
     private static ExpenseVoucherResponse MapVoucherResponse(ExpenseVoucher v) =>
         new(v.Id, v.VoucherCode, v.BranchId, v.BeneficiaryName, v.Category, v.Amount, v.Status.ToString(), v.PaymentSourceType.ToString(), v.PaymentSourceAccountId, v.IsTaxDeductible, v.InvoiceNumber, v.SellerTaxCode, v.EvidenceAttachmentUrl, v.IsFlaggedAsSuspiciousSplit, v.SuspiciousReason, v.ApprovedByUserId, v.ApprovedAtUtc, v.PaidAtUtc, v.ExpenseDate, v.Note, v.Nature, v.ReferenceCode, v.RefundedAmount, v.IsSettled);

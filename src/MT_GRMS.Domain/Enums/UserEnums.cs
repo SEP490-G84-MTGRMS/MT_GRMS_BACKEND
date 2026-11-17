@@ -27,16 +27,18 @@ public static class UserRoleNames
         UserRole.Admin => Admin,
         UserRole.StoreOwner => StoreOwner,
         UserRole.Staff => Staff,
-        _ => Staff
+        _ => throw new ArgumentOutOfRangeException(nameof(role))
     };
 
     public static UserRole FromString(string? role)
     {
-        if (string.IsNullOrWhiteSpace(role)) return UserRole.Staff;
-        var r = role.Trim().ToUpperInvariant();
-        if (r is "ADMIN" or "SUPER_ADMIN" or "SYSTEM_ADMIN") return UserRole.Admin;
-        if (r is "STORE_OWNER" or "TENANT_ADMIN" or "OWNER" or "BRANCH_MANAGER") return UserRole.StoreOwner;
-        return UserRole.Staff;
+        return role switch
+        {
+            Admin => UserRole.Admin,
+            StoreOwner => UserRole.StoreOwner,
+            Staff => UserRole.Staff,
+            _ => throw new ArgumentException("Role không hợp lệ.", nameof(role))
+        };
     }
 }
 

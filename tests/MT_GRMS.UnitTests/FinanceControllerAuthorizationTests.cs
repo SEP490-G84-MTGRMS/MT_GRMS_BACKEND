@@ -2,6 +2,7 @@ using System.Reflection;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Api.Controllers;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.UnitTests;
 
@@ -41,6 +42,70 @@ public class FinanceControllerAuthorizationTests
         Assert.Contains("private bool IsStoreOwnerOrAdmin()", source, StringComparison.Ordinal);
         Assert.Contains("User.IsInRole(\"STORE_OWNER\")", source, StringComparison.Ordinal);
         Assert.Contains("User.IsInRole(\"ADMIN\")", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void M7Controllers_RequireCanonicalStoreOwner()
+    {
+        foreach (var controller in new[]
+        {
+            typeof(CashbookController),
+            typeof(ExpensesController),
+            typeof(CustomerDebtController),
+            typeof(FinanceOverviewController),
+            typeof(FinanceAccountsController),
+            typeof(PnLReportController)
+        })
+        {
+            var authorization = controller.GetCustomAttribute<AuthorizeAttribute>();
+            Assert.NotNull(authorization);
+            Assert.Equal(SystemRoles.StoreOwner, authorization!.Roles);
+        }
+    }
+
+    [Fact]
+    public void ManualCashbookCommands_RequireIdempotency()
+    {
+        var controller = typeof(CashbookController);
+
+        foreach (var actionName in new[]
+        {
+            nameof(CashbookController.GetOrCreateTill),
+            nameof(CashbookController.CreateReceipt),
+            nameof(CashbookController.CreatePayment),
+            nameof(CashbookController.RecordTaxPayment)
+        })
+        {
+            var action = controller.GetMethod(actionName);
+            Assert.NotNull(action);
+            Assert.Contains(action!.GetCustomAttributes<AuthorizeAttribute>(), attribute => attribute.Roles == SystemRoles.StoreOwner);
+        }
+
+        foreach (var actionName in new[]
+        {
+            nameof(CashbookController.CreateReceipt),
+            nameof(CashbookController.CreatePayment),
+            nameof(CashbookController.RecordTaxPayment)
+        })
+        {
+            Assert.NotNull(controller.GetMethod(actionName)!.GetCustomAttribute<MT_GRMS.Api.Filters.RequireIdempotencyAttribute>());
+        }
+    }
+
+    [Fact]
+    public void HouseholdTaxController_And_PinEndpoints_RequireCanonicalStoreOwner()
+    {
+        var authAttr = typeof(HouseholdTaxController).GetCustomAttribute<AuthorizeAttribute>();
+        Assert.NotNull(authAttr);
+        Assert.Equal(SystemRoles.StoreOwner, authAttr!.Roles);
+
+        var changePinMethod = typeof(HouseholdTaxController).GetMethod(nameof(HouseholdTaxController.ChangePin));
+        Assert.NotNull(changePinMethod);
+        Assert.Null(changePinMethod!.GetCustomAttribute<AllowAnonymousAttribute>());
+
+        var resetPinMethod = typeof(HouseholdTaxController).GetMethod(nameof(HouseholdTaxController.ResetPin));
+        Assert.NotNull(resetPinMethod);
+        Assert.Null(resetPinMethod!.GetCustomAttribute<AllowAnonymousAttribute>());
     }
 
     private static string GetControllerSourcePath()

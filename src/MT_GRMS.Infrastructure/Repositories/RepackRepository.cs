@@ -45,6 +45,7 @@ public class RepackRepository : IRepackRepository
         CancellationToken ct = default)
     {
         return await _db.Packages.AsNoTracking()
+            .Include(p => p.RepackOrder)
             .Where(p => p.TenantId == tenantId && !p.IsDeleted && p.BranchStockId == branchStockId)
             .OrderByDescending(p => p.CreatedAt)
             .ToListAsync(ct);

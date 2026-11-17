@@ -7,7 +7,8 @@ public record PackageLineRequest(
     decimal NetWeight,
     decimal SellingPrice,
     DateTime? ExpiryDate = null,
-    string? Barcode = null
+    string? Barcode = null,
+    DateTime? ManufactureDate = null
 );
 
 public record CreateRepackOrderRequest(
@@ -30,10 +31,14 @@ public record PackageDto(
     string? Barcode,
     decimal NetWeight,
     decimal SellingPrice,
+    DateTime? ManufactureDate,
     DateTime? ExpiryDate,
     string RepackType,
     string Status,
     Guid? RepackOrderId,
+    /// <summary>Mã phiếu chế biến (đợt/ca tạo khay), vd RP-20261114-001.</summary>
+    string? RepackOrderCode,
+    DateTime? SoldAt,
     DateTime CreatedAt
 );
 

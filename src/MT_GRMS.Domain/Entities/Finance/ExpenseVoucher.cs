@@ -20,6 +20,11 @@ public class ExpenseVoucher : BaseTenantEntity
     public bool IsSettled { get; set; } = false; // Đã tất toán hoàn toàn hay chưa
     public FinanceAccountType PaymentSourceType { get; set; } = FinanceAccountType.Till;
     public Guid? PaymentSourceAccountId { get; set; }
+    /// <summary>
+    /// Optional evidence link for a payment made against an immutable finalized tax snapshot.
+    /// This link never changes the snapshot lifecycle or asserts settlement outside MT-GRMS.
+    /// </summary>
+    public Guid? HouseholdTaxSnapshotId { get; set; }
     public bool IsTaxDeductible { get; set; } = false; // Một sổ hai góc nhìn
     public string? InvoiceNumber { get; set; }
     public string? SellerTaxCode { get; set; }

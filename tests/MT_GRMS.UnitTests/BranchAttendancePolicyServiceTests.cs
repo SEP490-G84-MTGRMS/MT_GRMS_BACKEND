@@ -347,4 +347,82 @@ public class BranchAttendancePolicyServiceTests
         Assert.NotNull(target2Policy);
         Assert.Equal(15, target2Policy.LateThresholdMinutes);
     }
+
+    [Fact]
+    public void UpsertValidator_WhenConvertHoursEnabledAndRulesEmpty_ShouldFail()
+    {
+        var validator = new MT_GRMS.Application.HR.AttendancePolicies.Validators.UpsertAttendancePolicyRequestValidator();
+        var request = new UpsertAttendancePolicyRequest(
+            StandardDayHours: 8m,
+            IsConvertHoursToDays: true,
+            ConversionRulesJson: "[]",
+            EnableLateThreshold: false,
+            LateThresholdMinutes: 0,
+            EnableEarlyLeaveThreshold: false,
+            EarlyLeaveThresholdMinutes: 0);
+
+        var result = validator.Validate(request);
+
+        Assert.False(result.IsValid);
+    }
+
+    [Fact]
+    public void UpsertValidator_WhenRuleTimeExceeds24Hours_ShouldFail()
+    {
+        var validator = new MT_GRMS.Application.HR.AttendancePolicies.Validators.UpsertAttendancePolicyRequestValidator();
+        var rulesJson = """[{"type":"range","fromHours":8,"fromMinutes":0,"toHours":24,"toMinutes":30,"workUnits":1}]""";
+        var request = new UpsertAttendancePolicyRequest(
+            StandardDayHours: 8m,
+            IsConvertHoursToDays: true,
+            ConversionRulesJson: rulesJson,
+            EnableLateThreshold: false,
+            LateThresholdMinutes: 0,
+            EnableEarlyLeaveThreshold: false,
+            EarlyLeaveThresholdMinutes: 0);
+
+        var result = validator.Validate(request);
+
+        Assert.False(result.IsValid);
+    }
+
+    [Fact]
+    public void UpsertValidator_WhenRulesOverlapOrMultipleGte_ShouldFail()
+    {
+        var validator = new MT_GRMS.Application.HR.AttendancePolicies.Validators.UpsertAttendancePolicyRequestValidator();
+        var overlappingJson = """
+        [
+          {"type":"range","fromHours":4,"fromMinutes":0,"toHours":8,"toMinutes":0,"workUnits":1},
+          {"type":"range","fromHours":6,"fromMinutes":0,"toHours":10,"toMinutes":0,"workUnits":1.5}
+        ]
+        """;
+        var request1 = new UpsertAttendancePolicyRequest(8m, true, overlappingJson, false, 0, false, 0);
+        Assert.False(validator.Validate(request1).IsValid);
+
+        var multiGteJson = """
+        [
+          {"type":"gte","fromHours":8,"fromMinutes":0,"workUnits":1},
+          {"type":"gte","fromHours":10,"fromMinutes":0,"workUnits":1.5}
+        ]
+        """;
+        var request2 = new UpsertAttendancePolicyRequest(8m, true, multiGteJson, false, 0, false, 0);
+        Assert.False(validator.Validate(request2).IsValid);
+    }
+
+    [Fact]
+    public void UpsertValidator_WhenContiguousRangesAndSingleGte_ShouldPass()
+    {
+        var validator = new MT_GRMS.Application.HR.AttendancePolicies.Validators.UpsertAttendancePolicyRequestValidator();
+        var validJson = """
+        [
+          {"type":"range","fromHours":0,"fromMinutes":0,"toHours":4,"toMinutes":0,"workUnits":0.5},
+          {"type":"range","fromHours":4,"fromMinutes":0,"toHours":8,"toMinutes":0,"workUnits":1.0},
+          {"type":"gte","fromHours":8,"fromMinutes":0,"workUnits":1.5}
+        ]
+        """;
+        var request = new UpsertAttendancePolicyRequest(8m, true, validJson, true, 15, true, 10);
+
+        var result = validator.Validate(request);
+
+        Assert.True(result.IsValid);
+    }
 }

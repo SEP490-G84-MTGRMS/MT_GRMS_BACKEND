@@ -46,7 +46,7 @@ public class GoodsReceiptTests
             Status = "SENT",
             TotalQty = 100,
             TotalAmount = 2500000,
-            DeliveryDate = DateTime.UtcNow.AddDays(1),
+            DeliveryDate = DateTime.UtcNow.AddDays(-1),
             Supplier = new Supplier
             {
                 Id = _supplierId,
@@ -283,7 +283,9 @@ public class GoodsReceiptTests
                     DeliveredQty = 100,
                     AcceptedQty = 100,
                     UnitPrice = 25000,
+                    ManageBatch = true,
                     BatchCode = "LOT-100",
+                    ManufactureDate = DateTime.UtcNow.AddMonths(-1),
                     ExpiryDate = DateTime.UtcNow.AddMonths(12)
                 }
             }
@@ -370,7 +372,9 @@ public class GoodsReceiptTests
                     DeliveredQty = 100,
                     AcceptedQty = 100,
                     UnitPrice = 25000,
+                    ManageBatch = true,
                     BatchCode = "LOT-OK",
+                    ManufactureDate = DateTime.UtcNow.AddMonths(-1),
                     ExpiryDate = DateTime.UtcNow.AddMonths(6)
                 }
             }

@@ -54,15 +54,18 @@ public enum FinancialNature
 }
 
 /// <summary>
-/// Cash in transit status for 2-phase bank deposits.
+/// Explicit tax treatment for a cashbook entry. Never infer this value from a
+/// localized category label or free-text description.
 /// </summary>
-public enum CashInTransitStatus
+public enum CashbookTaxTreatment
 {
-    PendingBankConfirmation = 1, // Đang mang đi nộp
-    Completed = 2,               // Đã vào tài khoản ngân hàng
-    Discrepancy = 3,             // Tiền thực nhận bị lệch
-    Cancelled = 4,               // Đã hủy trước khi nộp
-    LossInTransit = 5            // Thất thoát trên đường mang tiền
+    ReviewRequired = 0,
+    TaxableRevenue = 1,
+    NonTaxableReceipt = 2,
+    DeductibleExpense = 3,
+    NonDeductibleExpense = 4,
+    TaxPayment = 5,
+    InternalTransfer = 6
 }
 
 /// <summary>

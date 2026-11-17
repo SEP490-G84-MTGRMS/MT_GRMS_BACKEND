@@ -24,7 +24,7 @@ public class ExpenseServiceTests
             CurrentUserId = userId;
             CurrentBranchId = branchId;
         }
-        public string CurrentRole { get; set; } = "ADMIN";
+        public string CurrentRole { get; set; } = "STORE_OWNER";
         public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
     }
 
@@ -97,8 +97,6 @@ public class ExpenseServiceTests
         public Task<ShiftResponse> OpenShiftAsync(OpenShiftRequest request, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<ShiftResponse> CloseShiftZReportAsync(CloseShiftRequest request, CancellationToken ct = default) => throw new NotImplementedException();
         public Task<bool> ProcessCashDropAsync(CashDropRequest request, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<CashInTransitResponse> CreateDepositToBankAsync(DepositToBankRequest request, CancellationToken ct = default) => throw new NotImplementedException();
-        public Task<CashInTransitResponse> ConfirmBankDepositAsync(ConfirmBankDepositRequest request, CancellationToken ct = default) => throw new NotImplementedException();
         public decimal ReceivedAmount { get; private set; }
         public string? LastReceivedReferenceCode { get; private set; }
 
@@ -300,7 +298,7 @@ public class ExpenseServiceTests
     }
 
     [Fact]
-    public async Task ApproveExpenseAsync_WhenAlreadyApproved_ShouldThrowBusinessException()
+    public async Task ApproveExpenseAsync_WhenAlreadyApproved_ShouldReturnVoucherIdempotently()
     {
         var voucher = new ExpenseVoucher
         {
@@ -311,8 +309,94 @@ public class ExpenseServiceTests
         _expenseRepo.Items.Add(voucher);
 
         var request = new ApproveExpenseRequest(voucher.Id, "Duyệt lại");
-        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.ApproveExpenseAsync(request));
-        Assert.Equal("INVALID_STATUS", ex.ErrorCode);
+        var response = await _service.ApproveExpenseAsync(request);
+        Assert.NotNull(response);
+        Assert.Equal(ExpenseVoucherStatus.Approved.ToString(), response.Status);
+    }
+
+    [Fact]
+    public async Task ApproveExpenseAsync_WhenDraftStatus_ShouldApproveSuccessfully()
+    {
+        var voucher = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            Amount = 5_000_000m,
+            Status = ExpenseVoucherStatus.Draft
+        };
+        _expenseRepo.Items.Add(voucher);
+
+        var request = new ApproveExpenseRequest(voucher.Id, "Phê duyệt phiếu nháp");
+        var response = await _service.ApproveExpenseAsync(request);
+        Assert.NotNull(response);
+        Assert.Equal(ExpenseVoucherStatus.Approved.ToString(), response.Status);
+        Assert.NotNull(response.ApprovedAtUtc);
+    }
+
+    [Fact]
+    public async Task ApproveExpenseAsync_WhenHasExistingNote_ShouldAppendApprovalNoteWithoutOverwriting()
+    {
+        var voucher = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            Amount = 2_000_000m,
+            Status = ExpenseVoucherStatus.PendingApproval,
+            Note = "Tiền điện tháng 11 theo hóa đơn EVN"
+        };
+        _expenseRepo.Items.Add(voucher);
+
+        var request = new ApproveExpenseRequest(voucher.Id, "Đã duyệt hợp lệ");
+        var response = await _service.ApproveExpenseAsync(request);
+
+        Assert.NotNull(response);
+        Assert.Contains("Tiền điện tháng 11 theo hóa đơn EVN", response.Note);
+        Assert.Contains("Đã duyệt hợp lệ", response.Note);
+    }
+
+    [Fact]
+    public async Task DisburseExpenseAsync_WhenAlreadyApproved_ShouldAppendDisbursementNote()
+    {
+        var voucher = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            VoucherCode = "EXP-APP-02",
+            Category = "Tiền nước",
+            BeneficiaryName = "Sawaco",
+            Amount = 450_000m,
+            Status = ExpenseVoucherStatus.Approved,
+            Note = "Đã duyệt chi tiền nước"
+        };
+        _expenseRepo.Items.Add(voucher);
+        _cashbookService.ShouldThrowInsufficientBalance = false;
+
+        var request = new DisburseExpenseRequest(voucher.Id, FinanceAccountType.Till, Guid.NewGuid(), "Đã chi tiền mặt tại quầy");
+        var response = await _service.DisburseExpenseAsync(request);
+
+        Assert.Equal(ExpenseVoucherStatus.Paid.ToString(), response.Status);
+        Assert.Contains("Đã duyệt chi tiền nước", response.Note);
+        Assert.Contains("Đã chi tiền mặt tại quầy", response.Note);
+    }
+
+    [Fact]
+    public async Task DisburseExpenseAsync_WhenDraftOrPendingApproval_ShouldAutoApproveAndDisburse()
+    {
+        var voucher = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            VoucherCode = "EXP-AUTO-01",
+            Category = "Tiền điện kho",
+            BeneficiaryName = "EVN",
+            Amount = 800_000m,
+            Status = ExpenseVoucherStatus.Draft
+        };
+        _expenseRepo.Items.Add(voucher);
+        _cashbookService.ShouldThrowInsufficientBalance = false;
+
+        var request = new DisburseExpenseRequest(voucher.Id, FinanceAccountType.Till, Guid.NewGuid(), "Chi trả 1-click");
+        var response = await _service.DisburseExpenseAsync(request);
+
+        Assert.Equal(ExpenseVoucherStatus.Paid.ToString(), response.Status);
+        Assert.NotNull(response.PaidAtUtc);
+        Assert.Equal(800_000m, _cashbookService.DisbursedAmount);
     }
 
     [Fact]

@@ -64,6 +64,29 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 .Where(s => supplierIds.Contains(s.Id))
                 .ToDictionaryAsync(s => s.Id, cancellationToken);
 
+        // DeliveryUoM theo (SupplierId, ProductId) — cùng logic ĐVT nhập màn sản phẩm cửa hàng
+        var deliveryUomBySupplierProduct = new Dictionary<(Guid SupplierId, Guid ProductId), string>();
+        if (supplierIds.Count > 0 && productIds.Count > 0)
+        {
+            var spRows = await _appContext.SupplierProducts.AsNoTracking()
+                .Where(sp => !sp.IsDeleted
+                    && supplierIds.Contains(sp.SupplierId)
+                    && productIds.Contains(sp.ProductId)
+                    && sp.DeliveryUoM != null
+                    && sp.DeliveryUoM != "")
+                .Select(sp => new { sp.SupplierId, sp.ProductId, sp.DeliveryUoM })
+                .ToListAsync(cancellationToken);
+
+            foreach (var row in spRows)
+            {
+                var key = (row.SupplierId, row.ProductId);
+                if (!deliveryUomBySupplierProduct.ContainsKey(key) && !string.IsNullOrWhiteSpace(row.DeliveryUoM))
+                {
+                    deliveryUomBySupplierProduct[key] = row.DeliveryUoM.Trim();
+                }
+            }
+        }
+
         var stockIds = stocks.Select(s => s.Id).ToList();
 
         var packageStats = await _appContext.Packages.AsNoTracking()
@@ -117,8 +140,20 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
             var grnId = lotGroup
                 .Select(x => grnIdLookup.TryGetValue(x.Id, out var gid) ? gid : null)
                 .FirstOrDefault(g => g.HasValue);
-            var initQty = lotGroup
-                .Sum(x => initialQtyLookup.TryGetValue(x.Id, out var iq) ? iq : x.QuantityOnHand);
+            products.TryGetValue(representative.ProductId, out var lotProduct);
+            string? lotDeliveryUom = null;
+            if (representative.SupplierId.HasValue
+                && deliveryUomBySupplierProduct != null
+                && deliveryUomBySupplierProduct.TryGetValue((representative.SupplierId.Value, representative.ProductId), out var lotDu))
+            {
+                lotDeliveryUom = lotDu;
+            }
+            var (_, lotPurchaseToStockRate) = ResolveInboundUnitAndRate(lotDeliveryUom, lotProduct);
+            // AcceptedQty trên GRN theo ĐVT nhập → quy về ĐVT tồn (cùng hệ với QuantityOnHand).
+            var initQty = lotGroup.Sum(x =>
+                initialQtyLookup.TryGetValue(x.Id, out var iq)
+                    ? Math.Round(iq * lotPurchaseToStockRate, 3)
+                    : x.QuantityOnHand);
 
             decimal packagedQty = 0m;
             var packageCount = 0;
@@ -164,7 +199,8 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 originalGrnId: grnId,
                 initialQtyOverride: initQty,
                 packagedQty: packagedQty,
-                packageCount: packageCount));
+                packageCount: packageCount,
+                deliveryUomBySupplierProduct: deliveryUomBySupplierProduct));
         }
 
         // Nhóm 2 (Product.HasBatches == false): Gom nhóm (GroupBy) theo (BranchId, ProductId) thành 1 bản ghi duy nhất cho mỗi cửa hàng
@@ -184,8 +220,21 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
             var grnId = group
                 .Select(x => grnIdLookup.TryGetValue(x.Id, out var gid) ? gid : null)
                 .FirstOrDefault(g => g.HasValue);
-            var initQty = group
-                .Sum(x => initialQtyLookup.TryGetValue(x.Id, out var iq) ? iq : x.QuantityOnHand);
+            products.TryGetValue(representative.ProductId, out var nonBatchProduct);
+            var nonBatchSupplierId = representative.SupplierId
+                ?? group.Select(x => x.SupplierId).FirstOrDefault(s => s.HasValue);
+            string? nonBatchDeliveryUom = null;
+            if (nonBatchSupplierId.HasValue
+                && deliveryUomBySupplierProduct != null
+                && deliveryUomBySupplierProduct.TryGetValue((nonBatchSupplierId.Value, representative.ProductId), out var nonBatchDu))
+            {
+                nonBatchDeliveryUom = nonBatchDu;
+            }
+            var (_, nonBatchPurchaseToStockRate) = ResolveInboundUnitAndRate(nonBatchDeliveryUom, nonBatchProduct);
+            var initQty = group.Sum(x =>
+                initialQtyLookup.TryGetValue(x.Id, out var iq)
+                    ? Math.Round(iq * nonBatchPurchaseToStockRate, 3)
+                    : x.QuantityOnHand);
 
             var mergedNonBatchStock = new BranchStock
             {
@@ -193,7 +242,7 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 TenantId = representative.TenantId,
                 BranchId = representative.BranchId,
                 ProductId = representative.ProductId,
-                SupplierId = representative.SupplierId ?? group.Select(x => x.SupplierId).FirstOrDefault(s => s.HasValue),
+                SupplierId = nonBatchSupplierId,
                 BatchCode = null,
                 ManufactureDate = null,
                 ExpiryDate = null,
@@ -229,7 +278,8 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 originalGrnId: grnId,
                 initialQtyOverride: initQty,
                 packagedQty: packagedQty,
-                packageCount: packageCount));
+                packageCount: packageCount,
+                deliveryUomBySupplierProduct: deliveryUomBySupplierProduct));
         }
 
         var kpiSummary = new BatchKpiSummaryDto(
@@ -269,7 +319,11 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
             allItems = allItems.Where(x => x.Status.Equals(query.Status, StringComparison.OrdinalIgnoreCase)).ToList();
         }
 
-        allItems = allItems.OrderBy(x => x.DaysLeft).ToList();
+        // Gom cùng SKU, trong mỗi SKU sắp theo HSD (FEFO / DaysLeft)
+        allItems = allItems
+            .OrderBy(x => x.Sku, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.DaysLeft)
+            .ToList();
 
         var totalCount = allItems.Count;
         var pageIndex = query.PageIndex < 1 ? 1 : query.PageIndex;
@@ -302,6 +356,7 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
         {
             var product = await _appContext.Products.AsNoTracking()
                 .Include(p => p.Category)
+                .Include(p => p.Units)
                 .FirstOrDefaultAsync(p => p.Id == branchStock.ProductId, cancellationToken);
 
             var branch = await _appContext.Branches.AsNoTracking()
@@ -324,6 +379,22 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 ? new Dictionary<Guid, Domain.Entities.Supplier.Supplier> { [supplier.Id] = supplier }
                 : new Dictionary<Guid, Domain.Entities.Supplier.Supplier>();
 
+            var deliveryUomBySupplierProduct = new Dictionary<(Guid SupplierId, Guid ProductId), string>();
+            if (branchStock.SupplierId.HasValue)
+            {
+                var deliveryUom = await _appContext.SupplierProducts.AsNoTracking()
+                    .Where(sp => !sp.IsDeleted
+                        && sp.SupplierId == branchStock.SupplierId.Value
+                        && sp.ProductId == branchStock.ProductId)
+                    .Select(sp => sp.DeliveryUoM)
+                    .FirstOrDefaultAsync(cancellationToken);
+                if (!string.IsNullOrWhiteSpace(deliveryUom))
+                {
+                    deliveryUomBySupplierProduct[(branchStock.SupplierId.Value, branchStock.ProductId)] =
+                        deliveryUom.Trim();
+                }
+            }
+
             var isBatchManaged = product?.HasBatches == true;
             if (!isBatchManaged)
             {
@@ -341,7 +412,15 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 .Select(l => l.GoodsReceipt!.Code)
                 .FirstOrDefaultAsync(cancellationToken);
 
-            return MapBranchStockToListItem(branchStock, products, branches, suppliers, now, grnNo, isBatchManaged);
+            return MapBranchStockToListItem(
+                branchStock,
+                products,
+                branches,
+                suppliers,
+                now,
+                grnNo,
+                isBatchManaged,
+                deliveryUomBySupplierProduct: deliveryUomBySupplierProduct);
         }
 
         var batch = await _appContext.Batches.AsNoTracking().FirstOrDefaultAsync(b => b.Id == id, cancellationToken);
@@ -461,6 +540,38 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
         _ => "Normal"
     };
 
+    /// <summary>
+    /// ĐVT nhập: DeliveryUoM (SupplierProduct) → IsPurchaseUnit → BaseUnit (giống màn SP cửa hàng).
+    /// Rate lấy theo ĐVT trùng tên; không khớp thì dùng IsPurchaseUnit.
+    /// </summary>
+    private static (string Unit, decimal Rate) ResolveInboundUnitAndRate(
+        string? deliveryUoM,
+        Domain.Entities.Catalog.Product? product)
+    {
+        var stockUnit = string.IsNullOrWhiteSpace(product?.BaseUnit) ? "Cái" : product!.BaseUnit.Trim();
+        var activeUnits = product?.Units?.Where(u => !u.IsDeleted).ToList() ?? [];
+        var purchase = activeUnits.FirstOrDefault(u => u.IsPurchaseUnit)
+            ?? activeUnits.FirstOrDefault(u => u.IsBaseUnit);
+
+        string inboundName;
+        if (!string.IsNullOrWhiteSpace(deliveryUoM))
+            inboundName = deliveryUoM.Trim();
+        else if (purchase != null && !string.IsNullOrWhiteSpace(purchase.UnitName))
+            inboundName = purchase.UnitName.Trim();
+        else
+            inboundName = stockUnit;
+
+        var matched = activeUnits.FirstOrDefault(u =>
+            string.Equals((u.UnitName ?? string.Empty).Trim(), inboundName, StringComparison.OrdinalIgnoreCase));
+        if (matched != null)
+            return (inboundName, matched.ConversionRate > 0 ? matched.ConversionRate : 1m);
+
+        if (purchase != null)
+            return (inboundName, purchase.ConversionRate > 0 ? purchase.ConversionRate : 1m);
+
+        return (inboundName, 1m);
+    }
+
     private static BatchListItemDto MapBranchStockToListItem(
         BranchStock bs,
         IReadOnlyDictionary<Guid, Domain.Entities.Catalog.Product> products,
@@ -472,7 +583,8 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
         Guid? originalGrnId = null,
         decimal? initialQtyOverride = null,
         decimal packagedQty = 0m,
-        int packageCount = 0)
+        int packageCount = 0,
+        IReadOnlyDictionary<(Guid SupplierId, Guid ProductId), string>? deliveryUomBySupplierProduct = null)
     {
         products.TryGetValue(bs.ProductId, out var product);
         branches.TryGetValue(bs.BranchId, out var branch);
@@ -513,20 +625,16 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
             ? "—"
             : bs.BatchCode!;
 
-        var stockUnit = product?.BaseUnit ?? "Cái";
-        var purchaseUnit = stockUnit;
-        var purchaseToStockRate = 1m;
-        if (product?.Units != null)
+        string? deliveryUom = null;
+        if (bs.SupplierId.HasValue
+            && deliveryUomBySupplierProduct != null
+            && deliveryUomBySupplierProduct.TryGetValue((bs.SupplierId.Value, bs.ProductId), out var du))
         {
-            var activeUnits = product.Units.Where(u => !u.IsDeleted).ToList();
-            var purchase = activeUnits.FirstOrDefault(u => u.IsPurchaseUnit)
-                ?? activeUnits.FirstOrDefault(u => u.IsBaseUnit);
-            if (purchase != null)
-            {
-                purchaseUnit = string.IsNullOrWhiteSpace(purchase.UnitName) ? stockUnit : purchase.UnitName;
-                purchaseToStockRate = purchase.ConversionRate > 0 ? purchase.ConversionRate : 1m;
-            }
+            deliveryUom = du;
         }
+
+        var stockUnit = string.IsNullOrWhiteSpace(product?.BaseUnit) ? "Cái" : product!.BaseUnit.Trim();
+        var (purchaseUnit, purchaseToStockRate) = ResolveInboundUnitAndRate(deliveryUom, product);
 
         return new BatchListItemDto(
             Id: bs.Id,

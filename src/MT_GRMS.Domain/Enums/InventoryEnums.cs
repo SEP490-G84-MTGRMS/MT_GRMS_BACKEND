@@ -3,17 +3,48 @@ namespace MT_GRMS.Domain.Enums;
 /// <summary>
 /// Trạng thái phiếu điều chuyển hàng hóa liên chi nhánh (Transfers)
 /// Theo quy trình chuyển hàng 2 pha UC-15 / BR-TRF:
-/// - Draft: Phiếu tạm / Lưu tạm (chưa trừ kho gửi)
-/// - InTransit: Đang chuyển (đã trừ kho chi nhánh gửi, hàng đang trên đường đi)
-/// - Received: Đã nhận (chi nhánh nhận đã kiểm đếm thực tế và cộng tồn kho đích)
-/// - Cancelled: Đã hủy (hoàn nguyên 100% tồn kho về lại chi nhánh gửi)
+/// - Draft: Phiếu đang soạn, chưa gửi cho chi nhánh nguồn.
+/// - Pending: Đã gửi, chờ chi nhánh nguồn xác nhận xuất.
+/// - InTransit: Đã trừ kho nguồn, hàng đang vận chuyển.
+/// - Completed: Chi nhánh đích đã kiểm nhận hoặc hàng đã được hoàn trả.
+/// - Cancelled: Đã hủy trước khi xuất; không dùng để hoàn tồn hàng đang vận chuyển.
 /// </summary>
 public enum TransferStatus
 {
     Draft = 1,
-    InTransit = 2,
-    Received = 3,
-    Cancelled = 4
+    Pending = 2,
+    InTransit = 3,
+    Completed = 4,
+    [Obsolete("Use Completed. Kept temporarily for source compatibility during the workflow migration.")]
+    Received = Completed,
+    Cancelled = 5
+}
+
+public enum TransferCompletionResult
+{
+    Received = 1,
+    ReceivedWithDiscrepancy = 2,
+    Returned = 3,
+    Partial = 4
+}
+
+public enum TransferOrigin
+{
+    OwnerAllocation = 1,
+    StaffUrgentRequest = 2
+}
+
+public enum TransferPriority
+{
+    Normal = 1,
+    Urgent = 2
+}
+
+public enum TransferRequestStatus
+{
+    Open = 1,
+    Completed = 2,
+    Cancelled = 3
 }
 
 /// <summary>

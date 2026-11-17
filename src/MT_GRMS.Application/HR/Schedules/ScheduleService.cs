@@ -331,6 +331,8 @@ public class ScheduleService : IScheduleService
         var schedule = await _scheduleRepository.GetByIdAsync(id, cancellationToken)
             ?? throw new NotFoundException($"Lịch làm việc với ID {id} không tồn tại.");
 
+        await EnsureScheduleNotLockedByPaidPayslipAsync(schedule, cancellationToken);
+
         if (schedule.Status == ScheduleStatus.Completed)
         {
             throw new BusinessException("Không thể chỉnh sửa ca làm việc đã hoàn thành.");
@@ -415,6 +417,8 @@ public class ScheduleService : IScheduleService
     {
         var schedule = await _scheduleRepository.GetByIdAsync(id, cancellationToken)
             ?? throw new NotFoundException($"Lịch làm việc với ID {id} không tồn tại.");
+
+        await EnsureScheduleNotLockedByPaidPayslipAsync(schedule, cancellationToken);
 
         var isLeaveSchedule = schedule.IsLeave
             || schedule.Status == ScheduleStatus.OnLeave
@@ -781,6 +785,8 @@ public class ScheduleService : IScheduleService
         var schedule = await _scheduleRepository.GetByIdAsync(id, cancellationToken)
             ?? throw new NotFoundException($"Lịch làm việc với ID {id} không tồn tại.");
 
+        await EnsureScheduleNotLockedByPaidPayslipAsync(schedule, cancellationToken);
+
         BranchAttendancePolicy? policy = null;
         if (_policyRepository != null)
         {
@@ -942,6 +948,32 @@ public class ScheduleService : IScheduleService
             : "Đã hủy chấm công và đưa ca làm việc về trạng thái chờ vào ca.";
 
         return new ResetAttendanceResponse(MapToResponse(schedule), hasUnpaidPayslip, message);
+    }
+
+    private async Task EnsureScheduleNotLockedByPaidPayslipAsync(
+        EmployeeSchedule schedule,
+        CancellationToken cancellationToken)
+    {
+        if (schedule.PayslipId.HasValue
+            && (schedule.Payslip == null || schedule.Payslip.Status is PayslipStatus.Paid or PayslipStatus.Partial))
+        {
+            throw new BusinessException(
+                "PAYSLIP_LOCKED",
+                "Bản ghi chấm công đã bị khóa do kỳ lương của nhân viên đã được thanh toán.");
+        }
+
+        if (_payslipRepository != null)
+        {
+            var periodMonth = schedule.WorkDate.ToString("yyyy-MM");
+            var periodPayslip = await _payslipRepository.GetByEmployeeAndPeriodAsync(
+                schedule.EmployeeId, periodMonth, cancellationToken);
+            if (periodPayslip != null && periodPayslip.Status is PayslipStatus.Paid or PayslipStatus.Partial)
+            {
+                throw new BusinessException(
+                    "PAYSLIP_LOCKED",
+                    $"Bản ghi chấm công tháng {schedule.WorkDate:MM/yyyy} đã bị khóa do phiếu lương của nhân viên đã được thanh toán.");
+            }
+        }
     }
 
     private static void ApplyWorkingAttendance(
@@ -1164,6 +1196,8 @@ public class ScheduleService : IScheduleService
             throw new BusinessException("INVALID_EMPLOYEE", "Nhân viên nhận diện không trùng khớp với ca làm việc.");
         }
 
+        await EnsureScheduleNotLockedByPaidPayslipAsync(schedule, cancellationToken);
+
         if (schedule.CheckInTime.HasValue)
         {
             throw new BusinessException("ALREADY_CHECKED_IN", "Ca làm việc này đã được điểm danh vào trước đó.");
@@ -1236,14 +1270,11 @@ public class ScheduleService : IScheduleService
             throw new BusinessException("INVALID_EMPLOYEE", "Nhân viên nhận diện không trùng khớp với ca làm việc.");
         }
 
+        await EnsureScheduleNotLockedByPaidPayslipAsync(schedule, cancellationToken);
+
         if (!schedule.CheckInTime.HasValue)
         {
             throw new BusinessException("NOT_CHECKED_IN", "Ca làm việc chưa được điểm danh vào. Không thể điểm danh ra.");
-        }
-
-        if (schedule.CheckOutTime.HasValue)
-        {
-            throw new BusinessException("ALREADY_CHECKED_OUT", "Ca làm việc này đã được điểm danh ra trước đó.");
         }
 
         if (request.FaceMatchScore > 0.45m)
@@ -1320,7 +1351,7 @@ public class ScheduleService : IScheduleService
 
         schedule.CheckOutTime = vnNow;
         schedule.CheckOutMethod = "FACE_ID";
-        schedule.CheckOutFaceImageUrl = snapshotUrl;
+        schedule.CheckOutFaceImageUrl = snapshotUrl ?? schedule.CheckOutFaceImageUrl;
         schedule.FaceMatchScore = request.FaceMatchScore;
         schedule.EarlyLeaveMinutes = earlyLeaveMinutes;
         schedule.OvertimeMinutes = approvedOtMinutes;
