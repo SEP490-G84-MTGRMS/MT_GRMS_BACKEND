@@ -4,6 +4,7 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reflection;
 using Microsoft.EntityFrameworkCore;
 using Moq;
 using Xunit;
@@ -30,6 +31,77 @@ namespace MT_GRMS.UnitTests;
 
 public class SupplierAndTransferBranchCoverageTests
 {
+    private static object? InvokeSupplierHelper(string name, params object?[] args)
+    {
+        var method = typeof(SupplierService).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        try
+        {
+            return method.Invoke(null, args);
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException != null)
+        {
+            throw ex.InnerException;
+        }
+    }
+
+    [Fact]
+    public void SupplierService_StaticMappingHelpers_CoverFallbackAndNormalizationBranches()
+    {
+        var defaults = Assert.IsType<List<string>>(InvokeSupplierHelper(
+            "ResolveSupplierBaseDeliveryDays", new object?[] { null }));
+        Assert.Equal(6, defaults.Count);
+
+        var supplier = new Supplier { DeliveryDaysJson = "not-json", DeliveryWeekdaysMask = 0 };
+        Assert.Equal(6, Assert.IsType<List<string>>(InvokeSupplierHelper(
+            "ResolveSupplierBaseDeliveryDays", supplier)).Count);
+        supplier.DeliveryDaysJson = "[\"Mon\",\"Sun\"]";
+        Assert.Equal(2, Assert.IsType<List<string>>(InvokeSupplierHelper(
+            "ResolveSupplierBaseDeliveryDays", supplier)).Count);
+        supplier.DeliveryDaysJson = null;
+        supplier.DeliveryWeekdaysMask = 2;
+        Assert.Single(Assert.IsType<List<string>>(InvokeSupplierHelper(
+            "ResolveSupplierBaseDeliveryDays", supplier)));
+
+        var assignment = new SupplierBranchAssignment { DeliveryDaysJson = "bad-json" };
+        var fallback = Assert.IsType<List<string>>(InvokeSupplierHelper(
+            "ResolveAssignmentDeliveryDayNames", assignment, supplier));
+        Assert.Single(fallback);
+        assignment.DeliveryDaysJson = "[\"Tue\"]";
+        Assert.Single(Assert.IsType<List<string>>(InvokeSupplierHelper(
+            "ResolveAssignmentDeliveryDayNames", assignment, supplier)));
+        assignment.DeliveryDaysJson = null;
+        assignment.DeliveryWeekdaysMask = 4;
+        Assert.Single(Assert.IsType<List<string>>(InvokeSupplierHelper(
+            "ResolveAssignmentDeliveryDayNames", assignment, supplier)));
+
+        var normalized = Assert.IsType<List<string>>(InvokeSupplierHelper(
+            "NormalizeAssignmentDeliveryDays", new List<string> { "Sun", "Mon" }, supplier));
+        Assert.Equal(2, normalized.Count);
+        Assert.Single(Assert.IsType<List<string>>(InvokeSupplierHelper(
+            "NormalizeAssignmentDeliveryDays", null, supplier)));
+
+        InvokeSupplierHelper("ApplyAssignmentDeliveryDays", assignment, new List<string> { "Mon", "Wed" });
+        Assert.NotNull(assignment.DeliveryWeekdaysMask);
+        Assert.Contains("Mon", assignment.DeliveryDaysJson!);
+        Assert.False(string.IsNullOrEmpty((string)InvokeSupplierHelper(
+            "FormatDeliveryDaysAbbrev", (object)Array.Empty<string>())!));
+        Assert.Equal("T2, T4", InvokeSupplierHelper("FormatDeliveryDaysAbbrev", new List<string> { "wed", "MON", "invalid" }));
+
+        var p1 = new Product { BaseUnit = "  Kg  ", Units = new List<ProductUnit>() };
+        Assert.Equal("Kg", InvokeSupplierHelper("ResolveDefaultDeliveryUoM", p1));
+        p1.BaseUnit = " ";
+        Assert.False(string.IsNullOrEmpty((string)InvokeSupplierHelper("ResolveDefaultDeliveryUoM", p1)!));
+        p1.Units.Add(new ProductUnit { UnitName = " Carton ", IsPurchaseUnit = true });
+        Assert.Equal("Carton", InvokeSupplierHelper("ResolveDefaultDeliveryUoM", p1));
+
+        var sp = new SupplierProduct { DeliveryUoM = " Pack ", Product = new Product { BaseUnit = "Kg" } };
+        Assert.Equal("Pack", InvokeSupplierHelper("ResolvePurchaseUnitName", sp));
+        sp.DeliveryUoM = null;
+        Assert.Equal("Kg", InvokeSupplierHelper("ResolvePurchaseUnitName", sp));
+        sp.Product = null;
+        Assert.False(string.IsNullOrEmpty((string)InvokeSupplierHelper("ResolvePurchaseUnitName", sp)!));
+    }
     private class FakeTenantContext : ITenantContext
     {
         public string CurrentTenantId { get; set; } = "tenant-sup-cov-01";

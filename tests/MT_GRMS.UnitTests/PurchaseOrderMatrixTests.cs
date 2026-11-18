@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Reflection;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PurchaseOrders;
 using MT_GRMS.Application.PurchaseOrders.Dispatch;
@@ -18,6 +19,28 @@ namespace MT_GRMS.UnitTests;
 
 public class PurchaseOrderMatrixTests
 {
+    private static T InvokePurchaseOrderHelper<T>(string name, params object?[] args)
+    {
+        var method = typeof(PurchaseOrderService).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+        return (T)method.Invoke(null, args)!;
+    }
+
+    [Fact]
+    public void DispatchFormattingHelpers_CoverAllUrgencyAndCountdownBranches()
+    {
+        var now = new DateTime(2026, 11, 18, 10, 0, 0);
+        Assert.Equal("later", InvokePurchaseOrderHelper<string>("ResolveUrgency", -1, now, now, true));
+        Assert.Equal("critical", InvokePurchaseOrderHelper<string>("ResolveUrgency", 60, now.AddHours(1), now, false));
+        Assert.Equal("today", InvokePurchaseOrderHelper<string>("ResolveUrgency", 61, now.AddHours(2), now, false));
+        Assert.Equal("later", InvokePurchaseOrderHelper<string>("ResolveUrgency", 2000, now.AddDays(2), now, false));
+
+        Assert.NotEmpty(InvokePurchaseOrderHelper<string>("FormatCountdown", 10, true));
+        Assert.NotEmpty(InvokePurchaseOrderHelper<string>("FormatCountdown", 0, false));
+        Assert.NotEmpty(InvokePurchaseOrderHelper<string>("FormatCountdown", 30, false));
+        Assert.NotEmpty(InvokePurchaseOrderHelper<string>("FormatCountdown", 61, false));
+        Assert.NotEmpty(InvokePurchaseOrderHelper<string>("FormatCountdown", 120, false));
+    }
     private readonly FakePurchaseOrderRepository _repo;
     private readonly FakeUnitOfWork _uow;
     private readonly FakeTenantContext _tenantContext;
@@ -965,6 +988,177 @@ public class PurchaseOrderMatrixTests
         // Assert: prod1 line updated
         var prod1Line = existingPo.Details.First(d => d.ProductId == _prod1Id && !d.IsDeleted);
         Assert.Equal(15m, prod1Line.FinalQty);
+    }
+
+    [Fact]
+    public async Task SplitPreview_ValidationMatrix_CoversInvalidProductSupplierStatusMoqAndMultiple()
+    {
+        var delivery = DateTime.Today.AddDays(5).Date;
+
+        async Task<SplitGroupResultDto> Preview(Guid supplierId, Guid productId, decimal qty)
+        {
+            var result = await _service.PreviewSplitMatrixPoAsync(new SplitMatrixPoCommand
+            {
+                BranchId = _branchId,
+                SupplierId = supplierId,
+                Groups = new List<SplitMatrixPoGroupCommand>
+                {
+                    new()
+                    {
+                        SupplierId = supplierId,
+                        DeliveryDate = delivery,
+                        Items = new List<SplitMatrixPoItemCommand>
+                        {
+                            new() { ProductId = productId, Quantity = qty, UnitPrice = 0, Unit = "" }
+                        }
+                    }
+                }
+            });
+            return Assert.Single(result.Results);
+        }
+
+        var missing = await Preview(_supplier1Id, Guid.NewGuid(), 10);
+        Assert.Equal("VALIDATION_FAILED", missing.ErrorCode);
+        Assert.Equal(1, missing.InvalidLineCount);
+
+        var wrongSupplier = await Preview(_supplier2Id, _prod1Id, 10);
+        Assert.Equal("VALIDATION_FAILED", wrongSupplier.ErrorCode);
+
+        var product = _repo.MatrixProducts.Single(x => x.Id == _prod1Id);
+        product.IsProductActive = false;
+        product.ProductInactiveReason = "inactive";
+        var disabled = await Preview(_supplier1Id, _prod1Id, 10);
+        Assert.Equal("VALIDATION_FAILED", disabled.ErrorCode);
+        product.IsProductActive = true;
+        product.ProductInactiveReason = null;
+
+        product.Moq = 20;
+        var belowMoq = await Preview(_supplier1Id, _prod1Id, 10);
+        Assert.Equal("VALIDATION_FAILED", belowMoq.ErrorCode);
+        product.Moq = 0;
+
+        product.OrderMultiple = 6;
+        var badMultiple = await Preview(_supplier1Id, _prod1Id, 10);
+        Assert.Equal("VALIDATION_FAILED", badMultiple.ErrorCode);
+        product.OrderMultiple = 0;
+
+        var valid = await Preview(_supplier1Id, _prod1Id, 10);
+        Assert.Equal(OrderMatrixRules.ResultSuccess, valid.Status);
+        Assert.Equal(10, valid.TotalQuantity);
+        Assert.True(valid.TotalAmount > 0);
+        Assert.False(valid.HasMissingPrice);
+        Assert.Single(valid.Lines);
+    }
+
+    [Fact]
+    public async Task SplitPreview_CoversMissingBranchInactiveSupplierAndEmptyLines()
+    {
+        var delivery = DateTime.Today.AddDays(5).Date;
+        var missingBranch = await Assert.ThrowsAsync<NotFoundException>(() =>
+            _service.PreviewSplitMatrixPoAsync(new SplitMatrixPoCommand
+            {
+                BranchId = Guid.NewGuid(),
+                Groups = new List<SplitMatrixPoGroupCommand>()
+            }));
+        Assert.NotNull(missingBranch);
+
+        _repo.CustomSupplierConfigs = new List<OrderMatrixSupplierDeliveryConfigDto>
+        {
+            new()
+            {
+                SupplierId = _supplier1Id,
+                SupplierCode = "NCC-01",
+                SupplierName = "Inactive supplier",
+                IsAssignedToBranch = false,
+                IsActive = false,
+                ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 },
+                CutoffTime = "23:59"
+            }
+        };
+        var inactive = await _service.PreviewSplitMatrixPoAsync(new SplitMatrixPoCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier1Id,
+            Groups = new List<SplitMatrixPoGroupCommand>
+            {
+                new() { SupplierId = _supplier1Id, DeliveryDate = delivery }
+            }
+        });
+        Assert.Equal("SUPPLIER_BRANCH_INACTIVE", Assert.Single(inactive.Results).ErrorCode);
+
+        _repo.CustomSupplierConfigs[0].IsAssignedToBranch = true;
+        _repo.CustomSupplierConfigs[0].IsActive = true;
+        var empty = await _service.PreviewSplitMatrixPoAsync(new SplitMatrixPoCommand
+        {
+            BranchId = _branchId,
+            SupplierId = _supplier1Id,
+            Groups = new List<SplitMatrixPoGroupCommand>
+            {
+                new() { SupplierId = _supplier1Id, DeliveryDate = delivery, Items = new List<SplitMatrixPoItemCommand>() }
+            }
+        });
+        Assert.Equal("EMPTY_LINES", Assert.Single(empty.Results).ErrorCode);
+    }
+
+    [Fact]
+    public async Task SplitSupplierAcrossBranches_PreviewAndCommit_AggregatesEveryActiveBranch()
+    {
+        var branch2Id = Guid.NewGuid();
+        _repo.Branches.Add(new Branch
+        {
+            Id = branch2Id,
+            TenantId = "tenant-test-1",
+            Code = "BR-02",
+            Name = "Chi nhanh 02",
+            IsActive = true
+        });
+        var delivery = DateTime.Today.AddDays(2).Date;
+
+        foreach (var branchId in new[] { _branchId, branch2Id })
+        {
+            var draft = await _service.SaveMatrixDraftAsync(new SaveMatrixDraftCommand
+            {
+                BranchId = branchId,
+                SupplierId = _supplier1Id,
+                ViewFrom = DateTime.Today,
+                ViewTo = delivery,
+                Cells = new List<OrderMatrixCellDto>
+                {
+                    new()
+                    {
+                        SupplierId = _supplier1Id,
+                        ProductId = _prod1Id,
+                        DeliveryDate = delivery,
+                        EmployeeQty = 10,
+                        FinalQty = 10
+                    }
+                }
+            });
+            Assert.Equal(branchId, draft.BranchId);
+        }
+
+        var command = new SplitMatrixPoCommand
+        {
+            BranchId = Guid.Empty,
+            SupplierId = _supplier1Id,
+            Scope = OrderMatrixRules.ScopeAll,
+            DurationDays = 7,
+            Note = "Multi branch",
+            EmailSendMode = "NOW"
+        };
+
+        var preview = await _service.PreviewSplitMatrixPoAsync(command);
+        Assert.Equal(Guid.Empty, preview.BranchId);
+        Assert.Equal(2, preview.TotalGroups);
+        Assert.Equal(2, preview.SuccessCount);
+        Assert.Empty(preview.CreatedPurchaseOrders);
+
+        var committed = await _service.SplitMatrixPoBatchAsync(command);
+        Assert.Equal(2, committed.TotalGroups);
+        Assert.Equal(2, committed.SuccessCount);
+        Assert.Equal(2, committed.CreatedPurchaseOrders.Count);
+        Assert.Contains(committed.Results, x => x.BranchId == _branchId);
+        Assert.Contains(committed.Results, x => x.BranchId == branch2Id);
     }
 
     // =========================================================================

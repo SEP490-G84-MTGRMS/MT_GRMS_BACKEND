@@ -846,6 +846,230 @@ public class DeepBranchCoverageSuite2Tests
         Assert.NotNull(res);
     }
 
+    [Fact]
+    public async Task PurchaseOrderService_DispatchSupplierHub_And_Detail_CoverAggregationsAndFilters()
+    {
+        var tenantContext = new FakeTenantContext();
+        var poRepo = new Mock<IPurchaseOrderRepository>();
+        var service = new PurchaseOrderService(
+            poRepo.Object,
+            new LocalUnitOfWork(),
+            tenantContext,
+            new Mock<ISupplierDispatchPackageService>().Object);
+
+        var branchId = tenantContext.CurrentBranchId!.Value;
+        var supplierId = Guid.NewGuid();
+        var productId = Guid.NewGuid();
+        var deliveryDate = DateTime.Today.AddDays(3).Date;
+        var branch = new Branch
+        {
+            Id = branchId,
+            TenantId = tenantContext.CurrentTenantId,
+            Code = "CN-01",
+            Name = "Chi nhanh 01",
+            IsActive = true
+        };
+        var supplier = new Supplier
+        {
+            Id = supplierId,
+            TenantId = tenantContext.CurrentTenantId,
+            Code = "NCC-AGG",
+            Name = "Nha cung cap Aggregate",
+            Email = "aggregate@example.test"
+        };
+        var config = new OrderMatrixSupplierDeliveryConfigDto
+        {
+            SupplierId = supplierId,
+            SupplierCode = supplier.Code,
+            SupplierName = supplier.Name,
+            CutoffTime = "23:59",
+            CutoffDayOffset = 0,
+            IsAssignedToBranch = true,
+            IsActive = true,
+            ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 }
+        };
+        var product = new OrderMatrixProductDto
+        {
+            Id = productId,
+            SupplierId = supplierId,
+            Name = "San pham Aggregate",
+            Sku = "SKU-AGG",
+            Unit = "Hop",
+            Category = "Thuc pham",
+            Price = 25_000m,
+            IsProductActive = true
+        };
+        var draft = new PurchaseOrder
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            BranchId = branchId,
+            SupplierId = supplierId,
+            Code = "PO-DRAFT-AGG",
+            Status = "DRAFT",
+            Details = new List<PurchaseOrderDetail>
+            {
+                new()
+                {
+                    Id = Guid.NewGuid(),
+                    ProductId = productId,
+                    DeliveryDate = deliveryDate,
+                    EmployeeQty = 4m,
+                    FinalQty = 4m
+                }
+            }
+        };
+
+        poRepo.Setup(r => r.GetActiveBranchesAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<Branch> { branch });
+        poRepo.Setup(r => r.GetBranchByIdAsync(branchId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(branch);
+        poRepo.Setup(r => r.GetSupplierByIdAsync(supplierId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(supplier);
+        poRepo.Setup(r => r.GetActiveBranchIdsForSupplierAsync(supplierId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<Guid> { branchId });
+        poRepo.Setup(r => r.GetMatrixProductsAsync(branchId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<OrderMatrixProductDto> { product });
+        poRepo.Setup(r => r.GetMatrixSupplierConfigsAsync(branchId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<OrderMatrixSupplierDeliveryConfigDto> { config });
+        poRepo.Setup(r => r.GetDraftMatrixPosAsync(branchId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<PurchaseOrder> { draft });
+        poRepo.Setup(r => r.GetCommittedPosInRangeAsync(branchId, null, It.IsAny<DateTime>(), It.IsAny<int>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<PurchaseOrder>());
+
+        var all = await service.GetDispatchSupplierHubAsync(new DispatchSupplierHubQuery
+        {
+            DurationDays = 7,
+            Keyword = "Aggregate",
+            Urgency = "all"
+        });
+        var row = Assert.Single(all.Suppliers);
+        Assert.Equal(supplierId, row.SupplierId);
+        Assert.Equal(1, row.LinkedBranchCount);
+        Assert.Equal(1, row.BranchesWithQty);
+        Assert.Equal(4m, row.TotalQty);
+        Assert.Equal(100_000m, row.TotalAmount);
+        Assert.Single(row.Branches);
+
+        var detail = await service.GetDispatchSupplierDetailAsync(new DispatchSupplierDetailQuery
+        {
+            SupplierId = supplierId,
+            DurationDays = 7
+        });
+        Assert.Equal(supplier.Email, detail.Email);
+        var detailBranch = Assert.Single(detail.Branches);
+        Assert.Equal(branch.Code, detailBranch.BranchCode);
+        Assert.Single(detailBranch.Items);
+
+        var noMatch = await service.GetDispatchSupplierHubAsync(new DispatchSupplierHubQuery
+        {
+            Keyword = "khong-ton-tai",
+            Urgency = "completed"
+        });
+        Assert.Empty(noMatch.Suppliers);
+    }
+
+    [Fact]
+    public async Task PurchaseOrderService_DispatchSupplierDetail_ValidatesSupplier()
+    {
+        var tenantContext = new FakeTenantContext();
+        var repo = new Mock<IPurchaseOrderRepository>();
+        var service = new PurchaseOrderService(
+            repo.Object,
+            new LocalUnitOfWork(),
+            tenantContext,
+            new Mock<ISupplierDispatchPackageService>().Object);
+
+        var required = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.GetDispatchSupplierDetailAsync(new DispatchSupplierDetailQuery { SupplierId = Guid.Empty }));
+        Assert.Equal("SUPPLIER_REQUIRED", required.ErrorCode);
+
+        var missingId = Guid.NewGuid();
+        repo.Setup(r => r.GetSupplierByIdAsync(missingId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Supplier?)null);
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.GetDispatchSupplierDetailAsync(new DispatchSupplierDetailQuery { SupplierId = missingId }));
+    }
+
+    [Fact]
+    public async Task PurchaseOrderService_PagedAndSingle_MapFallbacksAndAttachReceipt()
+    {
+        var tenant = new FakeTenantContext();
+        var repo = new Mock<IPurchaseOrderRepository>();
+        var service = new PurchaseOrderService(repo.Object, new LocalUnitOfWork(), tenant,
+            new Mock<ISupplierDispatchPackageService>().Object);
+        var po = new PurchaseOrder
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.CurrentTenantId,
+            BranchId = Guid.NewGuid(),
+            SupplierId = Guid.NewGuid(),
+            Code = "PO-PAGED-01",
+            Status = "APPROVED",
+            RevisionNumber = 0,
+            StoreCodeSnapshot = null,
+            SupplierCodeSnapshot = null,
+            Details = new List<PurchaseOrderDetail>
+            {
+                new()
+                {
+                    Id = Guid.NewGuid(), ProductId = Guid.NewGuid(), DeliveryUoM = "Cai",
+                    EmployeeQty = 2m, FinalQty = 2m, OrderedQty = null,
+                    UnitPrice = 10m, LineAmount = 20m, Product = null
+                }
+            }
+        };
+        var receiptId = Guid.NewGuid();
+        repo.Setup(r => r.GetPagedPurchaseOrdersAsync(null, null, null, null, null, 1, 100, "PO",
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync((new List<PurchaseOrder> { po }, 1));
+        repo.Setup(r => r.GetPurchaseOrderByIdAsync(po.Id, It.IsAny<CancellationToken>())).ReturnsAsync(po);
+        repo.Setup(r => r.GetActiveGoodsReceiptsByPoIdsAsync(It.IsAny<IReadOnlyCollection<Guid>>(),
+                It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Dictionary<Guid, (Guid, string, string)>
+            {
+                [po.Id] = (receiptId, "GR-01", "DRAFT")
+            });
+
+        var page = await service.GetPagedPurchaseOrdersAsync(new PurchaseOrderFilterQuery
+        {
+            PageIndex = 0,
+            PageSize = 1000,
+            Keyword = "PO"
+        });
+        Assert.Equal(1, page.Page);
+        Assert.Equal(100, page.PageSize);
+        Assert.Equal(1, page.TotalItems);
+        var dto = Assert.Single(page.Items);
+        Assert.Equal("BR", dto.BranchCode);
+        Assert.Equal("SUP", dto.SupplierCode);
+        Assert.Equal(1, dto.RevisionNumber);
+        Assert.Equal(receiptId, dto.ActiveGoodsReceiptId);
+        Assert.Equal(2m, Assert.Single(dto.Details).OrderedQty);
+
+        var single = await service.GetPurchaseOrderByIdAsync(po.Id);
+        Assert.Equal("GR-01", single.ActiveGoodsReceiptCode);
+    }
+
+    [Theory]
+    [InlineData("EMPLOYEE")]
+    [InlineData("STAFF")]
+    [InlineData("CASHIER")]
+    public async Task PurchaseOrderService_EmployeeRoles_CannotAccessAnotherBranch(string role)
+    {
+        var tenant = new FakeTenantContext { CurrentRole = role, CurrentBranchId = Guid.NewGuid() };
+        var service = new PurchaseOrderService(new Mock<IPurchaseOrderRepository>().Object,
+            new LocalUnitOfWork(), tenant, new Mock<ISupplierDispatchPackageService>().Object);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.GetOrderMatrixAsync(
+            new OrderMatrixQuery
+            {
+                BranchId = Guid.NewGuid(),
+                ViewFrom = DateTime.Today,
+                DurationDays = 1
+            }));
+    }
+
     // =========================================================================
     // SECTION 3: StocktakeService Deep Branches
     // =========================================================================
