@@ -35,21 +35,20 @@ public class SepayWebhookController : ControllerBase
         _logger.LogInformation("[SePay Webhook] Nhận giao dịch {Id}: Số tiền={Amount}, Nội dung='{Content}', Ref={RefCode}",
             payload.Id, payload.TransferAmount, payload.Content, payload.ReferenceCode);
 
-        // 1. Kiểm tra xác thực Token từ SePay (nếu cấu hình ApiKey)
-        if (!string.IsNullOrWhiteSpace(_sepaySettings.ApiKey) &&
-            _sepaySettings.ApiKey != "SEPAY_API_KEY_SECRET")
+        if (string.IsNullOrWhiteSpace(_sepaySettings.ApiKey) || _sepaySettings.ApiKey == "SEPAY_API_KEY_SECRET")
         {
-            var authHeader = Request.Headers.Authorization.ToString();
-            var expectedBearer = $"Bearer {_sepaySettings.ApiKey}";
-            var expectedApikey = $"Apikey {_sepaySettings.ApiKey}";
+            return StatusCode(StatusCodes.Status503ServiceUnavailable,
+                new { success = false, message = "Webhook SePay chưa được cấu hình." });
+        }
 
-            if (!string.Equals(authHeader, expectedBearer, StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(authHeader, expectedApikey, StringComparison.OrdinalIgnoreCase) &&
-                !authHeader.Contains(_sepaySettings.ApiKey))
-            {
-                _logger.LogWarning("[SePay Webhook] Xác thực token thất bại: Header='{Header}'", authHeader);
-                return Unauthorized(new { success = false, message = "Mã xác thực SePay không hợp lệ." });
-            }
+        var authHeader = Request.Headers.Authorization.ToString();
+        if (!System.Net.Http.Headers.AuthenticationHeaderValue.TryParse(authHeader, out var authorization)
+            || !(authorization.Scheme.Equals("Apikey", StringComparison.OrdinalIgnoreCase)
+                || authorization.Scheme.Equals("Bearer", StringComparison.OrdinalIgnoreCase))
+            || !string.Equals(authorization.Parameter, _sepaySettings.ApiKey, StringComparison.Ordinal))
+        {
+            _logger.LogWarning("[SePay Webhook] Xác thực token thất bại.");
+            return Unauthorized(new { success = false, message = "Mã xác thực SePay không hợp lệ." });
         }
 
         // 2. Xử lý nghiệp vụ cộng tiền và ghi nhận sổ cái giao dịch
@@ -67,8 +66,8 @@ public class SepayWebhookController : ControllerBase
             });
         }
 
-        _logger.LogInformation("[SePay Webhook] Nạp tiền thành công cho Gian hàng {TenantId}, Số tiền={Amount}",
-            result.TenantId, result.Amount);
+        _logger.LogInformation("[SePay Webhook] Đã xử lý giao dịch cho gian hàng {TenantId}: {Message}",
+            result.TenantId, result.Message);
 
         return Ok(new
         {

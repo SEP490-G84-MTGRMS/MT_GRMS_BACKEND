@@ -10,6 +10,7 @@ using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Domain.Entities.Finance;
+using MT_GRMS.Domain.Entities.System;
 using Xunit;
 
 namespace MT_GRMS.IntegrationTests;

@@ -504,6 +504,33 @@ public class ShiftManagementServiceTests
     }
 
     [Fact]
+    public async Task AddCashMovement_WhenStaffActsOnAnotherCashiersShift_RejectsWithoutMutation()
+    {
+        var shiftId = Guid.NewGuid();
+        var otherCashierId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            BranchId = _tenantContext.CurrentBranchId!.Value,
+            CashierUserId = otherCashierId,
+            OpeningFloat = 1_000_000m,
+            ExpectedCash = 1_000_000m,
+            Status = ShiftState.Open
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        var exception = await Assert.ThrowsAsync<BusinessException>(() => _service.AddCashMovementAsync(
+            shiftId,
+            new CashMovementRequest(CashMovementType.OUT, CashMovementCategory.EXPENSE, 100_000m, "Chi không thuộc ca của tôi"),
+            _tenantContext.CurrentUserId));
+
+        Assert.Equal("SHIFT_ACTOR_DENIED", exception.ErrorCode);
+        Assert.Equal(0m, shift.TotalCashOut);
+        Assert.Empty(_shiftRepository.CashMovements);
+    }
+
+    [Fact]
     public async Task CloseShift_WhenCashAllocationDoesNotMatchActualCashCounted_ThrowsBusinessException()
     {
         // Arrange
@@ -753,6 +780,7 @@ public class ShiftManagementServiceTests
     public async Task ApproveCashMovement_WhenPending_UpdatesStatusToRecordedAndDeductsCash()
     {
         // Arrange
+        _tenantContext.SetRole("STORE_OWNER");
         var shiftId = Guid.NewGuid();
         var shift = new ShiftZReport
         {
@@ -792,6 +820,7 @@ public class ShiftManagementServiceTests
     public async Task RejectCashMovement_WhenPending_UpdatesStatusToRejectedAndKeepsReason()
     {
         // Arrange
+        _tenantContext.SetRole("STORE_OWNER");
         var shiftId = Guid.NewGuid();
         var shift = new ShiftZReport
         {
@@ -824,6 +853,29 @@ public class ShiftManagementServiceTests
         Assert.Equal(CashMovementStatus.Rejected, result.Status);
         Assert.Equal("Chi không hợp lệ", result.RejectionReason);
         Assert.Equal(0m, shift.TotalCashOut); // Không trừ két
+    }
+
+    [Fact]
+    public async Task ApproveCashMovement_WhenActorIsStaff_RejectsWithoutChangingPendingMovement()
+    {
+        _tenantContext.SetRole("STAFF");
+        var movementId = Guid.NewGuid();
+        var movement = new ShiftCashMovement
+        {
+            Id = movementId,
+            ShiftId = Guid.NewGuid(),
+            MovementType = CashMovementType.OUT,
+            Category = CashMovementCategory.EXPENSE,
+            Amount = 300_000m,
+            Reason = "Chi cần duyệt",
+            Status = CashMovementStatus.PendingApproval
+        };
+        _shiftRepository.CashMovements.Add(movement);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _service.ApproveCashMovementAsync(movementId, "Nhân viên"));
+
+        Assert.Equal(CashMovementStatus.PendingApproval, movement.Status);
+        Assert.Null(movement.ApprovedAtUtc);
     }
 
     [Fact]

@@ -130,12 +130,11 @@ public sealed class StoreOwnerDashboardService : IStoreOwnerDashboardService
                 o.Status != "Cancelled")
             .Select(o => new { o.CreatedAt, o.TotalAmount, o.DiscountAmount })
             .ToListAsync(ct);
-        var returns = await _db.CustomerDebtEntries.AsNoTracking()
-            .Where(e => e.TenantId == tenantId && !e.IsDeleted &&
-                (!branchId.HasValue || e.BranchId == branchId.Value) &&
-                e.EntryType == CustomerDebtType.GoodsReturnOffset &&
-                e.OccurredAtUtc >= fromUtc && e.OccurredAtUtc < toUtc)
-            .Select(e => new { e.OccurredAtUtc, e.Amount })
+        var returns = await _db.Orders.AsNoTracking()
+            .Where(o => o.TenantId == tenantId && !o.IsDeleted &&
+                (!branchId.HasValue || o.BranchId == branchId.Value) &&
+                o.ReturnedAmount > 0 && o.CreatedAt >= fromUtc && o.CreatedAt < toUtc)
+            .Select(o => new { OccurredAtUtc = o.CreatedAt, Amount = o.ReturnedAmount })
             .ToListAsync(ct);
 
         int HourInVietnam(DateTime utc) => TimeZoneInfo.ConvertTimeFromUtc(

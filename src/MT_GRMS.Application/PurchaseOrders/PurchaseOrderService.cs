@@ -464,7 +464,7 @@ public class PurchaseOrderService : IPurchaseOrderService
                     {
                         employeeQty = cell.EmployeeQty;
                         storeQty = detail!.StoreQty;
-                        isOwnerAdjusted = detail.IsOwnerAdjusted;
+                        isOwnerAdjusted = true;
                     }
                     else
                     {

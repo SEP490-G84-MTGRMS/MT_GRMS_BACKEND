@@ -28,7 +28,38 @@ public class AdminTenantsController : BaseApiController
     }
 
     /// <summary>
-    /// Lấy danh sách khách thuê có phân trang và bộ lọc theo từ khóa, trạng thái, gói cước (REQ-ADMIN-BE-02)
+    /// Tạo cửa hàng, tài khoản chủ sở hữu và chi nhánh chính.
+    /// </summary>
+    [HttpPost]
+    public async Task<IActionResult> CreateTenant(
+        [FromBody] CreateTenantRequest request,
+        [FromServices] TenantProvisioningService provisioningService,
+        CancellationToken cancellationToken)
+    {
+        var actorId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+            ?? User.FindFirst("sub")?.Value;
+        if (string.IsNullOrEmpty(actorId)) return Unauthorized();
+
+        try
+        {
+            var id = await provisioningService.CreateAsync(
+                request, actorId, User.Identity?.Name ?? actorId,
+                HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
+            return CreatedAtAction(nameof(GetById), new { id },
+                ApiResponse<object>.Ok(new { id }, "Tạo cửa hàng và tài khoản chủ cửa hàng thành công."));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", ex.Message));
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(ApiResponse<object>.Fail("TENANT_CONFLICT", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Lấy danh sách khách thuê có phân trang và bộ lọc.
     /// </summary>
     [HttpGet]
     public async Task<IActionResult> GetTenants([FromQuery] TenantFilterRequest filter, CancellationToken cancellationToken)

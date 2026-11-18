@@ -16,10 +16,15 @@ public class CashbookEntry : BaseTenantEntity
     public decimal Amount { get; set; }
     public decimal BalanceAfter { get; set; }
     public string SourceType { get; set; } = string.Empty; // POS, EXPENSE, DEBT, CASH_DROP, BANK_DEPOSIT, SALARY, EQUITY, ADJUSTMENT...
+    public string CategoryCode { get; set; } = "REVIEW_REQUIRED";
+    public FinancialNature FinancialNature { get; set; } = FinancialNature.Suspense;
+    public CashbookTaxTreatment TaxTreatment { get; set; } = CashbookTaxTreatment.ReviewRequired;
+    public string? TaxTreatmentReason { get; set; }
     public Guid? SourceId { get; set; }
     public string ReferenceCode { get; set; } = string.Empty;
     public Guid? ReversedEntryId { get; set; }
     public string AuditHash { get; set; } = string.Empty;
+    public int AuditSchemaVersion { get; set; } = 2;
     public string Description { get; set; } = string.Empty;
     public DateTime OccurredAtUtc { get; set; } = DateTime.UtcNow;
 }

@@ -1,11 +1,27 @@
 ﻿using MT_GRMS.Application.Reports;
 using MT_GRMS.Application.Reports.Dtos;
+using MT_GRMS.Application.Common;
 using Xunit;
 
 namespace MT_GRMS.UnitTests;
 
 public class PnLReportServiceTests
 {
+    private sealed class OwnerTenantContext : ITenantContext
+    {
+        public string CurrentTenantId { get; set; } = "tenant-test";
+        public Guid CurrentUserId { get; set; } = Guid.NewGuid();
+        public Guid? CurrentBranchId { get; set; }
+        public string CurrentRole { get; set; } = "STORE_OWNER";
+        public void SetContext(string tenantId, Guid userId, Guid? branchId)
+        {
+            CurrentTenantId = tenantId;
+            CurrentUserId = userId;
+            CurrentBranchId = branchId;
+        }
+        public void SetRole(string? role) => CurrentRole = role ?? string.Empty;
+    }
+
     private class FakePnLReportRepository : IPnLReportRepository
     {
         public RevenueAggregation Revenue { get; set; } = new(100_000_000m, 5_000_000m, 2_000_000m, 320);
@@ -44,8 +60,7 @@ public class PnLReportServiceTests
                     current,
                     93_000_000m,
                     60_000_000m,
-                    10_000_000m,
-                    1_000_000m
+                    10_000_000m
                 ));
                 current = current.AddDays(1);
             }
@@ -61,7 +76,7 @@ public class PnLReportServiceTests
 
     public PnLReportServiceTests()
     {
-        _service = new PnLReportService(_fakeRepo);
+        _service = new PnLReportService(_fakeRepo, new OwnerTenantContext());
     }
 
     [Fact]
@@ -87,10 +102,10 @@ public class PnLReportServiceTests
         Assert.Equal(10_000_000m, response.OperatingExpenses.TotalAmount);
         Assert.Equal(2, response.OperatingExpenses.Categories.Count);
 
-        // NetProfit = 33tr - 10tr (OPEX) - 1tr (BadDebt) = 22tr
-        Assert.Equal(22_000_000m, response.NetProfit);
-        // NetMargin % = (22tr / 93tr) * 100 = 23.66%
-        Assert.Equal(23.66m, response.NetMarginPercentage);
+        // NetProfit = 33tr - 10tr (OPEX) = 23tr
+        Assert.Equal(23_000_000m, response.NetProfit);
+        // NetMargin % = (23tr / 93tr) * 100 = 24.73%
+        Assert.Equal(24.73m, response.NetMarginPercentage);
 
         Assert.Equal("Toàn chuỗi (Consolidated)", response.BranchName);
         Assert.Equal("ACTUAL", response.CogsSource);
@@ -180,5 +195,19 @@ public class PnLReportServiceTests
         Assert.Equal(3, trend.Count); // 3 ngày: mùng 1, 2, 3
         Assert.Equal(from.Date, trend[0].Date);
         Assert.Equal(93_000_000m, trend[0].Revenue);
+    }
+
+    [Theory]
+    [InlineData("ADMIN")]
+    [InlineData("STAFF")]
+    [InlineData("MANAGER")]
+    [InlineData("CASHIER")]
+    [InlineData("StoreOwner")]
+    public async Task GetPnLSummaryAsync_WhenRoleIsNotCanonicalOwner_ShouldReject(string role)
+    {
+        var service = new PnLReportService(_fakeRepo, new OwnerTenantContext { CurrentRole = role });
+        var request = new PnLFilterRequest(null, new DateTime(2026, 10, 1), new DateTime(2026, 10, 2));
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.GetPnLSummaryAsync(request));
     }
 }

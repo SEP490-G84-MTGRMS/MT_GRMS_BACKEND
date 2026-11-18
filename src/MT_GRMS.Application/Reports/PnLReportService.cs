@@ -5,18 +5,20 @@ namespace MT_GRMS.Application.Reports;
 public class PnLReportService : IPnLReportService
 {
     private readonly IPnLReportRepository _pnlRepo;
+    private readonly MT_GRMS.Application.Common.ITenantContext _tenantContext;
 
-    public PnLReportService(IPnLReportRepository pnlRepo)
+    public PnLReportService(IPnLReportRepository pnlRepo, MT_GRMS.Application.Common.ITenantContext tenantContext)
     {
         _pnlRepo = pnlRepo;
+        _tenantContext = tenantContext;
     }
 
     public async Task<PnLSummaryResponse> GetPnLSummaryAsync(PnLFilterRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         var revenue = await _pnlRepo.GetRevenueAsync(request.BranchId, request.FromDate, request.ToDate, ct);
         var cogsData = await _pnlRepo.GetCogsAsync(request.BranchId, request.FromDate, request.ToDate, ct);
         var expenseItems = await _pnlRepo.GetOperatingExpensesAsync(request.BranchId, request.FromDate, request.ToDate, ct);
-        var badDebt = await _pnlRepo.GetBadDebtExpenseAsync(request.BranchId, request.FromDate, request.ToDate, ct);
         var topProductItems = await _pnlRepo.GetTopProductsAsync(request.BranchId, request.FromDate, request.ToDate, 10, ct);
 
         var netRevenue = Math.Max(0, revenue.GrossRevenue - revenue.Discounts - revenue.SalesReturns);
@@ -33,7 +35,7 @@ public class PnLReportService : IPnLReportService
             netRevenue > 0 ? Math.Round((e.Amount / netRevenue) * 100m, 2, MidpointRounding.AwayFromZero) : 0m
         )).ToList();
 
-        var netProfit = grossProfit - totalOpex - badDebt;
+        var netProfit = grossProfit - totalOpex;
         var netMarginPct = netRevenue > 0
             ? Math.Round((netProfit / netRevenue) * 100m, 2, MidpointRounding.AwayFromZero)
             : 0m;
@@ -48,8 +50,8 @@ public class PnLReportService : IPnLReportService
         var fefoGp = netRevenue - fefoSpecificCogs;
         var weightedGpMarginPct = netRevenue > 0 ? Math.Round((weightedGp / netRevenue) * 100m, 2, MidpointRounding.AwayFromZero) : 0m;
         var fefoGpMarginPct = netRevenue > 0 ? Math.Round((fefoGp / netRevenue) * 100m, 2, MidpointRounding.AwayFromZero) : 0m;
-        var weightedNp = weightedGp - totalOpex - badDebt;
-        var fefoNp = fefoGp - totalOpex - badDebt;
+        var weightedNp = weightedGp - totalOpex;
+        var fefoNp = fefoGp - totalOpex;
 
         var cogsComparison = new CogsValuationComparisonDto(
             weightedAvgCogs,
@@ -89,7 +91,6 @@ public class PnLReportService : IPnLReportService
             grossProfit,
             grossMarginPct,
             new OperatingExpenseSummary(totalOpex, categories),
-            badDebt,
             netProfit,
             netMarginPct,
             cogsData.Source,
@@ -104,12 +105,14 @@ public class PnLReportService : IPnLReportService
 
     public async Task<OperatingExpenseSummary> GetExpenseBreakdownAsync(PnLFilterRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         var summary = await GetPnLSummaryAsync(request, ct);
         return summary.OperatingExpenses;
     }
 
     public async Task<PnLComparisonResponse> GetComparisonAsync(PnLFilterRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         var currentSummary = await GetPnLSummaryAsync(request, ct);
 
         // Tính toán khoảng thời gian kỳ trước có độ dài tương đương
@@ -136,6 +139,7 @@ public class PnLReportService : IPnLReportService
 
     public async Task<List<PnLTrendPointResponse>> GetTrendAsync(PnLFilterRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         // Tối ưu hóa: Thay thế vòng lặp N+1 queries bằng 1 lần gom toàn kỳ qua GetDailyTrendAsync
         var dailyItems = await _pnlRepo.GetDailyTrendAsync(request.BranchId, request.FromDate, request.ToDate, ct);
 
@@ -144,7 +148,9 @@ public class PnLReportService : IPnLReportService
             d.NetRevenue,
             d.Cogs,
             d.Expenses,
-            d.NetRevenue - d.Cogs - d.Expenses - d.BadDebt
+            d.NetRevenue - d.Cogs - d.Expenses
         )).ToList();
     }
+
+    private void RequireOwner() => MT_GRMS.Application.Common.TenantRoleGuard.RequireStoreOwner(_tenantContext, "báo cáo lãi lỗ");
 }

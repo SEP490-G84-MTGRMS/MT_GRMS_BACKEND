@@ -458,22 +458,19 @@ public class PayslipService : IPayslipService
             ? $"Tạm ứng lương kỳ {payslip.PeriodMonth} cho nhân viên {employee.FullName}"
             : request.Note.Trim();
 
-        FinanceAccount? disbursedAccount = null;
-        if (_cashbookService != null)
-        {
-            disbursedAccount = await _cashbookService.ResolveDisbursementAccountAsync(
-                payslip.BranchId, method, request.CashbookAccountId, cancellationToken);
-            var entry = await _cashbookService.DisburseCashAsync(
-                disbursedAccount.Id,
-                disbursedAccount.AccountType,
-                request.Amount,
-                "SALARY_ADVANCE",
-                payslip.Id,
-                payslip.PayslipCode,
-                description,
-                cancellationToken);
-            voucherCode = entry.EntryCode;
-        }
+        var cashbookService = _cashbookService ?? throw new InvalidOperationException("Cashbook service is required to disburse a salary advance.");
+        var disbursedAccount = await cashbookService.ResolveDisbursementAccountAsync(
+            payslip.BranchId, method, request.CashbookAccountId, cancellationToken);
+        var entry = await cashbookService.DisburseCashAsync(
+            disbursedAccount.Id,
+            disbursedAccount.AccountType,
+            request.Amount,
+            "SALARY_ADVANCE",
+            payslip.Id,
+            payslip.PayslipCode,
+            description,
+            cancellationToken);
+        voucherCode = entry.EntryCode;
 
         await RecordSalaryExpenseVoucherAsync(
             payslip,
@@ -484,22 +481,6 @@ public class PayslipService : IPayslipService
             paidAtUtc,
             description,
             cancellationToken);
-
-        var cashbookTransaction = new CashbookTransaction
-        {
-            Id = Guid.NewGuid(),
-            TenantId = _tenantContext.CurrentTenantId,
-            BranchId = payslip.BranchId,
-            Type = CashbookType.Payment,
-            Category = "Tạm ứng lương nhân viên",
-            Amount = request.Amount,
-            ReferenceCode = payslip.PayslipCode,
-            TransactionCode = voucherCode,
-            Description = description,
-            CreatedByUserId = _tenantContext.CurrentUserId,
-            CreatedAt = paidAtVn
-        };
-        await _payslipRepository.AddCashbookTransactionAsync(cashbookTransaction, cancellationToken);
 
         employee.DebtAmount += request.Amount;
         _employeeRepository.Update(employee);
@@ -539,7 +520,7 @@ public class PayslipService : IPayslipService
             ? $"Chi trả lương kỳ {payslip.PeriodMonth} cho nhân viên {employeeName}"
             : request.Note.Trim();
 
-        var (voucherCode, disbursedAccount) = await DisbursePayslipCashbookAsync(
+        var (voucherCode, disbursedAccount, cashbookEntryId) = await DisbursePayslipCashbookAsync(
             payslip, method, request.CashbookAccountId, paidAtVn, description, cancellationToken);
 
         await RecordSalaryExpenseVoucherAsync(
@@ -558,24 +539,7 @@ public class PayslipService : IPayslipService
         payslip.PaidBy = _tenantContext.CurrentUserId.ToString();
         payslip.Note = request.Note ?? payslip.Note;
 
-        var cashbookTransaction = new CashbookTransaction
-        {
-            Id = Guid.NewGuid(),
-            TenantId = _tenantContext.CurrentTenantId,
-            BranchId = payslip.BranchId,
-            Type = CashbookType.Payment,
-            Category = "Chi phí lương nhân viên",
-            Amount = payslip.NetSalary,
-            ReferenceCode = payslip.PayslipCode,
-            TransactionCode = voucherCode,
-            Description = description,
-            CreatedByUserId = _tenantContext.CurrentUserId,
-            CreatedAt = paidAtVn
-        };
-
-        await _payslipRepository.AddCashbookTransactionAsync(cashbookTransaction, cancellationToken);
-
-        payslip.CashbookTransactionId = cashbookTransaction.Id;
+        payslip.CashbookEntryId = cashbookEntryId;
         payslip.CashbookVoucherCode = voucherCode;
 
         if (payslip.Employee != null && payslip.AdvanceDeduction > 0)
@@ -622,10 +586,11 @@ public class PayslipService : IPayslipService
                 : request.Note.Trim();
 
             string voucherCode;
+            Guid? cashbookEntryId;
             FinanceAccount? disbursedAccount;
             try
             {
-                (voucherCode, disbursedAccount) = await DisbursePayslipCashbookAsync(
+                (voucherCode, disbursedAccount, cashbookEntryId) = await DisbursePayslipCashbookAsync(
                     payslip, method, request.CashbookAccountId, paidAtVn, description, cancellationToken);
             }
             catch (Exception ex)
@@ -650,24 +615,7 @@ public class PayslipService : IPayslipService
             payslip.PaidBy = _tenantContext.CurrentUserId.ToString();
             payslip.Note = request.Note ?? payslip.Note;
 
-            var cashbookTransaction = new CashbookTransaction
-            {
-                Id = Guid.NewGuid(),
-                TenantId = _tenantContext.CurrentTenantId,
-                BranchId = payslip.BranchId,
-                Type = CashbookType.Payment,
-                Category = "Chi phí lương nhân viên",
-                Amount = payslip.NetSalary,
-                ReferenceCode = payslip.PayslipCode,
-                TransactionCode = voucherCode,
-                Description = description,
-                CreatedByUserId = _tenantContext.CurrentUserId,
-                CreatedAt = paidAtVn
-            };
-
-            await _payslipRepository.AddCashbookTransactionAsync(cashbookTransaction, cancellationToken);
-
-            payslip.CashbookTransactionId = cashbookTransaction.Id;
+            payslip.CashbookEntryId = cashbookEntryId;
             payslip.CashbookVoucherCode = voucherCode;
 
             if (payslip.Employee != null && payslip.AdvanceDeduction > 0)
@@ -799,7 +747,7 @@ public class PayslipService : IPayslipService
         await _expenseRepository.AddAsync(voucher, cancellationToken);
     }
 
-    private async Task<(string VoucherCode, FinanceAccount? Account)> DisbursePayslipCashbookAsync(
+    private async Task<(string VoucherCode, FinanceAccount? Account, Guid? EntryId)> DisbursePayslipCashbookAsync(
         Payslip payslip,
         string method,
         Guid? cashbookAccountId,
@@ -808,14 +756,16 @@ public class PayslipService : IPayslipService
         CancellationToken cancellationToken)
     {
         var fallbackVoucherCode = $"PC-{paidAtVn:yyyyMM}-{Random.Shared.Next(1000, 9999)}";
-        if (_cashbookService == null || payslip.NetSalary <= 0)
+        if (payslip.NetSalary <= 0)
         {
-            return (fallbackVoucherCode, null);
+            return (fallbackVoucherCode, null, null);
         }
 
-        var account = await _cashbookService.ResolveDisbursementAccountAsync(
+        var cashbookService = _cashbookService ?? throw new InvalidOperationException("Cashbook service is required to disburse a payslip.");
+
+        var account = await cashbookService.ResolveDisbursementAccountAsync(
             payslip.BranchId, method, cashbookAccountId, cancellationToken);
-        var entry = await _cashbookService.DisburseCashAsync(
+        var entry = await cashbookService.DisburseCashAsync(
             account.Id,
             account.AccountType,
             payslip.NetSalary,
@@ -824,7 +774,7 @@ public class PayslipService : IPayslipService
             payslip.PayslipCode,
             description,
             cancellationToken);
-        return (entry.EntryCode, account);
+        return (entry.EntryCode, account, entry.Id);
     }
 
     public async Task<bool> DeletePayslipAsync(
@@ -1144,7 +1094,7 @@ public class PayslipService : IPayslipService
             BankAccountNumber: p.BankAccountNumber,
             BankName: p.BankName,
             BankAccountHolder: p.BankAccountHolder,
-            CashbookTransactionId: p.CashbookTransactionId,
+            CashbookEntryId: p.CashbookEntryId,
             CashbookVoucherCode: p.CashbookVoucherCode,
             Note: p.Note,
             ApprovedBy: p.ApprovedBy,

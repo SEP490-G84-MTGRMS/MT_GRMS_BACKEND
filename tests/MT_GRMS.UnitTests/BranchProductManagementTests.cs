@@ -807,6 +807,31 @@ public class BranchProductManagementTests
             return Task.FromResult((IReadOnlyList<BranchStock>)BranchStocks.Where(s => s.BranchId == branchId && s.ProductId == productId).ToList());
         }
 
+        public Task SyncBranchStockCatalogAsync(
+            Guid branchId,
+            Guid productId,
+            decimal retailPrice,
+            string status,
+            string? shelfLocation,
+            CancellationToken cancellationToken = default)
+        {
+            foreach (var stock in BranchStocks.Where(s => s.BranchId == branchId && s.ProductId == productId))
+            {
+                stock.RetailPrice = retailPrice;
+                stock.Status = status;
+                stock.ShelfLocation = shelfLocation;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task AddUnitPriceOverrideAsync(BranchProductUnitPrice unitPrice, CancellationToken cancellationToken = default)
+        {
+            var catalog = BranchProducts.First(bp => bp.Id == unitPrice.BranchProductId);
+            catalog.UnitPriceOverrides.Add(unitPrice);
+            return Task.CompletedTask;
+        }
+
         public Task AddBranchStockAsync(
             BranchStock branchStock,
             CancellationToken cancellationToken = default)

@@ -51,14 +51,30 @@ public class CatalogServiceTests
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<ProductPriceHistory>> GetByProductIdAsync(Guid productId, Guid? branchId = null, CancellationToken cancellationToken = default)
+        public Task<(IReadOnlyList<ProductPriceHistory> Items, int TotalCount)> GetPagedByProductIdAsync(
+            Guid productId,
+            ProductPriceHistoryQuery filter,
+            CancellationToken cancellationToken = default)
         {
             var query = Histories.Where(h => h.ProductId == productId);
-            if (branchId.HasValue)
+            if (filter.BranchId.HasValue)
             {
-                query = query.Where(h => h.BranchId == branchId.Value);
+                query = query.Where(h => h.BranchId == filter.BranchId.Value || h.BranchId == null);
             }
-            return Task.FromResult<IReadOnlyList<ProductPriceHistory>>(query.ToList());
+            if (filter.ProductUnitId.HasValue)
+                query = query.Where(h => h.ProductUnitId == filter.ProductUnitId.Value);
+            if (!string.IsNullOrWhiteSpace(filter.PriceScope))
+                query = query.Where(h => h.PriceScope == filter.PriceScope);
+            if (filter.FromDate.HasValue)
+                query = query.Where(h => h.CreatedAt >= filter.FromDate.Value);
+            if (filter.ToDate.HasValue)
+                query = query.Where(h => h.CreatedAt <= filter.ToDate.Value);
+            if (!string.IsNullOrWhiteSpace(filter.SearchTerm))
+                query = query.Where(h => h.ChangedByUserName.Contains(filter.SearchTerm, StringComparison.OrdinalIgnoreCase) || h.Reason.Contains(filter.SearchTerm, StringComparison.OrdinalIgnoreCase));
+
+            var filtered = query.OrderByDescending(h => h.CreatedAt).ToList();
+            return Task.FromResult<(IReadOnlyList<ProductPriceHistory>, int)>(
+                (filtered.Skip((filter.Page - 1) * filter.PageSize).Take(filter.PageSize).ToList(), filtered.Count));
         }
     }
 
@@ -525,6 +541,138 @@ public class CatalogServiceTests
         var secondaryUnit = product.Units.First(u => !u.IsBaseUnit);
         Assert.False(secondaryUnit.IsPurchaseUnit);
         Assert.True(uow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task GetPriceHistoryAsync_ReturnsRequestedPageAndTotalCount()
+    {
+        var (service, _, _, historyRepo, _, _, _) = CreateSut();
+        var productId = Guid.NewGuid();
+        for (var i = 1; i <= 5; i++)
+        {
+            historyRepo.Histories.Add(new ProductPriceHistory
+            {
+                ProductId = productId,
+                PriceScope = "MASTER",
+                OldPrice = i * 1000,
+                NewPrice = i * 1100,
+                ChangedByUserId = Guid.NewGuid().ToString(),
+                ChangedByUserName = "Chủ cửa hàng",
+                Reason = $"Lần đổi {i}",
+                CreatedAt = DateTime.UtcNow.AddMinutes(i)
+            });
+        }
+
+        var result = await service.GetPriceHistoryAsync(productId, new ProductPriceHistoryQuery
+        {
+            Page = 2,
+            PageSize = 2
+        });
+
+        Assert.Equal(5, result.TotalItems);
+        Assert.Equal(2, result.Page);
+        Assert.Equal(2, result.PageSize);
+        Assert.Equal(2, result.Items.Count);
+    }
+
+    [Fact]
+    public async Task GetPriceHistoryAsync_ProductUnitFilter_ReturnsOnlySelectedUnit()
+    {
+        var (service, _, _, historyRepo, _, _, _) = CreateSut();
+        var productId = Guid.NewGuid();
+        var selectedUnitId = Guid.NewGuid();
+        historyRepo.Histories.AddRange([
+            new ProductPriceHistory
+            {
+                ProductId = productId, ProductUnitId = selectedUnitId, PriceScope = "MASTER",
+                ChangedByUserId = "owner", ChangedByUserName = "Chủ cửa hàng", Reason = "Giá thùng"
+            },
+            new ProductPriceHistory
+            {
+                ProductId = productId, ProductUnitId = Guid.NewGuid(), PriceScope = "MASTER",
+                ChangedByUserId = "owner", ChangedByUserName = "Chủ cửa hàng", Reason = "Giá lốc"
+            }
+        ]);
+
+        var result = await service.GetPriceHistoryAsync(productId, new ProductPriceHistoryQuery
+        {
+            ProductUnitId = selectedUnitId
+        });
+
+        var item = Assert.Single(result.Items);
+        Assert.Equal(selectedUnitId, item.ProductUnitId);
+        Assert.Equal(1, result.TotalItems);
+    }
+
+    [Fact]
+    public async Task GetPriceHistoryAsync_ForBranch_IncludesMasterAndThatBranchHistory()
+    {
+        var (service, _, _, historyRepo, _, _, _) = CreateSut();
+        var productId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        historyRepo.Histories.AddRange([
+            new ProductPriceHistory
+            {
+                ProductId = productId, BranchId = null, PriceScope = "MASTER",
+                ChangedByUserId = "owner", ChangedByUserName = "Chủ cửa hàng", Reason = "Giá chung"
+            },
+            new ProductPriceHistory
+            {
+                ProductId = productId, BranchId = branchId, PriceScope = "BRANCH",
+                ChangedByUserId = "owner", ChangedByUserName = "Chủ cửa hàng", Reason = "Giá chi nhánh"
+            },
+            new ProductPriceHistory
+            {
+                ProductId = productId, BranchId = Guid.NewGuid(), PriceScope = "BRANCH",
+                ChangedByUserId = "owner", ChangedByUserName = "Chủ cửa hàng", Reason = "Chi nhánh khác"
+            }
+        ]);
+
+        var result = await service.GetPriceHistoryAsync(productId, new ProductPriceHistoryQuery
+        {
+            BranchId = branchId
+        });
+
+        Assert.Equal(2, result.TotalItems);
+        Assert.Contains(result.Items, item => item.PriceScope == "MASTER");
+        Assert.Contains(result.Items, item => item.BranchId == branchId && item.PriceScope == "BRANCH");
+        Assert.DoesNotContain(result.Items, item => item.Reason == "Chi nhánh khác");
+    }
+
+    [Theory]
+    [InlineData("UNKNOWN")]
+    [InlineData("COST")]
+    public async Task GetPriceHistoryAsync_InvalidScope_ThrowsArgumentException(string scope)
+    {
+        var (service, _, _, _, _, _, _) = CreateSut();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.GetPriceHistoryAsync(
+            Guid.NewGuid(),
+            new ProductPriceHistoryQuery { PriceScope = scope }));
+    }
+
+    [Fact]
+    public async Task GetPriceHistoryAsync_InvalidDateRange_ThrowsArgumentException()
+    {
+        var (service, _, _, _, _, _, _) = CreateSut();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.GetPriceHistoryAsync(
+            Guid.NewGuid(),
+            new ProductPriceHistoryQuery
+            {
+                FromDate = new DateTime(2026, 11, 16),
+                ToDate = new DateTime(2026, 11, 15)
+            }));
+    }
+
+    [Fact]
+    public async Task GetPriceHistoryAsync_NormalizesPagingAndRejectsLongSearchTerm()
+    {
+        var (service, _, _, _, _, _, _) = CreateSut();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.GetPriceHistoryAsync(
+            Guid.NewGuid(),
+            new ProductPriceHistoryQuery { Page = 0, PageSize = 1000, SearchTerm = new string('x', 101) }));
     }
 
     [Fact]

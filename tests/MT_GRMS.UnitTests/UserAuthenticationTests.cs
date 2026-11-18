@@ -14,8 +14,102 @@ namespace MT_GRMS.UnitTests;
 
 public class UserAuthenticationTests
 {
+    private const string TestJwtKey = "MT_GRMS_UNIT_TEST_JWT_SIGNING_SECRET_2026_0123456789";
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("UNKNOWN")]
+    public void UnknownRole_IsRejected(string? role) =>
+        Assert.Throws<ArgumentException>(() => MT_GRMS.Domain.Enums.UserRoleNames.FromString(role));
+
+    [Theory]
+    [InlineData("BRANCH_MANAGER")]
+    [InlineData("MANAGER")]
+    [InlineData("CASHIER")]
+    [InlineData("EMPLOYEE")]
+    public void LegacyStaffRoles_AreNeverPromotedToOwner(string role) =>
+        Assert.Equal(MT_GRMS.Domain.Enums.UserRole.Staff, LegacyRoleReader.ReadStoredRole(role));
+
+    [Fact]
+    public async Task DemoPassword_DoesNotBypassStoredPassword()
+    {
+        var repo = new FakeUserRepository();
+        await repo.AddAsync(new User { Id = "admin-id", Username = "admin", Password = "DifferentPassword", IsAdmin = true });
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            CreateAuthService(repo).LoginAsync(new LoginRequest("admin", "password123", null)));
+    }
+
+    [Fact]
+    public async Task LegacyBranchManager_LoginAndRefreshIssueOnlyStaffRole()
+    {
+        var repo = new FakeUserRepository();
+        var user = new User { Id = "staff-id", Username = "staff", Password = "StrongPassword", IsTwoFactorEnabled = false };
+        user.TenantUsers.Add(new TenantUser { TenantId = "tenant-a", UserId = user.Id, Role = "BRANCH_MANAGER" });
+        await repo.AddAsync(user);
+        var service = CreateAuthService(repo);
+        var login = await service.LoginAsync(new LoginRequest("staff", "StrongPassword", "tenant-a"));
+        var refresh = await service.RefreshTokenAsync(new RefreshTokenRequest(login.RefreshToken));
+        foreach (var session in new[] { login, refresh })
+        {
+            Assert.Equal("STAFF", session.User.Role);
+            var jwt = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ReadJwtToken(session.AccessToken);
+            Assert.All(jwt.Claims.Where(c => c.Type == "role" || c.Type == System.Security.Claims.ClaimTypes.Role), c => Assert.Equal("STAFF", c.Value));
+            Assert.Contains(jwt.Claims, c => c.Type == "tenant_id" && c.Value == "tenant-a");
+            Assert.Contains(jwt.Claims, c => c.Type == "security_stamp" && c.Value == user.SecurityStamp);
+        }
+    }
+
+    [Fact]
+    public async Task Login_WithMismatchedTenant_IsRejected()
+    {
+        var repo = new FakeUserRepository();
+        var user = new User { Id = "owner-id", Username = "owner", Password = "StrongPassword", IsTwoFactorEnabled = false };
+        user.TenantUsers.Add(new TenantUser { TenantId = "tenant-a", UserId = user.Id, Role = "STORE_OWNER" });
+        await repo.AddAsync(user);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            CreateAuthService(repo).LoginAsync(new LoginRequest("owner", "StrongPassword", "tenant-b")));
+    }
+
+    [Fact]
+    public async Task Refresh_RotatesHashedTokenAndRejectsReplays_PreservingSecurityStamp()
+    {
+        var repo = new FakeUserRepository();
+        var user = new User { Id = "refresh-owner", Username = "refresh-owner", Password = "StrongPassword123!", IsTwoFactorEnabled = false };
+        user.TenantUsers.Add(new TenantUser { TenantId = "tenant-a", UserId = user.Id, Role = "STORE_OWNER" });
+        await repo.AddAsync(user);
+        var service = CreateAuthService(repo);
+        var login = await service.LoginAsync(new LoginRequest(user.Username, "StrongPassword123!", "tenant-a"));
+        var stamp = user.SecurityStamp;
+        var storedLoginToken = user.RefreshToken;
+        Assert.StartsWith("sha256:", storedLoginToken);
+        Assert.NotEqual(login.RefreshToken, storedLoginToken);
+        Assert.False(string.IsNullOrWhiteSpace(stamp));
+
+        var refreshed = await service.RefreshTokenAsync(new RefreshTokenRequest(login.RefreshToken));
+        Assert.NotEqual(login.RefreshToken, refreshed.RefreshToken);
+        Assert.NotEqual(storedLoginToken, user.RefreshToken);
+        Assert.Equal("sha256:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(refreshed.RefreshToken))), user.RefreshToken);
+        Assert.Equal(stamp, user.SecurityStamp);
+        var jwt = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ReadJwtToken(refreshed.AccessToken);
+        Assert.Contains(jwt.Claims, claim => claim.Type == "security_stamp" && claim.Value == stamp);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.RefreshTokenAsync(new RefreshTokenRequest(login.RefreshToken)));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.RefreshTokenAsync(new RefreshTokenRequest(user.RefreshToken!)));
+    }
+
+    private static AuthService CreateAuthService(FakeUserRepository repository) =>
+        new(repository, new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Jwt:Key"] = TestJwtKey,
+            ["Jwt:Issuer"] = "MTGRMS_API",
+            ["Jwt:Audience"] = "MTGRMS_CLIENT"
+        }).Build());
+
     private class FakeUserRepository : IUserRepository
     {
+        public Guid? AssignedBranch { get; set; } = Guid.NewGuid();
+        public Task<Guid?> GetEmployeeBranchIdAsync(string userId, string tenantId, CancellationToken cancellationToken = default)
+            => Task.FromResult(AssignedBranch);
         private readonly List<User> _users = new();
         public MT_GRMS.Domain.Entities.SaaS.Tenant? LastRegisteredTenant { get; private set; }
 
@@ -130,7 +224,7 @@ public class UserAuthenticationTests
         };
         await repo.AddAsync(seedUser);
 
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN
         var response = await authService.LoginAsync(new LoginRequest(
@@ -149,7 +243,7 @@ public class UserAuthenticationTests
         Assert.Equal("ADMIN", response.User.Role);
         Assert.Equal("ADMIN", response.User.RoleName);
         Assert.True(response.User.IsAdmin);
-        Assert.Equal("TENANT-01", response.User.TenantId);
+        Assert.Equal(string.Empty, response.User.TenantId);
     }
 
     [Fact]
@@ -165,8 +259,9 @@ public class UserAuthenticationTests
             IsTwoFactorEnabled = false,
             IsAdmin = false
         };
+        seedUser.TenantUsers.Add(new TenantUser { TenantId = "TENANT-01", UserId = seedUser.Id, Role = "STORE_OWNER" });
         await repo.AddAsync(seedUser);
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN
         var response = await authService.LoginAsync(new LoginRequest("shopowner", "Password@123", "TENANT-01"));
@@ -188,7 +283,7 @@ public class UserAuthenticationTests
             Password = "CorrectPassword@123"
         });
 
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN & THEN
         var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
@@ -199,7 +294,7 @@ public class UserAuthenticationTests
     }
 
     [Fact]
-    public async Task AuthService_LoginAsync_Should_Fallback_To_DefaultTenant_When_TenantCode_Null()
+    public async Task AuthService_LoginAsync_UsernameAdminWithoutAdminFlag_IsNotAdmin()
     {
         // GIVEN
         var repo = new FakeUserRepository();
@@ -211,14 +306,10 @@ public class UserAuthenticationTests
             IsTwoFactorEnabled = false
         });
 
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN
-        var response = await authService.LoginAsync(new LoginRequest("admin", "Password@123", TenantCode: null));
-
-        // THEN
-        Assert.Equal("tenant_mt_mart_01", response.User.TenantId);
-        Assert.Equal("usr_admin_01", response.User.Id);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => authService.LoginAsync(new LoginRequest("admin", "Password@123", TenantCode: null)));
     }
 
     [Fact]
@@ -226,7 +317,7 @@ public class UserAuthenticationTests
     {
         // GIVEN
         var repo = new FakeUserRepository();
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN & THEN (Không có user trong DB -> Phải ném UnauthorizedAccessException)
         var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
@@ -241,7 +332,7 @@ public class UserAuthenticationTests
     {
         // GIVEN
         var repo = new FakeUserRepository();
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN & THEN
         await Assert.ThrowsAsync<ArgumentException>(() =>
@@ -261,9 +352,10 @@ public class UserAuthenticationTests
         await repo.AddAsync(new User { Id = "usr_01", Username = "user01", Password = "123", IsAdmin = true, IsTwoFactorEnabled = false });
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["Jwt:ExpiresMinutes"] = "120"
+            ["Jwt:ExpiresMinutes"] = "120",
+            ["Jwt:Key"] = TestJwtKey
         }).Build();
-        var authService = new AuthService(repo, config);
+        var authService = new AuthService(repo, config, passwordHasher: new PasswordHasher());
 
         // WHEN
         var before = DateTime.UtcNow;
@@ -288,7 +380,7 @@ public class UserAuthenticationTests
             RefreshToken = "mt_refresh_token_sample",
             RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7)
         });
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
 
         // WHEN
         var response = await authService.RefreshTokenAsync(new RefreshTokenRequest("mt_refresh_token_sample"));
@@ -350,9 +442,11 @@ public class UserAuthenticationTests
     {
         var repo = new FakeUserRepository();
         var hashedPass = PasswordHasher.Hash("Secret@999");
-        await repo.AddAsync(new User { Id = "usr_hash", Username = "user_hash", PasswordHash = hashedPass, IsTwoFactorEnabled = false });
+        var user = new User { Id = "usr_hash", Username = "user_hash", PasswordHash = hashedPass, IsTwoFactorEnabled = false };
+        user.TenantUsers.Add(new TenantUser { TenantId = "tenant-a", UserId = user.Id, Role = "STAFF" });
+        await repo.AddAsync(user);
 
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
         var res = await authService.LoginAsync(new LoginRequest("user_hash", "Secret@999", null));
 
         Assert.NotNull(res);

@@ -19,6 +19,7 @@ public record VatBreakdown
 /// </summary>
 public record TaxCalculationContext
 {
+    public decimal ExemptionThreshold { get; init; } = RevenuePercentageTaxStrategy.TaxExemptionThreshold;
     public HouseholdTaxGroup Group { get; init; }
     public bool IsExempt { get; init; }
     public decimal AnnualAccumulatedRevenue { get; init; }

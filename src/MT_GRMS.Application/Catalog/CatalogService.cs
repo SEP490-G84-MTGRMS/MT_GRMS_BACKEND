@@ -418,6 +418,7 @@ public class CatalogService : ICatalogService
                 Id = Guid.NewGuid(),
                 TenantId = _tenantContext.CurrentTenantId,
                 ProductId = product.Id,
+                ProductUnitId = product.Units.FirstOrDefault(u => u.IsBaseUnit && !u.IsDeleted)?.Id,
                 BranchId = null,
                 PriceScope = "MASTER",
                 PriceType = "SELLING_PRICE",
@@ -425,8 +426,8 @@ public class CatalogService : ICatalogService
                 NewPrice = newPrice,
                 CostPriceSnapshot = costSnapshot,
                 IsBelowCost = isBelowCost,
-                ManagerApprovedBy = isBelowCost ? (_tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "STORE_OWNER") : null,
-                ManagerApprovalReason = isBelowCost ? "Xác nhận bán dưới giá vốn" : null,
+                ManagerApprovedBy = null,
+                ManagerApprovalReason = null,
                 ChangedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM",
                 ChangedByUserName = !string.IsNullOrEmpty(_tenantContext.CurrentRole) ? _tenantContext.CurrentRole : "Quản lý",
                 Reason = isBelowCost ? "Điều chỉnh giá bán (Dưới giá vốn)" : "Điều chỉnh giá bán",
@@ -592,15 +593,43 @@ public class CatalogService : ICatalogService
         return items.Select(p => MapToResponse(p, canSeeCost, productIdsWithOrders.Contains(p.Id))).ToList();
     }
 
-    public async Task<IReadOnlyList<ProductPriceHistoryDto>> GetPriceHistoryAsync(Guid productId, Guid? branchId = null, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<ProductPriceHistoryDto>> GetPriceHistoryAsync(Guid productId, ProductPriceHistoryQuery query, CancellationToken cancellationToken = default)
     {
-        if (_priceHistoryRepository == null) return Array.Empty<ProductPriceHistoryDto>();
-        var list = await _priceHistoryRepository.GetByProductIdAsync(productId, branchId, cancellationToken);
-        return list.Select(h => new ProductPriceHistoryDto(
+        if (productId == Guid.Empty)
+            throw new ArgumentException("Mã sản phẩm không hợp lệ.", nameof(productId));
+        ArgumentNullException.ThrowIfNull(query);
+
+        query.Page = Math.Max(1, query.Page);
+        query.PageSize = Math.Clamp(query.PageSize, 1, 100);
+        query.SearchTerm = string.IsNullOrWhiteSpace(query.SearchTerm) ? null : query.SearchTerm.Trim();
+        if (query.SearchTerm?.Length > 100)
+            throw new ArgumentException("Từ khóa tìm kiếm không được vượt quá 100 ký tự.", nameof(query.SearchTerm));
+
+        query.PriceScope = string.IsNullOrWhiteSpace(query.PriceScope)
+            ? null
+            : query.PriceScope.Trim().ToUpperInvariant();
+        if (query.PriceScope is not null and not "MASTER" and not "BRANCH")
+            throw new ArgumentException("Phạm vi giá chỉ nhận MASTER hoặc BRANCH.", nameof(query.PriceScope));
+        if (query.BranchId == Guid.Empty)
+            query.BranchId = null;
+        if (!query.BranchId.HasValue)
+            query.PriceScope = "MASTER";
+        if (query.ProductUnitId == Guid.Empty)
+            query.ProductUnitId = null;
+        if (query.FromDate.HasValue && query.ToDate.HasValue && query.FromDate > query.ToDate)
+            throw new ArgumentException("Ngày bắt đầu không được sau ngày kết thúc.");
+
+        if (_priceHistoryRepository == null)
+            return new PagedResult<ProductPriceHistoryDto> { Page = query.Page, PageSize = query.PageSize };
+
+        var (items, totalCount) = await _priceHistoryRepository.GetPagedByProductIdAsync(productId, query, cancellationToken);
+        var dtos = items.Select(h => new ProductPriceHistoryDto(
             h.Id,
             h.ProductId,
             h.BranchId,
             h.Branch?.Name,
+            h.ProductUnitId,
+            h.ProductUnit?.UnitName,
             h.PriceScope,
             h.PriceType,
             h.OldPrice,
@@ -614,6 +643,14 @@ public class CatalogService : ICatalogService
             h.Reason,
             h.CreatedAt
         )).ToList();
+
+        return new PagedResult<ProductPriceHistoryDto>
+        {
+            Items = dtos,
+            Page = query.Page,
+            PageSize = query.PageSize,
+            TotalItems = totalCount
+        };
     }
 
     private bool CanViewCostPrice()

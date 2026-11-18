@@ -14,5 +14,4 @@ public interface IPayslipRepository
     void Update(Payslip payslip);
     void Delete(Payslip payslip);
     Task<int> GetCountByPeriodMonthAsync(string periodMonth, CancellationToken cancellationToken = default);
-    Task AddCashbookTransactionAsync(Domain.Entities.Finance.CashbookTransaction transaction, CancellationToken cancellationToken = default);
 }

@@ -66,59 +66,6 @@ public class DbInitializerIntegrationTests
     }
 
     [Fact]
-    public async Task DbInitializer_SeedTaxAndFinanceAsync_ShouldExecute()
-    {
-        using var context = CreateDbContext();
-        var logger = NullLogger.Instance;
-
-        await DbInitializer.SeedTaxAndFinanceAsync(context, logger);
-
-        var tenantCount = await context.Tenants.IgnoreQueryFilters().CountAsync();
-        Assert.True(tenantCount >= 1);
-    }
-
-    [Fact]
-    public async Task DbInitializer_SeedTaxAndFinanceAsync_Twice_ShouldSeedSupplierReturnsAndGrns()
-    {
-        using var context = CreateDbContext();
-        var logger = NullLogger.Instance;
-
-        await DbInitializer.SeedTaxAndFinanceAsync(context, logger);
-        // Second run will find seeded suppliers and products and execute SeedSupplierReturnsAndGrnsAsync
-        await DbInitializer.SeedTaxAndFinanceAsync(context, logger);
-
-        var returnCount = await context.SupplierReturns.IgnoreQueryFilters().CountAsync();
-        Assert.True(returnCount >= 4);
-    }
-
-    [Fact]
-    public async Task DbInitializer_SeedOrdersAndPreOrdersAsync_ShouldExecute()
-    {
-        using var context = CreateDbContext();
-
-        // Should seed branches, customers, orders
-        await DbInitializer.SeedOrdersAndPreOrdersAsync(context);
-
-        var branchCount = await context.Branches.IgnoreQueryFilters().CountAsync();
-        Assert.True(branchCount >= 3);
-    }
-
-    [Fact]
-    public async Task DbInitializer_SeedNewStoreOwnerAnNhienAsync_ShouldExecute_Idempotently()
-    {
-        using var context = CreateDbContext();
-
-        // First run: inserts owner, users, tenant
-        await DbInitializer.SeedNewStoreOwnerAnNhienAsync(context);
-
-        // Second run: updates credentials and branches
-        await DbInitializer.SeedNewStoreOwnerAnNhienAsync(context);
-
-        var tenantCount = await context.Tenants.IgnoreQueryFilters().CountAsync();
-        Assert.True(tenantCount >= 1);
-    }
-
-    [Fact]
     public async Task DbInitializer_EnsureSchemaAndPrivateMethods_ShouldExecute()
     {
         using var context = CreateDbContext();

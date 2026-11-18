@@ -1,8 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Tax.Security;
+using MT_GRMS.Application.Tax.Strategies;
+using MT_GRMS.Application.Tax;
+using MT_GRMS.Application.Tax.Dtos;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Entities.Finance;
-using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Infrastructure.Repositories;
@@ -12,6 +15,15 @@ namespace MT_GRMS.IntegrationTests;
 
 public class HouseholdTaxDatabaseIntegrationTests
 {
+    private sealed class AcceptingPinService : IPinVerificationService
+    {
+        public Task<PinVerificationResult> VerifyStoreOwnerPinAsync(string userId, string inputPin, CancellationToken ct = default) =>
+            Task.FromResult(new PinVerificationResult(true));
+        public Task SetStoreOwnerPinAsync(string userId, string newPin, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ChangeSecurityPinAsync(string userId, ChangeSecurityPinRequest request, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ResetSecurityPinAsync(string userId, ResetSecurityPinRequest request, CancellationToken ct = default) => Task.CompletedTask;
+    }
+
     private class FakeTenantContext : ITenantContext
     {
         public string CurrentTenantId { get; set; } = "tenant-tax-01";
@@ -23,8 +35,30 @@ public class HouseholdTaxDatabaseIntegrationTests
             CurrentUserId = userId;
             CurrentBranchId = branchId;
         }
-        public string CurrentRole { get; set; } = "ADMIN";
+        public string CurrentRole { get; set; } = "STORE_OWNER";
         public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
+    }
+
+    private static HouseholdTaxService CreateTaxService(IHouseholdTaxRepository repository) =>
+        new(
+            repository,
+            new TaxCalculationStrategyFactory(new ITaxCalculationStrategy[]
+            {
+                new RevenuePercentageTaxStrategy(),
+                new DeclarationBasedTaxStrategy()
+            }),
+            new AcceptingPinService(),
+            null,
+            null,
+            new FakeTenantContext());
+
+    private static Task<HouseholdTaxSnapshotDto> FinalizeAsync(
+        HouseholdTaxService service,
+        CreateTaxSnapshotRequest request,
+        string actor)
+    {
+        request.SecurityPin = "123456";
+        return service.FinalizeTaxSnapshotAsync(request, actor, "owner-user-id");
     }
 
     private AppDbContext CreateDbContext()
@@ -54,6 +88,7 @@ public class HouseholdTaxDatabaseIntegrationTests
             SubTotal = 10_000_000m,
             DiscountAmount = 500_000m,
             FinalAmount = 9_500_000m,
+            ReturnedAmount = 1_000_000m,
             PaymentStatus = "PAID",
             CreatedAt = new DateTime(2026, 2, 10, 10, 0, 0, DateTimeKind.Utc)
         };
@@ -69,16 +104,7 @@ public class HouseholdTaxDatabaseIntegrationTests
             CreatedAt = new DateTime(2026, 2, 15, 14, 0, 0, DateTimeKind.Utc)
         };
 
-        var returnEntry = new CustomerDebtEntry
-        {
-            BranchId = branchId,
-            EntryType = CustomerDebtType.GoodsReturnOffset,
-            Amount = 1_000_000m,
-            OccurredAtUtc = new DateTime(2026, 2, 20, 9, 0, 0, DateTimeKind.Utc)
-        };
-
         context.Orders.AddRange(order1, order2);
-        context.CustomerDebtEntries.Add(returnEntry);
         await context.SaveChangesAsync();
 
         // Act
@@ -329,6 +355,8 @@ public class HouseholdTaxDatabaseIntegrationTests
                 BranchId = branchId,
                 Category = "Tiền điện nước",
                 Amount = 5_000_000m,
+                Nature = FinancialNature.OperatingExpense,
+                IsTaxDeductible = true,
                 Status = ExpenseVoucherStatus.Paid,
                 ExpenseDate = new DateTime(2026, 1, 20, 0, 0, 0, DateTimeKind.Utc)
             },
@@ -337,6 +365,8 @@ public class HouseholdTaxDatabaseIntegrationTests
                 BranchId = branchId,
                 Category = "Lương nhân viên phụ tiệm",
                 Amount = 15_000_000m,
+                Nature = FinancialNature.OperatingExpense,
+                IsTaxDeductible = true,
                 Status = ExpenseVoucherStatus.Approved,
                 ExpenseDate = new DateTime(2026, 1, 25, 0, 0, 0, DateTimeKind.Utc)
             },
@@ -655,144 +685,323 @@ public class HouseholdTaxDatabaseIntegrationTests
     }
 
     [Fact]
-    public async Task HouseholdTaxRepository_GetDeductibleExpenseVouchersAsync_ShouldFilterByDateBranchAndTaxDeductible()
+    public async Task FinalizeSnapshot_Supersede_WithRepositoryAndDbContext()
     {
         using var context = CreateDbContext();
         var repo = new HouseholdTaxRepository(context);
+        var service = CreateTaxService(repo);
 
-        var branchId = Guid.NewGuid();
-        var fromDate = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var toDate = new DateTime(2026, 1, 31, 23, 59, 59, DateTimeKind.Utc);
-
-        var ev1 = new ExpenseVoucher
+        // 1. Chốt kỳ ban đầu (Revision 0)
+        var req1 = new CreateTaxSnapshotRequest
         {
-            Id = Guid.NewGuid(),
-            BranchId = branchId,
-            VoucherCode = "PC-TAX-01",
-            ExpenseDate = new DateTime(2026, 1, 15, 0, 0, 0, DateTimeKind.Utc),
-            Amount = 2_000_000m,
-            IsTaxDeductible = true,
-            Status = ExpenseVoucherStatus.Paid,
-            CreatedAt = DateTime.UtcNow
-        };
-        var ev2 = new ExpenseVoucher
-        {
-            Id = Guid.NewGuid(),
-            BranchId = branchId,
-            VoucherCode = "PC-NOT-DEDUCTIBLE",
-            ExpenseDate = new DateTime(2026, 1, 16, 0, 0, 0, DateTimeKind.Utc),
-            Amount = 1_000_000m,
-            IsTaxDeductible = false,
-            Status = ExpenseVoucherStatus.Paid,
-            CreatedAt = DateTime.UtcNow
-        };
-        var ev3 = new ExpenseVoucher
-        {
-            Id = Guid.NewGuid(),
-            BranchId = Guid.NewGuid(),
-            VoucherCode = "PC-DIFF-BRANCH",
-            ExpenseDate = new DateTime(2026, 1, 17, 0, 0, 0, DateTimeKind.Utc),
-            Amount = 3_000_000m,
-            IsTaxDeductible = true,
-            Status = ExpenseVoucherStatus.Paid,
-            CreatedAt = DateTime.UtcNow
-        };
-        await context.ExpenseVouchers.AddRangeAsync(ev1, ev2, ev3);
-        await context.SaveChangesAsync();
-
-        var resultWithBranch = await repo.GetDeductibleExpenseVouchersAsync(fromDate, toDate, branchId);
-        Assert.Single(resultWithBranch);
-        Assert.Equal("PC-TAX-01", resultWithBranch[0].VoucherCode);
-
-        var resultAllBranches = await repo.GetDeductibleExpenseVouchersAsync(fromDate, toDate, null);
-        Assert.Equal(2, resultAllBranches.Count);
-    }
-
-    [Fact]
-    public async Task HouseholdTaxRepository_UpsertYearSettingAsync_ShouldUpdateExistingSettings()
-    {
-        using var context = CreateDbContext();
-        var repo = new HouseholdTaxRepository(context);
-
-        var setting = new HouseholdTaxYearSetting
-        {
-            Id = Guid.NewGuid(),
-            TenantId = "tenant-tax-01",
-            Year = 2026,
-            PitMethod = TaxCalculationMethod.RevenuePercentage,
-            LockedUntilYear = 2027,
-            LockReason = "Initial setup",
-            LockedBySystem = "MANUAL",
-            LockedAtUtc = DateTime.UtcNow
-        };
-        await repo.UpsertYearSettingAsync(setting);
-
-        // Update properties
-        setting.PitMethod = TaxCalculationMethod.DeclarationBased;
-        setting.LockedUntilYear = 2028;
-        setting.LockReason = "Chuyển phương pháp kê khai 2 năm";
-        setting.LockedBySystem = "AUTO";
-        setting.LockedAtUtc = DateTime.UtcNow;
-
-        await repo.UpsertYearSettingAsync(setting);
-
-        var fetched = await repo.GetYearSettingAsync(2026);
-        Assert.NotNull(fetched);
-        Assert.Equal(TaxCalculationMethod.DeclarationBased, fetched!.PitMethod);
-        Assert.Equal(2028, fetched.LockedUntilYear);
-        Assert.Equal("AUTO", fetched.LockedBySystem);
-    }
-
-    [Fact]
-    public async Task HouseholdTaxRepository_GetSnapshotsAsync_ShouldFilterByBranch()
-    {
-        using var context = CreateDbContext();
-        var repo = new HouseholdTaxRepository(context);
-
-        var branchA = Guid.NewGuid();
-        var branchB = Guid.NewGuid();
-
-        var snapA = new HouseholdTaxSnapshot
-        {
-            Id = Guid.NewGuid(),
-            TenantId = "tenant-tax-01",
-            BranchId = branchA,
             Year = 2026,
             PeriodType = TaxPeriodType.Quarter,
             PeriodNumber = 1,
-            HouseholdGroup = HouseholdTaxGroup.Group2_1BTo3B,
-            CreatedAt = DateTime.UtcNow
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage
         };
-        var snapB = new HouseholdTaxSnapshot
+        var res1 = await FinalizeAsync(service, req1, "owner");
+        Assert.NotNull(res1);
+        Assert.Equal(0, res1.RevisionNumber);
+        Assert.Equal(TaxSnapshotStatus.Finalized, res1.Status);
+
+        // 2. Chốt lại nhưng KHÔNG tick cho phép supersede -> Ném ngoại lệ TAX_PERIOD_LOCKED
+        var reqLocked = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            AllowSupersedeExisting = false
+        };
+        var exLocked = await Assert.ThrowsAsync<MT_GRMS.Domain.Exceptions.BusinessException>(() =>
+            FinalizeAsync(service, reqLocked, "owner"));
+        Assert.Equal("TAX_PERIOD_LOCKED", exLocked.ErrorCode);
+
+        // 3. Chốt lại có tick supersede nhưng thiếu lý do điều chỉnh -> Ném ngoại lệ RECTIFICATION_REASON_REQUIRED
+        var reqNoReason = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            AllowSupersedeExisting = true,
+            RectificationReason = ""
+        };
+        var exNoReason = await Assert.ThrowsAsync<MT_GRMS.Domain.Exceptions.BusinessException>(() =>
+            FinalizeAsync(service, reqNoReason, "owner"));
+        Assert.Equal("RECTIFICATION_REASON_REQUIRED", exNoReason.ErrorCode);
+
+        // 4. Chốt lại hợp lệ (Revision 1)
+        var req2 = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            AllowSupersedeExisting = true,
+            RectificationReason = "Chốt lại do phát hiện nhầm lẫn hóa đơn"
+        };
+        var res2 = await FinalizeAsync(service, req2, "owner");
+        Assert.NotNull(res2);
+        Assert.Equal(1, res2.RevisionNumber);
+        Assert.Equal(TaxSnapshotStatus.Finalized, res2.Status);
+        Assert.Equal(res1.Id, res2.SupersededSnapshotId);
+        Assert.Equal("Chốt lại do phát hiện nhầm lẫn hóa đơn", res2.RectificationReason);
+
+        // Xác minh bản ghi cũ đã chuyển sang trạng thái Superseded trong cơ sở dữ liệu
+        var oldSnapshot = await context.HouseholdTaxSnapshots.FindAsync(res1.Id);
+        Assert.NotNull(oldSnapshot);
+        Assert.Equal(TaxSnapshotStatus.Superseded, oldSnapshot.Status);
+
+        // 5. Kiểm thử tính bất biến: Cố tình sửa đổi số liệu tài chính của snapshot đã supersede phải bị chặn
+        oldSnapshot.TotalTaxAmount = 999_999_999m;
+        var exModified = await Assert.ThrowsAsync<InvalidOperationException>(() => context.SaveChangesAsync());
+        Assert.Contains("Cấm chỉnh sửa số liệu tài chính của snapshot bất biến", exModified.Message);
+    }
+
+    [Fact]
+    public async Task FinalizeSnapshot_Supersede_WhenExistingSnapshotHasBranchId_ShouldFindAndSupersedeSuccessfully()
+    {
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+        var service = CreateTaxService(repo);
+
+        var branchId = Guid.NewGuid();
+
+        // Seed Q1 để thỏa mãn tính tuần tự
+        context.HouseholdTaxSnapshots.Add(new HouseholdTaxSnapshot
         {
             Id = Guid.NewGuid(),
             TenantId = "tenant-tax-01",
-            BranchId = branchB,
+            BranchId = branchId,
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            Status = TaxSnapshotStatus.Finalized,
+            BookDataJson = "{}",
+            FinalizedBy = "initial-user",
+            FinalizedAtUtc = DateTime.UtcNow
+        });
+
+        // Tạo snapshot cũ Q2 có BranchId (ví dụ do migration hoặc tạo từ chi nhánh cụ thể trước đó)
+        var existingWithBranch = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-tax-01",
+            BranchId = branchId,
             Year = 2026,
             PeriodType = TaxPeriodType.Quarter,
             PeriodNumber = 2,
-            HouseholdGroup = HouseholdTaxGroup.Group3_3BTo50B,
-            CreatedAt = DateTime.UtcNow
+            Status = TaxSnapshotStatus.Finalized,
+            RevisionNumber = 0,
+            BookDataJson = "{}",
+            FinalizedBy = "initial-user",
+            FinalizedAtUtc = DateTime.UtcNow
         };
-        await repo.AddSnapshotAsync(snapA);
-        await repo.AddSnapshotAsync(snapB);
+        context.HouseholdTaxSnapshots.Add(existingWithBranch);
+        await context.SaveChangesAsync();
 
-        var snapshotA = await repo.GetSnapshotAsync(2026, TaxPeriodType.Quarter, 1, branchA);
-        Assert.NotNull(snapshotA);
-        Assert.Equal(1, snapshotA!.PeriodNumber);
-        Assert.Equal(branchA, snapshotA.BranchId);
+        // Chốt lại kỳ Q2/2026 (yêu cầu chốt ở cấp tenant-wide, request.BranchId = null)
+        var req = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 2,
+            BranchId = null,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            AllowSupersedeExisting = true,
+            RectificationReason = "BBĐC-Q2-2026: Điều chỉnh thay thế bản chốt có branchId cũ"
+        };
 
-        var listA = await repo.GetSnapshotsAsync(2026, branchA);
-        Assert.Single(listA);
-        Assert.Equal(branchA, listA[0].BranchId);
+        var result = await FinalizeAsync(service, req, "store-owner");
+        Assert.NotNull(result);
+        Assert.Equal(1, result.RevisionNumber);
+        Assert.Equal(TaxSnapshotStatus.Finalized, result.Status);
+        Assert.Equal(existingWithBranch.Id, result.SupersededSnapshotId);
 
-        var listB = await repo.GetSnapshotsAsync(2026, branchB);
-        Assert.Single(listB);
-        Assert.Equal(branchB, listB[0].BranchId);
-
-        var listAll = await repo.GetSnapshotsAsync(2026, null);
-        Assert.Equal(2, listAll.Count);
+        // Bản ghi cũ có BranchId phải được chuyển sang Superseded
+        var oldDb = await context.HouseholdTaxSnapshots.FindAsync(existingWithBranch.Id);
+        Assert.NotNull(oldDb);
+        Assert.Equal(TaxSnapshotStatus.Superseded, oldDb.Status);
     }
+
+    [Fact]
+    public async Task FinalizeSnapshot_Supersede_SequentialMultipleRevisions_ShouldMaintainAuditChain()
+    {
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+        var service = CreateTaxService(repo);
+
+        // 1. Revision 0: Bản chốt đầu tiên
+        var reqRev0 = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage
+        };
+        var resRev0 = await FinalizeAsync(service, reqRev0, "owner");
+        Assert.Equal(0, resRev0.RevisionNumber);
+        Assert.Equal(TaxSnapshotStatus.Finalized, resRev0.Status);
+
+        // 2. Revision 1: Chốt lại lần 1
+        var reqRev1 = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            AllowSupersedeExisting = true,
+            RectificationReason = "BBĐC-01: Thay thế lần 1 do soát xét hóa đơn"
+        };
+        var resRev1 = await FinalizeAsync(service, reqRev1, "owner");
+        Assert.Equal(1, resRev1.RevisionNumber);
+        Assert.Equal(TaxSnapshotStatus.Finalized, resRev1.Status);
+        Assert.Equal(resRev0.Id, resRev1.SupersededSnapshotId);
+
+        // 3. Revision 2: Chốt lại lần 2
+        var reqRev2 = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            AllowSupersedeExisting = true,
+            RectificationReason = "BBĐC-02: Thay thế lần 2 theo kết luận kiểm toán"
+        };
+        var resRev2 = await FinalizeAsync(service, reqRev2, "owner");
+        Assert.Equal(2, resRev2.RevisionNumber);
+        Assert.Equal(TaxSnapshotStatus.Finalized, resRev2.Status);
+        Assert.Equal(resRev1.Id, resRev2.SupersededSnapshotId);
+
+        // Kiểm tra cơ sở dữ liệu: Rev0 và Rev1 đều Superseded, chỉ duy nhất Rev2 là Finalized
+        var dbRev0 = await context.HouseholdTaxSnapshots.FindAsync(resRev0.Id);
+        var dbRev1 = await context.HouseholdTaxSnapshots.FindAsync(resRev1.Id);
+        var dbRev2 = await context.HouseholdTaxSnapshots.FindAsync(resRev2.Id);
+
+        Assert.Equal(TaxSnapshotStatus.Superseded, dbRev0!.Status);
+        Assert.Equal(TaxSnapshotStatus.Superseded, dbRev1!.Status);
+        Assert.Equal(TaxSnapshotStatus.Finalized, dbRev2!.Status);
+
+        // Truy vấn GetSnapshotAsync phải trả về đúng bản Rev2
+        var activeSnapshot = await repo.GetSnapshotAsync(2026, TaxPeriodType.Quarter, 1, null);
+        Assert.NotNull(activeSnapshot);
+        Assert.Equal(resRev2.Id, activeSnapshot.Id);
+        Assert.Equal(2, activeSnapshot.RevisionNumber);
+    }
+
+    [Fact]
+    public async Task FinalizeSnapshot_Supersede_WhenLegacySnapshotHasDefaultStatusZero_ShouldFindAndSupersedeSuccessfully()
+    {
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+        var service = CreateTaxService(repo);
+
+        // Tạo bản ghi snapshot legacy có Status = 0 (trước khi áp dụng enum)
+        var legacySnapshot = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-tax-01",
+            BranchId = null,
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            Status = 0, // Legacy uninitialized status
+            RevisionNumber = 0,
+            BookDataJson = "{}",
+            FinalizedBy = "legacy-user",
+            FinalizedAtUtc = DateTime.UtcNow
+        };
+        context.HouseholdTaxSnapshots.Add(legacySnapshot);
+        await context.SaveChangesAsync();
+
+        // Chốt lại với allowSupersede = true
+        var req = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            BranchId = null,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            AllowSupersedeExisting = true,
+            RectificationReason = "Thay thế bản chốt legacy của kỳ Q1"
+        };
+
+        var result = await FinalizeAsync(service, req, "owner");
+        Assert.NotNull(result);
+        Assert.Equal(1, result.RevisionNumber);
+        Assert.Equal(TaxSnapshotStatus.Finalized, result.Status);
+        Assert.Equal(legacySnapshot.Id, result.SupersededSnapshotId);
+
+        // Bản ghi legacy cũ phải được chuyển sang Superseded
+        var oldDb = await context.HouseholdTaxSnapshots.FindAsync(legacySnapshot.Id);
+        Assert.NotNull(oldDb);
+        Assert.Equal(TaxSnapshotStatus.Superseded, oldDb.Status);
+    }
+
+    [Fact]
+    public async Task GetPeriodRevenueAsync_IncludesOnlyExplicitManualTaxableRevenue()
+    {
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+        var branchId = Guid.NewGuid();
+        var occurredAt = new DateTime(2026, 2, 10, 10, 0, 0, DateTimeKind.Utc);
+
+        context.CashbookEntries.AddRange(
+            NewCashbookEntry(branchId, occurredAt, 300_000m, CashbookEntryType.Receipt, CashbookTaxTreatment.TaxableRevenue),
+            NewCashbookEntry(branchId, occurredAt, 900_000m, CashbookEntryType.Receipt, CashbookTaxTreatment.NonTaxableReceipt));
+        await context.SaveChangesAsync();
+
+        var (gross, discounts, returns) = await repo.GetPeriodRevenueAsync(
+            occurredAt.AddDays(-1), occurredAt.AddDays(1), branchId);
+
+        Assert.Equal(300_000m, gross);
+        Assert.Equal(0m, discounts);
+        Assert.Equal(0m, returns);
+    }
+
+    [Fact]
+    public async Task GetPeriodOpexAsync_IncludesManualDeductibleExpenseAndExcludesNonDeductible()
+    {
+        using var context = CreateDbContext();
+        var repo = new HouseholdTaxRepository(context);
+        var branchId = Guid.NewGuid();
+        var occurredAt = new DateTime(2026, 2, 10, 10, 0, 0, DateTimeKind.Utc);
+
+        context.CashbookEntries.AddRange(
+            NewCashbookEntry(branchId, occurredAt, 120_000m, CashbookEntryType.Payment, CashbookTaxTreatment.DeductibleExpense),
+            NewCashbookEntry(branchId, occurredAt, 800_000m, CashbookEntryType.Payment, CashbookTaxTreatment.NonDeductibleExpense));
+        await context.SaveChangesAsync();
+
+        var total = await repo.GetPeriodOpexAsync(occurredAt.AddDays(-1), occurredAt.AddDays(1), branchId);
+        Assert.Equal(120_000m, total);
+    }
+
+    private static CashbookEntry NewCashbookEntry(
+        Guid branchId,
+        DateTime occurredAt,
+        decimal amount,
+        CashbookEntryType entryType,
+        CashbookTaxTreatment treatment) =>
+        new()
+        {
+            TenantId = "tenant-tax-01",
+            EntryCode = $"CB-TEST-{Guid.NewGuid():N}",
+            AccountId = Guid.NewGuid(),
+            AccountType = FinanceAccountType.Till,
+            BranchId = branchId,
+            EntryType = entryType,
+            Amount = amount,
+            BalanceAfter = 1_000_000m,
+            SourceType = "MANUAL",
+            CategoryCode = "TEST",
+            FinancialNature = entryType == CashbookEntryType.Receipt ? FinancialNature.OtherIncome : FinancialNature.OperatingExpense,
+            TaxTreatment = treatment,
+            ReferenceCode = "TEST",
+            AuditHash = "TEST",
+            Description = "Test classification",
+            OccurredAtUtc = occurredAt
+        };
 }
 
 

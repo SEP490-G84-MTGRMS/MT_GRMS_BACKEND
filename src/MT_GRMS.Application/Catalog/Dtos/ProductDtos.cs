@@ -137,6 +137,8 @@ public record ProductPriceHistoryDto(
     Guid ProductId,
     Guid? BranchId,
     string? BranchName,
+    Guid? ProductUnitId,
+    string? ProductUnitName,
     string PriceScope,
     string PriceType,
     decimal OldPrice,
@@ -150,3 +152,15 @@ public record ProductPriceHistoryDto(
     string Reason,
     DateTime CreatedAt
 );
+
+public class ProductPriceHistoryQuery
+{
+    public Guid? BranchId { get; set; }
+    public Guid? ProductUnitId { get; set; }
+    public string? SearchTerm { get; set; }
+    public string? PriceScope { get; set; }
+    public DateTime? FromDate { get; set; }
+    public DateTime? ToDate { get; set; }
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 15;
+}

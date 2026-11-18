@@ -630,19 +630,6 @@ public class HrAndPosRepositoriesIntegrationTests
             payRepo.Delete(payslip2);
             await context.SaveChangesAsync();
 
-            var cbTx = new Domain.Entities.Finance.CashbookTransaction
-            {
-                Id = Guid.NewGuid(),
-                TenantId = TenantId,
-                BranchId = branch.Id,
-                TransactionCode = "CB-PAY-01",
-                Type = CashbookType.Payment,
-                Category = "Lương",
-                Amount = 10_000_000m,
-                CreatedAt = DateTime.UtcNow
-            };
-            await payRepo.AddCashbookTransactionAsync(cbTx);
-            await context.SaveChangesAsync();
         }
     }
 

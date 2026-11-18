@@ -53,9 +53,21 @@ ehthumbs.db
 ## Entity Framework Core Migrations
 ## ----------------------------------------------------
 # Bỏ qua các file migrations tự động để tránh xung đột (merge conflicts) liên tục giữa các nhánh
-**/[Mm]igrations/
+**/[Mm]igrations/*
 **/AppDbContextModelSnapshot.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/AppDbContextModelSnapshot.cs
 *.Designer.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261114193000_AddTaxPaymentSnapshotReference.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261114203000_AddTaxSnapshotSupersedeAndRevision.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261116094500_AddCashbookTaxClassification.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261116230000_CanonicalizeTenantRoles.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261117030000_AddEmployeeLaborContractColumns.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261117120000_SimplifyCustomerDebt.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261117130000_RemoveUnusedCashTransit.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261117140000_ConsolidatePayslipCashbook.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261117150000_RecordOrderReturns.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261117160000_RemoveCustomerDebtEntries.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261117170000_MoveTaxPolicyToSnapshot.cs
 
 ## Supplier order Excel local storage
 **/storage/supplier-orders/

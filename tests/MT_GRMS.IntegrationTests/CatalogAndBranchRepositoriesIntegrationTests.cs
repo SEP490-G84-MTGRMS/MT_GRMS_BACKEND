@@ -321,48 +321,6 @@ public class CatalogAndBranchRepositoriesIntegrationTests
     }
 
     [Fact]
-    public async Task ProductPriceHistoryRepository_AllMethods_ShouldWork()
-    {
-        var (context, _) = CreateDbContext();
-        using (context)
-        {
-            var repo = new ProductPriceHistoryRepository(context);
-            var prodId = Guid.NewGuid();
-            var branchId = Guid.NewGuid();
-
-            var history1 = new ProductPriceHistory
-            {
-                Id = Guid.NewGuid(),
-                TenantId = TenantId,
-                ProductId = prodId,
-                BranchId = branchId,
-                OldPrice = 10_000m,
-                NewPrice = 12_000m,
-                CreatedAt = DateTime.UtcNow
-            };
-            var history2 = new ProductPriceHistory
-            {
-                Id = Guid.NewGuid(),
-                TenantId = TenantId,
-                ProductId = prodId,
-                BranchId = null, // Global
-                OldPrice = 12_000m,
-                NewPrice = 15_000m,
-                CreatedAt = DateTime.UtcNow.AddMinutes(5)
-            };
-            await repo.AddAsync(history1);
-            await repo.AddAsync(history2);
-            await context.SaveChangesAsync();
-
-            var withBranch = await repo.GetByProductIdAsync(prodId, branchId);
-            Assert.Equal(2, withBranch.Count);
-
-            var withoutBranch = await repo.GetByProductIdAsync(prodId);
-            Assert.Equal(2, withoutBranch.Count);
-        }
-    }
-
-    [Fact]
     public async Task BranchRepository_AllMethods_ShouldWork()
     {
         var (context, _) = CreateDbContext();

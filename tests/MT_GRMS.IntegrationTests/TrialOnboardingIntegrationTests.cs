@@ -132,7 +132,8 @@ public class TrialOnboardingIntegrationTests
         var otpStore = new RegistrationOtpStore(db);
         var devConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+            ["ASPNETCORE_ENVIRONMENT"] = "Development",
+            ["Jwt:Key"] = "TrialTestSigningKey_Explicit_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         }).Build();
 
         var realRepo = new UserRepository(db);
@@ -175,7 +176,8 @@ public class TrialOnboardingIntegrationTests
         var seedOtpStore = new RegistrationOtpStore(seedDb);
         var devConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+            ["ASPNETCORE_ENVIRONMENT"] = "Development",
+            ["Jwt:Key"] = "TrialTestSigningKey_Explicit_0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         }).Build();
         var seederAuth = new AuthService(new UserRepository(seedDb), devConfig, registrationOtpStore: seedOtpStore);
         var otp = await seederAuth.SendRegistrationOtpAsync(new SendRegistrationOtpRequest(
@@ -447,11 +449,11 @@ public class TrialOnboardingIntegrationTests
             Id = "t-sepay", Name = "Sepay Mart", Subdomain = "sepay", Code = "SP",
             SubscriptionStatus = "NO_PLAN", WalletBalance = 0m
         });
-        db.WalletTopupOrders.Add(new WalletTopupOrder
+        db.WalletTransactions.Add(new WalletTransaction
         {
             TenantId = "t-sepay", OrderCode = "778899", Amount = 300_000m,
-            TransferContent = "WAL 778899", BankCode = "MB", BankName = "MB",
-            AccountNumber = "1900", AccountName = "MT", QrUrl = "https://qr", Status = "PENDING",
+            TransactionCode = "WAL-ORDER-778899", Type = "TOPUP", RequestedAmount = 300_000m,
+            TransferContent = "WAL 778899", Status = "PENDING",
             ExpiresAt = DateTime.UtcNow.AddMinutes(10)
         });
         await db.SaveChangesAsync();

@@ -6,6 +6,8 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using MT_GRMS.Application.Admin.Dtos;
+using MT_GRMS.Application.Admin.Services;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Application.Common;
@@ -65,6 +67,24 @@ public class ProductsController : BaseApiController
             return NotFound(ApiResponse<object>.Fail("NOT_FOUND", $"Không tìm thấy sản phẩm với mã vạch hoặc mã hàng '{barcode}'."));
         }
         return Ok(ApiResponse<ProductResponse>.Ok(result));
+    }
+
+    /// <summary>
+    /// Tra cứu sản phẩm mẫu từ Thư viện Toàn cầu (Global Master Catalog) theo mã vạch phục vụ Auto-fill khi Onboard
+    /// </summary>
+    [HttpGet("lookup-master")]
+    public async Task<IActionResult> LookupMaster(
+        [FromQuery] string barcode,
+        [FromServices] IMasterCatalogService masterCatalogService,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(barcode))
+        {
+            return Ok(ApiResponse<MasterProductSuggestionDto?>.Ok(null));
+        }
+
+        var suggestion = await masterCatalogService.LookupByBarcodeAsync(barcode, cancellationToken);
+        return Ok(ApiResponse<MasterProductSuggestionDto?>.Ok(suggestion));
     }
 
     /// <summary>
@@ -185,11 +205,11 @@ public class ProductsController : BaseApiController
     [HttpGet("{id:guid}/price-history")]
     public async Task<IActionResult> GetPriceHistory(
         Guid id,
-        [FromQuery] Guid? branchId,
+        [FromQuery] ProductPriceHistoryQuery query,
         CancellationToken cancellationToken = default)
     {
-        var result = await _catalogService.GetPriceHistoryAsync(id, branchId, cancellationToken);
-        return Ok(ApiResponse<IReadOnlyList<ProductPriceHistoryDto>>.Ok(result));
+        var result = await _catalogService.GetPriceHistoryAsync(id, query, cancellationToken);
+        return Ok(ApiResponse<PagedResult<ProductPriceHistoryDto>>.Ok(result));
     }
 }
 

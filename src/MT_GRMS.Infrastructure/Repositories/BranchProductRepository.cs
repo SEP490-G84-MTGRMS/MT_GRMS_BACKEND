@@ -649,6 +649,32 @@ public class BranchProductRepository : IBranchProductRepository
             .ToListAsync(cancellationToken);
     }
 
+    public async Task SyncBranchStockCatalogAsync(
+        Guid branchId,
+        Guid productId,
+        decimal retailPrice,
+        string status,
+        string? shelfLocation,
+        CancellationToken cancellationToken = default)
+    {
+        // Catalog metadata is independent from stock quantities. Updating it in bulk avoids
+        // using BranchStock.RowVersion loaded earlier in the request and therefore does not
+        // overwrite, or spuriously conflict with, a concurrent sale/receipt stock movement.
+        await _context.BranchStocks
+            .Where(bs => bs.BranchId == branchId && bs.ProductId == productId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(bs => bs.RetailPrice, retailPrice)
+                .SetProperty(bs => bs.Status, status)
+                .SetProperty(bs => bs.ShelfLocation, shelfLocation)
+                .SetProperty(bs => bs.UpdatedAt, DateTime.UtcNow),
+                cancellationToken);
+    }
+
+    public async Task AddUnitPriceOverrideAsync(BranchProductUnitPrice unitPrice, CancellationToken cancellationToken = default)
+    {
+        await _context.BranchProductUnitPrices.AddAsync(unitPrice, cancellationToken);
+    }
+
     public async Task AddBranchStockAsync(
         BranchStock branchStock,
         CancellationToken cancellationToken = default)

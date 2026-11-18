@@ -94,10 +94,12 @@ public static class DependencyInjection
         services.AddScoped<Application.Expenses.IExpenseRepository, ExpenseRepository>();
         services.AddScoped<Application.Debt.ICustomerDebtRepository, CustomerDebtRepository>();
         services.AddScoped<Application.Reports.IPnLReportRepository, PnLReportRepository>();
+        services.AddScoped<Application.FinanceOverview.IFinanceOverviewRepository, FinanceOverviewRepository>();
         services.AddScoped<Application.Reports.IStoreOwnerDashboardService, StoreOwnerDashboardService>();
         services.AddScoped<Application.Tax.IHouseholdTaxRepository, HouseholdTaxRepository>();
         services.AddScoped<Application.Tax.ITaxExportService, Services.TaxExportService>();
         services.AddScoped<Application.Tax.Security.IPinVerificationService, Services.PinVerificationService>();
+        services.AddScoped<Application.Tax.ITaxPeriodLockGuard, Services.Tax.TaxPeriodLockGuard>();
         services.AddScoped<ISupplierRepository, SupplierRepository>();
         services.AddScoped<IBranchRepository, BranchRepository>();
         services.AddScoped<IBranchProductRepository, BranchProductRepository>();
@@ -116,6 +118,9 @@ public static class DependencyInjection
         services.AddScoped<IPayslipRepository, PayslipRepository>();
         services.AddScoped<ISubscriptionPlanRepository, SubscriptionPlanRepository>();
         services.AddScoped<ITenantRepository, TenantRepository>();
+        services.AddScoped<IMasterProductRepository, MasterProductRepository>();
+        services.AddScoped<Application.Admin.Services.IMasterCatalogExcelService, Services.MasterCatalogExcelService>();
+        services.AddScoped<Application.Admin.Services.IPlatformSettingService, Services.PlatformSettingService>();
 
         // Đăng ký dịch vụ máy in nhiệt hóa đơn POS-58 (khổ in 43mm siêu thị mini)
         services.AddScoped<IThermalPrintService, ThermalPrintService>();
