@@ -1,5 +1,6 @@
 using FluentValidation;
 using MT_GRMS.Application.Suppliers.Dtos;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Application.Suppliers.Validators;
 
@@ -173,20 +174,36 @@ public class UpdateSupplierCommandValidator : AbstractValidator<UpdateSupplierCo
 
 public class RecordAPTransactionCommandValidator : AbstractValidator<RecordAPTransactionCommand>
 {
+    private static readonly string[] AllowedPaymentMethods = ["CASH", "BANK_TRANSFER", "OTHER"];
+
     public RecordAPTransactionCommandValidator()
     {
         RuleFor(x => x.SupplierId)
             .NotEmpty().WithMessage("ID nhà cung cấp không được để trống.");
 
         RuleFor(x => x.DocNo)
-            .NotEmpty().WithMessage("Mã chứng từ không được để trống.")
             .MaximumLength(100).WithMessage("Mã chứng từ tối đa 100 ký tự.");
+
+        RuleFor(x => x.DocNo)
+            .NotEmpty().WithMessage("Mã chứng từ không được để trống.")
+            .When(x => x.DocType != APDocType.PaymentVoucher);
 
         RuleFor(x => x.Amount)
             .GreaterThan(0).WithMessage("Số tiền giao dịch phải lớn hơn 0.");
 
         RuleFor(x => x.Direction)
             .Must(d => d == 1 || d == -1).WithMessage("Chiều biến động công nợ chỉ có thể là +1 (tăng nợ) hoặc -1 (giảm nợ).");
+
+        RuleFor(x => x.PaymentMethod)
+            .MaximumLength(30).WithMessage("Hình thức thanh toán tối đa 30 ký tự.")
+            .Must(m => string.IsNullOrWhiteSpace(m) || AllowedPaymentMethods.Contains(m.Trim().ToUpperInvariant()))
+            .WithMessage("Hình thức thanh toán phải là CASH, BANK_TRANSFER hoặc OTHER.");
+
+        RuleFor(x => x.ReferenceNo)
+            .MaximumLength(100).WithMessage("Số tham chiếu tối đa 100 ký tự.");
+
+        RuleFor(x => x.Description)
+            .MaximumLength(500).WithMessage("Diễn giải tối đa 500 ký tự.");
     }
 }
 

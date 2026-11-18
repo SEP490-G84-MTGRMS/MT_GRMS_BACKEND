@@ -592,6 +592,99 @@ public class SupplierProductManagementTests
         Assert.Equal("SUPPLIER_INACTIVE", ex.ErrorCode);
     }
 
+    [Fact]
+    public async Task BatchAssignSupplierProductsAsync_EmptyItems_ThrowsValidationException()
+    {
+        var supplier = CreateTestSupplier("Vinamilk", "NCC-VNM-001");
+        _repo.Suppliers.Add(supplier);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.BatchAssignSupplierProductsAsync(supplier.Id, new BatchAssignSupplierProductsCommand
+            {
+                Items = new List<BatchAssignSupplierProductItemCommand>()
+            }));
+
+        Assert.Equal("VALIDATION_ERROR", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task BatchAssignSupplierProductsAsync_NegativeAllowShortage_ThrowsValidationException()
+    {
+        var supplier = CreateTestSupplier("Vinamilk", "NCC-VNM-001");
+        var product = CreateTestProduct("Sữa", "8931", "PRD-1");
+        _repo.Suppliers.Add(supplier);
+        _repo.Products.Add(product);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.BatchAssignSupplierProductsAsync(supplier.Id, new BatchAssignSupplierProductsCommand
+            {
+                Items = new List<BatchAssignSupplierProductItemCommand>
+                {
+                    new()
+                    {
+                        ProductId = product.Id,
+                        AgreedWholesalePrice = 10000m,
+                        MinimumOrderQuantity = 1,
+                        AllowedShortageQuantity = -5
+                    }
+                }
+            }));
+
+        Assert.Equal("VALIDATION_ERROR", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task UpdateSupplierProductAsync_NotFound_ThrowsNotFoundException()
+    {
+        var supplier = CreateTestSupplier("Vinamilk", "NCC-VNM-001");
+        _repo.Suppliers.Add(supplier);
+
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            _service.UpdateSupplierProductAsync(supplier.Id, Guid.NewGuid(), new UpdateSupplierProductCommand
+            {
+                AgreedWholesalePrice = 10000m,
+                MinimumOrderQuantity = 5
+            }));
+    }
+
+    [Fact]
+    public async Task ToggleSupplierProductStatusAsync_WhenProductInactive_ThrowsProductInactiveException()
+    {
+        var supplier = CreateTestSupplier("Vinamilk", "NCC-VNM-001");
+        var product = CreateTestProduct("Sữa", "8931", "PRD-1");
+        product.Status = ProductStatus.Inactive;
+        _repo.Suppliers.Add(supplier);
+        _repo.Products.Add(product);
+        _repo.SupplierProducts.Add(new SupplierProduct
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            Supplier = supplier,
+            ProductId = product.Id,
+            Product = product,
+            Status = SupplierProductStatus.Inactive,
+            AgreedWholesalePrice = 10000m,
+            MinimumOrderQuantity = 1
+        });
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.ToggleSupplierProductStatusAsync(supplier.Id, product.Id,
+                new ToggleSupplierProductStatusRequest { Status = SupplierProductStatus.Active }));
+
+        Assert.Equal("PRODUCT_INACTIVE", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ToggleSupplierProductStatusAsync_NotFound_ThrowsNotFoundException()
+    {
+        var supplier = CreateTestSupplier("Vinamilk", "NCC-VNM-001");
+        _repo.Suppliers.Add(supplier);
+
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            _service.ToggleSupplierProductStatusAsync(supplier.Id, Guid.NewGuid(),
+                new ToggleSupplierProductStatusRequest { Status = SupplierProductStatus.Active }));
+    }
+
     // Helper methods
     private static Supplier CreateTestSupplier(string name, string code)
     {
@@ -726,10 +819,16 @@ public class SupplierProductManagementTests
         public Task<bool> HasLedgerTransactionsAsync(Guid supplierId, APDocType docType, CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task<SupplierAPLedger?> GetLedgerByIdempotencyKeyAsync(string idempotencyKey, CancellationToken cancellationToken = default) => Task.FromResult<SupplierAPLedger?>(null);
         public Task AddLedgerAsync(SupplierAPLedger ledger, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task<(IReadOnlyList<SupplierAPLedger> Items, int TotalCount)> GetPagedLedgerAsync(Guid supplierId, DateTime? fromDate, DateTime? toDate, int pageIndex, int pageSize, CancellationToken cancellationToken = default)
+        public Task<(IReadOnlyList<SupplierAPLedger> Items, int TotalCount)> GetPagedLedgerAsync(Guid supplierId, DateTime? fromDate, DateTime? toDate, int pageIndex, int pageSize, CancellationToken cancellationToken = default, APDocType? docType = null)
         {
-            return Task.FromResult(((IReadOnlyList<SupplierAPLedger>)Ledgers, Ledgers.Count));
+            var list = Ledgers.AsEnumerable();
+            if (docType.HasValue) list = list.Where(l => l.DocType == docType.Value);
+            var filtered = list.ToList();
+            return Task.FromResult(((IReadOnlyList<SupplierAPLedger>)filtered, filtered.Count));
         }
+
+        public Task<int> CountLedgersByDocNoPrefixAsync(string docNoPrefix, CancellationToken cancellationToken = default)
+            => Task.FromResult(Ledgers.Count(l => l.DocNo.StartsWith(docNoPrefix, StringComparison.Ordinal)));
 
         public Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default) => Task.FromResult((IReadOnlyList<SupplierBlackoutDate>)BlackoutDates);
         public Task ReplaceBlackoutDatesAsync(Guid supplierId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default) => Task.CompletedTask;

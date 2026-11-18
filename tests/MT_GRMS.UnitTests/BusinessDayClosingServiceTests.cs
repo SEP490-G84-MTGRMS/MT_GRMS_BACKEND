@@ -311,6 +311,87 @@ public class BusinessDayClosingServiceTests
         Assert.EndsWith("-V2", result.ReferenceCode);
     }
 
+    [Fact]
+    public async Task EnsureOwnerOrAdmin_RejectsUnauthorizedStaff()
+    {
+        var (service, repo, _) = Create();
+        var branchId = Guid.NewGuid();
+        var date = new DateOnly(2026, 11, 14);
+
+        // Staff role
+        var tenant = new TenantContext { CurrentRole = "STAFF" };
+        var serviceStaff = new BusinessDayClosingService(repo, Mock.Of<ICashbookService>(), new UnitOfWork(), tenant);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            serviceStaff.CloseAsync(new CloseBusinessDayRequest(branchId, date, [], "token")));
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            serviceStaff.GetHistoryAsync(branchId, date));
+    }
+
+    [Fact]
+    public async Task CloseAsync_ValidationAndBlockers_ShouldBeRejected()
+    {
+        var (service, repo, _) = Create();
+        var branchId = Guid.NewGuid();
+        var date = new DateOnly(2026, 11, 14);
+
+        // Duplicate fund count
+        var dupFundReq = new CloseBusinessDayRequest(branchId, date,
+            [new BusinessDayFundCount(repo.Funds[0].Id, 100), new BusinessDayFundCount(repo.Funds[0].Id, 200)], "token");
+        var exDup = await Assert.ThrowsAsync<BusinessException>(() => service.CloseAsync(dupFundReq));
+        Assert.Equal("DUPLICATE_FUND_COUNT", exDup.ErrorCode);
+
+        // Note too long
+        var longNoteReq = new CloseBusinessDayRequest(branchId, date,
+            [new BusinessDayFundCount(repo.Funds[0].Id, 100)], "token", new string('x', 501));
+        var exNote = await Assert.ThrowsAsync<BusinessException>(() => service.CloseAsync(longNoteReq));
+        Assert.Equal("NOTE_TOO_LONG", exNote.ErrorCode);
+
+        // Branch not accessible
+        repo.BranchAccessible = false;
+        var exBranch = await Assert.ThrowsAsync<BusinessException>(() => service.CloseAsync(
+            new CloseBusinessDayRequest(branchId, date, [new BusinessDayFundCount(repo.Funds[0].Id, 100)], "token")));
+        Assert.Equal("BRANCH_NOT_FOUND", exBranch.ErrorCode);
+        repo.BranchAccessible = true;
+    }
+
+    [Fact]
+    public async Task GetHistoryAsync_And_ReopenAsync_EdgeCases_ShouldBeRejected()
+    {
+        var (service, repo, _) = Create();
+        var branchId = Guid.NewGuid();
+        var date = new DateOnly(2026, 11, 14);
+
+        // History invalid branch
+        await Assert.ThrowsAsync<BusinessException>(() => service.GetHistoryAsync(Guid.Empty, date));
+
+        // History default date
+        await Assert.ThrowsAsync<BusinessException>(() => service.GetHistoryAsync(branchId, default));
+
+        // Reopen empty id
+        await Assert.ThrowsAsync<BusinessException>(() => service.ReopenAsync(Guid.Empty, new ReopenBusinessDayRequest("Lý do")));
+
+        // Reopen empty reason
+        await Assert.ThrowsAsync<BusinessException>(() => service.ReopenAsync(Guid.NewGuid(), new ReopenBusinessDayRequest("")));
+
+        // Reopen reason too long
+        await Assert.ThrowsAsync<BusinessException>(() => service.ReopenAsync(Guid.NewGuid(), new ReopenBusinessDayRequest(new string('a', 501))));
+
+        // Reopen not found
+        await Assert.ThrowsAsync<BusinessException>(() => service.ReopenAsync(Guid.NewGuid(), new ReopenBusinessDayRequest("Lý do")));
+
+        // Reopen already reopened
+        var closing = new BusinessDayClosing
+        {
+            Id = Guid.NewGuid(), TenantId = "tenant-test", BranchId = branchId,
+            Status = BusinessDayClosingStatus.Reopened, IsActive = false
+        };
+        repo.History.Add(closing);
+        var exAlready = await Assert.ThrowsAsync<BusinessException>(() => service.ReopenAsync(closing.Id, new ReopenBusinessDayRequest("Lý do")));
+        Assert.Equal("BUSINESS_DAY_ALREADY_REOPENED", exAlready.ErrorCode);
+    }
+
     [Theory]
     [InlineData("2026-11-12T15:00:00Z", 2026, 11, 12)] // 22:00 giờ Việt Nam
     [InlineData("2026-11-12T18:30:00Z", 2026, 11, 12)] // 01:30 hôm sau, vẫn thuộc ngày trước

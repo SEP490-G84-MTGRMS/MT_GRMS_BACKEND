@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Moq;
 using MT_GRMS.Application.Tax;
 using MT_GRMS.Application.Tax.Dtos;
+using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Entities.Sales;
@@ -20,6 +21,8 @@ public class Circular152TaxExportServiceTests
     private readonly Mock<IHouseholdTaxRepository> _mockTaxRepo;
     private readonly AppDbContext _context;
     private readonly TaxExportService _exportService;
+    private readonly Guid _branchId;
+    private readonly Guid _branchId2;
 
     public Circular152TaxExportServiceTests()
     {
@@ -31,7 +34,7 @@ public class Circular152TaxExportServiceTests
             .Options;
         _context = new AppDbContext(options);
 
-        // Seed basic tenant and branch
+        // Seed basic tenant and branches
         var tenant = new Tenant
         {
             Id = Guid.NewGuid().ToString(),
@@ -47,10 +50,225 @@ public class Circular152TaxExportServiceTests
             TenantId = tenant.Id,
             BranchCode = "CN01",
             Name = "Chi nhánh Quận 1",
-            Address = "123 Đường Nguyễn Huệ, Quận 1, TP. Hồ Chí Minh"
+            Address = "123 Đường Nguyễn Huệ, Quận 1, TP. Hồ Chí Minh",
+            IsActive = true
         };
-        _context.Branches.Add(branch);
+        var branch2 = new Branch
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.Id,
+            BranchCode = "CN02",
+            Name = "Chi nhánh Quận 2",
+            Address = "456 Xa Lộ Hà Nội, Quận 2, TP. Hồ Chí Minh",
+            IsActive = true
+        };
+        _context.Branches.AddRange(branch, branch2);
+
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.Id,
+            Code = "NCC-VNM",
+            Name = "Công ty Cổ Phần Sữa Việt Nam",
+            Status = SupplierStatus.Active
+        };
+        _context.Suppliers.Add(supplier);
+
+        var product = new Product
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.Id,
+            ProductCode = "SP-001",
+            Barcode = "8931234567890",
+            Name = "Sữa Tươi Vinamilk 180ml",
+            BaseUnit = "Hộp",
+            CostPrice = 8000m,
+            SellingPrice = 10000m,
+            Status = ProductStatus.Active
+        };
+        _context.Products.Add(product);
+
+        // Seed Orders for Q1 and Q2
+        var order1 = new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.Id,
+            BranchId = branch.Id,
+            OrderCode = "DH-20260115-001",
+            TotalAmount = 50000m,
+            DiscountAmount = 5000m,
+            PaymentStatus = "PAID",
+            Status = "COMPLETED",
+            CreatedAt = new DateTime(2026, 1, 15, 8, 30, 0, DateTimeKind.Utc)
+        };
+        order1.Details.Add(new OrderDetail
+        {
+            Id = Guid.NewGuid(),
+            OrderId = order1.Id,
+            ProductId = product.Id,
+            ProductName = product.Name,
+            UnitName = product.BaseUnit,
+            Qty = 5m,
+            UnitPrice = 10000m,
+            CostPriceAtSale = 8000m
+        });
+
+        var order2 = new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.Id,
+            BranchId = branch.Id,
+            OrderCode = "DH-20260420-002",
+            TotalAmount = 100000m,
+            DiscountAmount = 10000m,
+            PaymentStatus = "PAID",
+            Status = "COMPLETED",
+            CreatedAt = new DateTime(2026, 4, 20, 10, 0, 0, DateTimeKind.Utc)
+        };
+        order2.Details.Add(new OrderDetail
+        {
+            Id = Guid.NewGuid(),
+            OrderId = order2.Id,
+            ProductId = product.Id,
+            ProductName = product.Name,
+            UnitName = product.BaseUnit,
+            Qty = 10m,
+            UnitPrice = 10000m,
+            CostPriceAtSale = 8000m
+        });
+        _context.Orders.AddRange(order1, order2);
+
+        // Seed GoodsReceipts for Q1 and Q2
+        var receipt1 = new GoodsReceipt
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.Id,
+            BranchId = branch.Id,
+            SupplierId = supplier.Id,
+            Code = "PN-20260110-001",
+            Status = "COMPLETED",
+            ReceivedAtUtc = new DateTime(2026, 1, 10, 9, 0, 0, DateTimeKind.Utc),
+            GrandTotal = 800000m
+        };
+        receipt1.Lines.Add(new GoodsReceiptLine
+        {
+            Id = Guid.NewGuid(),
+            GoodsReceiptId = receipt1.Id,
+            ProductId = product.Id,
+            AcceptedQty = 100m,
+            DeliveredQty = 100m,
+            OrderedQty = 100m
+        });
+
+        var receipt2 = new GoodsReceipt
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.Id,
+            BranchId = branch.Id,
+            SupplierId = supplier.Id,
+            Code = "PN-20260412-002",
+            Status = "COMPLETED",
+            ReceivedAtUtc = new DateTime(2026, 4, 12, 9, 0, 0, DateTimeKind.Utc),
+            GrandTotal = 1600000m
+        };
+        receipt2.Lines.Add(new GoodsReceiptLine
+        {
+            Id = Guid.NewGuid(),
+            GoodsReceiptId = receipt2.Id,
+            ProductId = product.Id,
+            AcceptedQty = 200m,
+            DeliveredQty = 200m,
+            OrderedQty = 200m
+        });
+        _context.GoodsReceipts.AddRange(receipt1, receipt2);
+
+        // Seed Cashbook entries
+        var cash1 = new CashbookEntry
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.Id,
+            BranchId = branch.Id,
+            EntryCode = "PT-001",
+            AccountType = FinanceAccountType.Till,
+            EntryType = CashbookEntryType.Receipt,
+            Amount = 45000m,
+            OccurredAtUtc = new DateTime(2026, 1, 15, 9, 0, 0, DateTimeKind.Utc),
+            Description = "Thu tiền bán lẻ",
+            SourceType = "POS",
+            ReferenceCode = "DH-20260115-001"
+        };
+        var cash2 = new CashbookEntry
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.Id,
+            BranchId = branch.Id,
+            EntryCode = "PC-001",
+            AccountType = FinanceAccountType.Bank,
+            EntryType = CashbookEntryType.Payment,
+            Amount = 15000000m,
+            OccurredAtUtc = new DateTime(2026, 1, 16, 10, 0, 0, DateTimeKind.Utc),
+            Description = "Chi tiền nộp thuế GTGT vào NSNN",
+            SourceType = "TAX",
+            ReferenceCode = "TT-001"
+        };
+        var cash3 = new CashbookEntry
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.Id,
+            BranchId = branch.Id,
+            EntryCode = "PT-002",
+            AccountType = FinanceAccountType.Bank,
+            EntryType = CashbookEntryType.Receipt,
+            Amount = 90000m,
+            OccurredAtUtc = new DateTime(2026, 4, 20, 10, 30, 0, DateTimeKind.Utc),
+            Description = "Thu tiền chuyển khoản đơn hàng",
+            SourceType = "POS",
+            ReferenceCode = "DH-20260420-002"
+        };
+        _context.CashbookEntries.AddRange(cash1, cash2, cash3);
+
+        // Seed HouseholdTaxSnapshots
+        var snapshot1 = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.Id,
+            BranchId = branch.Id,
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            AnnualAccumulatedRevenue = 1500000000m,
+            HouseholdGroup = HouseholdTaxGroup.Group2_1BTo3B,
+            TaxableRevenueInPeriod = 400000000m,
+            VatRate = 0.01m,
+            VatAmount = 4000000m,
+            PitRate = 0.005m,
+            PitAmount = 2000000m,
+            TotalTaxAmount = 6000000m,
+            CreatedAt = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+        var snapshot2 = new HouseholdTaxSnapshot
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.Id,
+            BranchId = branch.Id,
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 2,
+            AnnualAccumulatedRevenue = 3000000000m,
+            HouseholdGroup = HouseholdTaxGroup.Group2_1BTo3B,
+            TaxableRevenueInPeriod = 500000000m,
+            VatRate = 0.01m,
+            VatAmount = 5000000m,
+            PitRate = 0.005m,
+            PitAmount = 2500000m,
+            TotalTaxAmount = 7500000m,
+            CreatedAt = new DateTime(2026, 7, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+        _context.HouseholdTaxSnapshots.AddRange(snapshot1, snapshot2);
+
         _context.SaveChanges();
+        _branchId = branch.Id;
+        _branchId2 = branch2.Id;
 
         // Setup default tax summary
         var defaultSummary = new HouseholdTaxSummaryDto
@@ -403,5 +621,166 @@ public class Circular152TaxExportServiceTests
         Assert.True(hasResource, "S3a phải theo dõi thuế Tài nguyên");
         Assert.True(hasLand, "S3a phải theo dõi thuế đất");
         Assert.True(hasMonBai, "S3a phải theo dõi lệ phí môn bài");
+    }
+
+    [Fact]
+    public async Task ExportTaxSummaryToExcel_DefaultOverload_AndPeriodTypes_ShouldGenerateExcelBytes()
+    {
+        // 1. Default overload (filter only)
+        var filterQuarter = new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1
+        };
+        var bytesQuarter = await _exportService.ExportTaxSummaryToExcelAsync(filterQuarter);
+        Assert.NotNull(bytesQuarter);
+        Assert.NotEmpty(bytesQuarter);
+
+        // 2. Month period
+        var filterMonth = new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Month,
+            PeriodNumber = 5
+        };
+        var bytesMonth = await _exportService.ExportTaxSummaryToExcelAsync(filterMonth);
+        Assert.NotNull(bytesMonth);
+        Assert.NotEmpty(bytesMonth);
+
+        // 3. Year period
+        var filterYear = new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Year,
+            PeriodNumber = 1
+        };
+        var bytesYear = await _exportService.ExportTaxSummaryToExcelAsync(filterYear);
+        Assert.NotNull(bytesYear);
+        Assert.NotEmpty(bytesYear);
+    }
+
+    [Theory]
+    [InlineData(AccountingBookType.S1a_RevenueGroup1)]
+    [InlineData(AccountingBookType.S2a_RevenueGroup2)]
+    [InlineData(AccountingBookType.S2b_RevenueDeclaration)]
+    [InlineData(AccountingBookType.S2c_RevenueAndExpense)]
+    [InlineData(AccountingBookType.S2d_MaterialsAndGoods)]
+    [InlineData(AccountingBookType.S2e_CashAndBank)]
+    [InlineData(AccountingBookType.S3a_TaxObligation)]
+    public async Task ExportTaxSummaryToExcel_SpecificBookTypes_ShouldGenerateValidWorkbook(AccountingBookType bookType)
+    {
+        var filter = new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            BranchId = _branchId
+        };
+
+        var bytes = await _exportService.ExportTaxSummaryToExcelAsync(filter, bookType, CancellationToken.None);
+        Assert.NotNull(bytes);
+        Assert.NotEmpty(bytes);
+
+        using var ms = new MemoryStream(bytes);
+        using var workbook = new XLWorkbook(ms);
+        Assert.NotEmpty(workbook.Worksheets);
+    }
+
+    [Fact]
+    public async Task ExportTaxSummaryToExcel_AllBranches_GeneratesMultiBranchSheets()
+    {
+        var filter = new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            BranchId = null // All branches
+        };
+
+        var bytes = await _exportService.ExportTaxSummaryToExcelAsync(filter);
+        Assert.NotNull(bytes);
+        Assert.NotEmpty(bytes);
+
+        using var ms = new MemoryStream(bytes);
+        using var workbook = new XLWorkbook(ms);
+        Assert.True(workbook.Worksheets.Count >= 7);
+    }
+
+    [Fact]
+    public async Task BuildSheets_DirectCalls_PopulatedAndEmpty_ExecutesAllBranches()
+    {
+        var filter = new HouseholdTaxFilterDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            BranchId = _branchId
+        };
+        var summary = await _mockTaxService.Object.GetTaxSummaryAsync(filter);
+
+        var tenant = _context.Tenants.IgnoreQueryFilters().First();
+        var branch = _context.Branches.IgnoreQueryFilters().First();
+        var orders = _context.Orders.IgnoreQueryFilters().Include(o => o.Details).ToList();
+        var receipts = _context.GoodsReceipts.IgnoreQueryFilters().Include(g => g.Lines).ToList();
+        var cashEntries = _context.CashbookEntries.IgnoreQueryFilters().ToList();
+        var expenses = new List<ExpenseVoucher>
+        {
+            new()
+            {
+                Id = Guid.NewGuid(),
+                VoucherCode = "PC-001",
+                ExpenseDate = new DateTime(2026, 1, 15, 10, 0, 0, DateTimeKind.Utc),
+                BeneficiaryName = "Chủ nhà",
+                Category = "Tiền thuê mặt bằng cửa hàng",
+                Amount = 20000m,
+                IsTaxDeductible = true
+            }
+        };
+        var snapshots = new List<HouseholdTaxSnapshot>
+        {
+            new()
+            {
+                Id = Guid.NewGuid(),
+                Year = 2026,
+                PeriodNumber = 1,
+                PeriodType = TaxPeriodType.Quarter,
+                VatAmount = 1500m,
+                PitAmount = 750m,
+                TotalTaxAmount = 2250m
+            }
+        };
+
+        // 1. Populated calls
+        using (var wb = new XLWorkbook())
+        {
+            TaxExportService.BuildS1aSheet(wb, summary, filter, orders, tenant, branch);
+            TaxExportService.BuildS2aSheet(wb, summary, filter, orders, tenant, branch);
+            TaxExportService.BuildS2bSheet(wb, summary, filter, orders, tenant, branch);
+            TaxExportService.BuildS2cSheet(wb, summary, filter, orders, expenses, tenant, branch);
+            TaxExportService.BuildS2dSheet(wb, summary, filter, receipts, orders, expenses, tenant, branch);
+            TaxExportService.BuildS2eSheet(wb, summary, filter, cashEntries, orders, expenses, tenant, branch);
+            TaxExportService.BuildS3aSheet(wb, summary, filter, snapshots, expenses, tenant, branch);
+            Assert.Equal(7, wb.Worksheets.Count);
+        }
+
+        // 2. Empty data calls
+        using (var wbEmpty = new XLWorkbook())
+        {
+            var emptyOrders = new List<Order>();
+            var emptyReceipts = new List<GoodsReceipt>();
+            var emptyCash = new List<CashbookEntry>();
+            var emptyExpenses = new List<ExpenseVoucher>();
+            var emptySnapshots = new List<HouseholdTaxSnapshot>();
+
+            TaxExportService.BuildS1aSheet(wbEmpty, summary, filter, emptyOrders, tenant, null);
+            TaxExportService.BuildS2aSheet(wbEmpty, summary, filter, emptyOrders, null, null);
+            TaxExportService.BuildS2bSheet(wbEmpty, summary, filter, emptyOrders, null, branch);
+            TaxExportService.BuildS2cSheet(wbEmpty, summary, filter, emptyOrders, emptyExpenses, null, null);
+            TaxExportService.BuildS2dSheet(wbEmpty, summary, filter, emptyReceipts, emptyOrders, emptyExpenses, null, null);
+            TaxExportService.BuildS2eSheet(wbEmpty, summary, filter, emptyCash, emptyOrders, emptyExpenses, null, null);
+            TaxExportService.BuildS3aSheet(wbEmpty, summary, filter, emptySnapshots, emptyExpenses, null, null);
+            Assert.Equal(7, wbEmpty.Worksheets.Count);
+        }
     }
 }

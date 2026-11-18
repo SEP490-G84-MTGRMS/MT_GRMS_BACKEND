@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Application.Suppliers.Dtos;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Api.Controllers;
 
@@ -294,11 +295,12 @@ public class SuppliersController : BaseApiController
         Guid id,
         [FromQuery] DateTime? fromDate,
         [FromQuery] DateTime? toDate,
+        [FromQuery] APDocType? docType = null,
         [FromQuery] int pageIndex = 1,
         [FromQuery] int pageSize = 20,
         CancellationToken cancellationToken = default)
     {
-        var result = await _supplierService.GetAPLedgerAsync(id, fromDate, toDate, pageIndex, pageSize, cancellationToken);
+        var result = await _supplierService.GetAPLedgerAsync(id, fromDate, toDate, pageIndex, pageSize, cancellationToken, docType);
         return Ok(ApiResponse<PagedResult<SupplierAPLedgerDto>>.Ok(result));
     }
 

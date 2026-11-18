@@ -55,4 +55,3 @@ services.AddAuthentication(options =>
         return services;
     }
 }
-
