@@ -8,7 +8,7 @@ using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Api.Controllers;
 
-[Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+[Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
 [ApiController]
 [Route("api/shift-configs")]
 public class ShiftConfigsController : BaseApiController
@@ -54,7 +54,7 @@ public class ShiftConfigsController : BaseApiController
     /// <summary>
     /// Tạo mới một ca làm việc mẫu cho chi nhánh
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost]
     public async Task<IActionResult> Create(
         [FromBody] CreateShiftConfigRequest request,
@@ -78,7 +78,7 @@ public class ShiftConfigsController : BaseApiController
     /// <summary>
     /// Cập nhật thông tin cấu hình ca làm việc
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(
         Guid id,
@@ -103,7 +103,7 @@ public class ShiftConfigsController : BaseApiController
     /// <summary>
     /// Bật/Tắt trạng thái hoạt động (IsActive) của ca làm việc
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPatch("{id:guid}/status")]
     public async Task<IActionResult> UpdateStatus(
         Guid id,
@@ -124,7 +124,7 @@ public class ShiftConfigsController : BaseApiController
     /// <summary>
     /// Xóa mềm một ca làm việc
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(
         Guid id,

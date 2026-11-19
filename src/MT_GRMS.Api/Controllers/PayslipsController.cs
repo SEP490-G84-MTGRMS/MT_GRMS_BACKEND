@@ -11,7 +11,7 @@ using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Api.Controllers;
 
-[Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+[Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
 [Route("api/payslips")]
 public class PayslipsController : BaseApiController
 {
@@ -33,7 +33,7 @@ public class PayslipsController : BaseApiController
     /// GET /api/v1/payslips
     /// Lấy danh sách phiếu lương có phân trang và bộ lọc (kỳ tháng, chi nhánh, trạng thái, từ khóa).
     /// </summary>
-    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+    [Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
     [HttpGet]
     public async Task<ActionResult<ApiResponse<PagedResult<PayslipSummaryDto>>>> GetPayslipsPaged(
         [FromQuery] string? keyword,
@@ -48,9 +48,8 @@ public class PayslipsController : BaseApiController
                        ?? User.FindFirst("role")?.Value
                        ?? _tenantContext?.CurrentRole;
 
-        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner) || User.IsInRole(SystemRoles.Admin)
-                          || string.Equals(currentRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase)
-                          || string.Equals(currentRole, SystemRoles.Admin, StringComparison.OrdinalIgnoreCase);
+        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner)
+                          || string.Equals(currentRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase);
 
         Guid? employeeId = null;
         if (!isOwnerOrAdmin)
@@ -97,7 +96,7 @@ public class PayslipsController : BaseApiController
     /// GET /api/v1/payslips/{id}
     /// Lấy thông tin chi tiết một phiếu lương.
     /// </summary>
-    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+    [Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<ApiResponse<PayslipResponse>>> GetPayslipById(
         Guid id,
@@ -113,9 +112,8 @@ public class PayslipsController : BaseApiController
                        ?? User.FindFirst("role")?.Value
                        ?? _tenantContext?.CurrentRole;
 
-        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner) || User.IsInRole(SystemRoles.Admin)
-                          || string.Equals(currentRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase)
-                          || string.Equals(currentRole, SystemRoles.Admin, StringComparison.OrdinalIgnoreCase);
+        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner)
+                          || string.Equals(currentRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase);
 
         if (!isOwnerOrAdmin)
         {
@@ -132,7 +130,7 @@ public class PayslipsController : BaseApiController
     /// POST /api/v1/payslips/generate-batch
     /// Tự động tổng hợp dữ liệu chấm công và khởi tạo/cập nhật bảng lương tháng theo lô.
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("generate-batch")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<PayslipResponse>>>> GeneratePayrollBatch(
         [FromBody] GeneratePayrollBatchRequest request,
@@ -146,7 +144,7 @@ public class PayslipsController : BaseApiController
     /// POST /api/payslips/recalculate
     /// Tính toán lại bảng lương cho kỳ tháng (bảo lưu các phiếu đã chi trả, chỉ tính lại các phiếu chưa thanh toán).
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("recalculate")]
     public async Task<ActionResult<ApiResponse<IReadOnlyList<PayslipResponse>>>> RecalculatePayroll(
         [FromBody] GeneratePayrollBatchRequest request,
@@ -160,7 +158,7 @@ public class PayslipsController : BaseApiController
     /// POST /api/v1/payslips/{id}/advance
     /// Tạo khoản tạm ứng lương cho nhân viên, tự động hạch toán Sổ quỹ.
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("{id:guid}/advance")]
     public async Task<ActionResult<ApiResponse<PayslipResponse>>> AdvanceSalary(
         Guid id,
@@ -175,7 +173,7 @@ public class PayslipsController : BaseApiController
     /// POST /api/v1/payslips/{id}/pay
     /// Thực hiện chi trả một phiếu lương đơn lẻ, tự động sinh phiếu chi Sổ quỹ.
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("{id:guid}/pay")]
     public async Task<ActionResult<ApiResponse<PayslipResponse>>> PayPayslip(
         Guid id,
@@ -190,7 +188,7 @@ public class PayslipsController : BaseApiController
     /// POST /api/v1/payslips/batch-pay
     /// Chi trả lương hàng loạt cho danh sách phiếu lương chưa thanh toán.
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("batch-pay")]
     public async Task<ActionResult<ApiResponse<BatchPayResultDto>>> BatchPayPayslips(
         [FromBody] BatchPayPayslipsRequest request,
@@ -204,7 +202,7 @@ public class PayslipsController : BaseApiController
     /// DELETE /api/v1/payslips/{id}
     /// Xóa phiếu lương (chỉ cho phép xóa khi phiếu chưa thanh toán).
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpDelete("{id:guid}")]
     public async Task<ActionResult<ApiResponse<bool>>> DeletePayslip(
         Guid id,

@@ -868,10 +868,9 @@ public class ScheduleService : IScheduleService
         CancellationToken cancellationToken = default)
     {
         if (!string.IsNullOrWhiteSpace(_tenantContext.CurrentRole)
-            && !string.Equals(_tenantContext.CurrentRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(_tenantContext.CurrentRole, "ADMIN", StringComparison.OrdinalIgnoreCase))
+            && !string.Equals(_tenantContext.CurrentRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase))
         {
-            throw new BusinessException("FORBIDDEN", "Chỉ Chủ cửa hàng hoặc Quản trị viên mới có quyền hủy chấm công.");
+            throw new BusinessException("FORBIDDEN", "Chỉ Chủ cửa hàng mới có quyền hủy chấm công.");
         }
 
         var schedule = await _scheduleRepository.GetByIdAsync(id, cancellationToken)
