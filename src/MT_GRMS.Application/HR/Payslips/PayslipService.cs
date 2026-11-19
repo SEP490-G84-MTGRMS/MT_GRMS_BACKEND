@@ -709,7 +709,7 @@ public class PayslipService : IPayslipService
                 type,
                 title,
                 message,
-                "/employee/my-payslips",
+                "/employee/payroll",
                 cancellationToken);
         }
         catch

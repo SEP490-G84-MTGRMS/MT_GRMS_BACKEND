@@ -557,7 +557,7 @@ public class ScheduleService : IScheduleService
                             "SCHEDULE_PUBLISHED",
                             "Lịch làm việc mới",
                             $"Lịch làm việc mới ({group.Count()} ca) từ {fromDate:dd/MM/yyyy} đến {toDate:dd/MM/yyyy} đã được ban hành.",
-                            "/employee/my-schedule",
+                            "/employee/attendance",
                             cancellationToken);
                     }
                 }

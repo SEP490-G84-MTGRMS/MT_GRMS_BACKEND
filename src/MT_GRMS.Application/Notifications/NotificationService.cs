@@ -178,5 +178,7 @@ public class NotificationService : INotificationService
         n.Message,
         n.ActionUrl,
         n.IsRead,
-        n.CreatedAt);
+        n.CreatedAt.Kind == DateTimeKind.Unspecified
+            ? DateTime.SpecifyKind(n.CreatedAt, DateTimeKind.Utc)
+            : n.CreatedAt.ToUniversalTime());
 }

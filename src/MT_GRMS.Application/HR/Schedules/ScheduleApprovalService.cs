@@ -149,7 +149,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
                     "REQUEST_SUBMITTED",
                     "Đơn yêu cầu ca làm việc mới",
                     $"{empName} vừa gửi đơn {typeLabel} ngày {schedule.WorkDate:dd/MM/yyyy}.",
-                    "/hr/approval-requests",
+                    "/store-owner/employees/approval-requests",
                     cancellationToken);
             }
             catch
@@ -392,7 +392,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 "REQUEST_REVIEWED",
                 title,
                 msg,
-                "/employee/my-schedule",
+                "/employee/attendance",
                 cancellationToken);
         }
         catch
