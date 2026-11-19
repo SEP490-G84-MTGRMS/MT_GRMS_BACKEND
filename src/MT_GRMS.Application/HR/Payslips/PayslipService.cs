@@ -6,6 +6,7 @@ using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Payslips.Dtos;
 using MT_GRMS.Application.HR.Schedules;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Enums;
@@ -27,6 +28,7 @@ public class PayslipService : IPayslipService
     private readonly IUnitOfWork _unitOfWork;
     private readonly ICashbookService? _cashbookService;
     private readonly IExpenseRepository? _expenseRepository;
+    private readonly INotificationService? _notificationService;
 
     public PayslipService(
         IPayslipRepository payslipRepository,
@@ -36,7 +38,8 @@ public class PayslipService : IPayslipService
         ITenantContext tenantContext,
         IUnitOfWork unitOfWork,
         ICashbookService? cashbookService = null,
-        IExpenseRepository? expenseRepository = null)
+        IExpenseRepository? expenseRepository = null,
+        INotificationService? notificationService = null)
     {
         _payslipRepository = payslipRepository;
         _employeeRepository = employeeRepository;
@@ -46,6 +49,7 @@ public class PayslipService : IPayslipService
         _unitOfWork = unitOfWork;
         _cashbookService = cashbookService;
         _expenseRepository = expenseRepository;
+        _notificationService = notificationService;
     }
 
     public async Task<IReadOnlyList<PayslipResponse>> GenerateMonthlyPayrollAsync(
@@ -352,6 +356,21 @@ public class PayslipService : IPayslipService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        if (_notificationService != null)
+        {
+            foreach (var p in resultList.Where(x => x.Status == PayslipStatus.Unpaid))
+            {
+                await NotifyPayslipSafeAsync(
+                    p.TenantId,
+                    p.EmployeeId,
+                    p.Employee?.UserId,
+                    "PAYSLIP_GENERATED",
+                    "Phiếu lương mới",
+                    $"Phiếu lương kỳ {p.PeriodMonth} ({p.PayslipCode}) đã được tạo.",
+                    cancellationToken);
+            }
+        }
+
         return resultList.Select(MapToResponse).ToList();
     }
 
@@ -553,6 +572,15 @@ public class PayslipService : IPayslipService
         _payslipRepository.Update(payslip);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        await NotifyPayslipSafeAsync(
+            payslip.TenantId,
+            payslip.EmployeeId,
+            payslip.Employee?.UserId,
+            "PAYSLIP_PAID",
+            "Đã thanh toán lương",
+            $"Phiếu lương kỳ {payslip.PeriodMonth} số tiền {payslip.NetSalary:N0}đ đã được thanh toán ({payslip.CashbookVoucherCode}).",
+            cancellationToken);
+
         return MapToResponse(payslip);
     }
 
@@ -564,6 +592,7 @@ public class PayslipService : IPayslipService
         var successList = new List<string>();
         var errors = new List<string>();
 
+        var paidPayslips = new List<Payslip>();
         foreach (var id in request.PayslipIds)
         {
             var payslip = await _payslipRepository.GetByIdAsync(id, cancellationToken);
@@ -628,9 +657,22 @@ public class PayslipService : IPayslipService
 
             _payslipRepository.Update(payslip);
             successList.Add(payslip.PayslipCode);
+            paidPayslips.Add(payslip);
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        foreach (var paid in paidPayslips)
+        {
+            await NotifyPayslipSafeAsync(
+                paid.TenantId,
+                paid.EmployeeId,
+                paid.Employee?.UserId,
+                "PAYSLIP_PAID",
+                "Đã thanh toán lương",
+                $"Phiếu lương kỳ {paid.PeriodMonth} số tiền {paid.NetSalary:N0}đ đã được thanh toán ({paid.CashbookVoucherCode}).",
+                cancellationToken);
+        }
 
         return new BatchPayResultDto(
             TotalRequested: request.PayslipIds.Count,
@@ -639,6 +681,41 @@ public class PayslipService : IPayslipService
             PaidPayslipCodes: successList,
             Errors: errors
         );
+    }
+
+    private async Task NotifyPayslipSafeAsync(
+        string tenantId,
+        Guid employeeId,
+        string? userId,
+        string type,
+        string title,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        if (_notificationService == null) return;
+        try
+        {
+            var targetUserId = userId;
+            if (string.IsNullOrWhiteSpace(targetUserId))
+            {
+                var emp = await _employeeRepository.GetByIdAsync(employeeId, cancellationToken);
+                targetUserId = emp?.UserId;
+            }
+            if (string.IsNullOrWhiteSpace(targetUserId)) return;
+
+            await _notificationService.CreateAndPushAsync(
+                tenantId,
+                new[] { targetUserId },
+                type,
+                title,
+                message,
+                "/employee/my-payslips",
+                cancellationToken);
+        }
+        catch
+        {
+            // Không làm gián đoạn luồng tính/trả lương
+        }
     }
 
     private async Task<decimal> GetPayslipAdvanceFromCashbookAsync(

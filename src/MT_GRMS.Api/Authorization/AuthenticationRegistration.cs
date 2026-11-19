@@ -46,6 +46,12 @@ services.AddAuthentication(options =>
             {
                 context.Token = cookieToken;
             }
+            else if (context.Request.Path.StartsWithSegments("/hubs/notifications") &&
+                     context.Request.Query.TryGetValue("access_token", out var queryToken) &&
+                     !string.IsNullOrWhiteSpace(queryToken))
+            {
+                context.Token = queryToken;
+            }
             return Task.CompletedTask;
         },
         OnTokenValidated = SessionTokenValidator.ValidateAsync

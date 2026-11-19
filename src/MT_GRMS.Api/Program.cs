@@ -59,6 +59,8 @@ builder.Services.AddScoped<ITenantContext, TenantContext>();
 // 4. Đăng ký các tầng Application & Infrastructure
 builder.Services.AddApplicationServices();
 builder.Services.AddInfrastructureServices(builder.Configuration);
+builder.Services.AddSignalR();
+builder.Services.AddScoped<MT_GRMS.Application.Notifications.INotificationRealtimeDispatcher, MT_GRMS.Api.Hubs.SignalRNotificationDispatcher>();
 
 // 5. Cấu hình CORS (cho phép frontend gọi API từ localhost bất kỳ port nào)
 builder.Services.AddCors(options =>
@@ -132,6 +134,7 @@ app.UseMiddleware<SubscriptionAccessMiddleware>();
 app.UseAuthorization();
 
 app.MapControllers();
+app.MapHub<MT_GRMS.Api.Hubs.NotificationHub>("/hubs/notifications");
 
 // 8. Tự động áp dụng Migration (Auto-migration); Seed mẫu chỉ khi Database:SeedSampleData=true
 var skipDbInit = app.Configuration.GetValue<bool>("Database:SkipDbInitialization");

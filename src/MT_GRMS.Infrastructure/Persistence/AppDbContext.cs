@@ -85,6 +85,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<SupplierReturnPolicy> SupplierReturnPolicies { get; set; } = null!;
     public virtual DbSet<SupplierReturnPolicyCategoryCostShare> SupplierReturnPolicyCategoryCostShares { get; set; } = null!;
     public virtual DbSet<OutboxMessage> OutboxMessages { get; set; } = null!;
+    public virtual DbSet<Notification> Notifications { get; set; } = null!;
 
     // 5. Phân hệ Khách hàng, Khuyến mãi & Bán lẻ POS (4 bảng)
     public virtual DbSet<Customer> Customers { get; set; } = null!;

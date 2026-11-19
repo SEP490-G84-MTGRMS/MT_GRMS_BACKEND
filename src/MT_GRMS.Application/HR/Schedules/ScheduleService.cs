@@ -5,6 +5,7 @@ using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Payslips;
 using MT_GRMS.Application.HR.Schedules.Dtos;
 using MT_GRMS.Application.HR.ShiftConfigs;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
@@ -21,6 +22,7 @@ public class ScheduleService : IScheduleService
     private readonly IPayslipRepository? _payslipRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
+    private readonly INotificationService? _notificationService;
 
     public ScheduleService(
         IScheduleRepository scheduleRepository,
@@ -30,7 +32,8 @@ public class ScheduleService : IScheduleService
         ITenantContext tenantContext,
         IBranchAttendancePolicyRepository? policyRepository = null,
         ICloudinaryService? cloudinaryService = null,
-        IPayslipRepository? payslipRepository = null)
+        IPayslipRepository? payslipRepository = null,
+        INotificationService? notificationService = null)
     {
         _scheduleRepository = scheduleRepository;
         _employeeRepository = employeeRepository;
@@ -40,6 +43,7 @@ public class ScheduleService : IScheduleService
         _policyRepository = policyRepository;
         _cloudinaryService = cloudinaryService;
         _payslipRepository = payslipRepository;
+        _notificationService = notificationService;
     }
 
     public async Task<ScheduleResponse> CreateAsync(
@@ -531,6 +535,37 @@ public class ScheduleService : IScheduleService
         if (count > 0)
         {
             await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            if (_notificationService != null)
+            {
+                try
+                {
+                    var tenantId = _tenantContext.CurrentTenantId;
+                    foreach (var group in schedules.GroupBy(s => s.EmployeeId))
+                    {
+                        var userId = group.FirstOrDefault()?.Employee?.UserId;
+                        if (string.IsNullOrWhiteSpace(userId))
+                        {
+                            var emp = await _employeeRepository.GetByIdAsync(group.Key, cancellationToken);
+                            userId = emp?.UserId;
+                        }
+                        if (string.IsNullOrWhiteSpace(userId)) continue;
+
+                        await _notificationService.CreateAndPushAsync(
+                            tenantId,
+                            new[] { userId },
+                            "SCHEDULE_PUBLISHED",
+                            "Lịch làm việc mới",
+                            $"Lịch làm việc mới ({group.Count()} ca) từ {fromDate:dd/MM/yyyy} đến {toDate:dd/MM/yyyy} đã được ban hành.",
+                            "/employee/my-schedule",
+                            cancellationToken);
+                    }
+                }
+                catch
+                {
+                    // Không làm gián đoạn luồng ban hành lịch nếu lỗi thông báo
+                }
+            }
         }
 
         return new PublishSchedulesResponse(count, $"Đã ban hành thành công {count} ca làm việc.");
