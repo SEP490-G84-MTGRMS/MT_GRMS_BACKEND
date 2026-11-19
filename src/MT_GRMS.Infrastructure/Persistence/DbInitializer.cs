@@ -325,8 +325,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""Email"" character varying(150) NULL;
                 ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""ManagerName"" character varying(150) NULL;
                 ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""IsHeadquarter"" boolean NOT NULL DEFAULT false;
+                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""StandardDayHours"" numeric(4,2) NOT NULL DEFAULT 8.00;
+                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""IsConvertHoursToDays"" boolean NOT NULL DEFAULT true;
+                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""ConversionRulesJson"" text;
+                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""EnableLateThreshold"" boolean NOT NULL DEFAULT true;
+                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""LateThresholdMinutes"" integer NOT NULL DEFAULT 0;
+                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""EnableEarlyLeaveThreshold"" boolean NOT NULL DEFAULT true;
+                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""EarlyLeaveThresholdMinutes"" integer NOT NULL DEFAULT 0;
+                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""IsAttendancePolicyCustomized"" boolean NOT NULL DEFAULT false;
             ");
-            logger?.LogInformation("[MT-GRMS] Đã đồng bộ các cột Email, ManagerName, IsHeadquarter cho bảng Branches.");
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ các cột Email, ManagerName, IsHeadquarter, ConversionRulesJson cho bảng Branches.");
         }
         catch (Exception ex)
         {
@@ -1385,36 +1393,8 @@ END $$;
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate_Version"" ON ""BusinessDayClosings"" (""TenantId"", ""BranchId"", ""BusinessDate"", ""Version"");
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate_IsActive"" ON ""BusinessDayClosings"" (""TenantId"", ""BranchId"", ""BusinessDate"", ""IsActive"") WHERE ""IsActive"" = TRUE;
 
-                        CREATE TABLE IF NOT EXISTS ""ShiftParticipants"" (
-                            ""Id"" uuid NOT NULL PRIMARY KEY,
-                            ""TenantId"" text NOT NULL,
-                            ""ShiftId"" uuid NOT NULL,
-                            ""UserId"" uuid NOT NULL,
-                            ""UserName"" character varying(100),
-                            ""FullName"" character varying(150),
-                            ""JoinedAtUtc"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""LastActiveAtUtc"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""CreatedBy"" uuid,
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false
-                        );
-                        CREATE INDEX IF NOT EXISTS ""IX_ShiftParticipants_TenantId_ShiftId_UserId"" ON ""ShiftParticipants"" (""TenantId"", ""ShiftId"", ""UserId"");
-
-                        CREATE TABLE IF NOT EXISTS ""ShiftCloseConfirmations"" (
-                            ""Id"" uuid NOT NULL PRIMARY KEY,
-                            ""TenantId"" text NOT NULL,
-                            ""ShiftId"" uuid NOT NULL,
-                            ""UserId"" uuid NOT NULL,
-                            ""UserName"" character varying(100),
-                            ""ConfirmedCountedCash"" numeric(18,2) NOT NULL DEFAULT 0,
-                            ""ConfirmedAtUtc"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""CreatedBy"" uuid,
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false
-                        );
-                        CREATE INDEX IF NOT EXISTS ""IX_ShiftCloseConfirmations_TenantId_ShiftId"" ON ""ShiftCloseConfirmations"" (""TenantId"", ""ShiftId"");
+                        ALTER TABLE IF EXISTS ""ShiftZReports""
+                            ADD COLUMN IF NOT EXISTS ""ParticipantsJson"" jsonb NOT NULL DEFAULT '[]'::jsonb;
 
                         CREATE TABLE IF NOT EXISTS ""ShiftCashMovements"" (
                             ""Id"" uuid NOT NULL PRIMARY KEY,
@@ -1439,24 +1419,6 @@ END $$;
                         ALTER TABLE IF EXISTS ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""IsConfirmedByOwner"" boolean DEFAULT false;
                         ALTER TABLE IF EXISTS ""ShiftCashMovements"" ADD COLUMN IF NOT EXISTS ""ConfirmedByOwnerAtUtc"" timestamp without time zone;
 
-                        CREATE TABLE IF NOT EXISTS ""StorePaymentConfigs"" (
-                            ""Id"" uuid NOT NULL PRIMARY KEY,
-                            ""TenantId"" text NOT NULL,
-                            ""BankCode"" character varying(50) NOT NULL DEFAULT 'MB',
-                            ""BankName"" character varying(150) NOT NULL DEFAULT 'MBBank - Ngân hàng Quân Đội',
-                            ""BankAccountNumber"" character varying(50) NOT NULL DEFAULT '',
-                            ""BankAccountName"" character varying(150) NOT NULL DEFAULT '',
-                            ""SepayApiKeyEncrypted"" text NOT NULL DEFAULT '',
-                            ""SepayWebhookSecret"" text NOT NULL DEFAULT '',
-                            ""IsActive"" boolean NOT NULL DEFAULT true,
-                            ""CashOutApprovalThreshold"" numeric(18,2) NOT NULL DEFAULT 200000,
-                            ""CashOutShiftTotalLimit"" numeric(18,2) NOT NULL DEFAULT 0,
-                            ""CreatedBy"" uuid,
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false
-                        );
-
                         CREATE TABLE IF NOT EXISTS ""PaymentTransactions"" (
                             ""Id"" uuid NOT NULL PRIMARY KEY,
                             ""TenantId"" text NOT NULL,
@@ -1476,48 +1438,6 @@ END $$;
                             ""IsDeleted"" boolean NOT NULL DEFAULT false
                         );
 
-                        CREATE TABLE IF NOT EXISTS ""PaymentAccounts"" (
-                            ""Id"" uuid NOT NULL PRIMARY KEY,
-                            ""TenantId"" text NOT NULL,
-                            ""BankCode"" character varying(20) NOT NULL,
-                            ""BankName"" character varying(150) NOT NULL,
-                            ""AccountNumber"" character varying(50) NOT NULL,
-                            ""AccountHolderName"" character varying(150) NOT NULL,
-                            ""IsActive"" boolean NOT NULL DEFAULT true,
-                            ""CreatedBy"" uuid,
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false
-                        );
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_PaymentAccounts_TenantId_BankCode_AccountNumber""
-                            ON ""PaymentAccounts"" (""TenantId"", ""BankCode"", ""AccountNumber"");
-
-                        CREATE TABLE IF NOT EXISTS ""BranchPaymentAccounts"" (
-                            ""Id"" uuid NOT NULL PRIMARY KEY,
-                            ""TenantId"" text NOT NULL,
-                            ""BranchId"" uuid NOT NULL,
-                            ""PaymentAccountId"" uuid NOT NULL,
-                            ""IsDefault"" boolean NOT NULL DEFAULT false,
-                            ""IsActive"" boolean NOT NULL DEFAULT true,
-                            ""CreatedBy"" uuid,
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
-                            CONSTRAINT ""FK_BranchPaymentAccounts_Branches_BranchId"" FOREIGN KEY (""BranchId"") REFERENCES ""Branches"" (""Id"") ON DELETE RESTRICT,
-                            CONSTRAINT ""FK_BranchPaymentAccounts_PaymentAccounts_PaymentAccountId"" FOREIGN KEY (""PaymentAccountId"") REFERENCES ""PaymentAccounts"" (""Id"") ON DELETE RESTRICT
-                        );
-                        DROP INDEX IF EXISTS ""IX_BranchPaymentAccounts_TenantId_BranchId_PaymentAccountId"";
-                        DROP INDEX IF EXISTS ""IX_BranchPaymentAccounts_TenantId_BranchId_IsDefault"";
-                        DELETE FROM ""BranchPaymentAccounts"" current_assignment
-                        USING ""BranchPaymentAccounts"" duplicate_assignment
-                        WHERE current_assignment.""TenantId"" = duplicate_assignment.""TenantId""
-                          AND current_assignment.""BranchId"" = duplicate_assignment.""BranchId""
-                          AND current_assignment.""Id"" <> duplicate_assignment.""Id""
-                          AND (current_assignment.""IsDefault"", current_assignment.""CreatedAt"", current_assignment.""Id"")
-                              < (duplicate_assignment.""IsDefault"", duplicate_assignment.""CreatedAt"", duplicate_assignment.""Id"");
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BranchPaymentAccounts_TenantId_BranchId""
-                            ON ""BranchPaymentAccounts"" (""TenantId"", ""BranchId"");
-
                         ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""PaymentAccountId"" uuid;
                         ALTER TABLE IF EXISTS ""PaymentTransactions"" ADD COLUMN IF NOT EXISTS ""BranchId"" uuid;
                         ALTER TABLE IF EXISTS ""PaymentTransactions"" ADD COLUMN IF NOT EXISTS ""PaymentAccountId"" uuid;
@@ -1525,9 +1445,6 @@ END $$;
                         CREATE INDEX IF NOT EXISTS ""IX_Orders_PaymentAccountId"" ON ""Orders"" (""PaymentAccountId"");
                         CREATE INDEX IF NOT EXISTS ""IX_PaymentTransactions_TenantId_BranchId_TransactionDate""
                             ON ""PaymentTransactions"" (""TenantId"", ""BranchId"", ""TransactionDate"");
-
-                        ALTER TABLE IF EXISTS ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutApprovalThreshold"" numeric(18,2) DEFAULT 200000;
-                        ALTER TABLE IF EXISTS ""StorePaymentConfigs"" ADD COLUMN IF NOT EXISTS ""CashOutShiftTotalLimit"" numeric(18,2) DEFAULT 0;
 
                         ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""TaxCategory"" text DEFAULT 'STANDARD_1PCT';
                         ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""EligibleForVatReduction"" boolean DEFAULT false;
@@ -1924,6 +1841,41 @@ END $$;
                 }
 
                 // Đánh dấu các migration hiện tại đã được áp dụng sau khi toàn bộ DDL đồng bộ đã hoàn tất
+                // Hai migration gộp phải chạy backfill trước khi được đánh dấu. Không nuốt lỗi:
+                // nếu dữ liệu cũ mâu thuẫn, khởi động cần dừng để chủ cửa hàng đối soát.
+                const string shiftMergeId = "20261118170000_MergeShiftParticipationIntoZReport";
+                const string financeMergeId = "20261118180000_ExpandFinancePaymentAccountMerge";
+                const string dropLegacyTablesId = "20261118190000_DropLegacyPaymentAccountTables";
+                var appliedMergeIds = await context.Database.SqlQueryRaw<string>(
+                    "SELECT \"MigrationId\" AS \"Value\" FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" IN ('20261118170000_MergeShiftParticipationIntoZReport', '20261118180000_ExpandFinancePaymentAccountMerge', '20261118190000_DropLegacyPaymentAccountTables')")
+                    .ToListAsync();
+                if (!appliedMergeIds.Contains(shiftMergeId))
+                {
+                    var hasOldShiftTables = await context.Database.SqlQueryRaw<int>(
+                        "SELECT CASE WHEN to_regclass('\"ShiftParticipants\"') IS NULL THEN 0 ELSE 1 END AS \"Value\"")
+                        .SingleAsync();
+                    if (hasOldShiftTables == 1)
+                    {
+                        try { await context.Database.ExecuteSqlRawAsync(Migrations.MergeShiftParticipationIntoZReport.MergeSql); }
+                        catch (Exception ex) { throw new InvalidOperationException("MERGE_SCHEMA_FAILED: Không thể chuyển lịch sử chốt ca.", ex); }
+                    }
+                    await context.Database.ExecuteSqlRawAsync(
+                        "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({0}, '8.0.11') ON CONFLICT DO NOTHING;", shiftMergeId);
+                }
+                if (!appliedMergeIds.Contains(financeMergeId))
+                {
+                    try { await context.Database.ExecuteSqlRawAsync(Migrations.ExpandFinancePaymentAccountMerge.MergeSql); }
+                    catch (Exception ex) { throw new InvalidOperationException("MERGE_SCHEMA_FAILED: Không thể chuyển tài khoản thanh toán cũ.", ex); }
+                    await context.Database.ExecuteSqlRawAsync(
+                        "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({0}, '8.0.11') ON CONFLICT DO NOTHING;", financeMergeId);
+                }
+                if (!appliedMergeIds.Contains(dropLegacyTablesId))
+                {
+                    try { await context.Database.ExecuteSqlRawAsync(Migrations.DropLegacyPaymentAccountTables.DropSql); }
+                    catch (Exception ex) { throw new InvalidOperationException("DROP_LEGACY_TABLES_FAILED: Không thể xóa các bảng tài khoản thanh toán cũ.", ex); }
+                    await context.Database.ExecuteSqlRawAsync(
+                        "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({0}, '8.0.11') ON CONFLICT DO NOTHING;", dropLegacyTablesId);
+                }
                 try
                 {
                     var migrations = context.Database.GetMigrations();
@@ -1944,6 +1896,8 @@ END $$;
         }
         catch (Exception ex)
         {
+            if (ex is InvalidOperationException && ex.Message.StartsWith("MERGE_SCHEMA_FAILED:", StringComparison.Ordinal))
+                throw;
             logger?.LogWarning(ex, "Lỗi trong quá trình kiểm tra cấu trúc CSDL hoặc migrations (bỏ qua nếu bảng đã tồn tại).");
         }
 

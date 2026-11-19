@@ -58,8 +58,50 @@ public class VoucherBatchCreateRequestValidator : AbstractValidator<VoucherBatch
             .GreaterThan(x => x.StartDate).WithMessage("Thời gian kết thúc phải lớn hơn thời gian bắt đầu");
 
         RuleFor(x => x.StartDate)
-            .Must(value => value.Date >= DateTime.UtcNow.Date)
+            .Must(value => value.Date >= DateTime.UtcNow.Date.AddDays(-1))
             .WithMessage("Ngày bắt đầu không được là ngày trong quá khứ");
+    }
+}
+
+public class VoucherBatchUpdateRequestValidator : AbstractValidator<VoucherBatchUpdateRequest>
+{
+    private static readonly HashSet<string> AllowedDiscountTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "FIXED_AMOUNT",
+        "PERCENT"
+    };
+
+    public VoucherBatchUpdateRequestValidator()
+    {
+        RuleFor(x => x.Name)
+            .NotEmpty().WithMessage("Tên đợt voucher không được để trống")
+            .MaximumLength(150).WithMessage("Tên đợt voucher không quá 150 ký tự");
+
+        RuleFor(x => x.DiscountType)
+            .NotEmpty().WithMessage("Hình thức giảm giá không được để trống")
+            .Must(dt => !string.IsNullOrWhiteSpace(dt) && AllowedDiscountTypes.Contains(dt.Trim()))
+            .WithMessage("Hình thức giảm giá voucher không hợp lệ (chỉ chấp nhận: FIXED_AMOUNT, PERCENT)");
+
+        RuleFor(x => x.Description)
+            .MaximumLength(1000).WithMessage("Ghi chú voucher không quá 1.000 ký tự")
+            .When(x => !string.IsNullOrWhiteSpace(x.Description));
+
+        RuleFor(x => x.DiscountValue)
+            .GreaterThan(0).WithMessage("Giá trị giảm giá phải lớn hơn 0");
+
+        RuleFor(x => x.DiscountValue)
+            .LessThanOrEqualTo(100).WithMessage("Tỷ lệ giảm theo phần trăm không được vượt quá 100%")
+            .When(x => string.Equals(x.DiscountType?.Trim(), "PERCENT", StringComparison.OrdinalIgnoreCase));
+
+        RuleFor(x => x.MinOrderValue)
+            .GreaterThanOrEqualTo(0).WithMessage("Giá trị đơn hàng tối thiểu phải lớn hơn hoặc bằng 0");
+
+        RuleFor(x => x.MaxDiscountAmount)
+            .GreaterThan(0).WithMessage("Mức giảm tối đa phải lớn hơn 0")
+            .When(x => x.MaxDiscountAmount.HasValue);
+
+        RuleFor(x => x.EndDate)
+            .GreaterThan(x => x.StartDate).WithMessage("Thời gian kết thúc phải sau thời gian bắt đầu");
     }
 }
 

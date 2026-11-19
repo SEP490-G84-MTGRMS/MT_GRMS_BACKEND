@@ -117,7 +117,7 @@ public class PromotionCreateRequestValidator : AbstractValidator<PromotionCreate
             .Matches("^[A-Za-z0-9_-]+$").WithMessage("Mã khuyến mại chỉ gồm chữ, số, dấu gạch ngang hoặc gạch dưới");
 
         RuleFor(x => x.StartDate)
-            .Must(value => value.Date >= DateTime.UtcNow.Date)
+            .Must(value => value.Date >= DateTime.UtcNow.Date.AddDays(-1))
             .WithMessage("Ngày bắt đầu không được là ngày trong quá khứ");
 
         PromotionValidationRules.ApplyCommonRules(

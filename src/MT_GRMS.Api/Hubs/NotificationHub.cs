@@ -12,18 +12,45 @@ public class NotificationHub : Hub
     public static string BuildUserGroup(string tenantId, string userId)
         => $"tenant:{tenantId}:user:{userId}";
 
+    public static string BuildTenantGroup(string tenantId)
+        => $"tenant:{tenantId}";
+
+    public static string BuildOrderGroup(string orderCode)
+        => $"order:{orderCode.Trim().ToUpperInvariant()}";
+
     public override async Task OnConnectedAsync()
     {
         var tenantId = Context.User?.FindFirst("tenant_id")?.Value;
         var userId = Context.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value
                   ?? Context.User?.FindFirst("sub")?.Value;
 
-        if (!string.IsNullOrWhiteSpace(tenantId) && !string.IsNullOrWhiteSpace(userId))
+        if (!string.IsNullOrWhiteSpace(tenantId))
         {
-            await Groups.AddToGroupAsync(Context.ConnectionId, BuildUserGroup(tenantId, userId));
+            await Groups.AddToGroupAsync(Context.ConnectionId, BuildTenantGroup(tenantId));
+
+            if (!string.IsNullOrWhiteSpace(userId))
+            {
+                await Groups.AddToGroupAsync(Context.ConnectionId, BuildUserGroup(tenantId, userId));
+            }
         }
 
         await base.OnConnectedAsync();
+    }
+
+    public async Task JoinOrderGroup(string orderCode)
+    {
+        if (!string.IsNullOrWhiteSpace(orderCode))
+        {
+            await Groups.AddToGroupAsync(Context.ConnectionId, BuildOrderGroup(orderCode));
+        }
+    }
+
+    public async Task LeaveOrderGroup(string orderCode)
+    {
+        if (!string.IsNullOrWhiteSpace(orderCode))
+        {
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, BuildOrderGroup(orderCode));
+        }
     }
 }
 

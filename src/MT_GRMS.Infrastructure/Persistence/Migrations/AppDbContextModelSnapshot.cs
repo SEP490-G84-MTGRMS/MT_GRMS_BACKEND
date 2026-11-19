@@ -1460,103 +1460,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("ShiftCashMovements", (string)null);
                 });
 
-            modelBuilder.Entity("MT_GRMS.Domain.Entities.Finance.ShiftCloseConfirmation", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("ConfirmedAtUtc")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<decimal>("ConfirmedCountedCash")
-                        .HasColumnType("decimal(18,2)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<Guid?>("CreatedBy")
-                        .HasColumnType("uuid");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean");
-
-                    b.Property<Guid>("ShiftId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("TenantId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("UserName")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ShiftId");
-
-                    b.HasIndex("TenantId", "ShiftId");
-
-                    b.ToTable("ShiftCloseConfirmations", (string)null);
-                });
-
-            modelBuilder.Entity("MT_GRMS.Domain.Entities.Finance.ShiftParticipant", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<Guid?>("CreatedBy")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("FullName")
-                        .HasMaxLength(150)
-                        .HasColumnType("character varying(150)");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime>("JoinedAtUtc")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<DateTime>("LastActiveAtUtc")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<Guid>("ShiftId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("TenantId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<Guid>("UserId")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("UserName")
-                        .HasMaxLength(100)
-                        .HasColumnType("character varying(100)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("ShiftId", "UserId")
-                        .IsUnique();
-
-                    b.ToTable("ShiftParticipants", (string)null);
-                });
-
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Finance.ShiftZReport", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1617,6 +1520,12 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<string>("DiscrepancyReason")
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)");
+
+                    b.Property<string>("ParticipantsJson")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValue("[]");
 
                     b.Property<decimal>("DroppedToSafeAmount")
                         .HasColumnType("decimal(18,2)");
@@ -7310,28 +7219,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("Shift");
                 });
 
-            modelBuilder.Entity("MT_GRMS.Domain.Entities.Finance.ShiftCloseConfirmation", b =>
-                {
-                    b.HasOne("MT_GRMS.Domain.Entities.Finance.ShiftZReport", "Shift")
-                        .WithMany("CloseConfirmations")
-                        .HasForeignKey("ShiftId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Shift");
-                });
-
-            modelBuilder.Entity("MT_GRMS.Domain.Entities.Finance.ShiftParticipant", b =>
-                {
-                    b.HasOne("MT_GRMS.Domain.Entities.Finance.ShiftZReport", "Shift")
-                        .WithMany("Participants")
-                        .HasForeignKey("ShiftId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Shift");
-                });
-
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Finance.ShiftZReport", b =>
                 {
                     b.HasOne("MT_GRMS.Domain.Entities.SaaS.Branch", "Branch")
@@ -8208,9 +8095,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                 {
                     b.Navigation("CashMovements");
 
-                    b.Navigation("CloseConfirmations");
-
-                    b.Navigation("Participants");
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.Employee", b =>

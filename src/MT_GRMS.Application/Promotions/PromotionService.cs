@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using FluentValidation;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Application.Promotions.Dtos;
 using MT_GRMS.Application.Promotions.Validators;
 using MT_GRMS.Domain.Entities.Catalog;
@@ -16,15 +17,18 @@ public class PromotionService : IPromotionService
     private readonly IPromotionRepository _promotionRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
+    private readonly INotificationService? _notificationService;
 
     public PromotionService(
         IPromotionRepository promotionRepository,
         IUnitOfWork unitOfWork,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        INotificationService? notificationService = null)
     {
         _promotionRepository = promotionRepository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
+        _notificationService = notificationService;
     }
 
     #region 1. Promotions Management
@@ -363,13 +367,13 @@ public class PromotionService : IPromotionService
             }
         }
 
-        // 4. Thẩm định Voucher Coupon nếu có nhập mã
+        // 4. Thẩm định Voucher Coupon nếu có nhập mã (kiểm tra điều kiện MinOrderValue trên tổng tiền hàng SubTotal)
         ValidateVoucherResponse? voucherResult = null;
         if (!string.IsNullOrWhiteSpace(request.CouponCode))
         {
             voucherResult = await ValidateVoucherAsync(new ValidateVoucherRequest(
                 request.CouponCode,
-                Math.Max(0, request.SubTotal - totalDiscount),
+                request.SubTotal,
                 request.CustomerId,
                 HasOtherPromotions: totalDiscount > 0m
             ), cancellationToken);
@@ -424,6 +428,14 @@ public class PromotionService : IPromotionService
         }
 
         return true;
+    }
+
+    private static string? StripMetadataFromDescription(string? description)
+    {
+        if (string.IsNullOrWhiteSpace(description)) return null;
+        var clean = ConfigJsonRegex.Replace(description, string.Empty);
+        clean = TiersJsonRegex.Replace(clean, string.Empty).Trim();
+        return string.IsNullOrWhiteSpace(clean) ? null : clean;
     }
 
     private sealed class PromotionTierMetadata
@@ -734,13 +746,14 @@ public class PromotionService : IPromotionService
         if (await _promotionRepository.ExistsByCodeAsync(request.BatchCode, cancellationToken))
             throw new BusinessException("DUPLICATE_CODE", $"Mã đợt voucher '{request.BatchCode}' đã tồn tại.");
 
-        string? finalDescription = request.Description;
+        string? cleanDesc = StripMetadataFromDescription(request.Description);
+        string? finalDescription = cleanDesc;
         if (request.AllowWithPromotions.HasValue)
         {
             var configJson = $"[CONFIG_JSON]{{\"allowWithPromotions\":{request.AllowWithPromotions.Value.ToString().ToLowerInvariant()}}}[/CONFIG_JSON]";
-            finalDescription = string.IsNullOrWhiteSpace(finalDescription)
+            finalDescription = string.IsNullOrWhiteSpace(cleanDesc)
                 ? configJson
-                : $"{finalDescription.Trim()}\n{configJson}";
+                : $"{cleanDesc}\n{configJson}";
         }
 
         var batch = new Promotion
@@ -770,6 +783,39 @@ public class PromotionService : IPromotionService
         {
             await GenerateVoucherCodesAsync(batch.Id, new GenerateVoucherCodesRequest(request.TotalQuantity, request.Prefix), cancellationToken);
         }
+
+        return MapToVoucherBatchResponse(batch);
+    }
+
+    public async Task<VoucherBatchResponse> UpdateVoucherBatchAsync(Guid id, VoucherBatchUpdateRequest request, CancellationToken cancellationToken = default)
+    {
+        await ValidateRequestAsync(new VoucherBatchUpdateRequestValidator(), request, cancellationToken);
+
+        var batch = await _promotionRepository.GetByIdAsync(id, cancellationToken);
+        if (batch == null || batch.Type != "VOUCHER")
+            throw new NotFoundException("Đợt phát hành voucher", id);
+
+        string? cleanDesc = StripMetadataFromDescription(request.Description);
+        string? finalDescription = cleanDesc;
+        if (request.AllowWithPromotions.HasValue)
+        {
+            var configJson = $"[CONFIG_JSON]{{\"allowWithPromotions\":{request.AllowWithPromotions.Value.ToString().ToLowerInvariant()}}}[/CONFIG_JSON]";
+            finalDescription = string.IsNullOrWhiteSpace(cleanDesc)
+                ? configJson
+                : $"{cleanDesc}\n{configJson}";
+        }
+
+        batch.PromotionName = request.Name.Trim();
+        batch.DiscountValue = request.DiscountValue;
+        batch.MinOrderValue = request.MinOrderValue;
+        batch.MaxDiscountAmount = request.MaxDiscountAmount;
+        batch.StartDate = request.StartDate;
+        batch.EndDate = request.EndDate;
+        batch.Description = finalDescription;
+        batch.UpdatedAt = DateTime.UtcNow;
+
+        _promotionRepository.Update(batch);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return MapToVoucherBatchResponse(batch);
     }
@@ -959,6 +1005,32 @@ public class PromotionService : IPromotionService
             voucher.Promotion.UsedCount += 1;
             _promotionRepository.Update(voucher.Promotion);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            // Kiểm tra hạn mức Voucher: nếu sắp hết lượt dùng (còn <= 5 lượt hoặc = 0)
+            if (voucher.Promotion.UsageLimit.HasValue && _notificationService != null)
+            {
+                var remainingUses = voucher.Promotion.UsageLimit.Value - voucher.Promotion.UsedCount;
+                if (remainingUses <= 5)
+                {
+                    try
+                    {
+                        var statusMsg = remainingUses <= 0
+                            ? $"đã HẾT LƯỢT sử dụng (0/{voucher.Promotion.UsageLimit.Value})"
+                            : $"sắp hết lượt sử dụng (chỉ còn {remainingUses}/{voucher.Promotion.UsageLimit.Value} lượt)";
+                        await _notificationService.NotifyTenantOwnersAsync(
+                            voucher.Promotion.TenantId,
+                            "VOUCHER_DEPLETED",
+                            $"🟡 Cảnh báo: Voucher sắp hết lượt dùng ({voucher.Promotion.PromotionCode})",
+                            $"Chương trình '{voucher.Promotion.PromotionName}' ({voucher.Promotion.PromotionCode}) {statusMsg}. Vui lòng kiểm tra và bổ sung hạn mức nếu cần.",
+                            $"/promotions/{voucher.Promotion.Id}",
+                            cancellationToken);
+                    }
+                    catch
+                    {
+                        // Không làm gián đoạn luồng đổi voucher
+                    }
+                }
+            }
         }
 
         return new RedeemVoucherResponse(true, "Đổi mã voucher thành công", request.Code, DateTime.UtcNow);
@@ -1274,7 +1346,7 @@ public class PromotionService : IPromotionService
             p.EndDate,
             status,
             p.VoucherPrefix ?? "VC",
-            p.Description,
+            StripMetadataFromDescription(p.Description),
             p.CreatedAt,
             allowWithPromotions
         );

@@ -43,7 +43,7 @@ public class BusinessDayClosingRepository : IBusinessDayClosingRepository
 
     public Task<bool> HasPendingPaymentOrdersAsync(string tenantId, Guid branchId, DateOnly businessDate, CancellationToken cancellationToken = default) =>
         _context.Orders.AnyAsync(x => x.TenantId == tenantId && x.BranchId == branchId && x.BusinessDate == businessDate &&
-            (x.Status == "PendingPayment" || x.PaymentStatus == "PENDING_PAYMENT"), cancellationToken);
+            x.Status == "PendingPayment" && x.PaymentStatus == "PENDING_PAYMENT", cancellationToken);
 
     public async Task<IReadOnlyList<FinanceAccount>> GetFundsAsync(string tenantId, Guid branchId, CancellationToken cancellationToken = default) =>
         await _context.FinanceAccounts

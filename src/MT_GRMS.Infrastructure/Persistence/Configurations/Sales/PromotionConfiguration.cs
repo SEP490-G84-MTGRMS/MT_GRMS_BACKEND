@@ -23,8 +23,8 @@ public class PromotionConfiguration : IEntityTypeConfiguration<Promotion>
         builder.Property(x => x.UsageLimit);
         builder.Property(x => x.UsedCount).HasDefaultValue(0);
         builder.Property(x => x.IsActive).HasDefaultValue(true);
-        builder.Property(x => x.Description).HasMaxLength(500);
-        builder.Property(x => x.TargetBranches).HasMaxLength(255).HasDefaultValue("ALL");
+        builder.Property(x => x.Description).HasColumnType("text");
+        builder.Property(x => x.TargetBranches).HasColumnType("text").HasDefaultValue("ALL");
         builder.Property(x => x.BudgetLimit).HasColumnType("decimal(18,2)");
         builder.Property(x => x.TotalDiscountGiven).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.VoucherPrefix).HasMaxLength(20);

@@ -50,6 +50,8 @@ public class ShiftZReport : BaseTenantEntity
     public Guid? ClosingStartedByUserId { get; set; }
     public DateTime? ClosingStartedAtUtc { get; set; }
     public Guid? ClosedByUserId { get; set; }
+    /// <summary>Ảnh chụp người thực sự tham gia ca POS; một lịch nhân sự có thể xuất hiện ở nhiều ca.</summary>
+    public string ParticipantsJson { get; set; } = "[]";
     public string? ForceCloseReason { get; set; }
     public bool SnapshotLocked { get; set; }
     public CashbookPostingStatus CashbookPostingStatus { get; set; } = CashbookPostingStatus.NotPosted;
@@ -60,6 +62,4 @@ public class ShiftZReport : BaseTenantEntity
     public FinanceAccount? DestinationFund { get; set; }
     public ShiftZReport? PrevShift { get; set; }
     public ICollection<ShiftCashMovement> CashMovements { get; set; } = new List<ShiftCashMovement>();
-    public ICollection<ShiftParticipant> Participants { get; set; } = new List<ShiftParticipant>();
-    public ICollection<ShiftCloseConfirmation> CloseConfirmations { get; set; } = new List<ShiftCloseConfirmation>();
 }

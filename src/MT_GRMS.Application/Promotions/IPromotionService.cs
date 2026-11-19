@@ -18,6 +18,7 @@ public interface IPromotionService
     Task<PagedResult<VoucherBatchResponse>> GetPagedVoucherBatchesAsync(int pageIndex, int pageSize, string? searchTerm = null, string? status = null, CancellationToken cancellationToken = default);
     Task<VoucherBatchResponse> GetVoucherBatchByIdAsync(Guid id, CancellationToken cancellationToken = default);
     Task<VoucherBatchResponse> CreateVoucherBatchAsync(VoucherBatchCreateRequest request, CancellationToken cancellationToken = default);
+    Task<VoucherBatchResponse> UpdateVoucherBatchAsync(Guid id, VoucherBatchUpdateRequest request, CancellationToken cancellationToken = default);
     Task<int> GenerateVoucherCodesAsync(Guid batchId, GenerateVoucherCodesRequest request, CancellationToken cancellationToken = default);
     Task<PagedResult<VoucherCodeDto>> GetVoucherCodesAsync(Guid batchId, int pageIndex, int pageSize, string? status = null, CancellationToken cancellationToken = default);
     Task<ValidateVoucherResponse> ValidateVoucherAsync(ValidateVoucherRequest request, CancellationToken cancellationToken = default);

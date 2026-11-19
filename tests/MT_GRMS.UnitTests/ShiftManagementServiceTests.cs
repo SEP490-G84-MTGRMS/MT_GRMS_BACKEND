@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Moq;
@@ -10,6 +11,7 @@ using MT_GRMS.Application.PosShifts;
 using MT_GRMS.Application.PosShifts.Dtos;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.HR;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 using Xunit;
@@ -110,7 +112,7 @@ public class ShiftManagementServiceTests
             return Task.FromResult($"CA-{DateTime.UtcNow:yyyyMMdd}-{Shifts.Count + 1:D2}");
         }
 
-        public StorePaymentConfig? PaymentConfig { get; set; }
+        public Tenant? PaymentConfig { get; set; }
 
         public Task<ShiftCashMovement?> GetCashMovementByIdAsync(Guid movementId, CancellationToken cancellationToken = default)
         {
@@ -130,49 +132,14 @@ public class ShiftManagementServiceTests
             return Task.FromResult<IReadOnlyList<ShiftCashMovement>>(list);
         }
 
-        public Task<StorePaymentConfig?> GetPaymentConfigAsync(string tenantId, CancellationToken cancellationToken = default)
+        public Task<Tenant?> GetPaymentConfigAsync(string tenantId, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(PaymentConfig);
         }
 
-        public Task SavePaymentConfigAsync(StorePaymentConfig config, CancellationToken cancellationToken = default)
+        public Task SavePaymentConfigAsync(Tenant config, CancellationToken cancellationToken = default)
         {
             PaymentConfig = config;
-            return Task.CompletedTask;
-        }
-
-        public List<ShiftParticipant> Participants { get; } = new();
-        public List<ShiftCloseConfirmation> CloseConfirmations { get; } = new();
-
-        public Task AddParticipantAsync(ShiftParticipant participant, CancellationToken cancellationToken = default)
-        {
-            if (participant.Id == Guid.Empty) participant.Id = Guid.NewGuid();
-            Participants.Add(participant);
-            var shift = Shifts.FirstOrDefault(s => s.Id == participant.ShiftId);
-            shift?.Participants.Add(participant);
-            return Task.CompletedTask;
-        }
-
-        public Task<ShiftParticipant?> GetParticipantAsync(Guid shiftId, Guid userId, CancellationToken cancellationToken = default)
-        {
-            var p = Participants.FirstOrDefault(x => x.ShiftId == shiftId && x.UserId == userId);
-            return Task.FromResult(p);
-        }
-
-        public Task AddCloseConfirmationAsync(ShiftCloseConfirmation confirmation, CancellationToken cancellationToken = default)
-        {
-            if (confirmation.Id == Guid.Empty) confirmation.Id = Guid.NewGuid();
-            CloseConfirmations.Add(confirmation);
-            var shift = Shifts.FirstOrDefault(s => s.Id == confirmation.ShiftId);
-            shift?.CloseConfirmations.Add(confirmation);
-            return Task.CompletedTask;
-        }
-
-        public Task ClearCloseConfirmationsAsync(Guid shiftId, CancellationToken cancellationToken = default)
-        {
-            CloseConfirmations.RemoveAll(c => c.ShiftId == shiftId);
-            var shift = Shifts.FirstOrDefault(s => s.Id == shiftId);
-            shift?.CloseConfirmations.Clear();
             return Task.CompletedTask;
         }
 
@@ -221,6 +188,7 @@ public class ShiftManagementServiceTests
                     WorkDate = workDate.Date,
                     PlannedStartTime = TimeSpan.Zero,
                     PlannedEndTime = new TimeSpan(23, 59, 59),
+                    CheckInTime = DateTime.UtcNow.AddMinutes(-5),
                     Status = ScheduleStatus.Scheduled
                 });
             }
@@ -1096,8 +1064,7 @@ public class ShiftManagementServiceTests
         Assert.Equal(1_500_000m, result.RetainedFloatAmount);
         Assert.Equal(500_000m, result.DroppedToSafeAmount);
         Assert.Equal(cashierUserId, result.ClosedByUserId);
-        Assert.NotNull(result.CloseConfirmations);
-        Assert.Single(result.CloseConfirmations);
+        Assert.Empty(result.CloseConfirmations!);
     }
 
     [Fact]
@@ -1189,24 +1156,25 @@ public class ShiftManagementServiceTests
         // Arrange (REQ-SHIFT-SHARED-02)
         var shiftId = Guid.NewGuid();
         var userId = Guid.NewGuid();
+        _shiftRepository.Shifts.Add(new ShiftZReport { Id = shiftId, Status = ShiftState.Open });
 
         // Act 1: Thêm mới người tham gia
         await _service.RecordParticipantAsync(shiftId, userId, "cashier1", "Thu Ngân Một");
-        var p1 = await _shiftRepository.GetParticipantAsync(shiftId, userId);
+        var p1 = (await _service.GetShiftByIdAsync(shiftId))!.Participants!.Single();
 
         Assert.NotNull(p1);
         Assert.Equal("Thu Ngân Một", p1.FullName);
 
         // Act 2: Cập nhật hoạt động
         await _service.RecordParticipantAsync(shiftId, userId, "cashier1", "Thu Ngân Một Updated");
-        var p2 = await _shiftRepository.GetParticipantAsync(shiftId, userId);
+        var p2 = (await _service.GetShiftByIdAsync(shiftId))!.Participants!.Single();
 
         Assert.NotNull(p2);
         Assert.Equal("Thu Ngân Một Updated", p2.FullName);
     }
 
     [Fact]
-    public async Task GetShiftHistoryAsync_ReturnsShiftsWithParticipantsAndConfirmations()
+    public async Task GetShiftHistoryAsync_ReturnsShiftsWithParticipantSnapshot()
     {
         // Arrange (REQ-SHIFT-HIST-01)
         var branchId = Guid.NewGuid();
@@ -1225,25 +1193,9 @@ public class ShiftManagementServiceTests
             ActualCashCounted = 2_500_000m,
             HandoverStatus = HandoverStatus.PENDING
         };
-        shift.Participants.Add(new ShiftParticipant
-        {
-            Id = Guid.NewGuid(),
-            ShiftId = shift.Id,
-            UserId = Guid.NewGuid(),
-            UserName = "thu_ngan_1",
-            FullName = "Nguyễn Thu Ngân",
-            JoinedAtUtc = DateTime.UtcNow.AddHours(-4),
-            LastActiveAtUtc = DateTime.UtcNow.AddMinutes(-10)
-        });
-        shift.CloseConfirmations.Add(new ShiftCloseConfirmation
-        {
-            Id = Guid.NewGuid(),
-            ShiftId = shift.Id,
-            UserId = Guid.NewGuid(),
-            UserName = "thu_ngan_1",
-            ConfirmedCountedCash = 2_500_000m,
-            ConfirmedAtUtc = DateTime.UtcNow.AddMinutes(-5)
-        });
+        shift.ParticipantsJson = JsonSerializer.Serialize(new[] { new ShiftParticipantDto(
+            Guid.NewGuid(), shift.Id, Guid.NewGuid(), "thu_ngan_1", "Nguyễn Thu Ngân",
+            DateTime.UtcNow.AddHours(-4), DateTime.UtcNow.AddMinutes(-10)) });
         _shiftRepository.Shifts.Add(shift);
 
         // Act
@@ -1256,8 +1208,7 @@ public class ShiftManagementServiceTests
         Assert.Equal("CA-20261108-01", item.ShiftCode);
         Assert.Single(item.Participants);
         Assert.Equal("Nguyễn Thu Ngân", item.Participants[0].FullName);
-        Assert.Single(item.CloseConfirmations);
-        Assert.Equal(2_500_000m, item.CloseConfirmations[0].ConfirmedCountedCash);
+        Assert.Empty(item.CloseConfirmations!);
     }
 
     [Fact]
@@ -1319,6 +1270,47 @@ public class ShiftManagementServiceTests
         Assert.Equal(HandoverStatus.DISPUTED, result.HandoverStatus);
         Assert.Equal("cashier_next_user", result.ReceiverUserId);
         Assert.Contains("Thiếu 200.000đ tiền mặt trong két", result.Notes);
+    }
+
+    [Fact]
+    public async Task ConfirmHandoverAsync_WhenShiftIsOpen_IsRejected()
+    {
+        _tenantContext.CurrentRole = "STORE_OWNER";
+        var shift = new ShiftZReport { Id = Guid.NewGuid(), TenantId = "tenant_test_mart", Status = ShiftState.Open, ShiftName = "Ca sáng" };
+        _shiftRepository.Shifts.Add(shift);
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.ConfirmHandoverAsync(shift.Id, new ConfirmHandoverRequest(HandoverStatus.CONFIRMED, null), "owner"));
+
+        Assert.Equal("SHIFT_NOT_CLOSED", error.ErrorCode);
+        Assert.NotEqual(HandoverStatus.CONFIRMED, shift.HandoverStatus);
+    }
+
+    [Fact]
+    public async Task ConfirmHandoverAsync_WhenAlreadyConfirmed_IsRejected()
+    {
+        _tenantContext.CurrentRole = "STORE_OWNER";
+        var shift = new ShiftZReport { Id = Guid.NewGuid(), TenantId = "tenant_test_mart", Status = ShiftState.Closed, HandoverStatus = HandoverStatus.CONFIRMED };
+        _shiftRepository.Shifts.Add(shift);
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.ConfirmHandoverAsync(shift.Id, new ConfirmHandoverRequest(HandoverStatus.CONFIRMED, null), "owner"));
+
+        Assert.Equal("HANDOVER_ALREADY_CONFIRMED", error.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ConfirmHandoverAsync_DisputeWithoutReason_IsRejected()
+    {
+        _tenantContext.CurrentRole = "STORE_OWNER";
+        var shift = new ShiftZReport { Id = Guid.NewGuid(), TenantId = "tenant_test_mart", Status = ShiftState.Closed, HandoverStatus = HandoverStatus.PENDING };
+        _shiftRepository.Shifts.Add(shift);
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.ConfirmHandoverAsync(shift.Id, new ConfirmHandoverRequest(HandoverStatus.DISPUTED, " "), "owner"));
+
+        Assert.Equal("DISPUTE_REASON_REQUIRED", error.ErrorCode);
+        Assert.Equal(HandoverStatus.PENDING, shift.HandoverStatus);
     }
 
     [Fact]
@@ -1403,6 +1395,7 @@ public class ShiftManagementServiceTests
             WorkDate = nowVn.Date,
             PlannedStartTime = TimeSpan.Zero,
             PlannedEndTime = new TimeSpan(23, 59, 59),
+            CheckInTime = DateTime.UtcNow.AddMinutes(-5),
             Status = ScheduleStatus.Scheduled
         });
 

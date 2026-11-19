@@ -29,6 +29,7 @@ public class OrderService : IOrderService
     private readonly Promotions.IPromotionRepository? _promotionRepository;
     private readonly ITenantContext? _tenantContext;
     private readonly Tax.ITaxPeriodLockGuard? _taxPeriodLockGuard;
+    private readonly Notifications.INotificationService? _notificationService;
 
     private static readonly Guid DefaultTillId = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db");
     private static readonly Guid DefaultBankId = Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559");
@@ -43,7 +44,8 @@ public class OrderService : IOrderService
         Promotions.IPromotionRepository? promotionRepository = null,
         ITenantContext? tenantContext = null,
         PosShifts.IShiftService? shiftService = null,
-        Tax.ITaxPeriodLockGuard? taxPeriodLockGuard = null)
+        Tax.ITaxPeriodLockGuard? taxPeriodLockGuard = null,
+        Notifications.INotificationService? notificationService = null)
     {
         _orderRepository = orderRepository;
         _unitOfWork = unitOfWork;
@@ -55,6 +57,7 @@ public class OrderService : IOrderService
         _tenantContext = tenantContext;
         _shiftService = shiftService;
         _taxPeriodLockGuard = taxPeriodLockGuard;
+        _notificationService = notificationService;
     }
 
     public OrderService(
@@ -62,7 +65,7 @@ public class OrderService : IOrderService
         IUnitOfWork unitOfWork,
         IThermalPrintService thermalPrintService,
         IValidator<OrderCreateRequest>? validator)
-        : this(orderRepository, unitOfWork, thermalPrintService, null, validator, null, null, null, null, null)
+        : this(orderRepository, unitOfWork, thermalPrintService, null, validator, null, null, null, null, null, null)
     {
     }
 
@@ -648,11 +651,16 @@ public class OrderService : IOrderService
 
         string orderCode = $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
         var orderBusinessDate = activeShift?.BusinessDate ?? BusinessDateResolver.Resolve(DateTime.UtcNow, new TimeSpan(6, 0, 0));
+        var requiresBankAccount = request.IsPendingPayment && paymentMethodUpper is "VIETQR" or "TRANSFER" or "BANK";
+        if (requiresBankAccount && !branch.CurrentBankFinanceAccountId.HasValue)
+            throw new BusinessException("BANK_ACCOUNT_NOT_CONFIGURED", "Chi nhánh chưa chọn tài khoản ngân hàng nhận chuyển khoản.");
         var order = new Order
         {
             Id = Guid.NewGuid(),
             TenantId = branch.TenantId ?? (_tenantContext?.CurrentTenantId ?? string.Empty),
             BranchId = branchId,
+            FinanceAccountId = requiresBankAccount
+                ? branch.CurrentBankFinanceAccountId : null,
             CustomerId = request.CustomerId,
             ShiftId = shiftId,
             OrderCode = orderCode,
@@ -692,37 +700,6 @@ public class OrderService : IOrderService
         // - Đơn hàng của Chủ cửa hàng bán lẻ trực tiếp (!shiftId.HasValue) sẽ được gộp khi Chủ bấm "Chốt doanh thu cuối ngày" (SettleOwnerDailyOrdersAsync).
 
         await _orderRepository.AddAsync(order, cancellationToken);
-
-        // Ghi nhận nhân viên tham gia ca bán hàng chung (REQ-SHIFT-SHARED-02 — không gán Chủ cửa hàng bán không mở ca)
-        if (shiftId.HasValue && activeShift != null && _shiftRepository != null)
-        {
-            var cashierId = creatorId ?? (activeShift.CashierUserId != Guid.Empty ? activeShift.CashierUserId : Guid.Empty);
-            if (cashierId != Guid.Empty)
-            {
-                var participant = await _shiftRepository.GetParticipantAsync(activeShift.Id, cashierId, cancellationToken);
-                if (participant == null)
-                {
-                    await _shiftRepository.AddParticipantAsync(new ShiftParticipant
-                    {
-                        TenantId = branch.TenantId ?? (_tenantContext?.CurrentTenantId ?? string.Empty),
-                        ShiftId = activeShift.Id,
-                        UserId = cashierId,
-                        UserName = request.CashierName ?? (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân"),
-                        FullName = request.CashierName ?? (_tenantContext?.CurrentRole == "STORE_OWNER" ? "Chủ cửa hàng" : "Thu ngân"),
-                        JoinedAtUtc = DateTime.UtcNow,
-                        LastActiveAtUtc = DateTime.UtcNow
-                    }, cancellationToken);
-                }
-                else
-                {
-                    participant.LastActiveAtUtc = DateTime.UtcNow;
-                    if (!string.IsNullOrWhiteSpace(request.CashierName))
-                    {
-                        participant.UserName = request.CashierName;
-                    }
-                }
-            }
-        }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -1319,6 +1296,24 @@ public class OrderService : IOrderService
             createdOrder = order;
             createdGiftWarning = giftStockWarning;
         }, cancellationToken);
+
+        if (_notificationService != null && createdOrder != null)
+        {
+            try
+            {
+                await _notificationService.NotifyTenantOwnersAsync(
+                    createdOrder.TenantId,
+                    "PREORDER_CREATED",
+                    $"🟠 Đơn đặt trước mới ({createdOrder.OrderCode})",
+                    $"Đơn đặt hàng {createdOrder.OrderCode} hẹn nhận hàng lúc {request.ExpectedPickupDate:dd/MM/yyyy HH:mm} (Chi nhánh: {branch.Name}). Vui lòng chuẩn bị và giữ tồn kho.",
+                    $"/pos",
+                    cancellationToken);
+            }
+            catch
+            {
+                // Không gián đoạn luồng tạo đơn đặt trước
+            }
+        }
 
         return MapToOrderResponse(createdOrder!, request.DepositAmount, 0m, createdGiftWarning);
     }
