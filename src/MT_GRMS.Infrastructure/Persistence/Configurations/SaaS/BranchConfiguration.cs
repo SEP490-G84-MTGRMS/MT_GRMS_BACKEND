@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Entities.Finance;
 
 namespace MT_GRMS.Infrastructure.Persistence.Configurations.SaaS;
 
@@ -35,6 +36,9 @@ public class BranchConfiguration : IEntityTypeConfiguration<Branch>
         builder.Property(x => x.IsAttendancePolicyCustomized).HasDefaultValue(false);
 
         builder.HasIndex(x => new { x.TenantId, x.BranchCode }).IsUnique();
+        builder.HasOne<FinanceAccount>().WithMany()
+            .HasForeignKey(x => x.CurrentBankFinanceAccountId)
+            .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasOne(x => x.Tenant)
             .WithMany(t => t.Branches)

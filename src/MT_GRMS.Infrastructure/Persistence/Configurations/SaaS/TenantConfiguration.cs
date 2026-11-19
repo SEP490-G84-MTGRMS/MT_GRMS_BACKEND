@@ -29,6 +29,10 @@ public class TenantConfiguration : IEntityTypeConfiguration<Tenant>
         builder.Property(x => x.LockType).HasMaxLength(50);
         builder.Property(x => x.LockReason).HasMaxLength(500);
         builder.Property(x => x.LockedBy).HasMaxLength(100);
+        builder.Property(x => x.SepayApiKeyEncrypted).HasMaxLength(4000);
+        builder.Property(x => x.SepayWebhookSecret).HasMaxLength(200);
+        builder.Property(x => x.CashOutApprovalThreshold).HasColumnType("decimal(18,2)");
+        builder.Property(x => x.CashOutShiftTotalLimit).HasColumnType("decimal(18,2)");
 
         builder.HasIndex(x => x.Subdomain).IsUnique();
         builder.HasIndex(x => x.Code).IsUnique();

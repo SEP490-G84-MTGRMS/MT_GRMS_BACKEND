@@ -11,6 +11,7 @@ public class PaymentTransaction : BaseTenantEntity
     public Guid? OrderId { get; set; }
     public Guid? BranchId { get; set; }
     public Guid? PaymentAccountId { get; set; }
+    public Guid? FinanceAccountId { get; set; }
     public string BankTransactionId { get; set; } = string.Empty; // ID giao dịch SePay / Số GD Ngân hàng (Chỉ mục Unique)
     public string Gateway { get; set; } = string.Empty; // MBBank, Vietcombank, VietQR...
     public decimal AmountIn { get; set; }
@@ -20,6 +21,6 @@ public class PaymentTransaction : BaseTenantEntity
     public DateTime TransactionDate { get; set; }
     public bool VerifiedBySepayApi { get; set; } = false;
     public string? RawPayloadJson { get; set; }
-    public PaymentAccount? PaymentAccount { get; set; }
+    public FinanceAccount? FinanceAccount { get; set; }
 }
 

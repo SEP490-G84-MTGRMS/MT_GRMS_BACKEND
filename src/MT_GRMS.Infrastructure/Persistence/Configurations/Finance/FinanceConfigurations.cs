@@ -81,9 +81,6 @@ public class FinanceAccountConfiguration : IEntityTypeConfiguration<FinanceAccou
         builder.HasIndex(a => new { a.TenantId, a.BranchId });
         builder.HasIndex(a => new { a.TenantId, a.AccountType });
         builder.HasIndex(a => new { a.TenantId, a.BankCode, a.AccountNumber });
-        builder.HasIndex(a => new { a.TenantId, a.BranchId, a.PaymentAccountId });
-        builder.HasOne(a => a.PaymentAccount).WithMany().HasForeignKey(a => a.PaymentAccountId)
-            .OnDelete(DeleteBehavior.Restrict);
     }
 }
 
@@ -118,6 +115,7 @@ public class ShiftZReportConfiguration : IEntityTypeConfiguration<ShiftZReport>
         builder.Property(s => s.ActualCashCounted).HasColumnType("decimal(18,2)");
         builder.Property(s => s.Discrepancy).HasColumnType("decimal(18,2)");
         builder.Property(s => s.DiscrepancyReason).HasMaxLength(500);
+        builder.Property(s => s.ParticipantsJson).HasColumnType("jsonb").HasDefaultValue("[]");
         builder.Property(s => s.ClosingVersion).IsConcurrencyToken().HasDefaultValue(1L);
         builder.Property(s => s.RetainedFloatAmount).HasColumnType("decimal(18,2)");
         builder.Property(s => s.DroppedToSafeAmount).HasColumnType("decimal(18,2)");
@@ -142,44 +140,10 @@ public class ShiftZReportConfiguration : IEntityTypeConfiguration<ShiftZReport>
             .HasForeignKey(m => m.ShiftId)
             .OnDelete(DeleteBehavior.Cascade);
 
-        builder.HasMany(s => s.Participants)
-            .WithOne(p => p.Shift)
-            .HasForeignKey(p => p.ShiftId)
-            .OnDelete(DeleteBehavior.Cascade);
-
-        builder.HasMany(s => s.CloseConfirmations)
-            .WithOne(c => c.Shift)
-            .HasForeignKey(c => c.ShiftId)
-            .OnDelete(DeleteBehavior.Cascade);
-
         builder.HasIndex(s => new { s.TenantId, s.BranchId, s.Status });
         builder.HasIndex(s => new { s.TenantId, s.TillId, s.Status });
         builder.HasIndex(s => new { s.TenantId, s.ShiftCode });
         builder.HasIndex(s => new { s.TenantId, s.BranchId, s.BusinessDate });
-    }
-}
-
-public class ShiftParticipantConfiguration : IEntityTypeConfiguration<ShiftParticipant>
-{
-    public void Configure(EntityTypeBuilder<ShiftParticipant> builder)
-    {
-        builder.ToTable("ShiftParticipants");
-        builder.HasKey(p => p.Id);
-        builder.Property(p => p.UserName).HasMaxLength(100);
-        builder.Property(p => p.FullName).HasMaxLength(150);
-        builder.HasIndex(p => new { p.ShiftId, p.UserId }).IsUnique();
-    }
-}
-
-public class ShiftCloseConfirmationConfiguration : IEntityTypeConfiguration<ShiftCloseConfirmation>
-{
-    public void Configure(EntityTypeBuilder<ShiftCloseConfirmation> builder)
-    {
-        builder.ToTable("ShiftCloseConfirmations");
-        builder.HasKey(c => c.Id);
-        builder.Property(c => c.UserName).HasMaxLength(100);
-        builder.Property(c => c.ConfirmedCountedCash).HasColumnType("decimal(18,2)");
-        builder.HasIndex(c => new { c.TenantId, c.ShiftId });
     }
 }
 

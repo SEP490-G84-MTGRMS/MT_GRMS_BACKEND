@@ -16,6 +16,7 @@ public class Branch : BaseTenantEntity
     public string? ManagerName { get; set; }
     public bool IsHeadquarter { get; set; } = false;
     public bool IsActive { get; set; } = true;
+    public Guid? CurrentBankFinanceAccountId { get; set; }
     public TimeSpan BusinessDayStartTime { get; set; } = new(6, 0, 0);
 
     // Chính sách chấm công theo chi nhánh (gộp từ BranchAttendancePolicy)

@@ -29,6 +29,5 @@ public class FinanceAccount : BaseTenantEntity
     public Guid? ManagerUserId { get; set; }
     public bool IsActive { get; set; } = true;
     public byte[]? RowVersion { get; set; }
-    public PaymentAccount? PaymentAccount { get; set; }
 }
 
