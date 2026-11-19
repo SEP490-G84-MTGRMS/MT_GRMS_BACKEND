@@ -1,12 +1,13 @@
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Interfaces;
-using MT_GRMS.Application.HR.AttendancePolicies;
+using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Payslips;
 using MT_GRMS.Application.HR.Schedules.Dtos;
 using MT_GRMS.Application.HR.ShiftConfigs;
 using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Entities.HR;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
@@ -17,7 +18,7 @@ public class ScheduleService : IScheduleService
     private readonly IScheduleRepository _scheduleRepository;
     private readonly IEmployeeRepository _employeeRepository;
     private readonly IShiftConfigRepository _shiftConfigRepository;
-    private readonly IBranchAttendancePolicyRepository? _policyRepository;
+    private readonly IBranchRepository? _branchRepository;
     private readonly ICloudinaryService? _cloudinaryService;
     private readonly IPayslipRepository? _payslipRepository;
     private readonly IUnitOfWork _unitOfWork;
@@ -30,7 +31,7 @@ public class ScheduleService : IScheduleService
         IShiftConfigRepository shiftConfigRepository,
         IUnitOfWork unitOfWork,
         ITenantContext tenantContext,
-        IBranchAttendancePolicyRepository? policyRepository = null,
+        IBranchRepository? branchRepository = null,
         ICloudinaryService? cloudinaryService = null,
         IPayslipRepository? payslipRepository = null,
         INotificationService? notificationService = null)
@@ -40,7 +41,7 @@ public class ScheduleService : IScheduleService
         _shiftConfigRepository = shiftConfigRepository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
-        _policyRepository = policyRepository;
+        _branchRepository = branchRepository;
         _cloudinaryService = cloudinaryService;
         _payslipRepository = payslipRepository;
         _notificationService = notificationService;
@@ -822,10 +823,10 @@ public class ScheduleService : IScheduleService
 
         await EnsureScheduleNotLockedByPaidPayslipAsync(schedule, cancellationToken);
 
-        BranchAttendancePolicy? policy = null;
-        if (_policyRepository != null)
+        Branch? policy = null;
+        if (_branchRepository != null)
         {
-            policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
+            policy = await _branchRepository.GetByIdAsync(schedule.BranchId, cancellationToken);
         }
 
         switch (request.AttendanceType)
@@ -1013,7 +1014,7 @@ public class ScheduleService : IScheduleService
     private static void ApplyWorkingAttendance(
         EmployeeSchedule schedule,
         ManualAttendanceRequest request,
-        BranchAttendancePolicy? policy)
+        Branch? policy)
     {
         var inTime = request.CheckInTime ?? schedule.PlannedStartTime;
         var outTime = request.CheckOutTime ?? schedule.PlannedEndTime;
@@ -1253,10 +1254,10 @@ public class ScheduleService : IScheduleService
         var plannedStartDateTime = workDate.Add(schedule.PlannedStartTime);
 
         var lateMinutes = 0;
-        BranchAttendancePolicy? policy = null;
-        if (_policyRepository != null)
+        Branch? policy = null;
+        if (_branchRepository != null)
         {
-            policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
+            policy = await _branchRepository.GetByIdAsync(schedule.BranchId, cancellationToken);
         }
 
         if (vnNow > plannedStartDateTime)
@@ -1328,10 +1329,10 @@ public class ScheduleService : IScheduleService
         var isNextDay = schedule.IsCheckInNextDay || schedule.PlannedEndTime < schedule.PlannedStartTime;
         var plannedEndDateTime = isNextDay ? workDate.AddDays(1).Add(schedule.PlannedEndTime) : workDate.Add(schedule.PlannedEndTime);
 
-        BranchAttendancePolicy? policy = null;
-        if (_policyRepository != null)
+        Branch? policy = null;
+        if (_branchRepository != null)
         {
-            policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
+            policy = await _branchRepository.GetByIdAsync(schedule.BranchId, cancellationToken);
         }
 
         var earlyLeaveMinutes = 0;
@@ -1503,10 +1504,10 @@ public class ScheduleService : IScheduleService
         if (!isAllTimeShift)
         {
             var plannedStartDateTime = schedule.WorkDate.Add(schedule.PlannedStartTime);
-            BranchAttendancePolicy? policy = null;
-            if (_policyRepository != null)
+            Branch? policy = null;
+            if (_branchRepository != null)
             {
-                policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
+                policy = await _branchRepository.GetByIdAsync(schedule.BranchId, cancellationToken);
             }
 
             var lateThreshold = policy?.LateThresholdMinutes ?? 0;

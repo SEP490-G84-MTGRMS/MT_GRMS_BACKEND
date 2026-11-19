@@ -1611,37 +1611,22 @@ END $$;
                     logger?.LogWarning(ex, "Cảnh báo khi chạy DDL nâng cấp Employees/EmployeeSchedules");
                 }
 
-                // 1. Bảng Chính sách chấm công Chi nhánh (BranchAttendancePolicies)
+                // 1. Bổ sung cột Chính sách chấm công Chi nhánh vào bảng Branches (gộp từ BranchAttendancePolicies)
                 try
                 {
                     await context.Database.ExecuteSqlRawAsync(@"
-                        CREATE TABLE IF NOT EXISTS ""BranchAttendancePolicies"" (
-                            ""BranchAttendancePolicyID"" uuid NOT NULL PRIMARY KEY,
-                            ""BranchID"" uuid NOT NULL,
-                            ""TenantID"" character varying(50) NOT NULL,
-                            ""StandardDayHours"" numeric(4,2) NOT NULL DEFAULT 8.00,
-                            ""IsConvertHoursToDays"" boolean NOT NULL DEFAULT true,
-                            ""ConversionRulesJson"" text,
-                            ""EnableLateThreshold"" boolean NOT NULL DEFAULT true,
-                            ""LateThresholdMinutes"" integer NOT NULL DEFAULT 0,
-                            ""EnableEarlyLeaveThreshold"" boolean NOT NULL DEFAULT true,
-                            ""EarlyLeaveThresholdMinutes"" integer NOT NULL DEFAULT 0,
-                            ""EnableOtBeforeShift"" boolean NOT NULL DEFAULT true,
-                            ""OtBeforeShiftMinutes"" integer NOT NULL DEFAULT 0,
-                            ""EnableOtAfterShift"" boolean NOT NULL DEFAULT true,
-                            ""OtAfterShiftMinutes"" integer NOT NULL DEFAULT 0,
-                            ""CreatedAt"" timestamp without time zone NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                            ""UpdatedAt"" timestamp without time zone,
-                            ""IsDeleted"" boolean NOT NULL DEFAULT false,
-                            ""CreatedBy"" uuid
-                        );
-                        CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BranchAttendancePolicies_TenantID_BranchID""
-                        ON ""BranchAttendancePolicies"" (""TenantID"", ""BranchID"") WHERE ""IsDeleted"" = false;
-                        CREATE INDEX IF NOT EXISTS ""IX_BranchAttendancePolicies_BranchID""
-                        ON ""BranchAttendancePolicies"" (""BranchID"");
+                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""StandardDayHours"" numeric(4,2) NOT NULL DEFAULT 8.00;
+                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""IsConvertHoursToDays"" boolean NOT NULL DEFAULT true;
+                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""ConversionRulesJson"" text;
+                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""EnableLateThreshold"" boolean NOT NULL DEFAULT true;
+                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""LateThresholdMinutes"" integer NOT NULL DEFAULT 0;
+                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""EnableEarlyLeaveThreshold"" boolean NOT NULL DEFAULT true;
+                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""EarlyLeaveThresholdMinutes"" integer NOT NULL DEFAULT 0;
+                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""IsAttendancePolicyCustomized"" boolean NOT NULL DEFAULT false;
+                        DROP TABLE IF EXISTS ""BranchAttendancePolicies"" CASCADE;
                     ");
                 }
-                catch (Exception ex) { logger?.LogWarning(ex, "BranchAttendancePolicies DDL warning"); }
+                catch (Exception ex) { logger?.LogWarning(ex, "Branches AttendancePolicy DDL warning"); }
 
                 // 2. Bảng Danh mục ca làm việc (ShiftConfigs)
                 try
@@ -1919,20 +1904,7 @@ END $$;
                 catch (Exception ex) { logger?.LogWarning(ex, "HR Column Alter DDL warning"); }
 
                 // 9. Khóa ngoại liên kết
-                try
-                {
-                    await context.Database.ExecuteSqlRawAsync(@"
-                        DO $$
-                        BEGIN
-                            IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'FK_BranchAttendancePolicies_Branches_BranchID') THEN
-                                ALTER TABLE ""BranchAttendancePolicies""
-                                ADD CONSTRAINT ""FK_BranchAttendancePolicies_Branches_BranchID""
-                                FOREIGN KEY (""BranchID"") REFERENCES ""Branches"" (""BranchID"") ON DELETE RESTRICT;
-                            END IF;
-                        END $$;
-                    ");
-                }
-                catch { }
+                // Đã gộp BranchAttendancePolicies vào Branches (không còn FK riêng)
 
                 try
                 {

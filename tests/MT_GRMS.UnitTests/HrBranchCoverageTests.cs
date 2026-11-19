@@ -9,6 +9,7 @@ using MT_GRMS.Application.Cashbook.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.DTOs;
 using MT_GRMS.Application.Common.Interfaces;
+using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Employees.Dtos;
@@ -477,7 +478,7 @@ public class HrBranchCoverageTests
         var schedRepo = new Mock<IScheduleRepository>();
         var empRepo = new Mock<IEmployeeRepository>();
         var shiftCfgRepo = new Mock<IShiftConfigRepository>();
-        var policyRepo = new Mock<IBranchAttendancePolicyRepository>();
+        var policyRepo = new Mock<IBranchRepository>();
         var uow = new FakeUnitOfWork();
         var tenant = new FakeTenantContext();
         var service = new ScheduleService(schedRepo.Object, empRepo.Object, shiftCfgRepo.Object, uow, tenant, policyRepo.Object);
@@ -509,13 +510,13 @@ public class HrBranchCoverageTests
         Assert.Equal("INVALID_EMPLOYEE", exEmp.ErrorCode);
 
         // 3. Early leave policy threshold
-        var policy = new BranchAttendancePolicy
+        var policy = new Branch
         {
-            BranchId = sched.BranchId,
+            Id = sched.BranchId,
             EnableEarlyLeaveThreshold = true,
             EarlyLeaveThresholdMinutes = 15
         };
-        policyRepo.Setup(r => r.GetByBranchIdAsync(sched.BranchId, It.IsAny<CancellationToken>())).ReturnsAsync(policy);
+        policyRepo.Setup(r => r.GetByIdAsync(sched.BranchId, It.IsAny<CancellationToken>())).ReturnsAsync(policy);
 
         var req3 = new FaceIdCheckOutRequest(schedId, empId, 0.20m, null);
         var res3 = await service.CheckOutFaceIdAsync(req3);
@@ -739,7 +740,7 @@ public class HrBranchCoverageTests
         var payslipRepo = new Mock<IPayslipRepository>();
         var empRepo = new Mock<IEmployeeRepository>();
         var schedRepo = new Mock<IScheduleRepository>();
-        var policyRepo = new Mock<IBranchAttendancePolicyRepository>();
+        var policyRepo = new Mock<IBranchRepository>();
         var uow = new FakeUnitOfWork();
         var tenant = new FakeTenantContext();
         var service = new PayslipService(payslipRepo.Object, empRepo.Object, schedRepo.Object, policyRepo.Object, tenant, uow);
@@ -757,8 +758,8 @@ public class HrBranchCoverageTests
 
         empRepo.Setup(r => r.GetActiveEmployeesAsync(It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<Employee> { emp });
-        policyRepo.Setup(r => r.GetByBranchIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new BranchAttendancePolicy { StandardDayHours = 8m });
+        policyRepo.Setup(r => r.GetByIdAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new Branch { StandardDayHours = 8m });
 
         var schedule = new EmployeeSchedule
         {
@@ -824,7 +825,7 @@ public class HrBranchCoverageTests
         var payslipRepo = new Mock<IPayslipRepository>();
         var empRepo = new Mock<IEmployeeRepository>();
         var schedRepo = new Mock<IScheduleRepository>();
-        var policyRepo = new Mock<IBranchAttendancePolicyRepository>();
+        var policyRepo = new Mock<IBranchRepository>();
         var cashbookService = new Mock<ICashbookService>();
         var uow = new FakeUnitOfWork();
         var tenant = new FakeTenantContext();

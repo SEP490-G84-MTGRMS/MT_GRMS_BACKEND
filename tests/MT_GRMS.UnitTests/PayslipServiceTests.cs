@@ -5,6 +5,7 @@ using MT_GRMS.Application.Expenses;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Cashbook.Dtos;
+using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Employees.Dtos;
@@ -14,6 +15,7 @@ using MT_GRMS.Application.HR.Schedules;
 using MT_GRMS.Application.HR.Schedules.Dtos;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.HR;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 using Xunit;
@@ -270,33 +272,62 @@ public class PayslipServiceTests
         }
     }
 
-    private class FakeAttendancePolicyRepository : IBranchAttendancePolicyRepository
+    private class FakeAttendancePolicyRepository : IBranchRepository
     {
-        public List<BranchAttendancePolicy> Policies { get; } = new();
+        public List<Branch> Policies { get; } = new();
 
-        public Task<BranchAttendancePolicy?> GetByBranchIdAsync(Guid branchId, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(Policies.FirstOrDefault(p => p.BranchId == branchId && !p.IsDeleted));
-        }
+        public Task<Branch?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+            => Task.FromResult(Policies.FirstOrDefault(p => p.Id == id && !p.IsDeleted));
 
-        public Task<IReadOnlyList<BranchAttendancePolicy>> GetByBranchIdsAsync(IEnumerable<Guid> branchIds, CancellationToken cancellationToken = default)
-        {
-            var set = branchIds.ToHashSet();
-            var list = Policies.Where(p => set.Contains(p.BranchId) && !p.IsDeleted).ToList();
-            return Task.FromResult<IReadOnlyList<BranchAttendancePolicy>>(list);
-        }
+        public Task<IReadOnlyList<Branch>> GetAllAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<Branch>>(Policies.Where(p => !p.IsDeleted).ToList());
 
-        public Task AddAsync(BranchAttendancePolicy policy, CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<Branch>> FindAsync(System.Linq.Expressions.Expression<Func<Branch, bool>> predicate, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<Branch>>(Policies.AsQueryable().Where(predicate).ToList());
+
+        public Task<Branch?> FirstOrDefaultAsync(System.Linq.Expressions.Expression<Func<Branch, bool>> predicate, CancellationToken cancellationToken = default)
+            => Task.FromResult(Policies.AsQueryable().FirstOrDefault(predicate));
+
+        public Task<bool> ExistsAsync(System.Linq.Expressions.Expression<Func<Branch, bool>> predicate, CancellationToken cancellationToken = default)
+            => Task.FromResult(Policies.AsQueryable().Any(predicate));
+
+        public Task<int> CountAsync(System.Linq.Expressions.Expression<Func<Branch, bool>>? predicate = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(predicate == null ? Policies.Count : Policies.AsQueryable().Count(predicate));
+
+        public Task AddAsync(Branch entity, CancellationToken cancellationToken = default)
         {
-            Policies.Add(policy);
+            Policies.Add(entity);
             return Task.CompletedTask;
         }
 
-        public void Update(BranchAttendancePolicy policy)
+        public Task AddRangeAsync(IEnumerable<Branch> entities, CancellationToken cancellationToken = default)
         {
-            var idx = Policies.FindIndex(p => p.Id == policy.Id);
-            if (idx >= 0) Policies[idx] = policy;
+            Policies.AddRange(entities);
+            return Task.CompletedTask;
         }
+
+        public void Update(Branch entity)
+        {
+            var idx = Policies.FindIndex(p => p.Id == entity.Id);
+            if (idx >= 0) Policies[idx] = entity;
+        }
+
+        public void Delete(Branch entity) => entity.IsDeleted = true;
+
+        public Task<(IReadOnlyList<Branch> Items, int TotalCount)> GetPagedListAsync(string? keyword, string? branchCode, string? status, IReadOnlyList<string>? branchCodes, IReadOnlyList<string>? branchNames, IReadOnlyList<string>? addresses, IReadOnlyList<string>? phones, int pageIndex, int pageSize, CancellationToken cancellationToken = default)
+            => Task.FromResult(((IReadOnlyList<Branch>)Policies, Policies.Count));
+
+        public Task<bool> ExistsByCodeAsync(string code, CancellationToken cancellationToken = default)
+            => Task.FromResult(Policies.Any(b => b.BranchCode == code && !b.IsDeleted));
+
+        public Task<int> CountActiveAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(Policies.Count(b => !b.IsDeleted));
+
+        public Task<int> CountTotalAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(Policies.Count(b => !b.IsDeleted));
+
+        public Task<MT_GRMS.Application.Branches.Dtos.BranchDetailDto?> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default)
+            => Task.FromResult<MT_GRMS.Application.Branches.Dtos.BranchDetailDto?>(null);
     }
 
     private (PayslipService service, FakePayslipRepository payslipRepo, FakeEmployeeRepository empRepo, FakeScheduleRepository schedRepo, FakeAttendancePolicyRepository policyRepo, FakeTenantContext tenantContext, FakeUnitOfWork uow) CreateService()
@@ -1115,10 +1146,9 @@ public class PayslipServiceTests
         var (service, payslipRepo, empRepo, schedRepo, policyRepo, tenantContext, uow) = CreateService();
         var branchId = Guid.NewGuid();
 
-        policyRepo.Policies.Add(new BranchAttendancePolicy
+        policyRepo.Policies.Add(new Branch
         {
-            Id = Guid.NewGuid(),
-            BranchId = branchId,
+            Id = branchId,
             StandardDayHours = 8.0m,
             IsConvertHoursToDays = true,
             ConversionRulesJson = "[{\"type\":\"range\",\"fromHours\":1,\"fromMinutes\":0,\"toHours\":4,\"toMinutes\":30,\"workUnits\":0.5},{\"type\":\"gte\",\"fromHours\":4,\"fromMinutes\":30,\"workUnits\":1.0}]"

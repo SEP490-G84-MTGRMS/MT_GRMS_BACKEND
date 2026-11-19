@@ -21,11 +21,18 @@ public class BranchConfiguration : IEntityTypeConfiguration<Branch>
         builder.Property(x => x.Email).HasMaxLength(150);
         builder.Property(x => x.ManagerName).HasMaxLength(150);
         builder.Property(x => x.IsHeadquarter).HasDefaultValue(false);
-        builder.Property(x => x.Latitude).HasColumnType("decimal(10,7)");
-        builder.Property(x => x.Longitude).HasColumnType("decimal(10,7)");
-        builder.Property(x => x.CheckinRadiusMeters).HasDefaultValue(100);
         builder.Property(x => x.IsActive).HasDefaultValue(true);
         builder.Property(x => x.BusinessDayStartTime).HasDefaultValue(new TimeSpan(6, 0, 0));
+
+        // Chính sách chấm công theo chi nhánh (gộp từ BranchAttendancePolicy)
+        builder.Property(x => x.StandardDayHours).HasColumnType("decimal(4,2)").HasDefaultValue(8.00m);
+        builder.Property(x => x.IsConvertHoursToDays).HasDefaultValue(true);
+        builder.Property(x => x.ConversionRulesJson).HasColumnType("text");
+        builder.Property(x => x.EnableLateThreshold).HasDefaultValue(true);
+        builder.Property(x => x.LateThresholdMinutes).HasDefaultValue(0);
+        builder.Property(x => x.EnableEarlyLeaveThreshold).HasDefaultValue(true);
+        builder.Property(x => x.EarlyLeaveThresholdMinutes).HasDefaultValue(0);
+        builder.Property(x => x.IsAttendancePolicyCustomized).HasDefaultValue(false);
 
         builder.HasIndex(x => new { x.TenantId, x.BranchCode }).IsUnique();
 

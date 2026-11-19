@@ -2,13 +2,14 @@ using System.Text.Json;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Expenses;
-using MT_GRMS.Application.HR.AttendancePolicies;
+using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Payslips.Dtos;
 using MT_GRMS.Application.HR.Schedules;
 using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.HR;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
@@ -23,7 +24,7 @@ public class PayslipService : IPayslipService
     private readonly IPayslipRepository _payslipRepository;
     private readonly IEmployeeRepository _employeeRepository;
     private readonly IScheduleRepository _scheduleRepository;
-    private readonly IBranchAttendancePolicyRepository _attendancePolicyRepository;
+    private readonly IBranchRepository _branchRepository;
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ICashbookService? _cashbookService;
@@ -34,7 +35,7 @@ public class PayslipService : IPayslipService
         IPayslipRepository payslipRepository,
         IEmployeeRepository employeeRepository,
         IScheduleRepository scheduleRepository,
-        IBranchAttendancePolicyRepository attendancePolicyRepository,
+        IBranchRepository branchRepository,
         ITenantContext tenantContext,
         IUnitOfWork unitOfWork,
         ICashbookService? cashbookService = null,
@@ -44,7 +45,7 @@ public class PayslipService : IPayslipService
         _payslipRepository = payslipRepository;
         _employeeRepository = employeeRepository;
         _scheduleRepository = scheduleRepository;
-        _attendancePolicyRepository = attendancePolicyRepository;
+        _branchRepository = branchRepository;
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
         _cashbookService = cashbookService;
@@ -132,7 +133,7 @@ public class PayslipService : IPayslipService
 
             var empSchedules = schedules.Where(s => s.EmployeeId == emp.Id).ToList();
 
-            var policy = await _attendancePolicyRepository.GetByBranchIdAsync(emp.BranchId, cancellationToken);
+            var policy = await _branchRepository.GetByIdAsync(emp.BranchId, cancellationToken);
             var standardDayHours = policy?.StandardDayHours ?? 8.00m;
             if (standardDayHours <= 0) standardDayHours = 8.00m;
 
@@ -950,7 +951,7 @@ public class PayslipService : IPayslipService
         return s.ActualWorkHours;
     }
 
-    private static int CalculateEffectiveLateMinutes(EmployeeSchedule s, BranchAttendancePolicy? policy)
+    private static int CalculateEffectiveLateMinutes(EmployeeSchedule s, Branch? policy)
     {
         if (policy == null)
         {
@@ -974,7 +975,7 @@ public class PayslipService : IPayslipService
         return s.LateMinutes > policy.LateThresholdMinutes ? s.LateMinutes : 0;
     }
 
-    private static int CalculateEffectiveEarlyLeaveMinutes(EmployeeSchedule s, BranchAttendancePolicy? policy)
+    private static int CalculateEffectiveEarlyLeaveMinutes(EmployeeSchedule s, Branch? policy)
     {
         if (policy == null)
         {
@@ -1007,7 +1008,7 @@ public class PayslipService : IPayslipService
         IReadOnlyList<EmployeeSchedule> workingSchedules,
         decimal totalWorkHours,
         decimal standardDayHours,
-        BranchAttendancePolicy? policy)
+        Branch? policy)
     {
         var shouldConvert = policy == null || policy.IsConvertHoursToDays;
         var rulesJson = (policy != null && !string.IsNullOrWhiteSpace(policy.ConversionRulesJson))

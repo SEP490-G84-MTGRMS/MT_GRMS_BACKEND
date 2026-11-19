@@ -9,6 +9,7 @@ using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.Common.DTOs;
+using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Payslips;
@@ -165,7 +166,7 @@ public class CoreServicesBranchCoverageTests
         var shiftCfgRepo = new Mock<IShiftConfigRepository>();
         var uow = new Mock<IUnitOfWork>();
         var tenant = new FakeTenantContext();
-        var policyRepo = new Mock<IBranchAttendancePolicyRepository>();
+        var policyRepo = new Mock<IBranchRepository>();
 
         var service = new ScheduleService(schedRepo.Object, empRepo.Object, shiftCfgRepo.Object, uow.Object, tenant, policyRepo.Object);
 
@@ -274,13 +275,13 @@ public class CoreServicesBranchCoverageTests
         };
         schedRepo.Setup(r => r.GetByIdAsync(checkInSchedId, It.IsAny<CancellationToken>())).ReturnsAsync(checkInSched);
 
-        var policy = new BranchAttendancePolicy
+        var policy = new Branch
         {
-            BranchId = branchId,
+            Id = branchId,
             LateThresholdMinutes = 0,
             EnableLateThreshold = true
         };
-        policyRepo.Setup(p => p.GetByBranchIdAsync(branchId, It.IsAny<CancellationToken>())).ReturnsAsync(policy);
+        policyRepo.Setup(p => p.GetByIdAsync(branchId, It.IsAny<CancellationToken>())).ReturnsAsync(policy);
 
         var checkInRes = await service.SelfCheckInAsync(checkInSchedId, new SelfCheckInRequest("Self check-in"));
         Assert.NotNull(checkInRes);

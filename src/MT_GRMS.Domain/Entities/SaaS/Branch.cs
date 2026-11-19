@@ -15,11 +15,18 @@ public class Branch : BaseTenantEntity
     public string? Email { get; set; }
     public string? ManagerName { get; set; }
     public bool IsHeadquarter { get; set; } = false;
-    public decimal? Latitude { get; set; }
-    public decimal? Longitude { get; set; }
-    public int CheckinRadiusMeters { get; set; } = 100;
     public bool IsActive { get; set; } = true;
     public TimeSpan BusinessDayStartTime { get; set; } = new(6, 0, 0);
+
+    // Chính sách chấm công theo chi nhánh (gộp từ BranchAttendancePolicy)
+    public decimal StandardDayHours { get; set; } = 8.00m;
+    public bool IsConvertHoursToDays { get; set; } = true;
+    public string? ConversionRulesJson { get; set; }
+    public bool EnableLateThreshold { get; set; } = true;
+    public int LateThresholdMinutes { get; set; } = 0;
+    public bool EnableEarlyLeaveThreshold { get; set; } = true;
+    public int EarlyLeaveThresholdMinutes { get; set; } = 0;
+    public bool IsAttendancePolicyCustomized { get; set; } = false;
 
     // Backward compatibility aliases
     [NotMapped]

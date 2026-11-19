@@ -393,7 +393,7 @@ public class HrAndPosRepositoriesIntegrationTests
         using (context)
         {
             var shiftRepo = new ShiftConfigRepository(context);
-            var policyRepo = new BranchAttendancePolicyRepository(context);
+            var branchRepo = new BranchRepository(context);
 
             var branch = new Branch
             {
@@ -401,6 +401,8 @@ public class HrAndPosRepositoriesIntegrationTests
                 TenantId = TenantId,
                 BranchCode = "BR-SC",
                 Name = "Chi nhánh SC",
+                LateThresholdMinutes = 15,
+                IsAttendancePolicyCustomized = true,
                 CreatedAt = DateTime.UtcNow
             };
             var config = new ShiftConfig
@@ -415,19 +417,14 @@ public class HrAndPosRepositoriesIntegrationTests
                 IsActive = true,
                 CreatedAt = DateTime.UtcNow
             };
-            var policy = new BranchAttendancePolicy
-            {
-                Id = Guid.NewGuid(),
-                TenantId = TenantId,
-                BranchId = branch.Id,
-                LateThresholdMinutes = 15,
-                CreatedAt = DateTime.UtcNow
-            };
 
-            await context.Branches.AddAsync(branch);
+            await branchRepo.AddAsync(branch);
             await context.ShiftConfigs.AddAsync(config);
-            await policyRepo.AddAsync(policy);
             await context.SaveChangesAsync();
+
+            var savedBranch = await branchRepo.GetByIdAsync(branch.Id);
+            Assert.NotNull(savedBranch);
+            Assert.Equal(15, savedBranch.LateThresholdMinutes);
 
             // ShiftConfig
             var sc = await shiftRepo.GetByIdAsync(config.Id);
@@ -462,16 +459,17 @@ public class HrAndPosRepositoriesIntegrationTests
             shiftRepo.Delete(config2);
             await context.SaveChangesAsync();
 
-            // AttendancePolicy
-            var pol = await policyRepo.GetByBranchIdAsync(branch.Id);
+            // AttendancePolicy on Branch
+            var pol = await branchRepo.GetByIdAsync(branch.Id);
             Assert.NotNull(pol);
             Assert.Equal(15, pol!.LateThresholdMinutes);
-            var pols = await policyRepo.GetByBranchIdsAsync(new[] { branch.Id });
-            Assert.Single(pols);
 
             pol.LateThresholdMinutes = 20;
-            policyRepo.Update(pol);
+            branchRepo.Update(pol);
             await context.SaveChangesAsync();
+
+            var updatedPol = await branchRepo.GetByIdAsync(branch.Id);
+            Assert.Equal(20, updatedPol!.LateThresholdMinutes);
         }
     }
 

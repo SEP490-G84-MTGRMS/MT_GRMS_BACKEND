@@ -1782,79 +1782,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("StorePaymentConfigs");
                 });
 
-            modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.BranchAttendancePolicy", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("BranchAttendancePolicyID");
-
-                    b.Property<Guid>("BranchId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("BranchID");
-
-                    b.Property<string>("ConversionRulesJson")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<Guid?>("CreatedBy")
-                        .HasColumnType("uuid");
-
-                    b.Property<int>("EarlyLeaveThresholdMinutes")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasDefaultValue(0);
-
-                    b.Property<bool>("EnableEarlyLeaveThreshold")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(true);
-
-                    b.Property<bool>("EnableLateThreshold")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(true);
-
-                    b.Property<bool>("IsConvertHoursToDays")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("boolean")
-                        .HasDefaultValue(true);
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean");
-
-                    b.Property<int>("LateThresholdMinutes")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasDefaultValue(0);
-
-                    b.Property<decimal>("StandardDayHours")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(4,2)")
-                        .HasDefaultValue(8.00m);
-
-                    b.Property<string>("TenantId")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("character varying(50)")
-                        .HasColumnName("TenantID");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("BranchId");
-
-                    b.HasIndex("TenantId", "BranchId")
-                        .IsUnique()
-                        .HasFilter("\"IsDeleted\" = false");
-
-                    b.ToTable("BranchAttendancePolicies", (string)null);
-                });
-
             modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.Employee", b =>
                 {
                     b.Property<Guid>("Id")
@@ -3896,10 +3823,8 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("interval")
                         .HasDefaultValue(new TimeSpan(0, 6, 0, 0, 0));
 
-                    b.Property<int>("CheckinRadiusMeters")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer")
-                        .HasDefaultValue(100);
+                    b.Property<string>("ConversionRulesJson")
+                        .HasColumnType("text");
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp without time zone");
@@ -3907,11 +3832,36 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<Guid?>("CreatedBy")
                         .HasColumnType("uuid");
 
+                    b.Property<int>("EarlyLeaveThresholdMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
                     b.Property<string>("Email")
                         .HasMaxLength(150)
                         .HasColumnType("character varying(150)");
 
+                    b.Property<bool>("EnableEarlyLeaveThreshold")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("EnableLateThreshold")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
                     b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true);
+
+                    b.Property<bool>("IsAttendancePolicyCustomized")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<bool>("IsConvertHoursToDays")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
                         .HasDefaultValue(true);
@@ -3924,11 +3874,10 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("boolean")
                         .HasDefaultValue(false);
 
-                    b.Property<decimal?>("Latitude")
-                        .HasColumnType("decimal(10,7)");
-
-                    b.Property<decimal?>("Longitude")
-                        .HasColumnType("decimal(10,7)");
+                    b.Property<int>("LateThresholdMinutes")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
 
                     b.Property<string>("ManagerName")
                         .HasMaxLength(150)
@@ -3942,6 +3891,11 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<string>("Phone")
                         .HasMaxLength(20)
                         .HasColumnType("character varying(20)");
+
+                    b.Property<decimal>("StandardDayHours")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(4,2)")
+                        .HasDefaultValue(8.00m);
 
                     b.Property<string>("TenantId")
                         .IsRequired()
@@ -7401,17 +7355,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Navigation("DestinationFund");
 
                     b.Navigation("PrevShift");
-                });
-
-            modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.BranchAttendancePolicy", b =>
-                {
-                    b.HasOne("MT_GRMS.Domain.Entities.SaaS.Branch", "Branch")
-                        .WithMany()
-                        .HasForeignKey("BranchId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
-
-                    b.Navigation("Branch");
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.HR.Employee", b =>

@@ -113,7 +113,6 @@ public static class DependencyInjection
         services.AddScoped<Application.Promotions.IPromotionRepository, PromotionRepository>();
         services.AddScoped<IEmployeeRepository, EmployeeRepository>();
         services.AddScoped<IShiftConfigRepository, ShiftConfigRepository>();
-        services.AddScoped<IBranchAttendancePolicyRepository, BranchAttendancePolicyRepository>();
         services.AddScoped<IScheduleRepository, ScheduleRepository>();
         services.AddScoped<IScheduleApprovalRequestRepository, ScheduleApprovalRequestRepository>();
         services.AddScoped<IPayslipRepository, PayslipRepository>();

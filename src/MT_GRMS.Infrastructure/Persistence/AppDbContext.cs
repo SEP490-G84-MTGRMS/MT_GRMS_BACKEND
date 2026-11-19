@@ -124,7 +124,6 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<ScheduleApprovalRequest> ScheduleApprovalRequests { get; set; } = null!;
     public virtual DbSet<EmployeeAllowance> EmployeeAllowances { get; set; } = null!;
     public virtual DbSet<ShiftConfig> ShiftConfigs { get; set; } = null!;
-    public virtual DbSet<BranchAttendancePolicy> BranchAttendancePolicies { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

@@ -7,6 +7,7 @@ using Moq;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Interfaces;
+using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Payslips;
@@ -512,7 +513,7 @@ public class DeepBranchCoverageSuite1Tests
         var payslipRepo = new Mock<IPayslipRepository>();
         var empRepo = new Mock<IEmployeeRepository>();
         var schedRepo = new Mock<IScheduleRepository>();
-        var policyRepo = new Mock<IBranchAttendancePolicyRepository>();
+        var policyRepo = new Mock<IBranchRepository>();
         var tenant = new FakeTenantContext();
         var uow = new FakeUnitOfWork();
 
@@ -539,7 +540,7 @@ public class DeepBranchCoverageSuite1Tests
         var payslipRepo = new Mock<IPayslipRepository>();
         var empRepo = new Mock<IEmployeeRepository>();
         var schedRepo = new Mock<IScheduleRepository>();
-        var policyRepo = new Mock<IBranchAttendancePolicyRepository>();
+        var policyRepo = new Mock<IBranchRepository>();
         var tenant = new FakeTenantContext();
         var uow = new FakeUnitOfWork();
 
@@ -568,7 +569,7 @@ public class DeepBranchCoverageSuite1Tests
         var payslipRepo = new Mock<IPayslipRepository>();
         var empRepo = new Mock<IEmployeeRepository>();
         var schedRepo = new Mock<IScheduleRepository>();
-        var policyRepo = new Mock<IBranchAttendancePolicyRepository>();
+        var policyRepo = new Mock<IBranchRepository>();
         var tenant = new FakeTenantContext();
         var uow = new FakeUnitOfWork();
 

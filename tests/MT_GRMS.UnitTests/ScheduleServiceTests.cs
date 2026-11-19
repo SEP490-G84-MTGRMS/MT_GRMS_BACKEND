@@ -4,6 +4,7 @@ using Moq;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.DTOs;
 using MT_GRMS.Application.Common.Interfaces;
+using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Employees.Dtos;
@@ -247,33 +248,62 @@ public class ScheduleServiceTests
         public void Delete(ShiftConfig shiftConfig) => shiftConfig.IsDeleted = true;
     }
 
-    private class FakeBranchAttendancePolicyRepository : IBranchAttendancePolicyRepository
+    private class FakeBranchAttendancePolicyRepository : IBranchRepository
     {
-        public List<BranchAttendancePolicy> Policies { get; } = new();
+        public List<Branch> Policies { get; } = new();
 
-        public Task<BranchAttendancePolicy?> GetByBranchIdAsync(Guid branchId, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(Policies.FirstOrDefault(p => p.BranchId == branchId && !p.IsDeleted));
-        }
+        public Task<Branch?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+            => Task.FromResult(Policies.FirstOrDefault(p => p.Id == id && !p.IsDeleted));
 
-        public Task<IReadOnlyList<BranchAttendancePolicy>> GetByBranchIdsAsync(IEnumerable<Guid> branchIds, CancellationToken cancellationToken = default)
-        {
-            var idSet = branchIds.ToHashSet();
-            var list = Policies.Where(p => idSet.Contains(p.BranchId) && !p.IsDeleted).ToList();
-            return Task.FromResult((IReadOnlyList<BranchAttendancePolicy>)list);
-        }
+        public Task<IReadOnlyList<Branch>> GetAllAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<Branch>>(Policies.Where(p => !p.IsDeleted).ToList());
 
-        public Task AddAsync(BranchAttendancePolicy policy, CancellationToken cancellationToken = default)
+        public Task<IReadOnlyList<Branch>> FindAsync(System.Linq.Expressions.Expression<Func<Branch, bool>> predicate, CancellationToken cancellationToken = default)
+            => Task.FromResult<IReadOnlyList<Branch>>(Policies.AsQueryable().Where(predicate).ToList());
+
+        public Task<Branch?> FirstOrDefaultAsync(System.Linq.Expressions.Expression<Func<Branch, bool>> predicate, CancellationToken cancellationToken = default)
+            => Task.FromResult(Policies.AsQueryable().FirstOrDefault(predicate));
+
+        public Task<bool> ExistsAsync(System.Linq.Expressions.Expression<Func<Branch, bool>> predicate, CancellationToken cancellationToken = default)
+            => Task.FromResult(Policies.AsQueryable().Any(predicate));
+
+        public Task<int> CountAsync(System.Linq.Expressions.Expression<Func<Branch, bool>>? predicate = null, CancellationToken cancellationToken = default)
+            => Task.FromResult(predicate == null ? Policies.Count : Policies.AsQueryable().Count(predicate));
+
+        public Task AddAsync(Branch entity, CancellationToken cancellationToken = default)
         {
-            Policies.Add(policy);
+            Policies.Add(entity);
             return Task.CompletedTask;
         }
 
-        public void Update(BranchAttendancePolicy policy)
+        public Task AddRangeAsync(IEnumerable<Branch> entities, CancellationToken cancellationToken = default)
         {
-            var index = Policies.FindIndex(p => p.Id == policy.Id);
-            if (index >= 0) Policies[index] = policy;
+            Policies.AddRange(entities);
+            return Task.CompletedTask;
         }
+
+        public void Update(Branch entity)
+        {
+            var index = Policies.FindIndex(p => p.Id == entity.Id);
+            if (index >= 0) Policies[index] = entity;
+        }
+
+        public void Delete(Branch entity) => entity.IsDeleted = true;
+
+        public Task<(IReadOnlyList<Branch> Items, int TotalCount)> GetPagedListAsync(string? keyword, string? branchCode, string? status, IReadOnlyList<string>? branchCodes, IReadOnlyList<string>? branchNames, IReadOnlyList<string>? addresses, IReadOnlyList<string>? phones, int pageIndex, int pageSize, CancellationToken cancellationToken = default)
+            => Task.FromResult(((IReadOnlyList<Branch>)Policies, Policies.Count));
+
+        public Task<bool> ExistsByCodeAsync(string code, CancellationToken cancellationToken = default)
+            => Task.FromResult(Policies.Any(b => b.BranchCode == code && !b.IsDeleted));
+
+        public Task<int> CountActiveAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(Policies.Count(b => !b.IsDeleted));
+
+        public Task<int> CountTotalAsync(CancellationToken cancellationToken = default)
+            => Task.FromResult(Policies.Count(b => !b.IsDeleted));
+
+        public Task<MT_GRMS.Application.Branches.Dtos.BranchDetailDto?> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default)
+            => Task.FromResult<MT_GRMS.Application.Branches.Dtos.BranchDetailDto?>(null);
     }
 
     private class FakePayslipRepository : IPayslipRepository
@@ -741,10 +771,9 @@ public class ScheduleServiceTests
         scheduleRepo.Schedules.Add(schedule);
 
         // Branch policy: Bật tính trễ sau 15 phút
-        policyRepo.Policies.Add(new BranchAttendancePolicy
+        policyRepo.Policies.Add(new Branch
         {
-            Id = Guid.NewGuid(),
-            BranchId = branchId,
+            Id = branchId,
             EnableLateThreshold = true,
             LateThresholdMinutes = 15,
             EnableEarlyLeaveThreshold = true,
@@ -1743,11 +1772,10 @@ public class ScheduleServiceTests
         var branchId = Guid.NewGuid();
 
         // Setup policy with late & early thresholds
-        policyRepo.Policies.Add(new BranchAttendancePolicy
+        policyRepo.Policies.Add(new Branch
         {
-            Id = Guid.NewGuid(),
+            Id = branchId,
             TenantId = tenantContext.CurrentTenantId,
-            BranchId = branchId,
             EnableLateThreshold = true,
             LateThresholdMinutes = 15,
             EnableEarlyLeaveThreshold = true,
