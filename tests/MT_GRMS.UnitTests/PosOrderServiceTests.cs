@@ -15,6 +15,7 @@ using MT_GRMS.Application.PosOrders.Validators;
 using MT_GRMS.Application.Promotions;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Application.PosShifts;
+using MT_GRMS.Application.PosShifts.Dtos;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
@@ -1694,7 +1695,7 @@ public class PosOrderServiceTests
         var shiftId = Guid.NewGuid();
         var cashierUserId = Guid.NewGuid();
         var mockShiftRepo = new Moq.Mock<IShiftRepository>();
-        ShiftParticipant? recordedParticipant = null;
+        var shiftServiceMock = new Moq.Mock<IShiftService>();
 
         mockShiftRepo.Setup(r => r.GetActiveShiftAsync(_branchId, Moq.It.IsAny<Guid?>(), Moq.It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShiftZReport
@@ -1704,11 +1705,9 @@ public class PosOrderServiceTests
                 Status = ShiftState.Open
             });
 
-        mockShiftRepo.Setup(r => r.GetParticipantAsync(shiftId, cashierUserId, Moq.It.IsAny<CancellationToken>()))
-            .ReturnsAsync((ShiftParticipant?)null);
-
-        mockShiftRepo.Setup(r => r.AddParticipantAsync(Moq.It.IsAny<ShiftParticipant>(), Moq.It.IsAny<CancellationToken>()))
-            .Callback<ShiftParticipant, CancellationToken>((p, ct) => recordedParticipant = p)
+        shiftServiceMock.Setup(s => s.CheckCashierShiftEligibilityAsync(_branchId, cashierUserId, "CASHIER", Moq.It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CashierShiftEligibilityDto(true, false, "CASHIER", "Thu Ngân Test", null, null));
+        shiftServiceMock.Setup(s => s.RecordParticipantAsync(shiftId, cashierUserId, "Thu Ngân Test", "Thu Ngân Test", Moq.It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
 
         var mockTenantContext = new Moq.Mock<ITenantContext>();
@@ -1725,7 +1724,8 @@ public class PosOrderServiceTests
             new OrderCreateRequestValidator(),
             mockShiftRepo.Object,
             null,
-            mockTenantContext.Object);
+            mockTenantContext.Object,
+            shiftServiceMock.Object);
 
         var request = new OrderCreateRequest(
             BranchId: _branchId,
@@ -1744,10 +1744,8 @@ public class PosOrderServiceTests
         // Assert
         Assert.NotNull(result);
         Assert.Equal(shiftId, result.ShiftId);
-        Assert.NotNull(recordedParticipant);
-        Assert.Equal(shiftId, recordedParticipant.ShiftId);
-        Assert.Equal(cashierUserId, recordedParticipant.UserId);
-        Assert.Equal("Thu Ngân Test", recordedParticipant.UserName);
+        shiftServiceMock.Verify(s => s.RecordParticipantAsync(shiftId, cashierUserId,
+            "Thu Ngân Test", "Thu Ngân Test", Moq.It.IsAny<CancellationToken>()), Moq.Times.Once);
     }
 
     [Fact]
