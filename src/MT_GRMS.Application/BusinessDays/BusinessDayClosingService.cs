@@ -57,17 +57,21 @@ public class BusinessDayClosingService : IBusinessDayClosingService
         {
             if (shift.Status is ShiftState.Open or ShiftState.Closing)
                 blockers.Add(new("OPEN_SHIFTS_EXIST", "Shift", shift.Id.ToString(), shift.ShiftCode, null, shift.Status.ToString(), $"/store-owner/shifts?shiftId={shift.Id}"));
-            if (shift.HandoverStatus != HandoverStatus.CONFIRMED)
+            if (shift.Status is (ShiftState.Closed or ShiftState.ForceClosed) && shift.HandoverStatus != HandoverStatus.CONFIRMED)
                 blockers.Add(new("UNCONFIRMED_HANDOVER", "Shift", shift.Id.ToString(), shift.ShiftCode, shift.DroppedToSafeAmount, shift.HandoverStatus.ToString(), $"/store-owner/shifts?shiftId={shift.Id}"));
             foreach (var movement in shift.CashMovements.Where(x => x.Status == CashMovementStatus.PendingApproval))
                 blockers.Add(new("PENDING_CASH_MOVEMENT", "CashMovement", movement.Id.ToString(), movement.Reason, movement.Amount, movement.Status.ToString(), "/store-owner/pos-cash-control"));
         }
         if (await _repository.HasPendingPaymentOrdersAsync(tenantId, branchId, businessDate, cancellationToken))
-            blockers.Add(new("PENDING_PAYMENT_ORDERS", "Order", businessDate.ToString("yyyy-MM-dd"), "Đơn hàng chờ thanh toán", null, "PendingPayment", "/store-owner/invoices"));
+            blockers.Add(new("PENDING_PAYMENT_ORDERS", "Order", businessDate.ToString("yyyy-MM-dd"), "Đơn VietQR chưa hoàn tất thanh toán", null, "PendingPayment", $"/pos/orders?status=PENDING_PAYMENT&branchId={branchId}"));
 
         var completed = orders.Where(o => o.Status == "Completed" && o.PaymentMethod != "DEBT").ToList();
         var ownerCash = completed.Where(o => o.PaymentMethod == "CASH").Sum(o => o.FinalAmount);
         var ownerBank = completed.Where(o => IsBank(o.PaymentMethod)).Sum(o => o.FinalAmount);
+        if (shifts.Sum(s => s.TotalCashSales) + ownerCash > 0 && !funds.Any(f => f.AccountType == FinanceAccountType.Safe))
+            blockers.Add(new("SAFE_NOT_CONFIGURED", "FinanceAccount", branchId.ToString(), "Két sắt chi nhánh", null, "Chưa có két đang hoạt động", "/store-owner/finance"));
+        if (shifts.Sum(s => s.TotalBankRevenue) + ownerBank > 0 && !funds.Any(f => f.AccountType == FinanceAccountType.Bank))
+            blockers.Add(new("BANK_NOT_CONFIGURED", "FinanceAccount", branchId.ToString(), "Tài khoản ngân hàng chi nhánh", null, "Chưa có tài khoản đang hoạt động", "/store-owner/finance"));
         var cashIn = shifts.SelectMany(s => s.CashMovements).Where(IsEffectiveIn).Sum(m => m.Amount);
         var cashOut = shifts.SelectMany(s => s.CashMovements).Where(IsEffectiveOut).Sum(m => m.Amount);
         var fundDtos = funds.Select(f => new BusinessDayFundPreview(f.Id, f.AccountName, f.AccountType.ToString(), f.CurrentBalance, f.AccountType != FinanceAccountType.Bank)).ToList();
@@ -192,18 +196,13 @@ public class BusinessDayClosingService : IBusinessDayClosingService
         {
             await _repository.AddAsync(closing, cancellationToken);
             var safe = await _cashbook.GetOrCreateSafeAsync(request.BranchId, cancellationToken);
-            var bank = await _cashbook.GetOrCreateBankAccountAsync(request.BranchId, ct: cancellationToken);
             // Ca đã Posted chỉ được tổng hợp vào snapshot, không ghi Cashbook lần hai.
             var unpostedShiftCash = shifts.Where(s => s.CashbookPostingStatus != CashbookPostingStatus.Posted).Sum(s => s.TotalCashSales);
-            var unpostedShiftBank = shifts.Where(s => s.CashbookPostingStatus != CashbookPostingStatus.Posted).Sum(s => s.TotalBankRevenue);
             var unpostedCashIn = shifts.SelectMany(s => s.CashMovements).Where(IsPostableIn).Sum(m => m.Amount);
             var unpostedCashOut = shifts.SelectMany(s => s.CashMovements).Where(IsPostableOut).Sum(m => m.Amount);
             var cashToPost = ownerCash + unpostedShiftCash;
-            var bankToPost = ownerBank + unpostedShiftBank;
             if (cashToPost > 0)
                 await _cashbook.ReceiveCashAsync(safe.Id, FinanceAccountType.Safe, cashToPost, "BUSINESS_DAY_CLOSE", closing.Id, reference + "-CASH", "Thu doanh thu tiền mặt chưa kết toán của ngày nghiệp vụ", cancellationToken);
-            if (bankToPost > 0)
-                await _cashbook.ReceiveCashAsync(bank.Id, FinanceAccountType.Bank, bankToPost, "BUSINESS_DAY_CLOSE", closing.Id, reference + "-BANK", "Thu doanh thu chuyển khoản/VietQR chưa kết toán của ngày nghiệp vụ", cancellationToken);
             if (unpostedCashIn > 0)
                 await _cashbook.ReceiveCashAsync(safe.Id, FinanceAccountType.Safe, unpostedCashIn, "BUSINESS_DAY_CLOSE", closing.Id, reference + "-IN", "Tổng thu khác đã duyệt trong ngày", cancellationToken);
             if (unpostedCashOut > 0)
@@ -247,41 +246,9 @@ public class BusinessDayClosingService : IBusinessDayClosingService
         return history.Select(ToVersionResponse).ToList();
     }
 
-    public async Task<BusinessDayClosingVersionResponse> ReopenAsync(
-        Guid closingId, ReopenBusinessDayRequest request, CancellationToken cancellationToken = default)
-    {
-        EnsureOwnerOrAdmin();
-        if (closingId == Guid.Empty)
-            throw new BusinessException("BUSINESS_DAY_CLOSING_NOT_FOUND", "Không tìm thấy phiên chốt ngày nghiệp vụ.");
-        if (string.IsNullOrWhiteSpace(request.Reason))
-            throw new BusinessException("REOPEN_REASON_REQUIRED", "Vui lòng nhập lý do mở lại ngày nghiệp vụ.");
-        if (request.Reason.Trim().Length > 500)
-            throw new BusinessException("REOPEN_REASON_TOO_LONG", "Lý do mở lại tối đa 500 ký tự.");
-
-        var closing = await _repository.GetByIdAsync(_tenantContext.CurrentTenantId, closingId, cancellationToken);
-        if (closing == null)
-            throw new BusinessException("BUSINESS_DAY_CLOSING_NOT_FOUND", "Không tìm thấy phiên chốt ngày nghiệp vụ.");
-        if (!closing.IsActive || closing.Status != BusinessDayClosingStatus.Closed)
-            throw new BusinessException("BUSINESS_DAY_ALREADY_REOPENED", "Ngày nghiệp vụ này đã được mở lại hoặc không còn là phiên chốt hiện hành.");
-
-        await _unitOfWork.BeginTransactionAsync(cancellationToken);
-        try
-        {
-            closing.Status = BusinessDayClosingStatus.Reopened;
-            closing.IsActive = false;
-            closing.ReopenedAtUtc = DateTime.UtcNow;
-            closing.ReopenedByUserId = _tenantContext.CurrentUserId;
-            closing.ReopenReason = request.Reason.Trim();
-            await _unitOfWork.SaveChangesAsync(cancellationToken);
-            await _unitOfWork.CommitTransactionAsync(cancellationToken);
-        }
-        catch
-        {
-            await _unitOfWork.RollbackTransactionAsync(cancellationToken);
-            throw;
-        }
-        return ToVersionResponse(closing);
-    }
+    public Task<BusinessDayClosingVersionResponse> ReopenAsync(
+        Guid closingId, ReopenBusinessDayRequest request, CancellationToken cancellationToken = default) =>
+        throw new BusinessException("BUSINESS_DAY_FINALIZED", "Ngày kinh doanh đã chốt không thể mở lại. Vui lòng xem lịch sử chốt hoặc báo cáo tài chính.");
 
     private static BusinessDayClosingVersionResponse ToVersionResponse(BusinessDayClosing closing) => new(
         closing.Id, closing.BranchId, closing.BusinessDate, closing.Version, closing.Status.ToString(), closing.IsActive,

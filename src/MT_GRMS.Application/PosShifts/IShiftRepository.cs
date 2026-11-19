@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.HR;
+using MT_GRMS.Domain.Entities.SaaS;
 
 namespace MT_GRMS.Application.PosShifts;
 
@@ -19,12 +20,8 @@ public interface IShiftRepository
     Task<string> GenerateNextShiftCodeAsync(Guid branchId, CancellationToken cancellationToken = default);
     Task<ShiftCashMovement?> GetCashMovementByIdAsync(Guid movementId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ShiftCashMovement>> GetPendingMovementsAsync(Guid? branchId, CancellationToken cancellationToken = default);
-    Task<StorePaymentConfig?> GetPaymentConfigAsync(string tenantId, CancellationToken cancellationToken = default);
-    Task SavePaymentConfigAsync(StorePaymentConfig config, CancellationToken cancellationToken = default);
-    Task AddParticipantAsync(ShiftParticipant participant, CancellationToken cancellationToken = default);
-    Task<ShiftParticipant?> GetParticipantAsync(Guid shiftId, Guid userId, CancellationToken cancellationToken = default);
-    Task AddCloseConfirmationAsync(ShiftCloseConfirmation confirmation, CancellationToken cancellationToken = default);
-    Task ClearCloseConfirmationsAsync(Guid shiftId, CancellationToken cancellationToken = default);
+    Task<Tenant?> GetPaymentConfigAsync(string tenantId, CancellationToken cancellationToken = default);
+    Task SavePaymentConfigAsync(Tenant config, CancellationToken cancellationToken = default);
     Task<Guid?> ResolveBranchIdAsync(string? branchIdOrCode, CancellationToken cancellationToken = default);
     Task<Employee?> GetEmployeeByUserIdAsync(string userId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<EmployeeSchedule>> GetCashierSchedulesAsync(Guid employeeId, Guid branchId, DateTime workDate, CancellationToken cancellationToken = default);

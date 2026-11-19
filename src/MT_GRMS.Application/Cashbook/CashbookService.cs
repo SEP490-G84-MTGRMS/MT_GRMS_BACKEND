@@ -3,6 +3,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Services;
 using MT_GRMS.Application.Tax;
 using MT_GRMS.Domain.Entities.Finance;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
@@ -23,6 +24,7 @@ public class CashbookService : ICashbookService
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
     private readonly IRepository<ExpenseVoucher>? _expenseVoucherRepo;
+    private readonly IRepository<Branch>? _branchRepo;
     private readonly IHouseholdTaxRepository? _taxRepository;
 
     public CashbookService(
@@ -33,10 +35,12 @@ public class CashbookService : ICashbookService
         ITenantContext tenantContext,
         IUnitOfWork unitOfWork,
         IRepository<ExpenseVoucher>? expenseVoucherRepo = null,
-        IHouseholdTaxRepository? taxRepository = null)
+        IHouseholdTaxRepository? taxRepository = null,
+        IRepository<Branch>? branchRepo = null)
     {
         _cashbookRepo = cashbookRepo;
         _accountRepo = accountRepo;
+        _branchRepo = branchRepo;
         _shiftRepo = shiftRepo;
         _auditHashService = auditHashService;
         _tenantContext = tenantContext;
@@ -407,6 +411,17 @@ public class CashbookService : ICashbookService
     {
         RequireOwner();
         var existingBanks = await _accountRepo.FindAsync(b => b.AccountType == FinanceAccountType.Bank && !b.IsDeleted, ct);
+        if (_branchRepo != null)
+        {
+            if (!branchId.HasValue)
+                throw new BusinessException("BRANCH_REQUIRED", "Cần chọn chi nhánh để xác định tài khoản ngân hàng.");
+            var branch = await _branchRepo.GetByIdAsync(branchId.Value, ct);
+            if (branch == null || branch.IsDeleted || branch.TenantId != _tenantContext.CurrentTenantId)
+                throw new BusinessException("BRANCH_NOT_FOUND", "Không tìm thấy chi nhánh thuộc cửa hàng.");
+            var current = existingBanks.FirstOrDefault(b => b.Id == branch.CurrentBankFinanceAccountId
+                && b.TenantId == branch.TenantId && b.BranchId == branch.Id && b.IsActive);
+            return current ?? throw new BusinessException("BANK_ACCOUNT_NOT_CONFIGURED", "Chi nhánh chưa chọn tài khoản ngân hàng nhận tiền.");
+        }
         var matchedBank = existingBanks
             .Where(b => b.IsActive && b.BranchId == branchId)
             .FirstOrDefault()
