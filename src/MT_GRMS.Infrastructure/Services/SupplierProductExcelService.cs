@@ -12,23 +12,27 @@ namespace MT_GRMS.Infrastructure.Services;
 
 public class SupplierProductExcelService : ISupplierProductExcelService
 {
-    public const string SheetName = "Gia_Nhap_MOQ";
+    /// <summary>Sheet name — cùng phong cách DanhMucHangHoa ở màn /store-owner/products.</summary>
+    public const string SheetName = "SP_Theo_NCC";
 
+    /// <summary>Header hiển thị tiếng Việt (giống Danh mục hàng hóa).</summary>
     private static readonly string[] Headers =
     [
-        "ProductId",
-        "MaNCC",
-        "TenNCC",
-        "SKU",
-        "TenSanPham",
-        "DVTNhap",
-        "GiaNhapSi",
-        "MOQ"
+        "Mã hàng",
+        "Tên hàng",
+        "Mã NCC",
+        "Tên NCC",
+        "Đơn vị nhập",
+        "Giá nhập sỉ",
+        "MOQ",
+        "ProductId"
     ];
 
     private static readonly XLColor HeaderBg = XLColor.FromHtml("#0F766E");
-    private static readonly XLColor ReadonlyBg = XLColor.FromHtml("#F1F5F9");
-    private static readonly XLColor EditableBg = XLColor.FromHtml("#FEF3C7");
+    private static readonly XLColor BorderColor = XLColor.FromHtml("#CBD5E1");
+    private static readonly XLColor EvenRowBg = XLColor.FromHtml("#F0FDFA");
+    private static readonly XLColor OddRowBg = XLColor.FromHtml("#FFFFFF");
+    private static readonly XLColor TextColor = XLColor.FromHtml("#0F172A");
 
     private readonly ISupplierRepository _supplierRepository;
     private readonly IUnitOfWork _unitOfWork;
@@ -41,88 +45,117 @@ public class SupplierProductExcelService : ISupplierProductExcelService
 
     public async Task<SupplierProductExcelFileDto> ExportAsync(
         Guid supplierId,
+        SupplierProductQueryFilter? filter = null,
         CancellationToken cancellationToken = default)
     {
         var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken)
             ?? throw new NotFoundException($"Không tìm thấy nhà cung cấp với ID: {supplierId}");
 
-        var items = await _supplierRepository.GetActiveSupplierProductsForSupplierAsync(supplierId, cancellationToken);
-        var ordered = items
+        var all = await _supplierRepository.GetSupplierProductsForSupplierAsync(supplierId, cancellationToken);
+        var ordered = ApplyScreenFilter(all, filter)
             .OrderBy(x => x.Product?.ProductCode ?? string.Empty, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         using var workbook = new XLWorkbook();
+        workbook.Properties.Title = "Sản phẩm theo nhà cung cấp";
+        workbook.Properties.Subject = "Giá nhập sỉ & MOQ — MT-GRMS";
+        workbook.Properties.Author = "MT-GRMS";
+
         var ws = workbook.Worksheets.Add(SheetName);
 
         for (var i = 0; i < Headers.Length; i++)
         {
             var cell = ws.Cell(1, i + 1);
             cell.Value = Headers[i];
+            cell.Style.Font.FontName = "Aptos";
+            cell.Style.Font.FontSize = 11;
             cell.Style.Font.Bold = true;
             cell.Style.Font.FontColor = XLColor.White;
             cell.Style.Fill.BackgroundColor = HeaderBg;
             cell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+            cell.Style.Alignment.Vertical = XLAlignmentVerticalValues.Center;
+            cell.Style.Alignment.WrapText = true;
+            ApplyThinBorder(cell);
         }
 
-        ws.Cell(2, 1).Value = "KHÔNG SỬA các cột ProductId → DVTNhap. Chỉ điền/sửa GiaNhapSi và MOQ rồi gửi lại để import.";
-        ws.Range(2, 1, 2, Headers.Length).Merge();
-        ws.Cell(2, 1).Style.Font.Italic = true;
-        ws.Cell(2, 1).Style.Font.FontColor = XLColor.FromHtml("#B45309");
-        ws.Cell(2, 1).Style.Fill.BackgroundColor = XLColor.FromHtml("#FFFBEB");
+        ws.Row(1).Height = 34;
 
-        var row = 3;
+        var row = 2;
         foreach (var sp in ordered)
         {
-            var productId = sp.ProductId.ToString();
             var sku = sp.Product?.ProductCode ?? string.Empty;
             var name = sp.Product?.Name ?? string.Empty;
             var uom = string.IsNullOrWhiteSpace(sp.DeliveryUoM)
                 ? (sp.Product?.BaseUnit ?? "Cái")
                 : sp.DeliveryUoM;
+            var isEven = row % 2 == 0;
+            var rowBg = isEven ? EvenRowBg : OddRowBg;
 
-            ws.Cell(row, 1).Value = productId;
-            ws.Cell(row, 2).Value = supplier.Code;
-            ws.Cell(row, 3).Value = supplier.Name;
-            ws.Cell(row, 4).Value = sku;
-            ws.Cell(row, 5).Value = name;
-            ws.Cell(row, 6).Value = uom;
-            if (sp.AgreedWholesalePrice.HasValue && sp.AgreedWholesalePrice.Value > 0)
+            ws.Cell(row, 1).Value = sku;
+            ws.Cell(row, 2).Value = name;
+            ws.Cell(row, 3).Value = supplier.Code;
+            ws.Cell(row, 4).Value = supplier.Name;
+            ws.Cell(row, 5).Value = uom;
+            // Keep export consistent with the UI and purchase-order pricing:
+            // prefer the negotiated supplier price, then fall back to Master cost price.
+            var effectivePurchasePrice = sp.AgreedWholesalePrice.HasValue
+                                         && sp.AgreedWholesalePrice.Value > 0
+                ? sp.AgreedWholesalePrice.Value
+                : sp.Product?.CostPrice ?? 0m;
+            ws.Cell(row, 6).Value = effectivePurchasePrice;
+
+            ws.Cell(row, 7).Value = sp.MinimumOrderQuantity > 0 ? sp.MinimumOrderQuantity : 1;
+            ws.Cell(row, 8).Value = sp.ProductId.ToString();
+
+            for (var c = 1; c <= Headers.Length; c++)
             {
-                ws.Cell(row, 7).Value = sp.AgreedWholesalePrice.Value;
-            }
-            else
-            {
-                ws.Cell(row, 7).Value = string.Empty;
+                var cell = ws.Cell(row, c);
+                cell.Style.Font.FontName = "Aptos";
+                cell.Style.Font.FontSize = 10;
+                cell.Style.Font.FontColor = TextColor;
+                cell.Style.Fill.BackgroundColor = rowBg;
+                cell.Style.Alignment.Vertical = XLAlignmentVerticalValues.Center;
+                ApplyThinBorder(cell);
+
+                if (c is 6 or 7)
+                {
+                    cell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
+                }
+                else if (c == 2 || c == 4)
+                {
+                    cell.Style.Alignment.WrapText = true;
+                }
+                else
+                {
+                    cell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Left;
+                }
             }
 
-            ws.Cell(row, 8).Value = sp.MinimumOrderQuantity > 0 ? sp.MinimumOrderQuantity : 1;
-
-            for (var c = 1; c <= 6; c++)
-            {
-                ws.Cell(row, c).Style.Fill.BackgroundColor = ReadonlyBg;
-            }
-
-            ws.Cell(row, 7).Style.Fill.BackgroundColor = EditableBg;
-            ws.Cell(row, 8).Style.Fill.BackgroundColor = EditableBg;
-            ws.Cell(row, 7).Style.NumberFormat.Format = "#,##0.###";
-            ws.Cell(row, 8).Style.NumberFormat.Format = "0";
+            ws.Cell(row, 6).Style.NumberFormat.Format = "#,##0 [$₫-vi-VN]";
+            ws.Cell(row, 7).Style.NumberFormat.Format = "#,##0";
+            ws.Row(row).Height = 24;
             row++;
         }
 
-        ws.Column(1).Width = 38;
-        ws.Column(2).Width = 18;
-        ws.Column(3).Width = 28;
-        ws.Column(4).Width = 14;
-        ws.Column(5).Width = 36;
-        ws.Column(6).Width = 12;
-        ws.Column(7).Width = 14;
-        ws.Column(8).Width = 10;
-        ws.SheetView.FreezeRows(2);
+        ws.Column(1).Width = 18;
+        ws.Column(2).Width = 32;
+        ws.Column(3).Width = 16;
+        ws.Column(4).Width = 28;
+        ws.Column(5).Width = 14;
+        ws.Column(6).Width = 16;
+        ws.Column(7).Width = 10;
+        ws.Column(8).Width = 38;
+
+        ws.SheetView.FreezeRows(1);
+        if (ordered.Count > 0)
+        {
+            ws.RangeUsed()?.SetAutoFilter();
+        }
 
         using var ms = new MemoryStream();
         workbook.SaveAs(ms);
         var safeCode = Regex.Replace(supplier.Code ?? "NCC", @"[^\w\-]+", "_");
-        var fileName = $"NCC_GiaNhap_MOQ_{safeCode}_{DateTime.UtcNow:yyyyMMdd}.xlsx";
+        var fileName = $"SP_Theo_NCC_{safeCode}_{DateTime.UtcNow:yyyyMMdd}.xlsx";
 
         return new SupplierProductExcelFileDto
         {
@@ -131,10 +164,23 @@ public class SupplierProductExcelService : ISupplierProductExcelService
         };
     }
 
+    private static void ApplyThinBorder(IXLCell cell)
+    {
+        cell.Style.Border.TopBorder = XLBorderStyleValues.Thin;
+        cell.Style.Border.BottomBorder = XLBorderStyleValues.Thin;
+        cell.Style.Border.LeftBorder = XLBorderStyleValues.Thin;
+        cell.Style.Border.RightBorder = XLBorderStyleValues.Thin;
+        cell.Style.Border.TopBorderColor = BorderColor;
+        cell.Style.Border.BottomBorderColor = BorderColor;
+        cell.Style.Border.LeftBorderColor = BorderColor;
+        cell.Style.Border.RightBorderColor = BorderColor;
+    }
+
     public async Task<SupplierProductExcelImportResultDto> ImportAsync(
         Guid supplierId,
         Stream fileStream,
         string fileName,
+        SupplierProductQueryFilter? filter = null,
         CancellationToken cancellationToken = default)
     {
         var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken)
@@ -171,9 +217,11 @@ public class SupplierProductExcelService : ISupplierProductExcelService
             var headerMap = BuildHeaderMap(ws);
             RequireHeaders(headerMap, "SKU", "GiaNhapSi", "MOQ");
 
-            var assigned = await _supplierRepository.GetActiveSupplierProductsForSupplierAsync(supplierId, cancellationToken);
-            var byProductId = assigned.ToDictionary(x => x.ProductId);
-            var bySku = assigned
+            var assignedAll = await _supplierRepository.GetSupplierProductsForSupplierAsync(supplierId, cancellationToken);
+            var scoped = ApplyScreenFilter(assignedAll, filter).ToList();
+            var scopedIds = scoped.Select(x => x.ProductId).ToHashSet();
+            var byProductId = assignedAll.ToDictionary(x => x.ProductId);
+            var bySku = assignedAll
                 .Where(x => !string.IsNullOrWhiteSpace(x.Product?.ProductCode))
                 .GroupBy(x => x.Product!.ProductCode.Trim().ToUpperInvariant())
                 .ToDictionary(g => g.Key, g => g.First());
@@ -233,6 +281,13 @@ public class SupplierProductExcelService : ISupplierProductExcelService
                         throw new BusinessException(
                             "PRODUCT_NOT_ASSIGNED",
                             "SKU/ProductId không thuộc danh sách sản phẩm đã gán cho nhà cung cấp này.");
+                    }
+
+                    if (!scopedIds.Contains(entity.ProductId))
+                    {
+                        throw new BusinessException(
+                            "PRODUCT_OUT_OF_FILTER",
+                            "Sản phẩm không thuộc bộ lọc màn hình hiện tại. Xuất lại Excel theo bộ lọc rồi import.");
                     }
 
                     rowResult.Sku = entity.Product?.ProductCode ?? skuRaw;
@@ -300,6 +355,111 @@ public class SupplierProductExcelService : ISupplierProductExcelService
         }
     }
 
+    /// <summary>
+    /// Mirror filter logic of GetPagedSupplierProductsAsync (không phân trang) —
+    /// dùng chung cho export và validate import theo bộ lọc màn hình.
+    /// </summary>
+    internal static IEnumerable<SupplierProduct> ApplyScreenFilter(
+        IEnumerable<SupplierProduct> source,
+        SupplierProductQueryFilter? filter)
+    {
+        if (filter == null) return source;
+
+        IEnumerable<SupplierProduct> q = source;
+
+        if (filter.CategoryId.HasValue && filter.CategoryId != Guid.Empty)
+        {
+            q = q.Where(sp => sp.Product?.CategoryId == filter.CategoryId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(filter.CategoryName)
+            && !string.Equals(filter.CategoryName, "ALL", StringComparison.OrdinalIgnoreCase))
+        {
+            var cat = filter.CategoryName.Trim().ToLowerInvariant();
+            q = q.Where(sp =>
+                sp.Product?.Category != null
+                && sp.Product.Category.Name.ToLowerInvariant().Contains(cat));
+        }
+
+        if (filter.Status.HasValue)
+        {
+            q = q.Where(sp => sp.Status == filter.Status.Value);
+        }
+
+        var skuTerms = CleanTerms(filter.Skus);
+        if (skuTerms.Count > 0)
+        {
+            q = q.Where(sp =>
+            {
+                var code = sp.Product?.ProductCode ?? string.Empty;
+                return skuTerms.Any(t => code.Contains(t, StringComparison.OrdinalIgnoreCase));
+            });
+        }
+
+        var nameTerms = CleanTerms(filter.Names);
+        if (nameTerms.Count > 0)
+        {
+            q = q.Where(sp =>
+            {
+                var name = sp.Product?.Name ?? string.Empty;
+                return nameTerms.Any(t => name.Contains(t, StringComparison.OrdinalIgnoreCase));
+            });
+        }
+        else if (!string.IsNullOrWhiteSpace(filter.SearchTerm))
+        {
+            var term = filter.SearchTerm.Trim();
+            q = q.Where(sp =>
+            {
+                var p = sp.Product;
+                if (p == null) return false;
+                return (p.Name?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                       || (p.Barcode?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                       || (p.ProductCode?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false)
+                       || (sp.SupplierProductCode?.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false);
+            });
+        }
+
+        var supplierCodeTerms = CleanTerms(filter.SupplierCodes);
+        if (supplierCodeTerms.Count > 0)
+        {
+            q = q.Where(sp =>
+            {
+                var code = sp.Supplier?.Code ?? string.Empty;
+                return supplierCodeTerms.Any(t => code.Contains(t, StringComparison.OrdinalIgnoreCase));
+            });
+        }
+
+        var supplierNameTerms = CleanTerms(filter.SupplierNames);
+        if (supplierNameTerms.Count > 0)
+        {
+            q = q.Where(sp =>
+            {
+                var name = sp.Supplier?.Name ?? string.Empty;
+                return supplierNameTerms.Any(t => name.Contains(t, StringComparison.OrdinalIgnoreCase));
+            });
+        }
+        else if (!string.IsNullOrWhiteSpace(filter.SupplierSearch) && supplierCodeTerms.Count == 0)
+        {
+            var supplierTerm = filter.SupplierSearch.Trim();
+            q = q.Where(sp =>
+                sp.Supplier != null
+                && ((sp.Supplier.Code?.Contains(supplierTerm, StringComparison.OrdinalIgnoreCase) ?? false)
+                    || (sp.Supplier.Name?.Contains(supplierTerm, StringComparison.OrdinalIgnoreCase) ?? false)));
+        }
+
+        return q;
+    }
+
+    private static List<string> CleanTerms(IReadOnlyList<string>? values)
+    {
+        if (values == null || values.Count == 0) return [];
+        return values
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
     private static Dictionary<string, int> BuildHeaderMap(IXLWorksheet ws)
     {
         var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -323,17 +483,19 @@ public class SupplierProductExcelService : ISupplierProductExcelService
     private static string NormalizeHeader(string raw)
     {
         var s = raw.Trim();
-        // alias tiếng Việt / tiếng Anh
+        // alias tiếng Việt / tiếng Anh — khớp header Danh mục hàng hóa + file cũ
         return s switch
         {
-            "Mã NCC" or "Ma NCC" or "SupplierCode" => "MaNCC",
-            "Tên NCC" or "Ten NCC" or "SupplierName" => "TenNCC",
-            "Tên sản phẩm" or "Ten san pham" or "ProductName" => "TenSanPham",
-            "ĐVT nhập" or "DVT nhập" or "DVT" or "ĐVT" or "Unit" => "DVTNhap",
-            "Giá nhập sỉ" or "Gia nhap si" or "AgreedPrice" or "Price" => "GiaNhapSi",
+            "Mã NCC" or "Ma NCC" or "MaNCC" or "SupplierCode" => "MaNCC",
+            "Tên NCC" or "Ten NCC" or "TenNCC" or "SupplierName" => "TenNCC",
+            "Tên hàng" or "Tên hàng (*)" or "Ten hang" or "Tên sản phẩm" or "Ten san pham"
+                or "TenSanPham" or "ProductName" => "TenSanPham",
+            "Đơn vị nhập" or "Don vi nhap" or "ĐVT nhập" or "DVT nhập" or "DVTNhap"
+                or "DVT" or "ĐVT" or "Unit" => "DVTNhap",
+            "Giá nhập sỉ" or "Gia nhap si" or "GiaNhapSi" or "AgreedPrice" or "Price" => "GiaNhapSi",
             "MinimumOrderQuantity" or "MinOrder" => "MOQ",
-            "Product ID" or "Id" => "ProductId",
-            "Mã SKU" or "Ma SKU" or "ProductCode" => "SKU",
+            "Product ID" or "Id" or "Mã hệ thống" => "ProductId",
+            "Mã hàng" or "Ma hang" or "Mã SKU" or "Ma SKU" or "ProductCode" or "SKU" => "SKU",
             _ => Regex.Replace(s, @"\s+", string.Empty)
         };
     }

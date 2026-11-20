@@ -1037,6 +1037,14 @@ public class SupplierProductManagementTests
             return Task.FromResult<IReadOnlyList<SupplierProduct>>(products);
         }
 
+        public Task<IReadOnlyList<SupplierProduct>> GetSupplierProductsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
+        {
+            var products = SupplierProducts
+                .Where(sp => sp.SupplierId == supplierId && !sp.IsDeleted)
+                .ToList();
+            return Task.FromResult<IReadOnlyList<SupplierProduct>>(products);
+        }
+
         public Task<bool> BranchStockExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
         {
             return Task.FromResult(BranchStocks.Any(bs => bs.BranchId == branchId && bs.ProductId == productId && !bs.IsDeleted));

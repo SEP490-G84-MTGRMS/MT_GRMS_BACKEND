@@ -213,21 +213,22 @@ public class BranchesController : BaseApiController
     }
 
     /// <summary>
-    /// Xuất Excel danh sách SP đã gán chi nhánh để điền giá bán theo từng ĐVT.
+    /// Xuất Excel SP đã gán chi nhánh theo bộ lọc màn hình (giá bán theo từng ĐVT).
     /// </summary>
     [HttpGet("{id:guid}/products/export")]
     [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> ExportBranchProducts(
         Guid id,
+        [FromQuery] BranchProductQueryFilter filter,
         [FromServices] IBranchProductExcelService excelService,
         CancellationToken cancellationToken)
     {
-        var file = await excelService.ExportAsync(id, cancellationToken);
+        var file = await excelService.ExportAsync(id, filter, cancellationToken);
         return File(file.Content, file.ContentType, file.FileName);
     }
 
     /// <summary>
-    /// Import Excel: validate + override giá bán theo ĐVT (partial success theo từng dòng).
+    /// Import Excel: validate theo bộ lọc màn hình + override giá bán theo ĐVT (partial success).
     /// </summary>
     [HttpPost("{id:guid}/products/import")]
     [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
@@ -235,7 +236,8 @@ public class BranchesController : BaseApiController
     [RequestSizeLimit(10_000_000)]
     public async Task<IActionResult> ImportBranchProducts(
         Guid id,
-        IFormFile? file,
+        [FromForm] IFormFile? file,
+        [FromQuery] BranchProductQueryFilter filter,
         [FromServices] IBranchProductExcelService excelService,
         CancellationToken cancellationToken)
     {
@@ -245,7 +247,7 @@ public class BranchesController : BaseApiController
         }
 
         await using var stream = file.OpenReadStream();
-        var result = await excelService.ImportAsync(id, stream, file.FileName, cancellationToken);
+        var result = await excelService.ImportAsync(id, stream, file.FileName, filter, cancellationToken);
         var msg = result.Summary.FailedCount == 0
             ? $"Import thành công {result.Summary.SuccessCount}/{result.Summary.TotalRows} dòng."
             : $"Import xong: {result.Summary.SuccessCount} thành công, {result.Summary.FailedCount} lỗi / {result.Summary.TotalRows} dòng.";

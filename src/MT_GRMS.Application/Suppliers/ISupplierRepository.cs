@@ -101,6 +101,9 @@ public interface ISupplierRepository : IRepository<Supplier>
     // Auto-sync branch products
     Task<IReadOnlyList<Guid>> GetActiveBranchIdsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SupplierProduct>> GetActiveSupplierProductsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default);
+
+    /// <summary>Mọi SP đã gán NCC (kể cả Inactive), Include Product+Category — dùng Excel filter/import.</summary>
+    Task<IReadOnlyList<SupplierProduct>> GetSupplierProductsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default);
     Task<bool> BranchProductExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default);
     Task AddBranchProductAsync(MT_GRMS.Domain.Entities.Catalog.BranchProduct branchProduct, CancellationToken cancellationToken = default);
     Task<bool> BranchStockExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default);
