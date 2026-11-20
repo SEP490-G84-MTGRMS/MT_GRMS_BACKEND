@@ -94,11 +94,6 @@ public class InventoryTests
             return Task.FromResult(batches);
         }
 
-        public Task<StockOnHand?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<StockOnHand?>(null);
-        public Task<IReadOnlyList<StockOnHand>> GetAllAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<StockOnHand>>(new List<StockOnHand>());
-        public Task<StockOnHand> AddAsync(StockOnHand entity, CancellationToken cancellationToken = default) => Task.FromResult(entity);
-        public Task UpdateAsync(StockOnHand entity, CancellationToken cancellationToken = default) => Task.CompletedTask;
-        public Task DeleteAsync(StockOnHand entity, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private class FakeTenantContext : ITenantContext

@@ -236,7 +236,7 @@ public class BranchesController : BaseApiController
     [RequestSizeLimit(10_000_000)]
     public async Task<IActionResult> ImportBranchProducts(
         Guid id,
-        [FromForm] IFormFile? file,
+        IFormFile? file,
         [FromQuery] BranchProductQueryFilter filter,
         [FromServices] IBranchProductExcelService excelService,
         CancellationToken cancellationToken)
@@ -248,7 +248,9 @@ public class BranchesController : BaseApiController
 
         await using var stream = file.OpenReadStream();
         var result = await excelService.ImportAsync(id, stream, file.FileName, filter, cancellationToken);
-        var msg = result.Summary.FailedCount == 0
+        var msg = result.IsPreview
+            ? $"Kiểm tra Excel: {result.Summary.SuccessCount} hợp lệ, {result.Summary.FailedCount} lỗi."
+            : result.Summary.FailedCount == 0
             ? $"Import thành công {result.Summary.SuccessCount}/{result.Summary.TotalRows} dòng."
             : $"Import xong: {result.Summary.SuccessCount} thành công, {result.Summary.FailedCount} lỗi / {result.Summary.TotalRows} dòng.";
         return Ok(ApiResponse<BranchProductExcelImportResultDto>.Ok(result, msg));

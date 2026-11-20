@@ -5,11 +5,13 @@ using System.Threading.Tasks;
 using MT_GRMS.Application.Batches.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Inventory;
+using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.Batches;
 
 /// <summary>
-/// Service xử lý quản lý lô hàng & hạn sử dụng theo chuẩn FEFO (First Expired, First Out)
+/// Service xử lý quản lý lô hàng & hạn sử dụng theo chuẩn FEFO (First Expired, First Out).
+/// Tồn live = BranchStocks. Bảng Batches/StockOnHands là legacy — không tạo tồn qua API này.
 /// </summary>
 public class BatchService : IBatchService
 {
@@ -47,38 +49,15 @@ public class BatchService : IBatchService
         return batch;
     }
 
-    public async Task<BatchResponse> CreateBatchAsync(
+    public Task<BatchResponse> CreateBatchAsync(
         BatchCreateRequest request,
         CancellationToken cancellationToken = default)
     {
-        var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        var batch = new Batch
-        {
-            TenantId = tenantId,
-            ProductId = request.ProductId,
-            BranchId = request.BranchId,
-            BatchCode = request.BatchCode,
-            ManufactureDate = request.ManufactureDate,
-            ExpiryDate = request.ExpiryDate,
-            InitialQuantity = request.InitialQuantity,
-            LandedCostPerUnit = request.LandedCostPerUnit
-        };
-
-        await _repository.AddBatchAsync(batch, cancellationToken);
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
-
-        return new BatchResponse(
-            Id: batch.Id,
-            ProductId: batch.ProductId,
-            BranchId: batch.BranchId,
-            BatchCode: batch.BatchCode,
-            ManufactureDate: batch.ManufactureDate,
-            ExpiryDate: batch.ExpiryDate,
-            InitialQuantity: batch.InitialQuantity,
-            LandedCostPerUnit: batch.LandedCostPerUnit,
-            DaysUntilExpiry: batch.DaysUntilExpiry,
-            IsExpired: batch.IsExpired
-        );
+        // Legacy: trước đây tạo Batches + StockOnHands (tồn ma, POS không đọc).
+        // Tồn live chỉ tăng qua GRN COMPLETED → BranchStocks.
+        throw new BusinessException(
+            "BATCH_CREATE_DEPRECATED",
+            "Không còn hỗ trợ tạo lô/tồn thủ công. Hãy nhập kho (Goods Receipt) để tăng BranchStocks.");
     }
 
     public async Task<IReadOnlyList<ExpiryAlertDto>> GetNearExpiryBatchesAsync(

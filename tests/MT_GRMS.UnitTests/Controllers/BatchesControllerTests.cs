@@ -8,6 +8,7 @@ using MT_GRMS.Api.Controllers;
 using MT_GRMS.Application.Batches;
 using MT_GRMS.Application.Batches.Dtos;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Exceptions;
 using Xunit;
 
 namespace MT_GRMS.UnitTests.Controllers;
@@ -104,7 +105,7 @@ public class BatchesControllerTests
     }
 
     [Fact]
-    public async Task CreateBatch_ReturnsCreatedAtAction()
+    public async Task CreateBatch_WhenDeprecated_PropagatesBusinessException()
     {
         var request = new BatchCreateRequest(
             ProductId: Guid.NewGuid(),
@@ -115,26 +116,13 @@ public class BatchesControllerTests
             InitialQuantity: 10m,
             LandedCostPerUnit: 1000m
         );
-        var created = new BatchResponse(
-            Id: Guid.NewGuid(),
-            ProductId: request.ProductId,
-            BranchId: request.BranchId,
-            BatchCode: "BATCH-NEW",
-            ManufactureDate: request.ManufactureDate,
-            ExpiryDate: request.ExpiryDate,
-            InitialQuantity: 10m,
-            LandedCostPerUnit: 1000m,
-            DaysUntilExpiry: 30,
-            IsExpired: false
-        );
         _mockBatchService.Setup(s => s.CreateBatchAsync(request, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(created);
+            .ThrowsAsync(new BusinessException(
+                "BATCH_CREATE_DEPRECATED",
+                "Không còn hỗ trợ tạo lô/tồn thủ công."));
 
-        var result = await _controller.CreateBatch(request, CancellationToken.None);
-
-        var createdResult = Assert.IsType<CreatedAtActionResult>(result);
-        Assert.Equal(nameof(BatchesController.GetById), createdResult.ActionName);
-        Assert.Equal(created.Id, createdResult.RouteValues!["id"]);
+        await Assert.ThrowsAsync<BusinessException>(() =>
+            _controller.CreateBatch(request, CancellationToken.None));
     }
 
     [Fact]

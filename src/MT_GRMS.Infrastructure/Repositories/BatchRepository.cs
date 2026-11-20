@@ -349,8 +349,11 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
     {
         var now = DateTime.UtcNow.Date;
 
+        // Live ledger duy nhất: BranchStocks. Không fallback Batches/StockOnHands (legacy).
         var branchStock = await _appContext.BranchStocks.AsNoTracking()
-            .FirstOrDefaultAsync(bs => bs.Id == id && !bs.IsDeleted, cancellationToken);
+            .FirstOrDefaultAsync(
+                bs => bs.Id == id && !bs.IsDeleted && (string.IsNullOrEmpty(tenantId) || bs.TenantId == tenantId),
+                cancellationToken);
 
         if (branchStock != null)
         {
@@ -423,69 +426,19 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 deliveryUomBySupplierProduct: deliveryUomBySupplierProduct);
         }
 
-        var batch = await _appContext.Batches.AsNoTracking().FirstOrDefaultAsync(b => b.Id == id, cancellationToken);
-        if (batch == null) return null;
-
-        var legacyProduct = await _appContext.Products.AsNoTracking()
-            .Include(p => p.Category)
-            .FirstOrDefaultAsync(p => p.Id == batch.ProductId, cancellationToken);
-
-        var legacyBranch = await _appContext.Branches.AsNoTracking()
-            .FirstOrDefaultAsync(b => b.Id == batch.BranchId, cancellationToken);
-
-        var stock = await _appContext.StockOnHands.AsNoTracking()
-            .FirstOrDefaultAsync(s => s.BatchId == batch.Id, cancellationToken);
-
-        var daysLeft = (batch.ExpiryDate.Date - now).Days;
-        string status = ResolveStatus(daysLeft);
-
-        decimal currentQty = stock?.Quantity ?? batch.InitialQuantity;
-        decimal totalValuation = currentQty * batch.LandedCostPerUnit;
-
-        return new BatchListItemDto(
-            Id: batch.Id,
-            BatchCode: batch.BatchCode,
-            ProductId: batch.ProductId,
-            Sku: legacyProduct?.ProductCode ?? string.Empty,
-            ProductName: legacyProduct?.Name ?? "Sản phẩm",
-            CategoryName: legacyProduct?.Category?.Name ?? "Chung",
-            BranchId: batch.BranchId,
-            BranchName: legacyBranch?.Name ?? "Chi nhánh",
-            SupplierId: null,
-            SupplierName: "—",
-            MfgDate: batch.ManufactureDate,
-            ExpiryDate: batch.ExpiryDate,
-            DaysLeft: daysLeft,
-            QtyInitial: batch.InitialQuantity,
-            QtyCurrent: currentQty,
-            Unit: legacyProduct?.BaseUnit ?? "Cái",
-            CostPrice: batch.LandedCostPerUnit,
-            TotalValuation: totalValuation,
-            Status: status,
-            ZoneArea: null,
-            ShelfLocation: null,
-            OriginalGrnNo: null
-        );
+        return null;
     }
 
-    public async Task<Batch> AddBatchAsync(
+    /// <summary>
+    /// Deprecated: không tạo tồn live. Chỉ còn để tương thích chữ ký; caller phải ném BusinessException.
+    /// Không ghi StockOnHands.
+    /// </summary>
+    public Task<Batch> AddBatchAsync(
         Batch batch,
         CancellationToken cancellationToken = default)
     {
-        await _appContext.Batches.AddAsync(batch, cancellationToken);
-
-        var stock = new StockOnHand
-        {
-            TenantId = batch.TenantId,
-            BranchId = batch.BranchId,
-            ProductId = batch.ProductId,
-            BatchId = batch.Id,
-            Quantity = batch.InitialQuantity,
-            ReservedQuantity = 0
-        };
-        await _appContext.StockOnHands.AddAsync(stock, cancellationToken);
-
-        return batch;
+        throw new InvalidOperationException(
+            "API tạo Batch/StockOnHand legacy đã tắt. Tồn live chỉ qua BranchStocks (nhập kho GRN).");
     }
 
     public async Task<IReadOnlyList<ExpiryAlertDto>> GetNearExpiryBatchesAsync(
