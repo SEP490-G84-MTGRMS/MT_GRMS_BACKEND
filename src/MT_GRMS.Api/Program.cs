@@ -17,7 +17,13 @@ EnvLoader.Load();
 
 AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
 
-var builder = WebApplication.CreateBuilder(args);
+var resetDemo = args.Contains("--reset-demo");
+var confirmReset = args.Contains("--confirm-reset");
+var seedDemoOnly = args.Contains("--seed-demo-only");
+var configArgs = args.Where((arg, index) =>
+    arg is not ("--reset-demo" or "--confirm-reset" or "--seed-demo-only") &&
+    !(arg == "true" && index > 0 && args[index - 1] == "--seed-demo-only")).ToArray();
+var builder = WebApplication.CreateBuilder(configArgs);
 
 // 1. Thêm Controllers & Cấu hình Swagger
 builder.Services.AddControllers()
@@ -138,6 +144,21 @@ app.MapHub<MT_GRMS.Api.Hubs.NotificationHub>("/hubs/notifications");
 
 // 8. Tự động áp dụng Migration (Auto-migration); Seed mẫu chỉ khi Database:SeedSampleData=true
 var skipDbInit = app.Configuration.GetValue<bool>("Database:SkipDbInitialization");
+if (resetDemo || confirmReset)
+{
+    if (!resetDemo || !confirmReset || seedDemoOnly || !app.Environment.IsDevelopment())
+        throw new InvalidOperationException("Reset demo yêu cầu Development và cả --reset-demo --confirm-reset.");
+
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await DbInitializer.ResetDemoAsync(db);
+    app.Logger.LogInformation("Đã dựng lại schema và nạp dữ liệu mẫu vào mtgrms_demo.");
+    return;
+}
+
+if (seedDemoOnly && skipDbInit)
+    throw new InvalidOperationException("Database:SkipDbInitialization đang bật.");
+
 if (!skipDbInit)
 {
     using var scope = app.Services.CreateScope();
@@ -147,7 +168,7 @@ if (!skipDbInit)
     try
     {
         var dbContext = services.GetRequiredService<AppDbContext>();
-        if (args.Contains("--seed-demo-only"))
+        if (seedDemoOnly)
         {
             if (!app.Environment.IsDevelopment())
                 throw new InvalidOperationException("Seed demo chỉ hỗ trợ môi trường Development.");
@@ -173,7 +194,7 @@ if (!skipDbInit)
                 : "Database schema sync completed in {0} ms (sample seed skipped).",
             startupInitializationTimer.ElapsedMilliseconds);
     }
-    catch (Exception ex) when (ex is not WalletTopupSchemaMigrationException && !args.Contains("--seed-demo-only"))
+    catch (Exception ex) when (ex is not WalletTopupSchemaMigrationException && !seedDemoOnly)
     {
         logger.LogError(ex, "Lỗi khi tự động áp dụng schema hoặc nạp dữ liệu mẫu vào CSDL sau {ElapsedMilliseconds} ms.", startupInitializationTimer.ElapsedMilliseconds);
     }

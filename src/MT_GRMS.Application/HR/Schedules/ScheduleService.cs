@@ -577,7 +577,7 @@ public class ScheduleService : IScheduleService
     {
         if (config != null)
         {
-            var code = (config != null && !string.IsNullOrWhiteSpace(config.ShiftCode))
+            var code = !string.IsNullOrWhiteSpace(config.ShiftCode)
                 ? config.ShiftCode
                 : (!string.IsNullOrWhiteSpace(item.ShiftCode) ? item.ShiftCode : "SHIFT");
             if (code.Length > 30) code = code[..30];

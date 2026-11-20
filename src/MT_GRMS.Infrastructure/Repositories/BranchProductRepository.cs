@@ -81,7 +81,7 @@ public class BranchProductRepository : IBranchProductRepository
             query = query.Where(bp =>
                 (bp.Product != null && bp.Product.Name.ToLower().Contains(kw)) ||
                 (bp.Product != null && bp.Product.ProductCode.ToLower().Contains(kw)) ||
-                (bp.Product != null && bp.Product.Barcode.ToLower().Contains(kw)) ||
+                (bp.Product != null && bp.Product.Barcode != null && bp.Product.Barcode.ToLower().Contains(kw)) ||
                 (bp.Branch != null && bp.Branch.BranchCode.ToLower().Contains(kw)) ||
                 (bp.Branch != null && bp.Branch.Name.ToLower().Contains(kw)) ||
                 matchingProductIdsFromSP.Contains(bp.ProductId));
@@ -394,7 +394,7 @@ public class BranchProductRepository : IBranchProductRepository
                     ProductId = x.ProductId,
                     Name = x.ProductName,
                     Sku = x.ProductCode,
-                    Barcode = x.Barcode,
+                    Barcode = x.Barcode ?? string.Empty,
                     Category = x.CategoryName,
                     Unit = inboundUnit,
                     ImageUrl = extra?.ImageUrl,

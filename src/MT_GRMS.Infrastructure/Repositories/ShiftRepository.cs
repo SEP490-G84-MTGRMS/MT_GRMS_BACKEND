@@ -146,7 +146,7 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
 
         if (branchId.HasValue && branchId.Value != Guid.Empty)
         {
-            query = query.Where(m => m.Shift.BranchId == branchId.Value);
+            query = query.Where(m => m.Shift != null && m.Shift.BranchId == branchId.Value);
         }
 
         return await query
@@ -159,9 +159,10 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
         return await _context.Tenants.FirstOrDefaultAsync(c => c.Id == tenantId && !c.IsDeleted, cancellationToken);
     }
 
-    public async Task SavePaymentConfigAsync(MT_GRMS.Domain.Entities.SaaS.Tenant config, CancellationToken cancellationToken = default)
+    public Task SavePaymentConfigAsync(MT_GRMS.Domain.Entities.SaaS.Tenant config, CancellationToken cancellationToken = default)
     {
         config.UpdatedAt = DateTime.UtcNow;
+        return Task.CompletedTask;
     }
 
     public async Task<Guid?> ResolveBranchIdAsync(string? branchIdOrCode, CancellationToken cancellationToken = default)

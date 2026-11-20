@@ -1903,6 +1903,27 @@ END $$;
 
         if (context.Database.IsNpgsql())
         {
+            await context.Database.ExecuteSqlRawAsync("""
+                ALTER TABLE "Branches" ADD COLUMN IF NOT EXISTS "ConversionRulesJson" text;
+
+                CREATE TABLE IF NOT EXISTS "Notifications" (
+                    "Id" uuid PRIMARY KEY,
+                    "TenantId" varchar(50) NOT NULL,
+                    "RecipientUserId" varchar(64) NOT NULL,
+                    "Type" varchar(50) NOT NULL,
+                    "Title" varchar(200) NOT NULL,
+                    "Message" varchar(500) NOT NULL,
+                    "ActionUrl" varchar(300),
+                    "IsRead" boolean NOT NULL DEFAULT false,
+                    "ReadAtUtc" timestamp without time zone,
+                    "CreatedAt" timestamp without time zone NOT NULL,
+                    "UpdatedAt" timestamp without time zone,
+                    "CreatedBy" uuid,
+                    "IsDeleted" boolean NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS "IX_Notifications_TenantId_RecipientUserId_IsRead_CreatedAt"
+                    ON "Notifications" ("TenantId", "RecipientUserId", "IsRead", "CreatedAt");
+                """);
             await WalletTopupSchemaMigration.ApplyAsync(context);
         }
 
@@ -1932,9 +1953,34 @@ END $$;
         new("locked", "Demo - Cửa hàng bị khóa", "PRO", 2, "EXPIRED", -10)
     ];
 
+    public static async Task ResetDemoAsync(AppDbContext db, CancellationToken ct = default)
+    {
+        if (!db.Database.IsNpgsql())
+            throw new InvalidOperationException("Reset demo yêu cầu PostgreSQL.");
+
+        var target = new Npgsql.NpgsqlConnectionStringBuilder(db.Database.GetDbConnection().ConnectionString);
+        if (target.Database != "mtgrms_demo" ||
+            target.Host is not ("localhost" or "127.0.0.1" or "::1"))
+            throw new InvalidOperationException("Reset chỉ hỗ trợ database mtgrms_demo trên PostgreSQL local.");
+
+        var schema = db.Database.GenerateCreateScript();
+        await using var transaction = await db.Database.BeginTransactionAsync(ct);
+        await db.Database.ExecuteSqlRawAsync("SELECT pg_advisory_xact_lock(72126351);", ct);
+        await db.Database.ExecuteSqlRawAsync("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; SET LOCAL search_path = public;", ct);
+        await db.Database.ExecuteSqlRawAsync(schema.Replace("{", "{{").Replace("}", "}}"), ct);
+        await SeedDemoCoreAsync(db, ct);
+        await transaction.CommitAsync(ct);
+    }
+
     public static async Task SeedDemoAsync(AppDbContext db, CancellationToken ct = default)
     {
         await using var transaction = db.Database.IsRelational() ? await db.Database.BeginTransactionAsync(ct) : null;
+        await SeedDemoCoreAsync(db, ct);
+        if (transaction != null) await transaction.CommitAsync(ct);
+    }
+
+    private static async Task SeedDemoCoreAsync(AppDbContext db, CancellationToken ct)
+    {
         await SeedPlansAsync(db, ct);
         await SeedAdminAsync(db, ct);
         for (var index = 0; index < Scenarios.Length; index++)
@@ -1946,7 +1992,6 @@ END $$;
             await SeedScenarioAsync(db, scenario, index + 1, tenantId, ct);
         }
         await db.SaveChangesAsync(ct);
-        if (transaction != null) await transaction.CommitAsync(ct);
     }
 
     private static async Task SeedPlansAsync(AppDbContext db, CancellationToken ct)

@@ -12,8 +12,8 @@ public sealed class TransferRequestConfiguration : IEntityTypeConfiguration<Tran
         builder.ToTable("TransferRequests");
         builder.HasKey(x => x.Id);
         builder.Property(x => x.RequestCode).HasMaxLength(50).IsRequired();
-        builder.Property(x => x.Status).HasConversion<string>().HasMaxLength(20).HasDefaultValue(TransferRequestStatus.Open);
-        builder.Property(x => x.Priority).HasConversion<string>().HasMaxLength(20).HasDefaultValue(TransferPriority.Urgent);
+        builder.Property(x => x.Status).HasConversion<string>().HasMaxLength(20).HasDefaultValue(TransferRequestStatus.Open).ValueGeneratedNever();
+        builder.Property(x => x.Priority).HasConversion<string>().HasMaxLength(20).HasDefaultValue(TransferPriority.Urgent).ValueGeneratedNever();
         builder.Property(x => x.Note).HasMaxLength(500);
         builder.Property(x => x.CancelReason).HasMaxLength(255);
         builder.HasIndex(x => new { x.TenantId, x.RequestCode }).IsUnique();

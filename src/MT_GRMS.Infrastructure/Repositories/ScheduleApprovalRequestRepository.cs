@@ -16,7 +16,7 @@ public class ScheduleApprovalRequestRepository : GenericRepository<ScheduleAppro
     {
         return await _dbSet
             .Include(r => r.Schedule)
-                .ThenInclude(s => s.Branch)
+                .ThenInclude(s => s!.Branch)
             .Include(r => r.Employee)
             .FirstOrDefaultAsync(r => r.Id == id, cancellationToken);
     }
@@ -40,7 +40,7 @@ public class ScheduleApprovalRequestRepository : GenericRepository<ScheduleAppro
     {
         var query = _dbSet
             .Include(r => r.Schedule)
-                .ThenInclude(s => s.Branch)
+                .ThenInclude(s => s!.Branch)
             .Include(r => r.Employee)
             .AsQueryable();
 

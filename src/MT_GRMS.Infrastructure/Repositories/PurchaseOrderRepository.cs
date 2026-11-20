@@ -216,7 +216,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 Category = p.Category?.Name ?? "Khác",
                 Name = p.Name,
                 Sku = p.ProductCode,
-                Barcode = p.Barcode,
+                Barcode = p.Barcode ?? string.Empty,
                 // Đơn vị nhập (DVN): IsPurchaseUnit → DeliveryUoM NCC → BaseUnit
                 Unit = ResolvePurchaseUnitName(
                     sp,

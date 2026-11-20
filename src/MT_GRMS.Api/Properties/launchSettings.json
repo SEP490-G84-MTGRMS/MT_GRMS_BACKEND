@@ -17,7 +17,7 @@
       "applicationUrl": "http://localhost:5232",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "Database__SkipDbInitialization": "true"
+        "Database__SkipDbInitialization": "false"
       }
     },
     "https": {
@@ -28,7 +28,7 @@
       "applicationUrl": "https://localhost:7216;http://localhost:5232",
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
-        "Database__SkipDbInitialization": "true"
+        "Database__SkipDbInitialization": "false"
       }
     },
     "IIS Express": {

@@ -58,24 +58,21 @@ public class PayslipsController : BaseApiController
                              ?? User.FindFirst("sub")?.Value
                              ?? (_tenantContext != null && _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : null);
 
-            if (!string.IsNullOrWhiteSpace(currentUserId))
+            if (string.IsNullOrWhiteSpace(currentUserId) || _employeeRepository is null)
+                return Forbid();
+
+            var emp = await _employeeRepository.GetByUserIdAsync(currentUserId, ct);
+            if (emp is null)
             {
-                var emp = await _employeeRepository.GetByUserIdAsync(currentUserId, ct);
-                if (emp != null)
+                return Ok(ApiResponse<PagedResult<PayslipSummaryDto>>.Ok(new PagedResult<PayslipSummaryDto>
                 {
-                    employeeId = emp.Id;
-                }
-                else
-                {
-                    return Ok(ApiResponse<PagedResult<PayslipSummaryDto>>.Ok(new PagedResult<PayslipSummaryDto>
-                    {
-                        Items = Array.Empty<PayslipSummaryDto>(),
-                        Page = page,
-                        PageSize = pageSize,
-                        TotalItems = 0
-                    }));
-                }
+                    Items = Array.Empty<PayslipSummaryDto>(),
+                    Page = page,
+                    PageSize = pageSize,
+                    TotalItems = 0
+                }));
             }
+            employeeId = emp.Id;
         }
 
         var filter = new PayslipQueryFilter(

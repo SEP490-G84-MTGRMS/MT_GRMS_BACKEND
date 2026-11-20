@@ -7,6 +7,11 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-15
 
 ### Changed
+- Đồng bộ cột cấu hình chi nhánh và bảng thông báo khi chạy API bằng profile local.
+- Xử lý cảnh báo nullable ở email, OTP và mã vạch.
+- Xử lý cảnh báo nullable và async trong các luồng ca làm, phiếu lương, nhập hàng và in hóa đơn.
+- EF Core ghi trực tiếp giá trị enum của phiếu chuyển kho, yêu cầu chuyển kho và bản chốt thuế khi tạo bản ghi.
+- Thêm lệnh Development để dựng lại schema và nạp dữ liệu mẫu vào PostgreSQL local `mtgrms_demo` trong cùng một transaction.
 - Resolve the `dev` merge in `DbInitializer.cs` by keeping the wallet branch's scenario seeder and incorporating `dev` schema updates. [worklog: docs/worklogs/2026-11-17_WALLET-MERGE_AI_resolve-initializer.md]
 - Đồng bộ email Admin và chủ cửa hàng mẫu sang miền mtgrms.vn. [worklog: docs/worklogs/2026-11-16_DEMO-SEED_AI_scenario-fixtures.md]
 - Tập trung seed trực tiếp trong DbInitializer.cs, thay seed demo cũ bằng bộ 8 kịch bản SaaS có owner, nhân viên, chi nhánh và dữ liệu vận hành, nạp idempotent không ghi đè dữ liệu cũ. Thêm lệnh Development `--seed-demo-only true`. [worklog: docs/worklogs/2026-11-16_DEMO-SEED_AI_scenario-fixtures.md]

@@ -750,7 +750,7 @@ public class PurchaseOrderService : IPurchaseOrderService
 
                         if (isEditable)
                         {
-                            group.PoCode = dayStatus.PoCode;
+                            group.PoCode = dayStatus?.PoCode;
                             group.CanAmend = true;
                             group.HasPendingChanges = true;
                             group.PendingChangeLineCount++;

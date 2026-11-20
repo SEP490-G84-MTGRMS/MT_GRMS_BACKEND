@@ -19,8 +19,8 @@ public class TransferConfiguration : IEntityTypeConfiguration<Transfer>
         builder.Property(x => x.ToBranchId).HasColumnName("ToBranchID").IsRequired();
         builder.Property(x => x.Status).HasConversion<string>().HasMaxLength(30).HasDefaultValue(TransferStatus.Draft).HasSentinel((TransferStatus)0);
         builder.Property(x => x.CompletionResult).HasConversion<string>().HasMaxLength(40);
-        builder.Property(x => x.Origin).HasConversion<string>().HasMaxLength(30).HasDefaultValue(TransferOrigin.OwnerAllocation);
-        builder.Property(x => x.Priority).HasConversion<string>().HasMaxLength(20).HasDefaultValue(TransferPriority.Normal);
+        builder.Property(x => x.Origin).HasConversion<string>().HasMaxLength(30).HasDefaultValue(TransferOrigin.OwnerAllocation).ValueGeneratedNever();
+        builder.Property(x => x.Priority).HasConversion<string>().HasMaxLength(20).HasDefaultValue(TransferPriority.Normal).ValueGeneratedNever();
         builder.Property(x => x.CreatedByStaff).HasMaxLength(100).IsRequired();
         builder.Property(x => x.TotalAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.Note).HasMaxLength(500);
