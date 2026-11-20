@@ -697,6 +697,15 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<SupplierProduct>> GetSupplierProductsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
+    {
+        return await _context.SupplierProducts
+            .Include(sp => sp.Product)
+                .ThenInclude(p => p!.Category)
+            .Where(sp => sp.SupplierId == supplierId && !sp.IsDeleted)
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<bool> BranchProductExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
     {
         return await _context.BranchProducts

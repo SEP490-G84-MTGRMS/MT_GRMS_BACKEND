@@ -84,13 +84,19 @@ public class SupplierProductExcelServiceTests
                 Id = Guid.NewGuid(),
                 SupplierId = supplierId,
                 ProductId = productId2,
-                Product = new Product { ProductCode = "SKU02", Name = "Product 2", BaseUnit = "Cái" },
+                Product = new Product
+                {
+                    ProductCode = "SKU02",
+                    Name = "Product 2",
+                    BaseUnit = "Cái",
+                    CostPrice = 32000m
+                },
                 DeliveryUoM = string.Empty,
                 AgreedWholesalePrice = null,
                 MinimumOrderQuantity = 0
             }
         };
-        _mockRepo.Setup(r => r.GetActiveSupplierProductsForSupplierAsync(supplierId, It.IsAny<CancellationToken>()))
+        _mockRepo.Setup(r => r.GetSupplierProductsForSupplierAsync(supplierId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(list);
 
         var result = await _service.ExportAsync(supplierId);
@@ -98,16 +104,20 @@ public class SupplierProductExcelServiceTests
         Assert.NotNull(result);
         Assert.NotNull(result.Content);
         Assert.True(result.Content.Length > 0);
+        Assert.Contains("SP_Theo_NCC", result.FileName);
         Assert.Contains("NCC_01", result.FileName);
 
         using var ms = new MemoryStream(result.Content);
         using var wb = new XLWorkbook(ms);
         var ws = wb.Worksheet(SupplierProductExcelService.SheetName);
-        Assert.Equal("ProductId", ws.Cell(1, 1).GetString());
-        Assert.Equal(productId1.ToString(), ws.Cell(3, 1).GetString());
-        Assert.Equal("SKU01", ws.Cell(3, 4).GetString());
-        Assert.Equal(50000.0, ws.Cell(3, 7).GetDouble());
-        Assert.Equal(5, ws.Cell(3, 8).GetDouble());
+        Assert.Equal("Mã hàng", ws.Cell(1, 1).GetString());
+        Assert.Equal("Giá nhập sỉ", ws.Cell(1, 6).GetString());
+        Assert.Equal("SKU01", ws.Cell(2, 1).GetString());
+        Assert.Equal(productId1.ToString(), ws.Cell(2, 8).GetString());
+        Assert.Equal(50000.0, ws.Cell(2, 6).GetDouble());
+        Assert.Equal(5, ws.Cell(2, 7).GetDouble());
+        Assert.Equal(32000.0, ws.Cell(3, 6).GetDouble());
+        Assert.Equal(1, ws.Cell(3, 7).GetDouble());
     }
 
     [Fact]
@@ -193,7 +203,7 @@ public class SupplierProductExcelServiceTests
         var supplier = new Supplier { Id = supplierId, Code = "NCC-01", Name = "Test" };
         _mockRepo.Setup(r => r.GetByIdAsync(supplierId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(supplier);
-        _mockRepo.Setup(r => r.GetActiveSupplierProductsForSupplierAsync(supplierId, It.IsAny<CancellationToken>()))
+        _mockRepo.Setup(r => r.GetSupplierProductsForSupplierAsync(supplierId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<SupplierProduct>());
 
         using var stream = CreateWorkbookStream(ws =>
@@ -235,7 +245,7 @@ public class SupplierProductExcelServiceTests
             Product = new Product { ProductCode = "SKU-EMPTY-PRICE", Name = "Product 2" }
         };
 
-        _mockRepo.Setup(r => r.GetActiveSupplierProductsForSupplierAsync(supplierId, It.IsAny<CancellationToken>()))
+        _mockRepo.Setup(r => r.GetSupplierProductsForSupplierAsync(supplierId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<SupplierProduct> { sp1, sp2 });
 
         using var stream = CreateWorkbookStream(ws =>
@@ -324,7 +334,7 @@ public class SupplierProductExcelServiceTests
 
         _mockRepo.Setup(r => r.GetByIdAsync(supplierId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(supplier);
-        _mockRepo.Setup(r => r.GetActiveSupplierProductsForSupplierAsync(supplierId, It.IsAny<CancellationToken>()))
+        _mockRepo.Setup(r => r.GetSupplierProductsForSupplierAsync(supplierId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<SupplierProduct> { sp });
 
         // Stream 1 with Vietnamese alias headers
@@ -374,5 +384,115 @@ public class SupplierProductExcelServiceTests
         Assert.Equal(1, res2.Summary.SuccessCount);
         Assert.Equal(35000m, sp.AgreedWholesalePrice);
         Assert.Equal(10, sp.MinimumOrderQuantity);
+    }
+
+    [Fact]
+    public async Task ExportAsync_WithSkuFilter_OnlyExportsMatchingRows()
+    {
+        var supplierId = Guid.NewGuid();
+        var productId1 = Guid.NewGuid();
+        var productId2 = Guid.NewGuid();
+        var supplier = new Supplier { Id = supplierId, Code = "NCC01", Name = "NCC" };
+        _mockRepo.Setup(r => r.GetByIdAsync(supplierId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(supplier);
+
+        var list = new List<SupplierProduct>
+        {
+            new()
+            {
+                SupplierId = supplierId,
+                ProductId = productId1,
+                Product = new Product { ProductCode = "ABC-01", Name = "Keep" },
+                Status = MT_GRMS.Domain.Enums.SupplierProductStatus.Active,
+                MinimumOrderQuantity = 1
+            },
+            new()
+            {
+                SupplierId = supplierId,
+                ProductId = productId2,
+                Product = new Product { ProductCode = "XYZ-99", Name = "Drop" },
+                Status = MT_GRMS.Domain.Enums.SupplierProductStatus.Active,
+                MinimumOrderQuantity = 1
+            }
+        };
+        _mockRepo.Setup(r => r.GetSupplierProductsForSupplierAsync(supplierId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(list);
+
+        var filter = new MT_GRMS.Application.Suppliers.Dtos.SupplierProductQueryFilter
+        {
+            Skus = new List<string> { "ABC" }
+        };
+
+        var result = await _service.ExportAsync(supplierId, filter);
+        using var ms = new MemoryStream(result.Content);
+        using var wb = new XLWorkbook(ms);
+        var ws = wb.Worksheet(SupplierProductExcelService.SheetName);
+        Assert.Equal("ABC-01", ws.Cell(2, 1).GetString());
+        Assert.Equal(productId1.ToString(), ws.Cell(2, 8).GetString());
+        Assert.True(string.IsNullOrWhiteSpace(ws.Cell(3, 1).GetString()));
+    }
+
+    [Fact]
+    public async Task ImportAsync_ProductOutOfFilter_ReturnsErrorRow()
+    {
+        var supplierId = Guid.NewGuid();
+        var inFilterId = Guid.NewGuid();
+        var outFilterId = Guid.NewGuid();
+        var supplier = new Supplier { Id = supplierId, Code = "NCC01", Name = "NCC" };
+        _mockRepo.Setup(r => r.GetByIdAsync(supplierId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(supplier);
+
+        var spIn = new SupplierProduct
+        {
+            SupplierId = supplierId,
+            ProductId = inFilterId,
+            Product = new Product { ProductCode = "IN-01", Name = "In Filter" },
+            Status = MT_GRMS.Domain.Enums.SupplierProductStatus.Active,
+            MinimumOrderQuantity = 1
+        };
+        var spOut = new SupplierProduct
+        {
+            SupplierId = supplierId,
+            ProductId = outFilterId,
+            Product = new Product { ProductCode = "OUT-99", Name = "Out Filter" },
+            Status = MT_GRMS.Domain.Enums.SupplierProductStatus.Active,
+            MinimumOrderQuantity = 1
+        };
+        _mockRepo.Setup(r => r.GetSupplierProductsForSupplierAsync(supplierId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<SupplierProduct> { spIn, spOut });
+
+        using var stream = CreateWorkbookStream(ws =>
+        {
+            ws.Cell(1, 1).Value = "ProductId";
+            ws.Cell(1, 2).Value = "SKU";
+            ws.Cell(1, 3).Value = "GiaNhapSi";
+            ws.Cell(1, 4).Value = "MOQ";
+
+            ws.Cell(2, 1).Value = inFilterId.ToString();
+            ws.Cell(2, 2).Value = "IN-01";
+            ws.Cell(2, 3).Value = "12000";
+            ws.Cell(2, 4).Value = 3;
+
+            ws.Cell(3, 1).Value = outFilterId.ToString();
+            ws.Cell(3, 2).Value = "OUT-99";
+            ws.Cell(3, 3).Value = "15000";
+            ws.Cell(3, 4).Value = 2;
+        });
+
+        var filter = new MT_GRMS.Application.Suppliers.Dtos.SupplierProductQueryFilter
+        {
+            Skus = new List<string> { "IN-" }
+        };
+
+        var result = await _service.ImportAsync(supplierId, stream, "filter.xlsx", filter);
+
+        Assert.Equal(2, result.Rows.Count);
+        Assert.Equal(1, result.Summary.SuccessCount);
+        Assert.Equal(1, result.Summary.FailedCount);
+        Assert.Equal("OK", result.Rows[0].Status);
+        Assert.Equal("ERROR", result.Rows[1].Status);
+        Assert.Contains("bộ lọc", result.Rows[1].Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(12000m, spIn.AgreedWholesalePrice);
+        Assert.Null(spOut.AgreedWholesalePrice);
     }
 }

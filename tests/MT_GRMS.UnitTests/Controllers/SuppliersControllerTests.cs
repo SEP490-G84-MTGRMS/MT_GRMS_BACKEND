@@ -665,10 +665,14 @@ public class SuppliersControllerTests
             ContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             FileName = "test.xlsx"
         };
-        mockExcel.Setup(x => x.ExportAsync(id, It.IsAny<CancellationToken>()))
+        mockExcel.Setup(x => x.ExportAsync(id, It.IsAny<SupplierProductQueryFilter>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(fileDto);
 
-        var result = await _controller.ExportSupplierProducts(id, mockExcel.Object, CancellationToken.None);
+        var result = await _controller.ExportSupplierProducts(
+            id,
+            new SupplierProductQueryFilter(),
+            mockExcel.Object,
+            CancellationToken.None);
 
         var fileResult = Assert.IsType<FileContentResult>(result);
         Assert.Equal(fileDto.ContentType, fileResult.ContentType);
@@ -681,8 +685,10 @@ public class SuppliersControllerTests
         var id = Guid.NewGuid();
         var mockExcel = new Mock<ISupplierProductExcelService>();
 
+        var emptyFilter = new SupplierProductQueryFilter();
+
         // Null file
-        var result1 = await _controller.ImportSupplierProducts(id, null, mockExcel.Object, CancellationToken.None);
+        var result1 = await _controller.ImportSupplierProducts(id, null, emptyFilter, mockExcel.Object, CancellationToken.None);
         var badReq1 = Assert.IsType<BadRequestObjectResult>(result1);
         var resp1 = Assert.IsType<ApiResponse<object>>(badReq1.Value);
         Assert.Equal("INVALID_FILE", resp1.ErrorCode);
@@ -690,7 +696,7 @@ public class SuppliersControllerTests
         // Empty file
         var mockFile = new Mock<IFormFile>();
         mockFile.SetupGet(f => f.Length).Returns(0);
-        var result2 = await _controller.ImportSupplierProducts(id, mockFile.Object, mockExcel.Object, CancellationToken.None);
+        var result2 = await _controller.ImportSupplierProducts(id, mockFile.Object, emptyFilter, mockExcel.Object, CancellationToken.None);
         var badReq2 = Assert.IsType<BadRequestObjectResult>(result2);
         var resp2 = Assert.IsType<ApiResponse<object>>(badReq2.Value);
         Assert.Equal("INVALID_FILE", resp2.ErrorCode);
@@ -719,10 +725,20 @@ public class SuppliersControllerTests
                 FailedCount = failedCount
             }
         };
-        mockExcel.Setup(x => x.ImportAsync(id, It.IsAny<Stream>(), "test.xlsx", It.IsAny<CancellationToken>()))
+        mockExcel.Setup(x => x.ImportAsync(
+                id,
+                It.IsAny<Stream>(),
+                "test.xlsx",
+                It.IsAny<SupplierProductQueryFilter>(),
+                It.IsAny<CancellationToken>()))
             .ReturnsAsync(importResult);
 
-        var result = await _controller.ImportSupplierProducts(id, mockFile.Object, mockExcel.Object, CancellationToken.None);
+        var result = await _controller.ImportSupplierProducts(
+            id,
+            mockFile.Object,
+            new SupplierProductQueryFilter(),
+            mockExcel.Object,
+            CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(result);
         var resp = Assert.IsType<ApiResponse<SupplierProductExcelImportResultDto>>(ok.Value);
