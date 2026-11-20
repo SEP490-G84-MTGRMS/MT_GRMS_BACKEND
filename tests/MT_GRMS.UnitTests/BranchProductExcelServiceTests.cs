@@ -78,6 +78,11 @@ public class BranchProductExcelServiceTests
                     Unit = "Chai",
                     RetailPrice = 15000m,
                     MinOrderQuantity = 6,
+                    PrimarySupplierCode = "NCC-01",
+                    PrimarySupplierName = "Nhà cung cấp 1",
+                    CostPrice = 12000m,
+                    AllowRepack = true,
+                    ProcessedSellingPricePerKg = 25000m,
                     UnitPrices = new List<BranchProductUnitPriceDto>
                     {
                         new() { UnitId = Guid.NewGuid(), UnitName = "Chai", Price = 15000m, IsBaseUnit = true, ConversionRate = 1m },
@@ -129,6 +134,40 @@ public class BranchProductExcelServiceTests
         Assert.Equal("Chai", ws.Cell(2, 5).GetString());
         Assert.Equal(15000m, ws.Cell(2, 6).GetValue<decimal>());
         Assert.Equal(6, ws.Cell(2, 7).GetValue<int>());
+        Assert.Equal("NCC-01", ws.Cell(2, 9).GetString());
+        Assert.Equal("Nhà cung cấp 1", ws.Cell(2, 10).GetString());
+        Assert.Equal(15, ws.LastColumnUsed()!.ColumnNumber());
+        Assert.Equal(12000m, ws.Cell(2, 11).GetValue<decimal>());
+        Assert.Equal("Chai: 15.000 đ · Lốc: 85.000 đ · Khay: 25.000 đ/kg", ws.Cell(2, 12).GetString());
+        Assert.Equal("Chai", ws.Cell(2, 13).GetString());
+        Assert.Equal("Hoạt động", ws.Cell(2, 14).GetString());
+
+        var prices = wb.Worksheet("Gia_Theo_Don_Vi");
+        Assert.True(prices.Protection.IsProtected);
+        Assert.True(prices.Cell(3, 6).Style.Protection.Locked);
+        Assert.False(prices.Cell(3, 8).Style.Protection.Locked);
+        Assert.Equal("Lốc", prices.Cell(3, 6).GetString());
+        prices.Cell(3, 8).Value = 90000m;
+
+        using var edited = new MemoryStream();
+        wb.SaveAs(edited);
+        edited.Position = 0;
+        var preview = await _service.ImportAsync(branchId, edited, "edited.xlsx",
+            new BranchProductQueryFilter { PreviewOnly = true });
+        var change = Assert.Single(preview.Rows);
+        Assert.True(preview.IsPreview);
+        Assert.Equal("OK", change.Status);
+        Assert.StartsWith("Lốc:", change.UnitPricesSummary);
+
+        prices.Cell(3, 6).Value = "Đơn vị sai";
+        using var invalidFile = new MemoryStream();
+        wb.SaveAs(invalidFile);
+        invalidFile.Position = 0;
+        var invalid = await _service.ImportAsync(branchId, invalidFile, "invalid.xlsx",
+            new BranchProductQueryFilter { PreviewOnly = true });
+        Assert.Equal("ERROR", Assert.Single(invalid.Rows).Status);
+        _mockBranchProductService.Verify(service => service.UpdateProductAsync(
+            It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<UpdateBranchProductCommand>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

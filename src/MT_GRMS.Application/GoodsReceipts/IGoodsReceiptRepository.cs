@@ -26,7 +26,6 @@ public interface IGoodsReceiptRepository
     Task<IReadOnlyDictionary<Guid, Product>> GetProductsByIdsAsync(
         IReadOnlyCollection<Guid> productIds,
         CancellationToken cancellationToken = default);
-    Task AddBatchAsync(Batch batch, CancellationToken cancellationToken = default);
     Task<Product?> GetProductByIdAsync(string tenantId, Guid productId, CancellationToken cancellationToken = default);
     Task<decimal> GetTotalProductStockAsync(string tenantId, Guid productId, CancellationToken cancellationToken = default);
     Task<Supplier?> GetSupplierByIdAsync(string tenantId, Guid supplierId, CancellationToken cancellationToken = default);

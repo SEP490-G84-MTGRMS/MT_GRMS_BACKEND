@@ -2,6 +2,9 @@ using MT_GRMS.Domain.Common;
 
 namespace MT_GRMS.Domain.Entities.Inventory;
 
+/// <summary>
+/// Legacy snapshot lô (không còn được GRN/API ghi). Tồn live = <see cref="BranchStock"/>.
+/// </summary>
 public class Batch : BaseTenantEntity
 {
     public Guid ProductId { get; set; }
@@ -16,6 +19,10 @@ public class Batch : BaseTenantEntity
     public bool IsExpired => DateTime.UtcNow.Date > ExpiryDate.Date;
 }
 
+/// <summary>
+/// Legacy — bảng StockOnHands đã drop. Giữ class cho tương thích compile/tests domain.
+/// </summary>
+[Obsolete("StockOnHands table dropped. Use BranchStock as the live inventory ledger.")]
 public class StockOnHand : BaseTenantEntity
 {
     public Guid BranchId { get; set; }

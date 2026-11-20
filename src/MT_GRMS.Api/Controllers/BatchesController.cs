@@ -55,9 +55,10 @@ public class BatchesController : BaseApiController
     }
 
     /// <summary>
-    /// Tạo mới một lô hàng
+    /// Deprecated — tồn live chỉ qua BranchStocks (nhập kho GRN). Endpoint giữ để client cũ nhận lỗi rõ.
     /// </summary>
     [HttpPost]
+    [Obsolete("Use Goods Receipt complete to increase BranchStocks.")]
     public async Task<IActionResult> CreateBatch([FromBody] BatchCreateRequest request, CancellationToken cancellationToken)
     {
         var result = await _batchService.CreateBatchAsync(request, cancellationToken);

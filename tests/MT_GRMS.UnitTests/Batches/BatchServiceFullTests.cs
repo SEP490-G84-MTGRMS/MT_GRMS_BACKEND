@@ -7,6 +7,7 @@ using MT_GRMS.Application.Batches;
 using MT_GRMS.Application.Batches.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Inventory;
+using MT_GRMS.Domain.Exceptions;
 using Xunit;
 
 namespace MT_GRMS.UnitTests.Batches;
@@ -84,7 +85,7 @@ public class BatchServiceFullTests
     }
 
     [Fact]
-    public async Task CreateBatchAsync_ShouldAddBatchAndReturnResponse()
+    public async Task CreateBatchAsync_ShouldThrowBusinessException_Deprecated()
     {
         var request = new BatchCreateRequest(
             ProductId: Guid.NewGuid(),
@@ -96,17 +97,11 @@ public class BatchServiceFullTests
             LandedCostPerUnit: 25000m
         );
 
-        _mockRepo.Setup(r => r.AddBatchAsync(It.IsAny<Batch>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync((Batch b, CancellationToken ct) => b);
-        _mockUow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()))
-            .ReturnsAsync(1);
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.CreateBatchAsync(request));
 
-        var response = await _service.CreateBatchAsync(request);
-
-        Assert.Equal("BATCH-NEW", response.BatchCode);
-        Assert.Equal(50, response.InitialQuantity);
-        _mockRepo.Verify(r => r.AddBatchAsync(It.IsAny<Batch>(), It.IsAny<CancellationToken>()), Times.Once);
-        _mockUow.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
+        Assert.Equal("BATCH_CREATE_DEPRECATED", ex.ErrorCode);
+        _mockRepo.Verify(r => r.AddBatchAsync(It.IsAny<Batch>(), It.IsAny<CancellationToken>()), Times.Never);
+        _mockUow.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]

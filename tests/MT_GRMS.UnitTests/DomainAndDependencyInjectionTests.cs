@@ -102,6 +102,7 @@ public class DomainAndDependencyInjectionTests
         Assert.Equal("VietQR", tx.Gateway);
         Assert.True(tx.VerifiedBySepayApi);
 
+#pragma warning disable CS0618 // StockOnHand obsolete — domain helper still covered
         var stock = new StockOnHand
         {
             BranchId = Guid.NewGuid(),
@@ -112,6 +113,7 @@ public class DomainAndDependencyInjectionTests
             MinAlertThreshold = 15m
         };
         Assert.Equal(70m, stock.AvailableQuantity);
+#pragma warning restore CS0618
 
         var media = new TenantMedia
         {

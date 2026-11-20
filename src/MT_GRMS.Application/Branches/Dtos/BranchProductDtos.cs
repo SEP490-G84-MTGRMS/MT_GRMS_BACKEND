@@ -73,6 +73,7 @@ public class BranchSummaryDto
 /// </summary>
 public class BranchProductQueryFilter
 {
+    public bool PreviewOnly { get; set; }
     public string? SearchTerm { get; set; }
     public string? BranchCode { get; set; }
     public List<string>? Skus { get; set; }
@@ -172,6 +173,7 @@ public class BranchProductExcelImportSummaryDto
 
 public class BranchProductExcelImportResultDto
 {
+    public bool IsPreview { get; set; }
     public string FileName { get; set; } = string.Empty;
     public Guid BranchId { get; set; }
     public string BranchCode { get; set; } = string.Empty;

@@ -303,15 +303,14 @@ public class GoodsReceiptTests
 
         Assert.Equal("COMPLETED", completed.Status);
 
-        // Kiểm tra tồn kho BranchStock đã được cập nhật
+        // Kiểm tra tồn kho BranchStock đã được cập nhật (sổ live duy nhất)
         var stock = await _repo.GetBranchStockAsync("tenant-test-1", _branchId, _milkProdId, "LOT-100");
         Assert.NotNull(stock);
         Assert.Equal(100, stock.QuantityOnHand);
+        Assert.Equal("LOT-100", stock.BatchCode);
 
-        // Kiểm tra lô hàng FEFO (Batch) đã được sinh tự động
-        Assert.Single(_repo.Batches);
-        Assert.Equal("LOT-100", _repo.Batches[0].BatchCode);
-        Assert.Equal(100, _repo.Batches[0].InitialQuantity);
+        // Không dual-write bảng Batches legacy
+        Assert.Empty(_repo.Batches);
 
         // Kiểm tra công nợ nhà cung cấp (SupplierAPLedger) đã được sinh
         Assert.Single(_repo.Ledgers);
@@ -2279,12 +2278,6 @@ public class FakeGoodsReceiptRepository : IGoodsReceiptRepository
     public Task AddBranchStockAsync(BranchStock stock, CancellationToken cancellationToken = default)
     {
         Stocks.Add(stock);
-        return Task.CompletedTask;
-    }
-
-    public Task AddBatchAsync(Batch batch, CancellationToken cancellationToken = default)
-    {
-        Batches.Add(batch);
         return Task.CompletedTask;
     }
 

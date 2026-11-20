@@ -324,25 +324,23 @@ public class OrderAndBatchRepositoriesIntegrationTests
         Assert.NotNull(itemNonBatch);
         Assert.Equal("Normal", itemNonBatch!.Status);
 
-        // 4. AddBatchAsync (legacy Batch)
-        var legacyBatch = new Batch
-        {
-            Id = Guid.NewGuid(),
-            TenantId = TenantId,
-            BranchId = branch.Id,
-            ProductId = batchProd.Id,
-            BatchCode = "LEGACY-01",
-            InitialQuantity = 20,
-            LandedCostPerUnit = 25000,
-            ManufactureDate = DateTime.UtcNow.AddDays(-10),
-            ExpiryDate = DateTime.UtcNow.AddDays(20)
-        };
-        await repo.AddBatchAsync(legacyBatch);
-        await context.SaveChangesAsync();
+        // 4. AddBatchAsync legacy đã tắt; GetBatchById chỉ đọc BranchStocks
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            repo.AddBatchAsync(new Batch
+            {
+                Id = Guid.NewGuid(),
+                TenantId = TenantId,
+                BranchId = branch.Id,
+                ProductId = batchProd.Id,
+                BatchCode = "LEGACY-01",
+                InitialQuantity = 20,
+                LandedCostPerUnit = 25000,
+                ManufactureDate = DateTime.UtcNow.AddDays(-10),
+                ExpiryDate = DateTime.UtcNow.AddDays(20)
+            }));
 
-        var itemLegacy = await repo.GetBatchByIdAsync(TenantId, legacyBatch.Id);
-        Assert.NotNull(itemLegacy);
-        Assert.Equal("LEGACY-01", itemLegacy!.BatchCode);
+        var missingLegacy = await repo.GetBatchByIdAsync(TenantId, Guid.NewGuid());
+        Assert.Null(missingLegacy);
 
         // 5. GetNearExpiryBatchesAsync
         var nearExpiry = await repo.GetNearExpiryBatchesAsync(TenantId, 10, branch.Id);
