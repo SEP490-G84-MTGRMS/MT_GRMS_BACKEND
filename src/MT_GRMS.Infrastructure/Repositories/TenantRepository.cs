@@ -24,6 +24,7 @@ public class TenantRepository : ITenantRepository
     {
         return await _context.Tenants
             .IgnoreQueryFilters()
+            .AsSplitQuery()
             .Include(t => t.SubscriptionPlan)
             .Include(t => t.Branches.Where(b => !b.IsDeleted))
             .Include(t => t.TenantUsers.Where(tu => tu.IsActive && tu.User != null && !tu.User.IsDeleted))
@@ -53,6 +54,7 @@ public class TenantRepository : ITenantRepository
     {
         var now = DateTime.UtcNow;
         var query = _context.Tenants
+            .AsSplitQuery()
             .Include(t => t.SubscriptionPlan)
             .Include(t => t.Branches.Where(b => !b.IsDeleted))
             .Include(t => t.TenantUsers.Where(tu => tu.IsActive))
@@ -105,6 +107,7 @@ public class TenantRepository : ITenantRepository
 
         var items = await query
             .OrderByDescending(t => t.CreatedAt)
+            .ThenBy(t => t.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(cancellationToken);

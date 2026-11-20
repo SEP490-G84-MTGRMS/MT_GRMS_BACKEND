@@ -27,15 +27,15 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
     {
         var now = DateTime.UtcNow.Date;
 
-        var branches = await _appContext.Branches.AsNoTracking()
-            .Where(b => b.TenantId == tenantId && !b.IsDeleted)
-            .ToListAsync(cancellationToken);
+        var branchQuery = _appContext.Branches.AsNoTracking()
+            .Where(b => b.TenantId == tenantId && !b.IsDeleted);
 
         if (query.BranchId.HasValue && query.BranchId.Value != Guid.Empty)
         {
-            branches = branches.Where(b => b.Id == query.BranchId.Value).ToList();
+            branchQuery = branchQuery.Where(b => b.Id == query.BranchId.Value);
         }
 
+        var branches = await branchQuery.Select(b => new { b.Id, b.Name }).ToListAsync(cancellationToken);
         var branchIds = branches.Select(b => b.Id).ToList();
 
         // Catalog theo chi nhánh: hiện mọi SP đã gán CN, kể cả chưa có BranchStock.
@@ -128,9 +128,9 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
         var pendingReturnLines = productIds.Count == 0
             ? new List<(Guid BranchId, Guid ProductId, decimal RequestedQty)>()
             : (await _appContext.SupplierReturnLines.AsNoTracking()
-                .Include(l => l.SupplierReturn)
                 .Where(l => l.TenantId == tenantId && productIds.Contains(l.ProductId) &&
                             l.SupplierReturn != null &&
+                            branchIds.Contains(l.SupplierReturn.BranchId) &&
                             (l.SupplierReturn.Status == "PENDING_SUPPLIER" || l.SupplierReturn.Status == "APPROVED"))
                 .Select(l => new { l.SupplierReturn!.BranchId, l.ProductId, l.RequestedQty })
                 .ToListAsync(cancellationToken))
@@ -139,6 +139,8 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
 
         var allItems = new List<InventoryStockItemDto>();
         var branchById = branches.ToDictionary(b => b.Id);
+        var stocksByPair = branchStocks.ToLookup(s => (s.BranchId, s.ProductId));
+        var pendingReturnsByPair = pendingReturnLines.ToLookup(l => (l.BranchId, l.ProductId));
 
         foreach (var pair in catalogPairs)
         {
@@ -147,9 +149,7 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
             if (!branchById.TryGetValue(pair.BranchId, out var branch))
                 continue;
 
-            var stocks = branchStocks
-                .Where(bs => bs.BranchId == branch.Id && bs.ProductId == product.Id)
-                .ToList();
+            var stocks = stocksByPair[(branch.Id, product.Id)];
 
             var physicalQty = stocks.Sum(s => s.QuantityOnHand);
             var reservedQty = stocks.Sum(s => s.QuantityReserved);
@@ -158,8 +158,7 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
                 .Where(s => s.ExpiryDate.HasValue && s.ExpiryDate.Value.Date <= now)
                 .Sum(s => s.QuantityOnHand);
             var availableQty = BranchStockAvailability.SumSellableAvailable(stocks, now);
-            var pendingQty = pendingReturnLines
-                .Where(l => l.BranchId == branch.Id && l.ProductId == product.Id)
+            var pendingQty = pendingReturnsByPair[(branch.Id, product.Id)]
                 .Sum(l => l.RequestedQty);
 
             var minStock = product.MinStock > 0 ? product.MinStock : 10;
@@ -209,7 +208,7 @@ public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRep
                 AvgCost: Math.Round(weightedCost, 2),
                 TotalValue: Math.Round(totalValue, 2),
                 Status: status,
-                BatchCount: stocks.Count,
+                BatchCount: stocks.Count(),
                 Batches: batchDtos
             ));
         }

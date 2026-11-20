@@ -620,6 +620,7 @@ public class BranchProductRepository : IBranchProductRepository
             .Include(bp => bp.Product)!.ThenInclude(p => p!.Units)
             .Include(bp => bp.Branch)
             .Include(bp => bp.UnitPriceOverrides)
+            .AsSplitQuery()
             .FirstOrDefaultAsync(bp => bp.BranchId == branchId && bp.ProductId == productId, cancellationToken);
     }
 

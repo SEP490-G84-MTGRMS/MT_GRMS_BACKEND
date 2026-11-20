@@ -23,6 +23,7 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
     public async Task<Supplier?> GetByIdWithDetailsAsync(Guid id, CancellationToken cancellationToken = default)
     {
         return await _context.Suppliers
+            .AsSplitQuery()
             .Include(s => s.BlackoutDates)
             .Include(s => s.BranchAssignments)
             .FirstOrDefaultAsync(s => s.Id == id, cancellationToken);

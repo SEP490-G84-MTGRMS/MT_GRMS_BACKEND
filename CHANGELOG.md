@@ -7,6 +7,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-15
 
 ### Changed
+- Tách truy vấn tải nhiều danh sách và giảm dữ liệu, số lần duyệt trong truy vấn tồn kho.
 - Đồng bộ cột cấu hình chi nhánh và bảng thông báo khi chạy API bằng profile local.
 - Xử lý cảnh báo nullable ở email, OTP và mã vạch.
 - Xử lý cảnh báo nullable và async trong các luồng ca làm, phiếu lương, nhập hàng và in hóa đơn.
