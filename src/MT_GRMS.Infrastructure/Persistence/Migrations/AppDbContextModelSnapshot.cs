@@ -3009,51 +3009,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.ToTable("RepackOrders", (string)null);
                 });
 
-            modelBuilder.Entity("MT_GRMS.Domain.Entities.Inventory.StockOnHand", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid?>("BatchId")
-                        .HasColumnType("uuid");
-
-                    b.Property<Guid>("BranchId")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<Guid?>("CreatedBy")
-                        .HasColumnType("uuid");
-
-                    b.Property<bool>("IsDeleted")
-                        .HasColumnType("boolean");
-
-                    b.Property<decimal>("MinAlertThreshold")
-                        .HasColumnType("numeric");
-
-                    b.Property<Guid>("ProductId")
-                        .HasColumnType("uuid");
-
-                    b.Property<decimal>("Quantity")
-                        .HasColumnType("numeric");
-
-                    b.Property<decimal>("ReservedQuantity")
-                        .HasColumnType("numeric");
-
-                    b.Property<string>("TenantId")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("StockOnHands");
-                });
-
             modelBuilder.Entity("MT_GRMS.Domain.Entities.Inventory.Stocktake", b =>
                 {
                     b.Property<Guid>("Id")

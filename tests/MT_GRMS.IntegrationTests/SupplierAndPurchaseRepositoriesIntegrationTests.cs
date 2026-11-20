@@ -820,16 +820,6 @@ public class SupplierAndPurchaseRepositoriesIntegrationTests
             };
             await repo.AddBranchStockAsync(bStock);
 
-            var batch = new Batch
-            {
-                Id = Guid.NewGuid(),
-                TenantId = TenantId,
-                BranchId = branch.Id,
-                ProductId = product.Id,
-                BatchCode = "LOT-GRN-1",
-                CreatedAt = DateTime.UtcNow
-            };
-            await repo.AddBatchAsync(batch);
             await context.SaveChangesAsync();
 
             var foundStock = await repo.GetBranchStockAsync(TenantId, branch.Id, product.Id, "LOT-GRN-1");

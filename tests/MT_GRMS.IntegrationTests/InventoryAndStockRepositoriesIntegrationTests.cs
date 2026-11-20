@@ -156,17 +156,16 @@ public class InventoryAndStockRepositoriesIntegrationTests
             Assert.NotNull(batchById);
             Assert.Equal("LOT-001", batchById!.BatchCode);
 
-            // 4. AddBatchAsync
-            var newBatch = new Batch
-            {
-                Id = Guid.NewGuid(),
-                TenantId = TenantId,
-                ProductId = prod.Id,
-                BatchCode = "LOT-NEW",
-                ExpiryDate = DateTime.UtcNow.AddDays(90)
-            };
-            var addedBatch = await repo.AddBatchAsync(newBatch);
-            Assert.NotNull(addedBatch);
+            // 4. AddBatchAsync legacy đã tắt
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                repo.AddBatchAsync(new Batch
+                {
+                    Id = Guid.NewGuid(),
+                    TenantId = TenantId,
+                    ProductId = prod.Id,
+                    BatchCode = "LOT-NEW",
+                    ExpiryDate = DateTime.UtcNow.AddDays(90)
+                }));
 
             // 5. GetNearExpiryBatchesAsync
             var nearExpiry = await repo.GetNearExpiryBatchesAsync(TenantId, 30, branch.Id);

@@ -351,11 +351,6 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
             .ToDictionaryAsync(p => p.Id, cancellationToken);
     }
 
-    public async Task AddBatchAsync(Batch batch, CancellationToken cancellationToken = default)
-    {
-        await _context.Batches.AddAsync(batch, cancellationToken);
-    }
-
     public async Task<Product?> GetProductByIdAsync(string tenantId, Guid productId, CancellationToken cancellationToken = default)
     {
         return await _context.Products

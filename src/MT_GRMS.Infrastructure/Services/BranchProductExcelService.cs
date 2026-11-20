@@ -1,9 +1,11 @@
 using System.Globalization;
 using System.Text.RegularExpressions;
 using ClosedXML.Excel;
+using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Domain.Exceptions;
+using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Infrastructure.Services;
 
@@ -11,8 +13,12 @@ public class BranchProductExcelService : IBranchProductExcelService
 {
     /// <summary>Sheet name — cùng phong cách SP_Theo_NCC ở màn /suppliers/products.</summary>
     public const string SheetName = "SP_Theo_CH";
+    private const string UnitSheetName = "Gia_Theo_Don_Vi";
+    private const string UnitWorkbookSubject = "MT-GRMS Branch Unit Prices v1";
+    private static readonly string[] UnitHeaders =
+        ["BranchId", "ProductId", "Mã hàng", "Tên hàng", "UnitId", "Đơn vị", "Giá hiện tại", "Giá mới"];
 
-    /// <summary>Header cố định 8 cột — mirror SP theo NCC (CH thay NCC, Giá bán thay Giá nhập sỉ).</summary>
+    /// <summary>Tám cột đầu giữ định dạng nhập giá bán và MOQ.</summary>
     private static readonly string[] Headers =
     [
         "Mã hàng",
@@ -22,7 +28,14 @@ public class BranchProductExcelService : IBranchProductExcelService
         "Đơn vị",
         "Giá bán",
         "MOQ",
-        "ProductId"
+        "ProductId",
+        "Mã NCC",
+        "Tên nhà cung cấp",
+        "Giá vốn",
+        "Giá bán theo ĐVT",
+        "DVN",
+        "Trạng thái",
+        "Nguồn NCC"
     ];
 
     private static readonly XLColor HeaderBg = XLColor.FromHtml("#0F766E");
@@ -33,13 +46,16 @@ public class BranchProductExcelService : IBranchProductExcelService
 
     private readonly IBranchProductService _branchProductService;
     private readonly IBranchProductRepository _repository;
+    private readonly AppDbContext? _db;
 
     public BranchProductExcelService(
         IBranchProductService branchProductService,
-        IBranchProductRepository repository)
+        IBranchProductRepository repository,
+        AppDbContext? db = null)
     {
         _branchProductService = branchProductService;
         _repository = repository;
+        _db = db;
     }
 
     public async Task<BranchProductExcelFileDto> ExportAsync(
@@ -55,18 +71,14 @@ public class BranchProductExcelService : IBranchProductExcelService
             throw new NotFoundException($"Không tìm thấy chi nhánh với ID: {branchId}");
         }
 
-        var paged = await _branchProductService.GetBranchProductsAsync(
-            branchId,
-            new BranchProductQueryFilter { PageIndex = 1, PageSize = 10_000 },
-            cancellationToken);
-
-        var ordered = ApplyScreenFilter(paged.Items, filter)
+        var products = await GetAllBranchProductsAsync(branchId, cancellationToken);
+        var ordered = ApplyScreenFilter(products, filter)
             .OrderBy(x => x.Sku, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         using var workbook = new XLWorkbook();
         workbook.Properties.Title = "Sản phẩm theo cửa hàng";
-        workbook.Properties.Subject = "Giá bán & MOQ — MT-GRMS";
+        workbook.Properties.Subject = UnitWorkbookSubject;
         workbook.Properties.Author = "MT-GRMS";
 
         var ws = workbook.Worksheets.Add(SheetName);
@@ -103,6 +115,15 @@ public class BranchProductExcelService : IBranchProductExcelService
             ws.Cell(row, 6).Value = sellPrice;
             ws.Cell(row, 7).Value = p.MinOrderQuantity > 0 ? p.MinOrderQuantity : 1;
             ws.Cell(row, 8).Value = p.ProductId.ToString();
+            ws.Cell(row, 9).Value = p.LostSupplierSource ? string.Empty : p.PrimarySupplierCode;
+            ws.Cell(row, 10).Value = p.LostSupplierSource ? string.Empty : p.PrimarySupplierName;
+            ws.Cell(row, 11).Value = p.CostPrice;
+            ws.Cell(row, 12).Value = FormatUnitPrices(p);
+            ws.Cell(row, 13).Value = string.IsNullOrWhiteSpace(p.Unit) ? "Cái" : p.Unit;
+            ws.Cell(row, 14).Value = string.Equals(p.Status, "Active", StringComparison.OrdinalIgnoreCase)
+                ? "Hoạt động"
+                : "Tạm ngưng";
+            ws.Cell(row, 15).Value = p.LostSupplierSource ? "Mất nguồn NCC" : p.IsPrimarySupplier ? "Chính" : string.Empty;
 
             for (var c = 1; c <= Headers.Length; c++)
             {
@@ -114,11 +135,11 @@ public class BranchProductExcelService : IBranchProductExcelService
                 cell.Style.Alignment.Vertical = XLAlignmentVerticalValues.Center;
                 ApplyThinBorder(cell);
 
-                if (c is 6 or 7)
+                if (c is 6 or 7 or 11)
                 {
                     cell.Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
                 }
-                else if (c is 2 or 4)
+                else if (c is 2 or 4 or 10 or 12)
                 {
                     cell.Style.Alignment.WrapText = true;
                 }
@@ -130,6 +151,7 @@ public class BranchProductExcelService : IBranchProductExcelService
 
             ws.Cell(row, 6).Style.NumberFormat.Format = "#,##0 [$₫-vi-VN]";
             ws.Cell(row, 7).Style.NumberFormat.Format = "#,##0";
+            ws.Cell(row, 11).Style.NumberFormat.Format = "#,##0.## [$₫-vi-VN]";
             ws.Row(row).Height = 24;
             row++;
         }
@@ -142,6 +164,17 @@ public class BranchProductExcelService : IBranchProductExcelService
         ws.Column(6).Width = 16;
         ws.Column(7).Width = 10;
         ws.Column(8).Width = 38;
+        ws.Column(9).Width = 16;
+        ws.Column(10).Width = 28;
+        ws.Column(11).Width = 16;
+        ws.Column(12).Width = 60;
+        ws.Column(13).Width = 14;
+        ws.Column(14).Width = 16;
+        ws.Column(15).Width = 20;
+        if (row > 2)
+        {
+            ws.Rows(2, row - 1).AdjustToContents(2, Headers.Length, 24, double.MaxValue);
+        }
 
         ws.SheetView.FreezeRows(1);
         if (ordered.Count > 0)
@@ -149,6 +182,8 @@ public class BranchProductExcelService : IBranchProductExcelService
             ws.RangeUsed()?.SetAutoFilter();
         }
 
+        ws.Protect();
+        WriteUnitSheet(workbook, branchId, ordered);
         using var ms = new MemoryStream();
         workbook.SaveAs(ms);
         var safeCode = Regex.Replace(branch.BranchCode ?? "CH", @"[^\w\-]+", "_");
@@ -199,6 +234,12 @@ public class BranchProductExcelService : IBranchProductExcelService
 
         using (workbook)
         {
+            if (workbook.Worksheets.TryGetWorksheet(UnitSheetName, out var unitSheet))
+            {
+                return await ImportUnitsAsync(unitSheet, branch.Id, branch.BranchCode, branch.Name,
+                    fileName ?? "import.xlsx", filter, cancellationToken);
+            }
+
             var ws = workbook.Worksheets.FirstOrDefault(w =>
                          string.Equals(w.Name, SheetName, StringComparison.OrdinalIgnoreCase)
                          || string.Equals(w.Name, "Gia_Ban_DVT", StringComparison.OrdinalIgnoreCase)
@@ -207,16 +248,15 @@ public class BranchProductExcelService : IBranchProductExcelService
                      ?? throw new BusinessException("INVALID_SHEET", "File Excel không có sheet dữ liệu.");
 
             var headerMap = BuildHeaderMap(ws);
+            if (workbook.Properties.Subject == UnitWorkbookSubject)
+            {
+                throw new BusinessException("UNIT_SHEET_REQUIRED", $"Thiếu sheet {UnitSheetName}. Vui lòng xuất mẫu mới.");
+            }
             RequireHeaders(headerMap, "SKU", "GiaBan");
 
-            var paged = await _branchProductService.GetBranchProductsAsync(
-                branchId,
-                new BranchProductQueryFilter { PageIndex = 1, PageSize = 10_000 },
-                cancellationToken);
-
-            var assignedAll = paged.Items.ToList();
+            var assignedAll = await GetAllBranchProductsAsync(branchId, cancellationToken);
             var scopedIds = ApplyScreenFilter(assignedAll, filter).Select(x => x.ProductId).ToHashSet();
-            var byProductId = assignedAll.ToDictionary(x => x.ProductId);
+            var byProductId = assignedAll.DistinctBy(x => x.ProductId).ToDictionary(x => x.ProductId);
             var bySku = assignedAll
                 .Where(x => !string.IsNullOrWhiteSpace(x.Sku))
                 .GroupBy(x => x.Sku.Trim().ToUpperInvariant())
@@ -228,6 +268,7 @@ public class BranchProductExcelService : IBranchProductExcelService
                 BranchId = branch.Id,
                 BranchCode = branch.BranchCode,
                 BranchName = branch.Name,
+                IsPreview = filter?.PreviewOnly == true,
             };
 
             var lastRow = ws.LastRowUsed()?.RowNumber() ?? 0;
@@ -298,20 +339,25 @@ public class BranchProductExcelService : IBranchProductExcelService
 
                     var unitUpdates = BuildUnitPriceUpdates(assigned, price);
 
-                    await _branchProductService.UpdateProductAsync(
-                        branchId,
-                        assigned.ProductId,
-                        new UpdateBranchProductCommand
-                        {
-                            RetailPrice = price,
-                            Status = assigned.Status,
-                            UnitPrices = unitUpdates,
-                        },
-                        cancellationToken);
+                    if (!result.IsPreview)
+                    {
+                        await _branchProductService.UpdateProductAsync(
+                            branchId,
+                            assigned.ProductId,
+                            new UpdateBranchProductCommand
+                            {
+                                RetailPrice = price,
+                                Status = assigned.Status,
+                                UnitPrices = unitUpdates,
+                            },
+                            cancellationToken);
+                    }
 
                     rowResult.UnitPricesSummary = $"Giá bán:{price:N0}";
                     rowResult.Status = "OK";
-                    rowResult.Message = $"Cập nhật giá bán {price:N0} đ.";
+                    rowResult.Message = result.IsPreview
+                        ? $"Giá bán: {assigned.RetailPrice:N2} → {price:N2} đ."
+                        : $"Cập nhật giá bán {price:N0} đ.";
                 }
                 catch (BusinessException bex)
                 {
@@ -341,6 +387,178 @@ public class BranchProductExcelService : IBranchProductExcelService
 
             return result;
         }
+    }
+
+    private static void WriteUnitSheet(XLWorkbook workbook, Guid branchId, List<BranchProductDto> products)
+    {
+        var sheet = workbook.Worksheets.Add(UnitSheetName);
+        for (var i = 0; i < UnitHeaders.Length; i++)
+        {
+            sheet.Cell(1, i + 1).Value = UnitHeaders[i];
+        }
+        var header = sheet.Range(1, 1, 1, UnitHeaders.Length);
+        header.Style.Font.Bold = true;
+        header.Style.Font.FontColor = XLColor.White;
+        header.Style.Fill.BackgroundColor = HeaderBg;
+        var row = 2;
+        foreach (var product in products.DistinctBy(p => p.ProductId))
+        {
+            foreach (var unit in GetEditableUnits(product))
+            {
+                sheet.Cell(row, 1).Value = branchId.ToString();
+                sheet.Cell(row, 2).Value = product.ProductId.ToString();
+                sheet.Cell(row, 3).Value = product.Sku;
+                sheet.Cell(row, 4).Value = product.Name;
+                sheet.Cell(row, 5).Value = unit.UnitId?.ToString() ?? string.Empty;
+                sheet.Cell(row, 6).Value = unit.UnitName;
+                sheet.Cell(row, 7).Value = unit.Price;
+                sheet.Cell(row, 8).Style.Protection.Locked = false;
+                row++;
+            }
+        }
+        sheet.Columns(1, 2).Hide();
+        sheet.Column(5).Hide();
+        sheet.Columns(3, 8).Width = 20;
+        sheet.Column(4).Width = 36;
+        sheet.Columns(7, 8).Style.NumberFormat.Format = "#,##0.##";
+        sheet.SheetView.FreezeRows(1);
+        sheet.Protect();
+    }
+
+    private static IReadOnlyList<BranchProductUnitPriceDto> GetEditableUnits(BranchProductDto product) =>
+        product.UnitPrices.Count > 0
+            ? product.UnitPrices
+            : [new BranchProductUnitPriceDto
+            {
+                UnitName = string.IsNullOrWhiteSpace(product.Unit) ? "Cái" : product.Unit,
+                Price = product.RetailPrice,
+                IsBaseUnit = true,
+            }];
+
+    private async Task<BranchProductExcelImportResultDto> ImportUnitsAsync(
+        IXLWorksheet sheet, Guid branchId, string branchCode, string branchName,
+        string fileName, BranchProductQueryFilter? filter, CancellationToken cancellationToken)
+    {
+        for (var i = 0; i < UnitHeaders.Length; i++)
+        {
+            if (sheet.Cell(1, i + 1).GetString() != UnitHeaders[i])
+                throw new BusinessException("INVALID_UNIT_SHEET", $"Tiêu đề cột {i + 1} của sheet {UnitSheetName} không hợp lệ.");
+        }
+
+        var preview = filter?.PreviewOnly == true;
+        await using var transaction = !preview && _db != null
+            ? await _db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable, cancellationToken)
+            : null;
+        var products = ApplyScreenFilter(await GetAllBranchProductsAsync(branchId, cancellationToken), filter)
+            .DistinctBy(p => p.ProductId)
+            .ToDictionary(p => p.ProductId);
+        var result = new BranchProductExcelImportResultDto
+        {
+            BranchId = branchId, BranchCode = branchCode, BranchName = branchName,
+            FileName = fileName, IsPreview = preview,
+        };
+        var seen = new HashSet<(Guid, Guid?)>();
+        var updates = new List<(BranchProductDto Product, BranchProductUnitPriceDto Unit, decimal Price)>();
+        var lastRow = sheet.LastRowUsed()?.RowNumber() ?? 1;
+        for (var row = 2; row <= lastRow; row++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var newPrice = sheet.Cell(row, 8);
+            if (newPrice.IsEmpty() && !newPrice.HasFormula) continue;
+
+            var entry = new BranchProductExcelImportRowResultDto
+            {
+                Row = row, Sku = sheet.Cell(row, 3).GetString(), ProductName = sheet.Cell(row, 4).GetString(),
+                Status = "ERROR",
+            };
+            result.Rows.Add(entry);
+            var unitName = sheet.Cell(row, 6).GetString();
+            entry.UnitPricesSummary = unitName;
+            if (!Guid.TryParse(sheet.Cell(row, 1).GetString(), out var fileBranch) || fileBranch != branchId
+                || !Guid.TryParse(sheet.Cell(row, 2).GetString(), out var productId)
+                || !products.TryGetValue(productId, out var product) || product.Sku != entry.Sku)
+            {
+                entry.Message = "Sản phẩm không khớp với cửa hàng hoặc bộ lọc hiện tại.";
+                continue;
+            }
+            entry.ProductId = productId.ToString();
+            var unitIdText = sheet.Cell(row, 5).GetString();
+            var unit = GetEditableUnits(product).FirstOrDefault(u =>
+                string.Equals(u.UnitId?.ToString() ?? string.Empty, unitIdText, StringComparison.OrdinalIgnoreCase));
+            if (unit == null || unit.UnitName != unitName)
+            {
+                entry.Message = "Thông tin đơn vị đã thay đổi. Hãy xuất mẫu mới.";
+                continue;
+            }
+            if (!seen.Add((productId, unit.UnitId)))
+            {
+                entry.Message = "Đơn vị bị trùng trong file.";
+                continue;
+            }
+            var previousPrice = sheet.Cell(row, 7);
+            if (previousPrice.HasFormula || previousPrice.DataType != XLDataType.Number
+                || !previousPrice.TryGetValue<decimal>(out var original) || original != unit.Price)
+            {
+                entry.Message = "Giá hiện tại đã thay đổi. Hãy xuất mẫu mới.";
+                continue;
+            }
+            if (newPrice.HasFormula || newPrice.DataType != XLDataType.Number
+                || !newPrice.TryGetValue<decimal>(out var price) || price <= 0m
+                || price > 999_999_999_999.99m || decimal.Round(price, 2) != price)
+            {
+                entry.Message = "Giá mới phải là ô số dương, tối đa 12 chữ số phần nguyên và 2 chữ số thập phân.";
+                continue;
+            }
+            entry.Status = "OK";
+            entry.UnitPricesSummary = $"{unitName}: {original:N2} → {price:N2} đ";
+            entry.Message = original == price ? "Giá giữ nguyên." : preview ? "Sẵn sàng cập nhật." : "Đã cập nhật.";
+            if (original != price) updates.Add((product, unit, price));
+        }
+
+        if (result.Rows.Count == 0)
+            throw new BusinessException("EMPTY_DATA", "Hãy nhập ít nhất một ô Giá mới trong sheet giá theo đơn vị.");
+
+        if (result.Rows.Any(r => r.Status == "ERROR"))
+        {
+            foreach (var row in result.Rows.Where(r => r.Status == "OK"))
+            {
+                row.Status = "ERROR";
+                row.Message = "Chưa áp dụng vì file còn dòng lỗi.";
+            }
+        }
+        else if (!preview && updates.Count > 0)
+        {
+            if (transaction == null)
+                throw new InvalidOperationException("Cần giao dịch cơ sở dữ liệu để nhập giá theo đơn vị.");
+            foreach (var group in updates.GroupBy(update => update.Product.ProductId))
+            {
+                var product = group.First().Product;
+                var units = GetEditableUnits(product);
+                var baseUnit = units.FirstOrDefault(u => u.IsBaseUnit) ?? units[0];
+                var changes = group.Select(change => new BranchProductUnitPriceDto
+                {
+                    UnitId = change.Unit.UnitId,
+                    UnitName = change.Unit.UnitName,
+                    ConversionRate = change.Unit.ConversionRate,
+                    IsBaseUnit = change.Unit == baseUnit,
+                    Price = change.Price,
+                }).ToList();
+                var basePrice = changes.FirstOrDefault(u => u.IsBaseUnit)?.Price ?? product.RetailPrice;
+                if (!changes.Any(u => u.IsBaseUnit))
+                    changes.Add(new BranchProductUnitPriceDto { IsBaseUnit = true, Price = basePrice });
+                await _branchProductService.UpdateProductAsync(branchId, product.ProductId,
+                    new UpdateBranchProductCommand { RetailPrice = basePrice, UnitPrices = changes }, cancellationToken);
+            }
+            await transaction.CommitAsync(cancellationToken);
+        }
+
+        result.Summary = new BranchProductExcelImportSummaryDto
+        {
+            TotalRows = result.Rows.Count,
+            SuccessCount = result.Rows.Count(r => r.Status == "OK"),
+            FailedCount = result.Rows.Count(r => r.Status != "OK"),
+        };
+        return result;
     }
 
     /// <summary>
@@ -430,6 +648,53 @@ public class BranchProductExcelService : IBranchProductExcelService
         }
 
         return q;
+    }
+
+    private async Task<List<BranchProductDto>> GetAllBranchProductsAsync(
+        Guid branchId,
+        CancellationToken cancellationToken)
+    {
+        const int pageSize = 1000;
+        var products = new List<BranchProductDto>();
+        for (var pageIndex = 1; ; pageIndex++)
+        {
+            var page = await _branchProductService.GetBranchProductsAsync(
+                branchId,
+                new BranchProductQueryFilter { PageIndex = pageIndex, PageSize = pageSize },
+                cancellationToken);
+            products.AddRange(page.Items);
+            if (!page.Items.Any() || (long)pageIndex * pageSize >= page.TotalItems)
+            {
+                return products;
+            }
+        }
+    }
+
+    private static string FormatUnitPrices(BranchProductDto product)
+    {
+        var culture = CultureInfo.GetCultureInfo("vi-VN");
+        static string FormatPrice(decimal price, CultureInfo culture) =>
+            price.ToString("#,##0.############################", culture) + " đ";
+
+        var prices = product.UnitPrices
+            .Where(unit => !string.IsNullOrWhiteSpace(unit.UnitName))
+            .Select(unit => $"{unit.UnitName}: {FormatPrice(unit.Price, culture)}")
+            .ToList();
+        if (prices.Count == 0)
+        {
+            var unit = string.IsNullOrWhiteSpace(product.Unit) ? "Cái" : product.Unit;
+            prices.Add($"{unit}: {FormatPrice(product.RetailPrice, culture)}");
+        }
+
+        if (product.AllowRepack)
+        {
+            var trayPrice = product.ProcessedSellingPricePerKg is > 0
+                ? product.ProcessedSellingPricePerKg.Value
+                : product.RetailPrice;
+            prices.Add($"Khay: {FormatPrice(trayPrice, culture)}/kg");
+        }
+
+        return string.Join(" · ", prices);
     }
 
     private static (string UnitName, decimal SellPrice) ResolveUnitAndSellPrice(BranchProductDto p)

@@ -11,11 +11,14 @@ using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Infrastructure.Repositories;
 
-public class InventoryRepository : GenericRepository<StockOnHand>, IInventoryRepository
+/// <summary>
+/// Đọc tồn từ BranchStocks (sổ live). Không dùng StockOnHands legacy.
+/// </summary>
+public class InventoryRepository : IInventoryRepository
 {
     private readonly AppDbContext _appContext;
 
-    public InventoryRepository(AppDbContext context) : base(context)
+    public InventoryRepository(AppDbContext context)
     {
         _appContext = context;
     }

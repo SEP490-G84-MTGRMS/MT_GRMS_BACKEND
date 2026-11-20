@@ -935,24 +935,7 @@ public class GoodsReceiptService : IGoodsReceiptService
                 line.BranchStockId = newStock.Id;
             }
 
-            // Tạo bản ghi lô hàng FEFO (Batch / ProductBatch) — InitialQuantity theo đơn vị tồn
-            if (!string.IsNullOrWhiteSpace(line.BatchCode) || line.ExpiryDate.HasValue)
-            {
-                var newBatch = new Batch
-                {
-                    Id = Guid.NewGuid(),
-                    TenantId = tenantId,
-                    BranchId = receipt.BranchId,
-                    ProductId = line.ProductId,
-                    BatchCode = !string.IsNullOrWhiteSpace(line.BatchCode) ? line.BatchCode : $"LOT-{receipt.Code}",
-                    ManufactureDate = line.ManufactureDate ?? receipt.ReceivedAtUtc.Date,
-                    ExpiryDate = line.ExpiryDate ?? receipt.ReceivedAtUtc.Date.AddMonths(6),
-                    InitialQuantity = stockQtyDelta,
-                    LandedCostPerUnit = landedCostPerStockUnit,
-                    CreatedAt = DateTime.UtcNow
-                };
-                await _repository.AddBatchAsync(newBatch, cancellationToken);
-            }
+            // Tồn live chỉ ghi BranchStocks. Không dual-write bảng Batches (legacy snapshot).
         }
 
         // 2. Cập nhật PO nguồn

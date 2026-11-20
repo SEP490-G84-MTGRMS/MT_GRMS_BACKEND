@@ -61,7 +61,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<TransferRequestDetail> TransferRequestDetails { get; set; } = null!;
     public virtual DbSet<TransferStatusHistory> TransferStatusHistories { get; set; } = null!;
     public virtual DbSet<Batch> Batches { get; set; } = null!;
-    public virtual DbSet<StockOnHand> StockOnHands { get; set; } = null!;
+    // StockOnHands đã drop — sổ live duy nhất là BranchStocks.
     public virtual DbSet<Stocktake> Stocktakes { get; set; } = null!;
     public virtual DbSet<StocktakeLine> StocktakeLines { get; set; } = null!;
     public virtual DbSet<RepackOrder> RepackOrders { get; set; } = null!;
