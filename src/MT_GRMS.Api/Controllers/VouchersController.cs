@@ -44,6 +44,30 @@ public class VouchersController : BaseApiController
     }
 
     /// <summary>
+    /// Cập nhật đợt phát hành voucher (REQ-PV04)
+    /// </summary>
+    [HttpPut("{id:guid}")]
+    public async Task<IActionResult> UpdateBatch(Guid id, [FromBody] VoucherBatchUpdateRequest request, CancellationToken cancellationToken)
+    {
+        var result = await _promotionService.UpdateVoucherBatchAsync(id, request, cancellationToken);
+        return Ok(ApiResponse<VoucherBatchResponse>.Ok(result, "Cập nhật đợt phát hành voucher thành công"));
+    }
+
+    [HttpDelete("{id:guid}")]
+    public async Task<IActionResult> DeleteBatch(Guid id, CancellationToken cancellationToken)
+    {
+        await _promotionService.DeletePromotionAsync(id, cancellationToken);
+        return Ok(ApiResponse<bool>.Ok(true, "Xóa đợt voucher thành công"));
+    }
+
+    [HttpPatch("{id:guid}/status")]
+    public async Task<IActionResult> ToggleBatchStatus(Guid id, CancellationToken cancellationToken)
+    {
+        var isActive = await _promotionService.TogglePromotionStatusAsync(id, cancellationToken);
+        return Ok(ApiResponse<bool>.Ok(isActive, isActive ? "Đã kích hoạt đợt voucher" : "Đã tạm dừng đợt voucher"));
+    }
+
+    /// <summary>
     /// Tạo mới đợt phát hành voucher & tự động sinh mã (REQ-PV04)
     /// </summary>
     [HttpPost]

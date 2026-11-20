@@ -64,6 +64,8 @@ public class StocktakeLineConfiguration : IEntityTypeConfiguration<StocktakeLine
 
         builder.Property(x => x.DefectiveReasonCode).HasMaxLength(50);
         builder.Property(x => x.NearExpiryAction).HasMaxLength(50);
+        builder.Property(x => x.DamagedAction).HasMaxLength(50);
+        builder.Property(x => x.ExpiredAction).HasMaxLength(50);
         builder.Property(x => x.OriginalGrnCode).HasMaxLength(50);
         builder.Property(x => x.EvidenceUrl).HasMaxLength(1000);
         builder.Property(x => x.Note).HasMaxLength(1000);

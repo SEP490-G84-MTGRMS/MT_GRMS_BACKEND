@@ -23,9 +23,11 @@ public class TenantRepository : ITenantRepository
     public async Task<Tenant?> GetByIdWithDetailsAsync(string id, CancellationToken cancellationToken = default)
     {
         return await _context.Tenants
+            .IgnoreQueryFilters()
+            .AsSplitQuery()
             .Include(t => t.SubscriptionPlan)
             .Include(t => t.Branches.Where(b => !b.IsDeleted))
-            .Include(t => t.TenantUsers.Where(tu => tu.IsActive))
+            .Include(t => t.TenantUsers.Where(tu => tu.IsActive && tu.User != null && !tu.User.IsDeleted))
                 .ThenInclude(tu => tu.User)
             .FirstOrDefaultAsync(t => t.Id == id && !t.IsDeleted, cancellationToken);
     }
@@ -52,6 +54,7 @@ public class TenantRepository : ITenantRepository
     {
         var now = DateTime.UtcNow;
         var query = _context.Tenants
+            .AsSplitQuery()
             .Include(t => t.SubscriptionPlan)
             .Include(t => t.Branches.Where(b => !b.IsDeleted))
             .Include(t => t.TenantUsers.Where(tu => tu.IsActive))
@@ -104,6 +107,7 @@ public class TenantRepository : ITenantRepository
 
         var items = await query
             .OrderByDescending(t => t.CreatedAt)
+            .ThenBy(t => t.Id)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(cancellationToken);
@@ -148,6 +152,12 @@ public class TenantRepository : ITenantRepository
     {
         return await _context.Branches.IgnoreQueryFilters()
             .CountAsync(b => !b.IsDeleted, cancellationToken);
+    }
+
+    public async Task<int> GetSuccessfulUpgradeCountAsync(CancellationToken cancellationToken = default)
+    {
+        return await _context.WalletTransactions
+            .CountAsync(transaction => transaction.Type == "UPGRADE_PLAN" && transaction.Status == "SUCCESS", cancellationToken);
     }
 
     public async Task<IReadOnlyList<Tenant>> GetUrgentAlertTenantsAsync(int limit = 10, CancellationToken cancellationToken = default)

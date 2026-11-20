@@ -10,6 +10,7 @@ using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Domain.Entities.Finance;
+using MT_GRMS.Domain.Entities.System;
 using Xunit;
 
 namespace MT_GRMS.IntegrationTests;
@@ -526,6 +527,143 @@ public class IdempotencyFilterTests
         var finalRecord = await context.IdempotencyRecords.FirstOrDefaultAsync(r => r.Key.Contains(idempotencyKey));
         Assert.NotNull(finalRecord);
         Assert.Equal("COMPLETED", finalRecord.Status);
+    }
+
+    [Fact]
+    public async Task OnActionExecutionAsync_WithProblemDetails_ReturnsProblemDetailsObjectResult()
+    {
+        var tenantContext = new FakeTenantContext();
+        using var context = CreateDbContext(tenantContext);
+        var filter = new IdempotencyFilter(context, tenantContext, useProblemDetails: true);
+
+        // Missing key
+        var httpContext = new DefaultHttpContext();
+        var executingContext = CreateActionExecutingContext(httpContext, new Dictionary<string, object?>());
+
+        await filter.OnActionExecutionAsync(executingContext, () => Task.FromResult<ActionExecutedContext>(null!));
+
+        var objResult = Assert.IsType<ObjectResult>(executingContext.Result);
+        Assert.Equal(400, objResult.StatusCode);
+        var prob = Assert.IsType<ProblemDetails>(objResult.Value);
+        Assert.Equal("IDEMPOTENCY_KEY_REQUIRED", prob.Extensions["code"]?.ToString());
+    }
+
+    [Fact]
+    public async Task OnActionExecutionAsync_ExpiredPendingLock_IsCleanedUpAndReclaimed()
+    {
+        var tenantContext = new FakeTenantContext();
+        using var context = CreateDbContext(tenantContext);
+        var filter = new IdempotencyFilter(context, tenantContext);
+
+        var key = Guid.NewGuid().ToString();
+        var endpoint = "POST:/api/test-stale";
+
+        // Seed a stale pending lock that expired 10 minutes ago
+        context.IdempotencyRecords.Add(new IdempotencyRecord
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            Endpoint = endpoint,
+            Key = $"{tenantContext.CurrentUserId}:{key}",
+            PayloadHash = "oldhash",
+            Status = "PENDING",
+            ExpiresAtUtc = DateTime.UtcNow.AddMinutes(-10)
+        });
+        await context.SaveChangesAsync();
+
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Method = "POST";
+        httpContext.Request.Path = "/api/test-stale";
+        httpContext.Request.Headers["Idempotency-Key"] = key;
+
+        var executingContext = CreateActionExecutingContext(httpContext, new Dictionary<string, object?> { ["p"] = 1 });
+        var executedContext = new ActionExecutedContext(
+            executingContext,
+            new List<IFilterMetadata>(),
+            executingContext.Controller
+        )
+        {
+            Result = new ObjectResult(new { success = true }) { StatusCode = 200 }
+        };
+
+        await filter.OnActionExecutionAsync(executingContext, () => Task.FromResult(executedContext));
+
+        var updated = await context.IdempotencyRecords.FirstOrDefaultAsync(r => r.Key == $"{tenantContext.CurrentUserId}:{key}");
+        Assert.NotNull(updated);
+        Assert.Equal("COMPLETED", updated.Status);
+    }
+
+    [Fact]
+    public async Task OnActionExecutionAsync_AnonymousWithRegisterTenantRequest_AndLongKey_ShouldWork()
+    {
+        var tenantContext = new FakeTenantContext();
+        tenantContext.CurrentTenantId = string.Empty;
+        tenantContext.CurrentUserId = Guid.Empty;
+
+        using var context = CreateDbContext(tenantContext);
+        var filter = new IdempotencyFilter(context, tenantContext);
+
+        var longKey = new string('x', 150);
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Method = "POST";
+        httpContext.Request.Path = "/api/auth/register-tenant";
+        httpContext.Request.Headers["Idempotency-Key"] = longKey;
+
+        var regReq = new MT_GRMS.Application.Auth.Dtos.RegisterTenantRequest(
+            FullName: "Owner Test",
+            Phone: "0901234567",
+            Email: "owner@test.com",
+            StoreName: "My Test Store",
+            Password: "Password123!",
+            ChallengeId: "challenge-uuid-123"
+        );
+
+        var args = new Dictionary<string, object?> { ["request"] = regReq };
+        var executingContext = CreateActionExecutingContext(httpContext, args);
+        var executedContext = new ActionExecutedContext(
+            executingContext,
+            new List<IFilterMetadata>(),
+            executingContext.Controller
+        )
+        {
+            Result = new ObjectResult(new { id = 1 }) { StatusCode = 201 }
+        };
+
+        await filter.OnActionExecutionAsync(executingContext, () => Task.FromResult(executedContext));
+
+        var rec = await context.IdempotencyRecords.IgnoreQueryFilters().FirstOrDefaultAsync();
+        Assert.NotNull(rec);
+        Assert.Equal("COMPLETED", rec.Status);
+        Assert.True(rec.Key.Length <= 100);
+    }
+
+    [Fact]
+    public async Task OnActionExecutionAsync_WhenResultIs400BadRequest_CleansUpPendingRecord()
+    {
+        var tenantContext = new FakeTenantContext();
+        using var context = CreateDbContext(tenantContext);
+        var filter = new IdempotencyFilter(context, tenantContext);
+
+        var key = Guid.NewGuid().ToString();
+        var httpContext = new DefaultHttpContext();
+        httpContext.Request.Method = "POST";
+        httpContext.Request.Path = "/api/test-400";
+        httpContext.Request.Headers["Idempotency-Key"] = key;
+
+        var executingContext = CreateActionExecutingContext(httpContext, new Dictionary<string, object?>());
+        var executedContext = new ActionExecutedContext(
+            executingContext,
+            new List<IFilterMetadata>(),
+            executingContext.Controller
+        )
+        {
+            Result = new BadRequestObjectResult(new { error = "invalid" })
+        };
+
+        await filter.OnActionExecutionAsync(executingContext, () => Task.FromResult(executedContext));
+
+        var rec = await context.IdempotencyRecords.FirstOrDefaultAsync(r => r.Key.Contains(key));
+        Assert.Null(rec);
     }
 }
 

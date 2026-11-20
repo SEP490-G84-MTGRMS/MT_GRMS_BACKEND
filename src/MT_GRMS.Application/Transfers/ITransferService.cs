@@ -8,7 +8,9 @@ public interface ITransferService
     Task<TransferDto> GetTransferAsync(Guid id, CancellationToken ct);
     Task<IReadOnlyList<TransferStockBatchDto>> GetStockBatchesAsync(Guid branchId, CancellationToken ct);
     Task<TransferDto> CreateTransferAsync(CreateTransferRequest request, CancellationToken ct);
+    Task<TransferDto> SubmitTransferAsync(Guid id, CancellationToken ct);
     Task<TransferDto> DispatchTransferAsync(Guid id, CancellationToken ct);
     Task<TransferDto> ReceiveTransferAsync(Guid id, ReceiveTransferRequest request, CancellationToken ct);
     Task<TransferDto> CancelTransferAsync(Guid id, CancelTransferRequest request, CancellationToken ct);
+    Task<TransferDto> ReturnTransferAsync(Guid id, ReturnTransferRequest request, CancellationToken ct);
 }

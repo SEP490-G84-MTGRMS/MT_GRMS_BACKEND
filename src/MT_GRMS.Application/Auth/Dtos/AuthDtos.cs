@@ -13,7 +13,8 @@ public record LoginResponse(
     string AccessToken,
     string RefreshToken,
     DateTime ExpiresAt,
-    UserInfo User
+    UserInfo User,
+    DateTime? RefreshExpiresAt = null
 );
 
 public record SendLoginOtpResponse(

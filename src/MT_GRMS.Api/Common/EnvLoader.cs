@@ -33,7 +33,7 @@ public static class EnvLoader
 
             // Strip wrapping single or double quotes
             if (value.Length >= 2 &&
-                ((value.StartsWith(""") && value.EndsWith(""")) ||
+                ((value.StartsWith("\"") && value.EndsWith("\"")) ||
                  (value.StartsWith("'") && value.EndsWith("'"))))
             {
                 value = value[1..^1];

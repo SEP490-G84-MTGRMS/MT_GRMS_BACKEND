@@ -12,7 +12,7 @@ using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Api.Controllers;
 
-[Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+[Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
 [ApiController]
 [Route("api/employees")]
 public class EmployeesController : BaseApiController
@@ -29,7 +29,7 @@ public class EmployeesController : BaseApiController
     /// <summary>
     /// Lấy danh sách nhân viên có phân trang, tìm kiếm họ tên/mã/SĐT và lọc theo chi nhánh, trạng thái
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpGet]
     public async Task<IActionResult> GetEmployees(
         [FromQuery] EmployeeQueryFilter filter,
@@ -42,7 +42,7 @@ public class EmployeesController : BaseApiController
     /// <summary>
     /// Lấy thông tin hồ sơ nhân viên của tài khoản người dùng đang đăng nhập
     /// </summary>
-    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+    [Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
     [HttpGet("me")]
     public async Task<IActionResult> GetMyProfile(CancellationToken cancellationToken)
     {
@@ -67,7 +67,7 @@ public class EmployeesController : BaseApiController
     /// <summary>
     /// Lấy thông tin chi tiết một nhân viên theo ID
     /// </summary>
-    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+    [Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(
         Guid id,
@@ -85,9 +85,8 @@ public class EmployeesController : BaseApiController
                            ?? User.FindFirst("role")?.Value
                            ?? _tenantContext?.CurrentRole;
 
-            var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner) || User.IsInRole(SystemRoles.Admin)
-                              || string.Equals(currentRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase)
-                              || string.Equals(currentRole, SystemRoles.Admin, StringComparison.OrdinalIgnoreCase);
+            var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner)
+                              || string.Equals(currentRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase);
 
             if (!isOwnerOrAdmin)
             {
@@ -108,7 +107,7 @@ public class EmployeesController : BaseApiController
     /// <summary>
     /// Tạo mới hồ sơ nhân viên (tự sinh mã NVxxxx và kiểm tra CCCD/SĐT trùng lặp)
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost]
     public async Task<IActionResult> Create(
         [FromBody] CreateEmployeeRequest request,
@@ -160,7 +159,7 @@ public class EmployeesController : BaseApiController
     /// <summary>
     /// Cập nhật thông tin hồ sơ nhân viên và mức lương
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(
         Guid id,
@@ -234,7 +233,7 @@ public class EmployeesController : BaseApiController
     /// <summary>
     /// Cập nhật trạng thái hoạt động của nhân viên (active / inactive)
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPatch("{id:guid}/status")]
     public async Task<IActionResult> UpdateStatus(
         Guid id,
@@ -259,7 +258,7 @@ public class EmployeesController : BaseApiController
     /// <summary>
     /// Cấp tài khoản đăng nhập Identity cho nhân viên
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("{id:guid}/identity-account")]
     public async Task<IActionResult> CreateIdentityAccount(
         Guid id,
@@ -319,7 +318,7 @@ public class EmployeesController : BaseApiController
     /// <summary>
     /// Cập nhật tài khoản đăng nhập Identity cho nhân viên
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPut("{id:guid}/identity-account")]
     public async Task<IActionResult> UpdateIdentityAccount(
         Guid id,
@@ -379,7 +378,7 @@ public class EmployeesController : BaseApiController
     /// <summary>
     /// Xóa hoặc ngưng hoạt động nhân viên (Soft-delete)
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(
         Guid id,
@@ -426,7 +425,7 @@ public class EmployeesController : BaseApiController
     /// <summary>
     /// Đăng ký hoặc cập nhật vector khuôn mặt FaceID cho nhân viên
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("{id:guid}/face-descriptor")]
     public async Task<IActionResult> RegisterFaceDescriptor(
         Guid id,

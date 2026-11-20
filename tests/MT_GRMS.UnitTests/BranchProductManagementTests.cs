@@ -461,6 +461,212 @@ public class BranchProductManagementTests
         Assert.Equal(25m, (await _repo.GetBranchStocksByProductAsync(_branchId, _prod1Id)).First().QuantityOnHand);
     }
 
+    [Fact]
+    public async Task GetBranchProducts_BranchNotFound_Or_EmptyBranchId_ShouldBeHandled()
+    {
+        // Branch not found
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            _service.GetBranchProductsAsync(Guid.NewGuid(), new BranchProductQueryFilter()));
+
+        // Guid.Empty branchId allowed (global query)
+        var result = await _service.GetBranchProductsAsync(Guid.Empty, new BranchProductQueryFilter());
+        Assert.NotNull(result);
+    }
+
+    [Fact]
+    public async Task GetAssignableProducts_BranchNotFound_ThrowsNotFoundException()
+    {
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            _service.GetAssignableProductsAsync(Guid.NewGuid()));
+
+        var assignable = await _service.GetAssignableProductsAsync(_branchId);
+        Assert.NotNull(assignable);
+    }
+
+    [Fact]
+    public async Task AssignProducts_Exceptions_ShouldBeHandled()
+    {
+        // Validation error: empty ProductIds
+        var cmdEmpty = new AssignBranchProductsCommand { ProductIds = new List<Guid>() };
+        var exVal = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.AssignProductsAsync(_branchId, cmdEmpty));
+        Assert.Equal("VALIDATION_ERROR", exVal.ErrorCode);
+
+        // Branch not found
+        var cmdValid = new AssignBranchProductsCommand { ProductIds = new List<Guid> { _prod2Id } };
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            _service.AssignProductsAsync(Guid.NewGuid(), cmdValid));
+
+        // No linked supplier
+        _repo.ActiveSupplierIdsForBranch.Clear();
+        var exNoSup = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.AssignProductsAsync(_branchId, cmdValid));
+        Assert.Equal("NO_SUPPLIER_LINKED", exNoSup.ErrorCode);
+
+        // Product not supplied to branch
+        _repo.ActiveSupplierIdsForBranch.Add(_defaultSupplierId);
+        var unsuppliedId = Guid.NewGuid();
+        _repo.Products.Add(new Product
+        {
+            Id = unsuppliedId,
+            TenantId = "tenant-test-1",
+            ProductCode = "SP-UNSUP",
+            Name = "Unsupplied Product",
+            Status = ProductStatus.Active
+        });
+        var cmdUnsup = new AssignBranchProductsCommand { ProductIds = new List<Guid> { unsuppliedId } };
+        var exUnsup = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.AssignProductsAsync(_branchId, cmdUnsup));
+        Assert.Equal("PRODUCT_NOT_SUPPLIED_TO_BRANCH", exUnsup.ErrorCode);
+
+        // Product inactive
+        var inactiveProdId = Guid.NewGuid();
+        _repo.Products.Add(new Product
+        {
+            Id = inactiveProdId,
+            TenantId = "tenant-test-1",
+            ProductCode = "SP-INACT",
+            Name = "Inactive Product",
+            Status = ProductStatus.Inactive
+        });
+        _repo.SupplierProducts.Add(new SupplierProduct
+        {
+            Id = Guid.NewGuid(),
+            ProductId = inactiveProdId,
+            SupplierId = _defaultSupplierId,
+            AgreedWholesalePrice = 50000m
+        });
+        var cmdInact = new AssignBranchProductsCommand { ProductIds = new List<Guid> { inactiveProdId } };
+        var exInact = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.AssignProductsAsync(_branchId, cmdInact));
+        Assert.Equal("PRODUCT_INACTIVE", exInact.ErrorCode);
+    }
+
+    [Fact]
+    public async Task UpdateProduct_Exceptions_ShouldBeHandled()
+    {
+        var cmd = new UpdateBranchProductCommand { RetailPrice = 100000m };
+
+        // Branch not found
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            _service.UpdateProductAsync(Guid.NewGuid(), _prod1Id, cmd));
+
+        // Product not found
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            _service.UpdateProductAsync(_branchId, Guid.NewGuid(), cmd));
+
+        // Branch product not found
+        var unassignedProdId = Guid.NewGuid();
+        _repo.Products.Add(new Product { Id = unassignedProdId, Name = "Unassigned", Status = ProductStatus.Active });
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            _service.UpdateProductAsync(_branchId, unassignedProdId, cmd));
+
+        // Activate when master product is inactive
+        var masterProd = _repo.Products.First(p => p.Id == _prod1Id);
+        masterProd.Status = ProductStatus.Inactive;
+        var exInact = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.UpdateProductAsync(_branchId, _prod1Id, new UpdateBranchProductCommand { Status = "Active" }));
+        Assert.Equal("PRODUCT_INACTIVE", exInact.ErrorCode);
+        masterProd.Status = ProductStatus.Active;
+    }
+
+    [Fact]
+    public async Task RemoveProduct_NotFound_Exceptions_ShouldBeHandled()
+    {
+        // Branch not found
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            _service.RemoveProductAsync(Guid.NewGuid(), _prod1Id));
+
+        // Product not found
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            _service.RemoveProductAsync(_branchId, Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task RemoveProduct_WhenReservedStockGreaterThanZero_ThrowsBusinessException()
+    {
+        var prodId = Guid.NewGuid();
+        _repo.Products.Add(new Product
+        {
+            Id = prodId,
+            TenantId = "tenant-test-1",
+            ProductCode = "SP-RES",
+            Name = "SP Có Hàng Tạm Giữ",
+            BaseUnit = "Cái",
+            SellingPrice = 100000m
+        });
+        _repo.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-test-1",
+            BranchId = _branchId,
+            ProductId = prodId,
+            Status = "Active"
+        });
+        _repo.BranchStocks.Add(new BranchStock
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-test-1",
+            BranchId = _branchId,
+            ProductId = prodId,
+            QuantityOnHand = 0m,
+            QuantityReserved = 5m
+        });
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.RemoveProductAsync(_branchId, prodId));
+        Assert.Equal("CANNOT_REMOVE_PRODUCT_WITH_RESERVED_STOCK", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task UpdateProductAsync_WithUnitPriceOverrides_MatchesMaster_AndNewOverride()
+    {
+        var unit1Id = Guid.NewGuid();
+        var unit2Id = Guid.NewGuid();
+        var prod = _repo.Products.First(p => p.Id == _prod1Id);
+        prod.Units = new List<ProductUnit>
+        {
+            new ProductUnit { Id = unit1Id, ProductId = _prod1Id, UnitName = "Thùng", ConversionRate = 10, Price = 1800000m },
+            new ProductUnit { Id = unit2Id, ProductId = _prod1Id, UnitName = "Lốc", ConversionRate = 2, Price = 380000m }
+        };
+
+        var catalog = _repo.BranchProducts.First(bp => bp.BranchId == _branchId && bp.ProductId == _prod1Id);
+        catalog.UnitPriceOverrides = new List<BranchProductUnitPrice>
+        {
+            new BranchProductUnitPrice
+            {
+                Id = Guid.NewGuid(),
+                TenantId = "tenant-test-1",
+                BranchProductId = catalog.Id,
+                ProductUnitId = unit1Id,
+                SellingPriceOverride = 1750000m
+            }
+        };
+
+        // Act: Override unit 2, and reset unit 1 to master price (1800000)
+        var cmd = new UpdateBranchProductCommand
+        {
+            RetailPrice = 200000m,
+            UnitPrices = new List<BranchProductUnitPriceDto>
+            {
+                new BranchProductUnitPriceDto { UnitId = unit1Id, Price = 1800000m }, // Matches master -> soft deletes
+                new BranchProductUnitPriceDto { UnitId = unit2Id, Price = 370000m },  // New override
+                new BranchProductUnitPriceDto { UnitId = Guid.Empty, Price = 100m },   // Invalid unit id -> skipped
+                new BranchProductUnitPriceDto { UnitId = Guid.NewGuid(), Price = 50m } // Non-existent unit -> skipped
+            }
+        };
+
+        var result = await _service.UpdateProductAsync(_branchId, _prod1Id, cmd);
+        Assert.NotNull(result);
+
+        var unit1Override = catalog.UnitPriceOverrides.FirstOrDefault(u => u.ProductUnitId == unit1Id);
+        Assert.True(unit1Override == null || unit1Override.IsDeleted);
+
+        var unit2Override = catalog.UnitPriceOverrides.FirstOrDefault(u => u.ProductUnitId == unit2Id && !u.IsDeleted);
+        Assert.NotNull(unit2Override);
+        Assert.Equal(370000m, unit2Override.SellingPriceOverride);
+    }
+
     // =========================================================================
     // FAKE REPOSITORY & CONTEXT IMPLEMENTATIONS
     // =========================================================================
@@ -599,6 +805,31 @@ public class BranchProductManagementTests
             CancellationToken cancellationToken = default)
         {
             return Task.FromResult((IReadOnlyList<BranchStock>)BranchStocks.Where(s => s.BranchId == branchId && s.ProductId == productId).ToList());
+        }
+
+        public Task SyncBranchStockCatalogAsync(
+            Guid branchId,
+            Guid productId,
+            decimal retailPrice,
+            string status,
+            string? shelfLocation,
+            CancellationToken cancellationToken = default)
+        {
+            foreach (var stock in BranchStocks.Where(s => s.BranchId == branchId && s.ProductId == productId))
+            {
+                stock.RetailPrice = retailPrice;
+                stock.Status = status;
+                stock.ShelfLocation = shelfLocation;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task AddUnitPriceOverrideAsync(BranchProductUnitPrice unitPrice, CancellationToken cancellationToken = default)
+        {
+            var catalog = BranchProducts.First(bp => bp.Id == unitPrice.BranchProductId);
+            catalog.UnitPriceOverrides.Add(unitPrice);
+            return Task.CompletedTask;
         }
 
         public Task AddBranchStockAsync(

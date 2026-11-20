@@ -23,6 +23,7 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.Property(x => x.PaymentMethod).HasMaxLength(50).HasDefaultValue("CASH");
         builder.Property(x => x.PaymentStatus).HasMaxLength(30).HasDefaultValue("PAID");
         builder.Property(x => x.ShiftId).HasColumnName("ShiftID");
+        builder.Property(x => x.BusinessDate).IsRequired();
         builder.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("Completed");
         builder.Property(x => x.Note).HasMaxLength(1000);
         builder.Property(x => x.AppliedPromotionId);
@@ -35,8 +36,10 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
 
         builder.HasIndex(x => new { x.TenantId, x.OrderCode }).IsUnique();
         builder.HasIndex(x => x.ShiftId);
+        builder.HasIndex(x => new { x.TenantId, x.BranchId, x.BusinessDate });
         builder.HasIndex(x => x.AppliedPromotionId);
         builder.HasIndex(x => x.AppliedVoucherCode);
+        builder.HasIndex(x => x.FinanceAccountId);
 
         builder.HasOne(x => x.Shift)
             .WithMany()
@@ -51,6 +54,10 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.HasOne(x => x.Customer)
             .WithMany(c => c.Orders)
             .HasForeignKey(x => x.CustomerId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(x => x.FinanceAccount).WithMany()
+            .HasForeignKey(x => x.FinanceAccountId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

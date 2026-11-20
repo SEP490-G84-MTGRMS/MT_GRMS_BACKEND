@@ -29,6 +29,7 @@ public static class DependencyInjection
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IInventoryService, InventoryService>();
         services.AddScoped<ITransferService, TransferService>();
+        services.AddScoped<ITransferRequestService, TransferRequestService>();
         services.AddScoped<IOrderService, OrderService>();
         services.AddScoped<PosShifts.IShiftService, PosShifts.ShiftService>();
         services.AddScoped<ICatalogService, CatalogService>();
@@ -36,9 +37,11 @@ public static class DependencyInjection
         services.AddScoped<IProductUnitService, ProductUnitService>();
         services.AddScoped<IBatchService, BatchService>();
         services.AddScoped<ICashbookService, CashbookService>();
+        services.AddScoped<BusinessDays.IBusinessDayClosingService, BusinessDays.BusinessDayClosingService>();
         services.AddScoped<Expenses.IExpenseService, Expenses.ExpenseService>();
         services.AddScoped<Debt.ICustomerDebtService, Debt.CustomerDebtService>();
         services.AddScoped<Reports.IPnLReportService, Reports.PnLReportService>();
+        services.AddScoped<FinanceOverview.IFinanceOverviewService, FinanceOverview.FinanceOverviewService>();
         services.AddScoped<Tax.IHouseholdTaxService, Tax.HouseholdTaxService>();
         services.AddScoped<Tax.Strategies.ITaxCalculationStrategy, Tax.Strategies.RevenuePercentageTaxStrategy>();
         services.AddScoped<Tax.Strategies.ITaxCalculationStrategy, Tax.Strategies.DeclarationBasedTaxStrategy>();
@@ -61,11 +64,14 @@ public static class DependencyInjection
         services.AddScoped<IScheduleService, ScheduleService>();
         services.AddScoped<IScheduleApprovalService, ScheduleApprovalService>();
         services.AddScoped<HR.Payslips.IPayslipService, HR.Payslips.PayslipService>();
+        services.AddScoped<Notifications.INotificationService, Notifications.NotificationService>();
 
         // 3. Đăng ký các Service cho Master Admin Portal
         services.AddScoped<ISubscriptionPlanService, SubscriptionPlanService>();
         services.AddScoped<ITenantService, TenantService>();
+        services.AddScoped<TenantProvisioningService>();
         services.AddScoped<IAdminDashboardService, AdminDashboardService>();
+        services.AddScoped<IMasterCatalogService, MasterCatalogService>();
 
         return services;
     }

@@ -21,6 +21,8 @@ public class BranchStockConfiguration : IEntityTypeConfiguration<BranchStock>
         builder.Property(x => x.QuantityQuarantined).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);
         builder.Property(x => x.LandedCostPerUnit).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.RetailPrice).HasColumnType("decimal(18,2)").IsRequired(false);
+        builder.Property(x => x.FefoDiscountPercent).HasColumnType("decimal(5,2)").HasDefaultValue(0.00m);
+        builder.Property(x => x.IsFefoDiscountActive).HasDefaultValue(false);
         builder.Property(x => x.Status).HasMaxLength(20).HasDefaultValue("Active");
         builder.Property(x => x.ShelfLocation).HasMaxLength(50);
         builder.Property(x => x.ZoneArea).HasMaxLength(50);

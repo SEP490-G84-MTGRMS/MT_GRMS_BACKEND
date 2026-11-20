@@ -178,6 +178,8 @@ public class SupplierAPLedgerDto
     public decimal BalanceAfter { get; set; }
     public string CreatedByName { get; set; } = string.Empty;
     public string? IdempotencyKey { get; set; }
+    public string? PaymentMethod { get; set; }
+    public string? ReferenceNo { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
@@ -186,12 +188,16 @@ public class RecordAPTransactionCommand
     public Guid SupplierId { get; set; }
     public DateTime? TransactionDate { get; set; }
     public APDocType DocType { get; set; } = APDocType.PurchaseInvoice;
+    /// <summary>Bắt buộc với hầu hết DocType. Với PaymentVoucher có thể để trống — BE tự sinh PAY-yyyyMMdd-xxxx.</summary>
     public string DocNo { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;
     public decimal Amount { get; set; }
     public int Direction { get; set; } = 1; // +1 increase, -1 decrease
     public string CreatedByName { get; set; } = "Hệ thống";
     public string? IdempotencyKey { get; set; }
+    /// <summary>CASH | BANK_TRANSFER | OTHER</summary>
+    public string? PaymentMethod { get; set; }
+    public string? ReferenceNo { get; set; }
 }
 
 public class SupplierDeliveryConfigDto
@@ -224,6 +230,15 @@ public class UpdateSupplierDeliveryConfigCommand
     public List<SupplierBlackoutDateDto>? BlackoutDates { get; set; }
 }
 
+public class SupplierReturnPolicyCategoryCostShareDto
+{
+    public Guid? Id { get; set; }
+    public Guid CategoryId { get; set; }
+    public string CategoryName { get; set; } = string.Empty;
+    public decimal StoreCostSharePercent { get; set; }
+    public decimal SupplierCostSharePercent { get; set; }
+}
+
 public class SupplierReturnPolicyDto
 {
     public Guid Id { get; set; }
@@ -236,12 +251,14 @@ public class SupplierReturnPolicyDto
     public bool RequireEvidenceImage { get; set; } = true;
     public int? MaxReturnDaysAfterReceipt { get; set; }
     public bool CostShareEnabled { get; set; }
+    public bool CostShareByCategoryEnabled { get; set; }
     public decimal? StoreCostSharePercent { get; set; }
     public decimal? SupplierCostSharePercent { get; set; }
     public string CostShareBase { get; set; } = "REPLACEMENT_VALUE";
     public bool RequireStorePaymentBeforeReplacement { get; set; } = true;
     public string? Notes { get; set; }
     public bool IsActive { get; set; } = true;
+    public List<SupplierReturnPolicyCategoryCostShareDto> CategoryCostShares { get; set; } = [];
 }
 
 public class UpdateSupplierReturnPolicyCommand
@@ -254,11 +271,13 @@ public class UpdateSupplierReturnPolicyCommand
     public bool RequireEvidenceImage { get; set; } = true;
     public int? MaxReturnDaysAfterReceipt { get; set; }
     public bool CostShareEnabled { get; set; }
+    public bool CostShareByCategoryEnabled { get; set; }
     public decimal? StoreCostSharePercent { get; set; }
     public decimal? SupplierCostSharePercent { get; set; }
     public string CostShareBase { get; set; } = "REPLACEMENT_VALUE";
     public bool RequireStorePaymentBeforeReplacement { get; set; } = true;
     public string? Notes { get; set; }
+    public List<SupplierReturnPolicyCategoryCostShareDto>? CategoryCostShares { get; set; }
 }
 
 public class SupplierBlackoutDateDto

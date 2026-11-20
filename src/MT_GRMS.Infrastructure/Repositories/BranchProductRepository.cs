@@ -81,7 +81,7 @@ public class BranchProductRepository : IBranchProductRepository
             query = query.Where(bp =>
                 (bp.Product != null && bp.Product.Name.ToLower().Contains(kw)) ||
                 (bp.Product != null && bp.Product.ProductCode.ToLower().Contains(kw)) ||
-                (bp.Product != null && bp.Product.Barcode.ToLower().Contains(kw)) ||
+                (bp.Product != null && bp.Product.Barcode != null && bp.Product.Barcode.ToLower().Contains(kw)) ||
                 (bp.Branch != null && bp.Branch.BranchCode.ToLower().Contains(kw)) ||
                 (bp.Branch != null && bp.Branch.Name.ToLower().Contains(kw)) ||
                 matchingProductIdsFromSP.Contains(bp.ProductId));
@@ -301,6 +301,8 @@ public class BranchProductRepository : IBranchProductRepository
                 p.ImageUrl,
                 p.BaseUnit,
                 p.SellingPrice,
+                p.AllowRepack,
+                p.ProcessedSellingPricePerKg,
                 Units = p.Units.Select(u => new
                 {
                     u.Id,
@@ -392,7 +394,7 @@ public class BranchProductRepository : IBranchProductRepository
                     ProductId = x.ProductId,
                     Name = x.ProductName,
                     Sku = x.ProductCode,
-                    Barcode = x.Barcode,
+                    Barcode = x.Barcode ?? string.Empty,
                     Category = x.CategoryName,
                     Unit = inboundUnit,
                     ImageUrl = extra?.ImageUrl,
@@ -410,7 +412,9 @@ public class BranchProductRepository : IBranchProductRepository
                     Status = x.ProductStatus,
                     ShelfLocation = x.ShelfLocation,
                     AssignedDate = x.AssignedDate,
-                    UnitPrices = unitPrices
+                    UnitPrices = unitPrices,
+                    AllowRepack = extra?.AllowRepack ?? false,
+                    ProcessedSellingPricePerKg = extra?.ProcessedSellingPricePerKg
                 };
             }
 
@@ -616,6 +620,7 @@ public class BranchProductRepository : IBranchProductRepository
             .Include(bp => bp.Product)!.ThenInclude(p => p!.Units)
             .Include(bp => bp.Branch)
             .Include(bp => bp.UnitPriceOverrides)
+            .AsSplitQuery()
             .FirstOrDefaultAsync(bp => bp.BranchId == branchId && bp.ProductId == productId, cancellationToken);
     }
 
@@ -643,6 +648,32 @@ public class BranchProductRepository : IBranchProductRepository
             .Include(bs => bs.Supplier)
             .Where(bs => bs.BranchId == branchId && bs.ProductId == productId)
             .ToListAsync(cancellationToken);
+    }
+
+    public async Task SyncBranchStockCatalogAsync(
+        Guid branchId,
+        Guid productId,
+        decimal retailPrice,
+        string status,
+        string? shelfLocation,
+        CancellationToken cancellationToken = default)
+    {
+        // Catalog metadata is independent from stock quantities. Updating it in bulk avoids
+        // using BranchStock.RowVersion loaded earlier in the request and therefore does not
+        // overwrite, or spuriously conflict with, a concurrent sale/receipt stock movement.
+        await _context.BranchStocks
+            .Where(bs => bs.BranchId == branchId && bs.ProductId == productId)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(bs => bs.RetailPrice, retailPrice)
+                .SetProperty(bs => bs.Status, status)
+                .SetProperty(bs => bs.ShelfLocation, shelfLocation)
+                .SetProperty(bs => bs.UpdatedAt, DateTime.UtcNow),
+                cancellationToken);
+    }
+
+    public async Task AddUnitPriceOverrideAsync(BranchProductUnitPrice unitPrice, CancellationToken cancellationToken = default)
+    {
+        await _context.BranchProductUnitPrices.AddAsync(unitPrice, cancellationToken);
     }
 
     public async Task AddBranchStockAsync(

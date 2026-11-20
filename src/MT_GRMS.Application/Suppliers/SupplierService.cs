@@ -475,6 +475,7 @@ public class SupplierService : ISupplierService
         policy.RequireEvidenceImage = command.RequireEvidenceImage;
         policy.MaxReturnDaysAfterReceipt = command.MaxReturnDaysAfterReceipt;
         policy.CostShareEnabled = command.CostShareEnabled;
+        policy.CostShareByCategoryEnabled = command.CostShareEnabled && command.CostShareByCategoryEnabled;
         policy.StoreCostSharePercent = command.CostShareEnabled ? command.StoreCostSharePercent : null;
         policy.SupplierCostSharePercent = command.CostShareEnabled
             ? (command.SupplierCostSharePercent ?? (100m - (command.StoreCostSharePercent ?? 0m)))
@@ -484,8 +485,50 @@ public class SupplierService : ISupplierService
         policy.Notes = command.Notes;
         policy.IsActive = true;
 
+        await ReplaceCategoryCostSharesAsync(policy, command, cancellationToken);
+
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return MapReturnPolicyDto(policy);
+    }
+
+    private async Task ReplaceCategoryCostSharesAsync(
+        SupplierReturnPolicy policy,
+        UpdateSupplierReturnPolicyCommand command,
+        CancellationToken cancellationToken)
+    {
+        var existing = policy.CategoryCostShares?.ToList() ?? [];
+        foreach (var row in existing)
+        {
+            row.IsDeleted = true;
+            row.UpdatedAt = DateTime.UtcNow;
+        }
+
+        if (!command.CostShareEnabled || !command.CostShareByCategoryEnabled)
+            return;
+
+        var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
+        var incoming = command.CategoryCostShares ?? [];
+        foreach (var item in incoming)
+        {
+            if (item.CategoryId == Guid.Empty) continue;
+            var storePct = item.StoreCostSharePercent;
+            var supplierPct = item.SupplierCostSharePercent;
+            if (Math.Abs(storePct + supplierPct - 100m) > 0.01m)
+                supplierPct = 100m - storePct;
+
+            // Không revive: global filter không load soft-delete; unique index đã lọc IsDeleted=FALSE.
+            (policy.CategoryCostShares ??= new List<SupplierReturnPolicyCategoryCostShare>()).Add(
+                new SupplierReturnPolicyCategoryCostShare
+                {
+                    TenantId = tenantId,
+                    PolicyId = policy.Id,
+                    CategoryId = item.CategoryId,
+                    StoreCostSharePercent = storePct,
+                    SupplierCostSharePercent = supplierPct,
+                });
+        }
+
+        await Task.CompletedTask;
     }
 
     private static void ValidateReturnPolicyCommand(UpdateSupplierReturnPolicyCommand command)
@@ -503,7 +546,7 @@ public class SupplierService : ISupplierService
         if (command.CostShareEnabled)
         {
             if (!command.StoreCostSharePercent.HasValue)
-                throw new BusinessException("INVALID_COST_SHARE", "Khi bật chia sẻ chi phí phải nhập % cửa hàng chịu.");
+                throw new BusinessException("INVALID_COST_SHARE", "Khi bật chia sẻ chi phí phải nhập % cửa hàng chịu (mặc định NCC).");
 
             var storePct = command.StoreCostSharePercent.Value;
             if (storePct < 0 || storePct > 100)
@@ -512,6 +555,25 @@ public class SupplierService : ISupplierService
             var supplierPct = command.SupplierCostSharePercent ?? (100m - storePct);
             if (Math.Abs(storePct + supplierPct - 100m) > 0.01m)
                 throw new BusinessException("INVALID_COST_SHARE", "Tổng % cửa hàng và % NCC phải bằng 100.");
+
+            if (command.CostShareByCategoryEnabled)
+            {
+                var rows = command.CategoryCostShares ?? [];
+                var ids = rows.Select(r => r.CategoryId).Where(id => id != Guid.Empty).ToList();
+                if (ids.Count != ids.Distinct().Count())
+                    throw new BusinessException("INVALID_COST_SHARE_CATEGORY", "Mỗi nhóm sản phẩm chỉ được cấu hình một lần.");
+
+                foreach (var row in rows)
+                {
+                    if (row.CategoryId == Guid.Empty)
+                        throw new BusinessException("INVALID_COST_SHARE_CATEGORY", "Vui lòng chọn nhóm sản phẩm.");
+                    if (row.StoreCostSharePercent < 0 || row.StoreCostSharePercent > 100)
+                        throw new BusinessException("INVALID_COST_SHARE_CATEGORY", "% cửa hàng theo nhóm phải trong khoảng 0–100.");
+                    var rowSupplier = row.SupplierCostSharePercent;
+                    if (Math.Abs(row.StoreCostSharePercent + rowSupplier - 100m) > 0.01m)
+                        throw new BusinessException("INVALID_COST_SHARE_CATEGORY", "Tổng % NCC và cửa hàng theo nhóm phải bằng 100.");
+                }
+            }
         }
     }
 
@@ -520,14 +582,16 @@ public class SupplierService : ISupplierService
         Id = Guid.Empty,
         SupplierId = supplierId,
         AllowReturn = true,
-        AllowedReturnTypes = ["QUALITY_DEFECT", "NEAR_EXPIRY", "WRONG_ITEM"],
-        AllowedResolutionTypes = ["REDUCE_PAYABLE", "EXCHANGE", "REFUND"],
+        AllowedReturnTypes = ["QUALITY_DEFECT", "NEAR_EXPIRY", "EXPIRED", "WRONG_ITEM"],
+        AllowedResolutionTypes = ["REDUCE_PAYABLE", "EXCHANGE", "REFUND", "SUPPLIER_CREDIT"],
         DefaultResolutionType = "REDUCE_PAYABLE",
         RequireEvidenceImage = true,
         CostShareEnabled = false,
+        CostShareByCategoryEnabled = false,
         CostShareBase = "REPLACEMENT_VALUE",
         RequireStorePaymentBeforeReplacement = true,
-        IsActive = true
+        IsActive = true,
+        CategoryCostShares = []
     };
 
     private static SupplierReturnPolicyDto MapReturnPolicyDto(SupplierReturnPolicy policy)
@@ -545,6 +609,19 @@ public class SupplierService : ISupplierService
             }
         }
 
+        var categoryShares = (policy.CategoryCostShares ?? [])
+            .Where(c => !c.IsDeleted)
+            .Select(c => new SupplierReturnPolicyCategoryCostShareDto
+            {
+                Id = c.Id,
+                CategoryId = c.CategoryId,
+                CategoryName = c.Category?.Name ?? string.Empty,
+                StoreCostSharePercent = c.StoreCostSharePercent,
+                SupplierCostSharePercent = c.SupplierCostSharePercent
+            })
+            .OrderBy(c => c.CategoryName)
+            .ToList();
+
         return new SupplierReturnPolicyDto
         {
             Id = policy.Id,
@@ -557,36 +634,32 @@ public class SupplierService : ISupplierService
             RequireEvidenceImage = policy.RequireEvidenceImage,
             MaxReturnDaysAfterReceipt = policy.MaxReturnDaysAfterReceipt,
             CostShareEnabled = policy.CostShareEnabled,
+            CostShareByCategoryEnabled = policy.CostShareByCategoryEnabled,
             StoreCostSharePercent = policy.StoreCostSharePercent,
             SupplierCostSharePercent = policy.SupplierCostSharePercent,
             CostShareBase = policy.CostShareBase,
             RequireStorePaymentBeforeReplacement = policy.RequireStorePaymentBeforeReplacement,
             Notes = policy.Notes,
-            IsActive = policy.IsActive
+            IsActive = policy.IsActive,
+            CategoryCostShares = categoryShares
         };
     }
 
-    public async Task<PagedResult<SupplierAPLedgerDto>> GetAPLedgerAsync(Guid supplierId, DateTime? fromDate, DateTime? toDate, int pageIndex = 1, int pageSize = 20, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<SupplierAPLedgerDto>> GetAPLedgerAsync(
+        Guid supplierId,
+        DateTime? fromDate,
+        DateTime? toDate,
+        int pageIndex = 1,
+        int pageSize = 20,
+        CancellationToken cancellationToken = default,
+        APDocType? docType = null)
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
 
-        var (items, totalCount) = await _supplierRepository.GetPagedLedgerAsync(supplierId, fromDate, toDate, pageIndex, pageSize, cancellationToken);
+        var (items, totalCount) = await _supplierRepository.GetPagedLedgerAsync(
+            supplierId, fromDate, toDate, pageIndex, pageSize, cancellationToken, docType);
 
-        var dtos = items.Select(l => new SupplierAPLedgerDto
-        {
-            Id = l.Id,
-            SupplierId = l.SupplierId,
-            TransactionDate = l.TransactionDate,
-            DocType = l.DocType,
-            DocNo = l.DocNo,
-            Description = l.Description,
-            Amount = l.Amount,
-            Direction = l.Direction,
-            BalanceAfter = l.BalanceAfter,
-            CreatedByName = l.CreatedByName,
-            IdempotencyKey = l.IdempotencyKey,
-            CreatedAt = l.CreatedAt
-        }).ToList();
+        var dtos = items.Select(MapLedgerDto).ToList();
 
         return new PagedResult<SupplierAPLedgerDto>
         {
@@ -609,21 +682,7 @@ public class SupplierService : ISupplierService
             if (existingLedger != null)
             {
                 // Đã tồn tại giao dịch này trước đó -> Idempotent replay, không cộng dồn công nợ lần nữa
-                return new SupplierAPLedgerDto
-                {
-                    Id = existingLedger.Id,
-                    SupplierId = existingLedger.SupplierId,
-                    TransactionDate = existingLedger.TransactionDate,
-                    DocType = existingLedger.DocType,
-                    DocNo = existingLedger.DocNo,
-                    Description = existingLedger.Description,
-                    Amount = existingLedger.Amount,
-                    Direction = existingLedger.Direction,
-                    BalanceAfter = existingLedger.BalanceAfter,
-                    CreatedByName = existingLedger.CreatedByName,
-                    IdempotencyKey = existingLedger.IdempotencyKey,
-                    CreatedAt = existingLedger.CreatedAt
-                };
+                return MapLedgerDto(existingLedger);
             }
         }
 
@@ -632,6 +691,32 @@ public class SupplierService : ISupplierService
         {
             throw new NotFoundException("Nhà cung cấp", command.SupplierId);
         }
+
+        // v1: không cho trả vượt dư nợ (PaymentVoucher giảm nợ)
+        if (command.Direction == -1 && command.DocType == APDocType.PaymentVoucher)
+        {
+            if (supplier.CurrentDebt <= 0)
+            {
+                throw new BusinessException("AP_NO_DEBT", "Nhà cung cấp không còn dư nợ để thanh toán.");
+            }
+
+            if (command.Amount > supplier.CurrentDebt)
+            {
+                throw new BusinessException(
+                    "AP_OVERPAY",
+                    $"Số tiền thanh toán ({command.Amount:N0}) vượt dư nợ hiện tại ({supplier.CurrentDebt:N0}).");
+            }
+        }
+
+        var docNo = command.DocNo?.Trim() ?? string.Empty;
+        if (command.DocType == APDocType.PaymentVoucher && string.IsNullOrWhiteSpace(docNo))
+        {
+            docNo = await GeneratePaymentDocNoAsync(cancellationToken);
+        }
+
+        var paymentMethod = string.IsNullOrWhiteSpace(command.PaymentMethod)
+            ? null
+            : command.PaymentMethod.Trim().ToUpperInvariant();
 
         // Tính toán biến động công nợ (+1: Tăng nợ, -1: Giảm nợ)
         decimal delta = command.Direction == 1 ? command.Amount : -command.Amount;
@@ -642,13 +727,15 @@ public class SupplierService : ISupplierService
             SupplierId = command.SupplierId,
             TransactionDate = command.TransactionDate ?? DateTime.UtcNow,
             DocType = command.DocType,
-            DocNo = command.DocNo,
+            DocNo = docNo,
             Description = command.Description,
             Amount = command.Amount,
             Direction = command.Direction,
             BalanceAfter = newDebt,
             CreatedByName = string.IsNullOrWhiteSpace(command.CreatedByName) ? "Hệ thống" : command.CreatedByName,
-            IdempotencyKey = command.IdempotencyKey
+            IdempotencyKey = command.IdempotencyKey,
+            PaymentMethod = paymentMethod,
+            ReferenceNo = string.IsNullOrWhiteSpace(command.ReferenceNo) ? null : command.ReferenceNo.Trim()
         };
 
         supplier.CurrentDebt = newDebt;
@@ -657,22 +744,33 @@ public class SupplierService : ISupplierService
         _supplierRepository.Update(supplier);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return new SupplierAPLedgerDto
-        {
-            Id = ledger.Id,
-            SupplierId = ledger.SupplierId,
-            TransactionDate = ledger.TransactionDate,
-            DocType = ledger.DocType,
-            DocNo = ledger.DocNo,
-            Description = ledger.Description,
-            Amount = ledger.Amount,
-            Direction = ledger.Direction,
-            BalanceAfter = ledger.BalanceAfter,
-            CreatedByName = ledger.CreatedByName,
-            IdempotencyKey = ledger.IdempotencyKey,
-            CreatedAt = ledger.CreatedAt
-        };
+        return MapLedgerDto(ledger);
     }
+
+    private async Task<string> GeneratePaymentDocNoAsync(CancellationToken cancellationToken)
+    {
+        var prefix = $"PAY-{DateTime.UtcNow:yyyyMMdd}-";
+        var count = await _supplierRepository.CountLedgersByDocNoPrefixAsync(prefix, cancellationToken);
+        return $"{prefix}{(count + 1):D4}";
+    }
+
+    private static SupplierAPLedgerDto MapLedgerDto(SupplierAPLedger ledger) => new()
+    {
+        Id = ledger.Id,
+        SupplierId = ledger.SupplierId,
+        TransactionDate = ledger.TransactionDate,
+        DocType = ledger.DocType,
+        DocNo = ledger.DocNo,
+        Description = ledger.Description,
+        Amount = ledger.Amount,
+        Direction = ledger.Direction,
+        BalanceAfter = ledger.BalanceAfter,
+        CreatedByName = ledger.CreatedByName,
+        IdempotencyKey = ledger.IdempotencyKey,
+        PaymentMethod = ledger.PaymentMethod,
+        ReferenceNo = ledger.ReferenceNo,
+        CreatedAt = ledger.CreatedAt
+    };
 
     public async Task<SupplierApSummaryDto> GetApSummaryAsync(Guid supplierId, CancellationToken cancellationToken = default)
     {
@@ -1363,7 +1461,7 @@ public class SupplierService : ISupplierService
         var purchasePrice = SupplierProductPricing.NormalizeAgreedPriceToPersist(command.AgreedWholesalePrice);
 
         var deliveryUoM = string.IsNullOrWhiteSpace(command.DeliveryUoM)
-            ? (product.BaseUnit ?? "Cái")
+            ? ResolveDefaultDeliveryUoM(product)
             : command.DeliveryUoM.Trim();
 
         // BR-SP02: Độc quyền Primary Supplier — nếu đặt làm Primary thì tự động gỡ cờ Primary của NCC cũ
@@ -1477,7 +1575,7 @@ public class SupplierService : ISupplierService
             {
                 var deliveryUoM = !string.IsNullOrWhiteSpace(command.DeliveryUoM) && command.DeliveryUoM != "Theo ĐVT cơ sở"
                     ? command.DeliveryUoM
-                    : (product.BaseUnit ?? "Cái");
+                    : ResolveDefaultDeliveryUoM(product);
 
                 var entity = new SupplierProduct
                 {
@@ -1565,7 +1663,7 @@ public class SupplierService : ISupplierService
         }
         else if (product != null)
         {
-            entity.DeliveryUoM = product.BaseUnit ?? entity.DeliveryUoM;
+            entity.DeliveryUoM = ResolveDefaultDeliveryUoM(product);
         }
 
         entity.AgreedWholesalePrice = purchasePrice;
@@ -1723,6 +1821,19 @@ public class SupplierService : ISupplierService
                 AllowedShortageQuantity = command.AllowedShortageQuantity
             })
             .ToList();
+    }
+
+    private static string ResolveDefaultDeliveryUoM(Product product)
+    {
+        var purchaseFromUnits = product.Units?
+            .Where(u => !u.IsDeleted && u.IsPurchaseUnit)
+            .Select(u => u.UnitName)
+            .FirstOrDefault(n => !string.IsNullOrWhiteSpace(n));
+
+        if (!string.IsNullOrWhiteSpace(purchaseFromUnits))
+            return purchaseFromUnits.Trim();
+
+        return string.IsNullOrWhiteSpace(product.BaseUnit) ? "Cái" : product.BaseUnit.Trim();
     }
 
     private static string ResolvePurchaseUnitName(SupplierProduct sp)

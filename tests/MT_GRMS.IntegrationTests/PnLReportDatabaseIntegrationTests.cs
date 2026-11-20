@@ -1,6 +1,5 @@
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
-using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
@@ -23,7 +22,7 @@ public class PnLReportDatabaseIntegrationTests
             CurrentUserId = userId;
             CurrentBranchId = branchId;
         }
-        public string CurrentRole { get; set; } = "ADMIN";
+        public string CurrentRole { get; set; } = "STORE_OWNER";
         public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
     }
 
@@ -52,6 +51,7 @@ public class PnLReportDatabaseIntegrationTests
             SubTotal = 1_000_000m,
             DiscountAmount = 50_000m,
             FinalAmount = 950_000m,
+            ReturnedAmount = 100_000m,
             PaymentStatus = "PAID",
             CreatedAt = now
         };
@@ -67,18 +67,7 @@ public class PnLReportDatabaseIntegrationTests
             CreatedAt = now.AddHours(2)
         };
 
-        // Bút toán trả hàng
-        var returnEntry = new CustomerDebtEntry
-        {
-            EntryCode = "RET-01",
-            BranchId = branchId,
-            EntryType = CustomerDebtType.GoodsReturnOffset,
-            Amount = 100_000m,
-            OccurredAtUtc = now.AddHours(3)
-        };
-
         context.Orders.AddRange(order1, order2);
-        context.CustomerDebtEntries.Add(returnEntry);
         await context.SaveChangesAsync();
 
         var from = now.Date;
@@ -147,40 +136,6 @@ public class PnLReportDatabaseIntegrationTests
     }
 
     [Fact]
-    public async Task PnLReportRepository_GetBadDebtExpenseAsync_ShouldAggregateOnlyBadDebtWriteOffs()
-    {
-        using var context = CreateDbContext();
-        var repo = new PnLReportRepository(context);
-
-        var branchId = Guid.NewGuid();
-        var now = new DateTime(2026, 10, 15, 12, 0, 0, DateTimeKind.Utc);
-
-        var badDebtEntry = new CustomerDebtEntry
-        {
-            EntryCode = "WO-01",
-            BranchId = branchId,
-            EntryType = CustomerDebtType.BadDebtWriteOff,
-            Amount = 250_000m,
-            OccurredAtUtc = now
-        };
-
-        var normalRepayment = new CustomerDebtEntry
-        {
-            EntryCode = "REP-01",
-            BranchId = branchId,
-            EntryType = CustomerDebtType.DebtRepayment,
-            Amount = 500_000m,
-            OccurredAtUtc = now.AddHours(1)
-        };
-
-        context.CustomerDebtEntries.AddRange(badDebtEntry, normalRepayment);
-        await context.SaveChangesAsync();
-
-        var badDebt = await repo.GetBadDebtExpenseAsync(branchId, now.Date, now.Date.AddDays(1));
-        Assert.Equal(250_000m, badDebt); // Chỉ tính 250k xóa nợ xấu
-    }
-
-    [Fact]
     public async Task PnLReport_And_S2cHkd_ShouldBe100PercentIdentical_InSamePeriod()
     {
         using var context = CreateDbContext();
@@ -209,6 +164,7 @@ public class PnLReportDatabaseIntegrationTests
             TotalAmount = 3_500_000m,
             DiscountAmount = 100_000m,
             FinalAmount = 3_400_000m,
+            ReturnedAmount = 350_000m,
             PaymentStatus = "PAID",
             Status = "Completed",
             CreatedAt = orderTime
@@ -225,16 +181,6 @@ public class PnLReportDatabaseIntegrationTests
         });
         context.Orders.Add(order);
 
-        // Return entry: 350,000 VND (10% of GrossRevenue)
-        context.CustomerDebtEntries.Add(new CustomerDebtEntry
-        {
-            EntryCode = "RET-AUDIT-01",
-            BranchId = branchId,
-            EntryType = CustomerDebtType.GoodsReturnOffset,
-            Amount = 350_000m,
-            OccurredAtUtc = orderTime.AddHours(2)
-        });
-
         // Operating expense voucher: 500,000 VND
         context.ExpenseVouchers.Add(new ExpenseVoucher
         {
@@ -244,6 +190,7 @@ public class PnLReportDatabaseIntegrationTests
             Amount = 500_000m,
             Status = ExpenseVoucherStatus.Paid,
             Nature = FinancialNature.OperatingExpense,
+            IsTaxDeductible = true,
             ExpenseDate = orderTime.AddHours(3),
             CreatedAt = orderTime.AddHours(3)
         });
@@ -280,5 +227,57 @@ public class PnLReportDatabaseIntegrationTests
         Assert.Equal(taxNetRev, pnlNetRev);       // 3,500,000 - 100,000 - 350,000 = 3,050,000
         Assert.Equal(taxCogs, pnlCogs.TotalCogs); // 2,500,000 - 250,000 (return COGS) = 2,250,000
         Assert.Equal(taxOpex, pnlTotalOpex);      // 500,000 (Owner draw excluded)
+    }
+
+    [Fact]
+    public async Task PnLReportRepository_GetTopProducts_And_DailyTrend_ShouldWork()
+    {
+        using var context = CreateDbContext();
+        var repo = new PnLReportRepository(context);
+
+        var branchId = Guid.NewGuid();
+        var prodId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+
+        context.Products.Add(new MT_GRMS.Domain.Entities.Catalog.Product
+        {
+            Id = prodId,
+            ProductCode = "SP-TOP-01",
+            Name = "Top Ban Chay",
+            CostPrice = 20_000m,
+            SellingPrice = 30_000m
+        });
+
+        var order = new Order
+        {
+            OrderCode = "ORD-TOP-01",
+            BranchId = branchId,
+            SubTotal = 300_000m,
+            FinalAmount = 300_000m,
+            PaymentStatus = "PAID",
+            Status = "Completed",
+            CreatedAt = now
+        };
+        order.Details.Add(new OrderDetail
+        {
+            Id = Guid.NewGuid(),
+            OrderId = order.Id,
+            ProductId = prodId,
+            ProductName = "Top Ban Chay",
+            Qty = 10,
+            UnitPrice = 30_000m,
+            ActualPrice = 30_000m,
+            CostPriceAtSale = 20_000m
+        });
+
+        context.Orders.Add(order);
+        await context.SaveChangesAsync();
+
+        var topProducts = await repo.GetTopProductsAsync(branchId, now.AddDays(-1), now.AddDays(1), 5);
+        Assert.NotEmpty(topProducts);
+        Assert.Equal("SP-TOP-01", topProducts[0].ProductCode);
+
+        var dailyTrend = await repo.GetDailyTrendAsync(branchId, now.AddDays(-1), now.AddDays(1));
+        Assert.NotEmpty(dailyTrend);
     }
 }

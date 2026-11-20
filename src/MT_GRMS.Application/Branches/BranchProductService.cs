@@ -219,7 +219,7 @@ public class BranchProductService : IBranchProductService
                 ProductId = product.Id,
                 Name = product.Name,
                 Sku = product.ProductCode,
-                Barcode = product.Barcode,
+                Barcode = product.Barcode ?? string.Empty,
                 Category = product.Category?.Name ?? "Khác",
                 Unit = product.BaseUnit,
                 RetailPrice = effectiveRetail,
@@ -274,7 +274,12 @@ public class BranchProductService : IBranchProductService
         }
 
         var productForUnits = catalog.Product ?? product;
-        ApplyUnitPriceOverrides(catalog, productForUnits, command.UnitPrices);
+        var oldUnitPrices = (productForUnits.Units ?? [])
+            .Where(u => !u.IsDeleted)
+            .ToDictionary(
+                u => u.Id,
+                u => catalog.UnitPriceOverrides?.FirstOrDefault(o => !o.IsDeleted && o.ProductUnitId == u.Id)?.SellingPriceOverride ?? u.Price);
+        await ApplyUnitPriceOverridesAsync(catalog, productForUnits, command.UnitPrices, cancellationToken);
 
         var oldEffective = catalog.SellingPriceOverride ?? product.SellingPrice;
 
@@ -308,6 +313,7 @@ public class BranchProductService : IBranchProductService
                 Id = Guid.NewGuid(),
                 TenantId = _tenantContext.CurrentTenantId,
                 ProductId = product.Id,
+                ProductUnitId = productForUnits.Units?.FirstOrDefault(u => u.IsBaseUnit && !u.IsDeleted)?.Id,
                 BranchId = branchId,
                 PriceScope = "BRANCH",
                 PriceType = "SELLING_PRICE",
@@ -315,8 +321,8 @@ public class BranchProductService : IBranchProductService
                 NewPrice = effectiveRetail,
                 CostPriceSnapshot = costSnapshot,
                 IsBelowCost = isBelowCost,
-                ManagerApprovedBy = isBelowCost ? (_tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "BRANCH_MANAGER") : null,
-                ManagerApprovalReason = isBelowCost ? "Xác nhận bán dưới giá vốn tại chi nhánh" : null,
+                ManagerApprovedBy = null,
+                ManagerApprovalReason = null,
                 ChangedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM",
                 ChangedByUserName = !string.IsNullOrEmpty(_tenantContext.CurrentRole) ? $"{_tenantContext.CurrentRole} ({branch.Name})" : branch.Name,
                 Reason = isBelowCost ? "Điều chỉnh giá chi nhánh (Dưới giá vốn)" : "Điều chỉnh giá chi nhánh",
@@ -328,20 +334,47 @@ public class BranchProductService : IBranchProductService
             }
         }
 
-        // Đồng bộ RetailPrice trên các lô tồn (nếu có) để POS đọc nhất quán.
-        var stocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);
-        foreach (var stock in stocks)
+        if (_priceHistoryRepository != null && command.UnitPrices is { Count: > 0 })
         {
-            stock.RetailPrice = effectiveRetail;
-            stock.Status = catalog.Status;
-            if (!string.IsNullOrWhiteSpace(catalog.ShelfLocation))
+            foreach (var row in command.UnitPrices.Where(x => x.UnitId.HasValue && x.UnitId.Value != Guid.Empty && !x.IsBaseUnit))
             {
-                stock.ShelfLocation = catalog.ShelfLocation;
+                var unit = productForUnits.Units?.FirstOrDefault(u => !u.IsDeleted && u.Id == row.UnitId!.Value);
+                if (unit == null || !oldUnitPrices.TryGetValue(unit.Id, out var oldUnitPrice) || oldUnitPrice == row.Price)
+                    continue;
+
+                var unitCost = product.CostPrice.HasValue ? product.CostPrice.Value * unit.ConversionRate : (decimal?)null;
+                await _priceHistoryRepository.AddAsync(new ProductPriceHistory
+                {
+                    TenantId = _tenantContext.CurrentTenantId,
+                    ProductId = product.Id,
+                    BranchId = branchId,
+                    ProductUnitId = unit.Id,
+                    PriceScope = "BRANCH",
+                    PriceType = "SELLING_PRICE",
+                    OldPrice = oldUnitPrice,
+                    NewPrice = row.Price,
+                    CostPriceSnapshot = unitCost,
+                    IsBelowCost = unitCost.HasValue && row.Price < unitCost.Value,
+                    ChangedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM",
+                    ChangedByUserName = !string.IsNullOrEmpty(_tenantContext.CurrentRole) ? $"{_tenantContext.CurrentRole} ({branch.Name})" : branch.Name,
+                    Reason = $"Cập nhật giá đơn vị {unit.UnitName} tại chi nhánh"
+                }, cancellationToken);
             }
-            stock.UpdatedAt = DateTime.UtcNow;
         }
 
+        // Lấy snapshot để dựng DTO. Không update các entity BranchStock đang tracked:
+        // RowVersion của chúng thuộc luồng biến động tồn kho và có thể đổi do bán/nhập
+        // hàng song song với thao tác sửa giá.
+        var stocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        await _repository.SyncBranchStockCatalogAsync(
+            branchId,
+            productId,
+            effectiveRetail,
+            catalog.Status,
+            catalog.ShelfLocation,
+            cancellationToken);
 
         return await BuildDtoAsync(branch, product, catalog, stocks, cancellationToken);
     }
@@ -383,13 +416,15 @@ public class BranchProductService : IBranchProductService
         catalog.UpdatedAt = DateTime.UtcNow;
 
         var stocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);
-        foreach (var stock in stocks)
-        {
-            stock.Status = normalizedStatus;
-            stock.UpdatedAt = DateTime.UtcNow;
-        }
-
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        await _repository.SyncBranchStockCatalogAsync(
+            branchId,
+            productId,
+            catalog.SellingPriceOverride ?? product.SellingPrice,
+            normalizedStatus,
+            catalog.ShelfLocation,
+            cancellationToken);
 
         return await BuildDtoAsync(branch, product, catalog, stocks, cancellationToken);
     }
@@ -502,7 +537,7 @@ public class BranchProductService : IBranchProductService
             ProductId = product.Id,
             Name = product.Name,
             Sku = product.ProductCode,
-            Barcode = product.Barcode,
+            Barcode = product.Barcode ?? string.Empty,
             Category = product.Category?.Name ?? "Khác",
             Unit = product.BaseUnit,
             RetailPrice = effectiveRetail,
@@ -517,17 +552,20 @@ public class BranchProductService : IBranchProductService
             MinOrderQuantity = moq,
             Status = catalog.Status,
             ShelfLocation = catalog.ShelfLocation,
-            AssignedDate = catalog.CreatedAt
+            AssignedDate = catalog.CreatedAt,
+            AllowRepack = product.AllowRepack,
+            ProcessedSellingPricePerKg = product.ProcessedSellingPricePerKg
         };
     }
 
     /// <summary>
     /// Upsert override từng ĐVT: khác Master → lưu; trùng Master → xóa override.
     /// </summary>
-    private void ApplyUnitPriceOverrides(
+    private async Task ApplyUnitPriceOverridesAsync(
         BranchProduct catalog,
         Product product,
-        List<BranchProductUnitPriceDto>? unitPrices)
+        List<BranchProductUnitPriceDto>? unitPrices,
+        CancellationToken cancellationToken)
     {
         if (unitPrices is not { Count: > 0 })
         {
@@ -577,13 +615,13 @@ public class BranchProductService : IBranchProductService
             }
             else
             {
-                catalog.UnitPriceOverrides.Add(new BranchProductUnitPrice
+                await _repository.AddUnitPriceOverrideAsync(new BranchProductUnitPrice
                 {
                     TenantId = catalog.TenantId,
                     BranchProductId = catalog.Id,
                     ProductUnitId = unitId,
                     SellingPriceOverride = row.Price
-                });
+                }, cancellationToken);
             }
         }
     }

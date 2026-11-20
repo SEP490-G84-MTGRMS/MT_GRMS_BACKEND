@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Moq;
+using Microsoft.Extensions.Configuration;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Auth.Dtos;
 using MT_GRMS.Application.Branches;
@@ -84,6 +85,7 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
             ShiftName = "Ca Toàn Thời Gian 24/7",
             PlannedStartTime = TimeSpan.Zero,
             PlannedEndTime = new TimeSpan(23, 59, 59),
+            CheckInTime = DateTime.UtcNow.AddHours(-1),
             Status = ScheduleStatus.Scheduled
         };
 
@@ -95,11 +97,6 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
         shiftRepoMock.Setup(r => r.GenerateNextShiftCodeAsync(_branchId, It.IsAny<CancellationToken>()))
             .ReturnsAsync("SHF-001");
 
-        ShiftParticipant? capturedParticipant = null;
-        shiftRepoMock.Setup(r => r.AddParticipantAsync(It.IsAny<ShiftParticipant>(), It.IsAny<CancellationToken>()))
-            .Callback<ShiftParticipant, CancellationToken>((p, _) => capturedParticipant = p)
-            .Returns(Task.CompletedTask);
-
         var uowMock = new Mock<IUnitOfWork>();
         var shiftService = new ShiftService(shiftRepoMock.Object, uowMock.Object, tenantCtx);
 
@@ -107,12 +104,12 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
         Assert.True(eligibility.IsAllowed);
         Assert.Equal("Phạm Thị Yến", eligibility.EmployeeName);
 
-        await shiftService.OpenShiftAsync(
+        var opened = await shiftService.OpenShiftAsync(
             new MT_GRMS.Application.PosShifts.Dtos.OpenShiftRequest(_branchId, Guid.NewGuid(), "Ca Sáng", 500000m, null),
             detGuid);
 
-        Assert.NotNull(capturedParticipant);
-        Assert.Equal("Phạm Thị Yến", capturedParticipant!.FullName);
+        Assert.Single(opened.Participants!);
+        Assert.Equal("Phạm Thị Yến", opened.Participants![0].FullName);
     }
 
     [Fact]
@@ -298,7 +295,6 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
             orderRepoMock.Object,
             uowMock.Object,
             new ThermalPrintService(),
-            debtService: null,
             cashbookService: cashbookMock.Object,
             validator: new OrderCreateRequestValidator(),
             shiftRepository: shiftRepoMock.Object,
@@ -320,11 +316,16 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
 
         Assert.NotNull(savedOrder);
         Assert.Null(savedOrder!.ShiftId);
-        // Must receive cash into Safe, NOT Till, and must NOT add owner to ShiftParticipants!
+        // Per-order creation must NOT record individual cashbook entries; instead, EOD settlement aggregates and records into Safe!
+        cashbookMock.Verify(c => c.GetOrCreateTillAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+
+        orderRepoMock.Setup(r => r.GetAllOrdersForSummaryAsync(_branchId, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<Order> { savedOrder });
+        var settleResult = await orderService.SettleOwnerDailyOrdersAsync(new SettleOwnerDailyRequest(_branchId, "Chốt cuối ngày"));
+        Assert.Equal(1, settleResult.SettledOrdersCount);
+        Assert.Equal(50000m, settleResult.CashSettledAmount);
         cashbookMock.Verify(c => c.GetOrCreateSafeAsync(_branchId, It.IsAny<CancellationToken>()), Times.Once);
         cashbookMock.Verify(c => c.ReceiveCashAsync(safeAccount.Id, FinanceAccountType.Safe, 50000m, "POS_SALE", It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
-        cashbookMock.Verify(c => c.GetOrCreateTillAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
-        shiftRepoMock.Verify(r => r.AddParticipantAsync(It.IsAny<ShiftParticipant>(), It.IsAny<CancellationToken>()), Times.Never);
 
         // Staff spoofing creatorRole = "STORE_OWNER" when no shift is open MUST be rejected with SHIFT_NOT_OPEN
         shiftRepoMock.Setup(r => r.GetActiveShiftAsync(_branchId, null, It.IsAny<CancellationToken>()))
@@ -338,7 +339,6 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
             orderRepoMock.Object,
             uowMock.Object,
             new ThermalPrintService(),
-            debtService: null,
             cashbookService: cashbookMock.Object,
             validator: new OrderCreateRequestValidator(),
             shiftRepository: shiftRepoMock.Object,
@@ -407,7 +407,13 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
         userRepoMock.Setup(r => r.GetEmployeeBranchIdAsync("usr_employee_annhien_02", "tenant_an_nhien_02", It.IsAny<CancellationToken>()))
             .ReturnsAsync(_branchId);
 
-        var authService = new AuthService(userRepoMock.Object);
+        var authConfig = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["Jwt:Key"] = "MT_GRMS_UNIT_TEST_JWT_SIGNING_SECRET_2026_0123456789",
+            ["Jwt:Issuer"] = "MTGRMS_API",
+            ["Jwt:Audience"] = "MTGRMS_CLIENT"
+        }).Build();
+        var authService = new AuthService(userRepoMock.Object, authConfig);
 
         var loginRes = await authService.LoginAsync(new LoginRequest("0917778888", "123456", "tenant_an_nhien_02"));
         Assert.Equal(_branchId, loginRes.User.BranchId);

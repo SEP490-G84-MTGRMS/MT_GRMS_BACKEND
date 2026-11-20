@@ -26,9 +26,11 @@ public class PayslipConfiguration : IEntityTypeConfiguration<Payslip>
                 v => v.ToString().ToUpper(),
                 v => Enum.Parse<SalaryType>(v, true))
             .HasMaxLength(30)
-            .HasDefaultValue(SalaryType.Monthly);
+            .HasDefaultValue(SalaryType.Monthly)
+            .HasSentinel((SalaryType)0);
 
         builder.Property(x => x.BaseRate).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
+        builder.Property(x => x.InsuranceBaseSalary).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.StandardDays).HasColumnType("decimal(5,2)").HasDefaultValue(26.00m);
         builder.Property(x => x.StandardDayHours).HasColumnType("decimal(5,2)").HasDefaultValue(8.00m);
 
@@ -62,7 +64,8 @@ public class PayslipConfiguration : IEntityTypeConfiguration<Payslip>
                 v => v.ToString().ToUpper(),
                 v => Enum.Parse<PayslipStatus>(v, true))
             .HasMaxLength(30)
-            .HasDefaultValue(PayslipStatus.Unpaid);
+            .HasDefaultValue(PayslipStatus.Unpaid)
+            .HasSentinel((PayslipStatus)0);
 
         // Thanh toán & sổ quỹ
         builder.Property(x => x.PaymentMethod).HasMaxLength(30);
@@ -91,9 +94,9 @@ public class PayslipConfiguration : IEntityTypeConfiguration<Payslip>
             .HasForeignKey(x => x.BranchId)
             .OnDelete(DeleteBehavior.Restrict);
 
-        builder.HasOne(x => x.CashbookTransaction)
+        builder.HasOne(x => x.CashbookEntry)
             .WithMany()
-            .HasForeignKey(x => x.CashbookTransactionId)
+            .HasForeignKey(x => x.CashbookEntryId)
             .OnDelete(DeleteBehavior.SetNull);
     }
 }

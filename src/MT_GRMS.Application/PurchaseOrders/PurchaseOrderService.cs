@@ -462,12 +462,16 @@ public class PurchaseOrderService : IPurchaseOrderService
                         && (detail.IsOwnerAdjusted || detail.StoreQty.HasValue);
                     if (ownerLocked)
                     {
-                        continue;
+                        employeeQty = cell.EmployeeQty;
+                        storeQty = detail!.StoreQty;
+                        isOwnerAdjusted = true;
                     }
-
-                    employeeQty = cell.EmployeeQty;
-                    storeQty = null;
-                    isOwnerAdjusted = false;
+                    else
+                    {
+                        employeeQty = cell.EmployeeQty;
+                        storeQty = null;
+                        isOwnerAdjusted = false;
+                    }
                 }
 
                 decimal finalQty = isOwnerAdjusted
@@ -746,7 +750,7 @@ public class PurchaseOrderService : IPurchaseOrderService
 
                         if (isEditable)
                         {
-                            group.PoCode = dayStatus.PoCode;
+                            group.PoCode = dayStatus?.PoCode;
                             group.CanAmend = true;
                             group.HasPendingChanges = true;
                             group.PendingChangeLineCount++;
@@ -1952,14 +1956,14 @@ public class PurchaseOrderService : IPurchaseOrderService
 
         if (!isDryRun && createdPos.Count > 0)
         {
-            foreach (var draft in draftPos)
+            foreach (var d in draftPos)
             {
-                draft.TotalQty = draft.Details.Sum(d =>
-                    OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted));
-                draft.TotalAmount = draft.Details.Sum(d =>
+                d.TotalQty = d.Details.Sum(det =>
+                    OrderMatrixRules.ComputeFinalQty(det.EmployeeQty ?? 0m, det.StoreQty, det.IsOwnerAdjusted));
+                d.TotalAmount = d.Details.Sum(det =>
                 {
-                    var q = OrderMatrixRules.ComputeFinalQty(d.EmployeeQty ?? 0m, d.StoreQty, d.IsOwnerAdjusted);
-                    return q * d.UnitPrice;
+                    var q = OrderMatrixRules.ComputeFinalQty(det.EmployeeQty ?? 0m, det.StoreQty, det.IsOwnerAdjusted);
+                    return q * det.UnitPrice;
                 });
             }
 

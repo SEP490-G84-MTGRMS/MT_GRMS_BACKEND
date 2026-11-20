@@ -219,4 +219,66 @@ public class TenantStoreControllerTests
         Assert.False(resp.Success);
         Assert.Equal("DOWNGRADE_NOT_ALLOWED", resp.ErrorCode);
     }
+
+    [Fact]
+    public async Task PurchaseSubscription_FromStandardToPro_RecordsSuccessfulUpgrade()
+    {
+        var tenant = await _dbContext.Tenants.FindAsync("tenant-01");
+        Assert.NotNull(tenant);
+        tenant!.CurrentPlan = "STANDARD";
+        tenant.SubscriptionStatus = "ACTIVE";
+        tenant.WalletBalance = 10000000m;
+        _dbContext.SubscriptionPlans.Add(new SubscriptionPlan
+        {
+            Id = "plan-pro",
+            PlanCode = "PRO",
+            PlanName = "Gói Pro",
+            PriceMonthly = 249000m,
+            PriceYearly = 2988000m,
+            IsActive = true
+        });
+        await _dbContext.SaveChangesAsync();
+
+        var request = new PurchaseSubscriptionRequest(
+            PlanCode: "PRO",
+            Months: 1,
+            ExtraBranches: 0,
+            HasStaffManagementAddon: false,
+            PaymentMethod: "Wallet");
+
+        Assert.IsType<OkObjectResult>(await _controller.PurchaseSubscription(request, CancellationToken.None));
+        var transaction = Assert.Single(_dbContext.WalletTransactions);
+        Assert.Equal("UPGRADE_PLAN", transaction.Type);
+        Assert.Equal("SUCCESS", transaction.Status);
+    }
+
+    [Fact]
+    public async Task PurchaseSubscription_SamePlanRenewal_DoesNotRecordUpgrade()
+    {
+        var tenant = await _dbContext.Tenants.FindAsync("tenant-01");
+        Assert.NotNull(tenant);
+        tenant!.CurrentPlan = "PRO";
+        tenant.SubscriptionStatus = "ACTIVE";
+        tenant.WalletBalance = 10000000m;
+        _dbContext.SubscriptionPlans.Add(new SubscriptionPlan
+        {
+            Id = "plan-pro",
+            PlanCode = "PRO",
+            PlanName = "Gói Pro",
+            PriceMonthly = 249000m,
+            PriceYearly = 2988000m,
+            IsActive = true
+        });
+        await _dbContext.SaveChangesAsync();
+
+        var request = new PurchaseSubscriptionRequest(
+            PlanCode: "PRO",
+            Months: 1,
+            ExtraBranches: 0,
+            HasStaffManagementAddon: false,
+            PaymentMethod: "Wallet");
+
+        Assert.IsType<OkObjectResult>(await _controller.PurchaseSubscription(request, CancellationToken.None));
+        Assert.Equal("PURCHASE_PLAN", Assert.Single(_dbContext.WalletTransactions).Type);
+    }
 }

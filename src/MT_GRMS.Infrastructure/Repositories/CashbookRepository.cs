@@ -45,6 +45,7 @@ public class CashbookRepository : GenericRepository<CashbookEntry>, ICashbookRep
     {
         return await _context.ShiftZReports
             .Where(s => s.TillId == tillId && s.Status == Domain.Enums.ShiftState.Open)
+            .OrderByDescending(s => s.OpenedAtUtc)
             .FirstOrDefaultAsync(ct);
     }
 

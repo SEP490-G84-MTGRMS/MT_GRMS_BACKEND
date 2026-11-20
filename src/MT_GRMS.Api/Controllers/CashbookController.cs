@@ -12,7 +12,7 @@ using MT_GRMS.Domain.Enums;
 namespace MT_GRMS.Api.Controllers;
 
 [Route("api/[controller]")]
-[Authorize]
+[Authorize(Roles = SystemRoles.StoreOwner)]
 public class CashbookController : BaseApiController
 {
     private readonly ICashbookService _cashbookService;
@@ -26,6 +26,7 @@ public class CashbookController : BaseApiController
 
     [HttpPost("shifts/open")]
     [RequireIdempotency]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<ShiftResponse>>> OpenShift([FromBody] OpenShiftRequest request, CancellationToken ct)
     {
         var result = await _cashbookService.OpenShiftAsync(request, ct);
@@ -34,6 +35,7 @@ public class CashbookController : BaseApiController
 
     [HttpPost("shifts/close")]
     [RequireIdempotency]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<ShiftResponse>>> CloseShift([FromBody] CloseShiftRequest request, CancellationToken ct)
     {
         var result = await _cashbookService.CloseShiftZReportAsync(request, ct);
@@ -41,27 +43,12 @@ public class CashbookController : BaseApiController
     }
 
     [HttpPost("cash-drop")]
+    [RequireIdempotency]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<bool>>> CashDrop([FromBody] CashDropRequest request, CancellationToken ct)
     {
         var result = await _cashbookService.ProcessCashDropAsync(request, ct);
         return Ok(ApiResponse<bool>.Ok(result, "Thực hiện cash drop bàn giao tiền sang két sắt thành công."));
-    }
-
-    [HttpPost("deposits/bank")]
-    [RequireIdempotency]
-    public async Task<ActionResult<ApiResponse<CashInTransitResponse>>> CreateDepositToBank([FromBody] DepositToBankRequest request, CancellationToken ct)
-    {
-        var result = await _cashbookService.CreateDepositToBankAsync(request, ct);
-        return Ok(ApiResponse<CashInTransitResponse>.Ok(result, "Tạo lệnh nộp tiền vào ngân hàng thành công."));
-    }
-
-    [HttpPost("deposits/confirm")]
-    [RequireIdempotency]
-    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
-    public async Task<ActionResult<ApiResponse<CashInTransitResponse>>> ConfirmBankDeposit([FromBody] ConfirmBankDepositRequest request, CancellationToken ct)
-    {
-        var result = await _cashbookService.ConfirmBankDepositAsync(request, ct);
-        return Ok(ApiResponse<CashInTransitResponse>.Ok(result, "Xác nhận tiền nộp đã vào tài khoản ngân hàng thành công."));
     }
 
     [HttpGet("entries")]
@@ -82,6 +69,7 @@ public class CashbookController : BaseApiController
     }
 
     [HttpPost("tills/init")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<Guid>>> GetOrCreateTill([FromQuery] Guid branchId, [FromQuery] string tillName = "Két Thu Ngân #1", CancellationToken ct = default)
     {
         var till = await _cashbookService.GetOrCreateTillAsync(branchId, tillName, ct);
@@ -108,6 +96,7 @@ public class CashbookController : BaseApiController
 
     [HttpPost("receipts")]
     [RequireIdempotency]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<CashbookEntryResponse>>> CreateReceipt(
         [FromBody] CreateReceiptRequest request,
         CancellationToken ct)
@@ -118,6 +107,7 @@ public class CashbookController : BaseApiController
 
     [HttpPost("payments")]
     [RequireIdempotency]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<CashbookEntryResponse>>> CreatePayment(
         [FromBody] CreatePaymentRequest request,
         CancellationToken ct)
@@ -126,9 +116,20 @@ public class CashbookController : BaseApiController
         return Ok(ApiResponse<CashbookEntryResponse>.Ok(result, "Ghi nhận phiếu chi thành công."));
     }
 
+    [HttpPost("tax-payments")]
+    [RequireIdempotency]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
+    public async Task<ActionResult<ApiResponse<TaxPaymentResponse>>> RecordTaxPayment(
+        [FromBody] RecordTaxPaymentRequest request,
+        CancellationToken ct)
+    {
+        var result = await _cashbookService.RecordTaxPaymentAsync(request, ct);
+        return Ok(ApiResponse<TaxPaymentResponse>.Ok(result, "Đã ghi nhận chứng từ nộp thuế trong sổ quỹ. Chứng từ này không xác nhận nghĩa vụ thuế ngoài hệ thống đã được quyết toán."));
+    }
+
     [HttpPost("transfers")]
     [RequireIdempotency]
-    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<TransferFundResponse>>> TransferFunds(
         [FromBody] TransferFundRequest request,
         CancellationToken ct)
@@ -139,7 +140,7 @@ public class CashbookController : BaseApiController
 
     [HttpPost("reconcile")]
     [RequireIdempotency]
-    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<CashbookEntryResponse?>>> ReconcileCashAccount(
         [FromBody] ReconcileAccountRequest request,
         CancellationToken ct)
@@ -150,7 +151,7 @@ public class CashbookController : BaseApiController
 
     [HttpPost("entries/{id:guid}/void")]
     [RequireIdempotency]
-    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<CashbookEntryResponse>>> VoidTransaction(
         [FromRoute] Guid id,
         [FromBody] VoidEntryRequest request,
@@ -171,7 +172,7 @@ public class CashbookController : BaseApiController
 
     [HttpPost("triage/{id:guid}/resolve")]
     [RequireIdempotency]
-    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<ExpenseVoucherResponse>>> ResolveTriage(
         [FromRoute] Guid id,
         [FromBody] ResolveTriageRequest request,
@@ -182,7 +183,7 @@ public class CashbookController : BaseApiController
     }
 
     [HttpGet("accounts/{accountId:guid}/verify-chain")]
-    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<object>>> VerifyChainIntegrity(Guid accountId, CancellationToken ct)
     {
         var isValid = await _cashbookService.VerifyChainIntegrityAsync(accountId, ct);

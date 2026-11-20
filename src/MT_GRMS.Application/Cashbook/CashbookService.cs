@@ -1,7 +1,9 @@
 using MT_GRMS.Application.Cashbook.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Services;
+using MT_GRMS.Application.Tax;
 using MT_GRMS.Domain.Entities.Finance;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
@@ -9,34 +11,47 @@ namespace MT_GRMS.Application.Cashbook;
 
 public class CashbookService : ICashbookService
 {
+    private sealed record EntryClassification(
+        string CategoryCode,
+        FinancialNature FinancialNature,
+        CashbookTaxTreatment TaxTreatment,
+        string? TaxTreatmentReason = null);
+
     private readonly ICashbookRepository _cashbookRepo;
     private readonly IRepository<FinanceAccount> _accountRepo;
-    private readonly IRepository<CashInTransit> _transitRepo;
     private readonly IRepository<ShiftZReport> _shiftRepo;
     private readonly IAuditHashService _auditHashService;
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IRepository<ExpenseVoucher>? _expenseVoucherRepo;
+    private readonly IRepository<Branch>? _branchRepo;
+    private readonly IHouseholdTaxRepository? _taxRepository;
 
     public CashbookService(
         ICashbookRepository cashbookRepo,
         IRepository<FinanceAccount> accountRepo,
-        IRepository<CashInTransit> transitRepo,
         IRepository<ShiftZReport> shiftRepo,
         IAuditHashService auditHashService,
         ITenantContext tenantContext,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        IRepository<ExpenseVoucher>? expenseVoucherRepo = null,
+        IHouseholdTaxRepository? taxRepository = null,
+        IRepository<Branch>? branchRepo = null)
     {
         _cashbookRepo = cashbookRepo;
         _accountRepo = accountRepo;
-        _transitRepo = transitRepo;
+        _branchRepo = branchRepo;
         _shiftRepo = shiftRepo;
         _auditHashService = auditHashService;
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
+        _expenseVoucherRepo = expenseVoucherRepo;
+        _taxRepository = taxRepository;
     }
 
     public async Task<ShiftResponse> OpenShiftAsync(OpenShiftRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         var till = await _cashbookRepo.GetAccountWithLockAsync(request.TillId, ct)
             ?? throw new NotFoundException($"Không tìm thấy két quầy với Id: {request.TillId}");
 
@@ -73,6 +88,7 @@ public class CashbookService : ICashbookService
 
     public async Task<ShiftResponse> CloseShiftZReportAsync(CloseShiftRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         var shift = await _shiftRepo.GetByIdAsync(request.ShiftId, ct)
             ?? throw new NotFoundException($"Không tìm thấy ca làm việc: {request.ShiftId}");
 
@@ -113,6 +129,7 @@ public class CashbookService : ICashbookService
 
     public async Task<bool> ProcessCashDropAsync(CashDropRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         if (request.Amount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền cash drop phải lớn hơn 0.");
@@ -143,72 +160,10 @@ public class CashbookService : ICashbookService
         return true;
     }
 
-    public async Task<CashInTransitResponse> CreateDepositToBankAsync(DepositToBankRequest request, CancellationToken ct = default)
-    {
-        if (request.Amount <= 0)
-        {
-            throw new BusinessException("INVALID_AMOUNT", "Số tiền nộp ngân hàng phải lớn hơn 0.");
-        }
+    public Task<CashbookEntryResponse> DisburseCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default) =>
+        DisburseCashCoreAsync(accountId, amount, sourceType, sourceId, referenceCode, description, null, ct);
 
-        var safe = await _cashbookRepo.GetAccountWithLockAsync(request.SourceAccountId, ct)
-            ?? throw new NotFoundException("Không tìm thấy két sắt nguồn.");
-
-        if (safe.CurrentBalance < request.Amount)
-        {
-            throw new InsufficientStockException($"Két sắt không đủ tiền để nộp ngân hàng (Hiện có: {safe.CurrentBalance:N0}đ).");
-        }
-
-        safe.CurrentBalance -= request.Amount;
-
-        var transit = new CashInTransit
-        {
-            TransitCode = "CIT-" + DateTime.UtcNow.ToString("yyyyMMddHHmmss"),
-            SourceAccountId = safe.Id,
-            SourceAccountType = FinanceAccountType.Safe,
-            TargetBankAccountId = request.TargetBankAccountId,
-            AmountSent = request.Amount,
-            CarrierUserId = request.CarrierUserId,
-            Status = CashInTransitStatus.PendingBankConfirmation,
-            Note = request.Note
-        };
-
-        await _transitRepo.AddAsync(transit, ct);
-
-        await RecordEntryInternalAsync(safe.Id, FinanceAccountType.Safe, safe.BranchId, CashbookEntryType.Payment, request.Amount, "BANK_DEPOSIT", transit.Id, transit.TransitCode, "Xuất két sắt nộp tiền vào tài khoản ngân hàng", ct);
-
-        await _unitOfWork.SaveChangesAsync(ct);
-
-        return new CashInTransitResponse(transit.Id, transit.TransitCode, transit.SourceAccountId, transit.TargetBankAccountId, transit.AmountSent, transit.AmountReceived, transit.DiscrepancyAmount, transit.CarrierUserId, transit.Status.ToString(), transit.CreatedAt);
-    }
-
-    public async Task<CashInTransitResponse> ConfirmBankDepositAsync(ConfirmBankDepositRequest request, CancellationToken ct = default)
-    {
-        var transit = await _transitRepo.GetByIdAsync(request.TransitId, ct)
-            ?? throw new NotFoundException("Không tìm thấy lệnh nộp tiền đang chuyển.");
-
-        if (transit.Status != CashInTransitStatus.PendingBankConfirmation)
-        {
-            throw new BusinessException("INVALID_STATUS", "Lệnh nộp tiền này không ở trạng thái chờ xác nhận.");
-        }
-
-        var bankAccount = await _cashbookRepo.GetAccountWithLockAsync(transit.TargetBankAccountId, ct)
-            ?? throw new NotFoundException("Không tìm thấy tài khoản ngân hàng thụ hưởng.");
-
-        transit.AmountReceived = request.ActualReceivedAmount;
-        transit.DiscrepancyAmount = request.ActualReceivedAmount - transit.AmountSent;
-        transit.ConfirmedAtUtc = DateTime.UtcNow;
-        transit.Status = transit.DiscrepancyAmount != 0 ? CashInTransitStatus.Discrepancy : CashInTransitStatus.Completed;
-
-        bankAccount.CurrentBalance += request.ActualReceivedAmount;
-
-        await RecordEntryInternalAsync(bankAccount.Id, FinanceAccountType.Bank, null, CashbookEntryType.Receipt, request.ActualReceivedAmount, "BANK_DEPOSIT", transit.Id, transit.TransitCode, "Xác nhận tiền nộp đã vào tài khoản ngân hàng", ct);
-
-        await _unitOfWork.SaveChangesAsync(ct);
-
-        return new CashInTransitResponse(transit.Id, transit.TransitCode, transit.SourceAccountId, transit.TargetBankAccountId, transit.AmountSent, transit.AmountReceived, transit.DiscrepancyAmount, transit.CarrierUserId, transit.Status.ToString(), transit.CreatedAt);
-    }
-
-    public async Task<CashbookEntryResponse> DisburseCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default)
+    private async Task<CashbookEntryResponse> DisburseCashCoreAsync(Guid accountId, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, EntryClassification? classification, CancellationToken ct)
     {
         if (amount <= 0)
         {
@@ -240,7 +195,7 @@ public class CashbookService : ICashbookService
                 if (shift != null) shift.TotalCashOut += amount;
             }
 
-            var entry = await RecordEntryInternalAsync(accountId, account.AccountType, branchId, CashbookEntryType.Payment, amount, sourceType, sourceId, referenceCode, description, ct);
+            var entry = await RecordEntryInternalAsync(accountId, account.AccountType, branchId, CashbookEntryType.Payment, amount, sourceType, sourceId, referenceCode, description, classification, ct);
             await _unitOfWork.SaveChangesAsync(ct);
 
             if (shouldManageTransaction)
@@ -260,7 +215,10 @@ public class CashbookService : ICashbookService
         }
     }
 
-    public async Task<CashbookEntryResponse> ReceiveCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default)
+    public Task<CashbookEntryResponse> ReceiveCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default) =>
+        ReceiveCashCoreAsync(accountId, amount, sourceType, sourceId, referenceCode, description, null, ct);
+
+    private async Task<CashbookEntryResponse> ReceiveCashCoreAsync(Guid accountId, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, EntryClassification? classification, CancellationToken ct)
     {
         if (amount <= 0)
         {
@@ -287,7 +245,7 @@ public class CashbookService : ICashbookService
                 if (shift != null) shift.TotalCashIn += amount;
             }
 
-            var entry = await RecordEntryInternalAsync(accountId, account.AccountType, branchId, CashbookEntryType.Receipt, amount, sourceType, sourceId, referenceCode, description, ct);
+            var entry = await RecordEntryInternalAsync(accountId, account.AccountType, branchId, CashbookEntryType.Receipt, amount, sourceType, sourceId, referenceCode, description, classification, ct);
             await _unitOfWork.SaveChangesAsync(ct);
 
             if (shouldManageTransaction)
@@ -319,6 +277,7 @@ public class CashbookService : ICashbookService
         string? keyword = null,
         CancellationToken ct = default)
     {
+        RequireOwner();
         var kw = keyword?.Trim().ToLowerInvariant();
         var isGuid = Guid.TryParse(kw, out var searchGuid);
 
@@ -346,6 +305,8 @@ public class CashbookService : ICashbookService
 
     public async Task<FinanceAccount> GetOrCreateTillAsync(Guid branchId, string tillName, CancellationToken ct = default)
     {
+        RequireOwner();
+        ValidateFinancialManagementRole();
         var existingList = await _accountRepo.FindAsync(t => t.BranchId == branchId && t.AccountType == FinanceAccountType.Till, ct);
         var existing = existingList.FirstOrDefault(t => t.AccountName == tillName) ?? existingList.FirstOrDefault();
         if (existing != null) return existing;
@@ -366,10 +327,11 @@ public class CashbookService : ICashbookService
 
     public async Task<FinanceAccount> GetOrCreateSafeAsync(Guid branchId, CancellationToken ct = default)
     {
+        RequireOwner();
         var existingList = await _accountRepo.FindAsync(
-            s => s.BranchId == branchId && s.AccountType == FinanceAccountType.Safe && !s.IsDeleted,
+            s => s.BranchId == branchId && s.AccountType == FinanceAccountType.Safe && s.IsActive && !s.IsDeleted,
             ct);
-        var existing = existingList.FirstOrDefault();
+        var existing = existingList.OrderBy(s => s.CreatedAt).FirstOrDefault();
         if (existing != null) return existing;
 
         var safe = new FinanceAccount
@@ -388,6 +350,58 @@ public class CashbookService : ICashbookService
         return safe;
     }
 
+    public async Task<FinanceAccount> ResolveDisbursementAccountAsync(
+        Guid branchId,
+        string paymentMethod,
+        Guid? cashbookAccountId = null,
+        CancellationToken ct = default)
+    {
+        var normalized = (paymentMethod ?? string.Empty).Trim().ToUpperInvariant();
+        var isBank = normalized.Contains("BANK")
+            || normalized.Contains("TRANSFER")
+            || normalized.Contains("VIETQR")
+            || normalized == "QR";
+
+        if (!cashbookAccountId.HasValue)
+        {
+            return isBank
+                ? await GetOrCreateBankAccountAsync(branchId, ct: ct)
+                : await GetOrCreateSafeAsync(branchId, ct);
+        }
+
+        var account = await _accountRepo.GetByIdAsync(cashbookAccountId.Value, ct);
+        if (account == null || account.IsDeleted || !account.IsActive)
+        {
+            throw new NotFoundException("Tài khoản quỹ được chọn không tồn tại hoặc đang ngừng hoạt động.");
+        }
+
+        var currentTenantId = _tenantContext.CurrentTenantId;
+        if (!string.IsNullOrEmpty(currentTenantId) && account.TenantId != currentTenantId)
+        {
+            throw new NotFoundException("Tài khoản quỹ được chọn không thuộc cửa hàng hiện tại.");
+        }
+
+        if (isBank && account.AccountType != FinanceAccountType.Bank)
+        {
+            throw new BusinessException("INVALID_CASHBOOK_ACCOUNT", "Phương thức chuyển khoản chỉ áp dụng cho tài khoản ngân hàng.");
+        }
+
+        if (!isBank && account.AccountType == FinanceAccountType.Bank)
+        {
+            throw new BusinessException("INVALID_CASHBOOK_ACCOUNT", "Phương thức tiền mặt không áp dụng cho tài khoản ngân hàng.");
+        }
+
+        if (account.AccountType != FinanceAccountType.Bank
+            && account.BranchId.HasValue
+            && branchId != Guid.Empty
+            && account.BranchId.Value != branchId)
+        {
+            throw new BusinessException("INVALID_CASHBOOK_ACCOUNT", "Tài khoản quỹ được chọn không thuộc chi nhánh của phiếu lương.");
+        }
+
+        return account;
+    }
+
     public async Task<FinanceAccount> GetOrCreateBankAccountAsync(
         Guid? branchId = null,
         string? bankName = null,
@@ -395,12 +409,23 @@ public class CashbookService : ICashbookService
         string? accountHolderName = null,
         CancellationToken ct = default)
     {
+        RequireOwner();
         var existingBanks = await _accountRepo.FindAsync(b => b.AccountType == FinanceAccountType.Bank && !b.IsDeleted, ct);
+        if (_branchRepo != null)
+        {
+            if (!branchId.HasValue)
+                throw new BusinessException("BRANCH_REQUIRED", "Cần chọn chi nhánh để xác định tài khoản ngân hàng.");
+            var branch = await _branchRepo.GetByIdAsync(branchId.Value, ct);
+            if (branch == null || branch.IsDeleted || branch.TenantId != _tenantContext.CurrentTenantId)
+                throw new BusinessException("BRANCH_NOT_FOUND", "Không tìm thấy chi nhánh thuộc cửa hàng.");
+            var current = existingBanks.FirstOrDefault(b => b.Id == branch.CurrentBankFinanceAccountId
+                && b.TenantId == branch.TenantId && b.BranchId == branch.Id && b.IsActive);
+            return current ?? throw new BusinessException("BANK_ACCOUNT_NOT_CONFIGURED", "Chi nhánh chưa chọn tài khoản ngân hàng nhận tiền.");
+        }
         var matchedBank = existingBanks
-            .Where(b => b.IsActive && (!branchId.HasValue || !b.BranchId.HasValue || b.BranchId == branchId.Value))
+            .Where(b => b.IsActive && b.BranchId == branchId)
             .FirstOrDefault()
-            ?? existingBanks.FirstOrDefault(b => b.IsActive)
-            ?? existingBanks.FirstOrDefault();
+            ?? existingBanks.FirstOrDefault(b => b.BranchId == branchId);
 
         if (matchedBank != null)
         {
@@ -418,7 +443,9 @@ public class CashbookService : ICashbookService
         {
             Id = Guid.NewGuid(),
             TenantId = _tenantContext.CurrentTenantId ?? string.Empty,
-            BranchId = null,
+            // Sổ ngân hàng phục vụ chốt ngày phải tách theo chi nhánh. Tài khoản vật lý
+            // dùng chung được biểu diễn bằng PaymentAccount/BranchPaymentAccount.
+            BranchId = branchId,
             AccountType = FinanceAccountType.Bank,
             AccountName = resolvedName,
             BankName = resolvedName,
@@ -435,6 +462,7 @@ public class CashbookService : ICashbookService
 
     public async Task<List<CashAccountResponse>> GetAccountsAsync(Guid? branchId = null, CancellationToken ct = default)
     {
+        RequireOwner();
         var accounts = await _accountRepo.GetAllAsync(ct);
         var defaultBranchId = accounts.FirstOrDefault(a => a.BranchId.HasValue)?.BranchId ?? branchId ?? Guid.NewGuid();
         var currentTenantId = _tenantContext.CurrentTenantId ?? string.Empty;
@@ -546,6 +574,7 @@ public class CashbookService : ICashbookService
 
     public async Task<CashbookSummaryResponse> GetSummaryAsync(Guid? branchId = null, CancellationToken ct = default)
     {
+        RequireOwner();
         var accounts = await GetAccountsAsync(branchId, ct);
         var accountIds = accounts.Select(a => a.Id).ToHashSet();
         var entries = await _cashbookRepo.FindAsync(
@@ -582,10 +611,15 @@ public class CashbookService : ICashbookService
 
     public async Task<CashbookEntryResponse> CreateReceiptAsync(CreateReceiptRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
+        ValidateFinancialManagementRole();
         if (request.Amount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền thu phải lớn hơn 0.");
         }
+
+        var classification = ResolveReceiptClassification(request);
+        ValidateDescription(request.Description);
 
         var accountType = await ResolveAccountTypeAsync(request.AccountId, ct);
         var refCode = string.IsNullOrWhiteSpace(request.ReferenceCode)
@@ -596,11 +630,13 @@ public class CashbookService : ICashbookService
             ? request.Category
             : request.Description.Trim();
 
-        return await ReceiveCashAsync(request.AccountId, accountType, request.Amount, "MANUAL", null, refCode, description, ct);
+        return await ReceiveCashCoreAsync(request.AccountId, request.Amount, "MANUAL", null, refCode, description, classification, ct);
     }
 
     public async Task<CashbookEntryResponse> CreatePaymentAsync(CreatePaymentRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
+        ValidateFinancialManagementRole();
         if (request.Amount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền chi phải lớn hơn 0.");
@@ -619,6 +655,9 @@ public class CashbookService : ICashbookService
             throw new BusinessException("INSUFFICIENT_FUNDS", $"Số tiền chi ({request.Amount:N0} đ) vượt quá số dư két sắt hiện có ({account.CurrentBalance:N0} đ).");
         }
 
+        var classification = ResolvePaymentClassification(request);
+        ValidateDescription(request.Description);
+
         var refCode = string.IsNullOrWhiteSpace(request.ReferenceCode)
             ? "PC-" + DateTime.UtcNow.ToString("yyyyMMdd") + "-" + Random.Shared.Next(100, 999)
             : request.ReferenceCode.Trim();
@@ -627,7 +666,174 @@ public class CashbookService : ICashbookService
             ? request.Category
             : request.Description.Trim();
 
-        return await DisburseCashAsync(request.AccountId, account.AccountType, request.Amount, "MANUAL", null, refCode, description, ct);
+        return await DisburseCashCoreAsync(request.AccountId, request.Amount, "MANUAL", null, refCode, description, classification, ct);
+    }
+
+    private static EntryClassification ResolveReceiptClassification(CreateReceiptRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.CategoryCode))
+            throw new BusinessException("CATEGORY_REQUIRED", "Phiếu thu bắt buộc có mã danh mục nghiệp vụ.");
+        var code = request.CategoryCode.Trim().ToUpperInvariant();
+        return code switch
+        {
+            "OWNER_DEPOSIT" => RequireTreatment(code, FinancialNature.OwnerDeposit, CashbookTaxTreatment.NonTaxableReceipt, request.TaxTreatment),
+            "OFF_POS_SALE" => RequireTreatment(code, FinancialNature.OtherIncome, CashbookTaxTreatment.TaxableRevenue, request.TaxTreatment),
+            "INTERNAL_REIMBURSEMENT" => RequireTreatment(code, FinancialNature.OtherIncome, CashbookTaxTreatment.NonTaxableReceipt, request.TaxTreatment),
+            "BANK_INTEREST" => RequireTreatment(code, FinancialNature.OtherIncome, CashbookTaxTreatment.TaxableRevenue, request.TaxTreatment),
+            "OTHER_INCOME" => ResolveOtherIncome(request),
+            _ => throw new BusinessException("INVALID_CATEGORY", $"Danh mục thu '{request.CategoryCode}' không hợp lệ.")
+        };
+    }
+
+    private static EntryClassification ResolveOtherIncome(CreateReceiptRequest request)
+    {
+        if (request.TaxTreatment is not (CashbookTaxTreatment.TaxableRevenue or CashbookTaxTreatment.NonTaxableReceipt))
+        {
+            throw new BusinessException("TAX_TREATMENT_REQUIRED", "Thu nhập khác bắt buộc chọn tính vào doanh thu chịu thuế hoặc không tính thuế.");
+        }
+        if (request.TaxTreatment == CashbookTaxTreatment.NonTaxableReceipt && string.IsNullOrWhiteSpace(request.TaxTreatmentReason))
+        {
+            throw new BusinessException("TAX_REASON_REQUIRED", "Khoản thu không tính thuế bắt buộc có lý do.");
+        }
+        ValidateTaxReason(request.TaxTreatmentReason);
+        return new EntryClassification("OTHER_INCOME", FinancialNature.OtherIncome, request.TaxTreatment.Value, request.TaxTreatmentReason?.Trim());
+    }
+
+    private static EntryClassification ResolvePaymentClassification(CreatePaymentRequest request)
+    {
+        if (string.IsNullOrWhiteSpace(request.CategoryCode))
+            throw new BusinessException("CATEGORY_REQUIRED", "Phiếu chi bắt buộc có mã danh mục nghiệp vụ.");
+        var code = request.CategoryCode.Trim().ToUpperInvariant();
+        return code switch
+        {
+            "OWNER_DRAW" => RequireTreatment(code, FinancialNature.OwnerDraw, CashbookTaxTreatment.NonDeductibleExpense, request.TaxTreatment),
+            "ASSET_PURCHASE" => RequireTreatment(code, FinancialNature.OperatingExpense, CashbookTaxTreatment.NonDeductibleExpense, request.TaxTreatment),
+            "OTHER_PAYMENT" => ResolveOtherPayment(request),
+            "TAX_PAYMENT" => throw new BusinessException("USE_TAX_PAYMENT_ENDPOINT", "Nộp thuế phải được ghi nhận qua nghiệp vụ nộp thuế chuyên dụng và có chứng từ tham chiếu."),
+            _ => throw new BusinessException("INVALID_CATEGORY", $"Danh mục chi '{request.CategoryCode}' không hợp lệ.")
+        };
+    }
+
+    private static EntryClassification ResolveOtherPayment(CreatePaymentRequest request)
+    {
+        if (request.TaxTreatment is not (CashbookTaxTreatment.DeductibleExpense or CashbookTaxTreatment.NonDeductibleExpense))
+        {
+            throw new BusinessException("TAX_TREATMENT_REQUIRED", "Chi khác bắt buộc chọn chi phí được trừ hoặc không được trừ.");
+        }
+        if (request.TaxTreatment == CashbookTaxTreatment.DeductibleExpense && string.IsNullOrWhiteSpace(request.ReferenceCode))
+        {
+            throw new BusinessException("EVIDENCE_REQUIRED", "Chi phí được trừ bắt buộc có số hoặc mã chứng từ.");
+        }
+        if (request.ReferenceCode?.Trim().Length > 100)
+            throw new BusinessException("REFERENCE_TOO_LONG", "Mã chứng từ không được vượt quá 100 ký tự.");
+        ValidateTaxReason(request.TaxTreatmentReason);
+        return new EntryClassification("OTHER_PAYMENT", FinancialNature.OperatingExpense, request.TaxTreatment.Value, request.TaxTreatmentReason?.Trim());
+    }
+
+    private static EntryClassification RequireTreatment(string categoryCode, FinancialNature nature, CashbookTaxTreatment expected, CashbookTaxTreatment? requested)
+    {
+        if (requested.HasValue && requested.Value != expected)
+        {
+            throw new BusinessException("INVALID_TAX_TREATMENT", $"Cách xử lý thuế không phù hợp với danh mục {categoryCode}.");
+        }
+        return new EntryClassification(categoryCode, nature, expected);
+    }
+
+    private static void ValidateDescription(string? description)
+    {
+        if (description?.Trim().Length > 255)
+        {
+            throw new BusinessException("DESCRIPTION_TOO_LONG", "Diễn giải không được vượt quá 255 ký tự.");
+        }
+    }
+
+    private static void ValidateTaxReason(string? reason)
+    {
+        if (reason?.Trim().Length > 255)
+            throw new BusinessException("TAX_REASON_TOO_LONG", "Lý do xử lý thuế không được vượt quá 255 ký tự.");
+    }
+
+    public async Task<TaxPaymentResponse> RecordTaxPaymentAsync(RecordTaxPaymentRequest request, CancellationToken ct = default)
+    {
+        RequireOwner();
+        ValidateFinancialManagementRole();
+        if (_expenseVoucherRepo == null || _taxRepository == null)
+        {
+            throw new InvalidOperationException("Dịch vụ nộp thuế chưa được cấu hình đầy đủ.");
+        }
+        if (request.Amount <= 0)
+        {
+            throw new BusinessException("INVALID_AMOUNT", "Số tiền nộp thuế phải lớn hơn 0.");
+        }
+        if (string.IsNullOrWhiteSpace(request.BeneficiaryName) || string.IsNullOrWhiteSpace(request.PaymentReference))
+        {
+            throw new BusinessException("TAX_PAYMENT_EVIDENCE_REQUIRED", "Nộp thuế phải có đơn vị thụ hưởng và mã/chứng từ tham chiếu thanh toán.");
+        }
+
+        return await _unitOfWork.ExecuteInTransactionAsync(async token =>
+        {
+            var account = await _cashbookRepo.GetAccountWithLockAsync(request.SourceAccountId, token)
+                ?? throw new NotFoundException("Không tìm thấy tài khoản nguồn nộp thuế.");
+            if (!string.Equals(account.TenantId, _tenantContext.CurrentTenantId, StringComparison.Ordinal) ||
+                !account.IsActive || account.AccountType is not (FinanceAccountType.Bank or FinanceAccountType.Safe))
+            {
+                throw new BusinessException("TAX_PAYMENT_ACCOUNT_DENIED", "Nộp thuế chỉ được thực hiện từ tài khoản ngân hàng hoặc két sắt đang hoạt động.");
+            }
+            if (account.CurrentBalance < request.Amount)
+            {
+                throw new BusinessException("INSUFFICIENT_FUNDS", "Tài khoản nguồn không đủ số dư để nộp thuế.");
+            }
+
+            HouseholdTaxSnapshot? snapshot = null;
+            if (request.HouseholdTaxSnapshotId.HasValue)
+            {
+                snapshot = await _taxRepository.GetSnapshotByIdAsync(request.HouseholdTaxSnapshotId.Value, token)
+                    ?? throw new BusinessException("TAX_SNAPSHOT_NOT_FOUND", "Không tìm thấy snapshot thuế đã chốt để liên kết chứng từ nộp thuế.");
+                if (snapshot.BranchId.HasValue && snapshot.BranchId != account.BranchId)
+                {
+                    throw new BusinessException("TAX_PAYMENT_ACCOUNT_DENIED", "Tài khoản nguồn không cùng phạm vi chi nhánh với snapshot thuế được chọn.");
+                }
+            }
+
+            var paidAtUtc = DateTime.UtcNow;
+            var voucher = new ExpenseVoucher
+            {
+                TenantId = _tenantContext.CurrentTenantId,
+                VoucherCode = "TAX-" + paidAtUtc.ToString("yyyyMMddHHmmssfff"),
+                BranchId = account.BranchId,
+                BeneficiaryName = request.BeneficiaryName.Trim(),
+                Category = "Nộp thuế",
+                Amount = request.Amount,
+                Status = ExpenseVoucherStatus.Paid,
+                Nature = FinancialNature.TaxPayment,
+                ReferenceCode = request.PaymentReference.Trim(),
+                EvidenceAttachmentUrl = string.IsNullOrWhiteSpace(request.EvidenceAttachmentUrl) ? null : request.EvidenceAttachmentUrl.Trim(),
+                PaymentSourceType = account.AccountType,
+                PaymentSourceAccountId = account.Id,
+                HouseholdTaxSnapshotId = snapshot?.Id,
+                PaidAtUtc = paidAtUtc,
+                ExpenseDate = paidAtUtc,
+                Note = string.IsNullOrWhiteSpace(request.Note) ? null : request.Note.Trim(),
+                IsTaxDeductible = false
+            };
+            await _expenseVoucherRepo.AddAsync(voucher, token);
+
+            account.CurrentBalance -= request.Amount;
+            var entry = await RecordEntryInternalAsync(
+                account.Id,
+                account.AccountType,
+                account.BranchId,
+                CashbookEntryType.Payment,
+                request.Amount,
+                "TAX_PAYMENT",
+                voucher.Id,
+                voucher.ReferenceCode!,
+                $"Nộp thuế: {voucher.BeneficiaryName}",
+                token);
+            await _unitOfWork.SaveChangesAsync(token);
+
+            return new TaxPaymentResponse(voucher.Id, voucher.HouseholdTaxSnapshotId, MapEntryResponse(entry));
+        }, ct);
     }
 
     private async Task LockAccountByIdAsync(Guid accountId, CancellationToken ct)
@@ -637,6 +843,7 @@ public class CashbookService : ICashbookService
 
     public async Task<TransferFundResponse> TransferFundsAsync(TransferFundRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         if (request.Amount <= 0)
         {
             throw new BusinessException("INVALID_AMOUNT", "Số tiền chuyển quỹ phải lớn hơn 0.");
@@ -676,6 +883,7 @@ public class CashbookService : ICashbookService
 
     public async Task<CashbookEntryResponse?> ReconcileCashAccountAsync(ReconcileAccountRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole();
         var account = await _accountRepo.GetByIdAsync(request.AccountId, ct)
             ?? throw new NotFoundException("Không tìm thấy tài khoản quỹ.");
@@ -706,6 +914,7 @@ public class CashbookService : ICashbookService
 
     public async Task<CashbookEntryResponse> VoidTransactionAsync(Guid entryId, VoidEntryRequest request, CancellationToken ct = default)
     {
+        RequireOwner();
         ValidateFinancialManagementRole();
         if (string.IsNullOrWhiteSpace(request.Reason))
         {
@@ -728,16 +937,22 @@ public class CashbookService : ICashbookService
 
         if (origEntry.EntryType == CashbookEntryType.Receipt)
         {
-            return await DisburseCashAsync(origEntry.AccountId, origEntry.AccountType, origEntry.Amount, "COMPENSATING", origEntry.Id, compRefCode, compDescription, ct);
+            return await DisburseCashCoreAsync(origEntry.AccountId, origEntry.Amount, "COMPENSATING", origEntry.Id, compRefCode, compDescription,
+                new EntryClassification(origEntry.CategoryCode, origEntry.FinancialNature, origEntry.TaxTreatment, origEntry.TaxTreatmentReason), ct);
         }
         else
         {
-            return await ReceiveCashAsync(origEntry.AccountId, origEntry.AccountType, origEntry.Amount, "COMPENSATING", origEntry.Id, compRefCode, compDescription, ct);
+            return await ReceiveCashCoreAsync(origEntry.AccountId, origEntry.Amount, "COMPENSATING", origEntry.Id, compRefCode, compDescription,
+                new EntryClassification(origEntry.CategoryCode, origEntry.FinancialNature, origEntry.TaxTreatment, origEntry.TaxTreatmentReason), ct);
         }
     }
 
-    private async Task<CashbookEntry> RecordEntryInternalAsync(Guid accountId, FinanceAccountType accountType, Guid? branchId, CashbookEntryType entryType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct)
+    private Task<CashbookEntry> RecordEntryInternalAsync(Guid accountId, FinanceAccountType accountType, Guid? branchId, CashbookEntryType entryType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct) =>
+        RecordEntryInternalAsync(accountId, accountType, branchId, entryType, amount, sourceType, sourceId, referenceCode, description, null, ct);
+
+    private async Task<CashbookEntry> RecordEntryInternalAsync(Guid accountId, FinanceAccountType accountType, Guid? branchId, CashbookEntryType entryType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, EntryClassification? classification, CancellationToken ct)
     {
+        classification ??= InferClassification(sourceType, entryType);
         var prevHash = await _cashbookRepo.GetLastAuditHashAsync(accountId, ct);
         var acc = await _accountRepo.GetByIdAsync(accountId, ct);
         decimal balanceAfter = acc?.CurrentBalance ?? 0;
@@ -753,6 +968,10 @@ public class CashbookService : ICashbookService
             Amount = amount,
             BalanceAfter = balanceAfter,
             SourceType = sourceType,
+            CategoryCode = classification.CategoryCode,
+            FinancialNature = classification.FinancialNature,
+            TaxTreatment = classification.TaxTreatment,
+            TaxTreatmentReason = classification.TaxTreatmentReason,
             SourceId = sourceId,
             ReversedEntryId = (sourceType == "COMPENSATING" || sourceType == "REVERSAL") ? sourceId : null,
             ReferenceCode = referenceCode,
@@ -764,6 +983,21 @@ public class CashbookService : ICashbookService
         await _cashbookRepo.AddAsync(entry, ct);
 
         return entry;
+    }
+
+    private static EntryClassification InferClassification(string sourceType, CashbookEntryType entryType)
+    {
+        var source = sourceType.ToUpperInvariant();
+        if (source is "INTERNAL_TRANSFER" or "CASH_DROP" or "BANK_DEPOSIT")
+            return new EntryClassification(source, FinancialNature.InternalTransfer, CashbookTaxTreatment.InternalTransfer);
+        if (source == "TAX_PAYMENT")
+            return new EntryClassification("TAX_PAYMENT", FinancialNature.TaxPayment, CashbookTaxTreatment.TaxPayment);
+        if (source is "POS" or "POS_SALE")
+            return new EntryClassification("POS_SALE", FinancialNature.OtherIncome, CashbookTaxTreatment.TaxableRevenue);
+        if (source is "DEBT" or "DEBT_REPAYMENT")
+            return new EntryClassification("DEBT_COLLECTION", FinancialNature.OtherIncome, CashbookTaxTreatment.NonTaxableReceipt);
+        return new EntryClassification("REVIEW_REQUIRED", FinancialNature.Suspense, CashbookTaxTreatment.ReviewRequired,
+            $"Chưa có quy tắc phân loại tự động cho nguồn {sourceType}/{entryType}");
     }
 
     private static ShiftResponse MapShiftResponse(ShiftZReport s) =>
@@ -799,25 +1033,20 @@ public class CashbookService : ICashbookService
             e.ReferenceCode,
             e.AuditHash,
             e.Description,
-            e.OccurredAtUtc
+            e.OccurredAtUtc,
+            e.CategoryCode,
+            e.FinancialNature,
+            e.TaxTreatment,
+            e.TaxTreatmentReason
         );
 
-    private void ValidateFinancialManagementRole()
-    {
-        var role = _tenantContext.CurrentRole;
-        if (!string.IsNullOrWhiteSpace(role) &&
-            !role.Equals("Owner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Store_Owner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("StoreOwner", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Admin", StringComparison.OrdinalIgnoreCase) &&
-            !role.Equals("Manager", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new UnauthorizedAccessException("Chỉ Chủ hộ kinh doanh hoặc Quản lý cửa hàng mới có thẩm quyền thực hiện thao tác tài chính này.");
-        }
-    }
+    private void ValidateFinancialManagementRole() => RequireOwner();
+
+    private void RequireOwner() => TenantRoleGuard.RequireStoreOwner(_tenantContext, "sổ quỹ và tài chính");
 
     public async Task<bool> VerifyChainIntegrityAsync(Guid accountId, CancellationToken ct = default)
     {
+        RequireOwner();
         var entries = await _cashbookRepo.FindAsync(e => e.AccountId == accountId, ct);
         var sortedEntries = entries
             .OrderBy(e => e.OccurredAtUtc)

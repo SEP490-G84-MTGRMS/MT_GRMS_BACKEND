@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -36,34 +37,41 @@ public class WalletService : IWalletService
             throw new KeyNotFoundException("Không tìm thấy thông tin gian hàng.");
         }
 
-        // Tạo mã đơn 6 chữ số ngẫu nhiên không trùng lặp
-        var orderCode = $"{Random.Shared.Next(100000, 999999)}";
+        var orderCode = Guid.NewGuid().ToString("N")[..16].ToUpperInvariant();
         var transferContent = $"WAL {orderCode}";
 
-        var bankCode = !string.IsNullOrWhiteSpace(_sepaySettings.BankCode) ? _sepaySettings.BankCode : "MBBank";
-        var bankName = !string.IsNullOrWhiteSpace(_sepaySettings.BankName) ? _sepaySettings.BankName : "MB Bank (Ngân hàng Quân Đội)";
-        var accountNumber = !string.IsNullOrWhiteSpace(_sepaySettings.AccountNumber) ? _sepaySettings.AccountNumber : "190065228888";
-        var accountName = !string.IsNullOrWhiteSpace(_sepaySettings.AccountName) ? _sepaySettings.AccountName : "CONG TY TNHH PHAN MEM MT-GRMS";
+        var platformSetting = await _context.PlatformSettings.AsNoTracking().FirstOrDefaultAsync(cancellationToken);
+        var bankCode = !string.IsNullOrWhiteSpace(platformSetting?.MasterBankCode)
+            ? platformSetting.MasterBankCode
+            : (!string.IsNullOrWhiteSpace(_sepaySettings.BankCode) ? _sepaySettings.BankCode : "MBBank");
+        var bankName = !string.IsNullOrWhiteSpace(platformSetting?.MasterBankName)
+            ? platformSetting.MasterBankName
+            : (!string.IsNullOrWhiteSpace(_sepaySettings.BankName) ? _sepaySettings.BankName : "MB Bank (Ngân hàng Quân Đội)");
+        var accountNumber = !string.IsNullOrWhiteSpace(platformSetting?.MasterAccountNumber)
+            ? platformSetting.MasterAccountNumber
+            : (!string.IsNullOrWhiteSpace(_sepaySettings.AccountNumber) ? _sepaySettings.AccountNumber : "190065228888");
+        var accountName = !string.IsNullOrWhiteSpace(platformSetting?.MasterAccountName)
+            ? platformSetting.MasterAccountName
+            : (!string.IsNullOrWhiteSpace(_sepaySettings.AccountName) ? _sepaySettings.AccountName : "CONG TY TNHH PHAN MEM MT-GRMS");
 
         var qrUrl = $"https://qr.sepay.vn/img?acc={accountNumber}&bank={bankCode}&amount={(long)request.Amount}&des={Uri.EscapeDataString(transferContent)}";
         var expiresAt = DateTime.UtcNow.AddMinutes(15);
 
-        var order = new WalletTopupOrder
+        var order = new WalletTransaction
         {
             TenantId = tenant.Id,
+            TransactionCode = $"WAL-ORDER-{orderCode}",
             OrderCode = orderCode,
+            Type = "TOPUP",
             Amount = request.Amount,
+            RequestedAmount = request.Amount,
             TransferContent = transferContent,
-            BankCode = bankCode,
-            BankName = bankName,
-            AccountNumber = accountNumber,
-            AccountName = accountName,
-            QrUrl = qrUrl,
+            TopupDetails = JsonSerializer.Serialize(new { bankCode, bankName, accountNumber, accountName, qrUrl }),
             Status = "PENDING",
             ExpiresAt = expiresAt
         };
 
-        _context.WalletTopupOrders.Add(order);
+        _context.WalletTransactions.Add(order);
         await _context.SaveChangesAsync(cancellationToken);
 
         return new TopupOrderResponse(
@@ -85,36 +93,30 @@ public class WalletService : IWalletService
         CancellationToken cancellationToken = default)
     {
         var tenant = await ResolveTenantAsync(tenantId, cancellationToken);
-        var query = _context.WalletTopupOrders.AsQueryable();
-
-        if (tenant != null)
+        if (tenant == null)
         {
-            query = query.Where(o => o.TenantId == tenant.Id && (o.OrderCode == orderCode || o.TransferContent.Contains(orderCode)));
-        }
-        else
-        {
-            query = query.Where(o => o.OrderCode == orderCode || o.TransferContent.Contains(orderCode));
+            return null;
         }
 
-        var order = await query.FirstOrDefaultAsync(cancellationToken);
+        var order = await _context.WalletTransactions.AsNoTracking()
+            .SingleOrDefaultAsync(t => t.TenantId == tenant.Id && t.Type == "TOPUP"
+                && t.OrderCode != null && t.OrderCode == orderCode, cancellationToken);
         if (order == null)
         {
             return null;
         }
 
-        // Tự động đánh dấu hết hạn nếu quá hạn 15 phút
-        if (order.Status == "PENDING" && order.ExpiresAt < DateTime.UtcNow)
+        var status = order.Status switch
         {
-            order.Status = "EXPIRED";
-            await _context.SaveChangesAsync(cancellationToken);
-        }
-
-        var currentBalance = tenant?.WalletBalance;
+            "SUCCESS" => "COMPLETED",
+            "PENDING" when order.ExpiresAt <= DateTime.UtcNow => "EXPIRED",
+            _ => order.Status
+        };
         return new TopupOrderStatusResponse(
-            OrderCode: order.OrderCode,
-            Status: order.Status,
-            Amount: order.Amount,
-            NewBalance: currentBalance,
+            OrderCode: order.OrderCode!,
+            Status: status,
+            Amount: status == "COMPLETED" ? order.Amount : order.RequestedAmount ?? order.Amount,
+            NewBalance: tenant.WalletBalance,
             CompletedAt: order.CompletedAt
         );
     }
@@ -160,7 +162,7 @@ public class WalletService : IWalletService
         }
 
         var query = _context.WalletTransactions
-            .Where(t => t.TenantId == tenant.Id);
+            .Where(t => t.TenantId == tenant.Id && t.Status == "SUCCESS");
 
         if (!string.IsNullOrWhiteSpace(type) && type != "ALL")
         {
@@ -168,7 +170,7 @@ public class WalletService : IWalletService
         }
 
         return await query
-            .OrderByDescending(t => t.CreatedAt)
+            .OrderByDescending(t => t.CompletedAt ?? t.CreatedAt)
             .Select(t => new WalletTransactionDto(
                 t.Id,
                 t.TransactionCode,
@@ -180,7 +182,7 @@ public class WalletService : IWalletService
                 t.PaymentMethod,
                 t.Status,
                 t.ReferenceCode,
-                t.CreatedAt
+                t.CompletedAt ?? t.CreatedAt
             ))
             .ToListAsync(cancellationToken);
     }
@@ -194,114 +196,116 @@ public class WalletService : IWalletService
             return new SepayWebhookResult(true, "Bỏ qua giao dịch tiền ra", null, null, 0);
         }
 
-        // 1. Kiểm tra Idempotency để chống cộng tiền 2 lần
-        var refCode = !string.IsNullOrWhiteSpace(payload.ReferenceCode)
-            ? payload.ReferenceCode
-            : $"SEPAY-{payload.Id}";
-
-        var existingTx = await _context.WalletTransactions
-            .FirstOrDefaultAsync(t =>
-                t.ReferenceCode == refCode ||
-                t.TransactionCode == $"WAL-{payload.Id}" ||
-                t.TransactionCode.EndsWith($"-{payload.Id}"),
-                cancellationToken);
-
-        if (existingTx != null)
+        if (payload.TransferAmount <= 0 || (payload.Id <= 0 && string.IsNullOrWhiteSpace(payload.ReferenceCode)))
         {
-            return new SepayWebhookResult(true, "Giao dịch đã được xử lý trước đó (Idempotent)", null, existingTx.TenantId, existingTx.Amount);
+            return new SepayWebhookResult(false, "Thiếu thông tin giao dịch chuyển khoản hợp lệ.", null, null, 0);
         }
 
-        // 2. Trích xuất mã đơn từ nội dung chuyển khoản
-        var content = payload.Content ?? string.Empty;
-        var match = Regex.Match(content, @"(?:WAL|wal)\s*([0-9A-Za-z_-]+)", RegexOptions.IgnoreCase);
-        var candidateCode = match.Success ? match.Groups[1].Value.Trim() : string.Empty;
-
-        WalletTopupOrder? order = null;
-        Tenant? tenant = null;
-
-        if (!string.IsNullOrWhiteSpace(candidateCode))
-        {
-            order = await _context.WalletTopupOrders
-                .FirstOrDefaultAsync(o => o.OrderCode == candidateCode || o.TransferContent.Contains(candidateCode), cancellationToken);
-
-            if (order != null)
-            {
-                tenant = await _context.Tenants.FirstOrDefaultAsync(t => t.Id == order.TenantId, cancellationToken);
-            }
-            else
-            {
-                // Fallback: Tìm theo tenant code trực tiếp
-                tenant = await _context.Tenants.FirstOrDefaultAsync(t =>
-                    t.Code == candidateCode || t.Subdomain == candidateCode || t.Id == candidateCode,
-                    cancellationToken);
-            }
-        }
-
-        // Nếu vẫn chưa tìm thấy tenant, fallback tìm tenant đầu tiên nếu có một tenant duy nhất trong hệ thống
-        if (tenant == null)
-        {
-            tenant = await _context.Tenants.FirstOrDefaultAsync(cancellationToken);
-        }
-
-        if (tenant == null)
-        {
-            return new SepayWebhookResult(false, $"Không xác định được gian hàng từ nội dung: {content}", candidateCode, null, payload.TransferAmount);
-        }
-
-        // 3. Thực thi cập nhật số dư trong DB Transaction an toàn qua ExecutionStrategy của Npgsql
         var strategy = _context.Database.CreateExecutionStrategy();
         return await strategy.ExecuteAsync(async () =>
         {
-            using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
-            try
+            for (var attempt = 0; ; attempt++)
             {
-                var balanceBefore = tenant.WalletBalance;
-                tenant.WalletBalance += payload.TransferAmount;
-                var balanceAfter = tenant.WalletBalance;
-
-                var txCode = $"WAL-{DateTime.UtcNow:yyyyMMdd}-{payload.Id}";
-                var walletTx = new WalletTransaction
+                try
                 {
-                    TenantId = tenant.Id,
-                    TransactionCode = txCode,
-                    Type = "TOPUP",
-                    Amount = payload.TransferAmount,
-                    BalanceBefore = balanceBefore,
-                    BalanceAfter = balanceAfter,
-                    Description = $"Nạp tiền ví gian hàng qua VietQR SePay ({payload.Gateway ?? "MBBank"})",
-                    PaymentMethod = "VietQR",
-                    Status = "SUCCESS",
-                    ReferenceCode = refCode,
-                    Metadata = System.Text.Json.JsonSerializer.Serialize(new
+                    if (!_context.Database.IsRelational())
                     {
-                        payload.Gateway,
-                        payload.AccountNumber,
-                        payload.TransactionDate,
-                        payload.Content,
-                        payload.TransferAmount
-                    })
-                };
+                        return await RecordSepayTransferAsync(payload, cancellationToken);
+                    }
 
-                _context.WalletTransactions.Add(walletTx);
-
-                if (order != null)
-                {
-                    order.Status = "COMPLETED";
-                    order.CompletedAt = DateTime.UtcNow;
-                    order.ReferenceCode = refCode;
+                    // Serialize webhook decisions across API instances. Other wallet writers
+                    // are protected by the concurrency token on Tenant.WalletBalance.
+                    _context.ChangeTracker.Clear();
+                    await using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+                    await _context.Database.ExecuteSqlRawAsync(
+                        "SELECT pg_advisory_xact_lock(164711, 1)", cancellationToken);
+                    var result = await RecordSepayTransferAsync(payload, cancellationToken);
+                    await transaction.CommitAsync(cancellationToken);
+                    return result;
                 }
-
-                await _context.SaveChangesAsync(cancellationToken);
-                await transaction.CommitAsync(cancellationToken);
-
-                return new SepayWebhookResult(true, "Cộng tiền ví gian hàng thành công.", order?.OrderCode, tenant.Id, payload.TransferAmount);
-            }
-            catch (Exception ex)
-            {
-                await transaction.RollbackAsync(cancellationToken);
-                return new SepayWebhookResult(false, $"Lỗi xử lý giao dịch: {ex.Message}", candidateCode, tenant.Id, payload.TransferAmount);
+                catch (DbUpdateConcurrencyException) when (attempt < 2 && _context.Database.IsRelational())
+                {
+                    // Retry the entire operation with the newly committed balance.
+                }
             }
         });
+    }
+
+    private async Task<SepayWebhookResult> RecordSepayTransferAsync(
+        SepayWebhookPayload payload, CancellationToken cancellationToken)
+    {
+        long? sepayId = payload.Id > 0 ? payload.Id : null;
+        var reference = string.IsNullOrWhiteSpace(payload.ReferenceCode)
+            ? $"SEPAY-{payload.Id}"
+            : payload.ReferenceCode.Trim();
+        var existing = await _context.WalletTransactions.IgnoreQueryFilters().AsNoTracking()
+            .FirstOrDefaultAsync(t => t.Type == "TOPUP" && (t.Status == "SUCCESS" || t.Status == "REVIEW")
+                && (t.ReferenceCode == reference || (sepayId != null && t.SepayTransactionId == sepayId)),
+                cancellationToken);
+        if (existing != null)
+        {
+            return new SepayWebhookResult(true, "Giao dịch đã được xử lý trước đó (Idempotent)",
+                existing.OrderCode ?? existing.ReconciliationOrderCode, existing.TenantId, existing.Amount);
+        }
+
+        var match = Regex.Match(payload.Content ?? string.Empty,
+            @"\bWAL\s*([0-9A-Za-z_-]+)", RegexOptions.IgnoreCase);
+        var code = match.Groups[1].Value.ToUpperInvariant();
+        var transferContent = $"WAL {code}";
+        var order = await _context.WalletTransactions
+            .SingleOrDefaultAsync(t => t.Type == "TOPUP" && t.OrderCode != null
+                && (t.OrderCode == code || t.TransferContent == transferContent), cancellationToken);
+        var tenant = order == null
+            ? await _context.Tenants.SingleOrDefaultAsync(t => t.Code.ToUpper() == code && code != "", cancellationToken)
+            : await _context.Tenants.FindAsync(new object[] { order.TenantId }, cancellationToken);
+        if (tenant == null)
+        {
+            return new SepayWebhookResult(false, "Không xác định được gian hàng từ nội dung chuyển khoản.",
+                code, null, payload.TransferAmount);
+        }
+
+        var needsReview = order != null && order.Status != "PENDING" && order.Status != "EXPIRED";
+        var walletTx = needsReview ? null : order;
+        if (walletTx == null)
+        {
+            walletTx = new WalletTransaction
+            {
+                TenantId = tenant.Id,
+                TransactionCode = $"WAL-{Guid.NewGuid():N}",
+                Type = "TOPUP",
+                ReconciliationOrderCode = needsReview ? order!.OrderCode : null
+            };
+            _context.WalletTransactions.Add(walletTx);
+        }
+
+        walletTx.Amount = payload.TransferAmount;
+        walletTx.BalanceBefore = tenant.WalletBalance;
+        if (!needsReview)
+        {
+            tenant.WalletBalance += payload.TransferAmount;
+            walletTx.CompletedAt = DateTime.UtcNow;
+        }
+
+        walletTx.BalanceAfter = tenant.WalletBalance;
+        walletTx.Status = needsReview ? "REVIEW" : "SUCCESS";
+        walletTx.Description = needsReview
+            ? "Khoản nạp dùng mã đơn đã hoàn tất hoặc đã hủy, chờ đối soát"
+            : "Nạp tiền ví gian hàng qua VietQR SePay";
+        walletTx.PaymentMethod = "VietQR";
+        walletTx.ReferenceCode = reference;
+        walletTx.SepayTransactionId = sepayId;
+        walletTx.Metadata = JsonSerializer.Serialize(new
+        {
+            payload.Gateway,
+            payload.AccountNumber,
+            payload.TransactionDate,
+            payload.Content,
+            payload.TransferAmount
+        });
+
+        await _context.SaveChangesAsync(cancellationToken);
+        return new SepayWebhookResult(true, needsReview ? "Đã lưu khoản chuyển chờ đối soát." : "Đã cộng tiền vào ví.",
+            order?.OrderCode, tenant.Id, payload.TransferAmount);
     }
 
     public async Task DeductWalletAsync(
@@ -347,13 +351,9 @@ public class WalletService : IWalletService
 
     private async Task<Tenant?> ResolveTenantAsync(string tenantId, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(tenantId) || tenantId == "DEFAULT")
-        {
-            return await _context.Tenants.FirstOrDefaultAsync(cancellationToken);
-        }
-
         return await _context.Tenants.FirstOrDefaultAsync(
-            t => t.Id == tenantId || t.Subdomain == tenantId || t.Code == tenantId,
+            t => tenantId != "" && tenantId != "DEFAULT"
+                && (t.Id == tenantId || t.Subdomain == tenantId || t.Code == tenantId),
             cancellationToken);
     }
 }

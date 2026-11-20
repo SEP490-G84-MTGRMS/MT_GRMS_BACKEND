@@ -10,30 +10,39 @@ public enum SalaryType
     Shift = 3    // Lương theo ca làm việc
 }
 
+/// <summary>
+/// Trạng thái làm việc của nhân viên
+/// </summary>
 public enum EmployeeStatus
 {
-    Active = 1,
-    Inactive = 2
+    Active = 1,   // Đang làm việc
+    Inactive = 2  // Ngừng làm việc / Đã nghỉ
 }
 
+/// <summary>
+/// Trạng thái vòng đời của ca làm việc / bản ghi chấm công
+/// </summary>
 public enum ScheduleStatus
 {
-    Draft = 0,
-    Scheduled = 1,
-    Published = 2,
-    InProgress = 3,
-    Completed = 4,
-    Cancelled = 5,
-    OnLeave = 6
+    Draft = 0,       // Nháp (chưa ban hành lịch cho nhân viên)
+    Scheduled = 1,   // Đã xếp lịch (mặc định khi tạo ca)
+    Published = 2,   // Đã ban hành lịch (sẵn sàng để chấm công)
+    InProgress = 3,  // Đang trong ca làm việc (đã Check-in, chưa Check-out)
+    Completed = 4,   // Đã hoàn thành ca (đã Check-out hoặc chấm công đi làm / nghỉ có lương)
+    Cancelled = 5,   // Đã hủy ca hoặc nghỉ không lương
+    OnLeave = 6      // Đang nghỉ phép (đã duyệt đơn xin nghỉ)
 }
 
+/// <summary>
+/// Trạng thái phê duyệt đơn yêu cầu gắn với ca làm việc
+/// </summary>
 public enum ScheduleApprovalStatus
 {
-    None = 0,
-    Pending = 1,
-    Approved = 2,
-    Rejected = 3,
-    Cancelled = 4
+    None = 0,      // Không có đơn / Chưa gửi yêu cầu
+    Pending = 1,   // Đang chờ quản lý phê duyệt
+    Approved = 2,  // Đã được phê duyệt
+    Rejected = 3,  // Đã bị từ chối
+    Cancelled = 4  // Đã hủy yêu cầu (dự phòng / chưa dùng trực tiếp trong logic hiện tại)
 }
 
 /// <summary>
@@ -69,9 +78,12 @@ public enum LeaveType
     Other = 5        // Khác
 }
 
+/// <summary>
+/// Trạng thái thanh toán của phiếu lương
+/// </summary>
 public enum PayslipStatus
 {
-    Unpaid = 1,
-    Partial = 2,
-    Paid = 3
+    Unpaid = 1,   // Chưa thanh toán (có thể tính lại, tạm ứng hoặc xóa)
+    Partial = 2,  // Thanh toán một phần (dự phòng khóa ca tương tự Paid, hiện chưa gán trực tiếp)
+    Paid = 3      // Đã thanh toán (khóa phiếu lương và khóa toàn bộ ca trong kỳ)
 }

@@ -69,7 +69,14 @@ public class UserRepository : IUserRepository
 
     public async Task SaveChangesAsync(CancellationToken cancellationToken = default)
     {
-        await _context.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await _context.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateConcurrencyException ex) when (ex.Entries.Any(e => e.Entity is User))
+        {
+            throw new UnauthorizedAccessException("Phiên đã thay đổi hoặc refresh token đã được sử dụng. Vui lòng đăng nhập lại.");
+        }
     }
 
     public async Task<bool> ExistsByPhoneOrEmailAsync(string phone, string? email, CancellationToken cancellationToken = default)
@@ -117,6 +124,8 @@ public class UserRepository : IUserRepository
 
         await _context.Branches.AddAsync(branch, cancellationToken);
 
+        await TenantCatalogInitializer.AddAsync(_context, tenant.Id, branch.Id, cancellationToken);
+
         if (auditLog != null)
         {
             await _context.AuditLogs.AddAsync(auditLog, cancellationToken);
@@ -143,7 +152,9 @@ public class UserRepository : IUserRepository
             .Where(e => !e.IsDeleted
                 && e.TenantId == tenantId
                 && e.UserId == userId
-                && e.Status == EmployeeStatus.Active)
+                && e.Status == EmployeeStatus.Active
+                && _context.Branches.IgnoreQueryFilters().Any(b => b.Id == e.BranchId
+                    && b.TenantId == tenantId && !b.IsDeleted && b.IsActive))
             .Select(e => (Guid?)e.BranchId)
             .FirstOrDefaultAsync(cancellationToken);
     }

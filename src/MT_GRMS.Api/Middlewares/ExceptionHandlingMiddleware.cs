@@ -30,6 +30,10 @@ public class ExceptionHandlingMiddleware
         {
             await _next(context);
         }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            _logger.LogInformation("Request was canceled by the client.");
+        }
         catch (Exception ex)
         {
             await HandleExceptionAsync(context, ex);
@@ -38,6 +42,12 @@ public class ExceptionHandlingMiddleware
 
     private async Task HandleExceptionAsync(HttpContext context, Exception exception)
     {
+        if (exception is OperationCanceledException || context.RequestAborted.IsCancellationRequested)
+        {
+            _logger.LogInformation("Request was canceled by the client.");
+            return;
+        }
+
         var statusCode = (int)HttpStatusCode.InternalServerError;
         ApiResponse<object> apiResponse;
 
@@ -70,6 +80,20 @@ public class ExceptionHandlingMiddleware
                 statusCode = (int)HttpStatusCode.Unauthorized;
                 apiResponse = ApiResponse<object>.Fail("UNAUTHORIZED", unauthEx.Message, statusCode);
                 _logger.LogWarning(unauthEx, "Unauthorized access: {Message}", unauthEx.Message);
+                break;
+
+            case DbUpdateConcurrencyException concurrencyEx:
+                statusCode = (int)HttpStatusCode.Conflict;
+                apiResponse = ApiResponse<object>.Fail(
+                    "CONCURRENCY_CONFLICT",
+                    "Dữ liệu đã thay đổi trong lúc cập nhật. Vui lòng tải lại và thử lại.",
+                    statusCode);
+                _logger.LogWarning(concurrencyEx,
+                    "Concurrency conflict on {Method} {Path}. Entries: {Entries}",
+                    context.Request.Method,
+                    context.Request.Path,
+                    string.Join(", ", concurrencyEx.Entries.Select(entry =>
+                        $"{entry.Metadata.ClrType.Name}({string.Join(",", entry.Metadata.FindPrimaryKey()?.Properties.Select(property => entry.Property(property.Name).CurrentValue) ?? [])})")));
                 break;
 
             case DbUpdateException dbUpdateEx when dbUpdateEx.InnerException is Npgsql.PostgresException pgEx && pgEx.SqlState == "23505":

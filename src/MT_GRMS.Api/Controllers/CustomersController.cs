@@ -3,7 +3,6 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Debt.Dtos;
-using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
@@ -26,330 +25,133 @@ public class CustomersController : BaseApiController
 
     [HttpGet]
     public async Task<ActionResult<ApiResponse<List<CustomerResponse>>>> GetCustomers(
-        [FromQuery] string? search,
-        [FromQuery] string? tier,
-        [FromQuery] string? debtStatus,
-        CancellationToken ct)
+        [FromQuery] string? search, [FromQuery] string? tier, [FromQuery] string? debtStatus, CancellationToken ct)
     {
         var tenantId = _tenantContext.CurrentTenantId;
-        var query = _context.Customers
-            .AsNoTracking()
-            .Where(c => c.TenantId == tenantId);
+        var query = _context.Customers.AsNoTracking().Where(c => c.TenantId == tenantId);
 
         if (!string.IsNullOrWhiteSpace(search))
         {
-            var s = search.Trim().ToLower();
-
-            // Match debt repayment reference / entry code e.g. REC-xxx or DPR-xxx
-            var customerIdsFromDebt = await _context.CustomerDebtEntries
-                .AsNoTracking()
-                .Where(e => e.TenantId == tenantId && (e.EntryCode.ToLower().Contains(s) || e.ReferenceCode.ToLower().Contains(s) || (e.SourceId.HasValue && e.SourceId.Value.ToString().ToLower() == s)))
-                .Select(e => e.CustomerId)
-                .Distinct()
-                .ToListAsync(ct);
-
-            if (Guid.TryParse(s, out var guidId))
-            {
-                query = query.Where(c => c.Id == guidId || customerIdsFromDebt.Contains(c.Id) || c.Name.ToLower().Contains(s) || c.Phone.Contains(s) || c.CustomerCode.ToLower().Contains(s));
-            }
-            else
-            {
-                query = query.Where(c => c.Name.ToLower().Contains(s) || c.Phone.Contains(s) || c.CustomerCode.ToLower().Contains(s) || customerIdsFromDebt.Contains(c.Id));
-            }
+            var keyword = search.Trim().ToLower();
+            var customerIdsFromDebt = await _context.Orders.AsNoTracking()
+                .Where(o => o.TenantId == tenantId && o.CustomerId.HasValue &&
+                    o.OrderCode.ToLower().Contains(keyword) &&
+                    (o.PaymentMethod == "DEBT" || o.PaymentMethod == "CREDIT"))
+                .Select(o => o.CustomerId!.Value).Distinct().ToListAsync(ct);
+            query = query.Where(c => c.Name.ToLower().Contains(keyword) || c.Phone.Contains(keyword) ||
+                c.CustomerCode.ToLower().Contains(keyword) || customerIdsFromDebt.Contains(c.Id));
         }
 
         if (!string.IsNullOrWhiteSpace(tier) && !tier.Equals("ALL", StringComparison.OrdinalIgnoreCase))
-        {
             query = query.Where(c => c.MembershipTier == tier);
-        }
+        if (debtStatus is not null && debtStatus.Equals("NO_DEBT", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(c => c.TotalDebt <= 0);
+        else if (debtStatus is not null && !debtStatus.Equals("ALL", StringComparison.OrdinalIgnoreCase))
+            query = query.Where(c => c.TotalDebt > 0);
 
-        var customers = await query
-            .OrderByDescending(c => c.CreatedAt)
-            .ToListAsync(ct);
-
-        var result = new List<CustomerResponse>();
-        foreach (var c in customers)
-        {
-            var currentDebt = c.TotalDebt;
-            var debtLimit = c.DebtLimit;
-
-            // Apply debt status filter
-            if (!string.IsNullOrWhiteSpace(debtStatus) && !debtStatus.Equals("ALL", StringComparison.OrdinalIgnoreCase))
-            {
-                if (debtStatus.Equals("NO_DEBT", StringComparison.OrdinalIgnoreCase) && currentDebt > 0)
-                    continue;
-                if (debtStatus.Equals("IN_LIMIT", StringComparison.OrdinalIgnoreCase) && (currentDebt <= 0 || currentDebt > debtLimit))
-                    continue;
-                if (debtStatus.Equals("OVER_LIMIT", StringComparison.OrdinalIgnoreCase) && currentDebt <= debtLimit)
-                    continue;
-            }
-
-            result.Add(new CustomerResponse(
-                c.Id,
-                c.CustomerCode,
-                c.Name,
-                c.Phone,
-                c.Email,
-                c.Address,
-                c.MembershipTier,
-                c.RewardPoints,
-                c.TotalSpending,
-                currentDebt,
-                debtLimit,
-                c.IsBlockedForDebt ? "Inactive" : "Active",
-                c.AllowDebt,
-                c.IsBlockedForDebt,
-                c.CreatedAt
-            ));
-        }
-
-        return Ok(ApiResponse<List<CustomerResponse>>.Ok(result));
+        var customers = await query.OrderByDescending(c => c.CreatedAt).ToListAsync(ct);
+        return Ok(ApiResponse<List<CustomerResponse>>.Ok(customers.Select(c => MapCustomer(c)).ToList()));
     }
 
     [HttpGet("{id:guid}")]
     public async Task<ActionResult<ApiResponse<CustomerResponse>>> GetCustomerById(Guid id, CancellationToken ct)
     {
         var tenantId = _tenantContext.CurrentTenantId;
-        var c = await _context.Customers
-            .AsNoTracking()
+        var customer = await _context.Customers.AsNoTracking()
             .FirstOrDefaultAsync(x => x.Id == id && x.TenantId == tenantId, ct);
+        if (customer == null) return NotFound(ApiResponse<object>.Fail("NOT_FOUND", "Khách hàng không tồn tại."));
 
-        if (c == null)
-        {
-            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", "Khách hàng không tồn tại."));
-        }
-
-        // Load open invoices
-        var openInvoices = await _context.CustomerDebtInvoices
-            .AsNoTracking()
-            .Where(i => i.CustomerId == id && i.TenantId == tenantId)
-            .OrderByDescending(i => i.CreatedAt)
-            .Take(10)
-            .Select(i => new CustomerInvoiceSummaryResponse(
-                i.OrderCode,
-                i.CreatedAt.ToString("yyyy-MM-dd"),
-                i.TotalDebtAmount,
-                i.Status == DebtInvoiceStatus.FullyPaid
-                    ? "Paid"
-                    : i.Status == DebtInvoiceStatus.PartiallyPaid
-                        ? "Partial"
-                        : "Unpaid"
-            ))
+        var debtOrders = await _context.Orders.AsNoTracking()
+            .Where(o => o.CustomerId == id && o.TenantId == tenantId &&
+                (o.PaymentMethod == "DEBT" || o.PaymentMethod == "CREDIT"))
+            .OrderByDescending(o => o.OrderDate).Take(10)
+            .Select(o => new CustomerInvoiceSummaryResponse(o.OrderCode, o.OrderDate.ToString("yyyy-MM-dd"),
+                o.FinalAmount, "Debt"))
             .ToListAsync(ct);
 
-        // Load recent debt repayment history
-        var recentPayments = await _context.CustomerDebtEntries
-            .AsNoTracking()
-            .Where(e => e.CustomerId == id && e.TenantId == tenantId && e.EntryType == CustomerDebtType.DebtRepayment)
-            .OrderByDescending(e => e.OccurredAtUtc)
-            .Take(10)
+        var recentPayments = await _context.CashbookEntries.AsNoTracking()
+            .Where(e => e.SourceId == id && e.TenantId == tenantId && e.SourceType == "DEBT_REPAYMENT")
+            .OrderByDescending(e => e.OccurredAtUtc).Take(10)
             .Select(e => new CustomerPaymentSummaryResponse(
                 string.IsNullOrEmpty(e.ReferenceCode) ? e.EntryCode : e.ReferenceCode,
-                e.OccurredAtUtc.ToString("yyyy-MM-dd HH:mm"),
-                e.Amount,
-                e.Description.Contains("Bank") || e.Description.Contains("VietQR") ? "VietQR" : "Cash",
-                e.Description,
-                "Thu ngân"
-            ))
+                e.OccurredAtUtc.ToString("yyyy-MM-dd HH:mm"), e.Amount,
+                e.AccountType.ToString(), "Chủ cửa hàng", e.Description))
             .ToListAsync(ct);
 
-        var res = new CustomerResponse(
-            c.Id,
-            c.CustomerCode,
-            c.Name,
-            c.Phone,
-            c.Email,
-            c.Address,
-            c.MembershipTier,
-            c.RewardPoints,
-            c.TotalSpending,
-            c.TotalDebt,
-            c.DebtLimit,
-            c.IsBlockedForDebt ? "Inactive" : "Active",
-            c.AllowDebt,
-            c.IsBlockedForDebt,
-            c.CreatedAt,
-            openInvoices,
-            recentPayments
-        );
-
-        return Ok(ApiResponse<CustomerResponse>.Ok(res));
+        return Ok(ApiResponse<CustomerResponse>.Ok(MapCustomer(customer, debtOrders, recentPayments)));
     }
 
     [HttpPost]
-    public async Task<ActionResult<ApiResponse<CustomerResponse>>> CreateCustomer([FromBody] CreateCustomerRequest request, CancellationToken ct)
+    public async Task<ActionResult<ApiResponse<CustomerResponse>>> CreateCustomer(
+        [FromBody] CreateCustomerRequest request, CancellationToken ct)
     {
         var tenantId = _tenantContext.CurrentTenantId;
-        var cleanFullName = System.Text.RegularExpressions.Regex.Replace(request.FullName ?? string.Empty, @"<[^>]*>", string.Empty).Trim();
-        if (string.IsNullOrWhiteSpace(cleanFullName))
-        {
-            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không được để trống hoặc chỉ chứa thẻ HTML."));
-        }
-        if (request.FullName != null && (request.FullName.Contains('<') || request.FullName.Contains('>')))
-        {
-            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không được chứa thẻ HTML hoặc ký tự đặc biệt < >."));
-        }
+        var cleanName = CleanText(request.FullName);
+        if (string.IsNullOrWhiteSpace(cleanName) || request.FullName.Contains('<') || request.FullName.Contains('>'))
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không hợp lệ."));
         if (string.IsNullOrWhiteSpace(request.PhoneNumber))
-        {
             return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Số điện thoại không được để trống."));
-        }
-        if (request.DebtLimit < 0)
-        {
-            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Hạn mức nợ không thể là số âm."));
-        }
 
-        var existingPhone = await _context.Customers
-            .AnyAsync(c => c.Phone == request.PhoneNumber.Trim() && c.TenantId == tenantId, ct);
-
-        if (existingPhone)
-        {
+        var phone = request.PhoneNumber.Trim();
+        if (await _context.Customers.AnyAsync(c => c.Phone == phone && c.TenantId == tenantId, ct))
             return Conflict(ApiResponse<object>.Fail("PHONE_EXISTS", "Số điện thoại này đã được sử dụng cho một khách hàng khác."));
-        }
-
-        var customerId = Guid.NewGuid();
-        var code = "KH" + DateTime.UtcNow.ToString("yyMMddHHmmss") + Random.Shared.Next(10, 99);
 
         var customer = new Customer
         {
-            Id = customerId,
             TenantId = tenantId,
-            CustomerCode = code,
-            Name = cleanFullName,
-            Phone = request.PhoneNumber.Trim(),
+            CustomerCode = "KH" + DateTime.UtcNow.ToString("yyMMddHHmmss") + Random.Shared.Next(10, 99),
+            Name = cleanName,
+            Phone = phone,
             Email = request.Email?.Trim(),
-            Address = request.Address != null ? System.Text.RegularExpressions.Regex.Replace(request.Address, @"<[^>]*>", string.Empty).Trim() : null,
+            Address = CleanText(request.Address),
             MembershipTier = request.MembershipTier ?? "Standard",
-            RewardPoints = 0,
-            TotalSpending = 0m,
-            TotalDebt = 0m,
-            DebtLimit = Math.Max(0m, request.DebtLimit),
-            AllowDebt = request.DebtLimit > 0,
-            IsBlockedForDebt = false,
-            PrepaymentBalance = 0m,
-            MaxDebtDays = 30,
-            DebtStatus = CustomerDebtStatus.GoodStanding
+            TotalDebt = 0m
         };
-
         await _context.Customers.AddAsync(customer, ct);
         await _context.SaveChangesAsync(ct);
-
-        var response = new CustomerResponse(
-            customer.Id,
-            customer.CustomerCode,
-            customer.Name,
-            customer.Phone,
-            customer.Email,
-            customer.Address,
-            customer.MembershipTier,
-            customer.RewardPoints,
-            customer.TotalSpending,
-            0m,
-            customer.DebtLimit,
-            "Active",
-            customer.AllowDebt,
-            false,
-            customer.CreatedAt
-        );
-
-        return Ok(ApiResponse<CustomerResponse>.Ok(response, "Tạo khách hàng thành công."));
+        return Ok(ApiResponse<CustomerResponse>.Ok(MapCustomer(customer), "Tạo khách hàng thành công."));
     }
 
     [HttpPut("{id:guid}")]
-    public async Task<ActionResult<ApiResponse<CustomerResponse>>> UpdateCustomer(Guid id, [FromBody] UpdateCustomerRequest request, CancellationToken ct)
+    public async Task<ActionResult<ApiResponse<CustomerResponse>>> UpdateCustomer(
+        Guid id, [FromBody] UpdateCustomerRequest request, CancellationToken ct)
     {
         var tenantId = _tenantContext.CurrentTenantId;
-        var customer = await _context.Customers
-            .FirstOrDefaultAsync(c => c.Id == id && c.TenantId == tenantId, ct);
-
-        if (customer == null)
-        {
-            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", "Khách hàng không tồn tại."));
-        }
+        var customer = await _context.Customers.FirstOrDefaultAsync(c => c.Id == id && c.TenantId == tenantId, ct);
+        if (customer == null) return NotFound(ApiResponse<object>.Fail("NOT_FOUND", "Khách hàng không tồn tại."));
 
         if (request.FullName != null)
         {
-            if (request.FullName.Contains('<') || request.FullName.Contains('>'))
-            {
-                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không được chứa thẻ HTML hoặc ký tự đặc biệt < >."));
-            }
-            var cleanUpdateName = System.Text.RegularExpressions.Regex.Replace(request.FullName, @"<[^>]*>", string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(cleanUpdateName))
-            {
-                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không được để trống."));
-            }
-            customer.Name = cleanUpdateName;
+            var cleanName = CleanText(request.FullName);
+            if (string.IsNullOrWhiteSpace(cleanName) || request.FullName.Contains('<') || request.FullName.Contains('>'))
+                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không hợp lệ."));
+            customer.Name = cleanName;
         }
         if (request.Email != null) customer.Email = request.Email.Trim();
-        if (request.Address != null) customer.Address = System.Text.RegularExpressions.Regex.Replace(request.Address, @"<[^>]*>", string.Empty).Trim();
+        if (request.Address != null) customer.Address = CleanText(request.Address);
         if (request.MembershipTier != null) customer.MembershipTier = request.MembershipTier;
-        if (request.Status != null) customer.IsBlockedForDebt = request.Status.Equals("Inactive", StringComparison.OrdinalIgnoreCase);
-
-        if (request.DebtLimit.HasValue)
-        {
-            if (request.DebtLimit.Value < 0)
-            {
-                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Hạn mức nợ không thể là số âm."));
-            }
-            customer.DebtLimit = Math.Max(0m, request.DebtLimit.Value);
-            customer.AllowDebt = customer.DebtLimit > 0;
-
-            if (customer.TotalDebt > customer.DebtLimit)
-            {
-                customer.DebtStatus = CustomerDebtStatus.LimitExceededBlocked;
-                customer.IsBlockedForDebt = true;
-            }
-            else if (customer.DebtStatus == CustomerDebtStatus.LimitExceededBlocked)
-            {
-                customer.DebtStatus = CustomerDebtStatus.GoodStanding;
-                customer.IsBlockedForDebt = false;
-            }
-        }
 
         await _context.SaveChangesAsync(ct);
-
-        var response = new CustomerResponse(
-            customer.Id,
-            customer.CustomerCode,
-            customer.Name,
-            customer.Phone,
-            customer.Email,
-            customer.Address,
-            customer.MembershipTier,
-            customer.RewardPoints,
-            customer.TotalSpending,
-            customer.TotalDebt,
-            customer.DebtLimit,
-            customer.IsBlockedForDebt ? "Inactive" : "Active",
-            customer.AllowDebt,
-            customer.IsBlockedForDebt,
-            customer.CreatedAt
-        );
-
-        return Ok(ApiResponse<CustomerResponse>.Ok(response, "Cập nhật khách hàng thành công."));
+        return Ok(ApiResponse<CustomerResponse>.Ok(MapCustomer(customer), "Cập nhật khách hàng thành công."));
     }
 
     [HttpGet("debts/summary")]
     public async Task<ActionResult<ApiResponse<CustomerKpiSummaryResponse>>> GetDebtsSummary(CancellationToken ct)
     {
         var tenantId = _tenantContext.CurrentTenantId;
-        var customers = await _context.Customers
-            .AsNoTracking()
-            .Where(c => c.TenantId == tenantId)
-            .ToListAsync(ct);
-
-        var totalCustomers = customers.Count;
-        decimal totalDebtAR = customers.Sum(c => c.TotalDebt);
-        int overLimitCount = customers.Count(c => c.TotalDebt > c.DebtLimit);
-        int totalLoyaltyPoints = customers.Sum(c => c.RewardPoints);
-
-        var summary = new CustomerKpiSummaryResponse(
-            totalCustomers,
-            totalDebtAR,
-            overLimitCount,
-            totalLoyaltyPoints
-        );
-
+        var customers = await _context.Customers.AsNoTracking().Where(c => c.TenantId == tenantId).ToListAsync(ct);
+        var summary = new CustomerKpiSummaryResponse(customers.Count, customers.Sum(c => c.TotalDebt),
+            customers.Count(c => c.TotalDebt > 0), customers.Sum(c => c.RewardPoints));
         return Ok(ApiResponse<CustomerKpiSummaryResponse>.Ok(summary));
     }
-}
 
+    private static string? CleanText(string? value) => value == null
+        ? null
+        : System.Text.RegularExpressions.Regex.Replace(value, @"<[^>]*>", string.Empty).Trim();
+
+    private static CustomerResponse MapCustomer(Customer c,
+        List<CustomerInvoiceSummaryResponse>? invoices = null,
+        List<CustomerPaymentSummaryResponse>? payments = null) => new(
+        c.Id, c.CustomerCode, c.Name, c.Phone, c.Email, c.Address, c.MembershipTier,
+        c.RewardPoints, c.TotalSpending, c.TotalDebt, "Active", c.CreatedAt, invoices, payments);
+}

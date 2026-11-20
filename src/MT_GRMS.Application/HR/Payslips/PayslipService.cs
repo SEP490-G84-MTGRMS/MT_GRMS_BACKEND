@@ -1,12 +1,15 @@
 using System.Text.Json;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
-using MT_GRMS.Application.HR.AttendancePolicies;
+using MT_GRMS.Application.Expenses;
+using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Payslips.Dtos;
 using MT_GRMS.Application.HR.Schedules;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.HR;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
@@ -21,27 +24,33 @@ public class PayslipService : IPayslipService
     private readonly IPayslipRepository _payslipRepository;
     private readonly IEmployeeRepository _employeeRepository;
     private readonly IScheduleRepository _scheduleRepository;
-    private readonly IBranchAttendancePolicyRepository _attendancePolicyRepository;
+    private readonly IBranchRepository _branchRepository;
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ICashbookService? _cashbookService;
+    private readonly IExpenseRepository? _expenseRepository;
+    private readonly INotificationService? _notificationService;
 
     public PayslipService(
         IPayslipRepository payslipRepository,
         IEmployeeRepository employeeRepository,
         IScheduleRepository scheduleRepository,
-        IBranchAttendancePolicyRepository attendancePolicyRepository,
+        IBranchRepository branchRepository,
         ITenantContext tenantContext,
         IUnitOfWork unitOfWork,
-        ICashbookService? cashbookService = null)
+        ICashbookService? cashbookService = null,
+        IExpenseRepository? expenseRepository = null,
+        INotificationService? notificationService = null)
     {
         _payslipRepository = payslipRepository;
         _employeeRepository = employeeRepository;
         _scheduleRepository = scheduleRepository;
-        _attendancePolicyRepository = attendancePolicyRepository;
+        _branchRepository = branchRepository;
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
         _cashbookService = cashbookService;
+        _expenseRepository = expenseRepository;
+        _notificationService = notificationService;
     }
 
     public async Task<IReadOnlyList<PayslipResponse>> GenerateMonthlyPayrollAsync(
@@ -124,11 +133,18 @@ public class PayslipService : IPayslipService
 
             var empSchedules = schedules.Where(s => s.EmployeeId == emp.Id).ToList();
 
-            var policy = await _attendancePolicyRepository.GetByBranchIdAsync(emp.BranchId, cancellationToken);
+            var policy = await _branchRepository.GetByIdAsync(emp.BranchId, cancellationToken);
             var standardDayHours = policy?.StandardDayHours ?? 8.00m;
             if (standardDayHours <= 0) standardDayHours = 8.00m;
 
-            var standardDays = 26.00m;
+            const decimal monthlyFormulaStandardDays = 26.00m;
+            var assignedShiftCount = activeSchedulesInMonth
+                .Where(s => s.EmployeeId == emp.Id)
+                .Select(s => s.Id)
+                .Concat(empSchedules.Select(s => s.Id))
+                .Distinct()
+                .Count();
+            var standardDays = assignedShiftCount > 0 ? (decimal)assignedShiftCount : monthlyFormulaStandardDays;
 
             var workingSchedules = empSchedules
                 .Where(s => s.Status == ScheduleStatus.Completed && !IsPaidLeaveSchedule(s) && !IsUnpaidLeaveSchedule(s))
@@ -145,15 +161,15 @@ public class PayslipService : IPayslipService
             var workedDays = CalculateWorkedDays(workingSchedules, totalWorkHours, standardDayHours, policy);
             var paidLeaveDays = (decimal)paidLeaveSchedules.Count;
             var unpaidLeaveDays = (decimal)unpaidLeaveSchedules.Count;
-            var totalLateMinutes = workingSchedules.Sum(s => s.LateMinutes);
-            var totalEarlyLeaveMinutes = workingSchedules.Sum(s => s.EarlyLeaveMinutes);
+            var totalLateMinutes = workingSchedules.Sum(s => CalculateEffectiveLateMinutes(s, policy));
+            var totalEarlyLeaveMinutes = workingSchedules.Sum(s => CalculateEffectiveEarlyLeaveMinutes(s, policy));
 
             decimal otHours = 0m;
             decimal overtimePay = 0m;
 
             var hourlyRate = emp.SalaryType switch
             {
-                SalaryType.Monthly => (standardDays * standardDayHours > 0) ? Math.Round(emp.BaseRate / (standardDays * standardDayHours), 2) : 0m,
+                SalaryType.Monthly => (monthlyFormulaStandardDays * standardDayHours > 0) ? Math.Round(emp.BaseRate / (monthlyFormulaStandardDays * standardDayHours), 2) : 0m,
                 SalaryType.Shift => (standardDayHours > 0) ? Math.Round(emp.BaseRate / standardDayHours, 2) : 0m,
                 SalaryType.Hourly => emp.BaseRate,
                 _ => 0m
@@ -202,12 +218,34 @@ public class PayslipService : IPayslipService
             var totalEarnings = baseSalaryEarned + overtimePay + totalAllowance;
 
             decimal socialInsurance = 0m;
-            if (emp.SalaryType == SalaryType.Monthly && emp.BaseRate > 0)
+            decimal insuranceBase = 0m;
+            if (emp.SalaryType == SalaryType.Monthly && emp.HasLaborContract)
             {
-                socialInsurance = Math.Round(emp.BaseRate * 0.105m, 0, MidpointRounding.AwayFromZero);
+                insuranceBase = emp.InsuranceBaseSalary ?? emp.BaseRate;
+                if (insuranceBase > 0)
+                {
+                    var bhxh = Math.Round(insuranceBase * 0.08m, 0, MidpointRounding.AwayFromZero);
+                    var bhyt = Math.Round(insuranceBase * 0.015m, 0, MidpointRounding.AwayFromZero);
+                    var bhtn = Math.Round(insuranceBase * 0.01m, 0, MidpointRounding.AwayFromZero);
+                    socialInsurance = bhxh + bhyt + bhtn;
+                }
+                else
+                {
+                    insuranceBase = 0m;
+                }
             }
 
-            var currentDebt = emp.DebtAmount > 0 ? emp.DebtAmount : 0m;
+            var cashbookAdvance = existingPayslip != null
+                ? await GetPayslipAdvanceFromCashbookAsync(emp.BranchId, existingPayslip.Id, existingPayslip.PayslipCode, cancellationToken)
+                : 0m;
+            var currentDebt = Math.Max(
+                Math.Max(emp.DebtAmount > 0 ? emp.DebtAmount : 0m, cashbookAdvance),
+                existingPayslip?.AdvanceDeduction ?? 0m);
+            if (currentDebt > emp.DebtAmount)
+            {
+                emp.DebtAmount = currentDebt;
+                _employeeRepository.Update(emp);
+            }
             var earningsAfterInsurance = Math.Max(0, totalEarnings - socialInsurance);
 
             decimal advanceDeduction = 0m;
@@ -235,6 +273,7 @@ public class PayslipService : IPayslipService
             {
                 payslip = existingPayslip;
                 payslip.BaseRate = emp.BaseRate;
+                payslip.InsuranceBaseSalary = insuranceBase;
                 payslip.SalaryType = emp.SalaryType;
                 payslip.StandardDays = standardDays;
                 payslip.StandardDayHours = standardDayHours;
@@ -281,6 +320,7 @@ public class PayslipService : IPayslipService
                     PeriodMonth = request.PeriodMonth,
                     SalaryType = emp.SalaryType,
                     BaseRate = emp.BaseRate,
+                    InsuranceBaseSalary = insuranceBase,
                     StandardDays = standardDays,
                     StandardDayHours = standardDayHours,
                     WorkedDays = workedDays,
@@ -317,6 +357,21 @@ public class PayslipService : IPayslipService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        if (_notificationService != null)
+        {
+            foreach (var p in resultList.Where(x => x.Status == PayslipStatus.Unpaid))
+            {
+                await NotifyPayslipSafeAsync(
+                    p.TenantId,
+                    p.EmployeeId,
+                    p.Employee?.UserId,
+                    "PAYSLIP_GENERATED",
+                    "Phiếu lương mới",
+                    $"Phiếu lương kỳ {p.PeriodMonth} ({p.PayslipCode}) đã được tạo.",
+                    cancellationToken);
+            }
+        }
+
         return resultList.Select(MapToResponse).ToList();
     }
 
@@ -344,7 +399,9 @@ public class PayslipService : IPayslipService
             Status: p.Status,
             PaidAt: p.PaidAt,
             PaymentMethod: p.PaymentMethod,
-            CashbookVoucherCode: p.CashbookVoucherCode
+            CashbookVoucherCode: p.CashbookVoucherCode,
+            ApprovedAt: p.ApprovedAt,
+            ApprovedBy: p.ApprovedBy
         )).ToList();
 
         var page = filter.Page > 0 ? filter.Page : 1;
@@ -372,6 +429,94 @@ public class PayslipService : IPayslipService
         return MapToResponse(payslip);
     }
 
+    public async Task<PayslipResponse> AdvanceSalaryAsync(
+        Guid id,
+        SalaryAdvanceRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        if (request.Amount <= 0 || request.Amount > 1_000_000_000m)
+        {
+            throw new BusinessException("Số tiền tạm ứng phải lớn hơn 0 và không vượt quá 1,000,000,000 VNĐ.");
+        }
+
+        var payslip = await _payslipRepository.GetByIdAsync(id, cancellationToken);
+        if (payslip == null)
+        {
+            throw new NotFoundException("Payslip", id);
+        }
+
+        if (payslip.Status == PayslipStatus.Paid)
+        {
+            throw new BusinessException($"Phiếu lương {payslip.PayslipCode} đã thanh toán, không thể tạm ứng thêm.");
+        }
+
+        var maxAdvanceable = Math.Max(0m, payslip.TotalEarnings - payslip.SocialInsurance - payslip.AdvanceDeduction);
+        if (maxAdvanceable <= 0m)
+        {
+            throw new BusinessException(
+                $"Nhân viên chưa có lương đã làm được khả dụng để tạm ứng cho phiếu {payslip.PayslipCode}.");
+        }
+
+        if (request.Amount > maxAdvanceable)
+        {
+            throw new BusinessException(
+                $"Số tiền tạm ứng ({request.Amount:N0} VNĐ) không được vượt quá tiền lương đã làm được còn lại ({maxAdvanceable:N0} VNĐ).");
+        }
+
+        var employee = payslip.Employee ?? await _employeeRepository.GetByIdAsync(payslip.EmployeeId, cancellationToken);
+        if (employee == null)
+        {
+            throw new NotFoundException("Employee", payslip.EmployeeId);
+        }
+
+        var (paidAtVn, paidAtUtc) = ResolvePaymentTimes(request.PaidAt);
+        var method = string.IsNullOrWhiteSpace(request.PaymentMethod)
+            ? "CASH"
+            : request.PaymentMethod.Trim().ToUpperInvariant();
+        var voucherCode = $"TU-{paidAtVn:yyyyMM}-{Random.Shared.Next(1000, 9999)}";
+        var description = string.IsNullOrWhiteSpace(request.Note)
+            ? $"Tạm ứng lương kỳ {payslip.PeriodMonth} cho nhân viên {employee.FullName}"
+            : request.Note.Trim();
+
+        var cashbookService = _cashbookService ?? throw new InvalidOperationException("Cashbook service is required to disburse a salary advance.");
+        var disbursedAccount = await cashbookService.ResolveDisbursementAccountAsync(
+            payslip.BranchId, method, request.CashbookAccountId, cancellationToken);
+        var entry = await cashbookService.DisburseCashAsync(
+            disbursedAccount.Id,
+            disbursedAccount.AccountType,
+            request.Amount,
+            "SALARY_ADVANCE",
+            payslip.Id,
+            payslip.PayslipCode,
+            description,
+            cancellationToken);
+        voucherCode = entry.EntryCode;
+
+        await RecordSalaryExpenseVoucherAsync(
+            payslip,
+            employee.FullName,
+            request.Amount,
+            method,
+            disbursedAccount,
+            paidAtUtc,
+            description,
+            cancellationToken);
+
+        employee.DebtAmount += request.Amount;
+        _employeeRepository.Update(employee);
+
+        var earningsAfterInsurance = Math.Max(0, payslip.TotalEarnings - payslip.SocialInsurance);
+        payslip.AdvanceDeduction = Math.Min(employee.DebtAmount, earningsAfterInsurance);
+        payslip.RemainingDebt = Math.Max(0, employee.DebtAmount - payslip.AdvanceDeduction);
+        payslip.TotalDeductions = payslip.SocialInsurance + payslip.AdvanceDeduction;
+        payslip.NetSalary = Math.Max(0, payslip.TotalEarnings - payslip.TotalDeductions);
+        _payslipRepository.Update(payslip);
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return MapToResponse(payslip);
+    }
+
     public async Task<PayslipResponse> PayPayslipAsync(
         Guid id,
         PayPayslipRequest request,
@@ -389,59 +534,32 @@ public class PayslipService : IPayslipService
         }
 
         var method = request.PaymentMethod.Trim().ToUpper();
-        var now = VnNow;
-        var voucherCode = $"PC-{now:yyyyMM}-{Random.Shared.Next(1000, 9999)}";
+        var (paidAtVn, paidAtUtc) = ResolvePaymentTimes(request.PaidAt);
+        var employeeName = payslip.Employee?.FullName ?? payslip.EmployeeId.ToString();
+        var description = string.IsNullOrWhiteSpace(request.Note)
+            ? $"Chi trả lương kỳ {payslip.PeriodMonth} cho nhân viên {employeeName}"
+            : request.Note.Trim();
 
-        if (_cashbookService != null && payslip.NetSalary > 0)
-        {
-            try
-            {
-                FinanceAccount account = method.Contains("BANK") || method.Contains("TRANSFER")
-                    ? await _cashbookService.GetOrCreateBankAccountAsync(payslip.BranchId, ct: cancellationToken)
-                    : await _cashbookService.GetOrCreateSafeAsync(payslip.BranchId, cancellationToken);
+        var (voucherCode, disbursedAccount, cashbookEntryId) = await DisbursePayslipCashbookAsync(
+            payslip, method, request.CashbookAccountId, paidAtVn, description, cancellationToken);
 
-                var entry = await _cashbookService.DisburseCashAsync(
-                    account.Id,
-                    account.AccountType,
-                    payslip.NetSalary,
-                    "SALARY",
-                    payslip.Id,
-                    payslip.PayslipCode,
-                    $"Chi trả lương kỳ {payslip.PeriodMonth} cho nhân viên {payslip.Employee?.FullName ?? payslip.EmployeeId.ToString()}",
-                    cancellationToken
-                );
-                voucherCode = entry.EntryCode;
-            }
-            catch
-            {
-                // Keep default voucher code on fallback
-            }
-        }
+        await RecordSalaryExpenseVoucherAsync(
+            payslip,
+            employeeName,
+            payslip.NetSalary,
+            method,
+            disbursedAccount,
+            paidAtUtc,
+            description,
+            cancellationToken);
 
         payslip.Status = PayslipStatus.Paid;
-        payslip.PaidAt = now;
+        payslip.PaidAt = paidAtVn;
         payslip.PaymentMethod = method;
         payslip.PaidBy = _tenantContext.CurrentUserId.ToString();
         payslip.Note = request.Note ?? payslip.Note;
 
-        var cashbookTransaction = new CashbookTransaction
-        {
-            Id = Guid.NewGuid(),
-            TenantId = _tenantContext.CurrentTenantId,
-            BranchId = payslip.BranchId,
-            Type = CashbookType.Payment,
-            Category = "Chi phí lương nhân viên",
-            Amount = payslip.NetSalary,
-            ReferenceCode = payslip.PayslipCode,
-            TransactionCode = voucherCode,
-            Description = $"Chi trả lương kỳ {payslip.PeriodMonth} cho nhân viên {payslip.Employee?.FullName ?? payslip.EmployeeId.ToString()}",
-            CreatedByUserId = _tenantContext.CurrentUserId,
-            CreatedAt = now
-        };
-
-        await _payslipRepository.AddCashbookTransactionAsync(cashbookTransaction, cancellationToken);
-
-        payslip.CashbookTransactionId = cashbookTransaction.Id;
+        payslip.CashbookEntryId = cashbookEntryId;
         payslip.CashbookVoucherCode = voucherCode;
 
         if (payslip.Employee != null && payslip.AdvanceDeduction > 0)
@@ -455,6 +573,15 @@ public class PayslipService : IPayslipService
         _payslipRepository.Update(payslip);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        await NotifyPayslipSafeAsync(
+            payslip.TenantId,
+            payslip.EmployeeId,
+            payslip.Employee?.UserId,
+            "PAYSLIP_PAID",
+            "Đã thanh toán lương",
+            $"Phiếu lương kỳ {payslip.PeriodMonth} số tiền {payslip.NetSalary:N0}đ đã được thanh toán ({payslip.CashbookVoucherCode}).",
+            cancellationToken);
+
         return MapToResponse(payslip);
     }
 
@@ -466,6 +593,7 @@ public class PayslipService : IPayslipService
         var successList = new List<string>();
         var errors = new List<string>();
 
+        var paidPayslips = new List<Payslip>();
         foreach (var id in request.PayslipIds)
         {
             var payslip = await _payslipRepository.GetByIdAsync(id, cancellationToken);
@@ -481,59 +609,43 @@ public class PayslipService : IPayslipService
                 continue;
             }
 
-            var now = VnNow;
-            var voucherCode = $"PC-{now:yyyyMM}-{Random.Shared.Next(1000, 9999)}";
+            var (paidAtVn, paidAtUtc) = ResolvePaymentTimes(request.PaidAt);
+            var employeeName = payslip.Employee?.FullName ?? payslip.EmployeeId.ToString();
+            var description = string.IsNullOrWhiteSpace(request.Note)
+                ? $"Chi trả lương kỳ {payslip.PeriodMonth} cho nhân viên {employeeName}"
+                : request.Note.Trim();
 
-            if (_cashbookService != null && payslip.NetSalary > 0)
+            string voucherCode;
+            Guid? cashbookEntryId;
+            FinanceAccount? disbursedAccount;
+            try
             {
-                try
-                {
-                    FinanceAccount account = method.Contains("BANK") || method.Contains("TRANSFER")
-                        ? await _cashbookService.GetOrCreateBankAccountAsync(payslip.BranchId, ct: cancellationToken)
-                        : await _cashbookService.GetOrCreateSafeAsync(payslip.BranchId, cancellationToken);
-
-                    var entry = await _cashbookService.DisburseCashAsync(
-                        account.Id,
-                        account.AccountType,
-                        payslip.NetSalary,
-                        "SALARY",
-                        payslip.Id,
-                        payslip.PayslipCode,
-                        $"Chi trả lương kỳ {payslip.PeriodMonth} cho nhân viên {payslip.Employee?.FullName ?? payslip.EmployeeId.ToString()}",
-                        cancellationToken
-                    );
-                    voucherCode = entry.EntryCode;
-                }
-                catch
-                {
-                    // Keep default voucher code on fallback
-                }
+                (voucherCode, disbursedAccount, cashbookEntryId) = await DisbursePayslipCashbookAsync(
+                    payslip, method, request.CashbookAccountId, paidAtVn, description, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"Phiếu lương {payslip.PayslipCode}: {ex.Message}");
+                continue;
             }
 
+            await RecordSalaryExpenseVoucherAsync(
+                payslip,
+                employeeName,
+                payslip.NetSalary,
+                method,
+                disbursedAccount,
+                paidAtUtc,
+                description,
+                cancellationToken);
+
             payslip.Status = PayslipStatus.Paid;
-            payslip.PaidAt = now;
+            payslip.PaidAt = paidAtVn;
             payslip.PaymentMethod = method;
             payslip.PaidBy = _tenantContext.CurrentUserId.ToString();
             payslip.Note = request.Note ?? payslip.Note;
 
-            var cashbookTransaction = new CashbookTransaction
-            {
-                Id = Guid.NewGuid(),
-                TenantId = _tenantContext.CurrentTenantId,
-                BranchId = payslip.BranchId,
-                Type = CashbookType.Payment,
-                Category = "Chi phí lương nhân viên",
-                Amount = payslip.NetSalary,
-                ReferenceCode = payslip.PayslipCode,
-                TransactionCode = voucherCode,
-                Description = $"Chi trả lương kỳ {payslip.PeriodMonth} cho nhân viên {payslip.Employee?.FullName ?? payslip.EmployeeId.ToString()}",
-                CreatedByUserId = _tenantContext.CurrentUserId,
-                CreatedAt = now
-            };
-
-            await _payslipRepository.AddCashbookTransactionAsync(cashbookTransaction, cancellationToken);
-
-            payslip.CashbookTransactionId = cashbookTransaction.Id;
+            payslip.CashbookEntryId = cashbookEntryId;
             payslip.CashbookVoucherCode = voucherCode;
 
             if (payslip.Employee != null && payslip.AdvanceDeduction > 0)
@@ -546,9 +658,22 @@ public class PayslipService : IPayslipService
 
             _payslipRepository.Update(payslip);
             successList.Add(payslip.PayslipCode);
+            paidPayslips.Add(payslip);
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        foreach (var paid in paidPayslips)
+        {
+            await NotifyPayslipSafeAsync(
+                paid.TenantId,
+                paid.EmployeeId,
+                paid.Employee?.UserId,
+                "PAYSLIP_PAID",
+                "Đã thanh toán lương",
+                $"Phiếu lương kỳ {paid.PeriodMonth} số tiền {paid.NetSalary:N0}đ đã được thanh toán ({paid.CashbookVoucherCode}).",
+                cancellationToken);
+        }
 
         return new BatchPayResultDto(
             TotalRequested: request.PayslipIds.Count,
@@ -557,6 +682,177 @@ public class PayslipService : IPayslipService
             PaidPayslipCodes: successList,
             Errors: errors
         );
+    }
+
+    private async Task NotifyPayslipSafeAsync(
+        string tenantId,
+        Guid employeeId,
+        string? userId,
+        string type,
+        string title,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        if (_notificationService == null) return;
+        try
+        {
+            var targetUserId = userId;
+            if (string.IsNullOrWhiteSpace(targetUserId))
+            {
+                var emp = await _employeeRepository.GetByIdAsync(employeeId, cancellationToken);
+                targetUserId = emp?.UserId;
+            }
+            if (string.IsNullOrWhiteSpace(targetUserId)) return;
+
+            await _notificationService.CreateAndPushAsync(
+                tenantId,
+                new[] { targetUserId },
+                type,
+                title,
+                message,
+                "/employee/payroll",
+                cancellationToken);
+        }
+        catch
+        {
+            // Không làm gián đoạn luồng tính/trả lương
+        }
+    }
+
+    private async Task<decimal> GetPayslipAdvanceFromCashbookAsync(
+        Guid branchId,
+        Guid payslipId,
+        string payslipCode,
+        CancellationToken cancellationToken)
+    {
+        if (_cashbookService == null)
+        {
+            return 0m;
+        }
+
+        try
+        {
+            var entries = await _cashbookService.GetEntriesAsync(
+                accountId: null,
+                branchId: null,
+                fromDate: null,
+                toDate: null,
+                page: 1,
+                pageSize: 500,
+                entryType: CashbookEntryType.Payment,
+                sourceType: "SALARY_ADVANCE",
+                keyword: null,
+                ct: cancellationToken);
+
+            return entries
+                .Where(e => e.SourceId == payslipId ||
+                            string.Equals(e.ReferenceCode, payslipCode, StringComparison.OrdinalIgnoreCase) ||
+                            (!string.IsNullOrWhiteSpace(e.Description) &&
+                             e.Description.Contains(payslipCode, StringComparison.OrdinalIgnoreCase)))
+                .Sum(e => e.Amount);
+        }
+        catch
+        {
+            return 0m;
+        }
+    }
+
+    private static (DateTime PaidAtVn, DateTime PaidAtUtc) ResolvePaymentTimes(DateTime? requestedPaidAt)
+    {
+        if (!requestedPaidAt.HasValue)
+        {
+            var utcNow = DateTime.UtcNow;
+            return (utcNow.AddHours(7), utcNow);
+        }
+
+        var dt = requestedPaidAt.Value;
+        var utc = dt.Kind switch
+        {
+            DateTimeKind.Utc => dt,
+            DateTimeKind.Local => dt.ToUniversalTime(),
+            _ => DateTime.SpecifyKind(dt, DateTimeKind.Utc)
+        };
+        return (utc.AddHours(7), utc);
+    }
+
+    private static FinanceAccountType InferPaymentSourceType(string method)
+    {
+        var normalized = (method ?? string.Empty).Trim().ToUpperInvariant();
+        if (normalized.Contains("BANK") || normalized.Contains("TRANSFER") || normalized.Contains("VIETQR") || normalized == "QR")
+        {
+            return FinanceAccountType.Bank;
+        }
+        return FinanceAccountType.Safe;
+    }
+
+    private async Task RecordSalaryExpenseVoucherAsync(
+        Payslip payslip,
+        string beneficiaryName,
+        decimal amount,
+        string method,
+        FinanceAccount? account,
+        DateTime paymentTimeUtc,
+        string description,
+        CancellationToken cancellationToken)
+    {
+        if (_expenseRepository == null || amount <= 0)
+        {
+            return;
+        }
+
+        var voucher = new ExpenseVoucher
+        {
+            TenantId = _tenantContext.CurrentTenantId,
+            BranchId = payslip.BranchId,
+            VoucherCode = $"EXP-{DateTime.UtcNow:yyyyMMddHHmmssfff}",
+            BeneficiaryName = beneficiaryName,
+            Category = "Salary",
+            Amount = amount,
+            Status = ExpenseVoucherStatus.Paid,
+            Nature = FinancialNature.OperatingExpense,
+            PaymentSourceType = account?.AccountType ?? InferPaymentSourceType(method),
+            PaymentSourceAccountId = account?.Id,
+            IsTaxDeductible = false,
+            ExpenseDate = paymentTimeUtc,
+            PaidAtUtc = paymentTimeUtc,
+            ApprovedByUserId = _tenantContext.CurrentUserId,
+            ApprovedAtUtc = DateTime.UtcNow,
+            ReferenceCode = payslip.PayslipCode,
+            Note = description,
+            IsFlaggedAsSuspiciousSplit = false
+        };
+
+        await _expenseRepository.AddAsync(voucher, cancellationToken);
+    }
+
+    private async Task<(string VoucherCode, FinanceAccount? Account, Guid? EntryId)> DisbursePayslipCashbookAsync(
+        Payslip payslip,
+        string method,
+        Guid? cashbookAccountId,
+        DateTime paidAtVn,
+        string description,
+        CancellationToken cancellationToken)
+    {
+        var fallbackVoucherCode = $"PC-{paidAtVn:yyyyMM}-{Random.Shared.Next(1000, 9999)}";
+        if (payslip.NetSalary <= 0)
+        {
+            return (fallbackVoucherCode, null, null);
+        }
+
+        var cashbookService = _cashbookService ?? throw new InvalidOperationException("Cashbook service is required to disburse a payslip.");
+
+        var account = await cashbookService.ResolveDisbursementAccountAsync(
+            payslip.BranchId, method, cashbookAccountId, cancellationToken);
+        var entry = await cashbookService.DisburseCashAsync(
+            account.Id,
+            account.AccountType,
+            payslip.NetSalary,
+            "SALARY",
+            payslip.Id,
+            payslip.PayslipCode,
+            description,
+            cancellationToken);
+        return (entry.EntryCode, account, entry.Id);
     }
 
     public async Task<bool> DeletePayslipAsync(
@@ -655,11 +951,64 @@ public class PayslipService : IPayslipService
         return s.ActualWorkHours;
     }
 
+    private static int CalculateEffectiveLateMinutes(EmployeeSchedule s, Branch? policy)
+    {
+        if (policy == null)
+        {
+            return s.LateMinutes;
+        }
+
+        if (!policy.EnableLateThreshold)
+        {
+            return 0;
+        }
+
+        if (s.CheckInTime.HasValue)
+        {
+            var plannedStart = s.WorkDate.Date.Add(s.PlannedStartTime);
+            var rawLate = s.CheckInTime.Value > plannedStart
+                ? (int)(s.CheckInTime.Value - plannedStart).TotalMinutes
+                : 0;
+            return rawLate > policy.LateThresholdMinutes ? rawLate : 0;
+        }
+
+        return s.LateMinutes > policy.LateThresholdMinutes ? s.LateMinutes : 0;
+    }
+
+    private static int CalculateEffectiveEarlyLeaveMinutes(EmployeeSchedule s, Branch? policy)
+    {
+        if (policy == null)
+        {
+            return s.EarlyLeaveMinutes;
+        }
+
+        if (!policy.EnableEarlyLeaveThreshold)
+        {
+            return 0;
+        }
+
+        if (s.CheckOutTime.HasValue)
+        {
+            var plannedEnd = s.WorkDate.Date.Add(s.PlannedEndTime);
+            if (s.PlannedEndTime <= s.PlannedStartTime)
+            {
+                plannedEnd = plannedEnd.AddDays(1);
+            }
+
+            var rawEarly = s.CheckOutTime.Value < plannedEnd
+                ? (int)(plannedEnd - s.CheckOutTime.Value).TotalMinutes
+                : 0;
+            return rawEarly > policy.EarlyLeaveThresholdMinutes ? rawEarly : 0;
+        }
+
+        return s.EarlyLeaveMinutes > policy.EarlyLeaveThresholdMinutes ? s.EarlyLeaveMinutes : 0;
+    }
+
     private static decimal CalculateWorkedDays(
         IReadOnlyList<EmployeeSchedule> workingSchedules,
         decimal totalWorkHours,
         decimal standardDayHours,
-        BranchAttendancePolicy? policy)
+        Branch? policy)
     {
         var shouldConvert = policy == null || policy.IsConvertHoursToDays;
         var rulesJson = (policy != null && !string.IsNullOrWhiteSpace(policy.ConversionRulesJson))
@@ -726,10 +1075,6 @@ public class PayslipService : IPayslipService
                             {
                                 convertedDays += matchedUnits;
                             }
-                            else if (standardDayHours > 0)
-                            {
-                                convertedDays += Math.Round(dayHours / standardDayHours, 2);
-                            }
                         }
 
                         return Math.Round(convertedDays, 2);
@@ -762,11 +1107,13 @@ public class PayslipService : IPayslipService
 
         foreach (var sch in empSchedules)
         {
-            if (sch.Status != ScheduleStatus.Cancelled || IsUnpaidLeaveSchedule(sch))
-            {
-                sch.PayslipId = payslip.Id;
-                _scheduleRepository.Update(sch);
-            }
+            sch.PayslipId = payslip.Id;
+            // Tránh DbSet.Update(sch) attach lại navigation từ AsNoTracking() gây xung đột tracking Branch/Employee.
+            sch.Employee = null;
+            sch.Branch = null;
+            sch.ShiftConfig = null;
+            sch.Payslip = null;
+            _scheduleRepository.Update(sch);
         }
     }
 
@@ -778,9 +1125,10 @@ public class PayslipService : IPayslipService
 
         if (p.SocialInsurance > 0 && p.SalaryType == SalaryType.Monthly)
         {
-            bhxhAmount = Math.Round(p.BaseRate * 0.08m, 0, MidpointRounding.AwayFromZero);
-            bhytAmount = Math.Round(p.BaseRate * 0.015m, 0, MidpointRounding.AwayFromZero);
-            bhtnAmount = Math.Round(p.BaseRate * 0.01m, 0, MidpointRounding.AwayFromZero);
+            var insuranceBase = p.InsuranceBaseSalary > 0 ? p.InsuranceBaseSalary : p.BaseRate;
+            bhxhAmount = Math.Round(insuranceBase * 0.08m, 0, MidpointRounding.AwayFromZero);
+            bhytAmount = Math.Round(insuranceBase * 0.015m, 0, MidpointRounding.AwayFromZero);
+            bhtnAmount = Math.Round(insuranceBase * 0.01m, 0, MidpointRounding.AwayFromZero);
         }
 
         return new PayslipResponse(
@@ -824,7 +1172,7 @@ public class PayslipService : IPayslipService
             BankAccountNumber: p.BankAccountNumber,
             BankName: p.BankName,
             BankAccountHolder: p.BankAccountHolder,
-            CashbookTransactionId: p.CashbookTransactionId,
+            CashbookEntryId: p.CashbookEntryId,
             CashbookVoucherCode: p.CashbookVoucherCode,
             Note: p.Note,
             ApprovedBy: p.ApprovedBy,
@@ -832,7 +1180,8 @@ public class PayslipService : IPayslipService
             CreatedAt: p.CreatedAt,
             UserId: p.Employee?.UserId,
             OtWeekday: p.Employee?.OtWeekday ?? "150%",
-            OtSunday: p.Employee?.OtSunday ?? "200%"
+            OtSunday: p.Employee?.OtSunday ?? "200%",
+            InsuranceBaseSalary: p.InsuranceBaseSalary
         );
     }
 }

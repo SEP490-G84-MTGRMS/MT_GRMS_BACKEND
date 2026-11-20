@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Api.Middlewares;
@@ -14,6 +15,7 @@ public sealed class SubscriptionAccessMiddleware(RequestDelegate next)
     public async Task InvokeAsync(HttpContext context, AppDbContext db)
     {
         if (context.User.Identity?.IsAuthenticated != true ||
+            context.User.IsInRole(RoleConstants.AdminOnly) ||
             HttpMethods.IsOptions(context.Request.Method) ||
             AllowedPrefixes.Any(prefix => context.Request.Path.StartsWithSegments(prefix)))
         {

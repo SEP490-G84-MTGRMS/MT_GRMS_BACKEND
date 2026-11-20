@@ -1,4 +1,5 @@
 using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
@@ -12,32 +13,21 @@ public sealed class TransferService(
     IRepository<BranchStock> stocks,
     IRepository<Product> products,
     IRepository<Branch> branches,
+    IRepository<TransferStatusHistory> statusHistory,
     ITenantContext tenant,
     IUnitOfWork unitOfWork) : ITransferService
 {
-    private bool IsOwner =>
-        string.Equals(tenant.CurrentRole?.Trim(), "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(tenant.CurrentRole?.Trim(), "StoreOwner", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(tenant.CurrentRole?.Trim(), "ADMIN", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(tenant.CurrentRole?.Trim(), "Admin", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(tenant.CurrentRole?.Trim(), "SystemAdmin", StringComparison.OrdinalIgnoreCase);
-
-    private bool IsBranchEmployee =>
-        string.Equals(tenant.CurrentRole?.Trim(), "STAFF", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(tenant.CurrentRole?.Trim(), "EMPLOYEE", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(tenant.CurrentRole?.Trim(), "BRANCH_MANAGER", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(tenant.CurrentRole?.Trim(), "BranchManager", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(tenant.CurrentRole?.Trim(), "CASHIER", StringComparison.OrdinalIgnoreCase);
+    private bool IsOwner => tenant.CurrentRole == SystemRoles.StoreOwner;
+    private bool IsStaff => tenant.CurrentRole == SystemRoles.Staff;
 
     public async Task<PagedResult<TransferDto>> GetTransfersAsync(TransferFilterParams filter, CancellationToken ct)
     {
+        EnsureTenantRole();
         var all = (await transfers.GetAllAsync(ct)).AsEnumerable();
-        if (string.IsNullOrWhiteSpace(tenant.CurrentTenantId))
-            return new PagedResult<TransferDto> { Items = [], Page = Math.Max(filter.Page, 1), PageSize = Math.Clamp(filter.PageSize, 1, 100), TotalItems = 0 };
         all = all.Where(x => string.Equals(x.TenantId, tenant.CurrentTenantId, StringComparison.Ordinal));
         if (!IsOwner)
         {
-            if (IsBranchEmployee && tenant.CurrentBranchId is Guid branch) all = all.Where(x => x.FromBranchId == branch || x.ToBranchId == branch);
+            if (IsStaff && tenant.CurrentBranchId is Guid branch) all = all.Where(x => x.FromBranchId == branch || x.ToBranchId == branch);
             else all = Enumerable.Empty<Transfer>();
         }
         if (filter.FromBranchId.HasValue) all = all.Where(x => x.FromBranchId == filter.FromBranchId);
@@ -55,7 +45,7 @@ public sealed class TransferService(
             var receiptFiltered = new List<Transfer>();
             foreach (var transfer in all)
             {
-                if (transfer.Status != TransferStatus.Received) continue;
+                if (transfer.Status != TransferStatus.Completed) continue;
                 var lines = transfer.Details.Count > 0 ? transfer.Details.ToList() : (await details.FindAsync(x => x.TransferId == transfer.Id, ct)).ToList();
                 var isMatch = lines.All(line => line.ReceivedQuantity == line.SentQuantity && line.DamagedQuantity == 0);
                 if (isMatch == matchRequested) receiptFiltered.Add(transfer);
@@ -73,15 +63,15 @@ public sealed class TransferService(
 
     public async Task<IReadOnlyList<TransferStockBatchDto>> GetStockBatchesAsync(Guid branchId, CancellationToken ct)
     {
-        EnsureBranch(branchId);
-        var stock = await stocks.FindAsync(x => x.BranchId == branchId && x.QuantityOnHand > 0, ct);
+        await EnsureCanViewBranchStockAsync(branchId, ct);
+        var stock = await stocks.FindAsync(x => x.TenantId == tenant.CurrentTenantId && x.BranchId == branchId && x.QuantityOnHand > 0, ct);
         return stock.Select(x => new TransferStockBatchDto(x.ProductId, x.BatchCode, x.ExpiryDate,
             Math.Max(0, x.QuantityOnHand - x.QuantityReserved - x.QuantityQuarantined))).ToList();
     }
 
     private async Task<BranchStock> ResolveStockSourceAsync(Guid branchId, Guid productId, string? batchCode, DateTime? expiryDate, CancellationToken ct)
     {
-        var branchStocks = await stocks.FindAsync(s => s.BranchId == branchId && s.ProductId == productId, ct);
+        var branchStocks = await stocks.FindAsync(s => s.TenantId == tenant.CurrentTenantId && s.BranchId == branchId && s.ProductId == productId, ct);
         if (branchStocks.Count == 0)
             throw new InvalidOperationException("Không tìm thấy tồn kho cho sản phẩm này tại chi nhánh gửi.");
 
@@ -115,10 +105,10 @@ public sealed class TransferService(
 
     public async Task<TransferDto> CreateTransferAsync(CreateTransferRequest request, CancellationToken ct)
     {
+        EnsureOwner();
         if (request.FromBranchId == request.ToBranchId) throw new InvalidOperationException("Chi nhánh gửi và nhận phải khác nhau.");
         if (request.Items is null || request.Items.Count == 0 || request.Items.Any(x => x.Quantity <= 0 || x.UnitPrice < 0 || string.IsNullOrWhiteSpace(x.Unit) || x.Unit.Length > 30 || x.BatchCode?.Length > 50))
             throw new InvalidOperationException("Phiếu cần mặt hàng hợp lệ, số lượng dương, giá không âm và đơn vị đúng định dạng.");
-        EnsureBranch(request.FromBranchId);
         var from = await branches.GetByIdAsync(request.FromBranchId, ct) ?? throw new KeyNotFoundException("Không tìm thấy chi nhánh gửi.");
         var to = await branches.GetByIdAsync(request.ToBranchId, ct) ?? throw new KeyNotFoundException("Không tìm thấy chi nhánh nhận.");
         if (!string.Equals(from.TenantId, tenant.CurrentTenantId, StringComparison.Ordinal) || !string.Equals(to.TenantId, tenant.CurrentTenantId, StringComparison.Ordinal)) throw new InvalidOperationException("Hai chi nhánh phải thuộc cùng tenant hiện tại.");
@@ -131,35 +121,69 @@ public sealed class TransferService(
         await unitOfWork.BeginTransactionAsync(ct);
         try
         {
-            var transfer = new Transfer { TenantId = tenant.CurrentTenantId, TransferCode = $"TRF-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid():N}"[..21].ToUpperInvariant(), FromBranchId = request.FromBranchId, ToBranchId = request.ToBranchId, Status = request.DispatchNow ? TransferStatus.InTransit : TransferStatus.Draft, DispatchedAt = request.DispatchNow ? DateTime.UtcNow : null, ExpectedDeliveryDate = request.ExpectedDeliveryDate, Note = request.Note?.Trim(), CreatedByStaff = tenant.CurrentRawUserId };
+            var transfer = new Transfer
+            {
+                TenantId = tenant.CurrentTenantId,
+                TransferCode = $"TRF-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid():N}"[..21].ToUpperInvariant(),
+                FromBranchId = request.FromBranchId,
+                ToBranchId = request.ToBranchId,
+                Status = TransferStatus.Draft,
+                Origin = request.Origin,
+                Priority = request.Priority,
+                RelatedOrderId = request.RelatedOrderId,
+                ExpectedDeliveryDate = request.ExpectedDeliveryDate,
+                Note = request.Note?.Trim(),
+                CreatedBy = tenant.CurrentUserId,
+                CreatedByStaff = tenant.CurrentRawUserId
+            };
             foreach (var input in request.Items)
             {
                 var product = await products.GetByIdAsync(input.ProductId, ct) ?? throw new KeyNotFoundException("Không tìm thấy sản phẩm.");
-                string? actualBatch = input.BatchCode?.Trim();
-                DateTime? actualExpiry = input.ExpiryDate;
-                if (request.DispatchNow)
+                var stock = await ResolveStockSourceAsync(request.FromBranchId, input.ProductId, input.BatchCode, input.ExpiryDate, ct);
+                var available = stock.QuantityOnHand - stock.QuantityReserved - stock.QuantityQuarantined;
+                if (available < input.Quantity)
+                    throw new InvalidOperationException($"Không đủ tồn khả dụng cho {product.Name}; hiện có {available}, yêu cầu chuyển {input.Quantity}.");
+                var unitCost = stock.LandedCostPerUnit;
+                transfer.Details.Add(new TransferDetail
                 {
-                    var stock = await ResolveStockSourceAsync(request.FromBranchId, input.ProductId, input.BatchCode, input.ExpiryDate, ct);
-                    var available = stock.QuantityOnHand - stock.QuantityReserved - stock.QuantityQuarantined;
-                    if (available < input.Quantity) throw new InvalidOperationException($"Không đủ tồn khả dụng cho {product.Name}; hiện có {available}, yêu cầu chuyển {input.Quantity}.");
-                    stock.QuantityOnHand -= input.Quantity; stocks.Update(stock);
-
-                    if (string.IsNullOrWhiteSpace(actualBatch)) actualBatch = stock.BatchCode;
-                    actualExpiry ??= stock.ExpiryDate;
-                }
-                transfer.Details.Add(new TransferDetail { ProductId = input.ProductId, SentQuantity = input.Quantity, PackagingUnit = input.Unit.Trim(), BatchNumber = actualBatch, ExpiryDate = actualExpiry, UnitPrice = input.UnitPrice, Amount = input.Quantity * input.UnitPrice });
+                    ProductId = input.ProductId,
+                    SentQuantity = input.Quantity,
+                    PackagingUnit = input.Unit.Trim(),
+                    BatchNumber = string.IsNullOrWhiteSpace(input.BatchCode) ? stock.BatchCode : input.BatchCode.Trim(),
+                    ExpiryDate = input.ExpiryDate ?? stock.ExpiryDate,
+                    UnitPrice = unitCost,
+                    Amount = input.Quantity * unitCost
+                });
             }
             transfer.TotalAmount = transfer.Details.Sum(x => x.Amount);
             await transfers.AddAsync(transfer, ct);
             foreach (var detail in transfer.Details) await details.AddAsync(detail, ct);
+            await AddHistoryAsync(transfer, null, TransferStatus.Draft, "Created", request.Note, ct);
             await unitOfWork.SaveChangesAsync(ct); await unitOfWork.CommitTransactionAsync(ct);
             return await MapAsync(transfer, ct);
         }
         catch { await unitOfWork.RollbackTransactionAsync(ct); throw; }
     }
 
+    public async Task<TransferDto> SubmitTransferAsync(Guid id, CancellationToken ct)
+    {
+        EnsureOwner();
+        var transfer = await RequireAsync(id, ct);
+        if (transfer.Status != TransferStatus.Draft)
+            throw new InvalidOperationException("Chỉ có thể gửi phiếu đang ở trạng thái nháp.");
+        var previous = transfer.Status;
+        transfer.Status = TransferStatus.Pending;
+        transfer.SubmittedAt = DateTime.UtcNow;
+        transfer.SubmittedByUserId = tenant.CurrentUserId;
+        transfers.Update(transfer);
+        await AddHistoryAsync(transfer, previous, transfer.Status, "Submitted", null, ct);
+        await unitOfWork.SaveChangesAsync(ct);
+        return await MapAsync(transfer, ct);
+    }
+
     public async Task<TransferDto> ReceiveTransferAsync(Guid id, ReceiveTransferRequest request, CancellationToken ct)
     {
+        EnsureTenantRole();
         var transfer = await RequireAsync(id, ct); EnsureBranch(transfer.ToBranchId);
         if (transfer.Status != TransferStatus.InTransit) throw new InvalidOperationException("Chỉ nhận được phiếu đang vận chuyển.");
         if (request.Items is null) throw new InvalidOperationException("Thiếu thông tin kiểm đếm mặt hàng.");
@@ -208,7 +232,19 @@ public sealed class TransferService(
                     stocks.Update(destStock);
                 }
             }
-            transfer.Status = TransferStatus.Received; transfer.ReceivedAt = DateTime.UtcNow; transfer.DiscrepancyNote = request.Note?.Trim(); transfers.Update(transfer);
+            var hasDiscrepancy = request.Items.Any(input =>
+                input.ReceivedQuantity != lines[input.DetailId].SentQuantity || input.DamagedQuantity > 0);
+            var previous = transfer.Status;
+            transfer.Status = TransferStatus.Completed;
+            transfer.CompletionResult = hasDiscrepancy
+                ? TransferCompletionResult.ReceivedWithDiscrepancy
+                : TransferCompletionResult.Received;
+            transfer.HasDiscrepancy = hasDiscrepancy;
+            transfer.ReceivedAt = DateTime.UtcNow;
+            transfer.ReceivedByUserId = tenant.CurrentUserId;
+            transfer.DiscrepancyNote = request.Note?.Trim();
+            transfers.Update(transfer);
+            await AddHistoryAsync(transfer, previous, transfer.Status, "Received", request.Note, ct);
             await unitOfWork.SaveChangesAsync(ct); await unitOfWork.CommitTransactionAsync(ct); return await MapAsync(transfer, ct);
         }
         catch { await unitOfWork.RollbackTransactionAsync(ct); throw; }
@@ -216,9 +252,10 @@ public sealed class TransferService(
 
     public async Task<TransferDto> DispatchTransferAsync(Guid id, CancellationToken ct)
     {
+        EnsureTenantRole();
         var transfer = await RequireAsync(id, ct);
         EnsureBranch(transfer.FromBranchId);
-        if (transfer.Status != TransferStatus.Draft) throw new InvalidOperationException("Chỉ có thể xuất chuyển phiếu nháp.");
+        if (transfer.Status != TransferStatus.Pending) throw new InvalidOperationException("Chỉ có thể xuất phiếu đang chờ chi nhánh nguồn xử lý.");
         var lines = transfer.Details.Count > 0 ? transfer.Details.ToList() : (await details.FindAsync(x => x.TransferId == id, ct)).ToList();
         await unitOfWork.BeginTransactionAsync(ct);
         try
@@ -226,6 +263,12 @@ public sealed class TransferService(
             foreach (var line in lines)
             {
                 var stock = await ResolveStockSourceAsync(transfer.FromBranchId, line.ProductId, line.BatchNumber, line.ExpiryDate, ct);
+                if (transfer.IsStockReserved)
+                {
+                    if (stock.QuantityReserved < line.SentQuantity)
+                        throw new InvalidOperationException("Dữ liệu giữ tồn của phiếu không còn hợp lệ; không thể xuất kho.");
+                    stock.QuantityReserved -= line.SentQuantity;
+                }
                 var available = stock.QuantityOnHand - stock.QuantityReserved - stock.QuantityQuarantined;
                 if (available < line.SentQuantity) throw new InvalidOperationException($"Không đủ tồn khả dụng; còn {available}, yêu cầu chuyển {line.SentQuantity}.");
                 stock.QuantityOnHand -= line.SentQuantity;
@@ -238,9 +281,15 @@ public sealed class TransferService(
                     details.Update(line);
                 }
             }
+            var previous = transfer.Status;
             transfer.Status = TransferStatus.InTransit;
+            transfer.SourceConfirmedAt = DateTime.UtcNow;
+            transfer.SourceConfirmedByUserId = tenant.CurrentUserId;
             transfer.DispatchedAt = DateTime.UtcNow;
+            transfer.DispatchedByUserId = tenant.CurrentUserId;
+            transfer.IsStockReserved = false;
             transfers.Update(transfer);
+            await AddHistoryAsync(transfer, previous, transfer.Status, "Dispatched", null, ct);
             await unitOfWork.SaveChangesAsync(ct);
             await unitOfWork.CommitTransactionAsync(ct);
             return await MapAsync(transfer, ct);
@@ -250,22 +299,72 @@ public sealed class TransferService(
 
     public async Task<TransferDto> CancelTransferAsync(Guid id, CancelTransferRequest request, CancellationToken ct)
     {
+        EnsureTenantRole();
         if (string.IsNullOrWhiteSpace(request.Reason)) throw new InvalidOperationException("Cần nhập lý do hủy.");
-        var transfer = await RequireAsync(id, ct); EnsureBranch(transfer.FromBranchId);
-        if (transfer.Status is not (TransferStatus.Draft or TransferStatus.InTransit)) throw new InvalidOperationException("Chỉ hủy phiếu nháp hoặc đang vận chuyển.");
-        if (transfer.Status == TransferStatus.InTransit && !IsOwner) throw new UnauthorizedAccessException("Chỉ chủ cửa hàng hoặc quản trị viên được hủy phiếu đã xuất chuyển.");
+        var transfer = await RequireAsync(id, ct);
+        if (transfer.Status is not (TransferStatus.Draft or TransferStatus.Pending))
+            throw new InvalidOperationException("Chỉ có thể hủy phiếu trước khi xuất hàng.");
+        var isCreator = transfer.CreatedBy == tenant.CurrentUserId;
+        var isSourceEmployee = IsStaff && tenant.CurrentBranchId == transfer.FromBranchId;
+        if (!IsOwner && !isCreator && !isSourceEmployee)
+            throw new UnauthorizedAccessException("Không có quyền hủy hoặc từ chối phiếu này.");
         await unitOfWork.BeginTransactionAsync(ct);
         try
         {
-            if (transfer.Status == TransferStatus.InTransit)
-                foreach (var line in (transfer.Details.Count > 0 ? transfer.Details : (await details.FindAsync(x => x.TransferId == id, ct)).ToList()))
+            if (transfer.IsStockReserved)
+            {
+                var lines = transfer.Details.Count > 0 ? transfer.Details : (await details.FindAsync(x => x.TransferId == id, ct)).ToList();
+                foreach (var line in lines)
                 {
                     var stock = await ResolveStockSourceAsync(transfer.FromBranchId, line.ProductId, line.BatchNumber, line.ExpiryDate, ct);
-                    stock.QuantityOnHand += line.SentQuantity;
+                    if (stock.QuantityReserved < line.SentQuantity)
+                        throw new InvalidOperationException("Dữ liệu giữ tồn của phiếu không còn hợp lệ; không thể hủy phiếu.");
+                    stock.QuantityReserved -= line.SentQuantity;
                     stocks.Update(stock);
                 }
-            transfer.Status = TransferStatus.Cancelled; transfer.CancelReason = request.Reason.Trim(); transfers.Update(transfer);
+                transfer.IsStockReserved = false;
+            }
+            var previous = transfer.Status;
+            transfer.Status = TransferStatus.Cancelled;
+            transfer.CancelReason = request.Reason.Trim();
+            transfer.CancelledAt = DateTime.UtcNow;
+            transfer.CancelledByUserId = tenant.CurrentUserId;
+            transfers.Update(transfer);
+            await AddHistoryAsync(transfer, previous, transfer.Status, "Cancelled", request.Reason, ct);
             await unitOfWork.SaveChangesAsync(ct); await unitOfWork.CommitTransactionAsync(ct); return await MapAsync(transfer, ct);
+        }
+        catch { await unitOfWork.RollbackTransactionAsync(ct); throw; }
+    }
+
+    public async Task<TransferDto> ReturnTransferAsync(Guid id, ReturnTransferRequest request, CancellationToken ct)
+    {
+        EnsureTenantRole();
+        if (string.IsNullOrWhiteSpace(request.Reason)) throw new InvalidOperationException("Cần nhập lý do hoàn trả.");
+        var transfer = await RequireAsync(id, ct);
+        EnsureBranch(transfer.FromBranchId);
+        if (transfer.Status != TransferStatus.InTransit)
+            throw new InvalidOperationException("Chỉ có thể xác nhận hoàn trả phiếu đang vận chuyển.");
+        var lines = transfer.Details.Count > 0 ? transfer.Details : (await details.FindAsync(x => x.TransferId == id, ct)).ToList();
+        await unitOfWork.BeginTransactionAsync(ct);
+        try
+        {
+            foreach (var line in lines)
+            {
+                var stock = await ResolveStockSourceAsync(transfer.FromBranchId, line.ProductId, line.BatchNumber, line.ExpiryDate, ct);
+                stock.QuantityOnHand += line.SentQuantity;
+                stocks.Update(stock);
+            }
+            var previous = transfer.Status;
+            transfer.Status = TransferStatus.Completed;
+            transfer.CompletionResult = TransferCompletionResult.Returned;
+            transfer.ReceivedAt = DateTime.UtcNow;
+            transfer.ReceivedByUserId = tenant.CurrentUserId;
+            transfer.DiscrepancyNote = request.Reason.Trim();
+            transfers.Update(transfer);
+            await AddHistoryAsync(transfer, previous, transfer.Status, "ReturnedToSource", request.Reason, ct);
+            await unitOfWork.SaveChangesAsync(ct);
+            await unitOfWork.CommitTransactionAsync(ct);
+            return await MapAsync(transfer, ct);
         }
         catch { await unitOfWork.RollbackTransactionAsync(ct); throw; }
     }
@@ -274,18 +373,62 @@ public sealed class TransferService(
     {
         var transfer = await transfers.GetByIdAsync(id, ct) ?? throw new KeyNotFoundException("Không tìm thấy phiếu điều chuyển.");
         if (string.IsNullOrWhiteSpace(tenant.CurrentTenantId) || !string.Equals(transfer.TenantId, tenant.CurrentTenantId, StringComparison.Ordinal)) throw new KeyNotFoundException("Không tìm thấy phiếu điều chuyển.");
-        if (!IsOwner && (!IsBranchEmployee || transfer.FromBranchId != tenant.CurrentBranchId && transfer.ToBranchId != tenant.CurrentBranchId)) throw new UnauthorizedAccessException("Không có quyền truy cập phiếu.");
+        if (!IsOwner && (!IsStaff || transfer.FromBranchId != tenant.CurrentBranchId && transfer.ToBranchId != tenant.CurrentBranchId)) throw new UnauthorizedAccessException("Không có quyền truy cập phiếu.");
         return transfer;
     }
-    private void EnsureBranch(Guid branchId) { if (!IsOwner && (!IsBranchEmployee || tenant.CurrentBranchId is not Guid currentBranch || currentBranch != branchId)) throw new UnauthorizedAccessException("Không có quyền thao tác tại chi nhánh này."); }
+    private void EnsureBranch(Guid branchId) { if (!IsOwner && (!IsStaff || tenant.CurrentBranchId is not Guid currentBranch || currentBranch != branchId)) throw new UnauthorizedAccessException("Không có quyền thao tác tại chi nhánh này."); }
+    private void EnsureTenantRole()
+    {
+        if (string.IsNullOrWhiteSpace(tenant.CurrentTenantId) || !IsOwner && !IsStaff)
+            throw new UnauthorizedAccessException("Role không có quyền truy cập phân hệ điều chuyển.");
+        if (IsStaff && tenant.CurrentBranchId is not Guid)
+            throw new UnauthorizedAccessException("Staff chưa có chi nhánh được phân công.");
+    }
+
+    private void EnsureOwner()
+    {
+        EnsureTenantRole();
+        if (!IsOwner)
+            throw new UnauthorizedAccessException("Chỉ chủ cửa hàng được tạo và gửi phiếu điều chuyển trực tiếp.");
+    }
+
+    private async Task EnsureCanViewBranchStockAsync(Guid branchId, CancellationToken ct)
+    {
+        EnsureTenantRole();
+        var branch = await branches.GetByIdAsync(branchId, ct);
+        if (branch is null || branch.TenantId != tenant.CurrentTenantId || !branch.IsActive)
+            throw new KeyNotFoundException("Không tìm thấy chi nhánh nguồn hợp lệ.");
+        if (IsStaff && branchId == tenant.CurrentBranchId)
+            throw new InvalidOperationException("Chi nhánh nguồn phải khác chi nhánh hiện tại.");
+    }
+    private Task AddHistoryAsync(Transfer transfer, TransferStatus? from, TransferStatus to, string action, string? reason, CancellationToken ct)
+        => statusHistory.AddAsync(new TransferStatusHistory
+        {
+            TenantId = tenant.CurrentTenantId,
+            TransferId = transfer.Id,
+            FromStatus = from,
+            ToStatus = to,
+            ActorUserId = tenant.CurrentUserId,
+            ActorBranchId = tenant.CurrentBranchId,
+            ActorRole = tenant.CurrentRole?.Trim() ?? string.Empty,
+            Action = action,
+            Reason = reason?.Trim(),
+            CreatedBy = tenant.CurrentUserId
+        }, ct);
+
     private async Task<TransferDto> MapAsync(Transfer transfer, CancellationToken ct)
     {
+        var canViewCost = IsOwner;
         var from = await branches.GetByIdAsync(transfer.FromBranchId, ct); var to = await branches.GetByIdAsync(transfer.ToBranchId, ct); var items = new List<TransferLineDto>();
         foreach (var line in (transfer.Details.Count > 0 ? transfer.Details : (await details.FindAsync(x => x.TransferId == transfer.Id, ct)).ToList()))
         {
             var product = await products.GetByIdAsync(line.ProductId, ct);
-            items.Add(new TransferLineDto(line.Id, line.ProductId, product?.ProductCode ?? "", product?.Name ?? "", line.PackagingUnit, line.SentQuantity, line.ReceivedQuantity, line.DamagedQuantity, line.BatchNumber, line.ExpiryDate, line.UnitPrice, line.Amount, line.DiscrepancyReason));
+            items.Add(new TransferLineDto(line.Id, line.ProductId, product?.ProductCode ?? "", product?.Name ?? "", line.PackagingUnit, line.SentQuantity, line.ReceivedQuantity, line.DamagedQuantity, line.BatchNumber, line.ExpiryDate, canViewCost ? line.UnitPrice : 0, canViewCost ? line.Amount : 0, line.DiscrepancyReason));
         }
-        return new TransferDto(transfer.Id, transfer.TransferCode, transfer.FromBranchId, from?.Name ?? "", transfer.ToBranchId, to?.Name ?? "", transfer.Status.ToString(), transfer.CreatedAt, transfer.DispatchedAt, transfer.ReceivedAt, transfer.ExpectedDeliveryDate, transfer.CreatedByStaff, transfer.TotalAmount, transfer.Note, transfer.DiscrepancyNote, transfer.CancelReason, items);
+        var history = (await statusHistory.FindAsync(x => x.TransferId == transfer.Id, ct))
+            .OrderBy(x => x.CreatedAt)
+            .Select(x => new TransferStatusHistoryDto(x.Id, x.FromStatus?.ToString(), x.ToStatus.ToString(), x.Action, x.ActorUserId, x.ActorBranchId, x.ActorRole, x.Reason, x.CreatedAt))
+            .ToList();
+        return new TransferDto(transfer.Id, transfer.TransferCode, transfer.FromBranchId, from?.Name ?? "", transfer.ToBranchId, to?.Name ?? "", transfer.Status.ToString(), transfer.CompletionResult?.ToString(), transfer.Origin.ToString(), transfer.Priority.ToString(), transfer.CreatedAt, transfer.SubmittedAt, transfer.DispatchedAt, transfer.ReceivedAt, transfer.ExpectedDeliveryDate, transfer.CreatedByStaff, canViewCost ? transfer.TotalAmount : 0, transfer.HasDiscrepancy, transfer.Note, transfer.DiscrepancyNote, transfer.CancelReason, items, history);
     }
 }

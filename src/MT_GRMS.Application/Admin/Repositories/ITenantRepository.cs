@@ -21,6 +21,7 @@ public interface ITenantRepository
     Task<int> GetGracePeriodCountAsync(CancellationToken cancellationToken = default);
     Task<int> GetLockedCountAsync(CancellationToken cancellationToken = default);
     Task<int> GetTotalBranchesCountAsync(CancellationToken cancellationToken = default);
+    Task<int> GetSuccessfulUpgradeCountAsync(CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Tenant>> GetUrgentAlertTenantsAsync(int limit = 10, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Tenant>> GetAllActiveWithPlanAsync(CancellationToken cancellationToken = default);
     void Update(Tenant tenant);

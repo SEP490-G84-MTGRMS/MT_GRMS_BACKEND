@@ -89,7 +89,7 @@ public class InventoryTests
         {
             IReadOnlyList<InventoryBatchSummaryDto> batches = new List<InventoryBatchSummaryDto>
             {
-                new InventoryBatchSummaryDto(Guid.NewGuid(), "B01", DateTime.UtcNow.AddDays(-10), DateTime.UtcNow.AddDays(20), 20, 40, "Warning")
+                new InventoryBatchSummaryDto(Guid.NewGuid(), "B01", DateTime.UtcNow.AddDays(-10), DateTime.UtcNow.AddDays(20), 20, 50, 10, 40, "Warning")
             };
             return Task.FromResult(batches);
         }

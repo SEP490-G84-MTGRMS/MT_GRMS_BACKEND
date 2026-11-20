@@ -92,9 +92,14 @@ public class TaxSnapshotSignatureService : ITaxSnapshotSignatureService
         var bookDataBytes = Encoding.UTF8.GetBytes(s.BookDataJson ?? string.Empty);
         var bookDataHash = Convert.ToHexString(SHA256.HashData(bookDataBytes)).ToLowerInvariant();
 
+        // Legacy snapshots retain their original signature format.
+        var policyHash = string.IsNullOrWhiteSpace(s.TaxPolicyJson) || s.TaxPolicyJson == "{}"
+            ? string.Empty
+            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s.TaxPolicyJson))).ToLowerInvariant();
+
         return string.Format(
             System.Globalization.CultureInfo.InvariantCulture,
-            "{{\"TenantId\":\"{0}\",\"Year\":{1},\"PeriodType\":{2},\"PeriodNumber\":{3},\"TaxableRevenue\":{4:F2},\"TotalTaxAmount\":{5:F2},\"BookDataHash\":\"{6}\",\"FinalizedAtUtc\":\"{7:yyyy-MM-ddTHH:mm:ssZ}\",\"FinalizedBy\":\"{8}\"}}",
+            "{{\"TenantId\":\"{0}\",\"Year\":{1},\"PeriodType\":{2},\"PeriodNumber\":{3},\"TaxableRevenue\":{4:F2},\"TotalTaxAmount\":{5:F2},\"BookDataHash\":\"{6}\",\"FinalizedAtUtc\":\"{7:yyyy-MM-ddTHH:mm:ssZ}\",\"FinalizedBy\":\"{8}\"{9}}}",
             s.TenantId ?? string.Empty,
             s.Year,
             (int)s.PeriodType,
@@ -103,7 +108,8 @@ public class TaxSnapshotSignatureService : ITaxSnapshotSignatureService
             s.TotalTaxAmount,
             bookDataHash,
             utcTime,
-            s.FinalizedBy
+            s.FinalizedBy,
+            policyHash.Length == 0 ? string.Empty : $",\"TaxPolicyHash\":\"{policyHash}\""
         );
     }
 }

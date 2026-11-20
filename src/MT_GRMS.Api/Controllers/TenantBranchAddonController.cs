@@ -17,7 +17,7 @@ public record BranchAddonQuote(int ExtraBranches, decimal Subtotal, decimal Vat,
 [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
 public class TenantBranchAddonController(AppDbContext context) : BaseApiController
 {
-    private const decimal PricePerBranchMonth = 80000m;
+    private const decimal DefaultPricePerBranchMonth = 80000m;
     private string? TenantId => User.FindFirst("tenant_id")?.Value;
 
     private async Task<(Tenant? Tenant, BranchAddonQuote? Quote)> CreateQuoteAsync(int extraBranches, CancellationToken cancellationToken)
@@ -25,7 +25,9 @@ public class TenantBranchAddonController(AppDbContext context) : BaseApiControll
         if (extraBranches is < 1 or > 100 || string.IsNullOrWhiteSpace(TenantId)) return (null, null);
         var tenant = await context.Tenants.SingleOrDefaultAsync(t => t.Id == TenantId, cancellationToken);
         if (tenant?.SubscriptionExpiresAt is not DateTime expiry || expiry <= DateTime.UtcNow || tenant.SubscriptionStatus != "ACTIVE" || tenant.CurrentPlan != "PRO") return (tenant, null);
-        var subtotal = Math.Round(extraBranches * PricePerBranchMonth * (decimal)(expiry - DateTime.UtcNow).TotalDays / 30m, 0, MidpointRounding.AwayFromZero);
+        var platformSetting = await context.PlatformSettings.AsNoTracking().FirstOrDefaultAsync(cancellationToken);
+        var pricePerBranchMonth = platformSetting?.BranchAddonPriceMonthly ?? DefaultPricePerBranchMonth;
+        var subtotal = Math.Round(extraBranches * pricePerBranchMonth * (decimal)(expiry - DateTime.UtcNow).TotalDays / 30m, 0, MidpointRounding.AwayFromZero);
         var vat = Math.Round(subtotal * .1m, 0, MidpointRounding.AwayFromZero);
         return (tenant, new BranchAddonQuote(extraBranches, subtotal, vat, subtotal + vat, expiry));
     }

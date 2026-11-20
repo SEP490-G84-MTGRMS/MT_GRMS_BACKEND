@@ -1,6 +1,9 @@
+using FluentValidation;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Promotions.Dtos;
+using MT_GRMS.Application.Promotions.Validators;
 using MT_GRMS.Domain.Entities.Sales;
+using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.Promotions;
 
@@ -46,16 +49,23 @@ public class LoyaltyService : ILoyaltyService
 
     public async Task<LoyaltyConfigDto> UpdateConfigAsync(UpdateLoyaltyConfigRequest request, CancellationToken cancellationToken = default)
     {
+        var validator = new UpdateLoyaltyConfigRequestValidator();
+        var validationResult = await validator.ValidateAsync(request, cancellationToken);
+        if (!validationResult.IsValid)
+        {
+            throw new BusinessException("VALIDATION_ERROR", validationResult.Errors[0].ErrorMessage);
+        }
+
         var tenantId = _tenantContext.CurrentTenantId;
         var setting = new LoyaltySetting
         {
             TenantId = tenantId,
             IsEnabled = request.IsEnabled,
-            EarningRateAmount = request.EarningRateAmount <= 0 ? 10000m : request.EarningRateAmount,
-            EarningPoints = request.EarningPoints <= 0 ? 1 : request.EarningPoints,
-            RedemptionRatePoints = request.RedemptionRatePoints <= 0 ? 1 : request.RedemptionRatePoints,
-            RedemptionRateAmount = request.RedemptionRateAmount <= 0 ? 1000m : request.RedemptionRateAmount,
-            MinRedemptionPoints = request.MinRedemptionPoints < 0 ? 0 : request.MinRedemptionPoints,
+            EarningRateAmount = request.EarningRateAmount,
+            EarningPoints = request.EarningPoints,
+            RedemptionRatePoints = request.RedemptionRatePoints,
+            RedemptionRateAmount = request.RedemptionRateAmount,
+            MinRedemptionPoints = request.MinRedemptionPoints,
             AllowPointsWithPromotions = request.AllowPointsWithPromotions
         };
 

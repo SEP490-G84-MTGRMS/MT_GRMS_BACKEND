@@ -11,7 +11,7 @@ using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Api.Controllers;
 
-[Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+[Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
 [ApiController]
 [Route("api/schedule-approval-requests")]
 public class ScheduleApprovalRequestsController : BaseApiController
@@ -90,7 +90,7 @@ public class ScheduleApprovalRequestsController : BaseApiController
     /// <summary>
     /// Lấy danh sách các yêu cầu có bộ lọc (Chi nhánh, Loại đơn, Trạng thái) cho Quản lý / Chủ cửa hàng
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpGet]
     public async Task<IActionResult> GetAllRequests(
         [FromQuery] Guid? branchId,
@@ -105,7 +105,7 @@ public class ScheduleApprovalRequestsController : BaseApiController
     /// <summary>
     /// Lấy danh sách các yêu cầu đang chờ phê duyệt (Pending) cho Quản lý / Chủ cửa hàng
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpGet("pending")]
     public async Task<IActionResult> GetPendingRequests(
         [FromQuery] Guid? branchId,
@@ -135,7 +135,7 @@ public class ScheduleApprovalRequestsController : BaseApiController
     /// <summary>
     /// Quản lý / Chủ cửa hàng phê duyệt hoặc từ chối phiếu yêu cầu
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("{requestId:guid}/review")]
     public async Task<IActionResult> ReviewRequest(
         [FromRoute] Guid requestId,
@@ -163,7 +163,7 @@ public class ScheduleApprovalRequestsController : BaseApiController
         var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
             ?? throw new UnauthorizedAccessException("Không tìm thấy thông tin định danh người dùng.");
 
-        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner) || User.IsInRole(SystemRoles.Admin);
+        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner);
         var result = await _approvalService.UpdateRequestAsync(requestId, currentUserId, isOwnerOrAdmin, dto, cancellationToken);
         return Ok(ApiResponse<ScheduleApprovalRequestDto>.Ok(result, "Cập nhật phiếu yêu cầu thành công."));
     }
@@ -179,7 +179,7 @@ public class ScheduleApprovalRequestsController : BaseApiController
         var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
             ?? throw new UnauthorizedAccessException("Không tìm thấy thông tin định danh người dùng.");
 
-        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner) || User.IsInRole(SystemRoles.Admin);
+        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner);
         var success = await _approvalService.DeleteRequestAsync(requestId, currentUserId, isOwnerOrAdmin, cancellationToken);
         return Ok(ApiResponse<bool>.Ok(success, "Xóa phiếu yêu cầu thành công."));
     }

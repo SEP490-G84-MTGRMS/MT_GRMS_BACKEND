@@ -22,20 +22,6 @@ public record CashDropRequest(
     string? Notes
 );
 
-public record DepositToBankRequest(
-    Guid SourceAccountId,
-    Guid TargetBankAccountId,
-    decimal Amount,
-    Guid CarrierUserId,
-    string? Note
-);
-
-public record ConfirmBankDepositRequest(
-    Guid TransitId,
-    decimal ActualReceivedAmount,
-    string? Note
-);
-
 public record ShiftResponse(
     Guid Id,
     Guid TillId,
@@ -53,19 +39,6 @@ public record ShiftResponse(
     DateTime? ClosedAtUtc
 );
 
-public record CashInTransitResponse(
-    Guid Id,
-    string TransitCode,
-    Guid SourceAccountId,
-    Guid TargetBankAccountId,
-    decimal AmountSent,
-    decimal? AmountReceived,
-    decimal DiscrepancyAmount,
-    Guid CarrierUserId,
-    string Status,
-    DateTime CreatedAtUtc
-);
-
 public record CashbookEntryResponse(
     Guid Id,
     string EntryCode,
@@ -80,7 +53,11 @@ public record CashbookEntryResponse(
     string ReferenceCode,
     string AuditHash,
     string Description,
-    DateTime OccurredAtUtc
+    DateTime OccurredAtUtc,
+    string CategoryCode = "REVIEW_REQUIRED",
+    FinancialNature FinancialNature = FinancialNature.Suspense,
+    CashbookTaxTreatment TaxTreatment = CashbookTaxTreatment.ReviewRequired,
+    string? TaxTreatmentReason = null
 );
 public record CashbookCreateRequest(
     Guid BranchId,
@@ -120,7 +97,10 @@ public record CreateReceiptRequest(
     decimal Amount,
     string Category,
     string? Description,
-    string? ReferenceCode
+    string? ReferenceCode,
+    string CategoryCode = "OTHER_INCOME",
+    CashbookTaxTreatment? TaxTreatment = null,
+    string? TaxTreatmentReason = null
 );
 
 public record CreatePaymentRequest(
@@ -128,7 +108,29 @@ public record CreatePaymentRequest(
     decimal Amount,
     string Category,
     string? Description,
-    string? ReferenceCode
+    string? ReferenceCode,
+    string CategoryCode = "OTHER_PAYMENT",
+    CashbookTaxTreatment? TaxTreatment = null,
+    string? TaxTreatmentReason = null
+);
+
+/// <summary>
+/// Records an MT-GRMS cashbook payment as tax-payment evidence. It is not an eTax/treasury settlement assertion.
+/// </summary>
+public record RecordTaxPaymentRequest(
+    Guid SourceAccountId,
+    decimal Amount,
+    string BeneficiaryName,
+    string PaymentReference,
+    string? EvidenceAttachmentUrl,
+    Guid? HouseholdTaxSnapshotId,
+    string? Note
+);
+
+public record TaxPaymentResponse(
+    Guid VoucherId,
+    Guid? HouseholdTaxSnapshotId,
+    CashbookEntryResponse Entry
 );
 
 public record TransferFundRequest(

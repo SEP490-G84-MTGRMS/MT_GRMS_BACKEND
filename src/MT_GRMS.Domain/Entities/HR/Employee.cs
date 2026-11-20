@@ -28,6 +28,8 @@ public class Employee : BaseTenantEntity
     public DateTime? FaceRegisteredAt { get; set; }
     public SalaryType SalaryType { get; set; } = SalaryType.Monthly;
     public decimal BaseRate { get; set; } = 0.00m;
+    public bool HasLaborContract { get; set; } = false;
+    public decimal? InsuranceBaseSalary { get; set; }
     public string? OtWeekday { get; set; } = "150%";
     public string? OtSunday { get; set; } = "200%";
     public string? BankAccountNumber { get; set; }

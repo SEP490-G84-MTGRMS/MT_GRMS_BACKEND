@@ -8,7 +8,7 @@ using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Api.Controllers;
 
-[Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+[Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
 [ApiController]
 [Route("api/attendance-policies")]
 public class BranchAttendancePoliciesController : BaseApiController
@@ -42,7 +42,7 @@ public class BranchAttendancePoliciesController : BaseApiController
     /// <summary>
     /// Thiết lập / Cập nhật chính sách chấm công cho chi nhánh (Upsert)
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPut("branch/{branchId:guid}")]
     public async Task<IActionResult> UpsertPolicy(
         Guid branchId,
@@ -67,7 +67,7 @@ public class BranchAttendancePoliciesController : BaseApiController
     /// <summary>
     /// Sao chép chính sách chấm công từ một chi nhánh nguồn sang danh sách các chi nhánh đích
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("copy")]
     public async Task<IActionResult> CopyPolicy(
         [FromBody] CopyAttendancePolicyRequest request,

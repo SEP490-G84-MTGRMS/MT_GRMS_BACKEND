@@ -974,4 +974,783 @@ public class EmployeeServiceTests
         // Phone của User mới được để null để không đụng Unique Index IX_Users_Phone của StoreOwner
         Assert.Null(createdStaffUser!.Phone);
     }
+
+    [Fact]
+    public async Task GetEmployeeByIdAsync_And_GetEmployeeByUserIdAsync_ShouldWork()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        // 1. GetById not found throws NotFoundException
+        await Assert.ThrowsAsync<NotFoundException>(() => service.GetEmployeeByIdAsync(Guid.NewGuid()));
+
+        // 2. GetById success
+        var empId = Guid.NewGuid();
+        var employee = new Employee
+        {
+            Id = empId,
+            TenantId = "tenant_test_01",
+            EmployeeCode = "NV9999",
+            FullName = "Tran Van Test",
+            CitizenId = "001202009999",
+            Phone = "0987654321",
+            BranchId = Guid.NewGuid(),
+            Status = EmployeeStatus.Active,
+            SalaryType = SalaryType.Monthly,
+            BaseRate = 10000000m,
+            UserId = "user_test_9999"
+        };
+        await empRepo.AddAsync(employee);
+
+        var res = await service.GetEmployeeByIdAsync(empId);
+        Assert.Equal("NV9999", res.EmployeeCode);
+        Assert.Equal("Tran Van Test", res.FullName);
+
+        // 3. GetByUserId: found by direct string
+        var resByUser = await service.GetEmployeeByUserIdAsync("user_test_9999");
+        Assert.NotNull(resByUser);
+        Assert.Equal(empId, resByUser!.Id);
+
+        // 4. GetByUserId: fallback to Guid id
+        var resByGuid = await service.GetEmployeeByUserIdAsync(empId.ToString());
+        Assert.NotNull(resByGuid);
+        Assert.Equal(empId, resByGuid!.Id);
+
+        // 5. GetByUserId: not found returns null
+        var resNotFound = await service.GetEmployeeByUserIdAsync("unknown_user_id");
+        Assert.Null(resNotFound);
+    }
+
+    [Fact]
+    public async Task DeleteEmployeeAsync_NotFound_ThrowsNotFoundException()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        await Assert.ThrowsAsync<NotFoundException>(() => service.DeleteEmployeeAsync(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task UpdateIdentityAccountAsync_ValidationsAndSuccess()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var empId = Guid.NewGuid();
+        var employee = new Employee
+        {
+            Id = empId,
+            TenantId = "tenant_test_01",
+            EmployeeCode = "NV8888",
+            FullName = "Le Thi B",
+            CitizenId = "001202008888",
+            Phone = "0912348888",
+            BranchId = Guid.NewGuid(),
+            Status = EmployeeStatus.Active,
+            UserId = "user_b_01"
+        };
+        await empRepo.AddAsync(employee);
+
+        var user = new User
+        {
+            Id = "user_b_01",
+            UserName = "lethib",
+            FullName = "Le Thi B",
+            Phone = "0912348888"
+        };
+        await userRepo.AddAsync(user);
+
+        // 1. Empty username throws ArgumentException
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("", "pass")));
+
+        // 2. Not found employee throws NotFoundException
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.UpdateIdentityAccountAsync(Guid.NewGuid(), new CreateIdentityAccountRequest("valid_user", "pass")));
+
+        // 3. Inactive employee throws BusinessException
+        employee.Status = EmployeeStatus.Inactive;
+        var exInactive = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("valid_user", "pass")));
+        Assert.Equal("EMPLOYEE_INACTIVE", exInactive.ErrorCode);
+        employee.Status = EmployeeStatus.Active;
+
+        // 4. Employee without linked user throws NotFoundException
+        employee.UserId = null;
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("valid_user", "pass")));
+        employee.UserId = "user_b_01";
+
+        // 5. Linked user not in repository throws NotFoundException
+        employee.UserId = "non_existent_user";
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("valid_user", "pass")));
+        employee.UserId = "user_b_01";
+
+        // 6. Username conflict with another user throws BusinessException
+        await userRepo.AddAsync(new User { Id = "other_user", UserName = "existing_user" });
+        var exConflict = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("existing_user", "pass")));
+        Assert.Equal("DUPLICATE_USERNAME", exConflict.ErrorCode);
+
+        // 7. Success updates credentials
+        var updatedUserId = await service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest(
+            Username: "lethib_updated",
+            Password: "NewSecretPassword@123",
+            DisplayName: "Le Thi B (Manager)"
+        ));
+
+        Assert.Equal("user_b_01", updatedUserId);
+        Assert.Equal("lethib_updated", user.UserName);
+        Assert.Equal("NewSecretPassword@123", user.PasswordHash);
+        Assert.Equal("Le Thi B (Manager)", user.FullName);
+    }
+
+    [Fact]
+    public async Task RegisterFaceDescriptorAsync_ValidationsAndSuccess()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        // 1. Employee not found throws NotFoundException
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.RegisterFaceDescriptorAsync(Guid.NewGuid(), "[0.123, 0.456]"));
+
+        // 2. Success with face descriptor and URLs
+        var empId = Guid.NewGuid();
+        var employee = new Employee
+        {
+            Id = empId,
+            TenantId = "tenant_test_01",
+            EmployeeCode = "NV7777",
+            FullName = "Hoang Van C",
+            CitizenId = "001202007777",
+            Phone = "0912347777",
+            BranchId = Guid.NewGuid(),
+            Status = EmployeeStatus.Active
+        };
+        await empRepo.AddAsync(employee);
+
+        var success = await service.RegisterFaceDescriptorAsync(empId, "[0.1, 0.2, 0.3]", "[\"https://cloud.com/face.jpg\"]");
+        Assert.True(success);
+        Assert.Equal("[0.1, 0.2, 0.3]", employee.FaceDescriptor);
+        Assert.Equal("[\"https://cloud.com/face.jpg\"]", employee.FaceImageUrls);
+        Assert.NotNull(employee.FaceRegisteredAt);
+
+        // 3. Clear descriptor with empty/whitespace
+        var cleared = await service.RegisterFaceDescriptorAsync(empId, "   ", "   ");
+        Assert.True(cleared);
+        Assert.Null(employee.FaceDescriptor);
+        Assert.Null(employee.FaceImageUrls);
+        Assert.Null(employee.FaceRegisteredAt);
+    }
+
+    [Theory]
+    [InlineData("theothang", SalaryType.Monthly)]
+    [InlineData("thang", SalaryType.Monthly)]
+    [InlineData("monthly", SalaryType.Monthly)]
+    [InlineData("theogio", SalaryType.Hourly)]
+    [InlineData("gio", SalaryType.Hourly)]
+    [InlineData("hourly", SalaryType.Hourly)]
+    [InlineData("theoca", SalaryType.Shift)]
+    [InlineData("ca", SalaryType.Shift)]
+    [InlineData("shift", SalaryType.Shift)]
+    [InlineData("unknown_type", SalaryType.Monthly)]
+    [InlineData(null, SalaryType.Monthly)]
+    public async Task CreateEmployee_SalaryTypeVariants_ShouldParseExpectedSalaryType(string? salaryTypeInput, SalaryType expectedType)
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+        var branchId = Guid.NewGuid();
+
+        var code = $"NV{Random.Shared.Next(1000, 9999)}";
+        var phone = $"09{Random.Shared.Next(10000000, 99999999)}";
+        var citizenId = $"0012{Random.Shared.Next(10000000, 99999999)}";
+
+        var req = new CreateEmployeeRequest(
+            FullName: $"Emp {salaryTypeInput}",
+            CitizenId: citizenId,
+            Phone: phone,
+            BranchId: branchId,
+            SalaryType: salaryTypeInput ?? "monthly",
+            BaseRate: 10_000_000m,
+            EmployeeCode: code
+        );
+
+        var created = await service.CreateEmployeeAsync(req);
+        Assert.NotNull(created);
+        Assert.Equal(expectedType.ToString(), created.SalaryType, ignoreCase: true);
+    }
+
+    [Theory]
+    [InlineData("+84912345678", "0912345678")]
+    [InlineData("84912345678", "0912345678")]
+    [InlineData(" 091.234-5678 ", "0912345678")]
+    public async Task CreateEmployee_PhoneNumberNormalizationVariants_ShouldNormalizeCorrectly(string inputPhone, string expectedPhone)
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var req = new CreateEmployeeRequest(
+            FullName: "Phone Test",
+            CitizenId: $"0012{Random.Shared.Next(10000000, 99999999)}",
+            Phone: inputPhone,
+            BranchId: Guid.NewGuid(),
+            SalaryType: "Monthly",
+            BaseRate: 10_000_000m,
+            EmployeeCode: $"NV{Random.Shared.Next(1000, 9999)}"
+        );
+
+        var created = await service.CreateEmployeeAsync(req);
+        Assert.NotNull(created);
+        Assert.Equal(expectedPhone, created.Phone);
+    }
+
+    [Fact]
+    public async Task CreateEmployee_WithDeletedDuplicate_ReleasesDeletedUniqueFields()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var deletedEmp = new Employee
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            EmployeeCode = "NV-DUP-01",
+            FullName = "Old Deleted Emp",
+            CitizenId = "001202009999",
+            Phone = "0988776655",
+            BranchId = Guid.NewGuid(),
+            IsDeleted = true
+        };
+        empRepo.Employees.Add(deletedEmp);
+
+        var req = new CreateEmployeeRequest(
+            FullName: "New Emp Reusing Fields",
+            CitizenId: "001202009999",
+            Phone: "0988776655",
+            BranchId: Guid.NewGuid(),
+            SalaryType: "Monthly",
+            BaseRate: 10_000_000m,
+            EmployeeCode: "NV-DUP-01"
+        );
+
+        var created = await service.CreateEmployeeAsync(req);
+        Assert.NotNull(created);
+        Assert.Contains("_del_", deletedEmp.CitizenId);
+        Assert.Contains("_del_", deletedEmp.Phone);
+        Assert.Contains("_del_", deletedEmp.EmployeeCode);
+    }
+
+    [Fact]
+    public async Task RegisterFaceDescriptorAsync_Success_And_NotFound()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var empId = Guid.NewGuid();
+        var emp = new Employee
+        {
+            Id = empId,
+            TenantId = "tenant_test_01",
+            FullName = "Nguyen Face",
+            EmployeeCode = "NV-FACE-01",
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(emp);
+
+        // 1. Success with descriptor and image urls
+        var ok = await service.RegisterFaceDescriptorAsync(empId, "[0.12, -0.45, 0.88]", "https://res.cloudinary.com/face.jpg");
+        Assert.True(ok);
+        Assert.Equal("[0.12, -0.45, 0.88]", emp.FaceDescriptor);
+        Assert.Equal("https://res.cloudinary.com/face.jpg", emp.FaceImageUrls);
+        Assert.NotNull(emp.FaceRegisteredAt);
+
+        // 2. Clear descriptor when empty string provided
+        var cleared = await service.RegisterFaceDescriptorAsync(empId, "   ", null);
+        Assert.True(cleared);
+        Assert.Null(emp.FaceDescriptor);
+        Assert.Null(emp.FaceRegisteredAt);
+
+        // 3. Not found throws
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            service.RegisterFaceDescriptorAsync(Guid.NewGuid(), "descriptor"));
+    }
+
+    [Fact]
+    public async Task UpdateIdentityAccountAsync_Valid_DuplicateUsername_And_InactiveValidation()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var empId = Guid.NewGuid();
+        var userId = "user_emp_123";
+        var emp = new Employee
+        {
+            Id = empId,
+            TenantId = "tenant_test_01",
+            FullName = "Nguyen User Test",
+            EmployeeCode = "NV-USR-01",
+            UserId = userId,
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(emp);
+
+        var user = new User
+        {
+            Id = userId,
+            UserName = "staff_initial",
+            FullName = "Nguyen User Test",
+            IsActive = true
+        };
+        userRepo.Users.Add(user);
+
+        var otherUser = new User
+        {
+            Id = "other_user_456",
+            UserName = "existing_user",
+            IsActive = true
+        };
+        userRepo.Users.Add(otherUser);
+
+        // 1. Empty username throws ArgumentException
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("", "password")));
+
+        // 2. Duplicate username throws DUPLICATE_USERNAME
+        var dupEx = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("existing_user", "password")));
+        Assert.Equal("DUPLICATE_USERNAME", dupEx.ErrorCode);
+
+        // 3. Inactive employee throws EMPLOYEE_INACTIVE
+        emp.Status = EmployeeStatus.Inactive;
+        var inactEx = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("new_unique_name", "password")));
+        Assert.Equal("EMPLOYEE_INACTIVE", inactEx.ErrorCode);
+
+        // 4. Valid update succeeds
+        emp.Status = EmployeeStatus.Active;
+        var updatedId = await service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("new_unique_name", "new_hashed_pwd", DisplayName: "Nguyen Updated"));
+        Assert.Equal(userId, updatedId);
+        Assert.Equal("new_unique_name", user.UserName);
+        Assert.Equal("new_hashed_pwd", user.PasswordHash);
+        Assert.Equal("Nguyen Updated", user.FullName);
+    }
+
+    [Fact]
+    public async Task DeleteEmployeeAsync_HasWorkHistory_TransitionsToInactiveAndThrowsBusinessException()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var empId = Guid.NewGuid();
+        var userId = "user_with_history";
+        var emp = new Employee
+        {
+            Id = empId,
+            TenantId = "tenant_test_01",
+            FullName = "Nguyen Has History",
+            EmployeeCode = "NV-HIST-01",
+            UserId = userId,
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(emp);
+        empRepo.EmployeesWithWorkHistory.Add(empId);
+
+        var user = new User
+        {
+            Id = userId,
+            UserName = "user_hist",
+            IsActive = true,
+            RefreshToken = "token123"
+        };
+        userRepo.Users.Add(user);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.DeleteEmployeeAsync(empId));
+
+        Assert.Equal("EMPLOYEE_HAS_WORK_HISTORY", ex.ErrorCode);
+        Assert.Equal(EmployeeStatus.Inactive, emp.Status);
+        Assert.False(emp.IsDeleted);
+        Assert.False(user.IsActive);
+        Assert.Null(user.RefreshToken);
+    }
+
+    [Fact]
+    public async Task DeleteEmployeeAsync_NoWorkHistory_SoftDeletesAndDeactivatesLinkedUser()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var empId = Guid.NewGuid();
+        var userId = "user_no_history";
+        var emp = new Employee
+        {
+            Id = empId,
+            TenantId = "tenant_test_01",
+            FullName = "Tran Fresh Employee",
+            EmployeeCode = "NV-FRESH-01",
+            UserId = userId,
+            Status = EmployeeStatus.Active,
+            Allowances = new List<EmployeeAllowance>
+            {
+                new() { Name = "Xang xe", Amount = 500_000m }
+            }
+        };
+        empRepo.Employees.Add(emp);
+
+        var user = new User
+        {
+            Id = userId,
+            UserName = "user_fresh",
+            IsActive = true
+        };
+        userRepo.Users.Add(user);
+
+        var ok = await service.DeleteEmployeeAsync(empId);
+
+        Assert.True(ok);
+        Assert.True(emp.IsDeleted);
+        Assert.Equal(EmployeeStatus.Inactive, emp.Status);
+        Assert.False(user.IsActive);
+    }
+
+    [Fact]
+    public async Task CreateEmployee_InvalidCodeFormat_ThrowsArgumentException()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var request = new CreateEmployeeRequest(
+            FullName: "Nguyen Van A",
+            CitizenId: "001234567890",
+            Phone: "0901234567",
+            BranchId: Guid.NewGuid(),
+            EmployeeCode: "NV@123" // Contains invalid character '@'
+        );
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => service.CreateEmployeeAsync(request));
+        Assert.Contains("Mã nhân viên", ex.Message);
+    }
+
+    [Fact]
+    public async Task CreateEmployee_InvalidWeekdayOtRate_ThrowsBusinessException()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var request = new CreateEmployeeRequest(
+            FullName: "Nguyen Van A",
+            CitizenId: "001234567890",
+            Phone: "0901234567",
+            BranchId: Guid.NewGuid(),
+            OtWeekday: "1.2" // Must be >= 1.5
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateEmployeeAsync(request));
+        Assert.Equal("INVALID_OT_RATE", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreateEmployee_InvalidSundayOtRate_ThrowsBusinessException()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var request = new CreateEmployeeRequest(
+            FullName: "Nguyen Van A",
+            CitizenId: "001234567890",
+            Phone: "0901234567",
+            BranchId: Guid.NewGuid(),
+            OtSunday: "1.8" // Must be >= 2.0
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateEmployeeAsync(request));
+        Assert.Equal("INVALID_OT_RATE", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreateEmployee_WithLoginAccount_Succeeds()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var request = new CreateEmployeeRequest(
+            FullName: "Tran Thi B",
+            CitizenId: "001234567891",
+            Phone: "0901234568",
+            BranchId: Guid.NewGuid(),
+            UserName: "tranthib",
+            Password: "SecurePassword123!",
+            Role: "STAFF"
+        );
+
+        var result = await service.CreateEmployeeAsync(request);
+
+        Assert.NotNull(result);
+        Assert.Equal("Tran Thi B", result.FullName);
+        Assert.NotNull(result.UserId);
+        Assert.Single(userRepo.Users);
+        var createdUser = userRepo.Users[0];
+        Assert.Equal("tranthib", createdUser.UserName);
+        Assert.Single(createdUser.TenantUsers);
+        Assert.Equal("STAFF", createdUser.TenantUsers.First().Role);
+    }
+
+    [Fact]
+    public async Task CreateEmployee_WithExistingUserName_ThrowsDuplicateUsername()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        userRepo.Users.Add(new User
+        {
+            Id = "existing-user-id",
+            UserName = "tranthib",
+            IsActive = true
+        });
+
+        var request = new CreateEmployeeRequest(
+            FullName: "Tran Thi C",
+            CitizenId: "001234567892",
+            Phone: "0901234569",
+            BranchId: Guid.NewGuid(),
+            UserName: "tranthib",
+            Password: "SecurePassword123!"
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateEmployeeAsync(request));
+        Assert.Equal("DUPLICATE_USERNAME", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task UpdateEmployee_NotFound_ThrowsNotFoundException()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var request = new UpdateEmployeeRequest(
+            FullName: "Tran Nonexistent",
+            CitizenId: "001234567899",
+            Phone: "0909999999",
+            BranchId: Guid.NewGuid()
+        );
+
+        await Assert.ThrowsAsync<NotFoundException>(() => service.UpdateEmployeeAsync(Guid.NewGuid(), request));
+    }
+
+    [Fact]
+    public async Task UpdateEmployee_DuplicatePhone_ThrowsDuplicatePhone()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var emp1 = new Employee
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            FullName = "Employee One",
+            CitizenId = "001111111111",
+            Phone = "0901111111",
+            EmployeeCode = "NV0001",
+            Status = EmployeeStatus.Active
+        };
+        var emp2 = new Employee
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            FullName = "Employee Two",
+            CitizenId = "002222222222",
+            Phone = "0902222222",
+            EmployeeCode = "NV0002",
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(emp1);
+        empRepo.Employees.Add(emp2);
+
+        var request = new UpdateEmployeeRequest(
+            FullName: "Employee Two Updated",
+            CitizenId: "002222222222",
+            Phone: "0901111111", // Conflicts with emp1
+            BranchId: Guid.NewGuid()
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.UpdateEmployeeAsync(emp2.Id, request));
+        Assert.Equal("DUPLICATE_PHONE", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task UpdateEmployee_WithLoginAccount_UpdatesExistingLinkedUser()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var existingUser = new User
+        {
+            Id = "user_link_01",
+            UserName = "old_user",
+            FullName = "Nguyen Van Old",
+            IsActive = true
+        };
+        userRepo.Users.Add(existingUser);
+
+        var emp = new Employee
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            FullName = "Nguyen Van New Name",
+            CitizenId = "001234567893",
+            Phone = "0901234570",
+            EmployeeCode = "NV0003",
+            UserId = existingUser.Id,
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(emp);
+
+        var request = new UpdateEmployeeRequest(
+            FullName: "Nguyen Van New Name",
+            CitizenId: "001234567893",
+            Phone: "0901234570",
+            BranchId: Guid.NewGuid(),
+            UserName: "new_username",
+            Password: "NewSecretPassword!"
+        );
+
+        var result = await service.UpdateEmployeeAsync(emp.Id, request);
+
+        Assert.NotNull(result);
+        Assert.Equal("new_username", existingUser.UserName);
+        Assert.Equal("Nguyen Van New Name", existingUser.FullName);
+    }
+
+    [Fact]
+    public async Task UpdateEmployee_WithLoginAccount_CreatesNewUserWhenUserIdNull()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var emp = new Employee
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            FullName = "Pham Thi M",
+            CitizenId = "001234567894",
+            Phone = "0901234571",
+            EmployeeCode = "NV0004",
+            UserId = null,
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(emp);
+
+        var request = new UpdateEmployeeRequest(
+            FullName: "Pham Thi M",
+            CitizenId: "001234567894",
+            Phone: "0901234571",
+            BranchId: Guid.NewGuid(),
+            UserName: "phamthim",
+            Password: "Password123!",
+            Role: "STAFF"
+        );
+
+        var result = await service.UpdateEmployeeAsync(emp.Id, request);
+
+        Assert.NotNull(result);
+        Assert.NotNull(emp.UserId);
+        Assert.Single(userRepo.Users);
+        Assert.Equal("phamthim", userRepo.Users[0].UserName);
+    }
+
+    [Fact]
+    public async Task UpdateEmployee_WithDirectUserId_SetsUserId()
+    {
+        var empRepo = new FakeEmployeeRepository();
+        var userRepo = new FakeUserRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext();
+        var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
+
+        var emp = new Employee
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant_test_01",
+            FullName = "Le Van Direct",
+            CitizenId = "001234567895",
+            Phone = "0901234572",
+            EmployeeCode = "NV0005",
+            Status = EmployeeStatus.Active
+        };
+        empRepo.Employees.Add(emp);
+
+        var request = new UpdateEmployeeRequest(
+            FullName: "Le Van Direct",
+            CitizenId: "001234567895",
+            Phone: "0901234572",
+            BranchId: Guid.NewGuid(),
+            UserId: "direct-user-id-999"
+        );
+
+        var result = await service.UpdateEmployeeAsync(emp.Id, request);
+
+        Assert.NotNull(result);
+        Assert.Equal("direct-user-id-999", emp.UserId);
+    }
 }

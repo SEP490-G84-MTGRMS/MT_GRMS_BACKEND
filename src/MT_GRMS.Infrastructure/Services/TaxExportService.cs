@@ -58,7 +58,7 @@ public class TaxExportService : ITaxExportService
         var deductibleExpenses = await _taxRepository.GetDeductibleExpenseVouchersAsync(fromDateUtc, toDateUtc, filter.BranchId, cancellationToken);
 
         // Lấy thông tin tổ chức và chi nhánh
-        var tenant = await _context.Tenants.AsNoTracking().FirstOrDefaultAsync(cancellationToken);
+        var tenant = await _context.Tenants.AsNoTracking().OrderBy(t => t.Id).FirstOrDefaultAsync(cancellationToken);
         var branch = filter.BranchId.HasValue
             ? await _context.Branches.AsNoTracking().FirstOrDefaultAsync(b => b.Id == filter.BranchId.Value, cancellationToken)
             : null;
@@ -128,9 +128,9 @@ public class TaxExportService : ITaxExportService
         var snapshotQuery = _context.HouseholdTaxSnapshots.AsNoTracking().AsQueryable();
         if (filter.BranchId.HasValue)
         {
-            snapshotQuery = snapshotQuery.Where(s => s.BranchId == filter.BranchId.Value);
+            snapshotQuery = snapshotQuery.Where(s => s.BranchId == filter.BranchId.Value || s.BranchId == null);
         }
-        snapshotQuery = snapshotQuery.Where(s => s.Year == filter.Year);
+        snapshotQuery = snapshotQuery.Where(s => s.Year == filter.Year && s.Status == TaxSnapshotStatus.Finalized);
         var snapshots = await snapshotQuery.OrderBy(s => s.PeriodNumber).ToListAsync(cancellationToken);
 
         using var workbook = new XLWorkbook();

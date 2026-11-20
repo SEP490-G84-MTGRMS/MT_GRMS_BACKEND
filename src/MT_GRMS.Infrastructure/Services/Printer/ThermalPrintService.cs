@@ -339,7 +339,7 @@ public class ThermalPrintService : IThermalPrintService
 
     private static string FormatMoney(decimal amount) => amount.ToString("#,##0", new CultureInfo("vi-VN"));
 
-    private static string RemoveAccents(string text)
+    private static string RemoveAccents(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return string.Empty;
         string normalized = text.Normalize(NormalizationForm.FormD);

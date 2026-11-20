@@ -32,7 +32,8 @@ public record ProductResponse(
     string? PurchaseUnit = null,
     List<ProductUnitResponse>? UnitPrices = null,
     bool AllowRepack = false,
-    bool SellRawByWeight = true
+    bool SellRawByWeight = true,
+    decimal? ProcessedSellingPricePerKg = null
 )
 {
     // Backward compatibility aliases
@@ -68,7 +69,8 @@ public record ProductCreateRequest(
     string TaxCategory = "STANDARD_1PCT",
     bool IsBaseUnitPurchaseUnit = true,
     bool AllowRepack = false,
-    bool SellRawByWeight = true
+    bool SellRawByWeight = true,
+    decimal? ProcessedSellingPricePerKg = null
 )
 {
     // Backward compatibility constructor
@@ -116,7 +118,8 @@ public record ProductUpdateRequest(
     string TaxCategory = "STANDARD_1PCT",
     bool? IsBaseUnitPurchaseUnit = null,
     bool AllowRepack = false,
-    bool SellRawByWeight = true
+    bool SellRawByWeight = true,
+    decimal? ProcessedSellingPricePerKg = null
 );
 
 public class ProductQueryFilter
@@ -134,6 +137,8 @@ public record ProductPriceHistoryDto(
     Guid ProductId,
     Guid? BranchId,
     string? BranchName,
+    Guid? ProductUnitId,
+    string? ProductUnitName,
     string PriceScope,
     string PriceType,
     decimal OldPrice,
@@ -147,3 +152,15 @@ public record ProductPriceHistoryDto(
     string Reason,
     DateTime CreatedAt
 );
+
+public class ProductPriceHistoryQuery
+{
+    public Guid? BranchId { get; set; }
+    public Guid? ProductUnitId { get; set; }
+    public string? SearchTerm { get; set; }
+    public string? PriceScope { get; set; }
+    public DateTime? FromDate { get; set; }
+    public DateTime? ToDate { get; set; }
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 15;
+}

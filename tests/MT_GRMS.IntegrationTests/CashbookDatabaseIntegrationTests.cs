@@ -21,7 +21,7 @@ public class CashbookDatabaseIntegrationTests
             CurrentUserId = userId;
             CurrentBranchId = branchId;
         }
-        public string CurrentRole { get; set; } = "ADMIN";
+        public string CurrentRole { get; set; } = "STORE_OWNER";
         public void SetRole(string? role) => CurrentRole = role?.Trim() ?? string.Empty;
     }
 
@@ -79,6 +79,26 @@ public class CashbookDatabaseIntegrationTests
 
         var lastHash = await repo.GetLastAuditHashAsync(accountId);
         Assert.Equal("HASH-002", lastHash);
+
+        // Genesis hash when no entries
+        var emptyHash = await repo.GetLastAuditHashAsync(Guid.NewGuid());
+        Assert.Equal("GENESIS_HASH", emptyHash);
+
+        // GetAccountWithLockAsync
+        var account = new FinanceAccount
+        {
+            Id = accountId,
+            BranchId = branchId,
+            AccountName = "Két tiền mặt",
+            AccountType = FinanceAccountType.Till,
+            CurrentBalance = 700_000m
+        };
+        await context.FinanceAccounts.AddAsync(account);
+        await context.SaveChangesAsync();
+
+        var lockedAccount = await repo.GetAccountWithLockAsync(accountId);
+        Assert.NotNull(lockedAccount);
+        Assert.Equal(700_000m, lockedAccount!.CurrentBalance);
 
         var entries = await repo.FindAsync(e => e.AccountId == accountId);
         Assert.Equal(2, entries.Count);
