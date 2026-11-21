@@ -213,6 +213,7 @@ public class ExpenseVoucherConfiguration : IEntityTypeConfiguration<ExpenseVouch
             .OnDelete(DeleteBehavior.Restrict);
 
         builder.HasIndex(e => new { e.TenantId, e.BranchId, e.ExpenseDate });
+        builder.HasIndex(e => e.DueDate).HasFilter("\"DueDate\" IS NOT NULL AND \"IsDeleted\" = false");
         builder.HasIndex(e => new { e.TenantId, e.Status });
         builder.HasIndex(e => new { e.TenantId, e.ReferenceCode });
         builder.HasIndex(e => new { e.TenantId, e.Nature });

@@ -1,4 +1,5 @@
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
@@ -15,7 +16,8 @@ public sealed class TransferService(
     IRepository<Branch> branches,
     IRepository<TransferStatusHistory> statusHistory,
     ITenantContext tenant,
-    IUnitOfWork unitOfWork) : ITransferService
+    IUnitOfWork unitOfWork,
+    NotificationOutbox? notificationOutbox = null) : ITransferService
 {
     private bool IsOwner => tenant.CurrentRole == SystemRoles.StoreOwner;
     private bool IsStaff => tenant.CurrentRole == SystemRoles.Staff;
@@ -177,6 +179,9 @@ public sealed class TransferService(
         transfer.SubmittedByUserId = tenant.CurrentUserId;
         transfers.Update(transfer);
         await AddHistoryAsync(transfer, previous, transfer.Status, "Submitted", null, ct);
+        if (notificationOutbox != null)
+            await notificationOutbox.EnqueueTransferAsync(transfer, BusinessNotificationTypes.TransferDispatchRequired,
+                "Phiếu điều chuyển chờ xuất kho", transfer.FromBranchId, false, ct);
         await unitOfWork.SaveChangesAsync(ct);
         return await MapAsync(transfer, ct);
     }
@@ -245,6 +250,9 @@ public sealed class TransferService(
             transfer.DiscrepancyNote = request.Note?.Trim();
             transfers.Update(transfer);
             await AddHistoryAsync(transfer, previous, transfer.Status, "Received", request.Note, ct);
+            if (hasDiscrepancy && notificationOutbox != null)
+                await notificationOutbox.EnqueueTransferAsync(transfer, BusinessNotificationTypes.TransferReceiptDiscrepancy,
+                    "Phiếu điều chuyển nhận có chênh lệch", transfer.FromBranchId, true, ct);
             await unitOfWork.SaveChangesAsync(ct); await unitOfWork.CommitTransactionAsync(ct); return await MapAsync(transfer, ct);
         }
         catch { await unitOfWork.RollbackTransactionAsync(ct); throw; }
@@ -290,6 +298,9 @@ public sealed class TransferService(
             transfer.IsStockReserved = false;
             transfers.Update(transfer);
             await AddHistoryAsync(transfer, previous, transfer.Status, "Dispatched", null, ct);
+            if (notificationOutbox != null)
+                await notificationOutbox.EnqueueTransferAsync(transfer, BusinessNotificationTypes.TransferReceiveRequired,
+                    "Phiếu điều chuyển chờ nhận hàng", transfer.ToBranchId, false, ct);
             await unitOfWork.SaveChangesAsync(ct);
             await unitOfWork.CommitTransactionAsync(ct);
             return await MapAsync(transfer, ct);

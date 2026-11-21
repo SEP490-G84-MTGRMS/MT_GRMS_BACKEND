@@ -7,6 +7,7 @@ using System.Text;
 
 using System.Text.Json;
 using System.Xml.Linq;
+using MT_GRMS.Application.Notifications;
 
 using MT_GRMS.Application.Tax.Dtos;
 
@@ -34,6 +35,7 @@ public class HouseholdTaxService : IHouseholdTaxService
     private readonly TaxPolicy _taxPolicy;
     private readonly Common.ITenantContext _tenantContext;
     private readonly Common.IUnitOfWork? _unitOfWork;
+    private readonly NotificationOutbox? _notificationOutbox;
 
     public const decimal RetailVatRate = RevenuePercentageTaxStrategy.RetailVatRate;
 
@@ -64,7 +66,8 @@ public class HouseholdTaxService : IHouseholdTaxService
         Security.ITaxSnapshotSignatureService? signatureService = null,
         IConfiguration? configuration = null,
         Common.ITenantContext? tenantContext = null,
-        Common.IUnitOfWork? unitOfWork = null)
+        Common.IUnitOfWork? unitOfWork = null,
+        NotificationOutbox? notificationOutbox = null)
     {
         _repository = repository;
         _strategyFactory = strategyFactory;
@@ -73,6 +76,7 @@ public class HouseholdTaxService : IHouseholdTaxService
         _taxPolicy = TaxPolicy.Load(configuration);
         _tenantContext = tenantContext ?? throw new ArgumentNullException(nameof(tenantContext));
         _unitOfWork = unitOfWork;
+        _notificationOutbox = notificationOutbox;
     }
 
     private DateTime GetVatReductionDeadlineUtc() => _taxPolicy.VatReductionDeadlineUtc;
@@ -1268,6 +1272,14 @@ public class HouseholdTaxService : IHouseholdTaxService
         // Ký số HMAC-SHA256 trên Canonical JSON snapshot (Bao gồm cả mã băm BookDataHash)
         snapshot.AuditSignatureHash = _signatureService.ComputeSignature(snapshot);
         var created = await _repository.AddSnapshotAsync(snapshot, cancellationToken);
+        if (_notificationOutbox != null && _unitOfWork != null)
+        {
+            await _notificationOutbox.EnqueueAsync(created.TenantId, created.Id, new BusinessNotification(
+                BusinessNotificationTypes.TaxSnapshotFinalized, "Đã chốt kỳ tính thuế",
+                $"Kỳ {created.PeriodNumber}/{created.Year}, phiên bản {created.RevisionNumber}.",
+                $"/store-owner/tax-snapshots?snapshotId={created.Id}"), cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
 
         return new HouseholdTaxSnapshotDto
 

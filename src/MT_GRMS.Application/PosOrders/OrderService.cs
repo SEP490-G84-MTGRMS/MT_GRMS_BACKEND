@@ -30,6 +30,7 @@ public class OrderService : IOrderService
     private readonly ITenantContext? _tenantContext;
     private readonly Tax.ITaxPeriodLockGuard? _taxPeriodLockGuard;
     private readonly Notifications.INotificationService? _notificationService;
+    private readonly Notifications.NotificationOutbox? _notificationOutbox;
 
     private static readonly Guid DefaultTillId = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db");
     private static readonly Guid DefaultBankId = Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559");
@@ -45,7 +46,8 @@ public class OrderService : IOrderService
         ITenantContext? tenantContext = null,
         PosShifts.IShiftService? shiftService = null,
         Tax.ITaxPeriodLockGuard? taxPeriodLockGuard = null,
-        Notifications.INotificationService? notificationService = null)
+        Notifications.INotificationService? notificationService = null,
+        Notifications.NotificationOutbox? notificationOutbox = null)
     {
         _orderRepository = orderRepository;
         _unitOfWork = unitOfWork;
@@ -58,6 +60,7 @@ public class OrderService : IOrderService
         _shiftService = shiftService;
         _taxPeriodLockGuard = taxPeriodLockGuard;
         _notificationService = notificationService;
+        _notificationOutbox = notificationOutbox;
     }
 
     public OrderService(
@@ -700,6 +703,8 @@ public class OrderService : IOrderService
         // - Đơn hàng của Chủ cửa hàng bán lẻ trực tiếp (!shiftId.HasValue) sẽ được gộp khi Chủ bấm "Chốt doanh thu cuối ngày" (SettleOwnerDailyOrdersAsync).
 
         await _orderRepository.AddAsync(order, cancellationToken);
+        if (paymentStatus == "DEBT" && customer != null && _notificationOutbox != null)
+            await _notificationOutbox.EnqueueDebtThresholdAsync(customer, order.Id, finalAmount, cancellationToken);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -2010,6 +2015,8 @@ public class OrderService : IOrderService
         }
 
         await _orderRepository.AddAsync(exchangeOrder, cancellationToken);
+        if (paymentStatus == "DEBT" && customer != null && _notificationOutbox != null)
+            await _notificationOutbox.EnqueueDebtThresholdAsync(customer, exchangeOrder.Id, netAmount, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return MapToOrderResponse(exchangeOrder, cashTendered, changeAmount);

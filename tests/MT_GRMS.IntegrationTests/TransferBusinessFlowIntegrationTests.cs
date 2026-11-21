@@ -4,11 +4,14 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using System.Text.Json;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Application.Transfers;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Entities.System;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Infrastructure.Repositories;
@@ -74,7 +77,8 @@ public class TransferBusinessFlowIntegrationTests
             branchesRepo,
             historyRepo,
             tenantContext,
-            uow);
+            uow,
+            new NotificationOutbox(new GenericRepository<OutboxMessage>(context)));
 
         return (service, context);
     }
@@ -180,6 +184,7 @@ public class TransferBusinessFlowIntegrationTests
         // ASSERT 1: Kiểm tra trạng thái phiếu và kho trong DB
         Assert.NotNull(created);
         Assert.Equal("Draft", created.Status);
+        Assert.Empty(await context.OutboxMessages.ToListAsync());
         Assert.Equal(540_000m, created.TotalAmount); // 30 * 18,000
 
         var stockInDbA = await context.BranchStocks.FirstOrDefaultAsync(s => s.BranchId == branchA && s.ProductId == prodA);
@@ -225,6 +230,12 @@ public class TransferBusinessFlowIntegrationTests
         // Tổng tồn kho toàn hệ thống được bảo toàn: CN A (70) + CN B (30) = 100
         var totalStock = await context.BranchStocks.Where(s => s.ProductId == prodA).SumAsync(s => s.QuantityOnHand);
         Assert.Equal(100m, totalStock);
+        var notifications = await context.OutboxMessages.AsNoTracking().ToListAsync();
+        Assert.Equal(2, notifications.Count);
+        Assert.All(notifications, message => Assert.Equal(NotificationOutbox.MessageType, message.Type));
+        var pending = notifications.Select(message => JsonSerializer.Deserialize<BusinessNotification>(message.PayloadJson)!).ToList();
+        Assert.Equal(branchA, Assert.Single(pending, item => item.Type == BusinessNotificationTypes.TransferDispatchRequired).StaffBranchId);
+        Assert.Equal(branchB, Assert.Single(pending, item => item.Type == BusinessNotificationTypes.TransferReceiveRequired).StaffBranchId);
     }
 
     [Fact]

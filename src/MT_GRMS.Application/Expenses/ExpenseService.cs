@@ -2,6 +2,7 @@ using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.Expenses.Dtos;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
@@ -16,6 +17,7 @@ public class ExpenseService : IExpenseService
     private readonly IUnitOfWork _unitOfWork;
     private readonly Tax.ITaxPeriodLockGuard? _taxPeriodLockGuard;
     private readonly ICloudinaryService? _cloudinaryService;
+    private readonly NotificationOutbox? _notificationOutbox;
 
     // Định mức thẩm quyền theo BR-17-06 / TT 152/2025/TT-BTC
     private const decimal T1_AutoApprovalThreshold = 500_000m; // Ngưỡng tự duyệt chi dưới 500k
@@ -28,7 +30,8 @@ public class ExpenseService : IExpenseService
         ITenantContext tenantContext,
         IUnitOfWork unitOfWork,
         Tax.ITaxPeriodLockGuard? taxPeriodLockGuard = null,
-        ICloudinaryService? cloudinaryService = null)
+        ICloudinaryService? cloudinaryService = null,
+        NotificationOutbox? notificationOutbox = null)
     {
         _expenseRepo = expenseRepo;
         _cashbookService = cashbookService;
@@ -36,6 +39,7 @@ public class ExpenseService : IExpenseService
         _unitOfWork = unitOfWork;
         _taxPeriodLockGuard = taxPeriodLockGuard;
         _cloudinaryService = cloudinaryService;
+        _notificationOutbox = notificationOutbox;
     }
 
     public async Task<ExpenseVoucherResponse> CreateExpenseAsync(CreateExpenseRequest request, CancellationToken ct = default)
@@ -81,6 +85,7 @@ public class ExpenseService : IExpenseService
             SellerTaxCode = request.SellerTaxCode,
             EvidenceAttachmentUrl = resolvedEvidenceUrl,
             ExpenseDate = expenseDate,
+            DueDate = request.DueDate,
             Note = request.Note,
             Nature = request.Nature,
             ReferenceCode = request.ReferenceCode,
@@ -158,6 +163,8 @@ public class ExpenseService : IExpenseService
         }
 
         await _expenseRepo.AddAsync(voucher, ct);
+        if (voucher.Status == ExpenseVoucherStatus.PendingApproval)
+            await QueueNotificationAsync(voucher, BusinessNotificationTypes.ExpenseApprovalRequired, "Phiếu chi cần duyệt", ct);
         await _unitOfWork.SaveChangesAsync(ct);
 
         return MapVoucherResponse(voucher);
@@ -372,6 +379,8 @@ public class ExpenseService : IExpenseService
         }
         catch (InsufficientStockException)
         {
+            if (voucher.Status != ExpenseVoucherStatus.PaymentFailed)
+                await QueueNotificationAsync(voucher, BusinessNotificationTypes.ExpensePaymentFailed, "Phiếu chi chưa xuất được quỹ", ct);
             voucher.Status = ExpenseVoucherStatus.PaymentFailed;
             await _unitOfWork.SaveChangesAsync(ct);
             throw;
@@ -379,6 +388,11 @@ public class ExpenseService : IExpenseService
 
         return MapVoucherResponse(voucher);
     }
+
+    private Task QueueNotificationAsync(ExpenseVoucher voucher, string type, string title, CancellationToken ct) =>
+        _notificationOutbox?.EnqueueAsync(voucher.TenantId, voucher.Id, new BusinessNotification(
+            type, title, $"Phiếu chi {voucher.VoucherCode}.",
+            $"/store-owner/expenses?branchId={voucher.BranchId?.ToString() ?? "ALL"}&search={Uri.EscapeDataString(voucher.VoucherCode)}"), ct) ?? Task.CompletedTask;
 
     public async Task<ExpenseVoucherResponse> GetExpenseByIdAsync(Guid expenseId, CancellationToken ct = default)
     {
@@ -512,5 +526,5 @@ public class ExpenseService : IExpenseService
     private void RequireOwner() => TenantRoleGuard.RequireStoreOwner(_tenantContext, "chi phí và phiếu chi");
 
     private static ExpenseVoucherResponse MapVoucherResponse(ExpenseVoucher v) =>
-        new(v.Id, v.VoucherCode, v.BranchId, v.BeneficiaryName, v.Category, v.Amount, v.Status.ToString(), v.PaymentSourceType.ToString(), v.PaymentSourceAccountId, v.IsTaxDeductible, v.InvoiceNumber, v.SellerTaxCode, v.EvidenceAttachmentUrl, v.IsFlaggedAsSuspiciousSplit, v.SuspiciousReason, v.ApprovedByUserId, v.ApprovedAtUtc, v.PaidAtUtc, v.ExpenseDate, v.Note, v.Nature, v.ReferenceCode, v.RefundedAmount, v.IsSettled);
+        new(v.Id, v.VoucherCode, v.BranchId, v.BeneficiaryName, v.Category, v.Amount, v.Status.ToString(), v.PaymentSourceType.ToString(), v.PaymentSourceAccountId, v.IsTaxDeductible, v.InvoiceNumber, v.SellerTaxCode, v.EvidenceAttachmentUrl, v.IsFlaggedAsSuspiciousSplit, v.SuspiciousReason, v.ApprovedByUserId, v.ApprovedAtUtc, v.PaidAtUtc, v.ExpenseDate, v.Note, v.Nature, v.ReferenceCode, v.RefundedAmount, v.IsSettled, v.DueDate);
 }

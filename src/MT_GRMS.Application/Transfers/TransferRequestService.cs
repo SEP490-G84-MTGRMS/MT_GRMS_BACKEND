@@ -1,4 +1,5 @@
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
@@ -18,7 +19,8 @@ public sealed class TransferRequestService(
     IRepository<Branch> branches,
     ITransferService transferService,
     ITenantContext tenant,
-    IUnitOfWork unitOfWork) : ITransferRequestService
+    IUnitOfWork unitOfWork,
+    NotificationOutbox? notificationOutbox = null) : ITransferRequestService
 {
     private sealed record Allocation(Guid BranchId, BranchStock Stock, Product Product, decimal Quantity, string Unit);
 
@@ -136,6 +138,9 @@ public sealed class TransferRequestService(
                     Reason = request.Note?.Trim(),
                     CreatedBy = tenant.CurrentUserId
                 }, ct);
+                if (notificationOutbox != null)
+                    await notificationOutbox.EnqueueTransferAsync(transfer, BusinessNotificationTypes.TransferDispatchRequired,
+                        "Phiếu điều chuyển chờ xuất kho", transfer.FromBranchId, false, ct);
             }
 
             await unitOfWork.SaveChangesAsync(ct);

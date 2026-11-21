@@ -1,6 +1,7 @@
 using MT_GRMS.Application.Cashbook.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Services;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Application.Tax;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.SaaS;
@@ -26,6 +27,7 @@ public class CashbookService : ICashbookService
     private readonly IRepository<ExpenseVoucher>? _expenseVoucherRepo;
     private readonly IRepository<Branch>? _branchRepo;
     private readonly IHouseholdTaxRepository? _taxRepository;
+    private readonly NotificationOutbox? _notificationOutbox;
 
     public CashbookService(
         ICashbookRepository cashbookRepo,
@@ -36,7 +38,8 @@ public class CashbookService : ICashbookService
         IUnitOfWork unitOfWork,
         IRepository<ExpenseVoucher>? expenseVoucherRepo = null,
         IHouseholdTaxRepository? taxRepository = null,
-        IRepository<Branch>? branchRepo = null)
+        IRepository<Branch>? branchRepo = null,
+        NotificationOutbox? notificationOutbox = null)
     {
         _cashbookRepo = cashbookRepo;
         _accountRepo = accountRepo;
@@ -47,6 +50,7 @@ public class CashbookService : ICashbookService
         _unitOfWork = unitOfWork;
         _expenseVoucherRepo = expenseVoucherRepo;
         _taxRepository = taxRepository;
+        _notificationOutbox = notificationOutbox;
     }
 
     public async Task<ShiftResponse> OpenShiftAsync(OpenShiftRequest request, CancellationToken ct = default)
@@ -92,7 +96,7 @@ public class CashbookService : ICashbookService
         var shift = await _shiftRepo.GetByIdAsync(request.ShiftId, ct)
             ?? throw new NotFoundException($"Không tìm thấy ca làm việc: {request.ShiftId}");
 
-        if (shift.Status == ShiftState.Closed)
+        if (shift.Status is ShiftState.Closed or ShiftState.ForceClosed)
         {
             throw new BusinessException("SHIFT_ALREADY_CLOSED", "Ca làm việc này đã được chốt trước đó.");
         }
@@ -122,6 +126,8 @@ public class CashbookService : ICashbookService
 
         till.ActiveShiftId = null;
         till.CurrentBalance = request.RetainedFloatAmount;
+        if (Math.Abs(discrepancy) > 2000m && _notificationOutbox != null)
+            await _notificationOutbox.EnqueueShiftDiscrepancyAsync(shift, discrepancy, ct);
         await _unitOfWork.SaveChangesAsync(ct);
 
         return MapShiftResponse(shift);
@@ -163,7 +169,7 @@ public class CashbookService : ICashbookService
     public Task<CashbookEntryResponse> DisburseCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default) =>
         DisburseCashCoreAsync(accountId, amount, sourceType, sourceId, referenceCode, description, null, ct);
 
-    private async Task<CashbookEntryResponse> DisburseCashCoreAsync(Guid accountId, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, EntryClassification? classification, CancellationToken ct)
+    private async Task<CashbookEntryResponse> DisburseCashCoreAsync(Guid accountId, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, EntryClassification? classification, CancellationToken ct, bool isReconciliation = false)
     {
         if (amount <= 0)
         {
@@ -196,6 +202,8 @@ public class CashbookService : ICashbookService
             }
 
             var entry = await RecordEntryInternalAsync(accountId, account.AccountType, branchId, CashbookEntryType.Payment, amount, sourceType, sourceId, referenceCode, description, classification, ct);
+            if (isReconciliation)
+                await QueueEntryNotificationAsync(entry, BusinessNotificationTypes.CashbookReconciliationDiscrepancy, "Kiểm kê quỹ thiếu tiền", ct);
             await _unitOfWork.SaveChangesAsync(ct);
 
             if (shouldManageTransaction)
@@ -218,7 +226,7 @@ public class CashbookService : ICashbookService
     public Task<CashbookEntryResponse> ReceiveCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default) =>
         ReceiveCashCoreAsync(accountId, amount, sourceType, sourceId, referenceCode, description, null, ct);
 
-    private async Task<CashbookEntryResponse> ReceiveCashCoreAsync(Guid accountId, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, EntryClassification? classification, CancellationToken ct)
+    private async Task<CashbookEntryResponse> ReceiveCashCoreAsync(Guid accountId, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, EntryClassification? classification, CancellationToken ct, bool isReconciliation = false)
     {
         if (amount <= 0)
         {
@@ -246,6 +254,8 @@ public class CashbookService : ICashbookService
             }
 
             var entry = await RecordEntryInternalAsync(accountId, account.AccountType, branchId, CashbookEntryType.Receipt, amount, sourceType, sourceId, referenceCode, description, classification, ct);
+            if (isReconciliation)
+                await QueueEntryNotificationAsync(entry, BusinessNotificationTypes.CashbookReconciliationDiscrepancy, "Kiểm kê quỹ thừa tiền", ct);
             await _unitOfWork.SaveChangesAsync(ct);
 
             if (shouldManageTransaction)
@@ -830,11 +840,17 @@ public class CashbookService : ICashbookService
                 voucher.ReferenceCode!,
                 $"Nộp thuế: {voucher.BeneficiaryName}",
                 token);
+            await QueueEntryNotificationAsync(entry, BusinessNotificationTypes.TaxPaymentRecorded, "Đã ghi nhận tiền nộp thuế", token);
             await _unitOfWork.SaveChangesAsync(token);
 
             return new TaxPaymentResponse(voucher.Id, voucher.HouseholdTaxSnapshotId, MapEntryResponse(entry));
         }, ct);
     }
+
+    private Task QueueEntryNotificationAsync(CashbookEntry entry, string type, string title, CancellationToken ct) =>
+        _notificationOutbox?.EnqueueAsync(_tenantContext.CurrentTenantId, entry.Id, new BusinessNotification(
+            type, title, $"Bút toán {entry.EntryCode}.",
+            $"/store-owner/cashbook?accountId={entry.AccountId}&branchId={entry.BranchId?.ToString() ?? "ALL"}&search={Uri.EscapeDataString(entry.EntryCode)}"), ct) ?? Task.CompletedTask;
 
     private async Task LockAccountByIdAsync(Guid accountId, CancellationToken ct)
     {
@@ -904,11 +920,13 @@ public class CashbookService : ICashbookService
 
         if (diff > 0)
         {
-            return await ReceiveCashAsync(request.AccountId, account.AccountType, diff, "ADJUSTMENT", null, refCode, $"Điều chỉnh thừa kiểm kê: {request.Reason.Trim()} (+{diff:N0} đ)", ct);
+            return await ReceiveCashCoreAsync(request.AccountId, diff, "ADJUSTMENT", null, refCode,
+                $"Điều chỉnh thừa kiểm kê: {request.Reason.Trim()} (+{diff:N0} đ)", null, ct, isReconciliation: true);
         }
         else
         {
-            return await DisburseCashAsync(request.AccountId, account.AccountType, Math.Abs(diff), "ADJUSTMENT", null, refCode, $"Điều chỉnh thiếu kiểm kê: {request.Reason.Trim()} ({diff:N0} đ)", ct);
+            return await DisburseCashCoreAsync(request.AccountId, Math.Abs(diff), "ADJUSTMENT", null, refCode,
+                $"Điều chỉnh thiếu kiểm kê: {request.Reason.Trim()} ({diff:N0} đ)", null, ct, isReconciliation: true);
         }
     }
 

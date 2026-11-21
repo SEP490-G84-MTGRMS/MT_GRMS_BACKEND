@@ -1878,6 +1878,8 @@ END $$;
                 }
                 try
                 {
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddExpenseVoucherDueDate.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddTaxFilingConfirmations.UpSql);
                     var migrations = context.Database.GetMigrations();
                     foreach (var m in migrations)
                     {

@@ -137,6 +137,9 @@ public static class DependencyInjection
         services.AddScoped<ISupplierOrderEmailSender, SmtpSupplierOrderEmailSender>();
         services.AddScoped<ISupplierDispatchPackageService, SupplierDispatchPackageService>();
         services.AddHostedService<SupplierOrderDispatchWorker>();
+        services.AddHostedService<BusinessNotificationWorker>();
+        services.AddHostedService<ExpenseReminderWorker>();
+        services.AddHostedService<OperationalReminderWorker>();
 
         // Cấu hình SePay & Dịch vụ Ví gian hàng
         services.Configure<MT_GRMS.Application.Common.SePaySettings>(configuration.GetSection(MT_GRMS.Application.Common.SePaySettings.SectionName));
