@@ -135,6 +135,13 @@ app.MapControllers();
 
 // 8. Tự động áp dụng Migration (Auto-migration); Seed mẫu chỉ khi Database:SeedSampleData=true
 var skipDbInit = app.Configuration.GetValue<bool>("Database:SkipDbInitialization");
+if (app.Configuration.GetValue<bool>("Database:RepairTransferStockColumns"))
+{
+    using var repairScope = app.Services.CreateScope();
+    var repairDb = repairScope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await repairDb.Database.ExecuteSqlRawAsync("ALTER TABLE \"BranchStocks\" ADD COLUMN IF NOT EXISTS \"FefoDiscountPercent\" numeric(5,2) NOT NULL DEFAULT 0;");
+    await repairDb.Database.ExecuteSqlRawAsync("ALTER TABLE \"BranchStocks\" ADD COLUMN IF NOT EXISTS \"IsFefoDiscountActive\" boolean NOT NULL DEFAULT false;");
+}
 if (!skipDbInit)
 {
     using var scope = app.Services.CreateScope();
