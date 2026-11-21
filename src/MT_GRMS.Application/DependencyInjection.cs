@@ -64,11 +64,14 @@ public static class DependencyInjection
         services.AddScoped<IScheduleService, ScheduleService>();
         services.AddScoped<IScheduleApprovalService, ScheduleApprovalService>();
         services.AddScoped<HR.Payslips.IPayslipService, HR.Payslips.PayslipService>();
+        services.AddScoped<Notifications.INotificationService, Notifications.NotificationService>();
 
         // 3. Đăng ký các Service cho Master Admin Portal
         services.AddScoped<ISubscriptionPlanService, SubscriptionPlanService>();
         services.AddScoped<ITenantService, TenantService>();
+        services.AddScoped<TenantProvisioningService>();
         services.AddScoped<IAdminDashboardService, AdminDashboardService>();
+        services.AddScoped<IMasterCatalogService, MasterCatalogService>();
 
         return services;
     }

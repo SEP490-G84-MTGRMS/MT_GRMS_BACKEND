@@ -601,41 +601,15 @@ public static class EmployeeSeedData
 
         foreach (var branch in branches)
         {
-            var existingPolicy = await context.BranchAttendancePolicies
-                .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(p => p.TenantId == tenantId && p.BranchId == branch.Id);
-
-            if (existingPolicy == null)
-            {
-                var policy = new BranchAttendancePolicy
-                {
-                    Id = Uuid7.NewGuid(),
-                    TenantId = tenantId,
-                    BranchId = branch.Id,
-                    StandardDayHours = 8.00m,
-                    IsConvertHoursToDays = true,
-                    ConversionRulesJson = defaultConversionRulesJson,
-                    EnableLateThreshold = true,
-                    LateThresholdMinutes = 15, // Đi muộn sau 15 phút
-                    EnableEarlyLeaveThreshold = true,
-                    EarlyLeaveThresholdMinutes = 15, // Về sớm trước 15 phút
-                    CreatedAt = DateTime.UtcNow
-                };
-
-                await context.BranchAttendancePolicies.AddAsync(policy);
-                hasChanges = true;
-            }
-            else
-            {
-                // Đồng bộ các thông số chuẩn nếu chưa khớp
-                existingPolicy.StandardDayHours = 8.00m;
-                existingPolicy.IsConvertHoursToDays = true;
-                existingPolicy.EnableLateThreshold = true;
-                existingPolicy.LateThresholdMinutes = 15;
-                existingPolicy.EnableEarlyLeaveThreshold = true;
-                existingPolicy.EarlyLeaveThresholdMinutes = 15;
-                hasChanges = true;
-            }
+            branch.StandardDayHours = 8.00m;
+            branch.IsConvertHoursToDays = true;
+            branch.ConversionRulesJson ??= defaultConversionRulesJson;
+            branch.EnableLateThreshold = true;
+            branch.LateThresholdMinutes = 15; // Đi muộn sau 15 phút
+            branch.EnableEarlyLeaveThreshold = true;
+            branch.EarlyLeaveThresholdMinutes = 15; // Về sớm trước 15 phút
+            branch.IsAttendancePolicyCustomized = true;
+            hasChanges = true;
         }
 
         if (hasChanges)
@@ -792,10 +766,10 @@ public static class EmployeeSeedData
         var empShift = targetEmployees.First(e => e.EmployeeCode == "NV002");   // Lương ca 150.000
         var empHourly = targetEmployees.First(e => e.EmployeeCode == "NV003");  // Lương giờ 25.000
 
-        // 2. Lấy Policy chấm công của chi nhánh
-        var policy = await context.BranchAttendancePolicies
+        // 2. Lấy Policy chấm công từ chi nhánh (Branch)
+        var policy = await context.Branches
             .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(p => p.TenantId == tenantId && p.BranchId == branchId);
+            .FirstOrDefaultAsync(b => b.TenantId == tenantId && b.Id == branchId);
 
         if (policy == null)
         {

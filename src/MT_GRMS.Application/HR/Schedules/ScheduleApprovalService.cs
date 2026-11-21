@@ -3,6 +3,7 @@ using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Payslips;
 using MT_GRMS.Application.HR.Schedules.Dtos;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
@@ -19,6 +20,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
     private readonly ICloudinaryService? _cloudinaryService;
+    private readonly INotificationService? _notificationService;
 
     public ScheduleApprovalService(
         IScheduleApprovalRequestRepository approvalRepository,
@@ -27,7 +29,8 @@ public class ScheduleApprovalService : IScheduleApprovalService
         IUnitOfWork unitOfWork,
         ITenantContext tenantContext,
         ICloudinaryService? cloudinaryService = null,
-        IPayslipRepository? payslipRepository = null)
+        IPayslipRepository? payslipRepository = null,
+        INotificationService? notificationService = null)
     {
         _approvalRepository = approvalRepository;
         _scheduleRepository = scheduleRepository;
@@ -36,6 +39,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
         _tenantContext = tenantContext;
         _cloudinaryService = cloudinaryService;
         _payslipRepository = payslipRepository;
+        _notificationService = notificationService;
     }
 
     public async Task<ScheduleApprovalRequestDto> CreateRequestAsync(
@@ -125,6 +129,35 @@ public class ScheduleApprovalService : IScheduleApprovalService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         var created = await _approvalRepository.GetByIdWithDetailsAsync(request.Id, cancellationToken);
+
+        if (_notificationService != null)
+        {
+            try
+            {
+                var empName = currentEmployee?.FullName ?? created?.Employee?.FullName ?? "Nhân viên";
+                var typeLabel = dto.RequestType switch
+                {
+                    ScheduleRequestType.LeaveRequest => "xin nghỉ",
+                    ScheduleRequestType.ShiftSwap => "đổi ca",
+                    ScheduleRequestType.CheckInIncident => "sự cố vào ca",
+                    ScheduleRequestType.CheckOutIncident => "sự cố ra ca",
+                    ScheduleRequestType.Overtime => "tăng ca (OT)",
+                    _ => "yêu cầu ca làm việc"
+                };
+                await _notificationService.NotifyTenantOwnersAsync(
+                    schedule.TenantId,
+                    "REQUEST_SUBMITTED",
+                    "Đơn yêu cầu ca làm việc mới",
+                    $"{empName} vừa gửi đơn {typeLabel} ngày {schedule.WorkDate:dd/MM/yyyy}.",
+                    "/store-owner/employees/approval-requests",
+                    cancellationToken);
+            }
+            catch
+            {
+                // Không làm gián đoạn luồng gửi đơn
+            }
+        }
+
         return MapToDto(created ?? request);
     }
 
@@ -207,6 +240,7 @@ public class ScheduleApprovalService : IScheduleApprovalService
             request.Status = ScheduleApprovalStatus.Rejected;
             _approvalRepository.Update(request);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
+            await NotifyRequestReviewedSafeAsync(request, schedule, false, cancellationToken);
             return true;
         }
 
@@ -321,8 +355,50 @@ public class ScheduleApprovalService : IScheduleApprovalService
         _scheduleRepository.Update(schedule);
         _approvalRepository.Update(request);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+        await NotifyRequestReviewedSafeAsync(request, schedule, true, cancellationToken);
 
         return true;
+    }
+
+    private async Task NotifyRequestReviewedSafeAsync(
+        ScheduleApprovalRequest request,
+        EmployeeSchedule schedule,
+        bool isApproved,
+        CancellationToken cancellationToken)
+    {
+        if (_notificationService == null) return;
+        try
+        {
+            var emp = request.Employee ?? await _employeeRepository.GetByIdAsync(request.EmployeeId, cancellationToken);
+            if (string.IsNullOrWhiteSpace(emp?.UserId)) return;
+
+            var typeLabel = request.RequestType switch
+            {
+                ScheduleRequestType.LeaveRequest => "xin nghỉ",
+                ScheduleRequestType.ShiftSwap => "đổi ca",
+                ScheduleRequestType.CheckInIncident => "sự cố vào ca",
+                ScheduleRequestType.CheckOutIncident => "sự cố ra ca",
+                ScheduleRequestType.Overtime => "tăng ca (OT)",
+                _ => "yêu cầu ca làm việc"
+            };
+            var title = isApproved ? "Đơn yêu cầu đã được duyệt" : "Đơn yêu cầu bị từ chối";
+            var msg = isApproved
+                ? $"Đơn {typeLabel} ngày {schedule.WorkDate:dd/MM/yyyy} của bạn đã được phê duyệt."
+                : $"Đơn {typeLabel} ngày {schedule.WorkDate:dd/MM/yyyy} của bạn đã bị từ chối.";
+
+            await _notificationService.CreateAndPushAsync(
+                schedule.TenantId,
+                new[] { emp.UserId },
+                "REQUEST_REVIEWED",
+                title,
+                msg,
+                "/employee/attendance",
+                cancellationToken);
+        }
+        catch
+        {
+            // Không làm gián đoạn luồng duyệt đơn
+        }
     }
 
     public async Task<ScheduleApprovalRequestDto> UpdateRequestAsync(

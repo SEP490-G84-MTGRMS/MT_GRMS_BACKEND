@@ -69,6 +69,7 @@ public class FakeTenantRepository : ITenantRepository
     public Task<int> GetGracePeriodCountAsync(CancellationToken cancellationToken = default) => Task.FromResult(Tenants.Count(t => !t.IsDeleted && t.Status == "GRACE_PERIOD"));
     public Task<int> GetLockedCountAsync(CancellationToken cancellationToken = default) => Task.FromResult(Tenants.Count(t => !t.IsDeleted && (t.Status == "LOCKED" || t.LockType != null)));
     public Task<int> GetTotalBranchesCountAsync(CancellationToken cancellationToken = default) => Task.FromResult(Tenants.Sum(t => t.Branches.Count));
+    public Task<int> GetSuccessfulUpgradeCountAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
     public Task<IReadOnlyList<Tenant>> GetUrgentAlertTenantsAsync(int limit = 10, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<Tenant>>(Tenants.Take(limit).ToList());
     public Task<IReadOnlyList<Tenant>> GetAllActiveWithPlanAsync(CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<Tenant>>(Tenants.ToList());
 

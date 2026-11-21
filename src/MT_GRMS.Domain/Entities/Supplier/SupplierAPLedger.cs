@@ -17,4 +17,10 @@ public class SupplierAPLedger : BaseTenantEntity
     public decimal BalanceAfter { get; set; }
     public string CreatedByName { get; set; } = string.Empty;
     public string? IdempotencyKey { get; set; }
+
+    /// <summary>CASH | BANK_TRANSFER | OTHER — dùng cho PaymentVoucher.</summary>
+    public string? PaymentMethod { get; set; }
+
+    /// <summary>Mã giao dịch CK / số phiếu giấy.</summary>
+    public string? ReferenceNo { get; set; }
 }

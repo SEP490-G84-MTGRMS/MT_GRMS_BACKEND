@@ -1,5 +1,6 @@
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers.Dtos;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Application.Suppliers;
 
@@ -21,7 +22,7 @@ public interface ISupplierService
     Task<SupplierReturnPolicyDto> GetReturnPolicyAsync(Guid supplierId, CancellationToken cancellationToken = default);
     Task<SupplierReturnPolicyDto> UpsertReturnPolicyAsync(Guid supplierId, UpdateSupplierReturnPolicyCommand command, CancellationToken cancellationToken = default);
 
-    Task<PagedResult<SupplierAPLedgerDto>> GetAPLedgerAsync(Guid supplierId, DateTime? fromDate, DateTime? toDate, int pageIndex = 1, int pageSize = 20, CancellationToken cancellationToken = default);
+    Task<PagedResult<SupplierAPLedgerDto>> GetAPLedgerAsync(Guid supplierId, DateTime? fromDate, DateTime? toDate, int pageIndex = 1, int pageSize = 20, CancellationToken cancellationToken = default, APDocType? docType = null);
     Task<SupplierAPLedgerDto> RecordAPTransactionAsync(RecordAPTransactionCommand command, CancellationToken cancellationToken = default);
     Task<SupplierApSummaryDto> GetApSummaryAsync(Guid supplierId, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<SupplierBranchAssignmentDto>> GetAssignedBranchesAsync(Guid supplierId, CancellationToken cancellationToken = default);

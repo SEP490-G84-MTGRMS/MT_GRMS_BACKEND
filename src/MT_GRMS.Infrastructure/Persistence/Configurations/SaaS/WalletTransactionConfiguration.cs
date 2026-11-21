@@ -24,10 +24,21 @@ public class WalletTransactionConfiguration : IEntityTypeConfiguration<WalletTra
         builder.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("SUCCESS");
         builder.Property(x => x.ReferenceCode).HasMaxLength(100);
         builder.Property(x => x.Metadata).HasMaxLength(1000);
+        builder.Property(x => x.OrderCode).HasMaxLength(50);
+        builder.Property(x => x.RequestedAmount).HasPrecision(18, 2);
+        builder.Property(x => x.TransferContent).HasMaxLength(100);
+        builder.Property(x => x.ReconciliationOrderCode).HasMaxLength(50);
 
         builder.HasIndex(x => x.TenantId);
         builder.HasIndex(x => x.TransactionCode).IsUnique();
         builder.HasIndex(x => x.ReferenceCode);
+        builder.HasIndex(x => x.OrderCode).IsUnique();
+        builder.HasIndex(x => x.SepayTransactionId).IsUnique();
+        builder.HasIndex(x => x.ReferenceCode, "IX_WalletTransactions_SepayReference")
+            .IsUnique()
+            .HasFilter("""
+                "Type" = 'TOPUP' AND "Status" IN ('SUCCESS', 'REVIEW') AND "ReferenceCode" IS NOT NULL AND "ReferenceCode" <> ''
+                """);
 
         builder.HasOne(x => x.Tenant)
             .WithMany(t => t.WalletTransactions)

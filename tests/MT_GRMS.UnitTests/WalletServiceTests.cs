@@ -75,10 +75,14 @@ public class WalletServiceTests
         Assert.Contains("WAL", result.TransferContent);
         Assert.Contains("https://qr.sepay.vn/img", result.QrUrl);
 
-        var savedOrder = await context.WalletTopupOrders.FirstOrDefaultAsync(o => o.OrderCode == result.OrderCode);
+        var savedOrder = await context.WalletTransactions.SingleAsync(o => o.OrderCode == result.OrderCode);
         Assert.NotNull(savedOrder);
         Assert.Equal("PENDING", savedOrder.Status);
         Assert.Equal("tenant-001", savedOrder.TenantId);
+        Assert.Equal("PENDING", (await service.GetTopupOrderStatusAsync("tenant-001", result.OrderCode))!.Status);
+        Assert.Null(await service.GetTopupOrderStatusAsync("other-tenant", result.OrderCode));
+        Assert.Empty(await service.GetWalletTransactionsAsync("tenant-001"));
+        Assert.Equal(0, (await service.GetWalletBalanceAsync("tenant-001")).TotalTopup);
     }
 
     [Fact]
@@ -107,21 +111,19 @@ public class WalletServiceTests
         };
         context.Tenants.Add(tenant);
 
-        var order = new WalletTopupOrder
+        var order = new WalletTransaction
         {
             TenantId = "tenant-001",
             OrderCode = "839201",
+            TransactionCode = "WAL-ORDER-839201",
+            Type = "TOPUP",
             Amount = 1000000,
+            RequestedAmount = 1000000,
             TransferContent = "WAL 839201",
-            BankCode = "MBBank",
-            BankName = "MB Bank",
-            AccountNumber = "190065228888",
-            AccountName = "MT-GRMS",
-            QrUrl = "https://qr.sepay.vn/img?...",
             Status = "PENDING",
             ExpiresAt = DateTime.UtcNow.AddMinutes(15)
         };
-        context.WalletTopupOrders.Add(order);
+        context.WalletTransactions.Add(order);
         await context.SaveChangesAsync();
 
         var service = new WalletService(context, CreateDefaultSettings());
@@ -147,15 +149,26 @@ public class WalletServiceTests
         var updatedTenant = await context.Tenants.FindAsync("tenant-001");
         Assert.Equal(1200000, updatedTenant!.WalletBalance);
 
-        var updatedOrder = await context.WalletTopupOrders.FirstOrDefaultAsync(o => o.OrderCode == "839201");
+        var updatedOrder = await service.GetTopupOrderStatusAsync("tenant-001", "839201");
         Assert.Equal("COMPLETED", updatedOrder!.Status);
 
-        var tx = await context.WalletTransactions.FirstOrDefaultAsync(t => t.ReferenceCode == "FT2401019912");
+        var tx = await context.WalletTransactions.SingleAsync();
         Assert.NotNull(tx);
+        Assert.Equal(order.Id, tx.Id);
+        Assert.Equal("FT2401019912", tx.ReferenceCode);
+        Assert.Equal("SUCCESS", tx.Status);
         Assert.Equal("TOPUP", tx.Type);
         Assert.Equal(1000000, tx.Amount);
         Assert.Equal(200000, tx.BalanceBefore);
         Assert.Equal(1200000, tx.BalanceAfter);
+
+        webhookPayload.Id++;
+        webhookPayload.ReferenceCode = "FT_SECOND_TRANSFER";
+        Assert.True((await service.ProcessSepayWebhookAsync(webhookPayload)).Success);
+        var review = await context.WalletTransactions.SingleAsync(t => t.Status == "REVIEW");
+        Assert.Equal(order.OrderCode, review.ReconciliationOrderCode);
+        Assert.Equal(1200000, updatedTenant.WalletBalance);
+        Assert.Single(await service.GetWalletTransactionsAsync("tenant-001"));
     }
 
     [Fact]
@@ -282,6 +295,170 @@ public class WalletServiceTests
             service.DeductWalletAsync("tenant-001", 2000000, "Mua gói", "SUB-002"));
 
         Assert.Equal("INSUFFICIENT_WALLET_BALANCE", ex.Message);
+    }
+
+    [Fact]
+    public async Task CreateTopupOrder_TenantNotFound_ThrowsKeyNotFoundException()
+    {
+        using var context = CreateInMemoryDbContext();
+        var service = new WalletService(context, CreateDefaultSettings());
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            service.CreateTopupOrderAsync("unknown-tenant", new CreateTopupOrderRequest(100000)));
+    }
+
+    [Fact]
+    public async Task CreateTopupOrder_EmptySettings_FallsBackToDefaultValues()
+    {
+        using var context = CreateInMemoryDbContext();
+        var tenant = new Tenant { Id = "tenant-001", Name = "Store", Code = "ST1" };
+        context.Tenants.Add(tenant);
+        await context.SaveChangesAsync();
+
+        var emptySettings = Options.Create(new SePaySettings());
+        var service = new WalletService(context, emptySettings);
+
+        var result = await service.CreateTopupOrderAsync("tenant-001", new CreateTopupOrderRequest(50000));
+        Assert.NotNull(result);
+        Assert.Equal("MBBank", result.BankCode);
+        Assert.Equal("190065228888", result.AccountNumber);
+    }
+
+    [Fact]
+    public async Task GetTopupOrderStatus_ShouldHandle_NotFound_Expired_AndCompleted()
+    {
+        using var context = CreateInMemoryDbContext();
+        var tenant = new Tenant { Id = "tenant-001", Name = "Store", Code = "ST1", WalletBalance = 50000 };
+        context.Tenants.Add(tenant);
+
+        var pendingExpiredOrder = new WalletTopupOrder
+        {
+            TenantId = "tenant-001",
+            OrderCode = "111222",
+            Amount = 100000,
+            TransferContent = "WAL 111222",
+            Status = "PENDING",
+            ExpiresAt = DateTime.UtcNow.AddMinutes(-5) // Expired
+        };
+        context.WalletTopupOrders.Add(pendingExpiredOrder);
+        await context.SaveChangesAsync();
+
+        var service = new WalletService(context, CreateDefaultSettings());
+
+        // Not found
+        var notFound = await service.GetTopupOrderStatusAsync("tenant-001", "999999");
+        Assert.Null(notFound);
+
+        // Expired order
+        var expired = await service.GetTopupOrderStatusAsync("tenant-001", "111222");
+        Assert.NotNull(expired);
+        Assert.Equal("EXPIRED", expired.Status);
+
+        // Unknown tenantId fallback
+        var withNoTenant = await service.GetTopupOrderStatusAsync("unknown", "111222");
+        Assert.NotNull(withNoTenant);
+    }
+
+    [Fact]
+    public async Task GetWalletBalance_And_Transactions_ShouldHandle_VariousFilters()
+    {
+        using var context = CreateInMemoryDbContext();
+        var service = new WalletService(context, CreateDefaultSettings());
+
+        // Unknown tenant
+        var emptyBalance = await service.GetWalletBalanceAsync("unknown");
+        Assert.Equal(0, emptyBalance.WalletBalance);
+        var emptyTx = await service.GetWalletTransactionsAsync("unknown");
+        Assert.Empty(emptyTx);
+
+        // Tenant with transactions
+        var tenant = new Tenant { Id = "tenant-001", Code = "ST1", WalletBalance = 700000 };
+        context.Tenants.Add(tenant);
+        context.WalletTransactions.AddRange(
+            new WalletTransaction
+            {
+                TenantId = "tenant-001",
+                TransactionCode = "TX1",
+                Type = "TOPUP",
+                Amount = 1000000,
+                Status = "SUCCESS"
+            },
+            new WalletTransaction
+            {
+                TenantId = "tenant-001",
+                TransactionCode = "TX2",
+                Type = "PURCHASE_PLAN",
+                Amount = 200000,
+                Status = "SUCCESS"
+            },
+            new WalletTransaction
+            {
+                TenantId = "tenant-001",
+                TransactionCode = "TX3",
+                Type = "PURCHASE_ADDON",
+                Amount = 100000,
+                Status = "SUCCESS"
+            }
+        );
+        await context.SaveChangesAsync();
+
+        var balance = await service.GetWalletBalanceAsync("tenant-001");
+        Assert.Equal(700000, balance.WalletBalance);
+        Assert.Equal(1000000, balance.TotalTopup);
+        Assert.Equal(300000, balance.TotalSpent);
+
+        // Transactions filtered by type
+        var topupTx = await service.GetWalletTransactionsAsync("tenant-001", "TOPUP");
+        Assert.Single(topupTx);
+
+        // Transactions with "ALL" filter
+        var allTx = await service.GetWalletTransactionsAsync("tenant-001", "ALL");
+        Assert.Equal(3, allTx.Count);
+    }
+
+    [Fact]
+    public async Task ProcessSepayWebhook_CandidateCodeFallback_And_NoTenantFound()
+    {
+        using var context = CreateInMemoryDbContext();
+        var service = new WalletService(context, CreateDefaultSettings());
+
+        // No tenant in DB at all
+        var payloadNoTenant = new SepayWebhookPayload
+        {
+            Id = 1,
+            TransferType = "in",
+            TransferAmount = 100000,
+            Content = "Khong co code gi ca"
+        };
+        var resNoTenant = await service.ProcessSepayWebhookAsync(payloadNoTenant);
+        Assert.False(resNoTenant.Success);
+
+        // Tenant found via candidate code matching Tenant.Code
+        var tenant = new Tenant { Id = "tenant-code-01", Code = "STORE99", WalletBalance = 0 };
+        context.Tenants.Add(tenant);
+        await context.SaveChangesAsync();
+
+        var payloadStore = new SepayWebhookPayload
+        {
+            Id = 2,
+            TransferType = "in",
+            TransferAmount = 250000,
+            Content = "WAL STORE99 nap tien",
+            ReferenceCode = null // Will fallback to SEPAY-2
+        };
+        var resStore = await service.ProcessSepayWebhookAsync(payloadStore);
+        Assert.True(resStore.Success);
+        Assert.Equal("tenant-code-01", resStore.TenantId);
+    }
+
+    [Fact]
+    public async Task DeductWallet_TenantNotFound_ThrowsKeyNotFoundException()
+    {
+        using var context = CreateInMemoryDbContext();
+        var service = new WalletService(context, CreateDefaultSettings());
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            service.DeductWalletAsync("unknown", 50000, "Desc", "REF01"));
     }
 }
 

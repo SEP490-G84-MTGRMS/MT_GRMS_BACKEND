@@ -10,7 +10,7 @@ using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Api.Controllers;
 
-[Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+[Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
 [ApiController]
 [Route("api/schedules")]
 [Route("api/employee-schedules")]
@@ -28,7 +28,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Tra cứu danh sách lịch làm việc theo chi nhánh, nhân viên, dải ngày và trạng thái
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpGet]
     public async Task<IActionResult> GetSchedules(
         [FromQuery] ScheduleQueryFilter filter,
@@ -41,7 +41,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Tra cứu lịch làm việc cá nhân của tài khoản nhân viên đang đăng nhập
     /// </summary>
-    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+    [Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
     [HttpGet("my-schedule")]
     public async Task<IActionResult> GetMySchedule(
         [FromQuery] DateTime? fromDate,
@@ -64,7 +64,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Lấy chi tiết lịch làm việc theo ID
     /// </summary>
-    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+    [Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
     [HttpGet("{id:guid}")]
     public async Task<IActionResult> GetById(
         Guid id,
@@ -82,9 +82,8 @@ public class SchedulesController : BaseApiController
                            ?? User.FindFirst("role")?.Value
                            ?? _tenantContext.CurrentRole;
 
-            var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner) || User.IsInRole(SystemRoles.Admin)
-                              || string.Equals(currentRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase)
-                              || string.Equals(currentRole, SystemRoles.Admin, StringComparison.OrdinalIgnoreCase);
+            var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner)
+                              || string.Equals(currentRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase);
 
             if (!isOwnerOrAdmin)
             {
@@ -105,7 +104,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Phân ca làm việc đơn lẻ cho nhân viên
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost]
     public async Task<IActionResult> Create(
         [FromBody] CreateScheduleItemRequest request,
@@ -129,7 +128,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Phân ca làm việc hàng loạt (Batch) theo tuần/tháng có kiểm tra chống xung đột thời gian
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("batch")]
     public async Task<IActionResult> BatchCreate(
         [FromBody] BatchCreateScheduleRequest request,
@@ -153,7 +152,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Đặt lịch lặp lại cho nhân viên (khi không có ngày kết thúc: tự động tạo lịch đến hết tháng hiện tại và tháng sau; khi có ngày kết thúc: tạo lịch đến ngày chỉ định)
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("recurring")]
     public async Task<IActionResult> CreateRecurring(
         [FromBody] CreateRecurringScheduleRequest request,
@@ -177,7 +176,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Cập nhật thông tin ca làm việc
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(
         Guid id,
@@ -202,7 +201,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Xóa ca làm việc (chỉ xóa được ca chưa hoàn thành và chưa chấm công)
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(
         Guid id,
@@ -226,7 +225,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Ban hành ca làm việc (Publish) theo tuần cho chi nhánh
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("publish")]
     public async Task<IActionResult> Publish(
         [FromBody] PublishSchedulesRequest request,
@@ -250,7 +249,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Chấm công thủ công (Đi làm, Nghỉ phép có lương, Nghỉ phép không lương)
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("{id:guid}/attendance")]
     [HttpPut("{id:guid}/attendance")]
     public async Task<IActionResult> RecordAttendance(
@@ -280,7 +279,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Hủy chấm công và đưa ca làm việc về trạng thái chờ vào ca (Published)
     /// </summary>
-    [Authorize(Roles = SystemRoles.OwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("{id:guid}/attendance/reset")]
     [HttpDelete("{id:guid}/attendance")]
     public async Task<IActionResult> ResetAttendance(
@@ -336,7 +335,7 @@ public class SchedulesController : BaseApiController
         var currentUserId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value
             ?? throw new UnauthorizedAccessException("Không tìm thấy thông tin người dùng.");
 
-        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner) || User.IsInRole(SystemRoles.Admin);
+        var isOwnerOrAdmin = User.IsInRole(SystemRoles.StoreOwner);
         var result = await approvalService.GetRequestsByScheduleIdAsync(scheduleId, currentUserId, isOwnerOrAdmin, cancellationToken);
         return Ok(ApiResponse<IReadOnlyList<ScheduleApprovalRequestDto>>.Ok(result));
     }
@@ -363,7 +362,7 @@ public class SchedulesController : BaseApiController
     /// <summary>
     /// Nhân viên tự chấm công vào ca trực của chính mình (khi chưa đăng ký FaceID)
     /// </summary>
-    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
+    [Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
     [HttpPost("{id:guid}/self-check-in")]
     public async Task<IActionResult> SelfCheckIn(
         Guid id,

@@ -23,6 +23,14 @@ public class WalletTransaction : BaseEntity<string>
     public string Status { get; set; } = "SUCCESS"; // SUCCESS, PENDING, FAILED
     public string? ReferenceCode { get; set; } // Mã tham chiếu từ ngân hàng hoặc SePay
     public string? Metadata { get; set; }
+    public string? OrderCode { get; set; }
+    public decimal? RequestedAmount { get; set; }
+    public string? TransferContent { get; set; }
+    public string? TopupDetails { get; set; }
+    public DateTime? ExpiresAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+    public long? SepayTransactionId { get; set; }
+    public string? ReconciliationOrderCode { get; set; }
 
     // Navigation
     public Tenant? Tenant { get; set; }

@@ -85,6 +85,7 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
             ShiftName = "Ca Toàn Thời Gian 24/7",
             PlannedStartTime = TimeSpan.Zero,
             PlannedEndTime = new TimeSpan(23, 59, 59),
+            CheckInTime = DateTime.UtcNow.AddHours(-1),
             Status = ScheduleStatus.Scheduled
         };
 
@@ -96,11 +97,6 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
         shiftRepoMock.Setup(r => r.GenerateNextShiftCodeAsync(_branchId, It.IsAny<CancellationToken>()))
             .ReturnsAsync("SHF-001");
 
-        ShiftParticipant? capturedParticipant = null;
-        shiftRepoMock.Setup(r => r.AddParticipantAsync(It.IsAny<ShiftParticipant>(), It.IsAny<CancellationToken>()))
-            .Callback<ShiftParticipant, CancellationToken>((p, _) => capturedParticipant = p)
-            .Returns(Task.CompletedTask);
-
         var uowMock = new Mock<IUnitOfWork>();
         var shiftService = new ShiftService(shiftRepoMock.Object, uowMock.Object, tenantCtx);
 
@@ -108,12 +104,12 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
         Assert.True(eligibility.IsAllowed);
         Assert.Equal("Phạm Thị Yến", eligibility.EmployeeName);
 
-        await shiftService.OpenShiftAsync(
+        var opened = await shiftService.OpenShiftAsync(
             new MT_GRMS.Application.PosShifts.Dtos.OpenShiftRequest(_branchId, Guid.NewGuid(), "Ca Sáng", 500000m, null),
             detGuid);
 
-        Assert.NotNull(capturedParticipant);
-        Assert.Equal("Phạm Thị Yến", capturedParticipant!.FullName);
+        Assert.Single(opened.Participants!);
+        Assert.Equal("Phạm Thị Yến", opened.Participants![0].FullName);
     }
 
     [Fact]
@@ -322,7 +318,6 @@ public class PosDbSyncOwnerShiftlessAndBranchCatalogTests
         Assert.Null(savedOrder!.ShiftId);
         // Per-order creation must NOT record individual cashbook entries; instead, EOD settlement aggregates and records into Safe!
         cashbookMock.Verify(c => c.GetOrCreateTillAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
-        shiftRepoMock.Verify(r => r.AddParticipantAsync(It.IsAny<ShiftParticipant>(), It.IsAny<CancellationToken>()), Times.Never);
 
         orderRepoMock.Setup(r => r.GetAllOrdersForSummaryAsync(_branchId, null, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<Order> { savedOrder });

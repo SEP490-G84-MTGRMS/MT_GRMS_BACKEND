@@ -645,27 +645,21 @@ public class SupplierService : ISupplierService
         };
     }
 
-    public async Task<PagedResult<SupplierAPLedgerDto>> GetAPLedgerAsync(Guid supplierId, DateTime? fromDate, DateTime? toDate, int pageIndex = 1, int pageSize = 20, CancellationToken cancellationToken = default)
+    public async Task<PagedResult<SupplierAPLedgerDto>> GetAPLedgerAsync(
+        Guid supplierId,
+        DateTime? fromDate,
+        DateTime? toDate,
+        int pageIndex = 1,
+        int pageSize = 20,
+        CancellationToken cancellationToken = default,
+        APDocType? docType = null)
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
 
-        var (items, totalCount) = await _supplierRepository.GetPagedLedgerAsync(supplierId, fromDate, toDate, pageIndex, pageSize, cancellationToken);
+        var (items, totalCount) = await _supplierRepository.GetPagedLedgerAsync(
+            supplierId, fromDate, toDate, pageIndex, pageSize, cancellationToken, docType);
 
-        var dtos = items.Select(l => new SupplierAPLedgerDto
-        {
-            Id = l.Id,
-            SupplierId = l.SupplierId,
-            TransactionDate = l.TransactionDate,
-            DocType = l.DocType,
-            DocNo = l.DocNo,
-            Description = l.Description,
-            Amount = l.Amount,
-            Direction = l.Direction,
-            BalanceAfter = l.BalanceAfter,
-            CreatedByName = l.CreatedByName,
-            IdempotencyKey = l.IdempotencyKey,
-            CreatedAt = l.CreatedAt
-        }).ToList();
+        var dtos = items.Select(MapLedgerDto).ToList();
 
         return new PagedResult<SupplierAPLedgerDto>
         {
@@ -688,21 +682,7 @@ public class SupplierService : ISupplierService
             if (existingLedger != null)
             {
                 // Đã tồn tại giao dịch này trước đó -> Idempotent replay, không cộng dồn công nợ lần nữa
-                return new SupplierAPLedgerDto
-                {
-                    Id = existingLedger.Id,
-                    SupplierId = existingLedger.SupplierId,
-                    TransactionDate = existingLedger.TransactionDate,
-                    DocType = existingLedger.DocType,
-                    DocNo = existingLedger.DocNo,
-                    Description = existingLedger.Description,
-                    Amount = existingLedger.Amount,
-                    Direction = existingLedger.Direction,
-                    BalanceAfter = existingLedger.BalanceAfter,
-                    CreatedByName = existingLedger.CreatedByName,
-                    IdempotencyKey = existingLedger.IdempotencyKey,
-                    CreatedAt = existingLedger.CreatedAt
-                };
+                return MapLedgerDto(existingLedger);
             }
         }
 
@@ -711,6 +691,32 @@ public class SupplierService : ISupplierService
         {
             throw new NotFoundException("Nhà cung cấp", command.SupplierId);
         }
+
+        // v1: không cho trả vượt dư nợ (PaymentVoucher giảm nợ)
+        if (command.Direction == -1 && command.DocType == APDocType.PaymentVoucher)
+        {
+            if (supplier.CurrentDebt <= 0)
+            {
+                throw new BusinessException("AP_NO_DEBT", "Nhà cung cấp không còn dư nợ để thanh toán.");
+            }
+
+            if (command.Amount > supplier.CurrentDebt)
+            {
+                throw new BusinessException(
+                    "AP_OVERPAY",
+                    $"Số tiền thanh toán ({command.Amount:N0}) vượt dư nợ hiện tại ({supplier.CurrentDebt:N0}).");
+            }
+        }
+
+        var docNo = command.DocNo?.Trim() ?? string.Empty;
+        if (command.DocType == APDocType.PaymentVoucher && string.IsNullOrWhiteSpace(docNo))
+        {
+            docNo = await GeneratePaymentDocNoAsync(cancellationToken);
+        }
+
+        var paymentMethod = string.IsNullOrWhiteSpace(command.PaymentMethod)
+            ? null
+            : command.PaymentMethod.Trim().ToUpperInvariant();
 
         // Tính toán biến động công nợ (+1: Tăng nợ, -1: Giảm nợ)
         decimal delta = command.Direction == 1 ? command.Amount : -command.Amount;
@@ -721,13 +727,15 @@ public class SupplierService : ISupplierService
             SupplierId = command.SupplierId,
             TransactionDate = command.TransactionDate ?? DateTime.UtcNow,
             DocType = command.DocType,
-            DocNo = command.DocNo,
+            DocNo = docNo,
             Description = command.Description,
             Amount = command.Amount,
             Direction = command.Direction,
             BalanceAfter = newDebt,
             CreatedByName = string.IsNullOrWhiteSpace(command.CreatedByName) ? "Hệ thống" : command.CreatedByName,
-            IdempotencyKey = command.IdempotencyKey
+            IdempotencyKey = command.IdempotencyKey,
+            PaymentMethod = paymentMethod,
+            ReferenceNo = string.IsNullOrWhiteSpace(command.ReferenceNo) ? null : command.ReferenceNo.Trim()
         };
 
         supplier.CurrentDebt = newDebt;
@@ -736,22 +744,33 @@ public class SupplierService : ISupplierService
         _supplierRepository.Update(supplier);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return new SupplierAPLedgerDto
-        {
-            Id = ledger.Id,
-            SupplierId = ledger.SupplierId,
-            TransactionDate = ledger.TransactionDate,
-            DocType = ledger.DocType,
-            DocNo = ledger.DocNo,
-            Description = ledger.Description,
-            Amount = ledger.Amount,
-            Direction = ledger.Direction,
-            BalanceAfter = ledger.BalanceAfter,
-            CreatedByName = ledger.CreatedByName,
-            IdempotencyKey = ledger.IdempotencyKey,
-            CreatedAt = ledger.CreatedAt
-        };
+        return MapLedgerDto(ledger);
     }
+
+    private async Task<string> GeneratePaymentDocNoAsync(CancellationToken cancellationToken)
+    {
+        var prefix = $"PAY-{DateTime.UtcNow:yyyyMMdd}-";
+        var count = await _supplierRepository.CountLedgersByDocNoPrefixAsync(prefix, cancellationToken);
+        return $"{prefix}{(count + 1):D4}";
+    }
+
+    private static SupplierAPLedgerDto MapLedgerDto(SupplierAPLedger ledger) => new()
+    {
+        Id = ledger.Id,
+        SupplierId = ledger.SupplierId,
+        TransactionDate = ledger.TransactionDate,
+        DocType = ledger.DocType,
+        DocNo = ledger.DocNo,
+        Description = ledger.Description,
+        Amount = ledger.Amount,
+        Direction = ledger.Direction,
+        BalanceAfter = ledger.BalanceAfter,
+        CreatedByName = ledger.CreatedByName,
+        IdempotencyKey = ledger.IdempotencyKey,
+        PaymentMethod = ledger.PaymentMethod,
+        ReferenceNo = ledger.ReferenceNo,
+        CreatedAt = ledger.CreatedAt
+    };
 
     public async Task<SupplierApSummaryDto> GetApSummaryAsync(Guid supplierId, CancellationToken cancellationToken = default)
     {

@@ -1,7 +1,7 @@
 using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.HR.AttendancePolicies.Dtos;
-using MT_GRMS.Domain.Entities.HR;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.HR.AttendancePolicies;
@@ -11,21 +11,15 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
     private const string DefaultConversionRulesJson =
         "[{\"id\":\"rule-1\",\"type\":\"range\",\"fromHours\":1,\"fromMinutes\":0,\"toHours\":4,\"toMinutes\":30,\"workUnits\":0.5,\"workUnitsLabel\":\"nửa công\"},{\"id\":\"rule-2\",\"type\":\"gte\",\"fromHours\":4,\"fromMinutes\":30,\"workUnits\":1,\"workUnitsLabel\":\"1 công\"}]";
 
-    private readonly IBranchAttendancePolicyRepository _repository;
     private readonly IBranchRepository _branchRepository;
     private readonly IUnitOfWork _unitOfWork;
-    private readonly ITenantContext _tenantContext;
 
     public BranchAttendancePolicyService(
-        IBranchAttendancePolicyRepository repository,
         IBranchRepository branchRepository,
-        IUnitOfWork unitOfWork,
-        ITenantContext tenantContext)
+        IUnitOfWork unitOfWork)
     {
-        _repository = repository;
         _branchRepository = branchRepository;
         _unitOfWork = unitOfWork;
-        _tenantContext = tenantContext;
     }
 
     public async Task<AttendancePolicyResponse> GetByBranchIdAsync(Guid branchId, CancellationToken cancellationToken = default)
@@ -36,8 +30,7 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
             throw new NotFoundException("Branch", branchId);
         }
 
-        var policy = await _repository.GetByBranchIdAsync(branchId, cancellationToken);
-        if (policy == null)
+        if (!branch.IsAttendancePolicyCustomized)
         {
             // Trả về chính sách mặc định tiêu chuẩn nếu chi nhánh chưa từng lưu cấu hình riêng
             return new AttendancePolicyResponse(
@@ -55,7 +48,7 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
             );
         }
 
-        return MapToResponse(policy, branch.Name, isCustomized: true);
+        return MapToResponse(branch);
     }
 
     public async Task<AttendancePolicyResponse> UpsertPolicyAsync(
@@ -69,41 +62,21 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
             throw new NotFoundException("Branch", branchId);
         }
 
-        var policy = await _repository.GetByBranchIdAsync(branchId, cancellationToken);
+        branch.StandardDayHours = request.StandardDayHours;
+        branch.IsConvertHoursToDays = request.IsConvertHoursToDays;
+        branch.ConversionRulesJson = string.IsNullOrWhiteSpace(request.ConversionRulesJson)
+            ? DefaultConversionRulesJson
+            : request.ConversionRulesJson;
+        branch.EnableLateThreshold = request.EnableLateThreshold;
+        branch.LateThresholdMinutes = request.LateThresholdMinutes;
+        branch.EnableEarlyLeaveThreshold = request.EnableEarlyLeaveThreshold;
+        branch.EarlyLeaveThresholdMinutes = request.EarlyLeaveThresholdMinutes;
+        branch.IsAttendancePolicyCustomized = true;
 
-        if (policy == null)
-        {
-            policy = new BranchAttendancePolicy
-            {
-                TenantId = _tenantContext.CurrentTenantId,
-                BranchId = branchId,
-                StandardDayHours = request.StandardDayHours,
-                IsConvertHoursToDays = request.IsConvertHoursToDays,
-                ConversionRulesJson = string.IsNullOrWhiteSpace(request.ConversionRulesJson) ? DefaultConversionRulesJson : request.ConversionRulesJson,
-                EnableLateThreshold = request.EnableLateThreshold,
-                LateThresholdMinutes = request.LateThresholdMinutes,
-                EnableEarlyLeaveThreshold = request.EnableEarlyLeaveThreshold,
-                EarlyLeaveThresholdMinutes = request.EarlyLeaveThresholdMinutes
-            };
-
-            await _repository.AddAsync(policy, cancellationToken);
-        }
-        else
-        {
-            policy.StandardDayHours = request.StandardDayHours;
-            policy.IsConvertHoursToDays = request.IsConvertHoursToDays;
-            policy.ConversionRulesJson = string.IsNullOrWhiteSpace(request.ConversionRulesJson) ? DefaultConversionRulesJson : request.ConversionRulesJson;
-            policy.EnableLateThreshold = request.EnableLateThreshold;
-            policy.LateThresholdMinutes = request.LateThresholdMinutes;
-            policy.EnableEarlyLeaveThreshold = request.EnableEarlyLeaveThreshold;
-            policy.EarlyLeaveThresholdMinutes = request.EarlyLeaveThresholdMinutes;
-
-            _repository.Update(policy);
-        }
-
+        _branchRepository.Update(branch);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapToResponse(policy, branch.Name, isCustomized: true);
+        return MapToResponse(branch);
     }
 
     public async Task<CopyAttendancePolicyResultDto> CopyPolicyAsync(
@@ -116,16 +89,16 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
             throw new NotFoundException("Branch", request.SourceBranchId);
         }
 
-        var sourcePolicy = await _repository.GetByBranchIdAsync(request.SourceBranchId, cancellationToken);
-
-        // Lấy thông số nguồn (nếu chưa có thì dùng mặc định)
-        var standardDayHours = sourcePolicy?.StandardDayHours ?? 8.00m;
-        var isConvertHoursToDays = sourcePolicy?.IsConvertHoursToDays ?? true;
-        var conversionRulesJson = sourcePolicy?.ConversionRulesJson ?? DefaultConversionRulesJson;
-        var enableLateThreshold = sourcePolicy?.EnableLateThreshold ?? true;
-        var lateThresholdMinutes = sourcePolicy?.LateThresholdMinutes ?? 0;
-        var enableEarlyLeaveThreshold = sourcePolicy?.EnableEarlyLeaveThreshold ?? true;
-        var earlyLeaveThresholdMinutes = sourcePolicy?.EarlyLeaveThresholdMinutes ?? 0;
+        // Lấy thông số nguồn (nếu chưa cấu hình riêng thì dùng mặc định)
+        var standardDayHours = sourceBranch.IsAttendancePolicyCustomized ? sourceBranch.StandardDayHours : 8.00m;
+        var isConvertHoursToDays = !sourceBranch.IsAttendancePolicyCustomized || sourceBranch.IsConvertHoursToDays;
+        var conversionRulesJson = sourceBranch.IsAttendancePolicyCustomized && !string.IsNullOrWhiteSpace(sourceBranch.ConversionRulesJson)
+            ? sourceBranch.ConversionRulesJson
+            : DefaultConversionRulesJson;
+        var enableLateThreshold = !sourceBranch.IsAttendancePolicyCustomized || sourceBranch.EnableLateThreshold;
+        var lateThresholdMinutes = sourceBranch.IsAttendancePolicyCustomized ? sourceBranch.LateThresholdMinutes : 0;
+        var enableEarlyLeaveThreshold = !sourceBranch.IsAttendancePolicyCustomized || sourceBranch.EnableEarlyLeaveThreshold;
+        var earlyLeaveThresholdMinutes = sourceBranch.IsAttendancePolicyCustomized ? sourceBranch.EarlyLeaveThresholdMinutes : 0;
 
         var copiedTargetIds = new List<Guid>();
 
@@ -139,38 +112,16 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
                 continue; // Bỏ qua chi nhánh không tồn tại trong Tenant
             }
 
-            var targetPolicy = await _repository.GetByBranchIdAsync(targetBranchId, cancellationToken);
+            targetBranch.StandardDayHours = standardDayHours;
+            targetBranch.IsConvertHoursToDays = isConvertHoursToDays;
+            targetBranch.ConversionRulesJson = conversionRulesJson;
+            targetBranch.EnableLateThreshold = enableLateThreshold;
+            targetBranch.LateThresholdMinutes = lateThresholdMinutes;
+            targetBranch.EnableEarlyLeaveThreshold = enableEarlyLeaveThreshold;
+            targetBranch.EarlyLeaveThresholdMinutes = earlyLeaveThresholdMinutes;
+            targetBranch.IsAttendancePolicyCustomized = true;
 
-            if (targetPolicy == null)
-            {
-                targetPolicy = new BranchAttendancePolicy
-                {
-                    TenantId = _tenantContext.CurrentTenantId,
-                    BranchId = targetBranchId,
-                    StandardDayHours = standardDayHours,
-                    IsConvertHoursToDays = isConvertHoursToDays,
-                    ConversionRulesJson = conversionRulesJson,
-                    EnableLateThreshold = enableLateThreshold,
-                    LateThresholdMinutes = lateThresholdMinutes,
-                    EnableEarlyLeaveThreshold = enableEarlyLeaveThreshold,
-                    EarlyLeaveThresholdMinutes = earlyLeaveThresholdMinutes
-                };
-
-                await _repository.AddAsync(targetPolicy, cancellationToken);
-            }
-            else
-            {
-                targetPolicy.StandardDayHours = standardDayHours;
-                targetPolicy.IsConvertHoursToDays = isConvertHoursToDays;
-                targetPolicy.ConversionRulesJson = conversionRulesJson;
-                targetPolicy.EnableLateThreshold = enableLateThreshold;
-                targetPolicy.LateThresholdMinutes = lateThresholdMinutes;
-                targetPolicy.EnableEarlyLeaveThreshold = enableEarlyLeaveThreshold;
-                targetPolicy.EarlyLeaveThresholdMinutes = earlyLeaveThresholdMinutes;
-
-                _repository.Update(targetPolicy);
-            }
-
+            _branchRepository.Update(targetBranch);
             copiedTargetIds.Add(targetBranchId);
         }
 
@@ -184,20 +135,20 @@ public class BranchAttendancePolicyService : IBranchAttendancePolicyService
         );
     }
 
-    private static AttendancePolicyResponse MapToResponse(BranchAttendancePolicy policy, string? branchName, bool isCustomized)
+    private static AttendancePolicyResponse MapToResponse(Branch branch)
     {
         return new AttendancePolicyResponse(
-            Id: policy.Id,
-            BranchId: policy.BranchId,
-            BranchName: branchName ?? policy.Branch?.Name,
-            StandardDayHours: policy.StandardDayHours,
-            IsConvertHoursToDays: policy.IsConvertHoursToDays,
-            ConversionRulesJson: policy.ConversionRulesJson ?? DefaultConversionRulesJson,
-            EnableLateThreshold: policy.EnableLateThreshold,
-            LateThresholdMinutes: policy.LateThresholdMinutes,
-            EnableEarlyLeaveThreshold: policy.EnableEarlyLeaveThreshold,
-            EarlyLeaveThresholdMinutes: policy.EarlyLeaveThresholdMinutes,
-            IsCustomized: isCustomized
+            Id: branch.Id,
+            BranchId: branch.Id,
+            BranchName: branch.Name,
+            StandardDayHours: branch.StandardDayHours,
+            IsConvertHoursToDays: branch.IsConvertHoursToDays,
+            ConversionRulesJson: branch.ConversionRulesJson ?? DefaultConversionRulesJson,
+            EnableLateThreshold: branch.EnableLateThreshold,
+            LateThresholdMinutes: branch.LateThresholdMinutes,
+            EnableEarlyLeaveThreshold: branch.EnableEarlyLeaveThreshold,
+            EarlyLeaveThresholdMinutes: branch.EarlyLeaveThresholdMinutes,
+            IsCustomized: branch.IsAttendancePolicyCustomized
         );
     }
 }

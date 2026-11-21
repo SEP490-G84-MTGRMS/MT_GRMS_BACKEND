@@ -20,6 +20,8 @@ public class SupplierAPLedgerConfiguration : IEntityTypeConfiguration<SupplierAP
         builder.Property(x => x.BalanceAfter).HasColumnType("decimal(18,2)").IsRequired();
         builder.Property(x => x.CreatedByName).HasMaxLength(150).IsRequired();
         builder.Property(x => x.IdempotencyKey).HasMaxLength(150);
+        builder.Property(x => x.PaymentMethod).HasMaxLength(30);
+        builder.Property(x => x.ReferenceNo).HasMaxLength(100);
 
         builder.HasIndex(x => new { x.TenantId, x.SupplierId, x.TransactionDate });
         builder.HasIndex(x => new { x.TenantId, x.IdempotencyKey })

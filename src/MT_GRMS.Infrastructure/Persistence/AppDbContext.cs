@@ -40,7 +40,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<TenantUser> TenantUsers { get; set; } = null!;
     public virtual DbSet<AuditLog> AuditLogs { get; set; } = null!;
     public virtual DbSet<WalletTransaction> WalletTransactions { get; set; } = null!;
-    public virtual DbSet<WalletTopupOrder> WalletTopupOrders { get; set; } = null!;
+    public virtual DbSet<MT_GRMS.Domain.Entities.SaaS.PlatformSetting> PlatformSettings { get; set; } = null!;
 
     // 2. Phân hệ Catalog & Hàng hóa
     public virtual DbSet<Category> Categories { get; set; } = null!;
@@ -49,6 +49,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<BranchProduct> BranchProducts { get; set; } = null!;
     public virtual DbSet<BranchProductUnitPrice> BranchProductUnitPrices { get; set; } = null!;
     public virtual DbSet<ProductPriceHistory> ProductPriceHistories { get; set; } = null!;
+    public virtual DbSet<MasterProduct> MasterProducts { get; set; } = null!;
+    public virtual DbSet<MasterProductUnit> MasterProductUnits { get; set; } = null!;
 
     // 3. Phân hệ Chi nhánh, Kho & Điều chuyển (tồn theo lô)
     public virtual DbSet<Branch> Branches { get; set; } = null!;
@@ -59,7 +61,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<TransferRequestDetail> TransferRequestDetails { get; set; } = null!;
     public virtual DbSet<TransferStatusHistory> TransferStatusHistories { get; set; } = null!;
     public virtual DbSet<Batch> Batches { get; set; } = null!;
-    public virtual DbSet<StockOnHand> StockOnHands { get; set; } = null!;
+    // StockOnHands đã drop — sổ live duy nhất là BranchStocks.
     public virtual DbSet<Stocktake> Stocktakes { get; set; } = null!;
     public virtual DbSet<StocktakeLine> StocktakeLines { get; set; } = null!;
     public virtual DbSet<RepackOrder> RepackOrders { get; set; } = null!;
@@ -83,6 +85,7 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<SupplierReturnPolicy> SupplierReturnPolicies { get; set; } = null!;
     public virtual DbSet<SupplierReturnPolicyCategoryCostShare> SupplierReturnPolicyCategoryCostShares { get; set; } = null!;
     public virtual DbSet<OutboxMessage> OutboxMessages { get; set; } = null!;
+    public virtual DbSet<Notification> Notifications { get; set; } = null!;
 
     // 5. Phân hệ Khách hàng, Khuyến mãi & Bán lẻ POS (4 bảng)
     public virtual DbSet<Customer> Customers { get; set; } = null!;
@@ -99,13 +102,8 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<FinanceAccount> FinanceAccounts { get; set; } = null!;
     public virtual DbSet<ShiftZReport> ShiftZReports { get; set; } = null!;
     public virtual DbSet<ShiftCashMovement> ShiftCashMovements { get; set; } = null!;
-    public virtual DbSet<ShiftParticipant> ShiftParticipants { get; set; } = null!;
-    public virtual DbSet<ShiftCloseConfirmation> ShiftCloseConfirmations { get; set; } = null!;
     public virtual DbSet<BusinessDayClosing> BusinessDayClosings { get; set; } = null!;
     public virtual DbSet<ExpenseVoucher> ExpenseVouchers { get; set; } = null!;
-    public virtual DbSet<StorePaymentConfig> StorePaymentConfigs { get; set; } = null!;
-    public virtual DbSet<PaymentAccount> PaymentAccounts { get; set; } = null!;
-    public virtual DbSet<BranchPaymentAccount> BranchPaymentAccounts { get; set; } = null!;
     public virtual DbSet<PaymentTransaction> PaymentTransactions { get; set; } = null!;
     public virtual DbSet<IdempotencyRecord> IdempotencyRecords { get; set; } = null!;
     public virtual DbSet<MT_GRMS.Infrastructure.Services.RegistrationOtpChallenge> RegistrationOtpChallenges { get; set; } = null!;
@@ -121,7 +119,6 @@ public partial class AppDbContext : DbContext
     public virtual DbSet<ScheduleApprovalRequest> ScheduleApprovalRequests { get; set; } = null!;
     public virtual DbSet<EmployeeAllowance> EmployeeAllowances { get; set; } = null!;
     public virtual DbSet<ShiftConfig> ShiftConfigs { get; set; } = null!;
-    public virtual DbSet<BranchAttendancePolicy> BranchAttendancePolicies { get; set; } = null!;
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

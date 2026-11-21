@@ -44,6 +44,7 @@ public class AuthService : IAuthService
     private readonly IEmailService? _emailService;
     private readonly IRegistrationOtpStore? _registrationOtpStore;
     private readonly IEmployeeRepository? _employeeRepository;
+    private readonly Admin.Services.IPlatformSettingService? _platformSettingService;
 
     public AuthService(
         IUserRepository userRepository,
@@ -51,7 +52,8 @@ public class AuthService : IAuthService
         IPasswordHasher? passwordHasher = null,
         IEmailService? emailService = null,
         IRegistrationOtpStore? registrationOtpStore = null,
-        IEmployeeRepository? employeeRepository = null)
+        IEmployeeRepository? employeeRepository = null,
+        Admin.Services.IPlatformSettingService? platformSettingService = null)
     {
         _userRepository = userRepository;
         _configuration = configuration;
@@ -59,6 +61,7 @@ public class AuthService : IAuthService
         _emailService = emailService;
         _registrationOtpStore = registrationOtpStore;
         _employeeRepository = employeeRepository;
+        _platformSettingService = platformSettingService;
     }
 
     public async Task<LoginResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken = default)
@@ -492,7 +495,7 @@ public class AuthService : IAuthService
         ArgumentNullException.ThrowIfNull(request);
         AuthRequestValidation.EnsureValid(new RegisterTenantRequestValidator(), request);
 
-        var userEmail = request.Email.Trim().ToLowerInvariant();
+        var userEmail = (request.Email ?? throw new ArgumentException("Vui lòng nhập email.")).Trim().ToLowerInvariant();
         var normalizedPhone = NormalizePhoneKey(request.Phone);
         if (string.IsNullOrWhiteSpace(normalizedPhone))
             throw new ArgumentException("Số điện thoại không hợp lệ.");
@@ -535,7 +538,7 @@ public class AuthService : IAuthService
             throw new ArgumentException("OTP_FINGERPRINT_MISMATCH: Thông tin đăng ký đã thay đổi sau khi gửi OTP. Vui lòng yêu cầu gửi lại mã mới.");
         }
 
-        await VerifyChallengeOtpHashAsync(challenge, request.OtpCode, cancellationToken);
+        await VerifyChallengeOtpHashAsync(challenge, request.OtpCode ?? throw new ArgumentException("Vui lòng nhập mã OTP."), cancellationToken);
 
         var idempotencyKey = string.IsNullOrWhiteSpace(request.IdempotencyKey)
             ? $"reg_{Guid.NewGuid():N}"
@@ -558,6 +561,20 @@ public class AuthService : IAuthService
         var tenantCode = $"{cleanSlug.ToUpperInvariant()}-{uniqueSuffix.ToUpperInvariant()}";
 
         var trialStartedAt = request.StartTrial ? DateTime.UtcNow : (DateTime?)null;
+        int trialDays = 3;
+        if (request.StartTrial && _platformSettingService != null)
+        {
+            try
+            {
+                var settings = await _platformSettingService.GetSettingsAsync(cancellationToken);
+                trialDays = Math.Clamp(settings.TrialDays, 1, 30);
+            }
+            catch
+            {
+                trialDays = 3;
+            }
+        }
+        var trialExpiresAt = trialStartedAt?.AddDays(trialDays);
         var tenant = new Tenant
         {
             Id = tenantId,
@@ -571,8 +588,8 @@ public class AuthService : IAuthService
             HasStaffManagementAddon = request.StartTrial,
             WalletBalance = 0m,
             TrialStartedAt = trialStartedAt,
-            TrialExpiresAt = trialStartedAt?.AddHours(72),
-            SubscriptionExpiresAt = trialStartedAt?.AddHours(72)
+            TrialExpiresAt = trialExpiresAt,
+            SubscriptionExpiresAt = trialExpiresAt
         };
 
         var userId = $"usr_{Guid.NewGuid():N}";
@@ -827,7 +844,7 @@ public class AuthService : IAuthService
         ArgumentNullException.ThrowIfNull(request);
         AuthRequestValidation.EnsureValid(new SendRegistrationOtpRequestValidator(), request);
 
-        var emailTrimmed = request.Email.Trim().ToLowerInvariant();
+        var emailTrimmed = (request.Email ?? throw new ArgumentException("Vui lòng nhập email.")).Trim().ToLowerInvariant();
         if (!TryValidateEmail(emailTrimmed))
         {
             throw new ArgumentException("Địa chỉ email không đúng định dạng.");

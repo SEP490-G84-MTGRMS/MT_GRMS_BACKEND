@@ -18,11 +18,16 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using MT_GRMS.Api.Hubs;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Common.Services;
+using MT_GRMS.Application.Notifications;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Infrastructure.Persistence;
@@ -41,6 +46,9 @@ public class PaymentsController : BaseApiController
     private readonly ITenantContext _tenantContext;
     private readonly IDataProtector _sepayProtector;
     private readonly IWebHostEnvironment _environment;
+    private readonly IAuditHashService _auditHashService;
+    private readonly INotificationService _notificationService;
+    private readonly IHubContext<NotificationHub> _hubContext;
 
     private const string EncryptedPrefix = "AES256:";
     private const string DefaultMasterSecret = "MT_GRMS_SEPAY_AES256_MASTER_SECRET_KEY_2026_V4";
@@ -56,15 +64,21 @@ public class PaymentsController : BaseApiController
         ILogger<PaymentsController> logger,
         ITenantContext tenantContext,
         IDataProtectionProvider dataProtectionProvider,
-        IWebHostEnvironment environment)
+        IWebHostEnvironment environment,
+        IAuditHashService auditHashService,
+        INotificationService notificationService,
+        IHubContext<NotificationHub> hubContext)
     {
         _context = context;
         _httpClientFactory = httpClientFactory;
         _configuration = configuration;
         _logger = logger;
         _tenantContext = tenantContext;
+        _auditHashService = auditHashService;
         _sepayProtector = dataProtectionProvider.CreateProtector("MT_GRMS.SePay.ApiToken.v1");
         _environment = environment;
+        _notificationService = notificationService;
+        _hubContext = hubContext;
     }
 
     /// <summary>
@@ -72,20 +86,36 @@ public class PaymentsController : BaseApiController
     /// </summary>
     [HttpGet("public-qr-config")]
     [AllowAnonymous]
-    public async Task<IActionResult> GetPublicQrConfig([FromQuery] string? tenantId, [FromQuery] Guid? branchId, CancellationToken ct)
+    public async Task<IActionResult> GetPublicQrConfig([FromQuery] string? tenantId, [FromQuery] Guid? branchId, [FromQuery] string? orderCode, CancellationToken ct)
     {
         var resolvedTenantId = ResolveTenantId(tenantId);
         var tenantPrefix = GetTenantPrefix(resolvedTenantId);
 
-        var config = await _context.StorePaymentConfigs
-            .AsNoTracking()
-            .FirstOrDefaultAsync(c => c.TenantId == resolvedTenantId && !c.IsDeleted, ct);
-
-        var paymentAccount = await ResolvePaymentAccountAsync(resolvedTenantId, branchId, null, ct);
+        var tenant = await _context.Tenants.AsNoTracking()
+            .FirstOrDefaultAsync(t => t.Id == resolvedTenantId && !t.IsDeleted, ct);
+        var branch = branchId.HasValue
+            ? await _context.Branches.AsNoTracking().FirstOrDefaultAsync(b =>
+                b.Id == branchId.Value && b.TenantId == resolvedTenantId && !b.IsDeleted, ct)
+            : null;
+        var order = !string.IsNullOrWhiteSpace(orderCode) && branch != null
+            ? await _context.Orders.AsNoTracking().FirstOrDefaultAsync(o =>
+                o.TenantId == resolvedTenantId && o.BranchId == branch.Id && o.OrderCode == orderCode, ct)
+            : null;
+        if (!string.IsNullOrWhiteSpace(orderCode) && order == null)
+            return NotFound(new { message = "Không tìm thấy đơn hàng để phát QR." });
+        var selectedBankId = order?.FinanceAccountId ?? branch?.CurrentBankFinanceAccountId;
+        if (order != null && !order.FinanceAccountId.HasValue)
+            return Conflict(new { message = "Đơn hàng chưa chốt tài khoản ngân hàng; không thể phát QR." });
+        var bank = selectedBankId is Guid bankId
+            ? await _context.FinanceAccounts.AsNoTracking().FirstOrDefaultAsync(a =>
+                a.Id == bankId && a.TenantId == resolvedTenantId &&
+                a.BranchId == branch!.Id && a.AccountType == MT_GRMS.Domain.Enums.FinanceAccountType.Bank &&
+                !a.IsDeleted && (order != null || a.IsActive), ct)
+            : null;
 
         // POS luôn gửi BranchId. Không fallback sang cấu hình chung khi chi nhánh
         // chưa có tài khoản vì việc đó có thể làm tiền vào nhầm tài khoản.
-        if (branchId.HasValue && paymentAccount == null)
+        if (branchId.HasValue && bank == null)
         {
             return NotFound(new
             {
@@ -98,7 +128,7 @@ public class PaymentsController : BaseApiController
             });
         }
 
-        if (config == null && paymentAccount == null)
+        if (tenant?.IsSepayEnabled != true || bank == null)
         {
             return NotFound(new
             {
@@ -119,12 +149,13 @@ public class PaymentsController : BaseApiController
             tenantId = resolvedTenantId,
             tenantPrefix,
             branchId,
-            paymentAccountId = paymentAccount?.Id,
-            bankCode = paymentAccount?.BankCode ?? config!.BankCode,
-            bankName = paymentAccount?.BankName ?? config!.BankName,
-            bankAccountNumber = paymentAccount?.AccountNumber ?? config!.BankAccountNumber,
-            bankAccountName = paymentAccount?.AccountHolderName ?? config!.BankAccountName,
-            isActive = paymentAccount?.IsActive ?? config!.IsActive
+            paymentAccountId = bank.Id,
+            financeAccountId = bank.Id,
+            bankCode = bank.BankCode,
+            bankName = bank.BankName,
+            bankAccountNumber = bank.AccountNumber,
+            bankAccountName = bank.AccountHolderName,
+            isActive = true
         });
     }
 
@@ -135,307 +166,104 @@ public class PaymentsController : BaseApiController
     [HttpGet("config")]
     public async Task<IActionResult> GetPaymentConfig(CancellationToken ct)
     {
-        if (!IsStoreOwnerOrAdmin())
-        {
-            return StatusCode(StatusCodes.Status403Forbidden, new
-            {
-                message = "Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền xem cấu hình cổng thanh toán SePay."
-            });
-        }
-
+        if (!IsStoreOwnerOrAdmin()) return Forbid();
         var tenantId = GetAuthenticatedTenantId();
         if (tenantId == null) return Forbid();
-        var tenantPrefix = GetTenantPrefix(tenantId);
-        var config = await _context.StorePaymentConfigs
-            .AsNoTracking()
-            .FirstOrDefaultAsync(c => c.TenantId == tenantId && !c.IsDeleted, ct);
-        var paymentAccounts = await _context.PaymentAccounts.AsNoTracking()
-            .Where(x => x.TenantId == tenantId)
-            .OrderBy(x => x.CreatedAt)
-            .Select(x => new
-            {
-                paymentAccountId = x.Id,
-                x.BankCode,
-                x.BankName,
-                bankAccountNumber = x.AccountNumber,
-                bankAccountName = x.AccountHolderName,
-                x.IsActive,
-                branchIds = _context.BranchPaymentAccounts
-                    .Where(a => a.TenantId == tenantId && a.PaymentAccountId == x.Id && a.IsActive)
-                    .Select(a => a.BranchId).ToList()
-            })
-            .ToListAsync(ct);
-
-        if (config == null)
-        {
-            return Ok(new
-            {
-                tenantId,
-                tenantPrefix,
-                bankCode = "MB",
-                bankName = "MBBank - Ngân hàng Quân Đội",
-                bankAccountNumber = "",
-                bankAccountName = "",
-                hasApiKey = false,
-                isEncryptedAtRest = false,
-                sepayApiKeyMasked = "",
-                sepayWebhookSecretMasked = "",
-                webhookUrl = $"{Request.Scheme}://{Request.Host}/api/payments/sepay-webhook",
-                cashOutApprovalThreshold = 200000m,
-                cashOutShiftTotalLimit = 0m,
-                isActive = true,
-                paymentAccounts,
-                updatedAt = DateTime.UtcNow,
-                securityLayers = BuildSecurityLayersStatus(hasApiKey: false, isEncrypted: false, isActive: false)
-            });
-        }
-
-        string decryptedKey = DecryptSecret(config.SepayApiKeyEncrypted);
-        bool hasKey = !string.IsNullOrWhiteSpace(decryptedKey);
-        bool isEncrypted = !string.IsNullOrWhiteSpace(config.SepayApiKeyEncrypted) &&
-                           config.SepayApiKeyEncrypted.StartsWith(EncryptedPrefix, StringComparison.Ordinal);
-
-        string maskedKey = MaskSecret(decryptedKey, "sepay_apikey_");
-        string maskedWebhookSecret = MaskSecret(config.SepayWebhookSecret, "whsec_");
-
-        return Ok(new
-        {
-            tenantId = config.TenantId,
-            tenantPrefix,
-            bankCode = config.BankCode,
-            bankName = config.BankName,
-            bankAccountNumber = config.BankAccountNumber,
-            bankAccountName = config.BankAccountName,
-            hasApiKey = hasKey,
-            isEncryptedAtRest = isEncrypted || hasKey,
-            sepayApiKeyMasked = maskedKey,
-            sepayWebhookSecretMasked = maskedWebhookSecret,
+        var tenant = await _context.Tenants.AsNoTracking().FirstOrDefaultAsync(x => x.Id == tenantId && !x.IsDeleted, ct);
+        if (tenant == null) return NotFound(new { message = "Không tìm thấy cửa hàng." });
+        var banks = await _context.FinanceAccounts.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.AccountType == MT_GRMS.Domain.Enums.FinanceAccountType.Bank && !x.IsDeleted)
+            .OrderBy(x => x.CreatedAt).ToListAsync(ct);
+        var branches = await _context.Branches.AsNoTracking().Where(x => x.TenantId == tenantId && !x.IsDeleted).ToListAsync(ct);
+        var paymentAccounts = banks.Select(x => new {
+            paymentAccountId = x.Id, financeAccountId = x.Id, x.BankCode, x.BankName,
+            bankAccountNumber = x.AccountNumber, bankAccountName = x.AccountHolderName,
+            x.IsActive, branchIds = branches.Where(b => b.CurrentBankFinanceAccountId == x.Id).Select(b => b.Id).ToList()
+        }).ToList();
+        var selected = banks.FirstOrDefault(x => branches.Any(b => b.CurrentBankFinanceAccountId == x.Id));
+        var key = DecryptSecret(tenant.SepayApiKeyEncrypted);
+        var hasKey = !string.IsNullOrWhiteSpace(key);
+        return Ok(new {
+            tenantId, tenantPrefix = GetTenantPrefix(tenantId),
+            bankCode = selected?.BankCode ?? "MB", bankName = selected?.BankName ?? "",
+            bankAccountNumber = selected?.AccountNumber ?? "", bankAccountName = selected?.AccountHolderName ?? "",
+            hasApiKey = hasKey, isEncryptedAtRest = hasKey,
+            sepayApiKeyMasked = MaskSecret(key, "sepay_apikey_"),
+            sepayWebhookSecretMasked = MaskSecret(tenant.SepayWebhookSecret, "whsec_"),
             webhookUrl = $"{Request.Scheme}://{Request.Host}/api/payments/sepay-webhook",
-            cashOutApprovalThreshold = config.CashOutApprovalThreshold,
-            cashOutShiftTotalLimit = config.CashOutShiftTotalLimit,
-            isActive = config.IsActive,
-            paymentAccounts,
-            updatedAt = config.UpdatedAt ?? config.CreatedAt,
-            securityLayers = BuildSecurityLayersStatus(hasKey, isEncrypted || hasKey, config.IsActive)
+            cashOutApprovalThreshold = tenant.CashOutApprovalThreshold,
+            cashOutShiftTotalLimit = tenant.CashOutShiftTotalLimit,
+            isActive = tenant.IsSepayEnabled, paymentAccounts,
+            updatedAt = tenant.UpdatedAt ?? tenant.CreatedAt,
+            securityLayers = BuildSecurityLayersStatus(hasKey, hasKey, tenant.IsSepayEnabled)
         });
     }
 
-    /// <summary>
-    /// Lưu hoặc cập nhật cấu hình tài khoản ngân hàng & SePay API Key (Chỉ dành cho STORE_OWNER)
-    /// Tự động mã hóa AES-256 cho SePay API Key trước khi ghi xuống PostgreSQL.
-    /// </summary>
     [HttpPost("config")]
     public async Task<IActionResult> SavePaymentConfig([FromBody] SavePaymentConfigRequest request, CancellationToken ct)
     {
-        if (!IsStoreOwnerOrAdmin())
-        {
-            return StatusCode(StatusCodes.Status403Forbidden, new
-            {
-                message = "Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền thay đổi cấu hình tài khoản ngân hàng và SePay API Key."
-            });
-        }
-
-        if (string.IsNullOrWhiteSpace(request.BankAccountNumber) || string.IsNullOrWhiteSpace(request.BankAccountName))
-        {
-            return BadRequest(new { message = "Số tài khoản và Tên chủ tài khoản không được để trống." });
-        }
-
-        if (!System.Text.RegularExpressions.Regex.IsMatch(request.BankAccountNumber.Trim(), "^[0-9]{6,30}$"))
-        {
-            return BadRequest(new { message = "Số tài khoản ngân hàng phải gồm từ 6 đến 30 chữ số." });
-        }
-
-        if (request.BankAccountName.Trim().Length > 150)
-        {
-            return BadRequest(new { message = "Tên chủ tài khoản không được vượt quá 150 ký tự." });
-        }
-
+        if (!IsStoreOwnerOrAdmin()) return Forbid();
         var tenantId = GetAuthenticatedTenantId();
         if (tenantId == null) return Forbid();
-        var tenantPrefix = GetTenantPrefix(tenantId);
+        var tenant = await _context.Tenants.FirstOrDefaultAsync(x => x.Id == tenantId && !x.IsDeleted, ct);
+        if (tenant == null) return NotFound(new { message = "Không tìm thấy cửa hàng." });
         var branchIds = (request.BranchIds ?? []).Where(x => x != Guid.Empty).Distinct().ToList();
-        if (branchIds.Count > 0)
+        if (branchIds.Count != 1)
+            return BadRequest(new { message = "Chọn đúng một chi nhánh cho tài khoản ngân hàng." });
+        var branch = await _context.Branches.FirstOrDefaultAsync(x => x.Id == branchIds[0] && x.TenantId == tenantId && !x.IsDeleted, ct);
+        if (branch == null) return BadRequest(new { message = "Chi nhánh không thuộc cửa hàng." });
+        var bankCode = request.BankCode.Trim().ToUpperInvariant();
+        var accountNumber = request.BankAccountNumber.Trim();
+        var holder = request.BankAccountName.Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(bankCode) || !System.Text.RegularExpressions.Regex.IsMatch(accountNumber, "^[0-9]{6,30}$") || string.IsNullOrWhiteSpace(holder))
+            return BadRequest(new { message = "Thông tin ngân hàng hoặc số tài khoản không hợp lệ." });
+        if (request.CashOutApprovalThreshold < 0 || request.CashOutShiftTotalLimit < 0)
+            return BadRequest(new { message = "Hạn mức chi không được âm." });
+        var providedKey = !string.IsNullOrWhiteSpace(request.SepayApiKey) && !request.SepayApiKey.Contains("••");
+        if (providedKey && request.SepayApiKey!.Trim().Length < 20)
+            return BadRequest(new { message = "SePay API Key không hợp lệ." });
+        if (request.IsActive && !providedKey && string.IsNullOrWhiteSpace(tenant.SepayApiKeyEncrypted))
+            return BadRequest(new { message = "Cần cấu hình SePay API Key trước khi bật VietQR." });
+
+        await using var transaction = await _context.Database.BeginTransactionAsync(ct);
+        var bank = request.PaymentAccountId.HasValue
+            ? await _context.FinanceAccounts.FirstOrDefaultAsync(x => x.Id == request.PaymentAccountId.Value && x.TenantId == tenantId && x.BranchId == branch.Id && x.AccountType == MT_GRMS.Domain.Enums.FinanceAccountType.Bank && !x.IsDeleted, ct)
+            : null;
+        if (request.PaymentAccountId.HasValue && bank == null)
+            return BadRequest(new { message = "Tài khoản Bank không thuộc chi nhánh này." });
+        if (bank != null && (!string.Equals(bank.BankCode, bankCode, StringComparison.OrdinalIgnoreCase) || bank.AccountNumber != accountNumber))
+            return Conflict(new { message = "Không sửa số tài khoản cũ. Hãy thêm tài khoản mới để giữ lịch sử giao dịch." });
+        bank ??= await _context.FinanceAccounts.FirstOrDefaultAsync(x => x.TenantId == tenantId && x.BranchId == branch.Id && x.AccountType == MT_GRMS.Domain.Enums.FinanceAccountType.Bank && x.BankCode == bankCode && x.AccountNumber == accountNumber && !x.IsDeleted, ct);
+        if (await _context.FinanceAccounts.AnyAsync(x => x.TenantId == tenantId && x.AccountType == MT_GRMS.Domain.Enums.FinanceAccountType.Bank && x.BankCode == bankCode && x.AccountNumber == accountNumber && x.BranchId != branch.Id && !x.IsDeleted, ct))
+            return Conflict(new { message = "Số tài khoản đã thuộc chi nhánh khác." });
+        if (bank == null)
         {
-            var validCount = await _context.Branches.CountAsync(x => x.TenantId == tenantId && branchIds.Contains(x.Id), ct);
-            if (validCount != branchIds.Count)
-                return BadRequest(new { message = "Có chi nhánh không tồn tại hoặc không thuộc cửa hàng hiện tại." });
-        }
-        if (request.PaymentAccountId.HasValue &&
-            !await _context.PaymentAccounts.AnyAsync(x => x.Id == request.PaymentAccountId && x.TenantId == tenantId, ct))
-        {
-            return BadRequest(new { message = "Tài khoản thanh toán không tồn tại hoặc không thuộc cửa hàng hiện tại." });
-        }
-
-        var config = await _context.StorePaymentConfigs
-            .FirstOrDefaultAsync(c => c.TenantId == tenantId && !c.IsDeleted, ct);
-
-        bool isNewKeyProvided = !string.IsNullOrWhiteSpace(request.SepayApiKey) &&
-                                !request.SepayApiKey.Contains("••");
-
-        if (isNewKeyProvided && request.SepayApiKey!.Trim().Length < 20)
-        {
-            return BadRequest(new { message = "SePay API Key không hợp lệ hoặc quá ngắn." });
-        }
-
-        if (config == null && !isNewKeyProvided)
-        {
-            return BadRequest(new { message = "Cấu hình lần đầu bắt buộc phải nhập SePay API Key thật." });
-        }
-
-        if (config == null)
-        {
-            string rawKeyToEncrypt = request.SepayApiKey!.Trim();
-
-            config = new StorePaymentConfig
-            {
-                Id = Guid.NewGuid(),
-                TenantId = tenantId,
-                BankCode = string.IsNullOrWhiteSpace(request.BankCode) ? "MB" : request.BankCode.Trim().ToUpperInvariant(),
-                BankName = request.BankName ?? "MBBank - Ngân hàng Quân Đội",
-                BankAccountNumber = request.BankAccountNumber.Trim(),
-                BankAccountName = request.BankAccountName.Trim().ToUpperInvariant(),
-                SepayApiKeyEncrypted = EncryptSecret(rawKeyToEncrypt),
-                SepayWebhookSecret = GenerateWebhookSecret(),
-                CashOutApprovalThreshold = request.CashOutApprovalThreshold ?? 200000m,
-                CashOutShiftTotalLimit = request.CashOutShiftTotalLimit ?? 0m,
-                IsActive = request.IsActive,
-                CreatedAt = DateTime.UtcNow,
-                UpdatedAt = DateTime.UtcNow
+            bank = new FinanceAccount {
+                TenantId = tenantId, BranchId = branch.Id, AccountType = MT_GRMS.Domain.Enums.FinanceAccountType.Bank,
+                AccountName = $"{request.BankName ?? bankCode} · {accountNumber}", BankCode = bankCode,
+                BankName = request.BankName?.Trim(), AccountNumber = accountNumber,
+                AccountHolderName = holder, CurrentBalance = 0m, IsActive = request.IsActive
             };
-            await _context.StorePaymentConfigs.AddAsync(config, ct);
+            _context.FinanceAccounts.Add(bank);
         }
-        else
-        {
-            config.BankCode = string.IsNullOrWhiteSpace(request.BankCode) ? config.BankCode : request.BankCode.Trim().ToUpperInvariant();
-            if (!string.IsNullOrEmpty(request.BankName)) config.BankName = request.BankName;
-            config.BankAccountNumber = request.BankAccountNumber.Trim();
-            config.BankAccountName = request.BankAccountName.Trim().ToUpperInvariant();
-
-            if (isNewKeyProvided)
-            {
-                // Mã hóa AES-256 cho API Key mới (Key Rotation)
-                config.SepayApiKeyEncrypted = EncryptSecret(request.SepayApiKey!.Trim());
-            }
-            else if (!string.IsNullOrWhiteSpace(config.SepayApiKeyEncrypted) &&
-                     !config.SepayApiKeyEncrypted.StartsWith(EncryptedPrefix, StringComparison.Ordinal))
-            {
-                // Nâng cấp tự động khóa cũ đang lưu dạng plaintext lên chuẩn AES-256
-                config.SepayApiKeyEncrypted = EncryptSecret(config.SepayApiKeyEncrypted);
-            }
-
-            if (string.IsNullOrWhiteSpace(config.SepayWebhookSecret))
-            {
-                config.SepayWebhookSecret = GenerateWebhookSecret();
-            }
-
-            if (request.CashOutApprovalThreshold is >= 0)
-            {
-                config.CashOutApprovalThreshold = request.CashOutApprovalThreshold.Value;
-            }
-            if (request.CashOutShiftTotalLimit is >= 0)
-            {
-                config.CashOutShiftTotalLimit = request.CashOutShiftTotalLimit.Value;
-            }
-            config.IsActive = request.IsActive;
-            config.UpdatedAt = DateTime.UtcNow;
-        }
-
+        else { bank.BankName = request.BankName?.Trim(); bank.AccountHolderName = holder; bank.IsActive = request.IsActive; }
+        if (providedKey) tenant.SepayApiKeyEncrypted = EncryptSecret(request.SepayApiKey!.Trim());
+        if (string.IsNullOrWhiteSpace(tenant.SepayWebhookSecret)) tenant.SepayWebhookSecret = GenerateWebhookSecret();
+        tenant.IsSepayEnabled = request.IsActive;
+        if (request.CashOutApprovalThreshold.HasValue) tenant.CashOutApprovalThreshold = request.CashOutApprovalThreshold.Value;
+        if (request.CashOutShiftTotalLimit.HasValue) tenant.CashOutShiftTotalLimit = request.CashOutShiftTotalLimit.Value;
+        tenant.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync(ct);
-
-        var paymentAccount = request.PaymentAccountId.HasValue
-            ? await _context.PaymentAccounts.FirstOrDefaultAsync(x => x.Id == request.PaymentAccountId && x.TenantId == tenantId, ct)
-            : await _context.PaymentAccounts.FirstOrDefaultAsync(x => x.TenantId == tenantId
-                && x.BankCode == config.BankCode && x.AccountNumber == config.BankAccountNumber, ct);
-
-        // Đổi ngân hàng/số tài khoản là thay thế tài khoản, không sửa bản ghi cũ.
-        // Nhờ đó các đơn và giao dịch quá khứ vẫn tham chiếu đúng tài khoản đã nhận tiền.
-        if (paymentAccount != null &&
-            (!string.Equals(paymentAccount.BankCode, config.BankCode, StringComparison.OrdinalIgnoreCase)
-             || !string.Equals(paymentAccount.AccountNumber, config.BankAccountNumber, StringComparison.Ordinal)))
-        {
-            paymentAccount = await _context.PaymentAccounts.FirstOrDefaultAsync(x => x.TenantId == tenantId
-                && x.BankCode == config.BankCode && x.AccountNumber == config.BankAccountNumber, ct);
-        }
-        if (paymentAccount == null)
-        {
-            paymentAccount = new PaymentAccount
-            {
-                Id = Guid.NewGuid(), TenantId = tenantId, BankCode = config.BankCode,
-                BankName = config.BankName, AccountNumber = config.BankAccountNumber,
-                AccountHolderName = config.BankAccountName, IsActive = config.IsActive
-            };
-            await _context.PaymentAccounts.AddAsync(paymentAccount, ct);
-        }
-        else
-        {
-            paymentAccount.BankCode = config.BankCode;
-            paymentAccount.BankName = config.BankName;
-            paymentAccount.AccountNumber = config.BankAccountNumber;
-            paymentAccount.AccountHolderName = config.BankAccountName;
-            paymentAccount.IsActive = config.IsActive;
-        }
-
-        if (branchIds.Count > 0)
-        {
-            // Mỗi chi nhánh chỉ được nhận tiền vào một tài khoản. Nếu chi nhánh đang
-            // thuộc tài khoản khác thì việc lưu cấu hình này sẽ thay thế liên kết cũ.
-            var assignmentsForSelectedBranches = await _context.BranchPaymentAccounts
-                .Where(x => x.TenantId == tenantId && branchIds.Contains(x.BranchId))
-                .ToListAsync(ct);
-
-            // Các chi nhánh bị bỏ chọn không còn sử dụng tài khoản đang chỉnh sửa.
-            var removedAssignments = await _context.BranchPaymentAccounts
-                .Where(x => x.TenantId == tenantId
-                    && x.PaymentAccountId == paymentAccount.Id
-                    && !branchIds.Contains(x.BranchId))
-                .ToListAsync(ct);
-            _context.BranchPaymentAccounts.RemoveRange(removedAssignments);
-
-            foreach (var branchId in branchIds)
-            {
-                var assignment = assignmentsForSelectedBranches.FirstOrDefault(x => x.BranchId == branchId);
-                if (assignment == null)
-                {
-                    await _context.BranchPaymentAccounts.AddAsync(new BranchPaymentAccount
-                    {
-                        Id = Guid.NewGuid(), TenantId = tenantId, BranchId = branchId,
-                        PaymentAccountId = paymentAccount.Id, IsDefault = true, IsActive = true
-                    }, ct);
-                }
-                else
-                {
-                    assignment.PaymentAccountId = paymentAccount.Id;
-                    assignment.IsDefault = true;
-                    assignment.IsActive = true;
-                }
-            }
-        }
+        branch.CurrentBankFinanceAccountId = bank.Id;
         await _context.SaveChangesAsync(ct);
-
-        string decryptedKey = DecryptSecret(config.SepayApiKeyEncrypted);
-        bool hasKey = !string.IsNullOrWhiteSpace(decryptedKey);
-
-        _logger.LogInformation("Chủ cửa hàng Tenant {TenantId} đã cập nhật cấu hình SePay (AES-256 Encrypted, KeyRotated={KeyRotated})",
-            tenantId, isNewKeyProvided);
-
-        return Ok(new
-        {
-            success = true,
-            message = isNewKeyProvided
-                ? "Đã mã hóa AES-256 và cập nhật SePay API Key mới thành công!"
-                : "Đã lưu cấu hình tài khoản thanh toán thành công!",
-            tenantId = config.TenantId,
-            tenantPrefix,
-            paymentAccountId = paymentAccount.Id,
-            branchIds,
-            hasApiKey = hasKey,
-            isEncryptedAtRest = true,
-            sepayApiKeyMasked = MaskSecret(decryptedKey, "sepay_apikey_"),
-            sepayWebhookSecretMasked = MaskSecret(config.SepayWebhookSecret, "whsec_"),
-            webhookUrl = $"{Request.Scheme}://{Request.Host}/api/payments/sepay-webhook",
-            updatedAt = config.UpdatedAt,
-            securityLayers = BuildSecurityLayersStatus(hasKey, true, config.IsActive)
-        });
+        await transaction.CommitAsync(ct);
+        var key = DecryptSecret(tenant.SepayApiKeyEncrypted);
+        return Ok(new { success = true, message = "Đã lưu tài khoản nhận VietQR của chi nhánh.",
+            tenantId, tenantPrefix = GetTenantPrefix(tenantId), paymentAccountId = bank.Id,
+            financeAccountId = bank.Id, branchIds, hasApiKey = !string.IsNullOrWhiteSpace(key),
+            sepayApiKeyMasked = MaskSecret(key, "sepay_apikey_"),
+            sepayWebhookSecretMasked = MaskSecret(tenant.SepayWebhookSecret, "whsec_"),
+            updatedAt = tenant.UpdatedAt });
     }
 
     /// <summary>
@@ -455,13 +283,13 @@ public class PaymentsController : BaseApiController
 
         var tenantId = GetAuthenticatedTenantId();
         if (tenantId == null) return Forbid();
-        var config = await _context.StorePaymentConfigs
-            .FirstOrDefaultAsync(c => c.TenantId == tenantId && !c.IsDeleted, ct);
+        var config = await _context.Tenants.FirstOrDefaultAsync(c => c.Id == tenantId && !c.IsDeleted, ct);
 
         if (config != null)
         {
             config.SepayApiKeyEncrypted = string.Empty;
             config.SepayWebhookSecret = GenerateWebhookSecret();
+            config.IsSepayEnabled = false;
             config.UpdatedAt = DateTime.UtcNow;
             await _context.SaveChangesAsync(ct);
         }
@@ -495,9 +323,8 @@ public class PaymentsController : BaseApiController
 
         var tenantId = GetAuthenticatedTenantId();
         if (tenantId == null) return Forbid();
-        var config = await _context.StorePaymentConfigs
-            .AsNoTracking()
-            .FirstOrDefaultAsync(c => c.TenantId == tenantId && !c.IsDeleted, ct);
+        var config = await _context.Tenants.AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Id == tenantId && !c.IsDeleted, ct);
 
         string decryptedKey = config != null ? DecryptSecret(config.SepayApiKeyEncrypted) : string.Empty;
         bool isRealSePayKey = !string.IsNullOrWhiteSpace(decryptedKey) &&
@@ -606,9 +433,8 @@ public class PaymentsController : BaseApiController
         var tenantId = GetAuthenticatedTenantId();
         if (tenantId == null) return Forbid();
         var tenantPrefix = GetTenantPrefix(tenantId);
-        var config = await _context.StorePaymentConfigs
-            .AsNoTracking()
-            .FirstOrDefaultAsync(c => c.TenantId == tenantId && !c.IsDeleted, ct);
+        var config = await _context.Tenants.AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Id == tenantId && !c.IsDeleted, ct);
 
         string decryptedKey = config != null ? DecryptSecret(config.SepayApiKeyEncrypted) : string.Empty;
         bool hasKey = !string.IsNullOrWhiteSpace(decryptedKey);
@@ -644,7 +470,7 @@ public class PaymentsController : BaseApiController
                 layer = 4,
                 name = $"Lớp 4: Khớp Số Tiền (AmountIn == FinalAmount) & Định tuyến Tiền tố ({tenantPrefix}_HD...)",
                 passed = true,
-                detail = $"Đạt: Tự động bóc tách tiền tố cửa hàng '{tenantPrefix}_HDxxxx', kiểm tra đúng STK '{config?.BankAccountNumber ?? "0918889999"}' và chặn mọi giao dịch chuyển thiếu tiền."
+                detail = $"Đạt: Tự động bóc tách tiền tố cửa hàng '{tenantPrefix}_HDxxxx' và đối chiếu tài khoản Bank đã lưu trên đơn."
             },
             new
             {
@@ -716,21 +542,65 @@ public class PaymentsController : BaseApiController
         string content = payload.TransactionContent ?? "";
         var (extractedPrefix, orderCode) = ExtractTenantPrefixAndOrderCode(content);
 
+        // Trường hợp SePay gửi test ping hoặc giao dịch chuyển khoản không gắn mã đơn hàng
         if (string.IsNullOrEmpty(orderCode))
         {
-            _logger.LogWarning("Không trích xuất được mã đơn hàng từ nội dung chuyển khoản: '{Content}'", content);
-            return BadRequest(new { message = "Không tìm thấy mã đơn hàng hợp lệ trong nội dung chuyển khoản." });
+            var isValidKey = await _context.Tenants.AsNoTracking().AnyAsync(t =>
+                !t.IsDeleted && t.IsSepayEnabled && t.SepayWebhookSecret == incomingKey, ct);
+            if (!isValidKey)
+            {
+                var tenants = await _context.Tenants.AsNoTracking().Where(t => !t.IsDeleted && t.IsSepayEnabled).ToListAsync(ct);
+                isValidKey = tenants.Any(t =>
+                {
+                    try { return FixedTimeEquals(incomingKey, DecryptSecret(t.SepayApiKeyEncrypted)); }
+                    catch { return false; }
+                });
+            }
+
+            if (!isValidKey)
+            {
+                _logger.LogWarning("CẢNH BÁO BẢO MẬT: Webhook SePay với Token không hợp lệ: IP={Ip}", clientIp);
+                return Unauthorized(new { success = false, message = "Invalid SePay Token" });
+            }
+
+            _logger.LogInformation("[SePay Webhook] Tiếp nhận test webhook thành công với Token hợp lệ từ IP={Ip}.", clientIp);
+            return Ok(new
+            {
+                success = true,
+                message = "Đã tiếp nhận Webhook SePay thành công (Test ping hợp lệ)."
+            });
         }
 
-        // Tìm đơn hàng tương ứng trong CSDL
+        // Tìm đơn hàng tương ứng trong CSDL (Dùng IgnoreQueryFilters vì Webhook gọi Anonymous không có TenantContext)
         var order = await _context.Orders
-            .FirstOrDefaultAsync(o => o.OrderCode == orderCode || o.OrderCode == $"HD{orderCode}", ct);
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(o => !o.IsDeleted && (o.OrderCode == orderCode || o.OrderCode == $"HD{orderCode}"), ct);
+
+        // Trường hợp mã đơn có tiền tố dính liền (VD: AN02HD261119151132768)
+        if (order == null && orderCode.Length > 4 && (orderCode.StartsWith("AN") || orderCode.StartsWith("MT") || orderCode.StartsWith("CG") || orderCode.StartsWith("CH")))
+        {
+            var trimmedCode = orderCode.Substring(4);
+            order = await _context.Orders
+                .IgnoreQueryFilters()
+                .FirstOrDefaultAsync(o => !o.IsDeleted && (o.OrderCode == trimmedCode || o.OrderCode == $"HD{trimmedCode}"), ct);
+            if (order != null && string.IsNullOrEmpty(extractedPrefix))
+            {
+                extractedPrefix = orderCode.Substring(0, 4);
+            }
+        }
 
         if (order == null)
         {
             _logger.LogWarning("Đơn hàng '{OrderCode}' (Prefix='{Prefix}') không tồn tại trong hệ thống.", orderCode, extractedPrefix);
-            return NotFound(new { message = $"Đơn hàng {orderCode} không tồn tại." });
+            return Ok(new
+            {
+                success = false,
+                message = $"Đơn hàng {orderCode} không tồn tại trong hệ thống."
+            });
         }
+
+        // Thiết lập TenantContext cho luồng xử lý Webhook của đơn hàng này
+        _tenantContext.SetContext(order.TenantId, Guid.Empty, order.BranchId);
 
         // Kiểm tra định tuyến đa cửa hàng (Multi-tenant Prefix Routing) nếu trong nội dung CK có tiền tố
         if (!string.IsNullOrEmpty(extractedPrefix))
@@ -744,34 +614,29 @@ public class PaymentsController : BaseApiController
         }
 
         // Lấy cấu hình của Tenant sở hữu đơn hàng này
-        var storeConfig = await _context.StorePaymentConfigs
-            .FirstOrDefaultAsync(c => c.TenantId == order.TenantId && !c.IsDeleted, ct);
-        var paymentAccount = await ResolvePaymentAccountAsync(order.TenantId, order.BranchId, payload.AccountNumber, ct);
-
-        var bankAccount = await _context.FinanceAccounts.FirstOrDefaultAsync(a =>
-            a.TenantId == order.TenantId &&
-            a.AccountType == MT_GRMS.Domain.Enums.FinanceAccountType.Bank &&
-            a.AccountNumber == payload.AccountNumber &&
-            a.SepayConnectionStatus == "Connected" &&
-            a.IsActive && !a.IsDeleted, ct);
-
-        if (bankAccount == null && (paymentAccount == null || storeConfig?.IsActive != true))
-            return BadRequest(new { message = "Receiving account is not connected or active." });
+        var tenant = await _context.Tenants.FirstOrDefaultAsync(x => x.Id == order.TenantId && !x.IsDeleted, ct);
+        if (tenant?.IsSepayEnabled != true || !order.FinanceAccountId.HasValue)
+            return BadRequest(new { message = "Đơn hàng chưa có tài khoản nhận tiền hoặc SePay đang tắt." });
+        var bankAccount = await _context.FinanceAccounts
+            .IgnoreQueryFilters()
+            .FirstOrDefaultAsync(a =>
+                a.Id == order.FinanceAccountId.Value && a.TenantId == order.TenantId &&
+                a.AccountType == MT_GRMS.Domain.Enums.FinanceAccountType.Bank &&
+                !a.IsDeleted, ct);
+        if (bankAccount == null)
+            return BadRequest(new { message = "Không tìm thấy tài khoản Bank đã chốt trên đơn." });
 
         string decryptedApiKey;
         try
         {
-            decryptedApiKey = !string.IsNullOrWhiteSpace(bankAccount?.SepayApiKeyEncrypted)
-                ? _sepayProtector.Unprotect(bankAccount.SepayApiKeyEncrypted)
-                : storeConfig != null ? DecryptSecret(storeConfig.SepayApiKeyEncrypted) : string.Empty;
+            decryptedApiKey = DecryptSecret(tenant.SepayApiKeyEncrypted);
         }
         catch (CryptographicException ex)
         {
             _logger.LogError(ex, "Unable to decrypt SePay account token.");
             return StatusCode(StatusCodes.Status503ServiceUnavailable);
         }
-        var webhookSecret = !string.IsNullOrWhiteSpace(bankAccount?.SepayWebhookSecret)
-            ? bankAccount.SepayWebhookSecret : storeConfig?.SepayWebhookSecret ?? string.Empty;
+        var webhookSecret = tenant.SepayWebhookSecret;
         if (string.IsNullOrWhiteSpace(decryptedApiKey) && string.IsNullOrWhiteSpace(webhookSecret))
             return Unauthorized(new { message = "SePay credentials are not configured." });
 
@@ -789,7 +654,9 @@ public class PaymentsController : BaseApiController
         }
 
         // LỚP 4B: Kiểm tra Số tài khoản ngân hàng nhận tiền (nếu payload có gửi kèm accountNumber)
-        var expectedAccountNumber = paymentAccount?.AccountNumber ?? bankAccount?.AccountNumber ?? storeConfig?.BankAccountNumber;
+        var expectedAccountNumber = bankAccount.AccountNumber;
+        if (string.IsNullOrWhiteSpace(payload.AccountNumber))
+            return BadRequest(new { message = "Webhook không có số tài khoản nhận; cần đối soát thủ công." });
         if (!string.IsNullOrWhiteSpace(expectedAccountNumber) &&
             !string.IsNullOrWhiteSpace(payload.AccountNumber) &&
             !string.Equals(payload.AccountNumber.Trim(), expectedAccountNumber.Trim(), StringComparison.OrdinalIgnoreCase))
@@ -917,32 +784,34 @@ public class PaymentsController : BaseApiController
             verifiedBySePay = true;
         }
 
-        // LỚP 4C: So khớp chính xác số tiền thực nhận với tổng tiền phải thu của đơn hàng
-        if (verifiedAmountIn < order.FinalAmount)
-        {
-            _logger.LogWarning("CẢNH BÁO GIAN LẬN SỐ TIỀN [Lớp 4C]: Số tiền thực nhận ({Amt:N0}đ) nhỏ hơn tổng tiền đơn hàng ({Final:N0}đ) cho đơn {OrderCode}!",
-                verifiedAmountIn, order.FinalAmount, order.OrderCode);
-            return BadRequest(new
-            {
-                message = $"Số tiền thanh toán {verifiedAmountIn:N0}đ chưa đủ tổng tiền hóa đơn {order.FinalAmount:N0}đ."
-            });
-        }
+        // Khóa sổ Bank và kiểm tra lại idempotency trong cùng transaction với bút toán.
+        await using var settlement = await _context.Database.BeginTransactionAsync(ct);
+        bankAccount = await _context.FinanceAccounts.FromSqlInterpolated(
+            $"SELECT * FROM \"FinanceAccounts\" WHERE \"Id\" = {bankAccount.Id} FOR UPDATE")
+            .SingleAsync(ct);
+        if (await _context.PaymentTransactions.AnyAsync(p => p.TenantId == order.TenantId && p.BankTransactionId == bankTxId, ct))
+            return Ok(new { success = true, isIdempotentReplay = true });
+        // Order đã được track trước khi chờ khóa Bank; reload để đọc trạng thái
+        // vừa được transaction webhook khác commit.
+        await _context.Entry(order).ReloadAsync(ct);
+        if (order.PaymentStatus == "PAID" && order.Status == "Completed")
+            return Conflict(new { message = "Đơn đã được thanh toán đủ; giao dịch mới cần đối soát thủ công." });
 
-        // LỚP 6: Ghi nhận giao dịch bất biến vào bảng PaymentTransactions & Gạch nợ đơn hàng nguyên tử
+        // LỚP 6: Giao dịch, đơn, sổ Bank và số dư cùng một transaction.
         var paymentTx = new PaymentTransaction
         {
             Id = Guid.NewGuid(),
             TenantId = order.TenantId,
             OrderId = order.Id,
             BranchId = order.BranchId,
-            PaymentAccountId = paymentAccount?.Id,
+            FinanceAccountId = bankAccount.Id,
             BankTransactionId = bankTxId,
             Gateway = payload.Gateway ?? "VietQR",
             AmountIn = verifiedAmountIn,
             Accumulated = payload.Accumulated,
             TransactionContent = content,
             ReferenceNumber = payload.ReferenceNumber,
-            TransactionDate = payload.TransactionDate != default ? payload.TransactionDate : DateTime.UtcNow,
+            TransactionDate = payload.ParsedTransactionDate,
             VerifiedBySepayApi = verifiedBySePay,
             RawPayloadJson = JsonSerializer.Serialize(payload),
             CreatedAt = DateTime.UtcNow,
@@ -950,32 +819,132 @@ public class PaymentsController : BaseApiController
         };
         await _context.PaymentTransactions.AddAsync(paymentTx, ct);
 
-        // Chuyển trạng thái đơn hàng sang PAID & Completed (nếu đang giữ hàng chờ thanh toán QR)
-        order.PaymentStatus = "PAID";
-        order.PaymentAccountId ??= paymentAccount?.Id;
-        if (string.Equals(order.Status, "PendingPayment", StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(order.Status, "PENDING_PAYMENT", StringComparison.OrdinalIgnoreCase))
+        // Tính toán lũy kế thanh toán của đơn hàng (Hỗ trợ chuyển thiếu tiền / nhiều lần)
+        decimal previousDeposit = order.DepositAmount;
+        decimal totalPaidSoFar = previousDeposit + verifiedAmountIn;
+        bool isFullPayment = totalPaidSoFar >= order.FinalAmount;
+        decimal remainingAmount = Math.Max(0m, order.FinalAmount - totalPaidSoFar);
+
+        if (isFullPayment)
         {
-            order.Status = "Completed";
+            order.PaymentStatus = "PAID";
+            if (string.Equals(order.Status, "PendingPayment", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(order.Status, "PENDING_PAYMENT", StringComparison.OrdinalIgnoreCase))
+            {
+                order.Status = "Completed";
+            }
             order.DepositAmount = order.FinalAmount;
         }
-        order.UpdatedAt = DateTime.UtcNow;
-        if (bankAccount != null)
+        else
         {
-            bankAccount.CurrentBalance += verifiedAmountIn;
-            bankAccount.UpdatedAt = DateTime.UtcNow;
+            // Khách chuyển thiếu tiền: ghi nhận số tiền đã trả nhưng KHÔNG hoàn tất đơn
+            order.PaymentStatus = "PARTIALLY_PAID";
+            order.DepositAmount = totalPaidSoFar;
+        }
+        order.UpdatedAt = DateTime.UtcNow;
+
+        bankAccount.CurrentBalance += verifiedAmountIn;
+        bankAccount.UpdatedAt = DateTime.UtcNow;
+
+        var previousHash = await _context.CashbookEntries.AsNoTracking()
+            .Where(e => e.TenantId == order.TenantId && e.AccountId == bankAccount.Id)
+            .OrderByDescending(e => e.OccurredAtUtc).ThenByDescending(e => e.Id)
+            .Select(e => e.AuditHash).FirstOrDefaultAsync(ct) ?? string.Empty;
+
+        var entryDescription = isFullPayment
+            ? $"SePay thanh toán đơn {order.OrderCode}"
+            : $"SePay thanh toán một phần đơn {order.OrderCode} (thiếu {remainingAmount:N0}đ)";
+
+        var entry = new CashbookEntry {
+            TenantId = order.TenantId, EntryCode = $"CB-SEPAY-{payload.Id}",
+            AccountId = bankAccount.Id, AccountType = FinanceAccountType.Bank, BranchId = order.BranchId,
+            EntryType = CashbookEntryType.Receipt, Amount = verifiedAmountIn,
+            BalanceAfter = bankAccount.CurrentBalance, SourceType = "POS_SALE",
+            CategoryCode = "POS_SALE", FinancialNature = FinancialNature.OtherIncome,
+            TaxTreatment = CashbookTaxTreatment.TaxableRevenue, SourceId = paymentTx.Id,
+            ReferenceCode = order.OrderCode, Description = entryDescription,
+            OccurredAtUtc = DateTime.UtcNow
+        };
+        entry.AuditHash = _auditHashService.ComputeEntryHash(previousHash, entry);
+        _context.CashbookEntries.Add(entry);
+        await _context.SaveChangesAsync(ct);
+        await settlement.CommitAsync(ct);
+
+        // Bắn SignalR realtime cho màn hình POS
+        var paymentRealtimePayload = new
+        {
+            orderCode = order.OrderCode,
+            isFullPayment,
+            amountIn = verifiedAmountIn,
+            totalPaid = totalPaidSoFar,
+            remaining = remainingAmount,
+            finalAmount = order.FinalAmount,
+            gateway = paymentTx.Gateway,
+            bankTransactionId = paymentTx.BankTransactionId,
+            timestamp = DateTime.UtcNow
+        };
+
+        try
+        {
+            await _hubContext.Clients.Group(NotificationHub.BuildOrderGroup(order.OrderCode))
+                .SendAsync("PaymentReceived", paymentRealtimePayload, ct);
+            await _hubContext.Clients.Group(NotificationHub.BuildTenantGroup(order.TenantId))
+                .SendAsync("PaymentReceived", paymentRealtimePayload, ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Không thể gửi SignalR PaymentReceived cho đơn {OrderCode}", order.OrderCode);
         }
 
-        await _context.SaveChangesAsync(ct);
-        _logger.LogInformation("TING TING [Lớp 6]: Thanh toán thành công đơn hàng {OrderCode} ({Amount:N0}đ) qua VietQR SePay!",
-            order.OrderCode, verifiedAmountIn);
+        // Bắn Notification chuông thông báo In-App cho Chủ cửa hàng & Thu ngân
+        try
+        {
+            if (isFullPayment)
+            {
+                await _notificationService.NotifyTenantOwnersAsync(
+                    order.TenantId,
+                    "PAYMENT_SUCCESS",
+                    $"[VietQR] Thanh toán thành công {order.OrderCode}",
+                    $"Đơn hàng {order.OrderCode} đã thanh toán đủ {order.FinalAmount:N0} đ (nhận {verifiedAmountIn:N0} đ qua VietQR).",
+                    "/pos/invoices",
+                    ct);
+            }
+            else
+            {
+                await _notificationService.NotifyTenantOwnersAsync(
+                    order.TenantId,
+                    "PAYMENT_UNDERPAID",
+                    $"⚠️ Thiếu tiền VietQR đơn {order.OrderCode}",
+                    $"Khách chuyển {verifiedAmountIn:N0} đ (tổng nhận {totalPaidSoFar:N0} đ), còn thiếu {remainingAmount:N0} đ cho hóa đơn {order.FinalAmount:N0} đ. Vui lòng nhắc khách chuyển thêm hoặc thu tiền mặt.",
+                    "/pos",
+                    ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Không thể tạo thông báo in-app cho đơn {OrderCode}", order.OrderCode);
+        }
+
+        if (isFullPayment)
+        {
+            _logger.LogInformation("TING TING [Lớp 6]: Thanh toán thành công đơn hàng {OrderCode} ({Amount:N0}đ) qua VietQR SePay!",
+                order.OrderCode, verifiedAmountIn);
+        }
+        else
+        {
+            _logger.LogWarning("CHUYỂN THIẾU TIỀN: Đơn hàng {OrderCode} nhận {Amount:N0}đ, còn thiếu {Remaining:N0}đ!",
+                order.OrderCode, verifiedAmountIn, remainingAmount);
+        }
 
         return Ok(new
         {
             success = true,
-            message = "Thanh toán đơn hàng thành công!",
+            isFullPayment,
+            message = isFullPayment ? "Thanh toán đơn hàng thành công!" : $"Khách đã chuyển {verifiedAmountIn:N0}đ, còn thiếu {remainingAmount:N0}đ.",
             orderCode = order.OrderCode,
             amountIn = verifiedAmountIn,
+            totalPaid = totalPaidSoFar,
+            remaining = remainingAmount,
             verifiedBySePay
         });
     }
@@ -1003,6 +972,9 @@ public class PaymentsController : BaseApiController
                       (string.Equals(order.Status, "Completed", StringComparison.OrdinalIgnoreCase) &&
                        !string.Equals(order.PaymentStatus, "UNPAID", StringComparison.OrdinalIgnoreCase));
 
+        decimal depositAmount = order.DepositAmount;
+        decimal remainingAmount = Math.Max(0m, order.FinalAmount - depositAmount);
+
         return Ok(new
         {
             orderCode = order.OrderCode,
@@ -1010,6 +982,8 @@ public class PaymentsController : BaseApiController
             isPaid,
             paymentStatus = order.PaymentStatus,
             finalAmount = order.FinalAmount,
+            depositAmount,
+            remainingAmount,
             updatedAt = order.UpdatedAt
         });
     }
@@ -1033,29 +1007,6 @@ public class PaymentsController : BaseApiController
         return User.FindFirst("tenant_id")?.Value
                ?? User.FindFirst("TenantId")?.Value
                ?? "tenant_an_nhien_02";
-    }
-
-    private async Task<PaymentAccount?> ResolvePaymentAccountAsync(
-        string tenantId, Guid? branchId, string? accountNumber, CancellationToken ct)
-    {
-        var query = _context.PaymentAccounts.AsNoTracking()
-            .Where(x => x.TenantId == tenantId && x.IsActive);
-
-        if (!string.IsNullOrWhiteSpace(accountNumber))
-            query = query.Where(x => x.AccountNumber == accountNumber.Trim());
-
-        if (branchId.HasValue && branchId.Value != Guid.Empty)
-        {
-            return await query
-                .Where(x => _context.BranchPaymentAccounts.Any(a => a.TenantId == tenantId
-                    && a.BranchId == branchId.Value && a.PaymentAccountId == x.Id && a.IsActive))
-                .OrderByDescending(x => _context.BranchPaymentAccounts.Any(a => a.TenantId == tenantId
-                    && a.BranchId == branchId.Value && a.PaymentAccountId == x.Id && a.IsDefault))
-                .ThenBy(x => x.CreatedAt)
-                .FirstOrDefaultAsync(ct);
-        }
-
-        return await query.OrderBy(x => x.CreatedAt).FirstOrDefaultAsync(ct);
     }
 
     private static string GetTenantPrefix(string tenantId)
@@ -1107,6 +1058,11 @@ public class PaymentsController : BaseApiController
     private string DecryptSecret(string storedValue)
     {
         if (string.IsNullOrWhiteSpace(storedValue)) return string.Empty;
+        if (storedValue.StartsWith("DP:", StringComparison.Ordinal))
+        {
+            try { return _sepayProtector.Unprotect(storedValue[3..]); }
+            catch (CryptographicException) { return string.Empty; }
+        }
 
         // Tương thích ngược với dữ liệu cũ chưa có tiền tố AES256:
         if (!storedValue.StartsWith(EncryptedPrefix, StringComparison.Ordinal))
@@ -1198,30 +1154,44 @@ public class PaymentsController : BaseApiController
     {
         if (string.IsNullOrWhiteSpace(content)) return ("", "");
 
-        // Hỗ trợ các định dạng: "AN02_HD1005", "AN02_1005", "HD1005", "AN02 HD1005"
+        // ƯU TIÊN 1: Tìm mẫu chuẩn "HD" + chuỗi số (VD: "AN02_HD261119151132768", "AN02HD261119151132768", "HD261119151132768")
+        // Các ngân hàng (như MBBank, Techcombank, BIDV) thường lược bỏ dấu gạch dưới "_" trong nội dung chuyển tiền
+        var hdMatch = System.Text.RegularExpressions.Regex.Match(content, @"(HD\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        if (hdMatch.Success)
+        {
+            var matchedOrderCode = hdMatch.Groups[1].Value.ToUpperInvariant();
+
+            // Tìm tiền tố cửa hàng đứng trước HD (VD: "AN02", "MT01", "CG01") có hoặc không có dấu gạch/khoảng trắng
+            var prefixMatch = System.Text.RegularExpressions.Regex.Match(content, @"([A-Za-z]{2}\d{2})[\s\-_.]*HD", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var detectedPrefix = prefixMatch.Success ? prefixMatch.Groups[1].Value.ToUpperInvariant() : "";
+
+            return (detectedPrefix, matchedOrderCode);
+        }
+
+        // ƯU TIÊN 2: Hỗ trợ các định dạng phân tách: "AN02_1005", "AN02 1005"
         var tokens = content.Split(new[] { ' ', '-', '_', '.', ',', ':', ';' }, StringSplitOptions.RemoveEmptyEntries);
-        string detectedPrefix = "";
+        string detectedPrefixToken = "";
 
         for (int i = 0; i < tokens.Length; i++)
         {
             var token = tokens[i].ToUpperInvariant();
             if ((token.StartsWith("AN0") || token.StartsWith("MT0") || token.StartsWith("CG0") || token.StartsWith("CH0")) && token.Length == 4)
             {
-                detectedPrefix = token;
+                detectedPrefixToken = token;
                 if (i + 1 < tokens.Length && tokens[i + 1].Length >= 4)
                 {
                     var nextToken = tokens[i + 1].ToUpperInvariant();
-                    return (detectedPrefix, nextToken.StartsWith("HD") ? nextToken : $"HD{nextToken}");
+                    return (detectedPrefixToken, nextToken.StartsWith("HD") ? nextToken : $"HD{nextToken}");
                 }
             }
             if (token.StartsWith("HD", StringComparison.OrdinalIgnoreCase) && token.Length >= 4)
             {
-                return (detectedPrefix, token);
+                return (detectedPrefixToken, token);
             }
         }
 
         var fallback = tokens.FirstOrDefault(p => p.Length >= 4)?.ToUpperInvariant() ?? "";
-        return (detectedPrefix, fallback);
+        return (detectedPrefixToken, fallback);
     }
 
     private static object[] BuildSecurityLayersStatus(bool hasApiKey, bool isEncrypted, bool isActive)
@@ -1272,13 +1242,33 @@ public class SePayWebhookPayload
     public string? Gateway { get; set; }
 
     [JsonPropertyName("transactionDate")]
-    public DateTime TransactionDate { get; set; }
+    public string? TransactionDate { get; set; }
+
+    [JsonIgnore]
+    public DateTime ParsedTransactionDate
+    {
+        get
+        {
+            if (!string.IsNullOrWhiteSpace(TransactionDate) &&
+                DateTime.TryParse(TransactionDate, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var dt))
+            {
+                // SePay gửi giờ Việt Nam (UTC+7) -> chuẩn hóa sang UTC bất biến
+                var vnOffset = TimeSpan.FromHours(7);
+                var dto = new DateTimeOffset(DateTime.SpecifyKind(dt, DateTimeKind.Unspecified), vnOffset);
+                return dto.UtcDateTime;
+            }
+            return DateTime.UtcNow;
+        }
+    }
 
     [JsonPropertyName("accountNumber")]
     public string? AccountNumber { get; set; }
 
     [JsonPropertyName("amountIn")]
     public decimal AmountIn { get; set; }
+
+    [JsonPropertyName("transferAmount")]
+    public decimal? TransferAmount { set { if (value.HasValue && value.Value > 0 && AmountIn == 0) AmountIn = value.Value; } }
 
     [JsonPropertyName("amountOut")]
     public decimal AmountOut { get; set; }
@@ -1289,6 +1279,15 @@ public class SePayWebhookPayload
     [JsonPropertyName("transactionContent")]
     public string? TransactionContent { get; set; }
 
+    [JsonPropertyName("content")]
+    public string? Content { set { if (!string.IsNullOrEmpty(value) && string.IsNullOrEmpty(TransactionContent)) TransactionContent = value; } }
+
+    [JsonPropertyName("description")]
+    public string? Description { set { if (!string.IsNullOrEmpty(value) && string.IsNullOrEmpty(TransactionContent)) TransactionContent = value; } }
+
     [JsonPropertyName("referenceNumber")]
     public string? ReferenceNumber { get; set; }
+
+    [JsonPropertyName("referenceCode")]
+    public string? ReferenceCode { set { if (!string.IsNullOrEmpty(value) && string.IsNullOrEmpty(ReferenceNumber)) ReferenceNumber = value; } }
 }

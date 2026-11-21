@@ -17,6 +17,18 @@ public record VoucherBatchCreateRequest(
     bool? AllowWithPromotions = true
 );
 
+public record VoucherBatchUpdateRequest(
+    string Name,
+    string DiscountType,
+    decimal DiscountValue,
+    decimal MinOrderValue,
+    decimal? MaxDiscountAmount,
+    DateTime StartDate,
+    DateTime EndDate,
+    string? Description = null,
+    bool? AllowWithPromotions = true
+);
+
 public record VoucherBatchResponse(
     Guid Id,
     string BatchCode,

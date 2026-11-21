@@ -92,7 +92,7 @@ MT_GRMS_BACKEND/
 │   │   ├── Common/                             # BaseTenantEntity (Id, TenantId, CreatedAt, IsDeleted)
 │   │   ├── Entities/                           # POCO Entities thiết kế Database theo Bounded Context
 │   │   │   ├── Catalog/                        # Product.cs, Category.cs
-│   │   │   ├── Inventory/                      # Batch.cs, StockOnHand.cs
+│   │   │   ├── Inventory/                      # BranchStock.cs, Batch.cs (legacy), StockOnHand.cs (obsolete)
 │   │   │   ├── Sales/                          # Order.cs, OrderItem.cs
 │   │   │   ├── Identity/                       # User.cs, Role.cs
 │   │   │   ├── Finance/                        # CashbookTransaction.cs

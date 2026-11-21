@@ -342,4 +342,261 @@ public class StocktakeLotAdjustmentTests
         Assert.Equal(100m, lotA.QuantityOnHand);
         Assert.Equal(0m, lotA.QuantityQuarantined);
     }
+
+    [Fact]
+    public async Task GetPagedAsync_CallsRepository_ReturnsPagedResult()
+    {
+        var (svc, repo, _, _, _) = BuildServiceWithTwoLots();
+        var query = new StocktakeFilterQuery { PageIndex = 1, PageSize = 10, Status = "ALL" };
+        var expected = new PagedResult<StocktakeListItemDto>
+        {
+            Items = new List<StocktakeListItemDto>(),
+            Page = 1,
+            PageSize = 10,
+            TotalItems = 0
+        };
+        repo.Setup(r => r.GetPagedAsync("tenant-test", query, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(expected);
+
+        var result = await svc.GetPagedAsync(query, CancellationToken.None);
+        Assert.NotNull(result);
+        Assert.Equal(0, result.TotalItems);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_ExistsAndNotFound()
+    {
+        var (svc, repo, _, _, stocktakeId) = BuildServiceWithTwoLots();
+
+        // Found
+        var result = await svc.GetByIdAsync(stocktakeId, CancellationToken.None);
+        Assert.NotNull(result);
+        Assert.Equal(stocktakeId, result.Id);
+
+        // Not found
+        var nonExistentId = Guid.NewGuid();
+        repo.Setup(r => r.GetDetailDtoByIdAsync("tenant-test", nonExistentId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((StocktakeDetailDto?)null);
+
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            svc.GetByIdAsync(nonExistentId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task CreateAsync_EmployeeAssignedDifferentBranch_ThrowsUnauthorized()
+    {
+        var tenant = new FakeTenantContext
+        {
+            CurrentRole = "STAFF",
+            CurrentBranchId = Guid.NewGuid() // Different branch
+        };
+        var repo = new Mock<IStocktakeRepository>();
+        var svc = new StocktakeService(
+            repo.Object,
+            new Mock<ISupplierReturnService>().Object,
+            new Mock<ISupplierReturnRepository>().Object,
+            new Mock<ISupplierRepository>().Object,
+            tenant,
+            new Mock<IUnitOfWork>().Object);
+
+        var cmd = new CreateStocktakeCommand(
+            BranchId: Guid.NewGuid(), // Mismatched
+            Scope: "ALL",
+            ReasonType: "PERIODIC",
+            Note: "Test",
+            BranchStockIds: null,
+            CategoryId: null,
+            Lines: null
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            svc.CreateAsync(cmd, CancellationToken.None));
+        Assert.Contains("Nhân viên chỉ được lập phiếu kiểm kê", ex.Message);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_NotFoundOrNotDraft_ThrowsAppropriateException()
+    {
+        var (svc, repo, _, _, stocktakeId) = BuildServiceWithTwoLots();
+
+        // Not found
+        var nonExistentId = Guid.NewGuid();
+        repo.Setup(r => r.GetByIdAsync("tenant-test", nonExistentId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Stocktake?)null);
+
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            svc.UpdateAsync(nonExistentId, new UpdateStocktakeCommand(null, null, new List<StocktakeLineInputDto>())));
+
+        // Not draft (PENDING_APPROVAL)
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            svc.UpdateAsync(stocktakeId, new UpdateStocktakeCommand(null, null, new List<StocktakeLineInputDto>())));
+        Assert.Contains("Chỉ được sửa phiếu kiểm kê ở trạng thái DRAFT", ex.Message);
+    }
+
+    [Fact]
+    public async Task SubmitAsync_NotDraft_ThrowsBusinessException()
+    {
+        var (svc, repo, _, _, stocktakeId) = BuildServiceWithTwoLots();
+
+        // Stocktake is PENDING_APPROVAL -> not DRAFT
+        var exStatus = await Assert.ThrowsAsync<BusinessException>(() =>
+            svc.SubmitAsync(stocktakeId, CancellationToken.None));
+        Assert.Contains("Chỉ có thể gửi duyệt", exStatus.Message);
+    }
+
+    [Fact]
+    public async Task ReviewAsync_RejectAndRecount_UpdatesStatusAndAudits()
+    {
+        var (svc, repo, _, _, stocktakeId) = BuildServiceWithTwoLots();
+        var entity = await repo.Object.GetByIdAsync("tenant-test", stocktakeId, CancellationToken.None);
+
+        // Invalid decision throws
+        var exInvalid = await Assert.ThrowsAsync<BusinessException>(() =>
+            svc.ReviewAsync(stocktakeId, new ReviewStocktakeCommand("UNKNOWN_DECISION", "Test")));
+        Assert.Contains("không hợp lệ", exInvalid.Message);
+
+        // Valid Reject
+        await svc.ReviewAsync(stocktakeId, new ReviewStocktakeCommand("REJECT", "Từ chối do số liệu sai lệch"));
+        Assert.Equal("REJECTED", entity!.Status);
+        Assert.Equal("Từ chối do số liệu sai lệch", entity.ReviewNote);
+
+        // Reset to PENDING_APPROVAL for Recount
+        entity.Status = "PENDING_APPROVAL";
+        await svc.ReviewAsync(stocktakeId, new ReviewStocktakeCommand("NEEDS_RECOUNT", "Yêu cầu đếm lại kệ 3"));
+        Assert.Equal("NEEDS_RECOUNT", entity.Status);
+        Assert.Equal("Yêu cầu đếm lại kệ 3", entity.ReviewNote);
+    }
+
+    [Fact]
+    public async Task CreateReturnFromStocktake_NotApproved_ThrowsBusinessException()
+    {
+        var (svc, _, _, _, stocktakeId) = BuildServiceWithTwoLots();
+
+        var cmd = new CreateReturnFromStocktakeCommand(
+            GoodsReceiptId: Guid.NewGuid(),
+            ResolutionType: "EXCHANGE",
+            ReasonNotes: "Hàng hỏng",
+            AttachmentUrl: null,
+            Lines: new List<CreateReturnFromStocktakeLineItemDto>()
+        );
+
+        // Status is PENDING_APPROVAL, not APPROVED
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            svc.CreateReturnFromStocktakeAsync(stocktakeId, cmd, CancellationToken.None));
+        Assert.Contains("chưa được phê duyệt", ex.Message);
+    }
+
+    [Fact]
+    public async Task CreateReturnFromStocktake_ValidationRules_EnforcedCorrectly()
+    {
+        var tenant = new FakeTenantContext();
+        var repo = new Mock<IStocktakeRepository>();
+        var returnSvc = new Mock<ISupplierReturnService>();
+        var returnRepo = new Mock<ISupplierReturnRepository>();
+        var supplierRepo = new Mock<ISupplierRepository>();
+        var uow = new Mock<IUnitOfWork>();
+
+        var stocktakeId = Guid.NewGuid();
+        var lineId = Guid.NewGuid();
+        var stocktake = new Stocktake
+        {
+            Id = stocktakeId,
+            TenantId = "tenant-test",
+            Code = "KK-APPROVED-001",
+            Status = "APPROVED",
+            Lines = new List<StocktakeLine>
+            {
+                new()
+                {
+                    Id = lineId,
+                    TenantId = "tenant-test",
+                    StocktakeId = stocktakeId,
+                    DamagedQty = 5m,
+                    DamagedAction = "RETURN_SUPPLIER",
+                    ReturnedQty = 2m
+                }
+            }
+        };
+
+        repo.Setup(r => r.GetByIdAsync("tenant-test", stocktakeId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(stocktake);
+
+        var svc = new StocktakeService(repo.Object, returnSvc.Object, returnRepo.Object, supplierRepo.Object, tenant, uow.Object);
+
+        // Case 1: Employee role throws
+        tenant.SetRole("EMPLOYEE");
+        var exRole = await Assert.ThrowsAsync<BusinessException>(() =>
+            svc.CreateReturnFromStocktakeAsync(stocktakeId, new CreateReturnFromStocktakeCommand(Guid.NewGuid(), "EXCHANGE", "Notes", null, new List<CreateReturnFromStocktakeLineItemDto>())));
+        Assert.Contains("Chỉ Store Owner", exRole.Message);
+
+        // Reset to Owner
+        tenant.SetRole("STORE_OWNER");
+
+        // Case 2: Empty lines throws
+        var exEmpty = await Assert.ThrowsAsync<BusinessException>(() =>
+            svc.CreateReturnFromStocktakeAsync(stocktakeId, new CreateReturnFromStocktakeCommand(Guid.NewGuid(), "EXCHANGE", "Notes", null, new List<CreateReturnFromStocktakeLineItemDto>())));
+        Assert.Contains("ít nhất một dòng", exEmpty.Message);
+
+        // Case 3: Line not found throws
+        var exLineNotFound = await Assert.ThrowsAsync<BusinessException>(() =>
+            svc.CreateReturnFromStocktakeAsync(stocktakeId, new CreateReturnFromStocktakeCommand(Guid.NewGuid(), "EXCHANGE", "Notes", null, new List<CreateReturnFromStocktakeLineItemDto>
+            {
+                new(Guid.NewGuid(), null, null, 1m, null)
+            })));
+        Assert.Contains("không thuộc phiếu", exLineNotFound.Message);
+
+        // Case 4: Requested qty <= 0 throws
+        var exZero = await Assert.ThrowsAsync<BusinessException>(() =>
+            svc.CreateReturnFromStocktakeAsync(stocktakeId, new CreateReturnFromStocktakeCommand(Guid.NewGuid(), "EXCHANGE", "Notes", null, new List<CreateReturnFromStocktakeLineItemDto>
+            {
+                new(lineId, null, null, 0m, null)
+            })));
+        Assert.Contains("lớn hơn 0", exZero.Message);
+
+        // Case 5: Requested qty > remaining (5 - 2 = 3 remaining, requested 4)
+        var exExceed = await Assert.ThrowsAsync<BusinessException>(() =>
+            svc.CreateReturnFromStocktakeAsync(stocktakeId, new CreateReturnFromStocktakeCommand(Guid.NewGuid(), "EXCHANGE", "Notes", null, new List<CreateReturnFromStocktakeLineItemDto>
+            {
+                new(lineId, null, null, 4m, null)
+            })));
+        Assert.Contains("vượt quá số lượng", exExceed.Message);
+
+        // Case 6: No GRN resolved throws
+        var exNoGrn = await Assert.ThrowsAsync<BusinessException>(() =>
+            svc.CreateReturnFromStocktakeAsync(stocktakeId, new CreateReturnFromStocktakeCommand(Guid.Empty, "EXCHANGE", "Notes", null, new List<CreateReturnFromStocktakeLineItemDto>
+            {
+                new(lineId, null, null, 2m, null)
+            })));
+        Assert.Contains("Phiếu nhập kho gốc", exNoGrn.Message);
+    }
+
+    [Fact]
+    public void StaticHelpers_EvaluateQuantitiesAndDispositions()
+    {
+        // Eligible return qty: DamagedQty (when DamagedAction is RETURN_SUPPLIER) + ExpiredQty (when ExpiredAction is RETURN_SUPPLIER)
+        var line1 = new StocktakeLine
+        {
+            DamagedQty = 5m,
+            DamagedAction = "RETURN_SUPPLIER",
+            ExpiredQty = 3m,
+            ExpiredAction = "RETURN_SUPPLIER",
+            ReturnedQty = 2m
+        };
+        Assert.Equal(8m, StocktakeService.GetLineEligibleReturnQty(line1)); // 5 + 3 = 8
+
+        // Write-off qty: DamagedQty (when WRITE_OFF) + ExpiredQty (when WRITE_OFF)
+        var line2 = new StocktakeLine
+        {
+            DamagedQty = 5m,
+            DamagedAction = "WRITE_OFF",
+            ExpiredQty = 3m,
+            ExpiredAction = "WRITE_OFF"
+        };
+        Assert.Equal(8m, StocktakeService.GetLineWriteOffQty(line2));
+
+        // IsReturnDisposition
+        Assert.True(StocktakeService.IsReturnDisposition("RETURN_SUPPLIER"));
+        Assert.False(StocktakeService.IsReturnDisposition("WRITE_OFF"));
+        Assert.False(StocktakeService.IsReturnDisposition(null));
+    }
 }

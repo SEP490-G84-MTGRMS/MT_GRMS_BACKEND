@@ -1,11 +1,13 @@
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Interfaces;
-using MT_GRMS.Application.HR.AttendancePolicies;
+using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Payslips;
 using MT_GRMS.Application.HR.Schedules.Dtos;
 using MT_GRMS.Application.HR.ShiftConfigs;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Entities.HR;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
@@ -16,11 +18,12 @@ public class ScheduleService : IScheduleService
     private readonly IScheduleRepository _scheduleRepository;
     private readonly IEmployeeRepository _employeeRepository;
     private readonly IShiftConfigRepository _shiftConfigRepository;
-    private readonly IBranchAttendancePolicyRepository? _policyRepository;
+    private readonly IBranchRepository? _branchRepository;
     private readonly ICloudinaryService? _cloudinaryService;
     private readonly IPayslipRepository? _payslipRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
+    private readonly INotificationService? _notificationService;
 
     public ScheduleService(
         IScheduleRepository scheduleRepository,
@@ -28,18 +31,20 @@ public class ScheduleService : IScheduleService
         IShiftConfigRepository shiftConfigRepository,
         IUnitOfWork unitOfWork,
         ITenantContext tenantContext,
-        IBranchAttendancePolicyRepository? policyRepository = null,
+        IBranchRepository? branchRepository = null,
         ICloudinaryService? cloudinaryService = null,
-        IPayslipRepository? payslipRepository = null)
+        IPayslipRepository? payslipRepository = null,
+        INotificationService? notificationService = null)
     {
         _scheduleRepository = scheduleRepository;
         _employeeRepository = employeeRepository;
         _shiftConfigRepository = shiftConfigRepository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
-        _policyRepository = policyRepository;
+        _branchRepository = branchRepository;
         _cloudinaryService = cloudinaryService;
         _payslipRepository = payslipRepository;
+        _notificationService = notificationService;
     }
 
     public async Task<ScheduleResponse> CreateAsync(
@@ -531,6 +536,37 @@ public class ScheduleService : IScheduleService
         if (count > 0)
         {
             await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            if (_notificationService != null)
+            {
+                try
+                {
+                    var tenantId = _tenantContext.CurrentTenantId;
+                    foreach (var group in schedules.GroupBy(s => s.EmployeeId))
+                    {
+                        var userId = group.FirstOrDefault()?.Employee?.UserId;
+                        if (string.IsNullOrWhiteSpace(userId))
+                        {
+                            var emp = await _employeeRepository.GetByIdAsync(group.Key, cancellationToken);
+                            userId = emp?.UserId;
+                        }
+                        if (string.IsNullOrWhiteSpace(userId)) continue;
+
+                        await _notificationService.CreateAndPushAsync(
+                            tenantId,
+                            new[] { userId },
+                            "SCHEDULE_PUBLISHED",
+                            "Lịch làm việc mới",
+                            $"Lịch làm việc mới ({group.Count()} ca) từ {fromDate:dd/MM/yyyy} đến {toDate:dd/MM/yyyy} đã được ban hành.",
+                            "/employee/attendance",
+                            cancellationToken);
+                    }
+                }
+                catch
+                {
+                    // Không làm gián đoạn luồng ban hành lịch nếu lỗi thông báo
+                }
+            }
         }
 
         return new PublishSchedulesResponse(count, $"Đã ban hành thành công {count} ca làm việc.");
@@ -541,7 +577,7 @@ public class ScheduleService : IScheduleService
     {
         if (config != null)
         {
-            var code = (config != null && !string.IsNullOrWhiteSpace(config.ShiftCode))
+            var code = !string.IsNullOrWhiteSpace(config.ShiftCode)
                 ? config.ShiftCode
                 : (!string.IsNullOrWhiteSpace(item.ShiftCode) ? item.ShiftCode : "SHIFT");
             if (code.Length > 30) code = code[..30];
@@ -787,10 +823,10 @@ public class ScheduleService : IScheduleService
 
         await EnsureScheduleNotLockedByPaidPayslipAsync(schedule, cancellationToken);
 
-        BranchAttendancePolicy? policy = null;
-        if (_policyRepository != null)
+        Branch? policy = null;
+        if (_branchRepository != null)
         {
-            policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
+            policy = await _branchRepository.GetByIdAsync(schedule.BranchId, cancellationToken);
         }
 
         switch (request.AttendanceType)
@@ -833,10 +869,9 @@ public class ScheduleService : IScheduleService
         CancellationToken cancellationToken = default)
     {
         if (!string.IsNullOrWhiteSpace(_tenantContext.CurrentRole)
-            && !string.Equals(_tenantContext.CurrentRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
-            && !string.Equals(_tenantContext.CurrentRole, "ADMIN", StringComparison.OrdinalIgnoreCase))
+            && !string.Equals(_tenantContext.CurrentRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase))
         {
-            throw new BusinessException("FORBIDDEN", "Chỉ Chủ cửa hàng hoặc Quản trị viên mới có quyền hủy chấm công.");
+            throw new BusinessException("FORBIDDEN", "Chỉ Chủ cửa hàng mới có quyền hủy chấm công.");
         }
 
         var schedule = await _scheduleRepository.GetByIdAsync(id, cancellationToken)
@@ -979,7 +1014,7 @@ public class ScheduleService : IScheduleService
     private static void ApplyWorkingAttendance(
         EmployeeSchedule schedule,
         ManualAttendanceRequest request,
-        BranchAttendancePolicy? policy)
+        Branch? policy)
     {
         var inTime = request.CheckInTime ?? schedule.PlannedStartTime;
         var outTime = request.CheckOutTime ?? schedule.PlannedEndTime;
@@ -1219,10 +1254,10 @@ public class ScheduleService : IScheduleService
         var plannedStartDateTime = workDate.Add(schedule.PlannedStartTime);
 
         var lateMinutes = 0;
-        BranchAttendancePolicy? policy = null;
-        if (_policyRepository != null)
+        Branch? policy = null;
+        if (_branchRepository != null)
         {
-            policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
+            policy = await _branchRepository.GetByIdAsync(schedule.BranchId, cancellationToken);
         }
 
         if (vnNow > plannedStartDateTime)
@@ -1294,10 +1329,10 @@ public class ScheduleService : IScheduleService
         var isNextDay = schedule.IsCheckInNextDay || schedule.PlannedEndTime < schedule.PlannedStartTime;
         var plannedEndDateTime = isNextDay ? workDate.AddDays(1).Add(schedule.PlannedEndTime) : workDate.Add(schedule.PlannedEndTime);
 
-        BranchAttendancePolicy? policy = null;
-        if (_policyRepository != null)
+        Branch? policy = null;
+        if (_branchRepository != null)
         {
-            policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
+            policy = await _branchRepository.GetByIdAsync(schedule.BranchId, cancellationToken);
         }
 
         var earlyLeaveMinutes = 0;
@@ -1469,10 +1504,10 @@ public class ScheduleService : IScheduleService
         if (!isAllTimeShift)
         {
             var plannedStartDateTime = schedule.WorkDate.Add(schedule.PlannedStartTime);
-            BranchAttendancePolicy? policy = null;
-            if (_policyRepository != null)
+            Branch? policy = null;
+            if (_branchRepository != null)
             {
-                policy = await _policyRepository.GetByBranchIdAsync(schedule.BranchId, cancellationToken);
+                policy = await _branchRepository.GetByIdAsync(schedule.BranchId, cancellationToken);
             }
 
             var lateThreshold = policy?.LateThresholdMinutes ?? 0;

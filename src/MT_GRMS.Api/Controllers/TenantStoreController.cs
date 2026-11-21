@@ -204,6 +204,7 @@ public class TenantStoreController : BaseApiController
 
         // Trial có endpoint riêng để đảm bảo one-time eligibility; purchase chỉ dành cho gói trả phí.
         var targetCode = (request.PlanCode ?? "").Trim().ToUpperInvariant();
+        var currentPlanCode = (tenant.CurrentPlan ?? "").Trim().ToUpperInvariant();
         if (targetCode.Contains("TRIAL"))
             return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("TRIAL_ENDPOINT_REQUIRED", "Vui lòng dùng chức năng Bắt đầu dùng thử."));
         if (targetCode != "STANDARD" && targetCode != "PRO")
@@ -253,6 +254,7 @@ public class TenantStoreController : BaseApiController
         }
 
         var isTrial = request.Months == 0 || string.Equals(request.PaymentMethod, "TRIAL", StringComparison.OrdinalIgnoreCase);
+        var isSuccessfulUpgrade = IsPaidPlan(currentPlanCode) && GetPlanRank(plan.PlanCode) > GetPlanRank(currentPlanCode);
         if (isTrial && request.ExtraStorageGb > 0)
             return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("INVALID_TRIAL_ADDON", "Gói dùng thử không hỗ trợ mua thêm dung lượng."));
         var months = isTrial ? 0 : (request.Months <= 0 ? 12 : request.Months);
@@ -282,6 +284,7 @@ public class TenantStoreController : BaseApiController
                                   string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase) ||
                                   request.PaymentMethod.Contains("Ví", StringComparison.OrdinalIgnoreCase);
 
+            var balanceBefore = tenant.WalletBalance;
             if (isWalletPayment)
             {
                 if (tenant.WalletBalance < grandTotal)
@@ -291,24 +294,21 @@ public class TenantStoreController : BaseApiController
                         $"Số dư ví không đủ (hiện có {tenant.WalletBalance:N0} đ, cần {grandTotal:N0} đ). Vui lòng nạp thêm tiền hoặc chọn Quét mã VietQR."));
                 }
 
-                var balanceBefore = tenant.WalletBalance;
                 tenant.WalletBalance -= grandTotal;
-                var balanceAfter = tenant.WalletBalance;
-
-                var walletTx = new MT_GRMS.Domain.Entities.SaaS.WalletTransaction
-                {
-                    TenantId = tenant.Id,
-                    TransactionCode = idempotencyCode ?? $"SUB-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid():N}",
-                    Type = "PURCHASE_PLAN",
-                    Amount = grandTotal,
-                    BalanceBefore = balanceBefore,
-                    BalanceAfter = balanceAfter,
-                    Description = $"Thanh toán gói dịch vụ {plan.PlanName} ({months} tháng)",
-                    PaymentMethod = "WALLET",
-                    Status = "SUCCESS"
-                };
-                _context.WalletTransactions.Add(walletTx);
             }
+
+            _context.WalletTransactions.Add(new MT_GRMS.Domain.Entities.SaaS.WalletTransaction
+            {
+                TenantId = tenant.Id,
+                TransactionCode = idempotencyCode ?? $"SUB-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid():N}",
+                Type = isSuccessfulUpgrade ? "UPGRADE_PLAN" : "PURCHASE_PLAN",
+                Amount = grandTotal,
+                BalanceBefore = balanceBefore,
+                BalanceAfter = tenant.WalletBalance,
+                Description = $"Thanh toán gói dịch vụ {plan.PlanName} ({months} tháng)",
+                PaymentMethod = isWalletPayment ? "WALLET" : request.PaymentMethod,
+                Status = "SUCCESS"
+            });
         }
 
         DateTime newExpiresAt;
@@ -375,6 +375,17 @@ public class TenantStoreController : BaseApiController
 
         return Ok(ApiResponse<PurchaseSubscriptionResponse>.Ok(response, isTrial ? "Kích hoạt dùng thử thành công." : "Thanh toán và gia hạn gói dịch vụ thành công."));
     }
+
+    private static bool IsPaidPlan(string planCode)
+        => planCode is "STANDARD" or "PRO";
+
+    private static int GetPlanRank(string? planCode)
+        => (planCode ?? "").Trim().ToUpperInvariant() switch
+        {
+            "STANDARD" => 1,
+            "PRO" => 2,
+            _ => 0
+        };
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> TrialActivationLocks = new();
 
@@ -602,7 +613,7 @@ public class TenantStoreController : BaseApiController
 
         // 1. Lấy các giao dịch mua gói dịch vụ từ WalletTransactions
         var paidOrders = await _context.WalletTransactions
-            .Where(w => w.TenantId == tenant.Id && (w.Type == "PURCHASE_PLAN" || w.Type == "PURCHASE_ADDON"))
+            .Where(w => w.TenantId == tenant.Id && (w.Type == "PURCHASE_PLAN" || w.Type == "UPGRADE_PLAN" || w.Type == "PURCHASE_ADDON"))
             .OrderByDescending(w => w.CreatedAt)
             .ToListAsync(cancellationToken);
 

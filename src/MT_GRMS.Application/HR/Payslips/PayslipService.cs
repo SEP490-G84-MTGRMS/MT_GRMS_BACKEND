@@ -2,12 +2,14 @@ using System.Text.Json;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Expenses;
-using MT_GRMS.Application.HR.AttendancePolicies;
+using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Payslips.Dtos;
 using MT_GRMS.Application.HR.Schedules;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.HR;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
@@ -22,30 +24,33 @@ public class PayslipService : IPayslipService
     private readonly IPayslipRepository _payslipRepository;
     private readonly IEmployeeRepository _employeeRepository;
     private readonly IScheduleRepository _scheduleRepository;
-    private readonly IBranchAttendancePolicyRepository _attendancePolicyRepository;
+    private readonly IBranchRepository _branchRepository;
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ICashbookService? _cashbookService;
     private readonly IExpenseRepository? _expenseRepository;
+    private readonly INotificationService? _notificationService;
 
     public PayslipService(
         IPayslipRepository payslipRepository,
         IEmployeeRepository employeeRepository,
         IScheduleRepository scheduleRepository,
-        IBranchAttendancePolicyRepository attendancePolicyRepository,
+        IBranchRepository branchRepository,
         ITenantContext tenantContext,
         IUnitOfWork unitOfWork,
         ICashbookService? cashbookService = null,
-        IExpenseRepository? expenseRepository = null)
+        IExpenseRepository? expenseRepository = null,
+        INotificationService? notificationService = null)
     {
         _payslipRepository = payslipRepository;
         _employeeRepository = employeeRepository;
         _scheduleRepository = scheduleRepository;
-        _attendancePolicyRepository = attendancePolicyRepository;
+        _branchRepository = branchRepository;
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
         _cashbookService = cashbookService;
         _expenseRepository = expenseRepository;
+        _notificationService = notificationService;
     }
 
     public async Task<IReadOnlyList<PayslipResponse>> GenerateMonthlyPayrollAsync(
@@ -128,7 +133,7 @@ public class PayslipService : IPayslipService
 
             var empSchedules = schedules.Where(s => s.EmployeeId == emp.Id).ToList();
 
-            var policy = await _attendancePolicyRepository.GetByBranchIdAsync(emp.BranchId, cancellationToken);
+            var policy = await _branchRepository.GetByIdAsync(emp.BranchId, cancellationToken);
             var standardDayHours = policy?.StandardDayHours ?? 8.00m;
             if (standardDayHours <= 0) standardDayHours = 8.00m;
 
@@ -352,6 +357,21 @@ public class PayslipService : IPayslipService
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        if (_notificationService != null)
+        {
+            foreach (var p in resultList.Where(x => x.Status == PayslipStatus.Unpaid))
+            {
+                await NotifyPayslipSafeAsync(
+                    p.TenantId,
+                    p.EmployeeId,
+                    p.Employee?.UserId,
+                    "PAYSLIP_GENERATED",
+                    "Phiếu lương mới",
+                    $"Phiếu lương kỳ {p.PeriodMonth} ({p.PayslipCode}) đã được tạo.",
+                    cancellationToken);
+            }
+        }
+
         return resultList.Select(MapToResponse).ToList();
     }
 
@@ -553,6 +573,15 @@ public class PayslipService : IPayslipService
         _payslipRepository.Update(payslip);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        await NotifyPayslipSafeAsync(
+            payslip.TenantId,
+            payslip.EmployeeId,
+            payslip.Employee?.UserId,
+            "PAYSLIP_PAID",
+            "Đã thanh toán lương",
+            $"Phiếu lương kỳ {payslip.PeriodMonth} số tiền {payslip.NetSalary:N0}đ đã được thanh toán ({payslip.CashbookVoucherCode}).",
+            cancellationToken);
+
         return MapToResponse(payslip);
     }
 
@@ -564,6 +593,7 @@ public class PayslipService : IPayslipService
         var successList = new List<string>();
         var errors = new List<string>();
 
+        var paidPayslips = new List<Payslip>();
         foreach (var id in request.PayslipIds)
         {
             var payslip = await _payslipRepository.GetByIdAsync(id, cancellationToken);
@@ -628,9 +658,22 @@ public class PayslipService : IPayslipService
 
             _payslipRepository.Update(payslip);
             successList.Add(payslip.PayslipCode);
+            paidPayslips.Add(payslip);
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        foreach (var paid in paidPayslips)
+        {
+            await NotifyPayslipSafeAsync(
+                paid.TenantId,
+                paid.EmployeeId,
+                paid.Employee?.UserId,
+                "PAYSLIP_PAID",
+                "Đã thanh toán lương",
+                $"Phiếu lương kỳ {paid.PeriodMonth} số tiền {paid.NetSalary:N0}đ đã được thanh toán ({paid.CashbookVoucherCode}).",
+                cancellationToken);
+        }
 
         return new BatchPayResultDto(
             TotalRequested: request.PayslipIds.Count,
@@ -639,6 +682,41 @@ public class PayslipService : IPayslipService
             PaidPayslipCodes: successList,
             Errors: errors
         );
+    }
+
+    private async Task NotifyPayslipSafeAsync(
+        string tenantId,
+        Guid employeeId,
+        string? userId,
+        string type,
+        string title,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        if (_notificationService == null) return;
+        try
+        {
+            var targetUserId = userId;
+            if (string.IsNullOrWhiteSpace(targetUserId))
+            {
+                var emp = await _employeeRepository.GetByIdAsync(employeeId, cancellationToken);
+                targetUserId = emp?.UserId;
+            }
+            if (string.IsNullOrWhiteSpace(targetUserId)) return;
+
+            await _notificationService.CreateAndPushAsync(
+                tenantId,
+                new[] { targetUserId },
+                type,
+                title,
+                message,
+                "/employee/payroll",
+                cancellationToken);
+        }
+        catch
+        {
+            // Không làm gián đoạn luồng tính/trả lương
+        }
     }
 
     private async Task<decimal> GetPayslipAdvanceFromCashbookAsync(
@@ -873,7 +951,7 @@ public class PayslipService : IPayslipService
         return s.ActualWorkHours;
     }
 
-    private static int CalculateEffectiveLateMinutes(EmployeeSchedule s, BranchAttendancePolicy? policy)
+    private static int CalculateEffectiveLateMinutes(EmployeeSchedule s, Branch? policy)
     {
         if (policy == null)
         {
@@ -897,7 +975,7 @@ public class PayslipService : IPayslipService
         return s.LateMinutes > policy.LateThresholdMinutes ? s.LateMinutes : 0;
     }
 
-    private static int CalculateEffectiveEarlyLeaveMinutes(EmployeeSchedule s, BranchAttendancePolicy? policy)
+    private static int CalculateEffectiveEarlyLeaveMinutes(EmployeeSchedule s, Branch? policy)
     {
         if (policy == null)
         {
@@ -930,7 +1008,7 @@ public class PayslipService : IPayslipService
         IReadOnlyList<EmployeeSchedule> workingSchedules,
         decimal totalWorkHours,
         decimal standardDayHours,
-        BranchAttendancePolicy? policy)
+        Branch? policy)
     {
         var shouldConvert = policy == null || policy.IsConvertHoursToDays;
         var rulesJson = (policy != null && !string.IsNullOrWhiteSpace(policy.ConversionRulesJson))

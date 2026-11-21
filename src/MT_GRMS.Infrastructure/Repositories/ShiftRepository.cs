@@ -23,8 +23,6 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
         return await _context.ShiftZReports
             .Include(s => s.CashMovements)
             .Include(s => s.Branch)
-            .Include(s => s.Participants)
-            .Include(s => s.CloseConfirmations)
             .FirstOrDefaultAsync(s => s.Id == id, cancellationToken);
     }
 
@@ -33,8 +31,6 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
         var query = _context.ShiftZReports
             .Include(s => s.CashMovements)
             .Include(s => s.Branch)
-            .Include(s => s.Participants)
-            .Include(s => s.CloseConfirmations)
             .Where(s => s.BranchId == branchId && (s.Status == ShiftState.Open || s.Status == ShiftState.Closing));
 
         if (tillId.HasValue && tillId.Value != Guid.Empty)
@@ -75,8 +71,6 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
         var query = _context.ShiftZReports
             .Include(s => s.CashMovements)
             .Include(s => s.Branch)
-            .Include(s => s.Participants)
-            .Include(s => s.CloseConfirmations)
             .Where(s => s.BranchId == branchId);
 
         if (fromUtc.HasValue)
@@ -152,7 +146,7 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
 
         if (branchId.HasValue && branchId.Value != Guid.Empty)
         {
-            query = query.Where(m => m.Shift.BranchId == branchId.Value);
+            query = query.Where(m => m.Shift != null && m.Shift.BranchId == branchId.Value);
         }
 
         return await query
@@ -160,50 +154,15 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<StorePaymentConfig?> GetPaymentConfigAsync(string tenantId, CancellationToken cancellationToken = default)
+    public async Task<MT_GRMS.Domain.Entities.SaaS.Tenant?> GetPaymentConfigAsync(string tenantId, CancellationToken cancellationToken = default)
     {
-        return await _context.StorePaymentConfigs
-            .FirstOrDefaultAsync(c => c.TenantId == tenantId && !c.IsDeleted, cancellationToken);
+        return await _context.Tenants.FirstOrDefaultAsync(c => c.Id == tenantId && !c.IsDeleted, cancellationToken);
     }
 
-    public async Task SavePaymentConfigAsync(StorePaymentConfig config, CancellationToken cancellationToken = default)
+    public Task SavePaymentConfigAsync(MT_GRMS.Domain.Entities.SaaS.Tenant config, CancellationToken cancellationToken = default)
     {
-        var existing = await _context.StorePaymentConfigs
-            .FirstOrDefaultAsync(c => c.TenantId == config.TenantId && !c.IsDeleted, cancellationToken);
-        if (existing == null)
-        {
-            await _context.StorePaymentConfigs.AddAsync(config, cancellationToken);
-        }
-        else
-        {
-            existing.CashOutApprovalThreshold = config.CashOutApprovalThreshold;
-            existing.CashOutShiftTotalLimit = config.CashOutShiftTotalLimit;
-            existing.UpdatedAt = DateTime.UtcNow;
-        }
-    }
-
-    public async Task AddParticipantAsync(ShiftParticipant participant, CancellationToken cancellationToken = default)
-    {
-        await _context.ShiftParticipants.AddAsync(participant, cancellationToken);
-    }
-
-    public async Task<ShiftParticipant?> GetParticipantAsync(Guid shiftId, Guid userId, CancellationToken cancellationToken = default)
-    {
-        return await _context.ShiftParticipants
-            .FirstOrDefaultAsync(p => p.ShiftId == shiftId && p.UserId == userId, cancellationToken);
-    }
-
-    public async Task AddCloseConfirmationAsync(ShiftCloseConfirmation confirmation, CancellationToken cancellationToken = default)
-    {
-        await _context.ShiftCloseConfirmations.AddAsync(confirmation, cancellationToken);
-    }
-
-    public async Task ClearCloseConfirmationsAsync(Guid shiftId, CancellationToken cancellationToken = default)
-    {
-        var list = await _context.ShiftCloseConfirmations
-            .Where(c => c.ShiftId == shiftId)
-            .ToListAsync(cancellationToken);
-        _context.ShiftCloseConfirmations.RemoveRange(list);
+        config.UpdatedAt = DateTime.UtcNow;
+        return Task.CompletedTask;
     }
 
     public async Task<Guid?> ResolveBranchIdAsync(string? branchIdOrCode, CancellationToken cancellationToken = default)

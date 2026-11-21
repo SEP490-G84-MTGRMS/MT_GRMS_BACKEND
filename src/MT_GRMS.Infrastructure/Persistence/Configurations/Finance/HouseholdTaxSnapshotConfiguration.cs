@@ -56,6 +56,7 @@ public class HouseholdTaxSnapshotConfiguration : IEntityTypeConfiguration<Househ
         builder.Property(x => x.Status)
             .HasConversion<int>()
             .HasDefaultValue(MT_GRMS.Domain.Enums.TaxSnapshotStatus.Finalized)
+            .ValueGeneratedNever()
             .IsRequired();
 
         builder.Property(x => x.RevisionNumber)

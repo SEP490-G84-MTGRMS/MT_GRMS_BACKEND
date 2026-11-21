@@ -38,11 +38,15 @@ public class Tenant : BaseEntity<string>
     public string? LockReason { get; set; }
     public DateTime? LockedAt { get; set; }
     public string? LockedBy { get; set; }
+    public string SepayApiKeyEncrypted { get; set; } = string.Empty;
+    public string SepayWebhookSecret { get; set; } = string.Empty;
+    public bool IsSepayEnabled { get; set; }
+    public decimal CashOutApprovalThreshold { get; set; } = 200000m;
+    public decimal CashOutShiftTotalLimit { get; set; }
 
     // Navigations
     public SubscriptionPlan? SubscriptionPlan { get; set; }
     public ICollection<TenantUser> TenantUsers { get; set; } = new List<TenantUser>();
     public ICollection<Branch> Branches { get; set; } = new List<Branch>();
     public ICollection<WalletTransaction> WalletTransactions { get; set; } = new List<WalletTransaction>();
-    public ICollection<WalletTopupOrder> WalletTopupOrders { get; set; } = new List<WalletTopupOrder>();
 }

@@ -84,15 +84,6 @@ public class TenantService : ITenantService
             throw new KeyNotFoundException($"Không tìm thấy khách thuê với mã định danh '{id}'.");
         }
 
-        var branches = t.Branches.Select(b => new TenantDetailBranchSummaryDto(
-            Id: b.Id,
-            BranchCode: b.BranchCode,
-            Name: b.Name,
-            Address: b.Address,
-            Phone: b.Phone,
-            IsActive: b.IsActive
-        )).ToList();
-
         var now = DateTime.UtcNow;
         var (status, _, _) = ComputeStatus(t, now);
         var isNoPlan = string.Equals(t.SubscriptionStatus, "NO_PLAN", StringComparison.OrdinalIgnoreCase);
@@ -119,7 +110,7 @@ public class TenantService : ITenantService
             MaxBranches: t.SubscriptionPlan?.MaxBranches ?? 1,
             StaffCount: t.TenantUsers.Count,
             MaxStaff: t.SubscriptionPlan?.MaxStaff ?? 5,
-            Branches: branches,
+            Branches: new List<TenantDetailBranchSummaryDto>(),
             CreatedAt: t.CreatedAt,
             UpdatedAt: t.UpdatedAt,
             WalletBalance: t.WalletBalance

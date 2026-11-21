@@ -19,7 +19,7 @@ public record StorageUsage(long UsedBytes, long LimitBytes, int BaseGb, int Extr
 public class TenantStorageController(AppDbContext context) : BaseApiController
 {
     private const long Gb = 1024L * 1024 * 1024;
-    private const decimal PricePerGbMonth = 15000m;
+    private const decimal DefaultPricePerGbMonth = 15000m;
 
     private string? TenantId => User.FindFirst("tenant_id")?.Value;
 
@@ -38,8 +38,10 @@ public class TenantStorageController(AppDbContext context) : BaseApiController
         if (extraGb < 1 || extraGb > 100 || string.IsNullOrWhiteSpace(TenantId)) return (null, null);
         var tenant = await context.Tenants.SingleOrDefaultAsync(t => t.Id == TenantId, cancellationToken);
         if (tenant?.SubscriptionExpiresAt is not DateTime expiry || expiry <= DateTime.UtcNow || tenant.SubscriptionStatus != "ACTIVE") return (tenant, null);
+        var platformSetting = await context.PlatformSettings.AsNoTracking().FirstOrDefaultAsync(cancellationToken);
+        var pricePerGbMonth = platformSetting?.StorageAddonPricePerGbMonthly ?? DefaultPricePerGbMonth;
         var remainingDays = (decimal)(expiry - DateTime.UtcNow).TotalDays;
-        var subtotal = Math.Round(extraGb * PricePerGbMonth * remainingDays / 30m, 0, MidpointRounding.AwayFromZero);
+        var subtotal = Math.Round(extraGb * pricePerGbMonth * remainingDays / 30m, 0, MidpointRounding.AwayFromZero);
         var vat = Math.Round(subtotal * 0.1m, 0, MidpointRounding.AwayFromZero);
         return (tenant, new StorageQuote(extraGb, subtotal, vat, subtotal + vat, expiry));
     }

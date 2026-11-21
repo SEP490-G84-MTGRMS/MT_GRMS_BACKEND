@@ -79,6 +79,7 @@ public static class DependencyInjection
 
         // Đăng ký Repository cụ thể cho từng module
         services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<Application.Notifications.INotificationRepository, NotificationRepository>();
         services.AddScoped<IRegistrationOtpStore, RegistrationOtpStore>();
         services.AddScoped<Application.SaaS.Services.ITrialOnboardingBackfillService, Services.TrialOnboardingBackfillService>();
         services.AddScoped<IInventoryRepository, InventoryRepository>();
@@ -112,12 +113,14 @@ public static class DependencyInjection
         services.AddScoped<Application.Promotions.IPromotionRepository, PromotionRepository>();
         services.AddScoped<IEmployeeRepository, EmployeeRepository>();
         services.AddScoped<IShiftConfigRepository, ShiftConfigRepository>();
-        services.AddScoped<IBranchAttendancePolicyRepository, BranchAttendancePolicyRepository>();
         services.AddScoped<IScheduleRepository, ScheduleRepository>();
         services.AddScoped<IScheduleApprovalRequestRepository, ScheduleApprovalRequestRepository>();
         services.AddScoped<IPayslipRepository, PayslipRepository>();
         services.AddScoped<ISubscriptionPlanRepository, SubscriptionPlanRepository>();
         services.AddScoped<ITenantRepository, TenantRepository>();
+        services.AddScoped<IMasterProductRepository, MasterProductRepository>();
+        services.AddScoped<Application.Admin.Services.IMasterCatalogExcelService, Services.MasterCatalogExcelService>();
+        services.AddScoped<Application.Admin.Services.IPlatformSettingService, Services.PlatformSettingService>();
 
         // Đăng ký dịch vụ máy in nhiệt hóa đơn POS-58 (khổ in 43mm siêu thị mini)
         services.AddScoped<IThermalPrintService, ThermalPrintService>();

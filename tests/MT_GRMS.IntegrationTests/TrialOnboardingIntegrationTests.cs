@@ -449,11 +449,11 @@ public class TrialOnboardingIntegrationTests
             Id = "t-sepay", Name = "Sepay Mart", Subdomain = "sepay", Code = "SP",
             SubscriptionStatus = "NO_PLAN", WalletBalance = 0m
         });
-        db.WalletTopupOrders.Add(new WalletTopupOrder
+        db.WalletTransactions.Add(new WalletTransaction
         {
             TenantId = "t-sepay", OrderCode = "778899", Amount = 300_000m,
-            TransferContent = "WAL 778899", BankCode = "MB", BankName = "MB",
-            AccountNumber = "1900", AccountName = "MT", QrUrl = "https://qr", Status = "PENDING",
+            TransactionCode = "WAL-ORDER-778899", Type = "TOPUP", RequestedAmount = 300_000m,
+            TransferContent = "WAL 778899", Status = "PENDING",
             ExpiresAt = DateTime.UtcNow.AddMinutes(10)
         });
         await db.SaveChangesAsync();

@@ -3,6 +3,7 @@ using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Catalog;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.UnitTests.Catalog;
@@ -726,6 +727,163 @@ public class CatalogServiceTests
         Assert.Single(prodRepo.Products);
         Assert.Equal(2, prodRepo.Products[0].ImageUrls.Count);
         Assert.Equal("https://res.cloudinary.com/img1.png", prodRepo.Products[0].ImageUrl);
+    }
+
+    [Fact]
+    public async Task GetByBarcodeAsync_Variants_ShouldWork()
+    {
+        var (service, prodRepo, _, _, _, _, catId) = CreateSut();
+
+        // 1. Empty/null returns null
+        Assert.Null(await service.GetByBarcodeAsync(""));
+        Assert.Null(await service.GetByBarcodeAsync("   "));
+
+        // 2. Non-existent returns null
+        Assert.Null(await service.GetByBarcodeAsync("NON_EXISTENT_BARCODE"));
+
+        // 3. Match by Barcode
+        var prod1 = new Product { Id = Guid.NewGuid(), Name = "Bánh Snack", ProductCode = "SP-SNACK", Barcode = "893500112233", CategoryId = catId };
+        prodRepo.Products.Add(prod1);
+        var res1 = await service.GetByBarcodeAsync("893500112233");
+        Assert.NotNull(res1);
+        Assert.Equal(prod1.Id, res1.Id);
+
+        // 4. Match by ProductCode
+        var resCode = await service.GetByBarcodeAsync("SP-SNACK");
+        Assert.NotNull(resCode);
+        Assert.Equal(prod1.Id, resCode.Id);
+    }
+
+    [Fact]
+    public async Task GetAllAsync_ShouldReturnAllProductsWithOrderFlags()
+    {
+        var (service, prodRepo, _, _, _, _, catId) = CreateSut();
+
+        var prod1 = new Product { Id = Guid.NewGuid(), Name = "Kem đánh răng", ProductCode = "SP-KDR", CategoryId = catId };
+        var prod2 = new Product { Id = Guid.NewGuid(), Name = "Bàn chải", ProductCode = "SP-BC", CategoryId = catId };
+        prodRepo.Products.Add(prod1);
+        prodRepo.Products.Add(prod2);
+        prodRepo.OrderedProductIds.Add(prod1.Id);
+
+        var all = await service.GetAllAsync();
+        Assert.Equal(2, all.Count);
+        Assert.True(all.First(p => p.Id == prod1.Id).HasOrders);
+        Assert.False(all.First(p => p.Id == prod2.Id).HasOrders);
+    }
+
+    [Fact]
+    public async Task GetPriceHistoryAsync_ShouldReturnHistoryDtos()
+    {
+        var (service, prodRepo, _, historyRepo, _, _, catId) = CreateSut();
+        var prodId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+
+        historyRepo.Histories.Add(new ProductPriceHistory
+        {
+            Id = Guid.NewGuid(),
+            ProductId = prodId,
+            BranchId = branchId,
+            PriceScope = "BRANCH",
+            PriceType = "SELLING",
+            OldPrice = 10000m,
+            NewPrice = 12000m,
+            Reason = "Lạm phát",
+            CreatedAt = DateTime.UtcNow
+        });
+
+        var history = await service.GetPriceHistoryAsync(prodId, branchId);
+        Assert.Single(history);
+        Assert.Equal(10000m, history[0].OldPrice);
+        Assert.Equal(12000m, history[0].NewPrice);
+        Assert.Equal("Lạm phát", history[0].Reason);
+    }
+
+    [Fact]
+    public async Task UpdateProductAsync_ValidationErrors_ShouldThrowExpectedExceptions()
+    {
+        var (service, prodRepo, catRepo, _, _, _, catId) = CreateSut();
+        var prodId = Guid.NewGuid();
+        var existing = new Product
+        {
+            Id = prodId,
+            Name = "Existing Product",
+            ProductCode = "SP-001",
+            Barcode = "893000001",
+            SellingPrice = 50000m,
+            CostPrice = 30000m,
+            CategoryId = catId,
+            BaseUnit = "Gói"
+        };
+        prodRepo.Products.Add(existing);
+
+        var validReq = new ProductUpdateRequest(
+            Name: "Updated Name",
+            CategoryId: catId,
+            BaseUnit: "Hộp",
+            CostPrice: 30000m,
+            SellingPrice: 50000m,
+            MinStock: 5,
+            MaxStock: 50,
+            Barcode: "893000002",
+            Description: "Mo ta",
+            InternalNote: "Ghi chu",
+            VatRate: 10,
+            Status: "Active"
+        );
+
+        // 1. Empty name
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(prodId, validReq with { Name = "" }));
+
+        // 2. Name > 200 chars
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(prodId, validReq with { Name = new string('A', 201) }));
+
+        // 3. BaseUnit > 30 chars
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(prodId, validReq with { BaseUnit = new string('U', 31) }));
+
+        // 4. SellingPrice < 0 or > 1B
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(prodId, validReq with { SellingPrice = -1 }));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(prodId, validReq with { SellingPrice = 1_000_000_001m }));
+
+        // 5. CostPrice < 0 or > 1B
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(prodId, validReq with { CostPrice = -1 }));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(prodId, validReq with { CostPrice = 1_000_000_001m }));
+
+        // 6. MinStock < 0 or MaxStock < MinStock
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(prodId, validReq with { MinStock = -1 }));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(prodId, validReq with { MinStock = 10, MaxStock = 5 }));
+
+        // 7. Description > 1000
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(prodId, validReq with { Description = new string('D', 1001) }));
+
+        // 8. InternalNote > 500
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(prodId, validReq with { InternalNote = new string('N', 501) }));
+
+        // 9. Non-existent product
+        await Assert.ThrowsAsync<NotFoundException>(() => service.UpdateProductAsync(Guid.NewGuid(), validReq));
+
+        // 10. Empty category id
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(prodId, validReq with { CategoryId = Guid.Empty }));
+
+        // 11. Category not found
+        await Assert.ThrowsAsync<BusinessException>(() => service.UpdateProductAsync(prodId, validReq with { CategoryId = Guid.NewGuid() }));
+
+        // 12. Barcode with whitespace or > 50
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(prodId, validReq with { Barcode = "BAR CODE" }));
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(prodId, validReq with { Barcode = new string('1', 51) }));
+
+        // 13. Barcode duplicate
+        var otherProd = new Product { Id = Guid.NewGuid(), Name = "Other", ProductCode = "SP-002", Barcode = "893999999" };
+        prodRepo.Products.Add(otherProd);
+        var exDup = await Assert.ThrowsAsync<BusinessException>(() => service.UpdateProductAsync(prodId, validReq with { Barcode = "893999999" }));
+        Assert.Equal("PRODUCT_BARCODE_EXISTS", exDup.ErrorCode);
+
+        // 14. Empty barcode clears barcode
+        var updatedEmptyBarcode = await service.UpdateProductAsync(prodId, validReq with { Barcode = "" });
+        Assert.Null(updatedEmptyBarcode.Barcode);
+
+        // 15. Status change to Inactive
+        var updatedInactive = await service.UpdateProductAsync(prodId, validReq with { Status = "Inactive" });
+        Assert.Equal("Inactive", updatedInactive.Status);
     }
 }
 

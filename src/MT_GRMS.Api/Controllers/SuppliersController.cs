@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Application.Suppliers.Dtos;
+using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Api.Controllers;
 
@@ -294,11 +295,12 @@ public class SuppliersController : BaseApiController
         Guid id,
         [FromQuery] DateTime? fromDate,
         [FromQuery] DateTime? toDate,
+        [FromQuery] APDocType? docType = null,
         [FromQuery] int pageIndex = 1,
         [FromQuery] int pageSize = 20,
         CancellationToken cancellationToken = default)
     {
-        var result = await _supplierService.GetAPLedgerAsync(id, fromDate, toDate, pageIndex, pageSize, cancellationToken);
+        var result = await _supplierService.GetAPLedgerAsync(id, fromDate, toDate, pageIndex, pageSize, cancellationToken, docType);
         return Ok(ApiResponse<PagedResult<SupplierAPLedgerDto>>.Ok(result));
     }
 
@@ -421,27 +423,29 @@ public class SuppliersController : BaseApiController
     }
 
     /// <summary>
-    /// Xuất Excel danh sách SP đã gán NCC để điền giá nhập sỉ + MOQ.
+    /// Xuất Excel SP đã gán NCC theo bộ lọc màn hình (giá nhập sỉ + MOQ).
     /// </summary>
     [HttpGet("{id:guid}/products/export")]
     public async Task<IActionResult> ExportSupplierProducts(
         Guid id,
+        [FromQuery] SupplierProductQueryFilter filter,
         [FromServices] ISupplierProductExcelService excelService,
         CancellationToken cancellationToken)
     {
-        var file = await excelService.ExportAsync(id, cancellationToken);
+        var file = await excelService.ExportAsync(id, filter, cancellationToken);
         return File(file.Content, file.ContentType, file.FileName);
     }
 
     /// <summary>
-    /// Import Excel: validate + override giá nhập sỉ &amp; MOQ (partial success theo từng dòng).
+    /// Import Excel: validate theo bộ lọc màn hình + override giá nhập sỉ &amp; MOQ (partial success).
     /// </summary>
     [HttpPost("{id:guid}/products/import")]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(10_000_000)]
     public async Task<IActionResult> ImportSupplierProducts(
         Guid id,
-        IFormFile? file,
+        [FromForm] IFormFile? file,
+        [FromQuery] SupplierProductQueryFilter filter,
         [FromServices] ISupplierProductExcelService excelService,
         CancellationToken cancellationToken)
     {
@@ -451,7 +455,7 @@ public class SuppliersController : BaseApiController
         }
 
         await using var stream = file.OpenReadStream();
-        var result = await excelService.ImportAsync(id, stream, file.FileName, cancellationToken);
+        var result = await excelService.ImportAsync(id, stream, file.FileName, filter, cancellationToken);
         var msg = result.Summary.FailedCount == 0
             ? $"Import thành công {result.Summary.SuccessCount}/{result.Summary.TotalRows} dòng."
             : $"Import xong: {result.Summary.SuccessCount} thành công, {result.Summary.FailedCount} lỗi / {result.Summary.TotalRows} dòng.";

@@ -8,6 +8,12 @@ public static class SystemRoles
     public const string Employee = "EMPLOYEE";
 
     /// <summary>
+    /// Quyền dành cho tất cả người dùng phân hệ Nhân sự (Chủ cửa hàng và Nhân viên, không bao gồm ADMIN SaaS)
+    /// Hỗ trợ fallback EMPLOYEE cho các token cũ chưa hết hạn
+    /// </summary>
+    public const string HrAllStaffAndOwner = "STORE_OWNER,STAFF,EMPLOYEE";
+
+    /// <summary>
     /// Quyền dành cho Quản trị viên và Chủ cửa hàng
     /// </summary>
     public const string OwnerOrAdmin = "STORE_OWNER,ADMIN";

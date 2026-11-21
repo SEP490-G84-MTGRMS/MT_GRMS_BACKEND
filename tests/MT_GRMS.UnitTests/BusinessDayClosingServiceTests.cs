@@ -79,6 +79,7 @@ public class BusinessDayClosingServiceTests
         cashbook.Setup(x => x.DisburseCashAsync(It.IsAny<Guid>(), It.IsAny<FinanceAccountType>(), It.IsAny<decimal>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid a, FinanceAccountType t, decimal m, string _, Guid? _, string r, string _, CancellationToken _) => Entry(a, t, m, r));
         repo.Funds.Add(safe);
+        repo.Funds.Add(bank);
         return (new BusinessDayClosingService(repo, cashbook.Object, uow, tenant), repo, cashbook);
     }
 
@@ -197,6 +198,23 @@ public class BusinessDayClosingServiceTests
     }
 
     [Fact]
+    public async Task PreviewAsync_OpenShiftShowsCloseShiftBlockerWithoutHandoverBlocker()
+    {
+        var (service, repo, _) = Create();
+        var shift = new ShiftZReport
+        {
+            Id = Guid.NewGuid(), Status = ShiftState.Open,
+            HandoverStatus = HandoverStatus.PENDING, ShiftCode = "CA-DANG-BAN"
+        };
+        repo.Shifts.Add(shift);
+
+        var preview = await service.PreviewAsync(Guid.NewGuid(), new DateOnly(2026, 11, 19));
+
+        Assert.Contains(preview.Blockers, blocker => blocker.Code == "OPEN_SHIFTS_EXIST" && blocker.EntityId == shift.Id.ToString());
+        Assert.DoesNotContain(preview.Blockers, blocker => blocker.Code == "UNCONFIRMED_HANDOVER" && blocker.EntityId == shift.Id.ToString());
+    }
+
+    [Fact]
     public async Task CloseAsync_WhenHandoverNotConfirmed_IsRejected()
     {
         var (service, repo, _) = Create();
@@ -212,6 +230,19 @@ public class BusinessDayClosingServiceTests
         repo.HasPendingPayment = true;
         var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CloseAsync(new CloseBusinessDayRequest(Guid.NewGuid(), new DateOnly(2026, 11, 12), [], "preview")));
         Assert.Equal("PENDING_PAYMENT_ORDERS", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task PreviewAsync_WhenPaymentPending_LinksToPosOrderResolution()
+    {
+        var (service, repo, _) = Create();
+        repo.HasPendingPayment = true;
+        var branchId = Guid.NewGuid();
+
+        var preview = await service.PreviewAsync(branchId, new DateOnly(2026, 11, 12));
+
+        Assert.Contains(preview.Blockers, blocker => blocker.Code == "PENDING_PAYMENT_ORDERS"
+            && blocker.ActionPath == $"/pos/orders?status=PENDING_PAYMENT&branchId={branchId}");
     }
 
     [Fact]
@@ -271,8 +302,35 @@ public class BusinessDayClosingServiceTests
         Assert.Null(repo.Added);
     }
 
+    [Theory]
+    [InlineData(FinanceAccountType.Safe, "SAFE_NOT_CONFIGURED")]
+    [InlineData(FinanceAccountType.Bank, "BANK_NOT_CONFIGURED")]
+    public async Task CloseAsync_WhenRevenueFundIsMissing_IsRejected(FinanceAccountType missingType, string expectedCode)
+    {
+        var (service, repo, _) = Create();
+        var branchId = Guid.NewGuid();
+        var date = new DateOnly(2026, 11, 14);
+        repo.Funds.RemoveAll(fund => fund.AccountType == missingType);
+        repo.Orders.Add(new Order
+        {
+            BranchId = branchId, BusinessDate = date, Status = "Completed",
+            PaymentMethod = missingType == FinanceAccountType.Safe ? "CASH" : "BANK",
+            FinalAmount = 100_000m
+        });
+        var preview = await service.PreviewAsync(branchId, date);
+
+        Assert.Contains(preview.Blockers, blocker => blocker.Code == expectedCode);
+        var request = new CloseBusinessDayRequest(branchId, date,
+            preview.Funds.Where(fund => fund.RequiresPhysicalCount)
+                .Select(fund => new BusinessDayFundCount(fund.FundId, fund.ExpectedCash)).ToList(),
+            preview.PreviewToken);
+        var error = await Assert.ThrowsAsync<BusinessException>(() => service.CloseAsync(request));
+        Assert.Equal(expectedCode, error.ErrorCode);
+        Assert.Null(repo.Added);
+    }
+
     [Fact]
-    public async Task ReopenAsync_PreservesSnapshotAndRecordsAudit()
+    public async Task ReopenAsync_AfterClosing_IsRejectedAndPreservesSnapshot()
     {
         var (service, repo, _) = Create();
         var closing = new BusinessDayClosing
@@ -283,12 +341,12 @@ public class BusinessDayClosingServiceTests
         };
         repo.History.Add(closing);
 
-        var result = await service.ReopenAsync(closing.Id, new ReopenBusinessDayRequest("Bổ sung phiếu chi bị thiếu"));
+        var error = await Assert.ThrowsAsync<BusinessException>(() => service.ReopenAsync(closing.Id, new ReopenBusinessDayRequest("Bổ sung phiếu chi bị thiếu")));
 
-        Assert.Equal("Reopened", result.Status);
-        Assert.False(result.IsActive);
-        Assert.Equal("Bổ sung phiếu chi bị thiếu", result.ReopenReason);
-        Assert.NotNull(result.ReopenedAtUtc);
+        Assert.Equal("BUSINESS_DAY_FINALIZED", error.ErrorCode);
+        Assert.Equal(BusinessDayClosingStatus.Closed, closing.Status);
+        Assert.True(closing.IsActive);
+        Assert.Null(closing.ReopenedAtUtc);
     }
 
     [Fact]
@@ -309,6 +367,87 @@ public class BusinessDayClosingServiceTests
         Assert.Equal(2, repo.Added!.Version);
         Assert.Equal(previous.Id, repo.Added.SupersedesClosingId);
         Assert.EndsWith("-V2", result.ReferenceCode);
+    }
+
+    [Fact]
+    public async Task EnsureOwnerOrAdmin_RejectsUnauthorizedStaff()
+    {
+        var (service, repo, _) = Create();
+        var branchId = Guid.NewGuid();
+        var date = new DateOnly(2026, 11, 14);
+
+        // Staff role
+        var tenant = new TenantContext { CurrentRole = "STAFF" };
+        var serviceStaff = new BusinessDayClosingService(repo, Mock.Of<ICashbookService>(), new UnitOfWork(), tenant);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            serviceStaff.CloseAsync(new CloseBusinessDayRequest(branchId, date, [], "token")));
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            serviceStaff.GetHistoryAsync(branchId, date));
+    }
+
+    [Fact]
+    public async Task CloseAsync_ValidationAndBlockers_ShouldBeRejected()
+    {
+        var (service, repo, _) = Create();
+        var branchId = Guid.NewGuid();
+        var date = new DateOnly(2026, 11, 14);
+
+        // Duplicate fund count
+        var dupFundReq = new CloseBusinessDayRequest(branchId, date,
+            [new BusinessDayFundCount(repo.Funds[0].Id, 100), new BusinessDayFundCount(repo.Funds[0].Id, 200)], "token");
+        var exDup = await Assert.ThrowsAsync<BusinessException>(() => service.CloseAsync(dupFundReq));
+        Assert.Equal("DUPLICATE_FUND_COUNT", exDup.ErrorCode);
+
+        // Note too long
+        var longNoteReq = new CloseBusinessDayRequest(branchId, date,
+            [new BusinessDayFundCount(repo.Funds[0].Id, 100)], "token", new string('x', 501));
+        var exNote = await Assert.ThrowsAsync<BusinessException>(() => service.CloseAsync(longNoteReq));
+        Assert.Equal("NOTE_TOO_LONG", exNote.ErrorCode);
+
+        // Branch not accessible
+        repo.BranchAccessible = false;
+        var exBranch = await Assert.ThrowsAsync<BusinessException>(() => service.CloseAsync(
+            new CloseBusinessDayRequest(branchId, date, [new BusinessDayFundCount(repo.Funds[0].Id, 100)], "token")));
+        Assert.Equal("BRANCH_NOT_FOUND", exBranch.ErrorCode);
+        repo.BranchAccessible = true;
+    }
+
+    [Fact]
+    public async Task GetHistoryAsync_And_ReopenAsync_EdgeCases_ShouldBeRejected()
+    {
+        var (service, repo, _) = Create();
+        var branchId = Guid.NewGuid();
+        var date = new DateOnly(2026, 11, 14);
+
+        // History invalid branch
+        await Assert.ThrowsAsync<BusinessException>(() => service.GetHistoryAsync(Guid.Empty, date));
+
+        // History default date
+        await Assert.ThrowsAsync<BusinessException>(() => service.GetHistoryAsync(branchId, default));
+
+        // Reopen empty id
+        await Assert.ThrowsAsync<BusinessException>(() => service.ReopenAsync(Guid.Empty, new ReopenBusinessDayRequest("Lý do")));
+
+        // Reopen empty reason
+        await Assert.ThrowsAsync<BusinessException>(() => service.ReopenAsync(Guid.NewGuid(), new ReopenBusinessDayRequest("")));
+
+        // Reopen reason too long
+        await Assert.ThrowsAsync<BusinessException>(() => service.ReopenAsync(Guid.NewGuid(), new ReopenBusinessDayRequest(new string('a', 501))));
+
+        // Reopen not found
+        await Assert.ThrowsAsync<BusinessException>(() => service.ReopenAsync(Guid.NewGuid(), new ReopenBusinessDayRequest("Lý do")));
+
+        // Reopen already reopened
+        var closing = new BusinessDayClosing
+        {
+            Id = Guid.NewGuid(), TenantId = "tenant-test", BranchId = branchId,
+            Status = BusinessDayClosingStatus.Reopened, IsActive = false
+        };
+        repo.History.Add(closing);
+        var exAlready = await Assert.ThrowsAsync<BusinessException>(() => service.ReopenAsync(closing.Id, new ReopenBusinessDayRequest("Lý do")));
+        Assert.Equal("BUSINESS_DAY_ALREADY_REOPENED", exAlready.ErrorCode);
     }
 
     [Theory]

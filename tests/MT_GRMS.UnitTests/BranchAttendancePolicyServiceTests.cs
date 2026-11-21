@@ -115,36 +115,6 @@ public class BranchAttendancePolicyServiceTests
         public Task<BranchDetailDto?> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<BranchDetailDto?>(null);
     }
 
-    private class FakeBranchAttendancePolicyRepository : IBranchAttendancePolicyRepository
-    {
-        public List<BranchAttendancePolicy> Policies { get; } = new();
-
-        public Task<BranchAttendancePolicy?> GetByBranchIdAsync(Guid branchId, CancellationToken cancellationToken = default)
-        {
-            return Task.FromResult(Policies.FirstOrDefault(p => p.BranchId == branchId && !p.IsDeleted));
-        }
-
-        public Task<IReadOnlyList<BranchAttendancePolicy>> GetByBranchIdsAsync(IEnumerable<Guid> branchIds, CancellationToken cancellationToken = default)
-        {
-            var idList = branchIds.ToList();
-            var res = Policies.Where(p => idList.Contains(p.BranchId) && !p.IsDeleted).ToList();
-            return Task.FromResult((IReadOnlyList<BranchAttendancePolicy>)res);
-        }
-
-        public Task AddAsync(BranchAttendancePolicy policy, CancellationToken cancellationToken = default)
-        {
-            Policies.Add(policy);
-            return Task.CompletedTask;
-        }
-
-        public void Update(BranchAttendancePolicy policy)
-        {
-            var idx = Policies.FindIndex(p => p.Id == policy.Id);
-            if (idx >= 0) Policies[idx] = policy;
-        }
-    }
-
-    private readonly FakeBranchAttendancePolicyRepository _policyRepo;
     private readonly FakeBranchRepository _branchRepo;
     private readonly FakeUnitOfWork _uow;
     private readonly FakeTenantContext _tenantContext;
@@ -152,16 +122,13 @@ public class BranchAttendancePolicyServiceTests
 
     public BranchAttendancePolicyServiceTests()
     {
-        _policyRepo = new FakeBranchAttendancePolicyRepository();
         _branchRepo = new FakeBranchRepository();
         _uow = new FakeUnitOfWork();
         _tenantContext = new FakeTenantContext();
 
         _service = new BranchAttendancePolicyService(
-            _policyRepo,
             _branchRepo,
-            _uow,
-            _tenantContext
+            _uow
         );
     }
 
@@ -199,21 +166,14 @@ public class BranchAttendancePolicyServiceTests
             Id = Guid.NewGuid(),
             TenantId = _tenantContext.CurrentTenantId,
             BranchCode = "CN01",
-            Name = "Chi nhánh Trung tâm"
-        };
-        _branchRepo.Branches.Add(branch);
-
-        var policy = new BranchAttendancePolicy
-        {
-            Id = Guid.NewGuid(),
-            TenantId = _tenantContext.CurrentTenantId,
-            BranchId = branch.Id,
+            Name = "Chi nhánh Trung tâm",
             StandardDayHours = 7.50m,
             IsConvertHoursToDays = true,
             LateThresholdMinutes = 15,
-            EarlyLeaveThresholdMinutes = 10
+            EarlyLeaveThresholdMinutes = 10,
+            IsAttendancePolicyCustomized = true
         };
-        _policyRepo.Policies.Add(policy);
+        _branchRepo.Branches.Add(branch);
 
         // Act
         var result = await _service.GetByBranchIdAsync(branch.Id);
@@ -264,7 +224,7 @@ public class BranchAttendancePolicyServiceTests
         Assert.NotNull(result);
         Assert.True(result.IsCustomized);
         Assert.Equal(10, result.LateThresholdMinutes);
-        Assert.Single(_policyRepo.Policies);
+        Assert.True(branch.IsAttendancePolicyCustomized);
         Assert.True(_uow.SaveChangesCalled);
     }
 
@@ -277,19 +237,12 @@ public class BranchAttendancePolicyServiceTests
             Id = Guid.NewGuid(),
             TenantId = _tenantContext.CurrentTenantId,
             BranchCode = "CN03",
-            Name = "Chi nhánh Đà Nẵng"
+            Name = "Chi nhánh Đà Nẵng",
+            StandardDayHours = 8.00m,
+            LateThresholdMinutes = 0,
+            IsAttendancePolicyCustomized = true
         };
         _branchRepo.Branches.Add(branch);
-
-        var policy = new BranchAttendancePolicy
-        {
-            Id = Guid.NewGuid(),
-            TenantId = _tenantContext.CurrentTenantId,
-            BranchId = branch.Id,
-            StandardDayHours = 8.00m,
-            LateThresholdMinutes = 0
-        };
-        _policyRepo.Policies.Add(policy);
 
         var request = new UpsertAttendancePolicyRequest(
             StandardDayHours: 8.50m,
@@ -303,7 +256,7 @@ public class BranchAttendancePolicyServiceTests
         // Assert
         Assert.Equal(8.50m, result.StandardDayHours);
         Assert.Equal(20, result.LateThresholdMinutes);
-        Assert.Single(_policyRepo.Policies);
+        Assert.Equal(8.50m, branch.StandardDayHours);
         Assert.True(_uow.SaveChangesCalled);
     }
 
@@ -311,21 +264,19 @@ public class BranchAttendancePolicyServiceTests
     public async Task CopyPolicyAsync_WhenValid_CopiesPolicyToAllTargetBranches()
     {
         // Arrange
-        var sourceBranch = new Branch { Id = Guid.NewGuid(), TenantId = _tenantContext.CurrentTenantId, Name = "Chi nhánh Nguồn" };
+        var sourceBranch = new Branch
+        {
+            Id = Guid.NewGuid(),
+            TenantId = _tenantContext.CurrentTenantId,
+            Name = "Chi nhánh Nguồn",
+            StandardDayHours = 8.00m,
+            LateThresholdMinutes = 15,
+            IsAttendancePolicyCustomized = true
+        };
         var target1 = new Branch { Id = Guid.NewGuid(), TenantId = _tenantContext.CurrentTenantId, Name = "Chi nhánh Đích 1" };
         var target2 = new Branch { Id = Guid.NewGuid(), TenantId = _tenantContext.CurrentTenantId, Name = "Chi nhánh Đích 2" };
 
         _branchRepo.Branches.AddRange(new[] { sourceBranch, target1, target2 });
-
-        var sourcePolicy = new BranchAttendancePolicy
-        {
-            Id = Guid.NewGuid(),
-            TenantId = _tenantContext.CurrentTenantId,
-            BranchId = sourceBranch.Id,
-            StandardDayHours = 8.00m,
-            LateThresholdMinutes = 15
-        };
-        _policyRepo.Policies.Add(sourcePolicy);
 
         var request = new CopyAttendancePolicyRequest(
             SourceBranchId: sourceBranch.Id,
@@ -339,13 +290,11 @@ public class BranchAttendancePolicyServiceTests
         Assert.Equal(2, result.CopiedCount);
         Assert.True(_uow.SaveChangesCalled);
 
-        var target1Policy = _policyRepo.Policies.FirstOrDefault(p => p.BranchId == target1.Id);
-        Assert.NotNull(target1Policy);
-        Assert.Equal(15, target1Policy.LateThresholdMinutes);
+        Assert.True(target1.IsAttendancePolicyCustomized);
+        Assert.Equal(15, target1.LateThresholdMinutes);
 
-        var target2Policy = _policyRepo.Policies.FirstOrDefault(p => p.BranchId == target2.Id);
-        Assert.NotNull(target2Policy);
-        Assert.Equal(15, target2Policy.LateThresholdMinutes);
+        Assert.True(target2.IsAttendancePolicyCustomized);
+        Assert.Equal(15, target2.LateThresholdMinutes);
     }
 
     [Fact]
