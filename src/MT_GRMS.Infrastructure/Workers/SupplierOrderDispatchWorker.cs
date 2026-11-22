@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PurchaseOrders.Dispatch;
 using MT_GRMS.Domain.Entities.System;
 using MT_GRMS.Infrastructure.Persistence;
@@ -11,6 +12,7 @@ namespace MT_GRMS.Infrastructure.Workers;
 
 /// <summary>
 /// Poll Outbox + package SCHEDULED để generate Excel / gửi email (không SMTP trong request API).
+/// Background scope không có tenant HTTP → bắt buộc IgnoreQueryFilters + SetContext theo TenantId của từng message/package.
 /// </summary>
 public class SupplierOrderDispatchWorker : BackgroundService
 {
@@ -46,10 +48,14 @@ public class SupplierOrderDispatchWorker : BackgroundService
     {
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var tenant = scope.ServiceProvider.GetRequiredService<ITenantContext>();
         var packageService = scope.ServiceProvider.GetRequiredService<ISupplierDispatchPackageService>();
 
         var now = DateTime.UtcNow;
+
+        // Worker không có tenant HTTP → fail-closed filter sẽ chặn hết. Phải IgnoreQueryFilters.
         var messages = await db.OutboxMessages
+            .IgnoreQueryFilters()
             .Where(m => !m.IsDeleted
                 && m.Type == OutboxMessageTypes.SupplierOrderPackageProcess
                 && (m.Status == OutboxStatuses.Pending || m.Status == OutboxStatuses.Failed)
@@ -61,7 +67,8 @@ public class SupplierOrderDispatchWorker : BackgroundService
 
         foreach (var msg in messages)
         {
-            // Claim
+            BindTenant(tenant, msg.TenantId);
+
             msg.Status = OutboxStatuses.Processing;
             msg.LockedBy = _workerId;
             msg.LockedUntilUtc = now.AddMinutes(3);
@@ -99,8 +106,9 @@ public class SupplierOrderDispatchWorker : BackgroundService
             }
         }
 
-        // Đánh thức lịch gửi đã đến giờ (không phụ thuộc outbox còn pending)
+        // Đánh thức lịch gửi đã đến giờ
         var duePackages = await db.SupplierDispatchPackages
+            .IgnoreQueryFilters()
             .Where(p => !p.IsDeleted
                 && p.EmailStatus == PackageEmailStatuses.Scheduled
                 && p.GenerationStatus == PackageGenerationStatuses.Generated
@@ -109,23 +117,25 @@ public class SupplierOrderDispatchWorker : BackgroundService
                 && (p.ProcessingLeaseUntilUtc == null || p.ProcessingLeaseUntilUtc < now))
             .OrderBy(p => p.ScheduledSendAtUtc)
             .Take(5)
-            .Select(p => p.Id)
+            .Select(p => new { p.Id, p.TenantId })
             .ToListAsync(ct);
 
-        foreach (var id in duePackages)
+        foreach (var row in duePackages)
         {
             try
             {
-                await packageService.ProcessPackageAsync(id, ct);
+                BindTenant(tenant, row.TenantId);
+                await packageService.ProcessPackageAsync(row.Id, ct);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Scheduled package {Id} send failed.", id);
+                _logger.LogWarning(ex, "Scheduled package {Id} send failed.", row.Id);
             }
         }
 
-        // Recovery: package stuck GENERATING / FAILED / PENDING email while outbox already PROCESSED
+        // Recovery: package kẹt PENDING/FAILED khi outbox chưa kịp / đã lệch
         var stuckPackages = await db.SupplierDispatchPackages
+            .IgnoreQueryFilters()
             .Where(p => !p.IsDeleted
                 && (p.ProcessingLeaseUntilUtc == null || p.ProcessingLeaseUntilUtc < now)
                 && (
@@ -138,20 +148,28 @@ public class SupplierOrderDispatchWorker : BackgroundService
                 ))
             .OrderBy(p => p.CreatedAt)
             .Take(5)
-            .Select(p => p.Id)
+            .Select(p => new { p.Id, p.TenantId })
             .ToListAsync(ct);
 
-        foreach (var id in stuckPackages)
+        foreach (var row in stuckPackages)
         {
             try
             {
-                await packageService.ProcessPackageAsync(id, ct);
+                BindTenant(tenant, row.TenantId);
+                await packageService.ProcessPackageAsync(row.Id, ct);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Stuck package {Id} recovery failed.", id);
+                _logger.LogWarning(ex, "Stuck package {Id} recovery failed.", row.Id);
             }
         }
+    }
+
+    private static void BindTenant(ITenantContext tenant, string? tenantId)
+    {
+        var id = string.IsNullOrWhiteSpace(tenantId) ? string.Empty : tenantId.Trim();
+        tenant.SetContext(id, Guid.Empty, null);
+        tenant.SetRole("SYSTEM_WORKER");
     }
 
     private static Guid ExtractPackageId(string payloadJson)

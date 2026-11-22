@@ -97,7 +97,7 @@ public class PurchaseOrderMatrixTests
     }
 
     [Fact]
-    public void OrderMatrixRules_MinimumLeadTime_BlocksToday_AllowsTomorrow()
+    public void OrderMatrixRules_CutoffOffset_LocksWhenCutoffPassed_AllowsBeforeCutoff()
     {
         var supplierId = _supplier1Id;
         var config = new OrderMatrixSupplierDeliveryConfigDto
@@ -112,15 +112,42 @@ public class PurchaseOrderMatrixTests
         };
         var now = new DateTime(2026, 11, 8, 10, 30, 0);
 
+        // offset=1 → cutoff ngày giao hôm nay = hôm qua 23:59 → đã qua → LOCKED
         var todayStatus = OrderMatrixRules.EvaluateDayStatus(supplierId, now.Date, config, now);
-        Assert.Equal(OrderMatrixRules.StatusSupplierOff, todayStatus.DeliveryDateStatus);
-        Assert.Equal("LEAD_TIME_VIOLATION", todayStatus.PrimaryReasonCode);
+        Assert.Equal(OrderMatrixRules.StatusLocked, todayStatus.DeliveryDateStatus);
+        Assert.Equal("CUTOFF_PASSED", todayStatus.PrimaryReasonCode);
         Assert.False(OrderMatrixRules.IsEditableStatus(todayStatus.DeliveryDateStatus));
 
+        // offset=1 → cutoff ngày giao mai = hôm nay 23:59 → còn trước cutoff → editable
         var tomorrowStatus = OrderMatrixRules.EvaluateDayStatus(supplierId, now.Date.AddDays(1), config, now);
         Assert.True(OrderMatrixRules.IsEditableStatus(tomorrowStatus.DeliveryDateStatus));
-        // offset=1 → cutoff ngày giao mai = hôm nay 23:59
         Assert.Equal(new DateTime(2026, 11, 8, 23, 59, 0), tomorrowStatus.CutoffDateTime);
+    }
+
+    [Fact]
+    public void OrderMatrixRules_CutoffOffset0_AllowsSameDayDeliveryBeforeCutoff()
+    {
+        var supplierId = _supplier1Id;
+        var config = new OrderMatrixSupplierDeliveryConfigDto
+        {
+            SupplierId = supplierId,
+            IsActive = true,
+            IsAssignedToBranch = true,
+            CutoffTime = "17:00",
+            CutoffDayOffset = 0,
+            ActiveDeliveryDays = new List<int> { 0, 1, 2, 3, 4, 5, 6 },
+            BlackoutDates = new List<string>()
+        };
+        var now = new DateTime(2026, 11, 8, 10, 30, 0);
+
+        var todayStatus = OrderMatrixRules.EvaluateDayStatus(supplierId, now.Date, config, now);
+        Assert.True(OrderMatrixRules.IsEditableStatus(todayStatus.DeliveryDateStatus));
+        Assert.Equal(new DateTime(2026, 11, 8, 17, 0, 0), todayStatus.CutoffDateTime);
+
+        var afterCutoff = OrderMatrixRules.EvaluateDayStatus(
+            supplierId, now.Date, config, new DateTime(2026, 11, 8, 17, 0, 0));
+        Assert.Equal(OrderMatrixRules.StatusLocked, afterCutoff.DeliveryDateStatus);
+        Assert.Equal("CUTOFF_PASSED", afterCutoff.PrimaryReasonCode);
     }
 
     [Fact]

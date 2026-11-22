@@ -258,7 +258,7 @@ public class MatrixExcelImportService : IMatrixExcelImportService
                 dayStatusLookup.TryGetValue((supplierId, dayCol.Date), out var daySt);
                 var status = daySt?.DeliveryDateStatus ?? OrderMatrixRules.StatusOpen;
                 var editable = OrderMatrixRules.IsEditableStatus(status)
-                               && dayCol.Date >= OrderMatrixRules.GetEarliestAllowedDeliveryDate(OrderMatrixRules.GetVietnamNow());
+                               && dayCol.Date >= OrderMatrixRules.GetVietnamNow().Date;
 
                 if (!editable)
                 {
@@ -421,7 +421,7 @@ public class MatrixExcelImportService : IMatrixExcelImportService
             dayStatusLookup.TryGetValue((cell.SupplierId, date), out var daySt);
             var status = daySt?.DeliveryDateStatus ?? OrderMatrixRules.StatusOpen;
             var editable = OrderMatrixRules.IsEditableStatus(status)
-                           && date >= OrderMatrixRules.GetEarliestAllowedDeliveryDate(OrderMatrixRules.GetVietnamNow());
+                           && date >= OrderMatrixRules.GetVietnamNow().Date;
 
             if (!editable)
             {

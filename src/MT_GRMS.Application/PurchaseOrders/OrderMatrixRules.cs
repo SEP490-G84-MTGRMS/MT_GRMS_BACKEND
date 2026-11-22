@@ -120,12 +120,10 @@ public static class OrderMatrixRules
         return (hour, minute);
     }
 
-    /// <summary>Lead time tối thiểu (ngày): không cho đặt giao hôm nay / quá khứ.</summary>
-    public const int MinimumLeadTimeDays = 1;
-
     /// <summary>
     /// Cutoff của ngày giao D = (D − cutoffDayOffset) ở giờ CutoffTime.
     /// offset=1 → chốt ngày trước ngày giao; offset=0 → chốt cùng ngày giao.
+    /// Khóa ô nhập theo cutoff NCC (CutoffDayOffset + CutoffTime), không hardcode lead time.
     /// </summary>
     public static DateTime GetCutoffDateTime(DateTime deliveryDate, string? cutoffTime, int cutoffDayOffset = 1)
     {
@@ -140,10 +138,10 @@ public static class OrderMatrixRules
         => GetCutoffDateTime(deliveryDate, cutoffTime, cutoffDayOffset);
 
     /// <summary>
-    /// Ngày giao sớm nhất được phép đặt = hôm nay + MinimumLeadTimeDays (theo lịch VN).
+    /// Ngày giao sớm nhất theo lịch = hôm nay (quá khứ vẫn chặn; hôm nay phụ thuộc cutoff NCC).
     /// </summary>
     public static DateTime GetEarliestAllowedDeliveryDate(DateTime now)
-        => now.Date.AddDays(MinimumLeadTimeDays);
+        => now.Date;
 
     public static bool IsSupplierDeliveryDay(OrderMatrixSupplierDeliveryConfigDto config, DateTime deliveryDate)
     {
@@ -224,12 +222,7 @@ public static class OrderMatrixRules
             return Off(supplierId, deliveryDate, cutoff, "PAST_DELIVERY_DATE");
         }
 
-        // Lead time ≥ 1 ngày: không cho đặt giao hôm nay (ngày giao sớm nhất = ngày mai)
-        if (deliveryDate.Date < GetEarliestAllowedDeliveryDate(now))
-        {
-            return Off(supplierId, deliveryDate, cutoff, "LEAD_TIME_VIOLATION");
-        }
-
+        // Khóa theo cutoff NCC (CutoffDayOffset + CutoffTime) — không hardcode lead time
         if (now >= cutoff)
         {
             return new OrderMatrixDayStatusDto
