@@ -5310,9 +5310,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("DeliveryDate")
                         .HasColumnType("timestamp without time zone");
 
-                    b.Property<Guid?>("DispatchBatchId")
-                        .HasColumnType("uuid");
-
                     b.Property<Guid?>("DispatchPackageId")
                         .HasColumnType("uuid");
 
@@ -5431,19 +5428,11 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp without time zone");
 
-                    b.Property<DateTime?>("ViewFromDate")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<DateTime?>("ViewToDate")
-                        .HasColumnType("timestamp without time zone");
-
                     b.HasKey("Id");
 
                     b.HasIndex("ApprovedByUserId");
 
                     b.HasIndex("BranchId");
-
-                    b.HasIndex("DispatchBatchId");
 
                     b.HasIndex("DispatchPackageId");
 

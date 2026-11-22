@@ -27,6 +27,12 @@ public interface IPurchaseOrderRepository
         Guid? supplierId,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<OrderMatrixIncomingDto>> GetIncomingQuantitiesAsync(
+        Guid branchId,
+        DateTime throughDate,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<OrderMatrixIncomingDto>>(Array.Empty<OrderMatrixIncomingDto>());
+
     Task<PurchaseOrder?> GetDraftMatrixPoAsync(
         Guid branchId,
         Guid? supplierId,

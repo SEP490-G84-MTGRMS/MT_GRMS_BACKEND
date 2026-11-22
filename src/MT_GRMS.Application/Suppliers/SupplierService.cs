@@ -1880,6 +1880,7 @@ public class SupplierService : ISupplierService
             ImageUrl = sp.Product?.ImageUrl,
             IsPrimarySupplier = sp.IsPrimarySupplier,
             Status = sp.Status.ToString(),
+            MasterProductStatus = sp.Product?.Status.ToString() ?? "Active",
             SyncedBranchesCount = syncedBranchesCount,
             CreatedAt = sp.CreatedAt,
             UpdatedAt = sp.UpdatedAt
