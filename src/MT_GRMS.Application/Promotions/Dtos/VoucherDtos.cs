@@ -127,3 +127,31 @@ public record RedeemVoucherResponse(
     DateTime? RedeemedAt = null
 );
 
+public record PrintVoucherRequest(
+    string VoucherCode,
+    string BatchName,
+    string DiscountType, // FIXED_AMOUNT, PERCENT
+    decimal DiscountValue,
+    decimal MinOrderValue,
+    decimal? MaxDiscountAmount,
+    DateTime StartDate,
+    DateTime EndDate,
+    string Status, // UNUSED, USED, EXPIRED, LOCKED
+    string? StoreName = null,
+    string? StoreAddress = null,
+    string? StorePhone = null,
+    string? CustomerName = null,
+    string? CustomerPhone = null,
+    string? OrderCode = null,
+    DateTime? UsedAt = null,
+    string PrinterName = "POS-58",
+    string? BranchName = null,
+    string? AppliedBranches = null
+);
+
+public record PrintVoucherResponse(
+    bool Success,
+    string Message
+);
+
+

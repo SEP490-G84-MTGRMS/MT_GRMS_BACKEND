@@ -92,6 +92,26 @@ public class OrderRepository : GenericRepository<Order>, IOrderRepository
             cancellationToken);
     }
 
+    public Task<Dictionary<Guid, decimal>> GetActivePackageWeightsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
+        => _context.Packages
+            .Where(p => p.BranchId == branchId && p.ProductId == productId && !p.IsDeleted
+                && (p.Status == "AVAILABLE" || p.Status == "QUARANTINED"))
+            .GroupBy(p => p.BranchStockId)
+            .ToDictionaryAsync(g => g.Key, g => g.Sum(p => p.NetWeight), cancellationToken);
+
+    public async Task<Package?> GetPackageForSaleAsync(Guid branchId, Guid productId, Guid packageId, CancellationToken cancellationToken = default)
+    {
+        if (_context.Database.IsNpgsql())
+            return await _context.Packages.FromSqlInterpolated($@"
+                SELECT * FROM ""Packages""
+                WHERE ""Id"" = {packageId} AND ""BranchId"" = {branchId}
+                  AND ""ProductId"" = {productId} AND NOT ""IsDeleted""
+                FOR UPDATE").FirstOrDefaultAsync(cancellationToken);
+
+        return await _context.Packages.FirstOrDefaultAsync(p => p.Id == packageId && p.BranchId == branchId
+            && p.ProductId == productId && !p.IsDeleted, cancellationToken);
+    }
+
     public async Task<Order?> GetOrderWithDetailsAsync(Guid id, CancellationToken cancellationToken = default)
     {
         return await _dbSet

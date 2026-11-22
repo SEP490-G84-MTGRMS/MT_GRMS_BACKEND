@@ -57,7 +57,9 @@ public record CustomerResponse(
     string Status,
     DateTime CreatedAt,
     List<CustomerInvoiceSummaryResponse>? Invoices = null,
-    List<CustomerPaymentSummaryResponse>? Payments = null
+    List<CustomerPaymentSummaryResponse>? Payments = null,
+    int DebtOrderCount = 0,
+    decimal TotalDebtPurchased = 0m
 );
 
 public record CustomerInvoiceSummaryResponse(

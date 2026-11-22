@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using MT_GRMS.Application.PosOrders;
+using MT_GRMS.Application.Promotions.Dtos;
 using MT_GRMS.Domain.Entities.Sales;
 
 namespace MT_GRMS.Infrastructure.Services.Printer;
@@ -11,7 +12,171 @@ public class ThermalPrintService : IThermalPrintService
 {
     private const int LineWidth = 40; // Kho in chuan may in nhiet 58mm (POS-58) Font B: 40 ky tu can doi sat mep giay, khong bao gio bi tran le
 
+    public bool PrintVoucher(PrintVoucherRequest request, string printerName = "POS-58")
+    {
+        byte[] bytes = BuildEscPosVoucher(request);
+        return RawPrinterHelper.SendBytesToPrinter(printerName, bytes);
+    }
+
+    public byte[] BuildEscPosVoucher(PrintVoucherRequest request)
+    {
+        var buffer = new List<byte>();
+
+        // 1. Khoi tao may in (ESC @)
+        buffer.AddRange(new byte[] { 0x1B, 0x40 });
+
+        // 2. Chon Font B nho gon (~7.5pt, 40-42 ky tu/dong) (ESC M 1)
+        buffer.AddRange(new byte[] { 0x1B, 0x4D, 0x01 });
+
+        // 3. Header cua hang (Canh giua: ESC a 1)
+        buffer.AddRange(new byte[] { 0x1B, 0x61, 0x01 });
+        buffer.AddRange(new byte[] { 0x1B, 0x45, 0x01 }); // In dam
+
+        string storeName = !string.IsNullOrWhiteSpace(request.StoreName)
+            ? RemoveAccents(request.StoreName).ToUpper()
+            : "HE THONG CUA HANG";
+        foreach (var l in WordWrap(storeName, LineWidth))
+        {
+            buffer.AddRange(Encoding.ASCII.GetBytes(l + "\n"));
+        }
+        buffer.AddRange(new byte[] { 0x1B, 0x45, 0x00 }); // Tat in dam
+
+        if (!string.IsNullOrWhiteSpace(request.BranchName) && !request.BranchName.Contains("Toan he thong", StringComparison.OrdinalIgnoreCase))
+        {
+            foreach (var l in WordWrap($"Co so: {RemoveAccents(request.BranchName)}", LineWidth))
+            {
+                buffer.AddRange(Encoding.ASCII.GetBytes(l + "\n"));
+            }
+        }
+
+        string address = !string.IsNullOrWhiteSpace(request.StoreAddress)
+            ? RemoveAccents(request.StoreAddress)
+            : "120 Hoang Hoa Tham, Tay Ho, Ha Noi";
+        string phone = !string.IsNullOrWhiteSpace(request.StorePhone)
+            ? request.StorePhone
+            : "024 3822 9988";
+
+        foreach (var l in WordWrap($"Dia chi: {address}", LineWidth))
+        {
+            buffer.AddRange(Encoding.ASCII.GetBytes(l + "\n"));
+        }
+        buffer.AddRange(Encoding.ASCII.GetBytes($"Hotline: {phone}\n"));
+
+        // Tieu de phieu voucher (In dam)
+        buffer.AddRange(new byte[] { 0x1B, 0x45, 0x01 });
+        buffer.AddRange(Encoding.ASCII.GetBytes("\n*** PHIEU VOUCHER / UU DAI ***\n"));
+        buffer.AddRange(new byte[] { 0x1B, 0x45, 0x00 });
+
+        if (!string.IsNullOrWhiteSpace(request.BatchName))
+        {
+            string batchText = $"Dot: {RemoveAccents(request.BatchName)}";
+            foreach (var l in WordWrap(batchText, LineWidth))
+            {
+                buffer.AddRange(Encoding.ASCII.GetBytes(l + "\n"));
+            }
+        }
+
+        string divider = new string('-', LineWidth);
+        buffer.AddRange(Encoding.ASCII.GetBytes(divider + "\n"));
+
+        // 4. Ma Voucher noi bat (Canh giua, in dam)
+        buffer.AddRange(new byte[] { 0x1B, 0x61, 0x01 });
+        buffer.AddRange(new byte[] { 0x1B, 0x45, 0x01 });
+        buffer.AddRange(Encoding.ASCII.GetBytes($"MA VOUCHER:\n[{request.VoucherCode}]\n"));
+        buffer.AddRange(new byte[] { 0x1B, 0x45, 0x00 });
+
+        // Canh bao neu da su dung hoac het han
+        if (string.Equals(request.Status, "USED", StringComparison.OrdinalIgnoreCase))
+        {
+            buffer.AddRange(new byte[] { 0x1B, 0x45, 0x01 });
+            buffer.AddRange(Encoding.ASCII.GetBytes("[DA SU DUNG - VO HIEU HOA]\n"));
+            buffer.AddRange(new byte[] { 0x1B, 0x45, 0x00 });
+            if (!string.IsNullOrWhiteSpace(request.OrderCode))
+            {
+                buffer.AddRange(Encoding.ASCII.GetBytes($"HD: {request.OrderCode}\n"));
+            }
+            if (request.UsedAt.HasValue)
+            {
+                buffer.AddRange(Encoding.ASCII.GetBytes($"Luc: {request.UsedAt.Value:dd/MM/yyyy HH:mm}\n"));
+            }
+        }
+        else if (string.Equals(request.Status, "EXPIRED", StringComparison.OrdinalIgnoreCase))
+        {
+            buffer.AddRange(new byte[] { 0x1B, 0x45, 0x01 });
+            buffer.AddRange(Encoding.ASCII.GetBytes("[DA HET HAN SU DUNG]\n"));
+            buffer.AddRange(new byte[] { 0x1B, 0x45, 0x00 });
+        }
+        else if (string.Equals(request.Status, "LOCKED", StringComparison.OrdinalIgnoreCase))
+        {
+            buffer.AddRange(new byte[] { 0x1B, 0x45, 0x01 });
+            buffer.AddRange(Encoding.ASCII.GetBytes("[DANG KHOA]\n"));
+            buffer.AddRange(new byte[] { 0x1B, 0x45, 0x00 });
+        }
+
+        buffer.AddRange(Encoding.ASCII.GetBytes(divider + "\n"));
+
+        // 5. Chi tiet uu dai & Dieu kien (Canh trai: ESC a 0)
+        buffer.AddRange(new byte[] { 0x1B, 0x61, 0x00 });
+
+        string discountStr = string.Equals(request.DiscountType, "PERCENT", StringComparison.OrdinalIgnoreCase)
+            ? $"Giam {request.DiscountValue:0.#}%"
+            : $"Giam {FormatMoney(request.DiscountValue)} d";
+        buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns("Muc giam:", discountStr, LineWidth) + "\n"));
+
+        if (request.MinOrderValue > 0)
+        {
+            buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns("Don toi thieu:", $"{FormatMoney(request.MinOrderValue)} d", LineWidth) + "\n"));
+        }
+
+        if (request.MaxDiscountAmount.HasValue && request.MaxDiscountAmount.Value > 0)
+        {
+            buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns("Giam toi da:", $"{FormatMoney(request.MaxDiscountAmount.Value)} d", LineWidth) + "\n"));
+        }
+
+        string expiryStr = $"{request.EndDate:dd/MM/yyyy}";
+        buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns("Han dung den:", expiryStr, LineWidth) + "\n"));
+
+        string scopeStr = !string.IsNullOrWhiteSpace(request.AppliedBranches)
+            ? RemoveAccents(request.AppliedBranches)
+            : "Toan he thong chi nhanh";
+        buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns("Pham vi:", scopeStr, LineWidth) + "\n"));
+
+        if (!string.IsNullOrWhiteSpace(request.CustomerName))
+        {
+            string custInfo = RemoveAccents(request.CustomerName);
+            if (!string.IsNullOrWhiteSpace(request.CustomerPhone))
+            {
+                custInfo += $" ({request.CustomerPhone})";
+            }
+            buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns("Cap rieng cho:", custInfo, LineWidth) + "\n"));
+        }
+
+        buffer.AddRange(Encoding.ASCII.GetBytes(divider + "\n"));
+
+        // 6. Dieu kien & Ghi chu (Canh trai)
+        buffer.AddRange(Encoding.ASCII.GetBytes("* Dieu kien su dung:\n"));
+        buffer.AddRange(Encoding.ASCII.GetBytes($"- Ap dung: {scopeStr}.\n"));
+        buffer.AddRange(Encoding.ASCII.GetBytes("- Xuat trinh ma cho thu ngan truoc khi thanh toan.\n"));
+        buffer.AddRange(Encoding.ASCII.GetBytes("- Moi ma chi su dung 01 lan tai quay POS.\n"));
+        buffer.AddRange(Encoding.ASCII.GetBytes("- Khong co gia tri quy doi thanh tien mat.\n"));
+
+        buffer.AddRange(Encoding.ASCII.GetBytes(divider + "\n"));
+
+        // 7. Chan phieu (Canh giua: ESC a 1)
+        buffer.AddRange(new byte[] { 0x1B, 0x61, 0x01 });
+        buffer.AddRange(Encoding.ASCII.GetBytes("CAM ON QUY KHACH & HEN GAP LAI!\n"));
+
+        // 8. Day giay ra (Feed 4 dong)
+        buffer.AddRange(Encoding.ASCII.GetBytes("\n\n\n\n"));
+
+        // 9. Cat giay tu dong (GS V 66 0)
+        buffer.AddRange(new byte[] { 0x1D, 0x56, 0x42, 0x00 });
+
+        return buffer.ToArray();
+    }
+
     public bool PrintOrderInvoice(Order order, string printerName = "POS-58", decimal? cashReceived = null, decimal? changeAmount = null, string? cashierName = null)
+
     {
         byte[] bytes = BuildEscPosReceipt(order, cashReceived, changeAmount, cashierName);
         return RawPrinterHelper.SendBytesToPrinter(printerName, bytes);
@@ -55,15 +220,21 @@ public class ThermalPrintService : IThermalPrintService
 
         // Tiêu đề hóa đơn
         buffer.AddRange(new byte[] { 0x1B, 0x45, 0x01 });
-        buffer.AddRange(Encoding.ASCII.GetBytes("\nHOA DON BAN LE\n"));
+        bool isPreOrder = string.Equals(order.Status, "PreOrder", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(order.Status, "PendingPickup", StringComparison.OrdinalIgnoreCase)
+            || (order.OrderCode != null && (order.OrderCode.StartsWith("DH", StringComparison.OrdinalIgnoreCase) || order.OrderCode.StartsWith("PO", StringComparison.OrdinalIgnoreCase)));
+        string receiptTitle = isPreOrder ? "\nPHIEU DAT HANG TRUOC\n" : "\nHOA DON BAN LE\n";
+        buffer.AddRange(Encoding.ASCII.GetBytes(receiptTitle));
         buffer.AddRange(new byte[] { 0x1B, 0x45, 0x00 });
 
         // 4. Thông tin hóa đơn (Canh trái: ESC a 0)
         buffer.AddRange(new byte[] { 0x1B, 0x61, 0x00 });
-        buffer.AddRange(Encoding.ASCII.GetBytes($"HD:  {order.OrderCode ?? "HD0001"}\n"));
+        string codePrefix = isPreOrder ? "MA DAT: " : "HD:  ";
+        buffer.AddRange(Encoding.ASCII.GetBytes($"{codePrefix}{order.OrderCode ?? "HD0001"}\n"));
 
+        string dateLabel = isPreOrder ? "Ngay tao:" : "Ngay ban:";
         string dateStr = $"{order.OrderDate:dd/MM/yyyy HH:mm}";
-        buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns("Ngay ban:", dateStr, LineWidth) + "\n"));
+        buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns(dateLabel, dateStr, LineWidth) + "\n"));
 
         string cashierText;
         if (!string.IsNullOrWhiteSpace(cashierName))
@@ -240,6 +411,13 @@ public class ThermalPrintService : IThermalPrintService
         else
         {
             buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns("  Hinh thuc:", order.PaymentMethod ?? "Tien mat", LineWidth) + "\n"));
+        }
+
+        if (isPreOrder && order.DepositAmount > 0)
+        {
+            buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns("  Tien dat coc:", FormatMoney(order.DepositAmount) + " d", LineWidth) + "\n"));
+            decimal remaining = Math.Max(0, order.FinalAmount - order.DepositAmount);
+            buffer.AddRange(Encoding.ASCII.GetBytes(FormatTwoColumns("  Con phai tra:", FormatMoney(remaining) + " d", LineWidth) + "\n"));
         }
 
         // 7. Khối Thông Tin Khách Hàng (chuẩn theo form ảnh)

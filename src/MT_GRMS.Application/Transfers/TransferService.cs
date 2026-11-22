@@ -1,4 +1,5 @@
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Catalog;
@@ -17,8 +18,15 @@ public sealed class TransferService(
     IRepository<TransferStatusHistory> statusHistory,
     ITenantContext tenant,
     IUnitOfWork unitOfWork,
-    NotificationOutbox? notificationOutbox = null) : ITransferService
+    NotificationOutbox? notificationOutbox = null,
+    IRepository<Package>? packages = null) : ITransferService
 {
+    private async Task<decimal> RawAvailableAsync(BranchStock stock, CancellationToken ct)
+    {
+        var active = packages == null ? 0m : (await packages.FindAsync(p => p.TenantId == tenant.CurrentTenantId
+            && p.BranchStockId == stock.Id && !p.IsDeleted && (p.Status == "AVAILABLE" || p.Status == "QUARANTINED"), ct)).Sum(p => p.NetWeight);
+        return BranchStockAvailability.GetRawSellableKg(stock, active);
+    }
     private bool IsOwner => tenant.CurrentRole == SystemRoles.StoreOwner;
     private bool IsStaff => tenant.CurrentRole == SystemRoles.Staff;
 
@@ -67,18 +75,24 @@ public sealed class TransferService(
     {
         await EnsureCanViewBranchStockAsync(branchId, ct);
         var stock = await stocks.FindAsync(x => x.TenantId == tenant.CurrentTenantId && x.BranchId == branchId && x.QuantityOnHand > 0, ct);
-        return stock.Select(x => new TransferStockBatchDto(x.ProductId, x.BatchCode, x.ExpiryDate,
-            Math.Max(0, x.QuantityOnHand - x.QuantityReserved - x.QuantityQuarantined))).ToList();
+        var result = new List<TransferStockBatchDto>();
+        foreach (var item in stock)
+            result.Add(new TransferStockBatchDto(item.ProductId, item.BatchCode, item.ExpiryDate, await RawAvailableAsync(item, ct)));
+        return result;
     }
 
-    private async Task<BranchStock> ResolveStockSourceAsync(Guid branchId, Guid productId, string? batchCode, DateTime? expiryDate, CancellationToken ct)
+    private async Task<BranchStock> ResolveStockSourceAsync(Guid branchId, Guid productId, string? batchCode, DateTime? expiryDate, CancellationToken ct, Guid? branchStockId = null)
     {
+        if (branchStockId.HasValue)
+        {
+            var exact = await stocks.GetByIdAsync(branchStockId.Value, ct);
+            if (exact == null || exact.IsDeleted || exact.TenantId != tenant.CurrentTenantId || exact.BranchId != branchId || exact.ProductId != productId)
+                throw new InvalidOperationException("Dòng tồn đã chọn cho phiếu chuyển không còn hợp lệ.");
+            return exact;
+        }
         var branchStocks = await stocks.FindAsync(s => s.TenantId == tenant.CurrentTenantId && s.BranchId == branchId && s.ProductId == productId, ct);
         if (branchStocks.Count == 0)
             throw new InvalidOperationException("Không tìm thấy tồn kho cho sản phẩm này tại chi nhánh gửi.");
-
-        if (branchStocks.Count == 1)
-            return branchStocks[0];
 
         var normalizedBatch = batchCode?.Trim();
         if (!string.IsNullOrWhiteSpace(normalizedBatch))
@@ -90,11 +104,15 @@ public sealed class TransferService(
                 if (expiryDate.HasValue)
                 {
                     var dateMatches = batchMatches.Where(s => s.ExpiryDate.HasValue && s.ExpiryDate.Value.Date == expiryDate.Value.Date).ToList();
-                    if (dateMatches.Count > 0) return dateMatches[0];
+                    if (dateMatches.Count == 1) return dateMatches[0];
                 }
-                return batchMatches.OrderByDescending(s => s.QuantityOnHand - s.QuantityReserved - s.QuantityQuarantined).First();
+                throw new InvalidOperationException("Mã lô khớp nhiều dòng tồn; cần chọn đúng dòng tồn trước khi chuyển kho.");
             }
+            throw new InvalidOperationException("Lô yêu cầu chuyển không còn tồn tại tại chi nhánh nguồn.");
         }
+
+        if (branchStocks.Count == 1)
+            return branchStocks[0];
 
         if (expiryDate.HasValue)
         {
@@ -142,7 +160,7 @@ public sealed class TransferService(
             {
                 var product = await products.GetByIdAsync(input.ProductId, ct) ?? throw new KeyNotFoundException("Không tìm thấy sản phẩm.");
                 var stock = await ResolveStockSourceAsync(request.FromBranchId, input.ProductId, input.BatchCode, input.ExpiryDate, ct);
-                var available = stock.QuantityOnHand - stock.QuantityReserved - stock.QuantityQuarantined;
+                var available = await RawAvailableAsync(stock, ct);
                 if (available < input.Quantity)
                     throw new InvalidOperationException($"Không đủ tồn khả dụng cho {product.Name}; hiện có {available}, yêu cầu chuyển {input.Quantity}.");
                 var unitCost = stock.LandedCostPerUnit;
@@ -152,6 +170,7 @@ public sealed class TransferService(
                     SentQuantity = input.Quantity,
                     PackagingUnit = input.Unit.Trim(),
                     BatchNumber = string.IsNullOrWhiteSpace(input.BatchCode) ? stock.BatchCode : input.BatchCode.Trim(),
+                    BranchStockId = stock.Id,
                     ExpiryDate = input.ExpiryDate ?? stock.ExpiryDate,
                     UnitPrice = unitCost,
                     Amount = input.Quantity * unitCost
@@ -270,14 +289,14 @@ public sealed class TransferService(
         {
             foreach (var line in lines)
             {
-                var stock = await ResolveStockSourceAsync(transfer.FromBranchId, line.ProductId, line.BatchNumber, line.ExpiryDate, ct);
+                var stock = await ResolveStockSourceAsync(transfer.FromBranchId, line.ProductId, line.BatchNumber, line.ExpiryDate, ct, line.BranchStockId);
                 if (transfer.IsStockReserved)
                 {
                     if (stock.QuantityReserved < line.SentQuantity)
                         throw new InvalidOperationException("Dữ liệu giữ tồn của phiếu không còn hợp lệ; không thể xuất kho.");
                     stock.QuantityReserved -= line.SentQuantity;
                 }
-                var available = stock.QuantityOnHand - stock.QuantityReserved - stock.QuantityQuarantined;
+                var available = await RawAvailableAsync(stock, ct);
                 if (available < line.SentQuantity) throw new InvalidOperationException($"Không đủ tồn khả dụng; còn {available}, yêu cầu chuyển {line.SentQuantity}.");
                 stock.QuantityOnHand -= line.SentQuantity;
                 stocks.Update(stock);
@@ -327,7 +346,7 @@ public sealed class TransferService(
                 var lines = transfer.Details.Count > 0 ? transfer.Details : (await details.FindAsync(x => x.TransferId == id, ct)).ToList();
                 foreach (var line in lines)
                 {
-                    var stock = await ResolveStockSourceAsync(transfer.FromBranchId, line.ProductId, line.BatchNumber, line.ExpiryDate, ct);
+                    var stock = await ResolveStockSourceAsync(transfer.FromBranchId, line.ProductId, line.BatchNumber, line.ExpiryDate, ct, line.BranchStockId);
                     if (stock.QuantityReserved < line.SentQuantity)
                         throw new InvalidOperationException("Dữ liệu giữ tồn của phiếu không còn hợp lệ; không thể hủy phiếu.");
                     stock.QuantityReserved -= line.SentQuantity;
@@ -361,7 +380,7 @@ public sealed class TransferService(
         {
             foreach (var line in lines)
             {
-                var stock = await ResolveStockSourceAsync(transfer.FromBranchId, line.ProductId, line.BatchNumber, line.ExpiryDate, ct);
+                var stock = await ResolveStockSourceAsync(transfer.FromBranchId, line.ProductId, line.BatchNumber, line.ExpiryDate, ct, line.BranchStockId);
                 stock.QuantityOnHand += line.SentQuantity;
                 stocks.Update(stock);
             }

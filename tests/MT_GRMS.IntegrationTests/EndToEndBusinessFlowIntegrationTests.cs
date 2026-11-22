@@ -74,6 +74,8 @@ public class EndToEndBusinessFlowIntegrationTests
     {
         public bool PrintOrderInvoice(Order order, string printerName = "POS-58", decimal? cashReceived = null, decimal? changeAmount = null, string? cashierName = null) => true;
         public byte[] BuildEscPosReceipt(Order order, decimal? cashReceived = null, decimal? changeAmount = null, string? cashierName = null) => Array.Empty<byte>();
+        public bool PrintVoucher(MT_GRMS.Application.Promotions.Dtos.PrintVoucherRequest request, string printerName = "POS-58") => true;
+        public byte[] BuildEscPosVoucher(MT_GRMS.Application.Promotions.Dtos.PrintVoucherRequest request) => Array.Empty<byte>();
     }
 
     private AppDbContext CreateDbContext(string dbName, FakeTenantContext? tenantContext = null)

@@ -146,7 +146,8 @@ public record GrnReturnableLineDto(
     decimal AvailableReturnQty,
     decimal UnitCost,
     decimal StockOnHandQty = 0m,
-    decimal StockReservedQty = 0m
+    decimal StockReservedQty = 0m,
+    Guid? BranchStockId = null
 );
 
 public record CreateSupplierReturnLineDto(

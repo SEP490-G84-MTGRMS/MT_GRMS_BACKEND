@@ -871,6 +871,25 @@ public class PosOrderServiceTests
     }
 
     [Fact]
+    public async Task ProcessReturnExchange_CreditOrder_ReducesDebtWithoutCashRefund()
+    {
+        _tenantContext.SetRole("STORE_OWNER");
+        var customer = _orderRepo.Customers.First(c => c.Id == _customerId);
+        var originalDebt = customer.TotalDebt;
+        var order = await _orderService.CreateOrderAsync(new OrderCreateRequest(
+            _branchId, _customerId, "CREDIT", new List<OrderItemCreateDto> { new(_prodHaoHaoId, 2m, 5000m) }));
+        Assert.Equal(originalDebt + 10000m, customer.TotalDebt);
+
+        var result = await _orderService.ProcessReturnExchangeAsync(order.Id, new ReturnExchangeRequest(
+            new List<ReturnItemDto> { new(_prodHaoHaoId, 1m, 5000m) },
+            new List<OrderItemCreateDto>(), "REDUCE_DEBT"));
+
+        Assert.Equal(originalDebt + 5000m, customer.TotalDebt);
+        Assert.Equal(0m, result.ChangeAmount);
+        Assert.Equal("REDUCE_DEBT", result.PaymentMethod);
+    }
+
+    [Fact]
     public async Task REQ_POS_RET_01_ProcessReturnExchange_InsufficientStock_ThrowsInvalidOperationException()
     {
         // Arrange
@@ -1600,6 +1619,25 @@ public class PosOrderServiceTests
         // Assert
         Assert.Equal("Cancelled", cancelRes.Status);
         Assert.Equal(20m, stock.QuantityOnHand); // Hoàn lại 15 + 5 = 20
+    }
+
+    [Fact]
+    public async Task CancelCreditOrder_RestoresCustomerDebt()
+    {
+        var ownerService = CreateOwnerOrderService();
+        var customer = _orderRepo.Customers.First(c => c.Id == _customerId);
+        var debtBefore = customer.TotalDebt;
+        var order = await ownerService.CreateOrderAsync(new OrderCreateRequest(
+            _branchId, _customerId, "CREDIT",
+            new List<OrderItemCreateDto> { new(_prodCocaId, 1m, 10000m) }));
+
+        Assert.Equal(debtBefore + order.FinalAmount, customer.TotalDebt);
+        var cancelled = await ownerService.CancelOrderAsync(order.Id,
+            new CancelOrderRequest("Khách hủy", UserRole: "STORE_OWNER"));
+
+        Assert.Equal("Cancelled", cancelled.Status);
+        Assert.Equal("CANCELLED", cancelled.PaymentStatus);
+        Assert.Equal(debtBefore, customer.TotalDebt);
     }
 
     [Fact]
@@ -2752,6 +2790,57 @@ public class PosOrderServiceTests
 
         var stockAfter = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == _prodHaoHaoId).Sum(s => s.QuantityOnHand);
         Assert.Equal(stockBefore, stockAfter);
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchange_MultipleSoldLots_RestocksEachSelectedLot()
+    {
+        var soldStocks = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == _prodHaoHaoId).OrderBy(s => s.ExpiryDate).ToList();
+        soldStocks[0].QuantityOnHand = 1m;
+        var order = await _orderService.CreateOrderAsync(new OrderCreateRequest(
+            _branchId, _customerId, "CASH", new List<OrderItemCreateDto> { new(_prodHaoHaoId, 3m, 5000m) }, CashTendered: 15000m));
+        Assert.Equal(0m, soldStocks[0].QuantityOnHand);
+        var secondStockAfterSale = soldStocks[1].QuantityOnHand;
+
+        await _orderService.ProcessReturnExchangeAsync(order.Id, new ReturnExchangeRequest(
+            new List<ReturnItemDto> {
+                new(_prodHaoHaoId, 1m, 5000m, OrderDetailId: order.Items[0].Id, BatchId: soldStocks[0].Id),
+                new(_prodHaoHaoId, 2m, 5000m, OrderDetailId: order.Items[0].Id, BatchId: soldStocks[1].Id)
+            }, new List<OrderItemCreateDto>(), "CASH"));
+
+        Assert.Equal(1m, soldStocks[0].QuantityOnHand);
+        Assert.Equal(secondStockAfterSale + 2m, soldStocks[1].QuantityOnHand);
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchange_RejectsQuantityAboveSelectedSoldLot()
+    {
+        var soldStocks = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == _prodHaoHaoId).OrderBy(s => s.ExpiryDate).ToList();
+        soldStocks[0].QuantityOnHand = 1m;
+        var order = await _orderService.CreateOrderAsync(new OrderCreateRequest(
+            _branchId, _customerId, "CASH", new List<OrderItemCreateDto> { new(_prodHaoHaoId, 3m, 5000m) }, CashTendered: 15000m));
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() => _orderService.ProcessReturnExchangeAsync(order.Id,
+            new ReturnExchangeRequest(new List<ReturnItemDto> {
+                new(_prodHaoHaoId, 2m, 5000m, OrderDetailId: order.Items[0].Id, BatchId: soldStocks[0].Id)
+            }, new List<OrderItemCreateDto>(), "CASH")));
+        Assert.Equal("RETURN_BATCH_QUANTITY", error.ErrorCode);
+        Assert.Equal(0m, soldStocks[0].QuantityOnHand);
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchange_RejectsBranchLotNotSoldOnOrder()
+    {
+        var soldStocks = _orderRepo.BranchStocks.Where(s => s.BranchId == _branchId && s.ProductId == _prodHaoHaoId).OrderBy(s => s.ExpiryDate).ToList();
+        var order = await CreateSampleCompletedOrderAsync(haoHaoQty: 1m);
+        var unrelatedStockBefore = soldStocks[1].QuantityOnHand;
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() => _orderService.ProcessReturnExchangeAsync(order.Id,
+            new ReturnExchangeRequest(new List<ReturnItemDto> {
+                new(_prodHaoHaoId, 1m, 5000m, OrderDetailId: order.Items[0].Id, BatchId: soldStocks[1].Id)
+            }, new List<OrderItemCreateDto>(), "CASH")));
+        Assert.Equal("RETURN_BATCH_QUANTITY", error.ErrorCode);
+        Assert.Equal(unrelatedStockBefore, soldStocks[1].QuantityOnHand);
     }
 
     [Fact]
@@ -4099,6 +4188,7 @@ public class FakeOrderRepository : IOrderRepository
     public List<Customer> Customers { get; } = new();
     public List<Product> Products { get; } = new();
     public List<BranchStock> BranchStocks { get; } = new();
+    public List<Package> Packages { get; } = new();
     public List<BranchProduct> BranchProducts { get; } = new();
 
     public Task<Dictionary<Guid, BranchProduct>> GetBranchProductsByProductIdsAsync(Guid branchId, IEnumerable<Guid> productIds, CancellationToken cancellationToken = default)
@@ -4140,6 +4230,14 @@ public class FakeOrderRepository : IOrderRepository
 
     public Task<BranchStock?> GetBranchStockByIdAsync(Guid branchId, Guid productId, Guid batchId, CancellationToken cancellationToken = default)
         => Task.FromResult(BranchStocks.FirstOrDefault(s => s.Id == batchId && s.BranchId == branchId && s.ProductId == productId));
+
+    public Task<Dictionary<Guid, decimal>> GetActivePackageWeightsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
+        => Task.FromResult(Packages.Where(p => p.BranchId == branchId && p.ProductId == productId && !p.IsDeleted
+            && (p.Status == "AVAILABLE" || p.Status == "QUARANTINED"))
+            .GroupBy(p => p.BranchStockId).ToDictionary(g => g.Key, g => g.Sum(p => p.NetWeight)));
+
+    public Task<Package?> GetPackageForSaleAsync(Guid branchId, Guid productId, Guid packageId, CancellationToken cancellationToken = default)
+        => Task.FromResult(Packages.FirstOrDefault(p => p.Id == packageId && p.BranchId == branchId && p.ProductId == productId && !p.IsDeleted));
 
     public Task<Order?> GetOrderWithDetailsAsync(Guid id, CancellationToken cancellationToken = default)
     {

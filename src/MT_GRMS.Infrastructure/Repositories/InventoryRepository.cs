@@ -127,6 +127,7 @@ public class InventoryRepository : IInventoryRepository
                     && branchIds.Contains(bs.BranchId)
                     && productIds.Contains(bs.ProductId))
                 .ToListAsync(cancellationToken);
+        var packageWeights = await GetActivePackageWeightsAsync(tenantId, branchStocks.Select(s => s.Id).ToList(), cancellationToken);
 
         var pendingReturnLines = productIds.Count == 0
             ? new List<(Guid BranchId, Guid ProductId, decimal RequestedQty)>()
@@ -158,9 +159,9 @@ public class InventoryRepository : IInventoryRepository
             var reservedQty = stocks.Sum(s => s.QuantityReserved);
             var quarantinedQty = stocks.Sum(s => s.QuantityQuarantined);
             var expiredQty = stocks
-                .Where(s => s.ExpiryDate.HasValue && s.ExpiryDate.Value.Date <= now)
+                .Where(s => s.ExpiryDate.HasValue && s.ExpiryDate.Value.Date < now)
                 .Sum(s => s.QuantityOnHand);
-            var availableQty = BranchStockAvailability.SumSellableAvailable(stocks, now);
+            var availableQty = stocks.Sum(s => BranchStockAvailability.GetSellableAvailable(s, now, packageWeights.GetValueOrDefault(s.Id)));
             var pendingQty = pendingReturnsByPair[(branch.Id, product.Id)]
                 .Sum(l => l.RequestedQty);
 
@@ -179,7 +180,7 @@ public class InventoryRepository : IInventoryRepository
                 .Where(s => !string.IsNullOrWhiteSpace(s.BatchCode) || s.ExpiryDate.HasValue)
                 .OrderBy(s => s.ExpiryDate ?? DateTime.MaxValue)
                 .ThenBy(s => s.ManufactureDate ?? DateTime.MaxValue)
-                .Select(s => MapBranchStockToBatchSummary(s, now))
+                .Select(s => MapBranchStockToBatchSummary(s, now, packageWeights.GetValueOrDefault(s.Id)))
                 .ToList();
 
             string status;
@@ -271,23 +272,34 @@ public class InventoryRepository : IInventoryRepository
             .ThenBy(stock => stock.ManufactureDate ?? DateTime.MaxValue)
             .ToListAsync(cancellationToken);
 
-        return batchStocks.Select(stock => MapBranchStockToBatchSummary(stock, now)).ToList();
+        var packageWeights = await GetActivePackageWeightsAsync(tenantId, batchStocks.Select(s => s.Id).ToList(), cancellationToken);
+        return batchStocks.Select(stock => MapBranchStockToBatchSummary(stock, now, packageWeights.GetValueOrDefault(stock.Id))).ToList();
     }
 
-    private static InventoryBatchSummaryDto MapBranchStockToBatchSummary(BranchStock stock, DateTime now)
+    private async Task<Dictionary<Guid, decimal>> GetActivePackageWeightsAsync(string tenantId, List<Guid> stockIds, CancellationToken ct)
+    {
+        if (stockIds.Count == 0) return new Dictionary<Guid, decimal>();
+        return await _appContext.Packages.AsNoTracking()
+            .Where(p => p.TenantId == tenantId && stockIds.Contains(p.BranchStockId) && !p.IsDeleted
+                && (p.Status == "AVAILABLE" || p.Status == "QUARANTINED"))
+            .GroupBy(p => p.BranchStockId)
+            .ToDictionaryAsync(g => g.Key, g => g.Sum(p => p.NetWeight), ct);
+    }
+
+    private static InventoryBatchSummaryDto MapBranchStockToBatchSummary(BranchStock stock, DateTime now, decimal packageWeight)
     {
         var days = stock.ExpiryDate.HasValue
             ? (stock.ExpiryDate.Value.Date - now).Days
             : (int?)null;
         var status = days switch
         {
-            <= 0 => "Expired",
+            < 0 => "Expired",
             <= 3 => "Critical",
             <= 30 => "Warning",
             null => "NoExpiry",
             _ => "Normal"
         };
-        var availableQty = Math.Max(0m, stock.QuantityOnHand - stock.QuantityReserved - stock.QuantityQuarantined);
+        var availableQty = BranchStockAvailability.GetSellableAvailable(stock, now, packageWeight);
 
         return new InventoryBatchSummaryDto(
             stock.Id,

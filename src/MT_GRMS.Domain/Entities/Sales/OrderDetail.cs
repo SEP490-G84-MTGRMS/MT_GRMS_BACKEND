@@ -15,6 +15,8 @@ public class OrderDetail : BaseEntity
     public Guid? BatchId { get; set; }
     public string? BatchCode { get; set; }
     public DateTime? BatchExpiryDate { get; set; }
+    /// <summary>JSON of per-lot base quantities issued or reserved for this line.</summary>
+    public string? StockAllocationsJson { get; set; }
     public int LineNumber { get; set; } = 1;
     public decimal Qty { get; set; } = 1.00m;
     public decimal UnitPrice { get; set; } = 0.00m;

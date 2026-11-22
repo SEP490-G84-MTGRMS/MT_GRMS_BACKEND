@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Inventory;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
@@ -197,13 +198,16 @@ public class BranchProductRepository : IBranchProductRepository
             var allRows = await projected.ToListAsync(cancellationToken);
             var ids = allRows.Select(x => x.ProductId).Distinct().ToList();
             var branchIds = allRows.Select(x => x.BranchId).Distinct().ToList();
+            var todayForFilter = DateTime.UtcNow.Date;
             var qtyRows = await _context.BranchStocks
                 .AsNoTracking()
-                .Where(bs => branchIds.Contains(bs.BranchId) && ids.Contains(bs.ProductId))
-                .GroupBy(bs => new { bs.BranchId, bs.ProductId })
-                .Select(g => new { g.Key.BranchId, g.Key.ProductId, Qty = g.Sum(x => x.QuantityOnHand) })
+                .Where(bs => branchIds.Contains(bs.BranchId) && ids.Contains(bs.ProductId) && !bs.IsDeleted)
                 .ToListAsync(cancellationToken);
-            var qtyLookup = qtyRows.ToDictionary(x => (x.BranchId, x.ProductId), x => x.Qty);
+            var qtyLookup = qtyRows
+                .GroupBy(bs => (bs.BranchId, bs.ProductId))
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Sum(bs => BranchStockAvailability.GetSellableAvailable(bs, todayForFilter)));
 
             var filtered = allRows.Where(x =>
             {
@@ -253,13 +257,18 @@ public class BranchProductRepository : IBranchProductRepository
         var pagedProductIds = pagedData.Select(x => x.ProductId).Distinct().ToList();
         var pagedBranchIds = pagedData.Select(x => x.BranchId).Distinct().ToList();
 
-        var stockQtys = await _context.BranchStocks
+        var today = DateTime.UtcNow.Date;
+        var stockRows = await _context.BranchStocks
             .AsNoTracking()
-            .Where(bs => pagedBranchIds.Contains(bs.BranchId) && pagedProductIds.Contains(bs.ProductId))
-            .GroupBy(bs => new { bs.BranchId, bs.ProductId })
-            .Select(g => new { g.Key.BranchId, g.Key.ProductId, Qty = g.Sum(x => x.QuantityOnHand) })
+            .Where(bs => pagedBranchIds.Contains(bs.BranchId)
+                && pagedProductIds.Contains(bs.ProductId)
+                && !bs.IsDeleted)
             .ToListAsync(cancellationToken);
-        var stockLookup = stockQtys.ToDictionary(x => (x.BranchId, x.ProductId), x => x.Qty);
+        var stockLookup = stockRows
+            .GroupBy(bs => (bs.BranchId, bs.ProductId))
+            .ToDictionary(
+                g => g.Key,
+                g => g.Sum(bs => BranchStockAvailability.GetSellableAvailable(bs, today)));
 
         // NCC Active đang phục vụ từng chi nhánh trên trang → 1 BranchProduct có thể nhiều dòng nguồn nhập.
         var branchSupplierLinks = await _context.SupplierBranchAssignments
