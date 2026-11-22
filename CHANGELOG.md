@@ -20,6 +20,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - Hợp nhất yêu cầu nạp VietQR và giao dịch ví vào `WalletTransactions`. Giữ hợp đồng API, chuyển dữ liệu đơn cũ qua đối soát và ngăn webhook cộng trùng số dư. [worklog: docs/worklogs/2026-11-16_WALLET_AI_merge-topup-orders.md]
 
 ### Added
+- Cho chủ Gói Thường mua riêng tiện ích Quản lý nhân viên bằng Ví gian hàng, tính phí theo số ngày còn lại và kiểm tra quyền dùng ở API hồ sơ nhân viên. [worklog: docs/worklogs/2026-11-22_BE-STORE_AI_staff-management-addon.md]
 - API Admin xem lịch sử mua gói dịch vụ theo tenant, phân trang và giới hạn truy cập Admin. Chi tiết tenant không trả danh sách chi nhánh. [worklog: docs/worklogs/2026-11-16_ADMIN-TENANT_AI_tenant-records.md]
 - Khởi tạo danh mục sản phẩm, nhóm hàng, đơn vị quy đổi và gán chi nhánh chính từ MasterProducts đang bật trong transaction đăng ký cửa hàng. [worklog: docs/worklogs/2026-11-15_ADMIN-CATALOG_AI_new-tenant-default-data.md]
 - **Kho Danh mục Hàng hóa Mẫu Toàn Cầu (Global FMCG Master Catalog)**: Xây dựng thực thể nền tảng `MasterProduct` & `MasterProductUnit`, bộ API quản trị cho Super Admin `AdminMasterCatalogController` (`/api/admin/master-catalog`), xử lý ClosedXML xuất template và import Excel hàng loạt (>5.000 SKU) cùng API tra cứu mã vạch công khai `GET /api/products/lookup-master` phục vụ auto-fill tức thì khi tiệm tạp hóa onboard [REQ-MC-01 -> REQ-MC-04] [worklog: docs/worklogs/2026-11-15_FMCG-MASTER-CATALOG_Ortus24_add-global-master-catalog.md].
