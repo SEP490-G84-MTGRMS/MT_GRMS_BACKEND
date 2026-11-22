@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Admin.Dtos;
 using MT_GRMS.Application.Admin.Services;
+using MT_GRMS.Application.Admin.Validators;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.SaaS;
@@ -16,6 +17,7 @@ namespace MT_GRMS.Api.Controllers;
 [Authorize]
 public class TenantStoreController : BaseApiController
 {
+    private static readonly UpdateStoreInfoRequestValidator StoreInfoValidator = new();
     private readonly ITenantService _tenantService;
     private readonly ISubscriptionPlanService _planService;
     private readonly AppDbContext _context;
@@ -72,6 +74,13 @@ public class TenantStoreController : BaseApiController
         if (tenant == null)
         {
             return NotFound(ApiResponse<TenantDetailResponse>.Fail("TENANT_NOT_FOUND", "Không tìm thấy thông tin gian hàng để cập nhật."));
+        }
+
+        var validation = StoreInfoValidator.Validate(request);
+        if (!validation.IsValid)
+        {
+            var errors = string.Join(" ", validation.Errors.Select(error => error.ErrorMessage));
+            return BadRequest(ApiResponse<TenantDetailResponse>.Fail("VALIDATION_ERROR", errors));
         }
 
         var updated = await _tenantService.UpdateTenantAsync(tenant.Id, request, cancellationToken);

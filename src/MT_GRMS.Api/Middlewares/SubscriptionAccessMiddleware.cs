@@ -1,8 +1,12 @@
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Domain.Constants;
+using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Api.Middlewares;
+
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class RequiresStaffManagementAttribute : Attribute { }
 
 public sealed class SubscriptionAccessMiddleware(RequestDelegate next)
 {
@@ -32,7 +36,7 @@ public sealed class SubscriptionAccessMiddleware(RequestDelegate next)
 
         var tenant = await db.Tenants.AsNoTracking()
             .Where(x => x.Id == tenantId)
-            .Select(x => new { x.SubscriptionStatus, x.SubscriptionExpiresAt, x.TrialExpiresAt })
+            .Select(x => new { x.SubscriptionStatus, x.SubscriptionExpiresAt, x.TrialExpiresAt, x.CurrentPlan, x.HasStaffManagementAddon })
             .SingleOrDefaultAsync(context.RequestAborted);
 
         var trialExpiry = tenant?.TrialExpiresAt ?? tenant?.SubscriptionExpiresAt;
@@ -48,6 +52,20 @@ public sealed class SubscriptionAccessMiddleware(RequestDelegate next)
 
         if (!blocked)
         {
+            if (tenant != null &&
+                context.User.IsInRole(SystemRoles.StoreOwner) &&
+                context.GetEndpoint()?.Metadata.GetMetadata<RequiresStaffManagementAttribute>() != null &&
+                Tenant.RequiresStaffManagementAddon(tenant.CurrentPlan, tenant.HasStaffManagementAddon))
+            {
+                await Results.Problem(
+                    statusCode: StatusCodes.Status403Forbidden,
+                    title: "Quản lý nhân viên đang khóa",
+                    detail: "Vui lòng mua thêm Quản lý nhân viên trong mục Gói dịch vụ.",
+                    extensions: new Dictionary<string, object?> { ["code"] = "STAFF_MANAGEMENT_ADDON_REQUIRED" })
+                    .ExecuteAsync(context);
+                return;
+            }
+
             await next(context);
             return;
         }

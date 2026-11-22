@@ -113,7 +113,9 @@ public class TenantService : ITenantService
             Branches: new List<TenantDetailBranchSummaryDto>(),
             CreatedAt: t.CreatedAt,
             UpdatedAt: t.UpdatedAt,
-            WalletBalance: t.WalletBalance
+            WalletBalance: t.WalletBalance,
+            StaffManagementLocked: Tenant.RequiresStaffManagementAddon(t.CurrentPlan, t.HasStaffManagementAddon),
+            CanPurchaseStaffManagementAddon: t.CanPurchaseStaffManagementAddon(now)
         );
     }
 

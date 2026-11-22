@@ -44,6 +44,13 @@ public class Tenant : BaseEntity<string>
     public decimal CashOutApprovalThreshold { get; set; } = 200000m;
     public decimal CashOutShiftTotalLimit { get; set; }
 
+    public static bool RequiresStaffManagementAddon(string? planCode, bool hasAddon) =>
+        string.Equals(planCode, "STANDARD", StringComparison.OrdinalIgnoreCase) && !hasAddon;
+
+    public bool CanPurchaseStaffManagementAddon(DateTime now) =>
+        RequiresStaffManagementAddon(CurrentPlan, HasStaffManagementAddon) &&
+        SubscriptionStatus == "ACTIVE" && SubscriptionExpiresAt > now;
+
     // Navigations
     public SubscriptionPlan? SubscriptionPlan { get; set; }
     public ICollection<TenantUser> TenantUsers { get; set; } = new List<TenantUser>();

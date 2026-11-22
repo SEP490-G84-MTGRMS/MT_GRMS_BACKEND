@@ -1,7 +1,35 @@
+using System.Text.RegularExpressions;
 using FluentValidation;
 using MT_GRMS.Application.Admin.Dtos;
 
 namespace MT_GRMS.Application.Admin.Validators;
+
+public sealed class UpdateStoreInfoRequestValidator : AbstractValidator<UpdateTenantRequest>
+{
+    public UpdateStoreInfoRequestValidator()
+    {
+        RuleFor(x => x.Name)
+            .Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("Vui lòng nhập tên cửa hàng.")
+            .Must(value => value.Trim().Length <= 150).WithMessage("Tên cửa hàng tối đa 150 ký tự.");
+
+        RuleFor(x => x.Hotline)
+            .Must(value => string.IsNullOrWhiteSpace(value) || Regex.IsMatch(value.Trim(), @"\A\+?[0-9]{9,12}\z"))
+            .WithMessage("Số điện thoại phải có 9–12 chữ số, có thể bắt đầu bằng +.");
+
+        RuleFor(x => x.TaxCode)
+            .Must(value => value is null || value.Trim().Length <= 50)
+            .WithMessage("Mã số thuế tối đa 50 ký tự.");
+
+        RuleFor(x => x.City)
+            .Must(value => value is null || value.Trim().Length <= 100)
+            .WithMessage("Tỉnh / Thành phố tối đa 100 ký tự.");
+
+        RuleFor(x => x.Address)
+            .Must(value => value is null || value.Trim().Length <= 255)
+            .WithMessage("Địa chỉ tối đa 255 ký tự.");
+    }
+}
 
 public class LockTenantRequestValidator : AbstractValidator<LockTenantRequest>
 {

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using MT_GRMS.Api.Middlewares;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Employees.Dtos;
@@ -31,6 +32,7 @@ public class EmployeesController : BaseApiController
     /// </summary>
     [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpGet]
+    [RequiresStaffManagement]
     public async Task<IActionResult> GetEmployees(
         [FromQuery] EmployeeQueryFilter filter,
         CancellationToken cancellationToken)
@@ -69,6 +71,7 @@ public class EmployeesController : BaseApiController
     /// </summary>
     [Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
     [HttpGet("{id:guid}")]
+    [RequiresStaffManagement]
     public async Task<IActionResult> GetById(
         Guid id,
         CancellationToken cancellationToken)
@@ -109,6 +112,7 @@ public class EmployeesController : BaseApiController
     /// </summary>
     [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost]
+    [RequiresStaffManagement]
     public async Task<IActionResult> Create(
         [FromBody] CreateEmployeeRequest request,
         CancellationToken cancellationToken)
@@ -161,6 +165,7 @@ public class EmployeesController : BaseApiController
     /// </summary>
     [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPut("{id:guid}")]
+    [RequiresStaffManagement]
     public async Task<IActionResult> Update(
         Guid id,
         [FromBody] UpdateEmployeeRequest request,
@@ -235,6 +240,7 @@ public class EmployeesController : BaseApiController
     /// </summary>
     [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPatch("{id:guid}/status")]
+    [RequiresStaffManagement]
     public async Task<IActionResult> UpdateStatus(
         Guid id,
         [FromBody] UpdateEmployeeStatusRequest request,
@@ -260,6 +266,7 @@ public class EmployeesController : BaseApiController
     /// </summary>
     [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("{id:guid}/identity-account")]
+    [RequiresStaffManagement]
     public async Task<IActionResult> CreateIdentityAccount(
         Guid id,
         [FromBody] CreateIdentityAccountRequest request,
@@ -320,6 +327,7 @@ public class EmployeesController : BaseApiController
     /// </summary>
     [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPut("{id:guid}/identity-account")]
+    [RequiresStaffManagement]
     public async Task<IActionResult> UpdateIdentityAccount(
         Guid id,
         [FromBody] CreateIdentityAccountRequest request,
@@ -380,6 +388,7 @@ public class EmployeesController : BaseApiController
     /// </summary>
     [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpDelete("{id:guid}")]
+    [RequiresStaffManagement]
     public async Task<IActionResult> Delete(
         Guid id,
         CancellationToken cancellationToken)
@@ -427,6 +436,7 @@ public class EmployeesController : BaseApiController
     /// </summary>
     [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("{id:guid}/face-descriptor")]
+    [RequiresStaffManagement]
     public async Task<IActionResult> RegisterFaceDescriptor(
         Guid id,
         [FromBody] RegisterFaceDescriptorRequest request,

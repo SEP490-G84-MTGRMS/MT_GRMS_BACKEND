@@ -158,6 +158,35 @@ public class TenantStoreControllerTests
     }
 
     [Fact]
+    public async Task UpdateStoreInfo_WhenFieldsAreInvalid_ReturnsBadRequestWithoutUpdatingTenant()
+    {
+        using var context = CreateDbContext();
+        context.Tenants.Add(new Tenant { Id = TenantId, Name = "My Mart" });
+        context.TenantUsers.Add(new TenantUser { TenantId = TenantId, UserId = _userId, IsActive = true });
+        await context.SaveChangesAsync();
+
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        {
+            ControllerContext = CreateControllerContext()
+        };
+        var request = new UpdateTenantRequest(" ", new string('0', 51), "01234567", new string('a', 256), new string('a', 101));
+
+        var result = await controller.UpdateStoreInfo(request, CancellationToken.None);
+
+        var badRequest = Assert.IsType<BadRequestObjectResult>(result);
+        var response = Assert.IsType<ApiResponse<TenantDetailResponse>>(badRequest.Value);
+        Assert.False(response.Success);
+        Assert.Equal("VALIDATION_ERROR", response.ErrorCode);
+        Assert.Contains("Vui lòng nhập tên cửa hàng.", response.Message);
+        Assert.Contains("9–12 chữ số", response.Message);
+        Assert.Contains("Mã số thuế tối đa 50 ký tự.", response.Message);
+        Assert.Contains("Địa chỉ tối đa 255 ký tự.", response.Message);
+        Assert.Contains("Tỉnh / Thành phố tối đa 100 ký tự.", response.Message);
+        _mockTenantService.Verify(service => service.UpdateTenantAsync(
+            It.IsAny<string>(), It.IsAny<UpdateTenantRequest>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task GetPricingPlans_ReturnsOfficialPlansWithTrial()
     {
         using var context = CreateDbContext();

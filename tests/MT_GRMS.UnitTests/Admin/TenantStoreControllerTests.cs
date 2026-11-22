@@ -100,7 +100,7 @@ public class TenantStoreControllerTests
     [Fact]
     public async Task UpdateStoreInfo_ValidRequest_Returns200Ok_WithUpdated()
     {
-        var req = new UpdateTenantRequest("Hà Nội Mart Cập Nhật", "010999888", "19001122", "456 Cầu Giấy", "Hà Nội");
+        var req = new UpdateTenantRequest("Hà Nội Mart Cập Nhật", "010999888", "0919001122", "456 Cầu Giấy", "Hà Nội");
         var result = await _controller.UpdateStoreInfo(req, CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(result);

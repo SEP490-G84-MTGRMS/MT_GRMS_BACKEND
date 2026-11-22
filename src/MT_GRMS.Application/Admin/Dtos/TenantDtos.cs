@@ -63,7 +63,9 @@ public record TenantDetailResponse(
     List<TenantDetailBranchSummaryDto> Branches,
     DateTime CreatedAt,
     DateTime? UpdatedAt,
-    decimal WalletBalance = 0
+    decimal WalletBalance = 0,
+    bool StaffManagementLocked = false,
+    bool CanPurchaseStaffManagementAddon = false
 );
 
 public record UpdateTenantRequest(
