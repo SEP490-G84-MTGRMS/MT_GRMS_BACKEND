@@ -18,8 +18,8 @@ public sealed class TransferService(
     IRepository<TransferStatusHistory> statusHistory,
     ITenantContext tenant,
     IUnitOfWork unitOfWork,
-    IRepository<Package>? packages = null,
-    NotificationOutbox? notificationOutbox = null) : ITransferService
+    NotificationOutbox? notificationOutbox = null,
+    IRepository<Package>? packages = null) : ITransferService
 {
     private async Task<decimal> RawAvailableAsync(BranchStock stock, CancellationToken ct)
     {

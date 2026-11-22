@@ -21,8 +21,8 @@ public sealed class TransferRequestService(
     ITransferService transferService,
     ITenantContext tenant,
     IUnitOfWork unitOfWork,
-    IRepository<Package>? packages = null,
-    NotificationOutbox? notificationOutbox = null) : ITransferRequestService
+    NotificationOutbox? notificationOutbox = null,
+    IRepository<Package>? packages = null) : ITransferRequestService
 {
     private sealed record Allocation(Guid BranchId, BranchStock Stock, Product Product, decimal Quantity, string Unit);
 
