@@ -114,7 +114,51 @@ public sealed class StoreOwnerDashboardService : IStoreOwnerDashboardService
             new DashboardProcurementDto(pendingApproval, awaitingReceipt, receivedAmount),
             new DashboardInventoryDto(stock.KpiSummary.LowStockCount, stock.KpiSummary.OutOfStockCount,
                 stock.KpiSummary.ExpiryWarningCount, lowStockItems, expiryItems),
-            new DashboardEmployeesDto(totalEmployees, activeEmployees));
+            new DashboardEmployeesDto(totalEmployees, activeEmployees))
+        {
+            Tasks = await GetTasksAsync(tenantId, branchId, DateOnly.FromDateTime(todayVn), ct)
+        };
+    }
+
+    private async Task<IReadOnlyList<DashboardTaskDto>> GetTasksAsync(string tenantId, Guid? branchId, DateOnly today, CancellationToken ct)
+    {
+        const int limit = 8;
+        var expenses = await _db.ExpenseVouchers.AsNoTracking()
+            .Where(voucher => voucher.TenantId == tenantId && !voucher.IsDeleted
+                && (!branchId.HasValue || voucher.BranchId == branchId)
+                && (voucher.Status == ExpenseVoucherStatus.PendingApproval || voucher.Status == ExpenseVoucherStatus.PaymentFailed
+                    || (voucher.Status == ExpenseVoucherStatus.Approved && voucher.Nature == FinancialNature.OperatingExpense
+                        && !voucher.IsSettled && voucher.PaidAtUtc == null && voucher.DueDate <= today)))
+            .OrderByDescending(voucher => voucher.CreatedAt).ThenBy(voucher => voucher.Id).Take(limit)
+            .Select(voucher => new { voucher.VoucherCode, voucher.BranchId, voucher.Status, voucher.CreatedAt, voucher.DueDate }).ToListAsync(ct);
+        var transfers = await _db.Transfers.AsNoTracking()
+            .Where(transfer => transfer.TenantId == tenantId && !transfer.IsDeleted
+                && ((transfer.Status == TransferStatus.Pending && (!branchId.HasValue || transfer.FromBranchId == branchId))
+                    || (transfer.Status == TransferStatus.InTransit && (!branchId.HasValue || transfer.ToBranchId == branchId))))
+            .OrderByDescending(transfer => transfer.CreatedAt).ThenBy(transfer => transfer.Id).Take(limit)
+            .Select(transfer => new { transfer.Id, transfer.TransferCode, transfer.Status, transfer.CreatedAt }).ToListAsync(ct);
+        var shifts = await _db.ShiftZReports.AsNoTracking()
+            .Where(shift => shift.TenantId == tenantId && !shift.IsDeleted && (!branchId.HasValue || shift.BranchId == branchId)
+                && shift.Status == ShiftState.Closed && shift.HandoverStatus == HandoverStatus.PENDING
+                && (shift.Discrepancy > 0.01m || shift.Discrepancy < -0.01m))
+            .OrderByDescending(shift => shift.ClosedAtUtc ?? shift.CreatedAt).ThenBy(shift => shift.Id).Take(limit)
+            .Select(shift => new { shift.Id, shift.ShiftCode, shift.BranchId, shift.ClosedAtUtc, shift.CreatedAt }).ToListAsync(ct);
+
+        return expenses.Select(voucher => new DashboardTaskDto(
+                voucher.Status switch
+                {
+                    ExpenseVoucherStatus.PendingApproval => "Phiếu chi cần duyệt",
+                    ExpenseVoucherStatus.PaymentFailed => "Phiếu chi chưa xuất được quỹ",
+                    _ => voucher.DueDate < today ? "Phiếu chi quá hạn thanh toán" : "Phiếu chi đến hạn hôm nay"
+                },
+                voucher.VoucherCode, $"/store-owner/expenses?branchId={voucher.BranchId?.ToString() ?? "ALL"}&search={Uri.EscapeDataString(voucher.VoucherCode)}",
+                voucher.CreatedAt))
+            .Concat(transfers.Select(transfer => new DashboardTaskDto(
+                transfer.Status == TransferStatus.Pending ? "Điều chuyển chờ xuất kho" : "Điều chuyển chờ nhận hàng",
+                transfer.TransferCode, $"/store-owner/transfers/{transfer.Id}", transfer.CreatedAt)))
+            .Concat(shifts.Select(shift => new DashboardTaskDto("Ca lệch quỹ chờ bàn giao", shift.ShiftCode,
+                $"/store-owner/shifts?branchId={shift.BranchId}&shiftId={shift.Id}", shift.ClosedAtUtc ?? shift.CreatedAt)))
+            .OrderByDescending(task => task.CreatedAt).Take(limit).ToList();
     }
 
     private async Task<IReadOnlyList<DashboardRevenueTrendPointDto>> GetHourlyRevenueTrendAsync(

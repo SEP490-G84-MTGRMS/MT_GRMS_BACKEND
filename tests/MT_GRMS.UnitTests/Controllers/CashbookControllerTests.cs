@@ -109,61 +109,27 @@ public class CashbookControllerTests
         Assert.True(apiResponse.Data);
     }
 
-    [Fact]
-    public async Task CreateDepositToBank_ShouldReturnOk()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RecordTaxPayment_ReturnsVoucherAndCashbookEntry(bool hasSnapshot)
     {
-        var request = new DepositToBankRequest(Guid.NewGuid(), Guid.NewGuid(), 5_000_000m, Guid.NewGuid(), "Nop ngan hang Vietin");
-        var transitResponse = new CashInTransitResponse(
-            Guid.NewGuid(),
-            "CIT-001",
-            request.SourceAccountId,
-            request.TargetBankAccountId,
-            request.Amount,
-            null,
-            0m,
-            request.CarrierUserId,
-            "PENDING",
-            DateTime.UtcNow);
-
+        Guid? snapshotId = hasSnapshot ? Guid.NewGuid() : null;
+        var request = new RecordTaxPaymentRequest(Guid.NewGuid(), 5_000_000m, "Kho bạc", "TAX-01", null, snapshotId, null);
+        var voucherId = Guid.NewGuid();
+        var entry = new CashbookEntryResponse(Guid.NewGuid(), "CB-TAX", request.SourceAccountId, "Bank", null,
+            "Payment", request.Amount, 1_000_000m, "TAX_PAYMENT", voucherId, "TAX-01", "HASH", "Nộp thuế", DateTime.UtcNow);
+        var receipt = new TaxPaymentResponse(voucherId, snapshotId, entry);
         _mockCashbookService
-            .Setup(s => s.CreateDepositToBankAsync(request, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(transitResponse);
+            .Setup(s => s.RecordTaxPaymentAsync(request, CancellationToken.None))
+            .ReturnsAsync(receipt);
 
-        var actionResult = await _controller.CreateDepositToBank(request, CancellationToken.None);
+        var actionResult = await _controller.RecordTaxPayment(request, CancellationToken.None);
 
         var okResult = Assert.IsType<OkObjectResult>(actionResult.Result);
-        var apiResponse = Assert.IsType<ApiResponse<CashInTransitResponse>>(okResult.Value);
-        Assert.True(apiResponse.Success);
-        Assert.Equal("CIT-001", apiResponse.Data?.TransitCode);
-    }
-
-    [Fact]
-    public async Task ConfirmBankDeposit_ShouldReturnOk()
-    {
-        var transitId = Guid.NewGuid();
-        var request = new ConfirmBankDepositRequest(transitId, 5_000_000m, "Da vao tai khoan");
-        var transitResponse = new CashInTransitResponse(
-            transitId,
-            "CIT-001",
-            Guid.NewGuid(),
-            Guid.NewGuid(),
-            5_000_000m,
-            5_000_000m,
-            0m,
-            Guid.NewGuid(),
-            "CONFIRMED",
-            DateTime.UtcNow);
-
-        _mockCashbookService
-            .Setup(s => s.ConfirmBankDepositAsync(request, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(transitResponse);
-
-        var actionResult = await _controller.ConfirmBankDeposit(request, CancellationToken.None);
-
-        var okResult = Assert.IsType<OkObjectResult>(actionResult.Result);
-        var apiResponse = Assert.IsType<ApiResponse<CashInTransitResponse>>(okResult.Value);
-        Assert.True(apiResponse.Success);
-        Assert.Equal("CONFIRMED", apiResponse.Data?.Status);
+        var response = Assert.IsType<ApiResponse<TaxPaymentResponse>>(okResult.Value);
+        Assert.True(response.Success);
+        Assert.Equal(receipt, response.Data);
     }
 
     [Fact]

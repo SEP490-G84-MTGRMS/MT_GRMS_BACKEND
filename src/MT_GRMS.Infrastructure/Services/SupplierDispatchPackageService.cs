@@ -111,11 +111,19 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
             .Where(p => poIds.Contains(p.Id) && !p.IsDeleted)
             .ToListAsync(cancellationToken);
 
-        var maxPackageRev = await _db.SupplierDispatchPackages
-            .Where(p => p.SupplierId == supplierId && !p.IsDeleted)
-            .Select(p => (int?)p.PackageRevisionNumber)
-            .MaxAsync(cancellationToken) ?? 0;
-        var nextPackageRev = Math.Max(1, maxPackageRev + 1);
+        // Revision theo đúng các PO trong lần gửi (kể cả item soft-delete của package cũ),
+        // KHÔNG cộng dồn mọi package của cả NCC — tránh đơn mới ngày giao khác bị gắn UPDATED/R4.
+        var tenantId = _tenantContext.CurrentTenantId;
+        var maxPriorRevForThesePos = await (
+            from item in _db.SupplierDispatchPackageItems.IgnoreQueryFilters()
+            join pkg in _db.SupplierDispatchPackages.IgnoreQueryFilters() on item.PackageId equals pkg.Id
+            where poIds.Contains(item.PurchaseOrderId)
+                  && item.TenantId == tenantId
+                  && pkg.TenantId == tenantId
+                  && !pkg.IsDeleted
+            select (int?)pkg.PackageRevisionNumber
+        ).MaxAsync(cancellationToken) ?? 0;
+        var nextPackageRev = Math.Max(1, maxPriorRevForThesePos + 1);
 
         // Soft-delete package items cũ trước, rồi SaveChanges riêng —
         // Postgres check unique partial index ngay (không deferred); insert cùng batch dễ 409.
@@ -172,7 +180,6 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
         foreach (var po in pos)
         {
             po.DispatchPackageId = package.Id;
-            po.DispatchBatchId = dispatchBatchId;
             package.Items.Add(new SupplierDispatchPackageItem
             {
                 TenantId = _tenantContext.CurrentTenantId,
@@ -486,8 +493,11 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
                 .ToList();
 
             var cc = EmailCcHelper.FromJson(pkg.EmailCcJson);
-            var dispatchDate = DateTime.UtcNow.AddHours(7).ToString("dd/MM/yyyy");
+            var deliveryLabel = dates.Count > 0
+                ? string.Join(", ", dates)
+                : DateTime.UtcNow.AddHours(7).ToString("dd/MM/yyyy");
             var rev = Math.Max(1, pkg.PackageRevisionNumber);
+            // Chỉ coi là cập nhật khi đúng các PO này đã từng gửi (rev > 1), không phải vì NCC từng gửi đợt khác.
             var isUpdate = rev > 1;
             var body = new StringBuilder();
             body.AppendLine($"Kính gửi {pkg.SupplierNameSnapshot},");
@@ -496,10 +506,13 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
                 ? "MT-GRMS gửi bản CẬP NHẬT đơn đặt hàng (thay thế bản trước)."
                 : "MT-GRMS gửi đơn đặt hàng đính kèm.");
             body.AppendLine($"Mã NCC: {pkg.SupplierCodeSnapshot}");
-            body.AppendLine($"Revision package: {rev}");
+            if (isUpdate)
+            {
+                body.AppendLine($"Revision package: {rev}");
+            }
             body.AppendLine($"Số PO trong file: {pos.Count}");
             body.AppendLine($"Cửa hàng: {string.Join(", ", stores)}");
-            body.AppendLine($"Ngày giao: {string.Join(", ", dates)}");
+            body.AppendLine($"Ngày giao: {deliveryLabel}");
             if (!string.IsNullOrWhiteSpace(pkg.Note))
             {
                 body.AppendLine();
@@ -514,8 +527,8 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
             body.AppendLine("MT-GRMS");
 
             var subject = isUpdate
-                ? $"[UPDATED ORDER] {pkg.SupplierNameSnapshot} - {dispatchDate} - Revision {rev}"
-                : $"Đơn đặt hàng từ MT-GRMS - {pkg.SupplierCodeSnapshot} - {dispatchDate}";
+                ? $"[UPDATED ORDER] {pkg.SupplierNameSnapshot} - {deliveryLabel} - Revision {rev}"
+                : $"Đơn đặt hàng từ MT-GRMS - {pkg.SupplierNameSnapshot} - {deliveryLabel}";
 
             await _emailSender.SendSupplierOrderAsync(new SupplierOrderEmailMessage
             {

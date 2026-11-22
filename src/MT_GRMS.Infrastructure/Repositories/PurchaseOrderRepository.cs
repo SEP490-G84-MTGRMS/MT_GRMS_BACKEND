@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PurchaseOrders;
 using MT_GRMS.Application.PurchaseOrders.Dtos;
 using MT_GRMS.Domain.Entities.Catalog;
@@ -94,7 +95,8 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             return Array.Empty<OrderMatrixProductDto>();
         }
 
-        // 3. SupplierProducts: giữ cả inactive để hiển thị dòng xám + draft cũ
+        // 3. SupplierProducts: giữ SP master Inactive / SupplierProduct Inactive
+        //    để vẫn hiện trên matrix — chỉ disable dòng (IsRowDisabled), không loại khỏi list.
         var spQuery = _context.SupplierProducts
             .Include(sp => sp.Product)
                 .ThenInclude(p => p!.Category)
@@ -105,7 +107,6 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                          && !sp.IsDeleted
                          && sp.Product != null
                          && !sp.Product.IsDeleted
-                         && sp.Product.Status == ProductStatus.Active
                          && allocatedProductIds.Contains(sp.ProductId));
 
         var rawSupplierProducts = await spQuery.AsNoTracking().ToListAsync(cancellationToken);
@@ -130,9 +131,53 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             .AsNoTracking()
             .ToListAsync(cancellationToken);
 
+        var stockIds = stocks.Select(x => x.Id).ToList();
+        var packagedByStockId = await _context.Packages
+            .Where(x => stockIds.Contains(x.BranchStockId)
+                        && !x.IsDeleted
+                        && x.Status == "AVAILABLE")
+            .GroupBy(x => x.BranchStockId)
+            .Select(g => new { BranchStockId = g.Key, Qty = g.Sum(x => x.NetWeight) })
+            .ToDictionaryAsync(x => x.BranchStockId, x => x.Qty, cancellationToken);
+
         var stockLookup = stocks
             .GroupBy(bs => bs.ProductId)
-            .ToDictionary(g => g.Key, g => g.Sum(x => x.QuantityOnHand));
+            .ToDictionary(
+                g => g.Key,
+                g => g.Sum(x => BranchStockAvailability.GetSellableAvailable(
+                    x,
+                    DateTime.UtcNow,
+                    packagedByStockId.TryGetValue(x.Id, out var packaged) ? packaged : 0m)));
+
+        var salesFrom = DateTime.UtcNow.Date.AddDays(-30);
+        var soldRows = await _context.OrderDetails
+            .Where(d => productIds.Contains(d.ProductId)
+                        && !d.IsDeleted
+                        && !d.IsGift
+                        && d.Order != null
+                        && d.Order.BranchId == branchId
+                        && !d.Order.IsDeleted
+                        && d.Order.Status == "Completed"
+                        && d.Order.OrderDate >= salesFrom)
+            .Select(d => new
+            {
+                d.ProductId,
+                d.Order!.OrderDate,
+                BaseQty = d.Qty * (d.ConversionRate > 0 ? d.ConversionRate : 1m)
+            })
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+
+        var sevenDayFrom = DateTime.UtcNow.Date.AddDays(-7);
+        var salesLookup = soldRows
+            .GroupBy(x => x.ProductId)
+            .ToDictionary(
+                g => g.Key,
+                g => new
+                {
+                    Avg7 = g.Where(x => x.OrderDate >= sevenDayFrom).Sum(x => x.BaseQty) / 7m,
+                    Avg30 = g.Sum(x => x.BaseQty) / 30m
+                });
 
         // Tra cứu ĐVT nhập (IsPurchaseUnit) riêng — không phụ thuộc Include Units trên Product
         var purchaseUnitByProductId = await _context.Set<ProductUnit>()
@@ -204,7 +249,10 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 ?? branchProductInactiveReason;
 
             var safetyStock = p.MinStock > 0 ? p.MinStock : 10m;
-            var salesPerDay = Math.Max(2m, Math.Round(safetyStock / 2m));
+            salesLookup.TryGetValue(p.Id, out var sales);
+            var salesPerDay = sales == null
+                ? 0m
+                : Math.Round((sales.Avg7 * 0.7m) + (sales.Avg30 * 0.3m), 3);
 
             stockLookup.TryGetValue(p.Id, out var soh);
 
@@ -227,7 +275,11 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 OrderMultiple = 1,
                 Soh = soh,
                 SalesPerDay = salesPerDay,
+                AverageSales7Days = sales?.Avg7 ?? 0m,
+                AverageSales30Days = sales?.Avg30 ?? 0m,
                 SafetyStock = safetyStock,
+                IsPrimarySupplier = sp.IsPrimarySupplier,
+                PurchaseToStockRate = sp.ConversionRate > 0 ? sp.ConversionRate : 1m,
                 IsProductActive = isProdActive,
                 ProductInactiveReason = prodInactiveReason,
                 IsSupplierActive = isSupActive,
@@ -247,6 +299,58 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             .OrderBy(x => x.Price <= 0 ? decimal.MaxValue : x.Price)
             .ThenBy(x => x.SupplierName)
             .ThenBy(x => x.Sku)
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<OrderMatrixIncomingDto>> GetIncomingQuantitiesAsync(
+        Guid branchId,
+        DateTime throughDate,
+        CancellationToken cancellationToken = default)
+    {
+        var activeStatuses = new[] { "APPROVED", "DISPATCHED", "SENT" };
+        var rows = await _context.PurchaseOrderDetails
+            .Where(d => !d.IsDeleted
+                        && !d.IsClosed
+                        && d.PurchaseOrder != null
+                        && !d.PurchaseOrder.IsDeleted
+                        && d.PurchaseOrder.BranchId == branchId
+                        && d.PurchaseOrder.DeliveryDate.HasValue
+                        && d.PurchaseOrder.DeliveryDate.Value.Date <= throughDate.Date
+                        && activeStatuses.Contains(d.PurchaseOrder.Status))
+            .Select(d => new
+            {
+                d.ProductId,
+                d.PurchaseOrder!.SupplierId,
+                DeliveryDate = d.PurchaseOrder.DeliveryDate!.Value,
+                RemainingQty = Math.Max(0m, (d.OrderedQty ?? d.FinalQty ?? 0m) - d.ReceivedQty)
+            })
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+
+        var keys = rows.Select(x => new { x.SupplierId, x.ProductId }).Distinct().ToList();
+        var supplierIds = keys.Select(x => x.SupplierId).Distinct().ToList();
+        var productIds = keys.Select(x => x.ProductId).Distinct().ToList();
+        var rates = await _context.SupplierProducts
+            .Where(x => supplierIds.Contains(x.SupplierId)
+                        && productIds.Contains(x.ProductId)
+                        && !x.IsDeleted)
+            .Select(x => new { x.SupplierId, x.ProductId, x.ConversionRate })
+            .AsNoTracking()
+            .ToListAsync(cancellationToken);
+        var rateLookup = rates
+            .GroupBy(x => (x.SupplierId, x.ProductId))
+            .ToDictionary(g => g.Key, g => g.First().ConversionRate > 0 ? g.First().ConversionRate : 1m);
+
+        return rows
+            .GroupBy(x => (x.ProductId, x.SupplierId, Date: x.DeliveryDate.Date))
+            .Select(g => new OrderMatrixIncomingDto
+            {
+                ProductId = g.Key.ProductId,
+                SupplierId = g.Key.SupplierId,
+                DeliveryDate = g.Key.Date,
+                RemainingBaseQty = g.Sum(x => x.RemainingQty)
+                    * (rateLookup.TryGetValue((g.Key.SupplierId, g.Key.ProductId), out var rate) ? rate : 1m)
+            })
             .ToList();
     }
 

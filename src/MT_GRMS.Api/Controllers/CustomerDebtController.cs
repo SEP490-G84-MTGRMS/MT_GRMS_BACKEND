@@ -21,7 +21,7 @@ public class CustomerDebtController : BaseApiController
 
     [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("repay")]
-    [RequireIdempotency]
+    [RequireIdempotency(transactional: true)]
     public async Task<ActionResult<ApiResponse<RepaymentResultResponse>>> RepayDebt([FromBody] RepayDebtRequest request, CancellationToken ct)
     {
         var result = await _debtService.RepayDebtAsync(request, ct);

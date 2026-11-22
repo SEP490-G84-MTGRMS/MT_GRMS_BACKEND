@@ -193,6 +193,9 @@ public class HouseholdTaxServiceTests
         public Task<HouseholdTaxSnapshot?> GetSnapshotByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
             Task.FromResult(SavedSnapshots.FirstOrDefault(s => s.Id == id) ?? ExistingSnapshot);
 
+        public Task<HouseholdTaxSnapshot?> GetSnapshotForUpdateAsync(Guid id, CancellationToken cancellationToken = default) =>
+            GetSnapshotByIdAsync(id, cancellationToken);
+
         public Task<List<HouseholdTaxSnapshot>> GetSnapshotsAsync(int? year, Guid? branchId, CancellationToken cancellationToken = default) =>
             Task.FromResult(SavedSnapshots);
 

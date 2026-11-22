@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <InternalsVisibleTo Include="MT_GRMS.IntegrationTests" />
     <ProjectReference Include="..\MT_GRMS.Application\MT_GRMS.Application.csproj" />
     <ProjectReference Include="..\MT_GRMS.Domain\MT_GRMS.Domain.csproj" />
   </ItemGroup>
