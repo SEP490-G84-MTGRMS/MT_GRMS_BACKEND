@@ -96,7 +96,7 @@ public class DeepBranchCoverageSuite5Tests
         fakeOrderRepo.Products.Add(new Product { Id = prodId, Name = "SP Expired", SellingPrice = 40000m, IsActive = true, Units = new List<ProductUnit>() });
         fakeOrderRepo.BranchProducts.Add(new BranchProduct { BranchId = branchId, ProductId = prodId, Status = "Active" });
 
-        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, null, null, null, null, null, tenantContext, null);
+        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, tenantContext: tenantContext);
 
         // 1. Order with negative/zero items throws FluentValidation.ValidationException
         var reqEmpty = new OrderCreateRequest(

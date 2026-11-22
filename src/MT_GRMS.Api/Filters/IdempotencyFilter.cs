@@ -5,6 +5,7 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using MT_GRMS.Application.Auth.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.System;
@@ -18,9 +19,9 @@ namespace MT_GRMS.Api.Filters;
 [AttributeUsage(AttributeTargets.Method | AttributeTargets.Class)]
 public class RequireIdempotencyAttribute : TypeFilterAttribute
 {
-    public RequireIdempotencyAttribute(bool useProblemDetails = false) : base(typeof(IdempotencyFilter))
+    public RequireIdempotencyAttribute(bool useProblemDetails = false, bool transactional = false) : base(typeof(IdempotencyFilter))
     {
-        Arguments = [useProblemDetails];
+        Arguments = [useProblemDetails, transactional];
     }
 }
 
@@ -28,24 +29,38 @@ public class RequireIdempotencyAttribute : TypeFilterAttribute
 /// Two-Phase Idempotency filter preventing double-spending and race conditions.
 /// Phase 1: Claims key with PENDING status before action execution.
 /// Phase 2: Marks COMPLETED on 2xx success, or deletes PENDING on 4xx/5xx/exceptions to allow retry.
+/// Transactional actions commit their business writes and completion record together.
 /// </summary>
 public class IdempotencyFilter : IAsyncActionFilter
 {
     private readonly AppDbContext _context;
     private readonly ITenantContext _tenantContext;
     private readonly bool _useProblemDetails;
+    private readonly bool _transactional;
 
-    public IdempotencyFilter(AppDbContext context, ITenantContext tenantContext, bool useProblemDetails = false)
+    public IdempotencyFilter(AppDbContext context, ITenantContext tenantContext, bool useProblemDetails = false, bool transactional = false)
     {
         _context = context;
         _tenantContext = tenantContext;
         _useProblemDetails = useProblemDetails;
+        _transactional = transactional;
     }
 
     /// <summary>
     /// Executes the two-phase idempotency pipeline.
     /// </summary>
     public async Task OnActionExecutionAsync(ActionExecutingContext context, ActionExecutionDelegate next)
+    {
+        await using var transaction = _transactional && _context.Database.IsRelational()
+            ? await _context.Database.BeginTransactionAsync(context.HttpContext.RequestAborted)
+            : null;
+
+        var completed = await ExecuteRequestAsync(context, next, cleanupOnFailure: transaction == null);
+        if (transaction != null && completed)
+            await transaction.CommitAsync(context.HttpContext.RequestAborted);
+    }
+
+    private async Task<bool> ExecuteRequestAsync(ActionExecutingContext context, ActionExecutionDelegate next, bool cleanupOnFailure)
     {
         var httpContext = context.HttpContext;
         var req = httpContext.Request;
@@ -58,7 +73,7 @@ public class IdempotencyFilter : IAsyncActionFilter
                 "IDEMPOTENCY_KEY_REQUIRED",
                 "Thiếu khóa chống trùng lặp",
                 "Yêu cầu bắt buộc cung cấp Header 'Idempotency-Key' (UUID) để bảo đảm chống trùng lặp giao dịch tài chính.");
-            return;
+            return false;
         }
 
         var key = keyValues.ToString().Trim();
@@ -85,7 +100,7 @@ public class IdempotencyFilter : IAsyncActionFilter
         {
             if (HandleExistingRecord(context, httpContext, existingRecord, payloadHash))
             {
-                return;
+                return false;
             }
 
             // Stale PENDING lock cleaned up -> proceed to re-claim
@@ -108,11 +123,11 @@ public class IdempotencyFilter : IAsyncActionFilter
 
         if (!await TryClaimPendingLockAsync(context, httpContext, pendingRecord, tenantId, endpoint, scopedKey, payloadHash))
         {
-            return;
+            return false;
         }
 
         // Phase 2: Execute action and finalize or rollback lock
-        await ExecuteAndFinalizeAsync(context, next, pendingRecord);
+        return await ExecuteAndFinalizeAsync(context, next, pendingRecord, cleanupOnFailure);
     }
 
     private static string ResolveAnonymousScope(IDictionary<string, object?> actionArguments)
@@ -275,10 +290,11 @@ public class IdempotencyFilter : IAsyncActionFilter
         };
     }
 
-    private async Task ExecuteAndFinalizeAsync(
+    private async Task<bool> ExecuteAndFinalizeAsync(
         ActionExecutingContext context,
         ActionExecutionDelegate next,
-        IdempotencyRecord pendingRecord)
+        IdempotencyRecord pendingRecord,
+        bool cleanupOnFailure)
     {
         ActionExecutedContext executedContext;
         try
@@ -287,34 +303,38 @@ public class IdempotencyFilter : IAsyncActionFilter
         }
         catch (Exception)
         {
-            await SafeRemovePendingRecordAsync(pendingRecord);
+            if (cleanupOnFailure) await SafeRemovePendingRecordAsync(pendingRecord);
             throw;
         }
 
         if (executedContext.Exception != null && !executedContext.ExceptionHandled)
         {
-            await SafeRemovePendingRecordAsync(pendingRecord);
-            return;
+            if (cleanupOnFailure) await SafeRemovePendingRecordAsync(pendingRecord);
+            return false;
         }
 
         if (executedContext.Result is ObjectResult objectResult && (objectResult.StatusCode is null or (>= 200 and < 300)))
         {
             pendingRecord.Status = "COMPLETED";
             pendingRecord.StatusCode = objectResult.StatusCode ?? 200;
-            pendingRecord.ResponseJson = JsonSerializer.Serialize(objectResult.Value);
+            var jsonOptions = context.HttpContext.RequestServices?.GetService<IOptions<JsonOptions>>()?.Value.JsonSerializerOptions
+                ?? new JsonSerializerOptions(JsonSerializerDefaults.Web);
+            pendingRecord.ResponseJson = JsonSerializer.Serialize(objectResult.Value, jsonOptions);
             pendingRecord.ExpiresAtUtc = DateTime.UtcNow.AddHours(24);
             await _context.SaveChangesAsync();
+            return true;
         }
-        else
-        {
-            await SafeRemovePendingRecordAsync(pendingRecord);
-        }
+
+        if (cleanupOnFailure) await SafeRemovePendingRecordAsync(pendingRecord);
+        return false;
     }
 
     private async Task SafeRemovePendingRecordAsync(IdempotencyRecord pendingRecord)
     {
         try
         {
+            // The action may have rolled back financial writes on this same DbContext.
+            _context.ChangeTracker.Clear();
             _context.IdempotencyRecords.Remove(pendingRecord);
             await _context.SaveChangesAsync();
         }

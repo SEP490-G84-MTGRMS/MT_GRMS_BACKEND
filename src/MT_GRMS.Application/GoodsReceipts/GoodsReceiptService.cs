@@ -833,7 +833,8 @@ public class GoodsReceiptService : IGoodsReceiptService
         if (isExchangePo)
             await EnsureExchangeIncomingBatchesAreDistinctAsync(tenantId, po!, receipt, productFlags, cancellationToken);
 
-        // 1. Cập nhật tồn kho chi nhánh BranchStocks, tạo lô FEFO (ProductBatch) và tính giá vốn bình quân gia quyền (MovingAverageCost)
+        // 1. Cộng tồn BranchStocks theo SL nhận.
+        // Không cập nhật Products.CostPrice — giá nhập cố định ở quan hệ sản phẩm–NCC, không thuộc nhiệm vụ phiếu nhập kho.
         foreach (var line in receipt.Lines.Where(l => l.AcceptedQty > 0))
         {
             var hasBatches = productFlags != null && productFlags.TryGetValue(line.ProductId, out var flag)
@@ -851,7 +852,6 @@ public class GoodsReceiptService : IGoodsReceiptService
                 line.BatchCode = string.IsNullOrWhiteSpace(line.BatchCode) ? null : line.BatchCode.Trim();
             }
 
-            var existingTotalStock = await _repository.GetTotalProductStockAsync(tenantId, line.ProductId, cancellationToken);
             var product = line.Product ?? await _repository.GetProductByIdAsync(tenantId, line.ProductId, cancellationToken);
             var pod = line.PurchaseOrderDetailId.HasValue && po != null
                 ? po.Details.FirstOrDefault(d => d.Id == line.PurchaseOrderDetailId.Value)
@@ -866,24 +866,6 @@ public class GoodsReceiptService : IGoodsReceiptService
             var landedCostPerStockUnit = purchaseToStockRate > 0
                 ? Math.Round(line.LandedUnitCost / purchaseToStockRate, 4)
                 : line.LandedUnitCost;
-
-            // Tính MovingAverageCost theo đơn vị tồn (base)
-            if (product != null)
-            {
-                var oldCost = product.CostPrice ?? landedCostPerStockUnit;
-                var totalNewQty = existingTotalStock + stockQtyDelta;
-                if (totalNewQty > 0)
-                {
-                    product.CostPrice = Math.Round(
-                        ((existingTotalStock * oldCost) + (stockQtyDelta * landedCostPerStockUnit)) / totalNewQty,
-                        2);
-                }
-                else
-                {
-                    product.CostPrice = landedCostPerStockUnit;
-                }
-                product.UpdatedAt = DateTime.UtcNow;
-            }
 
             var stock = await _repository.GetBranchStockAsync(
                 tenantId,
@@ -1387,14 +1369,17 @@ public class GoodsReceiptService : IGoodsReceiptService
 
             retLine.HandedOverQty += deduct;
 
-            var stock = await _repository.GetBranchStockAsync(
-                tenantId, ret.BranchId, retLine.ProductId, retLine.BatchCode, cancellationToken);
-            if (stock != null)
-            {
-                stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - deduct);
-                stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - deduct);
-                stock.UpdatedAt = DateTime.UtcNow;
-            }
+            var stock = retLine.BranchStockId.HasValue
+                ? await _repository.GetBranchStockByIdAsync(tenantId, ret.BranchId, retLine.ProductId, retLine.BranchStockId.Value, cancellationToken)
+                : await _repository.GetBranchStockAsync(tenantId, ret.BranchId, retLine.ProductId, retLine.BatchCode, cancellationToken);
+            if (stock == null || stock.QuantityOnHand < deduct)
+                throw new BusinessException("RTV_EXCHANGE_STOCK_MISSING", "Không tìm thấy đủ tồn lô cũ để ghi giảm khi nhận hàng đổi.");
+            var packageWeight = await _repository.GetActivePackageWeightAsync(tenantId, stock.Id, cancellationToken);
+            if (stock.QuantityOnHand - deduct < packageWeight + stock.QuantityQuarantined + Math.Max(0m, stock.QuantityReserved - deduct))
+                throw new BusinessException("RTV_EXCHANGE_COMMITTED_STOCK", "Nhận hàng đổi sẽ lấy vào lượng khay, cách ly hoặc giữ chỗ khác của lô cũ.");
+            stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - deduct);
+            stock.QuantityOnHand -= deduct;
+            stock.UpdatedAt = DateTime.UtcNow;
         }
 
         ret.TotalHandedOverQty = ret.Lines.Sum(l => l.HandedOverQty);

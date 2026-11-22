@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentValidation;
@@ -30,6 +31,7 @@ public class OrderService : IOrderService
     private readonly ITenantContext? _tenantContext;
     private readonly Tax.ITaxPeriodLockGuard? _taxPeriodLockGuard;
     private readonly Notifications.INotificationService? _notificationService;
+    private readonly Notifications.NotificationOutbox? _notificationOutbox;
 
     private static readonly Guid DefaultTillId = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db");
     private static readonly Guid DefaultBankId = Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559");
@@ -45,7 +47,8 @@ public class OrderService : IOrderService
         ITenantContext? tenantContext = null,
         PosShifts.IShiftService? shiftService = null,
         Tax.ITaxPeriodLockGuard? taxPeriodLockGuard = null,
-        Notifications.INotificationService? notificationService = null)
+        Notifications.INotificationService? notificationService = null,
+        Notifications.NotificationOutbox? notificationOutbox = null)
     {
         _orderRepository = orderRepository;
         _unitOfWork = unitOfWork;
@@ -58,6 +61,7 @@ public class OrderService : IOrderService
         _shiftService = shiftService;
         _taxPeriodLockGuard = taxPeriodLockGuard;
         _notificationService = notificationService;
+        _notificationOutbox = notificationOutbox;
     }
 
     public OrderService(
@@ -138,7 +142,9 @@ public class OrderService : IOrderService
         ShiftZReport? activeShift = null;
         if (_shiftRepository != null)
         {
-            activeShift = await _shiftRepository.GetActiveShiftAsync(branchId, cancellationToken: cancellationToken);
+            activeShift = request.ShiftId.HasValue
+                ? await _shiftRepository.GetByIdAsync(request.ShiftId.Value, cancellationToken)
+                : await _shiftRepository.GetActiveShiftAsync(branchId, cancellationToken: cancellationToken);
             if (!isOwnerOrAdmin)
             {
                 if (_tenantContext != null
@@ -160,7 +166,7 @@ public class OrderService : IOrderService
             }
             if (request.ShiftId.HasValue)
             {
-                if (activeShift == null || activeShift.Id != request.ShiftId.Value || activeShift.Status != ShiftState.Open)
+                if (activeShift == null || activeShift.BranchId != branchId || activeShift.Id != request.ShiftId.Value || activeShift.Status != ShiftState.Open)
                 {
                     if (activeShift != null && activeShift.Id == request.ShiftId.Value && activeShift.Status == ShiftState.Closing)
                     {
@@ -282,8 +288,44 @@ public class OrderService : IOrderService
         }
 
         var selectedStocks = new Dictionary<Guid, Domain.Entities.Inventory.BranchStock>();
-        foreach (var item in request.Items.Where(i => !i.IsGift && i.BatchId.HasValue))
+        var allocationsByItem = new Dictionary<int, List<OrderStockAllocationDto>>();
+        var soldPackagesByItem = new Dictionary<int, Package>();
+        for (var itemIndex = 0; itemIndex < request.Items.Count; itemIndex++)
         {
+            var item = request.Items[itemIndex];
+            if (!item.PackageId.HasValue) continue;
+            if (item.IsGift || item.Quantity != 1m)
+                throw new BusinessException("PACKAGE_QUANTITY", "Mỗi khay phải là một dòng bán với số lượng 1.");
+
+            var package = await _orderRepository.GetPackageForSaleAsync(branchId, item.ProductId, item.PackageId.Value, cancellationToken)
+                ?? throw new BusinessException("PACKAGE_NOT_FOUND", "Khay không thuộc sản phẩm/chi nhánh hiện tại.");
+            if (package.Status != "AVAILABLE" || package.NetWeight <= 0m)
+                throw new BusinessException("PACKAGE_NOT_AVAILABLE", "Khay đã bán, cách ly hoặc không còn khả dụng.");
+            if (package.ExpiryDate?.Date < DateTime.UtcNow.Date)
+                throw new BusinessException("PACKAGE_EXPIRED", "Khay đã hết hạn sử dụng.");
+            if (item.BatchId.HasValue && item.BatchId.Value != package.BranchStockId)
+                throw new BusinessException("PACKAGE_BATCH_MISMATCH", "Khay không thuộc lô đã chọn.");
+
+            var stock = await _orderRepository.GetBranchStockByIdAsync(branchId, item.ProductId, package.BranchStockId, cancellationToken)
+                ?? throw new BusinessException("PACKAGE_BATCH_NOT_FOUND", "Lô của khay không còn tồn tại.");
+            if (stock.ExpiryDate.HasValue && stock.ExpiryDate.Value.Date < DateTime.UtcNow.Date)
+                throw new BusinessException("PACKAGE_BATCH_EXPIRED", "Lô gốc của khay đã hết hạn sử dụng.");
+            var packageWeights = await _orderRepository.GetActivePackageWeightsAsync(branchId, item.ProductId, cancellationToken) ?? new Dictionary<Guid, decimal>();
+            if (stock.QuantityOnHand - stock.QuantityReserved - stock.QuantityQuarantined < packageWeights.GetValueOrDefault(stock.Id))
+                throw new BusinessException("PACKAGE_STOCK_INVARIANT", "Sổ tồn không còn đủ để giao khay.");
+
+            stock.QuantityOnHand -= package.NetWeight;
+            stock.UpdatedAt = DateTime.UtcNow;
+            package.Status = "SOLD";
+            package.SoldAt = DateTime.UtcNow;
+            soldPackagesByItem[itemIndex] = package;
+            selectedStocks[stock.Id] = stock;
+            allocationsByItem[itemIndex] = new List<OrderStockAllocationDto> { new(stock.Id, stock.BatchCode, package.NetWeight, CostPerBase: stock.LandedCostPerUnit) };
+        }
+        for (var itemIndex = 0; itemIndex < request.Items.Count; itemIndex++)
+        {
+            var item = request.Items[itemIndex];
+            if (item.IsGift || item.PackageId.HasValue || !item.BatchId.HasValue) continue;
             var batchId = item.BatchId!.Value;
             if (!selectedStocks.TryGetValue(batchId, out var selectedStock))
             {
@@ -296,36 +338,27 @@ public class OrderService : IOrderService
                 throw new BusinessException("BATCH_EXPIRED", $"Lô {selectedStock.BatchCode} đã hết hạn và không được phép bán.");
 
             var required = item.Quantity * GetConversionRate(item);
-            var available = Math.Max(0m, selectedStock.QuantityOnHand - selectedStock.QuantityReserved - selectedStock.QuantityQuarantined);
+            var packageWeights = await _orderRepository.GetActivePackageWeightsAsync(branchId, item.ProductId, cancellationToken) ?? new Dictionary<Guid, decimal>();
+            var available = BranchStockAvailability.GetSellableAvailable(selectedStock, packagedWeight: packageWeights.GetValueOrDefault(selectedStock.Id));
             if (available < required)
                 throw new BusinessException("BATCH_INSUFFICIENT_STOCK", $"Lô {selectedStock.BatchCode} không đủ tồn khả dụng (còn {available:0.##}, cần {required:0.##}).");
 
             selectedStock.QuantityOnHand -= required;
             selectedStock.UpdatedAt = DateTime.UtcNow;
+            allocationsByItem[itemIndex] = new List<OrderStockAllocationDto> { new(selectedStock.Id, selectedStock.BatchCode, required, CostPerBase: selectedStock.LandedCostPerUnit, IsManualSelection: true) };
         }
 
-        var productRequiredBaseQty = new Dictionary<Guid, decimal>();
-        foreach (var item in request.Items.Where(i => !i.IsGift && !i.BatchId.HasValue))
+        for (var itemIndex = 0; itemIndex < request.Items.Count; itemIndex++)
         {
-            var baseQty = item.Quantity * GetConversionRate(item);
-            if (productRequiredBaseQty.ContainsKey(item.ProductId))
-            {
-                productRequiredBaseQty[item.ProductId] += baseQty;
-            }
-            else
-            {
-                productRequiredBaseQty[item.ProductId] = baseQty;
-            }
-        }
-
-        foreach (var kvp in productRequiredBaseQty)
-        {
-            var pId = kvp.Key;
-            var requiredBaseQty = kvp.Value;
+            var item = request.Items[itemIndex];
+            if (item.IsGift || item.BatchId.HasValue || item.PackageId.HasValue) continue;
+            var pId = item.ProductId;
+            var requiredBaseQty = item.Quantity * GetConversionRate(item);
             var prod = products[pId];
 
             var branchStocks = await GetStocksCachedAsync(pId);
-            DeductSellableFefo(branchStocks, requiredBaseQty, prod.Name, "bán");
+            var packageWeights = await _orderRepository.GetActivePackageWeightsAsync(branchId, pId, cancellationToken) ?? new Dictionary<Guid, decimal>();
+            allocationsByItem[itemIndex] = DeductSellableFefo(branchStocks, requiredBaseQty, prod.Name, "bán", packageWeights);
         }
 
         // 5. Tính toán chi tiết đơn hàng (Phân giải giá BranchProduct & xử lý dòng quà tặng IsGift = 0đ) (REQ-POS-09, REQ-POS-10, REQ-ORD-BOGO-02)
@@ -336,8 +369,9 @@ public class OrderService : IOrderService
         var orderDetails = new List<OrderDetail>();
         int lineNumber = 1;
 
-        foreach (var item in request.Items)
+        for (var itemIndex = 0; itemIndex < request.Items.Count; itemIndex++)
         {
+            var item = request.Items[itemIndex];
             var prod = products[item.ProductId];
             branchProducts.TryGetValue(item.ProductId, out var bp);
 
@@ -377,7 +411,8 @@ public class OrderService : IOrderService
 
                 var rate = GetConversionRate(item);
                 var giftStocks = await GetStocksCachedAsync(item.ProductId);
-                var remainingBaseStock = BranchStockAvailability.SumSellableAvailable(giftStocks);
+                var giftPackageWeights = await _orderRepository.GetActivePackageWeightsAsync(branchId, item.ProductId, cancellationToken) ?? new Dictionary<Guid, decimal>();
+                var remainingBaseStock = SumRawSellable(giftStocks, giftPackageWeights);
                 var availableGiftUnits = Math.Floor(remainingBaseStock / rate);
                 var actualGiftQty = Math.Min(item.Quantity, Math.Max(0m, availableGiftUnits));
 
@@ -393,7 +428,7 @@ public class OrderService : IOrderService
                     continue;
                 }
 
-                DeductSellableFefo(giftStocks, actualGiftQty * rate, prod.Name, "xuất quà", throwIfInsufficient: false);
+                var giftAllocations = DeductSellableFefo(giftStocks, actualGiftQty * rate, prod.Name, "xuất quà", giftPackageWeights, throwIfInsufficient: false);
 
                 var refGiftValue = resolvedUnitPrice * actualGiftQty;
                 giftEquivalenceTotal += refGiftValue;
@@ -417,6 +452,7 @@ public class OrderService : IOrderService
                     ActualPrice = 0m,
                     CostPriceAtSale = (prod.CostPrice ?? 0m) * giftConvRate,
                     IsGift = true,
+                    StockAllocationsJson = JsonSerializer.Serialize(giftAllocations),
                     AppliedVatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m,
                     VatAmount = 0m,
                     ProductName = !string.IsNullOrWhiteSpace(item.ProductName) ? item.ProductName : prod.Name,
@@ -442,11 +478,16 @@ public class OrderService : IOrderService
                 effectiveUnitPrice = item.UnitPrice > 0 ? item.UnitPrice : resolvedUnitPrice;
             }
 
+            if (soldPackagesByItem.TryGetValue(itemIndex, out var soldPackage))
+                effectiveUnitPrice = soldPackage.SellingPrice;
             decimal lineTotal = item.Quantity * effectiveUnitPrice;
-            selectedStocks.TryGetValue(item.BatchId ?? Guid.Empty, out var selectedStockForLine);
-            decimal fefoDiscount = selectedStockForLine is { IsFefoDiscountActive: true, FefoDiscountPercent: > 0m }
-                ? Math.Round(lineTotal * selectedStockForLine.FefoDiscountPercent / 100m, 2)
-                : 0m;
+            var lineAllocations = allocationsByItem[itemIndex];
+            var allocatedStocks = lineAllocations.Select(a => selectedStocks.GetValueOrDefault(a.BranchStockId)
+                ?? stocksCache.GetValueOrDefault(item.ProductId)?.FirstOrDefault(s => s.Id == a.BranchStockId)).ToList();
+            var allocatedBase = lineAllocations.Sum(a => a.QuantityBase);
+            decimal fefoDiscount = soldPackage != null || allocatedBase <= 0m ? 0m : Math.Round(
+                lineAllocations.Select((a, i) => allocatedStocks[i] is { IsFefoDiscountActive: true, FefoDiscountPercent: > 0m } stock
+                    ? lineTotal * a.QuantityBase / allocatedBase * stock.FefoDiscountPercent / 100m : 0m).Sum(), 2);
             decimal itemDiscount = Math.Max(item.DiscountAmount ?? 0m, fefoDiscount);
             decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : effectiveUnitPrice;
 
@@ -457,9 +498,10 @@ public class OrderService : IOrderService
             totalAmount += lineTotal;
             itemDiscountTotal += itemDiscount;
 
-            var itemConvRate = GetConversionRate(item);
+            var itemConvRate = soldPackage?.NetWeight ?? GetConversionRate(item);
             var itemUnitName = !string.IsNullOrWhiteSpace(item.UnitName)
                 ? item.UnitName
+                : soldPackage != null ? "Khay"
                 : (item.UnitId.HasValue && item.UnitId.Value != Guid.Empty
                     ? prod.Units?.FirstOrDefault(u => u.Id == item.UnitId.Value && !u.IsDeleted)?.UnitName ?? prod.BaseUnit
                     : prod.BaseUnit);
@@ -474,12 +516,14 @@ public class OrderService : IOrderService
                 UnitPrice = effectiveUnitPrice,
                 DiscountAmount = itemDiscount,
                 ActualPrice = actualPrice,
-                CostPriceAtSale = (selectedStockForLine?.LandedCostPerUnit > 0m
-                    ? selectedStockForLine.LandedCostPerUnit
-                    : (prod.CostPrice ?? 0m)) * itemConvRate, // Chốt cứng giá vốn COGS (FE-10)
-                BatchId = selectedStockForLine?.Id,
-                BatchCode = selectedStockForLine?.BatchCode,
-                BatchExpiryDate = selectedStockForLine?.ExpiryDate,
+                CostPriceAtSale = (allocatedBase > 0m ? lineAllocations.Select((a, i) => a.QuantityBase
+                    * (allocatedStocks[i]?.LandedCostPerUnit > 0m ? allocatedStocks[i]!.LandedCostPerUnit : (prod.CostPrice ?? 0m))).Sum() / allocatedBase
+                    : (prod.CostPrice ?? 0m)) * itemConvRate,
+                BatchId = lineAllocations.Count == 1 ? lineAllocations[0].BranchStockId : null,
+                BatchCode = lineAllocations.Count == 1 ? lineAllocations[0].BatchCode : null,
+                BatchExpiryDate = lineAllocations.Count == 1 ? allocatedStocks[0]?.ExpiryDate : null,
+                PackageId = soldPackage?.Id,
+                StockAllocationsJson = JsonSerializer.Serialize(allocationsByItem[itemIndex]),
                 IsGift = false,
                 AppliedVatRate = vatRate,
                 VatAmount = vatAmount,
@@ -489,6 +533,8 @@ public class OrderService : IOrderService
                 ConversionRate = itemConvRate,
                 Product = prod
             };
+            if (soldPackage != null)
+                soldPackage.SoldOrderDetailId = detail.Id;
             orderDetails.Add(detail);
         }
 
@@ -694,14 +740,36 @@ public class OrderService : IOrderService
         {
             d.OrderId = order.Id;
         }
+        foreach (var package in soldPackagesByItem.Values)
+            package.SoldOrderId = order.Id;
 
-        // Lưu ý (FE-17 Consolidated):
-        // - Đơn hàng thuộc Ca thu ngân (shiftId.HasValue) sẽ được gộp doanh thu vào Sổ quỹ khi Chốt ca / Xác nhận bàn giao ca.
-        // - Đơn hàng của Chủ cửa hàng bán lẻ trực tiếp (!shiftId.HasValue) sẽ được gộp khi Chủ bấm "Chốt doanh thu cuối ngày" (SettleOwnerDailyOrdersAsync).
+        // Tự động cộng tiền mặt vào Két sắt chi nhánh nếu Chủ cửa hàng bán trực tiếp không mở ca (Realtime cash into safe)
+        bool isShiftlessOwnerCash = !shiftId.HasValue && string.Equals(paymentMethodUpper, "CASH", StringComparison.OrdinalIgnoreCase) && finalAmount > 0m && !request.IsPendingPayment;
+        if (isShiftlessOwnerCash)
+        {
+            order.Note = string.IsNullOrWhiteSpace(order.Note) ? "[ĐÃ VÀO KÉT SẮT]" : $"{order.Note} [ĐÃ VÀO KÉT SẮT]";
+        }
 
         await _orderRepository.AddAsync(order, cancellationToken);
+        if (paymentStatus == "DEBT" && customer != null && _notificationOutbox != null)
+            await _notificationOutbox.EnqueueDebtThresholdAsync(customer, order.Id, finalAmount, cancellationToken);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        if (isShiftlessOwnerCash && _cashbookService != null)
+        {
+            var safe = await _cashbookService.GetOrCreateSafeAsync(branchId, cancellationToken);
+            await _cashbookService.ReceiveCashAsync(
+                safe.Id,
+                FinanceAccountType.Safe,
+                finalAmount,
+                "POS_SALE",
+                order.Id,
+                order.OrderCode,
+                $"Thu tiền mặt đơn bán lẻ '{order.OrderCode}' (Chủ cửa hàng)",
+                cancellationToken
+            );
+        }
 
         // 9. Đổi mã voucher (Redeem) nguyên tử và đồng bộ UsedCount / TotalDiscountGiven của chương trình KM & Voucher (REQ-ORD-PROMO-02)
         if (_promotionRepository != null)
@@ -1039,26 +1107,19 @@ public class OrderService : IOrderService
             }
 
             // 1. Trừ/giữ tồn kho FEFO ưu tiên hàng mua trả tiền trước (!IsGift) theo tổng số lượng cơ sở quy đổi
-            var paidItems = request.Items.Where(i => !i.IsGift).ToList();
-            var productRequiredBaseQty = new Dictionary<Guid, decimal>();
-            foreach (var item in paidItems)
+            var preOrderAllocationsByItem = new Dictionary<int, List<OrderStockAllocationDto>>();
+            for (var itemIndex = 0; itemIndex < request.Items.Count; itemIndex++)
             {
+                var item = request.Items[itemIndex];
+                if (item.IsGift) continue;
                 var rate = ResolvePreOrderConversionRate(item);
                 var baseQty = item.Quantity * rate;
-                if (productRequiredBaseQty.ContainsKey(item.ProductId))
-                    productRequiredBaseQty[item.ProductId] += baseQty;
-                else
-                    productRequiredBaseQty[item.ProductId] = baseQty;
-            }
-
-            foreach (var kvp in productRequiredBaseQty)
-            {
-                var pId = kvp.Key;
-                var requiredBaseQty = kvp.Value;
+                var pId = item.ProductId;
                 var prod = products[pId];
 
                 var branchStocks = await GetPreOrderStocksCachedAsync(pId);
-                DeductSellableFefo(branchStocks, requiredBaseQty, prod.Name, "đặt trước");
+                var packageWeights = await _orderRepository.GetActivePackageWeightsAsync(request.BranchId, pId, ct) ?? new Dictionary<Guid, decimal>();
+                preOrderAllocationsByItem[itemIndex] = DeductSellableFefo(branchStocks, baseQty, prod.Name, "giữ đặt trước", packageWeights, reserveOnly: true);
             }
 
             // 2. Tạo chi tiết đơn hàng (OrderDetails) độc lập theo từng dòng request.Items
@@ -1069,8 +1130,9 @@ public class OrderService : IOrderService
             var giftWarnings = new List<string>();
             int lineNumber = 1;
 
-            foreach (var item in request.Items)
+            for (var itemIndex = 0; itemIndex < request.Items.Count; itemIndex++)
             {
+                var item = request.Items[itemIndex];
                 var prod = products[item.ProductId];
                 branchProducts.TryGetValue(item.ProductId, out var bp);
                 var rate = ResolvePreOrderConversionRate(item);
@@ -1110,7 +1172,8 @@ public class OrderService : IOrderService
                     }
 
                     var giftStocks = await GetPreOrderStocksCachedAsync(item.ProductId);
-                    var remainingBaseStock = BranchStockAvailability.SumSellableAvailable(giftStocks);
+                    var giftPackageWeights = await _orderRepository.GetActivePackageWeightsAsync(request.BranchId, item.ProductId, ct) ?? new Dictionary<Guid, decimal>();
+                    var remainingBaseStock = SumRawSellable(giftStocks, giftPackageWeights);
                     var availableGiftUnits = Math.Floor(remainingBaseStock / rate);
                     var actualGiftQty = Math.Min(item.Quantity, Math.Max(0m, availableGiftUnits));
 
@@ -1123,7 +1186,7 @@ public class OrderService : IOrderService
 
                     if (actualGiftQty <= 0m) continue;
 
-                    DeductSellableFefo(giftStocks, actualGiftQty * rate, prod.Name, "giữ quà đặt trước", throwIfInsufficient: false);
+                    var giftAllocations = DeductSellableFefo(giftStocks, actualGiftQty * rate, prod.Name, "giữ quà đặt trước", giftPackageWeights, throwIfInsufficient: false, reserveOnly: true);
 
                     var refGiftValue = resolvedUnitPrice * actualGiftQty;
                     giftEquivalenceTotal += refGiftValue;
@@ -1141,6 +1204,7 @@ public class OrderService : IOrderService
                         ActualPrice = 0m,
                         CostPriceAtSale = (prod.CostPrice ?? 0m) * rate,
                         IsGift = true,
+                        StockAllocationsJson = JsonSerializer.Serialize(giftAllocations),
                         AppliedVatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m,
                         VatAmount = 0m,
                         ProductUnitId = item.UnitId,
@@ -1187,6 +1251,7 @@ public class OrderService : IOrderService
                     ActualPrice = actualPrice,
                     CostPriceAtSale = (prod.CostPrice ?? 0m) * rate,
                     IsGift = false,
+                    StockAllocationsJson = JsonSerializer.Serialize(preOrderAllocationsByItem[itemIndex]),
                     AppliedVatRate = vatRate,
                     VatAmount = vatAmount,
                     ProductUnitId = item.UnitId,
@@ -1278,8 +1343,29 @@ public class OrderService : IOrderService
                 d.OrderId = order.Id;
             }
 
+            bool isShiftlessOwnerDeposit = isOwnerPreOrder && !preOrderShiftId.HasValue && request.DepositAmount > 0 && string.Equals(preOrderPaymentMethod, "CASH", StringComparison.OrdinalIgnoreCase);
+            if (isShiftlessOwnerDeposit)
+            {
+                order.Note = string.IsNullOrWhiteSpace(order.Note) ? "[ĐÃ VÀO KÉT SẮT]" : $"{order.Note} [ĐÃ VÀO KÉT SẮT]";
+            }
+
             await _orderRepository.AddAsync(order, cancellationToken);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            if (isShiftlessOwnerDeposit && _cashbookService != null)
+            {
+                var safe = await _cashbookService.GetOrCreateSafeAsync(request.BranchId, cancellationToken);
+                await _cashbookService.ReceiveCashAsync(
+                    safe.Id,
+                    FinanceAccountType.Safe,
+                    request.DepositAmount,
+                    "PREORDER_DEPOSIT",
+                    order.Id,
+                    order.OrderCode,
+                    $"Thu tiền đặt cọc đơn đặt trước '{order.OrderCode}' (Chủ cửa hàng)",
+                    cancellationToken
+                );
+            }
 
             if (_promotionRepository != null && order.AppliedPromotionId.HasValue)
             {
@@ -1377,6 +1463,21 @@ public class OrderService : IOrderService
         if (order.Status != "PendingPickup")
         {
             throw new InvalidOperationException($"Đơn hàng '{order.OrderCode}' không ở trạng thái Chờ nhận hàng (trạng thái hiện tại: {order.Status}).");
+        }
+
+        // Đơn mới giữ tồn trong QOH; chỉ xuất vật lý khi bàn giao.
+        foreach (var detail in order.Details.Where(d => !string.IsNullOrWhiteSpace(d.StockAllocationsJson)))
+        {
+            foreach (var allocation in ReadAllocations(detail))
+            {
+                var stock = await _orderRepository.GetBranchStockByIdAsync(order.BranchId, detail.ProductId, allocation.BranchStockId, cancellationToken)
+                    ?? throw new BusinessException("PREORDER_BATCH_NOT_FOUND", "Lô đã giữ cho đơn đặt trước không còn tồn tại.");
+                if (stock.QuantityReserved < allocation.QuantityBase || stock.QuantityOnHand < allocation.QuantityBase)
+                    throw new BusinessException("PREORDER_STOCK_CHANGED", "Tồn đã giữ cho đơn đặt trước không đủ để bàn giao.");
+                stock.QuantityReserved -= allocation.QuantityBase;
+                stock.QuantityOnHand -= allocation.QuantityBase;
+                stock.UpdatedAt = DateTime.UtcNow;
+            }
         }
 
         decimal remainingAmount = Math.Max(0, order.FinalAmount - order.DepositAmount);
@@ -1543,12 +1644,34 @@ public class OrderService : IOrderService
         // Hoàn trả tồn kho về BranchStocks (quy đổi về ĐVT cơ sở)
         foreach (var detail in order.Details)
         {
-            var stock = await _orderRepository.GetBranchStockAsync(order.BranchId, detail.ProductId, null, cancellationToken);
-            if (stock != null)
+            var allocations = ReadAllocations(detail);
+            if (allocations.Count == 0 && detail.BatchId.HasValue)
+                allocations.Add(new OrderStockAllocationDto(detail.BatchId.Value, detail.BatchCode, detail.Qty * (detail.ConversionRate > 0m ? detail.ConversionRate : 1m)));
+            if (allocations.Count == 0)
+                throw new BusinessException("ORDER_STOCK_TRACE_MISSING", "Hóa đơn cũ không có thông tin lô xuất; cần đối soát kho trước khi hủy.");
+
+            foreach (var allocation in allocations)
             {
-                var restoreQty = detail.Qty * (detail.ConversionRate > 0m ? detail.ConversionRate : 1.00m);
-                stock.QuantityOnHand += restoreQty;
+                var stock = await _orderRepository.GetBranchStockByIdAsync(order.BranchId, detail.ProductId, allocation.BranchStockId, cancellationToken)
+                    ?? throw new BusinessException("ORDER_STOCK_TRACE_MISSING", "Lô xuất trên hóa đơn không còn tồn tại.");
+                if (order.Status == "PendingPickup" && !string.IsNullOrWhiteSpace(detail.StockAllocationsJson))
+                {
+                    if (stock.QuantityReserved < allocation.QuantityBase)
+                        throw new BusinessException("PREORDER_RESERVATION_MISSING", "Lượng giữ cho đơn đặt trước đã thay đổi; cần đối soát trước khi hủy.");
+                    stock.QuantityReserved -= allocation.QuantityBase;
+                }
+                else
+                    stock.QuantityOnHand += allocation.QuantityBase - allocation.ReturnedBase;
                 stock.UpdatedAt = DateTime.UtcNow;
+            }
+            if (detail.PackageId.HasValue)
+            {
+                var package = await _orderRepository.GetPackageForSaleAsync(order.BranchId, detail.ProductId, detail.PackageId.Value, cancellationToken)
+                    ?? throw new BusinessException("PACKAGE_NOT_FOUND", "Không tìm thấy khay đã bán của hóa đơn.");
+                package.Status = "AVAILABLE";
+                package.SoldOrderId = null;
+                package.SoldOrderDetailId = null;
+                package.SoldAt = null;
             }
         }
 
@@ -1558,7 +1681,9 @@ public class OrderService : IOrderService
             var customer = await _orderRepository.GetCustomerByIdAsync(order.CustomerId.Value, cancellationToken);
             if (customer != null)
             {
-                if (order.PaymentMethod == "DEBT" && order.Status != "PendingPayment")
+                if ((string.Equals(order.PaymentMethod, "DEBT", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(order.PaymentMethod, "CREDIT", StringComparison.OrdinalIgnoreCase)) &&
+                    order.Status != "PendingPayment")
                 {
                     customer.TotalDebt = Math.Max(0, customer.TotalDebt - order.FinalAmount);
                 }
@@ -1572,8 +1697,27 @@ public class OrderService : IOrderService
 
         bool wasPendingPayment = string.Equals(order.Status, "PendingPayment", StringComparison.OrdinalIgnoreCase);
         order.Status = "Cancelled";
-        order.PaymentStatus = wasPendingPayment ? "CANCELLED" : "REFUNDED";
+        order.PaymentStatus = wasPendingPayment ||
+            string.Equals(order.PaymentMethod, "CREDIT", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(order.PaymentMethod, "DEBT", StringComparison.OrdinalIgnoreCase)
+            ? "CANCELLED" : "REFUNDED";
         order.Note = $"Đã hủy: {request.Reason}. {request.Note} | Trước đó: {order.Note}".Trim();
+
+        // Hoàn tiền mặt từ Két sắt chi nhánh nếu đơn trước đó Chủ cửa hàng đã thu tiền mặt trực tiếp
+        if (!wasPendingPayment && order.PaymentMethod == "CASH" && order.FinalAmount > 0 && order.ShiftId == null && IsOwnerCaller() && _cashbookService != null)
+        {
+            var safe = await _cashbookService.GetOrCreateSafeAsync(order.BranchId, cancellationToken);
+            await _cashbookService.DisburseCashAsync(
+                safe.Id,
+                FinanceAccountType.Safe,
+                order.FinalAmount,
+                "ORDER_CANCEL",
+                order.Id,
+                order.OrderCode,
+                $"Hoàn tiền mặt hủy hóa đơn '{order.OrderCode}' (Chủ cửa hàng)",
+                cancellationToken
+            );
+        }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -1593,7 +1737,12 @@ public class OrderService : IOrderService
         return MapToOrderResponse(order, 0m, 0m);
     }
 
-    public async Task<OrderResponse> ProcessReturnExchangeAsync(Guid orderId, ReturnExchangeRequest request, CancellationToken cancellationToken = default)
+    public Task<OrderResponse> ProcessReturnExchangeAsync(Guid orderId, ReturnExchangeRequest request, CancellationToken cancellationToken = default)
+        => _unitOfWork.ExecuteInTransactionAsync(
+            ct => ProcessReturnExchangeCoreAsync(orderId, request, ct), cancellationToken,
+            System.Data.IsolationLevel.Serializable);
+
+    private async Task<OrderResponse> ProcessReturnExchangeCoreAsync(Guid orderId, ReturnExchangeRequest request, CancellationToken cancellationToken)
     {
         if (_tenantContext != null)
         {
@@ -1752,9 +1901,11 @@ public class OrderService : IOrderService
                 }
 
                 decimal cumulativeReturnQty = returnedQtyByDetailId.GetValueOrDefault(origDetail.Id) + retItem.Quantity;
-                if (cumulativeReturnQty > origDetail.Qty)
+                var previousReturnedBase = ReadAllocations(origDetail).Sum(a => a.ReturnedBase);
+                var conversionRate = origDetail.ConversionRate > 0m ? origDetail.ConversionRate : 1m;
+                if (previousReturnedBase + cumulativeReturnQty * conversionRate > origDetail.Qty * conversionRate)
                 {
-                    throw new InvalidOperationException($"Số lượng trả ({cumulativeReturnQty}) vượt quá số lượng đã mua ({origDetail.Qty}) của sản phẩm '{origDetail.ProductName}'.");
+                    throw new InvalidOperationException($"Số lượng trả vượt quá số lượng còn được trả của sản phẩm '{origDetail.ProductName}'.");
                 }
                 returnedQtyByDetailId[origDetail.Id] = cumulativeReturnQty;
 
@@ -1780,7 +1931,7 @@ public class OrderService : IOrderService
         }
 
         // 2. Tiền kiểm tra tồn kho FEFO các mặt hàng đổi mới trước khi mutate kho
-        var fefoDeductions = new List<(string ProductName, decimal RequiredQty, IReadOnlyList<Domain.Entities.Inventory.BranchStock> Stocks)>();
+        var fefoDeductions = new List<(Guid ProductId, string ProductName, decimal RequiredQty, IReadOnlyList<Domain.Entities.Inventory.BranchStock> Stocks)>();
         if (request.NewItems != null && request.NewItems.Count > 0 && newProducts != null)
         {
             var itemGroups = request.NewItems.GroupBy(i => i.ProductId);
@@ -1797,7 +1948,7 @@ public class OrderService : IOrderService
                     throw new InvalidOperationException($"Sản phẩm '{prod.Name}' không đủ tồn kho tại chi nhánh để đổi (Hiện còn: {totalOnHand:0.##}, Cần: {requiredQty:0.##}).");
                 }
 
-                fefoDeductions.Add((prod.Name, requiredQty, branchStocks));
+                fefoDeductions.Add((prod.Id, prod.Name, requiredQty, branchStocks));
             }
         }
 
@@ -1818,16 +1969,33 @@ public class OrderService : IOrderService
             throw new InvalidOperationException("Trừ nợ khách hàng bắt buộc phải có thông tin khách hàng.");
         }
 
+        var cashFundSource = request.CashFundSource?.Trim().ToUpperInvariant()
+            ?? (IsOwnerCaller() ? "SAFE" : "SHIFT");
+        if (cashFundSource is not ("SAFE" or "SHIFT"))
+            throw new BusinessException("INVALID_REFUND_SOURCE", "Nguồn tiền hoàn không hợp lệ.");
+        if (cashFundSource == "SAFE" && !IsOwnerCaller())
+            throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng được chi từ két sắt.");
         Domain.Entities.Finance.ShiftZReport? currentOpenShift = null;
-        if (!IsOwnerCaller() && _shiftRepository != null)
+        if (cashFundSource == "SHIFT" && _shiftRepository != null)
         {
             currentOpenShift = await _shiftRepository.GetActiveShiftAsync(originalOrder.BranchId, cancellationToken: cancellationToken);
+        }
+        if (cashFundSource == "SHIFT" && currentOpenShift == null)
+            throw new BusinessException("OPEN_SHIFT_REQUIRED", "Chi nhánh chưa có ca mở để thu hoặc hoàn tiền tại két quầy.");
+
+        if (netAmount < 0 && cashFundSource == "SHIFT" &&
+            settlementMethodUpper is not ("REDUCE_DEBT" or "DEBT") && !IsOwnerCaller() && _shiftRepository != null)
+        {
+            var paymentConfig = await _shiftRepository.GetPaymentConfigAsync(originalOrder.TenantId, cancellationToken);
+            var approvalThreshold = paymentConfig?.CashOutApprovalThreshold ?? 200000m;
+            if (Math.Abs(netAmount) > approvalThreshold)
+                throw new BusinessException("RETURN_APPROVAL_REQUIRED",
+                    $"Khoản hoàn {Math.Abs(netAmount):N0} đ vượt hạn mức {approvalThreshold:N0} đ. Chủ cửa hàng cần trực tiếp xác nhận giao dịch.");
         }
 
         if (netAmount < 0 &&
             settlementMethodUpper != "REDUCE_DEBT" &&
             settlementMethodUpper != "DEBT" &&
-            !IsOwnerCaller() &&
             currentOpenShift != null)
         {
             decimal previewRefundAmount = Math.Abs(netAmount);
@@ -1837,33 +2005,76 @@ public class OrderService : IOrderService
             }
         }
 
-        // Hoàn lại kho BranchStock cho hàng trả Restock
+        // Hoàn lại kho BranchStock cho hàng trả Restock / Damaged (Hướng B: Linh hoạt thực tế cho hàng bán tự động FEFO/FIFO)
         foreach (var (retItem, origDetail) in resolvedReturns)
         {
-            if (!string.Equals(retItem.Condition?.Trim(), "Damaged", StringComparison.OrdinalIgnoreCase))
+            var allocations = ReadAllocations(origDetail);
+            if (allocations.Count == 0 && origDetail.BatchId.HasValue)
+                allocations.Add(new OrderStockAllocationDto(origDetail.BatchId.Value, origDetail.BatchCode,
+                    origDetail.Qty * (origDetail.ConversionRate > 0m ? origDetail.ConversionRate : 1m)));
+            if (allocations.Count == 0)
+                throw new BusinessException("RETURN_LOT_UNTRACED", "Hóa đơn cũ không lưu lô đã xuất; cần quản lý đối soát trước khi nhập lại kho.");
+            var batchId = retItem.BatchId ?? (allocations.Count == 1 ? allocations[0].BranchStockId : null);
+            if (!batchId.HasValue)
+                throw new BusinessException("RETURN_BATCH_REQUIRED", "Chọn lô thực tế của hàng trả trước khi hoàn kho.");
+
+            var baseQty = retItem.Quantity * (origDetail.ConversionRate > 0m ? origDetail.ConversionRate : 1m);
+            var allocationIndex = allocations.FindIndex(a => a.BranchStockId == batchId.Value);
+
+            if (allocationIndex < 0 || allocations[allocationIndex].QuantityBase - allocations[allocationIndex].ReturnedBase < baseQty)
+                throw new BusinessException("RETURN_BATCH_QUANTITY", "Lô hoàn phải là lô đã xuất và số lượng trả không được vượt lượng còn có thể trả của lô.");
+
+            var stock = await _orderRepository.GetBranchStockByIdAsync(originalOrder.BranchId, retItem.ProductId, batchId.Value, cancellationToken)
+                ?? throw new BusinessException("RETURN_BATCH_NOT_FOUND", "Lô hàng trả không còn thuộc sản phẩm/chi nhánh của hóa đơn.");
+
+            bool isDamaged = string.Equals(retItem.Condition?.Trim(), "Damaged", StringComparison.OrdinalIgnoreCase);
+            if (!isDamaged)
             {
-                var stock = await _orderRepository.GetBranchStockAsync(originalOrder.BranchId, retItem.ProductId, null, cancellationToken);
-                if (stock != null)
-                {
-                    var convRate = origDetail.ConversionRate > 0m ? origDetail.ConversionRate : 1.00m;
-                    stock.QuantityOnHand += retItem.Quantity * convRate;
-                    stock.UpdatedAt = DateTime.UtcNow;
-                }
+                if (stock.ExpiryDate.HasValue && stock.ExpiryDate.Value.Date < DateTime.UtcNow.Date)
+                    throw new BusinessException("RETURN_BATCH_EXPIRED", $"Lô {stock.BatchCode} đã hết hạn sử dụng ({stock.ExpiryDate:dd/MM/yyyy}), không thể nhập lại kho bán (Restock). Vui lòng chọn tình trạng Hàng lỗi/hỏng hoặc chọn lô khác còn hạn.");
+                if (!string.Equals(stock.Status, "Active", StringComparison.OrdinalIgnoreCase))
+                    throw new BusinessException("RETURN_BATCH_INACTIVE", $"Lô {stock.BatchCode} không còn hoạt động ({stock.Status}), không thể nhập lại kho bán.");
             }
+
+            stock.QuantityOnHand += baseQty;
+            if (isDamaged)
+                stock.QuantityQuarantined += baseQty;
+            stock.UpdatedAt = DateTime.UtcNow;
+
+            if (origDetail.PackageId.HasValue)
+            {
+                if (retItem.Quantity != 1m)
+                    throw new BusinessException("PACKAGE_RETURN_QUANTITY", "Khay chỉ được trả nguyên khay.");
+                var package = await _orderRepository.GetPackageForSaleAsync(originalOrder.BranchId, retItem.ProductId, origDetail.PackageId.Value, cancellationToken)
+                    ?? throw new BusinessException("PACKAGE_NOT_FOUND", "Không tìm thấy khay đã bán của hóa đơn.");
+                package.Status = isDamaged ? "QUARANTINED" : "AVAILABLE";
+                package.SoldOrderId = null;
+                package.SoldOrderDetailId = null;
+                package.SoldAt = null;
+            }
+
+            allocations[allocationIndex] = allocations[allocationIndex] with { ReturnedBase = allocations[allocationIndex].ReturnedBase + baseQty };
+            origDetail.StockAllocationsJson = JsonSerializer.Serialize(allocations);
         }
 
         // Trừ kho FEFO cho hàng đổi mới & build chi tiết hóa đơn mới
         var newOrderDetails = new List<OrderDetail>();
         if (request.NewItems != null && request.NewItems.Count > 0 && newProducts != null)
         {
-            foreach (var (pName, requiredQty, branchStocks) in fefoDeductions)
+            var exchangeAllocations = new Dictionary<int, List<OrderStockAllocationDto>>();
+            for (var itemIndex = 0; itemIndex < request.NewItems.Count; itemIndex++)
             {
-                DeductSellableFefo(branchStocks, requiredQty, pName, "đổi hàng");
+                var item = request.NewItems[itemIndex];
+                var (productId, pName, _, branchStocks) = fefoDeductions.First(x => x.ProductId == item.ProductId);
+                var packageWeights = await _orderRepository.GetActivePackageWeightsAsync(originalOrder.BranchId, productId, cancellationToken) ?? new Dictionary<Guid, decimal>();
+                var rate = item.ConversionRate > 0m ? item.ConversionRate : (newProducts[productId].Units?.FirstOrDefault(u => u.Id == item.UnitId)?.ConversionRate ?? 1m);
+                exchangeAllocations[itemIndex] = DeductSellableFefo(branchStocks, item.Quantity * rate, pName, "đổi hàng", packageWeights);
             }
 
             int line = 1;
-            foreach (var item in request.NewItems)
+            for (var itemIndex = 0; itemIndex < request.NewItems.Count; itemIndex++)
             {
+                var item = request.NewItems[itemIndex];
                 var prod = newProducts[item.ProductId];
                 decimal lineTotal = item.Quantity * item.UnitPrice;
                 decimal itemDiscount = item.DiscountAmount ?? 0m;
@@ -1884,6 +2095,7 @@ public class OrderService : IOrderService
                     DiscountAmount = itemDiscount,
                     ActualPrice = actualPrice,
                     CostPriceAtSale = (prod.CostPrice ?? 0m) * rate,
+                    StockAllocationsJson = JsonSerializer.Serialize(exchangeAllocations[itemIndex]),
                     AppliedVatRate = vatRate,
                     VatAmount = vatAmount,
                     ProductName = prod.Name,
@@ -1934,7 +2146,7 @@ public class OrderService : IOrderService
                 changeAmount = refundAmount;
 
                 // Tự động kiểm tra két và ghi nhận phiếu chi hoàn tiền (Chủ cửa hàng chi từ Két sắt chi nhánh, không đụng két ca thu ngân)
-                if (IsOwnerCaller())
+                if (cashFundSource == "SAFE")
                 {
                     if (_cashbookService != null)
                     {
@@ -2010,7 +2222,27 @@ public class OrderService : IOrderService
         }
 
         await _orderRepository.AddAsync(exchangeOrder, cancellationToken);
+        if (paymentStatus == "DEBT" && customer != null && _notificationOutbox != null)
+            await _notificationOutbox.EnqueueDebtThresholdAsync(customer, exchangeOrder.Id, netAmount, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        // Thu thêm tiền chênh lệch đổi/trả vào Két sắt chi nhánh nếu Chủ cửa hàng thu tiền mặt trực tiếp
+        if (IsOwnerCaller() && !currentActiveShiftId.HasValue && netAmount > 0 && string.Equals(settlementMethodUpper, "CASH", StringComparison.OrdinalIgnoreCase) && _cashbookService != null)
+        {
+            var safe = await _cashbookService.GetOrCreateSafeAsync(originalOrder.BranchId, cancellationToken);
+            await _cashbookService.ReceiveCashAsync(
+                safe.Id,
+                FinanceAccountType.Safe,
+                netAmount,
+                "EXCHANGE_EXTRA",
+                exchangeOrder.Id,
+                exchangeOrder.OrderCode,
+                $"Thu thêm tiền mặt chênh lệch đổi/trả đơn '{exchangeOrder.OrderCode}' (Chủ cửa hàng)",
+                cancellationToken
+            );
+            exchangeOrder.Note = $"{exchangeOrder.Note} [ĐÃ VÀO KÉT SẮT]".Trim();
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
 
         return MapToOrderResponse(exchangeOrder, cashTendered, changeAmount);
     }
@@ -2171,17 +2403,21 @@ public class OrderService : IOrderService
 
             if (_cashbookService != null)
             {
-                if (branchCash > 0m)
+                // Chỉ nộp vào két những đơn tiền mặt CHƯA từng được cộng vào két sắt realtime
+                var uncreditedCashOrders = branchCashOrders.Where(o => o.Note == null || !o.Note.Contains("[ĐÃ VÀO KÉT SẮT]")).ToList();
+                decimal uncreditedCash = uncreditedCashOrders.Sum(o => o.FinalAmount);
+
+                if (uncreditedCash > 0m)
                 {
                     var safe = await _cashbookService.GetOrCreateSafeAsync(bId, cancellationToken);
                     await _cashbookService.ReceiveCashAsync(
                         safe.Id,
                         FinanceAccountType.Safe,
-                        branchCash,
+                        uncreditedCash,
                         "POS_SALE",
                         null,
                         settlementCode,
-                        $"Chốt doanh thu bán lẻ cuối ngày của Chủ cửa hàng ({branchCashOrders.Count} đơn tiền mặt){noteSuffix}",
+                        $"Chốt doanh thu bán lẻ cuối ngày của Chủ cửa hàng ({uncreditedCashOrders.Count} đơn tiền mặt){noteSuffix}",
                         cancellationToken
                     );
                 }
@@ -2248,7 +2484,9 @@ public class OrderService : IOrderService
             VatAmount: d.VatAmount,
             BatchCode: d.BatchCode,
             IsGift: d.IsGift,
-            PromotionId: d.PromotionId
+            PromotionId: d.PromotionId,
+            BatchId: d.BatchId,
+            StockAllocations: ReadAllocations(d)
         )).ToList();
 
         return new OrderResponse(
@@ -2282,6 +2520,7 @@ public class OrderService : IOrderService
             VoucherDiscountAmount: order.VoucherDiscountAmount,
             PointsRedeemed: order.PointsRedeemed,
             PointsDiscountAmount: order.PointsDiscountAmount,
+            ReturnedAmount: order.ReturnedAmount,
             GiftStockWarning: giftStockWarning
         );
     }
@@ -2292,19 +2531,32 @@ public class OrderService : IOrderService
         return string.Equals(role, "STORE_OWNER", StringComparison.OrdinalIgnoreCase);
     }
 
+    private static readonly JsonSerializerOptions _allocationJsonOptions = new() { PropertyNameCaseInsensitive = true };
+
     /// <summary>
     /// RULE-01: trừ tồn theo SellableAvailable (OnHand - Reserved - Quarantined; hết hạn = 0), FEFO đã sort sẵn.
     /// </summary>
-    private static void DeductSellableFefo(
+    private static List<OrderStockAllocationDto> ReadAllocations(OrderDetail detail)
+        => string.IsNullOrWhiteSpace(detail.StockAllocationsJson)
+            ? new List<OrderStockAllocationDto>()
+            : JsonSerializer.Deserialize<List<OrderStockAllocationDto>>(detail.StockAllocationsJson, _allocationJsonOptions) ?? new List<OrderStockAllocationDto>();
+
+    private static decimal SumRawSellable(IReadOnlyList<BranchStock> stocks, IReadOnlyDictionary<Guid, decimal> packageWeights)
+        => stocks.Sum(stock => BranchStockAvailability.GetSellableAvailable(stock, packagedWeight: packageWeights.GetValueOrDefault(stock.Id)));
+
+    private static List<OrderStockAllocationDto> DeductSellableFefo(
         IReadOnlyList<BranchStock> stocks,
         decimal requiredBaseQty,
         string productName,
         string actionLabel,
-        bool throwIfInsufficient = true)
+        IReadOnlyDictionary<Guid, decimal> packageWeights,
+        bool throwIfInsufficient = true,
+        bool reserveOnly = false)
     {
-        if (requiredBaseQty <= 0) return;
+        var allocations = new List<OrderStockAllocationDto>();
+        if (requiredBaseQty <= 0) return allocations;
 
-        var totalAvailable = BranchStockAvailability.SumSellableAvailable(stocks);
+        var totalAvailable = SumRawSellable(stocks, packageWeights);
         if (totalAvailable < requiredBaseQty)
         {
             if (throwIfInsufficient)
@@ -2318,13 +2570,16 @@ public class OrderService : IOrderService
         foreach (var stock in stocks)
         {
             if (remainingToDeduct <= 0) break;
-            var sellable = BranchStockAvailability.GetSellableAvailable(stock);
+            var sellable = BranchStockAvailability.GetSellableAvailable(stock, packagedWeight: packageWeights.GetValueOrDefault(stock.Id));
             if (sellable <= 0) continue;
 
             var deduct = Math.Min(sellable, remainingToDeduct);
-            stock.QuantityOnHand -= deduct;
+            if (reserveOnly) stock.QuantityReserved += deduct;
+            else stock.QuantityOnHand -= deduct;
             stock.UpdatedAt = DateTime.UtcNow;
             remainingToDeduct -= deduct;
+            allocations.Add(new OrderStockAllocationDto(stock.Id, stock.BatchCode, deduct, CostPerBase: stock.LandedCostPerUnit));
         }
+        return allocations;
     }
 }

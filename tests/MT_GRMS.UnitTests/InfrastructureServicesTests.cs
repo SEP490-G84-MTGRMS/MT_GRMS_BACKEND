@@ -222,7 +222,6 @@ public class InfrastructureServicesTests
             GrossProfit: 4000000m,
             GrossMarginPercentage: 40m,
             OperatingExpenses: new OperatingExpenseSummary(0m, new List<CategoryExpenseBreakdown>()),
-            BadDebtExpense: 0m,
             NetProfit: 4000000m,
             NetMarginPercentage: 40m,
             TotalOrders: 10,

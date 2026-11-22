@@ -16,6 +16,10 @@ public interface IPurchaseOrderService
         OrderMatrixQuery query,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<OrderMatrixSuggestionDto>> GetOrderMatrixSuggestionsAsync(
+        OrderMatrixSuggestionQuery query,
+        CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Hub chốt đơn NCC: gom nhóm theo NCC từ draft PO + trạng thái ngày (PurchaseOrders / Details).
     /// </summary>

@@ -241,9 +241,15 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
                 ? branchStocks.Where(s => s.Id == line.BranchStockId.Value).ToList()
                 : branchStocks.Where(s => s.ProductId == line.ProductId && (string.IsNullOrEmpty(line.BatchCode) || s.BatchCode == line.BatchCode)).ToList();
 
-            var stockOnHandQty = matchedStocks.Any() ? matchedStocks.Sum(s => s.QuantityOnHand) : grnCeilingQty;
+            var stockOnHandQty = matchedStocks.Sum(s => s.QuantityOnHand);
             var stockReservedQty = matchedStocks.Any() ? matchedStocks.Sum(s => s.QuantityReserved) : 0m;
-            var stockAvailableQty = Math.Max(0, stockOnHandQty - stockReservedQty);
+            var matchedIds = matchedStocks.Select(s => s.Id).ToList();
+            var packagedWeight = await _appContext.Packages.AsNoTracking()
+                .Where(p => p.TenantId == tenantId && matchedIds.Contains(p.BranchStockId) && !p.IsDeleted
+                    && (p.Status == "AVAILABLE" || p.Status == "QUARANTINED"))
+                .SumAsync(p => p.NetWeight, cancellationToken);
+            var stockAvailableQty = Math.Max(0, stockOnHandQty - stockReservedQty
+                - matchedStocks.Sum(s => s.QuantityQuarantined) - packagedWeight);
 
             var availableReturnQty = Math.Min(grnCeilingQty, stockAvailableQty);
             var unitCostPerStock = purchaseToStockRate > 0
@@ -264,7 +270,8 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
                 AvailableReturnQty: availableReturnQty,
                 UnitCost: unitCostPerStock,
                 StockOnHandQty: stockOnHandQty,
-                StockReservedQty: stockReservedQty
+                StockReservedQty: stockReservedQty,
+                BranchStockId: line.BranchStockId
             ));
         }
 

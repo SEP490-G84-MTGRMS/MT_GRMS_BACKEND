@@ -51,6 +51,14 @@ public class BusinessDayClosingRepository : IBusinessDayClosingRepository
             .OrderBy(x => x.AccountType).ThenBy(x => x.AccountName)
             .ToListAsync(cancellationToken);
 
+    public Task<decimal> GetSafeRefundsAsync(string tenantId, Guid branchId, DateTime periodStartUtc, DateTime periodEndUtc, CancellationToken cancellationToken = default) =>
+        _context.CashbookEntries.AsNoTracking()
+            .Where(x => x.TenantId == tenantId && x.BranchId == branchId && !x.IsDeleted &&
+                x.AccountType == MT_GRMS.Domain.Enums.FinanceAccountType.Safe &&
+                x.EntryType == MT_GRMS.Domain.Enums.CashbookEntryType.Payment &&
+                x.SourceType == "RETURN_REFUND" && x.OccurredAtUtc >= periodStartUtc && x.OccurredAtUtc < periodEndUtc)
+            .SumAsync(x => x.Amount, cancellationToken);
+
     public Task AddAsync(BusinessDayClosing closing, CancellationToken cancellationToken = default) =>
         _context.BusinessDayClosings.AddAsync(closing, cancellationToken).AsTask();
 }

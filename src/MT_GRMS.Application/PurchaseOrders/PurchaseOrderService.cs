@@ -189,6 +189,196 @@ public class PurchaseOrderService : IPurchaseOrderService
         };
     }
 
+    public async Task<IReadOnlyList<OrderMatrixSuggestionDto>> GetOrderMatrixSuggestionsAsync(
+        OrderMatrixSuggestionQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        if (query.DurationDays is < 1 or > 31)
+        {
+            throw new ArgumentOutOfRangeException(nameof(query.DurationDays), "Khoảng ngày gợi ý phải từ 1 đến 31 ngày.");
+        }
+
+        var matrix = await GetOrderMatrixAsync(new OrderMatrixQuery
+        {
+            BranchId = query.BranchId,
+            SupplierId = query.SupplierId,
+            ViewFrom = query.ViewFrom.Date,
+            DurationDays = query.DurationDays
+        }, cancellationToken);
+
+        var throughDate = query.ViewFrom.Date.AddDays(query.DurationDays - 1);
+        var incoming = await _repository.GetIncomingQuantitiesAsync(
+            query.BranchId,
+            throughDate,
+            cancellationToken);
+
+        var editableDatesBySupplier = matrix.DayStatuses
+            .Where(x => OrderMatrixRules.IsEditableStatus(x.DeliveryDateStatus))
+            .GroupBy(x => x.SupplierId)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Select(x => x.DeliveryDate.Date).Distinct().OrderBy(x => x).ToList());
+
+        // Gợi ý theo đúng từng dòng SP×NCC đang hiện trên matrix (không collapse NCC chính),
+        // để mọi ô editable đều nhận được SL gợi ý.
+        var selectedRows = matrix.Products.Where(x => !x.IsRowDisabled).ToList();
+
+        var today = matrix.ServerNow.Date;
+        var rangeEndExclusive = throughDate.AddDays(1);
+        var results = new List<OrderMatrixSuggestionDto>();
+        foreach (var product in selectedRows)
+        {
+            if (!editableDatesBySupplier.TryGetValue(product.SupplierId, out var dates) || dates.Count == 0)
+            {
+                continue;
+            }
+
+            // Chỉ lấy ngày giao trong đúng phạm vi ViewFrom..ViewFrom+DurationDays-1
+            var datesInRange = dates
+                .Where(d => d >= query.ViewFrom.Date && d <= throughDate)
+                .Distinct()
+                .OrderBy(d => d)
+                .ToList();
+            if (datesInRange.Count == 0)
+            {
+                continue;
+            }
+
+            var purchaseRate = product.PurchaseToStockRate > 0 ? product.PurchaseToStockRate : 1m;
+            var multiple = product.OrderMultiple > 0 ? product.OrderMultiple : 1;
+            var moq = product.Moq > 0 ? product.Moq : 1;
+            var projectedAvailable = product.Soh;
+            var incomingAppliedThrough = DateTime.MinValue;
+
+            for (var i = 0; i < datesInRange.Count; i++)
+            {
+                var deliveryDate = datesInRange[i];
+                var nextOpportunity = i + 1 < datesInRange.Count
+                    ? datesInRange[i + 1]
+                    : rangeEndExclusive;
+
+                // Ngày đầu: phủ từ hôm nay → lần giao kế; các ngày sau: phủ kỳ giao hiện tại → lần giao kế.
+                var coverageStart = i == 0 ? today : deliveryDate;
+                var coverageDays = Math.Max(1, (nextOpportunity - coverageStart).Days);
+
+                var incomingQty = incoming
+                    .Where(x => x.ProductId == product.Id
+                                && x.DeliveryDate.Date > incomingAppliedThrough
+                                && x.DeliveryDate.Date <= deliveryDate)
+                    .Sum(x => x.RemainingBaseQty);
+                incomingAppliedThrough = deliveryDate;
+
+                var forecastDemand = product.SalesPerDay * coverageDays;
+                decimal rawBaseQty;
+                if (i == 0)
+                {
+                    // Ngày giao đầu: trừ tồn + hàng đang về + giữ safety stock.
+                    rawBaseQty = Math.Max(
+                        0m,
+                        forecastDemand + product.SafetyStock - projectedAvailable - incomingQty);
+                }
+                else
+                {
+                    // Các ngày sau: luôn gợi ý đủ nhu cầu kỳ này (không bị tồn dư ngày đầu nuốt hết).
+                    rawBaseQty = Math.Max(forecastDemand, 0m);
+                }
+
+                var rawPurchaseQty = rawBaseQty / purchaseRate;
+                // Mọi ô editable đều có SL gợi ý: ít nhất MOQ (kể cả khi chưa có doanh số).
+                var rounded = rawPurchaseQty <= 0
+                    ? moq
+                    : Math.Max(moq, Math.Ceiling(rawPurchaseQty / multiple) * multiple);
+
+                results.Add(new OrderMatrixSuggestionDto
+                {
+                    ProductId = product.Id,
+                    SupplierId = product.SupplierId,
+                    DeliveryDate = deliveryDate,
+                    SuggestedQty = rounded,
+                    Avg7 = Math.Round(product.AverageSales7Days, 3),
+                    Avg30 = Math.Round(product.AverageSales30Days, 3),
+                    SalesPerDay = Math.Round(product.SalesPerDay, 3),
+                    CoverageDays = coverageDays,
+                    ForecastDemand = Math.Round(forecastDemand, 3),
+                    AvailableStock = Math.Round(projectedAvailable, 3),
+                    IncomingQty = Math.Round(incomingQty, 3),
+                    SafetyStock = product.SafetyStock,
+                    RawSuggested = Math.Round(rawPurchaseQty, 3),
+                    Moq = moq,
+                    OrderMultiple = multiple
+                });
+
+                projectedAvailable = Math.Max(
+                    0m,
+                    projectedAvailable + incomingQty + (rounded * purchaseRate) - forecastDemand);
+            }
+        }
+
+        // Bù SL theo MOQ tổng đơn NCC × ngày giao (MinOrderQuantity).
+        EnsureSuggestionsMeetSupplierOrderMoq(results, matrix.SupplierConfigs);
+
+        return results;
+    }
+
+    /// <summary>
+    /// Nếu tổng SL gợi ý của một NCC trong một ngày &lt; MinOrderQuantity thì phân bổ phần thiếu
+    /// vào các dòng SP (ưu tiên SP bán chạy), vẫn tôn trọng OrderMultiple.
+    /// </summary>
+    private static void EnsureSuggestionsMeetSupplierOrderMoq(
+        List<OrderMatrixSuggestionDto> results,
+        IReadOnlyList<OrderMatrixSupplierDeliveryConfigDto> supplierConfigs)
+    {
+        if (results.Count == 0 || supplierConfigs.Count == 0)
+        {
+            return;
+        }
+
+        var orderMoqBySupplier = supplierConfigs
+            .Where(c => c.MinOrderQuantity > 0)
+            .ToDictionary(c => c.SupplierId, c => c.MinOrderQuantity);
+
+        if (orderMoqBySupplier.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var group in results.GroupBy(r => (r.SupplierId, Date: r.DeliveryDate.Date)))
+        {
+            if (!orderMoqBySupplier.TryGetValue(group.Key.SupplierId, out var orderMoq) || orderMoq <= 0)
+            {
+                continue;
+            }
+
+            var items = group
+                .OrderByDescending(x => x.SalesPerDay)
+                .ThenByDescending(x => x.SuggestedQty)
+                .ThenBy(x => x.ProductId)
+                .ToList();
+            if (items.Count == 0)
+            {
+                continue;
+            }
+
+            var sum = items.Sum(x => x.SuggestedQty);
+            if (sum >= orderMoq)
+            {
+                continue;
+            }
+
+            var deficit = orderMoq - sum;
+            var guard = 0;
+            var maxSteps = (int)Math.Ceiling(deficit) + items.Count * 32;
+            while (deficit > 0 && guard < maxSteps)
+            {
+                var item = items[guard % items.Count];
+                var step = item.OrderMultiple > 0 ? item.OrderMultiple : 1m;
+                item.SuggestedQty += step;
+                deficit -= step;
+                guard++;
+            }
+        }
+    }
+
     public async Task<PurchaseOrderDto> SaveMatrixDraftAsync(
         SaveMatrixDraftCommand command,
         CancellationToken cancellationToken = default)
@@ -401,8 +591,6 @@ public class PurchaseOrderService : IPurchaseOrderService
                     Code = $"DRAFT-{DateTime.UtcNow:yyyyMMdd}-{branch.Code}-{Guid.NewGuid().ToString()[..4].ToUpper()}",
                     BranchId = command.BranchId,
                     SupplierId = supplierId,
-                    ViewFromDate = command.ViewFrom,
-                    ViewToDate = command.ViewTo,
                     Status = "DRAFT",
                     Note = command.Note,
                     CreatedByRole = _tenantContext.CurrentRole,
@@ -413,8 +601,6 @@ public class PurchaseOrderService : IPurchaseOrderService
             }
             else
             {
-                draft.ViewFromDate = command.ViewFrom;
-                draft.ViewToDate = command.ViewTo;
                 draft.Note = command.Note;
             }
 
@@ -554,8 +740,6 @@ public class PurchaseOrderService : IPurchaseOrderService
                     Code = $"DRAFT-{DateTime.UtcNow:yyyyMMdd}-{branch.Code}-{Guid.NewGuid().ToString()[..4].ToUpper()}",
                     BranchId = command.BranchId,
                     SupplierId = fallbackSupplier,
-                    ViewFromDate = command.ViewFrom,
-                    ViewToDate = command.ViewTo,
                     Status = "DRAFT",
                     Note = command.Note,
                     CreatedByRole = _tenantContext.CurrentRole,

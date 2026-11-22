@@ -27,6 +27,10 @@ public class SupplierProductDto
     public string? ImageUrl { get; set; }
     public bool IsPrimarySupplier { get; set; }
     public string Status { get; set; } = "Active";
+    /// <summary>Trạng thái SP master (Active/Inactive). Ngừng bán master không xóa dòng NCC–SP.</summary>
+    public string MasterProductStatus { get; set; } = "Active";
+    public bool IsMasterProductActive =>
+        string.Equals(MasterProductStatus, "Active", StringComparison.OrdinalIgnoreCase);
     public int SyncedBranchesCount { get; set; }
 
     public DateTime CreatedAt { get; set; }

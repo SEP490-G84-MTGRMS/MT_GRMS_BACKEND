@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using Moq;
 using MT_GRMS.Api.Controllers;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.Promotions;
 using MT_GRMS.Application.Promotions.Dtos;
 using Xunit;
@@ -15,12 +16,14 @@ namespace MT_GRMS.UnitTests.Controllers;
 public class VouchersControllerTests
 {
     private readonly Mock<IPromotionService> _mockService;
+    private readonly Mock<IThermalPrintService> _mockPrintService;
     private readonly VouchersController _controller;
 
     public VouchersControllerTests()
     {
         _mockService = new Mock<IPromotionService>();
-        _controller = new VouchersController(_mockService.Object);
+        _mockPrintService = new Mock<IThermalPrintService>();
+        _controller = new VouchersController(_mockService.Object, _mockPrintService.Object);
     }
 
     private static VoucherBatchResponse CreateTestBatch(Guid id, string code = "VCH-01")

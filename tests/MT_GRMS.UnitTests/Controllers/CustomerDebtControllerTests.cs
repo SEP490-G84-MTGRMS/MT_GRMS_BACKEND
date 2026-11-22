@@ -1,7 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
 using MT_GRMS.Api.Controllers;
@@ -9,131 +5,96 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Debt;
 using MT_GRMS.Application.Debt.Dtos;
 using MT_GRMS.Domain.Enums;
-using Xunit;
+using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.UnitTests.Controllers;
 
 public class CustomerDebtControllerTests
 {
-    private readonly Mock<ICustomerDebtService> _mockDebtService;
+    private readonly Mock<ICustomerDebtService> _mockDebtService = new(MockBehavior.Strict);
     private readonly CustomerDebtController _controller;
 
     public CustomerDebtControllerTests()
     {
-        _mockDebtService = new Mock<ICustomerDebtService>();
         _controller = new CustomerDebtController(_mockDebtService.Object);
     }
 
-    [Fact]
-    public async Task RecordSaleDebt_ReturnsOk()
+    [Theory]
+    [InlineData(FinanceAccountType.Till, 100_000)]
+    [InlineData(FinanceAccountType.Bank, 0)]
+    public async Task RepayDebt_ReturnsLedgerEntryAndRemainingBalance(FinanceAccountType accountType, int remainingDebt)
     {
-        var request = new RecordSaleDebtRequest(Guid.NewGuid(), Guid.NewGuid(), "ORD-01", Guid.NewGuid(), 500000m, null, null);
-        var response = new CustomerDebtInvoiceResponse(Guid.NewGuid(), request.CustomerId, request.OrderId, "ORD-01", 500000m, 500000m, DateTime.UtcNow.AddDays(30), "Unpaid", false);
-        _mockDebtService.Setup(s => s.RecordSaleDebtAsync(request, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(response);
+        using var cancellation = new CancellationTokenSource();
+        var request = new RepayDebtRequest(Guid.NewGuid(), 200_000m, accountType, Guid.NewGuid(), "REC-01", null);
+        var cashbookEntryId = Guid.NewGuid();
+        var receipt = new RepaymentResultResponse(cashbookEntryId, "DE-01", request.Amount,
+            request.Amount + remainingDebt, remainingDebt, cashbookEntryId);
+        _mockDebtService.Setup(service => service.RepayDebtAsync(request, cancellation.Token)).ReturnsAsync(receipt);
 
-        var actionResult = await _controller.RecordSaleDebt(request, CancellationToken.None);
+        var action = await _controller.RepayDebt(request, cancellation.Token);
 
-        var ok = Assert.IsType<OkObjectResult>(actionResult.Result);
-        var resp = Assert.IsType<ApiResponse<CustomerDebtInvoiceResponse>>(ok.Value);
-        Assert.True(resp.Success);
-        Assert.Equal(500000m, resp.Data!.TotalDebtAmount);
+        var response = Assert.IsType<ApiResponse<RepaymentResultResponse>>(Assert.IsType<OkObjectResult>(action.Result).Value);
+        Assert.True(response.Success);
+        Assert.Equal(receipt, response.Data);
+    }
+
+    [Theory]
+    [InlineData("INVALID_AMOUNT")]
+    [InlineData("REPAYMENT_EXCEEDS_DEBT")]
+    public async Task RepayDebt_PropagatesBusinessFailure(string errorCode)
+    {
+        var request = new RepayDebtRequest(Guid.NewGuid(), 200_000m, FinanceAccountType.Till, Guid.NewGuid(), null, null);
+        var failure = new BusinessException(errorCode, "Thu nợ không hợp lệ.");
+        _mockDebtService.Setup(service => service.RepayDebtAsync(request, CancellationToken.None)).ThrowsAsync(failure);
+
+        var exception = await Assert.ThrowsAsync<BusinessException>(() => _controller.RepayDebt(request, CancellationToken.None));
+
+        Assert.Equal(errorCode, exception.ErrorCode);
     }
 
     [Fact]
-    public async Task RepayDebt_ReturnsOk()
-    {
-        var request = new RepayDebtRequest(Guid.NewGuid(), 200000m, FinanceAccountType.Till, Guid.NewGuid(), null, null);
-        var response = new RepaymentResultResponse(Guid.NewGuid(), "DE-01", 200000m, 300000m, 0m, new List<AllocationDetailResponse>());
-        _mockDebtService.Setup(s => s.RepayDebtAsync(request, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(response);
-
-        var actionResult = await _controller.RepayDebt(request, CancellationToken.None);
-
-        var ok = Assert.IsType<OkObjectResult>(actionResult.Result);
-        var resp = Assert.IsType<ApiResponse<RepaymentResultResponse>>(ok.Value);
-        Assert.True(resp.Success);
-        Assert.Equal(300000m, resp.Data!.RemainingDebt);
-    }
-
-    [Fact]
-    public async Task OffsetGoodsReturnDebt_ReturnsOk()
-    {
-        var request = new OffsetGoodsReturnDebtRequest(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), 100000m, false, null, null);
-        var response = new CustomerDebtEntryResponse(Guid.NewGuid(), "DE-01", request.CustomerId, "RETURN_OFFSET", -100000m, 0m, 0m, "REF", "Desc", DateTime.UtcNow);
-        _mockDebtService.Setup(s => s.OffsetGoodsReturnDebtAsync(request, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(response);
-
-        var actionResult = await _controller.OffsetGoodsReturnDebt(request, CancellationToken.None);
-
-        var ok = Assert.IsType<OkObjectResult>(actionResult.Result);
-        var resp = Assert.IsType<ApiResponse<CustomerDebtEntryResponse>>(ok.Value);
-        Assert.True(resp.Success);
-        Assert.Equal(-100000m, resp.Data!.Amount);
-    }
-
-    [Fact]
-    public async Task AdjustDebt_ReturnsOk()
-    {
-        var request = new AdjustDebtRequest(Guid.NewGuid(), 1000m, true, "Correction", "1234");
-        var response = new CustomerDebtEntryResponse(Guid.NewGuid(), "DE-02", request.CustomerId, "ADJUSTMENT", 1000m, 1000m, 0m, "REF", "Desc", DateTime.UtcNow);
-        _mockDebtService.Setup(s => s.AdjustDebtAsync(request, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(response);
-
-        var actionResult = await _controller.AdjustDebt(request, CancellationToken.None);
-
-        var ok = Assert.IsType<OkObjectResult>(actionResult.Result);
-        var resp = Assert.IsType<ApiResponse<CustomerDebtEntryResponse>>(ok.Value);
-        Assert.True(resp.Success);
-    }
-
-    [Fact]
-    public async Task WriteOffBadDebt_ReturnsOk()
-    {
-        var request = new WriteOffBadDebtRequest(Guid.NewGuid(), 5000m, "Bad debt", "http://example.com");
-        var response = new CustomerDebtEntryResponse(Guid.NewGuid(), "DE-03", request.CustomerId, "WRITE_OFF", -5000m, 0m, 0m, "REF", "Desc", DateTime.UtcNow);
-        _mockDebtService.Setup(s => s.WriteOffBadDebtAsync(request, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(response);
-
-        var actionResult = await _controller.WriteOffBadDebt(request, CancellationToken.None);
-
-        var ok = Assert.IsType<OkObjectResult>(actionResult.Result);
-        var resp = Assert.IsType<ApiResponse<CustomerDebtEntryResponse>>(ok.Value);
-        Assert.True(resp.Success);
-    }
-
-    [Fact]
-    public async Task GetProfile_ReturnsOk()
+    public async Task GetProfile_ReturnsBalanceAndActivityTimestamps()
     {
         var customerId = Guid.NewGuid();
-        var response = new CustomerDebtProfileResponse(Guid.NewGuid(), customerId, 1000000m, 30, 150000m, 0m, "Normal", null, null, new List<CustomerDebtInvoiceResponse>());
-        _mockDebtService.Setup(s => s.GetProfileAsync(customerId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(response);
+        var lastRepayment = new DateTime(2026, 11, 20, 3, 0, 0, DateTimeKind.Utc);
+        var profile = new CustomerDebtProfileResponse(customerId, 150_000m, lastRepayment.AddDays(-1), lastRepayment);
+        _mockDebtService.Setup(service => service.GetProfileAsync(customerId, CancellationToken.None)).ReturnsAsync(profile);
 
-        var actionResult = await _controller.GetProfile(customerId, CancellationToken.None);
+        var action = await _controller.GetProfile(customerId, CancellationToken.None);
 
-        var ok = Assert.IsType<OkObjectResult>(actionResult.Result);
-        var resp = Assert.IsType<ApiResponse<CustomerDebtProfileResponse>>(ok.Value);
-        Assert.True(resp.Success);
-        Assert.Equal(150000m, resp.Data!.CurrentDebtBalance);
+        var response = Assert.IsType<ApiResponse<CustomerDebtProfileResponse>>(Assert.IsType<OkObjectResult>(action.Result).Value);
+        Assert.True(response.Success);
+        Assert.Equal(profile, response.Data);
     }
 
     [Fact]
-    public async Task GetLedger_ReturnsOk()
+    public async Task GetLedger_ForwardsRequestedPageAndReturnsReceiptDetails()
     {
         var customerId = Guid.NewGuid();
-        var list = new List<CustomerDebtEntryResponse>
-        {
-            new(Guid.NewGuid(), "DE-01", customerId, "SALE_DEBT", 1000m, 1000m, 0m, "REF", "Desc", DateTime.UtcNow)
-        };
-        _mockDebtService.Setup(s => s.GetLedgerAsync(customerId, 1, 50, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(list);
+        var cashbookEntryId = Guid.NewGuid();
+        var receipt = new CustomerDebtLedgerItemResponse(cashbookEntryId, "DE-01", customerId, "DebtRepayment",
+            1_000m, null, null, "REC-01", "Thu nợ", DateTime.UtcNow, Guid.NewGuid(), "Till", cashbookEntryId);
+        _mockDebtService.Setup(service => service.GetLedgerAsync(customerId, 2, 10, CancellationToken.None))
+            .ReturnsAsync([receipt]);
 
-        var actionResult = await _controller.GetLedger(customerId, 1, 50, CancellationToken.None);
+        var action = await _controller.GetLedger(customerId, 2, 10);
 
-        var ok = Assert.IsType<OkObjectResult>(actionResult.Result);
-        var resp = Assert.IsType<ApiResponse<List<CustomerDebtEntryResponse>>>(ok.Value);
-        Assert.True(resp.Success);
-        Assert.Single(resp.Data!);
+        var response = Assert.IsType<ApiResponse<List<CustomerDebtLedgerItemResponse>>>(Assert.IsType<OkObjectResult>(action.Result).Value);
+        Assert.True(response.Success);
+        Assert.Equal(receipt, Assert.Single(response.Data!));
+    }
+
+    [Fact]
+    public async Task GetLedger_UsesDefaultPageAndReturnsEmptyList()
+    {
+        var customerId = Guid.NewGuid();
+        _mockDebtService.Setup(service => service.GetLedgerAsync(customerId, 1, 50, CancellationToken.None))
+            .ReturnsAsync([]);
+
+        var action = await _controller.GetLedger(customerId);
+
+        var response = Assert.IsType<ApiResponse<List<CustomerDebtLedgerItemResponse>>>(Assert.IsType<OkObjectResult>(action.Result).Value);
+        Assert.True(response.Success);
+        Assert.Empty(response.Data!);
     }
 }

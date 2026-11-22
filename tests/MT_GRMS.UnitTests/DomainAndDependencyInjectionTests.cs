@@ -23,6 +23,7 @@ using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Entities.Supplier;
 using MT_GRMS.Domain.Entities.System;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 using MT_GRMS.Infrastructure;
 using Xunit;
@@ -75,14 +76,17 @@ public class DomainAndDependencyInjectionTests
     [Fact]
     public void DomainEntities_PropertiesAndCalculations_ShouldWork()
     {
-        var account = new BranchPaymentAccount
+        var paymentAccountId = Guid.NewGuid();
+        var account = new FinanceAccount
         {
             BranchId = Guid.NewGuid(),
-            PaymentAccountId = Guid.NewGuid(),
-            IsDefault = true,
+            PaymentAccountId = paymentAccountId,
+            AccountType = FinanceAccountType.Bank,
+            IsDefaultForVietQr = true,
             IsActive = true
         };
-        Assert.True(account.IsDefault);
+        Assert.Equal(paymentAccountId, account.PaymentAccountId);
+        Assert.True(account.IsDefaultForVietQr);
         Assert.True(account.IsActive);
 
         var tx = new PaymentTransaction
@@ -308,8 +312,8 @@ public class DomainAndDependencyInjectionTests
         var kpiSummary = new CustomerKpiSummaryResponse(100, 5000000m, 20, 1000);
         Assert.NotNull(kpiSummary.ToString());
 
-        var updateCustomer = new UpdateCustomerRequest("Nguyen Van B", "cust@example.com", "Address", "0123456789", 5000000m, "GOLD", "ACTIVE", true);
-        Assert.NotNull(updateCustomer.ToString());
+        var updateCustomer = new UpdateCustomerRequest("Nguyen Van B", "cust@example.com", "Address", "0123456789", "GOLD", "ACTIVE");
+        Assert.Equal("GOLD", updateCustomer.MembershipTier);
 
         var paymentSummary = new CustomerPaymentSummaryResponse("PAY01", "2026-11-16", 3000000m, "CASH", "Staff 1", "Note");
         Assert.NotNull(paymentSummary.ToString());

@@ -43,7 +43,6 @@ public class PurchaseOrderConfiguration : IEntityTypeConfiguration<PurchaseOrder
 
         builder.HasIndex(x => new { x.TenantId, x.Code }).IsUnique();
         builder.HasIndex(x => x.DispatchPackageId);
-        builder.HasIndex(x => x.DispatchBatchId);
 
         builder.HasOne(x => x.DispatchPackage)
             .WithMany()

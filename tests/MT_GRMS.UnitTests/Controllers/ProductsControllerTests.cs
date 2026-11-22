@@ -370,16 +370,17 @@ public class ProductsControllerTests
         var id = Guid.NewGuid();
         IReadOnlyList<ProductPriceHistoryDto> list = new List<ProductPriceHistoryDto>
         {
-            new(Guid.NewGuid(), id, null, null, "GLOBAL", "RETAIL", 1000m, 1200m, 800m, false, null, null, "USER-1", "Admin", "Reason", DateTime.UtcNow)
+            new(Guid.NewGuid(), id, null, null, null, null, "MASTER", "SELLING", 1000m, 1200m, 800m, false, null, null, "USER-1", "Admin", "Reason", DateTime.UtcNow)
         };
-        _mockCatalogService.Setup(s => s.GetPriceHistoryAsync(id, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(list);
+        var query = new ProductPriceHistoryQuery();
+        _mockCatalogService.Setup(s => s.GetPriceHistoryAsync(id, query, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<ProductPriceHistoryDto> { Items = list, Page = 1, PageSize = 15, TotalItems = 1 });
 
-        var result = await _controller.GetPriceHistory(id, null, CancellationToken.None);
+        var result = await _controller.GetPriceHistory(id, query, CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(result);
-        var resp = Assert.IsType<ApiResponse<IReadOnlyList<ProductPriceHistoryDto>>>(ok.Value);
+        var resp = Assert.IsType<ApiResponse<PagedResult<ProductPriceHistoryDto>>>(ok.Value);
         Assert.True(resp.Success);
-        Assert.Single(resp.Data!);
+        Assert.Single(resp.Data!.Items);
     }
 }

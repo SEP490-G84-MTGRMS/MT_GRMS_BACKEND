@@ -407,8 +407,6 @@ public class DeepBranchCoverageSuite1Tests
             CashierUserId = tenant.CurrentUserId
         };
         shiftRepo.Setup(r => r.GetByIdAsync(shiftId, It.IsAny<CancellationToken>())).ReturnsAsync(shift);
-        shiftRepo.Setup(r => r.GetParticipantAsync(shiftId, tenant.CurrentUserId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ShiftParticipant { ShiftId = shiftId, UserId = tenant.CurrentUserId });
 
         var req = new CloseShiftRequest(
             ActualCashCounted: 100000m,
@@ -438,8 +436,6 @@ public class DeepBranchCoverageSuite1Tests
             CashierUserId = tenant.CurrentUserId
         };
         shiftRepo.Setup(r => r.GetByIdAsync(shiftId, It.IsAny<CancellationToken>())).ReturnsAsync(shift);
-        shiftRepo.Setup(r => r.GetParticipantAsync(shiftId, tenant.CurrentUserId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new ShiftParticipant { ShiftId = shiftId, UserId = tenant.CurrentUserId });
 
         var req = new CloseShiftRequest(
             ActualCashCounted: -100m, // Negative actual cash

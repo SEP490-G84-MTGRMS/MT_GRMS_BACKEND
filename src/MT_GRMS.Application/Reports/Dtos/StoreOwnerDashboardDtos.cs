@@ -10,4 +10,8 @@ public record DashboardStockItemDto(Guid ProductId, Guid BranchId, string Produc
 public record DashboardExpiryItemDto(Guid ProductId, Guid BranchId, string ProductName, string BranchName, string? BatchCode, DateTime ExpiryDate, decimal QuantityOnHand);
 public record DashboardInventoryDto(int LowStockCount, int OutOfStockCount, int ExpiryWarningCount, IReadOnlyList<DashboardStockItemDto> LowStockItems, IReadOnlyList<DashboardExpiryItemDto> ExpiringBatches);
 public record DashboardEmployeesDto(int TotalCount, int ActiveCount);
-public record StoreOwnerDashboardResponse(DashboardScopeDto Scope, IReadOnlyList<DashboardBranchDto> Branches, DashboardSalesDto Sales, DashboardFinanceDto Finance, DashboardProcurementDto Procurement, DashboardInventoryDto Inventory, DashboardEmployeesDto Employees);
+public record DashboardTaskDto(string Title, string Code, string ActionUrl, DateTime CreatedAt);
+public record StoreOwnerDashboardResponse(DashboardScopeDto Scope, IReadOnlyList<DashboardBranchDto> Branches, DashboardSalesDto Sales, DashboardFinanceDto Finance, DashboardProcurementDto Procurement, DashboardInventoryDto Inventory, DashboardEmployeesDto Employees)
+{
+    public IReadOnlyList<DashboardTaskDto> Tasks { get; init; } = Array.Empty<DashboardTaskDto>();
+}

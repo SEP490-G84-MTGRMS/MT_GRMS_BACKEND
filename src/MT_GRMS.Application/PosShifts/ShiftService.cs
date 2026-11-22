@@ -21,19 +21,22 @@ public class ShiftService : IShiftService
     private readonly ITenantContext _tenantContext;
     private readonly ICashbookService? _cashbookService;
     private readonly INotificationService? _notificationService;
+    private readonly NotificationOutbox? _notificationOutbox;
 
     public ShiftService(
         IShiftRepository shiftRepository,
         IUnitOfWork unitOfWork,
         ITenantContext tenantContext,
         ICashbookService? cashbookService = null,
-        INotificationService? notificationService = null)
+        INotificationService? notificationService = null,
+        NotificationOutbox? notificationOutbox = null)
     {
         _shiftRepository = shiftRepository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
         _cashbookService = cashbookService;
         _notificationService = notificationService;
+        _notificationOutbox = notificationOutbox;
     }
 
     public async Task<ShiftDetailResponse> OpenShiftAsync(
@@ -55,13 +58,13 @@ public class ShiftService : IShiftService
                 eligibility.Reason ?? "Bạn không có lịch làm việc trong ca hiện tại của chi nhánh.");
         }
 
-        // 1. Kiểm tra xem quầy/chi nhánh đã có ca nào đang mở chưa
-        var activeShift = await _shiftRepository.GetActiveShiftAsync(request.BranchId, request.TillId, cancellationToken);
+        // Một chi nhánh chỉ có một ca/két quầy hoạt động tại một thời điểm.
+        var activeShift = await _shiftRepository.GetActiveShiftAsync(request.BranchId, cancellationToken: cancellationToken);
         if (activeShift != null)
         {
             throw new BusinessException(
                 "SHIFT_ALREADY_OPEN",
-                $"Quầy này đang có ca làm việc '{activeShift.ShiftName}' ({activeShift.ShiftCode}) đang mở. Vui lòng chốt ca trước khi mở ca mới.");
+                $"Chi nhánh đang có ca làm việc '{activeShift.ShiftName}' ({activeShift.ShiftCode}) đang mở. Vui lòng chốt ca trước khi mở ca mới.");
         }
 
         // 2. Tìm ca đã đóng liền trước đó trên cùng quầy/chi nhánh để lấy số tiền bàn giao dự kiến
@@ -400,29 +403,8 @@ public class ShiftService : IShiftService
                 : $"{shift.Notes} | {request.Notes.Trim()}";
         }
 
+        await QueueShiftDiscrepancyAsync(shift, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
-
-        if (_notificationService != null && shift.Discrepancy.HasValue && Math.Abs(shift.Discrepancy.Value) > 0.01m)
-        {
-            try
-            {
-                string diffText = shift.Discrepancy.Value > 0
-                    ? $"thừa +{shift.Discrepancy.Value:N0} đ"
-                    : $"thiếu {Math.Abs(shift.Discrepancy.Value):N0} đ";
-                await _notificationService.NotifyTenantOwnersAsync(
-                    shift.TenantId,
-                    "SHIFT_DISCREPANCY",
-                    $"🔴 Lệch tiền mặt chốt ca ({shift.ShiftCode})",
-                    $"Ca làm việc {shift.ShiftName} ({shift.ShiftCode}) khi đóng ca bị {diffText}. Thực đếm: {shift.ActualCashCounted:N0} đ, lý thuyết: {shift.ExpectedCash:N0} đ.",
-                    $"/pos/shifts",
-                    cancellationToken);
-            }
-            catch
-            {
-                // Không gián đoạn luồng đóng ca
-            }
-        }
-
         return MapToDetailResponse(shift);
     }
 
@@ -513,7 +495,9 @@ public class ShiftService : IShiftService
             shift.HandoverStatus,
             shift.ReceiverUserId,
             shift.Notes,
-            movements
+            movements,
+            movements.Where(m => m.Category == CashMovementCategory.RETURN_REFUND && m.Status == CashMovementStatus.Recorded).Sum(m => m.Amount),
+            cashSales - movements.Where(m => m.Category == CashMovementCategory.RETURN_REFUND && m.Status == CashMovementStatus.Recorded).Sum(m => m.Amount)
         );
     }
 
@@ -716,6 +700,7 @@ public class ShiftService : IShiftService
             shift.Notes = string.IsNullOrWhiteSpace(shift.Notes) ? request.Notes : $"{shift.Notes} | {request.Notes}";
         }
 
+        await QueueShiftDiscrepancyAsync(shift, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return MapToDetailResponse(shift);
     }
@@ -927,7 +912,7 @@ public class ShiftService : IShiftService
             throw new BusinessException("SHIFT_NOT_FOUND", "Không tìm thấy ca làm việc.");
         }
 
-        if (shift.Status == ShiftState.Closed)
+        if (shift.Status is ShiftState.Closed or ShiftState.ForceClosed)
         {
             throw new BusinessException("SHIFT_ALREADY_CLOSED", "Ca làm việc này đã được chốt trước đó.");
         }
@@ -954,8 +939,17 @@ public class ShiftService : IShiftService
         shift.SnapshotLocked = true;
         shift.CashbookPostingStatus = CashbookPostingStatus.NotPosted;
 
+        await QueueShiftDiscrepancyAsync(shift, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return MapToDetailResponse(shift);
+    }
+
+    private Task QueueShiftDiscrepancyAsync(ShiftZReport shift, CancellationToken ct)
+    {
+        if (_notificationOutbox == null || shift.Discrepancy is not decimal discrepancy || Math.Abs(discrepancy) <= 0.01m)
+            return Task.CompletedTask;
+
+        return _notificationOutbox.EnqueueShiftDiscrepancyAsync(shift, discrepancy, ct);
     }
 
     private async Task RecordShiftCashbookSettlementAsync(

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
 using Moq;
@@ -25,29 +26,38 @@ public class AdminDashboardServiceTests
     }
 
     [Fact]
-    public async Task GetKpiMetricsAsync_ShouldReturn4Metrics()
+    public async Task GetKpiMetricsAsync_ShouldReturnMrrTenantCountAndSuccessfulPurchases()
     {
         _mockTenantRepo.Setup(r => r.GetTotalCountAsync(It.IsAny<CancellationToken>())).ReturnsAsync(10);
-        _mockTenantRepo.Setup(r => r.GetActiveCountAsync(It.IsAny<CancellationToken>())).ReturnsAsync(8);
-        _mockTenantRepo.Setup(r => r.GetExpiringSoonCountAsync(7, It.IsAny<CancellationToken>())).ReturnsAsync(2);
-        _mockTenantRepo.Setup(r => r.GetGracePeriodCountAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
-        _mockTenantRepo.Setup(r => r.GetLockedCountAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
-        _mockTenantRepo.Setup(r => r.GetTotalBranchesCountAsync(It.IsAny<CancellationToken>())).ReturnsAsync(16);
+        _mockTenantRepo.Setup(r => r.GetSuccessfulUpgradeCountAsync(It.IsAny<CancellationToken>())).ReturnsAsync(4);
 
         var plan = new SubscriptionPlan { Id = "PRO", PriceMonthly = 249_000m };
         var activeTenants = new List<Tenant>
         {
             new() { Id = "t1", Status = "ACTIVE", SubscriptionPlan = plan },
-            new() { Id = "t2", Status = "ACTIVE", SubscriptionPlan = plan }
+            new() { Id = "t2", Status = "ACTIVE", SubscriptionPlan = plan, SubscriptionExpiresAt = DateTime.UtcNow.AddDays(1) },
+            new() { Id = "t3", Status = "ACTIVE", SubscriptionPlan = plan, SubscriptionExpiresAt = DateTime.UtcNow.AddDays(-1) },
+            new() { Id = "t4", Status = "ACTIVE", SubscriptionPlan = plan, LockType = "HARD" }
         };
         _mockTenantRepo.Setup(r => r.GetAllActiveWithPlanAsync(It.IsAny<CancellationToken>())).ReturnsAsync(activeTenants);
 
         var metrics = await _service.GetKpiMetricsAsync();
-        Assert.Equal(4, metrics.Count);
-        Assert.Equal("mrr", metrics[0].Id);
-        Assert.Equal("active_tenants", metrics[1].Id);
-        Assert.Equal("total_branches", metrics[2].Id);
-        Assert.Equal("urgent_alerts", metrics[3].Id);
+        Assert.Collection(metrics,
+            metric =>
+            {
+                Assert.Equal("mrr", metric.Id);
+                Assert.Equal(498_000m.ToString("N0", CultureInfo.GetCultureInfo("vi-VN")), metric.Value);
+            },
+            metric =>
+            {
+                Assert.Equal("total_tenants", metric.Id);
+                Assert.Equal("10", metric.Value);
+            },
+            metric =>
+            {
+                Assert.Equal("successful_upgrades", metric.Id);
+                Assert.Equal("4", metric.Value);
+            });
     }
 
     [Fact]
@@ -112,13 +122,14 @@ public class AdminDashboardServiceTests
 
         var alerts = await _service.GetUrgentAlertsAsync();
         Assert.Equal(3, alerts.Count);
-        Assert.Equal("error", alerts[0].StatusType);
-        Assert.Equal("error", alerts[1].StatusType);
-        Assert.Equal("warning", alerts[2].StatusType);
+        Assert.Equal("locked", alerts[0].StatusType);
+        Assert.Contains("Vi pham chinh sach", alerts[0].ExpiryNotice);
+        Assert.Equal("grace", alerts[1].StatusType);
+        Assert.Equal("expiring", alerts[2].StatusType);
     }
 
     [Fact]
-    public async Task GetMonthlyAnalyticsAsync_ShouldReturnAnalytics()
+    public async Task GetMonthlyAnalyticsAsync_DoesNotEstimatePastMonthsFromCurrentSubscriptions()
     {
         var plans = new List<SubscriptionPlan>
         {
@@ -134,6 +145,6 @@ public class AdminDashboardServiceTests
         _mockTenantRepo.Setup(r => r.GetAllActiveWithPlanAsync(It.IsAny<CancellationToken>())).ReturnsAsync(activeTenants);
 
         var analytics = await _service.GetMonthlyAnalyticsAsync();
-        Assert.NotEmpty(analytics);
+        Assert.Empty(analytics);
     }
 }

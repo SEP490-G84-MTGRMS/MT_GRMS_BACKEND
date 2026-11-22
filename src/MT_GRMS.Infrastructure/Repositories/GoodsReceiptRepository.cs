@@ -287,6 +287,15 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    public Task<BranchStock?> GetBranchStockByIdAsync(string tenantId, Guid branchId, Guid productId, Guid branchStockId, CancellationToken cancellationToken = default)
+        => _context.BranchStocks.FirstOrDefaultAsync(bs => bs.Id == branchStockId && bs.TenantId == tenantId
+            && bs.BranchId == branchId && bs.ProductId == productId && !bs.IsDeleted, cancellationToken);
+
+    public Task<decimal> GetActivePackageWeightAsync(string tenantId, Guid branchStockId, CancellationToken cancellationToken = default)
+        => _context.Packages.Where(p => p.TenantId == tenantId && p.BranchStockId == branchStockId && !p.IsDeleted
+            && (p.Status == "AVAILABLE" || p.Status == "QUARANTINED"))
+            .SumAsync(p => p.NetWeight, cancellationToken);
+
     public async Task<BranchStock?> GetBranchStockAsync(
         string tenantId,
         Guid branchId,

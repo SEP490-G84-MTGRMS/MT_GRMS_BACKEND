@@ -6,6 +6,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Inventory;
+using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Application.PurchaseOrders;
 using MT_GRMS.Application.PurchaseOrders.Dispatch;
 using MT_GRMS.Application.Suppliers;
@@ -23,6 +25,8 @@ public class SupplierReturnService : ISupplierReturnService
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ISupplierOrderEmailSender? _emailSender;
+    private readonly IRepository<Package>? _packages;
+    private readonly IRepository<BranchStock>? _stocks;
 
     public SupplierReturnService(
         ISupplierReturnRepository repository,
@@ -30,7 +34,9 @@ public class SupplierReturnService : ISupplierReturnService
         ISupplierRepository supplierRepository,
         ITenantContext tenantContext,
         IUnitOfWork unitOfWork,
-        ISupplierOrderEmailSender? emailSender = null)
+        ISupplierOrderEmailSender? emailSender = null,
+        IRepository<Package>? packages = null,
+        IRepository<BranchStock>? stocks = null)
     {
         _repository = repository;
         _purchaseOrderRepository = purchaseOrderRepository;
@@ -38,6 +44,8 @@ public class SupplierReturnService : ISupplierReturnService
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
         _emailSender = emailSender;
+        _packages = packages;
+        _stocks = stocks;
     }
 
     public SupplierReturnService(
@@ -136,6 +144,7 @@ public class SupplierReturnService : ISupplierReturnService
                 TenantId = tenantId,
                 ProductId = reqLine.ProductId,
                 GoodsReceiptLineId = reqLine.GoodsReceiptLineId,
+                BranchStockId = sourceLine.BranchStockId,
                 StocktakeLineId = reqLine.StocktakeLineId,
                 BatchCode = reqLine.BatchCode,
                 ExpiryDate = reqLine.ExpiryDate ?? sourceLine.ExpiryDate,
@@ -297,7 +306,7 @@ public class SupplierReturnService : ISupplierReturnService
                     // Giảm bớt số lượng khóa đối với phần bị từ chối
                     if (line.RejectedQty > 0)
                     {
-                        var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+                        var stock = await GetReturnStockAsync(tenantId, entity.BranchId, line, cancellationToken);
                         if (stock != null)
                         {
                             stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - line.RejectedQty);
@@ -323,7 +332,7 @@ public class SupplierReturnService : ISupplierReturnService
                 line.RejectedQty = line.RequestedQty;
 
                 // Giải phóng toàn bộ số lượng đã khóa
-                var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+                var stock = await GetReturnStockAsync(tenantId, entity.BranchId, line, cancellationToken);
                 if (stock != null)
                 {
                     stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - line.RequestedQty);
@@ -379,15 +388,20 @@ public class SupplierReturnService : ISupplierReturnService
             line.HandedOverQty += currentBatchHandoverQty;
             totalHandedOver += line.HandedOverQty;
 
-            // EXCHANGE: không trừ OnHand lúc bàn giao — trừ khi nhập GRN đổi thành công.
-            if (!IsExchangeResolution(entity.ResolutionType) && currentBatchHandoverQty > 0)
+            // Hàng đã rời chi nhánh phải giảm tồn ngay, kể cả phiếu đổi hàng.
+            // GRN đổi chỉ ghi giảm phần chưa được bàn giao (ApprovedQty - HandedOverQty).
+            if (currentBatchHandoverQty > 0)
             {
-                var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
-                if (stock != null)
-                {
-                    stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - currentBatchHandoverQty);
-                    stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - currentBatchHandoverQty);
-                }
+                var stock = await GetReturnStockAsync(tenantId, entity.BranchId, line, cancellationToken);
+                if (stock == null || stock.QuantityOnHand < currentBatchHandoverQty)
+                    throw new BusinessException($"Lô {line.BatchCode} không đủ tồn để bàn giao hàng trả nhà cung cấp.");
+
+                var packageWeight = await GetActivePackageWeightAsync(entity.TenantId, stock.Id, cancellationToken);
+                if (stock.QuantityOnHand - currentBatchHandoverQty < packageWeight + stock.QuantityQuarantined + Math.Max(0m, stock.QuantityReserved - currentBatchHandoverQty))
+                    throw new BusinessException("RTV_COMMITTED_STOCK", "Bàn giao sẽ lấy vào lượng khay, cách ly hoặc giữ cho chứng từ khác.");
+
+                stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - currentBatchHandoverQty);
+                stock.QuantityOnHand -= currentBatchHandoverQty;
             }
         }
 
@@ -443,7 +457,7 @@ public class SupplierReturnService : ISupplierReturnService
                 var unreserveQty = entity.Status == "APPROVED" ? line.ApprovedQty : line.RequestedQty;
                 if (unreserveQty > 0)
                 {
-                    var stock = await _repository.GetBranchStockAsync(tenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
+                    var stock = await GetReturnStockAsync(tenantId, entity.BranchId, line, cancellationToken);
                     if (stock != null)
                     {
                         stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - unreserveQty);
@@ -667,9 +681,8 @@ public class SupplierReturnService : ISupplierReturnService
     {
         foreach (var line in entity.Lines)
         {
-            var stock = await _repository.GetBranchStockAsync(
-                entity.TenantId, entity.BranchId, line.ProductId, line.BatchCode, cancellationToken);
-            if (stock == null) continue;
+            var stock = await GetReturnStockAsync(entity.TenantId, entity.BranchId, line, cancellationToken)
+                ?? throw new BusinessException("RTV_STOCK_NOT_FOUND", "Không tìm thấy đúng dòng tồn của hàng trả nhà cung cấp.");
 
             if (releaseQuarantine && stock.QuantityQuarantined > 0)
             {
@@ -677,8 +690,26 @@ public class SupplierReturnService : ISupplierReturnService
                 stock.QuantityQuarantined -= release;
             }
 
+            var packageWeight = await GetActivePackageWeightAsync(entity.TenantId, stock.Id, cancellationToken);
+            if (BranchStockAvailability.GetRawSellableKg(stock, packageWeight) < line.RequestedQty)
+                throw new BusinessException("RTV_INSUFFICIENT_RAW", "Không đủ hàng rời trong lô để giữ cho phiếu trả nhà cung cấp.");
             stock.QuantityReserved += line.RequestedQty;
         }
+    }
+
+    private async Task<decimal> GetActivePackageWeightAsync(string tenantId, Guid branchStockId, CancellationToken ct)
+        => _packages == null ? 0m : (await _packages.FindAsync(p => p.TenantId == tenantId && p.BranchStockId == branchStockId
+            && !p.IsDeleted && (p.Status == "AVAILABLE" || p.Status == "QUARANTINED"), ct)).Sum(p => p.NetWeight);
+
+    private async Task<BranchStock?> GetReturnStockAsync(string tenantId, Guid branchId, SupplierReturnLine line, CancellationToken ct)
+    {
+        BranchStock? stock = line.BranchStockId.HasValue && _stocks != null
+            ? await _stocks.GetByIdAsync(line.BranchStockId.Value, ct)
+            : await _repository.GetBranchStockAsync(tenantId, branchId, line.ProductId, line.BatchCode, ct);
+        if (stock == null || stock.IsDeleted || stock.TenantId != tenantId || stock.BranchId != branchId || stock.ProductId != line.ProductId
+            || (line.BranchStockId.HasValue && stock.Id != line.BranchStockId.Value))
+            return null;
+        return stock;
     }
 
     private async Task AutoConfirmByPolicyAsync(SupplierReturn entity, CancellationToken cancellationToken)

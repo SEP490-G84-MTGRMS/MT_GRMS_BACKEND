@@ -42,6 +42,8 @@ public record PackageDto(
     DateTime CreatedAt
 );
 
+public record PackageScanDto(PackageDto Package, string ProductName, string BatchCode, DateTime? BatchExpiryDate);
+
 public record RepackOrderDto(
     Guid Id,
     string Code,

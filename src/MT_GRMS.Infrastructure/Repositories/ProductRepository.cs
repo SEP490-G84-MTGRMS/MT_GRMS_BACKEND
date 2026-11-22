@@ -59,7 +59,8 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
         var pageSize = Math.Clamp(filter.PageSize, 1, 100);
 
         var items = await query
-            .OrderByDescending(p => p.CreatedAt)
+            .OrderBy(p => p.ProductCode)
+            .ThenBy(p => p.Name)
             .Skip((pageIndex - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(cancellationToken);

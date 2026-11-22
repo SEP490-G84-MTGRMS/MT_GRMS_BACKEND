@@ -64,6 +64,7 @@ public class SupplierReturnLine : BaseTenantEntity
     public Guid SupplierReturnId { get; set; }
     public Guid ProductId { get; set; }
     public Guid? GoodsReceiptLineId { get; set; }
+    public Guid? BranchStockId { get; set; }
     public Guid? StocktakeLineId { get; set; }
     public string? BatchCode { get; set; }
     public DateTime? ExpiryDate { get; set; }

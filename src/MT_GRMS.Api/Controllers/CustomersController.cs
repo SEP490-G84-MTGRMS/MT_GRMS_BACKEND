@@ -50,7 +50,17 @@ public class CustomersController : BaseApiController
             query = query.Where(c => c.TotalDebt > 0);
 
         var customers = await query.OrderByDescending(c => c.CreatedAt).ToListAsync(ct);
-        return Ok(ApiResponse<List<CustomerResponse>>.Ok(customers.Select(c => MapCustomer(c)).ToList()));
+        var customerIds = customers.Select(c => c.Id).ToList();
+        var debtStats = await _context.Orders.AsNoTracking()
+            .Where(o => o.TenantId == tenantId && o.CustomerId.HasValue && customerIds.Contains(o.CustomerId.Value)
+                && (o.PaymentMethod == "DEBT" || o.PaymentMethod == "CREDIT")
+                && o.Status == "Completed" && !o.IsDeleted && o.FinalAmount > 0)
+            .GroupBy(o => o.CustomerId!.Value)
+            .Select(g => new { CustomerId = g.Key, Count = g.Count(), Total = g.Sum(o => o.FinalAmount) })
+            .ToDictionaryAsync(x => x.CustomerId, ct);
+        return Ok(ApiResponse<List<CustomerResponse>>.Ok(customers.Select(c =>
+            MapCustomer(c, debtOrderCount: debtStats.GetValueOrDefault(c.Id)?.Count ?? 0,
+                totalDebtPurchased: debtStats.GetValueOrDefault(c.Id)?.Total ?? 0m)).ToList()));
     }
 
     [HttpGet("{id:guid}")]
@@ -62,7 +72,7 @@ public class CustomersController : BaseApiController
         if (customer == null) return NotFound(ApiResponse<object>.Fail("NOT_FOUND", "Khách hàng không tồn tại."));
 
         var debtOrders = await _context.Orders.AsNoTracking()
-            .Where(o => o.CustomerId == id && o.TenantId == tenantId &&
+            .Where(o => o.CustomerId == id && o.TenantId == tenantId && o.Status == "Completed" && !o.IsDeleted &&
                 (o.PaymentMethod == "DEBT" || o.PaymentMethod == "CREDIT"))
             .OrderByDescending(o => o.OrderDate).Take(10)
             .Select(o => new CustomerInvoiceSummaryResponse(o.OrderCode, o.OrderDate.ToString("yyyy-MM-dd"),
@@ -78,7 +88,14 @@ public class CustomersController : BaseApiController
                 e.AccountType.ToString(), "Chủ cửa hàng", e.Description))
             .ToListAsync(ct);
 
-        return Ok(ApiResponse<CustomerResponse>.Ok(MapCustomer(customer, debtOrders, recentPayments)));
+        var debtStats = await _context.Orders.AsNoTracking()
+            .Where(o => o.CustomerId == id && o.TenantId == tenantId && o.Status == "Completed" && !o.IsDeleted
+                && (o.PaymentMethod == "DEBT" || o.PaymentMethod == "CREDIT") && o.FinalAmount > 0)
+            .GroupBy(o => o.CustomerId!.Value)
+            .Select(g => new { Count = g.Count(), Total = g.Sum(o => o.FinalAmount) })
+            .FirstOrDefaultAsync(ct);
+        return Ok(ApiResponse<CustomerResponse>.Ok(MapCustomer(customer, debtOrders, recentPayments,
+            debtStats?.Count ?? 0, debtStats?.Total ?? 0m)));
     }
 
     [HttpPost]
@@ -151,7 +168,10 @@ public class CustomersController : BaseApiController
 
     private static CustomerResponse MapCustomer(Customer c,
         List<CustomerInvoiceSummaryResponse>? invoices = null,
-        List<CustomerPaymentSummaryResponse>? payments = null) => new(
+        List<CustomerPaymentSummaryResponse>? payments = null,
+        int debtOrderCount = 0,
+        decimal totalDebtPurchased = 0m) => new(
         c.Id, c.CustomerCode, c.Name, c.Phone, c.Email, c.Address, c.MembershipTier,
-        c.RewardPoints, c.TotalSpending, c.TotalDebt, "Active", c.CreatedAt, invoices, payments);
+        c.RewardPoints, c.TotalSpending, c.TotalDebt, "Active", c.CreatedAt, invoices, payments,
+        debtOrderCount, totalDebtPurchased);
 }

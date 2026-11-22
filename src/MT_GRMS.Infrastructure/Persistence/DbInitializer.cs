@@ -146,7 +146,6 @@ ON CONFLICT (""Id"") DO NOTHING;
         {
             await context.Database.ExecuteSqlRawAsync(@"
 ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchPackageId"" uuid NULL;
-ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchBatchId"" uuid NULL;
 ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierCodeSnapshot"" character varying(50) NULL;
 ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierNameSnapshot"" character varying(250) NULL;
 ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierEmailSnapshot"" character varying(200) NULL;
@@ -325,16 +324,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""Email"" character varying(150) NULL;
                 ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""ManagerName"" character varying(150) NULL;
                 ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""IsHeadquarter"" boolean NOT NULL DEFAULT false;
-                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""StandardDayHours"" numeric(4,2) NOT NULL DEFAULT 8.00;
-                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""IsConvertHoursToDays"" boolean NOT NULL DEFAULT true;
-                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""ConversionRulesJson"" text;
-                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""EnableLateThreshold"" boolean NOT NULL DEFAULT true;
-                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""LateThresholdMinutes"" integer NOT NULL DEFAULT 0;
-                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""EnableEarlyLeaveThreshold"" boolean NOT NULL DEFAULT true;
-                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""EarlyLeaveThresholdMinutes"" integer NOT NULL DEFAULT 0;
-                ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""IsAttendancePolicyCustomized"" boolean NOT NULL DEFAULT false;
             ");
-            logger?.LogInformation("[MT-GRMS] Đã đồng bộ các cột Email, ManagerName, IsHeadquarter, ConversionRulesJson cho bảng Branches.");
+            logger?.LogInformation("[MT-GRMS] Đã đồng bộ các cột Email, ManagerName, IsHeadquarter cho bảng Branches.");
         }
         catch (Exception ex)
         {
@@ -1178,18 +1169,6 @@ END $$;
         {
             if (context.Database.IsRelational())
             {
-                // Đảm bảo bảng __EFMigrationsHistory tồn tại
-                try
-                {
-                    await context.Database.ExecuteSqlRawAsync(@"
-                        CREATE TABLE IF NOT EXISTS ""__EFMigrationsHistory"" (
-                            ""MigrationId"" character varying(150) NOT NULL PRIMARY KEY,
-                            ""ProductVersion"" character varying(32) NOT NULL
-                        );
-                    ");
-                }
-                catch { }
-
                 // Sinh toàn bộ các bảng trong model nếu chưa tồn tại (chỉ chạy khi CSDL chưa có bảng nào)
                 var creator = context.Database.GetService<IDatabaseCreator>() as IRelationalDatabaseCreator;
                 if (creator != null)
@@ -1528,23 +1507,6 @@ END $$;
                     logger?.LogWarning(ex, "Cảnh báo khi chạy DDL nâng cấp Employees/EmployeeSchedules");
                 }
 
-                // 1. Bổ sung cột Chính sách chấm công Chi nhánh vào bảng Branches (gộp từ BranchAttendancePolicies)
-                try
-                {
-                    await context.Database.ExecuteSqlRawAsync(@"
-                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""StandardDayHours"" numeric(4,2) NOT NULL DEFAULT 8.00;
-                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""IsConvertHoursToDays"" boolean NOT NULL DEFAULT true;
-                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""ConversionRulesJson"" text;
-                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""EnableLateThreshold"" boolean NOT NULL DEFAULT true;
-                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""LateThresholdMinutes"" integer NOT NULL DEFAULT 0;
-                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""EnableEarlyLeaveThreshold"" boolean NOT NULL DEFAULT true;
-                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""EarlyLeaveThresholdMinutes"" integer NOT NULL DEFAULT 0;
-                        ALTER TABLE ""Branches"" ADD COLUMN IF NOT EXISTS ""IsAttendancePolicyCustomized"" boolean NOT NULL DEFAULT false;
-                        DROP TABLE IF EXISTS ""BranchAttendancePolicies"" CASCADE;
-                    ");
-                }
-                catch (Exception ex) { logger?.LogWarning(ex, "Branches AttendancePolicy DDL warning"); }
-
                 // 2. Bảng Danh mục ca làm việc (ShiftConfigs)
                 try
                 {
@@ -1820,9 +1782,6 @@ END $$;
                 }
                 catch (Exception ex) { logger?.LogWarning(ex, "HR Column Alter DDL warning"); }
 
-                // 9. Khóa ngoại liên kết
-                // Đã gộp BranchAttendancePolicies vào Branches (không còn FK riêng)
-
                 try
                 {
                     await EnsureSupplierDispatchSchemaAsync(context, logger);
@@ -1840,41 +1799,16 @@ END $$;
                     logger?.LogError(ex, "Lỗi khi chạy EnsureSupplierDispatchSchemaAsync / EnsureBranchColumnsAsync");
                 }
 
-                // Đánh dấu các migration hiện tại đã được áp dụng sau khi toàn bộ DDL đồng bộ đã hoàn tất
-                // Hai migration gộp phải chạy backfill trước khi được đánh dấu. Không nuốt lỗi:
-                // nếu dữ liệu cũ mâu thuẫn, khởi động cần dừng để chủ cửa hàng đối soát.
-                const string shiftMergeId = "20261118170000_MergeShiftParticipationIntoZReport";
-                const string financeMergeId = "20261118180000_ExpandFinancePaymentAccountMerge";
-                const string dropLegacyTablesId = "20261118190000_DropLegacyPaymentAccountTables";
-                var appliedMergeIds = await context.Database.SqlQueryRaw<string>(
-                    "SELECT \"MigrationId\" AS \"Value\" FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" IN ('20261118170000_MergeShiftParticipationIntoZReport', '20261118180000_ExpandFinancePaymentAccountMerge', '20261118190000_DropLegacyPaymentAccountTables')")
-                    .ToListAsync();
-                if (!appliedMergeIds.Contains(shiftMergeId))
+                await ApplyLegacyMergesAsync(context);
+                try
                 {
-                    var hasOldShiftTables = await context.Database.SqlQueryRaw<int>(
-                        "SELECT CASE WHEN to_regclass('\"ShiftParticipants\"') IS NULL THEN 0 ELSE 1 END AS \"Value\"")
-                        .SingleAsync();
-                    if (hasOldShiftTables == 1)
-                    {
-                        try { await context.Database.ExecuteSqlRawAsync(Migrations.MergeShiftParticipationIntoZReport.MergeSql); }
-                        catch (Exception ex) { throw new InvalidOperationException("MERGE_SCHEMA_FAILED: Không thể chuyển lịch sử chốt ca.", ex); }
-                    }
-                    await context.Database.ExecuteSqlRawAsync(
-                        "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({0}, '8.0.11') ON CONFLICT DO NOTHING;", shiftMergeId);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddExpenseVoucherDueDate.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddTaxFilingConfirmations.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchConversionRulesAndNotifications.UpSql);
                 }
-                if (!appliedMergeIds.Contains(financeMergeId))
+                catch (Exception ex)
                 {
-                    try { await context.Database.ExecuteSqlRawAsync(Migrations.ExpandFinancePaymentAccountMerge.MergeSql); }
-                    catch (Exception ex) { throw new InvalidOperationException("MERGE_SCHEMA_FAILED: Không thể chuyển tài khoản thanh toán cũ.", ex); }
-                    await context.Database.ExecuteSqlRawAsync(
-                        "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({0}, '8.0.11') ON CONFLICT DO NOTHING;", financeMergeId);
-                }
-                if (!appliedMergeIds.Contains(dropLegacyTablesId))
-                {
-                    try { await context.Database.ExecuteSqlRawAsync(Migrations.DropLegacyPaymentAccountTables.DropSql); }
-                    catch (Exception ex) { throw new InvalidOperationException("DROP_LEGACY_TABLES_FAILED: Không thể xóa các bảng tài khoản thanh toán cũ.", ex); }
-                    await context.Database.ExecuteSqlRawAsync(
-                        "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ({0}, '8.0.11') ON CONFLICT DO NOTHING;", dropLegacyTablesId);
+                    throw new InvalidOperationException("MERGE_SCHEMA_FAILED: Không thể nâng cấp schema phiếu chi, hồ sơ thuế, chi nhánh và thông báo.", ex);
                 }
                 try
                 {
@@ -1903,27 +1837,6 @@ END $$;
 
         if (context.Database.IsNpgsql())
         {
-            await context.Database.ExecuteSqlRawAsync("""
-                ALTER TABLE "Branches" ADD COLUMN IF NOT EXISTS "ConversionRulesJson" text;
-
-                CREATE TABLE IF NOT EXISTS "Notifications" (
-                    "Id" uuid PRIMARY KEY,
-                    "TenantId" varchar(50) NOT NULL,
-                    "RecipientUserId" varchar(64) NOT NULL,
-                    "Type" varchar(50) NOT NULL,
-                    "Title" varchar(200) NOT NULL,
-                    "Message" varchar(500) NOT NULL,
-                    "ActionUrl" varchar(300),
-                    "IsRead" boolean NOT NULL DEFAULT false,
-                    "ReadAtUtc" timestamp without time zone,
-                    "CreatedAt" timestamp without time zone NOT NULL,
-                    "UpdatedAt" timestamp without time zone,
-                    "CreatedBy" uuid,
-                    "IsDeleted" boolean NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS "IX_Notifications_TenantId_RecipientUserId_IsRead_CreatedAt"
-                    ON "Notifications" ("TenantId", "RecipientUserId", "IsRead", "CreatedAt");
-                """);
             await WalletTopupSchemaMigration.ApplyAsync(context);
         }
 
@@ -1939,6 +1852,73 @@ END $$;
         await SeedDemoAsync(context);
         logger?.LogInformation("Scenario demo seed completed in {ElapsedMilliseconds} ms.", seedTimer.ElapsedMilliseconds);
     }
+
+    internal static async Task ApplyLegacyMergesAsync(AppDbContext context)
+    {
+        const string shiftMergeId = "20261118170000_MergeShiftParticipationIntoZReport";
+        const string financeMergeId = "20261118180000_ExpandFinancePaymentAccountMerge";
+        const string dropLegacyTablesId = "20261118190000_DropLegacyPaymentAccountTables";
+
+        await using var transaction = await context.Database.BeginTransactionAsync();
+        try
+        {
+            await context.Database.ExecuteSqlRawAsync("""
+                SELECT pg_advisory_xact_lock(164711, 2);
+                CREATE TABLE IF NOT EXISTS "__EFMigrationsHistory" (
+                    "MigrationId" varchar(150) NOT NULL PRIMARY KEY,
+                    "ProductVersion" varchar(32) NOT NULL
+                );
+                """);
+            var applied = await context.Database.GetAppliedMigrationsAsync();
+            if (!applied.Contains(shiftMergeId))
+            {
+                if (await HasLegacyTablesAsync(context, "ShiftParticipants", "ShiftCloseConfirmations"))
+                    await context.Database.ExecuteSqlRawAsync(Migrations.MergeShiftParticipationIntoZReport.MergeSql);
+                await RecordMigrationAsync(context, shiftMergeId);
+            }
+
+            if (!applied.Contains(financeMergeId))
+            {
+                if (await HasLegacyTablesAsync(context, "StorePaymentConfigs", "PaymentAccounts", "BranchPaymentAccounts"))
+                    await context.Database.ExecuteSqlRawAsync(Migrations.ExpandFinancePaymentAccountMerge.MergeSql);
+                await RecordMigrationAsync(context, financeMergeId);
+            }
+
+            if (!applied.Contains(dropLegacyTablesId))
+            {
+                await context.Database.ExecuteSqlRawAsync(Migrations.DropLegacyPaymentAccountTables.DropSql);
+                await RecordMigrationAsync(context, dropLegacyTablesId);
+            }
+
+            if (!applied.Contains(Migrations.MergeBranchAttendancePoliciesIntoBranches.MigrationId))
+            {
+                await context.Database.ExecuteSqlRawAsync(Migrations.MergeBranchAttendancePoliciesIntoBranches.UpSql);
+                await RecordMigrationAsync(context, Migrations.MergeBranchAttendancePoliciesIntoBranches.MigrationId);
+            }
+
+            await transaction.CommitAsync();
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException("MERGE_SCHEMA_FAILED: Không thể chuyển dữ liệu chốt ca, tài khoản thanh toán hoặc chính sách chấm công cũ.", ex);
+        }
+    }
+
+    private static async Task<bool> HasLegacyTablesAsync(AppDbContext context, params string[] names)
+    {
+        var count = await context.Database.SqlQuery<int>($"""
+            SELECT count(*)::int AS "Value" FROM information_schema.tables
+            WHERE table_schema = current_schema() AND table_type = 'BASE TABLE' AND table_name = ANY({names})
+            """).SingleAsync();
+        if (count == 0) return false;
+        if (count != names.Length)
+            throw new InvalidOperationException($"Nhóm bảng cũ chưa đầy đủ: {string.Join(", ", names)}.");
+        return true;
+    }
+
+    private static Task<int> RecordMigrationAsync(AppDbContext context, string id) => context.Database.ExecuteSqlInterpolatedAsync($"""
+        INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion") VALUES ({id}, '8.0.11') ON CONFLICT DO NOTHING;
+        """);
 
     private record Scenario(string Key, string Name, string? Plan, int Branches, string State, int DaysLeft);
     private static readonly Scenario[] Scenarios =

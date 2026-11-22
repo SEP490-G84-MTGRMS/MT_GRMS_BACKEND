@@ -40,7 +40,6 @@ public class PnLReportControllerTests
             GrossProfit: grossRevenue - cogs,
             GrossMarginPercentage: 40.0m,
             OperatingExpenses: new OperatingExpenseSummary(10_000_000m, new List<CategoryExpenseBreakdown>()),
-            BadDebtExpense: 0m,
             NetProfit: netProfit,
             NetMarginPercentage: 30.0m);
     }

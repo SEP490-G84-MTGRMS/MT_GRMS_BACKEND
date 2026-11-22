@@ -79,6 +79,10 @@ public class BusinessDayClosingService : IBusinessDayClosingService
         var localStart = businessDate.ToDateTime(TimeOnly.FromTimeSpan(startTime), DateTimeKind.Unspecified);
         var periodStartUtc = DateTime.SpecifyKind(localStart.AddHours(-7), DateTimeKind.Utc);
         var periodEndUtc = periodStartUtc.AddDays(1);
+        var safeReturnRefunds = await _repository.GetSafeRefundsAsync(tenantId, branchId, periodStartUtc, periodEndUtc, cancellationToken);
+        var shiftReturnRefunds = shifts.SelectMany(s => s.CashMovements)
+            .Where(m => IsEffectiveOut(m) && m.Category == CashMovementCategory.RETURN_REFUND)
+            .Sum(m => m.Amount);
         var tokenSource = string.Join('|', shifts.OrderBy(s => s.Id).Select(s =>
                 $"S:{s.Id}:{s.Status}:{s.HandoverStatus}:{s.CashbookPostingStatus}:{s.SnapshotLocked}:{s.TotalCashSales}:{s.TotalBankRevenue}:{s.RetainedFloatAmount}:{s.DroppedToSafeAmount}:{s.UpdatedAt:O}"))
             + "|" + string.Join('|', shifts.SelectMany(s => s.CashMovements).OrderBy(m => m.Id).Select(m =>
@@ -96,7 +100,7 @@ public class BusinessDayClosingService : IBusinessDayClosingService
             cashIn, cashOut,
             shifts.Sum(s => s.RetainedFloatAmount),
             shifts.Sum(s => s.DroppedToSafeAmount),
-            fundDtos, blockers, previewToken);
+            fundDtos, blockers, previewToken, safeReturnRefunds, shiftReturnRefunds);
     }
 
     public async Task<BusinessDayClosingResponse> CloseAsync(CloseBusinessDayRequest request, CancellationToken cancellationToken = default)
@@ -230,7 +234,8 @@ public class BusinessDayClosingService : IBusinessDayClosingService
         return new BusinessDayClosingResponse(closing.Id, closing.BranchId, closing.BusinessDate, closing.Status.ToString(),
             closing.TotalShifts, closing.TotalOrders, closing.TotalCashSales, closing.TotalBankSales,
             ownerCash, ownerBank, cashIn, cashOut, closing.TotalRetainedFloat, closing.TotalDroppedToSafe,
-            expectedCash, actualCashCounted, discrepancy, reference, now);
+            expectedCash, actualCashCounted, discrepancy, reference, now,
+            currentPreview.SafeReturnRefunds, currentPreview.ShiftReturnRefunds);
     }
 
     public async Task<IReadOnlyList<BusinessDayClosingVersionResponse>> GetHistoryAsync(

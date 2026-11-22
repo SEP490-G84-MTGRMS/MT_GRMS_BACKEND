@@ -17,7 +17,7 @@ namespace MT_GRMS.UnitTests;
 public class MatrixExcelImportServiceTests
 {
     private static readonly DateTime TargetDeliveryDate =
-        OrderMatrixRules.GetEarliestAllowedDeliveryDate(OrderMatrixRules.GetVietnamNow()).AddDays(1);
+        OrderMatrixRules.GetVietnamNow().Date.AddDays(1);
 
     private static MemoryStream BuildSampleWorkbook(
         Guid branchId,

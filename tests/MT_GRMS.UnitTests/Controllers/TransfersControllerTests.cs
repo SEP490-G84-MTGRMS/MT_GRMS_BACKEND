@@ -33,16 +33,22 @@ public class TransfersControllerTests
             ToBranchId: Guid.NewGuid(),
             ToBranchName: "Branch 2",
             Status: "Draft",
+            CompletionResult: null,
+            Origin: "OwnerAllocation",
+            Priority: "Normal",
             CreatedAt: DateTime.UtcNow,
+            SubmittedAt: null,
             DispatchedAt: null,
             ReceivedAt: null,
             ExpectedDeliveryDate: null,
             CreatedBy: "User",
             TotalAmount: 1000m,
+            HasDiscrepancy: false,
             Note: null,
             DiscrepancyNote: null,
             CancelReason: null,
-            Items: new List<TransferLineDto>()
+            Items: [],
+            History: []
         );
     }
 

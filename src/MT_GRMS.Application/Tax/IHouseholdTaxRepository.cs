@@ -16,6 +16,7 @@ public interface IHouseholdTaxRepository
     Task<List<AccountingBookEntryDto>> GetBookEntriesAsync(DateTime fromDateUtc, DateTime toDateUtc, Guid? branchId, HouseholdTaxGroup group, TaxCalculationMethod method, AccountingBookType? bookType, CancellationToken cancellationToken = default);
     Task<HouseholdTaxSnapshot?> GetSnapshotAsync(int year, TaxPeriodType periodType, int periodNumber, Guid? branchId, CancellationToken cancellationToken = default);
     Task<HouseholdTaxSnapshot?> GetSnapshotByIdAsync(Guid id, CancellationToken cancellationToken = default);
+    Task<HouseholdTaxSnapshot?> GetSnapshotForUpdateAsync(Guid id, CancellationToken cancellationToken = default);
     Task<List<HouseholdTaxSnapshot>> GetSnapshotsAsync(int? year, Guid? branchId, CancellationToken cancellationToken = default);
     Task<HouseholdTaxSnapshot> AddSnapshotAsync(HouseholdTaxSnapshot snapshot, CancellationToken cancellationToken = default);
     Task UpdateSnapshotAsync(HouseholdTaxSnapshot snapshot, CancellationToken cancellationToken = default);

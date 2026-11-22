@@ -54,6 +54,11 @@ public class RepackRepository : IRepackRepository
     public Task<Package?> GetPackageByIdAsync(string tenantId, Guid packageId, CancellationToken ct = default)
         => _db.Packages.FirstOrDefaultAsync(p => p.Id == packageId && p.TenantId == tenantId && !p.IsDeleted, ct);
 
+    public Task<Package?> FindPackageByCodeAsync(string tenantId, Guid branchId, string code, CancellationToken ct = default)
+        => _db.Packages.AsNoTracking()
+            .FirstOrDefaultAsync(p => p.TenantId == tenantId && p.BranchId == branchId && !p.IsDeleted
+                && (p.InternalCode == code || p.Barcode == code), ct);
+
     public Task<int> CountPackagesCreatedTodayAsync(string tenantId, DateTime utcDate, CancellationToken ct = default)
     {
         var start = utcDate.Date;

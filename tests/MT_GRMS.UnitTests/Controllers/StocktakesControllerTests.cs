@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Security.Claims;
+using Microsoft.AspNetCore.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Moq;
 using MT_GRMS.Api.Controllers;
 using MT_GRMS.Application.Common;
@@ -21,7 +24,15 @@ public class StocktakesControllerTests
     public StocktakesControllerTests()
     {
         _mockService = new Mock<IStocktakeService>();
-        _controller = new StocktakesController(_mockService.Object);
+        var tenant = new Mock<ITenantContext>();
+        tenant.SetupGet(value => value.CurrentTenantId).Returns("test-tenant");
+        var authorization = new Mock<IAuthorizationService>();
+        authorization.Setup(service => service.AuthorizeAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<object>(), "TenantOwnerOrAssignedBranchStaff"))
+            .ReturnsAsync(AuthorizationResult.Success());
+        _controller = new StocktakesController(_mockService.Object, tenant.Object, authorization.Object)
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
     }
 
     private static StocktakeDetailDto CreateDetailDto(Guid id, string status = "DRAFT")
@@ -97,6 +108,7 @@ public class StocktakesControllerTests
         var id = Guid.NewGuid();
         var cmd = new UpdateStocktakeCommand("ANOMALY", "Cập nhật", new List<StocktakeLineInputDto>());
         var dto = CreateDetailDto(id);
+        _mockService.Setup(s => s.GetByIdAsync(id, It.IsAny<CancellationToken>())).ReturnsAsync(CreateDetailDto(id));
         _mockService.Setup(s => s.UpdateAsync(id, cmd, It.IsAny<CancellationToken>()))
             .ReturnsAsync(dto);
 
@@ -147,6 +159,7 @@ public class StocktakesControllerTests
         var id = Guid.NewGuid();
         var cmd = new CreateReturnFromStocktakeCommand(Guid.NewGuid(), "EXCHANGE", "Hàng lỗi", null, new());
         var returns = new List<SupplierReturnDetailDto>();
+        _mockService.Setup(s => s.GetByIdAsync(id, It.IsAny<CancellationToken>())).ReturnsAsync(CreateDetailDto(id));
         _mockService.Setup(s => s.CreateReturnFromStocktakeAsync(id, cmd, It.IsAny<CancellationToken>()))
             .ReturnsAsync(returns);
 

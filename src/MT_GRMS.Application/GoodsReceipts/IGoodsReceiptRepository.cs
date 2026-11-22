@@ -22,6 +22,13 @@ public interface IGoodsReceiptRepository
     Task<PurchaseOrder?> GetPurchaseOrderByCodeWithDetailsAsync(string tenantId, string poCode, CancellationToken cancellationToken = default);
     Task<GoodsReceipt?> GetActiveReceiptByPoIdAsync(string tenantId, Guid poId, CancellationToken cancellationToken = default);
     Task<BranchStock?> GetBranchStockAsync(string tenantId, Guid branchId, Guid productId, string? batchCode, CancellationToken cancellationToken = default);
+    async Task<BranchStock?> GetBranchStockByIdAsync(string tenantId, Guid branchId, Guid productId, Guid branchStockId, CancellationToken cancellationToken = default)
+    {
+        var stock = await GetBranchStockAsync(tenantId, branchId, productId, null, cancellationToken);
+        return stock?.Id == branchStockId ? stock : null;
+    }
+    Task<decimal> GetActivePackageWeightAsync(string tenantId, Guid branchStockId, CancellationToken cancellationToken = default)
+        => Task.FromResult(0m);
     Task AddBranchStockAsync(BranchStock stock, CancellationToken cancellationToken = default);
     Task<IReadOnlyDictionary<Guid, Product>> GetProductsByIdsAsync(
         IReadOnlyCollection<Guid> productIds,

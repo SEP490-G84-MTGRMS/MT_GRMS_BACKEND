@@ -210,7 +210,14 @@ public class OrderAndInventoryBranchCoverageTests
         var printMock = new Mock<IThermalPrintService>();
 
         var branchId = tenantContext.CurrentBranchId!.Value;
-        orderRepo.Branches.Add(new Branch { Id = branchId, TenantId = tenantContext.CurrentTenantId, Name = "Branch 1" });
+        var bankAccountId = Guid.NewGuid();
+        orderRepo.Branches.Add(new Branch
+        {
+            Id = branchId,
+            TenantId = tenantContext.CurrentTenantId,
+            Name = "Branch 1",
+            CurrentBankFinanceAccountId = bankAccountId
+        });
 
         var p1 = new Product { Id = Guid.NewGuid(), TenantId = tenantContext.CurrentTenantId, Name = "P1", BaseUnit = "Cai", SellingPrice = 50000m };
         var p2 = new Product { Id = Guid.NewGuid(), TenantId = tenantContext.CurrentTenantId, Name = "P2", BaseUnit = "Cai", SellingPrice = 50000m };
@@ -243,6 +250,7 @@ public class OrderAndInventoryBranchCoverageTests
         var res = await orderService.CreateOrderAsync(req);
         Assert.NotNull(res);
         Assert.Equal("PENDING_PAYMENT", res.PaymentStatus);
+        Assert.Equal(bankAccountId, Assert.Single(orderRepo.Orders).FinanceAccountId);
         Assert.True(res.AppliedPromotionSummary?.Length <= 300);
     }
 
