@@ -444,7 +444,7 @@ public class SuppliersController : BaseApiController
     [RequestSizeLimit(10_000_000)]
     public async Task<IActionResult> ImportSupplierProducts(
         Guid id,
-        [FromForm] IFormFile? file,
+        IFormFile? file,
         [FromQuery] SupplierProductQueryFilter filter,
         [FromServices] ISupplierProductExcelService excelService,
         CancellationToken cancellationToken)

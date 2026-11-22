@@ -31,13 +31,17 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructureServices(
         this IServiceCollection services,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        bool allowInMemory = true)
     {
         var connectionString = Environment.GetEnvironmentVariable("DB_CONNECTION_STRING")
             ?? Environment.GetEnvironmentVariable("DATABASE_URL")
             ?? configuration["DATABASE_URL"]
             ?? configuration.GetConnectionString("DefaultConnection")
             ?? Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection");
+
+        if (!allowInMemory && string.IsNullOrWhiteSpace(connectionString))
+            throw new InvalidOperationException("PostgreSQL connection is required in Production.");
 
         if (!string.IsNullOrWhiteSpace(connectionString) &&
             (connectionString.StartsWith("postgres://") || connectionString.StartsWith("postgresql://")))

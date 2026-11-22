@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using Moq;
 using MT_GRMS.Api.Controllers;
 using MT_GRMS.Application.Common;
@@ -23,7 +24,12 @@ public class OrdersControllerTests
     public OrdersControllerTests()
     {
         _mockOrderService = new Mock<IOrderService>();
-        _controller = new OrdersController(_mockOrderService.Object)
+        var tenant = new Mock<ITenantContext>();
+        tenant.SetupGet(value => value.CurrentTenantId).Returns("test-tenant");
+        var authorization = new Mock<IAuthorizationService>();
+        authorization.Setup(service => service.AuthorizeAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<object>(), "TenantOwnerOrAssignedBranchStaff"))
+            .ReturnsAsync(AuthorizationResult.Success());
+        _controller = new OrdersController(_mockOrderService.Object, tenant.Object, authorization.Object)
         {
             ControllerContext = new ControllerContext
             {
@@ -148,6 +154,8 @@ public class OrdersControllerTests
     public async Task FulfillPreOrder_ShouldHandleSuccess_AndExceptions()
     {
         var id = Guid.NewGuid();
+        _mockOrderService.Setup(service => service.GetOrderByIdAsync(id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateTestOrder(id));
         var request = new PreOrderFulfillRequest("Cash", 50_000m);
         var order = CreateTestOrder(id);
 
@@ -170,6 +178,8 @@ public class OrdersControllerTests
     public async Task CancelOrder_ShouldHandleSuccess_AndExceptions()
     {
         var id = Guid.NewGuid();
+        _mockOrderService.Setup(service => service.GetOrderByIdAsync(id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateTestOrder(id));
         var request = new CancelOrderRequest("Khach doi y");
         var order = CreateTestOrder(id);
 
@@ -192,6 +202,8 @@ public class OrdersControllerTests
     public async Task ReturnExchange_ShouldHandleSuccess_AndExceptions()
     {
         var id = Guid.NewGuid();
+        _mockOrderService.Setup(service => service.GetOrderByIdAsync(id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateTestOrder(id));
         var request = new ReturnExchangeRequest(new List<ReturnItemDto>(), new List<OrderItemCreateDto>(), "Cash", "Reason", "Notes");
         var order = CreateTestOrder(id);
 
@@ -235,6 +247,8 @@ public class OrdersControllerTests
     public async Task PrintOrder_ShouldHandleSuccess_NotPrinted_AndExceptions()
     {
         var id = Guid.NewGuid();
+        _mockOrderService.Setup(service => service.GetOrderByIdAsync(id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateTestOrder(id));
         var printReq = new PrintOrderRequest("POS-58");
 
         // Success
@@ -371,6 +385,8 @@ public class OrdersControllerTests
     public async Task GetReceiptBytes_ShouldHandleSuccess_AndExceptions()
     {
         var id = Guid.NewGuid();
+        _mockOrderService.Setup(service => service.GetOrderByIdAsync(id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateTestOrder(id));
         var bytes = new byte[] { 0x1B, 0x40, 0x0A };
 
         _mockOrderService

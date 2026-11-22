@@ -331,16 +331,30 @@ public class WalletServiceTests
         var tenant = new Tenant { Id = "tenant-001", Name = "Store", Code = "ST1", WalletBalance = 50000 };
         context.Tenants.Add(tenant);
 
-        var pendingExpiredOrder = new WalletTopupOrder
+        var pendingExpiredOrder = new WalletTransaction
         {
             TenantId = "tenant-001",
+            TransactionCode = "WAL-ORDER-111222",
+            Type = "TOPUP",
             OrderCode = "111222",
             Amount = 100000,
+            RequestedAmount = 100000,
             TransferContent = "WAL 111222",
             Status = "PENDING",
-            ExpiresAt = DateTime.UtcNow.AddMinutes(-5) // Expired
+            ExpiresAt = DateTime.UtcNow.AddMinutes(-5)
         };
-        context.WalletTopupOrders.Add(pendingExpiredOrder);
+        var completedAt = DateTime.UtcNow.AddMinutes(-1);
+        context.WalletTransactions.AddRange(pendingExpiredOrder, new WalletTransaction
+        {
+            TenantId = tenant.Id,
+            TransactionCode = "WAL-ORDER-333444",
+            Type = "TOPUP",
+            OrderCode = "333444",
+            Amount = 80_000m,
+            RequestedAmount = 75_000m,
+            Status = "SUCCESS",
+            CompletedAt = completedAt
+        });
         await context.SaveChangesAsync();
 
         var service = new WalletService(context, CreateDefaultSettings());
@@ -354,9 +368,12 @@ public class WalletServiceTests
         Assert.NotNull(expired);
         Assert.Equal("EXPIRED", expired.Status);
 
-        // Unknown tenantId fallback
-        var withNoTenant = await service.GetTopupOrderStatusAsync("unknown", "111222");
-        Assert.NotNull(withNoTenant);
+        var completed = await service.GetTopupOrderStatusAsync("tenant-001", "333444");
+        Assert.NotNull(completed);
+        Assert.Equal("COMPLETED", completed.Status);
+        Assert.Equal(80_000m, completed.Amount);
+        Assert.Equal(completedAt, completed.CompletedAt);
+        Assert.Null(await service.GetTopupOrderStatusAsync("unknown", "111222"));
     }
 
     [Fact]

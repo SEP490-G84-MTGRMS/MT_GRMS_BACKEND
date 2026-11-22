@@ -251,64 +251,67 @@ public class ExpenseService : IExpenseService
     {
         RequireOwner();
 
-        var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
-            ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
-
-        if (_taxPeriodLockGuard != null)
+        return await _unitOfWork.ExecuteInTransactionAsync(async token =>
         {
-            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(voucher.ExpenseDate, "hủy phiếu chi", voucher.BranchId, ct);
-        }
+            var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, token)
+                ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
-        if (string.IsNullOrWhiteSpace(request.Reason))
-        {
-            throw new BusinessException("REASON_REQUIRED", "Bắt buộc phải nhập lý do khi hủy phiếu chi.");
-        }
-
-        if (voucher.Status == ExpenseVoucherStatus.Paid)
-        {
-            // Bút toán đảo (Reversal Entry): Hoàn tiền lại vào tài khoản nguồn
-            if (!voucher.PaymentSourceAccountId.HasValue)
+            if (_taxPeriodLockGuard != null)
             {
-                throw new BusinessException("MISSING_PAYMENT_SOURCE", "Phiếu chi thiếu thông tin tài khoản nguồn để thực hiện bút toán đảo hoàn tiền.");
+                await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(voucher.ExpenseDate, "hủy phiếu chi", voucher.BranchId, token);
             }
 
-            var reversalRefCode = "REV-" + voucher.VoucherCode;
-            var reversalDesc = $"Bút toán đảo: Hoàn tiền phiếu chi {voucher.VoucherCode} đã thanh toán do bị hủy - Lý do: {request.Reason.Trim()}";
+            if (string.IsNullOrWhiteSpace(request.Reason))
+            {
+                throw new BusinessException("REASON_REQUIRED", "Bắt buộc phải nhập lý do khi hủy phiếu chi.");
+            }
 
-            await _cashbookService.ReceiveCashAsync(
-                voucher.PaymentSourceAccountId.Value,
-                voucher.PaymentSourceType,
-                voucher.Amount,
-                "EXPENSE_REVERSAL",
-                voucher.Id,
-                reversalRefCode,
-                reversalDesc,
-                ct
-            );
+            if (voucher.Status == ExpenseVoucherStatus.Paid)
+            {
+                // Bút toán đảo (Reversal Entry): Hoàn tiền lại vào tài khoản nguồn
+                if (!voucher.PaymentSourceAccountId.HasValue)
+                {
+                    throw new BusinessException("MISSING_PAYMENT_SOURCE", "Phiếu chi thiếu thông tin tài khoản nguồn để thực hiện bút toán đảo hoàn tiền.");
+                }
 
-            voucher.Status = ExpenseVoucherStatus.Reversed;
-            voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
-                ? $"[ĐÃ ĐẢO BÚT TOÁN HOÀN TIỀN]: {request.Reason.Trim()}"
-                : $"{voucher.Note} | [ĐÃ ĐẢO BÚT TOÁN HOÀN TIỀN]: {request.Reason.Trim()}";
-        }
-        else if (voucher.Status == ExpenseVoucherStatus.Draft ||
-                 voucher.Status == ExpenseVoucherStatus.PendingApproval ||
-                 voucher.Status == ExpenseVoucherStatus.Approved ||
-                 voucher.Status == ExpenseVoucherStatus.PaymentFailed ||
-                 voucher.Status == ExpenseVoucherStatus.Unresolved)
-        {
-            voucher.Status = ExpenseVoucherStatus.Cancelled;
-            voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
-                ? $"[ĐÃ HỦY]: {request.Reason.Trim()}"
-                : $"{voucher.Note} | [ĐÃ HỦY]: {request.Reason.Trim()}";
-        }
-        else
-        {
-            throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể hủy.");
-        }
+                var reversalRefCode = "REV-" + voucher.VoucherCode;
+                var reversalDesc = $"Bút toán đảo: Hoàn tiền phiếu chi {voucher.VoucherCode} đã thanh toán do bị hủy - Lý do: {request.Reason.Trim()}";
 
-        await _unitOfWork.SaveChangesAsync(ct);
-        return MapVoucherResponse(voucher);
+                await _cashbookService.ReceiveCashAsync(
+                    voucher.PaymentSourceAccountId.Value,
+                    voucher.PaymentSourceType,
+                    voucher.Amount,
+                    "EXPENSE_REVERSAL",
+                    voucher.Id,
+                    reversalRefCode,
+                    reversalDesc,
+                    token
+                );
+
+                voucher.Status = ExpenseVoucherStatus.Reversed;
+                voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
+                    ? $"[ĐÃ ĐẢO BÚT TOÁN HOÀN TIỀN]: {request.Reason.Trim()}"
+                    : $"{voucher.Note} | [ĐÃ ĐẢO BÚT TOÁN HOÀN TIỀN]: {request.Reason.Trim()}";
+            }
+            else if (voucher.Status == ExpenseVoucherStatus.Draft ||
+                     voucher.Status == ExpenseVoucherStatus.PendingApproval ||
+                     voucher.Status == ExpenseVoucherStatus.Approved ||
+                     voucher.Status == ExpenseVoucherStatus.PaymentFailed ||
+                     voucher.Status == ExpenseVoucherStatus.Unresolved)
+            {
+                voucher.Status = ExpenseVoucherStatus.Cancelled;
+                voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
+                    ? $"[ĐÃ HỦY]: {request.Reason.Trim()}"
+                    : $"{voucher.Note} | [ĐÃ HỦY]: {request.Reason.Trim()}";
+            }
+            else
+            {
+                throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể hủy.");
+            }
+
+            await _unitOfWork.SaveChangesAsync(token);
+            return MapVoucherResponse(voucher);
+        }, ct);
     }
 
     public async Task<ExpenseVoucherResponse> DisburseExpenseAsync(DisburseExpenseRequest request, CancellationToken ct = default)
@@ -316,77 +319,85 @@ public class ExpenseService : IExpenseService
         RequireOwner();
         ValidateFinancialManagementRole("xuất quỹ chi trả phiếu chi");
 
-        var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, ct)
-            ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
-
-        if (_taxPeriodLockGuard != null)
+        var result = await _unitOfWork.ExecuteInTransactionAsync(async token =>
         {
-            await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(voucher.ExpenseDate, "chi tiền cho phiếu chi", voucher.BranchId, ct);
-        }
+            var voucher = await _expenseRepo.GetByIdAsync(request.ExpenseId, token)
+                ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
-        // Idempotent: Nếu đã xuất quỹ thành công từ trước thì trả về luôn không thực hiện trừ quỹ kép
-        if (voucher.Status == ExpenseVoucherStatus.Paid)
-        {
-            return MapVoucherResponse(voucher);
-        }
-
-        // Tự động phê duyệt cho Chủ cửa hàng / Quản lý nếu phiếu đang ở Draft, PendingApproval hoặc Unresolved (1-click payment flow)
-        if (voucher.Status == ExpenseVoucherStatus.Draft ||
-            voucher.Status == ExpenseVoucherStatus.PendingApproval ||
-            voucher.Status == ExpenseVoucherStatus.Unresolved)
-        {
-            if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note) && string.IsNullOrWhiteSpace(voucher.Note))
+            if (_taxPeriodLockGuard != null)
             {
-                throw new BusinessException("NOTE_REQUIRED_FOR_SUSPICIOUS_EXPENSE", "Phiếu chi bị gắn cờ nghi vấn xé nhỏ hạn mức. Bắt buộc nhập ghi chú giải trình khi phê duyệt và xuất quỹ.");
+                await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(voucher.ExpenseDate, "chi tiền cho phiếu chi", voucher.BranchId, token);
             }
 
-            voucher.Status = ExpenseVoucherStatus.Approved;
-            voucher.ApprovedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId : Guid.NewGuid();
-            voucher.ApprovedAtUtc = DateTime.UtcNow;
-        }
-        else if (voucher.Status != ExpenseVoucherStatus.Approved && voucher.Status != ExpenseVoucherStatus.PaymentFailed)
-        {
-            throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể xuất quỹ chi trả.");
-        }
+            // Idempotent: Nếu đã xuất quỹ thành công từ trước thì trả về luôn không thực hiện trừ quỹ kép
+            if (voucher.Status == ExpenseVoucherStatus.Paid)
+            {
+                return (Voucher: MapVoucherResponse(voucher), Failure: (InsufficientStockException?)null);
+            }
 
-        // Cập nhật/bổ sung ghi chú giải trình hoặc thanh toán nếu có (áp dụng cho mọi trường hợp xuất quỹ)
-        if (!string.IsNullOrWhiteSpace(request.Note))
-        {
-            voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
-                ? request.Note.Trim()
-                : $"{voucher.Note} | {request.Note.Trim()}";
-        }
+            // Tự động phê duyệt cho Chủ cửa hàng / Quản lý nếu phiếu đang ở Draft, PendingApproval hoặc Unresolved (1-click payment flow)
+            if (voucher.Status == ExpenseVoucherStatus.Draft ||
+                voucher.Status == ExpenseVoucherStatus.PendingApproval ||
+                voucher.Status == ExpenseVoucherStatus.Unresolved)
+            {
+                if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note) && string.IsNullOrWhiteSpace(voucher.Note))
+                {
+                    throw new BusinessException("NOTE_REQUIRED_FOR_SUSPICIOUS_EXPENSE", "Phiếu chi bị gắn cờ nghi vấn xé nhỏ hạn mức. Bắt buộc nhập ghi chú giải trình khi phê duyệt và xuất quỹ.");
+                }
 
-        voucher.PaymentSourceType = request.PaymentSourceType;
-        voucher.PaymentSourceAccountId = request.PaymentSourceAccountId;
+                voucher.Status = ExpenseVoucherStatus.Approved;
+                voucher.ApprovedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId : Guid.NewGuid();
+                voucher.ApprovedAtUtc = DateTime.UtcNow;
+            }
+            else if (voucher.Status != ExpenseVoucherStatus.Approved && voucher.Status != ExpenseVoucherStatus.PaymentFailed)
+            {
+                throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể xuất quỹ chi trả.");
+            }
 
-        try
-        {
-            await _cashbookService.DisburseCashAsync(
-                request.PaymentSourceAccountId,
-                request.PaymentSourceType,
-                voucher.Amount,
-                "EXPENSE",
-                voucher.Id,
-                voucher.VoucherCode,
-                $"Chi phí: {voucher.Category} - {voucher.BeneficiaryName}",
-                ct
-            );
+            // Cập nhật/bổ sung ghi chú giải trình hoặc thanh toán nếu có (áp dụng cho mọi trường hợp xuất quỹ)
+            if (!string.IsNullOrWhiteSpace(request.Note))
+            {
+                voucher.Note = string.IsNullOrWhiteSpace(voucher.Note)
+                    ? request.Note.Trim()
+                    : $"{voucher.Note} | {request.Note.Trim()}";
+            }
 
-            voucher.Status = ExpenseVoucherStatus.Paid;
-            voucher.PaidAtUtc = DateTime.UtcNow;
-            await _unitOfWork.SaveChangesAsync(ct);
-        }
-        catch (InsufficientStockException)
-        {
-            if (voucher.Status != ExpenseVoucherStatus.PaymentFailed)
-                await QueueNotificationAsync(voucher, BusinessNotificationTypes.ExpensePaymentFailed, "Phiếu chi chưa xuất được quỹ", ct);
-            voucher.Status = ExpenseVoucherStatus.PaymentFailed;
-            await _unitOfWork.SaveChangesAsync(ct);
-            throw;
-        }
+            voucher.PaymentSourceType = request.PaymentSourceType;
+            voucher.PaymentSourceAccountId = request.PaymentSourceAccountId;
 
-        return MapVoucherResponse(voucher);
+            try
+            {
+                await _cashbookService.DisburseCashAsync(
+                    request.PaymentSourceAccountId,
+                    request.PaymentSourceType,
+                    voucher.Amount,
+                    "EXPENSE",
+                    voucher.Id,
+                    voucher.VoucherCode,
+                    $"Chi phí: {voucher.Category} - {voucher.BeneficiaryName}",
+                    token
+                );
+
+                voucher.Status = ExpenseVoucherStatus.Paid;
+                voucher.PaidAtUtc = DateTime.UtcNow;
+            }
+            catch (InsufficientStockException failure)
+            {
+                if (voucher.Status != ExpenseVoucherStatus.PaymentFailed)
+                    await QueueNotificationAsync(voucher, BusinessNotificationTypes.ExpensePaymentFailed, "Phiếu chi chưa xuất được quỹ", token);
+                voucher.Status = ExpenseVoucherStatus.PaymentFailed;
+                await _unitOfWork.SaveChangesAsync(token);
+                return (Voucher: MapVoucherResponse(voucher), Failure: failure);
+            }
+
+            await _unitOfWork.SaveChangesAsync(token);
+            return (Voucher: MapVoucherResponse(voucher), Failure: (InsufficientStockException?)null);
+        }, ct);
+
+        if (result.Failure != null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(result.Failure);
+
+        return result.Voucher;
     }
 
     private Task QueueNotificationAsync(ExpenseVoucher voucher, string type, string title, CancellationToken ct) =>

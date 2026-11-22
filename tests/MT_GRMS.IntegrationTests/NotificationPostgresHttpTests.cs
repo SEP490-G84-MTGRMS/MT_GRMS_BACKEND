@@ -59,6 +59,7 @@ public class NotificationPostgresHttpTests(ITestOutputHelper output)
     private const string TenantId = "notification-http-test";
     private const string DueDateMigration = "20261122000000_AddExpenseVoucherDueDate";
     private const string FilingMigration = "20261122010000_AddTaxFilingConfirmations";
+    private const string BranchAndNotificationMigration = "20261122020000_AddBranchConversionRulesAndNotifications";
 
     [NotificationPostgresFact]
     public async Task MigrationsAndTransferNotifications_WorkThroughPostgresRestAndSignalR()
@@ -121,12 +122,14 @@ public class NotificationPostgresHttpTests(ITestOutputHelper output)
                 Assert.Equal(schema, await db.Database.SqlQueryRaw<string>("SELECT current_schema() AS \"Value\"").SingleAsync(ct));
                 await db.Database.ExecuteSqlRawAsync(db.Database.GenerateCreateScript(), ct);
                 var migrator = db.GetService<IMigrator>();
-                // Start from the model's baseline tables with the two new changes removed.
+                // Start from the baseline without the columns and tables missing on existing deployments.
                 await db.Database.ExecuteSqlRawAsync("""
                     DROP TABLE "TaxFilingConfirmations";
+                    DROP TABLE "Notifications";
                     ALTER TABLE "ExpenseVouchers" DROP COLUMN "DueDate";
+                    ALTER TABLE "Branches" DROP COLUMN "ConversionRulesJson";
                     """, ct);
-                var script = migrator.GenerateScript("20261118190000_DropLegacyPaymentAccountTables", FilingMigration, MigrationsSqlGenerationOptions.NoTransactions);
+                var script = migrator.GenerateScript("20261118190000_DropLegacyPaymentAccountTables", BranchAndNotificationMigration, MigrationsSqlGenerationOptions.NoTransactions);
                 Assert.Contains(DueDateMigration, script);
                 Assert.Contains(FilingMigration, script);
                 await db.Database.ExecuteSqlRawAsync("""
@@ -135,7 +138,8 @@ public class NotificationPostgresHttpTests(ITestOutputHelper output)
                 await db.Database.ExecuteSqlRawAsync(script, ct);
                 Assert.Contains(DueDateMigration, await db.Database.GetAppliedMigrationsAsync(ct));
                 Assert.Contains(FilingMigration, await db.Database.GetAppliedMigrationsAsync(ct));
-                output.WriteLine("Applied both migrations in isolated schema.");
+                Assert.Contains(BranchAndNotificationMigration, await db.Database.GetAppliedMigrationsAsync(ct));
+                output.WriteLine("Applied all three migrations in isolated schema.");
                 seed = await SeedAsync(db, ct);
             }
 
@@ -192,12 +196,29 @@ public class NotificationPostgresHttpTests(ITestOutputHelper output)
             detail.EnsureSuccessStatusCode();
 
             var lineId = dispatch.GetProperty("items")[0].GetProperty("id").GetGuid();
+            await using var returnScope = app.Services.CreateAsyncScope();
+            returnScope.ServiceProvider.GetRequiredService<ITenantContext>().SetContext(TenantId, Guid.Empty, seed.Source);
+            var returnDb = returnScope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var staleTransfer = await returnDb.Transfers.SingleAsync(transfer => transfer.Id == id, ct);
+
             using var received = await destination.PutAsJsonAsync($"/api/transfers/{id}/receive",
                 new ReceiveTransferRequest("Short shipment", new[] { new ReceiveTransferLineRequest(lineId, 1, 0, null) }), ct);
             received.EnsureSuccessStatusCode();
             await AssertPushAsync(sourceSocket, BusinessNotificationTypes.TransferReceiptDiscrepancy, ct);
             using var finalInbox = await destination.GetAsync("/api/notifications", ct);
             Assert.Equal(0, (await ReadDataAsync(finalInbox, ct)).GetProperty("unreadCount").GetInt32());
+
+            await using var staleReturn = await returnDb.Database.BeginTransactionAsync(ct);
+            var sourceStock = await returnDb.BranchStocks.SingleAsync(stock => stock.BranchId == seed.Source, ct);
+            sourceStock.QuantityOnHand += 2m;
+            staleTransfer.Status = TransferStatus.Completed;
+            staleTransfer.CompletionResult = TransferCompletionResult.Returned;
+            await Assert.ThrowsAsync<DbUpdateConcurrencyException>(() => returnDb.SaveChangesAsync(ct));
+            await staleReturn.RollbackAsync(ct);
+            await returnDb.Entry(sourceStock).ReloadAsync(ct);
+            await returnDb.Entry(staleTransfer).ReloadAsync(ct);
+            Assert.Equal(3m, sourceStock.QuantityOnHand);
+            Assert.Equal(TransferCompletionResult.ReceivedWithDiscrepancy, staleTransfer.CompletionResult);
         }
         finally
         {

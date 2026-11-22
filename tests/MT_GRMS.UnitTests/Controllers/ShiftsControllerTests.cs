@@ -155,7 +155,7 @@ public class ShiftsControllerTests
         var shift = CreateTestShift(id, ShiftState.Closed);
 
         _mockShiftService
-            .Setup(s => s.CloseShiftAsync(id, request, It.IsAny<CancellationToken>()))
+            .Setup(s => s.CloseShiftAsync(id, request, _userId, CancellationToken.None))
             .ReturnsAsync(shift);
 
         var res = await _controller.CloseShift(id, request, CancellationToken.None);
@@ -163,6 +163,11 @@ public class ShiftsControllerTests
         var apiRes = Assert.IsType<ApiResponse<ShiftDetailResponse>>(ok.Value);
         Assert.True(apiRes.Success);
         Assert.Equal(ShiftState.Closed, apiRes.Data?.Status);
+
+        _mockTenant.SetupGet(t => t.CurrentUserId).Returns(Guid.Empty);
+        var unauthorized = await _controller.CloseShift(id, request, CancellationToken.None);
+        Assert.IsType<UnauthorizedResult>(unauthorized.Result);
+        _mockShiftService.Verify(s => s.CloseShiftAsync(id, request, _userId, CancellationToken.None), Times.Once);
     }
 
     [Fact]

@@ -162,12 +162,11 @@ public class DeepBranchCoverageSuite4Tests
         var uow = new FakeUnitOfWork();
         var cashbookRepo = new FakeCashbookRepository();
         var accountRepo = new FakeRepository<FinanceAccount>();
-        var transitRepo = new FakeRepository<CashInTransit>();
         var shiftRepo = new FakeRepository<ShiftZReport>();
         var hashServiceMock = new Mock<IAuditHashService>();
         hashServiceMock.Setup(h => h.ComputeEntryHash(It.IsAny<string>(), It.IsAny<CashbookEntry>())).Returns("valid_hash");
 
-        var service = new CashbookService(cashbookRepo, accountRepo, transitRepo, shiftRepo, hashServiceMock.Object, tenantContext, uow);
+        var service = new CashbookService(cashbookRepo, accountRepo, shiftRepo, hashServiceMock.Object, tenantContext, uow);
 
         // 1. CloseShiftZReportAsync: shift already closed -> SHIFT_ALREADY_CLOSED
         var closedShift = new ShiftZReport { Id = Guid.NewGuid(), Status = ShiftState.Closed };
@@ -181,17 +180,14 @@ public class DeepBranchCoverageSuite4Tests
             service.ProcessCashDropAsync(new CashDropRequest(Guid.NewGuid(), 0m, Guid.NewGuid(), "Drop")));
         Assert.Equal("INVALID_AMOUNT", dropEx.ErrorCode);
 
-        // 3. CreateDepositToBankAsync: Amount <= 0 -> INVALID_AMOUNT
-        var depositEx = await Assert.ThrowsAsync<BusinessException>(() =>
-            service.CreateDepositToBankAsync(new DepositToBankRequest(Guid.NewGuid(), Guid.NewGuid(), -5000m, Guid.NewGuid(), "Nop")));
-        Assert.Equal("INVALID_AMOUNT", depositEx.ErrorCode);
+        var transferEx = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.TransferFundsAsync(new TransferFundRequest(Guid.NewGuid(), Guid.NewGuid(), -5000m, "Nop")));
+        Assert.Equal("INVALID_AMOUNT", transferEx.ErrorCode);
 
-        // 4. ConfirmBankDepositAsync: status != PendingBankConfirmation -> INVALID_STATUS
-        var confirmedTransit = new CashInTransit { Id = Guid.NewGuid(), Status = CashInTransitStatus.Completed };
-        transitRepo.Items.Add(confirmedTransit);
-        var confirmEx = await Assert.ThrowsAsync<BusinessException>(() =>
-            service.ConfirmBankDepositAsync(new ConfirmBankDepositRequest(confirmedTransit.Id, 100000m, "Xac nhan")));
-        Assert.Equal("INVALID_STATUS", confirmEx.ErrorCode);
+        var sameAccountId = Guid.NewGuid();
+        var sameAccountEx = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.TransferFundsAsync(new TransferFundRequest(sameAccountId, sameAccountId, 100000m, "Nop")));
+        Assert.Equal("INVALID_ACCOUNTS", sameAccountEx.ErrorCode);
 
         // 5. CreatePaymentAsync: Amount <= 0 -> INVALID_AMOUNT
         var payEx = await Assert.ThrowsAsync<BusinessException>(() =>
@@ -213,7 +209,7 @@ public class DeepBranchCoverageSuite4Tests
         cashbookRepo.Accounts.Add(tillAcc);
         accountRepo.Items.Add(tillAcc);
 
-        var paymentRes = await service.CreatePaymentAsync(new CreatePaymentRequest(tillAcc.Id, 100000m, "Chi vat", "Mua da", null));
+        var paymentRes = await service.CreatePaymentAsync(new CreatePaymentRequest(tillAcc.Id, 100000m, "Chi vat", "Mua da", null, TaxTreatment: CashbookTaxTreatment.NonDeductibleExpense));
         Assert.NotNull(paymentRes);
         Assert.Equal(150000m, activeShift.TotalCashOut);
 
@@ -269,7 +265,7 @@ public class DeepBranchCoverageSuite4Tests
         Assert.True(resolvedBank.IsActive);
 
         // 9. ResolveAccountTypeAsync: account not found -> NotFoundException
-        await Assert.ThrowsAsync<NotFoundException>(() => service.CreateReceiptAsync(new CreateReceiptRequest(Guid.NewGuid(), 1000m, "OTHER", "Desc", "REF01")));
+        await Assert.ThrowsAsync<NotFoundException>(() => service.CreateReceiptAsync(new CreateReceiptRequest(Guid.NewGuid(), 1000m, "OTHER", "Desc", "REF01", TaxTreatment: CashbookTaxTreatment.TaxableRevenue)));
 
         // 10. VerifyChainIntegrityAsync: entry hash verification fails -> returns false
         hashServiceMock.Setup(h => h.VerifyEntryHash(It.IsAny<string>(), It.IsAny<CashbookEntry>())).Returns(false);
@@ -762,7 +758,7 @@ public class DeepBranchCoverageSuite4Tests
         Assert.Equal(ExpenseVoucherStatus.Cancelled.ToString(), cancelDto.Status);
 
         // 8. DisburseExpenseAsync: status != Approved && status != PaymentFailed -> INVALID_STATUS
-        voucherSuspense.Status = ExpenseVoucherStatus.Draft;
+        voucherSuspense.Status = ExpenseVoucherStatus.Cancelled;
         var exExec = await Assert.ThrowsAsync<BusinessException>(() =>
             service.DisburseExpenseAsync(new DisburseExpenseRequest(voucherSuspense.Id, FinanceAccountType.Till, Guid.NewGuid(), "Chi")));
         Assert.Equal("INVALID_STATUS", exExec.ErrorCode);

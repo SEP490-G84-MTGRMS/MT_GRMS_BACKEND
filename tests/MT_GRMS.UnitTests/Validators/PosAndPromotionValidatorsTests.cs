@@ -322,8 +322,8 @@ public class PosAndPromotionValidatorsTests
             MinOrderValue: -1m,
             MaxDiscountAmount: 0m,
             TotalQuantity: 10001, // > 10000
-            StartDate: DateTime.UtcNow.Date.AddDays(-1),
-            EndDate: DateTime.UtcNow.Date.AddDays(-2),
+            StartDate: DateTime.UtcNow.Date.AddDays(-3),
+            EndDate: DateTime.UtcNow.Date.AddDays(-4),
             Prefix: "INVALID PREFIX!",
             Description: new string('D', 1001)
         );

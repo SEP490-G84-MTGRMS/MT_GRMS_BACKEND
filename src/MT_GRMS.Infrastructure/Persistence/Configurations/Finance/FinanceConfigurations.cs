@@ -174,6 +174,7 @@ public class ExpenseVoucherConfiguration : IEntityTypeConfiguration<ExpenseVouch
     public void Configure(EntityTypeBuilder<ExpenseVoucher> builder)
     {
         builder.ToTable("ExpenseVouchers");
+        builder.Property(e => e.Status).IsConcurrencyToken();
 
         builder.Property(e => e.VoucherCode)
             .HasMaxLength(50)

@@ -209,6 +209,8 @@ public class UserDatabaseIntegrationTests
         var repo = new UserRepository(context);
 
         var branchId = Guid.NewGuid();
+        var branch = new Branch { Id = branchId, TenantId = "tenant_emp", BranchCode = "BR1", Name = "Main branch", IsActive = true };
+        context.Branches.Add(branch);
         var emp = new Employee
         {
             Id = Guid.NewGuid(),
@@ -237,7 +239,12 @@ public class UserDatabaseIntegrationTests
         var found = await repo.GetEmployeeBranchIdAsync("emp_user_01", "tenant_emp");
         Assert.Equal(branchId, found);
 
+        branch.IsActive = false;
+        await context.SaveChangesAsync();
+        Assert.Null(await repo.GetEmployeeBranchIdAsync("emp_user_01", "tenant_emp"));
+
         // Deleted or inactive employee
+        branch.IsActive = true;
         emp.Status = EmployeeStatus.Inactive;
         await context.SaveChangesAsync();
         var terminated = await repo.GetEmployeeBranchIdAsync("emp_user_01", "tenant_emp");

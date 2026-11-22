@@ -5,16 +5,22 @@ using System.Net.Http;
 using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using MT_GRMS.Api.Controllers;
+using MT_GRMS.Api.Hubs;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Interfaces;
+using MT_GRMS.Application.Common.Services;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Application.GoodsReceipts.Dtos;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Employees.Dtos;
@@ -353,7 +359,12 @@ public class DeepBranchCoverageSuite6Tests
             httpClientFactoryMock.Object,
             configMock.Object,
             loggerMock.Object,
-            tenantContext);
+            tenantContext,
+            new EphemeralDataProtectionProvider(),
+            Mock.Of<IWebHostEnvironment>(),
+            Mock.Of<IAuditHashService>(),
+            Mock.Of<INotificationService>(),
+            Mock.Of<IHubContext<NotificationHub>>());
 
         // 1. Caller not STORE_OWNER / ADMIN -> 403 Forbidden
         controller.ControllerContext = new ControllerContext
@@ -372,19 +383,23 @@ public class DeepBranchCoverageSuite6Tests
             BankAccountNumber = "1234567890",
             BankAccountName = "CONG TY TNHH TEST",
             SepayApiKey = "sepay_api_key_valid_1234567890",
-            BranchIds = new List<Guid>()
+            BranchIds = []
         };
 
         var resForbidden = await controller.SavePaymentConfig(req, CancellationToken.None);
-        var objForbidden = Assert.IsType<ObjectResult>(resForbidden);
-        Assert.Equal(StatusCodes.Status403Forbidden, objForbidden.StatusCode);
+        Assert.IsType<ForbidResult>(resForbidden);
 
         // Switch to STORE_OWNER
         controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {
             new Claim(ClaimTypes.Role, "STORE_OWNER"),
-            new Claim("tenantId", tenantContext.CurrentTenantId)
+            new Claim("tenant_id", tenantContext.CurrentTenantId)
         }, "TestAuth"));
+
+        var branch = new Branch { Id = Guid.NewGuid(), TenantId = tenantContext.CurrentTenantId, Name = "Branch A" };
+        context.Tenants.Add(new Tenant { Id = tenantContext.CurrentTenantId, Name = "Test store" });
+        context.Branches.Add(branch);
+        await context.SaveChangesAsync();
 
         // 2. Empty BankAccountNumber -> 400 BadRequest
         var reqEmptyAccount = new SavePaymentConfigRequest
@@ -392,7 +407,7 @@ public class DeepBranchCoverageSuite6Tests
             BankAccountNumber = "",
             BankAccountName = "CONG TY TEST",
             SepayApiKey = "sepay_api_key_valid_1234567890",
-            BranchIds = new List<Guid>()
+            BranchIds = [branch.Id]
         };
         var resEmpty = await controller.SavePaymentConfig(reqEmptyAccount, CancellationToken.None);
         Assert.IsType<BadRequestObjectResult>(resEmpty);
@@ -403,21 +418,21 @@ public class DeepBranchCoverageSuite6Tests
             BankAccountNumber = "12345ABCD",
             BankAccountName = "CONG TY TEST",
             SepayApiKey = "sepay_api_key_valid_1234567890",
-            BranchIds = new List<Guid>()
+            BranchIds = [branch.Id]
         };
         var resBadFormat = await controller.SavePaymentConfig(reqBadFormat, CancellationToken.None);
         Assert.IsType<BadRequestObjectResult>(resBadFormat);
 
-        // 4. Overlong BankAccountName (> 150 chars) -> 400 BadRequest
-        var reqLongName = new SavePaymentConfigRequest
+        // 4. Missing account holder -> 400 BadRequest
+        var reqMissingHolder = new SavePaymentConfigRequest
         {
             BankAccountNumber = "1234567890",
-            BankAccountName = new string('A', 151),
+            BankAccountName = "  ",
             SepayApiKey = "sepay_api_key_valid_1234567890",
-            BranchIds = new List<Guid>()
+            BranchIds = [branch.Id]
         };
-        var resLongName = await controller.SavePaymentConfig(reqLongName, CancellationToken.None);
-        Assert.IsType<BadRequestObjectResult>(resLongName);
+        var resMissingHolder = await controller.SavePaymentConfig(reqMissingHolder, CancellationToken.None);
+        Assert.IsType<BadRequestObjectResult>(resMissingHolder);
 
         // 5. Short SePay API Key (< 20 chars) -> 400 BadRequest
         var reqShortKey = new SavePaymentConfigRequest
@@ -425,7 +440,7 @@ public class DeepBranchCoverageSuite6Tests
             BankAccountNumber = "1234567890",
             BankAccountName = "CONG TY TEST",
             SepayApiKey = "short_key",
-            BranchIds = new List<Guid>()
+            BranchIds = [branch.Id]
         };
         var resShortKey = await controller.SavePaymentConfig(reqShortKey, CancellationToken.None);
         Assert.IsType<BadRequestObjectResult>(resShortKey);

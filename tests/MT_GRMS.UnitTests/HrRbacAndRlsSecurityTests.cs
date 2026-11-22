@@ -303,17 +303,17 @@ public class HrRbacAndRlsSecurityTests
     }
 
     [Theory]
-    [InlineData(typeof(EmployeesController), "GetEmployees", SystemRoles.OwnerOrAdmin)]
-    [InlineData(typeof(EmployeesController), "Create", SystemRoles.OwnerOrAdmin)]
-    [InlineData(typeof(EmployeesController), "Delete", SystemRoles.OwnerOrAdmin)]
-    [InlineData(typeof(PayslipsController), "GetPayslipsPaged", SystemRoles.AllStaffAndOwner)]
-    [InlineData(typeof(PayslipsController), "GeneratePayrollBatch", SystemRoles.OwnerOrAdmin)]
-    [InlineData(typeof(PayslipsController), "PayPayslip", SystemRoles.OwnerOrAdmin)]
-    [InlineData(typeof(ShiftConfigsController), "Create", SystemRoles.OwnerOrAdmin)]
-    [InlineData(typeof(ShiftConfigsController), "Delete", SystemRoles.OwnerOrAdmin)]
-    [InlineData(typeof(SchedulesController), "BatchCreate", SystemRoles.OwnerOrAdmin)]
-    [InlineData(typeof(SchedulesController), "Publish", SystemRoles.OwnerOrAdmin)]
-    [InlineData(typeof(BranchAttendancePoliciesController), "UpsertPolicy", SystemRoles.OwnerOrAdmin)]
+    [InlineData(typeof(EmployeesController), nameof(EmployeesController.GetEmployees), "STORE_OWNER")]
+    [InlineData(typeof(EmployeesController), nameof(EmployeesController.Create), "STORE_OWNER")]
+    [InlineData(typeof(EmployeesController), nameof(EmployeesController.Delete), "STORE_OWNER")]
+    [InlineData(typeof(PayslipsController), nameof(PayslipsController.GetPayslipsPaged), "STORE_OWNER,STAFF,EMPLOYEE")]
+    [InlineData(typeof(PayslipsController), nameof(PayslipsController.GeneratePayrollBatch), "STORE_OWNER")]
+    [InlineData(typeof(PayslipsController), nameof(PayslipsController.PayPayslip), "STORE_OWNER")]
+    [InlineData(typeof(ShiftConfigsController), nameof(ShiftConfigsController.Create), "STORE_OWNER")]
+    [InlineData(typeof(ShiftConfigsController), nameof(ShiftConfigsController.Delete), "STORE_OWNER")]
+    [InlineData(typeof(SchedulesController), nameof(SchedulesController.BatchCreate), "STORE_OWNER")]
+    [InlineData(typeof(SchedulesController), nameof(SchedulesController.Publish), "STORE_OWNER")]
+    [InlineData(typeof(BranchAttendancePoliciesController), nameof(BranchAttendancePoliciesController.UpsertPolicy), "STORE_OWNER")]
     public void ControllerActions_HaveExpectedAuthorizeRoles(Type controllerType, string actionName, string expectedRoles)
     {
         var method = controllerType.GetMethod(actionName);
