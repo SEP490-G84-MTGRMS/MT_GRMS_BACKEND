@@ -1,3 +1,5 @@
+using System.Data;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -9,6 +11,7 @@ using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Api.Filters;
+using Npgsql;
 
 namespace MT_GRMS.Api.Controllers;
 
@@ -17,6 +20,7 @@ namespace MT_GRMS.Api.Controllers;
 [Authorize]
 public class TenantStoreController : BaseApiController
 {
+    private const decimal StaffAddonMonthlyPrice = 30000m;
     private static readonly UpdateStoreInfoRequestValidator StoreInfoValidator = new();
     private readonly ITenantService _tenantService;
     private readonly ISubscriptionPlanService _planService;
@@ -32,7 +36,7 @@ public class TenantStoreController : BaseApiController
         _context = context;
     }
 
-    private async Task<Tenant?> ResolveCurrentTenantAsync(CancellationToken cancellationToken)
+    private async Task<Tenant?> ResolveCurrentTenantAsync(CancellationToken cancellationToken, bool requireOwner = false)
     {
         var tenantId = User.FindFirst("tenant_id")?.Value;
         var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
@@ -40,12 +44,101 @@ public class TenantStoreController : BaseApiController
         if (string.IsNullOrWhiteSpace(tenantId) || string.IsNullOrWhiteSpace(userId) || tenantId == "DEFAULT") return null;
 
         var hasMembership = await _context.TenantUsers.AnyAsync(x =>
-            x.TenantId == tenantId && x.UserId == userId && x.IsActive, cancellationToken);
+            x.TenantId == tenantId && x.UserId == userId && x.IsActive &&
+            (!requireOwner || x.Role == SystemRoles.StoreOwner || x.Role == "StoreOwner"), cancellationToken);
         if (!hasMembership) return null;
 
         return await _context.Tenants.Include(t => t.SubscriptionPlan)
             .FirstOrDefaultAsync(t => t.Id == tenantId, cancellationToken);
     }
+
+    [HttpGet("subscriptions/staff-addon/quote")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
+    public async Task<IActionResult> GetStaffAddonQuote(CancellationToken cancellationToken)
+    {
+        var tenant = await ResolveCurrentTenantAsync(cancellationToken, requireOwner: true);
+        if (tenant == null) return Forbid();
+
+        var now = DateTime.UtcNow;
+        return tenant.CanPurchaseStaffManagementAddon(now)
+            ? Ok(ApiResponse<StaffAddonQuote>.Ok(CreateStaffAddonQuote(tenant.SubscriptionExpiresAt!.Value, now)))
+            : StaffAddonUnavailable();
+    }
+
+    [HttpPost("subscriptions/staff-addon/purchase")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
+    public async Task<IActionResult> PurchaseStaffAddon(StaffAddonPurchaseRequest request, CancellationToken cancellationToken)
+    {
+        if (request.RequestId == Guid.Empty || request.Total <= 0 || request.ExpiresAt == default)
+            return BadRequest(ApiResponse<object>.Fail("INVALID_STAFF_ADDON_PURCHASE", "Yêu cầu mua tiện ích không hợp lệ."));
+
+        try
+        {
+            await using var transaction = _context.Database.IsRelational()
+                ? await _context.Database.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken)
+                : null;
+            var tenant = await ResolveCurrentTenantAsync(cancellationToken, requireOwner: true);
+            if (tenant == null) return Forbid();
+
+            var code = $"STAFF-{request.RequestId:N}";
+            var alreadyPurchased = await _context.WalletTransactions.AsNoTracking().AnyAsync(
+                x => x.TenantId == tenant.Id && x.TransactionCode == code && x.Status == "SUCCESS", cancellationToken);
+            if (alreadyPurchased)
+                return Ok(ApiResponse<StaffAddonPurchaseResponse>.Ok(new(tenant.WalletBalance)));
+
+            var now = DateTime.UtcNow;
+            if (!tenant.CanPurchaseStaffManagementAddon(now)) return StaffAddonUnavailable();
+
+            var quote = CreateStaffAddonQuote(tenant.SubscriptionExpiresAt!.Value, now);
+            if (quote.Total != request.Total || quote.ExpiresAt != request.ExpiresAt)
+                return Conflict(ApiResponse<object>.Fail("STAFF_ADDON_QUOTE_CHANGED", "Báo giá đã thay đổi. Vui lòng xem lại báo giá."));
+            if (tenant.WalletBalance < quote.Total)
+                return BadRequest(ApiResponse<object>.Fail("INSUFFICIENT_WALLET_BALANCE", "Số dư Ví gian hàng không đủ. Vui lòng nạp thêm tiền."));
+
+            var balanceBefore = tenant.WalletBalance;
+            tenant.WalletBalance -= quote.Total;
+            tenant.HasStaffManagementAddon = true;
+            _context.WalletTransactions.Add(new WalletTransaction
+            {
+                TenantId = tenant.Id,
+                TransactionCode = code,
+                Type = "PURCHASE_ADDON",
+                Amount = quote.Total,
+                BalanceBefore = balanceBefore,
+                BalanceAfter = tenant.WalletBalance,
+                PaymentMethod = "WALLET",
+                Status = "SUCCESS",
+                Description = $"Mua thêm Quản lý nhân viên đến {quote.ExpiresAt:dd/MM/yyyy}"
+            });
+
+            await _context.SaveChangesAsync(cancellationToken);
+            if (transaction != null) await transaction.CommitAsync(cancellationToken);
+            return Ok(ApiResponse<StaffAddonPurchaseResponse>.Ok(new(tenant.WalletBalance)));
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.SerializationFailure)
+        {
+            return StaffAddonPurchaseConflict();
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException
+            { SqlState: PostgresErrorCodes.SerializationFailure or PostgresErrorCodes.UniqueViolation })
+        {
+            return StaffAddonPurchaseConflict();
+        }
+    }
+
+    private static StaffAddonQuote CreateStaffAddonQuote(DateTime expiry, DateTime now)
+    {
+        var days = (decimal)Math.Ceiling((expiry - now).TotalDays);
+        var subtotal = StaffAddonMonthlyPrice * days / 30m;
+        var vat = Math.Round(subtotal * 0.1m, 0, MidpointRounding.AwayFromZero);
+        return new StaffAddonQuote(subtotal, vat, subtotal + vat, expiry);
+    }
+
+    private IActionResult StaffAddonUnavailable() => BadRequest(ApiResponse<object>.Fail(
+        "STAFF_ADDON_UNAVAILABLE", "Chỉ Gói Thường còn hiệu lực và chưa có tiện ích Quản lý nhân viên mới có thể mua thêm."));
+
+    private IActionResult StaffAddonPurchaseConflict() => Conflict(ApiResponse<object>.Fail(
+        "STAFF_ADDON_PURCHASE_CONFLICT", "Ví hoặc gói dịch vụ vừa thay đổi. Vui lòng thử xác nhận lại."));
 
     /// <summary>
     /// Lấy thông tin chi tiết gian hàng và gói cước hiện tại của khách thuê đang đăng nhập
@@ -282,7 +375,7 @@ public class TenantStoreController : BaseApiController
         {
             var basePrice = plan.PriceMonthly * months;
             var branchAddonPrice = (plan.PlanCode == "PRO" ? request.ExtraBranches * 80000m : 0m) * months;
-            var staffAddonPrice = (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon ? 30000m : 0m) * months;
+            var staffAddonPrice = (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon ? StaffAddonMonthlyPrice : 0m) * months;
             var storageAddonPrice = request.ExtraStorageGb * 15000m * months;
             var subTotal = basePrice + branchAddonPrice + staffAddonPrice + storageAddonPrice;
             var vatAmount = Math.Round(subTotal * 0.1m, 0);
@@ -292,6 +385,10 @@ public class TenantStoreController : BaseApiController
             var isWalletPayment = string.Equals(request.PaymentMethod, "WALLET", StringComparison.OrdinalIgnoreCase) ||
                                   string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase) ||
                                   request.PaymentMethod.Contains("Ví", StringComparison.OrdinalIgnoreCase);
+
+            if (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon && !isWalletPayment)
+                return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
+                    "INVALID_STAFF_ADDON_PAYMENT", "Tiện ích Quản lý nhân viên cần được thanh toán bằng Ví gian hàng."));
 
             var balanceBefore = tenant.WalletBalance;
             if (isWalletPayment)
@@ -358,9 +455,10 @@ public class TenantStoreController : BaseApiController
                 tenant.ExtraBranches += request.ExtraBranches;
                 tenant.HasStaffManagementAddon = true; // Gói Pro mặc định có sẵn tính năng quản lý nhân viên
             }
-            else if (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon)
+            else if (plan.PlanCode == "STANDARD")
             {
-                tenant.HasStaffManagementAddon = true;
+                tenant.HasStaffManagementAddon = request.HasStaffManagementAddon ||
+                    (currentPlanCode == "STANDARD" && tenant.HasStaffManagementAddon && baseDate > DateTime.UtcNow);
             }
             tenant.ExtraStorageGb = request.ExtraStorageGb;
             tenant.StorageAddonExpiresAt = request.ExtraStorageGb > 0 ? newExpiresAt : null;

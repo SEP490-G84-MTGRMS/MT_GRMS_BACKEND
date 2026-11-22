@@ -107,6 +107,12 @@ public record PurchaseSubscriptionResponse(
     string Message
 );
 
+public record StaffAddonQuote(decimal Subtotal, decimal Vat, decimal Total, DateTime ExpiresAt);
+
+public record StaffAddonPurchaseRequest(Guid RequestId, decimal Total, DateTime ExpiresAt);
+
+public record StaffAddonPurchaseResponse(decimal WalletBalance);
+
 public record SubscriptionOrderHistoryDto(
     string Code,
     string PlanName,
