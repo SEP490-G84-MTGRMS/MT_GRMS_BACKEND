@@ -212,6 +212,7 @@ public class OrdersController : BaseApiController
     /// Xử lý Đổi / Trả hàng chuẩn KiotViet: hoàn kho hàng trả, trừ kho hàng đổi mới (FEFO) và bù trừ chênh lệch
     /// </summary>
     [HttpPost("{id:guid}/return-exchange")]
+    [RequireIdempotency]
     public async Task<IActionResult> ReturnExchange([FromRoute] Guid id, [FromBody] ReturnExchangeRequest request, CancellationToken cancellationToken)
     {
         var order = await _orderService.GetOrderByIdAsync(id, cancellationToken);

@@ -21,6 +21,13 @@ public class RepackOrdersController : BaseApiController
         _repackService = repackService;
     }
 
+    [HttpGet("packages/scan")]
+    public async Task<IActionResult> ScanPackage([FromQuery] Guid branchId, [FromQuery] string code, CancellationToken cancellationToken)
+    {
+        var result = await _repackService.FindSellablePackageByCodeAsync(branchId, code, cancellationToken);
+        return result == null ? NotFound() : Ok(ApiResponse<PackageScanDto>.Ok(result));
+    }
+
     [HttpGet("branch-stocks/{branchStockId:guid}/packages")]
     public async Task<IActionResult> GetPackages(Guid branchStockId, CancellationToken cancellationToken)
     {

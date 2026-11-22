@@ -19,6 +19,7 @@ public class OrderDetailConfiguration : IEntityTypeConfiguration<OrderDetail>
         builder.Property(x => x.BatchId).HasColumnName("BatchID");
         builder.Property(x => x.BatchCode).HasMaxLength(100);
         builder.Property(x => x.BatchExpiryDate);
+        builder.Property(x => x.StockAllocationsJson).HasColumnType("text").IsConcurrencyToken();
         builder.Property(x => x.LineNumber).HasDefaultValue(1);
         builder.Property(x => x.Qty).HasColumnType("decimal(12,2)").HasDefaultValue(1.00m);
         builder.Property(x => x.UnitPrice).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);

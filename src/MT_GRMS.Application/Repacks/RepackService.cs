@@ -80,6 +80,19 @@ public class RepackService : IRepackService
         );
     }
 
+    public async Task<PackageScanDto?> FindSellablePackageByCodeAsync(Guid branchId, string code, CancellationToken ct = default)
+    {
+        if (branchId == Guid.Empty || string.IsNullOrWhiteSpace(code)) return null;
+        var package = await _repository.FindPackageByCodeAsync(RequireTenant(), branchId, code.Trim(), ct);
+        if (package == null || package.Status != "AVAILABLE" ||
+            (package.ExpiryDate.HasValue && package.ExpiryDate.Value.Date < DateTime.UtcNow.Date)) return null;
+        var stock = await _repository.GetBranchStockAsync(package.TenantId, package.BranchStockId, ct);
+        if (stock == null || stock.BranchId != branchId) return null;
+        var product = await _repository.GetProductWithUnitsAsync(package.TenantId, package.ProductId, ct);
+        if (product == null) return null;
+        return new PackageScanDto(MapPackage(package), product.Name, stock.BatchCode ?? string.Empty, stock.ExpiryDate);
+    }
+
     public async Task<RepackOrderDto> CreateRepackOrderAsync(
         CreateRepackOrderRequest request,
         CancellationToken ct = default)

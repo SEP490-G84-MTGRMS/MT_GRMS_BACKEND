@@ -14,6 +14,7 @@ public interface IRepackRepository
     Task<decimal> GetActivePackageWeightAsync(string tenantId, Guid branchStockId, CancellationToken ct = default);
     Task<IReadOnlyList<Package>> GetPackagesByBranchStockAsync(string tenantId, Guid branchStockId, CancellationToken ct = default);
     Task<Package?> GetPackageByIdAsync(string tenantId, Guid packageId, CancellationToken ct = default);
+    Task<Package?> FindPackageByCodeAsync(string tenantId, Guid branchId, string code, CancellationToken ct = default);
     Task<int> CountPackagesCreatedTodayAsync(string tenantId, DateTime utcDate, CancellationToken ct = default);
     Task<int> CountRepackOrdersTodayAsync(string tenantId, DateTime utcDate, CancellationToken ct = default);
     Task AddRepackOrderAsync(RepackOrder order, CancellationToken ct = default);

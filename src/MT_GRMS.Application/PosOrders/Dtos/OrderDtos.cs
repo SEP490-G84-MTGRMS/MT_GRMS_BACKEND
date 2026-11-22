@@ -42,7 +42,8 @@ public record OrderItemCreateDto(
     bool IsGift = false,
     Guid? PromotionId = null,
     decimal ConversionRate = 1.00m,
-    Guid? BatchId = null
+    Guid? BatchId = null,
+    Guid? PackageId = null
 );
 
 public record OrderResponse(
@@ -76,7 +77,8 @@ public record OrderResponse(
     decimal VoucherDiscountAmount = 0m,
     int PointsRedeemed = 0,
     decimal PointsDiscountAmount = 0m,
-    string? GiftStockWarning = null
+    string? GiftStockWarning = null,
+    decimal ReturnedAmount = 0m
 )
 {
     public Guid StoreId => BranchId;
@@ -98,8 +100,12 @@ public record OrderItemResponse(
     decimal VatAmount = 0m,
     string? BatchCode = null,
     bool IsGift = false,
-    Guid? PromotionId = null
+    Guid? PromotionId = null,
+    Guid? BatchId = null,
+    List<OrderStockAllocationDto>? StockAllocations = null
 );
+
+public record OrderStockAllocationDto(Guid BranchStockId, string? BatchCode, decimal QuantityBase, decimal ReturnedBase = 0m, decimal CostPerBase = 0m, bool IsManualSelection = false);
 
 public record OrderFilterRequest(
     Guid? BranchId = null,
@@ -153,7 +159,8 @@ public record ReturnExchangeRequest(
     List<OrderItemCreateDto> NewItems,
     string SettlementMethod = "CASH",
     string? Reason = null,
-    string? Note = null
+    string? Note = null,
+    string? CashFundSource = null
 );
 
 public record ReturnItemDto(
@@ -162,7 +169,8 @@ public record ReturnItemDto(
     decimal UnitPrice,
     string? Condition = "Restock",
     Guid? OrderDetailId = null,
-    bool IsGift = false
+    bool IsGift = false,
+    Guid? BatchId = null
 );
 
 public record OrderSummaryResponse(

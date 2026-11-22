@@ -48,7 +48,7 @@ public class ScheduleApprovalRequestsController : BaseApiController
     [HttpPost("upload-evidences")]
     [Consumes("multipart/form-data")]
     public async Task<IActionResult> UploadEvidenceImages(
-        [FromForm] List<IFormFile> files,
+        List<IFormFile> files,
         [FromServices] ICloudinaryService cloudinaryService,
         CancellationToken cancellationToken)
     {

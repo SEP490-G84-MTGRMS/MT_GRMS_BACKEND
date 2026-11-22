@@ -81,6 +81,10 @@ public class FinanceAccountConfiguration : IEntityTypeConfiguration<FinanceAccou
         builder.HasIndex(a => new { a.TenantId, a.BranchId });
         builder.HasIndex(a => new { a.TenantId, a.AccountType });
         builder.HasIndex(a => new { a.TenantId, a.BankCode, a.AccountNumber });
+        builder.HasIndex(a => new { a.TenantId, a.BranchId, a.AccountType })
+            .HasDatabaseName("IX_FinanceAccounts_OneActiveCashFundPerBranch")
+            .IsUnique()
+            .HasFilter("\"BranchId\" IS NOT NULL AND \"IsActive\" = TRUE AND NOT \"IsDeleted\" AND \"AccountType\" IN (1, 2)");
     }
 }
 
@@ -144,6 +148,10 @@ public class ShiftZReportConfiguration : IEntityTypeConfiguration<ShiftZReport>
         builder.HasIndex(s => new { s.TenantId, s.TillId, s.Status });
         builder.HasIndex(s => new { s.TenantId, s.ShiftCode });
         builder.HasIndex(s => new { s.TenantId, s.BranchId, s.BusinessDate });
+        builder.HasIndex(s => new { s.TenantId, s.BranchId })
+            .HasDatabaseName("IX_ShiftZReports_OneActiveShiftPerBranch")
+            .IsUnique()
+            .HasFilter("\"Status\" IN (1, 3) AND NOT \"IsDeleted\"");
     }
 }
 

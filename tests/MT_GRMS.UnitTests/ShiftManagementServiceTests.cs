@@ -300,6 +300,23 @@ public class ShiftManagementServiceTests
     }
 
     [Fact]
+    public async Task OpenShift_WhenAnotherTillInSameBranchIsOpen_ThrowsBusinessException()
+    {
+        var branchId = Guid.NewGuid();
+        var existingTillId = Guid.NewGuid();
+        _shiftRepository.Shifts.Add(new ShiftZReport
+        {
+            Id = Guid.NewGuid(), TenantId = _tenantContext.CurrentTenantId,
+            BranchId = branchId, TillId = existingTillId,
+            ShiftCode = "CA-EXISTING", ShiftName = "Ca quầy thứ nhất", Status = ShiftState.Open
+        });
+
+        var request = new OpenShiftRequest(branchId, Guid.NewGuid(), "Ca quầy thứ hai", 1_000_000m);
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.OpenShiftAsync(request, _tenantContext.CurrentUserId));
+        Assert.Equal("SHIFT_ALREADY_OPEN", ex.ErrorCode);
+    }
+
+    [Fact]
     public async Task OpenShift_WhenNegativeOpeningFloat_ThrowsBusinessException()
     {
         // Arrange

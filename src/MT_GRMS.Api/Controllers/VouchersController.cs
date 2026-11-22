@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.Promotions;
 using MT_GRMS.Application.Promotions.Dtos;
 
@@ -12,10 +13,12 @@ namespace MT_GRMS.Api.Controllers;
 public class VouchersController : BaseApiController
 {
     private readonly IPromotionService _promotionService;
+    private readonly IThermalPrintService _thermalPrintService;
 
-    public VouchersController(IPromotionService promotionService)
+    public VouchersController(IPromotionService promotionService, IThermalPrintService thermalPrintService)
     {
         _promotionService = promotionService;
+        _thermalPrintService = thermalPrintService;
     }
 
     /// <summary>
@@ -124,6 +127,41 @@ public class VouchersController : BaseApiController
             return BadRequest(ApiResponse<RedeemVoucherResponse>.Fail("REDEEM_FAILED", result.Message));
         }
         return Ok(ApiResponse<RedeemVoucherResponse>.Ok(result, result.Message));
+    }
+
+    /// <summary>
+    /// In trực tiếp phiếu voucher ra máy in nhiệt POS-58 (khổ 43mm/58mm) qua Windows Spooler RAW
+    /// </summary>
+    [HttpPost("print")]
+    public IActionResult PrintVoucher([FromBody] PrintVoucherRequest request)
+    {
+        if (request == null || string.IsNullOrWhiteSpace(request.VoucherCode))
+        {
+            return BadRequest(ApiResponse<PrintVoucherResponse>.Fail("INVALID_PAYLOAD", "Thông tin phiếu voucher không hợp lệ."));
+        }
+
+        try
+        {
+            string printer = !string.IsNullOrWhiteSpace(request.PrinterName) ? request.PrinterName : "POS-58";
+            bool printed = _thermalPrintService.PrintVoucher(request, printer);
+
+            if (!printed)
+            {
+                return Ok(ApiResponse<PrintVoucherResponse>.Ok(
+                    new PrintVoucherResponse(false, "Lệnh in đã gửi nhưng máy in POS-58 chưa sẵn sàng hoặc mất kết nối USB. Vui lòng kiểm tra nguồn và cáp USB máy in!")
+                ));
+            }
+
+            return Ok(ApiResponse<PrintVoucherResponse>.Ok(
+                new PrintVoucherResponse(true, $"Đã gửi lệnh in thành công phiếu voucher [{request.VoucherCode}] tới máy in {printer}!")
+            ));
+        }
+        catch (Exception ex)
+        {
+            return Ok(ApiResponse<PrintVoucherResponse>.Ok(
+                new PrintVoucherResponse(false, $"Lỗi kết nối máy in POS-58: {ex.Message}")
+            ));
+        }
     }
 }
 

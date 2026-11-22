@@ -18,6 +18,8 @@ public interface IOrderRepository : IRepository<Order>
     Task<Dictionary<Guid, BranchProduct>> GetBranchProductsByProductIdsAsync(Guid branchId, IEnumerable<Guid> productIds, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<BranchStock>> GetBranchStocksForProductFefoAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default);
     Task<BranchStock?> GetBranchStockByIdAsync(Guid branchId, Guid productId, Guid batchId, CancellationToken cancellationToken = default);
+    Task<Dictionary<Guid, decimal>> GetActivePackageWeightsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default);
+    Task<Package?> GetPackageForSaleAsync(Guid branchId, Guid productId, Guid packageId, CancellationToken cancellationToken = default);
 
     Task<Order?> GetOrderWithDetailsAsync(Guid id, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Order>> GetOrdersWithFilterAsync(

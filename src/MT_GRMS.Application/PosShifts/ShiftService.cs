@@ -55,13 +55,13 @@ public class ShiftService : IShiftService
                 eligibility.Reason ?? "Bạn không có lịch làm việc trong ca hiện tại của chi nhánh.");
         }
 
-        // 1. Kiểm tra xem quầy/chi nhánh đã có ca nào đang mở chưa
-        var activeShift = await _shiftRepository.GetActiveShiftAsync(request.BranchId, request.TillId, cancellationToken);
+        // Một chi nhánh chỉ có một ca/két quầy hoạt động tại một thời điểm.
+        var activeShift = await _shiftRepository.GetActiveShiftAsync(request.BranchId, cancellationToken: cancellationToken);
         if (activeShift != null)
         {
             throw new BusinessException(
                 "SHIFT_ALREADY_OPEN",
-                $"Quầy này đang có ca làm việc '{activeShift.ShiftName}' ({activeShift.ShiftCode}) đang mở. Vui lòng chốt ca trước khi mở ca mới.");
+                $"Chi nhánh đang có ca làm việc '{activeShift.ShiftName}' ({activeShift.ShiftCode}) đang mở. Vui lòng chốt ca trước khi mở ca mới.");
         }
 
         // 2. Tìm ca đã đóng liền trước đó trên cùng quầy/chi nhánh để lấy số tiền bàn giao dự kiến
@@ -513,7 +513,9 @@ public class ShiftService : IShiftService
             shift.HandoverStatus,
             shift.ReceiverUserId,
             shift.Notes,
-            movements
+            movements,
+            movements.Where(m => m.Category == CashMovementCategory.RETURN_REFUND && m.Status == CashMovementStatus.Recorded).Sum(m => m.Amount),
+            cashSales - movements.Where(m => m.Category == CashMovementCategory.RETURN_REFUND && m.Status == CashMovementStatus.Recorded).Sum(m => m.Amount)
         );
     }
 

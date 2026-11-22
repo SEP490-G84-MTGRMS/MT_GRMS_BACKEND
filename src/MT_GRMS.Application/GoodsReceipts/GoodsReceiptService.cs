@@ -1387,14 +1387,17 @@ public class GoodsReceiptService : IGoodsReceiptService
 
             retLine.HandedOverQty += deduct;
 
-            var stock = await _repository.GetBranchStockAsync(
-                tenantId, ret.BranchId, retLine.ProductId, retLine.BatchCode, cancellationToken);
-            if (stock != null)
-            {
-                stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - deduct);
-                stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - deduct);
-                stock.UpdatedAt = DateTime.UtcNow;
-            }
+            var stock = retLine.BranchStockId.HasValue
+                ? await _repository.GetBranchStockByIdAsync(tenantId, ret.BranchId, retLine.ProductId, retLine.BranchStockId.Value, cancellationToken)
+                : await _repository.GetBranchStockAsync(tenantId, ret.BranchId, retLine.ProductId, retLine.BatchCode, cancellationToken);
+            if (stock == null || stock.QuantityOnHand < deduct)
+                throw new BusinessException("RTV_EXCHANGE_STOCK_MISSING", "Không tìm thấy đủ tồn lô cũ để ghi giảm khi nhận hàng đổi.");
+            var packageWeight = await _repository.GetActivePackageWeightAsync(tenantId, stock.Id, cancellationToken);
+            if (stock.QuantityOnHand - deduct < packageWeight + stock.QuantityQuarantined + Math.Max(0m, stock.QuantityReserved - deduct))
+                throw new BusinessException("RTV_EXCHANGE_COMMITTED_STOCK", "Nhận hàng đổi sẽ lấy vào lượng khay, cách ly hoặc giữ chỗ khác của lô cũ.");
+            stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - deduct);
+            stock.QuantityOnHand -= deduct;
+            stock.UpdatedAt = DateTime.UtcNow;
         }
 
         ret.TotalHandedOverQty = ret.Lines.Sum(l => l.HandedOverQty);

@@ -28,7 +28,9 @@ public record BusinessDayClosingResponse(
     decimal ActualCashCounted,
     decimal CashDiscrepancy,
     string ReferenceCode,
-    DateTime ClosedAtUtc);
+    DateTime ClosedAtUtc,
+    decimal SafeReturnRefunds = 0m,
+    decimal ShiftReturnRefunds = 0m);
 
 public record BusinessDateResponse(
     Guid BranchId,
@@ -86,4 +88,6 @@ public record BusinessDayClosingPreview(
     decimal TotalDroppedToSafe,
     IReadOnlyList<BusinessDayFundPreview> Funds,
     IReadOnlyList<BusinessDayBlocker> Blockers,
-    string PreviewToken);
+    string PreviewToken,
+    decimal SafeReturnRefunds = 0m,
+    decimal ShiftReturnRefunds = 0m);

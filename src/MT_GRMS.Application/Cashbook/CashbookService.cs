@@ -54,11 +54,15 @@ public class CashbookService : ICashbookService
         RequireOwner();
         var till = await _cashbookRepo.GetAccountWithLockAsync(request.TillId, ct)
             ?? throw new NotFoundException($"Không tìm thấy két quầy với Id: {request.TillId}");
+        if (till.AccountType != FinanceAccountType.Till || !till.BranchId.HasValue || !till.IsActive || till.IsDeleted)
+            throw new BusinessException("INVALID_TILL", "Két quầy không hợp lệ hoặc không còn hoạt động.");
 
-        var activeShift = await _cashbookRepo.GetActiveShiftByTillIdAsync(request.TillId, ct);
-        if (activeShift != null)
+        var activeShifts = await _shiftRepo.FindAsync(
+            s => s.BranchId == till.BranchId.Value &&
+                 (s.Status == ShiftState.Open || s.Status == ShiftState.Closing) && !s.IsDeleted, ct);
+        if (activeShifts.Any())
         {
-            throw new BusinessException("ACTIVE_SHIFT_EXISTS", "Két quầy này đang có ca làm việc chưa chốt. Vui lòng chốt ca trước.");
+            throw new BusinessException("ACTIVE_SHIFT_EXISTS", "Chi nhánh đang có ca làm việc chưa chốt. Vui lòng chốt ca trước.");
         }
 
         var lastClosed = await _cashbookRepo.GetLastClosedShiftByTillIdAsync(request.TillId, ct);
@@ -66,6 +70,8 @@ public class CashbookService : ICashbookService
 
         var shift = new ShiftZReport
         {
+            TenantId = _tenantContext.CurrentTenantId ?? string.Empty,
+            BranchId = till.BranchId.Value,
             TillId = request.TillId,
             CashierUserId = Guid.NewGuid(),
             OpeningFloat = expectedOpeningFloat,
@@ -307,12 +313,13 @@ public class CashbookService : ICashbookService
     {
         RequireOwner();
         ValidateFinancialManagementRole();
-        var existingList = await _accountRepo.FindAsync(t => t.BranchId == branchId && t.AccountType == FinanceAccountType.Till, ct);
-        var existing = existingList.FirstOrDefault(t => t.AccountName == tillName) ?? existingList.FirstOrDefault();
+        var existingList = await _accountRepo.FindAsync(t => t.BranchId == branchId && t.AccountType == FinanceAccountType.Till && t.IsActive && !t.IsDeleted, ct);
+        var existing = existingList.OrderBy(t => t.CreatedAt).FirstOrDefault();
         if (existing != null) return existing;
 
         var till = new FinanceAccount
         {
+            TenantId = _tenantContext.CurrentTenantId ?? string.Empty,
             BranchId = branchId,
             AccountType = FinanceAccountType.Till,
             AccountName = tillName,
@@ -514,13 +521,19 @@ public class CashbookService : ICashbookService
         }
 
         var results = new List<CashAccountResponse>();
+        var branchMap = _branchRepo != null
+            ? (await _branchRepo.GetAllAsync(ct)).ToDictionary(b => b.Id, b => b.Name)
+            : new Dictionary<Guid, string>();
 
         foreach (var till in accounts.Where(a => a.AccountType == FinanceAccountType.Till && (!branchId.HasValue || a.BranchId == branchId.Value)))
         {
+            var bName = till.BranchId.HasValue && branchMap.TryGetValue(till.BranchId.Value, out var name)
+                ? name
+                : "Chi nhánh chính";
             results.Add(new CashAccountResponse(
                 till.Id,
                 till.BranchId,
-                "Chi nhánh chính",
+                bName,
                 till.AccountName,
                 "CASH",
                 null,
@@ -535,10 +548,13 @@ public class CashbookService : ICashbookService
 
         foreach (var safe in accounts.Where(a => a.AccountType == FinanceAccountType.Safe && (!branchId.HasValue || a.BranchId == branchId.Value)))
         {
+            var bName = safe.BranchId.HasValue && branchMap.TryGetValue(safe.BranchId.Value, out var name)
+                ? name
+                : "Toàn hệ thống (Chủ cửa hàng)";
             results.Add(new CashAccountResponse(
                 safe.Id,
                 safe.BranchId,
-                "Toàn hệ thống (Chủ cửa hàng)",
+                bName,
                 safe.AccountName,
                 "CASH",
                 null,
@@ -553,10 +569,13 @@ public class CashbookService : ICashbookService
 
         foreach (var bank in accounts.Where(a => a.AccountType == FinanceAccountType.Bank && a.IsActive))
         {
+            var bName = bank.BranchId.HasValue && branchMap.TryGetValue(bank.BranchId.Value, out var name)
+                ? name
+                : "Toàn hệ thống";
             results.Add(new CashAccountResponse(
                 bank.Id,
-                null,
-                "Toàn hệ thống",
+                bank.BranchId,
+                bName,
                 $"{bank.BankName} - TK {bank.AccountNumber}",
                 "BANK",
                 bank.BankName,

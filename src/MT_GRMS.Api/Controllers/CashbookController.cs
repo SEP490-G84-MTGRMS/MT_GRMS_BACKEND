@@ -105,6 +105,20 @@ public class CashbookController : BaseApiController
         return Ok(ApiResponse<CashbookEntryResponse>.Ok(result, "Ghi nhận phiếu thu thành công."));
     }
 
+    [HttpPost("owner-safe-deposits")]
+    [RequireIdempotency]
+    public async Task<ActionResult<ApiResponse<CashbookEntryResponse>>> DepositOwnerCash(
+        [FromBody] OwnerSafeDepositRequest request, CancellationToken ct)
+    {
+        if (request.BranchId == Guid.Empty || request.Amount <= 0)
+            return BadRequest("Cần chọn chi nhánh và nhập số tiền lớn hơn 0.");
+        var safe = await _cashbookService.GetOrCreateSafeAsync(request.BranchId, ct);
+        var result = await _cashbookService.CreateReceiptAsync(new CreateReceiptRequest(
+            safe.Id, request.Amount, "Chủ nạp thêm vốn", request.Note,
+            null, "OWNER_DEPOSIT", CashbookTaxTreatment.NonTaxableReceipt), ct);
+        return Ok(ApiResponse<CashbookEntryResponse>.Ok(result, "Đã nộp tiền vào két sắt chi nhánh."));
+    }
+
     [HttpPost("payments")]
     [RequireIdempotency]
     [Authorize(Roles = SystemRoles.StoreOwner)]

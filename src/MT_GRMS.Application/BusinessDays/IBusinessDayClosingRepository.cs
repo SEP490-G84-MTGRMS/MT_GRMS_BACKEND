@@ -15,5 +15,7 @@ public interface IBusinessDayClosingRepository
     Task<IReadOnlyList<Order>> GetShiftlessOrdersAsync(string tenantId, Guid branchId, DateOnly businessDate, CancellationToken cancellationToken = default);
     Task<bool> HasPendingPaymentOrdersAsync(string tenantId, Guid branchId, DateOnly businessDate, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<FinanceAccount>> GetFundsAsync(string tenantId, Guid branchId, CancellationToken cancellationToken = default);
+    Task<decimal> GetSafeRefundsAsync(string tenantId, Guid branchId, DateTime periodStartUtc, DateTime periodEndUtc, CancellationToken cancellationToken = default)
+        => Task.FromResult(0m);
     Task AddAsync(BusinessDayClosing closing, CancellationToken cancellationToken = default);
 }
