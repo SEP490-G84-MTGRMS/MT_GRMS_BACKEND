@@ -1580,7 +1580,7 @@ public class DeepBranchCoverageSuite2Tests
                     Product = product,
                     DeliveredQty = 10m,
                     AcceptedQty = 10m,
-                    LandedUnitCost = 15000m,
+                    PurchaseUnitCost = 15000m,
                     BatchCode = baseCandidateCode, // Existing code conflicts with return batch!
                     ExpiryDate = DateTime.UtcNow.AddMonths(12)
                 }

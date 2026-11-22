@@ -5042,11 +5042,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("decimal(18,2)")
                         .HasDefaultValue(0.00m);
 
-                    b.Property<decimal>("FreightFee")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(18,2)")
-                        .HasDefaultValue(0.00m);
-
                     b.Property<decimal>("GrandTotal")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(18,2)")
@@ -5191,18 +5186,13 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("ExpiryDate")
                         .HasColumnType("timestamp without time zone");
 
-                    b.Property<decimal>("FreightAllocated")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(18,2)")
-                        .HasDefaultValue(0.00m);
-
                     b.Property<Guid>("GoodsReceiptId")
                         .HasColumnType("uuid");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
 
-                    b.Property<decimal>("LandedUnitCost")
+                    b.Property<decimal>("PurchaseUnitCost")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(18,2)")
                         .HasDefaultValue(0.00m);

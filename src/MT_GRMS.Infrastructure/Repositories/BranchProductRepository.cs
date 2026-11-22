@@ -388,11 +388,15 @@ public class BranchProductRepository : IBranchProductRepository
                     : 0;
                 var hasSource = sp != null;
 
-                // Đơn vị nhập: DeliveryUoM (SupplierProduct) → IsPurchaseUnit → BaseUnit (giống màn NCC)
-                var inboundUnit = ResolveInboundUnit(
+                // Đơn vị nhập + rate: DeliveryUoM → IsPurchaseUnit → BaseUnit (giống màn Lô / NCC)
+                var stockUnitName = string.IsNullOrWhiteSpace(extra?.BaseUnit)
+                    ? (string.IsNullOrWhiteSpace(x.Unit) ? "Cái" : x.Unit.Trim())
+                    : extra!.BaseUnit.Trim();
+                var (inboundUnit, purchaseToStockRate) = ResolveInboundUnitAndRate(
                     deliveryUoM: sp?.DeliveryUoM,
                     purchaseUnitName: catalogPurchaseUnitName,
-                    baseUnitName: extra?.BaseUnit ?? x.Unit);
+                    baseUnitName: stockUnitName,
+                    units: extra?.Units.Select(u => (u.UnitName, u.ConversionRate, u.IsPurchaseUnit)));
 
                 return new BranchProductDto
                 {
@@ -406,6 +410,8 @@ public class BranchProductRepository : IBranchProductRepository
                     Barcode = x.Barcode ?? string.Empty,
                     Category = x.CategoryName,
                     Unit = inboundUnit,
+                    StockUnit = stockUnitName,
+                    PurchaseToStockRate = purchaseToStockRate,
                     ImageUrl = extra?.ImageUrl,
                     RetailPrice = x.RetailPrice,
                     CostPrice = cost,
@@ -454,11 +460,39 @@ public class BranchProductRepository : IBranchProductRepository
         string? purchaseUnitName,
         string? baseUnitName)
     {
+        return ResolveInboundUnitAndRate(deliveryUoM, purchaseUnitName, baseUnitName, null).Name;
+    }
+
+    /// <summary>
+    /// ĐVT nhập + hệ số quy đổi 1 ĐVT nhập = N ĐVT tồn (giống BatchRepository).
+    /// </summary>
+    private static (string Name, decimal Rate) ResolveInboundUnitAndRate(
+        string? deliveryUoM,
+        string? purchaseUnitName,
+        string? baseUnitName,
+        IEnumerable<(string UnitName, decimal ConversionRate, bool IsPurchaseUnit)>? units)
+    {
+        var stockUnit = string.IsNullOrWhiteSpace(baseUnitName) ? "Cái" : baseUnitName.Trim();
+        var unitList = units?.ToList() ?? [];
+        var purchase = unitList.FirstOrDefault(u => u.IsPurchaseUnit);
+
+        string inboundName;
         if (!string.IsNullOrWhiteSpace(deliveryUoM))
-            return deliveryUoM.Trim();
-        if (!string.IsNullOrWhiteSpace(purchaseUnitName))
-            return purchaseUnitName.Trim();
-        return string.IsNullOrWhiteSpace(baseUnitName) ? "Cái" : baseUnitName.Trim();
+            inboundName = deliveryUoM.Trim();
+        else if (!string.IsNullOrWhiteSpace(purchase.UnitName))
+            inboundName = purchase.UnitName.Trim();
+        else if (!string.IsNullOrWhiteSpace(purchaseUnitName))
+            inboundName = purchaseUnitName.Trim();
+        else
+            inboundName = stockUnit;
+
+        var matched = unitList.FirstOrDefault(u =>
+            string.Equals((u.UnitName ?? string.Empty).Trim(), inboundName, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(matched.UnitName) && matched.ConversionRate > 0)
+            return (inboundName, matched.ConversionRate);
+        if (!string.IsNullOrWhiteSpace(purchase.UnitName) && purchase.ConversionRate > 0)
+            return (inboundName, purchase.ConversionRate);
+        return (inboundName, 1m);
     }
 
     /// <summary>

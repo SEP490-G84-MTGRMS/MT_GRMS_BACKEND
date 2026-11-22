@@ -40,7 +40,6 @@ public class GoodsReceiptDto
     public DateTime? CancelledAtUtc { get; set; }
     public string? CancellationReason { get; set; }
     public decimal SubTotal { get; set; }
-    public decimal FreightFee { get; set; }
     public decimal DiscountAmount { get; set; }
     public decimal VatPercent { get; set; }
     public decimal VatAmount { get; set; }
@@ -82,10 +81,9 @@ public class GoodsReceiptLineDto
     public DateTime? ExpiryDate { get; set; }
     public int? DaysToExpiry => ExpiryDate.HasValue ? (int)(ExpiryDate.Value.Date - DateTime.UtcNow.Date).TotalDays : null;
     public bool IsNearExpiry => DaysToExpiry.HasValue && DaysToExpiry.Value <= 30;
-    public decimal FreightAllocated { get; set; }
     public decimal DiscountAllocated { get; set; }
     public decimal VatAllocated { get; set; }
-    public decimal LandedUnitCost { get; set; }
+    public decimal PurchaseUnitCost { get; set; }
     public string QualityStatus { get; set; } = "ACCEPTED";
     public string? RejectionReason { get; set; } // DAMAGE, EXPIRED, NEAR_EXPIRY, WRONG_SPEC, WRONG_ITEM, QUALITY_ISSUE, OTHER
     public string? RejectionNote { get; set; }
@@ -111,7 +109,6 @@ public class CreateGoodsReceiptCommand
     public Guid BranchId { get; set; }
     public string? InvoiceNo { get; set; }
     public DateTime? ReceivedAtUtc { get; set; }
-    public decimal FreightFee { get; set; } = 0;
     public decimal DiscountAmount { get; set; } = 0;
     public decimal VatPercent { get; set; } = 0;
     public string PaymentMethod { get; set; } = "AP";

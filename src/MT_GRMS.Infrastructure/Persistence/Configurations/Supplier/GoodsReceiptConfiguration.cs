@@ -23,7 +23,6 @@ public class GoodsReceiptConfiguration : IEntityTypeConfiguration<GoodsReceipt>
         builder.Property(x => x.RejectedByUserId).HasMaxLength(50);
         builder.Property(x => x.RejectionReason).HasMaxLength(500);
         builder.Property(x => x.SubTotal).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
-        builder.Property(x => x.FreightFee).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.DiscountAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.VatPercent).HasColumnType("decimal(5,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.VatAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);

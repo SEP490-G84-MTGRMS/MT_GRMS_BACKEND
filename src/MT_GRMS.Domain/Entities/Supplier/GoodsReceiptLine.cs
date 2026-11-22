@@ -21,10 +21,9 @@ public class GoodsReceiptLine : BaseTenantEntity
     public string? BatchCode { get; set; }
     public DateTime? ManufactureDate { get; set; }
     public DateTime? ExpiryDate { get; set; }
-    public decimal FreightAllocated { get; set; } = 0.00m;
     public decimal DiscountAllocated { get; set; } = 0.00m;
     public decimal VatAllocated { get; set; } = 0.00m;
-    public decimal LandedUnitCost { get; set; } = 0.00m;
+    public decimal PurchaseUnitCost { get; set; } = 0.00m;
     public string? RemainOption { get; set; }
     public string QualityStatus { get; set; } = "ACCEPTED";
     public string? RejectionReason { get; set; }

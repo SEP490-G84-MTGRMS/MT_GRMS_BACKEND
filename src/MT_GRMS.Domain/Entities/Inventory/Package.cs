@@ -14,6 +14,8 @@ public class Package : BaseTenantEntity
     public Guid BranchStockId { get; set; }
 
     public string InternalCode { get; set; } = string.Empty;
+    /// <summary>Tên hiển thị khi bán / tìm kiếm (vd: Dưa hấu khay 1kg).</summary>
+    public string? Name { get; set; }
     public string? Barcode { get; set; }
     public decimal NetWeight { get; set; } = 0.000m;
     public decimal SellingPrice { get; set; } = 0.00m;

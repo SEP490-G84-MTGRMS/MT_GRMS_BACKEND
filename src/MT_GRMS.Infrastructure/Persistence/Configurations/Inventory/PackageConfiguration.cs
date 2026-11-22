@@ -13,6 +13,7 @@ public class PackageConfiguration : IEntityTypeConfiguration<Package>
 
         builder.Property(x => x.TenantId).HasMaxLength(50).IsRequired();
         builder.Property(x => x.InternalCode).HasMaxLength(40).IsRequired();
+        builder.Property(x => x.Name).HasMaxLength(200);
         builder.Property(x => x.Barcode).HasMaxLength(50);
         builder.Property(x => x.RepackType).HasMaxLength(20).IsRequired();
         builder.Property(x => x.Status).HasMaxLength(20).IsRequired().IsConcurrencyToken();

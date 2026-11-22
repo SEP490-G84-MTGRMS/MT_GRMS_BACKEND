@@ -141,6 +141,42 @@ public class InventoryRepository : IInventoryRepository
                 .Select(x => (x.BranchId, x.ProductId, x.RequestedQty))
                 .ToList();
 
+        // Đang đặt = remaining trên PO mở (APPROVED/CONFIRMED/DISPATCHED/SENT), line chưa đóng.
+        var onOrderByPair = new Dictionary<(Guid BranchId, Guid ProductId), decimal>();
+        if (productIds.Count > 0 && branchIds.Count > 0)
+        {
+            var openPoLines = await (
+                from d in _appContext.PurchaseOrderDetails.AsNoTracking()
+                join po in _appContext.PurchaseOrders.AsNoTracking() on d.PurchaseOrderId equals po.Id
+                where d.TenantId == tenantId
+                      && !d.IsDeleted
+                      && !d.IsClosed
+                      && !po.IsDeleted
+                      && (po.Status == "APPROVED"
+                          || po.Status == "CONFIRMED"
+                          || po.Status == "DISPATCHED"
+                          || po.Status == "SENT")
+                      && branchIds.Contains(po.BranchId)
+                      && productIds.Contains(d.ProductId)
+                select new
+                {
+                    po.BranchId,
+                    d.ProductId,
+                    d.OrderedQty,
+                    d.FinalQty,
+                    d.ReceivedQty,
+                    d.IsClosed
+                }
+            ).ToListAsync(cancellationToken);
+
+            onOrderByPair = openPoLines
+                .GroupBy(x => (x.BranchId, x.ProductId))
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Sum(x => InventoryOnOrder.LineRemaining(
+                        x.OrderedQty, x.FinalQty, x.ReceivedQty, x.IsClosed)));
+        }
+
         var allItems = new List<InventoryStockItemDto>();
         var branchById = branches.ToDictionary(b => b.Id);
         var stocksByPair = branchStocks.ToLookup(s => (s.BranchId, s.ProductId));
@@ -164,6 +200,7 @@ public class InventoryRepository : IInventoryRepository
             var availableQty = stocks.Sum(s => BranchStockAvailability.GetSellableAvailable(s, now, packageWeights.GetValueOrDefault(s.Id)));
             var pendingQty = pendingReturnsByPair[(branch.Id, product.Id)]
                 .Sum(l => l.RequestedQty);
+            onOrderByPair.TryGetValue((branch.Id, product.Id), out var onOrderQty);
 
             var minStock = product.MinStock > 0 ? product.MinStock : 10;
             var weightedCost = physicalQty > 0
@@ -208,6 +245,7 @@ public class InventoryRepository : IInventoryRepository
                 DamagedQty: 0,
                 QuarantinedQty: quarantinedQty,
                 ReservedQty: reservedQty,
+                OnOrderQty: onOrderQty,
                 MinStock: minStock,
                 AvgCost: Math.Round(weightedCost, 2),
                 TotalValue: Math.Round(totalValue, 2),
@@ -222,7 +260,8 @@ public class InventoryRepository : IInventoryRepository
             TotalValue: allItems.Sum(x => x.TotalValue),
             LowStockCount: allItems.Count(x => x.Status == "LOW_STOCK"),
             OutOfStockCount: allItems.Count(x => x.Status == "OUT_OF_STOCK"),
-            ExpiryWarningCount: allItems.Count(x => x.Status == "NEAR_EXPIRY" || x.ExpiredQty > 0)
+            ExpiryWarningCount: allItems.Count(x => x.Status == "NEAR_EXPIRY" || x.ExpiredQty > 0),
+            TotalOnOrder: allItems.Sum(x => x.OnOrderQty)
         );
 
         if (!string.IsNullOrWhiteSpace(query.Status) && !query.Status.Equals("ALL", StringComparison.OrdinalIgnoreCase))

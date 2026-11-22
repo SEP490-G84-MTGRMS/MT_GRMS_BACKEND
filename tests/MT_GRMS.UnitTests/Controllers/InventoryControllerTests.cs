@@ -46,6 +46,7 @@ public class InventoryControllerTests
                     DamagedQty: 0m,
                     QuarantinedQty: 0m,
                     ReservedQty: 0m,
+                    OnOrderQty: 25m,
                     MinStock: 5m,
                     AvgCost: 1000m,
                     TotalValue: 10000m,
@@ -57,7 +58,7 @@ public class InventoryControllerTests
             TotalCount: 1,
             PageIndex: 1,
             PageSize: 20,
-            KpiSummary: new InventoryKpiSummaryDto(1, 10000m, 0, 0, 0)
+            KpiSummary: new InventoryKpiSummaryDto(1, 10000m, 0, 0, 0, 25m)
         );
         _mockInventoryService.Setup(s => s.GetPagedStockSummaryAsync(query, It.IsAny<CancellationToken>()))
             .ReturnsAsync(paged);
@@ -69,6 +70,8 @@ public class InventoryControllerTests
         Assert.True(resp.Success);
         Assert.Single(resp.Data!.Items);
         Assert.Equal("Product A", resp.Data.Items[0].ProductName);
+        Assert.Equal(25m, resp.Data.Items[0].OnOrderQty);
+        Assert.Equal(25m, resp.Data.KpiSummary.TotalOnOrder);
     }
 
     [Fact]
