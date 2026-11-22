@@ -253,8 +253,8 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
 
             var availableReturnQty = Math.Min(grnCeilingQty, stockAvailableQty);
             var unitCostPerStock = purchaseToStockRate > 0
-                ? Math.Round((line.LandedUnitCost > 0 ? line.LandedUnitCost : line.UnitPrice) / purchaseToStockRate, 4)
-                : (line.LandedUnitCost > 0 ? line.LandedUnitCost : line.UnitPrice);
+                ? Math.Round((line.PurchaseUnitCost > 0 ? line.PurchaseUnitCost : line.UnitPrice) / purchaseToStockRate, 4)
+                : (line.PurchaseUnitCost > 0 ? line.PurchaseUnitCost : line.UnitPrice);
 
             result.Add(new GrnReturnableLineDto(
                 GoodsReceiptLineId: line.Id,

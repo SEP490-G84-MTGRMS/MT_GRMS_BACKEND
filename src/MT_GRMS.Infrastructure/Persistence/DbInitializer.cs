@@ -145,6 +145,7 @@ ON CONFLICT (""Id"") DO NOTHING;
         try
         {
             await context.Database.ExecuteSqlRawAsync(@"
+ALTER TABLE IF EXISTS ""Packages"" ADD COLUMN IF NOT EXISTS ""Name"" character varying(200) NULL;
 ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""DispatchPackageId"" uuid NULL;
 ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierCodeSnapshot"" character varying(50) NULL;
 ALTER TABLE IF EXISTS ""PurchaseOrders"" ADD COLUMN IF NOT EXISTS ""SupplierNameSnapshot"" character varying(250) NULL;

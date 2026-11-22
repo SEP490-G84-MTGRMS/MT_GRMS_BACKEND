@@ -7,6 +7,7 @@ using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Application.Branches.Validators;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
@@ -222,6 +223,8 @@ public class BranchProductService : IBranchProductService
                 Barcode = product.Barcode ?? string.Empty,
                 Category = product.Category?.Name ?? "Khác",
                 Unit = product.BaseUnit,
+                StockUnit = product.BaseUnit,
+                PurchaseToStockRate = 1m,
                 RetailPrice = effectiveRetail,
                 CostPrice = effectiveCost,
                 CurrentStock = 0,
@@ -527,6 +530,8 @@ public class BranchProductService : IBranchProductService
             : 0;
 
         var effectiveRetail = catalog.SellingPriceOverride ?? product.SellingPrice;
+        var stockUnit = string.IsNullOrWhiteSpace(product.BaseUnit) ? "Cái" : product.BaseUnit.Trim();
+        var sellable = stocks.Sum(s => BranchStockAvailability.GetSellableAvailable(s));
 
         return new BranchProductDto
         {
@@ -539,10 +544,12 @@ public class BranchProductService : IBranchProductService
             Sku = product.ProductCode,
             Barcode = product.Barcode ?? string.Empty,
             Category = product.Category?.Name ?? "Khác",
-            Unit = product.BaseUnit,
+            Unit = stockUnit,
+            StockUnit = stockUnit,
+            PurchaseToStockRate = 1m,
             RetailPrice = effectiveRetail,
             CostPrice = costPrice,
-            CurrentStock = stocks.Sum(s => s.QuantityOnHand),
+            CurrentStock = sellable,
             MinStockLevel = product.MinStock,
             SupplierId = displaySupplierId ?? sp?.SupplierId,
             HasActiveSupplierSource = hasSource,

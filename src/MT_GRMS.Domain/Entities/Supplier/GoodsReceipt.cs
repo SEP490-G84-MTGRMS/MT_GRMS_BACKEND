@@ -23,7 +23,6 @@ public class GoodsReceipt : BaseTenantEntity
     public DateTime? RejectedAtUtc { get; set; }
     public string? RejectionReason { get; set; }
     public decimal SubTotal { get; set; } = 0.00m;
-    public decimal FreightFee { get; set; } = 0.00m;
     public decimal DiscountAmount { get; set; } = 0.00m;
     public decimal VatPercent { get; set; } = 0.00m;
     public decimal VatAmount { get; set; } = 0.00m;

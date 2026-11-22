@@ -290,6 +290,9 @@ public class OrderService : IOrderService
         var selectedStocks = new Dictionary<Guid, Domain.Entities.Inventory.BranchStock>();
         var allocationsByItem = new Dictionary<int, List<OrderStockAllocationDto>>();
         var soldPackagesByItem = new Dictionary<int, Package>();
+        // Kg khay đã đánh dấu SOLD trong đơn này (chưa SaveChanges) — trừ khỏi trọng số active khi check invariant.
+        var soldPackageWeightInTxn = new Dictionary<Guid, decimal>();
+        var packageWeightsByProduct = new Dictionary<Guid, Dictionary<Guid, decimal>>();
         for (var itemIndex = 0; itemIndex < request.Items.Count; itemIndex++)
         {
             var item = request.Items[itemIndex];
@@ -306,20 +309,39 @@ public class OrderService : IOrderService
             if (item.BatchId.HasValue && item.BatchId.Value != package.BranchStockId)
                 throw new BusinessException("PACKAGE_BATCH_MISMATCH", "Khay không thuộc lô đã chọn.");
 
-            var stock = await _orderRepository.GetBranchStockByIdAsync(branchId, item.ProductId, package.BranchStockId, cancellationToken)
-                ?? throw new BusinessException("PACKAGE_BATCH_NOT_FOUND", "Lô của khay không còn tồn tại.");
+            if (!selectedStocks.TryGetValue(package.BranchStockId, out var stock))
+            {
+                stock = await _orderRepository.GetBranchStockByIdAsync(branchId, item.ProductId, package.BranchStockId, cancellationToken)
+                    ?? throw new BusinessException("PACKAGE_BATCH_NOT_FOUND", "Lô của khay không còn tồn tại.");
+                selectedStocks[stock.Id] = stock;
+            }
+
             if (stock.ExpiryDate.HasValue && stock.ExpiryDate.Value.Date < DateTime.UtcNow.Date)
                 throw new BusinessException("PACKAGE_BATCH_EXPIRED", "Lô gốc của khay đã hết hạn sử dụng.");
-            var packageWeights = await _orderRepository.GetActivePackageWeightsAsync(branchId, item.ProductId, cancellationToken) ?? new Dictionary<Guid, decimal>();
-            if (stock.QuantityOnHand - stock.QuantityReserved - stock.QuantityQuarantined < packageWeights.GetValueOrDefault(stock.Id))
-                throw new BusinessException("PACKAGE_STOCK_INVARIANT", "Sổ tồn không còn đủ để giao khay.");
+
+            if (!packageWeightsByProduct.TryGetValue(item.ProductId, out var packageWeights))
+            {
+                packageWeights = await _orderRepository.GetActivePackageWeightsAsync(branchId, item.ProductId, cancellationToken)
+                    ?? new Dictionary<Guid, decimal>();
+                packageWeightsByProduct[item.ProductId] = packageWeights;
+            }
+
+            // Active packaged còn lại sau các khay đã bán trong cùng đơn (DB vẫn thấy AVAILABLE).
+            var dbPackaged = packageWeights.GetValueOrDefault(stock.Id);
+            var remainingPackaged = Math.Max(0m, dbPackaged - soldPackageWeightInTxn.GetValueOrDefault(stock.Id));
+            if (!BranchStockAvailability.MeetsPackageInvariant(stock.QuantityOnHand, remainingPackaged))
+            {
+                throw new BusinessException(
+                    "PACKAGE_STOCK_INVARIANT",
+                    $"Sổ tồn không còn đủ để giao khay '{package.InternalCode}' (tồn {stock.QuantityOnHand:0.###} kg, khay đang giữ {remainingPackaged:0.###} kg).");
+            }
 
             stock.QuantityOnHand -= package.NetWeight;
             stock.UpdatedAt = DateTime.UtcNow;
             package.Status = "SOLD";
             package.SoldAt = DateTime.UtcNow;
             soldPackagesByItem[itemIndex] = package;
-            selectedStocks[stock.Id] = stock;
+            soldPackageWeightInTxn[stock.Id] = soldPackageWeightInTxn.GetValueOrDefault(stock.Id) + package.NetWeight;
             allocationsByItem[itemIndex] = new List<OrderStockAllocationDto> { new(stock.Id, stock.BatchCode, package.NetWeight, CostPerBase: stock.LandedCostPerUnit) };
         }
         for (var itemIndex = 0; itemIndex < request.Items.Count; itemIndex++)

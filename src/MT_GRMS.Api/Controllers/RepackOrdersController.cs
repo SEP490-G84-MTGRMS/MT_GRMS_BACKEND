@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Authorization;
@@ -26,6 +27,17 @@ public class RepackOrdersController : BaseApiController
     {
         var result = await _repackService.FindSellablePackageByCodeAsync(branchId, code, cancellationToken);
         return result == null ? NotFound() : Ok(ApiResponse<PackageScanDto>.Ok(result));
+    }
+
+    [HttpGet("packages/search")]
+    public async Task<IActionResult> SearchPackages(
+        [FromQuery] Guid branchId,
+        [FromQuery] string q,
+        [FromQuery] int limit = 20,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await _repackService.SearchSellablePackagesAsync(branchId, q, limit, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<PackageScanDto>>.Ok(result));
     }
 
     [HttpGet("branch-stocks/{branchStockId:guid}/packages")]

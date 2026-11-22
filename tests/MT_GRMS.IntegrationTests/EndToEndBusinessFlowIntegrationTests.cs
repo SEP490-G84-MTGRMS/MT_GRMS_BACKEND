@@ -210,7 +210,6 @@ public class EndToEndBusinessFlowIntegrationTests
             Status = "COMPLETED",
             ReceivedAtUtc = testTxDate,
             SubTotal = 1_000_000m,      // 100 * 10.000 đ
-            FreightFee = 0m,
             DiscountAmount = 0m,
             VatAmount = 0m,
             GrandTotal = 1_000_000m,
@@ -228,7 +227,7 @@ public class EndToEndBusinessFlowIntegrationTests
                     RejectedQty = 0,
                     UnitPrice = 10_000m,
                     LineAmount = 1_000_000m,
-                    LandedUnitCost = 10_000m,
+                    PurchaseUnitCost = 10_000m,
                     QualityStatus = "ACCEPTED",
                     CreatedAt = testTxDate
                 }

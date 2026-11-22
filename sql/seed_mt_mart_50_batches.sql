@@ -310,7 +310,7 @@ JOIN LATERAL (
 INSERT INTO "GoodsReceiptLines" (
   "Id", "TenantId", "GoodsReceiptId", "ProductId", "OrderedQty", "DeliveredQty", "AcceptedQty",
   "RejectedQty", "MissingQty", "UnitPrice", "LineAmount", "BatchCode", "ManufactureDate", "ExpiryDate",
-  "LandedUnitCost", "QualityStatus", "BranchStockId", "Note",
+  "PurchaseUnitCost", "QualityStatus", "BranchStockId", "Note",
   "CreatedAt", "IsDeleted"
 )
 SELECT

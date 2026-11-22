@@ -22,10 +22,9 @@ public class GoodsReceiptLineConfiguration : IEntityTypeConfiguration<GoodsRecei
         builder.Property(x => x.UnitPrice).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.LineAmount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.BatchCode).HasMaxLength(100);
-        builder.Property(x => x.FreightAllocated).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.DiscountAllocated).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.VatAllocated).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
-        builder.Property(x => x.LandedUnitCost).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
+        builder.Property(x => x.PurchaseUnitCost).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.RemainOption).HasMaxLength(20);
         builder.Property(x => x.QualityStatus).HasMaxLength(20).HasDefaultValue("ACCEPTED");
         builder.Property(x => x.RejectionReason).HasMaxLength(300);

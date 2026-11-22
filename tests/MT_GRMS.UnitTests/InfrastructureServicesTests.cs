@@ -238,7 +238,7 @@ public class InfrastructureServicesTests
             TotalCount: 0,
             PageIndex: 1,
             PageSize: 5,
-            KpiSummary: new InventoryKpiSummaryDto(0, 0, 0, 0, 0)
+            KpiSummary: new InventoryKpiSummaryDto(0, 0, 0, 0, 0, 0)
         );
         mockInv.Setup(i => i.GetPagedStockSummaryAsync(It.IsAny<InventoryFilterQuery>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(stockSummary);

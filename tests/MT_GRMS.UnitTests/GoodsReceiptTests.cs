@@ -97,7 +97,6 @@ public class GoodsReceiptTests
             SupplierId = _supplierId,
             BranchId = _branchId,
             InvoiceNo = "INV-001",
-            FreightFee = 50000,
             DiscountAmount = 0,
             VatPercent = 10,
             Lines = new List<CreateGoodsReceiptLineCommand>
@@ -126,6 +125,7 @@ public class GoodsReceiptTests
         Assert.Equal(5, result.TotalRejectedQty);
         Assert.Equal(5, result.TotalShortageQty);
         Assert.True(result.HasMismatch);
+        Assert.Equal(25000m, Assert.Single(result.Lines).PurchaseUnitCost);
     }
 
     [Fact]
@@ -686,7 +686,6 @@ public class GoodsReceiptTests
             SupplierId = _supplierId,
             BranchId = _branchId,
             InvoiceNo = "INV-UPDATED",
-            FreightFee = 20000,
             DiscountAmount = 10000,
             VatPercent = 10,
             Lines = new List<CreateGoodsReceiptLineCommand>
@@ -714,6 +713,7 @@ public class GoodsReceiptTests
         Assert.Equal("DRAFT", updated.Status);
         Assert.Equal("INV-UPDATED", updated.InvoiceNo);
         Assert.Equal(90m * 25000m, updated.SubTotal);
+        Assert.Equal(25000m, Assert.Single(updated.Lines).PurchaseUnitCost);
     }
 
     [Fact]
@@ -1998,7 +1998,7 @@ public class GoodsReceiptTests
                     AcceptedQty = 10,
                     RejectedQty = 0,
                     UnitPrice = 26000,
-                    LandedUnitCost = 26000,
+                    PurchaseUnitCost = 26000,
                     BatchCode = "LOT-2026A",
                     ExpiryDate = DateTime.UtcNow.AddMonths(12)
                 }
@@ -2075,7 +2075,7 @@ public class GoodsReceiptTests
                     AcceptedQty = 5,
                     RejectedQty = 0,
                     UnitPrice = 5000,
-                    LandedUnitCost = 5000
+                    PurchaseUnitCost = 5000
                 }
             }
         };
