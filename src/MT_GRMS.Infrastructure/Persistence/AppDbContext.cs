@@ -19,6 +19,7 @@ namespace MT_GRMS.Infrastructure.Persistence;
 /// </summary>
 public partial class AppDbContext : DbContext
 {
+    public DbSet<TaxFilingConfirmation> TaxFilingConfirmations => Set<TaxFilingConfirmation>();
     private readonly ITenantContext? _tenantContext;
 
     public AppDbContext(DbContextOptions<AppDbContext> options)

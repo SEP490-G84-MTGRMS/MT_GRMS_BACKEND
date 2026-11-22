@@ -439,7 +439,7 @@ public class BusinessDayClosingServiceTests
         // Reopen not found
         await Assert.ThrowsAsync<BusinessException>(() => service.ReopenAsync(Guid.NewGuid(), new ReopenBusinessDayRequest("Lý do")));
 
-        // Reopen already reopened
+        // Legacy records are retained for history but reopening is disabled for all versions.
         var closing = new BusinessDayClosing
         {
             Id = Guid.NewGuid(), TenantId = "tenant-test", BranchId = branchId,
@@ -447,7 +447,9 @@ public class BusinessDayClosingServiceTests
         };
         repo.History.Add(closing);
         var exAlready = await Assert.ThrowsAsync<BusinessException>(() => service.ReopenAsync(closing.Id, new ReopenBusinessDayRequest("Lý do")));
-        Assert.Equal("BUSINESS_DAY_ALREADY_REOPENED", exAlready.ErrorCode);
+        Assert.Equal("BUSINESS_DAY_FINALIZED", exAlready.ErrorCode);
+        Assert.False(closing.IsActive);
+        Assert.Equal(BusinessDayClosingStatus.Reopened, closing.Status);
     }
 
     [Theory]

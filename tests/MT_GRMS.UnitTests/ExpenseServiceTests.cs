@@ -142,7 +142,8 @@ public class ExpenseServiceTests
             "HD001",
             "0101234567",
             null,
-            "Mua hóa đơn in nhiệt"
+            "Mua hóa đơn in nhiệt",
+            DueDate: new DateOnly(2026, 11, 22)
         );
 
         var response = await _service.CreateExpenseAsync(request);
@@ -151,6 +152,7 @@ public class ExpenseServiceTests
         Assert.Equal(ExpenseVoucherStatus.Approved.ToString(), response.Status);
         Assert.False(response.IsFlaggedAsSuspiciousSplit);
         Assert.NotNull(response.ApprovedAtUtc);
+        Assert.Equal(request.DueDate, response.DueDate);
     }
 
     [Fact]

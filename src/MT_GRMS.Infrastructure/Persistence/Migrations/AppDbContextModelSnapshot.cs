@@ -920,6 +920,9 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<string>("EvidenceAttachmentUrl")
                         .HasColumnType("text");
 
+                    b.Property<DateOnly?>("DueDate")
+                        .HasColumnType("date");
+
                     b.Property<DateTime>("ExpenseDate")
                         .HasColumnType("timestamp without time zone");
 
@@ -973,6 +976,7 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<int>("Status")
+                        .IsConcurrencyToken()
                         .HasColumnType("integer");
 
                     b.Property<string>("SuspiciousReason")
@@ -1003,6 +1007,9 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.HasIndex("TenantId", "Status");
 
                     b.HasIndex("TenantId", "BranchId", "ExpenseDate");
+
+                    b.HasIndex("DueDate")
+                        .HasFilter("\"DueDate\" IS NOT NULL AND \"IsDeleted\" = false");
 
                     b.ToTable("ExpenseVouchers", (string)null);
                 });
@@ -3344,6 +3351,7 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<string>("Status")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
+                        .IsConcurrencyToken()
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)")
                         .HasDefaultValue("Draft");
@@ -6809,6 +6817,19 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("IdempotencyRecords", (string)null);
+                });
+
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Finance.TaxFilingConfirmation", b =>
+                {
+                    b.Property<Guid>("SnapshotId").HasColumnType("uuid");
+                    b.Property<DateTime>("ConfirmedAtUtc").HasColumnType("timestamp without time zone");
+                    b.Property<string>("ConfirmedBy").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<string>("TenantId").IsRequired().HasMaxLength(50).HasColumnType("character varying(50)");
+                    b.HasKey("SnapshotId");
+                    b.ToTable("TaxFilingConfirmations", (string)null);
+                    b.HasOne("MT_GRMS.Domain.Entities.Finance.HouseholdTaxSnapshot", null)
+                        .WithOne().HasForeignKey("MT_GRMS.Domain.Entities.Finance.TaxFilingConfirmation", "SnapshotId")
+                        .OnDelete(DeleteBehavior.Cascade).IsRequired();
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.System.Notification", b =>

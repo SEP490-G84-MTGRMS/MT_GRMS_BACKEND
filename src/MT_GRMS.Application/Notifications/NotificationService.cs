@@ -75,7 +75,7 @@ public class NotificationService : INotificationService
         {
             var payloadMap = entities.ToDictionary(
                 e => e.RecipientUserId,
-                MapToDto,
+                NotificationDto.FromEntity,
                 StringComparer.Ordinal);
             await _realtimeDispatcher.PushToUsersAsync(tenantId, distinctUsers, payloadMap, cancellationToken);
         }
@@ -121,7 +121,7 @@ public class NotificationService : INotificationService
         var items = await _notificationRepository.GetByRecipientAsync(tenantId, userId, limit, cancellationToken);
         var unreadCount = await _notificationRepository.CountUnreadAsync(tenantId, userId, cancellationToken);
 
-        return new NotificationListResponse(items.Select(MapToDto).ToList(), unreadCount);
+        return new NotificationListResponse(items.Select(NotificationDto.FromEntity).ToList(), unreadCount);
     }
 
     public async Task<bool> MarkAsReadAsync(
@@ -171,14 +171,4 @@ public class NotificationService : INotificationService
         return updated;
     }
 
-    private static NotificationDto MapToDto(Notification n) => new(
-        n.Id,
-        n.Type,
-        n.Title,
-        n.Message,
-        n.ActionUrl,
-        n.IsRead,
-        n.CreatedAt.Kind == DateTimeKind.Unspecified
-            ? DateTime.SpecifyKind(n.CreatedAt, DateTimeKind.Utc)
-            : n.CreatedAt.ToUniversalTime());
 }

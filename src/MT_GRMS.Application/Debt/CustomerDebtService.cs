@@ -1,6 +1,7 @@
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Debt.Dtos;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.Debt;
@@ -11,14 +12,16 @@ public class CustomerDebtService : ICustomerDebtService
     private readonly ICashbookService _cashbookService;
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly NotificationOutbox? _notificationOutbox;
 
     public CustomerDebtService(ICustomerDebtRepository debtRepo, ICashbookService cashbookService,
-        ITenantContext tenantContext, IUnitOfWork unitOfWork)
+        ITenantContext tenantContext, IUnitOfWork unitOfWork, NotificationOutbox? notificationOutbox = null)
     {
         _debtRepo = debtRepo;
         _cashbookService = cashbookService;
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
+        _notificationOutbox = notificationOutbox;
     }
 
     public async Task<RepaymentResultResponse> RepayDebtAsync(RepayDebtRequest request, CancellationToken ct = default)
@@ -43,6 +46,13 @@ public class CustomerDebtService : ICustomerDebtService
             var cashbookEntry = await _cashbookService.ReceiveCashAsync(request.PaymentSourceAccountId,
                 request.PaymentSourceType, request.Amount, "DEBT_REPAYMENT", customer.Id, referenceCode,
                 request.Notes?.Trim() ?? $"Thu nợ khách hàng {customer.Name}", ct);
+            if (customer.TotalDebt == 0 && _notificationOutbox != null)
+            {
+                await _notificationOutbox.EnqueueAsync(_tenantContext.CurrentTenantId, cashbookEntry.Id, new BusinessNotification(
+                    BusinessNotificationTypes.CustomerDebtSettled, "Khách hàng đã thanh toán hết nợ",
+                    $"Khách hàng {customer.CustomerCode} đã hết dư nợ.",
+                    $"/store-owner/customers?search={Uri.EscapeDataString(customer.CustomerCode)}"), ct);
+            }
             await _unitOfWork.SaveChangesAsync(ct);
             if (managesTransaction) await _unitOfWork.CommitTransactionAsync(ct);
 

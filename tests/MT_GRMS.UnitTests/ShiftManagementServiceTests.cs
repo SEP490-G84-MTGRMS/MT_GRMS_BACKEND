@@ -1206,8 +1206,7 @@ public class ShiftManagementServiceTests
         Assert.Single(result);
         var item = result.First();
         Assert.Equal("CA-20261108-01", item.ShiftCode);
-        Assert.Single(item.Participants);
-        Assert.Equal("Nguyễn Thu Ngân", item.Participants[0].FullName);
+        Assert.Equal("Nguyễn Thu Ngân", Assert.Single(item.Participants!).FullName);
         Assert.Empty(item.CloseConfirmations!);
     }
 
@@ -1444,6 +1443,9 @@ public class ShiftManagementServiceTests
     public async Task ConfirmCashDropAsync_ValidationsAndSuccess()
     {
         var movId = Guid.NewGuid();
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _service.ConfirmCashDropAsync(movId, "Staff"));
+        _tenantContext.SetRole("STORE_OWNER");
 
         // 1. Not found
         var exNotFound = await Assert.ThrowsAsync<BusinessException>(() =>
@@ -1475,6 +1477,7 @@ public class ShiftManagementServiceTests
     [Fact]
     public async Task GetPendingMovementsSummaryAsync_AndSettings_ShouldWork()
     {
+        _tenantContext.SetRole("STORE_OWNER");
         var branchId = Guid.NewGuid();
         _shiftRepository.CashMovements.Add(new ShiftCashMovement
         {
@@ -1502,7 +1505,8 @@ public class ShiftManagementServiceTests
 
         // 2. GetCashMovementSettingsAsync
         var settings = await _service.GetCashMovementSettingsAsync();
-        Assert.NotNull(settings);
+        Assert.Equal(200_000m, settings.CashOutApprovalThreshold);
+        Assert.Equal(0m, settings.CashOutShiftTotalLimit);
 
         // 3. UpdateCashMovementSettingsAsync negative
         var exNeg = await Assert.ThrowsAsync<BusinessException>(() =>
@@ -1510,9 +1514,11 @@ public class ShiftManagementServiceTests
         Assert.Equal("INVALID_THRESHOLD", exNeg.ErrorCode);
 
         // 4. UpdateCashMovementSettingsAsync success
+        _shiftRepository.PaymentConfig = new Tenant { Id = _tenantContext.CurrentTenantId };
         var updated = await _service.UpdateCashMovementSettingsAsync(new UpdateCashMovementSettingsRequest(300000, 500000));
         Assert.Equal(300000m, updated.CashOutApprovalThreshold);
         Assert.Equal(500000m, updated.CashOutShiftTotalLimit);
+        Assert.Equal(updated, await _service.GetCashMovementSettingsAsync());
     }
 
     [Fact]
@@ -1559,13 +1565,15 @@ public class ShiftManagementServiceTests
     }
 
     [Fact]
-    public async Task GetShiftHistoryAsync_ShouldSyncParticipantsFromSchedules()
+    public async Task GetShiftHistoryAsync_ShouldReturnRecordedParticipantsOnly()
     {
         var branchId = Guid.NewGuid();
         var shiftId = Guid.NewGuid();
         var shiftTime = DateTime.UtcNow;
         var shiftDateVn = shiftTime.AddHours(7).Date;
 
+        var recordedParticipant = new ShiftParticipantDto(Guid.NewGuid(), shiftId, Guid.NewGuid(),
+            "cashier", "Recorded cashier", shiftTime, shiftTime.AddHours(4));
         var shift = new ShiftZReport
         {
             Id = shiftId,
@@ -1574,9 +1582,10 @@ public class ShiftManagementServiceTests
             ShiftCode = "CA-HIST-01",
             OpenedAtUtc = shiftTime,
             ClosedAtUtc = shiftTime.AddHours(4),
-            CashierUserId = Guid.NewGuid(),
+            CashierUserId = recordedParticipant.UserId,
             OpeningFloat = 500_000m,
-            Status = ShiftState.Closed
+            Status = ShiftState.Closed,
+            ParticipantsJson = JsonSerializer.Serialize(new[] { recordedParticipant })
         };
         _shiftRepository.Shifts.Add(shift);
 
@@ -1602,7 +1611,7 @@ public class ShiftManagementServiceTests
         Assert.NotEmpty(history);
         var historyShift = history.FirstOrDefault(h => h.Id == shiftId);
         Assert.NotNull(historyShift);
-        Assert.Contains(shift.Participants, p => p.FullName == "Nguyen Van A");
+        Assert.Equal(recordedParticipant, Assert.Single(historyShift.Participants!));
     }
 
     [Fact]
@@ -1724,20 +1733,16 @@ public class ShiftManagementServiceTests
     }
 
     [Fact]
-    public async Task RecordShiftCashbookSettlementAsync_ShouldPostToCashbookAccounts()
+    public async Task RecordShiftCashbookSettlementAsync_ShouldPostCashAndAvoidDuplicateBankCredits()
     {
         var mockCashbook = new Mock<ICashbookService>();
-        var bankAccount = new MT_GRMS.Domain.Entities.Finance.FinanceAccount { Id = Guid.NewGuid(), AccountName = "Bank", AccountType = FinanceAccountType.Bank };
         var tillAccount = new MT_GRMS.Domain.Entities.Finance.FinanceAccount { Id = Guid.NewGuid(), AccountName = "Till", AccountType = FinanceAccountType.Till };
         var safeAccount = new MT_GRMS.Domain.Entities.Finance.FinanceAccount { Id = Guid.NewGuid(), AccountName = "Safe", AccountType = FinanceAccountType.Safe };
 
         mockCashbook.Setup(c => c.GetEntriesAsync(It.IsAny<Guid?>(), It.IsAny<Guid?>(), It.IsAny<DateTime?>(), It.IsAny<DateTime?>(), It.IsAny<int>(), It.IsAny<int>(), It.IsAny<CashbookEntryType?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<MT_GRMS.Application.Cashbook.Dtos.CashbookEntryResponse>());
 
-        mockCashbook.Setup(c => c.GetOrCreateBankAccountAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
-            .ReturnsAsync(bankAccount);
-
-        mockCashbook.Setup(c => c.GetOrCreateTillAsync(It.IsAny<Guid>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+        mockCashbook.Setup(c => c.GetOrCreateTillAsync(It.IsAny<Guid>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(tillAccount);
 
         mockCashbook.Setup(c => c.GetOrCreateSafeAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
@@ -1762,7 +1767,7 @@ public class ShiftManagementServiceTests
         Assert.NotNull(task);
         await task;
 
-        mockCashbook.Verify(c => c.ReceiveCashAsync(bankAccount.Id, FinanceAccountType.Bank, 2_000_000m, "POS_SALE", shift.Id, shift.ShiftCode, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        mockCashbook.Verify(c => c.ReceiveCashAsync(It.IsAny<Guid>(), FinanceAccountType.Bank, It.IsAny<decimal>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
         mockCashbook.Verify(c => c.ReceiveCashAsync(tillAccount.Id, FinanceAccountType.Till, 1_000_000m, "POS_SALE", shift.Id, shift.ShiftCode, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
         mockCashbook.Verify(c => c.ReceiveCashAsync(safeAccount.Id, FinanceAccountType.Safe, 500_000m, "CASH_DROP", shift.Id, shift.ShiftCode, It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
@@ -1830,18 +1835,19 @@ public class ShiftManagementServiceTests
             BranchId = branchId,
             WorkDate = nowVn.Date,
             PlannedStartTime = TimeSpan.FromHours(offsetHours),
-            PlannedEndTime = TimeSpan.FromHours(offsetHours).Add(TimeSpan.FromHours(2)),
+            PlannedEndTime = TimeSpan.FromHours(Math.Min(offsetHours + 2, 23)).Add(TimeSpan.FromMinutes(59)),
+            CheckInTime = DateTime.UtcNow,
             Status = ScheduleStatus.Scheduled
         });
 
         var result = await _service.CheckCashierShiftEligibilityAsync(branchId, staffUserId, "STAFF");
 
         Assert.False(result.IsAllowed);
-        Assert.Contains("Bạn không có lịch làm việc trong ca hiện tại", result.Reason);
+        Assert.Contains("lịch làm việc hợp lệ", result.Reason);
     }
 
     [Fact]
-    public async Task CheckCashierShiftEligibilityAsync_StaffAlreadyClosedCurrentSchedule_ReturnsNotAllowed()
+    public async Task CheckCashierShiftEligibilityAsync_StaffCanWorkAfterClosingEarlierShiftAndReportsHistory()
     {
         var branchId = Guid.NewGuid();
         var staffUserId = Guid.NewGuid();
@@ -1866,6 +1872,7 @@ public class ShiftManagementServiceTests
             WorkDate = nowVn.Date,
             PlannedStartTime = TimeSpan.Zero,
             PlannedEndTime = new TimeSpan(23, 59, 59),
+            CheckInTime = DateTime.UtcNow,
             ShiftName = "Ca Toàn Thời Gian",
             Status = ScheduleStatus.Scheduled
         });
@@ -1875,8 +1882,8 @@ public class ShiftManagementServiceTests
             Id = Guid.NewGuid(),
             BranchId = branchId,
             Status = ShiftState.Closed,
-            OpenedAtUtc = DateTime.UtcNow.AddHours(-4),
-            ClosedAtUtc = DateTime.UtcNow.AddHours(-1),
+            OpenedAtUtc = nowVn.Date.AddHours(-7),
+            ClosedAtUtc = DateTime.UtcNow,
             OpenedScheduleId = schedId,
             ClosedScheduleId = schedId,
             ClosedByUserId = staffUserId
@@ -1884,9 +1891,9 @@ public class ShiftManagementServiceTests
 
         var result = await _service.CheckCashierShiftEligibilityAsync(branchId, staffUserId, "STAFF");
 
-        Assert.False(result.IsAllowed);
+        Assert.True(result.IsAllowed);
         Assert.True(result.HasClosedShiftToday);
-        Assert.Contains("đã chốt ca làm việc", result.Reason);
+        Assert.Equal(schedId, result.ActiveSchedule?.ScheduleId);
     }
 
     [Fact]
@@ -2160,6 +2167,7 @@ public class ShiftManagementServiceTests
     [Fact]
     public async Task RejectCashMovementAsync_EmptyReason_ThrowsBusinessException()
     {
+        _tenantContext.SetRole("STORE_OWNER");
         var ex = await Assert.ThrowsAsync<BusinessException>(() =>
             _service.RejectCashMovementAsync(Guid.NewGuid(), "Admin", "   "));
         Assert.Equal("REQUIRED_REASON", ex.ErrorCode);

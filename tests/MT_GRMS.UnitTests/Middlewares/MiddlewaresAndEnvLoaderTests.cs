@@ -50,7 +50,7 @@ public class MiddlewaresAndEnvLoaderTests
     }
 
     [Fact]
-    public async Task MultiTenantMiddleware_AuthenticatedAdmin_CanSwitchTenant()
+    public async Task MultiTenantMiddleware_AuthenticatedAdmin_IgnoresTenantHeader()
     {
         var tenantContext = new TenantContext();
         var context = new DefaultHttpContext();
@@ -66,7 +66,7 @@ public class MiddlewaresAndEnvLoaderTests
         var middleware = new MultiTenantMiddleware(next: (ctx) => Task.CompletedTask);
         await middleware.InvokeAsync(context, tenantContext);
 
-        Assert.Equal("switched-tenant", tenantContext.CurrentTenantId);
+        Assert.Empty(tenantContext.CurrentTenantId);
         Assert.Equal("ADMIN", tenantContext.CurrentRole);
     }
 
@@ -106,7 +106,7 @@ public class MiddlewaresAndEnvLoaderTests
     }
 
     [Fact]
-    public async Task MultiTenantMiddleware_Unauthenticated_AppliesFallbackTenant()
+    public async Task MultiTenantMiddleware_Unauthenticated_IgnoresScopeHeaders()
     {
         var tenantContext = new TenantContext();
         var context = new DefaultHttpContext();
@@ -117,8 +117,8 @@ public class MiddlewaresAndEnvLoaderTests
         var middleware = new MultiTenantMiddleware(next: (ctx) => Task.CompletedTask);
         await middleware.InvokeAsync(context, tenantContext);
 
-        Assert.Equal("custom-fallback", tenantContext.CurrentTenantId);
-        Assert.Equal("CASHIER", tenantContext.CurrentRole);
+        Assert.Empty(tenantContext.CurrentTenantId);
+        Assert.Empty(tenantContext.CurrentRole);
     }
 
     [Theory]

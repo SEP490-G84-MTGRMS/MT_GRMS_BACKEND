@@ -13,6 +13,7 @@ using MT_GRMS.Application.GoodsReceipts.Dtos;
 using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.PosOrders.Dtos;
 using MT_GRMS.Application.PosShifts;
+using MT_GRMS.Application.PosShifts.Dtos;
 using MT_GRMS.Application.Promotions;
 using MT_GRMS.Application.PurchaseOrders;
 using MT_GRMS.Application.PurchaseOrders.Dispatch;
@@ -84,7 +85,7 @@ public class DeepBranchCoverageSuite2Tests
         fakeOrderRepo.Products.Add(new Product { Id = prodId, Name = "SP 1", SellingPrice = 50000m, IsActive = true, Units = new List<ProductUnit>() });
         fakeOrderRepo.BranchProducts.Add(new BranchProduct { BranchId = branchId, ProductId = prodId, Status = "Active" });
 
-        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, null, null, null, null, null, tenantContext, null);
+        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, tenantContext: tenantContext);
 
         var req = new OrderCreateRequest(
             BranchId: branchId,
@@ -125,7 +126,7 @@ public class DeepBranchCoverageSuite2Tests
             ExpiryDate = DateTime.UtcNow.AddDays(-2) // Expired 2 days ago
         });
 
-        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, null, null, null, null, null, tenantContext, null);
+        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, tenantContext: tenantContext);
 
         var req = new OrderCreateRequest(
             BranchId: branchId,
@@ -168,7 +169,7 @@ public class DeepBranchCoverageSuite2Tests
             ExpiryDate = DateTime.UtcNow.AddDays(30)
         });
 
-        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, null, null, null, null, null, tenantContext, null);
+        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, tenantContext: tenantContext);
 
         var req = new OrderCreateRequest(
             BranchId: branchId,
@@ -211,7 +212,7 @@ public class DeepBranchCoverageSuite2Tests
         };
         fakeOrderRepo.BranchStocks.Add(stock);
 
-        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, null, null, null, null, null, tenantContext, null);
+        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, tenantContext: tenantContext);
 
         var req = new OrderCreateRequest(
             BranchId: branchId,
@@ -271,7 +272,7 @@ public class DeepBranchCoverageSuite2Tests
             QuantityOnHand = 100m
         });
 
-        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, null, null, null, null, null, tenantContext, null);
+        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, tenantContext: tenantContext);
 
         var req = new OrderCreateRequest(
             BranchId: branchId,
@@ -310,7 +311,7 @@ public class DeepBranchCoverageSuite2Tests
         fakeOrderRepo.BranchStocks.Add(new BranchStock { Id = Guid.NewGuid(), BranchId = branchId, ProductId = normalProdId, QuantityOnHand = 50m });
         fakeOrderRepo.BranchStocks.Add(new BranchStock { Id = Guid.NewGuid(), BranchId = branchId, ProductId = giftProdId, QuantityOnHand = 50m });
 
-        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, null, null, null, null, null, tenantContext, null);
+        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, tenantContext: tenantContext);
 
         var req = new OrderCreateRequest(
             BranchId: branchId,
@@ -330,13 +331,14 @@ public class DeepBranchCoverageSuite2Tests
     }
 
     [Fact]
-    public async Task OrderService_ShiftParticipant_UpdatesUserNameWhenProvided()
+    public async Task OrderService_RecordsAuthorizedCashierFromShiftEligibility()
     {
-        var tenantContext = new FakeTenantContext();
+        var tenantContext = new FakeTenantContext { CurrentRole = "STAFF" };
         var fakeOrderRepo = new FakeOrderRepository();
         var uow = new LocalUnitOfWork();
         var printMock = new Mock<IThermalPrintService>();
         var shiftRepoMock = new Mock<IShiftRepository>();
+        var shiftServiceMock = new Mock<IShiftService>();
 
         var branchId = tenantContext.CurrentBranchId!.Value;
         var prodId = Guid.NewGuid();
@@ -348,22 +350,22 @@ public class DeepBranchCoverageSuite2Tests
         fakeOrderRepo.BranchProducts.Add(new BranchProduct { BranchId = branchId, ProductId = prodId, Status = "Active" });
         fakeOrderRepo.BranchStocks.Add(new BranchStock { Id = Guid.NewGuid(), BranchId = branchId, ProductId = prodId, QuantityOnHand = 50m });
 
-        var participant = new ShiftParticipant { ShiftId = shiftId, UserId = userId, UserName = "Old Name" };
         var activeShift = new ShiftZReport
         {
             Id = shiftId,
             BranchId = branchId,
             Status = ShiftState.Open,
-            CashierUserId = userId,
-            Participants = new List<ShiftParticipant> { participant }
+            CashierUserId = userId
         };
 
         shiftRepoMock.Setup(r => r.GetActiveShiftAsync(branchId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(activeShift);
-        shiftRepoMock.Setup(r => r.GetParticipantAsync(shiftId, userId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(participant);
+        const string employeeName = "Pham Thu Ngan Moi";
+        shiftServiceMock.Setup(r => r.CheckCashierShiftEligibilityAsync(branchId, userId, "STAFF", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new CashierShiftEligibilityDto(true, false, "STAFF", employeeName, null, null));
 
-        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, null, null, null, shiftRepoMock.Object, null, tenantContext, null);
+        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, shiftRepository: shiftRepoMock.Object,
+            tenantContext: tenantContext, shiftService: shiftServiceMock.Object);
 
         var req = new OrderCreateRequest(
             BranchId: branchId,
@@ -374,12 +376,13 @@ public class DeepBranchCoverageSuite2Tests
                 new OrderItemCreateDto(ProductId: prodId, Quantity: 1, UnitPrice: 50000m)
             },
             ShiftId: shiftId,
-            CashierName: "Pham Thu Ngan Moi"
+            CashierName: employeeName
         );
 
         var res = await service.CreateOrderAsync(req);
         Assert.NotNull(res);
-        Assert.Equal("Pham Thu Ngan Moi", participant.UserName);
+        Assert.Equal(employeeName, res.CashierName);
+        shiftServiceMock.Verify(r => r.RecordParticipantAsync(shiftId, userId, employeeName, employeeName, It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -399,7 +402,7 @@ public class DeepBranchCoverageSuite2Tests
         fakeOrderRepo.Products.Add(new Product { Id = prodId, Name = "SP Pre", SellingPrice = 100000m, IsActive = true });
         fakeOrderRepo.BranchProducts.Add(new BranchProduct { BranchId = branchId, ProductId = prodId, Status = "Active" });
 
-        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, null, null, null, null, null, tenantContext, null);
+        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, tenantContext: tenantContext);
 
         var req = new PreOrderCreateRequest(
             BranchId: branchId,
@@ -431,7 +434,7 @@ public class DeepBranchCoverageSuite2Tests
         fakeOrderRepo.BranchProducts.Add(new BranchProduct { BranchId = branchId, ProductId = prodId, Status = "Active" });
         fakeOrderRepo.BranchStocks.Add(new BranchStock { Id = Guid.NewGuid(), BranchId = branchId, ProductId = prodId, QuantityOnHand = 10m });
 
-        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, null, null, null, null, null, tenantContext, null);
+        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, tenantContext: tenantContext);
 
         var longSummary = new string('A', 350);
         var req = new PreOrderCreateRequest(
@@ -452,7 +455,7 @@ public class DeepBranchCoverageSuite2Tests
     }
 
     [Fact]
-    public async Task OrderService_ProcessReturnExchangeAsync_SettlementMethodDebt_IncreasesCustomerDebtAndSetsUnpaid()
+    public async Task OrderService_ProcessReturnExchangeAsync_SettlementMethodDebt_IncreasesCustomerDebtAndSetsDebtStatus()
     {
         var tenantContext = new FakeTenantContext();
         var fakeOrderRepo = new FakeOrderRepository();
@@ -503,7 +506,7 @@ public class DeepBranchCoverageSuite2Tests
         };
         fakeOrderRepo.Orders.Add(originalOrder);
 
-        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, null, null, null, null, null, tenantContext, null);
+        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, tenantContext: tenantContext);
 
         // Exchange: return old item (100k credit), take new item (180k debit). Net amount = +80k. SettlementMethod = "DEBT"
         var req = new ReturnExchangeRequest(
@@ -516,7 +519,7 @@ public class DeepBranchCoverageSuite2Tests
         Assert.NotNull(res);
         Assert.Equal(130000m, customer.TotalDebt); // 50,000 + 80,000 = 130,000!
         var exchangeOrder = fakeOrderRepo.Orders.Last();
-        Assert.Equal("UNPAID", exchangeOrder.PaymentStatus);
+        Assert.Equal("DEBT", exchangeOrder.PaymentStatus);
     }
 
     [Fact]
@@ -571,7 +574,7 @@ public class DeepBranchCoverageSuite2Tests
         };
         fakeOrderRepo.Orders.Add(originalOrder);
 
-        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, null, null, null, null, null, tenantContext, null);
+        var service = new OrderService(fakeOrderRepo, uow, printMock.Object, tenantContext: tenantContext);
 
         // Exchange: return 150k, buy 80k -> net = -70k. SettlementMethod = "REDUCE_DEBT"
         var req = new ReturnExchangeRequest(

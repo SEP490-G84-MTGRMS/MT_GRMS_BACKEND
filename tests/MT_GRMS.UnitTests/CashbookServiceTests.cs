@@ -437,6 +437,23 @@ public class CashbookServiceTests
     }
 
     [Fact]
+    public async Task ReconcileCashAccountAsync_ComputesDifferenceFromTheLockedBalance()
+    {
+        var accountId = Guid.NewGuid();
+        var current = new FinanceAccount { Id = accountId, CurrentBalance = 150_000m, AccountType = FinanceAccountType.Safe };
+        _cashbookRepo.Accounts.Add(current);
+        _accountRepo.Items.Add(new FinanceAccount { Id = accountId, CurrentBalance = 100_000m });
+
+        await _service.ReconcileCashAccountAsync(new ReconcileAccountRequest(accountId, 140_000m, "Kiểm kê"));
+
+        var entry = Assert.Single(_cashbookRepo.Items);
+        Assert.Equal(CashbookEntryType.Payment, entry.EntryType);
+        Assert.Equal(10_000m, entry.Amount);
+        Assert.Equal(140_000m, entry.BalanceAfter);
+        Assert.Equal(140_000m, current.CurrentBalance);
+    }
+
+    [Fact]
     public async Task ReconcileCashAccountAsync_WhenUserHasUnauthorizedRole_ShouldThrowUnauthorizedAccessException()
     {
         _tenantContext.SetRole("Staff");

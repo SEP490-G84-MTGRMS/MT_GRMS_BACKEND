@@ -943,7 +943,7 @@ public class SupplierAndTransferBranchCoverageTests
         branches.Items.Add(new Branch { Id = branchToId, TenantId = tenant.CurrentTenantId, Name = "Branch To", IsActive = true });
         products.Items.Add(new Product { Id = prodId, TenantId = tenant.CurrentTenantId, Name = "Product Transfer", ProductCode = "PTRF01" });
 
-        var service = new TransferService(transfers, details, stocks, products, branches, tenant, uow);
+        var service = new TransferService(transfers, details, stocks, products, branches, new MemoryRepository<TransferStatusHistory>(), tenant, uow);
 
         // 1. Dispatch with ZERO stock throws
         var trf1 = new Transfer
@@ -952,7 +952,7 @@ public class SupplierAndTransferBranchCoverageTests
             TenantId = tenant.CurrentTenantId,
             FromBranchId = branchFromId,
             ToBranchId = branchToId,
-            Status = TransferStatus.Draft,
+            Status = TransferStatus.Pending,
             TransferCode = "TRF-001"
         };
         transfers.Items.Add(trf1);
@@ -998,7 +998,7 @@ public class SupplierAndTransferBranchCoverageTests
         Assert.Equal("B-AUTO", line.BatchNumber);
         Assert.NotNull(line.ExpiryDate);
 
-        // 4. Dispatch non-draft throws
+        // 4. Dispatch InTransit throws
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.DispatchTransferAsync(trf1.Id, CancellationToken.None));
     }
@@ -1023,7 +1023,7 @@ public class SupplierAndTransferBranchCoverageTests
         branches.Items.Add(new Branch { Id = branchToId, TenantId = tenant.CurrentTenantId, Name = "Branch To", IsActive = true });
         products.Items.Add(new Product { Id = prodId, TenantId = tenant.CurrentTenantId, Name = "Product Transfer", ProductCode = "PTRF01" });
 
-        var service = new TransferService(transfers, details, stocks, products, branches, tenant, uow);
+        var service = new TransferService(transfers, details, stocks, products, branches, new MemoryRepository<TransferStatusHistory>(), tenant, uow);
 
         var trf = new Transfer
         {
@@ -1067,7 +1067,7 @@ public class SupplierAndTransferBranchCoverageTests
     }
 
     [Fact]
-    public async Task TransferService_CancelTransfer_RestoresStock_And_EnforcesPermissions()
+    public async Task TransferService_CancelTransfer_ReleasesReservation_And_EnforcesPermissions()
     {
         var tenant = new FakeTenantContext();
         var uow = new LocalUnitOfWork();
@@ -1093,11 +1093,12 @@ public class SupplierAndTransferBranchCoverageTests
             BranchId = branchFromId,
             ProductId = prodId,
             BatchCode = "B-CANCEL",
-            QuantityOnHand = 40m
+            QuantityOnHand = 40m,
+            QuantityReserved = 15m
         };
         stocks.Items.Add(stockSource);
 
-        var service = new TransferService(transfers, details, stocks, products, branches, tenant, uow);
+        var service = new TransferService(transfers, details, stocks, products, branches, new MemoryRepository<TransferStatusHistory>(), tenant, uow);
 
         var trf = new Transfer
         {
@@ -1105,7 +1106,8 @@ public class SupplierAndTransferBranchCoverageTests
             TenantId = tenant.CurrentTenantId,
             FromBranchId = branchFromId,
             ToBranchId = branchToId,
-            Status = TransferStatus.InTransit,
+            Status = TransferStatus.Pending,
+            IsStockReserved = true,
             TransferCode = "TRF-CAN-01"
         };
         transfers.Items.Add(trf);
@@ -1122,19 +1124,20 @@ public class SupplierAndTransferBranchCoverageTests
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             service.CancelTransferAsync(trf.Id, new CancelTransferRequest(""), CancellationToken.None));
 
-        // 2. Cancel InTransit as unauthorized role throws
+        // 2. Cancel as unauthorized role throws
         tenant.SetRole("CUSTOMER");
         tenant.CurrentBranchId = Guid.NewGuid();
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             service.CancelTransferAsync(trf.Id, new CancelTransferRequest("Lý do"), CancellationToken.None));
 
-        // 3. Cancel InTransit as Owner restores stock
+        // 3. Cancel before dispatch releases the reservation
         tenant.SetRole("STORE_OWNER");
         tenant.CurrentBranchId = branchFromId;
         var cancelResult = await service.CancelTransferAsync(trf.Id, new CancelTransferRequest("Khách hủy đơn"), CancellationToken.None);
         Assert.NotNull(cancelResult);
         Assert.Equal(TransferStatus.Cancelled.ToString(), cancelResult.Status);
-        Assert.Equal(55m, stockSource.QuantityOnHand); // 40 + 15 = 55
+        Assert.Equal(40m, stockSource.QuantityOnHand);
+        Assert.Equal(0m, stockSource.QuantityReserved);
 
         // 4. Cancel already cancelled transfer throws
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -1161,12 +1164,12 @@ public class SupplierAndTransferBranchCoverageTests
         branches.Items.Add(new Branch { Id = branchToId, TenantId = tenant.CurrentTenantId, Name = "Branch To", IsActive = true });
         products.Items.Add(new Product { Id = prodId, TenantId = tenant.CurrentTenantId, Name = "Product Transfer", ProductCode = "PTRF01" });
 
-        var service = new TransferService(transfers, details, stocks, products, branches, tenant, uow);
+        var service = new TransferService(transfers, details, stocks, products, branches, new MemoryRepository<TransferStatusHistory>(), tenant, uow);
 
-        // 1. Empty CurrentTenantId returns empty
+        // 1. Missing tenant context is denied
         tenant.CurrentTenantId = "";
-        var emptyResult = await service.GetTransfersAsync(new TransferFilterParams(null, null, null, null, null, null), CancellationToken.None);
-        Assert.Empty(emptyResult.Items);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            service.GetTransfersAsync(new TransferFilterParams(null, null, null, null, null, null), CancellationToken.None));
         tenant.CurrentTenantId = "tenant-sup-cov-01";
 
         // Seed 2 transfers: 1 match, 1 mismatch
@@ -1176,7 +1179,7 @@ public class SupplierAndTransferBranchCoverageTests
             TenantId = tenant.CurrentTenantId,
             FromBranchId = branchFromId,
             ToBranchId = branchToId,
-            Status = TransferStatus.Received,
+            Status = TransferStatus.Completed,
             TransferCode = "TRF-MATCH-01",
             ReceivedAt = DateTime.UtcNow
         };
@@ -1197,7 +1200,7 @@ public class SupplierAndTransferBranchCoverageTests
             TenantId = tenant.CurrentTenantId,
             FromBranchId = branchFromId,
             ToBranchId = branchToId,
-            Status = TransferStatus.Received,
+            Status = TransferStatus.Completed,
             TransferCode = "TRF-MISMATCH-02",
             ReceivedAt = DateTime.UtcNow
         };

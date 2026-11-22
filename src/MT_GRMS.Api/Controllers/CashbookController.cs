@@ -95,7 +95,7 @@ public class CashbookController : BaseApiController
     }
 
     [HttpPost("receipts")]
-    [RequireIdempotency]
+    [RequireIdempotency(transactional: true)]
     [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<CashbookEntryResponse>>> CreateReceipt(
         [FromBody] CreateReceiptRequest request,
@@ -106,7 +106,7 @@ public class CashbookController : BaseApiController
     }
 
     [HttpPost("payments")]
-    [RequireIdempotency]
+    [RequireIdempotency(transactional: true)]
     [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<CashbookEntryResponse>>> CreatePayment(
         [FromBody] CreatePaymentRequest request,
@@ -117,7 +117,7 @@ public class CashbookController : BaseApiController
     }
 
     [HttpPost("tax-payments")]
-    [RequireIdempotency]
+    [RequireIdempotency(transactional: true)]
     [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<TaxPaymentResponse>>> RecordTaxPayment(
         [FromBody] RecordTaxPaymentRequest request,
@@ -128,7 +128,7 @@ public class CashbookController : BaseApiController
     }
 
     [HttpPost("transfers")]
-    [RequireIdempotency]
+    [RequireIdempotency(transactional: true)]
     [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<TransferFundResponse>>> TransferFunds(
         [FromBody] TransferFundRequest request,
@@ -139,7 +139,7 @@ public class CashbookController : BaseApiController
     }
 
     [HttpPost("reconcile")]
-    [RequireIdempotency]
+    [RequireIdempotency(transactional: true)]
     [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<CashbookEntryResponse?>>> ReconcileCashAccount(
         [FromBody] ReconcileAccountRequest request,

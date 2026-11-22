@@ -65,6 +65,7 @@ public static class DependencyInjection
         services.AddScoped<IScheduleApprovalService, ScheduleApprovalService>();
         services.AddScoped<HR.Payslips.IPayslipService, HR.Payslips.PayslipService>();
         services.AddScoped<Notifications.INotificationService, Notifications.NotificationService>();
+        services.AddScoped<Notifications.NotificationOutbox>();
 
         // 3. Đăng ký các Service cho Master Admin Portal
         services.AddScoped<ISubscriptionPlanService, SubscriptionPlanService>();

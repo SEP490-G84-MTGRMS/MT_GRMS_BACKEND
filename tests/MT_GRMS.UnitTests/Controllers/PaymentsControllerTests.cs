@@ -4,18 +4,28 @@ using System.Reflection;
 using System.Security.Claims;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Moq;
 using MT_GRMS.Api.Controllers;
+using MT_GRMS.Api.Hubs;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Common.Services;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Domain.Entities.Sales;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
+using Npgsql;
 using Xunit;
 
 namespace MT_GRMS.UnitTests.Controllers;
@@ -42,10 +52,14 @@ public class PaymentsControllerTests
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(databaseName: $"PaymentsDb_{Guid.NewGuid()}")
+            .ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning))
             .Options;
 
         return new AppDbContext(options, _mockTenant.Object);
     }
+
+    private PaymentsController CreateController(AppDbContext context)
+        => PaymentTestSupport.CreateController(context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
 
     private static int _ipCounter = 1;
     private static ControllerContext CreateContext(string role = "STORE_OWNER", string? tenant = TenantId, string? ip = null)
@@ -67,7 +81,8 @@ public class PaymentsControllerTests
         {
             User = new ClaimsPrincipal(identity)
         };
-        var assignedIp = ip ?? $"10.0.{(System.Threading.Interlocked.Increment(ref _ipCounter) / 250) % 250}.{System.Threading.Interlocked.Increment(ref _ipCounter) % 250}";
+        var number = Interlocked.Increment(ref _ipCounter);
+        var assignedIp = ip ?? $"10.0.{number / 250}.{number % 250}";
         httpContext.Connection.RemoteIpAddress = System.Net.IPAddress.Parse(assignedIp);
 
         return new ControllerContext { HttpContext = httpContext };
@@ -77,34 +92,23 @@ public class PaymentsControllerTests
     public async Task GetPublicQrConfig_ShouldHandleNotFound_AndSuccess()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object)
-        {
-            ControllerContext = CreateContext()
-        };
+        var controller = CreateController(context);
+        controller.ControllerContext = CreateContext();
 
         // 1. Not found when nothing configured
-        var resNotFound = await controller.GetPublicQrConfig(TenantId, null, CancellationToken.None);
+        var resNotFound = await controller.GetPublicQrConfig(TenantId, null, null, CancellationToken.None);
         Assert.IsType<NotFoundObjectResult>(resNotFound);
 
         // 2. Branch requested but no branch payment account
-        var resBranchNotFound = await controller.GetPublicQrConfig(TenantId, Guid.NewGuid(), CancellationToken.None);
+        var resBranchNotFound = await controller.GetPublicQrConfig(TenantId, Guid.NewGuid(), null, CancellationToken.None);
         Assert.IsType<NotFoundObjectResult>(resBranchNotFound);
 
         // 3. Config exists -> Success
-        context.StorePaymentConfigs.Add(new StorePaymentConfig
-        {
-            Id = Guid.NewGuid(),
-            TenantId = TenantId,
-            BankCode = "MB",
-            BankName = "MBBank",
-            BankAccountNumber = "0987654321",
-            BankAccountName = "NGUYEN VAN A",
-            IsActive = true
-        });
+        PaymentTestSupport.AddTenant(context, TenantId, enabled: true);
+        var bank = PaymentTestSupport.AddBank(context, TenantId, "0987654321");
         await context.SaveChangesAsync();
 
-        var resSuccess = await controller.GetPublicQrConfig(TenantId, null, CancellationToken.None);
+        var resSuccess = await controller.GetPublicQrConfig(TenantId, bank.BranchId, null, CancellationToken.None);
         Assert.IsType<OkObjectResult>(resSuccess);
     }
 
@@ -112,27 +116,17 @@ public class PaymentsControllerTests
     public async Task GetPaymentConfig_ShouldHandleForbidden_AndSuccess()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
 
         // 1. Forbidden for STAFF
         controller.ControllerContext = CreateContext("STAFF");
         var resForbid = await controller.GetPaymentConfig(CancellationToken.None);
-        var objRes = Assert.IsType<ObjectResult>(resForbid);
-        Assert.Equal(StatusCodes.Status403Forbidden, objRes.StatusCode);
+        Assert.IsType<ForbidResult>(resForbid);
 
         // 2. Success for STORE_OWNER
         controller.ControllerContext = CreateContext("STORE_OWNER");
-        context.StorePaymentConfigs.Add(new StorePaymentConfig
-        {
-            Id = Guid.NewGuid(),
-            TenantId = TenantId,
-            BankCode = "VCB",
-            BankName = "Vietcombank",
-            BankAccountNumber = "1234567890",
-            BankAccountName = "NGUYEN VAN B",
-            IsActive = true
-        });
+        PaymentTestSupport.AddTenant(context, TenantId, enabled: true);
+        PaymentTestSupport.AddBank(context, TenantId, "1234567890", "VCB");
         await context.SaveChangesAsync();
 
         var resOk = await controller.GetPaymentConfig(CancellationToken.None);
@@ -143,25 +137,27 @@ public class PaymentsControllerTests
     public async Task SavePaymentConfig_ShouldHandleForbidden_Validation_AndSuccess()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
 
         // 1. Forbidden for STAFF
         controller.ControllerContext = CreateContext("STAFF");
         var req = new SavePaymentConfigRequest { BankCode = "MB", BankAccountNumber = "12345", BankAccountName = "TEST" };
         var resForbid = await controller.SavePaymentConfig(req, CancellationToken.None);
-        var objRes = Assert.IsType<ObjectResult>(resForbid);
-        Assert.Equal(StatusCodes.Status403Forbidden, objRes.StatusCode);
+        Assert.IsType<ForbidResult>(resForbid);
 
         // 2. Validation error: empty bank account
         controller.ControllerContext = CreateContext("STORE_OWNER");
-        var reqEmpty = new SavePaymentConfigRequest { BankCode = "MB", BankAccountNumber = "", BankAccountName = "TEST" };
+        PaymentTestSupport.AddTenant(context, TenantId);
+        var bank = PaymentTestSupport.AddBank(context, TenantId, "1234567890");
+        await context.SaveChangesAsync();
+        var branchId = bank.BranchId!.Value;
+        var reqEmpty = new SavePaymentConfigRequest { BankCode = "MB", BankAccountNumber = "", BankAccountName = "TEST", BranchIds = [branchId] };
         var resEmpty = await controller.SavePaymentConfig(reqEmpty, CancellationToken.None);
         Assert.IsType<BadRequestObjectResult>(resEmpty);
 
-        // 2b. Name too long
-        var reqLongName = new SavePaymentConfigRequest { BankCode = "MB", BankAccountNumber = "123456789", BankAccountName = new string('A', 151) };
-        Assert.IsType<BadRequestObjectResult>(await controller.SavePaymentConfig(reqLongName, CancellationToken.None));
+        // 2b. Bank account number too long
+        var reqLongNumber = new SavePaymentConfigRequest { BankCode = "MB", BankAccountNumber = new string('0', 31), BankAccountName = "TEST", BranchIds = [branchId] };
+        Assert.IsType<BadRequestObjectResult>(await controller.SavePaymentConfig(reqLongNumber, CancellationToken.None));
 
         // 2c. Invalid branch id
         var reqBadBranch = new SavePaymentConfigRequest
@@ -179,7 +175,9 @@ public class PaymentsControllerTests
             BankCode = "MB",
             BankAccountNumber = "123456789",
             BankAccountName = "TEST",
-            PaymentAccountId = Guid.NewGuid()
+            PaymentAccountId = Guid.NewGuid(),
+            BranchIds = [branchId],
+            IsActive = false
         };
         Assert.IsType<BadRequestObjectResult>(await controller.SavePaymentConfig(reqBadPaymentAcc, CancellationToken.None));
 
@@ -189,24 +187,12 @@ public class PaymentsControllerTests
             BankCode = "MB",
             BankAccountNumber = "123456789",
             BankAccountName = "TEST",
-            SepayApiKey = "short_key"
+            SepayApiKey = "short_key",
+            BranchIds = [branchId]
         };
         Assert.IsType<BadRequestObjectResult>(await controller.SavePaymentConfig(reqShortKey, CancellationToken.None));
 
         // 3. Success with valid Branch
-        var branch = new Branch
-        {
-            Id = Guid.NewGuid(),
-            TenantId = TenantId,
-            Name = "Chi nhanh chinh",
-            BranchCode = "CN01",
-            Address = "123 Street",
-            Phone = "0987654321",
-            IsActive = true
-        };
-        await context.Branches.AddAsync(branch);
-        await context.SaveChangesAsync();
-
         var reqSuccess = new SavePaymentConfigRequest
         {
             BankCode = "MB",
@@ -214,7 +200,7 @@ public class PaymentsControllerTests
             BankAccountNumber = "1234567890",
             BankAccountName = "NGUYEN VAN C",
             SepayApiKey = "SEPAY_API_KEY_1234567890_TEST",
-            BranchIds = new List<Guid> { branch.Id },
+            BranchIds = [branchId],
             IsActive = true
         };
         var resSuccess = await controller.SavePaymentConfig(reqSuccess, CancellationToken.None);
@@ -230,8 +216,7 @@ public class PaymentsControllerTests
     public async Task RevokeSePayApiKey_ShouldHandleForbidden_AndSuccess()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
 
         // Forbidden
         controller.ControllerContext = CreateContext("STAFF");
@@ -241,31 +226,22 @@ public class PaymentsControllerTests
 
         // Success when config exists
         controller.ControllerContext = CreateContext("STORE_OWNER");
-        context.StorePaymentConfigs.Add(new StorePaymentConfig
-        {
-            Id = Guid.NewGuid(),
-            TenantId = TenantId,
-            BankCode = "MB",
-            BankAccountNumber = "1234567890",
-            BankAccountName = "TEST",
-            SepayApiKeyEncrypted = "AES256:dummy",
-            IsActive = true
-        });
+        var tenant = PaymentTestSupport.AddTenant(context, TenantId, enabled: true, apiKey: "test-api-key", secret: "test-webhook-secret");
         await context.SaveChangesAsync();
 
         var resSuccess = await controller.RevokeSePayApiKey(CancellationToken.None);
         Assert.IsType<OkObjectResult>(resSuccess);
+        Assert.Empty(tenant.SepayApiKeyEncrypted);
+        Assert.False(tenant.IsSepayEnabled);
+        Assert.NotEqual("test-webhook-secret", tenant.SepayWebhookSecret);
     }
 
     [Fact]
     public async Task CheckOrderStatus_ShouldHandleNotFound_AndSuccess()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object)
-        {
-            ControllerContext = CreateContext()
-        };
+        var controller = CreateController(context);
+        controller.ControllerContext = CreateContext();
 
         // NotFound
         var resNotFound = await controller.CheckOrderStatus("ORD-NONEXISTENT", CancellationToken.None);
@@ -294,8 +270,7 @@ public class PaymentsControllerTests
     public async Task TestSecurityLayers_ShouldHandleForbidden_AndSuccess()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
 
         // Forbidden
         controller.ControllerContext = CreateContext("STAFF");
@@ -313,8 +288,7 @@ public class PaymentsControllerTests
     public async Task GetSePayBankAccounts_ShouldHandleForbidden_NoConfig_AndMockKey()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
 
         // 1. Forbidden for STAFF
         controller.ControllerContext = CreateContext("STAFF");
@@ -329,16 +303,7 @@ public class PaymentsControllerTests
         Assert.Equal(StatusCodes.Status502BadGateway, objBadGateway.StatusCode);
 
         // 3. STORE_OWNER with mock key -> 502 Bad Gateway
-        context.StorePaymentConfigs.Add(new StorePaymentConfig
-        {
-            Id = Guid.NewGuid(),
-            TenantId = TenantId,
-            BankCode = "MB",
-            BankAccountNumber = "12345678",
-            BankAccountName = "STORE",
-            SepayApiKeyEncrypted = "AES256:mock_key_123",
-            IsActive = true
-        });
+        PaymentTestSupport.AddTenant(context, TenantId, enabled: true, apiKey: "mock_key_123");
         await context.SaveChangesAsync();
 
         var resMock = await controller.GetSePayBankAccounts(CancellationToken.None);
@@ -347,34 +312,23 @@ public class PaymentsControllerTests
     }
 
     [Fact]
-    public async Task HandleSePayWebhook_SecurityLayers_AndSuccessFlow_ShouldExecute()
+    public async Task HandleSePayWebhook_ShouldRejectInvalidRequests_AndAcknowledgeReplay()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
 
         var payload = new SePayWebhookPayload
         {
             Id = 12345,
             Gateway = "VietQR",
-            TransactionDate = DateTime.UtcNow,
+            TransactionDate = DateTime.UtcNow.ToString("O"),
             AccountNumber = "12345678",
             AmountIn = 100_000m,
             TransactionContent = "Thanh toan HD1001",
             ReferenceNumber = "REF-999"
         };
 
-        // 1. IP not whitelisted -> 403 Forbidden
-        var notWhitelistedContext = CreateContext();
-        notWhitelistedContext.HttpContext.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("8.8.8.8");
-        controller.ControllerContext = notWhitelistedContext;
-        var resIp = await controller.HandleSePayWebhook(payload, CancellationToken.None);
-        var objIp = Assert.IsType<ObjectResult>(resIp);
-        Assert.Equal(StatusCodes.Status403Forbidden, objIp.StatusCode);
-
-        // Whitelist IP from now on
         var validContext = CreateContext();
-        validContext.HttpContext.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("10.1.1.1");
         controller.ControllerContext = validContext;
 
         // 2. Missing Authorization header -> 401 Unauthorized
@@ -389,19 +343,19 @@ public class PaymentsControllerTests
         // Set valid header
         validContext.HttpContext.Request.Headers["Authorization"] = "Bearer mock_apikey";
 
-        // 4. Order code cannot be extracted -> 400 BadRequest
+        // 4. Unknown key on an orderless ping -> 401 Unauthorized
         var payloadBadContent = new SePayWebhookPayload
         {
             Id = 12345,
             TransactionContent = ""
         };
         var resBadContent = await controller.HandleSePayWebhook(payloadBadContent, CancellationToken.None);
-        Assert.IsType<BadRequestObjectResult>(resBadContent);
+        Assert.IsType<UnauthorizedObjectResult>(resBadContent);
 
-        // 5. Order not found -> 404 NotFound
+        // 5. Unknown order returns a non-success acknowledgement
         payload.TransactionContent = "HD999999";
         var resNotFound = await controller.HandleSePayWebhook(payload, CancellationToken.None);
-        Assert.IsType<NotFoundObjectResult>(resNotFound);
+        Assert.False(PaymentTestSupport.Json(Assert.IsType<OkObjectResult>(resNotFound)).GetProperty("success").GetBoolean());
 
         // Seed order
         var order = new Order
@@ -419,17 +373,10 @@ public class PaymentsControllerTests
         context.Orders.Add(order);
 
         // Seed config with webhook secret
-        var config = new StorePaymentConfig
-        {
-            Id = Guid.NewGuid(),
-            TenantId = TenantId,
-            BankCode = "MB",
-            BankAccountNumber = "12345678",
-            BankAccountName = "STORE OWNER",
-            SepayWebhookSecret = "SECRET_WEBHOOK_123",
-            IsActive = true
-        };
-        context.StorePaymentConfigs.Add(config);
+        PaymentTestSupport.AddTenant(context, TenantId, enabled: true, secret: "SECRET_WEBHOOK_123");
+        var bank = PaymentTestSupport.AddBank(context, TenantId, "12345678");
+        order.BranchId = bank.BranchId!.Value;
+        order.FinanceAccountId = bank.Id;
         await context.SaveChangesAsync();
 
         payload.TransactionContent = "HD1001";
@@ -462,23 +409,7 @@ public class PaymentsControllerTests
         await context.SaveChangesAsync();
 
         var resIdempotent = await controller.HandleSePayWebhook(payload, CancellationToken.None);
-        Assert.IsType<OkObjectResult>(resIdempotent);
-
-        // 9. Insufficient amount -> 400 BadRequest
-        payload.Id = 99999;
-        payload.AmountIn = 50_000m;
-        var resInsufficient = await controller.HandleSePayWebhook(payload, CancellationToken.None);
-        Assert.IsType<BadRequestObjectResult>(resInsufficient);
-
-        // 10. Valid webhook execution -> Success (200 Ok), marks order PAID
-        payload.AmountIn = 100_000m;
-        var resSuccess = await controller.HandleSePayWebhook(payload, CancellationToken.None);
-        var objSuccess = Assert.IsType<OkObjectResult>(resSuccess);
-        Assert.NotNull(objSuccess.Value);
-
-        var updatedOrder = await context.Orders.FindAsync(order.Id);
-        Assert.Equal("PAID", updatedOrder!.PaymentStatus);
-        Assert.Equal("Completed", updatedOrder.Status);
+                Assert.True(PaymentTestSupport.Json(Assert.IsType<OkObjectResult>(resIdempotent)).GetProperty("isIdempotentReplay").GetBoolean());
     }
 
     [Fact]
@@ -488,35 +419,22 @@ public class PaymentsControllerTests
 
         // 1. Forbidden when not store owner or admin
         var staffContext = CreateContext(role: "STAFF");
-        var controllerStaff = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object)
-        {
-            ControllerContext = staffContext
-        };
+        var controllerStaff = CreateController(context);
+        controllerStaff.ControllerContext = staffContext;
         var resForbidden = await controllerStaff.GetSePayBankAccounts(CancellationToken.None);
         var obj403 = Assert.IsType<ObjectResult>(resForbidden);
         Assert.Equal(403, obj403.StatusCode);
 
         // 2. Owner context, but no config / no key -> 502 Bad Gateway
         var ownerContext = CreateContext(role: "STORE_OWNER");
-        var controllerOwner = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object)
-        {
-            ControllerContext = ownerContext
-        };
+        var controllerOwner = CreateController(context);
+        controllerOwner.ControllerContext = ownerContext;
         var resNoConfig = await controllerOwner.GetSePayBankAccounts(CancellationToken.None);
         var obj502 = Assert.IsType<ObjectResult>(resNoConfig);
         Assert.Equal(502, obj502.StatusCode);
 
         // 3. Config with real key and mock HTTP client returning SePay bankaccounts
-        var config = new StorePaymentConfig
-        {
-            Id = Guid.NewGuid(),
-            TenantId = TenantId,
-            SepayApiKeyEncrypted = "REAL_SEPAY_API_KEY_12345",
-            IsActive = true
-        };
-        context.StorePaymentConfigs.Add(config);
+        PaymentTestSupport.AddTenant(context, TenantId, enabled: true, apiKey: "REAL_SEPAY_API_KEY_12345");
         await context.SaveChangesAsync();
 
         var jsonResponse = @"{
@@ -556,13 +474,10 @@ public class PaymentsControllerTests
     public async Task HandleSePayWebhook_SecurityBranches_ShouldWork()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
 
-        // 1. Non-whitelisted IP -> 403 Forbidden
-        var forbiddenIpContext = CreateContext();
-        forbiddenIpContext.HttpContext.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("198.51.100.1");
-        controller.ControllerContext = forbiddenIpContext;
+        var localContext = CreateContext();
+        controller.ControllerContext = localContext;
 
         var payload = new SePayWebhookPayload
         {
@@ -571,13 +486,7 @@ public class PaymentsControllerTests
             AmountIn = 100_000m,
             TransactionContent = "HD1001"
         };
-        var resIpForbidden = await controller.HandleSePayWebhook(payload, CancellationToken.None);
-        var objIpForbidden = Assert.IsType<ObjectResult>(resIpForbidden);
-        Assert.Equal(403, objIpForbidden.StatusCode);
-
-        // 2. Missing Authorization header -> 401 Unauthorized
-        var localContext = CreateContext(); // 127.0.0.1 is whitelisted
-        controller.ControllerContext = localContext;
+        // Missing Authorization header
         var resMissingAuth = await controller.HandleSePayWebhook(payload, CancellationToken.None);
         Assert.IsType<UnauthorizedObjectResult>(resMissingAuth);
 
@@ -599,14 +508,10 @@ public class PaymentsControllerTests
             CreatedAt = DateTime.UtcNow
         };
         context.Orders.Add(order);
-        context.StorePaymentConfigs.Add(new StorePaymentConfig
-        {
-            Id = Guid.NewGuid(),
-            TenantId = TenantId,
-            SepayApiKeyEncrypted = "REAL_KEY_999",
-            BankAccountNumber = "12345678",
-            IsActive = true
-        });
+        PaymentTestSupport.AddTenant(context, TenantId, enabled: true, apiKey: "REAL_KEY_999", secret: "SECRET_WEBHOOK_123");
+        var bank = PaymentTestSupport.AddBank(context, TenantId, "12345678");
+        order.BranchId = bank.BranchId!.Value;
+        order.FinanceAccountId = bank.Id;
         await context.SaveChangesAsync();
 
         var failHandler = new MockHttpMessageHandler(_ => new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.NotFound));
@@ -633,12 +538,12 @@ public class PaymentsControllerTests
         Assert.IsType<BadRequestObjectResult>(resMismatchCode);
     }
 
-    [Fact]
+    [PaymentPostgresFact]
     public async Task HandleSePayWebhook_SandboxHappyPath_AndDuplicate_ShouldWork()
     {
-        using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        await using var database = await PaymentTestSupport.OpenPostgresAsync(_mockTenant.Object);
+        var context = database.Context;
+        var controller = CreateController(context);
 
         var localContext = CreateContext();
         localContext.HttpContext.Request.Headers["Authorization"] = "Bearer mock_sepay_key_123";
@@ -655,14 +560,10 @@ public class PaymentsControllerTests
             CreatedAt = DateTime.UtcNow
         };
         context.Orders.Add(order);
-        context.StorePaymentConfigs.Add(new StorePaymentConfig
-        {
-            Id = Guid.NewGuid(),
-            TenantId = TenantId,
-            SepayApiKeyEncrypted = "mock_sepay_key_123",
-            BankAccountNumber = "999888777",
-            IsActive = true
-        });
+        PaymentTestSupport.AddTenant(context, TenantId, enabled: true, apiKey: "mock_sepay_key_123", secret: "SECRET_WEBHOOK_123");
+        var bank = PaymentTestSupport.AddBank(context, TenantId, "999888777");
+        order.BranchId = bank.BranchId!.Value;
+        order.FinanceAccountId = bank.Id;
         await context.SaveChangesAsync();
 
         var payload = new SePayWebhookPayload
@@ -682,15 +583,18 @@ public class PaymentsControllerTests
 
         // 2. Duplicate transaction -> idempotent Ok
         var resDup = await controller.HandleSePayWebhook(payload, CancellationToken.None);
-        Assert.IsType<OkObjectResult>(resDup);
+        Assert.True(PaymentTestSupport.Json(Assert.IsType<OkObjectResult>(resDup)).GetProperty("isIdempotentReplay").GetBoolean());
+        Assert.Single(await context.PaymentTransactions.ToListAsync());
+        Assert.Single(await context.CashbookEntries.ToListAsync());
+        Assert.Equal(150_000m, bank.CurrentBalance);
     }
 
-    [Fact]
-    public async Task HandleSePayWebhook_Underpaid_ReturnsBadRequest()
+    [PaymentPostgresFact]
+    public async Task HandleSePayWebhook_Underpaid_RecordsPartialPayment()
     {
-        using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        await using var database = await PaymentTestSupport.OpenPostgresAsync(_mockTenant.Object);
+        var context = database.Context;
+        var controller = CreateController(context);
 
         var localContext = CreateContext();
         localContext.HttpContext.Request.Headers["Authorization"] = "Bearer mock_sepay_key_123";
@@ -707,14 +611,10 @@ public class PaymentsControllerTests
             CreatedAt = DateTime.UtcNow
         };
         context.Orders.Add(order);
-        context.StorePaymentConfigs.Add(new StorePaymentConfig
-        {
-            Id = Guid.NewGuid(),
-            TenantId = TenantId,
-            SepayApiKeyEncrypted = "mock_sepay_key_123",
-            BankAccountNumber = "999888777",
-            IsActive = true
-        });
+        PaymentTestSupport.AddTenant(context, TenantId, enabled: true, apiKey: "mock_sepay_key_123", secret: "SECRET_WEBHOOK_123");
+        var bank = PaymentTestSupport.AddBank(context, TenantId, "999888777");
+        order.BranchId = bank.BranchId!.Value;
+        order.FinanceAccountId = bank.Id;
         await context.SaveChangesAsync();
 
         var payload = new SePayWebhookPayload
@@ -726,18 +626,20 @@ public class PaymentsControllerTests
         };
 
         var res = await controller.HandleSePayWebhook(payload, CancellationToken.None);
-        Assert.IsType<BadRequestObjectResult>(res);
+        var result = PaymentTestSupport.Json(Assert.IsType<OkObjectResult>(res));
+        Assert.False(result.GetProperty("isFullPayment").GetBoolean());
+        Assert.Equal("PARTIALLY_PAID", order.PaymentStatus);
+        Assert.Equal(50_000m, order.DepositAmount);
+        Assert.Equal(50_000m, bank.CurrentBalance);
+        Assert.Equal(50_000m, (await context.CashbookEntries.SingleAsync()).Amount);
     }
 
     [Fact]
     public async Task CheckOrderStatus_AndTestSecurityLayers_ShouldWork()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object)
-        {
-            ControllerContext = CreateContext()
-        };
+        var controller = CreateController(context);
+        controller.ControllerContext = CreateContext();
 
         var order = new Order
         {
@@ -821,8 +723,7 @@ public class PaymentsControllerTests
         Assert.NotNull(method);
 
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
 
         // 1. tenant_id claim
         var userWithTenantId = new ClaimsPrincipal(new ClaimsIdentity(new[]
@@ -847,38 +748,14 @@ public class PaymentsControllerTests
     }
 
     [Fact]
-    public void IsIpWhitelisted_Variants_ShouldValidateCorrectly()
-    {
-        var method = typeof(PaymentsController).GetMethod("IsIpWhitelisted", BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.NotNull(method);
-
-        using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
-
-        bool CheckIp(string ip) => (bool)method.Invoke(controller, new object[] { ip })!;
-
-        Assert.False(CheckIp(""));
-        Assert.False(CheckIp("   "));
-        Assert.True(CheckIp("127.0.0.1"));
-        Assert.True(CheckIp("::1"));
-        Assert.False(CheckIp("198.51.100.22"));
-
-        // Custom config whitelist
-        _mockConfig.Setup(c => c["SePaySettings:AllowedWebhookIps"]).Returns("203.0.113.1, 203.0.113.2");
-        Assert.True(CheckIp("203.0.113.1"));
-        Assert.True(CheckIp("203.0.113.2"));
-        Assert.False(CheckIp("203.0.113.3"));
-    }
-
-    [Fact]
     public async Task GetPaymentConfig_WhenNoConfig_ReturnsDefaultConfig()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
         controller.ControllerContext = CreateContext();
 
+        PaymentTestSupport.AddTenant(context, TenantId);
+        await context.SaveChangesAsync();
         var result = await controller.GetPaymentConfig(CancellationToken.None);
         var ok = Assert.IsType<OkObjectResult>(result);
         Assert.NotNull(ok.Value);
@@ -888,12 +765,16 @@ public class PaymentsControllerTests
     public async Task SavePaymentConfig_InvalidAccountNumber_ReturnsBadRequest()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
         controller.ControllerContext = CreateContext();
+
+        PaymentTestSupport.AddTenant(context, TenantId);
+        var bank = PaymentTestSupport.AddBank(context, TenantId, "1234567890");
+        await context.SaveChangesAsync();
 
         var req = new SavePaymentConfigRequest
         {
+            BranchIds = [bank.BranchId!.Value],
             BankCode = "MB",
             BankName = "MBBank",
             BankAccountNumber = "123",
@@ -909,12 +790,16 @@ public class PaymentsControllerTests
     public async Task SavePaymentConfig_FirstTimeNoApiKey_ReturnsBadRequest()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
         controller.ControllerContext = CreateContext();
+
+        PaymentTestSupport.AddTenant(context, TenantId);
+        var bank = PaymentTestSupport.AddBank(context, TenantId, "1234567890");
+        await context.SaveChangesAsync();
 
         var req = new SavePaymentConfigRequest
         {
+            BranchIds = [bank.BranchId!.Value],
             BankCode = "MB",
             BankName = "MBBank",
             BankAccountNumber = "1234567890",
@@ -930,12 +815,16 @@ public class PaymentsControllerTests
     public async Task SavePaymentConfig_WithApprovalThresholds_AndUnencryptedKey_SavesSuccessfully()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
         controller.ControllerContext = CreateContext();
+
+        PaymentTestSupport.AddTenant(context, TenantId);
+        var bank = PaymentTestSupport.AddBank(context, TenantId, "1234567890");
+        await context.SaveChangesAsync();
 
         var req = new SavePaymentConfigRequest
         {
+            BranchIds = [bank.BranchId!.Value],
             BankCode = "MB",
             BankName = "MBBank",
             BankAccountNumber = "1234567890",
@@ -950,7 +839,7 @@ public class PaymentsControllerTests
         var ok = Assert.IsType<OkObjectResult>(result);
         Assert.NotNull(ok.Value);
 
-        var saved = await context.StorePaymentConfigs.FirstOrDefaultAsync(x => x.TenantId == TenantId);
+        var saved = await context.Tenants.SingleAsync(x => x.Id == TenantId);
         Assert.NotNull(saved);
         Assert.Equal(500000m, saved.CashOutApprovalThreshold);
         Assert.Equal(2000000m, saved.CashOutShiftTotalLimit);
@@ -960,8 +849,7 @@ public class PaymentsControllerTests
     public async Task HandleSePayWebhook_RateLimitExceeded_Returns429()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
 
         var ip = $"127.0.0.{(_ipCounter++ % 200) + 10}";
         controller.ControllerContext = CreateContext(role: "ANONYMOUS", tenant: null, ip: ip);
@@ -971,7 +859,7 @@ public class PaymentsControllerTests
             Id = 1,
             Gateway = "MB",
             AccountNumber = "1234567890",
-            TransactionDate = DateTime.UtcNow,
+            TransactionDate = DateTime.UtcNow.ToString("O"),
             TransactionContent = "DH-001",
             AmountIn = 10000m,
             ReferenceNumber = "REF"
@@ -1002,17 +890,10 @@ public class PaymentsControllerTests
         };
         context.Orders.Add(order);
 
-        var config = new StorePaymentConfig
-        {
-            TenantId = TenantId,
-            BankCode = "MB",
-            BankAccountNumber = "1234567890",
-            BankAccountName = "TEST STORE",
-            SepayApiKeyEncrypted = "real-production-api-key-12345",
-            SepayWebhookSecret = "SECRET_WEBHOOK_123",
-            IsActive = true
-        };
-        context.StorePaymentConfigs.Add(config);
+        PaymentTestSupport.AddTenant(context, TenantId, enabled: true, apiKey: "real-production-api-key-12345", secret: "SECRET_WEBHOOK_123");
+        var bank = PaymentTestSupport.AddBank(context, TenantId, "1234567890");
+        order.BranchId = bank.BranchId!.Value;
+        order.FinanceAccountId = bank.Id;
         await context.SaveChangesAsync();
 
         var jsonResponse = "{\"transaction\": {\"amount_in\": 50000, \"transaction_content\": \"HD1005\", \"account_number\": \"99999999\"}}";
@@ -1023,8 +904,7 @@ public class PaymentsControllerTests
         var client = new System.Net.Http.HttpClient(handler);
         _mockHttpClientFactory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(client);
 
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
         controller.ControllerContext = CreateContext(role: "ANONYMOUS", tenant: null, ip: "127.0.0.1");
         controller.ControllerContext.HttpContext.Request.Headers["Authorization"] = "Bearer SECRET_WEBHOOK_123";
 
@@ -1033,7 +913,7 @@ public class PaymentsControllerTests
             Id = 1,
             Gateway = "MB",
             AccountNumber = "1234567890",
-            TransactionDate = DateTime.UtcNow,
+            TransactionDate = DateTime.UtcNow.ToString("O"),
             TransactionContent = "HD1005",
             AmountIn = 50000m,
             ReferenceNumber = "REF"
@@ -1059,25 +939,17 @@ public class PaymentsControllerTests
         };
         context.Orders.Add(order);
 
-        var config = new StorePaymentConfig
-        {
-            TenantId = TenantId,
-            BankCode = "MB",
-            BankAccountNumber = "1234567890",
-            BankAccountName = "TEST STORE",
-            SepayApiKeyEncrypted = "real-production-api-key-12345",
-            SepayWebhookSecret = "SECRET_WEBHOOK_123",
-            IsActive = true
-        };
-        context.StorePaymentConfigs.Add(config);
+        PaymentTestSupport.AddTenant(context, TenantId, enabled: true, apiKey: "real-production-api-key-12345", secret: "SECRET_WEBHOOK_123");
+        var bank = PaymentTestSupport.AddBank(context, TenantId, "1234567890");
+        order.BranchId = bank.BranchId!.Value;
+        order.FinanceAccountId = bank.Id;
         await context.SaveChangesAsync();
 
         var handler = new MockHttpMessageHandler(_ => throw new System.Net.Http.HttpRequestException("Connection timeout"));
         var client = new System.Net.Http.HttpClient(handler);
         _mockHttpClientFactory.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(client);
 
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
         controller.ControllerContext = CreateContext(role: "ANONYMOUS", tenant: null, ip: "127.0.0.1");
         controller.ControllerContext.HttpContext.Request.Headers["Authorization"] = "Bearer SECRET_WEBHOOK_123";
 
@@ -1086,7 +958,7 @@ public class PaymentsControllerTests
             Id = 1,
             Gateway = "MB",
             AccountNumber = "1234567890",
-            TransactionDate = DateTime.UtcNow,
+            TransactionDate = DateTime.UtcNow.ToString("O"),
             TransactionContent = "HD1005",
             AmountIn = 50000m,
             ReferenceNumber = "REF"
@@ -1098,20 +970,20 @@ public class PaymentsControllerTests
     }
 
     [Fact]
-    public void GetClientIpAddress_ForwardedFor_And_ResolveTenantIdHeader()
+    public void GetClientIpAddress_UsesRemoteAddress_And_ResolveTenantIdHeader()
     {
         using var context = CreateDbContext();
-        var controller = new PaymentsController(
-            context, _mockHttpClientFactory.Object, _mockConfig.Object, _mockLogger.Object, _mockTenant.Object);
+        var controller = CreateController(context);
 
         var httpContext = new DefaultHttpContext();
-        httpContext.Request.Headers["X-Forwarded-For"] = "203.0.113.195, 70.41.3.18";
+        httpContext.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("70.41.3.18");
+        httpContext.Request.Headers["X-Forwarded-For"] = "203.0.113.195";
         httpContext.Request.Headers["X-Tenant-Id"] = "header-tenant-99";
         controller.ControllerContext = new ControllerContext { HttpContext = httpContext };
 
         var ipMethod = typeof(PaymentsController).GetMethod("GetClientIpAddress", BindingFlags.NonPublic | BindingFlags.Instance);
         var ip = (string?)ipMethod!.Invoke(controller, null);
-        Assert.Equal("203.0.113.195", ip);
+        Assert.Equal("70.41.3.18", ip);
 
         var tenantMethod = typeof(PaymentsController).GetMethod("ResolveTenantId", BindingFlags.NonPublic | BindingFlags.Instance);
         var tenant = (string?)tenantMethod!.Invoke(controller, new object?[] { null });
@@ -1132,6 +1004,104 @@ public class PaymentsControllerTests
             CancellationToken cancellationToken)
         {
             return Task.FromResult(_responseFactory(request));
+        }
+    }
+}
+
+public sealed class PaymentPostgresFactAttribute : FactAttribute
+{
+    internal const string ConnectionKey = "MT_GRMS_PAYMENT_TEST_POSTGRES";
+
+    public PaymentPostgresFactAttribute()
+    {
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(ConnectionKey)))
+            Skip = $"Requires an explicit {ConnectionKey} connection.";
+    }
+}
+
+internal static class PaymentTestSupport
+{
+    public static PaymentsController CreateController(AppDbContext context, IHttpClientFactory clients, IConfiguration configuration,
+        ILogger<PaymentsController> logger, ITenantContext tenant, string? environmentName = null)
+    {
+        var environment = new Mock<IWebHostEnvironment>();
+        environment.SetupGet(value => value.EnvironmentName).Returns(environmentName ?? Environments.Development);
+        var hub = new Mock<IHubContext<NotificationHub>>();
+        var hubClients = new Mock<IHubClients>();
+        hubClients.Setup(clients => clients.Group(It.IsAny<string>())).Returns(Mock.Of<IClientProxy>());
+        hub.SetupGet(value => value.Clients).Returns(hubClients.Object);
+        return new PaymentsController(context, clients, configuration, logger, tenant, new EphemeralDataProtectionProvider(),
+            environment.Object, new AuditHashService(configuration), Mock.Of<INotificationService>(), hub.Object);
+    }
+
+    public static Tenant AddTenant(AppDbContext context, string id, bool enabled = false, string apiKey = "", string secret = "")
+    {
+        var tenant = new Tenant
+        {
+            Id = id, Name = "Payment test store", Subdomain = id, Code = id,
+            SepayApiKeyEncrypted = apiKey, SepayWebhookSecret = secret, IsSepayEnabled = enabled
+        };
+        context.Tenants.Add(tenant);
+        return tenant;
+    }
+
+    public static FinanceAccount AddBank(AppDbContext context, string tenantId, string accountNumber, string bankCode = "MB")
+    {
+        var branch = new Branch { Id = Guid.NewGuid(), TenantId = tenantId, Name = "Main branch", BranchCode = "MAIN" };
+        var bank = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), BranchId = branch.Id, TenantId = tenantId, AccountType = FinanceAccountType.Bank,
+            AccountName = "Payment account", AccountHolderName = "TEST STORE", AccountNumber = accountNumber, BankCode = bankCode
+        };
+        branch.CurrentBankFinanceAccountId = bank.Id;
+        context.Branches.Add(branch);
+        context.FinanceAccounts.Add(bank);
+        return bank;
+    }
+
+    public static System.Text.Json.JsonElement Json(OkObjectResult result)
+        => System.Text.Json.JsonSerializer.SerializeToElement(result.Value);
+
+    public static async Task<PostgresDatabase> OpenPostgresAsync(ITenantContext tenant)
+    {
+        AppContext.SetSwitch("Npgsql.EnableLegacyTimestampBehavior", true);
+        var schema = $"payment_test_{Guid.NewGuid():N}";
+        var connection = Environment.GetEnvironmentVariable(PaymentPostgresFactAttribute.ConnectionKey)!;
+        var admin = new NpgsqlConnection(connection);
+        var isolated = new NpgsqlConnectionStringBuilder(connection) { SearchPath = schema, Pooling = false };
+        var database = new PostgresDatabase(admin, schema,
+            new AppDbContext(new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(isolated.ConnectionString).Options, tenant));
+        try
+        {
+            await admin.OpenAsync();
+            await using var create = new NpgsqlCommand($"CREATE SCHEMA \"{schema}\"", admin);
+            await create.ExecuteNonQueryAsync();
+            await database.Context.Database.OpenConnectionAsync();
+            await database.Context.Database.ExecuteSqlInterpolatedAsync($"SELECT set_config('search_path', {schema}, false)");
+            Assert.Equal(schema, await database.Context.Database.SqlQueryRaw<string>("SELECT current_schema() AS \"Value\"").SingleAsync());
+            await database.Context.Database.ExecuteSqlRawAsync(database.Context.Database.GenerateCreateScript());
+            return database;
+        }
+        catch
+        {
+            await database.DisposeAsync();
+            throw;
+        }
+    }
+
+    public sealed class PostgresDatabase(NpgsqlConnection admin, string schema, AppDbContext context) : IAsyncDisposable
+    {
+        public AppDbContext Context { get; } = context;
+
+        public async ValueTask DisposeAsync()
+        {
+            await Context.DisposeAsync();
+            await using (admin)
+            {
+                if (admin.State != System.Data.ConnectionState.Open) return;
+                await using var drop = new NpgsqlCommand($"DROP SCHEMA IF EXISTS \"{schema}\" CASCADE", admin);
+                await drop.ExecuteNonQueryAsync();
+            }
         }
     }
 }

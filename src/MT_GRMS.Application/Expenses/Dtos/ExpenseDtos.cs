@@ -16,7 +16,8 @@ public record CreateExpenseRequest(
     string? Note,
     FinancialNature Nature = FinancialNature.OperatingExpense,
     string? ReferenceCode = null,
-    DateTime? ExpenseDate = null
+    DateTime? ExpenseDate = null,
+    DateOnly? DueDate = null
 );
 
 public record ApproveExpenseRequest(
@@ -65,7 +66,8 @@ public record ExpenseVoucherResponse(
     FinancialNature Nature = FinancialNature.OperatingExpense,
     string? ReferenceCode = null,
     decimal RefundedAmount = 0,
-    bool IsSettled = false
+    bool IsSettled = false,
+    DateOnly? DueDate = null
 );
 
 public record ExpenseSummaryResponse(
