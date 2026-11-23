@@ -425,6 +425,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""AllowRepack"" boolean NOT NULL DEFAULT FALSE;
                 ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""SellRawByWeight"" boolean NOT NULL DEFAULT TRUE;
                 ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""ProcessedSellingPricePerKg"" numeric(18,2) NULL;
+                ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""NearExpiryThresholdDays"" integer NULL;
 
                 CREATE TABLE IF NOT EXISTS ""RepackOrders"" (
                     ""Id"" uuid NOT NULL PRIMARY KEY,

@@ -124,8 +124,21 @@ public class BranchProductExcelService : IBranchProductExcelService
                 ws.Cell(row, 7).Value = p.MinOrderQuantity > 0 ? p.MinOrderQuantity : 1;
                 ws.Cell(row, 8).Value = p.ProductId.ToString();
                 ws.Cell(row, 9).Value = unit.UnitId?.ToString() ?? string.Empty;
-                ws.Cell(row, 10).Value = p.LostSupplierSource ? string.Empty : p.PrimarySupplierCode;
-                ws.Cell(row, 11).Value = p.LostSupplierSource ? string.Empty : p.PrimarySupplierName;
+                if (p.LostSupplierSource)
+                {
+                    ws.Cell(row, 10).Value = string.Empty;
+                    ws.Cell(row, 11).Value = string.Empty;
+                }
+                else if (p.Suppliers is { Count: > 1 })
+                {
+                    ws.Cell(row, 10).Value = string.Join("; ", p.Suppliers.Select(s => s.SupplierCode).Where(c => !string.IsNullOrWhiteSpace(c)));
+                    ws.Cell(row, 11).Value = $"{p.Suppliers.Count} NCC";
+                }
+                else
+                {
+                    ws.Cell(row, 10).Value = p.PrimarySupplierCode;
+                    ws.Cell(row, 11).Value = p.PrimarySupplierName;
+                }
                 ws.Cell(row, 12).Value = p.CostPrice;
                 ws.Cell(row, 13).Value = string.IsNullOrWhiteSpace(p.Unit) ? "Cái" : p.Unit;
                 ws.Cell(row, 14).Value = string.Equals(p.Status, "Active", StringComparison.OrdinalIgnoreCase)
@@ -674,7 +687,10 @@ public class BranchProductExcelService : IBranchProductExcelService
         {
             q = q.Where(x =>
                 supplierCodeTerms.Any(t =>
-                    (x.PrimarySupplierCode ?? string.Empty).Contains(t, StringComparison.OrdinalIgnoreCase)));
+                    (x.Suppliers is { Count: > 0 }
+                        && x.Suppliers.Any(s =>
+                            (s.SupplierCode ?? string.Empty).Contains(t, StringComparison.OrdinalIgnoreCase)))
+                    || (x.PrimarySupplierCode ?? string.Empty).Contains(t, StringComparison.OrdinalIgnoreCase)));
         }
 
         var supplierNameTerms = CleanTerms(filter.SupplierNames);
@@ -682,7 +698,10 @@ public class BranchProductExcelService : IBranchProductExcelService
         {
             q = q.Where(x =>
                 supplierNameTerms.Any(t =>
-                    (x.PrimarySupplierName ?? string.Empty).Contains(t, StringComparison.OrdinalIgnoreCase)));
+                    (x.Suppliers is { Count: > 0 }
+                        && x.Suppliers.Any(s =>
+                            (s.SupplierName ?? string.Empty).Contains(t, StringComparison.OrdinalIgnoreCase)))
+                    || (x.PrimarySupplierName ?? string.Empty).Contains(t, StringComparison.OrdinalIgnoreCase)));
         }
 
         if (!string.IsNullOrWhiteSpace(filter.Category)

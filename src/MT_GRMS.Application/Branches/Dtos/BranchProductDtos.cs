@@ -15,6 +15,20 @@ public class BranchProductUnitPriceDto
     public bool IsBaseUnit { get; set; }
 }
 
+/// <summary>
+/// Một nguồn nhập (NCC) của sản phẩm tại chi nhánh — dùng khi 1 BranchProduct có nhiều NCC.
+/// </summary>
+public class BranchProductSupplierSourceDto
+{
+    public Guid SupplierId { get; set; }
+    public string SupplierCode { get; set; } = string.Empty;
+    public string SupplierName { get; set; } = string.Empty;
+    public decimal CostPrice { get; set; }
+    public int MinOrderQuantity { get; set; }
+    public bool IsPrimarySupplier { get; set; }
+    public string? DeliveryUoM { get; set; }
+}
+
 public class BranchProductDto
 {
     public Guid Id { get; set; }
@@ -47,6 +61,10 @@ public class BranchProductDto
     public bool HasActiveSupplierSource { get; set; } = true;
     /// <summary>true = SP đang bán tại CN nhưng mất nguồn NCC (không còn assignment Active).</summary>
     public bool LostSupplierSource { get; set; }
+    /// <summary>Tất cả NCC Active đang phục vụ CN cho SP này (1 dòng catalog = 1 list).</summary>
+    public List<BranchProductSupplierSourceDto> Suppliers { get; set; } = new();
+    /// <summary>Số NCC nguồn nhập — &gt;1 thì UI hiện "N NCC" thay vì tên.</summary>
+    public int SupplierCount { get; set; }
     public int MinOrderQuantity { get; set; } = 1;
     public string Status { get; set; } = "Active";
     public string? ShelfLocation { get; set; }

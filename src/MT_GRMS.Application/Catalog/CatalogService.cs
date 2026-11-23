@@ -122,7 +122,8 @@ public class CatalogService : ICatalogService
             unitPrices,
             p.AllowRepack,
             p.SellRawByWeight,
-            p.ProcessedSellingPricePerKg
+            p.ProcessedSellingPricePerKg,
+            p.NearExpiryThresholdDays
         );
     }
 
@@ -300,6 +301,7 @@ public class CatalogService : ICatalogService
             Description = trimmedDescription,
             InternalNote = trimmedInternalNote,
             HasBatches = request.HasBatches || request.AllowRepack,
+            NearExpiryThresholdDays = NormalizeNearExpiryDays(request.NearExpiryThresholdDays),
             AllowRepack = request.AllowRepack,
             SellRawByWeight = request.SellRawByWeight,
             ProcessedSellingPricePerKg = ResolveProcessedPrice(request.AllowRepack, request.ProcessedSellingPricePerKg, request.SellingPrice),
@@ -455,6 +457,7 @@ public class CatalogService : ICatalogService
         product.Description = trimmedDescription;
         product.InternalNote = trimmedInternalNote;
         product.HasBatches = request.HasBatches || request.AllowRepack;
+        product.NearExpiryThresholdDays = NormalizeNearExpiryDays(request.NearExpiryThresholdDays);
         product.AllowRepack = request.AllowRepack;
         product.SellRawByWeight = request.SellRawByWeight;
         product.ProcessedSellingPricePerKg = ResolveProcessedPrice(request.AllowRepack, request.ProcessedSellingPricePerKg, request.SellingPrice);
@@ -676,4 +679,7 @@ public class CatalogService : ICatalogService
 
         return sellingPrice > 0 ? sellingPrice : null;
     }
+
+    private static int? NormalizeNearExpiryDays(int? days)
+        => days is > 0 ? days : null;
 }
