@@ -18,7 +18,8 @@
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
         "Database__SkipDbInitialization": "true",
-        "Database__RepairTransferStockColumns": "true"
+        "Database__RepairTransferStockColumns": "true",
+        "Database__RepairLocalSchema": "true"
       }
     },
     "https": {
@@ -30,7 +31,8 @@
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
         "Database__SkipDbInitialization": "true",
-        "Database__RepairTransferStockColumns": "true"
+        "Database__RepairTransferStockColumns": "true",
+        "Database__RepairLocalSchema": "true"
       }
     },
     "IIS Express": {

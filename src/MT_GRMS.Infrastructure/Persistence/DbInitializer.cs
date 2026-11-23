@@ -24,6 +24,14 @@ namespace MT_GRMS.Infrastructure.Persistence;
 /// </summary>
 public static class DbInitializer
 {
+    public static async Task ApplyLocalSchemaRepairsAsync(AppDbContext context)
+    {
+        if (!context.Database.IsNpgsql()) return;
+
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddOrderDetailStockAllocations.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddExpenseVoucherDueDate.UpSql);
+    }
+
     private static async Task EnsureSupplierDispatchSchemaAsync(AppDbContext context, ILogger? logger = null)
     {
         // 1. Tạo các bảng độc lập trước (CREATE TABLE IF NOT EXISTS)

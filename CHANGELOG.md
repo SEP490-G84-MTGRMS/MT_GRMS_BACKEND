@@ -29,6 +29,8 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - API Admin `POST /api/admin/tenants` tạo cửa hàng, tài khoản chủ sở hữu và chi nhánh chính trong một transaction, kiểm tra dữ liệu trùng và ghi audit log. Cửa hàng khởi tạo ở trạng thái `NO_PLAN`. [worklog: docs/worklogs/2026-11-15_ADMIN-TENANT_AI_create-tenant.md]
 
 ### Fixed
+- Bổ sung cột `OrderDetails.StockAllocationsJson` khi chạy API bằng profile local để khắc phục lỗi tải Tổng quan trên cơ sở dữ liệu chưa cập nhật schema.
+- Áp dụng bổ sung schema `ExpenseVouchers.DueDate` khi chạy API bằng profile local để worker nhắc thanh toán đọc được phiếu chi trên cơ sở dữ liệu cũ.
 - Kiểm tra tên, số điện thoại, mã số thuế, tỉnh/thành phố và địa chỉ trước khi lưu thông tin gian hàng. [worklog: docs/worklogs/2026-11-22_BE-STORE_AI_store-info-validation.md]
 - Không áp điều kiện mua gói tenant cho Admin đã xác thực, sửa API quản trị trả 403 sau reset dữ liệu. [worklog: docs/worklogs/2026-11-16_ADMIN-AUTH_AI_subscription-bypass.md]
 - Bổ sung CreatedAt và IsDeleted trong khởi tạo PlatformSettings để tránh lỗi PostgreSQL 23502 khi chạy backend. [worklog: docs/worklogs/2026-11-16_PLATFORM-SETTINGS_AI_fix-startup-seed.md]
