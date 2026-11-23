@@ -94,8 +94,14 @@ public record PurchaseSubscriptionRequest(
     string PaymentMethod = "Wallet",
     int ExtraWarehouses = 0,
     int ExtraStorageGb = 0,
-    Guid? RequestId = null
+    Guid? RequestId = null,
+    DateTime? QuoteAt = null,
+    DateTime? ExpectedExpiry = null,
+    decimal? ExpectedTotal = null
 );
+
+public record ProUpgradeQuote(DateTime QuoteAt, DateTime ExpectedExpiry, DateTime ExpiresAt,
+    decimal RemainingPro, decimal Credit, decimal AdditionalTerm, decimal Branches, decimal Total);
 
 public record PurchaseSubscriptionResponse(
     string PlanCode,

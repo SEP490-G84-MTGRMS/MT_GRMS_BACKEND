@@ -1,3 +1,5 @@
+using System.Data;
+using System.Text.RegularExpressions;
 using MT_GRMS.Application.Admin.Repositories;
 using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Application.Common;
@@ -48,6 +50,10 @@ public class BranchService : IBranchService
             cancellationToken);
 
         var dtos = items.Select(MapToDto).ToList();
+        if (dtos.Count == 1 && !dtos[0].IsHeadquarter)
+        {
+            dtos[0].IsHeadquarter = await IsOnlyBranchAsync(cancellationToken);
+        }
 
         return new PagedResult<BranchDto>
         {
@@ -66,7 +72,9 @@ public class BranchService : IBranchService
             throw new NotFoundException("Chi nhánh", id);
         }
 
-        return MapToDto(branch);
+        var dto = MapToDto(branch);
+        dto.IsHeadquarter = dto.IsHeadquarter || await IsOnlyBranchAsync(cancellationToken);
+        return dto;
     }
 
     public async Task<BranchDetailDto> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default)
@@ -77,6 +85,7 @@ public class BranchService : IBranchService
             throw new NotFoundException("Chi nhánh", id);
         }
 
+        detail.IsHeadquarter = detail.IsHeadquarter || await IsOnlyBranchAsync(cancellationToken);
         return detail;
     }
 
@@ -140,10 +149,33 @@ public class BranchService : IBranchService
         if (string.IsNullOrWhiteSpace(request.BranchCode))
             throw new BusinessException("INVALID_INPUT", "Mã chi nhánh không được để trống.");
 
-        if (string.IsNullOrWhiteSpace(request.Name))
-            throw new BusinessException("INVALID_INPUT", "Tên chi nhánh không được để trống.");
+        var name = request.Name?.Trim();
+        if (name is null || name.Length < 2)
+            throw new BusinessException("INVALID_INPUT", "Tên chi nhánh phải có ít nhất 2 ký tự.");
 
         var code = request.BranchCode.Trim().ToUpper();
+        var address = request.Address?.Trim();
+        var phone = request.Phone?.Trim();
+        var email = request.Email?.Trim();
+        var managerName = request.ManagerName?.Trim();
+
+        if (code.Length > 30)
+            throw new BusinessException("INVALID_INPUT", "Mã chi nhánh không được vượt quá 30 ký tự.");
+        if (name.Length > 150)
+            throw new BusinessException("INVALID_INPUT", "Tên chi nhánh không được vượt quá 150 ký tự.");
+        if (string.IsNullOrEmpty(address))
+            throw new BusinessException("INVALID_INPUT", "Vui lòng nhập địa chỉ chi nhánh.");
+        if (address.Length > 255)
+            throw new BusinessException("INVALID_INPUT", "Địa chỉ chi nhánh không được vượt quá 255 ký tự.");
+        if (!string.IsNullOrEmpty(phone) && (phone.Length > 20
+            || !Regex.IsMatch(phone, @"^\+?[0-9][0-9 .-]*[0-9]$")
+            || phone.Count(c => c is >= '0' and <= '9') is < 8 or > 15))
+            throw new BusinessException("INVALID_INPUT", "Hotline phải có 8–15 chữ số và không vượt quá 20 ký tự. Có thể dùng dấu + ở đầu, dấu cách, dấu chấm hoặc dấu gạch ngang.");
+        if (!string.IsNullOrEmpty(email) && (email.Length > 150
+            || !Regex.IsMatch(email, @"^[^\s@.]+(?:\.[^\s@.]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$")))
+            throw new BusinessException("INVALID_INPUT", "Email phải đúng định dạng và không vượt quá 150 ký tự.");
+        if (managerName?.Length > 150)
+            throw new BusinessException("INVALID_INPUT", "Tên quản lý không được vượt quá 150 ký tự.");
 
         // 1. Kiểm tra trùng mã chi nhánh
         if (await _branchRepo.ExistsByCodeAsync(code, cancellationToken))
@@ -164,12 +196,12 @@ public class BranchService : IBranchService
             Id = Guid.NewGuid(),
             TenantId = !string.IsNullOrWhiteSpace(tenantId) && tenantId != "DEFAULT" ? tenantId : "t-001-minhduc",
             BranchCode = code,
-            Name = request.Name.Trim(),
-            Address = request.Address?.Trim() ?? string.Empty,
-            Phone = request.Phone?.Trim(),
-            Email = request.Email?.Trim(),
-            ManagerName = request.ManagerName?.Trim(),
-            IsHeadquarter = request.IsHeadquarter,
+            Name = name,
+            Address = address,
+            Phone = string.IsNullOrEmpty(phone) ? null : phone,
+            Email = string.IsNullOrEmpty(email) ? null : email,
+            ManagerName = string.IsNullOrEmpty(managerName) ? null : managerName,
+            IsHeadquarter = quota.UsedBranches == 0 || request.IsHeadquarter,
             IsActive = true,
             CreatedAt = DateTime.UtcNow
         };
@@ -182,8 +214,9 @@ public class BranchService : IBranchService
 
     public async Task<BranchDto> UpdateBranchAsync(Guid id, UpdateBranchRequest request, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(request.Name))
-            throw new BusinessException("INVALID_INPUT", "Tên chi nhánh không được để trống.");
+        var name = request.Name?.Trim();
+        if (name is null || name.Length < 2)
+            throw new BusinessException("INVALID_INPUT", "Tên chi nhánh phải có ít nhất 2 ký tự.");
 
         var branch = await _branchRepo.GetByIdAsync(id, cancellationToken);
         if (branch == null || branch.IsDeleted)
@@ -191,8 +224,9 @@ public class BranchService : IBranchService
             throw new NotFoundException("Chi nhánh", id);
         }
 
+        var isOnlyBranch = await IsOnlyBranchAsync(cancellationToken);
         // Nếu đặt chi nhánh này làm Trụ sở chính, tự động gỡ cờ Trụ sở chính ở các chi nhánh khác
-        if (request.IsHeadquarter && !branch.IsHeadquarter)
+        if (!isOnlyBranch && request.IsHeadquarter && !branch.IsHeadquarter)
         {
             var paged = await _branchRepo.GetPagedListAsync(null, null, null, null, null, null, null, 1, 100, cancellationToken);
             foreach (var other in paged.Items.Where(b => b.Id != id && b.IsHeadquarter))
@@ -203,12 +237,12 @@ public class BranchService : IBranchService
             }
         }
 
-        branch.Name = request.Name.Trim();
+        branch.Name = name;
         branch.Address = request.Address?.Trim() ?? string.Empty;
         branch.Phone = request.Phone?.Trim();
         branch.Email = request.Email?.Trim();
         branch.ManagerName = request.ManagerName?.Trim();
-        branch.IsHeadquarter = request.IsHeadquarter;
+        branch.IsHeadquarter = isOnlyBranch || request.IsHeadquarter;
         branch.UpdatedAt = DateTime.UtcNow;
 
         _branchRepo.Update(branch);
@@ -217,12 +251,22 @@ public class BranchService : IBranchService
         return MapToDto(branch);
     }
 
-    public async Task<BranchDto> ToggleBranchStatusAsync(Guid id, UpdateBranchStatusRequest request, CancellationToken cancellationToken = default)
+    public Task<BranchDto> ToggleBranchStatusAsync(Guid id, UpdateBranchStatusRequest request, CancellationToken cancellationToken = default)
+        => _unitOfWork.ExecuteInTransactionAsync(
+            token => ChangeBranchStatusAsync(id, request, token), cancellationToken, IsolationLevel.Serializable);
+
+    private async Task<BranchDto> ChangeBranchStatusAsync(Guid id, UpdateBranchStatusRequest request, CancellationToken cancellationToken)
     {
         var branch = await _branchRepo.GetByIdAsync(id, cancellationToken);
         if (branch == null || branch.IsDeleted)
         {
             throw new NotFoundException("Chi nhánh", id);
+        }
+
+        var isOnlyBranch = await IsOnlyBranchAsync(cancellationToken);
+        if (!request.IsActive && isOnlyBranch)
+        {
+            throw new BusinessException("CANNOT_DISABLE_ONLY_BRANCH", "Không thể ngừng hoạt động chi nhánh duy nhất của gian hàng.");
         }
 
         // Kiểm tra hạn mức nếu kích hoạt lại chi nhánh
@@ -237,6 +281,7 @@ public class BranchService : IBranchService
         }
 
         branch.IsActive = request.IsActive;
+        branch.IsHeadquarter = isOnlyBranch || branch.IsHeadquarter;
         branch.UpdatedAt = DateTime.UtcNow;
 
         _branchRepo.Update(branch);
@@ -245,7 +290,11 @@ public class BranchService : IBranchService
         return MapToDto(branch);
     }
 
-    public async Task DeleteBranchAsync(Guid id, CancellationToken cancellationToken = default)
+    public Task DeleteBranchAsync(Guid id, CancellationToken cancellationToken = default)
+        => _unitOfWork.ExecuteInTransactionAsync(
+            token => RemoveBranchAsync(id, token), cancellationToken, IsolationLevel.Serializable);
+
+    private async Task RemoveBranchAsync(Guid id, CancellationToken cancellationToken)
     {
         var branch = await _branchRepo.GetByIdAsync(id, cancellationToken);
         if (branch == null || branch.IsDeleted)
@@ -258,6 +307,11 @@ public class BranchService : IBranchService
             throw new BusinessException("CANNOT_DELETE_HEADQUARTER", "Không thể xóa chi nhánh chính (Trụ sở chính) của chuỗi cửa hàng. Vui lòng chỉ định chi nhánh khác làm trụ sở chính trước khi xóa.");
         }
 
+        if (await IsOnlyBranchAsync(cancellationToken))
+        {
+            throw new BusinessException("CANNOT_DELETE_ONLY_BRANCH", "Không thể xóa chi nhánh duy nhất của gian hàng.");
+        }
+
         branch.IsDeleted = true;
         branch.IsActive = false;
         branch.UpdatedAt = DateTime.UtcNow;
@@ -265,6 +319,9 @@ public class BranchService : IBranchService
         _branchRepo.Update(branch);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
     }
+
+    private async Task<bool> IsOnlyBranchAsync(CancellationToken cancellationToken)
+        => await _branchRepo.CountTotalAsync(cancellationToken) == 1;
 
     private static BranchDto MapToDto(Branch branch)
     {

@@ -7,6 +7,9 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-15
 
 ### Changed
+- Áp dụng quyền Quản lý nhân viên theo gói cho API ca làm, chấm công, lịch làm, duyệt yêu cầu và bảng lương.
+- Yêu cầu tên chi nhánh có ít nhất 2 ký tự sau khi bỏ khoảng trắng hai đầu khi thêm mới hoặc cập nhật chi nhánh.
+- Giữ đúng mã gian hàng cho chi nhánh chính và danh mục mẫu khi đăng ký trong phiên của một gian hàng khác.
 - Tách truy vấn tải nhiều danh sách và giảm dữ liệu, số lần duyệt trong truy vấn tồn kho.
 - Đồng bộ cột cấu hình chi nhánh và bảng thông báo khi chạy API bằng profile local.
 - Xử lý cảnh báo nullable ở email, OTP và mã vạch.
@@ -29,6 +32,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - API Admin `POST /api/admin/tenants` tạo cửa hàng, tài khoản chủ sở hữu và chi nhánh chính trong một transaction, kiểm tra dữ liệu trùng và ghi audit log. Cửa hàng khởi tạo ở trạng thái `NO_PLAN`. [worklog: docs/worklogs/2026-11-15_ADMIN-TENANT_AI_create-tenant.md]
 
 ### Fixed
+- Giữ chi nhánh duy nhất làm trụ sở chính và chặn thao tác ngừng hoạt động hoặc xóa chi nhánh đó. [worklog: docs/worklogs/2026-11-23_BE-BRANCH_AI_protect-only-branch.md]
 - Bổ sung cột `OrderDetails.StockAllocationsJson` khi chạy API bằng profile local để khắc phục lỗi tải Tổng quan trên cơ sở dữ liệu chưa cập nhật schema.
 - Áp dụng bổ sung schema `ExpenseVouchers.DueDate` khi chạy API bằng profile local để worker nhắc thanh toán đọc được phiếu chi trên cơ sở dữ liệu cũ.
 - Kiểm tra tên, số điện thoại, mã số thuế, tỉnh/thành phố và địa chỉ trước khi lưu thông tin gian hàng. [worklog: docs/worklogs/2026-11-22_BE-STORE_AI_store-info-validation.md]

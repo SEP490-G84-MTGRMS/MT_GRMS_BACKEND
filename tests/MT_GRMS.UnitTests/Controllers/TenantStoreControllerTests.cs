@@ -1,3 +1,4 @@
+using MT_GRMS.Infrastructure.Services;
 using System;
 using System.Collections.Generic;
 using System.Security.Claims;
@@ -92,7 +93,7 @@ public class TenantStoreControllerTests
         context.Tenants.Add(tenant);
         context.TenantUsers.Add(new TenantUser { TenantId = TenantId, UserId = _userId, Role = membershipRole });
         await context.SaveChangesAsync();
-        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
         {
             ControllerContext = CreateControllerContext()
         };
@@ -185,7 +186,7 @@ public class TenantStoreControllerTests
     public async Task GetStoreInfo_WhenTenantNotFound_ReturnsNotFound()
     {
         using var context = CreateDbContext();
-        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
         {
             ControllerContext = CreateControllerContext()
         };
@@ -215,7 +216,7 @@ public class TenantStoreControllerTests
         _mockTenantService.Setup(s => s.GetByIdAsync(TenantId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new TenantDetailResponse(TenantId, "mymart", "My Mart", "M01", null, null, null, null, "ACTIVE", null, "Gói Chuẩn", null, null, null, null, null, null, 1, 1, 1, 3, new List<TenantDetailBranchSummaryDto>(), DateTime.UtcNow, null, 0m));
 
-        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
         {
             ControllerContext = CreateControllerContext()
         };
@@ -248,7 +249,7 @@ public class TenantStoreControllerTests
         _mockTenantService.Setup(s => s.UpdateTenantAsync(TenantId, req, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new TenantDetailResponse(TenantId, "mymart", "Updated Mart", "M01", null, null, null, null, "ACTIVE", null, "Gói Chuẩn", null, null, null, null, null, null, 1, 1, 1, 3, new List<TenantDetailBranchSummaryDto>(), DateTime.UtcNow, null, 0m));
 
-        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
         {
             ControllerContext = CreateControllerContext()
         };
@@ -267,7 +268,7 @@ public class TenantStoreControllerTests
         context.TenantUsers.Add(new TenantUser { TenantId = TenantId, UserId = _userId, IsActive = true });
         await context.SaveChangesAsync();
 
-        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
         {
             ControllerContext = CreateControllerContext()
         };
@@ -299,7 +300,7 @@ public class TenantStoreControllerTests
                 new("2", "PRO", "Gói Pro", "Desc", 249000m, 2490000m, "ACTIVE", 1, new PlanQuotaDto(), new PlanFeatureDto(), DateTime.UtcNow, null)
             });
 
-        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
         {
             ControllerContext = CreateControllerContext()
         };
@@ -316,7 +317,7 @@ public class TenantStoreControllerTests
     public async Task PurchaseSubscription_Validations()
     {
         using var context = CreateDbContext();
-        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
         {
             ControllerContext = CreateControllerContext()
         };
@@ -362,7 +363,7 @@ public class TenantStoreControllerTests
     public async Task PurchaseSubscription_StandardPlanWithExtraBranches_ReturnsInvalidPlanAddon()
     {
         using var context = CreateDbContext();
-        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
         {
             ControllerContext = CreateControllerContext()
         };
@@ -394,7 +395,7 @@ public class TenantStoreControllerTests
     public async Task ActivateTrialSubscription_InvalidTenant_ReturnsForbidden()
     {
         using var context = CreateDbContext();
-        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
         {
             ControllerContext = CreateControllerContext(tenantId: "DEFAULT")
         };
@@ -408,7 +409,7 @@ public class TenantStoreControllerTests
     public async Task ActivateTrialSubscription_NoMembership_ReturnsForbidden()
     {
         using var context = CreateDbContext();
-        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
         {
             ControllerContext = CreateControllerContext()
         };
@@ -423,7 +424,7 @@ public class TenantStoreControllerTests
     public async Task ActivateTrialSubscription_UserNotVerified_ReturnsForbidden()
     {
         using var context = CreateDbContext();
-        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
         {
             ControllerContext = CreateControllerContext()
         };
@@ -458,7 +459,7 @@ public class TenantStoreControllerTests
     public async Task ActivateTrialSubscription_TenantTrialAlreadyUsed_ReturnsConflict()
     {
         using var context = CreateDbContext();
-        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
         {
             ControllerContext = CreateControllerContext()
         };
@@ -495,7 +496,7 @@ public class TenantStoreControllerTests
     public async Task ActivateTrialSubscription_Success_ActivatesTrial()
     {
         using var context = CreateDbContext();
-        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
         {
             ControllerContext = CreateControllerContext()
         };
@@ -537,7 +538,7 @@ public class TenantStoreControllerTests
     public async Task GetSubscriptionOrderHistory_TenantNotFound_ReturnsNotFound()
     {
         using var context = CreateDbContext();
-        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context)
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
         {
             ControllerContext = CreateControllerContext()
         };

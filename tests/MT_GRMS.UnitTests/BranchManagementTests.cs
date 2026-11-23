@@ -225,11 +225,69 @@ public class BranchManagementTests
     [Theory]
     [InlineData("", "Valid Name")]
     [InlineData("BR-01", "")]
+    [InlineData("BR-NEW", " A ")]
     public async Task REQ_BR02_CreateBranch_InvalidInput_ThrowsBusinessException(string code, string name)
     {
         var req = new CreateBranchRequest(code, name, "Address");
         var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.CreateBranchAsync(req));
         Assert.Equal("INVALID_INPUT", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task SoleBranch_IsHeadquarterAndCannotBeDisabledOrDeleted()
+    {
+        var branch = _repo.Branches[0];
+        foreach (var other in _repo.Branches.Where(b => b.TenantId == branch.TenantId && b.Id != branch.Id))
+            other.IsDeleted = true;
+
+        Assert.True((await _service.GetBranchDetailAsync(branch.Id)).IsHeadquarter);
+        Assert.True((await _service.GetBranchByIdAsync(branch.Id)).IsHeadquarter);
+        Assert.True(Assert.Single((await _service.GetPagedBranchesAsync(new BranchFilterQuery())).Items).IsHeadquarter);
+
+        var disabled = await Assert.ThrowsAsync<BusinessException>(
+            () => _service.ToggleBranchStatusAsync(branch.Id, new UpdateBranchStatusRequest(false)));
+        Assert.Equal("CANNOT_DISABLE_ONLY_BRANCH", disabled.ErrorCode);
+        Assert.True(branch.IsActive);
+
+        var deleted = await Assert.ThrowsAsync<BusinessException>(() => _service.DeleteBranchAsync(branch.Id));
+        Assert.Equal("CANNOT_DELETE_ONLY_BRANCH", deleted.ErrorCode);
+        Assert.False(branch.IsDeleted);
+
+        var updated = await _service.UpdateBranchAsync(branch.Id, new UpdateBranchRequest(branch.Name, branch.Address ?? string.Empty));
+        Assert.True(updated.IsHeadquarter);
+        Assert.True(branch.IsHeadquarter);
+    }
+
+    [Fact]
+    public async Task InactiveSoleBranch_CanBeReactivated()
+    {
+        var branch = _repo.Branches[0];
+        branch.IsActive = false;
+        _repo.Branches.RemoveAll(b => b.TenantId == branch.TenantId && b.Id != branch.Id);
+
+        var result = await _service.ToggleBranchStatusAsync(branch.Id, new UpdateBranchStatusRequest(true));
+
+        Assert.Equal("Active", result.Status);
+        Assert.True(result.IsHeadquarter);
+    }
+
+    [Fact]
+    public async Task FirstBranch_IsCreatedAsHeadquarter()
+    {
+        _repo.Branches.RemoveAll(b => b.TenantId == "tenant-test-1");
+
+        var result = await _service.CreateBranchAsync(new CreateBranchRequest("BR-FIRST", "Chi nhánh chính", "Hà Nội"));
+
+        Assert.True(result.IsHeadquarter);
+        Assert.True(_repo.Branches.Single(b => b.Id == result.Id).IsHeadquarter);
+    }
+
+    [Fact]
+    public async Task FilteredListOfOne_DoesNotMakeBranchHeadquarter()
+    {
+        var result = await _service.GetPagedBranchesAsync(new BranchFilterQuery { Keyword = "BR-01" });
+
+        Assert.False(Assert.Single(result.Items).IsHeadquarter);
     }
 
     [Fact]
@@ -247,6 +305,9 @@ public class BranchManagementTests
     {
         var id = Guid.Parse("11111111-1111-1111-1111-111111111111");
         await Assert.ThrowsAsync<BusinessException>(() => _service.UpdateBranchAsync(id, new UpdateBranchRequest("", "Address")));
+        await Assert.ThrowsAsync<BusinessException>(() => _service.UpdateBranchAsync(id, new UpdateBranchRequest(" A ", "Address")));
+        var updated = await _service.UpdateBranchAsync(id, new UpdateBranchRequest(" AB ", "Address"));
+        Assert.Equal("AB", updated.Name);
         await Assert.ThrowsAsync<NotFoundException>(() => _service.UpdateBranchAsync(Guid.NewGuid(), new UpdateBranchRequest("Name", "Address")));
     }
 
@@ -327,7 +388,11 @@ public class BranchManagementTests
             return Task.FromResult(Branches.Count(b => b.TenantId == "tenant-test-1" && !b.IsDeleted));
         }
 
-        public Task<BranchDetailDto?> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult<BranchDetailDto?>(null);
+        public async Task<BranchDetailDto?> GetBranchDetailAsync(Guid id, CancellationToken cancellationToken = default)
+        {
+            var branch = await GetByIdAsync(id, cancellationToken);
+            return branch == null ? null : new BranchDetailDto { Id = branch.Id, IsHeadquarter = branch.IsHeadquarter };
+        }
 
         public Task<(IReadOnlyList<Branch> Items, int TotalCount)> GetPagedListAsync(
             string? keyword,

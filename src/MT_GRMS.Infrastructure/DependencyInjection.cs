@@ -121,6 +121,7 @@ public static class DependencyInjection
         services.AddScoped<IScheduleApprovalRequestRepository, ScheduleApprovalRequestRepository>();
         services.AddScoped<IPayslipRepository, PayslipRepository>();
         services.AddScoped<ISubscriptionPlanRepository, SubscriptionPlanRepository>();
+        services.AddScoped<TenantSubscriptionService>();
         services.AddScoped<ITenantRepository, TenantRepository>();
         services.AddScoped<IMasterProductRepository, MasterProductRepository>();
         services.AddScoped<Application.Admin.Services.IMasterCatalogExcelService, Services.MasterCatalogExcelService>();

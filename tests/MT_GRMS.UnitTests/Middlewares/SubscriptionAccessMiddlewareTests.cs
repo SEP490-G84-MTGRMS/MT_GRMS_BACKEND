@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using MT_GRMS.Api.Controllers;
 using MT_GRMS.Api.Middlewares;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Constants;
@@ -88,8 +89,22 @@ public class SubscriptionAccessMiddlewareTests
         Assert.True(nextCalled);
     }
 
-    [Fact]
-    public async Task StaffManagementEndpoint_UsesCurrentAddonState_AndKeepsOtherEndpointsAvailable()
+    [Theory]
+    [InlineData(typeof(ShiftConfigsController))]
+    [InlineData(typeof(BranchAttendancePoliciesController))]
+    [InlineData(typeof(SchedulesController))]
+    [InlineData(typeof(ScheduleApprovalRequestsController))]
+    [InlineData(typeof(PayslipsController))]
+    public void HrControllers_RequireStaffManagement(Type controller)
+    {
+        Assert.True(controller.IsDefined(typeof(RequiresStaffManagementAttribute), inherit: true));
+    }
+
+
+    [Theory]
+    [InlineData(SystemRoles.StoreOwner)]
+    [InlineData(SystemRoles.Staff)]
+    public async Task StaffManagementEndpoint_UsesCurrentAddonState_AndKeepsOtherEndpointsAvailable(string role)
     {
         using var db = CreateDbContext();
         var tenant = new Tenant
@@ -106,7 +121,7 @@ public class SubscriptionAccessMiddlewareTests
             return Task.CompletedTask;
         });
         var context = CreateHttpContext(path: "/api/employees");
-        context.User.AddIdentity(new ClaimsIdentity([new Claim(ClaimTypes.Role, SystemRoles.StoreOwner)]));
+        context.User.AddIdentity(new ClaimsIdentity([new Claim(ClaimTypes.Role, role)]));
         using var body = new MemoryStream();
         context.Response.Body = body;
         context.SetEndpoint(new Endpoint(_ => Task.CompletedTask,
