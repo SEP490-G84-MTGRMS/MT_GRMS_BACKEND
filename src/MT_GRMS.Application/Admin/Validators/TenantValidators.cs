@@ -11,6 +11,7 @@ public sealed class UpdateStoreInfoRequestValidator : AbstractValidator<UpdateTe
         RuleFor(x => x.Name)
             .Cascade(CascadeMode.Stop)
             .NotEmpty().WithMessage("Vui lòng nhập tên cửa hàng.")
+            .Must(value => value.Trim().Length >= 2).WithMessage("Tên cửa hàng tối thiểu 2 ký tự.")
             .Must(value => value.Trim().Length <= 150).WithMessage("Tên cửa hàng tối đa 150 ký tự.");
 
         RuleFor(x => x.Hotline)
@@ -37,11 +38,12 @@ public class LockTenantRequestValidator : AbstractValidator<LockTenantRequest>
     {
         RuleFor(x => x.LockType)
             .NotEmpty().WithMessage("Loại khóa không được để trống")
-            .Must(t => t.ToLower() == "soft" || t.ToLower() == "hard")
+            .Must(t => string.Equals(t, "soft", StringComparison.OrdinalIgnoreCase) || string.Equals(t, "hard", StringComparison.OrdinalIgnoreCase))
             .WithMessage("Loại khóa chỉ chấp nhận 'soft' hoặc 'hard'");
 
         RuleFor(x => x.Reason)
             .NotEmpty().WithMessage("Lý do khóa không được để trống")
+            .Must(reason => reason?.Trim().Length >= 10).WithMessage("Lý do khóa tối thiểu 10 ký tự")
             .MaximumLength(500).WithMessage("Lý do khóa tối đa 500 ký tự");
     }
 }
@@ -56,6 +58,7 @@ public class ExtendGraceRequestValidator : AbstractValidator<ExtendGraceRequest>
 
         RuleFor(x => x.Reason)
             .NotEmpty().WithMessage("Lý do gia hạn không được để trống")
+            .Must(reason => reason?.Trim().Length >= 10).WithMessage("Lý do gia hạn tối thiểu 10 ký tự")
             .MaximumLength(500).WithMessage("Lý do gia hạn tối đa 500 ký tự");
     }
 }

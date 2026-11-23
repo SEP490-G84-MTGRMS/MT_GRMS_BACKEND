@@ -166,6 +166,14 @@ public class SubscriptionPlanTests
     }
 
     [Fact]
+    public async Task CreateInactivePlan_PreservesSelectedStatus()
+    {
+        var request = new CreatePlanRequest("DRAFT", "Chờ mở bán", null, 0m, 0m, null, null, IsActive: false);
+        var result = await _service.CreatePlanAsync(request);
+        Assert.Equal("INACTIVE", result.Status);
+    }
+
+    [Fact]
     public async Task REQ_ADMIN_BE01_CreatePlan_DuplicateCode_ThrowsInvalidOperationException()
     {
         // Arrange

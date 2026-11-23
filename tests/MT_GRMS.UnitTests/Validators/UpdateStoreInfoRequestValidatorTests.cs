@@ -20,7 +20,8 @@ public class UpdateStoreInfoRequestValidatorTests
     }
 
     [Theory]
-    [InlineData(1, true)]
+    [InlineData(1, false)]
+    [InlineData(2, true)]
     [InlineData(149, true)]
     [InlineData(150, true)]
     [InlineData(151, false)]

@@ -7,6 +7,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-15
 
 ### Changed
+- Đồng bộ kiểm tra dữ liệu nhập admin cho cửa hàng, gói dịch vụ, hàng mẫu, Excel và cấu hình nền tảng. [Worklog](./docs/worklogs/2026-11-23_ADMIN-VALIDATION_Codex_admin-input-boundaries.md)
 - Áp dụng quyền Quản lý nhân viên theo gói cho API ca làm, chấm công, lịch làm, duyệt yêu cầu và bảng lương.
 - Yêu cầu tên chi nhánh có ít nhất 2 ký tự sau khi bỏ khoảng trắng hai đầu khi thêm mới hoặc cập nhật chi nhánh.
 - Giữ đúng mã gian hàng cho chi nhánh chính và danh mục mẫu khi đăng ký trong phiên của một gian hàng khác.
