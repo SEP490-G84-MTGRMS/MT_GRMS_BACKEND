@@ -82,6 +82,8 @@ public class StocktakeService : IStocktakeService
             ? "ALL"
             : (string.IsNullOrWhiteSpace(command.Scope) ? "LOT" : command.Scope.Trim().ToUpperInvariant());
         var reasonType = string.IsNullOrWhiteSpace(command.ReasonType) ? "PERIODIC" : command.ReasonType.Trim().ToUpperInvariant();
+        if (reasonType == "CUSTOMER_RETURN")
+            throw new BusinessException("Phiếu kiểm kê hàng lỗi đổi/trả chỉ được tạo tự động từ giao dịch đổi/trả.");
 
         var stocks = await _repository.GetBranchStocksForScopeAsync(
             tenantId,
@@ -199,6 +201,10 @@ public class StocktakeService : IStocktakeService
         if (entity.Status != "DRAFT" && entity.Status != "NEEDS_RECOUNT")
             throw new BusinessException($"Chỉ được sửa phiếu kiểm kê ở trạng thái DRAFT hoặc NEEDS_RECOUNT (hiện tại: {entity.Status}).");
 
+        if (entity.ReasonType == "CUSTOMER_RETURN" && !string.IsNullOrWhiteSpace(command.ReasonType) &&
+            !string.Equals(command.ReasonType.Trim(), "CUSTOMER_RETURN", StringComparison.OrdinalIgnoreCase))
+            throw new BusinessException("Không thể đổi loại phiếu kiểm kê phát sinh từ hàng lỗi đổi/trả.");
+
         if (!string.IsNullOrWhiteSpace(command.ReasonType))
             entity.ReasonType = command.ReasonType.Trim().ToUpperInvariant();
 
@@ -215,6 +221,12 @@ public class StocktakeService : IStocktakeService
                     (input.BranchStockId.HasValue && l.BranchStockId == input.BranchStockId.Value));
 
                 if (line == null) continue;
+
+                if (entity.ReasonType == "CUSTOMER_RETURN" &&
+                    (input.GoodQty != line.GoodQty || input.DefectiveQty != line.DefectiveQty ||
+                     input.DamagedQty != line.DamagedQty || input.NearExpiryQty != line.NearExpiryQty ||
+                     input.ExpiredQty != line.ExpiredQty))
+                    throw new BusinessException("Số lượng trên phiếu kiểm kê hàng lỗi đổi/trả đã được cách ly; chỉ được cập nhật ghi chú và bằng chứng.");
 
                 ValidateNonNegativeQuantities(input.GoodQty, input.DefectiveQty, input.DamagedQty, input.NearExpiryQty, input.ExpiredQty);
 
@@ -333,11 +345,13 @@ public class StocktakeService : IStocktakeService
                 var writeOffQty = GetLineWriteOffQty(line);
                 if (writeOffQty > 0)
                 {
+                    if (entity.ReasonType == "CUSTOMER_RETURN")
+                        stock.QuantityQuarantined = Math.Max(0m, stock.QuantityQuarantined - writeOffQty);
                     stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - writeOffQty);
                 }
 
                 var returnHoldQty = GetLineEligibleReturnQty(line);
-                if (returnHoldQty > 0)
+                if (returnHoldQty > 0 && entity.ReasonType != "CUSTOMER_RETURN")
                 {
                     stock.QuantityQuarantined += returnHoldQty;
                 }

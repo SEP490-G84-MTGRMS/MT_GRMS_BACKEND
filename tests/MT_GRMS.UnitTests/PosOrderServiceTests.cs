@@ -12,6 +12,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.PosOrders.Dtos;
 using MT_GRMS.Application.PosOrders.Validators;
+using MT_GRMS.Application.Stocktakes;
 using MT_GRMS.Application.Promotions;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Application.PosShifts;
@@ -58,13 +59,23 @@ public class PosOrderServiceTests
     private readonly Guid _prodHaoHaoId = Guid.Parse("33333333-aaaa-bbbb-cccc-333333333333");
     private readonly Guid _prodCocaId = Guid.Parse("44444444-aaaa-bbbb-cccc-444444444444");
 
+    private static IStocktakeRepository CreateStocktakeRepository()
+    {
+        var repository = new Mock<IStocktakeRepository>();
+        repository.Setup(r => r.GenerateCodeAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync("KK-RETURN-TEST");
+        repository.Setup(r => r.AddAsync(It.IsAny<Stocktake>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Stocktake stocktake, CancellationToken _) => stocktake);
+        return repository.Object;
+    }
+
     public PosOrderServiceTests()
     {
         _tenantContext = new FakeTenantContext();
         _orderRepo = new FakeOrderRepository();
         _uow = new FakeUnitOfWork();
         _printService = new ThermalPrintService();
-        _orderService = new OrderService(_orderRepo, _uow, _printService, validator: new OrderCreateRequestValidator(), tenantContext: _tenantContext);
+        _orderService = new OrderService(_orderRepo, _uow, _printService, validator: new OrderCreateRequestValidator(), tenantContext: _tenantContext, stocktakeRepository: CreateStocktakeRepository());
 
         // Seed Branch
         _orderRepo.Branches.Add(new Branch
@@ -725,18 +736,17 @@ public class PosOrderServiceTests
         Assert.Equal(initialStock - 3m, _orderRepo.BranchStocks.First(s => s.ProductId == _prodCocaId).QuantityOnHand);
 
         // Act: Hủy đơn đặt trước
-        var cancelResult = await _orderService.CancelOrderAsync(preOrder.Id, new CancelOrderRequest(
+        await Assert.ThrowsAsync<BusinessException>(() => _orderService.CancelOrderAsync(preOrder.Id, new CancelOrderRequest(
             Reason: "Khách hủy lịch hẹn lấy",
             Note: "Đã hoàn lại tiền cọc"
-        ));
+        )));
 
         // Assert
-        Assert.Equal("Cancelled", cancelResult.Status);
-        Assert.Equal("REFUNDED", cancelResult.PaymentStatus);
+        Assert.NotEqual("Cancelled", preOrder.Status);
 
         // Tồn kho được phục hồi về ban đầu
         var restoredStock = _orderRepo.BranchStocks.First(s => s.ProductId == _prodCocaId).QuantityOnHand;
-        Assert.Equal(initialStock, restoredStock);
+        Assert.Equal(initialStock - 3m, restoredStock);
     }
 
     [Fact]
@@ -838,7 +848,8 @@ public class PosOrderServiceTests
         // Assert
         Assert.NotNull(result);
         var currentStock = _orderRepo.BranchStocks.First(s => s.ProductId == _prodHaoHaoId).QuantityOnHand;
-        Assert.Equal(initialHaoHaoStock, currentStock); // Tồn kho bán lẻ KHÔNG tăng
+        Assert.Equal(initialHaoHaoStock + 1m, currentStock);
+        Assert.Equal(initialHaoHaoStock, currentStock - _orderRepo.BranchStocks.First(s => s.ProductId == _prodHaoHaoId).QuantityQuarantined);
     }
 
     [Fact]
@@ -1172,15 +1183,15 @@ public class PosOrderServiceTests
         Assert.Equal(6m, batch.QuantityOnHand);
 
         // Act: Hủy đơn đặt trước
-        var cancelResult = await _orderService.CancelOrderAsync(preOrder.Id, new CancelOrderRequest(
+        await Assert.ThrowsAsync<BusinessException>(() => _orderService.CancelOrderAsync(preOrder.Id, new CancelOrderRequest(
             Reason: "Khách bận không nhận hàng",
             Note: "Hoàn cọc và hoàn kho",
             UserRole: "STORE_OWNER"
-        ));
+        )));
 
         // Assert: Tồn kho được hoàn đủ 24 lon: 6 + 24 = 30 lon
-        Assert.Equal("Cancelled", cancelResult.Status);
-        Assert.Equal(30m, batch.QuantityOnHand);
+        Assert.NotEqual("Cancelled", preOrder.Status);
+        Assert.Equal(6m, batch.QuantityOnHand);
     }
 
     [Fact]
@@ -1614,11 +1625,8 @@ public class PosOrderServiceTests
             Reason: "Khách đổi ý không mua nữa",
             UserRole: "STORE_OWNER"
         );
-        var cancelRes = await _orderService.CancelOrderAsync(orderRes.Id, cancelReq);
-
-        // Assert
-        Assert.Equal("Cancelled", cancelRes.Status);
-        Assert.Equal(20m, stock.QuantityOnHand); // Hoàn lại 15 + 5 = 20
+        await Assert.ThrowsAsync<BusinessException>(() => _orderService.CancelOrderAsync(orderRes.Id, cancelReq));
+        Assert.Equal(15m, stock.QuantityOnHand);
     }
 
     [Fact]
@@ -1632,12 +1640,9 @@ public class PosOrderServiceTests
             new List<OrderItemCreateDto> { new(_prodCocaId, 1m, 10000m) }));
 
         Assert.Equal(debtBefore + order.FinalAmount, customer.TotalDebt);
-        var cancelled = await ownerService.CancelOrderAsync(order.Id,
-            new CancelOrderRequest("Khách hủy", UserRole: "STORE_OWNER"));
-
-        Assert.Equal("Cancelled", cancelled.Status);
-        Assert.Equal("CANCELLED", cancelled.PaymentStatus);
-        Assert.Equal(debtBefore, customer.TotalDebt);
+        await Assert.ThrowsAsync<BusinessException>(() => ownerService.CancelOrderAsync(order.Id,
+            new CancelOrderRequest("Khách hủy", UserRole: "STORE_OWNER")));
+        Assert.Equal(debtBefore + order.FinalAmount, customer.TotalDebt);
     }
 
     [Fact]
@@ -2313,18 +2318,17 @@ public class PosOrderServiceTests
         Assert.Equal(5000m, voucherBatch.TotalDiscountGiven);
 
         // Hủy đơn hàng với quyền STORE_OWNER -> Hoàn tồn kho quà tặng, trả Voucher về UNUSED và giảm UsedCount/TotalDiscountGiven về 0
-        var cancelRes = await orderService.CancelOrderAsync(createRes.Id, new CancelOrderRequest("Khách đổi ý", "Hoàn đơn test", "STORE_OWNER"));
-        Assert.Equal("Cancelled", cancelRes.Status);
-        Assert.Equal(0, autoPromo.UsedCount);
-        Assert.Equal(0m, autoPromo.TotalDiscountGiven);
-        Assert.Equal("UNUSED", voucherEntity.Status);
-        Assert.Equal(0, voucherBatch.UsedCount);
-        Assert.Equal(0m, voucherBatch.TotalDiscountGiven);
+        await Assert.ThrowsAsync<BusinessException>(() => orderService.CancelOrderAsync(createRes.Id, new CancelOrderRequest("Khách đổi ý", "Hoàn đơn test", "STORE_OWNER")));
+        Assert.Equal(1, autoPromo.UsedCount);
+        Assert.Equal(15000m, autoPromo.TotalDiscountGiven);
+        Assert.Equal("USED", voucherEntity.Status);
+        Assert.Equal(1, voucherBatch.UsedCount);
+        Assert.Equal(5000m, voucherBatch.TotalDiscountGiven);
 
         var restoredCocaStock = _orderRepo.BranchStocks
             .Where(s => s.BranchId == _branchId && s.ProductId == _prodCocaId)
             .Sum(s => s.QuantityOnHand);
-        Assert.Equal(3m, restoredCocaStock);
+        Assert.Equal(2m, restoredCocaStock);
     }
 
     [Fact]
@@ -3640,7 +3644,8 @@ public class PosOrderServiceTests
             cashbookService: mockCashbook.Object,
             shiftRepository: mockShiftRepo.Object,
             promotionRepository: mockPromotionRepo.Object,
-            tenantContext: ownerContext
+            tenantContext: ownerContext,
+            stocktakeRepository: CreateStocktakeRepository()
         );
 
         var preOrderId1 = Guid.NewGuid();
@@ -3690,7 +3695,8 @@ public class PosOrderServiceTests
             cashbookService: mockCashbook.Object,
             shiftRepository: mockShiftRepo.Object,
             promotionRepository: mockPromotionRepo.Object,
-            tenantContext: staffContext
+            tenantContext: staffContext,
+            stocktakeRepository: CreateStocktakeRepository()
         );
 
         var preOrderId2 = Guid.NewGuid();

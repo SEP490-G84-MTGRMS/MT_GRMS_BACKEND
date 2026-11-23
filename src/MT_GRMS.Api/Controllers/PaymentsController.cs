@@ -571,23 +571,59 @@ public class PaymentsController : BaseApiController
             });
         }
 
-        // Tìm đơn hàng tương ứng trong CSDL (Dùng IgnoreQueryFilters vì Webhook gọi Anonymous không có TenantContext)
-        var order = await _context.Orders
-            .IgnoreQueryFilters()
-            .FirstOrDefaultAsync(o => !o.IsDeleted && (o.OrderCode == orderCode || o.OrderCode == $"HD{orderCode}"), ct);
-
-        // Trường hợp mã đơn có tiền tố dính liền (VD: AN02HD261119151132768)
-        if (order == null && orderCode.Length > 4 && (orderCode.StartsWith("AN") || orderCode.StartsWith("MT") || orderCode.StartsWith("CG") || orderCode.StartsWith("CH")))
+        // Webhook không có TenantContext: xác thực cửa hàng bằng token trước khi truy vấn đơn.
+        var enabledTenants = await _context.Tenants.AsNoTracking()
+            .Where(t => !t.IsDeleted && t.IsSepayEnabled).ToListAsync(ct);
+        var authenticatedTenants = enabledTenants.Where(t =>
         {
-            var trimmedCode = orderCode.Substring(4);
-            order = await _context.Orders
-                .IgnoreQueryFilters()
-                .FirstOrDefaultAsync(o => !o.IsDeleted && (o.OrderCode == trimmedCode || o.OrderCode == $"HD{trimmedCode}"), ct);
-            if (order != null && string.IsNullOrEmpty(extractedPrefix))
-            {
-                extractedPrefix = orderCode.Substring(0, 4);
-            }
+            if (FixedTimeEquals(incomingKey, t.SepayWebhookSecret)) return true;
+            try { return FixedTimeEquals(incomingKey, DecryptSecret(t.SepayApiKeyEncrypted)); }
+            catch (CryptographicException) { return false; }
+        }).ToList();
+        if (authenticatedTenants.Count == 0)
+            return Unauthorized(new { message = "Invalid SePay API Key or Webhook Secret for this store." });
+        if (string.IsNullOrWhiteSpace(payload.AccountNumber))
+            return BadRequest(new { message = "Webhook không có số tài khoản nhận; cần đối soát thủ công." });
+
+        var authenticatedTenantIds = authenticatedTenants.Select(t => t.Id).ToList();
+        var receivingAccounts = await _context.FinanceAccounts.IgnoreQueryFilters().AsNoTracking()
+            .Where(a => authenticatedTenantIds.Contains(a.TenantId) && !a.IsDeleted &&
+                a.AccountType == MT_GRMS.Domain.Enums.FinanceAccountType.Bank &&
+                a.AccountNumber == payload.AccountNumber.Trim())
+            .Select(a => new { a.Id, a.TenantId }).ToListAsync(ct);
+        if (receivingAccounts.Count == 0)
+            return BadRequest(new { message = "Số tài khoản nhận tiền không thuộc cửa hàng đã xác thực." });
+        var receivingTenantIds = receivingAccounts.Select(a => a.TenantId).Distinct().ToList();
+        if (receivingTenantIds.Count != 1)
+            return Conflict(new { message = "Token và tài khoản nhận tiền khớp nhiều cửa hàng; cần đối soát thủ công." });
+        var authenticatedTenant = authenticatedTenants.Single(t => t.Id == receivingTenantIds[0]);
+        var receivingAccountIds = receivingAccounts.Select(a => a.Id).ToList();
+
+        if (!string.IsNullOrEmpty(extractedPrefix) &&
+            !string.Equals(extractedPrefix, GetTenantPrefix(authenticatedTenant.Id), StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { message = "Tiền tố cửa hàng không khớp với token SePay." });
+
+        var orderCodes = new List<string> { orderCode, $"HD{orderCode}" };
+        // Hỗ trợ mã tiền tố dính liền trong nội dung chuyển khoản cũ.
+        if (string.IsNullOrEmpty(extractedPrefix) && orderCode.Length > 4 &&
+            (orderCode.StartsWith("AN") || orderCode.StartsWith("MT") || orderCode.StartsWith("CG") || orderCode.StartsWith("CH")))
+        {
+            var prefix = orderCode[..4];
+            if (!string.Equals(prefix, GetTenantPrefix(authenticatedTenant.Id), StringComparison.OrdinalIgnoreCase))
+                return BadRequest(new { message = "Tiền tố cửa hàng không khớp với token SePay." });
+            var trimmedCode = orderCode[4..];
+            orderCodes.Add(trimmedCode);
+            orderCodes.Add($"HD{trimmedCode}");
         }
+
+        var matchingOrders = await _context.Orders.IgnoreQueryFilters()
+            .Where(o => !o.IsDeleted && o.TenantId == authenticatedTenant.Id &&
+                o.FinanceAccountId.HasValue && receivingAccountIds.Contains(o.FinanceAccountId.Value) &&
+                orderCodes.Contains(o.OrderCode))
+            .Take(2).ToListAsync(ct);
+        if (matchingOrders.Count > 1)
+            return Conflict(new { message = "Nhiều đơn cùng mã và tài khoản nhận tiền; cần đối soát thủ công." });
+        var order = matchingOrders.SingleOrDefault();
 
         if (order == null)
         {
@@ -601,17 +637,6 @@ public class PaymentsController : BaseApiController
 
         // Thiết lập TenantContext cho luồng xử lý Webhook của đơn hàng này
         _tenantContext.SetContext(order.TenantId, Guid.Empty, order.BranchId);
-
-        // Kiểm tra định tuyến đa cửa hàng (Multi-tenant Prefix Routing) nếu trong nội dung CK có tiền tố
-        if (!string.IsNullOrEmpty(extractedPrefix))
-        {
-            string expectedPrefix = GetTenantPrefix(order.TenantId);
-            if (!string.Equals(extractedPrefix, expectedPrefix, StringComparison.OrdinalIgnoreCase))
-            {
-                _logger.LogWarning("CẢNH BÁO [Lớp 4A]: Tiền tố cửa hàng '{Extracted}' không khớp với cửa hàng sở hữu đơn '{Expected}' (Tenant={TenantId})",
-                    extractedPrefix, expectedPrefix, order.TenantId);
-            }
-        }
 
         // Lấy cấu hình của Tenant sở hữu đơn hàng này
         var tenant = await _context.Tenants.FirstOrDefaultAsync(x => x.Id == order.TenantId && !x.IsDeleted, ct);
