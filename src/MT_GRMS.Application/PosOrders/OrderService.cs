@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentValidation;
+using MT_GRMS.Application.Batches;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Inventory;
@@ -507,9 +508,12 @@ public class OrderService : IOrderService
             var allocatedStocks = lineAllocations.Select(a => selectedStocks.GetValueOrDefault(a.BranchStockId)
                 ?? stocksCache.GetValueOrDefault(item.ProductId)?.FirstOrDefault(s => s.Id == a.BranchStockId)).ToList();
             var allocatedBase = lineAllocations.Sum(a => a.QuantityBase);
+            var pricingUtcNow = DateTime.UtcNow;
             decimal fefoDiscount = soldPackage != null || allocatedBase <= 0m ? 0m : Math.Round(
-                lineAllocations.Select((a, i) => allocatedStocks[i] is { IsFefoDiscountActive: true, FefoDiscountPercent: > 0m } stock
-                    ? lineTotal * a.QuantityBase / allocatedBase * stock.FefoDiscountPercent / 100m : 0m).Sum(), 2);
+                lineAllocations.Select((a, i) =>
+                    FefoDiscountWindow.IsEffective(allocatedStocks[i], pricingUtcNow)
+                        ? lineTotal * a.QuantityBase / allocatedBase * allocatedStocks[i]!.FefoDiscountPercent / 100m
+                        : 0m).Sum(), 2);
             decimal itemDiscount = Math.Max(item.DiscountAmount ?? 0m, fefoDiscount);
             decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : effectiveUnitPrice;
 

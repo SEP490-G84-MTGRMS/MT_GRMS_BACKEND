@@ -270,6 +270,18 @@ public class BranchProductRepository : IBranchProductRepository
                 g => g.Key,
                 g => g.Sum(bs => BranchStockAvailability.GetSellableAvailable(bs, today)));
 
+        // WAC theo ĐVT cơ sở: Σ(QOH × LandedCost) / Σ(QOH) — giống Inventory AvgCost.
+        var avgCostLookup = stockRows
+            .GroupBy(bs => (bs.BranchId, bs.ProductId))
+            .ToDictionary(
+                g => g.Key,
+                g =>
+                {
+                    var physicalQty = g.Sum(bs => bs.QuantityOnHand);
+                    if (physicalQty <= 0m) return 0m;
+                    return Math.Round(g.Sum(bs => bs.QuantityOnHand * bs.LandedCostPerUnit) / physicalQty, 2);
+                });
+
         // NCC Active đang phục vụ từng chi nhánh trên trang → 1 BranchProduct có thể nhiều dòng nguồn nhập.
         var branchSupplierLinks = await _context.SupplierBranchAssignments
             .AsNoTracking()
@@ -393,6 +405,8 @@ public class BranchProductRepository : IBranchProductRepository
                     primarySp.AgreedWholesalePrice,
                     x.CostPrice)
                 : x.CostPrice;
+            avgCostLookup.TryGetValue((x.BranchId, x.ProductId), out var stockAvgCost);
+            var averageCost = stockAvgCost > 0m ? stockAvgCost : cost;
             var moq = primarySp != null && primarySp.MinimumOrderQuantity > 0
                 ? (int)primarySp.MinimumOrderQuantity
                 : 0;
@@ -433,6 +447,7 @@ public class BranchProductRepository : IBranchProductRepository
                 ImageUrl = extra?.ImageUrl,
                 RetailPrice = x.RetailPrice,
                 CostPrice = cost,
+                AverageCost = averageCost,
                 CurrentStock = currentStock,
                 MinStockLevel = x.MinStock,
                 SupplierId = primarySp?.SupplierId,

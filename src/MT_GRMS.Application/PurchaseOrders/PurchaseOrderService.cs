@@ -638,9 +638,23 @@ public class PurchaseOrderService : IPurchaseOrderService
 
                 if (isStoreOwner)
                 {
-                    storeQty = cell.StoreQty;
-                    isOwnerAdjusted = cell.IsOwnerAdjusted || cell.StoreQty.HasValue;
-                    employeeQty = detail?.EmployeeQty ?? cell.EmployeeQty;
+                    // Gỡ chốt (khôi phục đề xuất NV): FE gửi IsOwnerAdjusted=false + StoreQty=null
+                    if (!cell.IsOwnerAdjusted && !cell.StoreQty.HasValue)
+                    {
+                        storeQty = null;
+                        isOwnerAdjusted = false;
+                        // Ưu tiên SL NV từ payload; fallback bản nháp đã lưu
+                        employeeQty = cell.EmployeeQty > 0
+                            ? cell.EmployeeQty
+                            : (detail?.EmployeeQty ?? 0m);
+                    }
+                    else
+                    {
+                        storeQty = cell.StoreQty;
+                        isOwnerAdjusted = cell.IsOwnerAdjusted || cell.StoreQty.HasValue;
+                        // Owner chỉnh: không ghi đè EmployeeQty đã có
+                        employeeQty = detail?.EmployeeQty ?? cell.EmployeeQty;
+                    }
                 }
                 else
                 {

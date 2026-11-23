@@ -2735,6 +2735,12 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("decimal(5,2)")
                         .HasDefaultValue(0.00m);
 
+                    b.Property<DateTime?>("FefoDiscountStartAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<DateTime?>("FefoDiscountEndAtUtc")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
 

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authorization;
+using MT_GRMS.Domain.Constants;
 using System;
 using System.Threading;
 using System.Threading.Tasks;
@@ -42,7 +43,7 @@ public class BatchesController : BaseApiController
     }
 
     /// <summary>
-    /// Lấy danh sách cảnh báo các lô hàng cận date (dưới 30 ngày)
+    /// Lấy danh sách cảnh báo lô cận hạn theo NearExpiryThresholdDays từng SP (fallback daysThreshold).
     /// </summary>
     [HttpGet("alerts")]
     public async Task<IActionResult> GetExpiryAlerts(
@@ -66,6 +67,7 @@ public class BatchesController : BaseApiController
     }
 
     [HttpPatch("{id:guid}/fefo-discount")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<IActionResult> ApplyFefoDiscount(Guid id, [FromBody] ApplyFefoDiscountRequest request, CancellationToken cancellationToken)
     {
         var result = await _batchService.ApplyFefoDiscountAsync(id, request, cancellationToken);

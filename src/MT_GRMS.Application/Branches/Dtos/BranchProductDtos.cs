@@ -49,6 +49,12 @@ public class BranchProductDto
     public string? ImageUrl { get; set; }
     public decimal RetailPrice { get; set; }
     public decimal CostPrice { get; set; }
+    /// <summary>
+    /// Giá vốn trung bình tồn (WAC) theo ĐVT cơ sở:
+    /// Σ(QOH × LandedCostPerUnit) / Σ(QOH). Không tồn → fallback CostPrice (NCC/Master).
+    /// ĐVT khác = AverageCost × ConversionRate.
+    /// </summary>
+    public decimal AverageCost { get; set; }
     /// <summary>Tồn khả dụng bán (RULE-01) theo ĐVT tồn gốc — chỉ cộng lô còn hạn.</summary>
     public decimal CurrentStock { get; set; }
     public decimal MinStockLevel { get; set; }
@@ -142,6 +148,11 @@ public class UpdateBranchProductCommand
     /// (khác Master → lưu override; trùng Master → xóa override).
     /// </summary>
     public List<BranchProductUnitPriceDto>? UnitPrices { get; set; }
+    /// <summary>
+    /// Giá đóng khay đ/kg (PROCESSED). Chỉ áp khi Product.AllowRepack.
+    /// Hiện lưu trên Master Product (cùng giá khay mọi CN) — null = không đổi.
+    /// </summary>
+    public decimal? ProcessedSellingPricePerKg { get; set; }
 }
 
 /// <summary>

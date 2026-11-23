@@ -1075,6 +1075,8 @@ ON ""HouseholdTaxSnapshots"" (
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""BatchExpiryDate"" timestamp without time zone NULL;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""FefoDiscountPercent"" numeric(5,2) NOT NULL DEFAULT 0;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""IsFefoDiscountActive"" boolean NOT NULL DEFAULT false;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""FefoDiscountStartAtUtc"" timestamp with time zone NULL;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""FefoDiscountEndAtUtc"" timestamp with time zone NULL;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitId"" uuid;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitName"" character varying(50);", logger);
 
@@ -1807,10 +1809,11 @@ END $$;
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddExpenseVoucherDueDate.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddTaxFilingConfirmations.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchConversionRulesAndNotifications.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.RemoveGoodsReceiptFreight.UpSql);
                 }
                 catch (Exception ex)
                 {
-                    throw new InvalidOperationException("MERGE_SCHEMA_FAILED: Không thể nâng cấp schema phiếu chi, hồ sơ thuế, chi nhánh và thông báo.", ex);
+                    throw new InvalidOperationException("MERGE_SCHEMA_FAILED: Không thể nâng cấp schema phiếu chi, hồ sơ thuế, chi nhánh, thông báo hoặc GRN cost.", ex);
                 }
                 try
                 {

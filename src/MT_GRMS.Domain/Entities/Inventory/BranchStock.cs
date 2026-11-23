@@ -22,6 +22,8 @@ public class BranchStock : BaseTenantEntity
     public decimal? RetailPrice { get; set; }
     public decimal FefoDiscountPercent { get; set; } = 0.00m;
     public bool IsFefoDiscountActive { get; set; } = false;
+    public DateTime? FefoDiscountStartAtUtc { get; set; }
+    public DateTime? FefoDiscountEndAtUtc { get; set; }
     public string Status { get; set; } = "Active";
     public string? ShelfLocation { get; set; }
     public string? ZoneArea { get; set; }

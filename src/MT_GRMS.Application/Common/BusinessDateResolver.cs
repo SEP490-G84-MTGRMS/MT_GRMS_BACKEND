@@ -4,6 +4,16 @@ public static class BusinessDateResolver
 {
     private static readonly TimeZoneInfo StoreTimeZone = ResolveStoreTimeZone();
 
+    public static TimeZoneInfo TimeZone => StoreTimeZone;
+
+    public static DateTime ToUtc(DateTime localTime)
+        => TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(localTime, DateTimeKind.Unspecified), StoreTimeZone);
+
+    public static DateTime ToLocal(DateTime utcTime)
+        => TimeZoneInfo.ConvertTimeFromUtc(
+            utcTime.Kind == DateTimeKind.Utc ? utcTime : DateTime.SpecifyKind(utcTime, DateTimeKind.Utc),
+            StoreTimeZone);
+
     public static DateOnly Resolve(DateTime utcTime, TimeSpan businessDayStartTime)
     {
         var normalizedUtc = utcTime.Kind == DateTimeKind.Utc ? utcTime : DateTime.SpecifyKind(utcTime, DateTimeKind.Utc);
