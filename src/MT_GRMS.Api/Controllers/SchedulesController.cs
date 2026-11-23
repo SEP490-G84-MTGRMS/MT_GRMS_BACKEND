@@ -1,3 +1,4 @@
+using MT_GRMS.Api.Middlewares;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -14,6 +15,7 @@ namespace MT_GRMS.Api.Controllers;
 [ApiController]
 [Route("api/schedules")]
 [Route("api/employee-schedules")]
+[RequiresStaffManagement]
 public class SchedulesController : BaseApiController
 {
     private readonly IScheduleService _scheduleService;

@@ -1,12 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Security.Claims;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using MT_GRMS.Api.Controllers;
 using MT_GRMS.Api.Middlewares;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Infrastructure.Persistence;
 using Xunit;
@@ -84,6 +87,76 @@ public class SubscriptionAccessMiddlewareTests
         await middleware.InvokeAsync(context, db);
 
         Assert.True(nextCalled);
+    }
+
+    [Theory]
+    [InlineData(typeof(ShiftConfigsController))]
+    [InlineData(typeof(BranchAttendancePoliciesController))]
+    [InlineData(typeof(SchedulesController))]
+    [InlineData(typeof(ScheduleApprovalRequestsController))]
+    [InlineData(typeof(PayslipsController))]
+    public void HrControllers_RequireStaffManagement(Type controller)
+    {
+        Assert.True(controller.IsDefined(typeof(RequiresStaffManagementAttribute), inherit: true));
+    }
+
+
+    [Theory]
+    [InlineData(SystemRoles.StoreOwner)]
+    [InlineData(SystemRoles.Staff)]
+    public async Task StaffManagementEndpoint_UsesCurrentAddonState_AndKeepsOtherEndpointsAvailable(string role)
+    {
+        using var db = CreateDbContext();
+        var tenant = new Tenant
+        {
+            Id = "tenant-01", CurrentPlan = "STANDARD", SubscriptionStatus = "ACTIVE",
+            SubscriptionExpiresAt = DateTime.UtcNow.AddDays(10)
+        };
+        db.Tenants.Add(tenant);
+        await db.SaveChangesAsync();
+        var calls = 0;
+        var middleware = new SubscriptionAccessMiddleware(_ =>
+        {
+            calls++;
+            return Task.CompletedTask;
+        });
+        var context = CreateHttpContext(path: "/api/employees");
+        context.User.AddIdentity(new ClaimsIdentity([new Claim(ClaimTypes.Role, role)]));
+        using var body = new MemoryStream();
+        context.Response.Body = body;
+        context.SetEndpoint(new Endpoint(_ => Task.CompletedTask,
+            new EndpointMetadataCollection(new RequiresStaffManagementAttribute()), "Employees"));
+
+        await middleware.InvokeAsync(context, db);
+
+        Assert.Equal(403, context.Response.StatusCode);
+        body.Position = 0;
+        using var reader = new StreamReader(body);
+        Assert.Contains("STAFF_MANAGEMENT_ADDON_REQUIRED", await reader.ReadToEndAsync());
+        Assert.Equal(0, calls);
+
+        context.SetEndpoint(null);
+        await middleware.InvokeAsync(context, db);
+        Assert.Equal(1, calls);
+
+        context.SetEndpoint(new Endpoint(_ => Task.CompletedTask,
+            new EndpointMetadataCollection(new RequiresStaffManagementAttribute()), "Employees"));
+        tenant.HasStaffManagementAddon = true;
+        await db.SaveChangesAsync();
+        await middleware.InvokeAsync(context, db);
+        Assert.Equal(2, calls);
+
+        tenant.CurrentPlan = "PRO";
+        tenant.HasStaffManagementAddon = false;
+        await db.SaveChangesAsync();
+        await middleware.InvokeAsync(context, db);
+        Assert.Equal(3, calls);
+
+        tenant.CurrentPlan = "TRIAL";
+        tenant.SubscriptionStatus = "TRIAL";
+        await db.SaveChangesAsync();
+        await middleware.InvokeAsync(context, db);
+        Assert.Equal(4, calls);
     }
 
     [Fact]

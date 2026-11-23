@@ -1,3 +1,4 @@
+using MT_GRMS.Infrastructure.Services;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -328,7 +329,7 @@ public class AdvancedOperationsBranchCoverageTests
         var mockTenantService = new Mock<ITenantService>();
         var mockPlanService = new Mock<ISubscriptionPlanService>();
 
-        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext);
+        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext, new TenantSubscriptionService(dbContext));
         var claims = new List<Claim>
         {
             new(ClaimTypes.NameIdentifier, userId),
@@ -418,7 +419,7 @@ public class AdvancedOperationsBranchCoverageTests
         var mockTenantService = new Mock<ITenantService>();
         var mockPlanService = new Mock<ISubscriptionPlanService>();
 
-        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext);
+        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext, new TenantSubscriptionService(dbContext));
 
         // 1. Missing claims -> 403 Forbidden
         controller.ControllerContext = new ControllerContext

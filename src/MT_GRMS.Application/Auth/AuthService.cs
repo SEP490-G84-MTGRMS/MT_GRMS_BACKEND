@@ -620,8 +620,9 @@ public class AuthService : IAuthService
             Id = Guid.NewGuid(),
             TenantId = tenantId,
             BranchCode = "BR-01",
-            Name = $"{request.StoreName.Trim()} - Chi Nhánh Chính",
+            Name = $"Cơ sở 1",
             Phone = normalizedPhone,
+            IsHeadquarter = true,
             IsActive = true
         };
 

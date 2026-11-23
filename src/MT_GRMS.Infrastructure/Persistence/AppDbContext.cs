@@ -183,9 +183,23 @@ public partial class AppDbContext : DbContext
         => SaveChangesAsync(true, cancellationToken);
 
     public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+        => SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken, newTenantId: null);
+
+    internal Task<int> SaveNewTenantAsync(Tenant tenant, CancellationToken cancellationToken)
+    {
+        if (Entry(tenant).State != EntityState.Added || string.IsNullOrWhiteSpace(tenant.Id))
+        {
+            throw new InvalidOperationException("Chỉ áp dụng khi đang tạo gian hàng mới.");
+        }
+
+        // Provisioning rows already assigned to the new store must keep that tenant ID.
+        return SaveChangesAsync(true, cancellationToken, tenant.Id);
+    }
+
+    private Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken, string? newTenantId)
     {
         RevokeChangedIdentitySessions();
-        ApplyAuditAndTenantInfo();
+        ApplyAuditAndTenantInfo(newTenantId);
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
 
@@ -235,7 +249,7 @@ public partial class AppDbContext : DbContext
         }
     }
 
-    private void ApplyAuditAndTenantInfo()
+    private void ApplyAuditAndTenantInfo(string? newTenantId = null)
     {
         foreach (var userEntry in ChangeTracker.Entries<User>())
         {
@@ -300,6 +314,7 @@ public partial class AppDbContext : DbContext
                     entry.Entity.TenantId = !string.IsNullOrWhiteSpace(tenantId) ? tenantId : "default-tenant";
                 }
                 else if (!string.IsNullOrWhiteSpace(tenantId)
+                         && !string.Equals(entry.Entity.TenantId, newTenantId, StringComparison.Ordinal)
                          && _tenantContext?.CurrentUserId != null
                          && _tenantContext.CurrentUserId != Guid.Empty
                          && !string.Equals(_tenantContext.CurrentRole, "ADMIN", StringComparison.OrdinalIgnoreCase))

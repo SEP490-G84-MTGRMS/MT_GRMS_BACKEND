@@ -5,7 +5,7 @@ using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Api.Middlewares;
 
-[AttributeUsage(AttributeTargets.Method)]
+[AttributeUsage(AttributeTargets.Class | AttributeTargets.Method)]
 public sealed class RequiresStaffManagementAttribute : Attribute { }
 
 public sealed class SubscriptionAccessMiddleware(RequestDelegate next)
@@ -53,7 +53,6 @@ public sealed class SubscriptionAccessMiddleware(RequestDelegate next)
         if (!blocked)
         {
             if (tenant != null &&
-                context.User.IsInRole(SystemRoles.StoreOwner) &&
                 context.GetEndpoint()?.Metadata.GetMetadata<RequiresStaffManagementAttribute>() != null &&
                 Tenant.RequiresStaffManagementAddon(tenant.CurrentPlan, tenant.HasStaffManagementAddon))
             {

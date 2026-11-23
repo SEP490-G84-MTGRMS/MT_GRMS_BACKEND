@@ -293,7 +293,7 @@ public class ControllerAndExcelBranchCoverageTests
         mockPlanService.Setup(p => p.GetPlansAsync(It.IsAny<PlanFilterRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<PlanSummaryResponse>());
 
-        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext);
+        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext, new TenantSubscriptionService(dbContext));
 
         var result = await controller.GetPricingPlans(CancellationToken.None);
         var okResult = Assert.IsType<OkObjectResult>(result);
@@ -320,7 +320,7 @@ public class ControllerAndExcelBranchCoverageTests
 
         var mockTenantService = new Mock<ITenantService>();
         var mockPlanService = new Mock<ISubscriptionPlanService>();
-        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext);
+        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext, new TenantSubscriptionService(dbContext));
 
         // Helper to set ControllerContext with claims
         void SetUser(string? tId, string? uId)

@@ -1,3 +1,4 @@
+using MT_GRMS.Api.Middlewares;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -13,6 +14,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
 [Route("api/payslips")]
+[RequiresStaffManagement]
 public class PayslipsController : BaseApiController
 {
     private readonly IPayslipService _payslipService;

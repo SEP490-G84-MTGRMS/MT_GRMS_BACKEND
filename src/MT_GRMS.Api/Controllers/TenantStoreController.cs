@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -9,6 +10,7 @@ using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.SaaS;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Api.Filters;
+using MT_GRMS.Infrastructure.Services;
 
 namespace MT_GRMS.Api.Controllers;
 
@@ -21,30 +23,58 @@ public class TenantStoreController : BaseApiController
     private readonly ITenantService _tenantService;
     private readonly ISubscriptionPlanService _planService;
     private readonly AppDbContext _context;
+    private readonly TenantSubscriptionService _subscriptions;
 
     public TenantStoreController(
         ITenantService tenantService,
         ISubscriptionPlanService planService,
-        AppDbContext context)
+        AppDbContext context,
+        TenantSubscriptionService subscriptions)
     {
         _tenantService = tenantService;
         _planService = planService;
         _context = context;
+        _subscriptions = subscriptions;
     }
+
+    private TenantSubscriptionService.Actor GetSubscriptionActor() => new(
+        User.FindFirst("tenant_id")?.Value,
+        User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? User.FindFirst("sub")?.Value);
 
     private async Task<Tenant?> ResolveCurrentTenantAsync(CancellationToken cancellationToken)
     {
-        var tenantId = User.FindFirst("tenant_id")?.Value;
-        var userId = User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
-            ?? User.FindFirst("sub")?.Value;
+        var (tenantId, userId) = GetSubscriptionActor();
         if (string.IsNullOrWhiteSpace(tenantId) || string.IsNullOrWhiteSpace(userId) || tenantId == "DEFAULT") return null;
 
         var hasMembership = await _context.TenantUsers.AnyAsync(x =>
             x.TenantId == tenantId && x.UserId == userId && x.IsActive, cancellationToken);
         if (!hasMembership) return null;
-
         return await _context.Tenants.Include(t => t.SubscriptionPlan)
             .FirstOrDefaultAsync(t => t.Id == tenantId, cancellationToken);
+    }
+
+    private IActionResult SubscriptionResponse(TenantSubscriptionService.OperationResult result) => result.StatusCode switch
+    {
+        200 => Ok(result.Body),
+        400 => BadRequest(result.Body),
+        403 => Forbid(),
+        404 => NotFound(result.Body),
+        409 => Conflict(result.Body),
+        _ => StatusCode(result.StatusCode, result.Body)
+    };
+
+    [HttpGet("subscriptions/staff-addon/quote")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
+    public async Task<IActionResult> GetStaffAddonQuote(CancellationToken cancellationToken)
+    {
+        return SubscriptionResponse(await _subscriptions.GetStaffAddonQuoteAsync(GetSubscriptionActor(), cancellationToken));
+    }
+
+    [HttpPost("subscriptions/staff-addon/purchase")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
+    public async Task<IActionResult> PurchaseStaffAddon(StaffAddonPurchaseRequest request, CancellationToken cancellationToken)
+    {
+        return SubscriptionResponse(await _subscriptions.PurchaseStaffAddonAsync(GetSubscriptionActor(), request, cancellationToken));
     }
 
     /// <summary>
@@ -176,225 +206,19 @@ public class TenantStoreController : BaseApiController
     /// <summary>
     /// Đặt mua hoặc nâng cấp / gia hạn gói dịch vụ SaaS cho gian hàng
     /// </summary>
-    [HttpPost("subscriptions/purchase")]
+    [HttpPost("subscriptions/pro-quote")]
     [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
-    public async Task<IActionResult> PurchaseSubscription(
-        [FromBody] PurchaseSubscriptionRequest request,
-        CancellationToken cancellationToken)
+    public async Task<IActionResult> QuoteProUpgrade(PurchaseSubscriptionRequest request, CancellationToken cancellationToken)
     {
-        if (request.ExtraStorageGb is < 0 or > 100)
-            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("INVALID_STORAGE_GB", "Số GB mua thêm phải từ 0 đến 100."));
-        var tenant = await ResolveCurrentTenantAsync(cancellationToken);
-        if (tenant == null)
-        {
-            return NotFound(ApiResponse<PurchaseSubscriptionResponse>.Fail("TENANT_NOT_FOUND", "Không tìm thấy thông tin gian hàng trong hệ thống."));
-        }
-
-        var idempotencyCode = request.RequestId.HasValue ? $"SUB-{request.RequestId.Value:N}" : null;
-        if (idempotencyCode != null)
-        {
-            var completed = await _context.WalletTransactions.AsNoTracking().SingleOrDefaultAsync(
-                transaction => transaction.TenantId == tenant.Id && transaction.TransactionCode == idempotencyCode && transaction.Status == "SUCCESS",
-                cancellationToken);
-            if (completed != null && tenant.SubscriptionExpiresAt.HasValue)
-            {
-                var existingDays = (int)Math.Max(0, Math.Ceiling((tenant.SubscriptionExpiresAt.Value - DateTime.UtcNow).TotalDays));
-                var existingResponse = new PurchaseSubscriptionResponse(
-                    tenant.CurrentPlan ?? "STANDARD",
-                    tenant.SubscriptionPlan?.PlanName ?? tenant.CurrentPlan ?? "Gói dịch vụ",
-                    tenant.SubscriptionExpiresAt.Value,
-                    existingDays,
-                    completed.Amount,
-                    completed.PaymentMethod,
-                    "Giao dịch đã được xử lý trước đó.");
-                return Ok(ApiResponse<PurchaseSubscriptionResponse>.Ok(existingResponse, "Giao dịch đã được xử lý trước đó."));
-            }
-        }
-
-        // Trial có endpoint riêng để đảm bảo one-time eligibility; purchase chỉ dành cho gói trả phí.
-        var targetCode = (request.PlanCode ?? "").Trim().ToUpperInvariant();
-        var currentPlanCode = (tenant.CurrentPlan ?? "").Trim().ToUpperInvariant();
-        if (targetCode.Contains("TRIAL"))
-            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("TRIAL_ENDPOINT_REQUIRED", "Vui lòng dùng chức năng Bắt đầu dùng thử."));
-        if (targetCode != "STANDARD" && targetCode != "PRO")
-        {
-            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("INVALID_PLAN_CODE", "Mã gói dịch vụ không hợp lệ. Vui lòng chọn STANDARD hoặc PRO."));
-        }
-
-        if (targetCode == "STANDARD" &&
-            string.Equals(tenant.CurrentPlan, "PRO", StringComparison.OrdinalIgnoreCase) &&
-            !string.Equals(tenant.SubscriptionStatus, "NO_PLAN", StringComparison.OrdinalIgnoreCase))
-        {
-            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
-                "DOWNGRADE_NOT_ALLOWED",
-                "Gian hàng đang sử dụng Gói Pro, không hỗ trợ hạ cấp xuống Gói Thường."));
-        }
-
-        // Tìm gói cước theo PlanCode
-        var plan = await _context.SubscriptionPlans.FirstOrDefaultAsync(
-            p => (p.PlanCode == targetCode || p.Id == request.PlanCode) && p.IsActive,
-            cancellationToken);
-
-        if (plan == null)
-        {
-            plan = await _context.SubscriptionPlans.FirstOrDefaultAsync(
-                p => p.PlanCode == targetCode,
-                cancellationToken);
-        }
-
-        if (plan == null)
-        {
-            plan = new SubscriptionPlan
-            {
-                Id = targetCode == "PRO" ? "plan_pro" : (targetCode == "TRIAL" ? "plan_trial" : "plan_standard"),
-                PlanCode = targetCode,
-                PlanName = targetCode == "PRO" ? "Gói Pro (Chuỗi Cửa Hàng)" : (targetCode == "TRIAL" ? "Gói Dùng Thử (Trải Nghiệm)" : "Gói Thường (Cửa Hàng Độc Lập)"),
-                PriceMonthly = targetCode == "PRO" ? 249000.00m : (targetCode == "TRIAL" ? 0m : 99000.00m),
-                PriceYearly = targetCode == "PRO" ? 2988000.00m : (targetCode == "TRIAL" ? 0m : 1188000.00m),
-                MaxBranches = targetCode == "PRO" ? 2 : 1,
-                MaxStaff = targetCode == "PRO" ? 100 : (targetCode == "TRIAL" ? 5 : 1),
-                EnabledModulesJson = targetCode == "PRO"
-                    ? "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\",\"MultiBranch\"]"
-                    : (targetCode == "TRIAL" ? "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\",\"HR\"]" : "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\"]"),
-                IsActive = true
-            };
-            await _context.SubscriptionPlans.AddAsync(plan, cancellationToken);
-            await _context.SaveChangesAsync(cancellationToken);
-        }
-
-        var isTrial = request.Months == 0 || string.Equals(request.PaymentMethod, "TRIAL", StringComparison.OrdinalIgnoreCase);
-        var isSuccessfulUpgrade = IsPaidPlan(currentPlanCode) && GetPlanRank(plan.PlanCode) > GetPlanRank(currentPlanCode);
-        if (isTrial && request.ExtraStorageGb > 0)
-            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("INVALID_TRIAL_ADDON", "Gói dùng thử không hỗ trợ mua thêm dung lượng."));
-        var months = isTrial ? 0 : (request.Months <= 0 ? 12 : request.Months);
-
-        // Validation nghiệp vụ theo gói
-        if (plan.PlanCode == "STANDARD" && request.ExtraBranches > 0)
-        {
-            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
-                "INVALID_PLAN_ADDON",
-                "Gói Thường cố định 1 chi nhánh và không hỗ trợ mua thêm chi nhánh. Vui lòng nâng cấp lên Gói Pro để mở rộng chuỗi cửa hàng."));
-        }
-
-        // 1. Tính toán chi phí chuẩn hóa
-        decimal grandTotal = 0m;
-        if (!isTrial)
-        {
-            var basePrice = plan.PriceMonthly * months;
-            var branchAddonPrice = (plan.PlanCode == "PRO" ? request.ExtraBranches * 80000m : 0m) * months;
-            var staffAddonPrice = (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon ? 30000m : 0m) * months;
-            var storageAddonPrice = request.ExtraStorageGb * 15000m * months;
-            var subTotal = basePrice + branchAddonPrice + staffAddonPrice + storageAddonPrice;
-            var vatAmount = Math.Round(subTotal * 0.1m, 0);
-            grandTotal = subTotal + vatAmount;
-
-            // 2. Xử lý thanh toán nếu chọn phương thức Ví gian hàng
-            var isWalletPayment = string.Equals(request.PaymentMethod, "WALLET", StringComparison.OrdinalIgnoreCase) ||
-                                  string.Equals(request.PaymentMethod, "Wallet", StringComparison.OrdinalIgnoreCase) ||
-                                  request.PaymentMethod.Contains("Ví", StringComparison.OrdinalIgnoreCase);
-
-            var balanceBefore = tenant.WalletBalance;
-            if (isWalletPayment)
-            {
-                if (tenant.WalletBalance < grandTotal)
-                {
-                    return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
-                        "INSUFFICIENT_WALLET_BALANCE",
-                        $"Số dư ví không đủ (hiện có {tenant.WalletBalance:N0} đ, cần {grandTotal:N0} đ). Vui lòng nạp thêm tiền hoặc chọn Quét mã VietQR."));
-                }
-
-                tenant.WalletBalance -= grandTotal;
-            }
-
-            _context.WalletTransactions.Add(new MT_GRMS.Domain.Entities.SaaS.WalletTransaction
-            {
-                TenantId = tenant.Id,
-                TransactionCode = idempotencyCode ?? $"SUB-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid():N}",
-                Type = isSuccessfulUpgrade ? "UPGRADE_PLAN" : "PURCHASE_PLAN",
-                Amount = grandTotal,
-                BalanceBefore = balanceBefore,
-                BalanceAfter = tenant.WalletBalance,
-                Description = $"Thanh toán gói dịch vụ {plan.PlanName} ({months} tháng)",
-                PaymentMethod = isWalletPayment ? "WALLET" : request.PaymentMethod,
-                Status = "SUCCESS"
-            });
-        }
-
-        DateTime newExpiresAt;
-        int totalMonthsAdded = 0;
-        string resultMessage;
-
-        if (isTrial)
-        {
-            newExpiresAt = DateTime.UtcNow.AddDays(3);
-            tenant.CurrentPlan = "TRIAL";
-            tenant.SubscriptionStatus = "TRIAL";
-            tenant.SubscriptionExpiresAt = newExpiresAt;
-            tenant.HasStaffManagementAddon = true; // Gói Dùng thử mở khóa trải nghiệm quản lý nhân viên
-            tenant.Status = "ACTIVE";
-            resultMessage = "Kích hoạt thành công 3 ngày dùng thử miễn phí Gói Dùng Thử (Trải Nghiệm).";
-        }
-        else
-        {
-            // Tính số tháng gia hạn (Khuyến mãi thêm tháng)
-            var bonusMonths = months >= 24 ? 3 : (months >= 12 ? 1 : 0);
-            totalMonthsAdded = months + bonusMonths;
-
-            // Gia hạn thời gian sử dụng
-            var baseDate = (tenant.SubscriptionExpiresAt.HasValue && tenant.SubscriptionExpiresAt.Value > DateTime.UtcNow)
-                ? tenant.SubscriptionExpiresAt.Value
-                : DateTime.UtcNow;
-
-            newExpiresAt = baseDate.AddMonths(totalMonthsAdded);
-
-            tenant.CurrentPlan = plan.PlanCode;
-            tenant.FirstPaidAt ??= DateTime.UtcNow;
-            tenant.SubscriptionExpiresAt = newExpiresAt;
-            tenant.SubscriptionStatus = "ACTIVE";
-            tenant.Status = "ACTIVE";
-
-            if (plan.PlanCode == "PRO")
-            {
-                tenant.ExtraBranches += request.ExtraBranches;
-                tenant.HasStaffManagementAddon = true; // Gói Pro mặc định có sẵn tính năng quản lý nhân viên
-            }
-            else if (plan.PlanCode == "STANDARD" && request.HasStaffManagementAddon)
-            {
-                tenant.HasStaffManagementAddon = true;
-            }
-            tenant.ExtraStorageGb = request.ExtraStorageGb;
-            tenant.StorageAddonExpiresAt = request.ExtraStorageGb > 0 ? newExpiresAt : null;
-
-            resultMessage = $"Gia hạn thành công {plan.PlanName} thêm {totalMonthsAdded} tháng.";
-        }
-
-        await _context.SaveChangesAsync(cancellationToken);
-
-        var daysRemaining = (int)Math.Max(0, Math.Ceiling((newExpiresAt - DateTime.UtcNow).TotalDays));
-
-        var response = new PurchaseSubscriptionResponse(
-            PlanCode: plan.PlanCode,
-            PlanName: plan.PlanName,
-            SubscriptionExpiresAt: newExpiresAt,
-            DaysRemaining: daysRemaining,
-            TotalAmount: grandTotal,
-            PaymentMethod: isTrial ? "TRIAL" : request.PaymentMethod,
-            Message: resultMessage
-        );
-
-        return Ok(ApiResponse<PurchaseSubscriptionResponse>.Ok(response, isTrial ? "Kích hoạt dùng thử thành công." : "Thanh toán và gia hạn gói dịch vụ thành công."));
+        return SubscriptionResponse(await _subscriptions.QuoteProUpgradeAsync(GetSubscriptionActor(), request, cancellationToken));
     }
 
-    private static bool IsPaidPlan(string planCode)
-        => planCode is "STANDARD" or "PRO";
-
-    private static int GetPlanRank(string? planCode)
-        => (planCode ?? "").Trim().ToUpperInvariant() switch
-        {
-            "STANDARD" => 1,
-            "PRO" => 2,
-            _ => 0
-        };
+    [HttpPost("subscriptions/purchase")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    public async Task<IActionResult> PurchaseSubscription([FromBody] PurchaseSubscriptionRequest request, CancellationToken cancellationToken)
+    {
+        return SubscriptionResponse(await _subscriptions.PurchaseSubscriptionAsync(GetSubscriptionActor(), request, cancellationToken));
+    }
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> TrialActivationLocks = new();
 
@@ -612,55 +436,8 @@ public class TenantStoreController : BaseApiController
     [HttpGet("subscriptions/history")]
     public async Task<IActionResult> GetSubscriptionOrderHistory(CancellationToken cancellationToken)
     {
-        var tenant = await ResolveCurrentTenantAsync(cancellationToken);
-        if (tenant == null)
-        {
-            return NotFound(ApiResponse<IReadOnlyList<SubscriptionOrderHistoryDto>>.Fail("TENANT_NOT_FOUND", "Không tìm thấy thông tin gian hàng trong hệ thống."));
-        }
-
-        var list = new List<SubscriptionOrderHistoryDto>();
-
-        // 1. Lấy các giao dịch mua gói dịch vụ từ WalletTransactions
-        var paidOrders = await _context.WalletTransactions
-            .Where(w => w.TenantId == tenant.Id && (w.Type == "PURCHASE_PLAN" || w.Type == "UPGRADE_PLAN" || w.Type == "PURCHASE_ADDON"))
-            .OrderByDescending(w => w.CreatedAt)
-            .ToListAsync(cancellationToken);
-
-        foreach (var order in paidOrders)
-        {
-            var isPlanActive = tenant.SubscriptionExpiresAt.HasValue && tenant.SubscriptionExpiresAt.Value >= DateTime.UtcNow;
-            list.Add(new SubscriptionOrderHistoryDto(
-                Code: order.TransactionCode,
-                PlanName: order.Description.Replace("Thanh toán gói dịch vụ ", ""),
-                StartDate: order.CreatedAt.ToString("dd/MM/yyyy"),
-                EndDate: tenant.SubscriptionExpiresAt?.ToString("dd/MM/yyyy") ?? order.CreatedAt.AddYears(1).ToString("dd/MM/yyyy"),
-                TotalAmount: order.Amount,
-                PaymentMethod: order.PaymentMethod == "WALLET" ? "Ví MT-GRMS" : order.PaymentMethod,
-                Status: isPlanActive ? "Đang hiệu lực" : "Hết hạn",
-                CreatedAt: order.CreatedAt
-            ));
-        }
-
-        // 2. Chỉ bổ sung bản ghi gói dùng thử nếu tenant thực sự có dấu Trial
-        if (tenant.TrialStartedAt.HasValue || string.Equals(tenant.CurrentPlan, "TRIAL", StringComparison.OrdinalIgnoreCase))
-        {
-            var initPlanName = tenant.SubscriptionPlan?.PlanName ?? "Gói Dùng Thử Trải Nghiệm";
-            var initEndDate = tenant.TrialExpiresAt ?? tenant.SubscriptionExpiresAt ?? tenant.CreatedAt.AddHours(72);
-            var isInitActive = list.Count == 0 && initEndDate >= DateTime.UtcNow;
-
-            list.Add(new SubscriptionOrderHistoryDto(
-                Code: $"SUB-{tenant.CreatedAt:yyyyMMdd}-001",
-                PlanName: initPlanName,
-                StartDate: (tenant.TrialStartedAt ?? tenant.CreatedAt).ToString("dd/MM/yyyy"),
-                EndDate: initEndDate.ToString("dd/MM/yyyy"),
-                TotalAmount: 0m,
-                PaymentMethod: "Gói hệ thống cấp",
-                Status: isInitActive ? "Đang hiệu lực" : "Hết hạn",
-                CreatedAt: tenant.TrialStartedAt ?? tenant.CreatedAt
-            ));
-        }
-
-        return Ok(ApiResponse<IReadOnlyList<SubscriptionOrderHistoryDto>>.Ok(list));
+        return SubscriptionResponse(await _subscriptions.GetSubscriptionOrderHistoryAsync(GetSubscriptionActor(), cancellationToken));
     }
+
 }
 
