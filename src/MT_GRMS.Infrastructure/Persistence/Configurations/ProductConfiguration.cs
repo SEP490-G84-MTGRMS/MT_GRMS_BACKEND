@@ -36,6 +36,7 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
         builder.Property(x => x.Description).HasMaxLength(1000);
         builder.Property(x => x.InternalNote).HasMaxLength(500);
         builder.Property(x => x.HasBatches).HasDefaultValue(false);
+        builder.Property(x => x.NearExpiryThresholdDays).IsRequired(false);
         builder.Property(x => x.IsFavorite).HasDefaultValue(false);
         builder.Property(x => x.AllowRepack).HasDefaultValue(false);
         builder.Property(x => x.SellRawByWeight).HasDefaultValue(true);

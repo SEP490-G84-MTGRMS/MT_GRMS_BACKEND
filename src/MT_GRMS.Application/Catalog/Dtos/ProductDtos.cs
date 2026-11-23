@@ -33,7 +33,8 @@ public record ProductResponse(
     List<ProductUnitResponse>? UnitPrices = null,
     bool AllowRepack = false,
     bool SellRawByWeight = true,
-    decimal? ProcessedSellingPricePerKg = null
+    decimal? ProcessedSellingPricePerKg = null,
+    int? NearExpiryThresholdDays = null
 )
 {
     // Backward compatibility aliases
@@ -70,7 +71,8 @@ public record ProductCreateRequest(
     bool IsBaseUnitPurchaseUnit = true,
     bool AllowRepack = false,
     bool SellRawByWeight = true,
-    decimal? ProcessedSellingPricePerKg = null
+    decimal? ProcessedSellingPricePerKg = null,
+    int? NearExpiryThresholdDays = null
 )
 {
     // Backward compatibility constructor
@@ -119,7 +121,8 @@ public record ProductUpdateRequest(
     bool? IsBaseUnitPurchaseUnit = null,
     bool AllowRepack = false,
     bool SellRawByWeight = true,
-    decimal? ProcessedSellingPricePerKg = null
+    decimal? ProcessedSellingPricePerKg = null,
+    int? NearExpiryThresholdDays = null
 );
 
 public class ProductQueryFilter

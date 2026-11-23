@@ -227,6 +227,7 @@ public class BranchProductService : IBranchProductService
                 PurchaseToStockRate = 1m,
                 RetailPrice = effectiveRetail,
                 CostPrice = effectiveCost,
+                AverageCost = effectiveCost,
                 CurrentStock = 0,
                 MinStockLevel = product.MinStock,
                 SupplierId = eligible.SupplierId,
@@ -301,6 +302,55 @@ public class BranchProductService : IBranchProductService
         if (!string.IsNullOrWhiteSpace(command.ShelfLocation))
         {
             catalog.ShelfLocation = command.ShelfLocation.Trim();
+        }
+
+        // Giá đóng khay (đ/kg): chỉnh từ popup CH → cập nhật Master (AllowRepack).
+        if (product.AllowRepack && command.ProcessedSellingPricePerKg.HasValue)
+        {
+            var processed = command.ProcessedSellingPricePerKg.Value;
+            if (processed <= 0)
+            {
+                throw new BusinessException(
+                    "VALIDATION_ERROR",
+                    "Giá khi đóng khay (đ/kg) phải lớn hơn 0.");
+            }
+
+            if (processed > 1_000_000_000m)
+            {
+                throw new BusinessException(
+                    "VALIDATION_ERROR",
+                    "Giá khi đóng khay không được vượt quá 1.000.000.000 đ.");
+            }
+
+            var oldProcessed = product.ProcessedSellingPricePerKg;
+            product.ProcessedSellingPricePerKg = processed;
+            product.UpdatedAt = DateTime.UtcNow;
+
+            if (_priceHistoryRepository != null
+                && oldProcessed.GetValueOrDefault() != processed)
+            {
+                var costSnapshot = product.CostPrice;
+                await _priceHistoryRepository.AddAsync(new ProductPriceHistory
+                {
+                    TenantId = _tenantContext.CurrentTenantId,
+                    ProductId = product.Id,
+                    BranchId = branchId,
+                    PriceScope = "BRANCH",
+                    PriceType = "PROCESSED_SELLING_PRICE",
+                    OldPrice = oldProcessed ?? 0m,
+                    NewPrice = processed,
+                    CostPriceSnapshot = costSnapshot,
+                    IsBelowCost = costSnapshot.HasValue && processed < costSnapshot.Value,
+                    ChangedByUserId = _tenantContext.CurrentUserId != Guid.Empty
+                        ? _tenantContext.CurrentUserId.ToString()
+                        : "SYSTEM",
+                    ChangedByUserName = !string.IsNullOrEmpty(_tenantContext.CurrentRole)
+                        ? $"{_tenantContext.CurrentRole} ({branch.Name})"
+                        : branch.Name,
+                    Reason = "Điều chỉnh giá đóng khay (đ/kg) từ chi nhánh",
+                    CreatedAt = DateTime.UtcNow
+                }, cancellationToken);
+            }
         }
 
         catalog.UpdatedAt = DateTime.UtcNow;
@@ -532,6 +582,11 @@ public class BranchProductService : IBranchProductService
         var effectiveRetail = catalog.SellingPriceOverride ?? product.SellingPrice;
         var stockUnit = string.IsNullOrWhiteSpace(product.BaseUnit) ? "Cái" : product.BaseUnit.Trim();
         var sellable = stocks.Sum(s => BranchStockAvailability.GetSellableAvailable(s));
+        var physicalQty = stocks.Sum(s => s.QuantityOnHand);
+        var stockAvgCost = physicalQty > 0m
+            ? Math.Round(stocks.Sum(s => s.QuantityOnHand * s.LandedCostPerUnit) / physicalQty, 2)
+            : 0m;
+        var averageCost = stockAvgCost > 0m ? stockAvgCost : costPrice;
 
         return new BranchProductDto
         {
@@ -549,6 +604,7 @@ public class BranchProductService : IBranchProductService
             PurchaseToStockRate = 1m,
             RetailPrice = effectiveRetail,
             CostPrice = costPrice,
+            AverageCost = averageCost,
             CurrentStock = sellable,
             MinStockLevel = product.MinStock,
             SupplierId = displaySupplierId ?? sp?.SupplierId,

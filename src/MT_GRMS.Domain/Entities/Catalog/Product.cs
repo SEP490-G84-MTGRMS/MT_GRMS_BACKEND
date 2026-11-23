@@ -26,6 +26,10 @@ public class Product : BaseTenantEntity
     public string? Description { get; set; }
     public string? InternalNote { get; set; }
     public bool HasBatches { get; set; } = false;
+
+    /// <summary>Số ngày trước HSD được tính cận hạn. Null = mặc định 30 ngày.</summary>
+    public int? NearExpiryThresholdDays { get; set; }
+
     public bool IsFavorite { get; set; } = false;
 
     /// <summary>Cho phép chia khay / sơ chế (chỉ có ý nghĩa với SP cân kg).</summary>

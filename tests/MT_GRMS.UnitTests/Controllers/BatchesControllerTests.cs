@@ -1,13 +1,16 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
 using MT_GRMS.Api.Controllers;
 using MT_GRMS.Application.Batches;
 using MT_GRMS.Application.Batches.Dtos;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Exceptions;
 using Xunit;
 
@@ -130,7 +133,7 @@ public class BatchesControllerTests
     {
         var id = Guid.NewGuid();
         var request = new ApplyFefoDiscountRequest(15, true);
-        var response = new FefoDiscountResponse(id, 15, true);
+        var response = new FefoDiscountResponse(id, 15, true, DateTime.UtcNow, DateTime.UtcNow.AddDays(1), "Scheduled");
         _mockBatchService.Setup(s => s.ApplyFefoDiscountAsync(id, request, It.IsAny<CancellationToken>()))
             .ReturnsAsync(response);
 
@@ -140,5 +143,17 @@ public class BatchesControllerTests
         var resp = Assert.IsType<ApiResponse<FefoDiscountResponse>>(ok.Value);
         Assert.True(resp.Success);
         Assert.Equal(15, resp.Data!.DiscountPercent);
+        Assert.Equal("Scheduled", resp.Data.Status);
+    }
+
+    [Fact]
+    public void ApplyFefoDiscount_HasStoreOwnerAuthorizeAttribute()
+    {
+        var method = typeof(BatchesController).GetMethod(nameof(BatchesController.ApplyFefoDiscount));
+        Assert.NotNull(method);
+        var attr = method!.GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true)
+            .Cast<AuthorizeAttribute>()
+            .FirstOrDefault(a => a.Roles == SystemRoles.StoreOwner);
+        Assert.NotNull(attr);
     }
 }

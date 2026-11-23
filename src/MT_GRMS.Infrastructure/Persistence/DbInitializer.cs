@@ -433,6 +433,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""AllowRepack"" boolean NOT NULL DEFAULT FALSE;
                 ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""SellRawByWeight"" boolean NOT NULL DEFAULT TRUE;
                 ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""ProcessedSellingPricePerKg"" numeric(18,2) NULL;
+                ALTER TABLE IF EXISTS ""Products"" ADD COLUMN IF NOT EXISTS ""NearExpiryThresholdDays"" integer NULL;
 
                 CREATE TABLE IF NOT EXISTS ""RepackOrders"" (
                     ""Id"" uuid NOT NULL PRIMARY KEY,
@@ -1082,6 +1083,8 @@ ON ""HouseholdTaxSnapshots"" (
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""BatchExpiryDate"" timestamp without time zone NULL;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""FefoDiscountPercent"" numeric(5,2) NOT NULL DEFAULT 0;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""IsFefoDiscountActive"" boolean NOT NULL DEFAULT false;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""FefoDiscountStartAtUtc"" timestamp with time zone NULL;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""FefoDiscountEndAtUtc"" timestamp with time zone NULL;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitId"" uuid;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""OrderDetails"" ADD COLUMN IF NOT EXISTS ""UnitName"" character varying(50);", logger);
 
@@ -1814,10 +1817,11 @@ END $$;
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddExpenseVoucherDueDate.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddTaxFilingConfirmations.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchConversionRulesAndNotifications.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.RemoveGoodsReceiptFreight.UpSql);
                 }
                 catch (Exception ex)
                 {
-                    throw new InvalidOperationException("MERGE_SCHEMA_FAILED: Không thể nâng cấp schema phiếu chi, hồ sơ thuế, chi nhánh và thông báo.", ex);
+                    throw new InvalidOperationException("MERGE_SCHEMA_FAILED: Không thể nâng cấp schema phiếu chi, hồ sơ thuế, chi nhánh, thông báo hoặc GRN cost.", ex);
                 }
                 try
                 {

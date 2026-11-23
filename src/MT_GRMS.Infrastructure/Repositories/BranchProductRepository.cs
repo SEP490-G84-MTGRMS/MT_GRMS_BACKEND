@@ -270,6 +270,18 @@ public class BranchProductRepository : IBranchProductRepository
                 g => g.Key,
                 g => g.Sum(bs => BranchStockAvailability.GetSellableAvailable(bs, today)));
 
+        // WAC theo ĐVT cơ sở: Σ(QOH × LandedCost) / Σ(QOH) — giống Inventory AvgCost.
+        var avgCostLookup = stockRows
+            .GroupBy(bs => (bs.BranchId, bs.ProductId))
+            .ToDictionary(
+                g => g.Key,
+                g =>
+                {
+                    var physicalQty = g.Sum(bs => bs.QuantityOnHand);
+                    if (physicalQty <= 0m) return 0m;
+                    return Math.Round(g.Sum(bs => bs.QuantityOnHand * bs.LandedCostPerUnit) / physicalQty, 2);
+                });
+
         // NCC Active đang phục vụ từng chi nhánh trên trang → 1 BranchProduct có thể nhiều dòng nguồn nhập.
         var branchSupplierLinks = await _context.SupplierBranchAssignments
             .AsNoTracking()
@@ -337,7 +349,9 @@ public class BranchProductRepository : IBranchProductRepository
                 g => g.Key,
                 g => (IReadOnlyDictionary<Guid, decimal>)g.ToDictionary(x => x.ProductUnitId, x => x.SellingPriceOverride));
 
-        var dtos = pagedData.SelectMany(x =>
+        // 1 BranchProduct = 1 dòng; nhiều NCC gộp vào Suppliers[] (không fan-out).
+        var dtos = new List<BranchProductDto>();
+        foreach (var x in pagedData)
         {
             productExtraLookup.TryGetValue(x.ProductId, out var extra);
             stockLookup.TryGetValue((x.BranchId, x.ProductId), out var currentStock);
@@ -356,98 +370,103 @@ public class BranchProductRepository : IBranchProductRepository
 
             if (supplierCodeTerms.Count > 0)
             {
-                sourcing = sourcing
-                    .Where(sp =>
-                    {
-                        var code = sp.Supplier?.Code?.ToLowerInvariant() ?? string.Empty;
-                        return supplierCodeTerms.Any(term => code.Contains(term));
-                    })
-                    .ToList();
+                var matched = sourcing.Any(sp =>
+                {
+                    var code = sp.Supplier?.Code?.ToLowerInvariant() ?? string.Empty;
+                    return supplierCodeTerms.Any(term => code.Contains(term));
+                });
+                if (!matched)
+                {
+                    continue;
+                }
             }
 
             if (supplierNameTerms.Count > 0)
             {
-                sourcing = sourcing
-                    .Where(sp =>
-                    {
-                        var name = sp.Supplier?.Name?.ToLowerInvariant() ?? string.Empty;
-                        return supplierNameTerms.Any(term => name.Contains(term));
-                    })
-                    .ToList();
-            }
-
-            BranchProductDto MapRow(SupplierProduct? sp)
-            {
-                var cost = sp != null
-                    ? MT_GRMS.Application.Suppliers.SupplierProductPricing.ResolveEffectivePurchasePrice(
-                        sp.AgreedWholesalePrice,
-                        x.CostPrice)
-                    : x.CostPrice;
-                var moq = sp != null && sp.MinimumOrderQuantity > 0
-                    ? (int)sp.MinimumOrderQuantity
-                    : 0;
-                var hasSource = sp != null;
-
-                // Đơn vị nhập + rate: DeliveryUoM → IsPurchaseUnit → BaseUnit (giống màn Lô / NCC)
-                var stockUnitName = string.IsNullOrWhiteSpace(extra?.BaseUnit)
-                    ? (string.IsNullOrWhiteSpace(x.Unit) ? "Cái" : x.Unit.Trim())
-                    : extra!.BaseUnit.Trim();
-                var (inboundUnit, purchaseToStockRate) = ResolveInboundUnitAndRate(
-                    deliveryUoM: sp?.DeliveryUoM,
-                    purchaseUnitName: catalogPurchaseUnitName,
-                    baseUnitName: stockUnitName,
-                    units: extra?.Units.Select(u => (u.UnitName, u.ConversionRate, u.IsPurchaseUnit)));
-
-                return new BranchProductDto
+                var matched = sourcing.Any(sp =>
                 {
-                    Id = x.Id,
-                    BranchId = x.BranchId,
-                    BranchCode = x.BranchCode,
-                    BranchName = x.BranchName,
-                    ProductId = x.ProductId,
-                    Name = x.ProductName,
-                    Sku = x.ProductCode,
-                    Barcode = x.Barcode ?? string.Empty,
-                    Category = x.CategoryName,
-                    Unit = inboundUnit,
-                    StockUnit = stockUnitName,
-                    PurchaseToStockRate = purchaseToStockRate,
-                    ImageUrl = extra?.ImageUrl,
-                    RetailPrice = x.RetailPrice,
-                    CostPrice = cost,
-                    CurrentStock = currentStock,
-                    MinStockLevel = x.MinStock,
-                    SupplierId = sp?.SupplierId,
-                    PrimarySupplierCode = sp?.Supplier?.Code ?? string.Empty,
-                    PrimarySupplierName = sp?.Supplier?.Name ?? string.Empty,
-                    IsPrimarySupplier = sp?.IsPrimarySupplier ?? false,
-                    HasActiveSupplierSource = hasSource,
-                    LostSupplierSource = !hasSource,
-                    MinOrderQuantity = moq,
-                    Status = x.ProductStatus,
-                    ShelfLocation = x.ShelfLocation,
-                    AssignedDate = x.AssignedDate,
-                    UnitPrices = unitPrices,
-                    AllowRepack = extra?.AllowRepack ?? false,
-                    ProcessedSellingPricePerKg = extra?.ProcessedSellingPricePerKg
-                };
+                    var name = sp.Supplier?.Name?.ToLowerInvariant() ?? string.Empty;
+                    return supplierNameTerms.Any(term => name.Contains(term));
+                });
+                if (!matched)
+                {
+                    continue;
+                }
             }
 
-            // Có nguồn nhập phục vụ CN → 1 dòng / NCC (sort giá tăng dần đã áp ở rawSp).
-            if (sourcing.Count > 0)
+            var stockUnitName = string.IsNullOrWhiteSpace(extra?.BaseUnit)
+                ? (string.IsNullOrWhiteSpace(x.Unit) ? "Cái" : x.Unit.Trim())
+                : extra!.BaseUnit.Trim();
+
+            // Primary = NCC giá vốn thấp nhất (rawSp đã sort). Scalar Cost/MOQ/Unit lấy từ primary.
+            var primarySp = sourcing.FirstOrDefault();
+            var cost = primarySp != null
+                ? MT_GRMS.Application.Suppliers.SupplierProductPricing.ResolveEffectivePurchasePrice(
+                    primarySp.AgreedWholesalePrice,
+                    x.CostPrice)
+                : x.CostPrice;
+            avgCostLookup.TryGetValue((x.BranchId, x.ProductId), out var stockAvgCost);
+            var averageCost = stockAvgCost > 0m ? stockAvgCost : cost;
+            var moq = primarySp != null && primarySp.MinimumOrderQuantity > 0
+                ? (int)primarySp.MinimumOrderQuantity
+                : 0;
+            var hasSource = sourcing.Count > 0;
+            var (inboundUnit, purchaseToStockRate) = ResolveInboundUnitAndRate(
+                deliveryUoM: primarySp?.DeliveryUoM,
+                purchaseUnitName: catalogPurchaseUnitName,
+                baseUnitName: stockUnitName,
+                units: extra?.Units.Select(u => (u.UnitName, u.ConversionRate, u.IsPurchaseUnit)));
+
+            var supplierSources = sourcing.Select(sp => new BranchProductSupplierSourceDto
             {
-                return sourcing.Select(MapRow);
-            }
+                SupplierId = sp.SupplierId,
+                SupplierCode = sp.Supplier?.Code ?? string.Empty,
+                SupplierName = sp.Supplier?.Name ?? string.Empty,
+                CostPrice = MT_GRMS.Application.Suppliers.SupplierProductPricing.ResolveEffectivePurchasePrice(
+                    sp.AgreedWholesalePrice,
+                    x.CostPrice),
+                MinOrderQuantity = sp.MinimumOrderQuantity > 0 ? (int)sp.MinimumOrderQuantity : 0,
+                IsPrimarySupplier = sp.IsPrimarySupplier,
+                DeliveryUoM = sp.DeliveryUoM
+            }).ToList();
 
-            // Lọc theo NCC mà không khớp → ẩn dòng.
-            if (supplierCodeTerms.Count > 0 || supplierNameTerms.Count > 0)
+            dtos.Add(new BranchProductDto
             {
-                return Array.Empty<BranchProductDto>();
-            }
-
-            // SP đã gán bán nhưng chưa có NCC Active phục vụ CN.
-            return new[] { MapRow(null) };
-        }).ToList();
+                Id = x.Id,
+                BranchId = x.BranchId,
+                BranchCode = x.BranchCode,
+                BranchName = x.BranchName,
+                ProductId = x.ProductId,
+                Name = x.ProductName,
+                Sku = x.ProductCode,
+                Barcode = x.Barcode ?? string.Empty,
+                Category = x.CategoryName,
+                Unit = inboundUnit,
+                StockUnit = stockUnitName,
+                PurchaseToStockRate = purchaseToStockRate,
+                ImageUrl = extra?.ImageUrl,
+                RetailPrice = x.RetailPrice,
+                CostPrice = cost,
+                AverageCost = averageCost,
+                CurrentStock = currentStock,
+                MinStockLevel = x.MinStock,
+                SupplierId = primarySp?.SupplierId,
+                PrimarySupplierCode = primarySp?.Supplier?.Code ?? string.Empty,
+                PrimarySupplierName = primarySp?.Supplier?.Name ?? string.Empty,
+                IsPrimarySupplier = primarySp?.IsPrimarySupplier ?? false,
+                HasActiveSupplierSource = hasSource,
+                LostSupplierSource = !hasSource,
+                Suppliers = supplierSources,
+                SupplierCount = supplierSources.Count,
+                MinOrderQuantity = moq,
+                Status = x.ProductStatus,
+                ShelfLocation = x.ShelfLocation,
+                AssignedDate = x.AssignedDate,
+                UnitPrices = unitPrices,
+                AllowRepack = extra?.AllowRepack ?? false,
+                ProcessedSellingPricePerKg = extra?.ProcessedSellingPricePerKg
+            });
+        }
 
         return (dtos, totalCount);
     }
