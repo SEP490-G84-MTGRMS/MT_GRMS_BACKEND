@@ -31,7 +31,7 @@ public class CreateShiftConfigRequestValidator : AbstractValidator<CreateShiftCo
         });
 
         RuleFor(x => x)
-            .Must(x => x.StartTime != x.EndTime || (x.DurationHours.HasValue && x.DurationHours.Value > 0))
+            .Must(x => x.StartTime != x.EndTime)
             .WithMessage("Giờ bắt đầu và giờ kết thúc ca không được trùng nhau (thời lượng ca phải lớn hơn 0).");
 
         When(x => x.DurationHours.HasValue, () =>
@@ -73,7 +73,7 @@ public class UpdateShiftConfigRequestValidator : AbstractValidator<UpdateShiftCo
         });
 
         RuleFor(x => x)
-            .Must(x => x.StartTime != x.EndTime || (x.DurationHours.HasValue && x.DurationHours.Value > 0))
+            .Must(x => x.StartTime != x.EndTime)
             .WithMessage("Giờ bắt đầu và giờ kết thúc ca không được trùng nhau (thời lượng ca phải lớn hơn 0).");
 
         When(x => x.DurationHours.HasValue, () =>
