@@ -373,7 +373,7 @@ public class EmployeeServiceTests
 
         var request = new CreateIdentityAccountRequest(
             Username: "thungan_01",
-            Password: "SecurePassword123",
+            Password: "SecurePassword@123",
             Role: "CASHIER"
         );
 
@@ -414,7 +414,7 @@ public class EmployeeServiceTests
         var tenantCtx = new FakeTenantContext();
         var service = new EmployeeService(empRepo, userRepo, uow, tenantCtx);
 
-        var request = new CreateIdentityAccountRequest("new_user", "pass123", "STAFF");
+        var request = new CreateIdentityAccountRequest("new_user", "Pass@1234", "STAFF");
 
         // Act & Assert
         var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateIdentityAccountAsync(empId, request));
@@ -1071,35 +1071,39 @@ public class EmployeeServiceTests
 
         // 1. Empty username throws ArgumentException
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("", "pass")));
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("", "Pass@1234")));
+
+        // 1b. Weak password throws ArgumentException matching Auth policy
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("valid_user", "weakpass")));
 
         // 2. Not found employee throws NotFoundException
         await Assert.ThrowsAsync<NotFoundException>(() =>
-            service.UpdateIdentityAccountAsync(Guid.NewGuid(), new CreateIdentityAccountRequest("valid_user", "pass")));
+            service.UpdateIdentityAccountAsync(Guid.NewGuid(), new CreateIdentityAccountRequest("valid_user", "Pass@1234")));
 
         // 3. Inactive employee throws BusinessException
         employee.Status = EmployeeStatus.Inactive;
         var exInactive = await Assert.ThrowsAsync<BusinessException>(() =>
-            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("valid_user", "pass")));
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("valid_user", "Pass@1234")));
         Assert.Equal("EMPLOYEE_INACTIVE", exInactive.ErrorCode);
         employee.Status = EmployeeStatus.Active;
 
         // 4. Employee without linked user throws NotFoundException
         employee.UserId = null;
         await Assert.ThrowsAsync<NotFoundException>(() =>
-            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("valid_user", "pass")));
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("valid_user", "Pass@1234")));
         employee.UserId = "user_b_01";
 
         // 5. Linked user not in repository throws NotFoundException
         employee.UserId = "non_existent_user";
         await Assert.ThrowsAsync<NotFoundException>(() =>
-            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("valid_user", "pass")));
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("valid_user", "Pass@1234")));
         employee.UserId = "user_b_01";
 
         // 6. Username conflict with another user throws BusinessException
         await userRepo.AddAsync(new User { Id = "other_user", UserName = "existing_user" });
         var exConflict = await Assert.ThrowsAsync<BusinessException>(() =>
-            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("existing_user", "pass")));
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("existing_user", "Pass@1234")));
         Assert.Equal("DUPLICATE_USERNAME", exConflict.ErrorCode);
 
         // 7. Success updates credentials
@@ -1342,25 +1346,25 @@ public class EmployeeServiceTests
 
         // 1. Empty username throws ArgumentException
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("", "password")));
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("", "Pass@1234")));
 
         // 2. Duplicate username throws DUPLICATE_USERNAME
         var dupEx = await Assert.ThrowsAsync<BusinessException>(() =>
-            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("existing_user", "password")));
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("existing_user", "Pass@1234")));
         Assert.Equal("DUPLICATE_USERNAME", dupEx.ErrorCode);
 
         // 3. Inactive employee throws EMPLOYEE_INACTIVE
         emp.Status = EmployeeStatus.Inactive;
         var inactEx = await Assert.ThrowsAsync<BusinessException>(() =>
-            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("new_unique_name", "password")));
+            service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("new_unique_name", "Pass@1234")));
         Assert.Equal("EMPLOYEE_INACTIVE", inactEx.ErrorCode);
 
         // 4. Valid update succeeds
         emp.Status = EmployeeStatus.Active;
-        var updatedId = await service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("new_unique_name", "new_hashed_pwd", DisplayName: "Nguyen Updated"));
+        var updatedId = await service.UpdateIdentityAccountAsync(empId, new CreateIdentityAccountRequest("new_unique_name", "NewPwd@2026", DisplayName: "Nguyen Updated"));
         Assert.Equal(userId, updatedId);
         Assert.Equal("new_unique_name", user.UserName);
-        Assert.Equal("new_hashed_pwd", user.PasswordHash);
+        Assert.Equal("NewPwd@2026", user.PasswordHash);
         Assert.Equal("Nguyen Updated", user.FullName);
     }
 
