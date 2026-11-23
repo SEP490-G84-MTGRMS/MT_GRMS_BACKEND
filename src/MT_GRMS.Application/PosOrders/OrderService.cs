@@ -9,6 +9,7 @@ using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders.Dtos;
+using MT_GRMS.Application.Stocktakes;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.Finance;
@@ -32,6 +33,7 @@ public class OrderService : IOrderService
     private readonly Tax.ITaxPeriodLockGuard? _taxPeriodLockGuard;
     private readonly Notifications.INotificationService? _notificationService;
     private readonly Notifications.NotificationOutbox? _notificationOutbox;
+    private readonly IStocktakeRepository? _stocktakeRepository;
 
     private static readonly Guid DefaultTillId = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db");
     private static readonly Guid DefaultBankId = Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559");
@@ -48,7 +50,8 @@ public class OrderService : IOrderService
         PosShifts.IShiftService? shiftService = null,
         Tax.ITaxPeriodLockGuard? taxPeriodLockGuard = null,
         Notifications.INotificationService? notificationService = null,
-        Notifications.NotificationOutbox? notificationOutbox = null)
+        Notifications.NotificationOutbox? notificationOutbox = null,
+        IStocktakeRepository? stocktakeRepository = null)
     {
         _orderRepository = orderRepository;
         _unitOfWork = unitOfWork;
@@ -62,6 +65,7 @@ public class OrderService : IOrderService
         _taxPeriodLockGuard = taxPeriodLockGuard;
         _notificationService = notificationService;
         _notificationOutbox = notificationOutbox;
+        _stocktakeRepository = stocktakeRepository;
     }
 
     public OrderService(
@@ -1663,6 +1667,11 @@ public class OrderService : IOrderService
             throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền hủy hóa đơn đã thanh toán. Nhân viên không được phép tự ý hủy.");
         }
 
+        if (order.Status == "Completed")
+            throw new BusinessException("PAID_ORDER_RETURN_REQUIRED", "Đơn đã thanh toán cần xử lý qua Đổi/Trả để ghi nhận hàng nhận lại và hoàn tiền đúng nguồn.");
+        if (order.DepositAmount > 0 || string.Equals(order.PaymentStatus, "PAID", StringComparison.OrdinalIgnoreCase))
+            throw new BusinessException("PAID_ORDER_RETURN_REQUIRED", "Đơn đã nhận tiền hoặc tiền cọc cần xử lý qua Đổi/Trả để ghi nhận hoàn tiền đúng nguồn.");
+
         // Hoàn trả tồn kho về BranchStocks (quy đổi về ĐVT cơ sở)
         foreach (var detail in order.Details)
         {
@@ -2028,6 +2037,7 @@ public class OrderService : IOrderService
         }
 
         // Hoàn lại kho BranchStock cho hàng trả Restock / Damaged (Hướng B: Linh hoạt thực tế cho hàng bán tự động FEFO/FIFO)
+        var damagedReturns = new Dictionary<Guid, (BranchStock Stock, decimal Quantity)>();
         foreach (var (retItem, origDetail) in resolvedReturns)
         {
             var allocations = ReadAllocations(origDetail);
@@ -2060,7 +2070,11 @@ public class OrderService : IOrderService
 
             stock.QuantityOnHand += baseQty;
             if (isDamaged)
+            {
                 stock.QuantityQuarantined += baseQty;
+                damagedReturns[stock.Id] = damagedReturns.TryGetValue(stock.Id, out var existing)
+                    ? (stock, existing.Quantity + baseQty) : (stock, baseQty);
+            }
             stock.UpdatedAt = DateTime.UtcNow;
 
             if (origDetail.PackageId.HasValue)
@@ -2244,6 +2258,34 @@ public class OrderService : IOrderService
         }
 
         await _orderRepository.AddAsync(exchangeOrder, cancellationToken);
+        if (damagedReturns.Count > 0)
+        {
+            if (_stocktakeRepository == null)
+                throw new BusinessException("STOCKTAKE_REQUIRED", "Không thể tạo phiếu kiểm kê cho hàng lỗi; giao dịch đổi/trả chưa được ghi nhận.");
+
+            var stocktake = new Stocktake
+            {
+                Id = Guid.NewGuid(), TenantId = originalOrder.TenantId,
+                BranchId = originalOrder.BranchId,
+                Code = await _stocktakeRepository.GenerateCodeAsync(originalOrder.TenantId, cancellationToken),
+                Scope = "LOT", ReasonType = "CUSTOMER_RETURN", Status = "DRAFT",
+                StartedAt = DateTime.UtcNow, CreatedByName = exchangeCashierName,
+                Note = $"Hàng lỗi đổi/trả từ đơn {originalOrder.OrderCode}; phiếu {exchangeOrder.OrderCode}. Đã cách ly trong tồn kho.",
+                Lines = damagedReturns.Values.Select(x => new StocktakeLine
+                {
+                    Id = Guid.NewGuid(), TenantId = originalOrder.TenantId,
+                    ProductId = x.Stock.ProductId, BranchStockId = x.Stock.Id,
+                    BatchCode = x.Stock.BatchCode, ManufactureDate = x.Stock.ManufactureDate,
+                    ExpiryDate = x.Stock.ExpiryDate, UnitCost = x.Stock.LandedCostPerUnit,
+                    SystemQty = x.Stock.QuantityOnHand,
+                    GoodQty = x.Stock.QuantityOnHand - x.Quantity,
+                    DamagedQty = x.Quantity, ActualQty = x.Stock.QuantityOnHand,
+                    VarianceQty = 0m, SupplierId = x.Stock.SupplierId,
+                    Note = $"Hàng lỗi trả từ đơn {originalOrder.OrderCode}; đã cách ly {x.Quantity:0.###}."
+                }).ToList()
+            };
+            await _stocktakeRepository.AddAsync(stocktake, cancellationToken);
+        }
         if (paymentStatus == "DEBT" && customer != null && _notificationOutbox != null)
             await _notificationOutbox.EnqueueDebtThresholdAsync(customer, exchangeOrder.Id, netAmount, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);

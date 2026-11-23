@@ -352,10 +352,10 @@ public class PaymentsControllerTests
         var resBadContent = await controller.HandleSePayWebhook(payloadBadContent, CancellationToken.None);
         Assert.IsType<UnauthorizedObjectResult>(resBadContent);
 
-        // 5. Unknown order returns a non-success acknowledgement
+        // 5. An unknown store token cannot be used to probe order codes.
         payload.TransactionContent = "HD999999";
         var resNotFound = await controller.HandleSePayWebhook(payload, CancellationToken.None);
-        Assert.False(PaymentTestSupport.Json(Assert.IsType<OkObjectResult>(resNotFound)).GetProperty("success").GetBoolean());
+        Assert.IsType<UnauthorizedObjectResult>(resNotFound);
 
         // Seed order
         var order = new Order
@@ -587,6 +587,47 @@ public class PaymentsControllerTests
         Assert.Single(await context.PaymentTransactions.ToListAsync());
         Assert.Single(await context.CashbookEntries.ToListAsync());
         Assert.Equal(150_000m, bank.CurrentBalance);
+    }
+
+    [PaymentPostgresFact]
+    public async Task HandleSePayWebhook_SameOrderCodeAcrossStores_PaysAuthenticatedStoreOnly()
+    {
+        await using var database = await PaymentTestSupport.OpenPostgresAsync(_mockTenant.Object);
+        var context = database.Context;
+        var otherTenantId = "tenant-other-store";
+        var otherBank = PaymentTestSupport.AddBank(context, otherTenantId, "111222333");
+        var targetBank = PaymentTestSupport.AddBank(context, TenantId, "999888777");
+        PaymentTestSupport.AddTenant(context, otherTenantId, enabled: true, apiKey: "mock_other_key", secret: "OTHER_SECRET");
+        PaymentTestSupport.AddTenant(context, TenantId, enabled: true, apiKey: "mock_sepay_key_123", secret: "TARGET_SECRET");
+        var otherOrder = new Order
+        {
+            Id = Guid.NewGuid(), TenantId = otherTenantId, BranchId = otherBank.BranchId!.Value,
+            FinanceAccountId = otherBank.Id, OrderCode = "HD2002", Status = "PendingPayment",
+            PaymentStatus = "UNPAID", FinalAmount = 150_000m, CreatedAt = DateTime.UtcNow
+        };
+        var targetOrder = new Order
+        {
+            Id = Guid.NewGuid(), TenantId = TenantId, BranchId = targetBank.BranchId!.Value,
+            FinanceAccountId = targetBank.Id, OrderCode = "HD2002", Status = "PendingPayment",
+            PaymentStatus = "UNPAID", FinalAmount = 150_000m, CreatedAt = DateTime.UtcNow
+        };
+        context.Orders.AddRange(otherOrder, targetOrder);
+        await context.SaveChangesAsync();
+
+        var controller = CreateController(context);
+        var requestContext = CreateContext();
+        requestContext.HttpContext.Request.Headers["Authorization"] = "Bearer TARGET_SECRET";
+        controller.ControllerContext = requestContext;
+        var result = await controller.HandleSePayWebhook(new SePayWebhookPayload
+        {
+            Id = 2002002, AccountNumber = "999888777", AmountIn = 150_000m,
+            TransactionContent = "HD2002", Gateway = "VietQR"
+        }, CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal("PAID", targetOrder.PaymentStatus);
+        Assert.Equal("UNPAID", otherOrder.PaymentStatus);
+        Assert.Equal(targetOrder.Id, (await context.PaymentTransactions.SingleAsync()).OrderId);
     }
 
     [PaymentPostgresFact]

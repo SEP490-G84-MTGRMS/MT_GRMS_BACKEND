@@ -502,12 +502,8 @@ public class CoreServicesBranchCoverageTests
         orderRepo.Setup(r => r.GetOrderWithDetailsAsync(orderId, It.IsAny<CancellationToken>())).ReturnsAsync(debtOrder);
 
         var cancelReq = new CancelOrderRequest("KHACH_HUY", "Huy don");
-        var cancelRes = await service.CancelOrderAsync(orderId, cancelReq);
-        Assert.NotNull(cancelRes);
-        Assert.Equal("Cancelled", debtOrder.Status);
-        Assert.Equal("REFUNDED", debtOrder.PaymentStatus);
-        Assert.Equal(150000m, customer.TotalDebt); // 200,000 - 50,000
-        Assert.Equal(70, customer.RewardPoints); // 50 + 20
+        await Assert.ThrowsAsync<BusinessException>(() => service.CancelOrderAsync(orderId, cancelReq));
+        Assert.Equal("Completed", debtOrder.Status);
 
         // 5. ConfirmOrderPaymentAsync with Loyalty Settings
         var completedOrder = new Order
