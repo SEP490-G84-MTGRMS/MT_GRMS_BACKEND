@@ -220,8 +220,22 @@ public class FinanceAccountsController : BaseApiController
             return Conflict(ApiResponse<bool>.Fail("SEPAY_REQUIRED", "Phải kết nối và kiểm tra SePay thành công trước khi kích hoạt tài khoản ngân hàng."));
         account.IsActive = request.IsActive;
         account.UpdatedAt = DateTime.UtcNow;
+
+        // REQ: Mỗi chi nhánh duy trì 01 Két sắt và 01 Két quầy hoạt động; khi đổi sang két khác thì két cũ tự động tắt
+        if (request.IsActive && (account.AccountType == FinanceAccountType.Safe || account.AccountType == FinanceAccountType.Till) && account.BranchId.HasValue)
+        {
+            var others = await _db.FinanceAccounts
+                .Where(x => x.Id != account.Id && x.BranchId == account.BranchId && x.AccountType == account.AccountType && x.IsActive && !x.IsDeleted)
+                .ToListAsync(ct);
+            foreach (var other in others)
+            {
+                other.IsActive = false;
+                other.UpdatedAt = DateTime.UtcNow;
+            }
+        }
+
         await _db.SaveChangesAsync(ct);
-        return Ok(ApiResponse<bool>.Ok(true, request.IsActive ? "Đã kích hoạt." : "Đã ngừng hoạt động."));
+        return Ok(ApiResponse<bool>.Ok(true, request.IsActive ? "Đã kích hoạt và chuyển làm két hoạt động chính của chi nhánh." : "Đã ngừng hoạt động."));
     }
 
     [HttpPost("{id:guid}/sepay/connect")]
@@ -335,9 +349,23 @@ public class FinanceAccountsController : BaseApiController
 
     private async Task EnsureSingleDefault(FinanceAccount account, CancellationToken ct)
     {
-        if (!account.IsDefaultForVietQr) return;
-        var others = await _db.FinanceAccounts.Where(x => x.Id != account.Id && x.AccountType == FinanceAccountType.Bank && x.BranchId == account.BranchId && x.IsDefaultForVietQr).ToListAsync(ct);
-        foreach (var other in others) other.IsDefaultForVietQr = false;
+        if (account.AccountType == FinanceAccountType.Bank)
+        {
+            if (!account.IsDefaultForVietQr) return;
+            var others = await _db.FinanceAccounts.Where(x => x.Id != account.Id && x.AccountType == FinanceAccountType.Bank && x.BranchId == account.BranchId && x.IsDefaultForVietQr).ToListAsync(ct);
+            foreach (var other in others) other.IsDefaultForVietQr = false;
+        }
+        else if ((account.AccountType == FinanceAccountType.Safe || account.AccountType == FinanceAccountType.Till) && account.IsActive && account.BranchId.HasValue)
+        {
+            var others = await _db.FinanceAccounts
+                .Where(x => x.Id != account.Id && x.BranchId == account.BranchId && x.AccountType == account.AccountType && x.IsActive && !x.IsDeleted)
+                .ToListAsync(ct);
+            foreach (var other in others)
+            {
+                other.IsActive = false;
+                other.UpdatedAt = DateTime.UtcNow;
+            }
+        }
     }
 
     private async Task<Dictionary<Guid, string>> BranchNames(CancellationToken ct) => await _db.Branches.AsNoTracking().ToDictionaryAsync(x => x.Id, x => x.Name, ct);

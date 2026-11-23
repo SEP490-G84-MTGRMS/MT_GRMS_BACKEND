@@ -27,7 +27,11 @@ public class OrderMatrixProductDto
     public int OrderMultiple { get; set; } = 1;
     public decimal Soh { get; set; }
     public decimal SalesPerDay { get; set; }
+    public decimal AverageSales7Days { get; set; }
+    public decimal AverageSales30Days { get; set; }
     public decimal SafetyStock { get; set; }
+    public bool IsPrimarySupplier { get; set; }
+    public decimal PurchaseToStockRate { get; set; } = 1m;
 
     // Trạng thái nghiệp vụ Active / Inactive
     public bool IsProductActive { get; set; } = true;
@@ -47,6 +51,41 @@ public class OrderMatrixProductDto
 
     public bool IsRowDisabled => !IsProductActive || !IsSupplierActive || !IsSupplierProductActive || !IsSupplierBranchActive || !IsBranchProductActive;
     public string? RowDisabledReason { get; set; }
+}
+
+public class OrderMatrixSuggestionQuery
+{
+    public Guid BranchId { get; set; }
+    public Guid? SupplierId { get; set; }
+    public DateTime ViewFrom { get; set; }
+    public int DurationDays { get; set; } = 7;
+}
+
+public class OrderMatrixSuggestionDto
+{
+    public Guid ProductId { get; set; }
+    public Guid SupplierId { get; set; }
+    public DateTime DeliveryDate { get; set; }
+    public decimal SuggestedQty { get; set; }
+    public decimal Avg7 { get; set; }
+    public decimal Avg30 { get; set; }
+    public decimal SalesPerDay { get; set; }
+    public int CoverageDays { get; set; }
+    public decimal ForecastDemand { get; set; }
+    public decimal AvailableStock { get; set; }
+    public decimal IncomingQty { get; set; }
+    public decimal SafetyStock { get; set; }
+    public decimal RawSuggested { get; set; }
+    public int Moq { get; set; }
+    public int OrderMultiple { get; set; }
+}
+
+public class OrderMatrixIncomingDto
+{
+    public Guid ProductId { get; set; }
+    public Guid SupplierId { get; set; }
+    public DateTime DeliveryDate { get; set; }
+    public decimal RemainingBaseQty { get; set; }
 }
 
 public class OrderMatrixSupplierDeliveryConfigDto

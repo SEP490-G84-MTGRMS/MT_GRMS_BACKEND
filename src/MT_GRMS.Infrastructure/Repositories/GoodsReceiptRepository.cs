@@ -119,7 +119,6 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
             CancelledAtUtc = gr.RejectedAtUtc,
             CancellationReason = gr.RejectionReason,
             SubTotal = gr.SubTotal,
-            FreightFee = gr.FreightFee,
             DiscountAmount = gr.DiscountAmount,
             VatPercent = gr.VatPercent,
             VatAmount = gr.VatAmount,
@@ -154,10 +153,9 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
                 BatchCode = l.BatchCode,
                 ManufactureDate = l.ManufactureDate,
                 ExpiryDate = l.ExpiryDate,
-                FreightAllocated = l.FreightAllocated,
                 DiscountAllocated = l.DiscountAllocated,
                 VatAllocated = l.VatAllocated,
-                LandedUnitCost = l.LandedUnitCost,
+                PurchaseUnitCost = l.PurchaseUnitCost,
                 QualityStatus = l.QualityStatus,
                 RejectionReason = l.RejectionReason,
                 Note = l.Note
@@ -286,6 +284,15 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
             .OrderBy(gr => gr.Status == "DRAFT" ? 0 : 1)
             .FirstOrDefaultAsync(cancellationToken);
     }
+
+    public Task<BranchStock?> GetBranchStockByIdAsync(string tenantId, Guid branchId, Guid productId, Guid branchStockId, CancellationToken cancellationToken = default)
+        => _context.BranchStocks.FirstOrDefaultAsync(bs => bs.Id == branchStockId && bs.TenantId == tenantId
+            && bs.BranchId == branchId && bs.ProductId == productId && !bs.IsDeleted, cancellationToken);
+
+    public Task<decimal> GetActivePackageWeightAsync(string tenantId, Guid branchStockId, CancellationToken cancellationToken = default)
+        => _context.Packages.Where(p => p.TenantId == tenantId && p.BranchStockId == branchStockId && !p.IsDeleted
+            && (p.Status == "AVAILABLE" || p.Status == "QUARANTINED"))
+            .SumAsync(p => p.NetWeight, cancellationToken);
 
     public async Task<BranchStock?> GetBranchStockAsync(
         string tenantId,

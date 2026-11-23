@@ -621,14 +621,16 @@ public class UserAuthenticationTests
             IsActive = true,
             IsTwoFactorEnabled = false
         };
+        user.TenantUsers.Add(new TenantUser { TenantId = "tenant-01", UserId = user.Id, Role = UserRoleNames.StoreOwner });
         await repo.AddAsync(user);
 
-        var authService = new AuthService(repo);
+        var authService = CreateAuthService(repo);
         var resp = await authService.SendLoginOtpAsync(new LoginRequest("user_otp_disabled", "Pass@123", "tenant-01"));
 
         Assert.False(resp.RequiresOtp);
         Assert.NotNull(resp.Session);
         Assert.Equal("user_otp_disabled", resp.User?.Username);
+        Assert.Equal("tenant-01", resp.User?.TenantId);
     }
 
     [Fact]
@@ -701,11 +703,13 @@ public class UserAuthenticationTests
             IsActive = true,
             IsTwoFactorEnabled = true
         };
+        user.TenantUsers.Add(new TenantUser { TenantId = "tenant-01", UserId = user.Id, Role = UserRoleNames.StoreOwner });
         await repo.AddAsync(user);
 
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+            ["ASPNETCORE_ENVIRONMENT"] = "Development",
+            ["Jwt:Key"] = TestJwtKey
         }).Build();
 
         var authService = new AuthService(repo, configuration: config);
@@ -726,6 +730,7 @@ public class UserAuthenticationTests
         var loginResp = await authService.VerifyLoginOtpAsync(new VerifyLoginOtpRequest(sendResp.TempToken, sendResp.DevOtpCode));
         Assert.NotNull(loginResp);
         Assert.Equal("user_verify_flow", loginResp.User.Username);
+        Assert.Equal("tenant-01", loginResp.User.TenantId);
     }
 
     [Fact]
@@ -783,7 +788,8 @@ public class UserAuthenticationTests
         var repo = new FakeUserRepository();
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
-            ["ASPNETCORE_ENVIRONMENT"] = "Development"
+            ["ASPNETCORE_ENVIRONMENT"] = "Development",
+            ["Jwt:Key"] = TestJwtKey
         }).Build();
 
         var authService = new AuthService(repo, configuration: config);
@@ -833,6 +839,7 @@ public class UserAuthenticationTests
             RefreshToken = "mt_refresh_to_revoke",
             RefreshTokenExpiryTime = DateTime.UtcNow.AddDays(7)
         };
+        user.TenantUsers.Add(new TenantUser { TenantId = "tenant-01", UserId = user.Id, Role = UserRoleNames.StoreOwner });
         await repo.AddAsync(user);
 
         var authService = new AuthService(repo);
@@ -845,6 +852,7 @@ public class UserAuthenticationTests
         var current = await authService.GetCurrentUserAsync("usr_current_check");
         Assert.NotNull(current);
         Assert.Equal("user_current_check", current.Username);
+        Assert.Equal("tenant-01", current.TenantId);
 
         // Revoke refresh token
         await authService.RevokeRefreshTokenAsync("usr_current_check");
@@ -864,6 +872,7 @@ public class UserAuthenticationTests
             PasswordHash = PasswordHasher.Hash("Pass@123"),
             IsActive = true
         };
+        user.TenantUsers.Add(new TenantUser { TenantId = "tenant-01", UserId = user.Id, Role = UserRoleNames.Staff });
         await repo.AddAsync(user);
 
         var mockEmpRepo = new Mock<IEmployeeRepository>();

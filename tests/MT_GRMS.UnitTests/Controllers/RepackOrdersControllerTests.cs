@@ -26,7 +26,7 @@ public class RepackOrdersControllerTests
     private static PackageDto CreatePackageDto(Guid id, string status = "AVAILABLE")
     {
         return new PackageDto(
-            id, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "PKG-01", null,
+            id, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), "PKG-01", "Cam khay 1.5kg", null,
             1.5m, 50000m, DateTime.UtcNow, DateTime.UtcNow.AddDays(3),
             "PORTIONING", status, null, null, null, DateTime.UtcNow);
     }

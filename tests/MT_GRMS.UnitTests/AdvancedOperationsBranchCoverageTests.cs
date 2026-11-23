@@ -1,3 +1,4 @@
+using MT_GRMS.Infrastructure.Services;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -11,6 +12,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Moq;
 using MT_GRMS.Api.Controllers;
@@ -33,6 +35,7 @@ using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Exceptions;
 using MT_GRMS.Infrastructure.Persistence;
+using MT_GRMS.UnitTests.Controllers;
 using Xunit;
 
 namespace MT_GRMS.UnitTests;
@@ -79,10 +82,10 @@ public class AdvancedOperationsBranchCoverageTests
         var mockConfig = new Mock<IConfiguration>();
         var mockLogger = new Mock<ILogger<PaymentsController>>();
 
-        var controller = new PaymentsController(dbContext, mockFactory.Object, mockConfig.Object, mockLogger.Object, tenantContext);
+        var controller = PaymentTestSupport.CreateController(dbContext, mockFactory.Object, mockConfig.Object, mockLogger.Object, tenantContext);
         var claims = new List<Claim>
         {
-            new(ClaimTypes.Role, RoleConstants.StoreOwner),
+            new(ClaimTypes.Role, SystemRoles.StoreOwner),
             new("tenant_id", tenantId)
         };
         controller.ControllerContext = new ControllerContext
@@ -92,35 +95,23 @@ public class AdvancedOperationsBranchCoverageTests
 
         // 1. GetPublicQrConfig: branchId specified but branch has no payment account -> BRANCH_PAYMENT_ACCOUNT_NOT_CONFIGURED (404)
         var branchId = Guid.NewGuid();
-        var resNoAcc = await controller.GetPublicQrConfig(tenantId, branchId, CancellationToken.None);
+        var resNoAcc = await controller.GetPublicQrConfig(tenantId, branchId, null, CancellationToken.None);
         var notFoundAcc = Assert.IsType<NotFoundObjectResult>(resNoAcc);
         Assert.NotNull(notFoundAcc.Value);
 
         // 2. GetPublicQrConfig: no branch, no config -> 404
-        var resNoConfig = await controller.GetPublicQrConfig(tenantId, null, CancellationToken.None);
+        var resNoConfig = await controller.GetPublicQrConfig(tenantId, null, null, CancellationToken.None);
         var notFoundConfig = Assert.IsType<NotFoundObjectResult>(resNoConfig);
         Assert.NotNull(notFoundConfig.Value);
 
-        // Seed StorePaymentConfig
-        var paymentConfig = new StorePaymentConfig
-        {
-            Id = Guid.NewGuid(),
-            TenantId = tenantId,
-            BankCode = "MB",
-            BankName = "MB Bank",
-            BankAccountNumber = "1234567890",
-            BankAccountName = "CONG TY TNHH ABC",
-            SepayApiKeyEncrypted = "some_encrypted_key",
-            SepayWebhookSecret = "whsec_test123",
-            IsActive = true
-        };
-        dbContext.StorePaymentConfigs.Add(paymentConfig);
+        var paymentConfig = PaymentTestSupport.AddTenant(dbContext, tenantId, enabled: true,
+            apiKey: "sample-api-key", secret: "whsec_test123");
+        var bank = PaymentTestSupport.AddBank(dbContext, tenantId, "1234567890");
         await dbContext.SaveChangesAsync();
 
-        // 3. GetPublicQrConfig: with config -> 200 Ok
-        var resOk = await controller.GetPublicQrConfig(tenantId, null, CancellationToken.None);
-        var okResult = Assert.IsType<OkObjectResult>(resOk);
-        Assert.NotNull(okResult.Value);
+        // 3. The QR configuration comes from the branch's selected Bank account.
+        var qr = Assert.IsType<OkObjectResult>(await controller.GetPublicQrConfig(tenantId, bank.BranchId, null, CancellationToken.None));
+        Assert.Equal(bank.Id, PaymentTestSupport.Json(qr).GetProperty("financeAccountId").GetGuid());
 
         // 4. RevokeSePayApiKey: as non-owner -> 403 Forbidden
         var staffClaims = new List<Claim>
@@ -200,7 +191,7 @@ public class AdvancedOperationsBranchCoverageTests
         var mockConfig = new Mock<IConfiguration>();
         var mockLogger = new Mock<ILogger<PaymentsController>>();
 
-        var controller = new PaymentsController(dbContext, mockFactory.Object, mockConfig.Object, mockLogger.Object, tenantContext);
+        var controller = PaymentTestSupport.CreateController(dbContext, mockFactory.Object, mockConfig.Object, mockLogger.Object, tenantContext, Environments.Production);
         var httpContext = new DefaultHttpContext();
         httpContext.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("10.99.88.77");
         controller.ControllerContext = new ControllerContext { HttpContext = httpContext };
@@ -211,7 +202,7 @@ public class AdvancedOperationsBranchCoverageTests
             AmountIn = 200000m,
             AccountNumber = "1234567890",
             TransactionContent = "HD5001 chuyen tien",
-            TransactionDate = DateTime.UtcNow
+            TransactionDate = DateTime.UtcNow.ToString("O")
         };
 
         // 1. Missing Authorization header -> 401 Unauthorized
@@ -223,16 +214,16 @@ public class AdvancedOperationsBranchCoverageTests
         var resEmptyAuth = await controller.HandleSePayWebhook(payload, CancellationToken.None);
         Assert.IsType<UnauthorizedObjectResult>(resEmptyAuth);
 
-        // 3. No order code in transaction content -> 400 BadRequest
+        // 3. An orderless ping with an invalid key -> 401 Unauthorized
         httpContext.Request.Headers["Authorization"] = "Apikey whsec_secret123";
         payload.TransactionContent = "a b c";
         var resNoCode = await controller.HandleSePayWebhook(payload, CancellationToken.None);
-        Assert.IsType<BadRequestObjectResult>(resNoCode);
+        Assert.IsType<UnauthorizedObjectResult>(resNoCode);
 
-        // 4. Order code extracted but order not found in DB -> 404 NotFound
+        // 4. Unknown order returns a non-success acknowledgement
         payload.TransactionContent = "HD9999 mua hang";
         var resNotFound = await controller.HandleSePayWebhook(payload, CancellationToken.None);
-        Assert.IsType<NotFoundObjectResult>(resNotFound);
+        Assert.False(PaymentTestSupport.Json(Assert.IsType<OkObjectResult>(resNotFound)).GetProperty("success").GetBoolean());
 
         // Seed order
         var order = new Order
@@ -247,16 +238,10 @@ public class AdvancedOperationsBranchCoverageTests
         };
         dbContext.Orders.Add(order);
 
-        var config = new StorePaymentConfig
-        {
-            Id = Guid.NewGuid(),
-            TenantId = tenantId,
-            BankAccountNumber = "1234567890",
-            SepayWebhookSecret = "whsec_correct_secret",
-            SepayApiKeyEncrypted = "",
-            IsActive = true
-        };
-        dbContext.StorePaymentConfigs.Add(config);
+        PaymentTestSupport.AddTenant(dbContext, tenantId, enabled: true, secret: "whsec_correct_secret");
+        var bank = PaymentTestSupport.AddBank(dbContext, tenantId, "1234567890");
+        order.BranchId = bank.BranchId!.Value;
+        order.FinanceAccountId = bank.Id;
         await dbContext.SaveChangesAsync();
 
         // 5. Invalid token vs store secret -> 401 Unauthorized
@@ -286,23 +271,15 @@ public class AdvancedOperationsBranchCoverageTests
         await dbContext.SaveChangesAsync();
 
         var resReplay = await controller.HandleSePayWebhook(payload, CancellationToken.None);
-        var okReplay = Assert.IsType<OkObjectResult>(resReplay);
-        Assert.NotNull(okReplay.Value);
+        Assert.True(PaymentTestSupport.Json(Assert.IsType<OkObjectResult>(resReplay)).GetProperty("isIdempotentReplay").GetBoolean());
 
-        // 8. New transaction ID but insufficient amount -> 400 BadRequest
+        // 8. A production webhook cannot settle a new transaction without a real SePay API key.
         payload.Id = 999902;
-        payload.AmountIn = 50000m; // order requires 200,000m
-        var resInsufficient = await controller.HandleSePayWebhook(payload, CancellationToken.None);
-        Assert.IsType<BadRequestObjectResult>(resInsufficient);
-
-        // 9. Full payment success -> 200 Ok, marks order PAID and Completed
-        payload.Id = 999903;
-        payload.AmountIn = 200000m;
-        var resSuccess = await controller.HandleSePayWebhook(payload, CancellationToken.None);
-        var okSuccess = Assert.IsType<OkObjectResult>(resSuccess);
-        Assert.NotNull(okSuccess.Value);
-        Assert.Equal("PAID", order.PaymentStatus);
-        Assert.Equal("Completed", order.Status);
+        var unavailable = Assert.IsType<ObjectResult>(await controller.HandleSePayWebhook(payload, CancellationToken.None));
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, unavailable.StatusCode);
+        Assert.Equal("UNPAID", order.PaymentStatus);
+        Assert.Equal(0m, bank.CurrentBalance);
+        Assert.Single(await dbContext.PaymentTransactions.ToListAsync());
     }
 
     // =========================================================================
@@ -352,7 +329,7 @@ public class AdvancedOperationsBranchCoverageTests
         var mockTenantService = new Mock<ITenantService>();
         var mockPlanService = new Mock<ISubscriptionPlanService>();
 
-        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext);
+        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext, new TenantSubscriptionService(dbContext));
         var claims = new List<Claim>
         {
             new(ClaimTypes.NameIdentifier, userId),
@@ -442,7 +419,7 @@ public class AdvancedOperationsBranchCoverageTests
         var mockTenantService = new Mock<ITenantService>();
         var mockPlanService = new Mock<ISubscriptionPlanService>();
 
-        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext);
+        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext, new TenantSubscriptionService(dbContext));
 
         // 1. Missing claims -> 403 Forbidden
         controller.ControllerContext = new ControllerContext

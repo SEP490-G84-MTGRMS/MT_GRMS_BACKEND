@@ -24,7 +24,7 @@ public class OrderConfiguration : IEntityTypeConfiguration<Order>
         builder.Property(x => x.PaymentStatus).HasMaxLength(30).HasDefaultValue("PAID");
         builder.Property(x => x.ShiftId).HasColumnName("ShiftID");
         builder.Property(x => x.BusinessDate).IsRequired();
-        builder.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("Completed");
+        builder.Property(x => x.Status).HasMaxLength(30).HasDefaultValue("Completed").IsConcurrencyToken();
         builder.Property(x => x.Note).HasMaxLength(1000);
         builder.Property(x => x.AppliedPromotionId);
         builder.Property(x => x.AppliedPromotionSummary).HasMaxLength(300);

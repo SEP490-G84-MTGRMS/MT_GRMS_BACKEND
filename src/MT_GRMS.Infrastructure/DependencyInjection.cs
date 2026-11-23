@@ -31,13 +31,17 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructureServices(
         this IServiceCollection services,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        bool allowInMemory = true)
     {
         var connectionString = Environment.GetEnvironmentVariable("DB_CONNECTION_STRING")
             ?? Environment.GetEnvironmentVariable("DATABASE_URL")
             ?? configuration["DATABASE_URL"]
             ?? configuration.GetConnectionString("DefaultConnection")
             ?? Environment.GetEnvironmentVariable("ConnectionStrings__DefaultConnection");
+
+        if (!allowInMemory && string.IsNullOrWhiteSpace(connectionString))
+            throw new InvalidOperationException("PostgreSQL connection is required in Production.");
 
         if (!string.IsNullOrWhiteSpace(connectionString) &&
             (connectionString.StartsWith("postgres://") || connectionString.StartsWith("postgresql://")))
@@ -117,6 +121,7 @@ public static class DependencyInjection
         services.AddScoped<IScheduleApprovalRequestRepository, ScheduleApprovalRequestRepository>();
         services.AddScoped<IPayslipRepository, PayslipRepository>();
         services.AddScoped<ISubscriptionPlanRepository, SubscriptionPlanRepository>();
+        services.AddScoped<TenantSubscriptionService>();
         services.AddScoped<ITenantRepository, TenantRepository>();
         services.AddScoped<IMasterProductRepository, MasterProductRepository>();
         services.AddScoped<Application.Admin.Services.IMasterCatalogExcelService, Services.MasterCatalogExcelService>();
@@ -137,6 +142,9 @@ public static class DependencyInjection
         services.AddScoped<ISupplierOrderEmailSender, SmtpSupplierOrderEmailSender>();
         services.AddScoped<ISupplierDispatchPackageService, SupplierDispatchPackageService>();
         services.AddHostedService<SupplierOrderDispatchWorker>();
+        services.AddHostedService<BusinessNotificationWorker>();
+        services.AddHostedService<ExpenseReminderWorker>();
+        services.AddHostedService<OperationalReminderWorker>();
 
         // Cấu hình SePay & Dịch vụ Ví gian hàng
         services.Configure<MT_GRMS.Application.Common.SePaySettings>(configuration.GetSection(MT_GRMS.Application.Common.SePaySettings.SectionName));

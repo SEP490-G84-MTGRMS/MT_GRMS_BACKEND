@@ -133,12 +133,8 @@ public class OrderServiceTaxLockTests
         var cancelRequest = new CancelOrderRequest("Khách nhập sai thông tin", "STORE_OWNER");
 
         // Act
-        var result = await _orderService.CancelOrderAsync(orderId, cancelRequest);
-
-        // Assert
-        Assert.NotNull(result);
-        Assert.Equal("Cancelled", result.Status);
-        Assert.Equal("Cancelled", order.Status);
+        await Assert.ThrowsAsync<BusinessException>(() => _orderService.CancelOrderAsync(orderId, cancelRequest));
+        Assert.Equal("Completed", order.Status);
     }
 
     [Fact]

@@ -63,7 +63,9 @@ public record TenantDetailResponse(
     List<TenantDetailBranchSummaryDto> Branches,
     DateTime CreatedAt,
     DateTime? UpdatedAt,
-    decimal WalletBalance = 0
+    decimal WalletBalance = 0,
+    bool StaffManagementLocked = false,
+    bool CanPurchaseStaffManagementAddon = false
 );
 
 public record UpdateTenantRequest(
@@ -92,8 +94,14 @@ public record PurchaseSubscriptionRequest(
     string PaymentMethod = "Wallet",
     int ExtraWarehouses = 0,
     int ExtraStorageGb = 0,
-    Guid? RequestId = null
+    Guid? RequestId = null,
+    DateTime? QuoteAt = null,
+    DateTime? ExpectedExpiry = null,
+    decimal? ExpectedTotal = null
 );
+
+public record ProUpgradeQuote(DateTime QuoteAt, DateTime ExpectedExpiry, DateTime ExpiresAt,
+    decimal RemainingPro, decimal Credit, decimal AdditionalTerm, decimal Branches, decimal Total);
 
 public record PurchaseSubscriptionResponse(
     string PlanCode,
@@ -104,6 +112,12 @@ public record PurchaseSubscriptionResponse(
     string PaymentMethod,
     string Message
 );
+
+public record StaffAddonQuote(decimal Subtotal, decimal Vat, decimal Total, DateTime ExpiresAt);
+
+public record StaffAddonPurchaseRequest(Guid RequestId, decimal Total, DateTime ExpiresAt);
+
+public record StaffAddonPurchaseResponse(decimal WalletBalance);
 
 public record SubscriptionOrderHistoryDto(
     string Code,

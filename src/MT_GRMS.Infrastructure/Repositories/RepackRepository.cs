@@ -54,6 +54,48 @@ public class RepackRepository : IRepackRepository
     public Task<Package?> GetPackageByIdAsync(string tenantId, Guid packageId, CancellationToken ct = default)
         => _db.Packages.FirstOrDefaultAsync(p => p.Id == packageId && p.TenantId == tenantId && !p.IsDeleted, ct);
 
+    public Task<Package?> FindPackageByCodeAsync(string tenantId, Guid branchId, string code, CancellationToken ct = default)
+        => _db.Packages.AsNoTracking()
+            .FirstOrDefaultAsync(p => p.TenantId == tenantId && p.BranchId == branchId && !p.IsDeleted
+                && (p.InternalCode == code || p.Barcode == code), ct);
+
+    public async Task<IReadOnlyList<(Package Package, string ProductName, BranchStock Stock)>> SearchSellablePackagesAsync(
+        string tenantId, Guid branchId, string query, int limit, CancellationToken ct = default)
+    {
+        var q = query.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(q)) return Array.Empty<(Package, string, BranchStock)>();
+
+        limit = Math.Clamp(limit, 1, 50);
+        var today = DateTime.UtcNow.Date;
+
+        var rows = await (
+            from p in _db.Packages.AsNoTracking()
+            join prod in _db.Products.AsNoTracking() on p.ProductId equals prod.Id
+            join stock in _db.BranchStocks.AsNoTracking() on p.BranchStockId equals stock.Id
+            where p.TenantId == tenantId
+                && p.BranchId == branchId
+                && !p.IsDeleted
+                && p.Status == "AVAILABLE"
+                && (!p.ExpiryDate.HasValue || p.ExpiryDate.Value.Date >= today)
+                && !prod.IsDeleted
+                && prod.TenantId == tenantId
+                && !stock.IsDeleted
+                && stock.TenantId == tenantId
+                && stock.BranchId == branchId
+                && (
+                    p.InternalCode.ToLower().Contains(q)
+                    || (p.Name != null && p.Name.ToLower().Contains(q))
+                    || (p.Barcode != null && p.Barcode.ToLower().Contains(q))
+                    || prod.Name.ToLower().Contains(q)
+                    || prod.ProductCode.ToLower().Contains(q)
+                )
+            orderby p.ExpiryDate ?? DateTime.MaxValue, p.CreatedAt
+            select new { Package = p, ProductName = prod.Name, Stock = stock }
+        ).Take(limit).ToListAsync(ct);
+
+        return rows.Select(r => (r.Package, r.ProductName, r.Stock)).ToList();
+    }
+
     public Task<int> CountPackagesCreatedTodayAsync(string tenantId, DateTime utcDate, CancellationToken ct = default)
     {
         var start = utcDate.Date;

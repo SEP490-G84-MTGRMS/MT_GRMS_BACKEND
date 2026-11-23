@@ -393,19 +393,18 @@ public class CoreServicesBranchCoverageTests
             orderRepo.Object,
             uow.Object,
             thermal.Object,
-            null,
-            null,
-            null,
-            shiftRepo.Object,
-            promoRepo.Object,
-            tenant,
-            shiftService.Object
+            shiftRepository: shiftRepo.Object,
+            promotionRepository: promoRepo.Object,
+            tenantContext: tenant,
+            shiftService: shiftService.Object
         );
 
         var branchId = Guid.NewGuid();
         var shiftId = Guid.NewGuid();
 
-        var branch = new Branch { Id = branchId, Name = "Chi nhanh 1" };
+        tenant.SetRole("STAFF");
+        tenant.CurrentBranchId = branchId;
+        var branch = new Branch { Id = branchId, TenantId = tenant.CurrentTenantId, Name = "Chi nhanh 1" };
         orderRepo.Setup(r => r.GetBranchByIdAsync(branchId, It.IsAny<CancellationToken>())).ReturnsAsync(branch);
 
         // 2. CreateOrderAsync: SHIFT_CLOSING_LOCKDOWN and SHIFT_CLOSED_OR_INVALID
@@ -426,8 +425,9 @@ public class CoreServicesBranchCoverageTests
 
         // If shiftId is requested but activeShift is null -> SHIFT_CLOSED_OR_INVALID
         var branchIdNoShift = Guid.NewGuid();
+        tenant.CurrentBranchId = branchIdNoShift;
         orderRepo.Setup(r => r.GetBranchByIdAsync(branchIdNoShift, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new Branch { Id = branchIdNoShift, Name = "Chi nhanh khong ca" });
+            .ReturnsAsync(new Branch { Id = branchIdNoShift, TenantId = tenant.CurrentTenantId, Name = "Chi nhanh khong ca" });
         shiftRepo.Setup(r => r.GetActiveShiftAsync(branchIdNoShift, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((ShiftZReport?)null);
 
@@ -443,6 +443,7 @@ public class CoreServicesBranchCoverageTests
         Assert.Equal("SHIFT_CLOSED_OR_INVALID", exNoShift.ErrorCode);
 
         // 3. CreatePreOrderAsync: negative deposit
+        tenant.SetRole("STORE_OWNER");
         var custId = Guid.NewGuid();
         var customer = new Customer
         {
@@ -501,12 +502,8 @@ public class CoreServicesBranchCoverageTests
         orderRepo.Setup(r => r.GetOrderWithDetailsAsync(orderId, It.IsAny<CancellationToken>())).ReturnsAsync(debtOrder);
 
         var cancelReq = new CancelOrderRequest("KHACH_HUY", "Huy don");
-        var cancelRes = await service.CancelOrderAsync(orderId, cancelReq);
-        Assert.NotNull(cancelRes);
-        Assert.Equal("Cancelled", debtOrder.Status);
-        Assert.Equal("REFUNDED", debtOrder.PaymentStatus);
-        Assert.Equal(150000m, customer.TotalDebt); // 200,000 - 50,000
-        Assert.Equal(70, customer.RewardPoints); // 50 + 20
+        await Assert.ThrowsAsync<BusinessException>(() => service.CancelOrderAsync(orderId, cancelReq));
+        Assert.Equal("Completed", debtOrder.Status);
 
         // 5. ConfirmOrderPaymentAsync with Loyalty Settings
         var completedOrder = new Order

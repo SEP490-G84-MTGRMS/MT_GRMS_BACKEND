@@ -1,3 +1,4 @@
+using MT_GRMS.Application.Admin.Validators;
 using MT_GRMS.Application.Admin.Dtos;
 using MT_GRMS.Application.Admin.Repositories;
 using MT_GRMS.Application.Common;
@@ -48,11 +49,8 @@ public class MasterCatalogService : IMasterCatalogService
         CreateMasterProductRequest request,
         CancellationToken cancellationToken = default)
     {
-        var barcode = request.Barcode?.Trim() ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(barcode))
-        {
-            throw new BusinessException("BARCODE_REQUIRED", "Mã vạch (Barcode) là bắt buộc.");
-        }
+        MasterProductValidator.ValidateCreate(request);
+        var barcode = request.Barcode.Trim();
 
         if (await _masterRepo.ExistsByBarcodeAsync(barcode, null, cancellationToken))
         {
@@ -79,12 +77,11 @@ public class MasterCatalogService : IMasterCatalogService
         {
             foreach (var u in request.Units)
             {
-                if (string.IsNullOrWhiteSpace(u.UnitName)) continue;
                 product.Units.Add(new MasterProductUnit
                 {
                     MasterProductId = product.Id,
                     UnitName = u.UnitName.Trim(),
-                    ConversionRate = u.ConversionRate <= 0 ? 1 : u.ConversionRate,
+                    ConversionRate = u.ConversionRate,
                     Barcode = string.IsNullOrWhiteSpace(u.Barcode) ? null : u.Barcode.Trim(),
                     IsPurchaseUnit = u.IsPurchaseUnit
                 });
@@ -105,6 +102,7 @@ public class MasterCatalogService : IMasterCatalogService
         var product = await _masterRepo.GetByIdWithUnitsAsync(id, cancellationToken)
             ?? throw new NotFoundException($"Không tìm thấy sản phẩm mẫu với ID: {id}");
 
+        MasterProductValidator.EnsureValid(request);
         product.Name = request.Name.Trim();
         product.Brand = request.Brand.Trim();
         product.CategoryName = request.CategoryName.Trim();
@@ -122,12 +120,11 @@ public class MasterCatalogService : IMasterCatalogService
         {
             foreach (var u in request.Units)
             {
-                if (string.IsNullOrWhiteSpace(u.UnitName)) continue;
                 product.Units.Add(new MasterProductUnit
                 {
                     MasterProductId = product.Id,
                     UnitName = u.UnitName.Trim(),
-                    ConversionRate = u.ConversionRate <= 0 ? 1 : u.ConversionRate,
+                    ConversionRate = u.ConversionRate,
                     Barcode = string.IsNullOrWhiteSpace(u.Barcode) ? null : u.Barcode.Trim(),
                     IsPurchaseUnit = u.IsPurchaseUnit
                 });
@@ -194,6 +191,7 @@ public class MasterCatalogService : IMasterCatalogService
         return new MasterProductDto(
             Id: p.Id,
             Barcode: p.Barcode,
+            Description: p.Description,
             Name: p.Name,
             Brand: p.Brand,
             CategoryName: p.CategoryName,

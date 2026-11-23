@@ -16,6 +16,7 @@ public class SupplierReturnLineConfiguration : IEntityTypeConfiguration<Supplier
         builder.Property(x => x.SupplierReturnId).IsRequired();
         builder.Property(x => x.ProductId).IsRequired();
         builder.Property(x => x.BatchCode).HasMaxLength(100);
+        builder.Property(x => x.BranchStockId);
 
         builder.Property(x => x.RequestedQty).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);
         builder.Property(x => x.SupplierAcceptedQty).HasColumnType("decimal(18,3)").HasDefaultValue(0.000m);

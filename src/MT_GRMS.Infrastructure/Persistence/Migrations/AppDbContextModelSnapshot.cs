@@ -920,6 +920,9 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<string>("EvidenceAttachmentUrl")
                         .HasColumnType("text");
 
+                    b.Property<DateOnly?>("DueDate")
+                        .HasColumnType("date");
+
                     b.Property<DateTime>("ExpenseDate")
                         .HasColumnType("timestamp without time zone");
 
@@ -973,6 +976,7 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(50)");
 
                     b.Property<int>("Status")
+                        .IsConcurrencyToken()
                         .HasColumnType("integer");
 
                     b.Property<string>("SuspiciousReason")
@@ -1003,6 +1007,9 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.HasIndex("TenantId", "Status");
 
                     b.HasIndex("TenantId", "BranchId", "ExpenseDate");
+
+                    b.HasIndex("DueDate")
+                        .HasFilter("\"DueDate\" IS NOT NULL AND \"IsDeleted\" = false");
 
                     b.ToTable("ExpenseVouchers", (string)null);
                 });
@@ -3344,6 +3351,7 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<string>("Status")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
+                        .IsConcurrencyToken()
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)")
                         .HasDefaultValue("Draft");
@@ -5034,11 +5042,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .HasColumnType("decimal(18,2)")
                         .HasDefaultValue(0.00m);
 
-                    b.Property<decimal>("FreightFee")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(18,2)")
-                        .HasDefaultValue(0.00m);
-
                     b.Property<decimal>("GrandTotal")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(18,2)")
@@ -5183,18 +5186,13 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("ExpiryDate")
                         .HasColumnType("timestamp without time zone");
 
-                    b.Property<decimal>("FreightAllocated")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(18,2)")
-                        .HasDefaultValue(0.00m);
-
                     b.Property<Guid>("GoodsReceiptId")
                         .HasColumnType("uuid");
 
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("boolean");
 
-                    b.Property<decimal>("LandedUnitCost")
+                    b.Property<decimal>("PurchaseUnitCost")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("decimal(18,2)")
                         .HasDefaultValue(0.00m);
@@ -5309,9 +5307,6 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTime?>("DeliveryDate")
                         .HasColumnType("timestamp without time zone");
-
-                    b.Property<Guid?>("DispatchBatchId")
-                        .HasColumnType("uuid");
 
                     b.Property<Guid?>("DispatchPackageId")
                         .HasColumnType("uuid");
@@ -5431,19 +5426,11 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("UpdatedAt")
                         .HasColumnType("timestamp without time zone");
 
-                    b.Property<DateTime?>("ViewFromDate")
-                        .HasColumnType("timestamp without time zone");
-
-                    b.Property<DateTime?>("ViewToDate")
-                        .HasColumnType("timestamp without time zone");
-
                     b.HasKey("Id");
 
                     b.HasIndex("ApprovedByUserId");
 
                     b.HasIndex("BranchId");
-
-                    b.HasIndex("DispatchBatchId");
 
                     b.HasIndex("DispatchPackageId");
 
@@ -6820,6 +6807,19 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("IdempotencyRecords", (string)null);
+                });
+
+            modelBuilder.Entity("MT_GRMS.Domain.Entities.Finance.TaxFilingConfirmation", b =>
+                {
+                    b.Property<Guid>("SnapshotId").HasColumnType("uuid");
+                    b.Property<DateTime>("ConfirmedAtUtc").HasColumnType("timestamp without time zone");
+                    b.Property<string>("ConfirmedBy").IsRequired().HasMaxLength(64).HasColumnType("character varying(64)");
+                    b.Property<string>("TenantId").IsRequired().HasMaxLength(50).HasColumnType("character varying(50)");
+                    b.HasKey("SnapshotId");
+                    b.ToTable("TaxFilingConfirmations", (string)null);
+                    b.HasOne("MT_GRMS.Domain.Entities.Finance.HouseholdTaxSnapshot", null)
+                        .WithOne().HasForeignKey("MT_GRMS.Domain.Entities.Finance.TaxFilingConfirmation", "SnapshotId")
+                        .OnDelete(DeleteBehavior.Cascade).IsRequired();
                 });
 
             modelBuilder.Entity("MT_GRMS.Domain.Entities.System.Notification", b =>

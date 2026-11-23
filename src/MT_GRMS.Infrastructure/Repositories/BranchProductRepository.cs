@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Inventory;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
@@ -197,13 +198,16 @@ public class BranchProductRepository : IBranchProductRepository
             var allRows = await projected.ToListAsync(cancellationToken);
             var ids = allRows.Select(x => x.ProductId).Distinct().ToList();
             var branchIds = allRows.Select(x => x.BranchId).Distinct().ToList();
+            var todayForFilter = DateTime.UtcNow.Date;
             var qtyRows = await _context.BranchStocks
                 .AsNoTracking()
-                .Where(bs => branchIds.Contains(bs.BranchId) && ids.Contains(bs.ProductId))
-                .GroupBy(bs => new { bs.BranchId, bs.ProductId })
-                .Select(g => new { g.Key.BranchId, g.Key.ProductId, Qty = g.Sum(x => x.QuantityOnHand) })
+                .Where(bs => branchIds.Contains(bs.BranchId) && ids.Contains(bs.ProductId) && !bs.IsDeleted)
                 .ToListAsync(cancellationToken);
-            var qtyLookup = qtyRows.ToDictionary(x => (x.BranchId, x.ProductId), x => x.Qty);
+            var qtyLookup = qtyRows
+                .GroupBy(bs => (bs.BranchId, bs.ProductId))
+                .ToDictionary(
+                    g => g.Key,
+                    g => g.Sum(bs => BranchStockAvailability.GetSellableAvailable(bs, todayForFilter)));
 
             var filtered = allRows.Where(x =>
             {
@@ -253,13 +257,18 @@ public class BranchProductRepository : IBranchProductRepository
         var pagedProductIds = pagedData.Select(x => x.ProductId).Distinct().ToList();
         var pagedBranchIds = pagedData.Select(x => x.BranchId).Distinct().ToList();
 
-        var stockQtys = await _context.BranchStocks
+        var today = DateTime.UtcNow.Date;
+        var stockRows = await _context.BranchStocks
             .AsNoTracking()
-            .Where(bs => pagedBranchIds.Contains(bs.BranchId) && pagedProductIds.Contains(bs.ProductId))
-            .GroupBy(bs => new { bs.BranchId, bs.ProductId })
-            .Select(g => new { g.Key.BranchId, g.Key.ProductId, Qty = g.Sum(x => x.QuantityOnHand) })
+            .Where(bs => pagedBranchIds.Contains(bs.BranchId)
+                && pagedProductIds.Contains(bs.ProductId)
+                && !bs.IsDeleted)
             .ToListAsync(cancellationToken);
-        var stockLookup = stockQtys.ToDictionary(x => (x.BranchId, x.ProductId), x => x.Qty);
+        var stockLookup = stockRows
+            .GroupBy(bs => (bs.BranchId, bs.ProductId))
+            .ToDictionary(
+                g => g.Key,
+                g => g.Sum(bs => BranchStockAvailability.GetSellableAvailable(bs, today)));
 
         // NCC Active đang phục vụ từng chi nhánh trên trang → 1 BranchProduct có thể nhiều dòng nguồn nhập.
         var branchSupplierLinks = await _context.SupplierBranchAssignments
@@ -379,11 +388,15 @@ public class BranchProductRepository : IBranchProductRepository
                     : 0;
                 var hasSource = sp != null;
 
-                // Đơn vị nhập: DeliveryUoM (SupplierProduct) → IsPurchaseUnit → BaseUnit (giống màn NCC)
-                var inboundUnit = ResolveInboundUnit(
+                // Đơn vị nhập + rate: DeliveryUoM → IsPurchaseUnit → BaseUnit (giống màn Lô / NCC)
+                var stockUnitName = string.IsNullOrWhiteSpace(extra?.BaseUnit)
+                    ? (string.IsNullOrWhiteSpace(x.Unit) ? "Cái" : x.Unit.Trim())
+                    : extra!.BaseUnit.Trim();
+                var (inboundUnit, purchaseToStockRate) = ResolveInboundUnitAndRate(
                     deliveryUoM: sp?.DeliveryUoM,
                     purchaseUnitName: catalogPurchaseUnitName,
-                    baseUnitName: extra?.BaseUnit ?? x.Unit);
+                    baseUnitName: stockUnitName,
+                    units: extra?.Units.Select(u => (u.UnitName, u.ConversionRate, u.IsPurchaseUnit)));
 
                 return new BranchProductDto
                 {
@@ -397,6 +410,8 @@ public class BranchProductRepository : IBranchProductRepository
                     Barcode = x.Barcode ?? string.Empty,
                     Category = x.CategoryName,
                     Unit = inboundUnit,
+                    StockUnit = stockUnitName,
+                    PurchaseToStockRate = purchaseToStockRate,
                     ImageUrl = extra?.ImageUrl,
                     RetailPrice = x.RetailPrice,
                     CostPrice = cost,
@@ -445,11 +460,39 @@ public class BranchProductRepository : IBranchProductRepository
         string? purchaseUnitName,
         string? baseUnitName)
     {
+        return ResolveInboundUnitAndRate(deliveryUoM, purchaseUnitName, baseUnitName, null).Name;
+    }
+
+    /// <summary>
+    /// ĐVT nhập + hệ số quy đổi 1 ĐVT nhập = N ĐVT tồn (giống BatchRepository).
+    /// </summary>
+    private static (string Name, decimal Rate) ResolveInboundUnitAndRate(
+        string? deliveryUoM,
+        string? purchaseUnitName,
+        string? baseUnitName,
+        IEnumerable<(string UnitName, decimal ConversionRate, bool IsPurchaseUnit)>? units)
+    {
+        var stockUnit = string.IsNullOrWhiteSpace(baseUnitName) ? "Cái" : baseUnitName.Trim();
+        var unitList = units?.ToList() ?? [];
+        var purchase = unitList.FirstOrDefault(u => u.IsPurchaseUnit);
+
+        string inboundName;
         if (!string.IsNullOrWhiteSpace(deliveryUoM))
-            return deliveryUoM.Trim();
-        if (!string.IsNullOrWhiteSpace(purchaseUnitName))
-            return purchaseUnitName.Trim();
-        return string.IsNullOrWhiteSpace(baseUnitName) ? "Cái" : baseUnitName.Trim();
+            inboundName = deliveryUoM.Trim();
+        else if (!string.IsNullOrWhiteSpace(purchase.UnitName))
+            inboundName = purchase.UnitName.Trim();
+        else if (!string.IsNullOrWhiteSpace(purchaseUnitName))
+            inboundName = purchaseUnitName.Trim();
+        else
+            inboundName = stockUnit;
+
+        var matched = unitList.FirstOrDefault(u =>
+            string.Equals((u.UnitName ?? string.Empty).Trim(), inboundName, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(matched.UnitName) && matched.ConversionRate > 0)
+            return (inboundName, matched.ConversionRate);
+        if (!string.IsNullOrWhiteSpace(purchase.UnitName) && purchase.ConversionRate > 0)
+            return (inboundName, purchase.ConversionRate);
+        return (inboundName, 1m);
     }
 
     /// <summary>

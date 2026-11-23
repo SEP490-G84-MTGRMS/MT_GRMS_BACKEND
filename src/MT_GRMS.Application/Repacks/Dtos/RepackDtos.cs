@@ -8,7 +8,8 @@ public record PackageLineRequest(
     decimal SellingPrice,
     DateTime? ExpiryDate = null,
     string? Barcode = null,
-    DateTime? ManufactureDate = null
+    DateTime? ManufactureDate = null,
+    string? Name = null
 );
 
 public record CreateRepackOrderRequest(
@@ -28,6 +29,7 @@ public record PackageDto(
     Guid ProductId,
     Guid BranchId,
     string InternalCode,
+    string? Name,
     string? Barcode,
     decimal NetWeight,
     decimal SellingPrice,
@@ -41,6 +43,8 @@ public record PackageDto(
     DateTime? SoldAt,
     DateTime CreatedAt
 );
+
+public record PackageScanDto(PackageDto Package, string ProductName, string BatchCode, DateTime? BatchExpiryDate);
 
 public record RepackOrderDto(
     Guid Id,

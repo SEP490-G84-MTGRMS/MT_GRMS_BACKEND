@@ -10,6 +10,7 @@ using ClosedXML.Excel;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
@@ -33,6 +34,7 @@ using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 using MT_GRMS.Infrastructure.Persistence;
 using MT_GRMS.Infrastructure.Services;
+using MT_GRMS.UnitTests.Controllers;
 
 namespace MT_GRMS.UnitTests;
 
@@ -160,6 +162,10 @@ public class ControllerAndExcelBranchCoverageTests
             IsTwoFactorEnabled = false
         };
         userNormal.PasswordHash = hasher.HashPassword("StrongPass123!");
+        userNormal.TenantUsers.Add(new TenantUser
+        {
+            UserId = userNormal.Id, TenantId = "auth-test-tenant", Role = SystemRoles.StoreOwner
+        });
         await userRepo.AddAsync(userNormal);
 
         // 1. SendLoginOtpAsync for normal user immediately returns session without OTP
@@ -287,16 +293,17 @@ public class ControllerAndExcelBranchCoverageTests
         mockPlanService.Setup(p => p.GetPlansAsync(It.IsAny<PlanFilterRequest>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(new List<PlanSummaryResponse>());
 
-        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext);
+        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext, new TenantSubscriptionService(dbContext));
 
         var result = await controller.GetPricingPlans(CancellationToken.None);
         var okResult = Assert.IsType<OkObjectResult>(result);
         var apiRes = Assert.IsType<ApiResponse<IReadOnlyList<PlanSummaryResponse>>>(okResult.Value);
 
-        Assert.Equal(3, apiRes.Data.Count);
-        Assert.Contains(apiRes.Data, p => p.Code == "TRIAL");
-        Assert.Contains(apiRes.Data, p => p.Code == "STANDARD");
-        Assert.Contains(apiRes.Data, p => p.Code == "PRO");
+        var plans = Assert.IsAssignableFrom<IReadOnlyList<PlanSummaryResponse>>(apiRes.Data);
+        Assert.Equal(3, plans.Count);
+        Assert.Contains(plans, p => p.Code == "TRIAL");
+        Assert.Contains(plans, p => p.Code == "STANDARD");
+        Assert.Contains(plans, p => p.Code == "PRO");
     }
 
     [Fact]
@@ -313,7 +320,7 @@ public class ControllerAndExcelBranchCoverageTests
 
         var mockTenantService = new Mock<ITenantService>();
         var mockPlanService = new Mock<ISubscriptionPlanService>();
-        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext);
+        var controller = new TenantStoreController(mockTenantService.Object, mockPlanService.Object, dbContext, new TenantSubscriptionService(dbContext));
 
         // Helper to set ControllerContext with claims
         void SetUser(string? tId, string? uId)
@@ -410,6 +417,7 @@ public class ControllerAndExcelBranchCoverageTests
 
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(databaseName: $"PaymentsConfigDb_{Guid.NewGuid()}")
+            .ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning))
             .Options;
         using var dbContext = new AppDbContext(options, tenantContext);
 
@@ -417,10 +425,10 @@ public class ControllerAndExcelBranchCoverageTests
         var mockConfig = new Mock<IConfiguration>();
         var mockLogger = new Mock<ILogger<PaymentsController>>();
 
-        var controller = new PaymentsController(dbContext, mockFactory.Object, mockConfig.Object, mockLogger.Object, tenantContext);
+        var controller = PaymentTestSupport.CreateController(dbContext, mockFactory.Object, mockConfig.Object, mockLogger.Object, tenantContext);
         var claims = new List<Claim>
         {
-            new(ClaimTypes.Role, RoleConstants.StoreOwner),
+            new(ClaimTypes.Role, SystemRoles.StoreOwner),
             new("tenant_id", tenantId)
         };
         controller.ControllerContext = new ControllerContext
@@ -428,20 +436,8 @@ public class ControllerAndExcelBranchCoverageTests
             HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity(claims, "TestAuth")) }
         };
 
-        // Seed existing StorePaymentConfig with PLAINTEXT API Key and null WebhookSecret
-        var existingConfig = new StorePaymentConfig
-        {
-            Id = Guid.NewGuid(),
-            TenantId = tenantId,
-            BankCode = "MB",
-            BankName = "MBBank",
-            BankAccountNumber = "1234567890",
-            BankAccountName = "NGUYEN VAN A",
-            SepayApiKeyEncrypted = "raw-sepay-api-key-plaintext-12345", // not starting with AES256:
-            SepayWebhookSecret = "", // empty -> triggers GenerateWebhookSecret()
-            IsActive = true
-        };
-        dbContext.StorePaymentConfigs.Add(existingConfig);
+        PaymentTestSupport.AddTenant(dbContext, tenantId, enabled: true, apiKey: "old-test-sepay-key");
+        var oldBank = PaymentTestSupport.AddBank(dbContext, tenantId, "1234567890");
         await dbContext.SaveChangesAsync();
 
         var request = new SavePaymentConfigRequest
@@ -450,7 +446,8 @@ public class ControllerAndExcelBranchCoverageTests
             BankName = "Vietcombank",
             BankAccountNumber = "9876543210",
             BankAccountName = "NGUYEN VAN B",
-            SepayApiKey = null, // not providing new key -> triggers plaintext upgrade
+            BranchIds = [oldBank.BranchId!.Value],
+            SepayApiKey = "replacement-test-sepay-key",
             CashOutApprovalThreshold = 500000m,
             CashOutShiftTotalLimit = 2000000m,
             IsActive = true
@@ -460,17 +457,18 @@ public class ControllerAndExcelBranchCoverageTests
         Assert.IsType<OkObjectResult>(result);
 
         // Verify config was encrypted and updated
-        var updated = await dbContext.StorePaymentConfigs.FirstOrDefaultAsync(c => c.TenantId == tenantId);
-        Assert.NotNull(updated);
+        var updated = await dbContext.Tenants.SingleAsync(c => c.Id == tenantId);
         Assert.StartsWith("AES256:", updated.SepayApiKeyEncrypted);
+        Assert.DoesNotContain(request.SepayApiKey, updated.SepayApiKeyEncrypted);
         Assert.NotEmpty(updated.SepayWebhookSecret);
         Assert.Equal(500000m, updated.CashOutApprovalThreshold);
         Assert.Equal(2000000m, updated.CashOutShiftTotalLimit);
 
-        // Verify new PaymentAccount created for the new bank/account
-        var paymentAccount = await dbContext.PaymentAccounts.FirstOrDefaultAsync(p => p.TenantId == tenantId && p.BankCode == "VCB");
-        Assert.NotNull(paymentAccount);
+        var paymentAccount = await dbContext.FinanceAccounts.SingleAsync(p => p.TenantId == tenantId && p.BankCode == "VCB");
         Assert.Equal("9876543210", paymentAccount.AccountNumber);
+        var branch = await dbContext.Branches.SingleAsync(b => b.Id == oldBank.BranchId);
+        Assert.Equal(paymentAccount.Id, branch.CurrentBankFinanceAccountId);
+        Assert.Equal("1234567890", oldBank.AccountNumber);
     }
 
     // =========================================================================

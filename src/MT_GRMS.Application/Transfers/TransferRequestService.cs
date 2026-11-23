@@ -1,4 +1,6 @@
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.Inventory;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
@@ -18,7 +20,9 @@ public sealed class TransferRequestService(
     IRepository<Branch> branches,
     ITransferService transferService,
     ITenantContext tenant,
-    IUnitOfWork unitOfWork) : ITransferRequestService
+    IUnitOfWork unitOfWork,
+    NotificationOutbox? notificationOutbox = null,
+    IRepository<Package>? packages = null) : ITransferRequestService
 {
     private sealed record Allocation(Guid BranchId, BranchStock Stock, Product Product, decimal Quantity, string Unit);
 
@@ -112,6 +116,7 @@ public sealed class TransferRequestService(
                         SentQuantity = item.Quantity,
                         PackagingUnit = item.Unit,
                         BatchNumber = item.Stock.BatchCode,
+                        BranchStockId = item.Stock.Id,
                         ExpiryDate = item.Stock.ExpiryDate,
                         UnitPrice = item.Stock.LandedCostPerUnit,
                         Amount = item.Quantity * item.Stock.LandedCostPerUnit,
@@ -136,6 +141,9 @@ public sealed class TransferRequestService(
                     Reason = request.Note?.Trim(),
                     CreatedBy = tenant.CurrentUserId
                 }, ct);
+                if (notificationOutbox != null)
+                    await notificationOutbox.EnqueueTransferAsync(transfer, BusinessNotificationTypes.TransferDispatchRequired,
+                        "Phiếu điều chuyển chờ xuất kho", transfer.FromBranchId, false, ct);
             }
 
             await unitOfWork.SaveChangesAsync(ct);
@@ -215,9 +223,12 @@ public sealed class TransferRequestService(
         {
             var product = await products.GetByIdAsync(input.ProductId, ct) ?? throw new KeyNotFoundException("Không tìm thấy sản phẩm.");
             if (product.TenantId != tenant.CurrentTenantId) throw new KeyNotFoundException("Không tìm thấy sản phẩm.");
+            var packageWeights = packages == null ? new Dictionary<Guid, decimal>() : (await packages.FindAsync(p => p.TenantId == tenant.CurrentTenantId
+                && p.ProductId == input.ProductId && !p.IsDeleted && (p.Status == "AVAILABLE" || p.Status == "QUARANTINED"), ct))
+                .GroupBy(p => p.BranchStockId).ToDictionary(g => g.Key, g => g.Sum(p => p.NetWeight));
             var candidates = (await stocks.FindAsync(x => x.TenantId == tenant.CurrentTenantId && x.ProductId == input.ProductId && x.BranchId != request.ToBranchId, ct))
                 .Where(x => activeBranches.ContainsKey(x.BranchId) && (!x.ExpiryDate.HasValue || x.ExpiryDate.Value.Date >= DateTime.UtcNow.Date))
-                .Select(x => new { Stock = x, Available = Math.Max(0, x.QuantityOnHand - x.QuantityReserved - x.QuantityQuarantined) })
+                .Select(x => new { Stock = x, Available = BranchStockAvailability.GetRawSellableKg(x, packageWeights.GetValueOrDefault(x.Id)) })
                 .Where(x => x.Available > 0)
                 .GroupBy(x => x.Stock.BranchId)
                 .OrderByDescending(group => group.Sum(x => x.Available))

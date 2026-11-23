@@ -65,6 +65,7 @@ public record InventoryStockItemDto(
     decimal DamagedQty,
     decimal QuarantinedQty,
     decimal ReservedQty,
+    decimal OnOrderQty,
     decimal MinStock,
     decimal AvgCost,
     decimal TotalValue,
@@ -78,7 +79,8 @@ public record InventoryKpiSummaryDto(
     decimal TotalValue,
     int LowStockCount,
     int OutOfStockCount,
-    int ExpiryWarningCount
+    int ExpiryWarningCount,
+    decimal TotalOnOrder
 );
 
 public record InventoryPagedResultDto(

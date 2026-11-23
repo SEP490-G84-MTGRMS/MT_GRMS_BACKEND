@@ -191,7 +191,6 @@ public class GoodsReceiptService : IGoodsReceiptService
             InvoiceNo = command.InvoiceNo,
             ReceivedAtUtc = command.ReceivedAtUtc ?? DateTime.UtcNow,
             ReceiverUserId = actorUserId,
-            FreightFee = command.FreightFee,
             DiscountAmount = command.DiscountAmount,
             VatPercent = command.VatPercent,
             PaymentMethod = command.PaymentMethod,
@@ -209,7 +208,7 @@ public class GoodsReceiptService : IGoodsReceiptService
         }
 
         receipt.SubTotal = subTotal;
-        var baseAmount = subTotal - command.DiscountAmount + command.FreightFee;
+        var baseAmount = subTotal - command.DiscountAmount;
         receipt.VatAmount = Math.Round(Math.Max(0, baseAmount) * (command.VatPercent / 100m), 2);
         receipt.GrandTotal = Math.Max(0, baseAmount) + receipt.VatAmount;
 
@@ -287,15 +286,13 @@ public class GoodsReceiptService : IGoodsReceiptService
                 }
             }
 
-            // Phân bổ chi phí Landed cost
+            // Giá vốn nhập theo giá mua đã chốt; VAT/discount chỉ phục vụ tổng tiền chứng từ.
             var lineAmount = l.AcceptedQty * l.UnitPrice;
             var weight = subTotal > 0 ? (lineAmount / subTotal) : 0;
-            var freightAlloc = Math.Round(command.FreightFee * weight, 2);
             var discountAlloc = Math.Round(command.DiscountAmount * weight, 2);
-            var landedSubtotal = lineAmount - discountAlloc + freightAlloc;
-            var vatAlloc = Math.Round(landedSubtotal * (command.VatPercent / 100m), 2);
-            var landedTotal = landedSubtotal + vatAlloc;
-            var landedUnitCost = l.AcceptedQty > 0 ? Math.Round(landedTotal / l.AcceptedQty, 2) : l.UnitPrice;
+            var purchaseSubtotal = lineAmount - discountAlloc;
+            var vatAlloc = Math.Round(purchaseSubtotal * (command.VatPercent / 100m), 2);
+            var purchaseUnitCost = l.UnitPrice;
 
             var shouldManageBatch = l.ManageBatch || !string.IsNullOrWhiteSpace(l.BatchCode) || l.ExpiryDate.HasValue || l.ManufactureDate.HasValue;
 
@@ -315,10 +312,9 @@ public class GoodsReceiptService : IGoodsReceiptService
                 BatchCode = shouldManageBatch && !string.IsNullOrWhiteSpace(l.BatchCode) ? l.BatchCode.Trim() : null,
                 ManufactureDate = shouldManageBatch ? l.ManufactureDate : null,
                 ExpiryDate = shouldManageBatch ? l.ExpiryDate : null,
-                FreightAllocated = freightAlloc,
                 DiscountAllocated = discountAlloc,
                 VatAllocated = vatAlloc,
-                LandedUnitCost = landedUnitCost,
+                PurchaseUnitCost = purchaseUnitCost,
                 QualityStatus = rejectedQty > 0 ? "PARTIAL_REJECT" : "ACCEPTED",
                 RejectionReason = l.RejectionReason,
                 Note = string.IsNullOrWhiteSpace(l.RejectionNote) ? l.Note : $"{l.RejectionNote} | {l.Note}",
@@ -389,7 +385,6 @@ public class GoodsReceiptService : IGoodsReceiptService
         }
 
         receipt.InvoiceNo = command.InvoiceNo;
-        receipt.FreightFee = command.FreightFee;
         receipt.DiscountAmount = command.DiscountAmount;
         receipt.VatPercent = command.VatPercent;
         receipt.PaymentMethod = command.PaymentMethod;
@@ -409,7 +404,7 @@ public class GoodsReceiptService : IGoodsReceiptService
         }
 
         receipt.SubTotal = subTotal;
-        var baseAmount = subTotal - command.DiscountAmount + command.FreightFee;
+        var baseAmount = subTotal - command.DiscountAmount;
         receipt.VatAmount = Math.Round(Math.Max(0, baseAmount) * (command.VatPercent / 100m), 2);
         receipt.GrandTotal = Math.Max(0, baseAmount) + receipt.VatAmount;
 
@@ -454,12 +449,10 @@ public class GoodsReceiptService : IGoodsReceiptService
 
             var lineAmount = l.AcceptedQty * l.UnitPrice;
             var weight = subTotal > 0 ? (lineAmount / subTotal) : 0;
-            var freightAlloc = Math.Round(command.FreightFee * weight, 2);
             var discountAlloc = Math.Round(command.DiscountAmount * weight, 2);
-            var landedSubtotal = lineAmount - discountAlloc + freightAlloc;
-            var vatAlloc = Math.Round(landedSubtotal * (command.VatPercent / 100m), 2);
-            var landedTotal = landedSubtotal + vatAlloc;
-            var landedUnitCost = l.AcceptedQty > 0 ? Math.Round(landedTotal / l.AcceptedQty, 2) : l.UnitPrice;
+            var purchaseSubtotal = lineAmount - discountAlloc;
+            var vatAlloc = Math.Round(purchaseSubtotal * (command.VatPercent / 100m), 2);
+            var purchaseUnitCost = l.UnitPrice;
 
             receipt.Lines.Add(new GoodsReceiptLine
             {
@@ -477,10 +470,9 @@ public class GoodsReceiptService : IGoodsReceiptService
                 BatchCode = l.ManageBatch && !string.IsNullOrWhiteSpace(l.BatchCode) ? l.BatchCode.Trim() : null,
                 ManufactureDate = l.ManageBatch ? l.ManufactureDate : null,
                 ExpiryDate = l.ManageBatch ? l.ExpiryDate : null,
-                FreightAllocated = freightAlloc,
                 DiscountAllocated = discountAlloc,
                 VatAllocated = vatAlloc,
-                LandedUnitCost = landedUnitCost,
+                PurchaseUnitCost = purchaseUnitCost,
                 QualityStatus = rejectedQty > 0 ? "PARTIAL_REJECT" : "ACCEPTED",
                 RejectionReason = l.RejectionReason,
                 Note = string.IsNullOrWhiteSpace(l.RejectionNote) ? l.Note : $"{l.RejectionNote} | {l.Note}",
@@ -833,7 +825,8 @@ public class GoodsReceiptService : IGoodsReceiptService
         if (isExchangePo)
             await EnsureExchangeIncomingBatchesAreDistinctAsync(tenantId, po!, receipt, productFlags, cancellationToken);
 
-        // 1. Cập nhật tồn kho chi nhánh BranchStocks, tạo lô FEFO (ProductBatch) và tính giá vốn bình quân gia quyền (MovingAverageCost)
+        // 1. Cộng tồn BranchStocks theo SL nhận.
+        // Không cập nhật Products.CostPrice — giá nhập cố định ở quan hệ sản phẩm–NCC, không thuộc nhiệm vụ phiếu nhập kho.
         foreach (var line in receipt.Lines.Where(l => l.AcceptedQty > 0))
         {
             var hasBatches = productFlags != null && productFlags.TryGetValue(line.ProductId, out var flag)
@@ -851,7 +844,6 @@ public class GoodsReceiptService : IGoodsReceiptService
                 line.BatchCode = string.IsNullOrWhiteSpace(line.BatchCode) ? null : line.BatchCode.Trim();
             }
 
-            var existingTotalStock = await _repository.GetTotalProductStockAsync(tenantId, line.ProductId, cancellationToken);
             var product = line.Product ?? await _repository.GetProductByIdAsync(tenantId, line.ProductId, cancellationToken);
             var pod = line.PurchaseOrderDetailId.HasValue && po != null
                 ? po.Details.FirstOrDefault(d => d.Id == line.PurchaseOrderDetailId.Value)
@@ -863,27 +855,9 @@ public class GoodsReceiptService : IGoodsReceiptService
                 pod?.DeliveryUoM,
                 pod?.PurchaseUnitNameSnapshot);
             var stockQtyDelta = Math.Round(line.AcceptedQty * purchaseToStockRate, 3);
-            var landedCostPerStockUnit = purchaseToStockRate > 0
-                ? Math.Round(line.LandedUnitCost / purchaseToStockRate, 4)
-                : line.LandedUnitCost;
-
-            // Tính MovingAverageCost theo đơn vị tồn (base)
-            if (product != null)
-            {
-                var oldCost = product.CostPrice ?? landedCostPerStockUnit;
-                var totalNewQty = existingTotalStock + stockQtyDelta;
-                if (totalNewQty > 0)
-                {
-                    product.CostPrice = Math.Round(
-                        ((existingTotalStock * oldCost) + (stockQtyDelta * landedCostPerStockUnit)) / totalNewQty,
-                        2);
-                }
-                else
-                {
-                    product.CostPrice = landedCostPerStockUnit;
-                }
-                product.UpdatedAt = DateTime.UtcNow;
-            }
+            var purchaseCostPerStockUnit = purchaseToStockRate > 0
+                ? Math.Round(line.PurchaseUnitCost / purchaseToStockRate, 4)
+                : line.PurchaseUnitCost;
 
             var stock = await _repository.GetBranchStockAsync(
                 tenantId,
@@ -897,8 +871,8 @@ public class GoodsReceiptService : IGoodsReceiptService
                 var prevQty = Math.Max(0, stock.QuantityOnHand);
                 var nextQty = prevQty + stockQtyDelta;
                 stock.LandedCostPerUnit = nextQty > 0
-                    ? Math.Round(((prevQty * stock.LandedCostPerUnit) + (stockQtyDelta * landedCostPerStockUnit)) / nextQty, 4)
-                    : landedCostPerStockUnit;
+                    ? Math.Round(((prevQty * stock.LandedCostPerUnit) + (stockQtyDelta * purchaseCostPerStockUnit)) / nextQty, 4)
+                    : purchaseCostPerStockUnit;
                 stock.QuantityOnHand = nextQty;
                 if (!hasBatches)
                 {
@@ -928,7 +902,7 @@ public class GoodsReceiptService : IGoodsReceiptService
                     ExpiryDate = hasBatches ? line.ExpiryDate : null,
                     QuantityOnHand = stockQtyDelta,
                     QuantityReserved = 0,
-                    LandedCostPerUnit = landedCostPerStockUnit,
+                    LandedCostPerUnit = purchaseCostPerStockUnit,
                     CreatedAt = DateTime.UtcNow
                 };
                 await _repository.AddBranchStockAsync(newStock, cancellationToken);
@@ -1201,7 +1175,6 @@ public class GoodsReceiptService : IGoodsReceiptService
             CancelledAtUtc = gr.RejectedAtUtc,
             CancellationReason = gr.RejectionReason,
             SubTotal = gr.SubTotal,
-            FreightFee = gr.FreightFee,
             DiscountAmount = gr.DiscountAmount,
             VatPercent = gr.VatPercent,
             VatAmount = gr.VatAmount,
@@ -1236,10 +1209,9 @@ public class GoodsReceiptService : IGoodsReceiptService
                 BatchCode = l.BatchCode,
                 ManufactureDate = l.ManufactureDate,
                 ExpiryDate = l.ExpiryDate,
-                FreightAllocated = l.FreightAllocated,
                 DiscountAllocated = l.DiscountAllocated,
                 VatAllocated = l.VatAllocated,
-                LandedUnitCost = l.LandedUnitCost,
+                PurchaseUnitCost = l.PurchaseUnitCost,
                 QualityStatus = l.QualityStatus,
                 RejectionReason = l.RejectionReason,
                 Note = l.Note
@@ -1387,14 +1359,17 @@ public class GoodsReceiptService : IGoodsReceiptService
 
             retLine.HandedOverQty += deduct;
 
-            var stock = await _repository.GetBranchStockAsync(
-                tenantId, ret.BranchId, retLine.ProductId, retLine.BatchCode, cancellationToken);
-            if (stock != null)
-            {
-                stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - deduct);
-                stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - deduct);
-                stock.UpdatedAt = DateTime.UtcNow;
-            }
+            var stock = retLine.BranchStockId.HasValue
+                ? await _repository.GetBranchStockByIdAsync(tenantId, ret.BranchId, retLine.ProductId, retLine.BranchStockId.Value, cancellationToken)
+                : await _repository.GetBranchStockAsync(tenantId, ret.BranchId, retLine.ProductId, retLine.BatchCode, cancellationToken);
+            if (stock == null || stock.QuantityOnHand < deduct)
+                throw new BusinessException("RTV_EXCHANGE_STOCK_MISSING", "Không tìm thấy đủ tồn lô cũ để ghi giảm khi nhận hàng đổi.");
+            var packageWeight = await _repository.GetActivePackageWeightAsync(tenantId, stock.Id, cancellationToken);
+            if (stock.QuantityOnHand - deduct < packageWeight + stock.QuantityQuarantined + Math.Max(0m, stock.QuantityReserved - deduct))
+                throw new BusinessException("RTV_EXCHANGE_COMMITTED_STOCK", "Nhận hàng đổi sẽ lấy vào lượng khay, cách ly hoặc giữ chỗ khác của lô cũ.");
+            stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - deduct);
+            stock.QuantityOnHand -= deduct;
+            stock.UpdatedAt = DateTime.UtcNow;
         }
 
         ret.TotalHandedOverQty = ret.Lines.Sum(l => l.HandedOverQty);

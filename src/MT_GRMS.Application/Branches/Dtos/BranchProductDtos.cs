@@ -26,10 +26,16 @@ public class BranchProductDto
     public string Sku { get; set; } = string.Empty;
     public string Barcode { get; set; } = string.Empty;
     public string Category { get; set; } = string.Empty;
+    /// <summary>ĐVT nhập (DeliveryUoM / purchase) — dùng hiển thị tồn giống màn Lô.</summary>
     public string Unit { get; set; } = string.Empty;
+    /// <summary>ĐVT tồn gốc (Product.BaseUnit) — QuantityOnHand / CurrentStock theo đơn vị này.</summary>
+    public string StockUnit { get; set; } = string.Empty;
+    /// <summary>1 ĐVT nhập = bao nhiêu ĐVT tồn (base). Mặc định 1.</summary>
+    public decimal PurchaseToStockRate { get; set; } = 1m;
     public string? ImageUrl { get; set; }
     public decimal RetailPrice { get; set; }
     public decimal CostPrice { get; set; }
+    /// <summary>Tồn khả dụng bán (RULE-01) theo ĐVT tồn gốc — chỉ cộng lô còn hạn.</summary>
     public decimal CurrentStock { get; set; }
     public decimal MinStockLevel { get; set; }
     public Guid? SupplierId { get; set; }

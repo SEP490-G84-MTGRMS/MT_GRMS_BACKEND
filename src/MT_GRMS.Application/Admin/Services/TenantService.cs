@@ -1,3 +1,5 @@
+using MT_GRMS.Application.Admin.Validators;
+using MT_GRMS.Domain.Exceptions;
 using MT_GRMS.Application.Admin.Dtos;
 using MT_GRMS.Application.Admin.Repositories;
 using MT_GRMS.Application.Common;
@@ -113,7 +115,9 @@ public class TenantService : ITenantService
             Branches: new List<TenantDetailBranchSummaryDto>(),
             CreatedAt: t.CreatedAt,
             UpdatedAt: t.UpdatedAt,
-            WalletBalance: t.WalletBalance
+            WalletBalance: t.WalletBalance,
+            StaffManagementLocked: Tenant.RequiresStaffManagementAddon(t.CurrentPlan, t.HasStaffManagementAddon),
+            CanPurchaseStaffManagementAddon: t.CanPurchaseStaffManagementAddon(now)
         );
     }
 
@@ -125,10 +129,11 @@ public class TenantService : ITenantService
             throw new KeyNotFoundException($"Không tìm thấy khách thuê với mã định danh '{id}'.");
         }
 
-        if (!string.IsNullOrWhiteSpace(request.Name))
-        {
-            tenant.Name = request.Name.Trim();
-        }
+        var validation = new UpdateStoreInfoRequestValidator().Validate(request);
+        if (!validation.IsValid)
+            throw new BusinessException("VALIDATION_ERROR", validation.Errors[0].ErrorMessage);
+
+        tenant.Name = request.Name.Trim();
         tenant.TaxCode = request.TaxCode?.Trim();
         tenant.Hotline = request.Hotline?.Trim();
         tenant.Address = request.Address?.Trim();

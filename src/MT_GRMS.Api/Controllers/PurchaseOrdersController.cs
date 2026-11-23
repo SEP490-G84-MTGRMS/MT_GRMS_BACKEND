@@ -57,6 +57,16 @@ public class PurchaseOrdersController : BaseApiController
         return Ok(ApiResponse<OrderMatrixResponse>.Ok(result));
     }
 
+    /// <summary>Tính số lượng gợi ý từ doanh số thật, tồn khả dụng và PO đang về.</summary>
+    [HttpPost("matrix/suggestions")]
+    public async Task<IActionResult> GetOrderMatrixSuggestions(
+        [FromBody] OrderMatrixSuggestionQuery query,
+        CancellationToken cancellationToken)
+    {
+        var result = await _poService.GetOrderMatrixSuggestionsAsync(query, cancellationToken);
+        return Ok(ApiResponse<IReadOnlyList<OrderMatrixSuggestionDto>>.Ok(result));
+    }
+
     /// <summary>
     /// Hub chốt đơn với nhà cung cấp — gom từ PurchaseOrders + PurchaseOrderDetails theo Scope (NEAREST / WEEK / ALL)
     /// </summary>

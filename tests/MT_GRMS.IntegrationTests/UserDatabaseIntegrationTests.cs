@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Entities.SaaS;
@@ -203,12 +205,50 @@ public class UserDatabaseIntegrationTests
     }
 
     [Fact]
+    public async Task RegisterStoreOwner_WithExistingSession_UsesNewTenantForBranchAndCatalog()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+        var session = new TenantContext();
+        session.SetContext("existing-store", Guid.NewGuid(), null);
+        session.SetRole("STORE_OWNER");
+        using var context = new AppDbContext(options, session);
+        context.MasterProducts.Add(new MasterProduct { Name = "Gạo", BaseUnit = "Kg", IsActive = true });
+        await context.SaveChangesAsync();
+
+        var tenant = new Tenant { Id = "new-store", Name = "Cửa hàng mới", Code = "NEW" };
+        var branch = new Branch { TenantId = tenant.Id, BranchCode = "BR-01", Name = "Chi nhánh chính", IsHeadquarter = true, IsActive = true };
+        var owner = new User { Id = "new-owner", UserName = "new-owner" };
+        await new UserRepository(context).RegisterStoreOwnerAsync(owner, tenant, branch);
+        context.ChangeTracker.Clear();
+
+        Assert.Empty(await context.Branches.ToListAsync());
+        var savedBranch = await context.Branches.IgnoreQueryFilters().SingleAsync();
+        Assert.Equal(tenant.Id, savedBranch.TenantId);
+        Assert.True(savedBranch.IsHeadquarter);
+        Assert.Equal(tenant.Id, (await context.TenantUsers.IgnoreQueryFilters().SingleAsync()).TenantId);
+        Assert.Equal(tenant.Id, (await context.Products.IgnoreQueryFilters().SingleAsync()).TenantId);
+        Assert.Equal(tenant.Id, (await context.ProductUnits.IgnoreQueryFilters().SingleAsync()).TenantId);
+        Assert.Equal(tenant.Id, (await context.Categories.IgnoreQueryFilters().SingleAsync()).TenantId);
+        var assignment = await context.BranchProducts.IgnoreQueryFilters().SingleAsync();
+        Assert.Equal(tenant.Id, assignment.TenantId);
+        Assert.Equal(savedBranch.Id, assignment.BranchId);
+
+        context.Branches.Add(new Branch { TenantId = tenant.Id, BranchCode = "BR-02", Name = "Chi nhánh khác" });
+        await context.SaveChangesAsync();
+        Assert.Equal("existing-store", (await context.Branches.SingleAsync()).TenantId);
+    }
+
+    [Fact]
     public async Task UserRepository_GetEmployeeBranchIdAsync_Should_Handle_Valid_And_Edge_Cases()
     {
         using var context = CreateDbContext();
         var repo = new UserRepository(context);
 
         var branchId = Guid.NewGuid();
+        var branch = new Branch { Id = branchId, TenantId = "tenant_emp", BranchCode = "BR1", Name = "Main branch", IsActive = true };
+        context.Branches.Add(branch);
         var emp = new Employee
         {
             Id = Guid.NewGuid(),
@@ -237,7 +277,12 @@ public class UserDatabaseIntegrationTests
         var found = await repo.GetEmployeeBranchIdAsync("emp_user_01", "tenant_emp");
         Assert.Equal(branchId, found);
 
+        branch.IsActive = false;
+        await context.SaveChangesAsync();
+        Assert.Null(await repo.GetEmployeeBranchIdAsync("emp_user_01", "tenant_emp"));
+
         // Deleted or inactive employee
+        branch.IsActive = true;
         emp.Status = EmployeeStatus.Inactive;
         await context.SaveChangesAsync();
         var terminated = await repo.GetEmployeeBranchIdAsync("emp_user_01", "tenant_emp");

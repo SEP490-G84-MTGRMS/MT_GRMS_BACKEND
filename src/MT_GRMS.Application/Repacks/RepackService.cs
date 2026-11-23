@@ -80,6 +80,39 @@ public class RepackService : IRepackService
         );
     }
 
+    public async Task<PackageScanDto?> FindSellablePackageByCodeAsync(Guid branchId, string code, CancellationToken ct = default)
+    {
+        if (branchId == Guid.Empty || string.IsNullOrWhiteSpace(code)) return null;
+        var package = await _repository.FindPackageByCodeAsync(RequireTenant(), branchId, code.Trim(), ct);
+        if (package == null || package.Status != "AVAILABLE" ||
+            (package.ExpiryDate.HasValue && package.ExpiryDate.Value.Date < DateTime.UtcNow.Date)) return null;
+        var stock = await _repository.GetBranchStockAsync(package.TenantId, package.BranchStockId, ct);
+        if (stock == null || stock.BranchId != branchId) return null;
+        var product = await _repository.GetProductWithUnitsAsync(package.TenantId, package.ProductId, ct);
+        if (product == null) return null;
+        return new PackageScanDto(MapPackage(package), product.Name, stock.BatchCode ?? string.Empty, stock.ExpiryDate);
+    }
+
+    public async Task<IReadOnlyList<PackageScanDto>> SearchSellablePackagesAsync(
+        Guid branchId, string query, int limit = 20, CancellationToken ct = default)
+    {
+        if (branchId == Guid.Empty || string.IsNullOrWhiteSpace(query))
+        {
+            return Array.Empty<PackageScanDto>();
+        }
+
+        var rows = await _repository.SearchSellablePackagesAsync(
+            RequireTenant(), branchId, query.Trim(), limit, ct);
+
+        return rows
+            .Select(r => new PackageScanDto(
+                MapPackage(r.Package),
+                r.ProductName,
+                r.Stock.BatchCode ?? string.Empty,
+                r.Stock.ExpiryDate))
+            .ToList();
+    }
+
     public async Task<RepackOrderDto> CreateRepackOrderAsync(
         CreateRepackOrderRequest request,
         CancellationToken ct = default)
@@ -245,6 +278,7 @@ public class RepackService : IRepackService
                 ProductId = stock.ProductId,
                 BranchStockId = stock.Id,
                 InternalCode = internalCode,
+                Name = BuildPackageName(product.Name, line.NetWeight),
                 Barcode = string.IsNullOrWhiteSpace(line.Barcode) ? null : line.Barcode.Trim(),
                 NetWeight = line.NetWeight,
                 SellingPrice = autoPrice,
@@ -426,12 +460,32 @@ public class RepackService : IRepackService
         return tenantId;
     }
 
+    /// <summary>Tên khay tự gen: "{Tên SP} {khối lượng} KG|G".</summary>
+    private static string BuildPackageName(string? productName, decimal netWeightKg)
+    {
+        var baseName = string.IsNullOrWhiteSpace(productName) ? "Khay" : productName.Trim();
+        string weightPart;
+        if (netWeightKg > 0m && netWeightKg < 1m)
+        {
+            var grams = Math.Round(netWeightKg * 1000m, 0, MidpointRounding.AwayFromZero);
+            weightPart = $"{grams:0} G";
+        }
+        else
+        {
+            weightPart = $"{netWeightKg.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)} KG";
+        }
+
+        var full = $"{baseName} {weightPart}";
+        return full.Length <= 200 ? full : full[..200];
+    }
+
     private static PackageDto MapPackage(Package p) => new(
         Id: p.Id,
         BranchStockId: p.BranchStockId,
         ProductId: p.ProductId,
         BranchId: p.BranchId,
         InternalCode: p.InternalCode,
+        Name: p.Name,
         Barcode: p.Barcode,
         NetWeight: p.NetWeight,
         SellingPrice: p.SellingPrice,

@@ -103,6 +103,8 @@ public record CreateReceiptRequest(
     string? TaxTreatmentReason = null
 );
 
+public record OwnerSafeDepositRequest(Guid BranchId, decimal Amount, string? Note);
+
 public record CreatePaymentRequest(
     Guid AccountId,
     decimal Amount,

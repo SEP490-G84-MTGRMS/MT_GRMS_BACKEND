@@ -21,6 +21,7 @@ public class StocktakeService : IStocktakeService
     private readonly ISupplierRepository _supplierRepository;
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IRepository<Package>? _packages;
 
     public StocktakeService(
         IStocktakeRepository repository,
@@ -28,7 +29,8 @@ public class StocktakeService : IStocktakeService
         ISupplierReturnRepository supplierReturnRepository,
         ISupplierRepository supplierRepository,
         ITenantContext tenantContext,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        IRepository<Package>? packages = null)
     {
         _repository = repository;
         _supplierReturnService = supplierReturnService;
@@ -36,6 +38,7 @@ public class StocktakeService : IStocktakeService
         _supplierRepository = supplierRepository;
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
+        _packages = packages;
     }
 
     public async Task<PagedResult<StocktakeListItemDto>> GetPagedAsync(
@@ -79,6 +82,8 @@ public class StocktakeService : IStocktakeService
             ? "ALL"
             : (string.IsNullOrWhiteSpace(command.Scope) ? "LOT" : command.Scope.Trim().ToUpperInvariant());
         var reasonType = string.IsNullOrWhiteSpace(command.ReasonType) ? "PERIODIC" : command.ReasonType.Trim().ToUpperInvariant();
+        if (reasonType == "CUSTOMER_RETURN")
+            throw new BusinessException("Phiếu kiểm kê hàng lỗi đổi/trả chỉ được tạo tự động từ giao dịch đổi/trả.");
 
         var stocks = await _repository.GetBranchStocksForScopeAsync(
             tenantId,
@@ -196,6 +201,10 @@ public class StocktakeService : IStocktakeService
         if (entity.Status != "DRAFT" && entity.Status != "NEEDS_RECOUNT")
             throw new BusinessException($"Chỉ được sửa phiếu kiểm kê ở trạng thái DRAFT hoặc NEEDS_RECOUNT (hiện tại: {entity.Status}).");
 
+        if (entity.ReasonType == "CUSTOMER_RETURN" && !string.IsNullOrWhiteSpace(command.ReasonType) &&
+            !string.Equals(command.ReasonType.Trim(), "CUSTOMER_RETURN", StringComparison.OrdinalIgnoreCase))
+            throw new BusinessException("Không thể đổi loại phiếu kiểm kê phát sinh từ hàng lỗi đổi/trả.");
+
         if (!string.IsNullOrWhiteSpace(command.ReasonType))
             entity.ReasonType = command.ReasonType.Trim().ToUpperInvariant();
 
@@ -212,6 +221,12 @@ public class StocktakeService : IStocktakeService
                     (input.BranchStockId.HasValue && l.BranchStockId == input.BranchStockId.Value));
 
                 if (line == null) continue;
+
+                if (entity.ReasonType == "CUSTOMER_RETURN" &&
+                    (input.GoodQty != line.GoodQty || input.DefectiveQty != line.DefectiveQty ||
+                     input.DamagedQty != line.DamagedQty || input.NearExpiryQty != line.NearExpiryQty ||
+                     input.ExpiredQty != line.ExpiredQty))
+                    throw new BusinessException("Số lượng trên phiếu kiểm kê hàng lỗi đổi/trả đã được cách ly; chỉ được cập nhật ghi chú và bằng chứng.");
 
                 ValidateNonNegativeQuantities(input.GoodQty, input.DefectiveQty, input.DamagedQty, input.NearExpiryQty, input.ExpiredQty);
 
@@ -322,17 +337,21 @@ public class StocktakeService : IStocktakeService
                 if (!line.BranchStockId.HasValue) continue;
                 var stock = await _repository.GetBranchStockByIdAsync(tenantId, line.BranchStockId.Value, cancellationToken);
                 if (stock == null) continue;
+                if (stock.QuantityOnHand != line.SystemQty)
+                    throw new BusinessException("STOCKTAKE_STALE_SNAPSHOT", "Tồn của lô đã thay đổi sau khi lập/đếm phiếu; cần kiểm lại trước khi duyệt.");
 
                 // 1. Hết hạn / hư hỏng chọn WRITE_OFF → trừ OnHand.
                 //    Chọn RETURN_SUPPLIER → giữ OnHand + đưa vào Quarantine (không bán được) đến khi gửi phiếu trả.
                 var writeOffQty = GetLineWriteOffQty(line);
                 if (writeOffQty > 0)
                 {
+                    if (entity.ReasonType == "CUSTOMER_RETURN")
+                        stock.QuantityQuarantined = Math.Max(0m, stock.QuantityQuarantined - writeOffQty);
                     stock.QuantityOnHand = Math.Max(0, stock.QuantityOnHand - writeOffQty);
                 }
 
                 var returnHoldQty = GetLineEligibleReturnQty(line);
-                if (returnHoldQty > 0)
+                if (returnHoldQty > 0 && entity.ReasonType != "CUSTOMER_RETURN")
                 {
                     stock.QuantityQuarantined += returnHoldQty;
                 }
@@ -349,6 +368,11 @@ public class StocktakeService : IStocktakeService
                 {
                     stock.QuantityOnHand += line.VarianceQty;
                 }
+
+                var packageWeight = _packages == null ? 0m : (await _packages.FindAsync(p => p.TenantId == tenantId
+                    && p.BranchStockId == stock.Id && !p.IsDeleted && (p.Status == "AVAILABLE" || p.Status == "QUARANTINED"), cancellationToken)).Sum(p => p.NetWeight);
+                if (stock.QuantityOnHand < stock.QuantityReserved + stock.QuantityQuarantined + packageWeight)
+                    throw new BusinessException("STOCKTAKE_COMMITTED_STOCK", "Kiểm kê làm tồn thấp hơn lượng khay, cách ly hoặc giữ chỗ; cần đối soát từng phần trước khi duyệt.");
 
                 stock.UpdatedAt = DateTime.UtcNow;
             }

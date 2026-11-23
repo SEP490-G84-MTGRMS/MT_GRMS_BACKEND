@@ -963,6 +963,16 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             .FirstOrDefaultAsync(s => s.Id == id, cancellationToken);
     }
 
+    public Task<HouseholdTaxSnapshot?> GetSnapshotForUpdateAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        if (!_context.Database.IsNpgsql()) return GetSnapshotByIdAsync(id, cancellationToken);
+
+        return _context.HouseholdTaxSnapshots
+            .FromSqlInterpolated($"SELECT * FROM \"HouseholdTaxSnapshots\" WHERE \"Id\" = {id} FOR UPDATE")
+            .AsNoTracking()
+            .SingleOrDefaultAsync(cancellationToken);
+    }
+
     public async Task<List<HouseholdTaxSnapshot>> GetSnapshotsAsync(int? year, Guid? branchId, CancellationToken cancellationToken = default)
     {
         var query = _context.HouseholdTaxSnapshots.AsQueryable();

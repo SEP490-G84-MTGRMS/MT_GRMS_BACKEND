@@ -791,11 +791,11 @@ public class CatalogServiceTests
             CreatedAt = DateTime.UtcNow
         });
 
-        var history = await service.GetPriceHistoryAsync(prodId, branchId);
-        Assert.Single(history);
-        Assert.Equal(10000m, history[0].OldPrice);
-        Assert.Equal(12000m, history[0].NewPrice);
-        Assert.Equal("Lạm phát", history[0].Reason);
+        var history = await service.GetPriceHistoryAsync(prodId, new ProductPriceHistoryQuery { BranchId = branchId });
+        var entry = Assert.Single(history.Items);
+        Assert.Equal(10000m, entry.OldPrice);
+        Assert.Equal(12000m, entry.NewPrice);
+        Assert.Equal("Lạm phát", entry.Reason);
     }
 
     [Fact]

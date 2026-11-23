@@ -17,6 +17,7 @@ public class TransferDetail : BaseTenantEntity
     public decimal DamagedQuantity { get; set; } = 0.00m;
     public string PackagingUnit { get; set; } = string.Empty;
     public string? BatchNumber { get; set; }
+    public Guid? BranchStockId { get; set; }
     public DateTime? ExpiryDate { get; set; }
     public decimal UnitPrice { get; set; } = 0.00m;
     public decimal Amount { get; set; } = 0.00m;

@@ -13,8 +13,6 @@ public class PurchaseOrder : BaseTenantEntity
     public Guid SupplierId { get; set; }
     public Guid BranchId { get; set; }
     public DateTime? DeliveryDate { get; set; }
-    public DateTime? ViewFromDate { get; set; }
-    public DateTime? ViewToDate { get; set; }
     public string Status { get; set; } = "DRAFT";
     public DateTime? OrderedAtUtc { get; set; }
     public decimal TotalQty { get; set; } = 0.000m;
@@ -40,7 +38,6 @@ public class PurchaseOrder : BaseTenantEntity
 
     /// <summary>Gói dispatch/email chứa PO này (nullable — PO cũ chưa có package).</summary>
     public Guid? DispatchPackageId { get; set; }
-    public Guid? DispatchBatchId { get; set; }
 
     /// <summary>null/MANUAL_MATRIX = PO mua thường; SUPPLIER_RETURN = PO đổi hàng.</summary>
     public string? SourceType { get; set; }

@@ -26,6 +26,16 @@ public class WalletPostgresIntegrationTests
         await database.Database.EnsureCreatedAsync();
         try
         {
+            await database.Database.ExecuteSqlRawAsync("""CREATE TABLE "StorePaymentConfigs" ("Id" uuid PRIMARY KEY)""");
+            var partialSchema = await Assert.ThrowsAsync<InvalidOperationException>(() => DbInitializer.ApplyLegacyMergesAsync(database));
+            Assert.Contains("Nhóm bảng cũ chưa đầy đủ", partialSchema.InnerException!.Message);
+            Assert.True(await database.Database.SqlQueryRaw<bool>(
+                """SELECT to_regclass('"StorePaymentConfigs"') IS NOT NULL AS "Value" """).SingleAsync());
+            await database.Database.ExecuteSqlRawAsync("DROP TABLE \"StorePaymentConfigs\"");
+
+            await DbInitializer.ApplyLegacyMergesAsync(database);
+            Assert.Contains("20261118190000_DropLegacyPaymentAccountTables", await database.Database.GetAppliedMigrationsAsync());
+
             database.Tenants.Add(new Tenant { Id = TenantId, Code = "WALLET-TEST", Subdomain = TenantId, WalletBalance = 75_000 });
             database.WalletTransactions.Add(new WalletTransaction
             {
@@ -55,7 +65,7 @@ public class WalletPostgresIntegrationTests
                 """);
 
             await Assert.ThrowsAsync<WalletTopupSchemaMigrationException>(
-                () => DbInitializer.InitializeAsync(database, seedSampleData: false));
+                () => WalletTopupSchemaMigration.ApplyAsync(database));
             Assert.Equal(4L, await database.Database.SqlQueryRaw<long>(
                 """SELECT count(*) AS "Value" FROM "WalletTopupOrders" """).SingleAsync());
             Assert.Single(await database.WalletTransactions.AsNoTracking().ToListAsync());
@@ -63,7 +73,7 @@ public class WalletPostgresIntegrationTests
             await database.Database.ExecuteSqlRawAsync("""
                 UPDATE "WalletTopupOrders" SET "ReferenceCode" = 'LEGACY-REF' WHERE "Id" = 'legacy-paid';
                 """);
-            await DbInitializer.InitializeAsync(database, seedSampleData: false);
+            await WalletTopupSchemaMigration.ApplyAsync(database);
             database.ChangeTracker.Clear();
 
             var wallet = new WalletService(database, Options.Create(new SePaySettings()));

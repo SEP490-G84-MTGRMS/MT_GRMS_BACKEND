@@ -35,5 +35,6 @@ public class ExpenseVoucher : BaseTenantEntity
     public DateTime? ApprovedAtUtc { get; set; }
     public DateTime? PaidAtUtc { get; set; }
     public DateTime ExpenseDate { get; set; } = DateTime.UtcNow; // Kỳ tính P&L dồn tích
+    public DateOnly? DueDate { get; set; }
     public string? Note { get; set; }
 }

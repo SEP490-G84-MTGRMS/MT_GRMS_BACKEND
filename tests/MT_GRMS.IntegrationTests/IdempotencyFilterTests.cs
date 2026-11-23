@@ -179,6 +179,8 @@ public class IdempotencyFilterTests
         var contentResult = Assert.IsType<ContentResult>(executingContext2.Result);
         Assert.Equal(200, contentResult.StatusCode);
         Assert.Contains("EXP-999", contentResult.Content);
+        using var response = JsonDocument.Parse(contentResult.Content!);
+        Assert.Equal("EXP-999", response.RootElement.GetProperty("voucher").GetString());
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using MT_GRMS.Infrastructure.Services;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -68,7 +69,7 @@ public class TenantStoreControllerTests
             UpdatedAt: null
         ));
 
-        _controller = new TenantStoreController(_tenantService, _planService, _dbContext);
+        _controller = new TenantStoreController(_tenantService, _planService, _dbContext, new TenantSubscriptionService(_dbContext));
 
         var user = new ClaimsPrincipal(new ClaimsIdentity(new[]
         {
@@ -100,7 +101,7 @@ public class TenantStoreControllerTests
     [Fact]
     public async Task UpdateStoreInfo_ValidRequest_Returns200Ok_WithUpdated()
     {
-        var req = new UpdateTenantRequest("Hà Nội Mart Cập Nhật", "010999888", "19001122", "456 Cầu Giấy", "Hà Nội");
+        var req = new UpdateTenantRequest("Hà Nội Mart Cập Nhật", "010999888", "0919001122", "456 Cầu Giấy", "Hà Nội");
         var result = await _controller.UpdateStoreInfo(req, CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(result);
@@ -220,14 +221,41 @@ public class TenantStoreControllerTests
         Assert.Equal("DOWNGRADE_NOT_ALLOWED", resp.ErrorCode);
     }
 
-    [Fact]
-    public async Task PurchaseSubscription_FromStandardToPro_RecordsSuccessfulUpgrade()
+    [Theory]
+    [InlineData(0, 30)]
+    [InlineData(3, 30)]
+    [InlineData(0, 1)]
+    public async Task PurchaseSubscription_FromStandardToPro_RecordsSuccessfulUpgrade(int months, int daysRemaining)
     {
         var tenant = await _dbContext.Tenants.FindAsync("tenant-01");
         Assert.NotNull(tenant);
         tenant!.CurrentPlan = "STANDARD";
         tenant.SubscriptionStatus = "ACTIVE";
         tenant.WalletBalance = 10000000m;
+        var expiry = DateTime.UtcNow.AddDays(daysRemaining);
+        tenant.SubscriptionExpiresAt = expiry;
+        _dbContext.WalletTransactions.Add(new WalletTransaction
+        {
+            TenantId = tenant.Id,
+            TransactionCode = "SUB-legacy",
+            Type = "PURCHASE_PLAN",
+            Amount = 326700m,
+            Description = "Thanh toán gói dịch vụ Gói Thường (3 tháng)",
+            PaymentMethod = "WALLET",
+            Status = "SUCCESS",
+            CreatedAt = expiry.AddMonths(-3)
+        });
+        _dbContext.WalletTransactions.Add(new WalletTransaction
+        {
+            TenantId = tenant.Id,
+            TransactionCode = "STAFF-legacy",
+            Type = "PURCHASE_ADDON",
+            Amount = 33000m,
+            Description = "Mua thêm Quản lý nhân viên",
+            PaymentMethod = "WALLET",
+            Status = "SUCCESS",
+            CreatedAt = expiry.AddDays(-daysRemaining - 1)
+        });
         _dbContext.SubscriptionPlans.Add(new SubscriptionPlan
         {
             Id = "plan-pro",
@@ -241,15 +269,45 @@ public class TenantStoreControllerTests
 
         var request = new PurchaseSubscriptionRequest(
             PlanCode: "PRO",
-            Months: 1,
+            Months: months,
             ExtraBranches: 0,
             HasStaffManagementAddon: false,
-            PaymentMethod: "Wallet");
+            PaymentMethod: "Wallet",
+            RequestId: Guid.NewGuid());
 
+        Assert.IsType<ConflictObjectResult>(await _controller.PurchaseSubscription(request, CancellationToken.None));
+        var quoteResult = Assert.IsType<OkObjectResult>(await _controller.QuoteProUpgrade(request, CancellationToken.None));
+        var quote = Assert.IsType<ApiResponse<ProUpgradeQuote>>(quoteResult.Value).Data!;
+        Assert.True(quote.Credit > 326700m * daysRemaining / (expiry - expiry.AddMonths(-3)).Days);
+        Assert.Equal(expiry.AddMonths(months), quote.ExpiresAt);
+        request = request with { QuoteAt = quote.QuoteAt, ExpectedExpiry = expiry, ExpectedTotal = quote.Total };
+        Assert.IsType<ConflictObjectResult>(await _controller.PurchaseSubscription(
+            request with { ExpectedTotal = quote.Total - 1 }, CancellationToken.None));
         Assert.IsType<OkObjectResult>(await _controller.PurchaseSubscription(request, CancellationToken.None));
-        var transaction = Assert.Single(_dbContext.WalletTransactions);
+        Assert.IsType<OkObjectResult>(await _controller.PurchaseSubscription(request, CancellationToken.None));
+        var transaction = Assert.Single(_dbContext.WalletTransactions.Where(w => w.Type == "UPGRADE_PLAN"));
         Assert.Equal("UPGRADE_PLAN", transaction.Type);
         Assert.Equal("SUCCESS", transaction.Status);
+        Assert.Equal(10000000m - quote.Total, tenant.WalletBalance);
+        Assert.Equal(quote.ExpiresAt, tenant.SubscriptionExpiresAt);
+    }
+
+    [Fact]
+    public async Task PurchaseSubscription_ExpiredStandard_ChargesFullProTerm()
+    {
+        var tenant = (await _dbContext.Tenants.FindAsync("tenant-01"))!;
+        tenant.CurrentPlan = "STANDARD";
+        tenant.SubscriptionStatus = "ACTIVE";
+        tenant.SubscriptionExpiresAt = DateTime.UtcNow.AddDays(-1);
+        await _dbContext.SaveChangesAsync();
+
+        var started = DateTime.UtcNow;
+        var result = Assert.IsType<OkObjectResult>(await _controller.PurchaseSubscription(
+            new PurchaseSubscriptionRequest("PRO", 3), CancellationToken.None));
+        var purchase = Assert.IsType<ApiResponse<PurchaseSubscriptionResponse>>(result.Value).Data!;
+        Assert.Equal(821700m, purchase.TotalAmount);
+        Assert.True(purchase.SubscriptionExpiresAt >= started.AddMonths(3));
+        Assert.Equal("PURCHASE_PLAN", Assert.Single(_dbContext.WalletTransactions).Type);
     }
 
     [Fact]

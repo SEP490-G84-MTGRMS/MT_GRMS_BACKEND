@@ -74,6 +74,8 @@ public class EndToEndBusinessFlowIntegrationTests
     {
         public bool PrintOrderInvoice(Order order, string printerName = "POS-58", decimal? cashReceived = null, decimal? changeAmount = null, string? cashierName = null) => true;
         public byte[] BuildEscPosReceipt(Order order, decimal? cashReceived = null, decimal? changeAmount = null, string? cashierName = null) => Array.Empty<byte>();
+        public bool PrintVoucher(MT_GRMS.Application.Promotions.Dtos.PrintVoucherRequest request, string printerName = "POS-58") => true;
+        public byte[] BuildEscPosVoucher(MT_GRMS.Application.Promotions.Dtos.PrintVoucherRequest request) => Array.Empty<byte>();
     }
 
     private AppDbContext CreateDbContext(string dbName, FakeTenantContext? tenantContext = null)
@@ -208,7 +210,6 @@ public class EndToEndBusinessFlowIntegrationTests
             Status = "COMPLETED",
             ReceivedAtUtc = testTxDate,
             SubTotal = 1_000_000m,      // 100 * 10.000 đ
-            FreightFee = 0m,
             DiscountAmount = 0m,
             VatAmount = 0m,
             GrandTotal = 1_000_000m,
@@ -226,7 +227,7 @@ public class EndToEndBusinessFlowIntegrationTests
                     RejectedQty = 0,
                     UnitPrice = 10_000m,
                     LineAmount = 1_000_000m,
-                    LandedUnitCost = 10_000m,
+                    PurchaseUnitCost = 10_000m,
                     QualityStatus = "ACCEPTED",
                     CreatedAt = testTxDate
                 }

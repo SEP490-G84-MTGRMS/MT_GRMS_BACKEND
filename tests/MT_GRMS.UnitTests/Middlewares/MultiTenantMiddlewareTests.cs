@@ -61,7 +61,7 @@ public class MultiTenantMiddlewareTests
     }
 
     [Fact]
-    public async Task AdminRole_CanSwitchTenantViaHeader()
+    public async Task AdminRole_DoesNotAcquireTenantOrBranchScope()
     {
         var tenantContext = new FakeTenantContext();
         var middleware = new MultiTenantMiddleware(_ => Task.CompletedTask);
@@ -71,6 +71,7 @@ public class MultiTenantMiddlewareTests
         {
             new("tenant_id", "tenant-admin-orig"),
             new(ClaimTypes.NameIdentifier, Guid.NewGuid().ToString()),
+            new("branch_id", Guid.NewGuid().ToString()),
             new(ClaimTypes.Role, "ADMIN")
         };
         httpContext.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "TestAuth"));
@@ -78,7 +79,9 @@ public class MultiTenantMiddlewareTests
 
         await middleware.InvokeAsync(httpContext, tenantContext);
 
-        Assert.Equal("tenant-switched", tenantContext.CurrentTenantId);
+        Assert.Empty(tenantContext.CurrentTenantId);
+        Assert.Null(tenantContext.CurrentBranchId);
+        Assert.Equal("ADMIN", tenantContext.CurrentRole);
     }
 
     [Fact]
@@ -117,7 +120,7 @@ public class MultiTenantMiddlewareTests
     }
 
     [Fact]
-    public async Task UnauthenticatedUser_UsesFallbackTenantAndRoleHeaders()
+    public async Task UnauthenticatedUser_CannotSetTenantOrRoleViaHeaders()
     {
         var tenantContext = new FakeTenantContext();
         var middleware = new MultiTenantMiddleware(_ => Task.CompletedTask);
@@ -128,12 +131,13 @@ public class MultiTenantMiddlewareTests
 
         await middleware.InvokeAsync(httpContext, tenantContext);
 
-        Assert.Equal("tenant_custom_fallback", tenantContext.CurrentTenantId);
-        Assert.Equal("CASHIER", tenantContext.CurrentRole);
+        Assert.Empty(tenantContext.CurrentTenantId);
+        Assert.Empty(tenantContext.CurrentRole);
+        Assert.Equal(Guid.Empty, tenantContext.CurrentUserId);
     }
 
     [Fact]
-    public async Task DefaultTenant_FallsBackToDefaultMartAndStoreOwner()
+    public async Task DefaultTenantHeader_DoesNotGrantStoreOwnerScope()
     {
         var tenantContext = new FakeTenantContext();
         var middleware = new MultiTenantMiddleware(_ => Task.CompletedTask);
@@ -143,7 +147,7 @@ public class MultiTenantMiddlewareTests
 
         await middleware.InvokeAsync(httpContext, tenantContext);
 
-        Assert.Equal("tenant_mt_mart_01", tenantContext.CurrentTenantId);
-        Assert.Equal("STORE_OWNER", tenantContext.CurrentRole);
+        Assert.Empty(tenantContext.CurrentTenantId);
+        Assert.Empty(tenantContext.CurrentRole);
     }
 }

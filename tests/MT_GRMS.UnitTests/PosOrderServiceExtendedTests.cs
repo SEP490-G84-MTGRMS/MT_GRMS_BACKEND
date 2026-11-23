@@ -42,6 +42,7 @@ public class PosOrderServiceExtendedTests
         _tenantContextMock.Setup(t => t.CurrentTenantId).Returns("tenant-01");
         _tenantContextMock.Setup(t => t.CurrentUserId).Returns(Guid.NewGuid());
         _tenantContextMock.Setup(t => t.CurrentRole).Returns("CASHIER");
+        _tenantContextMock.Setup(t => t.CurrentBranchId).Returns(_branchId);
 
         _orderRepoMock.Setup(r => r.GetBranchByIdAsync(_branchId, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new Branch { Id = _branchId, TenantId = "tenant-01", Name = "Branch 1", IsActive = true });
@@ -78,7 +79,7 @@ public class PosOrderServiceExtendedTests
             .ReturnsAsync(new CashierShiftEligibilityDto(true, false, "CASHIER", "Cashier 01", null, null));
 
         _orderRepoMock.Setup(r => r.GetCustomerByIdAsync(_customerId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new Customer { Id = _customerId, CustomerCode = "CUST01", Name = "Nguyen Van A", AllowDebt = true, TenantId = "tenant-01" });
+            .ReturnsAsync(new Customer { Id = _customerId, CustomerCode = "CUST01", Name = "Nguyen Van A", TenantId = "tenant-01" });
 
         _orderRepoMock.Setup(r => r.GetOrderWithDetailsAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid id, CancellationToken _) => new Order
@@ -110,7 +111,6 @@ public class PosOrderServiceExtendedTests
             _orderRepoMock.Object,
             _uowMock.Object,
             _printService,
-            debtService: null,
             cashbookService: null,
             validator: null,
             shiftRepository: _shiftRepoMock.Object,
@@ -213,9 +213,9 @@ public class PosOrderServiceExtendedTests
     }
 
     [Fact]
-    public async Task CreateOrderAsync_CustomerNotAllowedDebt_ThrowsInvalidOperation()
+    public async Task CreateOrderAsync_DebtCustomerNotFound_ThrowsInvalidOperation()
     {
-        _tenantContextMock.Setup(t => t.CurrentRole).Returns("ACCOUNTANT");
+        _tenantContextMock.Setup(t => t.CurrentRole).Returns("STORE_OWNER");
         _shiftRepoMock.Setup(s => s.GetActiveShiftAsync(_branchId, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync(new ShiftZReport { Id = Guid.NewGuid(), BranchId = _branchId, Status = ShiftState.Open });
 
@@ -223,7 +223,7 @@ public class PosOrderServiceExtendedTests
             .ReturnsAsync(new BranchStock { Id = Guid.NewGuid(), BranchId = _branchId, ProductId = _productId, QuantityOnHand = 10m });
 
         _orderRepoMock.Setup(r => r.GetCustomerByIdAsync(_customerId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new Customer { Id = _customerId, Name = "Khách A", AllowDebt = false });
+            .ReturnsAsync((Customer?)null);
 
         var service = CreateService();
         var req = new OrderCreateRequest(
@@ -234,7 +234,7 @@ public class PosOrderServiceExtendedTests
         );
 
         var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateOrderAsync(req));
-        Assert.Contains("chưa được kích hoạt quyền mua nợ", ex.Message);
+        Assert.Contains("không tồn tại", ex.Message);
     }
 
     [Fact]
@@ -245,7 +245,7 @@ public class PosOrderServiceExtendedTests
             .ReturnsAsync(new ShiftZReport { Id = Guid.NewGuid(), BranchId = _branchId, Status = ShiftState.Open });
 
         _orderRepoMock.Setup(r => r.GetCustomerByIdAsync(_customerId, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(new Customer { Id = _customerId, Name = "Khách A", AllowDebt = true });
+            .ReturnsAsync(new Customer { Id = _customerId, Name = "Khách A", TenantId = "tenant-01" });
 
         var service = CreateService();
         var req = new OrderCreateRequest(
@@ -256,7 +256,7 @@ public class PosOrderServiceExtendedTests
         );
 
         var ex = await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.CreateOrderAsync(req));
-        Assert.Contains("Chỉ Chủ cửa hàng hoặc Quản trị viên mới có quyền bán nợ", ex.Message);
+        Assert.Contains("Chỉ Chủ cửa hàng mới có quyền bán nợ", ex.Message);
     }
 
     [Fact]

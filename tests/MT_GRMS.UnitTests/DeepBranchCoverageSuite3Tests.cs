@@ -1,3 +1,4 @@
+using MT_GRMS.Infrastructure.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -11,20 +12,27 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Moq.Protected;
 using MT_GRMS.Api.Controllers;
+using MT_GRMS.Api.Hubs;
 using MT_GRMS.Application.Admin.Dtos;
 using MT_GRMS.Application.Admin.Services;
 using MT_GRMS.Application.Auth;
 using MT_GRMS.Application.Auth.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Interfaces;
+using MT_GRMS.Application.Common.Services;
+using MT_GRMS.Application.Notifications;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.Transfers;
 using MT_GRMS.Domain.Common;
@@ -169,6 +177,13 @@ public class DeepBranchCoverageSuite3Tests
         }
     }
 
+    private static IConfiguration CreateAuthConfig() => new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?> { ["Jwt:Key"] = "unit-test-signing-key-not-used-in-production" })
+        .Build();
+
+    private static TenantUser ActiveOwnerMembership(string userId, string tenantId = "tenant1") =>
+        new() { TenantId = tenantId, UserId = userId, Role = SystemRoles.StoreOwner, IsActive = true };
+
     #endregion
 
     // =========================================================================
@@ -180,7 +195,7 @@ public class DeepBranchCoverageSuite3Tests
     {
         var repo = new FakeUserRepository();
         var mockHasher = new PasswordHasher();
-        var service = new AuthService(repo, passwordHasher: mockHasher);
+        var service = new AuthService(repo, configuration: CreateAuthConfig(), passwordHasher: mockHasher);
 
         // 1. Null / empty PasswordHash -> UnauthorizedAccessException
         var userEmptyHash = new User { Id = "u_empty", Username = "user_empty", PasswordHash = "", IsActive = true };
@@ -191,7 +206,7 @@ public class DeepBranchCoverageSuite3Tests
         // 2. Fallback 1: SHA256 hashed password with auto-rehash to PBKDF2
         var rawPasswordSha = "SecretSha123!";
         var shaHex = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawPasswordSha))).ToLowerInvariant();
-        var userSha = new User { Id = "u_sha", Username = "user_sha", PasswordHash = shaHex, IsActive = true };
+        var userSha = new User { Id = "u_sha", Username = "user_sha", PasswordHash = shaHex, IsActive = true, TenantUsers = [ActiveOwnerMembership("u_sha")] };
         repo.Users.Add(userSha);
 
         var loginShaRes = await service.LoginAsync(new LoginRequest("user_sha", rawPasswordSha, "tenant1"));
@@ -200,27 +215,22 @@ public class DeepBranchCoverageSuite3Tests
 
         // 3. Fallback 2: Plaintext password match with auto-rehash
         var rawPlain = "PlaintextSecret999";
-        var userPlain = new User { Id = "u_plain", Username = "user_plain", PasswordHash = rawPlain, IsActive = true };
+        var userPlain = new User { Id = "u_plain", Username = "user_plain", PasswordHash = rawPlain, IsActive = true, TenantUsers = [ActiveOwnerMembership("u_plain")] };
         repo.Users.Add(userPlain);
 
         var loginPlainRes = await service.LoginAsync(new LoginRequest("user_plain", rawPlain, "tenant1"));
         Assert.NotNull(loginPlainRes);
         Assert.NotEqual(rawPlain, userPlain.PasswordHash);
 
-        // 4. Fallback 3: Demo passwords "password123" and "123456" for seeded accounts
+        // Legacy seeded credentials still require the stored password to match.
         var adminUser = new User { Id = "u_admin", Username = "admin", PasswordHash = "legacy_demo_hash", IsAdmin = true, IsActive = true };
-        var managerUser = new User { Id = "u_mgr", Username = "manager01", PasswordHash = "legacy_demo_hash", IsActive = true };
-        var cashierUser = new User { Id = "u_csh", Username = "cashier01", PasswordHash = "legacy_demo_hash", IsActive = true };
+        var managerUser = new User { Id = "u_mgr", Username = "manager01", PasswordHash = "legacy_demo_hash", IsActive = true, TenantUsers = [ActiveOwnerMembership("u_mgr")] };
+        var cashierUser = new User { Id = "u_csh", Username = "cashier01", PasswordHash = "legacy_demo_hash", IsActive = true, TenantUsers = [ActiveOwnerMembership("u_csh")] };
         repo.Users.AddRange(new[] { adminUser, managerUser, cashierUser });
 
-        var adminRes = await service.LoginAsync(new LoginRequest("admin", "password123", "tenant1"));
-        Assert.NotNull(adminRes);
-
-        var mgrRes = await service.LoginAsync(new LoginRequest("manager01", "123456", "tenant1"));
-        Assert.NotNull(mgrRes);
-
-        var cshRes = await service.LoginAsync(new LoginRequest("cashier01", "123456", "tenant1"));
-        Assert.NotNull(cshRes);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.LoginAsync(new LoginRequest("admin", "password123", "tenant1")));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.LoginAsync(new LoginRequest("manager01", "123456", "tenant1")));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.LoginAsync(new LoginRequest("cashier01", "123456", "tenant1")));
 
         // 5. Wrong password -> UnauthorizedAccessException
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
@@ -233,7 +243,7 @@ public class DeepBranchCoverageSuite3Tests
         var repo = new FakeUserRepository();
         var mockHasher = new PasswordHasher();
         var empRepoMock = new Mock<IEmployeeRepository>();
-        var service = new AuthService(repo, passwordHasher: mockHasher, employeeRepository: empRepoMock.Object);
+        var service = new AuthService(repo, configuration: CreateAuthConfig(), passwordHasher: mockHasher, employeeRepository: empRepoMock.Object);
 
         // 1. Inactive user -> UnauthorizedAccessException
         var inactiveUser = new User
@@ -268,6 +278,7 @@ public class DeepBranchCoverageSuite3Tests
         {
             Id = "u_emp_inact",
             Username = "user_emp_inact",
+            TenantUsers = [ActiveOwnerMembership("u_emp_inact")],
             PasswordHash = mockHasher.HashPassword("Pass123!"),
             IsActive = true
         };
@@ -278,11 +289,12 @@ public class DeepBranchCoverageSuite3Tests
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             service.LoginAsync(new LoginRequest("user_emp_inact", "Pass123!", "tenant1")));
 
-        // 4. Tenant code aliases normalization ("default-tenant", "TENANT-HCM-01", "TENANT-DEFAULT", "DEFAULT") -> "tenant_mt_mart_01"
+        // Only the tenant ID associated with the active membership can establish a session.
         var activeUser = new User
         {
             Id = "u_norm",
             Username = "user_norm",
+            TenantUsers = [ActiveOwnerMembership("u_norm", "tenant_mt_mart_01")],
             PasswordHash = mockHasher.HashPassword("Pass123!"),
             IsActive = true
         };
@@ -290,9 +302,11 @@ public class DeepBranchCoverageSuite3Tests
 
         foreach (var alias in new[] { "default-tenant", "TENANT-HCM-01", "TENANT-DEFAULT", "DEFAULT" })
         {
-            var res = await service.LoginAsync(new LoginRequest("user_norm", "Pass123!", alias));
-            Assert.Equal("tenant_mt_mart_01", res.User.TenantId);
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+                service.LoginAsync(new LoginRequest("user_norm", "Pass123!", alias)));
         }
+        var session = await service.LoginAsync(new LoginRequest("user_norm", "Pass123!", "tenant_mt_mart_01"));
+        Assert.Equal("tenant_mt_mart_01", session.User.TenantId);
     }
 
     [Fact]
@@ -300,7 +314,7 @@ public class DeepBranchCoverageSuite3Tests
     {
         var repo = new FakeUserRepository();
         var mockHasher = new PasswordHasher();
-        var service = new AuthService(repo, passwordHasher: mockHasher);
+        var service = new AuthService(repo, configuration: CreateAuthConfig(), passwordHasher: mockHasher);
 
         // 1. RefreshToken whitespace -> ArgumentException
         await Assert.ThrowsAsync<ArgumentException>(() =>
@@ -317,6 +331,7 @@ public class DeepBranchCoverageSuite3Tests
         {
             Id = "u_legacy_tok",
             Username = "user_legacy",
+            TenantUsers = [ActiveOwnerMembership("u_legacy_tok")],
             RefreshToken = legacyRawToken,
             RefreshTokenExpiryTime = DateTime.UtcNow.AddHours(2),
             IsActive = true
@@ -328,6 +343,7 @@ public class DeepBranchCoverageSuite3Tests
         Assert.Equal("user_legacy", refreshRes.User.Username);
 
         // 4. Expired refresh token -> UnauthorizedAccessException
+        userLegacy.RefreshToken = legacyRawToken;
         userLegacy.RefreshTokenExpiryTime = DateTime.UtcNow.AddHours(-1);
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             service.RefreshTokenAsync(new RefreshTokenRequest(legacyRawToken)));
@@ -336,13 +352,13 @@ public class DeepBranchCoverageSuite3Tests
         Assert.Null(await service.GetCurrentUserAsync(""));
         Assert.Null(await service.GetCurrentUserAsync("non_existent"));
 
-        // 6. GetCurrentUserAsync: inactive user or inactive tenantUser -> returns null
+        // Inactive users and inactive memberships cannot resolve a session.
         userLegacy.IsActive = false;
         Assert.Null(await service.GetCurrentUserAsync("u_legacy_tok"));
 
         userLegacy.IsActive = true;
         userLegacy.TenantUsers = new List<TenantUser> { new() { TenantId = "t1", UserId = "u_legacy_tok", IsActive = false } };
-        Assert.Null(await service.GetCurrentUserAsync("u_legacy_tok"));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.GetCurrentUserAsync("u_legacy_tok"));
 
         // 7. RevokeRefreshTokenAsync: by raw refreshToken or by userId
         userLegacy.TenantUsers = new List<TenantUser>();
@@ -395,13 +411,14 @@ public class DeepBranchCoverageSuite3Tests
     // =========================================================================
 
     [Fact]
-    public async Task PaymentsController_SavePaymentConfig_ReplacesAccount_And_EncryptBranches()
+    public async Task PaymentsController_SavePaymentConfig_PreservesAccountHistoryAndEncryptsKey()
     {
         var tenantId = "tenant-pay-conf";
         var tenantContext = new FakeTenantContext { CurrentTenantId = tenantId };
 
         var options = new DbContextOptionsBuilder<AppDbContext>()
             .UseInMemoryDatabase(databaseName: $"PayConfDb_{Guid.NewGuid()}")
+            .ConfigureWarnings(warnings => warnings.Ignore(InMemoryEventId.TransactionIgnoredWarning))
             .Options;
         using var dbContext = new AppDbContext(options, tenantContext);
 
@@ -409,78 +426,75 @@ public class DeepBranchCoverageSuite3Tests
         var mockConfig = new Mock<IConfiguration>();
         var mockLogger = new Mock<ILogger<PaymentsController>>();
 
-        var controller = new PaymentsController(dbContext, mockFactory.Object, mockConfig.Object, mockLogger.Object, tenantContext);
-        var claims = new List<Claim> { new(ClaimTypes.Role, RoleConstants.StoreOwner), new("tenant_id", tenantId) };
+        var controller = new PaymentsController(dbContext, mockFactory.Object, mockConfig.Object, mockLogger.Object, tenantContext,
+            new EphemeralDataProtectionProvider(), Mock.Of<IWebHostEnvironment>(), Mock.Of<IAuditHashService>(),
+            Mock.Of<INotificationService>(), Mock.Of<IHubContext<NotificationHub>>());
+        var claims = new List<Claim> { new(ClaimTypes.Role, SystemRoles.StoreOwner), new("tenant_id", tenantId) };
         controller.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity(claims, "TestAuth")) }
         };
 
-        // Seed existing PaymentAccount with old bank details
-        var oldAcc = new PaymentAccount
+        var tenant = new Tenant { Id = tenantId, Name = "Test store" };
+        var branch = new Branch { Id = Guid.NewGuid(), TenantId = tenantId, Name = "Branch A" };
+        dbContext.Tenants.Add(tenant);
+        dbContext.Branches.Add(branch);
+
+        var oldAcc = new FinanceAccount
         {
             Id = Guid.NewGuid(),
             TenantId = tenantId,
+            BranchId = branch.Id,
+            AccountType = FinanceAccountType.Bank,
             BankCode = "VCB",
             AccountNumber = "0011002233",
             AccountHolderName = "OLD OWNER",
             IsActive = true
         };
-        dbContext.PaymentAccounts.Add(oldAcc);
-
-        // Seed an existing matching account for the new bank details
-        var existingNewAcc = new PaymentAccount
+        var existingNewAcc = new FinanceAccount
         {
             Id = Guid.NewGuid(),
             TenantId = tenantId,
+            BranchId = branch.Id,
+            AccountType = FinanceAccountType.Bank,
             BankCode = "TCB",
             AccountNumber = "9988776655",
             AccountHolderName = "NEW OWNER",
             IsActive = true
         };
-        dbContext.PaymentAccounts.Add(existingNewAcc);
+        branch.CurrentBankFinanceAccountId = oldAcc.Id;
+        dbContext.FinanceAccounts.AddRange(oldAcc, existingNewAcc);
         await dbContext.SaveChangesAsync();
 
-        // 1. SavePaymentConfig: Provide PaymentAccountId pointing to oldAcc, but with TCB / 9988776655
-        // This triggers lines 354-360 where paymentAccount is replaced by existingNewAcc
-        var req = new SavePaymentConfigRequest
+        var request = new SavePaymentConfigRequest
         {
             BankCode = "TCB",
             BankName = "Techcombank",
             BankAccountNumber = "9988776655",
             BankAccountName = "NEW OWNER",
             SepayApiKey = "sepay_key_123456789012345",
+            BranchIds = [branch.Id],
             PaymentAccountId = oldAcc.Id,
             IsActive = true
         };
+        Assert.IsType<ConflictObjectResult>(await controller.SavePaymentConfig(request, CancellationToken.None));
+        Assert.Equal(oldAcc.Id, branch.CurrentBankFinanceAccountId);
+        Assert.Equal("0011002233", oldAcc.AccountNumber);
 
-        var resSave = await controller.SavePaymentConfig(req, CancellationToken.None);
-        var okSave = Assert.IsType<OkObjectResult>(resSave);
-        Assert.NotNull(okSave.Value);
+        request.PaymentAccountId = null;
+        Assert.IsType<OkObjectResult>(await controller.SavePaymentConfig(request, CancellationToken.None));
+        Assert.Equal(existingNewAcc.Id, branch.CurrentBankFinanceAccountId);
+        Assert.Equal(2, await dbContext.FinanceAccounts.CountAsync());
+        Assert.StartsWith("AES256:", tenant.SepayApiKeyEncrypted);
 
-        // Verify config was created and key was encrypted with AES256:
-        var savedConfig = await dbContext.StorePaymentConfigs.FirstOrDefaultAsync(c => c.TenantId == tenantId);
-        Assert.NotNull(savedConfig);
-        Assert.StartsWith("AES256:", savedConfig.SepayApiKeyEncrypted);
-
-        // 2. SavePaymentConfig update without new key: triggers auto-upgrade from plaintext if needed
-        savedConfig.SepayApiKeyEncrypted = "raw_plaintext_key";
-        await dbContext.SaveChangesAsync();
-
-        var reqUpdate = new SavePaymentConfigRequest
-        {
-            BankCode = "TCB",
-            BankAccountNumber = "9988776655",
-            BankAccountName = "NEW OWNER",
-            SepayApiKey = null, // no new key
-            IsActive = true
-        };
-        await controller.SavePaymentConfig(reqUpdate, CancellationToken.None);
-        Assert.StartsWith("AES256:", savedConfig.SepayApiKeyEncrypted);
+        var encryptedKey = tenant.SepayApiKeyEncrypted;
+        request.SepayApiKey = null;
+        Assert.IsType<OkObjectResult>(await controller.SavePaymentConfig(request, CancellationToken.None));
+        Assert.Equal(encryptedKey, tenant.SepayApiKeyEncrypted);
     }
 
     [Fact]
-    public async Task PaymentsController_Webhook_PrefixMismatch_And_TwoWayVerification_Branches()
+    public async Task PaymentsController_Webhook_RejectsAccountMismatchAndAcknowledgesExistingPayment()
     {
         var tenantId = "tenant_cau_giay_01";
         var tenantContext = new FakeTenantContext { CurrentTenantId = tenantId };
@@ -503,19 +517,26 @@ public class DeepBranchCoverageSuite3Tests
         };
         dbContext.Orders.Add(order);
 
-        // Seed StorePaymentConfig with SePay key
-        var config = new StorePaymentConfig
+        var tenant = new Tenant
+        {
+            Id = tenantId,
+            Name = "Test store",
+            SepayApiKeyEncrypted = "raw_test_key_for_mock",
+            SepayWebhookSecret = "whsec_secret123",
+            IsSepayEnabled = true
+        };
+        var bankAccount = new FinanceAccount
         {
             Id = Guid.NewGuid(),
             TenantId = tenantId,
+            AccountType = FinanceAccountType.Bank,
             BankCode = "MB",
-            BankAccountNumber = "1234567890",
-            BankAccountName = "CHU CUA HANG",
-            SepayApiKeyEncrypted = "raw_test_key_for_mock",
-            SepayWebhookSecret = "whsec_secret123",
-            IsActive = true
+            AccountNumber = "1234567890",
+            AccountHolderName = "CHU CUA HANG"
         };
-        dbContext.StorePaymentConfigs.Add(config);
+        order.FinanceAccountId = bankAccount.Id;
+        dbContext.Tenants.Add(tenant);
+        dbContext.FinanceAccounts.Add(bankAccount);
         await dbContext.SaveChangesAsync();
 
         // Mock HttpClientFactory for 2-way verification
@@ -525,7 +546,9 @@ public class DeepBranchCoverageSuite3Tests
 
         var mockConfig = new Mock<IConfiguration>();
         var mockLogger = new Mock<ILogger<PaymentsController>>();
-        var controller = new PaymentsController(dbContext, mockFactory.Object, mockConfig.Object, mockLogger.Object, tenantContext);
+        var controller = new PaymentsController(dbContext, mockFactory.Object, mockConfig.Object, mockLogger.Object, tenantContext,
+            new EphemeralDataProtectionProvider(), Mock.Of<IWebHostEnvironment>(), Mock.Of<IAuditHashService>(),
+            Mock.Of<INotificationService>(), Mock.Of<IHubContext<NotificationHub>>());
 
         var httpContext = new DefaultHttpContext();
         httpContext.Connection.RemoteIpAddress = IPAddress.Parse("10.77.66.55");
@@ -559,44 +582,42 @@ public class DeepBranchCoverageSuite3Tests
             AmountIn = 300000m,
             AccountNumber = "1234567890",
             TransactionContent = "AN02 HD8801 chuyen khoan",
-            TransactionDate = DateTime.UtcNow
+            TransactionDate = DateTime.UtcNow.ToString("O")
         };
 
         var resFraud = await controller.HandleSePayWebhook(payloadFraud, CancellationToken.None);
         var badReqFraud = Assert.IsType<BadRequestObjectResult>(resFraud);
         Assert.NotNull(badReqFraud.Value);
 
-        // 2. SePay API returns matching account -> verifiedBySePay = true (lines 879-880) and auto-completes order
-        var sepayValidJson = JsonSerializer.Serialize(new
+        Assert.Empty(await dbContext.PaymentTransactions.ToListAsync());
+        Assert.Equal("UNPAID", order.PaymentStatus);
+
+        // An already reconciled transaction returns success without applying the same payment again.
+        dbContext.PaymentTransactions.Add(new PaymentTransaction
         {
-            transaction = new
-            {
-                amount_in = 300000m,
-                transaction_content = "AN02 HD8801",
-                account_number = "1234567890" // Matching!
-            }
+            TenantId = tenantId,
+            OrderId = order.Id,
+            FinanceAccountId = bankAccount.Id,
+            BankTransactionId = "555002",
+            AmountIn = 300_000m,
+            TransactionDate = DateTime.UtcNow,
+            VerifiedBySepayApi = true
         });
+        await dbContext.SaveChangesAsync();
 
-        mockHttpHandler.Protected()
-            .Setup<Task<HttpResponseMessage>>("SendAsync", ItExpr.IsAny<HttpRequestMessage>(), ItExpr.IsAny<CancellationToken>())
-            .ReturnsAsync(new HttpResponseMessage
-            {
-                StatusCode = HttpStatusCode.OK,
-                Content = new StringContent(sepayValidJson, Encoding.UTF8, "application/json")
-            });
-
-        var payloadValid = new SePayWebhookPayload
+        var replay = new SePayWebhookPayload
         {
             Id = 555002,
-            AmountIn = 300000m,
-            AccountNumber = "1234567890",
+            AmountIn = 300_000m,
+            AccountNumber = bankAccount.AccountNumber,
             TransactionContent = "AN02 HD8801 chuyen khoan",
-            TransactionDate = DateTime.UtcNow
+            TransactionDate = DateTime.UtcNow.ToString("O")
         };
 
-        var resValid = await controller.HandleSePayWebhook(payloadValid, CancellationToken.None);
-        var okValid = Assert.IsType<OkObjectResult>(resValid);
-        Assert.NotNull(okValid.Value);
+        var result = Assert.IsType<OkObjectResult>(await controller.HandleSePayWebhook(replay, CancellationToken.None));
+        using var response = JsonDocument.Parse(JsonSerializer.Serialize(result.Value));
+        Assert.True(response.RootElement.GetProperty("isIdempotentReplay").GetBoolean());
+        Assert.Single(await dbContext.PaymentTransactions.ToListAsync());
 
         // 3. Test Private Static / Helper Methods via Reflection
         var getTenantPrefixMethod = typeof(PaymentsController).GetMethod("GetTenantPrefix", BindingFlags.NonPublic | BindingFlags.Static);
@@ -641,7 +662,7 @@ public class DeepBranchCoverageSuite3Tests
 
         var tenantServiceMock = new Mock<ITenantService>();
         var planServiceMock = new Mock<ISubscriptionPlanService>();
-        var controller = new TenantStoreController(tenantServiceMock.Object, planServiceMock.Object, dbContext);
+        var controller = new TenantStoreController(tenantServiceMock.Object, planServiceMock.Object, dbContext, new TenantSubscriptionService(dbContext));
 
         // 1. Unauthenticated or missing tenant -> 403 Forbidden
         controller.ControllerContext = new ControllerContext
@@ -782,7 +803,7 @@ public class DeepBranchCoverageSuite3Tests
 
         var service = new TransferService(
             transfersRepo, detailsRepo, stocksRepo, productsRepo, branchesRepo,
-            tenantContext, mockUow);
+            new FakeRepository<TransferStatusHistory>(), tenantContext, mockUow);
 
         var bFrom = new Branch { Id = Guid.NewGuid(), TenantId = tenantContext.CurrentTenantId, Name = "Branch From", IsActive = true };
         var bTo = new Branch { Id = Guid.NewGuid(), TenantId = tenantContext.CurrentTenantId, Name = "Branch To", IsActive = true };
@@ -795,7 +816,7 @@ public class DeepBranchCoverageSuite3Tests
             TransferCode = "TRF-001",
             FromBranchId = bFrom.Id,
             ToBranchId = bTo.Id,
-            Status = TransferStatus.Received,
+            Status = TransferStatus.Completed,
             ReceivedAt = DateTime.UtcNow.AddDays(-2),
             CreatedAt = DateTime.UtcNow.AddDays(-5),
             DispatchedAt = DateTime.UtcNow.AddDays(-3)
@@ -913,7 +934,7 @@ public class DeepBranchCoverageSuite3Tests
 
         var service = new TransferService(
             transfersRepo, detailsRepo, stocksRepo, productsRepo, branchesRepo,
-            tenantContext, mockUow);
+            new FakeRepository<TransferStatusHistory>(), tenantContext, mockUow);
 
         var bFrom = new Branch { Id = Guid.NewGuid(), TenantId = tenantContext.CurrentTenantId, Name = "Branch From", IsActive = true };
         var bTo = new Branch { Id = Guid.NewGuid(), TenantId = tenantContext.CurrentTenantId, Name = "Branch To", IsActive = true };
@@ -935,6 +956,7 @@ public class DeepBranchCoverageSuite3Tests
         var stock1 = new BranchStock
         {
             Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
             BranchId = bFrom.Id,
             ProductId = product.Id,
             BatchCode = "BATCH-A",
@@ -944,6 +966,7 @@ public class DeepBranchCoverageSuite3Tests
         var stock2 = new BranchStock
         {
             Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
             BranchId = bFrom.Id,
             ProductId = product.Id,
             BatchCode = "BATCH-A", // duplicate batch code with different expiry
@@ -953,6 +976,7 @@ public class DeepBranchCoverageSuite3Tests
         var stock3 = new BranchStock
         {
             Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
             BranchId = bFrom.Id,
             ProductId = product.Id,
             BatchCode = "BATCH-B",
@@ -965,7 +989,7 @@ public class DeepBranchCoverageSuite3Tests
         var createReq = new CreateTransferRequest(
             bFrom.Id,
             bTo.Id,
-            DispatchNow: true,
+            DispatchNow: false,
             ExpectedDeliveryDate: DateTime.UtcNow.AddDays(2),
             Note: "Chuyen hang nhieu lo",
             Items: new List<TransferLineRequest>
@@ -976,7 +1000,13 @@ public class DeepBranchCoverageSuite3Tests
         var createdDto = await service.CreateTransferAsync(createReq, CancellationToken.None);
         Assert.NotNull(createdDto);
         var createdTransfer = transfersRepo.Items.First(t => t.Id == createdDto.Id);
+        Assert.Equal(TransferStatus.Draft, createdTransfer.Status);
+        await service.SubmitTransferAsync(createdTransfer.Id, CancellationToken.None);
+        await service.DispatchTransferAsync(createdTransfer.Id, CancellationToken.None);
         Assert.Equal(TransferStatus.InTransit, createdTransfer.Status);
+        Assert.Equal(100m, stock1.QuantityOnHand);
+        Assert.Equal(70m, stock2.QuantityOnHand);
+        Assert.Equal(50m, stock3.QuantityOnHand);
 
         // 2. ReceiveTransferAsync: missing reason for damaged items -> InvalidOperationException
         var lineDetail = createdTransfer.Details.First();
@@ -999,7 +1029,8 @@ public class DeepBranchCoverageSuite3Tests
             });
 
         var receivedDto = await service.ReceiveTransferAsync(createdTransfer.Id, goodReceiveReq, CancellationToken.None);
-        Assert.Equal(TransferStatus.Received.ToString(), receivedDto.Status);
+        Assert.Equal(nameof(TransferStatus.Completed), receivedDto.Status);
+        Assert.Equal(nameof(TransferCompletionResult.ReceivedWithDiscrepancy), receivedDto.CompletionResult);
 
         // Verify destination stock was created with quarantined amount
         var destStock = stocksRepo.Items.FirstOrDefault(s => s.BranchId == bTo.Id && s.ProductId == product.Id);

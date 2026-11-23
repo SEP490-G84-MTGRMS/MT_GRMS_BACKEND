@@ -64,7 +64,8 @@ builder.Services.AddScoped<ITenantContext, TenantContext>();
 
 // 4. Đăng ký các tầng Application & Infrastructure
 builder.Services.AddApplicationServices();
-builder.Services.AddInfrastructureServices(builder.Configuration);
+builder.Services.AddInfrastructureServices(builder.Configuration, allowInMemory: !builder.Environment.IsProduction());
+builder.Services.AddHealthChecks().AddCheck<DatabaseReadinessCheck>("database", timeout: TimeSpan.FromSeconds(5));
 builder.Services.AddSignalR();
 builder.Services.AddScoped<MT_GRMS.Application.Notifications.INotificationRealtimeDispatcher, MT_GRMS.Api.Hubs.SignalRNotificationDispatcher>();
 
@@ -159,6 +160,21 @@ if (resetDemo || confirmReset)
 if (seedDemoOnly && skipDbInit)
     throw new InvalidOperationException("Database:SkipDbInitialization đang bật.");
 
+if (app.Configuration.GetValue<bool>("Database:RepairTransferStockColumns"))
+{
+    using var repairScope = app.Services.CreateScope();
+    var repairDb = repairScope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await repairDb.Database.ExecuteSqlRawAsync("ALTER TABLE \"BranchStocks\" ADD COLUMN IF NOT EXISTS \"FefoDiscountPercent\" numeric(5,2) NOT NULL DEFAULT 0;");
+    await repairDb.Database.ExecuteSqlRawAsync("ALTER TABLE \"BranchStocks\" ADD COLUMN IF NOT EXISTS \"IsFefoDiscountActive\" boolean NOT NULL DEFAULT false;");
+}
+
+if (app.Environment.IsDevelopment() && app.Configuration.GetValue<bool>("Database:RepairLocalSchema"))
+{
+    using var repairScope = app.Services.CreateScope();
+    var repairDb = repairScope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await DbInitializer.ApplyLocalSchemaRepairsAsync(repairDb);
+}
+
 if (!skipDbInit)
 {
     using var scope = app.Services.CreateScope();
@@ -194,7 +210,7 @@ if (!skipDbInit)
                 : "Database schema sync completed in {0} ms (sample seed skipped).",
             startupInitializationTimer.ElapsedMilliseconds);
     }
-    catch (Exception ex) when (ex is not WalletTopupSchemaMigrationException && !seedDemoOnly)
+    catch (Exception ex) when (ex is not WalletTopupSchemaMigrationException && !seedDemoOnly && !app.Environment.IsProduction())
     {
         logger.LogError(ex, "Lỗi khi tự động áp dụng schema hoặc nạp dữ liệu mẫu vào CSDL sau {ElapsedMilliseconds} ms.", startupInitializationTimer.ElapsedMilliseconds);
     }

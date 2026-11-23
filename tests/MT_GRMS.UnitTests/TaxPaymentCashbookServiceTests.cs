@@ -48,6 +48,28 @@ public class TaxPaymentCashbookServiceTests
     }
 
     [Fact]
+    public async Task RecordTaxPaymentAsync_RejectsSupersededSnapshotBeforeChangingBalance()
+    {
+        var tenantContext = new FakeTenantContext();
+        var snapshot = new HouseholdTaxSnapshot { Id = Guid.NewGuid(), Status = TaxSnapshotStatus.Superseded };
+        var account = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), TenantId = tenantContext.CurrentTenantId,
+            AccountType = FinanceAccountType.Bank, CurrentBalance = 200_000m, IsActive = true
+        };
+        var service = CreateService(tenantContext, out var cashbookRepo, out _, out var expenseRepo, snapshot);
+        cashbookRepo.Accounts.Add(account);
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() => service.RecordTaxPaymentAsync(
+            new RecordTaxPaymentRequest(account.Id, 100_000m, "Kho bạc", "TAX-REF", null, snapshot.Id, null)));
+
+        Assert.Equal("TAX_SNAPSHOT_NOT_FINALIZED", error.ErrorCode);
+        Assert.Equal(200_000m, account.CurrentBalance);
+        Assert.Empty(cashbookRepo.Entries);
+        Assert.Empty(expenseRepo.Items);
+    }
+
+    [Fact]
     public async Task RecordTaxPaymentAsync_CreatesTaxVoucherAndAppendOnlyLedgerEntryWithoutChangingSnapshot()
     {
         var tenantContext = new FakeTenantContext();
@@ -173,6 +195,8 @@ public class TaxPaymentCashbookServiceTests
     private sealed class FakeTaxRepository(HouseholdTaxSnapshot? snapshot) : IHouseholdTaxRepository
     {
         public Task<HouseholdTaxSnapshot?> GetSnapshotByIdAsync(Guid id, CancellationToken cancellationToken = default) => Task.FromResult(snapshot?.Id == id ? snapshot : null);
+        public Task<HouseholdTaxSnapshot?> GetSnapshotForUpdateAsync(Guid id, CancellationToken cancellationToken = default) =>
+            GetSnapshotByIdAsync(id, cancellationToken);
         public Task<decimal> GetAnnualAccumulatedRevenueAsync(int year, DateTime upToDateUtc, CancellationToken cancellationToken = default) => Task.FromResult(0m);
         public Task<(decimal GrossRevenue, decimal DiscountAmount, decimal ReturnAmount)> GetPeriodRevenueAsync(DateTime fromDateUtc, DateTime toDateUtc, Guid? branchId, CancellationToken cancellationToken = default) => Task.FromResult((0m, 0m, 0m));
         public Task<(decimal ReducedVatRevenue, decimal StandardVatRevenue)> GetPeriodRevenueSplitAsync(DateTime fromDateUtc, DateTime toDateUtc, Guid? branchId, CancellationToken cancellationToken = default) => Task.FromResult((0m, 0m));

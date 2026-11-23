@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Application.PosShifts;
+using MT_GRMS.Application.PosShifts.Dtos;
 using MT_GRMS.Application.HR.Employees.Dtos;
 using MT_GRMS.Application.HR.Payslips.Dtos;
 using MT_GRMS.Application.HR.Schedules.Dtos;
@@ -245,32 +248,17 @@ public class HrAndPosRepositoriesIntegrationTests
             var pendingMovements = await repo.GetPendingMovementsAsync(branch.Id);
             Assert.NotEmpty(pendingMovements);
 
-            // 6. Participants & Confirmations
+            // Shift participation is persisted in the shift snapshot.
             var testUserId = Guid.NewGuid();
-            var participant = new ShiftParticipant
-            {
-                Id = Guid.NewGuid(),
-                TenantId = TenantId,
-                ShiftId = shift.Id,
-                UserId = testUserId,
-                JoinedAtUtc = DateTime.UtcNow
-            };
-            await repo.AddParticipantAsync(participant);
-            await context.SaveChangesAsync();
-            var foundParticipant = await repo.GetParticipantAsync(shift.Id, testUserId);
-            Assert.NotNull(foundParticipant);
+            var service = new ShiftService(repo, new UnitOfWork(context), new TestTenantContext());
+            await service.RecordParticipantAsync(shift.Id, testUserId, "cashier", "Shift Emp");
+            context.ChangeTracker.Clear();
 
-            var confirmation = new ShiftCloseConfirmation
-            {
-                Id = Guid.NewGuid(),
-                TenantId = TenantId,
-                ShiftId = shift.Id,
-                UserId = testUserId,
-                ConfirmedAtUtc = DateTime.UtcNow
-            };
-            await repo.AddCloseConfirmationAsync(confirmation);
-            await context.SaveChangesAsync();
-            await repo.ClearCloseConfirmationsAsync(shift.Id);
+            var savedShift = await repo.GetByIdAsync(shift.Id);
+            Assert.NotNull(savedShift);
+            var participant = Assert.Single(JsonSerializer.Deserialize<ShiftParticipantDto[]>(savedShift.ParticipantsJson)!);
+            Assert.Equal(testUserId, participant.UserId);
+            Assert.Equal("cashier", participant.UserName);
 
             // 7. Branch Resolution & Employee lookup
             var resolvedBranch = await repo.ResolveBranchIdAsync("BR-SHIFT");
@@ -293,20 +281,16 @@ public class HrAndPosRepositoriesIntegrationTests
             var foundEmp = await repo.GetEmployeeByUserIdAsync(userStrId);
             Assert.NotNull(foundEmp);
 
-            // 8. Payment Config
-            var pConfig = new StorePaymentConfig
-            {
-                Id = Guid.NewGuid(),
-                TenantId = TenantId,
-                BankCode = "MB",
-                BankAccountNumber = "12345678",
-                BankAccountName = "SHIFT OWNER",
-                IsActive = true
-            };
-            await repo.SavePaymentConfigAsync(pConfig);
+            var paymentSettings = new Tenant { Id = TenantId, Name = "Cửa hàng thử nghiệm" };
+            await context.Tenants.AddAsync(paymentSettings);
             await context.SaveChangesAsync();
-            var fetchedPConfig = await repo.GetPaymentConfigAsync(TenantId);
-            Assert.NotNull(fetchedPConfig);
+            paymentSettings.CashOutApprovalThreshold = 350_000m;
+            await repo.SavePaymentConfigAsync(paymentSettings);
+            await context.SaveChangesAsync();
+            context.ChangeTracker.Clear();
+            var fetchedSettings = await repo.GetPaymentConfigAsync(TenantId);
+            Assert.NotNull(fetchedSettings);
+            Assert.Equal(350_000m, fetchedSettings.CashOutApprovalThreshold);
 
             // 9. Closed shift & sales metrics
             var closedShift = new ShiftZReport

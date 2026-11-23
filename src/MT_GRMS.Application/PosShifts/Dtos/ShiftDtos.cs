@@ -247,7 +247,9 @@ public record ZReportResponse(
     HandoverStatus HandoverStatus,
     string? ReceiverUserId,
     string? Notes,
-    IReadOnlyList<ShiftCashMovementDto> CashMovements
+    IReadOnlyList<ShiftCashMovementDto> CashMovements,
+    decimal TotalReturnRefunds = 0m,
+    decimal NetCashSalesAfterRefunds = 0m
 );
 
 /// <summary>

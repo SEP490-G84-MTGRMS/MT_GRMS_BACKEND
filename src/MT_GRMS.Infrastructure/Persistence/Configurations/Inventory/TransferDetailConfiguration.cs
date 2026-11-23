@@ -21,6 +21,7 @@ public class TransferDetailConfiguration : IEntityTypeConfiguration<TransferDeta
         builder.Property(x => x.DamagedQuantity).HasColumnType("decimal(12,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.PackagingUnit).HasMaxLength(30).IsRequired();
         builder.Property(x => x.BatchNumber).HasMaxLength(50);
+        builder.Property(x => x.BranchStockId);
         builder.Property(x => x.UnitPrice).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.Amount).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.LineStatus).HasConversion<string>().HasMaxLength(20).HasDefaultValue(TransferLineStatus.Pending);
