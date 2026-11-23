@@ -153,7 +153,7 @@ public class BranchService : IBranchService
         if (name is null || name.Length < 2)
             throw new BusinessException("INVALID_INPUT", "Tên chi nhánh phải có ít nhất 2 ký tự.");
 
-        var code = request.BranchCode.Trim().ToUpper();
+        var code = request.BranchCode.Trim().ToUpperInvariant();
         var address = request.Address?.Trim();
         var phone = request.Phone?.Trim();
         var email = request.Email?.Trim();
@@ -172,7 +172,7 @@ public class BranchService : IBranchService
             || phone.Count(c => c is >= '0' and <= '9') is < 8 or > 15))
             throw new BusinessException("INVALID_INPUT", "Hotline phải có 8–15 chữ số và không vượt quá 20 ký tự. Có thể dùng dấu + ở đầu, dấu cách, dấu chấm hoặc dấu gạch ngang.");
         if (!string.IsNullOrEmpty(email) && (email.Length > 150
-            || !Regex.IsMatch(email, @"^[^\s@.]+(?:\.[^\s@.]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$")))
+            || !Regex.IsMatch(email, @"^[A-Za-z0-9!#$%&'*+/=?^_\x60{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_\x60{|}~-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$")))
             throw new BusinessException("INVALID_INPUT", "Email phải đúng định dạng và không vượt quá 150 ký tự.");
         if (managerName?.Length > 150)
             throw new BusinessException("INVALID_INPUT", "Tên quản lý không được vượt quá 150 ký tự.");

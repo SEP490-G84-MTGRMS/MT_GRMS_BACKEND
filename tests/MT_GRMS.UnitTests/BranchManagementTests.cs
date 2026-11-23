@@ -156,7 +156,10 @@ public class BranchManagementTests
     {
         // Arrange - Giảm bớt 1 chi nhánh để quota chưa đầy (4/5)
         _repo.Branches.RemoveAll(b => b.Code == "DC-01");
-        var req = new CreateBranchRequest("BR-NEW", "Chi nhánh Mới", "789 Phố Mới", "0912345678", "Trần Văn Mới");
+        var req = new CreateBranchRequest("BR-NEW", "Chi nhánh Mới", "789 Phố Mới", "024.3768.9999", "Trần Văn Mới")
+        {
+            Email = "branch.sales+alerts@mt-grms.vn"
+        };
 
         // Act
         var result = await _service.CreateBranchAsync(req);
@@ -165,6 +168,8 @@ public class BranchManagementTests
         Assert.NotNull(result);
         Assert.Equal("BR-NEW", result.Code);
         Assert.Equal("Chi nhánh Mới", result.Name);
+        Assert.Equal("024.3768.9999", result.Phone);
+        Assert.Equal("branch.sales+alerts@mt-grms.vn", result.Email);
         Assert.Equal("Active", result.Status);
     }
 
@@ -231,6 +236,44 @@ public class BranchManagementTests
         var req = new CreateBranchRequest(code, name, "Address");
         var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.CreateBranchAsync(req));
         Assert.Equal("INVALID_INPUT", ex.ErrorCode);
+    }
+
+    [Theory]
+    [InlineData("code", 31)]
+    [InlineData("name", 151)]
+    [InlineData("address", 256)]
+    [InlineData("manager", 151)]
+    [InlineData("phone", 21)]
+    [InlineData("email", 151)]
+    public async Task CreateBranch_RejectsValuesLongerThanDatabaseColumns(string field, int length)
+    {
+        var request = new CreateBranchRequest("BR-NEW", "Chi nhánh mới", "Hà Nội");
+        var value = new string('a', length);
+        switch (field)
+        {
+            case "code": request.BranchCode = value; break;
+            case "name": request.Name = value; break;
+            case "address": request.Address = value; break;
+            case "manager": request.ManagerName = value; break;
+            case "phone": request.Phone = "0" + new string('.', length - 9) + "12345678"; break;
+            case "email": request.Email = new string('a', length - 6) + "@x.com"; break;
+        }
+
+        var exception = await Assert.ThrowsAsync<BusinessException>(() => _service.CreateBranchAsync(request));
+        Assert.Equal("INVALID_INPUT", exception.ErrorCode);
+    }
+
+    [Theory]
+    [InlineData(" ", null, null)]
+    [InlineData("Hà Nội", "abc12345678", null)]
+    [InlineData("Hà Nội", "1234567", null)]
+    [InlineData("Hà Nội", null, "owner@domain")]
+    [InlineData("Hà Nội", null, "owner,sales@domain.com")]
+    public async Task CreateBranch_RejectsBlankAddressAndInvalidContact(string address, string? phone, string? email)
+    {
+        var request = new CreateBranchRequest("BR-NEW", "Chi nhánh mới", address) { Phone = phone, Email = email };
+        var exception = await Assert.ThrowsAsync<BusinessException>(() => _service.CreateBranchAsync(request));
+        Assert.Equal("INVALID_INPUT", exception.ErrorCode);
     }
 
     [Fact]
