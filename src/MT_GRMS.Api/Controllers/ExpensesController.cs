@@ -86,11 +86,11 @@ public class ExpensesController : BaseApiController
         [FromQuery] DateTime? toDate,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50,
+        CancellationToken ct = default,
         [FromQuery] string? keyword = null,
         [FromQuery] string? category = null,
         [FromQuery] string? status = null,
-        [FromQuery] string? quickStatus = null,
-        CancellationToken ct = default)
+        [FromQuery] string? quickStatus = null)
     {
         var paged = await _expenseService.GetExpensesPageAsync(
             branchId, fromDate, toDate, page, pageSize, keyword, category, status, quickStatus, ct);
