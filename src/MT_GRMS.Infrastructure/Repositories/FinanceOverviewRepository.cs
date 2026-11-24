@@ -196,7 +196,7 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
     }
 
     private static bool IsInternalSource(CashbookEntry entry) =>
-        entry.Nature == FinancialNature.InternalTransfer
+        entry.FinancialNature == FinancialNature.InternalTransfer
         || string.Equals(entry.SourceType, InternalTransferSource, StringComparison.OrdinalIgnoreCase)
         || string.Equals(entry.SourceType, "CASH_DROP", StringComparison.OrdinalIgnoreCase)
         || string.Equals(entry.SourceType, "BANK_DEPOSIT", StringComparison.OrdinalIgnoreCase);
