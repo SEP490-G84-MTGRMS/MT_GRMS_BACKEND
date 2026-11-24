@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Debt.Dtos;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
@@ -130,6 +131,7 @@ public class CustomersController : BaseApiController
     }
 
     [HttpPut("{id:guid}")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<CustomerResponse>>> UpdateCustomer(
         Guid id, [FromBody] UpdateCustomerRequest request, CancellationToken ct)
     {
@@ -153,6 +155,7 @@ public class CustomersController : BaseApiController
     }
 
     [HttpGet("debts/summary")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<CustomerKpiSummaryResponse>>> GetDebtsSummary(CancellationToken ct)
     {
         var tenantId = _tenantContext.CurrentTenantId;
