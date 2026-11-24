@@ -250,7 +250,7 @@ public class ShiftService : IShiftService
                     .Where(m => !m.IsDeleted &&
                                 m.MovementType == CashMovementType.OUT &&
                                 m.Category == CashMovementCategory.EXPENSE &&
-                                (m.Status == CashMovementStatus.Recorded || m.Status == CashMovementStatus.Approved))
+                                m.Status == CashMovementStatus.Recorded)
                     .Sum(m => m.Amount);
                 var exceedsShiftTotalLimit = shiftTotalLimit > 0m && (existingShiftExpenseOut + request.Amount) > shiftTotalLimit;
 
