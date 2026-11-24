@@ -89,8 +89,8 @@ public sealed class TransferService(
         }
         var matching = all.OrderByDescending(x => x.CreatedAt).ToList();
         var page = Math.Max(filter.Page, 1); var size = Math.Clamp(filter.PageSize, 1, 100);
-        var result = new List<TransferDto>();
-        foreach (var transfer in matching.Skip((page - 1) * size).Take(size)) result.Add(await MapAsync(transfer, ct));
+        var pageSlice = matching.Skip((page - 1) * size).Take(size).ToList();
+        var result = await MapBatchAsync(pageSlice, ct);
         return new PagedResult<TransferDto> { Items = result, Page = page, PageSize = size, TotalItems = matching.Count };
     }
 
@@ -100,10 +100,26 @@ public sealed class TransferService(
     {
         await EnsureCanViewBranchStockAsync(branchId, ct);
         var stock = await stocks.FindAsync(x => x.TenantId == tenant.CurrentTenantId && x.BranchId == branchId && x.QuantityOnHand > 0, ct);
-        var result = new List<TransferStockBatchDto>();
-        foreach (var item in stock)
-            result.Add(new TransferStockBatchDto(item.ProductId, item.BatchCode, item.ExpiryDate, await RawAvailableAsync(item, ct)));
-        return result;
+        if (stock.Count == 0) return [];
+
+        var stockIds = stock.Select(s => s.Id).ToHashSet();
+        var packageWeights = packages == null
+            ? new Dictionary<Guid, decimal>()
+            : (await packages.FindAsync(p => p.TenantId == tenant.CurrentTenantId
+                && stockIds.Contains(p.BranchStockId)
+                && !p.IsDeleted
+                && (p.Status == "AVAILABLE" || p.Status == "QUARANTINED"), ct))
+                .GroupBy(p => p.BranchStockId)
+                .ToDictionary(g => g.Key, g => g.Sum(p => p.NetWeight));
+
+        return stock
+            .Select(item => new TransferStockBatchDto(
+                item.ProductId,
+                item.BatchCode,
+                item.ExpiryDate,
+                BranchStockAvailability.GetRawSellableKg(item, packageWeights.GetValueOrDefault(item.Id))))
+            .Where(dto => dto.AvailableQuantity > 0)
+            .ToList();
     }
 
     private async Task<BranchStock> ResolveStockSourceAsync(Guid branchId, Guid productId, string? batchCode, DateTime? expiryDate, CancellationToken ct, Guid? branchStockId = null)
@@ -474,6 +490,57 @@ public sealed class TransferService(
             Reason = reason?.Trim(),
             CreatedBy = tenant.CurrentUserId
         }, ct);
+
+    private async Task<List<TransferDto>> MapBatchAsync(IReadOnlyList<Transfer> pageTransfers, CancellationToken ct)
+    {
+        if (pageTransfers.Count == 0) return [];
+        var canViewCost = IsOwner;
+        var transferIds = pageTransfers.Select(t => t.Id).ToHashSet();
+        var branchIds = pageTransfers.SelectMany(t => new[] { t.FromBranchId, t.ToBranchId }).ToHashSet();
+
+        var branchMap = (await branches.FindAsync(b => branchIds.Contains(b.Id), ct))
+            .ToDictionary(b => b.Id, b => b.Name);
+        var missingDetailsIds = pageTransfers.Where(t => t.Details.Count == 0).Select(t => t.Id).ToHashSet();
+        var fetchedDetails = missingDetailsIds.Count == 0
+            ? new Dictionary<Guid, List<TransferDetail>>()
+            : (await details.FindAsync(d => missingDetailsIds.Contains(d.TransferId), ct))
+                .GroupBy(d => d.TransferId)
+                .ToDictionary(g => g.Key, g => g.ToList());
+        var allProductIds = pageTransfers
+            .SelectMany(t => t.Details.Count > 0 ? t.Details : (fetchedDetails.GetValueOrDefault(t.Id) ?? []))
+            .Select(d => d.ProductId)
+            .ToHashSet();
+        var productMap = allProductIds.Count == 0
+            ? new Dictionary<Guid, Product>()
+            : (await products.FindAsync(p => allProductIds.Contains(p.Id), ct))
+                .ToDictionary(p => p.Id);
+        var historyMap = (await statusHistory.FindAsync(h => transferIds.Contains(h.TransferId), ct))
+            .GroupBy(h => h.TransferId)
+            .ToDictionary(g => g.Key, g => g.OrderBy(x => x.CreatedAt)
+                .Select(x => new TransferStatusHistoryDto(x.Id, x.FromStatus?.ToString(), x.ToStatus.ToString(), x.Action, x.ActorUserId, x.ActorBranchId, x.ActorRole, x.Reason, x.CreatedAt))
+                .ToList());
+
+        var dtos = new List<TransferDto>(pageTransfers.Count);
+        foreach (var transfer in pageTransfers)
+        {
+            var lines = transfer.Details.Count > 0 ? transfer.Details : (fetchedDetails.GetValueOrDefault(transfer.Id) ?? []);
+            var items = lines.Select(line =>
+            {
+                productMap.TryGetValue(line.ProductId, out var product);
+                return new TransferLineDto(line.Id, line.ProductId, product?.ProductCode ?? "", product?.Name ?? "", line.PackagingUnit, line.SentQuantity, line.ReceivedQuantity, line.DamagedQuantity, line.BatchNumber, line.ExpiryDate, canViewCost ? line.UnitPrice : 0, canViewCost ? line.Amount : 0, line.DiscrepancyReason);
+            }).ToList();
+            dtos.Add(new TransferDto(
+                transfer.Id, transfer.TransferCode,
+                transfer.FromBranchId, branchMap.GetValueOrDefault(transfer.FromBranchId, ""),
+                transfer.ToBranchId, branchMap.GetValueOrDefault(transfer.ToBranchId, ""),
+                transfer.Status.ToString(), transfer.CompletionResult?.ToString(), transfer.Origin.ToString(), transfer.Priority.ToString(),
+                transfer.CreatedAt, transfer.SubmittedAt, transfer.DispatchedAt, transfer.ReceivedAt, transfer.ExpectedDeliveryDate,
+                transfer.CreatedByStaff, canViewCost ? transfer.TotalAmount : 0, transfer.HasDiscrepancy,
+                transfer.Note, transfer.DiscrepancyNote, transfer.CancelReason, items,
+                historyMap.GetValueOrDefault(transfer.Id, [])));
+        }
+        return dtos;
+    }
 
     private async Task<TransferDto> MapAsync(Transfer transfer, CancellationToken ct)
     {
