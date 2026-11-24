@@ -218,42 +218,69 @@ public sealed class TransferService(
         await unitOfWork.BeginTransactionAsync(ct);
         try
         {
+            var createdDestStocks = new Dictionary<(Guid ProductId, string BatchKey, DateTime? ExpDate, Guid? SupplierId), BranchStock>();
             foreach (var input in request.Items)
             {
                 var line = lines[input.DetailId]; line.ReceivedQuantity = input.ReceivedQuantity; line.DamagedQuantity = input.DamagedQuantity; line.DiscrepancyReason = input.DiscrepancyReason?.Trim();
                 line.LineStatus = input.DamagedQuantity > 0 ? TransferLineStatus.Damaged : input.ReceivedQuantity == line.SentQuantity ? TransferLineStatus.Matched : TransferLineStatus.Deficit; details.Update(line);
                 if (input.ReceivedQuantity + input.DamagedQuantity == 0) continue;
-                var destStocks = await stocks.FindAsync(s => s.BranchId == transfer.ToBranchId && s.ProductId == line.ProductId, ct);
-                BranchStock? destStock = null;
+
+                // Lấy SupplierId và ManufactureDate từ BranchStock nguồn để giữ nguồn gốc lô khi chuyển kho (TRF-01)
+                BranchStock? sourceStock = line.BranchStockId.HasValue
+                    ? await stocks.GetByIdAsync(line.BranchStockId.Value, ct)
+                    : null;
+                var sourceSupplierId = sourceStock?.SupplierId;
+                var sourceMfgDate = sourceStock?.ManufactureDate;
+                var effectiveExpiry = line.ExpiryDate ?? sourceStock?.ExpiryDate;
                 var normalizedBatch = line.BatchNumber?.Trim();
-                if (!string.IsNullOrWhiteSpace(normalizedBatch))
+                var batchKey = (normalizedBatch ?? string.Empty).ToUpperInvariant();
+                var cacheKey = (line.ProductId, batchKey, effectiveExpiry?.Date, sourceSupplierId);
+
+                if (!createdDestStocks.TryGetValue(cacheKey, out var destStock))
                 {
-                    destStock = destStocks.FirstOrDefault(s => string.Equals(s.BatchCode?.Trim(), normalizedBatch, StringComparison.OrdinalIgnoreCase));
-                }
-                else if (destStocks.Count == 1)
-                {
-                    destStock = destStocks[0];
+                    var destStocks = await stocks.FindAsync(s => s.BranchId == transfer.ToBranchId && s.ProductId == line.ProductId && !s.IsDeleted, ct);
+                    if (!string.IsNullOrWhiteSpace(normalizedBatch))
+                    {
+                        destStock = destStocks.FirstOrDefault(s =>
+                            string.Equals(s.BatchCode?.Trim(), normalizedBatch, StringComparison.OrdinalIgnoreCase) &&
+                            s.ExpiryDate?.Date == effectiveExpiry?.Date &&
+                            s.SupplierId == sourceSupplierId);
+                    }
+                    else
+                    {
+                        destStock = destStocks.FirstOrDefault(s =>
+                            string.IsNullOrWhiteSpace(s.BatchCode) &&
+                            s.ExpiryDate?.Date == effectiveExpiry?.Date &&
+                            s.SupplierId == sourceSupplierId);
+                    }
                 }
 
                 if (destStock == null)
                 {
-                    await stocks.AddAsync(new BranchStock
+                    destStock = new BranchStock
                     {
                         TenantId = tenant.CurrentTenantId,
                         BranchId = transfer.ToBranchId,
                         ProductId = line.ProductId,
-                        BatchCode = line.BatchNumber,
-                        ExpiryDate = line.ExpiryDate,
+                        SupplierId = sourceSupplierId,
+                        BatchCode = normalizedBatch,
+                        ManufactureDate = sourceMfgDate,
+                        ExpiryDate = effectiveExpiry,
                         QuantityOnHand = input.ReceivedQuantity + input.DamagedQuantity,
                         QuantityQuarantined = input.DamagedQuantity,
                         LandedCostPerUnit = line.UnitPrice
-                    }, ct);
+                    };
+                    await stocks.AddAsync(destStock, ct);
+                    createdDestStocks[cacheKey] = destStock;
                 }
                 else
                 {
                     destStock.QuantityOnHand += input.ReceivedQuantity + input.DamagedQuantity;
                     destStock.QuantityQuarantined += input.DamagedQuantity;
-                    stocks.Update(destStock);
+                    if (!createdDestStocks.ContainsValue(destStock))
+                    {
+                        stocks.Update(destStock);
+                    }
                 }
             }
             var hasDiscrepancy = request.Items.Any(input =>
