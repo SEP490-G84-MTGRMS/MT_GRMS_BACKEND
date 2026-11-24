@@ -696,7 +696,10 @@ public class SupplierReturnService : ISupplierReturnService
             }
 
             var packageWeight = await GetActivePackageWeightAsync(entity.TenantId, stock.Id, cancellationToken);
-            if (BranchStockAvailability.GetRawSellableKg(stock, packageWeight) < line.RequestedQty)
+            // Hàng trả NCC (kể cả lô đã hết hạn được duyệt RETURN_SUPPLIER từ kiểm kê) không dùng GetRawSellableKg
+            // vì GetRawSellableKg trả 0 cho lô hết hạn (STK-02).
+            var rawReturnableQty = Math.Max(0m, stock.QuantityOnHand - stock.QuantityReserved - stock.QuantityQuarantined - packageWeight);
+            if (rawReturnableQty < line.RequestedQty)
                 throw new BusinessException("RTV_INSUFFICIENT_RAW", "Không đủ hàng rời trong lô để giữ cho phiếu trả nhà cung cấp.");
             stock.QuantityReserved += line.RequestedQty;
         }
