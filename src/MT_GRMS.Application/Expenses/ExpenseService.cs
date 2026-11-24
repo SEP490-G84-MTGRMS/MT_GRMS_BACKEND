@@ -67,6 +67,26 @@ public class ExpenseService : IExpenseService
             throw new BusinessException("INVALID_AMOUNT", "Số tiền chi phí phải lớn hơn 0.");
         }
 
+        if (string.IsNullOrWhiteSpace(request.BeneficiaryName) || request.BeneficiaryName.Trim().Length > 200)
+        {
+            throw new BusinessException("INVALID_BENEFICIARY", "Tên người thụ hưởng/nhà cung cấp không được để trống và tối đa 200 ký tự.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Category) || request.Category.Trim().Length > 100)
+        {
+            throw new BusinessException("INVALID_CATEGORY", "Danh mục chi phí không được để trống và tối đa 100 ký tự.");
+        }
+
+        if (!Enum.IsDefined(typeof(FinanceAccountType), request.PaymentSourceType))
+        {
+            throw new BusinessException("INVALID_PAYMENT_SOURCE", "Loại nguồn chi thanh toán không hợp lệ.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.SellerTaxCode) && request.SellerTaxCode.Trim().Length > 50)
+        {
+            throw new BusinessException("INVALID_TAX_CODE", "Mã số thuế bên bán không vượt quá 50 ký tự.");
+        }
+
         EnsureNatureInScope(request.Nature);
 
         if (request.Nature == FinancialNature.OwnerDraw || request.Nature == FinancialNature.TaxPayment)
