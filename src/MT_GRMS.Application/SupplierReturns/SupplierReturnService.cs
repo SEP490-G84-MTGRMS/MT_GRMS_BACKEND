@@ -292,6 +292,9 @@ public class SupplierReturnService : ISupplierReturnService
         }
         else if (command.ResultType.Equals("APPROVED_PARTIAL", StringComparison.OrdinalIgnoreCase))
         {
+            if (command.LineResponses == null || command.LineResponses.Count == 0)
+                throw new BusinessException("LINE_RESPONSES_REQUIRED", "Bắt buộc gửi danh sách chi tiết dòng (lineResponses) khi duyệt một phần (APPROVED_PARTIAL).");
+
             entity.Status = "APPROVED";
             decimal totalApproved = 0;
 
