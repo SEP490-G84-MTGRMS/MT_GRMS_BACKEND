@@ -1267,9 +1267,13 @@ public class SupplierService : ISupplierService
         var activeSupplierProducts = await _supplierRepository.GetActiveSupplierProductsForSupplierAsync(supplierId, cancellationToken);
         foreach (var sp in activeSupplierProducts)
         {
-            var exists = await _supplierRepository.BranchProductExistsAsync(branchId, sp.ProductId, cancellationToken);
-            if (exists)
+            var existingBp = await _supplierRepository.GetBranchProductAsync(branchId, sp.ProductId, cancellationToken);
+            if (existingBp != null)
             {
+                if (existingBp.AllowedSupplierIdsJson != null)
+                {
+                    existingBp.AddAllowedSupplierId(supplierId);
+                }
                 continue;
             }
 
@@ -1640,8 +1644,15 @@ public class SupplierService : ISupplierService
         var activeBranchIds = await _supplierRepository.GetActiveBranchIdsForSupplierAsync(supplierId, cancellationToken);
         foreach (var branchId in activeBranchIds)
         {
-            var exists = await _supplierRepository.BranchProductExistsAsync(branchId, command.ProductId, cancellationToken);
-            if (!exists)
+            var existingBp = await _supplierRepository.GetBranchProductAsync(branchId, command.ProductId, cancellationToken);
+            if (existingBp != null)
+            {
+                if (existingBp.AllowedSupplierIdsJson != null)
+                {
+                    existingBp.AddAllowedSupplierId(supplierId);
+                }
+            }
+            else
             {
                 var newBranchProduct = new BranchProduct
                 {
@@ -1750,8 +1761,15 @@ public class SupplierService : ISupplierService
 
                 foreach (var branchId in activeBranchIds)
                 {
-                    var exists = await _supplierRepository.BranchProductExistsAsync(branchId, product.Id, ct);
-                    if (!exists)
+                    var existingBp = await _supplierRepository.GetBranchProductAsync(branchId, product.Id, ct);
+                    if (existingBp != null)
+                    {
+                        if (existingBp.AllowedSupplierIdsJson != null)
+                        {
+                            existingBp.AddAllowedSupplierId(supplierId);
+                        }
+                    }
+                    else
                     {
                         var newBranchProduct = new BranchProduct
                         {

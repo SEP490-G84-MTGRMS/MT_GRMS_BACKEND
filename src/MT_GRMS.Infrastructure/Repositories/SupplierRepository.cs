@@ -763,6 +763,12 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             .AnyAsync(bp => bp.BranchId == branchId && bp.ProductId == productId && !bp.IsDeleted, cancellationToken);
     }
 
+    public async Task<BranchProduct?> GetBranchProductAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
+    {
+        return await _context.BranchProducts
+            .FirstOrDefaultAsync(bp => bp.BranchId == branchId && bp.ProductId == productId && !bp.IsDeleted, cancellationToken);
+    }
+
     public async Task AddBranchProductAsync(BranchProduct branchProduct, CancellationToken cancellationToken = default)
     {
         await _context.BranchProducts.AddAsync(branchProduct, cancellationToken);
