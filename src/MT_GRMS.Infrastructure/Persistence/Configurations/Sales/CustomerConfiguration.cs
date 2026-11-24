@@ -26,7 +26,7 @@ public class CustomerConfiguration : IEntityTypeConfiguration<Customer>
         // Quản lý công nợ khách hàng (Single Source of Truth)
         builder.Property(x => x.TotalDebt).HasColumnType("decimal(18,2)").HasDefaultValue(0.00m);
         builder.Property(x => x.Notes).HasMaxLength(500);
-        builder.Property(x => x.RowVersion).IsRowVersion();
+        builder.Property(x => x.RowVersion).IsConcurrencyToken();
 
         builder.HasIndex(x => new { x.TenantId, x.CustomerCode }).IsUnique();
         builder.HasIndex(x => new { x.TenantId, x.Phone }).IsUnique();
