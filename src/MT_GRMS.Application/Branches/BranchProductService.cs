@@ -49,12 +49,16 @@ public class BranchProductService : IBranchProductService
         BranchProductQueryFilter filter,
         CancellationToken cancellationToken = default)
     {
-        if (branchId != Guid.Empty)
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(
+            _tenantContext,
+            branchId == Guid.Empty ? null : branchId) ?? Guid.Empty;
+
+        if (effectiveBranchId != Guid.Empty)
         {
-            var branch = await _repository.GetBranchByIdAsync(branchId, cancellationToken);
+            var branch = await _repository.GetBranchByIdAsync(effectiveBranchId, cancellationToken);
             if (branch == null || branch.IsDeleted)
             {
-                throw new NotFoundException("Chi nhánh", branchId);
+                throw new NotFoundException("Chi nhánh", effectiveBranchId);
             }
         }
 
@@ -62,7 +66,7 @@ public class BranchProductService : IBranchProductService
         var pageSize = Math.Clamp(filter.PageSize, 1, 1000);
 
         var (items, totalCount) = await _repository.GetPagedBranchProductsAsync(
-            branchId,
+            effectiveBranchId,
             filter,
             pageIndex,
             pageSize,
@@ -80,13 +84,21 @@ public class BranchProductService : IBranchProductService
     public async Task<IReadOnlyList<BranchSummaryDto>> GetBranchSummariesAsync(
         CancellationToken cancellationToken = default)
     {
-        return await _repository.GetBranchSummariesAsync(cancellationToken);
+        var summaries = await _repository.GetBranchSummariesAsync(cancellationToken);
+        if (BranchScopeGuard.IsBranchScopedEmployee(_tenantContext))
+        {
+            var assigned = BranchScopeGuard.ResolveRequiredBranchId(_tenantContext, Guid.Empty);
+            return summaries.Where(s => s.Id == assigned).ToList();
+        }
+        return summaries;
     }
 
     public async Task<IReadOnlyList<AssignableBranchProductDto>> GetAssignableProductsAsync(
         Guid branchId,
         CancellationToken cancellationToken = default)
     {
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, branchId);
+
         var branch = await _repository.GetBranchByIdAsync(branchId, cancellationToken);
         if (branch == null || branch.IsDeleted)
         {
