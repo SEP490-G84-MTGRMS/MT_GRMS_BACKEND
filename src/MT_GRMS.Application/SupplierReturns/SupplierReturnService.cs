@@ -247,8 +247,8 @@ public class SupplierReturnService : ISupplierReturnService
             entity.ReasonNotes = string.IsNullOrWhiteSpace(entity.ReasonNotes) ? notes : $"{entity.ReasonNotes} | {notes}";
         }
 
-        // Khóa tồn kho sang trạng thái chờ trả / đổi
-        await ReserveReturnStockAsync(entity, releaseQuarantine: false, cancellationToken);
+        // Khóa tồn kho sang trạng thái chờ trả / đổi; nếu phiếu tạo từ Kiểm kê thì giải phóng QuantityQuarantined để tránh khóa kép (STK-03).
+        await ReserveReturnStockAsync(entity, releaseQuarantine: entity.StocktakeId.HasValue, cancellationToken);
 
         // Không chờ NCC duyệt: tự xác nhận theo chính sách + gửi email thông báo.
         await AutoConfirmByPolicyAsync(entity, cancellationToken);
