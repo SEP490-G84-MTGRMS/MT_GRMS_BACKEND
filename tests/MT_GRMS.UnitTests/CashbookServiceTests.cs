@@ -111,6 +111,24 @@ public class CashbookServiceTests
     }
 
     [Fact]
+    public async Task GetAccounts_PreservesBankQrIdentityAndDefaultFlag()
+    {
+        var bankId = Guid.NewGuid();
+        _accountRepo.Items.Add(new FinanceAccount
+        {
+            Id = bankId, TenantId = _tenantContext.CurrentTenantId,
+            AccountType = FinanceAccountType.Bank, IsActive = true,
+            BankCode = "MB", BankName = "MBBank", AccountNumber = "123456789",
+            AccountHolderName = "TEST HOLDER", IsDefaultForVietQr = true
+        });
+        var account = Assert.Single((await _service.GetAccountsAsync()).Where(a => a.Id == bankId));
+        Assert.Equal("MB", account.BankCode);
+        Assert.Equal("TEST HOLDER", account.AccountHolderName);
+        Assert.Equal("123456789", account.AccountNumber);
+        Assert.True(account.IsDefaultForVietQr);
+    }
+
+    [Fact]
     public async Task GetOrCreateBankAccountAsync_MustNotReuseAnotherBranchLedger()
     {
         var branchA = Guid.NewGuid();
@@ -151,9 +169,9 @@ public class CashbookServiceTests
     public async Task OpenShiftAsync_WhenActiveShiftExists_ShouldThrowBusinessException()
     {
         var till = new FinanceAccount { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy 01", CurrentBalance = 500_000m };
-        var activeShift = new ShiftZReport { Id = Guid.NewGuid(), TillId = till.Id, Status = ShiftState.Open };
+        var activeShift = new ShiftZReport { Id = Guid.NewGuid(), TillId = till.Id, BranchId = till.BranchId!.Value, Status = ShiftState.Open };
         _cashbookRepo.Accounts.Add(till);
-        _cashbookRepo.Shifts.Add(activeShift);
+        _shiftRepo.Items.Add(activeShift);
 
         var request = new OpenShiftRequest(till.Id, 500_000m, null);
         var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.OpenShiftAsync(request));
@@ -437,33 +455,6 @@ public class CashbookServiceTests
     }
 
     [Fact]
-    public async Task ReconcileCashAccountAsync_ComputesDifferenceFromTheLockedBalance()
-    {
-        var accountId = Guid.NewGuid();
-        var current = new FinanceAccount { Id = accountId, CurrentBalance = 150_000m, AccountType = FinanceAccountType.Safe };
-        _cashbookRepo.Accounts.Add(current);
-        _accountRepo.Items.Add(new FinanceAccount { Id = accountId, CurrentBalance = 100_000m });
-
-        await _service.ReconcileCashAccountAsync(new ReconcileAccountRequest(accountId, 140_000m, "Kiểm kê"));
-
-        var entry = Assert.Single(_cashbookRepo.Items);
-        Assert.Equal(CashbookEntryType.Payment, entry.EntryType);
-        Assert.Equal(10_000m, entry.Amount);
-        Assert.Equal(140_000m, entry.BalanceAfter);
-        Assert.Equal(140_000m, current.CurrentBalance);
-    }
-
-    [Fact]
-    public async Task ReconcileCashAccountAsync_WhenUserHasUnauthorizedRole_ShouldThrowUnauthorizedAccessException()
-    {
-        _tenantContext.SetRole("Staff");
-        var accountId = Guid.NewGuid();
-        var request = new ReconcileAccountRequest(accountId, 5_000_000m, "Kiểm kê định kỳ");
-
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _service.ReconcileCashAccountAsync(request));
-    }
-
-    [Fact]
     public async Task VerifyChainIntegrityAsync_WhenEmptyOrValid_ShouldReturnTrue()
     {
         var accountId = Guid.NewGuid();
@@ -472,29 +463,16 @@ public class CashbookServiceTests
     }
 
     [Fact]
-    public async Task REQ_POS_BANK_01_GetAccountsAndReceiveBankTransfer_WhenTenantOnlyHasTill_ShouldAutoProvisionTenantBankAccount()
+    public async Task GetAccounts_WhenOnlyTillConfigured_DoesNotInventBankOrRequireBranch()
     {
         var branchId = Guid.NewGuid();
-        _tenantContext.SetContext("tenant_an_nhien_02", Guid.NewGuid(), branchId);
-
-        // Mở ca POS đã tạo sẵn 1 tài khoản Till (accounts.Count == 1, chưa có Bank)
+        _tenantContext.SetContext("tenant-test-01", Guid.NewGuid(), branchId);
         var till = await _service.GetOrCreateTillAsync(branchId, "Két quầy chính");
-        _cashbookRepo.Accounts.Add(till);
-
-        var accounts = await _service.GetAccountsAsync(branchId);
-        var bankResp = accounts.FirstOrDefault(a => string.Equals(a.AccountType, "Bank", StringComparison.OrdinalIgnoreCase));
-
-        Assert.NotNull(bankResp);
-        Assert.NotEqual(Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559"), bankResp!.Id);
-
-        // Đồng bộ danh sách lock của FakeCashbookRepository như DbContext thật
-        foreach (var acc in _accountRepo.Items.Where(i => _cashbookRepo.Accounts.All(a => a.Id != i.Id)))
-        {
-            _cashbookRepo.Accounts.Add(acc);
-        }
-
-        var entry = await _service.ReceiveCashAsync(bankResp.Id, FinanceAccountType.Bank, 150_000m, "POS_SALE", Guid.NewGuid(), "HD-TEST-01", "Doanh thu bán hàng POS (BANK)");
-        Assert.Equal(150_000m, entry.BalanceAfter);
+        var savesBefore = _unitOfWork.SaveChangesCount;
+        var accounts = await _service.GetAccountsAsync();
+        Assert.Equal(till.Id, Assert.Single(accounts).Id);
+        Assert.DoesNotContain(accounts, a => a.AccountType == "BANK");
+        Assert.Equal(savesBefore, _unitOfWork.SaveChangesCount);
     }
 
     [Fact]

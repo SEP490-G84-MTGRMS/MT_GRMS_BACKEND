@@ -235,9 +235,25 @@ public class CashbookService : ICashbookService
         string? sourceType = null,
         string? keyword = null,
         CancellationToken ct = default)
+        => (await GetEntriesPageAsync(accountId, branchId, fromDate, toDate, page, pageSize, entryType, sourceType, keyword, ct: ct)).Items.ToList();
+
+    public async Task<PagedResult<CashbookEntryResponse>> GetEntriesPageAsync(
+        Guid? accountId,
+        Guid? branchId,
+        DateTime? fromDate,
+        DateTime? toDate,
+        int page = 1,
+        int pageSize = 50,
+        CashbookEntryType? entryType = null,
+        string? sourceType = null,
+        string? keyword = null,
+        string? status = null, string? counterparty = null,
+        CancellationToken ct = default)
     {
         RequireOwner();
+        var normalizedStatus = status?.Trim().ToUpperInvariant();
         var kw = keyword?.Trim().ToLowerInvariant();
+        var party = counterparty?.Trim().ToLowerInvariant();
         var isGuid = Guid.TryParse(kw, out var searchGuid);
 
         var entries = await _cashbookRepo.FindAsync(e =>
@@ -245,8 +261,10 @@ public class CashbookService : ICashbookService
             (!branchId.HasValue || e.BranchId == branchId.Value || (e.AccountType == FinanceAccountType.Bank && e.BranchId == null)) &&
             (!fromDate.HasValue || e.OccurredAtUtc >= fromDate.Value) &&
             (!toDate.HasValue || e.OccurredAtUtc <= toDate.Value) &&
-            (!entryType.HasValue || e.EntryType == entryType.Value) &&
+            (!entryType.HasValue || (e.EntryType == entryType.Value && e.SourceType != "ADJUSTMENT")) &&
             (string.IsNullOrEmpty(sourceType) || e.SourceType == sourceType) &&
+            (string.IsNullOrEmpty(party) ||
+             (e.ReferenceCode == "" ? e.SourceType : e.ReferenceCode).ToLower().Contains(party)) &&
             (string.IsNullOrEmpty(kw) ||
              e.Description.ToLower().Contains(kw) ||
              e.ReferenceCode.ToLower().Contains(kw) ||
@@ -254,12 +272,28 @@ public class CashbookService : ICashbookService
              (isGuid && e.SourceId == searchGuid)),
             ct);
 
-        return entries
-            .OrderByDescending(e => e.OccurredAtUtc)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .Select(MapEntryResponse)
-            .ToList();
+        var entryIds = entries.Where(e => e.SourceType != "COMPENSATING").Select(e => e.Id).ToArray();
+        var voidedIds = entryIds.Length > 0
+            ? (await _cashbookRepo.FindAsync(e => e.SourceType == "COMPENSATING" && e.SourceId.HasValue
+                && entryIds.Contains(e.SourceId.Value), ct)).Select(e => e.SourceId!.Value).ToHashSet()
+            : new HashSet<Guid>();
+        var filtered = entries.Where(e => normalizedStatus switch
+        {
+            "VOIDED" => voidedIds.Contains(e.Id),
+            "COMPENSATING" => e.SourceType == "COMPENSATING",
+            "ACTIVE" => e.SourceType != "COMPENSATING" && !voidedIds.Contains(e.Id),
+            _ => true
+        }).ToList();
+
+        return new PagedResult<CashbookEntryResponse>
+        {
+            Items = filtered.OrderByDescending(e => e.OccurredAtUtc).ThenByDescending(e => e.Id)
+                .Skip((page - 1) * pageSize).Take(pageSize)
+                .Select(e => MapEntryResponse(e) with { IsVoided = voidedIds.Contains(e.Id) }).ToList(),
+            Page = page,
+            PageSize = pageSize,
+            TotalItems = filtered.Count
+        };
     }
 
     public async Task<FinanceAccount> GetOrCreateTillAsync(Guid branchId, string tillName, CancellationToken ct = default)
@@ -424,55 +458,7 @@ public class CashbookService : ICashbookService
     {
         RequireOwner();
         var accounts = await _accountRepo.GetAllAsync(ct);
-        var defaultBranchId = accounts.FirstOrDefault(a => a.BranchId.HasValue)?.BranchId ?? branchId ?? Guid.NewGuid();
-        var currentTenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-
-        if (accounts.Count == 0)
-        {
-            var initTill = new FinanceAccount
-            {
-                Id = Guid.NewGuid(),
-                TenantId = currentTenantId,
-                BranchId = defaultBranchId,
-                AccountType = FinanceAccountType.Till,
-                AccountName = "Két tiền mặt quầy chính",
-                CurrentBalance = 0m,
-                IsActive = true
-            };
-            var initSafe = new FinanceAccount
-            {
-                Id = Guid.NewGuid(),
-                TenantId = currentTenantId,
-                BranchId = defaultBranchId,
-                AccountType = FinanceAccountType.Safe,
-                AccountName = "Két sắt chủ shop (Safe Deposit)",
-                CurrentBalance = 0m,
-                IsActive = true
-            };
-            var initBank = new FinanceAccount
-            {
-                Id = Guid.NewGuid(),
-                TenantId = currentTenantId,
-                AccountType = FinanceAccountType.Bank,
-                AccountName = "Tài khoản Ngân hàng cửa hàng",
-                BankName = "Tài khoản Ngân hàng cửa hàng",
-                AccountHolderName = "CHỦ HỘ KINH DOANH",
-                CurrentBalance = 0m,
-                IsActive = true
-            };
-
-            await _accountRepo.AddAsync(initTill, ct);
-            await _accountRepo.AddAsync(initSafe, ct);
-            await _accountRepo.AddAsync(initBank, ct);
-            await _unitOfWork.SaveChangesAsync(ct);
-            accounts = await _accountRepo.GetAllAsync(ct);
-        }
-        else if (!accounts.Any(a => a.AccountType == FinanceAccountType.Bank && !a.IsDeleted))
-        {
-            await GetOrCreateBankAccountAsync(branchId, ct: ct);
-            accounts = await _accountRepo.GetAllAsync(ct);
-        }
-
+        // Danh sách chỉ phản ánh tài khoản đã cấu hình; GET không tự tạo két hoặc ngân hàng.
         var results = new List<CashAccountResponse>();
         var branchMap = _branchRepo != null
             ? (await _branchRepo.GetAllAsync(ct)).ToDictionary(b => b.Id, b => b.Name)
@@ -537,7 +523,10 @@ public class CashbookService : ICashbookService
                 bank.CurrentBalance,
                 bank.IsActive,
                 "VND",
-                false
+                false,
+                bank.BankCode,
+                bank.AccountHolderName,
+                bank.IsDefaultForVietQr
             ));
         }
 
@@ -850,38 +839,6 @@ public class CashbookService : ICashbookService
                 "INTERNAL_TRANSFER", payment.Id, $"PT-TRF-{dateStr}-{rand}", note, null, token);
             await _unitOfWork.SaveChangesAsync(token);
             return new TransferFundResponse(MapEntryResponse(payment), MapEntryResponse(receipt));
-        }, ct);
-    }
-
-    public async Task<CashbookEntryResponse?> ReconcileCashAccountAsync(ReconcileAccountRequest request, CancellationToken ct = default)
-    {
-        RequireOwner();
-        ValidateFinancialManagementRole();
-        if (request.ActualCountedBalance < 0)
-            throw new BusinessException("INVALID_BALANCE", "Số tiền kiểm kê không được âm.");
-
-        return await _unitOfWork.ExecuteInTransactionAsync<CashbookEntryResponse?>(async token =>
-        {
-            var account = await _cashbookRepo.GetAccountWithLockAsync(request.AccountId, token)
-                ?? throw new NotFoundException("Không tìm thấy tài khoản quỹ.");
-
-            var diff = request.ActualCountedBalance - account.CurrentBalance;
-            if (diff == 0) return null;
-            if (string.IsNullOrWhiteSpace(request.Reason))
-            {
-                throw new BusinessException("REASON_REQUIRED", "Chênh lệch kiểm kê bắt buộc phải có lý do giải trình cụ thể theo quy tắc GBR-CSH-04.");
-            }
-
-            var refCode = "KK-" + DateTime.UtcNow.ToString("yyyyMMdd") + "-" + Random.Shared.Next(100, 999);
-            var isOverage = diff > 0;
-            var direction = isOverage ? "thừa" : "thiếu";
-            var entry = await RecordCashMovementAsync(account, isOverage ? CashbookEntryType.Receipt : CashbookEntryType.Payment,
-                Math.Abs(diff), "ADJUSTMENT", null, refCode,
-                $"Điều chỉnh {direction} kiểm kê: {request.Reason.Trim()} ({diff:+#,0;-#,0} đ)", null, token);
-            await QueueEntryNotificationAsync(entry, BusinessNotificationTypes.CashbookReconciliationDiscrepancy,
-                $"Kiểm kê quỹ {direction} tiền", token);
-            await _unitOfWork.SaveChangesAsync(token);
-            return MapEntryResponse(entry);
         }, ct);
     }
 

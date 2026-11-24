@@ -1,5 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
+using System.Globalization;
 using Microsoft.Extensions.Configuration;
 using MT_GRMS.Domain.Entities.Finance;
 
@@ -34,7 +36,7 @@ public class TaxSnapshotSignatureService : ITaxSnapshotSignatureService
     public string ComputeSignature(HouseholdTaxSnapshot snapshot)
     {
         var keyId = DefaultKeyId;
-        var canonicalJson = BuildCanonicalJson(snapshot);
+        var canonicalJson = BuildCanonicalJson(snapshot, CanonicalizePolicy(snapshot.TaxPolicyJson));
         var secret = _keyStore[keyId];
 
         using var hmac = new HMACSHA256(secret);
@@ -73,32 +75,87 @@ public class TaxSnapshotSignatureService : ITaxSnapshotSignatureService
             return false; // Unknown KeyId cannot be verified
         }
 
-        var canonicalJson = BuildCanonicalJson(snapshot);
-        using var hmac = new HMACSHA256(secret);
-        var expectedHashBytes = hmac.ComputeHash(Encoding.UTF8.GetBytes(canonicalJson));
-        var expectedHash = Convert.ToHexString(expectedHashBytes).ToLowerInvariant();
-
         var actualBytes = Encoding.UTF8.GetBytes(actualHash);
-        var expectedBytes = Encoding.UTF8.GetBytes(expectedHash);
+        using var hmac = new HMACSHA256(secret);
+        bool Matches(string policy)
+        {
+            var hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(BuildCanonicalJson(snapshot, policy)));
+            var expectedBytes = Encoding.UTF8.GetBytes(Convert.ToHexString(hash).ToLowerInvariant());
+            return CryptographicOperations.FixedTimeEquals(actualBytes, expectedBytes);
+        }
 
-        return CryptographicOperations.FixedTimeEquals(actualBytes, expectedBytes);
+        try
+        {
+            var canonical = CanonicalizePolicy(snapshot.TaxPolicyJson);
+            if (Matches(canonical)) return true;
+
+            // Old snapshots signed the serialized policy rather than its canonical representation.
+            if (string.IsNullOrWhiteSpace(snapshot.TaxPolicyJson) || canonical == "{}") return false;
+            if (Matches(snapshot.TaxPolicyJson)) return true;
+
+            // Recover the original serializer order only if every stored field is preserved.
+            var legacyPolicy = JsonSerializer.Deserialize<TaxSnapshotPolicy>(snapshot.TaxPolicyJson);
+            if (legacyPolicy?.Rules is null) return false;
+            var serialized = JsonSerializer.Serialize(legacyPolicy);
+            return CanonicalizePolicy(serialized) == canonical && Matches(serialized);
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
-    private static string BuildCanonicalJson(HouseholdTaxSnapshot s)
+    private static string CanonicalizePolicy(string? policy)
     {
-        var utcTime = s.FinalizedAtUtc.Kind == DateTimeKind.Utc 
-            ? s.FinalizedAtUtc 
-            : s.FinalizedAtUtc.ToUniversalTime();
+        if (string.IsNullOrWhiteSpace(policy)) return "{}";
+        using var document = JsonDocument.Parse(policy);
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+            WriteCanonicalValue(writer, document.RootElement);
+        return Encoding.UTF8.GetString(buffer.ToArray());
+    }
+
+    private static void WriteCanonicalValue(Utf8JsonWriter writer, JsonElement value)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in value.EnumerateObject().OrderBy(property => property.Name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(property.Name);
+                    WriteCanonicalValue(writer, property.Value);
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var element in value.EnumerateArray())
+                    WriteCanonicalValue(writer, element);
+                writer.WriteEndArray();
+                break;
+            default:
+                value.WriteTo(writer);
+                break;
+        }
+    }
+
+    private static string BuildCanonicalJson(HouseholdTaxSnapshot s, string policy)
+    {
+        // The PostgreSQL timestamp column stores UTC without a time zone.
+        var utcTime = s.FinalizedAtUtc.Kind == DateTimeKind.Local
+            ? s.FinalizedAtUtc.ToUniversalTime()
+            : DateTime.SpecifyKind(s.FinalizedAtUtc, DateTimeKind.Utc);
         var bookDataBytes = Encoding.UTF8.GetBytes(s.BookDataJson ?? string.Empty);
         var bookDataHash = Convert.ToHexString(SHA256.HashData(bookDataBytes)).ToLowerInvariant();
 
         // Legacy snapshots retain their original signature format.
-        var policyHash = string.IsNullOrWhiteSpace(s.TaxPolicyJson) || s.TaxPolicyJson == "{}"
+        var policyHash = policy == "{}"
             ? string.Empty
-            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(s.TaxPolicyJson))).ToLowerInvariant();
+            : Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(policy))).ToLowerInvariant();
 
         return string.Format(
-            System.Globalization.CultureInfo.InvariantCulture,
+            CultureInfo.InvariantCulture,
             "{{\"TenantId\":\"{0}\",\"Year\":{1},\"PeriodType\":{2},\"PeriodNumber\":{3},\"TaxableRevenue\":{4:F2},\"TotalTaxAmount\":{5:F2},\"BookDataHash\":\"{6}\",\"FinalizedAtUtc\":\"{7:yyyy-MM-ddTHH:mm:ssZ}\",\"FinalizedBy\":\"{8}\"{9}}}",
             s.TenantId ?? string.Empty,
             s.Year,

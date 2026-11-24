@@ -51,6 +51,7 @@ public class HouseholdTaxSnapshotConfiguration : IEntityTypeConfiguration<Househ
 
         builder.Property(x => x.TaxPolicyJson)
             .HasColumnType("jsonb")
+            .HasDefaultValueSql("'{}'::jsonb")
             .IsRequired();
 
         builder.Property(x => x.Status)

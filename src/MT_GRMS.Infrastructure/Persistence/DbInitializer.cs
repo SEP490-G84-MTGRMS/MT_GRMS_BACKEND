@@ -967,6 +967,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
         try
         {
+            // Bắt buộc: ADD IF NOT EXISTS không sửa cột nullable đã tồn tại trên DB cũ.
+            // Không dùng ExecuteSqlSafeAsync ở đây: lỗi chuẩn hóa phải dừng khởi động.
+            if (context.Database.IsNpgsql())
+                await context.Database.ExecuteSqlRawAsync(Migrations.NormalizeTaxPolicyJson.UpSql.Replace("{", "{{").Replace("}", "}}"));
+
             // 1. Bổ sung các cột Status, RevisionNumber, SupersededSnapshotId, RectificationReason nếu chưa có
             await ExecuteSqlSafeAsync(context, @"
                 ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""Status"" integer NOT NULL DEFAULT 1;
@@ -1028,7 +1033,7 @@ ON ""HouseholdTaxSnapshots"" (
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ schema cho bảng HouseholdTaxSnapshots");
+            throw new HouseholdTaxSnapshotSchemaException(ex);
         }
     }
 
@@ -1805,6 +1810,7 @@ END $$;
                 }
                 catch (Exception ex)
                 {
+                    if (ex is HouseholdTaxSnapshotSchemaException) throw;
                     logger?.LogError(ex, "Lỗi khi chạy EnsureSupplierDispatchSchemaAsync / EnsureBranchColumnsAsync");
                 }
 
@@ -1839,7 +1845,8 @@ END $$;
         }
         catch (Exception ex)
         {
-            if (ex is InvalidOperationException && ex.Message.StartsWith("MERGE_SCHEMA_FAILED:", StringComparison.Ordinal))
+            if (ex is HouseholdTaxSnapshotSchemaException ||
+                ex is InvalidOperationException && ex.Message.StartsWith("MERGE_SCHEMA_FAILED:", StringComparison.Ordinal))
                 throw;
             logger?.LogWarning(ex, "Lỗi trong quá trình kiểm tra cấu trúc CSDL hoặc migrations (bỏ qua nếu bảng đã tồn tại).");
         }

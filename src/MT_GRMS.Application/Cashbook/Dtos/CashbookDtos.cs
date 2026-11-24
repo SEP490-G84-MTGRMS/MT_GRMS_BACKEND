@@ -57,7 +57,8 @@ public record CashbookEntryResponse(
     string CategoryCode = "REVIEW_REQUIRED",
     FinancialNature FinancialNature = FinancialNature.Suspense,
     CashbookTaxTreatment TaxTreatment = CashbookTaxTreatment.ReviewRequired,
-    string? TaxTreatmentReason = null
+    string? TaxTreatmentReason = null,
+    bool IsVoided = false
 );
 public record CashbookCreateRequest(
     Guid BranchId,
@@ -79,7 +80,10 @@ public record CashAccountResponse(
     decimal InitialBalance,
     bool IsActive,
     string Currency,
-    bool IsSafeDeposit
+    bool IsSafeDeposit,
+    string? BankCode = null,
+    string? AccountHolderName = null,
+    bool IsDefaultForVietQr = false
 );
 
 public record CashbookSummaryResponse(
@@ -140,12 +144,6 @@ public record TransferFundRequest(
     Guid ToAccountId,
     decimal Amount,
     string? Note
-);
-
-public record ReconcileAccountRequest(
-    Guid AccountId,
-    decimal ActualCountedBalance,
-    string Reason
 );
 
 public record VoidEntryRequest(
