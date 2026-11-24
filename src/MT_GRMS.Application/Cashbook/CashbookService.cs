@@ -56,87 +56,93 @@ public class CashbookService : ICashbookService
     public async Task<ShiftResponse> OpenShiftAsync(OpenShiftRequest request, CancellationToken ct = default)
     {
         RequireOwner();
-        var till = await _cashbookRepo.GetAccountWithLockAsync(request.TillId, ct)
-            ?? throw new NotFoundException($"Không tìm thấy két quầy với Id: {request.TillId}");
-        if (till.AccountType != FinanceAccountType.Till || !till.BranchId.HasValue || !till.IsActive || till.IsDeleted)
-            throw new BusinessException("INVALID_TILL", "Két quầy không hợp lệ hoặc không còn hoạt động.");
-
-        var activeShifts = await _shiftRepo.FindAsync(
-            s => s.BranchId == till.BranchId.Value &&
-                 (s.Status == ShiftState.Open || s.Status == ShiftState.Closing) && !s.IsDeleted, ct);
-        if (activeShifts.Any())
+        return await _unitOfWork.ExecuteInTransactionAsync(async token =>
         {
-            throw new BusinessException("ACTIVE_SHIFT_EXISTS", "Chi nhánh đang có ca làm việc chưa chốt. Vui lòng chốt ca trước.");
-        }
+            var till = await _cashbookRepo.GetAccountWithLockAsync(request.TillId, token)
+                ?? throw new NotFoundException($"Không tìm thấy két quầy với Id: {request.TillId}");
+            if (till.AccountType != FinanceAccountType.Till || !till.BranchId.HasValue || !till.IsActive || till.IsDeleted)
+                throw new BusinessException("INVALID_TILL", "Két quầy không hợp lệ hoặc không còn hoạt động.");
 
-        var lastClosed = await _cashbookRepo.GetLastClosedShiftByTillIdAsync(request.TillId, ct);
-        var expectedOpeningFloat = lastClosed?.RetainedFloatAmount ?? till.CurrentBalance;
+            var activeShifts = await _shiftRepo.FindAsync(
+                s => s.BranchId == till.BranchId.Value &&
+                     (s.Status == ShiftState.Open || s.Status == ShiftState.Closing) && !s.IsDeleted, token);
+            if (activeShifts.Any())
+            {
+                throw new BusinessException("ACTIVE_SHIFT_EXISTS", "Chi nhánh đang có ca làm việc chưa chốt. Vui lòng chốt ca trước.");
+            }
 
-        var shift = new ShiftZReport
-        {
-            TenantId = _tenantContext.CurrentTenantId ?? string.Empty,
-            BranchId = till.BranchId.Value,
-            TillId = request.TillId,
-            CashierUserId = Guid.NewGuid(),
-            OpeningFloat = expectedOpeningFloat,
-            ExpectedCash = expectedOpeningFloat,
-            ActualCashCounted = request.CountedFloat,
-            Discrepancy = request.CountedFloat - expectedOpeningFloat,
-            RetainedFloatAmount = 0,
-            DroppedToSafeAmount = 0,
-            Status = ShiftState.Open,
-            Notes = request.Notes
-        };
+            var lastClosed = await _cashbookRepo.GetLastClosedShiftByTillIdAsync(request.TillId, token);
+            var expectedOpeningFloat = lastClosed?.RetainedFloatAmount ?? till.CurrentBalance;
 
-        await _shiftRepo.AddAsync(shift, ct);
-        till.ActiveShiftId = shift.Id;
-        till.CurrentBalance = request.CountedFloat;
-        await _unitOfWork.SaveChangesAsync(ct);
+            var shift = new ShiftZReport
+            {
+                TenantId = _tenantContext.CurrentTenantId ?? string.Empty,
+                BranchId = till.BranchId.Value,
+                TillId = request.TillId,
+                CashierUserId = Guid.NewGuid(),
+                OpeningFloat = expectedOpeningFloat,
+                ExpectedCash = expectedOpeningFloat,
+                ActualCashCounted = request.CountedFloat,
+                Discrepancy = request.CountedFloat - expectedOpeningFloat,
+                RetainedFloatAmount = 0,
+                DroppedToSafeAmount = 0,
+                Status = ShiftState.Open,
+                Notes = request.Notes
+            };
 
-        return MapShiftResponse(shift);
+            await _shiftRepo.AddAsync(shift, token);
+            till.ActiveShiftId = shift.Id;
+            till.CurrentBalance = request.CountedFloat;
+            await _unitOfWork.SaveChangesAsync(token);
+
+            return MapShiftResponse(shift);
+        }, ct);
     }
 
     public async Task<ShiftResponse> CloseShiftZReportAsync(CloseShiftRequest request, CancellationToken ct = default)
     {
         RequireOwner();
-        var shift = await _shiftRepo.GetByIdAsync(request.ShiftId, ct)
-            ?? throw new NotFoundException($"Không tìm thấy ca làm việc: {request.ShiftId}");
-
-        if (shift.Status is ShiftState.Closed or ShiftState.ForceClosed)
+        return await _unitOfWork.ExecuteInTransactionAsync(async token =>
         {
-            throw new BusinessException("SHIFT_ALREADY_CLOSED", "Ca làm việc này đã được chốt trước đó.");
-        }
+            var shift = await _shiftRepo.GetByIdAsync(request.ShiftId, token)
+                ?? throw new NotFoundException($"Không tìm thấy ca làm việc: {request.ShiftId}");
 
-        var till = await _cashbookRepo.GetAccountWithLockAsync(shift.TillId, ct)
-            ?? throw new NotFoundException($"Không tìm thấy két quầy: {shift.TillId}");
+            if (shift.Status is ShiftState.Closed or ShiftState.ForceClosed)
+            {
+                throw new BusinessException("SHIFT_ALREADY_CLOSED", "Ca làm việc này đã được chốt trước đó.");
+            }
 
-        shift.ExpectedCash = shift.OpeningFloat + shift.TotalCashIn - shift.TotalCashOut;
-        shift.ActualCashCounted = request.ActualCashCounted;
-        shift.Discrepancy = request.ActualCashCounted - shift.ExpectedCash;
-        shift.RetainedFloatAmount = request.RetainedFloatAmount;
-        shift.DroppedToSafeAmount = Math.Max(0, request.ActualCashCounted - request.RetainedFloatAmount);
-        shift.ClosedAtUtc = DateTime.UtcNow;
-        shift.Status = ShiftState.Closed;
-        shift.Notes = request.Notes;
+            var till = await _cashbookRepo.GetAccountWithLockAsync(shift.TillId, token)
+                ?? throw new NotFoundException($"Không tìm thấy két quầy: {shift.TillId}");
 
-        // Xử lý chênh lệch ngoài dung sai (+- 2000đ)
-        decimal discrepancy = shift.Discrepancy ?? 0m;
-        if (discrepancy > 2000)
-        {
-            await RecordEntryInternalAsync(till, till.BranchId, CashbookEntryType.Receipt, discrepancy, "CASH_OVER_SUSPENSE", shift.Id, "SHF-" + shift.Id.ToString()[..8], "Thừa tiền chốt ca chờ chủ xử lý", ct);
-        }
-        else if (discrepancy < -2000)
-        {
-            await RecordEntryInternalAsync(till, till.BranchId, CashbookEntryType.Payment, Math.Abs(discrepancy), "CASH_SHORTAGE_PENDING", shift.Id, "SHF-" + shift.Id.ToString()[..8], "Thiếu tiền chốt ca chờ xử lý bồi hoàn", ct);
-        }
+            shift.ExpectedCash = shift.OpeningFloat + shift.TotalCashIn - shift.TotalCashOut;
+            shift.ActualCashCounted = request.ActualCashCounted;
+            shift.Discrepancy = request.ActualCashCounted - shift.ExpectedCash;
+            shift.RetainedFloatAmount = request.RetainedFloatAmount;
+            shift.DroppedToSafeAmount = Math.Max(0, request.ActualCashCounted - request.RetainedFloatAmount);
+            shift.ClosedAtUtc = DateTime.UtcNow;
+            shift.Status = ShiftState.Closed;
+            shift.Notes = request.Notes;
 
-        till.ActiveShiftId = null;
-        till.CurrentBalance = request.RetainedFloatAmount;
-        if (Math.Abs(discrepancy) > 2000m && _notificationOutbox != null)
-            await _notificationOutbox.EnqueueShiftDiscrepancyAsync(shift, discrepancy, ct);
-        await _unitOfWork.SaveChangesAsync(ct);
+            // Xử lý chênh lệch ngoài dung sai (+- 2000đ)
+            decimal discrepancy = shift.Discrepancy ?? 0m;
+            if (discrepancy > 2000)
+            {
+                await RecordEntryInternalAsync(till, till.BranchId, CashbookEntryType.Receipt, discrepancy, "CASH_OVER_SUSPENSE", shift.Id, "SHF-" + shift.Id.ToString()[..8], "Thừa tiền chốt ca chờ chủ xử lý", token);
+            }
+            else if (discrepancy < -2000)
+            {
+                await RecordEntryInternalAsync(till, till.BranchId, CashbookEntryType.Payment, Math.Abs(discrepancy), "CASH_SHORTAGE_PENDING", shift.Id, "SHF-" + shift.Id.ToString()[..8], "Thiếu tiền chốt ca chờ xử lý bồi hoàn", token);
+            }
 
-        return MapShiftResponse(shift);
+            till.ActiveShiftId = null;
+            till.CurrentBalance = request.RetainedFloatAmount;
+            if (Math.Abs(discrepancy) > 2000m && _notificationOutbox != null)
+                await _notificationOutbox.EnqueueShiftDiscrepancyAsync(shift, discrepancy, token);
+            await _unitOfWork.SaveChangesAsync(token);
+
+            return MapShiftResponse(shift);
+        }, ct);
     }
 
     public async Task<bool> ProcessCashDropAsync(CashDropRequest request, CancellationToken ct = default)
@@ -147,29 +153,32 @@ public class CashbookService : ICashbookService
             throw new BusinessException("INVALID_AMOUNT", "Số tiền cash drop phải lớn hơn 0.");
         }
 
-        var shift = await _shiftRepo.GetByIdAsync(request.ShiftId, ct)
-            ?? throw new NotFoundException("Không tìm thấy ca làm việc.");
-
-        var till = await _cashbookRepo.GetAccountWithLockAsync(shift.TillId, ct)
-            ?? throw new NotFoundException("Không tìm thấy két quầy.");
-
-        if (till.CurrentBalance < request.Amount)
+        return await _unitOfWork.ExecuteInTransactionAsync(async token =>
         {
-            throw new InsufficientStockException($"Két quầy không đủ tiền để cash drop (Hiện có: {till.CurrentBalance:N0}đ).");
-        }
+            var shift = await _shiftRepo.GetByIdAsync(request.ShiftId, token)
+                ?? throw new NotFoundException("Không tìm thấy ca làm việc.");
 
-        var safe = await GetOrCreateSafeAsync(till.BranchId ?? Guid.Empty, ct);
-        var lockedSafe = await _cashbookRepo.GetAccountWithLockAsync(safe.Id, ct) ?? safe;
+            var till = await _cashbookRepo.GetAccountWithLockAsync(shift.TillId, token)
+                ?? throw new NotFoundException("Không tìm thấy két quầy.");
 
-        till.CurrentBalance -= request.Amount;
-        lockedSafe.CurrentBalance += request.Amount;
-        shift.DroppedToSafeAmount += request.Amount;
+            if (till.CurrentBalance < request.Amount)
+            {
+                throw new InsufficientStockException($"Két quầy không đủ tiền để cash drop (Hiện có: {till.CurrentBalance:N0}đ).");
+            }
 
-        await RecordEntryInternalAsync(till, till.BranchId, CashbookEntryType.Payment, request.Amount, "CASH_DROP", shift.Id, "CD-" + shift.Id.ToString()[..8], "Cash drop chuyển tiền két quầy sang két sắt", ct);
-        await RecordEntryInternalAsync(lockedSafe, till.BranchId, CashbookEntryType.Receipt, request.Amount, "CASH_DROP", shift.Id, "CD-" + shift.Id.ToString()[..8], "Nhận cash drop từ két quầy", ct);
+            var safe = await GetOrCreateSafeAsync(till.BranchId ?? Guid.Empty, token);
+            var lockedSafe = await _cashbookRepo.GetAccountWithLockAsync(safe.Id, token) ?? safe;
 
-        await _unitOfWork.SaveChangesAsync(ct);
-        return true;
+            till.CurrentBalance -= request.Amount;
+            lockedSafe.CurrentBalance += request.Amount;
+            shift.DroppedToSafeAmount += request.Amount;
+
+            await RecordEntryInternalAsync(till, till.BranchId, CashbookEntryType.Payment, request.Amount, "CASH_DROP", shift.Id, "CD-" + shift.Id.ToString()[..8], "Cash drop chuyển tiền két quầy sang két sắt", token);
+            await RecordEntryInternalAsync(lockedSafe, till.BranchId, CashbookEntryType.Receipt, request.Amount, "CASH_DROP", shift.Id, "CD-" + shift.Id.ToString()[..8], "Nhận cash drop từ két quầy", token);
+
+            await _unitOfWork.SaveChangesAsync(token);
+            return true;
+        }, ct);
     }
 
     public Task<CashbookEntryResponse> DisburseCashAsync(Guid accountId, FinanceAccountType accountType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct = default) =>
