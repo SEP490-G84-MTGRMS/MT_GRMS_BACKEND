@@ -45,6 +45,7 @@ public class RepackService : IRepackService
         var tenantId = RequireTenant();
         var stock = await _repository.GetBranchStockAsync(tenantId, branchStockId, ct)
             ?? throw new BusinessException("BRANCH_STOCK_NOT_FOUND", "Không tìm thấy lô tồn kho.");
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, stock.BranchId);
 
         var product = await _repository.GetProductWithUnitsAsync(tenantId, stock.ProductId, ct)
             ?? throw new BusinessException("PRODUCT_NOT_FOUND", "Không tìm thấy sản phẩm.");
@@ -83,6 +84,7 @@ public class RepackService : IRepackService
     public async Task<PackageScanDto?> FindSellablePackageByCodeAsync(Guid branchId, string code, CancellationToken ct = default)
     {
         if (branchId == Guid.Empty || string.IsNullOrWhiteSpace(code)) return null;
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, branchId);
         var package = await _repository.FindPackageByCodeAsync(RequireTenant(), branchId, code.Trim(), ct);
         if (package == null || package.Status != "AVAILABLE" ||
             (package.ExpiryDate.HasValue && package.ExpiryDate.Value.Date < DateTime.UtcNow.Date)) return null;
@@ -100,6 +102,7 @@ public class RepackService : IRepackService
         {
             return Array.Empty<PackageScanDto>();
         }
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, branchId);
 
         var rows = await _repository.SearchSellablePackagesAsync(
             RequireTenant(), branchId, query.Trim(), limit, ct);
@@ -159,6 +162,7 @@ public class RepackService : IRepackService
 
         var stock = await _repository.GetBranchStockAsync(tenantId, request.BranchStockId, ct)
             ?? throw new BusinessException("BRANCH_STOCK_NOT_FOUND", "Không tìm thấy lô tồn kho.");
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, stock.BranchId);
 
         var product = await _repository.GetProductWithUnitsAsync(tenantId, stock.ProductId, ct)
             ?? throw new BusinessException("PRODUCT_NOT_FOUND", "Không tìm thấy sản phẩm.");
@@ -337,6 +341,7 @@ public class RepackService : IRepackService
         var tenantId = RequireTenant();
         var package = await _repository.GetPackageByIdAsync(tenantId, packageId, ct)
             ?? throw new BusinessException("PACKAGE_NOT_FOUND", "Không tìm thấy khay.");
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, package.BranchId);
 
         if (package.Status is not ("AVAILABLE" or "QUARANTINED"))
         {
@@ -374,6 +379,7 @@ public class RepackService : IRepackService
         var tenantId = RequireTenant();
         var package = await _repository.GetPackageByIdAsync(tenantId, packageId, ct)
             ?? throw new BusinessException("PACKAGE_NOT_FOUND", "Không tìm thấy khay.");
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, package.BranchId);
 
         if (package.Status != "AVAILABLE")
         {
@@ -390,6 +396,7 @@ public class RepackService : IRepackService
         var tenantId = RequireTenant();
         var package = await _repository.GetPackageByIdAsync(tenantId, packageId, ct)
             ?? throw new BusinessException("PACKAGE_NOT_FOUND", "Không tìm thấy khay.");
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, package.BranchId);
 
         if (package.Status != "QUARANTINED")
         {
@@ -409,6 +416,7 @@ public class RepackService : IRepackService
         var tenantId = RequireTenant();
         var package = await _repository.GetPackageByIdAsync(tenantId, packageId, ct)
             ?? throw new BusinessException("PACKAGE_NOT_FOUND", "Không tìm thấy khay.");
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, package.BranchId);
 
         if (package.Status is not ("AVAILABLE" or "QUARANTINED"))
         {
