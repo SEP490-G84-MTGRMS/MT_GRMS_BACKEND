@@ -293,6 +293,20 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             .OrderBy(o => o.CreatedAt)
             .ToListAsync(cancellationToken);
 
+        // Truy vấn phiếu thu thủ công / bút toán bù trừ chịu thuế ngoài POS để khớp 100% với tờ khai 01/CNKD
+        var manualRevenueQuery = _context.CashbookEntries.AsNoTracking().Where(e =>
+            e.OccurredAtUtc >= fromDateUtc &&
+            e.OccurredAtUtc < toDateUtc &&
+            (e.SourceType == "MANUAL" || e.SourceType == "COMPENSATING") &&
+            e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue);
+        if (branchId.HasValue)
+        {
+            manualRevenueQuery = manualRevenueQuery.Where(e => e.BranchId == branchId.Value);
+        }
+        var manualTaxableEntries = await manualRevenueQuery
+            .OrderBy(e => e.OccurredAtUtc)
+            .ToListAsync(cancellationToken);
+
         // Truy vấn phiếu chi trong kỳ (loại trừ vốn chủ sở hữu)
         var voucherQuery = _context.ExpenseVouchers.AsQueryable();
         if (branchId.HasValue)
@@ -330,6 +344,22 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
                     BookCode = "S1a-HKD"
                 };
             }));
+            result.AddRange(manualTaxableEntries.Select(e =>
+            {
+                var signedAmount = e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount;
+                return new AccountingBookEntryDto
+                {
+                    VoucherNumber = e.EntryCode,
+                    VoucherDate = e.OccurredAtUtc,
+                    Description = !string.IsNullOrWhiteSpace(e.Description) ? e.Description : $"Doanh thu ngoài POS ({e.EntryCode})",
+                    Amount = signedAmount,
+                    Category = "Doanh thu ngoài POS chịu thuế",
+                    SectionGroup = "Doanh thu bán lẻ",
+                    BookType = AccountingBookType.S1a_RevenueGroup1,
+                    BookCode = "S1a-HKD",
+                    InvoiceNumber = e.ReferenceCode
+                };
+            }));
         }
 
         // 2. Phân loại theo Nhóm 2 (Phương pháp tỷ lệ % doanh thu): Dùng mẫu S2a-HKD
@@ -350,6 +380,24 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
                     TaxAmount = Math.Round(netAmount * 0.01m, 0, MidpointRounding.AwayFromZero),
                     BookType = AccountingBookType.S2a_RevenueGroup2,
                     BookCode = "S2a-HKD"
+                };
+            }));
+            result.AddRange(manualTaxableEntries.Select(e =>
+            {
+                var signedAmount = e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount;
+                return new AccountingBookEntryDto
+                {
+                    VoucherNumber = e.EntryCode,
+                    VoucherDate = e.OccurredAtUtc,
+                    Description = !string.IsNullOrWhiteSpace(e.Description) ? e.Description : $"Doanh thu ngoài POS chịu thuế ({e.EntryCode})",
+                    Amount = signedAmount,
+                    Category = "Doanh thu ngoài POS chịu thuế",
+                    SectionGroup = "1. Phân phối, cung cấp hàng hóa",
+                    TaxRate = 1.0m,
+                    TaxAmount = Math.Round(signedAmount * 0.01m, 0, MidpointRounding.AwayFromZero),
+                    BookType = AccountingBookType.S2a_RevenueGroup2,
+                    BookCode = "S2a-HKD",
+                    InvoiceNumber = e.ReferenceCode
                 };
             }));
         }
@@ -375,6 +423,24 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
                     BookCode = "S2b-HKD"
                 };
             }));
+            result.AddRange(manualTaxableEntries.Select(e =>
+            {
+                var signedAmount = e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount;
+                return new AccountingBookEntryDto
+                {
+                    VoucherNumber = e.EntryCode,
+                    VoucherDate = e.OccurredAtUtc,
+                    Description = !string.IsNullOrWhiteSpace(e.Description) ? e.Description : $"Doanh thu ngoài POS kê khai ({e.EntryCode})",
+                    Amount = signedAmount,
+                    Category = "Doanh thu ngoài POS kê khai",
+                    SectionGroup = "1. Phân phối, cung cấp hàng hóa",
+                    TaxRate = 1.0m,
+                    TaxAmount = Math.Round(signedAmount * 0.01m, 0, MidpointRounding.AwayFromZero),
+                    BookType = AccountingBookType.S2b_RevenueDeclaration,
+                    BookCode = "S2b-HKD",
+                    InvoiceNumber = e.ReferenceCode
+                };
+            }));
         }
 
         // S2c-HKD: Sổ chi tiết doanh thu, chi phí (Thu & Chi)
@@ -394,6 +460,22 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
                     SectionGroup = "1. Doanh thu",
                     BookType = AccountingBookType.S2c_RevenueAndExpense,
                     BookCode = "S2c-HKD"
+                };
+            }));
+            result.AddRange(manualTaxableEntries.Select(e =>
+            {
+                var signedAmount = e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount;
+                return new AccountingBookEntryDto
+                {
+                    VoucherNumber = e.EntryCode,
+                    VoucherDate = e.OccurredAtUtc,
+                    Description = $"[Thu] {(!string.IsNullOrWhiteSpace(e.Description) ? e.Description : $"Doanh thu ngoài POS ({e.EntryCode})")}",
+                    Amount = signedAmount,
+                    Category = "Doanh thu",
+                    SectionGroup = "1. Doanh thu",
+                    BookType = AccountingBookType.S2c_RevenueAndExpense,
+                    BookCode = "S2c-HKD",
+                    InvoiceNumber = e.ReferenceCode
                 };
             }));
 
