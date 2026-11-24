@@ -209,14 +209,22 @@ public class ExpensesControllerTests
         };
 
         _mockExpenseService
-            .Setup(s => s.GetExpensesAsync(branchId, null, null, 1, 50, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(list);
+            .Setup(s => s.GetExpensesPageAsync(branchId, null, null, 1, 50, null, null, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<ExpenseVoucherResponse>
+            {
+                Items = list,
+                Page = 1,
+                PageSize = 50,
+                TotalItems = list.Count,
+            });
 
         var actionResult = await _controller.GetExpenses(branchId, null, null, 1, 50, CancellationToken.None);
 
         var okResult = Assert.IsType<OkObjectResult>(actionResult.Result);
-        var apiResponse = Assert.IsType<ApiResponse<List<ExpenseVoucherResponse>>>(okResult.Value);
+        var apiResponse = Assert.IsAssignableFrom<ApiResponse<List<ExpenseVoucherResponse>>>(okResult.Value);
         Assert.True(apiResponse.Success);
         Assert.Single(apiResponse.Data!);
+        var paged = Assert.IsType<ExpensesPagedResponse>(okResult.Value);
+        Assert.Equal(1, paged.TotalItems);
     }
 }
