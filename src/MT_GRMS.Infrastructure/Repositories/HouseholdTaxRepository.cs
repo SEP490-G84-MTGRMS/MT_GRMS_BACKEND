@@ -803,7 +803,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
                     result.Add(new AccountingBookEntryDto
                     {
                         VoucherNumber = $"TAX-VAT-{s.Year}-{pCode}",
-                        VoucherDate = s.FinalizedAtUtc ?? s.CreatedAt,
+                        VoucherDate = s.FinalizedAtUtc != default ? s.FinalizedAtUtc : s.CreatedAt,
                         Description = $"[Nghĩa vụ thuế] Thuế GTGT phát sinh {pText}",
                         Amount = s.VatAmount,
                         InAmount = s.VatAmount,
@@ -825,7 +825,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
                     result.Add(new AccountingBookEntryDto
                     {
                         VoucherNumber = $"TAX-PIT-{s.Year}-{pCode}",
-                        VoucherDate = s.FinalizedAtUtc ?? s.CreatedAt,
+                        VoucherDate = s.FinalizedAtUtc != default ? s.FinalizedAtUtc : s.CreatedAt,
                         Description = $"[Nghĩa vụ thuế] Thuế TNCN phát sinh {pText}",
                         Amount = s.PitAmount,
                         InAmount = s.PitAmount,
