@@ -32,6 +32,17 @@ public class CashbookRepository : GenericRepository<CashbookEntry>, ICashbookRep
 
     public async Task<string> GetLastAuditHashAsync(Guid accountId, CancellationToken ct = default)
     {
+        var pendingLocal = _context.CashbookEntries.Local
+            .Where(e => e.AccountId == accountId && !string.IsNullOrEmpty(e.AuditHash))
+            .OrderByDescending(e => e.OccurredAtUtc)
+            .ThenByDescending(e => e.CreatedAt)
+            .FirstOrDefault();
+
+        if (pendingLocal != null)
+        {
+            return pendingLocal.AuditHash;
+        }
+
         var lastEntry = await _context.CashbookEntries
             .Where(e => e.AccountId == accountId)
             .OrderByDescending(e => e.OccurredAtUtc)

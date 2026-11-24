@@ -967,7 +967,7 @@ public class CashbookService : ICashbookService
         var entry = new CashbookEntry
         {
             TenantId = _tenantContext.CurrentTenantId,
-            EntryCode = "CB-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff"),
+            EntryCode = $"CB-{DateTime.UtcNow:yyyyMMddHHmmssfff}-{Random.Shared.Next(1000, 9999)}",
             AccountId = account.Id,
             AccountType = account.AccountType,
             BranchId = branchId,
