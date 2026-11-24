@@ -72,11 +72,19 @@ public class ShiftService : IShiftService
         decimal openingFloatExpected = prevShift?.RetainedFloatAmount ?? request.OpeningFloat;
         decimal openingDiscrepancy = request.OpeningFloat - openingFloatExpected;
 
+        var openedAtUtc = DateTime.UtcNow;
+        var businessDayStart = await _shiftRepository.GetBusinessDayStartTimeAsync(request.BranchId, cancellationToken);
+        var businessDate = BusinessDateResolver.Resolve(openedAtUtc, businessDayStart);
+        if (await _shiftRepository.IsBusinessDayClosedAsync(request.BranchId, businessDate, cancellationToken))
+        {
+            throw new BusinessException(
+                "BUSINESS_DAY_CLOSED",
+                $"Ngày nghiệp vụ {businessDate:dd/MM/yyyy} đã khóa sổ cuối ngày. Không thể mở ca mới vào ngày đã chốt sổ.");
+        }
+
         // 3. Sinh mã ca tự động
         var shiftCode = await _shiftRepository.GenerateNextShiftCodeAsync(request.BranchId, cancellationToken);
 
-        var openedAtUtc = DateTime.UtcNow;
-        var businessDayStart = await _shiftRepository.GetBusinessDayStartTimeAsync(request.BranchId, cancellationToken);
         var shift = new ShiftZReport
         {
             TenantId = _tenantContext.CurrentTenantId,
@@ -88,7 +96,7 @@ public class ShiftService : IShiftService
             OpenedScheduleId = eligibility.ActiveSchedule?.ScheduleId,
             PrevShiftId = prevShift?.Id,
             OpenedAtUtc = openedAtUtc,
-            BusinessDate = BusinessDateResolver.Resolve(openedAtUtc, businessDayStart),
+            BusinessDate = businessDate,
             OpeningFloatExpected = openingFloatExpected,
             OpeningFloat = request.OpeningFloat,
             OpeningDiscrepancy = openingDiscrepancy,
