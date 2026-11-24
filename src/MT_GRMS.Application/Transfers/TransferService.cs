@@ -275,11 +275,13 @@ public sealed class TransferService(
                 {
                     destStock = destStocks.FirstOrDefault(s => string.Equals(s.BatchCode?.Trim(), normalizedBatch, StringComparison.OrdinalIgnoreCase));
                 }
-                else if (destStocks.Count == 1)
+                else
                 {
-                    destStock = destStocks[0];
+                    destStock = destStocks.FirstOrDefault(s => string.IsNullOrWhiteSpace(s.BatchCode))
+                        ?? (destStocks.Count == 1 ? destStocks[0] : null);
                 }
 
+                var receivedTotal = input.ReceivedQuantity + input.DamagedQuantity;
                 if (destStock == null)
                 {
                     await stocks.AddAsync(new BranchStock
@@ -289,14 +291,23 @@ public sealed class TransferService(
                         ProductId = line.ProductId,
                         BatchCode = line.BatchNumber,
                         ExpiryDate = line.ExpiryDate,
-                        QuantityOnHand = input.ReceivedQuantity + input.DamagedQuantity,
+                        QuantityOnHand = receivedTotal,
                         QuantityQuarantined = input.DamagedQuantity,
                         LandedCostPerUnit = line.UnitPrice
                     }, ct);
                 }
                 else
                 {
-                    destStock.QuantityOnHand += input.ReceivedQuantity + input.DamagedQuantity;
+                    var prevQty = Math.Max(0m, destStock.QuantityOnHand);
+                    var nextQty = prevQty + receivedTotal;
+                    if (nextQty > 0 && line.UnitPrice > 0)
+                    {
+                        destStock.LandedCostPerUnit = Math.Round(
+                            ((prevQty * destStock.LandedCostPerUnit) + (receivedTotal * line.UnitPrice)) / nextQty,
+                            4,
+                            MidpointRounding.AwayFromZero);
+                    }
+                    destStock.QuantityOnHand += receivedTotal;
                     destStock.QuantityQuarantined += input.DamagedQuantity;
                     stocks.Update(destStock);
                 }
