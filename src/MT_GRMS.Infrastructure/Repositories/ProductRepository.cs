@@ -2,6 +2,7 @@ using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Catalog.Dtos;
+using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
@@ -10,8 +11,11 @@ namespace MT_GRMS.Infrastructure.Repositories;
 
 public class ProductRepository : GenericRepository<Product>, IProductRepository
 {
-    public ProductRepository(AppDbContext context) : base(context)
+    private readonly ITenantContext? _tenantContext;
+
+    public ProductRepository(AppDbContext context, ITenantContext? tenantContext = null) : base(context)
     {
+        _tenantContext = tenantContext;
     }
 
     public async Task<(IReadOnlyList<Product> Items, int TotalCount)> GetPagedListAsync(
@@ -123,10 +127,16 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
     public async Task<string?> GetMaxSequentialCodeAsync(string prefix, int totalLength, CancellationToken cancellationToken = default)
     {
         var normalizedPrefix = prefix.Trim().ToUpper();
-        return await _dbSet
+        var tenantId = _tenantContext?.CurrentTenantId;
+        var query = _dbSet
             .IgnoreQueryFilters()
             .Where(p => p.ProductCode.StartsWith(normalizedPrefix) &&
-                        p.ProductCode.Length == totalLength)
+                        p.ProductCode.Length == totalLength);
+        if (!string.IsNullOrWhiteSpace(tenantId))
+        {
+            query = query.Where(p => p.TenantId == tenantId);
+        }
+        return await query
             .OrderByDescending(p => p.ProductCode)
             .Select(p => p.ProductCode)
             .FirstOrDefaultAsync(cancellationToken);
