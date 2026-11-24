@@ -15,7 +15,7 @@ public class ProductCreateRequestValidator : AbstractValidator<ProductCreateRequ
             .NotEmpty().WithMessage("Vui lòng chọn nhóm hàng hợp lệ.");
 
         RuleFor(x => x.SellingPrice)
-            .GreaterThanOrEqualTo(0).WithMessage("Giá bán không được nhỏ hơn 0.")
+            .GreaterThan(0).WithMessage("Giá bán phải lớn hơn 0.")
             .LessThanOrEqualTo(1_000_000_000m).WithMessage("Giá bán không được vượt quá 1.000.000.000 đ.");
 
         RuleFor(x => x.CostPrice)

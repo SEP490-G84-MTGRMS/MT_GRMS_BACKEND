@@ -326,8 +326,12 @@ public class BranchProductService : IBranchProductService
                 IsBelowCost = isBelowCost,
                 ManagerApprovedBy = null,
                 ManagerApprovalReason = null,
-                ChangedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM",
-                ChangedByUserName = !string.IsNullOrEmpty(_tenantContext.CurrentRole) ? $"{_tenantContext.CurrentRole} ({branch.Name})" : branch.Name,
+                ChangedByUserId = !string.IsNullOrWhiteSpace(_tenantContext.CurrentRawUserId)
+                    ? _tenantContext.CurrentRawUserId
+                    : (_tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM"),
+                ChangedByUserName = !string.IsNullOrWhiteSpace(_tenantContext.CurrentUserName)
+                    ? _tenantContext.CurrentUserName
+                    : (!string.IsNullOrEmpty(_tenantContext.CurrentRole) ? $"{_tenantContext.CurrentRole} ({branch.Name})" : branch.Name),
                 Reason = isBelowCost ? "Điều chỉnh giá chi nhánh (Dưới giá vốn)" : "Điều chỉnh giá chi nhánh",
                 CreatedAt = DateTime.UtcNow
             };
@@ -358,8 +362,12 @@ public class BranchProductService : IBranchProductService
                     NewPrice = row.Price,
                     CostPriceSnapshot = unitCost,
                     IsBelowCost = unitCost.HasValue && row.Price < unitCost.Value,
-                    ChangedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM",
-                    ChangedByUserName = !string.IsNullOrEmpty(_tenantContext.CurrentRole) ? $"{_tenantContext.CurrentRole} ({branch.Name})" : branch.Name,
+                    ChangedByUserId = !string.IsNullOrWhiteSpace(_tenantContext.CurrentRawUserId)
+                        ? _tenantContext.CurrentRawUserId
+                        : (_tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM"),
+                    ChangedByUserName = !string.IsNullOrWhiteSpace(_tenantContext.CurrentUserName)
+                        ? _tenantContext.CurrentUserName
+                        : (!string.IsNullOrEmpty(_tenantContext.CurrentRole) ? $"{_tenantContext.CurrentRole} ({branch.Name})" : branch.Name),
                     Reason = $"Cập nhật giá đơn vị {unit.UnitName} tại chi nhánh"
                 }, cancellationToken);
             }

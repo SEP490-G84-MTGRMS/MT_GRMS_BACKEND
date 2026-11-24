@@ -172,9 +172,9 @@ public class CatalogService : ICatalogService
             throw new ArgumentException("Tên đơn vị cơ bản không được vượt quá 30 ký tự.");
         }
 
-        if (request.SellingPrice < 0 || request.SellingPrice > MaxAllowedPrice)
+        if (request.SellingPrice <= 0 || request.SellingPrice > MaxAllowedPrice)
         {
-            throw new ArgumentException("Giá bán không được nhỏ hơn 0 hoặc vượt quá 1.000.000.000 đ.");
+            throw new ArgumentException("Giá bán phải lớn hơn 0 và không vượt quá 1.000.000.000 đ.");
         }
 
         if (request.CostPrice.HasValue && (request.CostPrice.Value < 0 || request.CostPrice.Value > MaxAllowedPrice))
@@ -345,9 +345,9 @@ public class CatalogService : ICatalogService
             throw new ArgumentException("Tên đơn vị cơ bản không được vượt quá 30 ký tự.");
         }
 
-        if (request.SellingPrice < 0 || request.SellingPrice > MaxAllowedPrice)
+        if (request.SellingPrice <= 0 || request.SellingPrice > MaxAllowedPrice)
         {
-            throw new ArgumentException("Giá bán không được nhỏ hơn 0 hoặc vượt quá 1.000.000.000 đ.");
+            throw new ArgumentException("Giá bán phải lớn hơn 0 và không vượt quá 1.000.000.000 đ.");
         }
 
         if (request.CostPrice.HasValue && (request.CostPrice.Value < 0 || request.CostPrice.Value > MaxAllowedPrice))
@@ -428,8 +428,12 @@ public class CatalogService : ICatalogService
                 IsBelowCost = isBelowCost,
                 ManagerApprovedBy = null,
                 ManagerApprovalReason = null,
-                ChangedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM",
-                ChangedByUserName = !string.IsNullOrEmpty(_tenantContext.CurrentRole) ? _tenantContext.CurrentRole : "Quản lý",
+                ChangedByUserId = !string.IsNullOrWhiteSpace(_tenantContext.CurrentRawUserId)
+                    ? _tenantContext.CurrentRawUserId
+                    : (_tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM"),
+                ChangedByUserName = !string.IsNullOrWhiteSpace(_tenantContext.CurrentUserName)
+                    ? _tenantContext.CurrentUserName
+                    : (!string.IsNullOrEmpty(_tenantContext.CurrentRole) ? _tenantContext.CurrentRole : "Quản lý"),
                 Reason = isBelowCost ? "Điều chỉnh giá bán (Dưới giá vốn)" : "Điều chỉnh giá bán",
                 CreatedAt = DateTime.UtcNow
             };
@@ -612,8 +616,6 @@ public class CatalogService : ICatalogService
             throw new ArgumentException("Phạm vi giá chỉ nhận MASTER hoặc BRANCH.", nameof(query.PriceScope));
         if (query.BranchId == Guid.Empty)
             query.BranchId = null;
-        if (!query.BranchId.HasValue)
-            query.PriceScope = "MASTER";
         if (query.ProductUnitId == Guid.Empty)
             query.ProductUnitId = null;
         if (query.FromDate.HasValue && query.ToDate.HasValue && query.FromDate > query.ToDate)
@@ -641,7 +643,7 @@ public class CatalogService : ICatalogService
             h.ChangedByUserId,
             h.ChangedByUserName,
             h.Reason,
-            h.CreatedAt
+            DateTime.SpecifyKind(h.CreatedAt, DateTimeKind.Utc)
         )).ToList();
 
         return new PagedResult<ProductPriceHistoryDto>

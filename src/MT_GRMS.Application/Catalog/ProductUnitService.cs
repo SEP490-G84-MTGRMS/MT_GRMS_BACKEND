@@ -218,8 +218,12 @@ public class ProductUnitService : IProductUnitService
                 NewPrice = request.Price,
                 CostPriceSnapshot = costSnapshot,
                 IsBelowCost = costSnapshot.HasValue && request.Price < costSnapshot.Value,
-                ChangedByUserId = _tenantContext?.CurrentUserId.ToString() ?? "SYSTEM",
-                ChangedByUserName = _tenantContext?.CurrentRole ?? "SYSTEM",
+                ChangedByUserId = !string.IsNullOrWhiteSpace(_tenantContext?.CurrentRawUserId)
+                    ? _tenantContext.CurrentRawUserId
+                    : (_tenantContext?.CurrentUserId != Guid.Empty ? _tenantContext?.CurrentUserId.ToString() ?? "SYSTEM" : "SYSTEM"),
+                ChangedByUserName = !string.IsNullOrWhiteSpace(_tenantContext?.CurrentUserName)
+                    ? _tenantContext.CurrentUserName
+                    : (_tenantContext?.CurrentRole ?? "SYSTEM"),
                 Reason = $"Cập nhật giá đơn vị {request.UnitName.Trim()}"
             }, cancellationToken);
         }
