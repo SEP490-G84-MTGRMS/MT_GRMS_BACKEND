@@ -15,19 +15,22 @@ public class BranchService : IBranchService
     private readonly ITenantContext _tenantContext;
     private readonly ITenantRepository _tenantRepo;
     private readonly ISubscriptionPlanRepository _planRepo;
+    private readonly IRepository<Domain.Entities.Supplier.PurchaseOrder>? _poRepo;
 
     public BranchService(
         IBranchRepository branchRepo,
         IUnitOfWork unitOfWork,
         ITenantContext tenantContext,
         ITenantRepository tenantRepo,
-        ISubscriptionPlanRepository planRepo)
+        ISubscriptionPlanRepository planRepo,
+        IRepository<Domain.Entities.Supplier.PurchaseOrder>? poRepo = null)
     {
         _branchRepo = branchRepo;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
         _tenantRepo = tenantRepo;
         _planRepo = planRepo;
+        _poRepo = poRepo;
     }
 
     public async Task<PagedResult<BranchDto>> GetPagedBranchesAsync(
@@ -50,6 +53,30 @@ public class BranchService : IBranchService
             cancellationToken);
 
         var dtos = items.Select(MapToDto).ToList();
+        if (_poRepo != null && dtos.Count > 0)
+        {
+            var branchIds = dtos.Select(d => d.Id).ToHashSet();
+            var tenantId = _tenantContext.CurrentTenantId;
+            var pos = await _poRepo.FindAsync(
+                po => !po.IsDeleted && po.TenantId == tenantId && branchIds.Contains(po.BranchId) && po.Status != "DRAFT",
+                cancellationToken);
+            var statsByBranch = pos
+                .GroupBy(po => po.BranchId)
+                .ToDictionary(
+                    g => g.Key,
+                    g => (
+                        PendingCount: g.Count(po => po.Status is not ("COMPLETED" or "CANCELLED" or "REJECTED")),
+                        LastOrderDate: g.Max(po => po.UpdatedAt ?? po.CreatedAt)
+                    ));
+            foreach (var dto in dtos)
+            {
+                if (statsByBranch.TryGetValue(dto.Id, out var stats))
+                {
+                    dto.PendingOrdersCount = stats.PendingCount;
+                    dto.LastOrderDate = stats.LastOrderDate;
+                }
+            }
+        }
         if (dtos.Count == 1 && !dtos[0].IsHeadquarter)
         {
             dtos[0].IsHeadquarter = await IsOnlyBranchAsync(cancellationToken);
