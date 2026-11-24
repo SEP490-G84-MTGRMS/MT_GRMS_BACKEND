@@ -606,20 +606,12 @@ public class ScheduleApprovalService : IScheduleApprovalService
                 {
                     throw new InvalidOperationException("Sự cố Check-in của ca làm việc này đã được duyệt.");
                 }
-                if (schedule.CheckInTime.HasValue && schedule.CheckInMethod != "INCIDENT_PENDING")
-                {
-                    throw new InvalidOperationException("Ca làm việc đã được ghi nhận giờ vào, không cần gửi sự cố Check-in.");
-                }
                 break;
 
             case ScheduleRequestType.CheckOutIncident:
                 if (approvedRequests.Any(r => r.RequestType == ScheduleRequestType.CheckOutIncident))
                 {
                     throw new InvalidOperationException("Sự cố Check-out của ca làm việc này đã được duyệt.");
-                }
-                if (schedule.CheckOutTime.HasValue && schedule.CheckOutMethod != "INCIDENT_PENDING")
-                {
-                    throw new InvalidOperationException("Ca làm việc đã được ghi nhận giờ ra, không cần gửi sự cố Check-out.");
                 }
                 break;
         }

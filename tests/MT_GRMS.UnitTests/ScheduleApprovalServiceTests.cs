@@ -1338,12 +1338,13 @@ public class ScheduleApprovalServiceTests
     }
 
     [Fact]
-    public async Task CreateRequestAsync_CheckInIncidentWhenCheckInAlreadyRecorded_ThrowsInvalidOperationException()
+    public async Task CreateRequestAsync_CheckInIncidentWhenInProgressWithCheckInTime_CreatesRequestSuccessfully()
     {
         var service = CreateService();
         var emp = new Employee { Id = Guid.NewGuid(), FullName = "NV Checked In", TenantId = _tenantContext.CurrentTenantId, UserId = "user_checked_in" };
         _employees.Add(emp);
 
+        var existingCheckIn = DateTime.UtcNow.AddHours(-1);
         var schedule = new EmployeeSchedule
         {
             Id = Guid.NewGuid(),
@@ -1352,27 +1353,35 @@ public class ScheduleApprovalServiceTests
             BranchId = _tenantContext.CurrentBranchId ?? Guid.NewGuid(),
             WorkDate = DateTime.UtcNow.Date,
             Status = ScheduleStatus.InProgress,
-            CheckInTime = DateTime.UtcNow
+            CheckInTime = existingCheckIn,
+            CheckInMethod = "FACE_ID"
         };
         _scheduleRepo.Schedules.Add(schedule);
 
         var dto = new CreateScheduleApprovalRequestDto(
             RequestType: ScheduleRequestType.CheckInIncident,
-            Reason: "Bao su co checkin nhung da checkin",
-            RequestedCheckInTime: DateTime.UtcNow
+            Reason: "Khieu nai gio check-in khi ca dang InProgress",
+            RequestedCheckInTime: DateTime.UtcNow.AddHours(-2)
         );
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateRequestAsync(schedule.Id, emp.UserId, dto));
-        Assert.Contains("Ca làm việc đã được ghi nhận giờ vào", ex.Message);
+        var result = await service.CreateRequestAsync(schedule.Id, emp.UserId, dto);
+
+        Assert.NotNull(result);
+        Assert.Equal(ScheduleRequestType.CheckInIncident, result.RequestType);
+        Assert.Equal(ScheduleApprovalStatus.Pending, result.Status);
+        // Giữ nguyên CheckInTime gốc trong lúc chờ duyệt
+        Assert.Equal(existingCheckIn, schedule.CheckInTime);
     }
 
     [Fact]
-    public async Task CreateRequestAsync_CheckOutIncidentWhenCheckOutAlreadyRecorded_ThrowsInvalidOperationException()
+    public async Task CreateRequestAsync_CheckOutIncidentWhenCompletedWithCheckInAndCheckOut_CreatesRequestSuccessfully()
     {
         var service = CreateService();
         var emp = new Employee { Id = Guid.NewGuid(), FullName = "NV Checked Out", TenantId = _tenantContext.CurrentTenantId, UserId = "user_checked_out" };
         _employees.Add(emp);
 
+        var existingCheckIn = DateTime.UtcNow.AddHours(-4);
+        var existingCheckOut = DateTime.UtcNow;
         var schedule = new EmployeeSchedule
         {
             Id = Guid.NewGuid(),
@@ -1381,19 +1390,25 @@ public class ScheduleApprovalServiceTests
             BranchId = _tenantContext.CurrentBranchId ?? Guid.NewGuid(),
             WorkDate = DateTime.UtcNow.Date,
             Status = ScheduleStatus.Completed,
-            CheckInTime = DateTime.UtcNow.AddHours(-4),
-            CheckOutTime = DateTime.UtcNow
+            CheckInTime = existingCheckIn,
+            CheckOutTime = existingCheckOut,
+            CheckOutMethod = "FACE_ID"
         };
         _scheduleRepo.Schedules.Add(schedule);
 
         var dto = new CreateScheduleApprovalRequestDto(
             RequestType: ScheduleRequestType.CheckOutIncident,
-            Reason: "Bao su co checkout nhung da checkout",
-            RequestedCheckOutTime: DateTime.UtcNow
+            Reason: "Khieu nai gio check-out khi ca da Completed",
+            RequestedCheckOutTime: DateTime.UtcNow.AddMinutes(30)
         );
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateRequestAsync(schedule.Id, emp.UserId, dto));
-        Assert.Contains("Ca làm việc đã được ghi nhận giờ ra", ex.Message);
+        var result = await service.CreateRequestAsync(schedule.Id, emp.UserId, dto);
+
+        Assert.NotNull(result);
+        Assert.Equal(ScheduleRequestType.CheckOutIncident, result.RequestType);
+        Assert.Equal(ScheduleApprovalStatus.Pending, result.Status);
+        // Giữ nguyên CheckOutTime gốc trong lúc chờ duyệt
+        Assert.Equal(existingCheckOut, schedule.CheckOutTime);
     }
 
     [Fact]

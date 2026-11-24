@@ -335,11 +335,18 @@ public class EmployeeValidationTests
     }
 
     [Theory]
-    [InlineData("staff_01", "123456", "STAFF", true)]
-    [InlineData("cashier_01", "123456", "CASHIER", true)]
-    [InlineData("ab", "123456", "STAFF", false)] // Username < 3 ký tự
-    [InlineData("staff_01", "123", "STAFF", false)] // Password < 6 ký tự
-    [InlineData("staff_01", "123456", "SUPER_HACKER", false)] // Role không hợp lệ
+    [InlineData("staff_01", "Staff@123", "STAFF", true)]
+    [InlineData("cashier_01", "Cashier#2026", "CASHIER", true)]
+    [InlineData("staff_01", "", "STAFF", true)] // Update mode không đổi mật khẩu
+    [InlineData("ab", "Staff@123", "STAFF", false)] // Username < 3 ký tự
+    [InlineData("staff_01", "123456", "STAFF", false)] // Thiếu độ dài & chữ hoa/thường/ký tự đặc biệt
+    [InlineData("staff_01", "Ab1@xyz", "STAFF", false)] // < 8 ký tự
+    [InlineData("staff_01", "staff@123", "STAFF", false)] // Thiếu chữ hoa
+    [InlineData("staff_01", "STAFF@123", "STAFF", false)] // Thiếu chữ thường
+    [InlineData("staff_01", "Staff@abc", "STAFF", false)] // Thiếu chữ số
+    [InlineData("staff_01", "Staff1234", "STAFF", false)] // Thiếu ký tự đặc biệt
+    [InlineData("staff_01", "Staff @123", "STAFF", false)] // Chứa khoảng trắng
+    [InlineData("staff_01", "Staff@123", "SUPER_HACKER", false)] // Role không hợp lệ
     public void CreateIdentityAccount_ValidatesUsernamePasswordAndRole(
         string username, string password, string role, bool expectedValid)
     {
