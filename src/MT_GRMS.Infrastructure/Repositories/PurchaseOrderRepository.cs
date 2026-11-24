@@ -633,13 +633,31 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
     {
         var datePrefix = deliveryDate.ToString("yyyyMMdd");
         var basePattern = $"PO-{datePrefix}-";
+        var tenantId = _tenantContext.CurrentTenantId;
 
-        var count = await _context.PurchaseOrders
+        var existingCodes = await _context.PurchaseOrders
             .IgnoreQueryFilters()
-            .CountAsync(po => po.TenantId == _tenantContext.CurrentTenantId && po.Code.StartsWith(basePattern), cancellationToken);
+            .Where(po => po.TenantId == tenantId && po.Code.StartsWith(basePattern))
+            .Select(po => po.Code)
+            .ToListAsync(cancellationToken);
 
-        var nextSeq = count + 1;
-        return $"PO-{datePrefix}-{nextSeq:D4}";
+        var trackedCodes = _context.ChangeTracker.Entries<PurchaseOrder>()
+            .Where(e => e.Entity.TenantId == tenantId &&
+                        !string.IsNullOrEmpty(e.Entity.Code) &&
+                        e.Entity.Code.StartsWith(basePattern, StringComparison.Ordinal))
+            .Select(e => e.Entity.Code);
+
+        var maxSeq = 0;
+        foreach (var code in existingCodes.Concat(trackedCodes))
+        {
+            var suffix = code.Length > basePattern.Length ? code[basePattern.Length..] : string.Empty;
+            if (int.TryParse(suffix, out var seq) && seq > maxSeq)
+            {
+                maxSeq = seq;
+            }
+        }
+
+        return $"PO-{datePrefix}-{(maxSeq + 1):D4}";
     }
 
     public async Task<bool> UserExistsAsync(string userId, CancellationToken cancellationToken = default)
