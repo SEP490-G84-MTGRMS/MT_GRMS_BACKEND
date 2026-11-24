@@ -1,5 +1,6 @@
 using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
+using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Tax;
 using MT_GRMS.Application.Tax.Dtos;
 using MT_GRMS.Domain.Entities.Finance;
@@ -26,15 +27,18 @@ public class TaxExportService : ITaxExportService
     private readonly IHouseholdTaxService _taxService;
     private readonly IHouseholdTaxRepository _taxRepository;
     private readonly AppDbContext _context;
+    private readonly ITenantContext? _tenantContext;
 
     public TaxExportService(
         IHouseholdTaxService taxService,
         IHouseholdTaxRepository taxRepository,
-        AppDbContext context)
+        AppDbContext context,
+        ITenantContext? tenantContext = null)
     {
         _taxService = taxService;
         _taxRepository = taxRepository;
         _context = context;
+        _tenantContext = tenantContext;
     }
 
     /// <summary>
@@ -57,8 +61,11 @@ public class TaxExportService : ITaxExportService
         var (fromDateUtc, toDateUtc) = GetPeriodDatesUtc(filter.Year, filter.PeriodType, filter.PeriodNumber);
         var deductibleExpenses = await _taxRepository.GetDeductibleExpenseVouchersAsync(fromDateUtc, toDateUtc, filter.BranchId, cancellationToken);
 
-        // Lấy thông tin tổ chức và chi nhánh
-        var tenant = await _context.Tenants.AsNoTracking().OrderBy(t => t.Id).FirstOrDefaultAsync(cancellationToken);
+        // Lấy thông tin tổ chức và chi nhánh đúng theo Tenant hiện tại (tránh cross-tenant leak)
+        var currentTenantId = _tenantContext?.CurrentTenantId;
+        var tenant = !string.IsNullOrWhiteSpace(currentTenantId)
+            ? await _context.Tenants.AsNoTracking().FirstOrDefaultAsync(t => t.Id == currentTenantId, cancellationToken)
+            : null;
         var branch = filter.BranchId.HasValue
             ? await _context.Branches.AsNoTracking().FirstOrDefaultAsync(b => b.Id == filter.BranchId.Value, cancellationToken)
             : null;
