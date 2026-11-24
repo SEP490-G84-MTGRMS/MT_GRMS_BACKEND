@@ -506,7 +506,10 @@ public class CashbookService : ICashbookService
             ));
         }
 
-        foreach (var bank in accounts.Where(a => a.AccountType == FinanceAccountType.Bank && a.IsActive))
+        foreach (var bank in accounts.Where(a =>
+                     a.AccountType == FinanceAccountType.Bank &&
+                     a.IsActive &&
+                     (!branchId.HasValue || !a.BranchId.HasValue || a.BranchId == branchId.Value)))
         {
             var bName = bank.BranchId.HasValue && branchMap.TryGetValue(bank.BranchId.Value, out var name)
                 ? name
@@ -539,7 +542,7 @@ public class CashbookService : ICashbookService
         var accounts = await GetAccountsAsync(branchId, ct);
         var accountIds = accounts.Select(a => a.Id).ToHashSet();
         var entries = await _cashbookRepo.FindAsync(
-            e => accountIds.Contains(e.AccountId) || (!branchId.HasValue || e.BranchId == branchId.Value),
+            e => !branchId.HasValue || accountIds.Contains(e.AccountId),
             ct);
 
         decimal totalCashInDrawers = accounts.Where(a => a.AccountType == "CASH" && !a.IsSafeDeposit).Sum(a => a.CurrentBalance);
