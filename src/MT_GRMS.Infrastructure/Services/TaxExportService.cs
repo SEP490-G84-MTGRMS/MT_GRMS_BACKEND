@@ -331,7 +331,8 @@ public class TaxExportService : ITaxExportService
             ? "1. Hàng hóa chịu mức thuế suất tiêu chuẩn (1.0% GTGT, 0.5% TNCN)"
             : "1. Hoạt động phân phối, cung cấp hàng hóa (1.0% GTGT, 0.5% TNCN)";
         var sec1VatRate = 0.01m;
-        var sec1PitRate = summary.PitRate > 0 ? summary.PitRate : 0.005m;
+        var sec1PitRatePct = summary.PitRate > 0 ? summary.PitRate : 0.5m;
+        var sec1PitRate = sec1PitRatePct / 100m;
 
         // Tiêu đề Ngành 1
         ws.Cell(row, 1).Value = sec1Name;
@@ -801,12 +802,13 @@ public class TaxExportService : ITaxExportService
         row++;
 
         // ================= NHÓM 4: THUẾ TNCN PHẢI NỘP =================
-        var pitRateStr = $"{summary.PitRate * 100:0.##}%";
+        var pitRateDecimal = summary.PitRate / 100m;
+        var pitRateStr = $"{summary.PitRate:0.##}%";
         ws.Cell(row, 1).Value = $"4. Thuế Thu nhập cá nhân (TNCN) phải nộp theo tỷ lệ kê khai ({pitRateStr})";
         ws.Range(row, 1, row, 3).Merge();
         ws.Cell(row, 1).Style.Font.Bold = true;
         ws.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
-        ws.Cell(row, 4).FormulaA1 = $"ROUND(D{profitRow} * {summary.PitRate}, 0)";
+        ws.Cell(row, 4).FormulaA1 = $"ROUND(D{profitRow} * {pitRateDecimal.ToString(System.Globalization.CultureInfo.InvariantCulture)}, 0)";
         ws.Cell(row, 4).Style.Font.Bold = true;
         ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
         FormatTotalRow(ws.Range(row, 1, row, 4));
