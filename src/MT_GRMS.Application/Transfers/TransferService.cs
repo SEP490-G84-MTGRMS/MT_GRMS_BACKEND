@@ -19,8 +19,33 @@ public sealed class TransferService(
     ITenantContext tenant,
     IUnitOfWork unitOfWork,
     NotificationOutbox? notificationOutbox = null,
-    IRepository<Package>? packages = null) : ITransferService
+    IRepository<Package>? packages = null,
+    IRepository<ProductUnit>? productUnits = null) : ITransferService
 {
+    private async Task<(decimal BaseQuantity, string NormalizedUnit)> NormalizeToBaseUnitAsync(
+        Product product,
+        decimal requestedQuantity,
+        string requestedUnit,
+        CancellationToken ct)
+    {
+        var trimmedUnit = requestedUnit.Trim();
+        var baseUnit = string.IsNullOrWhiteSpace(product.BaseUnit) ? trimmedUnit : product.BaseUnit.Trim();
+        if (string.Equals(trimmedUnit, baseUnit, StringComparison.OrdinalIgnoreCase) || productUnits == null)
+        {
+            return (requestedQuantity, baseUnit);
+        }
+
+        var units = await productUnits.FindAsync(
+            u => u.TenantId == tenant.CurrentTenantId && u.ProductId == product.Id && !u.IsDeleted,
+            ct);
+        var matched = units.FirstOrDefault(u => string.Equals(u.UnitName?.Trim(), trimmedUnit, StringComparison.OrdinalIgnoreCase));
+        if (matched == null || matched.ConversionRate <= 0)
+        {
+            throw new InvalidOperationException($"Đơn vị '{trimmedUnit}' không hợp lệ cho sản phẩm {product.Name} (đơn vị cơ sở: {baseUnit}).");
+        }
+
+        return (requestedQuantity * matched.ConversionRate, baseUnit);
+    }
     private async Task<decimal> RawAvailableAsync(BranchStock stock, CancellationToken ct)
     {
         var active = packages == null ? 0m : (await packages.FindAsync(p => p.TenantId == tenant.CurrentTenantId
@@ -160,9 +185,10 @@ public sealed class TransferService(
             foreach (var input in request.Items)
             {
                 var product = await products.GetByIdAsync(input.ProductId, ct) ?? throw new KeyNotFoundException("Không tìm thấy sản phẩm.");
+                var (baseQuantity, normalizedUnit) = await NormalizeToBaseUnitAsync(product, input.Quantity, input.Unit, ct);
                 var stock = await ResolveStockSourceAsync(request.FromBranchId, input.ProductId, input.BatchCode, input.ExpiryDate, ct);
                 var available = await RawAvailableAsync(stock, ct);
-                var nextCumulative = cumulativeRequestedByStock.GetValueOrDefault(stock.Id) + input.Quantity;
+                var nextCumulative = cumulativeRequestedByStock.GetValueOrDefault(stock.Id) + baseQuantity;
                 if (available < nextCumulative)
                     throw new InvalidOperationException($"Không đủ tồn khả dụng cho {product.Name}; hiện có {available}, tổng yêu cầu chuyển {nextCumulative}.");
                 cumulativeRequestedByStock[stock.Id] = nextCumulative;
@@ -170,13 +196,13 @@ public sealed class TransferService(
                 transfer.Details.Add(new TransferDetail
                 {
                     ProductId = input.ProductId,
-                    SentQuantity = input.Quantity,
-                    PackagingUnit = input.Unit.Trim(),
+                    SentQuantity = baseQuantity,
+                    PackagingUnit = normalizedUnit,
                     BatchNumber = string.IsNullOrWhiteSpace(input.BatchCode) ? stock.BatchCode : input.BatchCode.Trim(),
                     BranchStockId = stock.Id,
                     ExpiryDate = input.ExpiryDate ?? stock.ExpiryDate,
                     UnitPrice = unitCost,
-                    Amount = input.Quantity * unitCost
+                    Amount = baseQuantity * unitCost
                 });
             }
             transfer.TotalAmount = transfer.Details.Sum(x => x.Amount);
