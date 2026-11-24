@@ -34,17 +34,7 @@ public class PurchaseOrderService : IPurchaseOrderService
 
     private void EnsureBranchAccess(Guid branchId)
     {
-        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
-        if (role is "EMPLOYEE" or "STAFF" or "CASHIER")
-        {
-            if (_tenantContext.CurrentBranchId.HasValue && _tenantContext.CurrentBranchId.Value != Guid.Empty)
-            {
-                if (branchId != _tenantContext.CurrentBranchId.Value)
-                {
-                    throw new UnauthorizedAccessException("Nhân viên chỉ có quyền truy cập và thao tác đặt hàng tại chi nhánh được phân công.");
-                }
-            }
-        }
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, branchId);
     }
 
     private async Task<string?> ResolveValidUserIdAsync(CancellationToken ct = default)
@@ -1491,6 +1481,11 @@ public class PurchaseOrderService : IPurchaseOrderService
         SplitMatrixPoCommand command,
         CancellationToken cancellationToken = default)
     {
+        if (BranchScopeGuard.IsBranchScopedEmployee(_tenantContext))
+        {
+            throw new BusinessException("FORBIDDEN", "Chỉ Store Owner mới có quyền chốt đơn đặt hàng.");
+        }
+
         SplitMatrixBatchResultDto result;
         if (command.SupplierId.HasValue
             && command.SupplierId.Value != Guid.Empty

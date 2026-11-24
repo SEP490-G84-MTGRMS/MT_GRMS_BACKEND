@@ -187,6 +187,7 @@ public class PurchaseOrdersController : BaseApiController
     /// Xem trước kết quả chốt PO theo phạm vi (NEAREST / WEEK / ALL) không ghi DB (Dùng cho Modal Preview)
     /// </summary>
     [HttpPost("matrix/split/preview")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> PreviewSplitMatrixPo([FromBody] SplitMatrixPoCommand command, CancellationToken cancellationToken)
     {
         var result = await _poService.PreviewSplitMatrixPoAsync(command, cancellationToken);
@@ -197,6 +198,7 @@ public class PurchaseOrdersController : BaseApiController
     /// Chốt ma trận và tự động phát hành các đơn PO độc lập theo từng Ngày giao hàng và NCC (FE-05 / P0 Engine)
     /// </summary>
     [HttpPost("matrix/split")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> SplitMatrixPo([FromBody] SplitMatrixPoCommand command, CancellationToken cancellationToken)
     {
         var result = await _poService.SplitMatrixPoBatchAsync(command, cancellationToken);
