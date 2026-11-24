@@ -369,10 +369,17 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 branchStock.ExpiryDate = null;
             }
 
-            string? grnNo = await _appContext.GoodsReceiptLines.AsNoTracking()
+            var grnInfo = await _appContext.GoodsReceiptLines.AsNoTracking()
                 .Where(l => l.BranchStockId == branchStock.Id && !l.IsDeleted)
-                .Select(l => l.GoodsReceipt!.Code)
+                .Select(l => new { l.GoodsReceiptId, Code = l.GoodsReceipt!.Code, l.AcceptedQty })
                 .FirstOrDefaultAsync(cancellationToken);
+
+            var activePackages = await _appContext.Packages.AsNoTracking()
+                .Where(p => p.BranchStockId == branchStock.Id && !p.IsDeleted && (p.Status == "AVAILABLE" || p.Status == "QUARANTINED"))
+                .Select(p => p.NetWeight)
+                .ToListAsync(cancellationToken);
+            var packagedQty = activePackages.Sum();
+            var packageCount = activePackages.Count;
 
             return MapBranchStockToListItem(
                 branchStock,
@@ -380,8 +387,12 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 branches,
                 suppliers,
                 now,
-                grnNo,
+                grnInfo?.Code,
                 isBatchManaged,
+                originalGrnId: grnInfo?.GoodsReceiptId,
+                initialQtyOverride: grnInfo?.AcceptedQty,
+                packagedQty: packagedQty,
+                packageCount: packageCount,
                 deliveryUomBySupplierProduct: deliveryUomBySupplierProduct);
         }
 
