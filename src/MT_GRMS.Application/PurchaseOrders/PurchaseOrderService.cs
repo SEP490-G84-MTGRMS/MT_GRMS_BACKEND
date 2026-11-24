@@ -395,6 +395,25 @@ public class PurchaseOrderService : IPurchaseOrderService
         bool isStoreOwner = string.IsNullOrEmpty(role) || role is "STORE_OWNER" or "ADMIN";
 
         var nowVn = OrderMatrixRules.GetVietnamNow();
+        if (command.Cells == null || command.Cells.Count == 0)
+        {
+            throw new BusinessException("EMPTY_MATRIX_CELLS", "Bản thảo ma trận cần ít nhất một ô đặt hàng hợp lệ.");
+        }
+
+        foreach (var cell in command.Cells)
+        {
+            if (cell.EmployeeQty < 0 || (cell.StoreQty.HasValue && cell.StoreQty.Value < 0))
+            {
+                throw new BusinessException("NEGATIVE_QUANTITY", "Số lượng đặt hàng trên ma trận không được âm.");
+            }
+
+            var hasPositiveQty = cell.EmployeeQty > 0 || (cell.StoreQty.HasValue && cell.StoreQty.Value > 0);
+            if (hasPositiveQty && cell.DeliveryDate.Date < nowVn.Date)
+            {
+                throw new BusinessException("PAST_DELIVERY_DATE", $"Ngày giao hàng {cell.DeliveryDate:dd/MM/yyyy} không được nằm trong quá khứ.");
+            }
+        }
+
         var matrixProducts = await _repository.GetMatrixProductsAsync(command.BranchId, null, cancellationToken);
         var productByKey = matrixProducts
             .GroupBy(p => (p.Id, p.SupplierId))
