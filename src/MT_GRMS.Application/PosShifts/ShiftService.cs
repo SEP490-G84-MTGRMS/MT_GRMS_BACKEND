@@ -227,6 +227,7 @@ public class ShiftService : IShiftService
         // 1. Kiểm tra cấu hình hạn mức chi của tenant
         var paymentConfig = await _shiftRepository.GetPaymentConfigAsync(_tenantContext.CurrentTenantId, cancellationToken);
         decimal threshold = paymentConfig?.CashOutApprovalThreshold ?? 200000m;
+        decimal shiftTotalLimit = paymentConfig?.CashOutShiftTotalLimit ?? 0m;
 
         CashMovementStatus initialStatus = CashMovementStatus.Recorded;
 
@@ -245,9 +246,17 @@ public class ShiftService : IShiftService
             }
             else // EXPENSE
             {
-                if (request.Amount > threshold)
+                var existingShiftExpenseOut = shift.CashMovements
+                    .Where(m => !m.IsDeleted &&
+                                m.MovementType == CashMovementType.OUT &&
+                                m.Category == CashMovementCategory.EXPENSE &&
+                                (m.Status == CashMovementStatus.Recorded || m.Status == CashMovementStatus.Approved))
+                    .Sum(m => m.Amount);
+                var exceedsShiftTotalLimit = shiftTotalLimit > 0m && (existingShiftExpenseOut + request.Amount) > shiftTotalLimit;
+
+                if (request.Amount > threshold || exceedsShiftTotalLimit)
                 {
-                    // Vượt hạn mức: Cần chủ duyệt, chưa trừ vào két (chưa ảnh hưởng G)
+                    // Vượt hạn mức đơn lẻ hoặc trần tổng chi trong ca: Cần chủ duyệt, chưa trừ vào két (chưa ảnh hưởng G)
                     initialStatus = CashMovementStatus.PendingApproval;
                 }
                 else
@@ -652,6 +661,11 @@ public class ShiftService : IShiftService
         if (request.CashOutApprovalThreshold < 0)
         {
             throw new BusinessException("INVALID_THRESHOLD", "Hạn mức duyệt chi không được âm.");
+        }
+
+        if (request.CashOutShiftTotalLimit < 0)
+        {
+            throw new BusinessException("INVALID_SHIFT_LIMIT", "Trần tổng chi trong ca không được âm.");
         }
 
         var config = await _shiftRepository.GetPaymentConfigAsync(_tenantContext.CurrentTenantId, cancellationToken)
