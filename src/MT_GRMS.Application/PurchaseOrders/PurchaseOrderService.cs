@@ -614,8 +614,9 @@ public class PurchaseOrderService : IPurchaseOrderService
             }
 
             var existingDetails = draft.Details
-                .Where(d => d.DeliveryDate.HasValue)
-                .ToDictionary(d => (d.ProductId, d.DeliveryDate!.Value.Date));
+                .Where(d => !d.IsDeleted && d.DeliveryDate.HasValue)
+                .GroupBy(d => (d.ProductId, d.DeliveryDate!.Value.Date))
+                .ToDictionary(g => g.Key, g => g.First());
 
             foreach (var (cell, _) in supplierGroup)
             {
@@ -2404,7 +2405,7 @@ public class PurchaseOrderService : IPurchaseOrderService
 
     private static PurchaseOrderDto MapToDto(PurchaseOrder po, string branchName, string supplierName)
     {
-        var details = po.Details?.Select(d => new PurchaseOrderDetailDto
+        var details = po.Details?.Where(d => !d.IsDeleted).Select(d => new PurchaseOrderDetailDto
         {
             Id = d.Id,
             ProductId = d.ProductId,
