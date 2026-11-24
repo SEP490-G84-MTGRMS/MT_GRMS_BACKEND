@@ -489,18 +489,22 @@ public class SupplierReturnService : ISupplierReturnService
         if (entity == null)
             throw new NotFoundException($"Không tìm thấy phiếu trả hàng với ID {id}.");
 
-        if (entity.Status == "COMPLETED")
-            throw new BusinessException("Không thể hủy phiếu trả hàng đã hoàn tất bàn giao.");
+        if (entity.Status is "COMPLETED" or "CANCELLED" or "REJECTED")
+            throw new BusinessException("INVALID_STATUS", $"Không thể hủy phiếu trả hàng đang ở trạng thái {entity.Status}.");
+
+        if (entity.Lines.Any(l => l.HandedOverQty > 0))
+            throw new BusinessException("ALREADY_HANDED_OVER", "Không thể hủy phiếu trả hàng đã có số lượng bàn giao thực tế cho nhà cung cấp.");
 
         if (string.IsNullOrWhiteSpace(command.Reason))
-            throw new BusinessException("Bắt buộc phải nhập lý do khi hủy phiếu trả hàng.");
+            throw new BusinessException("REASON_REQUIRED", "Bắt buộc phải nhập lý do khi hủy phiếu trả hàng.");
 
-        // Giải phóng tồn kho đã khóa nếu phiếu đang chờ NCC hoặc đã duyệt
-        if (entity.Status is "PENDING_SUPPLIER" or "APPROVED")
+        // Giải phóng đúng phần tồn kho đang còn giữ (chưa bàn giao) nếu phiếu đang chờ NCC / đã duyệt / giao 1 phần (RTV-03)
+        if (entity.Status is "PENDING_SUPPLIER" or "APPROVED" or "PARTIALLY_HANDED_OVER")
         {
             foreach (var line in entity.Lines)
             {
-                var unreserveQty = entity.Status == "APPROVED" ? line.ApprovedQty : line.RequestedQty;
+                var baseReserved = entity.Status == "PENDING_SUPPLIER" ? line.RequestedQty : line.ApprovedQty;
+                var unreserveQty = Math.Max(0m, baseReserved - line.HandedOverQty);
                 if (unreserveQty > 0)
                 {
                     var stock = await GetReturnStockAsync(tenantId, entity.BranchId, line, cancellationToken);
@@ -508,6 +512,22 @@ public class SupplierReturnService : ISupplierReturnService
                     {
                         stock.QuantityReserved = Math.Max(0, stock.QuantityReserved - unreserveQty);
                     }
+                }
+            }
+        }
+
+        // Hủy đồng bộ các PO đổi hàng chưa nhập kho gắn với phiếu trả này
+        if (_purchaseOrderRepository != null)
+        {
+            var (relatedPos, _) = await _purchaseOrderRepository.GetPagedPurchaseOrdersAsync(
+                entity.BranchId, entity.SupplierId, null, null, null, 1, 100, null, cancellationToken);
+            foreach (var po in relatedPos.Where(p => p.SourceSupplierReturnId == entity.Id && !p.IsDeleted))
+            {
+                if (po.Status is not ("COMPLETED" or "CANCELLED" or "PARTIALLY_RECEIVED")
+                    && (po.Details == null || po.Details.All(d => (d.ReceivedQty ?? 0) <= 0)))
+                {
+                    po.Status = "CANCELLED";
+                    po.UpdatedAt = DateTime.UtcNow;
                 }
             }
         }
