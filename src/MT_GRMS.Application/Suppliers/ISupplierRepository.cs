@@ -116,7 +116,8 @@ public interface ISupplierRepository : IRepository<Supplier>
     /// <summary>Mọi SP đã gán NCC (kể cả Inactive), Include Product+Category — dùng Excel filter/import.</summary>
     Task<IReadOnlyList<SupplierProduct>> GetSupplierProductsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default);
     Task<bool> BranchProductExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default);
-    Task<MT_GRMS.Domain.Entities.Catalog.BranchProduct?> GetBranchProductAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default);
+    Task<MT_GRMS.Domain.Entities.Catalog.BranchProduct?> GetBranchProductAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
+        => Task.FromResult<MT_GRMS.Domain.Entities.Catalog.BranchProduct?>(null);
     Task AddBranchProductAsync(MT_GRMS.Domain.Entities.Catalog.BranchProduct branchProduct, CancellationToken cancellationToken = default);
     Task<bool> BranchStockExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default);
     Task AddBranchStockAsync(MT_GRMS.Domain.Entities.Inventory.BranchStock branchStock, CancellationToken cancellationToken = default);
@@ -125,6 +126,7 @@ public interface ISupplierRepository : IRepository<Supplier>
         Guid? branchId,
         int pageIndex,
         int pageSize,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<(IReadOnlyList<SupplierTransactionDto>, int)>((Array.Empty<SupplierTransactionDto>(), 0));
 }
 

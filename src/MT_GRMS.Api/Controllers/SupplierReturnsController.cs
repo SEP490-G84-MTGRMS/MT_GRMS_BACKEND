@@ -84,8 +84,8 @@ public class SupplierReturnsController : BaseApiController
     public async Task<IActionResult> Submit(
         Guid id,
         [FromQuery] string? notes,
-        [FromBody] SubmitSupplierReturnBody? body,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken = default,
+        [FromBody] SubmitSupplierReturnBody? body = null)
     {
         var effectiveNotes = !string.IsNullOrWhiteSpace(body?.Notes) ? body!.Notes : notes;
         var result = await _service.SubmitAsync(id, effectiveNotes, cancellationToken);

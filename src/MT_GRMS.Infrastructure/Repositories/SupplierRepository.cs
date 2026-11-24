@@ -484,7 +484,7 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         if (effectiveBranchId.HasValue)
         {
             var scopedBranchId = effectiveBranchId.Value;
-            query = query.Where(sp => _context.BranchSupplierAssignments.Any(bsa =>
+            query = query.Where(sp => _context.SupplierBranchAssignments.Any(bsa =>
                 bsa.SupplierId == sp.SupplierId &&
                 bsa.BranchId == scopedBranchId &&
                 !bsa.IsDeleted));

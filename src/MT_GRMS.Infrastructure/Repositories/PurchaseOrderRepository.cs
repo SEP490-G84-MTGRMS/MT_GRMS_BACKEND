@@ -290,8 +290,8 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 AverageSales30Days = sales?.Avg30 ?? 0m,
                 SafetyStock = safetyStock,
                 IsPrimarySupplier = sp.IsPrimarySupplier,
-                PurchaseToStockRate = (purchaseUnitByProductId.TryGetValue(p.Id, out var puRate) && puRate.ConversionRate > 0)
-                    ? puRate.ConversionRate
+                PurchaseToStockRate = (p.Units?.FirstOrDefault(u => !u.IsDeleted && u.IsPurchaseUnit)?.ConversionRate is decimal puConv && puConv > 0)
+                    ? puConv
                     : (sp.ConversionRate > 0 ? sp.ConversionRate : 1m),
                 IsProductActive = isProdActive,
                 ProductInactiveReason = prodInactiveReason,
