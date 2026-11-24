@@ -65,8 +65,8 @@ public class PromotionService : IPromotionService
             MinOrderValue = request.MinOrderValue,
             MaxDiscountAmount = request.MaxDiscountAmount,
             UsageLimit = request.UsageLimit,
-            StartDate = request.StartDate,
-            EndDate = request.EndDate,
+            StartDate = NormalizeToUtc(request.StartDate),
+            EndDate = NormalizeToUtc(request.EndDate),
             IsActive = request.IsActive,
             Description = request.Description,
             TargetBranches = string.IsNullOrWhiteSpace(request.TargetBranches) ? "ALL" : request.TargetBranches,
@@ -113,8 +113,8 @@ public class PromotionService : IPromotionService
         promo.MinOrderValue = request.MinOrderValue;
         promo.MaxDiscountAmount = request.MaxDiscountAmount;
         promo.UsageLimit = request.UsageLimit;
-        promo.StartDate = request.StartDate;
-        promo.EndDate = request.EndDate;
+        promo.StartDate = NormalizeToUtc(request.StartDate);
+        promo.EndDate = NormalizeToUtc(request.EndDate);
         promo.IsActive = request.IsActive;
         promo.Description = request.Description;
         promo.TargetBranches = string.IsNullOrWhiteSpace(request.TargetBranches) ? "ALL" : request.TargetBranches;
@@ -169,8 +169,10 @@ public class PromotionService : IPromotionService
             throw new NotFoundException("Chương trình khuyến mại", id);
 
         var now = DateTime.UtcNow;
-        if (promo.IsActive && promo.StartDate <= now && promo.EndDate >= now)
-            throw new BusinessException("PROMOTION_IS_RUNNING", "Không thể xóa voucher/khuyến mãi đang trong thời gian áp dụng. Hãy tạm dừng chương trình trước khi xóa.");
+        var endUtc = ToUtcKind(promo.EndDate);
+        var isDepleted = promo.UsageLimit.HasValue && promo.UsedCount >= promo.UsageLimit.Value;
+        if (promo.IsActive && endUtc >= now && !isDepleted)
+            throw new BusinessException("PROMOTION_IS_RUNNING", "Không thể xóa voucher/khuyến mãi đang kích hoạt hoặc trong thời gian áp dụng. Hãy tạm dừng chương trình trước khi xóa.");
 
         promo.IsDeleted = true;
         _promotionRepository.Update(promo);
@@ -301,7 +303,7 @@ public class PromotionService : IPromotionService
                     foreach (var cartItem in matchingCartItems)
                     {
                         decimal itemLineDiscount = 0m;
-                        if (discountPerItem <= 100m)
+                        if (cond.Note == "PERCENT" || (cond.Note != "FIXED_AMOUNT" && discountPerItem <= 100m))
                         {
                             itemLineDiscount = Math.Round(cartItem.UnitPrice * (discountPerItem / 100.00m) * cartItem.Quantity, 2);
                         }
@@ -746,15 +748,10 @@ public class PromotionService : IPromotionService
         if (await _promotionRepository.ExistsByCodeAsync(request.BatchCode, cancellationToken))
             throw new BusinessException("DUPLICATE_CODE", $"Mã đợt voucher '{request.BatchCode}' đã tồn tại.");
 
-        string? cleanDesc = StripMetadataFromDescription(request.Description);
-        string? finalDescription = cleanDesc;
-        if (request.AllowWithPromotions.HasValue)
-        {
-            var configJson = $"[CONFIG_JSON]{{\"allowWithPromotions\":{request.AllowWithPromotions.Value.ToString().ToLowerInvariant()}}}[/CONFIG_JSON]";
-            finalDescription = string.IsNullOrWhiteSpace(cleanDesc)
-                ? configJson
-                : $"{cleanDesc}\n{configJson}";
-        }
+        string normalizedDiscountType = string.Equals(request.DiscountType?.Trim(), "PERCENT", StringComparison.OrdinalIgnoreCase)
+            ? "PERCENT"
+            : "FIXED_AMOUNT";
+        string? finalDescription = BuildVoucherDescription(request.Description, normalizedDiscountType, request.AllowWithPromotions);
 
         var batch = new Promotion
         {
@@ -767,8 +764,8 @@ public class PromotionService : IPromotionService
             MaxDiscountAmount = request.MaxDiscountAmount,
             UsageLimit = request.TotalQuantity,
             UsedCount = 0,
-            StartDate = request.StartDate,
-            EndDate = request.EndDate,
+            StartDate = NormalizeToUtc(request.StartDate),
+            EndDate = NormalizeToUtc(request.EndDate),
             IsActive = true,
             Description = finalDescription,
             VoucherPrefix = request.Prefix.Trim().ToUpper(),
@@ -795,22 +792,17 @@ public class PromotionService : IPromotionService
         if (batch == null || batch.Type != "VOUCHER")
             throw new NotFoundException("Đợt phát hành voucher", id);
 
-        string? cleanDesc = StripMetadataFromDescription(request.Description);
-        string? finalDescription = cleanDesc;
-        if (request.AllowWithPromotions.HasValue)
-        {
-            var configJson = $"[CONFIG_JSON]{{\"allowWithPromotions\":{request.AllowWithPromotions.Value.ToString().ToLowerInvariant()}}}[/CONFIG_JSON]";
-            finalDescription = string.IsNullOrWhiteSpace(cleanDesc)
-                ? configJson
-                : $"{cleanDesc}\n{configJson}";
-        }
+        string normalizedDiscountType = string.Equals(request.DiscountType?.Trim(), "PERCENT", StringComparison.OrdinalIgnoreCase)
+            ? "PERCENT"
+            : "FIXED_AMOUNT";
+        string? finalDescription = BuildVoucherDescription(request.Description, normalizedDiscountType, request.AllowWithPromotions);
 
         batch.PromotionName = request.Name.Trim();
         batch.DiscountValue = request.DiscountValue;
         batch.MinOrderValue = request.MinOrderValue;
         batch.MaxDiscountAmount = request.MaxDiscountAmount;
-        batch.StartDate = request.StartDate;
-        batch.EndDate = request.EndDate;
+        batch.StartDate = NormalizeToUtc(request.StartDate);
+        batch.EndDate = NormalizeToUtc(request.EndDate);
         batch.Description = finalDescription;
         batch.UpdatedAt = DateTime.UtcNow;
 
@@ -933,6 +925,7 @@ public class PromotionService : IPromotionService
             return new ValidateVoucherResponse(false, $"Đơn hàng chưa đạt giá trị tối thiểu {promo.MinOrderValue:N0} đ để dùng voucher này", 0, codeEntity.Code);
 
         bool allowWithPromotions = ParseAllowWithPromotions(promo.Description);
+        string discountType = ResolveVoucherDiscountType(promo);
         if (!allowWithPromotions && request.HasOtherPromotions)
         {
             return new ValidateVoucherResponse(
@@ -942,7 +935,7 @@ public class PromotionService : IPromotionService
                 Code: codeEntity.Code,
                 PromotionId: promo.Id,
                 PromotionName: promo.PromotionName,
-                DiscountType: promo.DiscountValue <= 100 && promo.MaxDiscountAmount.HasValue ? "PERCENT" : "FIXED_AMOUNT",
+                DiscountType: discountType,
                 DiscountValue: promo.DiscountValue,
                 AllowWithPromotions: false
             );
@@ -950,9 +943,6 @@ public class PromotionService : IPromotionService
 
         // Tính toán số tiền chiết khấu
         decimal discount = 0;
-        string discountType = promo.DiscountValue <= 100 && promo.DiscountValue > 0 && promo.MaxDiscountAmount.HasValue
-            ? "PERCENT"
-            : "FIXED_AMOUNT";
 
         if (discountType == "PERCENT")
         {
@@ -1289,6 +1279,55 @@ public class PromotionService : IPromotionService
     #endregion
 
     #region Helpers & Mappers
+    private static DateTime NormalizeToUtc(DateTime dt)
+    {
+        if (dt.Kind == DateTimeKind.Utc) return dt;
+        if (dt.Kind == DateTimeKind.Local) return dt.ToUniversalTime();
+        // Unspecified wall-clock from Vietnam client (UTC+7) -> convert cleanly to UTC
+        return DateTime.SpecifyKind(dt.AddHours(-7), DateTimeKind.Utc);
+    }
+
+    private static DateTime ToUtcKind(DateTime dt)
+    {
+        if (dt.Kind == DateTimeKind.Utc) return dt;
+        if (dt.Kind == DateTimeKind.Local) return dt.ToUniversalTime();
+        return DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+    }
+
+    private static string? BuildVoucherDescription(string? rawDescription, string discountType, bool? allowWithPromotions)
+    {
+        string? cleanDesc = StripMetadataFromDescription(rawDescription);
+        bool allowFlag = allowWithPromotions ?? true;
+        var configJson = $"[CONFIG_JSON]{{\"allowWithPromotions\":{allowFlag.ToString().ToLowerInvariant()},\"discountType\":\"{discountType}\"}}[/CONFIG_JSON]";
+        return string.IsNullOrWhiteSpace(cleanDesc)
+            ? configJson
+            : $"{cleanDesc}\n{configJson}";
+    }
+
+    private static string ResolveVoucherDiscountType(Promotion p)
+    {
+        if (!string.IsNullOrWhiteSpace(p.Description))
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(
+                p.Description,
+                @"\[CONFIG_JSON\]([\s\S]*?)\[/CONFIG_JSON\]",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (match.Success)
+            {
+                var json = match.Groups[1].Value;
+                var typeMatch = System.Text.RegularExpressions.Regex.Match(
+                    json,
+                    @"""discountType""\s*:\s*""(PERCENT|FIXED_AMOUNT)""",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                if (typeMatch.Success)
+                {
+                    return typeMatch.Groups[1].Value.ToUpperInvariant();
+                }
+            }
+        }
+        return p.DiscountValue <= 100 && p.MaxDiscountAmount.HasValue ? "PERCENT" : "FIXED_AMOUNT";
+    }
+
     private static PromotionResponse MapToResponse(Promotion p)
     {
         return new PromotionResponse(
@@ -1301,14 +1340,14 @@ public class PromotionService : IPromotionService
             p.MaxDiscountAmount,
             p.UsageLimit,
             p.UsedCount,
-            p.StartDate,
-            p.EndDate,
+            ToUtcKind(p.StartDate),
+            ToUtcKind(p.EndDate),
             p.IsActive,
             p.Description,
             p.TargetBranches,
             p.BudgetLimit,
             p.TotalDiscountGiven,
-            p.CreatedAt,
+            ToUtcKind(p.CreatedAt),
             p.Conditions.Select(c => new PromotionConditionDto(
                 c.Id,
                 c.ProductId,
@@ -1324,12 +1363,13 @@ public class PromotionService : IPromotionService
     private static VoucherBatchResponse MapToVoucherBatchResponse(Promotion p)
     {
         var now = DateTime.UtcNow;
+        var endUtc = ToUtcKind(p.EndDate);
         string status = !p.IsActive ? "PAUSED"
-            : now > p.EndDate ? "EXPIRED"
+            : now > endUtc ? "EXPIRED"
             : (p.UsageLimit.HasValue && p.UsedCount >= p.UsageLimit.Value) ? "DEPLETED"
             : "ACTIVE";
 
-        string discountType = p.DiscountValue <= 100 && p.MaxDiscountAmount.HasValue ? "PERCENT" : "FIXED_AMOUNT";
+        string discountType = ResolveVoucherDiscountType(p);
         bool allowWithPromotions = ParseAllowWithPromotions(p.Description);
 
         return new VoucherBatchResponse(
@@ -1342,12 +1382,12 @@ public class PromotionService : IPromotionService
             p.MaxDiscountAmount,
             p.TotalVoucherQuantity > 0 ? p.TotalVoucherQuantity : (p.UsageLimit ?? 0),
             p.UsedCount,
-            p.StartDate,
-            p.EndDate,
+            ToUtcKind(p.StartDate),
+            endUtc,
             status,
             p.VoucherPrefix ?? "VC",
             StripMetadataFromDescription(p.Description),
-            p.CreatedAt,
+            ToUtcKind(p.CreatedAt),
             allowWithPromotions
         );
     }

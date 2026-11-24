@@ -47,7 +47,7 @@ public class PromotionsController : BaseApiController
     public async Task<IActionResult> Create([FromBody] PromotionCreateRequest request, CancellationToken cancellationToken)
     {
         var result = await _promotionService.CreatePromotionAsync(request, cancellationToken);
-        return CreatedAtAction(nameof(GetById), new { id = result.Id }, ApiResponse<PromotionResponse>.Ok(result, "Tạo chương trình khuyến mại thành công"));
+        return CreatedAtAction(nameof(GetById), new { id = result.Id }, ApiResponse<PromotionResponse>.Ok(result, "Tạo chương trình khuyến mại thành công", StatusCodes.Status201Created));
     }
 
     /// <summary>

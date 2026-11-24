@@ -82,7 +82,7 @@ public class VouchersController : BaseApiController
     public async Task<IActionResult> CreateBatch([FromBody] VoucherBatchCreateRequest request, CancellationToken cancellationToken)
     {
         var result = await _promotionService.CreateVoucherBatchAsync(request, cancellationToken);
-        return CreatedAtAction(nameof(GetBatchById), new { id = result.Id }, ApiResponse<VoucherBatchResponse>.Ok(result, "Tạo đợt phát hành voucher thành công"));
+        return CreatedAtAction(nameof(GetBatchById), new { id = result.Id }, ApiResponse<VoucherBatchResponse>.Ok(result, "Tạo đợt phát hành voucher thành công", StatusCodes.Status201Created));
     }
 
     /// <summary>
