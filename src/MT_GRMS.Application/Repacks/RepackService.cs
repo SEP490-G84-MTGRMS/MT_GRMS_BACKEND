@@ -172,14 +172,9 @@ public class RepackService : IRepackService
             throw new BusinessException("NOT_WEIGHT_PRODUCT", "Chỉ sản phẩm đơn vị nhập kg mới được chế biến khay.");
         }
 
-        // SP cân kg được chế biến; tự bật AllowRepack nếu chưa.
         if (!product.AllowRepack)
         {
-            product.AllowRepack = true;
-            if (!product.HasBatches)
-            {
-                product.HasBatches = true;
-            }
+            throw new BusinessException("REPACK_NOT_ALLOWED", "Sản phẩm này chưa bật cho phép đóng khay/chế biến (AllowRepack = false).");
         }
 
         var existingActiveWeight = await _repository.GetActivePackageWeightAsync(tenantId, stock.Id, ct);

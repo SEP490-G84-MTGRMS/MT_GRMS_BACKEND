@@ -622,7 +622,7 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
             FefoDiscountPercent: bs.FefoDiscountPercent,
             IsFefoDiscountActive: bs.IsFefoDiscountActive,
             IsWeightProduct: isWeight,
-            AllowRepack: isWeight || allowRepack,
+            AllowRepack: allowRepack,
             PackagedQty: effectivePackaged,
             PackageCount: isWeight ? packageCount : 0,
             RawSellableQty: availableQty,
