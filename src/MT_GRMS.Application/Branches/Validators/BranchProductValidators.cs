@@ -35,14 +35,25 @@ public class UpdateBranchProductValidator : AbstractValidator<UpdateBranchProduc
     public UpdateBranchProductValidator()
     {
         RuleFor(x => x.RetailPrice)
-            .GreaterThan(0).WithMessage("Giá bán lẻ niêm yết phải lớn hơn 0 VNĐ.");
+            .GreaterThanOrEqualTo(0).WithMessage("Giá bán lẻ niêm yết không được nhỏ hơn 0 VNĐ.")
+            .LessThanOrEqualTo(1_000_000_000m).WithMessage("Giá bán lẻ niêm yết không được vượt quá 1.000.000.000 VNĐ.");
+
+        RuleFor(x => x.RetailPrice)
+            .GreaterThan(0).When(x => x.UnitPrices == null || x.UnitPrices.Count == 0)
+            .WithMessage("Giá bán lẻ niêm yết phải lớn hơn 0 VNĐ.");
 
         RuleFor(x => x.MinStockLevel)
             .GreaterThanOrEqualTo(0).When(x => x.MinStockLevel.HasValue)
             .WithMessage("Định mức tồn an toàn tối thiểu không thể nhỏ hơn 0.");
 
+        RuleFor(x => x.MinOrderQuantity)
+            .GreaterThan(0).When(x => x.MinOrderQuantity.HasValue)
+            .WithMessage("MOQ phải lớn hơn 0.");
+
         RuleFor(x => x.Status)
-            .Must(s => string.IsNullOrEmpty(s) || s == "Active" || s == "Inactive")
+            .Must(s => string.IsNullOrEmpty(s)
+                || string.Equals(s, "Active", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(s, "Inactive", StringComparison.OrdinalIgnoreCase))
             .WithMessage("Trạng thái kinh doanh chỉ có thể là 'Active' hoặc 'Inactive'.");
     }
 }

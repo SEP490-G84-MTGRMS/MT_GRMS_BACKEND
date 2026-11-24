@@ -323,6 +323,13 @@ public class BranchProductService : IBranchProductService
         UpdateBranchProductCommand command,
         CancellationToken cancellationToken = default)
     {
+        var validator = new UpdateBranchProductValidator();
+        var validationResult = await validator.ValidateAsync(command, cancellationToken);
+        if (!validationResult.IsValid)
+        {
+            throw new BusinessException("VALIDATION_ERROR", validationResult.Errors.First().ErrorMessage);
+        }
+
         var branch = await _repository.GetBranchByIdAsync(branchId, cancellationToken);
         if (branch == null || branch.IsDeleted)
         {
@@ -529,7 +536,14 @@ public class BranchProductService : IBranchProductService
             throw new NotFoundException($"Sản phẩm '{product.Name}' chưa được gán vào chi nhánh '{branch.Name}'.");
         }
 
-        var normalizedStatus = string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase) ? "Active" : "Inactive";
+        if (string.IsNullOrWhiteSpace(status)
+            || (!string.Equals(status.Trim(), "Active", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(status.Trim(), "Inactive", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new BusinessException("VALIDATION_ERROR", "Trạng thái kinh doanh chỉ có thể là 'Active' hoặc 'Inactive'.");
+        }
+
+        var normalizedStatus = string.Equals(status.Trim(), "Active", StringComparison.OrdinalIgnoreCase) ? "Active" : "Inactive";
         if (normalizedStatus == "Active"
             && product.Status != ProductStatus.Active)
         {
@@ -725,7 +739,14 @@ public class BranchProductService : IBranchProductService
 
         foreach (var row in unitPrices)
         {
-            if (!row.UnitId.HasValue || row.UnitId.Value == Guid.Empty || row.Price < 0)
+            if (row.Price <= 0 || row.Price > 1_000_000_000m)
+            {
+                throw new BusinessException(
+                    "VALIDATION_ERROR",
+                    $"Giá bán theo đơn vị '{row.UnitName}' phải lớn hơn 0 và không vượt quá 1.000.000.000 VNĐ.");
+            }
+
+            if (!row.UnitId.HasValue || row.UnitId.Value == Guid.Empty)
             {
                 continue;
             }
