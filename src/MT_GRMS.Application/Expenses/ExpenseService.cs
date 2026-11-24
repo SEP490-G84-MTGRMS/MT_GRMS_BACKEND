@@ -23,6 +23,23 @@ public class ExpenseService : IExpenseService
     private const decimal T1_AutoApprovalThreshold = 500_000m; // Ngưỡng tự duyệt chi dưới 500k
     private const decimal C1_ShiftCapLimit = 500_000m; // Hạn mức trần ca chi vặt
     private const decimal C2_DailyCumulativeLimit = 20_000_000m; // Hạn mức ngày 20 triệu
+    private static readonly string[] TaxBlacklistKeywords =
+    [
+        "phạt",
+        "vi phạm",
+        "cá nhân",
+        "từ thiện",
+        "phong bì",
+        "không hóa đơn",
+        "rút vốn",
+        "tiếp khách không chứng từ",
+    ];
+
+    private static bool IsTaxBlacklisted(string? category, string? beneficiaryName, string? note)
+    {
+        var combined = $"{category} {beneficiaryName} {note}".ToLowerInvariant();
+        return TaxBlacklistKeywords.Any(kw => combined.Contains(kw, StringComparison.Ordinal));
+    }
 
     public ExpenseService(
         IExpenseRepository expenseRepo,
@@ -71,6 +88,10 @@ public class ExpenseService : IExpenseService
             voucherCode,
             ct);
 
+        var effectiveTaxDeductible = request.IsTaxDeductible
+            && request.Nature == FinancialNature.OperatingExpense
+            && !IsTaxBlacklisted(request.Category, request.BeneficiaryName, request.Note);
+
         var voucher = new ExpenseVoucher
         {
             VoucherCode = voucherCode,
@@ -80,7 +101,7 @@ public class ExpenseService : IExpenseService
             Amount = request.Amount,
             PaymentSourceType = request.PaymentSourceType,
             PaymentSourceAccountId = request.PaymentSourceAccountId,
-            IsTaxDeductible = request.IsTaxDeductible,
+            IsTaxDeductible = effectiveTaxDeductible,
             InvoiceNumber = request.InvoiceNumber,
             SellerTaxCode = request.SellerTaxCode,
             EvidenceAttachmentUrl = resolvedEvidenceUrl,
