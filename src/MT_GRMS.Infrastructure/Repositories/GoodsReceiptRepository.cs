@@ -74,13 +74,16 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
 
         if (query.ToDate.HasValue)
         {
-            dbQuery = dbQuery.Where(gr => gr.ReceivedAtUtc <= query.ToDate.Value);
+            var endExclusive = query.ToDate.Value.Date.AddDays(1);
+            dbQuery = dbQuery.Where(gr => gr.ReceivedAtUtc < endExclusive);
         }
 
         if (query.IsTodayDelivery == true)
         {
-            var today = DateTime.UtcNow.Date;
-            dbQuery = dbQuery.Where(gr => gr.ReceivedAtUtc.Date == today);
+            var localToday = MT_GRMS.Application.Common.BusinessDateResolver.ToLocal(DateTime.UtcNow).Date;
+            var startUtc = MT_GRMS.Application.Common.BusinessDateResolver.ToUtc(localToday);
+            var endUtc = MT_GRMS.Application.Common.BusinessDateResolver.ToUtc(localToday.AddDays(1));
+            dbQuery = dbQuery.Where(gr => gr.ReceivedAtUtc >= startUtc && gr.ReceivedAtUtc < endUtc);
         }
 
         if (query.HasMismatch == true)
