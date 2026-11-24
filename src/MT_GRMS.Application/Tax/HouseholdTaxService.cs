@@ -746,7 +746,7 @@ public class HouseholdTaxService : IHouseholdTaxService
         var totalTax = activeSnapshot?.TotalTaxAmount ?? summary.TotalTaxAmount;
         var vatRate = activeSnapshot?.VatRate ?? summary.VatRate;
         var pitRate = activeSnapshot?.PitRate ?? summary.PitRate;
-        var calcMethod = activeSnapshot?.CalculationMethod ?? summary.CalculationMethod;
+        var calcMethod = summary.CalculationMethod;
         var revisionNumber = activeSnapshot?.RevisionNumber ?? 1;
 
         var periodLabel = filter.PeriodType switch
