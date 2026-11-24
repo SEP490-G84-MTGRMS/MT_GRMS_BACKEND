@@ -37,20 +37,21 @@ public sealed class TransferRequestService(
 
     public async Task<TransferRequestGroupDto> CreateAndAllocateAsync(CreateTransferRequestGroupRequest request, CancellationToken ct)
     {
-        var allocation = await BuildAllocationAsync(request, ct);
-        var shortages = request.Items
-            .Select(item => new
-            {
-                item.ProductId,
-                Missing = item.Quantity - allocation.Where(x => x.Product.Id == item.ProductId).Sum(x => x.Quantity)
-            })
-            .Where(x => x.Missing > 0)
-            .ToList();
-        if (shortages.Count > 0)
-            throw new InvalidOperationException("Tồn khả dụng toàn chuỗi không đủ để tạo trọn vẹn yêu cầu. Hãy xem lại phương án phân bổ.");
         await unitOfWork.BeginTransactionAsync(ct);
         try
         {
+            var allocation = await BuildAllocationAsync(request, ct);
+            var shortages = request.Items
+                .Select(item => new
+                {
+                    item.ProductId,
+                    Missing = item.Quantity - allocation.Where(x => x.Product.Id == item.ProductId).Sum(x => x.Quantity)
+                })
+                .Where(x => x.Missing > 0)
+                .ToList();
+            if (shortages.Count > 0)
+                throw new InvalidOperationException("Tồn khả dụng toàn chuỗi không đủ để tạo trọn vẹn yêu cầu. Hãy xem lại phương án phân bổ.");
+
             var now = DateTime.UtcNow;
             var group = new TransferRequest
             {
