@@ -67,7 +67,8 @@ public record ExpenseVoucherResponse(
     string? ReferenceCode = null,
     decimal RefundedAmount = 0,
     bool IsSettled = false,
-    DateOnly? DueDate = null
+    DateOnly? DueDate = null,
+    string? BranchName = null
 );
 
 public record ExpenseSummaryResponse(

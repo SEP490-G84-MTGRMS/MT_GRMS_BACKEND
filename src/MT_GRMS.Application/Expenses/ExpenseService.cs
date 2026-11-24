@@ -87,6 +87,15 @@ public class ExpenseService : IExpenseService
             throw new BusinessException("INVALID_TAX_CODE", "Mã số thuế bên bán không vượt quá 50 ký tự.");
         }
 
+        if (request.BranchId.HasValue)
+        {
+            var exists = await _expenseRepo.BranchExistsAsync(request.BranchId.Value, ct);
+            if (!exists)
+            {
+                throw new NotFoundException($"Không tìm thấy chi nhánh với mã {request.BranchId.Value}.");
+            }
+        }
+
         EnsureNatureInScope(request.Nature);
 
         if (request.Nature == FinancialNature.OwnerDraw || request.Nature == FinancialNature.TaxPayment)
@@ -452,7 +461,8 @@ public class ExpenseService : IExpenseService
         var voucher = await _expenseRepo.GetByIdAsync(expenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
-        return MapVoucherResponse(voucher);
+        var branchNames = await ResolveBranchNamesAsync([voucher], ct);
+        return MapVoucherResponse(voucher, branchNames);
     }
 
     public async Task<List<ExpenseVoucherResponse>> GetExpensesAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CancellationToken ct = default)
@@ -551,10 +561,13 @@ public class ExpenseService : IExpenseService
         }
 
         var ordered = query.OrderByDescending(e => e.CreatedAt).ToList();
-        var items = ordered
+        var pageEntities = ordered
             .Skip((safePage - 1) * safePageSize)
             .Take(safePageSize)
-            .Select(MapVoucherResponse)
+            .ToList();
+        var branchNames = await ResolveBranchNamesAsync(pageEntities, ct);
+        var items = pageEntities
+            .Select(v => MapVoucherResponse(v, branchNames))
             .ToList();
 
         return new PagedResult<ExpenseVoucherResponse>
@@ -614,9 +627,10 @@ public class ExpenseService : IExpenseService
             ct
         );
 
-        return vouchers
-            .OrderByDescending(e => e.CreatedAt)
-            .Select(MapVoucherResponse)
+        var list = vouchers.OrderByDescending(e => e.CreatedAt).ToList();
+        var branchNames = await ResolveBranchNamesAsync(list, ct);
+        return list
+            .Select(v => MapVoucherResponse(v, branchNames))
             .ToList();
     }
 
@@ -672,6 +686,23 @@ public class ExpenseService : IExpenseService
 
     private void RequireOwner() => TenantRoleGuard.RequireStoreOwner(_tenantContext, "chi phí và phiếu chi");
 
-    private static ExpenseVoucherResponse MapVoucherResponse(ExpenseVoucher v) =>
-        new(v.Id, v.VoucherCode, v.BranchId, v.BeneficiaryName, v.Category, v.Amount, v.Status.ToString(), v.PaymentSourceType.ToString(), v.PaymentSourceAccountId, v.IsTaxDeductible, v.InvoiceNumber, v.SellerTaxCode, v.EvidenceAttachmentUrl, v.IsFlaggedAsSuspiciousSplit, v.SuspiciousReason, v.ApprovedByUserId, v.ApprovedAtUtc, v.PaidAtUtc, v.ExpenseDate, v.Note, v.Nature, v.ReferenceCode, v.RefundedAmount, v.IsSettled, v.DueDate);
+    private async Task<Dictionary<Guid, string>> ResolveBranchNamesAsync(IEnumerable<ExpenseVoucher> vouchers, CancellationToken ct)
+    {
+        var ids = vouchers.Where(v => v.BranchId.HasValue).Select(v => v.BranchId!.Value).Distinct().ToList();
+        return ids.Count == 0
+            ? new Dictionary<Guid, string>()
+            : await _expenseRepo.GetBranchNamesAsync(ids, ct);
+    }
+
+    private static ExpenseVoucherResponse MapVoucherResponse(ExpenseVoucher v) => MapVoucherResponse(v, null);
+
+    private static ExpenseVoucherResponse MapVoucherResponse(ExpenseVoucher v, Dictionary<Guid, string>? branchNames)
+    {
+        string? branchName = null;
+        if (v.BranchId.HasValue && branchNames != null && branchNames.TryGetValue(v.BranchId.Value, out var resolved))
+        {
+            branchName = resolved;
+        }
+        return new(v.Id, v.VoucherCode, v.BranchId, v.BeneficiaryName, v.Category, v.Amount, v.Status.ToString(), v.PaymentSourceType.ToString(), v.PaymentSourceAccountId, v.IsTaxDeductible, v.InvoiceNumber, v.SellerTaxCode, v.EvidenceAttachmentUrl, v.IsFlaggedAsSuspiciousSplit, v.SuspiciousReason, v.ApprovedByUserId, v.ApprovedAtUtc, v.PaidAtUtc, v.ExpenseDate, v.Note, v.Nature, v.ReferenceCode, v.RefundedAmount, v.IsSettled, v.DueDate, branchName);
+    }
 }
