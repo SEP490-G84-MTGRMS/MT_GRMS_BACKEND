@@ -276,6 +276,17 @@ public class CashbookService : ICashbookService
         CancellationToken ct = default)
     {
         RequireOwner();
+        DateTime? fromUtc = fromDate.HasValue
+            ? (fromDate.Value.Kind == DateTimeKind.Utc ? fromDate.Value : fromDate.Value.Kind == DateTimeKind.Local ? fromDate.Value.ToUniversalTime() : DateTime.SpecifyKind(fromDate.Value.AddHours(-7), DateTimeKind.Utc))
+            : null;
+        DateTime? toUtc = toDate.HasValue
+            ? (toDate.Value.Kind == DateTimeKind.Utc ? toDate.Value : toDate.Value.Kind == DateTimeKind.Local ? toDate.Value.ToUniversalTime() : DateTime.SpecifyKind(toDate.Value.AddHours(-7), DateTimeKind.Utc))
+            : null;
+        if (fromUtc.HasValue && toUtc.HasValue && fromUtc.Value > toUtc.Value)
+        {
+            throw new BusinessException("INVALID_DATE_RANGE", "Ngày bắt đầu không được sau ngày kết thúc.");
+        }
+
         var normalizedStatus = status?.Trim().ToUpperInvariant();
         var kw = keyword?.Trim().ToLowerInvariant();
         var party = counterparty?.Trim().ToLowerInvariant();
@@ -284,8 +295,8 @@ public class CashbookService : ICashbookService
         var entries = await _cashbookRepo.FindAsync(e =>
             (!accountId.HasValue || e.AccountId == accountId.Value) &&
             (!branchId.HasValue || e.BranchId == branchId.Value || (e.AccountType == FinanceAccountType.Bank && e.BranchId == null)) &&
-            (!fromDate.HasValue || e.OccurredAtUtc >= fromDate.Value) &&
-            (!toDate.HasValue || e.OccurredAtUtc <= toDate.Value) &&
+            (!fromUtc.HasValue || e.OccurredAtUtc >= fromUtc.Value) &&
+            (!toUtc.HasValue || e.OccurredAtUtc <= toUtc.Value) &&
             (!entryType.HasValue || (e.EntryType == entryType.Value && e.SourceType != "ADJUSTMENT")) &&
             (string.IsNullOrEmpty(sourceType) || e.SourceType == sourceType) &&
             (string.IsNullOrEmpty(party) ||
