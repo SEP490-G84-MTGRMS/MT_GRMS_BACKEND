@@ -109,7 +109,7 @@ public class ExpenseService : IExpenseService
         {
             await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(expenseDate, "tạo phiếu chi", request.BranchId, ct);
         }
-        var voucherCode = "EXP-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff");
+        var voucherCode = $"EXP-{DateTime.UtcNow:yyyyMMddHHmmssfff}-{Random.Shared.Next(100, 999)}";
         var resolvedEvidenceUrl = await CloudinaryDataUrlHelper.ResolveImageUrlAsync(
             _cloudinaryService,
             request.EvidenceAttachmentUrl,
@@ -144,23 +144,24 @@ public class ExpenseService : IExpenseService
 
         // Thuật toán Anti-Splitting Engine (REQ-EXP-02) & Trần ca C1
         var isSuspicious = false;
-        string? suspiciousReason = null;
+        var suspiciousReasons = new List<string>();
         var requiresApproval = false;
         var isOverShiftCap = false;
 
         if (request.BranchId.HasValue)
         {
             var branchId = request.BranchId.Value;
+            var vnDayStartUtc = DateTime.UtcNow.AddHours(7).Date.AddHours(-7);
 
             // 0. Kiểm tra trần ca chi vặt C1 (500.000đ)
             if (request.Nature == FinancialNature.OperatingExpense && request.Amount <= T1_AutoApprovalThreshold)
             {
-                var shiftSum = await _expenseRepo.GetShiftExpenseSumAsync(branchId, DateTime.UtcNow.Date, ct);
+                var shiftSum = await _expenseRepo.GetShiftExpenseSumAsync(branchId, vnDayStartUtc, ct);
                 if (shiftSum + request.Amount > C1_ShiftCapLimit)
                 {
                     isOverShiftCap = true;
                     isSuspicious = true;
-                    suspiciousReason = $"Tổng chi trong ca ({shiftSum + request.Amount:N0}đ) vượt trần ca cho phép ({C1_ShiftCapLimit:N0}đ). Đã chuyển vào Triage Inbox chờ chủ duyệt.";
+                    suspiciousReasons.Add($"Tổng chi trong ca ({shiftSum + request.Amount:N0}đ) vượt trần ca cho phép ({C1_ShiftCapLimit:N0}đ). Đã chuyển vào Triage Inbox chờ chủ duyệt.");
                 }
             }
 
@@ -168,8 +169,9 @@ public class ExpenseService : IExpenseService
             var sameVendorSum = await _expenseRepo.GetSameVendorDailySumAsync(branchId, request.BeneficiaryName, request.Category, DateTime.UtcNow, ct);
             if (sameVendorSum + request.Amount > T1_AutoApprovalThreshold)
             {
+                isSuspicious = true;
                 requiresApproval = true;
-                suspiciousReason = $"Tổng chi cùng đối tượng '{request.BeneficiaryName}' trong ngày vượt ngưỡng tự duyệt ({sameVendorSum + request.Amount:N0}đ > {T1_AutoApprovalThreshold:N0}đ).";
+                suspiciousReasons.Add($"Tổng chi cùng đối tượng '{request.BeneficiaryName}' trong ngày vượt ngưỡng tự duyệt ({sameVendorSum + request.Amount:N0}đ > {T1_AutoApprovalThreshold:N0}đ).");
             }
 
             // 2. Mẫu hình tần suất: >= 3 phiếu trong 60 phút có giá trị >= 60% T1 (300.000đ)
@@ -179,7 +181,7 @@ public class ExpenseService : IExpenseService
             {
                 isSuspicious = true;
                 requiresApproval = true;
-                suspiciousReason = "Phát hiện mẫu hình tạo nhiều phiếu chi giá trị lớn trong 60 phút (nghi vấn chia nhỏ hóa đơn né duyệt).";
+                suspiciousReasons.Add("Phát hiện mẫu hình tạo nhiều phiếu chi giá trị lớn trong 60 phút (nghi vấn chia nhỏ hóa đơn né duyệt).");
             }
 
             // 3. Hạn mức lũy kế ngày C2
@@ -191,7 +193,7 @@ public class ExpenseService : IExpenseService
         }
 
         voucher.IsFlaggedAsSuspiciousSplit = isSuspicious;
-        voucher.SuspiciousReason = suspiciousReason;
+        voucher.SuspiciousReason = suspiciousReasons.Count > 0 ? string.Join(" | ", suspiciousReasons) : null;
 
         // Quyết định trạng thái phê duyệt ban đầu
         if (request.Nature == FinancialNature.Suspense || isOverShiftCap)
@@ -247,8 +249,8 @@ public class ExpenseService : IExpenseService
             throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể phê duyệt.");
         }
 
-        // Kiểm toán tiệm 1 chủ solo: Nếu phiếu bị cảnh báo xé nhỏ hạn mức thì bắt buộc phải nhập lý do/ghi chú giải trình
-        if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note) && string.IsNullOrWhiteSpace(voucher.Note))
+        // Kiểm toán tiệm 1 chủ solo: Nếu phiếu bị cảnh báo xé nhỏ hạn mức thì bắt buộc phải nhập lý do/ghi chú giải trình khi duyệt
+        if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note))
         {
             throw new BusinessException("NOTE_REQUIRED_FOR_SUSPICIOUS_EXPENSE", "Phiếu chi bị gắn cờ nghi vấn xé nhỏ hạn mức. Bắt buộc nhập ghi chú giải trình khi phê duyệt.");
         }
@@ -390,7 +392,7 @@ public class ExpenseService : IExpenseService
                 voucher.Status == ExpenseVoucherStatus.PendingApproval ||
                 voucher.Status == ExpenseVoucherStatus.Unresolved)
             {
-                if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note) && string.IsNullOrWhiteSpace(voucher.Note))
+                if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note))
                 {
                     throw new BusinessException("NOTE_REQUIRED_FOR_SUSPICIOUS_EXPENSE", "Phiếu chi bị gắn cờ nghi vấn xé nhỏ hạn mức. Bắt buộc nhập ghi chú giải trình khi phê duyệt và xuất quỹ.");
                 }
