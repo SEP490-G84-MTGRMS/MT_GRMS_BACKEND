@@ -594,7 +594,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         var totalCount = await query.CountAsync(cancellationToken);
 
         var safePageIndex = Math.Max(1, pageIndex);
-        var safePageSize = Math.Clamp(pageSize, 1, 100);
+        var safePageSize = Math.Clamp(pageSize, 1, 500);
 
         var items = await query
             .OrderByDescending(po => po.CreatedAt)
