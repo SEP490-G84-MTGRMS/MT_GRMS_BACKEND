@@ -406,9 +406,8 @@ public class BranchProductService : IBranchProductService
                     "Giá khi đóng khay không được vượt quá 1.000.000.000 đ.");
             }
 
-            var oldProcessed = product.ProcessedSellingPricePerKg;
-            product.ProcessedSellingPricePerKg = processed;
-            product.UpdatedAt = DateTime.UtcNow;
+            var oldProcessed = catalog.ProcessedSellingPricePerKg ?? product.ProcessedSellingPricePerKg;
+            catalog.ProcessedSellingPricePerKg = processed == product.ProcessedSellingPricePerKg ? null : processed;
 
             if (_priceHistoryRepository != null
                 && oldProcessed.GetValueOrDefault() != processed)
@@ -720,7 +719,7 @@ public class BranchProductService : IBranchProductService
             ShelfLocation = catalog.ShelfLocation,
             AssignedDate = catalog.CreatedAt,
             AllowRepack = product.AllowRepack,
-            ProcessedSellingPricePerKg = product.ProcessedSellingPricePerKg
+            ProcessedSellingPricePerKg = catalog.ProcessedSellingPricePerKg ?? product.ProcessedSellingPricePerKg
         };
     }
 

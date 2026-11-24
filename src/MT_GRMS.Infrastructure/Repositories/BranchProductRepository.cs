@@ -184,7 +184,8 @@ public class BranchProductRepository : IBranchProductRepository
             ProductStatus = bp.Status,
             ShelfLocation = bp.ShelfLocation,
             AssignedDate = bp.CreatedAt,
-            AllowedSupplierIdsJson = bp.AllowedSupplierIdsJson
+            AllowedSupplierIdsJson = bp.AllowedSupplierIdsJson,
+            BranchProcessedSellingPricePerKg = bp.ProcessedSellingPricePerKg
         });
 
         // Stock alert cần QuantityOnHand từ BranchStocks — lọc sau khi join qty.
@@ -472,7 +473,7 @@ public class BranchProductRepository : IBranchProductRepository
                 AssignedDate = x.AssignedDate,
                 UnitPrices = unitPrices,
                 AllowRepack = extra?.AllowRepack ?? false,
-                ProcessedSellingPricePerKg = extra?.ProcessedSellingPricePerKg
+                ProcessedSellingPricePerKg = x.BranchProcessedSellingPricePerKg ?? extra?.ProcessedSellingPricePerKg
             });
         }
 

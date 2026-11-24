@@ -16,6 +16,9 @@ public class BranchProduct : BaseTenantEntity
     /// <summary>NULL = dùng giá Master Product.SellingPrice.</summary>
     public decimal? SellingPriceOverride { get; set; }
 
+    /// <summary>Giá bán đ/kg khi đóng khay riêng của chi nhánh (NULL = dùng Master Product.ProcessedSellingPricePerKg).</summary>
+    public decimal? ProcessedSellingPricePerKg { get; set; }
+
     public string Status { get; set; } = "Active";
     public string? ShelfLocation { get; set; }
 
