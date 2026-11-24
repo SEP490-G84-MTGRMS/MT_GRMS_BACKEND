@@ -134,7 +134,8 @@ public record ScheduleResponse(
     string? ApprovedBy,
     DateTime? ApprovedAt,
     DateTime CreatedAt,
-    string? UserId = null
+    string? UserId = null,
+    decimal? WorkUnits = null
 );
 
 public record TodayStaffDescriptorDto(

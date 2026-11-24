@@ -1,6 +1,7 @@
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Interfaces;
 using MT_GRMS.Application.Branches;
+using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Payslips;
 using MT_GRMS.Application.HR.Schedules.Dtos;
@@ -773,8 +774,24 @@ public class ScheduleService : IScheduleService
         return result;
     }
 
-    private static ScheduleResponse MapToResponse(EmployeeSchedule s)
+    private static ScheduleResponse MapToResponse(EmployeeSchedule s) => MapToResponse(s, null);
+
+    private static ScheduleResponse MapToResponse(EmployeeSchedule s, Branch? policy)
     {
+        var branchPolicy = policy ?? s.Branch;
+        decimal? workUnits = null;
+        if (s.Status == ScheduleStatus.Completed)
+        {
+            if (s.IsLeave && s.IsPaidLeave)
+            {
+                workUnits = 1.00m;
+            }
+            else if (!s.IsLeave)
+            {
+                workUnits = WorkdayConversionHelper.CalculateWorkUnits(s.ActualWorkHours, branchPolicy);
+            }
+        }
+
         return new ScheduleResponse(
             s.Id,
             s.EmployeeId,
@@ -809,7 +826,8 @@ public class ScheduleService : IScheduleService
             s.ApprovedBy,
             s.ApprovedAt,
             s.CreatedAt,
-            s.Employee?.UserId
+            s.Employee?.UserId,
+            workUnits
         );
     }
 
@@ -860,7 +878,7 @@ public class ScheduleService : IScheduleService
             schedule.Employee = await _employeeRepository.GetByIdAsync(schedule.EmployeeId, cancellationToken);
         }
 
-        return MapToResponse(schedule);
+        return MapToResponse(schedule, policy);
     }
 
     public async Task<ResetAttendanceResponse> ResetManualAttendanceAsync(
@@ -1377,7 +1395,7 @@ public class ScheduleService : IScheduleService
         _scheduleRepository.Update(schedule);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapToResponse(schedule);
+        return MapToResponse(schedule, policy);
     }
 
     public async Task<ScheduleResponse> CheckOutFaceIdAsync(
@@ -1478,7 +1496,7 @@ public class ScheduleService : IScheduleService
         _scheduleRepository.Update(schedule);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
-        return MapToResponse(schedule);
+        return MapToResponse(schedule, policy);
     }
 
     private async Task<string?> UploadSnapshotAsync(string? base64Data, string prefix, CancellationToken cancellationToken)

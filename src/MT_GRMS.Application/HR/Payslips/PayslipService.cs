@@ -3,6 +3,7 @@ using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Expenses;
 using MT_GRMS.Application.Branches;
+using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Payslips.Dtos;
 using MT_GRMS.Application.HR.Schedules;
@@ -1025,80 +1026,16 @@ public class PayslipService : IPayslipService
         Branch? policy)
     {
         var shouldConvert = policy == null || policy.IsConvertHoursToDays;
-        var rulesJson = (policy != null && !string.IsNullOrWhiteSpace(policy.ConversionRulesJson))
-            ? policy.ConversionRulesJson
-            : DefaultConversionRulesJson;
-
-        if (shouldConvert && !string.IsNullOrWhiteSpace(rulesJson))
+        if (shouldConvert)
         {
-            try
+            decimal convertedDays = 0m;
+            var schedulesByDate = workingSchedules.GroupBy(s => s.WorkDate.Date);
+            foreach (var dayGroup in schedulesByDate)
             {
-                using var doc = JsonDocument.Parse(rulesJson);
-                if (doc.RootElement.ValueKind == JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0)
-                {
-                    var rules = new List<(string Type, int FromMinutes, int ToMinutes, decimal WorkUnits)>();
-                    foreach (var item in doc.RootElement.EnumerateArray())
-                    {
-                        if (item.ValueKind != JsonValueKind.Object) continue;
-                        var type = item.TryGetProperty("type", out var tProp) ? (tProp.GetString() ?? "range") : "range";
-                        var fh = item.TryGetProperty("fromHours", out var fhProp) && fhProp.TryGetInt32(out var fhv) ? fhv : 0;
-                        var fm = item.TryGetProperty("fromMinutes", out var fmProp) && fmProp.TryGetInt32(out var fmv) ? fmv : 0;
-                        var th = item.TryGetProperty("toHours", out var thProp) && thProp.TryGetInt32(out var thv) ? thv : 0;
-                        var tm = item.TryGetProperty("toMinutes", out var tmProp) && tmProp.TryGetInt32(out var tmv) ? tmv : 0;
-                        var wu = item.TryGetProperty("workUnits", out var wuProp) && wuProp.TryGetDecimal(out var wuv) ? wuv : 0m;
-
-                        if (wu > 0m)
-                        {
-                            rules.Add((type, fh * 60 + fm, th * 60 + tm, wu));
-                        }
-                    }
-
-                    if (rules.Count > 0)
-                    {
-                        decimal convertedDays = 0m;
-                        var schedulesByDate = workingSchedules.GroupBy(s => s.WorkDate.Date);
-                        foreach (var dayGroup in schedulesByDate)
-                        {
-                            var dayHours = dayGroup.Sum(GetInShiftWorkHours);
-                            var dayMinutes = (int)Math.Round(dayHours * 60m, MidpointRounding.AwayFromZero);
-
-                            decimal matchedUnits = 0m;
-                            var matched = false;
-
-                            foreach (var rule in rules)
-                            {
-                                if (string.Equals(rule.Type, "range", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    if (dayMinutes >= rule.FromMinutes && dayMinutes < rule.ToMinutes)
-                                    {
-                                        matchedUnits = Math.Max(matchedUnits, rule.WorkUnits);
-                                        matched = true;
-                                    }
-                                }
-                                else if (string.Equals(rule.Type, "gte", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    if (dayMinutes >= rule.FromMinutes)
-                                    {
-                                        matchedUnits = Math.Max(matchedUnits, rule.WorkUnits);
-                                        matched = true;
-                                    }
-                                }
-                            }
-
-                            if (matched)
-                            {
-                                convertedDays += matchedUnits;
-                            }
-                        }
-
-                        return Math.Round(convertedDays, 2);
-                    }
-                }
+                var dayHours = dayGroup.Sum(GetInShiftWorkHours);
+                convertedDays += WorkdayConversionHelper.CalculateWorkUnits(dayHours, policy);
             }
-            catch
-            {
-                // Fallback to standard linear conversion if JSON is malformed
-            }
+            return Math.Round(convertedDays, 2);
         }
 
         return standardDayHours > 0 ? Math.Round(totalWorkHours / standardDayHours, 2) : 0m;

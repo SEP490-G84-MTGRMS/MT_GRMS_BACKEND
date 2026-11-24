@@ -2071,6 +2071,55 @@ public class ScheduleServiceTests
     }
 
     [Fact]
+    public async Task RecordManualAttendance_WithCustom3TierConversionRules_ComputesWorkUnitsCorrectly()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var policyRepo = new FakeBranchAttendancePolicyRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext, policyRepo);
+
+        var branchId = Guid.NewGuid();
+        var empId = Guid.NewGuid();
+        policyRepo.Policies.Add(new MT_GRMS.Domain.Entities.SaaS.Branch
+        {
+            Id = branchId,
+            TenantId = tenantContext.CurrentTenantId,
+            Name = "Chi nhánh 3 mức",
+            StandardDayHours = 8.0m,
+            IsConvertHoursToDays = true,
+            ConversionRulesJson =
+                "[{\"id\":\"rule-1\",\"type\":\"range\",\"fromHours\":1,\"fromMinutes\":0,\"toHours\":4,\"toMinutes\":30,\"workUnits\":0.5,\"workUnitsLabel\":\"0.5 công\"},{\"id\":\"rule-2\",\"type\":\"range\",\"fromHours\":4,\"fromMinutes\":30,\"toHours\":8,\"toMinutes\":0,\"workUnits\":1,\"workUnitsLabel\":\"1 công\"},{\"id\":\"rule-3\",\"type\":\"gte\",\"fromHours\":8,\"fromMinutes\":0,\"workUnits\":1.5,\"workUnitsLabel\":\"1.5 công\"}]",
+            IsAttendancePolicyCustomized = true
+        });
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            EmployeeId = empId,
+            BranchId = branchId,
+            WorkDate = DateTime.UtcNow.Date,
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(16, 0, 0),
+            DurationHours = 8.0m,
+            Status = ScheduleStatus.Scheduled
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var res = await service.RecordManualAttendanceAsync(schedule.Id, new ManualAttendanceRequest(
+            AttendanceType: ManualAttendanceType.Working,
+            CheckInTime: new TimeSpan(8, 0, 0),
+            CheckOutTime: new TimeSpan(16, 0, 0)
+        ));
+
+        Assert.Equal(8.00m, res.ActualWorkHours);
+        Assert.Equal(1.50m, res.WorkUnits);
+    }
+
+    [Fact]
     public async Task SelfCheckInAsync_AllBranchConditions_ShouldWorkExpectedly()
     {
         var scheduleRepo = new FakeScheduleRepository();
