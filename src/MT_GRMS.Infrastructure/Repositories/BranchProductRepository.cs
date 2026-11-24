@@ -183,7 +183,8 @@ public class BranchProductRepository : IBranchProductRepository
             RetailPrice = bp.SellingPriceOverride ?? bp.Product.SellingPrice,
             ProductStatus = bp.Status,
             ShelfLocation = bp.ShelfLocation,
-            AssignedDate = bp.CreatedAt
+            AssignedDate = bp.CreatedAt,
+            AllowedSupplierIdsJson = bp.AllowedSupplierIdsJson
         });
 
         // Stock alert cần QuantityOnHand từ BranchStocks — lọc sau khi join qty.
@@ -364,9 +365,13 @@ public class BranchProductRepository : IBranchProductRepository
             var catalogPurchaseUnitName = extra?.Units.FirstOrDefault(u => u.IsPurchaseUnit)?.UnitName;
 
             spLookup.TryGetValue(x.ProductId, out var spList);
-            var sourcing = (spList ?? new List<SupplierProduct>())
+            var activeSourcing = (spList ?? new List<SupplierProduct>())
                 .Where(sp => branchSupplierSet.Contains((x.BranchId, sp.SupplierId)))
                 .ToList();
+            var allowedSupplierIds = BranchProduct.ParseAllowedSupplierIds(x.AllowedSupplierIdsJson);
+            var sourcing = allowedSupplierIds != null
+                ? activeSourcing.Where(sp => allowedSupplierIds.Contains(sp.SupplierId)).ToList()
+                : activeSourcing;
 
             if (supplierCodeTerms.Count > 0)
             {
@@ -804,13 +809,16 @@ public class BranchProductRepository : IBranchProductRepository
             return Array.Empty<AssignableBranchProductDto>();
         }
 
-        var alreadyAssignedIds = await _context.BranchProducts
+        var existingBranchProducts = await _context.BranchProducts
             .AsNoTracking()
             .Where(bp => bp.BranchId == branchId)
-            .Select(bp => bp.ProductId)
-            .Distinct()
+            .Select(bp => new { bp.ProductId, bp.AllowedSupplierIdsJson })
             .ToListAsync(cancellationToken);
-        var alreadyAssigned = alreadyAssignedIds.ToHashSet();
+        var allowedByProduct = existingBranchProducts
+            .GroupBy(bp => bp.ProductId)
+            .ToDictionary(
+                g => g.Key,
+                g => BranchProduct.ParseAllowedSupplierIds(g.First().AllowedSupplierIdsJson));
 
         var supplierProducts = await _context.SupplierProducts
             .AsNoTracking()
@@ -832,14 +840,17 @@ public class BranchProductRepository : IBranchProductRepository
             .ToListAsync(cancellationToken);
 
         var result = new List<AssignableBranchProductDto>();
-        var seenProducts = new HashSet<Guid>();
+        var seenPairs = new HashSet<(Guid ProductId, Guid SupplierId)>();
 
         foreach (var sp in supplierProducts)
         {
-            if (sp.Product == null || !seenProducts.Add(sp.ProductId))
+            if (sp.Product == null || !seenPairs.Add((sp.ProductId, sp.SupplierId)))
             {
                 continue;
             }
+
+            var isAlreadyAssigned = allowedByProduct.TryGetValue(sp.ProductId, out var allowedIds)
+                && (allowedIds == null || allowedIds.Contains(sp.SupplierId));
 
             var cost = MT_GRMS.Application.Suppliers.SupplierProductPricing.ResolveEffectivePurchasePrice(
                 sp.AgreedWholesalePrice,
@@ -865,13 +876,14 @@ public class BranchProductRepository : IBranchProductRepository
                 SupplierId = sp.SupplierId,
                 SupplierCode = sp.Supplier?.Code ?? string.Empty,
                 SupplierName = sp.Supplier?.Name ?? string.Empty,
-                IsAlreadyAssigned = alreadyAssigned.Contains(sp.ProductId),
+                IsAlreadyAssigned = isAlreadyAssigned,
                 UnitPrices = unitPrices
             });
         }
 
         return result
             .OrderBy(x => x.Name)
+            .ThenBy(x => x.SupplierName)
             .ToList();
     }
 

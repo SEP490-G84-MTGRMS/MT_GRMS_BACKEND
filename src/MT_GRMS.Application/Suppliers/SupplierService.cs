@@ -1273,7 +1273,7 @@ public class SupplierService : ISupplierService
                 continue;
             }
 
-            await _supplierRepository.AddBranchProductAsync(new BranchProduct
+            var newBp = new BranchProduct
             {
                 Id = Guid.NewGuid(),
                 TenantId = _tenantContext.CurrentTenantId,
@@ -1283,7 +1283,9 @@ public class SupplierService : ISupplierService
                 Status = "Active",
                 ShelfLocation = "Kệ hàng",
                 CreatedAt = DateTime.UtcNow
-            }, cancellationToken);
+            };
+            newBp.SetAllowedSupplierIds(new[] { supplierId });
+            await _supplierRepository.AddBranchProductAsync(newBp, cancellationToken);
         }
     }
 
@@ -1650,6 +1652,7 @@ public class SupplierService : ISupplierService
                     ShelfLocation = "Kệ hàng",
                     CreatedAt = DateTime.UtcNow
                 };
+                newBranchProduct.SetAllowedSupplierIds(new[] { supplierId });
                 await _supplierRepository.AddBranchProductAsync(newBranchProduct, cancellationToken);
             }
         }
@@ -1755,6 +1758,7 @@ public class SupplierService : ISupplierService
                             ShelfLocation = "Kệ hàng",
                             CreatedAt = DateTime.UtcNow
                         };
+                        newBranchProduct.SetAllowedSupplierIds(new[] { supplierId });
                         await _supplierRepository.AddBranchProductAsync(newBranchProduct, ct);
                     }
                 }
@@ -1845,14 +1849,6 @@ public class SupplierService : ISupplierService
                 throw new BusinessException(
                     "SUPPLIER_INACTIVE",
                     "Không thể kích hoạt sản phẩm khi nhà cung cấp đang ngưng hoạt động.");
-            }
-
-            var product = entity.Product ?? await _supplierRepository.GetProductByIdAsync(productId, cancellationToken);
-            if (product == null || product.Status != ProductStatus.Active)
-            {
-                throw new BusinessException(
-                    "PRODUCT_INACTIVE",
-                    "Không thể kích hoạt sản phẩm khi hàng hóa đang ngưng kinh doanh.");
             }
         }
 

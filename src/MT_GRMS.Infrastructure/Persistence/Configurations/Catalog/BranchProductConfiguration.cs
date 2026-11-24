@@ -18,6 +18,7 @@ public class BranchProductConfiguration : IEntityTypeConfiguration<BranchProduct
         builder.Property(x => x.SellingPriceOverride).HasColumnType("decimal(18,2)");
         builder.Property(x => x.Status).HasMaxLength(20).HasDefaultValue("Active");
         builder.Property(x => x.ShelfLocation).HasMaxLength(50);
+        builder.Property(x => x.AllowedSupplierIdsJson).HasColumnType("text");
 
         builder.HasIndex(x => new { x.TenantId, x.BranchId, x.ProductId })
             .IsUnique()

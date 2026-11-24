@@ -123,21 +123,45 @@ public class BranchProductService : IBranchProductService
         }
 
         var assignable = await _repository.GetAssignableProductsForBranchAsync(branchId, cancellationToken);
-        var assignableByProduct = assignable
-            .GroupBy(x => x.ProductId)
-            .ToDictionary(g => g.Key, g => g.First());
+        var requestedItems = (command.Items is { Count: > 0 }
+            ? command.Items
+                .Where(i => i != null && i.ProductId != Guid.Empty)
+                .Select(i => (ProductId: i.ProductId, SupplierId: i.SupplierId.HasValue && i.SupplierId.Value != Guid.Empty ? i.SupplierId : null))
+            : (command.ProductIds ?? new List<Guid>())
+                .Where(id => id != Guid.Empty)
+                .Select(id => (ProductId: id, SupplierId: (Guid?)null)))
+            .Distinct()
+            .ToList();
 
         var assignedList = new List<BranchProductDto>();
+        var createdCatalogs = new Dictionary<Guid, BranchProduct>();
 
-        foreach (var productId in command.ProductIds.Distinct())
+        foreach (var (productId, requestedSupplierId) in requestedItems)
         {
-            var existing = await _repository.GetBranchProductAsync(branchId, productId, cancellationToken);
-            if (existing != null)
+            AssignableBranchProductDto? eligible;
+            if (requestedSupplierId.HasValue)
+            {
+                eligible = assignable.FirstOrDefault(x =>
+                    x.ProductId == productId && x.SupplierId == requestedSupplierId.Value);
+            }
+            else
+            {
+                eligible = assignable.FirstOrDefault(x => x.ProductId == productId && !x.IsAlreadyAssigned)
+                    ?? assignable.FirstOrDefault(x => x.ProductId == productId);
+            }
+
+            if (!createdCatalogs.TryGetValue(productId, out var existing))
+            {
+                existing = await _repository.GetBranchProductAsync(branchId, productId, cancellationToken);
+            }
+
+            // Gọi legacy chỉ truyền ProductIds (không chỉ định SupplierId) và SP đã gán → bỏ qua (idempotent)
+            if (existing != null && !requestedSupplierId.HasValue)
             {
                 continue;
             }
 
-            if (!assignableByProduct.TryGetValue(productId, out var eligible))
+            if (eligible == null)
             {
                 var productName = (await _repository.GetProductByIdAsync(productId, cancellationToken))?.Name
                     ?? productId.ToString();
@@ -146,7 +170,7 @@ public class BranchProductService : IBranchProductService
                     $"Sản phẩm '{productName}' không thuộc nhà cung cấp đang cung cấp cho chi nhánh này.");
             }
 
-            if (eligible.IsAlreadyAssigned)
+            if (eligible.IsAlreadyAssigned && !createdCatalogs.ContainsKey(productId))
             {
                 continue;
             }
@@ -170,45 +194,82 @@ public class BranchProductService : IBranchProductService
                 product.CostPrice);
             var moq = sp != null && sp.MinimumOrderQuantity > 0 ? (int)sp.MinimumOrderQuantity : eligible.Moq;
 
-            // Không copy cứng Master → SellingPriceOverride = null (hiệu lực = Master).
-            // Chỉ ghi override khi client gửi DefaultRetailPrice > 0 và khác Master.
-            decimal? sellingOverride = null;
-            if (command.DefaultRetailPrice is > 0 && command.DefaultRetailPrice.Value != product.SellingPrice)
+            BranchProduct catalog;
+            decimal effectiveRetail;
+
+            if (existing != null)
             {
-                sellingOverride = command.DefaultRetailPrice.Value;
+                // Bản ghi cũ chưa có AllowedSupplierIdsJson → bảo toàn các NCC đã gán hiện có trước khi thêm NCC mới
+                if (string.IsNullOrWhiteSpace(existing.AllowedSupplierIdsJson))
+                {
+                    var currentIds = assignable
+                        .Where(x => x.ProductId == productId && x.IsAlreadyAssigned && x.SupplierId != Guid.Empty)
+                        .Select(x => x.SupplierId)
+                        .Distinct()
+                        .ToList();
+                    if (currentIds.Count > 0)
+                    {
+                        existing.SetAllowedSupplierIds(currentIds);
+                    }
+                }
+
+                if (!existing.AddAllowedSupplierId(eligible.SupplierId))
+                {
+                    continue;
+                }
+
+                existing.UpdatedAt = DateTime.UtcNow;
+                catalog = existing;
+                effectiveRetail = catalog.SellingPriceOverride ?? product.SellingPrice;
             }
-
-            var effectiveRetail = sellingOverride ?? product.SellingPrice;
-
-            var catalog = new BranchProduct
+            else
             {
-                TenantId = _tenantContext.CurrentTenantId,
-                BranchId = branchId,
-                ProductId = productId,
-                SellingPriceOverride = sellingOverride,
-                Status = "Active",
-                ShelfLocation = command.ShelfLocation ?? "Kệ hàng"
-            };
-            await _repository.AddBranchProductAsync(catalog, cancellationToken);
+                // Không copy cứng Master → SellingPriceOverride = null (hiệu lực = Master).
+                // Chỉ ghi override khi client gửi DefaultRetailPrice > 0 và khác Master.
+                decimal? sellingOverride = null;
+                if (command.DefaultRetailPrice is > 0 && command.DefaultRetailPrice.Value != product.SellingPrice)
+                {
+                    sellingOverride = command.DefaultRetailPrice.Value;
+                }
 
-            // Seed tồn 0 để GRN/FEFO có chỗ gắn lô (không thay catalog).
-            var existingStocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);
-            if (!existingStocks.Any())
-            {
-                await _repository.AddBranchStockAsync(new BranchStock
+                effectiveRetail = sellingOverride ?? product.SellingPrice;
+
+                catalog = new BranchProduct
                 {
                     TenantId = _tenantContext.CurrentTenantId,
                     BranchId = branchId,
                     ProductId = productId,
-                    SupplierId = eligible.SupplierId,
-                    QuantityOnHand = 0.000m,
-                    QuantityReserved = 0.000m,
-                    LandedCostPerUnit = effectiveCost,
-                    RetailPrice = effectiveRetail,
+                    SellingPriceOverride = sellingOverride,
                     Status = "Active",
-                    ShelfLocation = catalog.ShelfLocation,
-                    ZoneArea = "Khu vực trưng bày"
-                }, cancellationToken);
+                    ShelfLocation = command.ShelfLocation ?? "Kệ hàng"
+                };
+                if (eligible.SupplierId != Guid.Empty)
+                {
+                    catalog.SetAllowedSupplierIds(new[] { eligible.SupplierId });
+                }
+
+                await _repository.AddBranchProductAsync(catalog, cancellationToken);
+                createdCatalogs[productId] = catalog;
+
+                // Seed tồn 0 để GRN/FEFO có chỗ gắn lô (không thay catalog).
+                var existingStocks = await _repository.GetBranchStocksByProductAsync(branchId, productId, cancellationToken);
+                if (!existingStocks.Any())
+                {
+                    await _repository.AddBranchStockAsync(new BranchStock
+                    {
+                        TenantId = _tenantContext.CurrentTenantId,
+                        BranchId = branchId,
+                        ProductId = productId,
+                        SupplierId = eligible.SupplierId,
+                        QuantityOnHand = 0.000m,
+                        QuantityReserved = 0.000m,
+                        LandedCostPerUnit = effectiveCost,
+                        RetailPrice = effectiveRetail,
+                        Status = "Active",
+                        ShelfLocation = catalog.ShelfLocation,
+                        ZoneArea = "Khu vực trưng bày"
+                    }, cancellationToken);
+                }
             }
 
             assignedList.Add(new BranchProductDto
@@ -550,16 +611,22 @@ public class BranchProductService : IBranchProductService
             .ToList();
         Guid? displaySupplierId = uniqueLotSupplierIds.Count == 1 ? uniqueLotSupplierIds[0] : null;
         var activeSupplierIds = await _repository.GetActiveSupplierIdsForBranchAsync(branch.Id, cancellationToken);
+        var allowedSupplierIds = catalog.GetAllowedSupplierIds();
+        var eligibleSupplierIds = allowedSupplierIds != null
+            ? activeSupplierIds.Where(id => allowedSupplierIds.Contains(id)).ToList()
+            : activeSupplierIds.ToList();
         SupplierProduct? sp = null;
         var hasSource = false;
-        if (displaySupplierId.HasValue && displaySupplierId.Value != Guid.Empty)
+        if (displaySupplierId.HasValue
+            && displaySupplierId.Value != Guid.Empty
+            && (allowedSupplierIds == null || allowedSupplierIds.Contains(displaySupplierId.Value)))
         {
             sp = await _repository.GetSupplierProductAsync(product.Id, displaySupplierId, cancellationToken);
             hasSource = sp != null && sp.Status == SupplierProductStatus.Active;
         }
         else
         {
-            foreach (var sid in activeSupplierIds)
+            foreach (var sid in eligibleSupplierIds)
             {
                 var candidate = await _repository.GetSupplierProductAsync(product.Id, sid, cancellationToken);
                 if (candidate == null || candidate.Status != SupplierProductStatus.Active)

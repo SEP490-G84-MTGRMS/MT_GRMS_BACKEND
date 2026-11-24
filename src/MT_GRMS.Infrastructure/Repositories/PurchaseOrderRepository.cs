@@ -115,11 +115,22 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             return Array.Empty<OrderMatrixProductDto>();
         }
 
-        // ALL và filter 1 NCC: giữ mọi dòng Product×NCC (không collapse 1 SP → 1 NCC).
-        var supplierProducts = rawSupplierProducts;
+        // Chỉ giữ các NCC đã được gán tường minh cho (Branch, Product) trong AllowedSupplierIdsJson
+        var supplierProducts = rawSupplierProducts
+            .Where(sp =>
+            {
+                if (!branchProductLookup.TryGetValue(sp.ProductId, out var bp))
+                {
+                    return true;
+                }
+
+                var allowedSupplierIds = bp.GetAllowedSupplierIds();
+                return allowedSupplierIds == null || allowedSupplierIds.Contains(sp.SupplierId);
+            })
+            .ToList();
         if (supplierId.HasValue && supplierId.Value != Guid.Empty)
         {
-            supplierProducts = rawSupplierProducts
+            supplierProducts = supplierProducts
                 .Where(sp => sp.SupplierId == supplierId.Value)
                 .ToList();
         }

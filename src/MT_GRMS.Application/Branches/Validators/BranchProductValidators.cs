@@ -7,11 +7,17 @@ public class AssignBranchProductsValidator : AbstractValidator<AssignBranchProdu
 {
     public AssignBranchProductsValidator()
     {
-        RuleFor(x => x.ProductIds)
-            .NotEmpty().WithMessage("Vui lòng chọn ít nhất một sản phẩm để gán vào chi nhánh.");
+        RuleFor(x => x)
+            .Must(x => (x.Items != null && x.Items.Count > 0) || (x.ProductIds != null && x.ProductIds.Count > 0))
+            .WithMessage("Vui lòng chọn ít nhất một sản phẩm để gán vào chi nhánh.");
 
         RuleForEach(x => x.ProductIds)
             .NotEmpty().WithMessage("ID sản phẩm không được rỗng.");
+
+        RuleForEach(x => x.Items)
+            .Must(item => item != null && item.ProductId != Guid.Empty)
+            .When(x => x.Items != null)
+            .WithMessage("ID sản phẩm không được rỗng.");
 
         RuleFor(x => x.DefaultRetailPrice)
             .GreaterThanOrEqualTo(0).When(x => x.DefaultRetailPrice.HasValue)

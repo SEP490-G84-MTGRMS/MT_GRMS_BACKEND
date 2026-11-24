@@ -120,11 +120,22 @@ public class BranchProductQueryFilter
 }
 
 /// <summary>
+/// Cặp (ProductId, SupplierId) khi gán thủ công sản phẩm + nhà cung cấp vào chi nhánh
+/// </summary>
+public class BranchProductAssignItemCommand
+{
+    public Guid ProductId { get; set; }
+    public Guid? SupplierId { get; set; }
+}
+
+/// <summary>
 /// Lệnh gán một hoặc nhiều sản phẩm từ Master Catalog vào Chi nhánh
 /// </summary>
 public class AssignBranchProductsCommand
 {
     public List<Guid> ProductIds { get; set; } = new();
+    /// <summary>Danh sách cặp (ProductId, SupplierId) cụ thể — ưu tiên dùng khi có.</summary>
+    public List<BranchProductAssignItemCommand>? Items { get; set; }
     public decimal? DefaultRetailPrice { get; set; }
     public decimal? DefaultMinStock { get; set; }
     public int? DefaultMinOrderQuantity { get; set; }
