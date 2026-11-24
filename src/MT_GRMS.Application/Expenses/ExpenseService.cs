@@ -608,6 +608,9 @@ public class ExpenseService : IExpenseService
         var taxDeductibleVouchers = activeVouchers.Where(v => v.IsTaxDeductible).ToList();
         var nonTaxDeductibleVouchers = activeVouchers.Where(v => !v.IsTaxDeductible).ToList();
 
+        var todayVn = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(7));
+        var overdueCount = pendingVouchers.Count(v => v.DueDate.HasValue && v.DueDate.Value < todayVn);
+
         return new ExpenseSummaryResponse(
             TotalAmount: totalAmount,
             TotalCount: totalCount,
@@ -620,7 +623,8 @@ public class ExpenseService : IExpenseService
             TaxDeductibleAmount: taxDeductibleVouchers.Sum(v => v.Amount),
             TaxDeductibleCount: taxDeductibleVouchers.Count,
             NonTaxDeductibleAmount: nonTaxDeductibleVouchers.Sum(v => v.Amount),
-            NonTaxDeductibleCount: nonTaxDeductibleVouchers.Count
+            NonTaxDeductibleCount: nonTaxDeductibleVouchers.Count,
+            OverdueCount: overdueCount
         );
     }
 

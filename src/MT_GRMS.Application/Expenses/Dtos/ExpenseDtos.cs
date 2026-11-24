@@ -83,7 +83,8 @@ public record ExpenseSummaryResponse(
     decimal TaxDeductibleAmount,
     int TaxDeductibleCount,
     decimal NonTaxDeductibleAmount,
-    int NonTaxDeductibleCount
+    int NonTaxDeductibleCount,
+    int OverdueCount = 0
 );
 
 public record ResolveTriageRequest(
