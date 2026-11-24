@@ -20,7 +20,9 @@ public sealed class TransferService(
     IUnitOfWork unitOfWork,
     NotificationOutbox? notificationOutbox = null,
     IRepository<Package>? packages = null,
-    IRepository<ProductUnit>? productUnits = null) : ITransferService
+    IRepository<ProductUnit>? productUnits = null,
+    IRepository<TransferRequest>? transferRequests = null,
+    IRepository<TransferRequestDetail>? transferRequestDetails = null) : ITransferService
 {
     private async Task<(decimal BaseQuantity, string NormalizedUnit)> NormalizeToBaseUnitAsync(
         Product product,
@@ -325,6 +327,10 @@ public sealed class TransferService(
             transfer.DiscrepancyNote = request.Note?.Trim();
             transfers.Update(transfer);
             await AddHistoryAsync(transfer, previous, transfer.Status, "Received", request.Note, ct);
+            if (transfer.TransferRequestId.HasValue && transferRequests != null && transferRequestDetails != null)
+            {
+                await SyncTransferRequestCompletionAsync(transfer.TransferRequestId.Value, transfer, lines.Values.ToList(), ct);
+            }
             if (hasDiscrepancy && notificationOutbox != null)
                 await notificationOutbox.EnqueueTransferAsync(transfer, BusinessNotificationTypes.TransferReceiptDiscrepancy,
                     "Phiếu điều chuyển nhận có chênh lệch", transfer.FromBranchId, true, ct);
@@ -487,6 +493,40 @@ public sealed class TransferService(
         if (IsStaff && branchId == tenant.CurrentBranchId)
             throw new InvalidOperationException("Chi nhánh nguồn phải khác chi nhánh hiện tại.");
     }
+    private async Task SyncTransferRequestCompletionAsync(
+        Guid requestId,
+        Transfer currentTransfer,
+        IReadOnlyList<TransferDetail> currentLines,
+        CancellationToken ct)
+    {
+        var group = await transferRequests!.GetByIdAsync(requestId, ct);
+        if (group == null || group.Status != TransferRequestStatus.Open) return;
+
+        var reqDetails = await transferRequestDetails!.FindAsync(d => d.TransferRequestId == requestId, ct);
+        var siblingTransfers = await transfers.FindAsync(t => t.TransferRequestId == requestId && t.Id != currentTransfer.Id && t.Status == TransferStatus.Completed, ct);
+        var siblingIds = siblingTransfers.Select(t => t.Id).ToHashSet();
+        var siblingLines = siblingIds.Count == 0
+            ? new List<TransferDetail>()
+            : (await details.FindAsync(d => siblingIds.Contains(d.TransferId), ct)).ToList();
+
+        var receivedByProduct = currentLines.Concat(siblingLines)
+            .GroupBy(l => l.ProductId)
+            .ToDictionary(g => g.Key, g => g.Sum(l => l.ReceivedQuantity));
+
+        foreach (var reqDetail in reqDetails)
+        {
+            reqDetail.ReceivedQuantity = receivedByProduct.GetValueOrDefault(reqDetail.ProductId, 0m);
+            transferRequestDetails.Update(reqDetail);
+        }
+
+        if (reqDetails.Count > 0 && reqDetails.All(d => d.ReceivedQuantity >= d.RequestedQuantity))
+        {
+            group.Status = TransferRequestStatus.Completed;
+            group.CompletedAt = DateTime.UtcNow;
+            transferRequests.Update(group);
+        }
+    }
+
     private Task AddHistoryAsync(Transfer transfer, TransferStatus? from, TransferStatus to, string action, string? reason, CancellationToken ct)
         => statusHistory.AddAsync(new TransferStatusHistory
         {

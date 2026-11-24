@@ -188,19 +188,16 @@ public sealed class TransferRequestService(
                 Math.Max(0, detail.RequestedQuantity - detail.AllocatedQuantity),
                 detail.Unit,
                 received));
-            detail.ReceivedQuantity = received;
         }
 
-        if (group.Status == TransferRequestStatus.Open && itemDtos.Count > 0
-            && itemDtos.All(x => x.ReceivedQuantity >= x.RequestedQuantity))
-        {
-            group.Status = TransferRequestStatus.Completed;
-            group.CompletedAt = DateTime.UtcNow;
-            requests.Update(group);
-            await unitOfWork.SaveChangesAsync(ct);
-        }
+        // Compute effective status without mutating DB on HTTP GET (completion is persisted inside ReceiveTransferAsync)
+        var effectiveStatus = group.Status == TransferRequestStatus.Open
+            && itemDtos.Count > 0
+            && itemDtos.All(x => x.ReceivedQuantity >= x.RequestedQuantity)
+                ? TransferRequestStatus.Completed
+                : group.Status;
 
-        return new TransferRequestGroupDto(group.Id, group.RequestCode, group.ToBranchId, group.Status.ToString(),
+        return new TransferRequestGroupDto(group.Id, group.RequestCode, group.ToBranchId, effectiveStatus.ToString(),
             group.Priority.ToString(), group.CreatedAt, group.RequiredAt, group.RelatedOrderId, group.Note, itemDtos, transferDtos);
     }
 
