@@ -737,6 +737,18 @@ public class HouseholdTaxService : IHouseholdTaxService
         if (string.IsNullOrWhiteSpace(profile.BusinessLocation)) missingFields.Add("Địa điểm kinh doanh");
         if (string.IsNullOrWhiteSpace(profile.TaxAuthorityName)) missingFields.Add("Cơ quan thuế quản lý");
 
+        var activeSnapshot = summary.IsFinalized && summary.SnapshotId.HasValue
+            ? await _repository.GetSnapshotByIdAsync(summary.SnapshotId.Value, cancellationToken)
+            : null;
+        var revenue = activeSnapshot?.TaxableRevenueInPeriod ?? summary.TaxableRevenueInPeriod;
+        var vatAmount = activeSnapshot?.VatAmount ?? summary.VatAmount;
+        var pitAmount = activeSnapshot?.PitAmount ?? summary.PitAmount;
+        var totalTax = activeSnapshot?.TotalTaxAmount ?? summary.TotalTaxAmount;
+        var vatRate = activeSnapshot?.VatRate ?? summary.VatRate;
+        var pitRate = activeSnapshot?.PitRate ?? summary.PitRate;
+        var calcMethod = activeSnapshot?.CalculationMethod ?? summary.CalculationMethod;
+        var revisionNumber = activeSnapshot?.RevisionNumber ?? 1;
+
         var periodLabel = filter.PeriodType switch
         {
             TaxPeriodType.Month => $"Tháng {filter.PeriodNumber}/{filter.Year}",
@@ -755,6 +767,8 @@ public class HouseholdTaxService : IHouseholdTaxService
             PeriodNumber = filter.PeriodNumber,
             PeriodLabel = periodLabel,
             FilingDeadlineLocal = summary.FilingDeadlineLocal,
+            IsFirstDeclaration = revisionNumber <= 1,
+            IsSupplementaryDeclaration = revisionNumber > 1,
             Taxpayer = profile,
             Lines = new List<TaxDeclarationLineDto>
             {
@@ -763,30 +777,30 @@ public class HouseholdTaxService : IHouseholdTaxService
                     Sequence = 1,
                     BusinessSector = "Hoạt động sản xuất, kinh doanh hàng hóa, cung cấp dịch vụ",
                     TaxCode = "HKD-BAN-LE",
-                    TotalRevenue = summary.TaxableRevenueInPeriod,
-                    VatNonTaxableRevenue = Math.Max(0, summary.TaxableRevenueInPeriod - summary.VatTaxableRevenue),
-                    VatTaxableRevenue = summary.VatTaxableRevenue,
+                    TotalRevenue = revenue,
+                    VatNonTaxableRevenue = Math.Max(0, revenue - summary.VatTaxableRevenue),
+                    VatTaxableRevenue = Math.Min(revenue, summary.VatTaxableRevenue),
                     VatZeroRateRevenue = 0,
-                    VatRate = summary.VatRate,
-                    VatAmount = summary.VatAmount,
+                    VatRate = vatRate,
+                    VatAmount = vatAmount,
                     PitTaxableRevenue = summary.PitTaxableRevenue,
                     PitRevenueDeduction = 0,
-                    PitRate = summary.PitRate,
-                    PitAmount = summary.PitAmount
+                    PitRate = pitRate,
+                    PitAmount = pitAmount
                 }
             },
-            TotalVatAmount = summary.VatAmount,
-            TotalPitAmount = summary.PitAmount,
-            TotalTaxAmount = summary.TotalTaxAmount,
-            RequiresBusinessActivityAppendix = summary.CalculationMethod == TaxCalculationMethod.DeclarationBased,
-            AppendixRevenue = summary.TaxableRevenueInPeriod,
+            TotalVatAmount = vatAmount,
+            TotalPitAmount = pitAmount,
+            TotalTaxAmount = totalTax,
+            RequiresBusinessActivityAppendix = calcMethod == TaxCalculationMethod.DeclarationBased,
+            AppendixRevenue = revenue,
             AppendixCogs = summary.CogsAmount,
             AppendixOpex = summary.OpexAmount,
             AppendixTaxableIncome = summary.TaxableIncomeDeclaration,
             IsProfileComplete = missingFields.Count == 0,
             MissingProfileFields = missingFields,
             DataNotice = summary.IsFinalized
-                ? "Bản xem trước được lập từ kỳ đã chốt."
+                ? $"Bản xem trước được lập từ bản chốt chính thức (Lần {revisionNumber})."
                 : "Bản xem trước tạm tính; chưa phải hồ sơ đã chốt để xuất XML."
         };
     }
