@@ -12,7 +12,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/batches")]
-[Authorize]
+[Authorize(Policy = "TenantOwnerOrAssignedBranchStaff")]
 public class BatchesController : BaseApiController
 {
     private readonly IBatchService _batchService;
