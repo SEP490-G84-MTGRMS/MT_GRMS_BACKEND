@@ -538,6 +538,9 @@ public class HouseholdTaxService : IHouseholdTaxService
         var s2eEntries = bookEntries.Where(e => e.BookCode == "S2e-HKD" && !e.IsSummaryRow).ToList();
         var totalCashBankReceipts = s2eEntries.Sum(e => e.InAmount ?? 0m);
         var totalCashBankDisbursements = s2eEntries.Sum(e => e.OutAmount ?? 0m);
+        var totalTaxPaidToState = bookEntries
+            .Where(e => e.BookCode == "S3a-HKD" && !e.IsSummaryRow)
+            .Sum(e => e.OutAmount ?? 0m);
 
         var booksSummary = new TaxBooksSummaryDto
 
@@ -555,7 +558,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
             TotalTaxObligationsAccrued = calcResult.TotalTaxAmount,
 
-            TotalTaxPaidToState = snapshot != null ? snapshot.TotalTaxAmount : 0m
+            TotalTaxPaidToState = totalTaxPaidToState
 
         };
 

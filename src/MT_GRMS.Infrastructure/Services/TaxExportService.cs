@@ -119,8 +119,23 @@ public class TaxExportService : ITaxExportService
         receiptQuery = receiptQuery.Where(g =>
             g.ReceivedAtUtc >= fromDateUtc &&
             g.ReceivedAtUtc <= toDateUtc &&
-            (g.Status == "CONFIRMED" || g.Status == "COMPLETED" || g.Status == "DRAFT"));
+            (g.Status == "CONFIRMED" || g.Status == "COMPLETED"));
         var receipts = await receiptQuery.OrderBy(g => g.ReceivedAtUtc).ToListAsync(cancellationToken);
+
+        // Lấy danh sách chứng từ thực nộp thuế NSNN (Nature == TaxPayment, IsTaxDeductible == false) cho sổ S3a-HKD
+        var taxPaymentQuery = _context.ExpenseVouchers.AsNoTracking()
+            .Where(v => v.ExpenseDate >= fromDateUtc && v.ExpenseDate <= toDateUtc &&
+                        (v.Status == ExpenseVoucherStatus.Paid || v.Status == ExpenseVoucherStatus.Approved) &&
+                        (v.Nature == FinancialNature.TaxPayment ||
+                         v.Category.ToLower().Contains("thuế") ||
+                         v.Category.ToLower().Contains("tax") ||
+                         v.Category.ToLower().Contains("nsnn") ||
+                         v.Category.ToLower().Contains("kho bạc")));
+        if (filter.BranchId.HasValue)
+        {
+            taxPaymentQuery = taxPaymentQuery.Where(v => v.BranchId == filter.BranchId.Value);
+        }
+        var taxPaymentVouchers = await taxPaymentQuery.OrderBy(v => v.ExpenseDate).ToListAsync(cancellationToken);
 
         // Lấy danh sách nhật ký quỹ tiền (Cashbook)
         var cashQuery = _context.CashbookEntries.AsNoTracking().AsQueryable();
@@ -171,7 +186,7 @@ public class TaxExportService : ITaxExportService
                     BuildS2eSheet(workbook, summary, filter, cashEntries, orders, deductibleExpenses, tenant, branch);
                     break;
                 case AccountingBookType.S3a_TaxObligation:
-                    BuildS3aSheet(workbook, summary, filter, snapshots, deductibleExpenses, tenant, branch);
+                    BuildS3aSheet(workbook, summary, filter, snapshots, taxPaymentVouchers, tenant, branch);
                     break;
             }
         }
@@ -184,7 +199,7 @@ public class TaxExportService : ITaxExportService
             BuildS2cSheet(workbook, summary, filter, orders, deductibleExpenses, tenant, branch);
             BuildS2dSheet(workbook, summary, filter, receipts, orders, deductibleExpenses, tenant, branch);
             BuildS2eSheet(workbook, summary, filter, cashEntries, orders, deductibleExpenses, tenant, branch);
-            BuildS3aSheet(workbook, summary, filter, snapshots, deductibleExpenses, tenant, branch);
+            BuildS3aSheet(workbook, summary, filter, snapshots, taxPaymentVouchers, tenant, branch);
 
             // Các sheet phụ trợ tổng hợp
             BuildRevenueByBranchSheet(workbook, branchRevenues);
