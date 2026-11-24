@@ -116,83 +116,39 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
 
         var allItems = new List<BatchListItemDto>();
 
-        // Nhóm 1 (Product.HasBatches == true): Hiển thị chi tiết từng dòng lô theo từng cửa hàng (BranchId)
+        // Nhóm 1 (Product.HasBatches == true): Hiển thị từng dòng BranchStock độc lập theo đúng Id (BAT-03),
+        // tránh gộp nhiều bản ghi dưới 1 representative.Id khiến FEFO/Repack/Stocktake thao tác thiếu.
         var batchManagedStocks = stocks
-            .Where(bs => products.TryGetValue(bs.ProductId, out var p) && p.HasBatches)
-            .GroupBy(bs => new
-            {
-                bs.BranchId,
-                bs.ProductId,
-                bs.SupplierId,
-                BatchCodeKey = (bs.BatchCode ?? string.Empty).Trim().ToUpperInvariant(),
-                MfgKey = bs.ManufactureDate?.Date,
-                ExpKey = bs.ExpiryDate?.Date
-            });
+            .Where(bs => products.TryGetValue(bs.ProductId, out var p) && p.HasBatches);
 
-        foreach (var lotGroup in batchManagedStocks)
+        foreach (var stock in batchManagedStocks)
         {
-            var representative = lotGroup
-                .OrderByDescending(x => x.UpdatedAt ?? x.CreatedAt)
-                .First();
-            var totalLotQty = lotGroup.Sum(x => x.QuantityOnHand);
-            var grnCode = lotGroup
-                .Select(x => grnLookup.TryGetValue(x.Id, out var code) ? code : null)
-                .FirstOrDefault(c => !string.IsNullOrWhiteSpace(c));
-            var grnId = lotGroup
-                .Select(x => grnIdLookup.TryGetValue(x.Id, out var gid) ? gid : null)
-                .FirstOrDefault(g => g.HasValue);
-            products.TryGetValue(representative.ProductId, out var lotProduct);
+            var grnCode = grnLookup.TryGetValue(stock.Id, out var code) ? code : null;
+            var grnId = grnIdLookup.TryGetValue(stock.Id, out var gid) ? gid : (Guid?)null;
+            products.TryGetValue(stock.ProductId, out var lotProduct);
             string? lotDeliveryUom = null;
-            if (representative.SupplierId.HasValue
+            if (stock.SupplierId.HasValue
                 && deliveryUomBySupplierProduct != null
-                && deliveryUomBySupplierProduct.TryGetValue((representative.SupplierId.Value, representative.ProductId), out var lotDu))
+                && deliveryUomBySupplierProduct.TryGetValue((stock.SupplierId.Value, stock.ProductId), out var lotDu))
             {
                 lotDeliveryUom = lotDu;
             }
             var (_, lotPurchaseToStockRate) = ResolveInboundUnitAndRate(lotDeliveryUom, lotProduct);
             // AcceptedQty trên GRN theo ĐVT nhập → quy về ĐVT tồn (cùng hệ với QuantityOnHand).
-            var initQty = lotGroup.Sum(x =>
-                initialQtyLookup.TryGetValue(x.Id, out var iq)
-                    ? Math.Round(iq * lotPurchaseToStockRate, 3)
-                    : x.QuantityOnHand);
+            var initQty = initialQtyLookup.TryGetValue(stock.Id, out var iq)
+                ? Math.Round(iq * lotPurchaseToStockRate, 3)
+                : stock.QuantityOnHand;
 
             decimal packagedQty = 0m;
             var packageCount = 0;
-            foreach (var s in lotGroup)
+            if (packageStats.TryGetValue(stock.Id, out var ps))
             {
-                if (packageStats.TryGetValue(s.Id, out var ps))
-                {
-                    packagedQty += ps.Weight;
-                    packageCount += ps.Count;
-                }
+                packagedQty = ps.Weight;
+                packageCount = ps.Count;
             }
 
-            var mergedLotStock = new BranchStock
-            {
-                Id = representative.Id,
-                TenantId = representative.TenantId,
-                BranchId = representative.BranchId,
-                ProductId = representative.ProductId,
-                SupplierId = representative.SupplierId,
-                BatchCode = representative.BatchCode,
-                ManufactureDate = representative.ManufactureDate,
-                ExpiryDate = representative.ExpiryDate,
-                QuantityOnHand = totalLotQty,
-                QuantityReserved = lotGroup.Sum(x => x.QuantityReserved),
-                QuantityQuarantined = lotGroup.Sum(x => x.QuantityQuarantined),
-                LandedCostPerUnit = representative.LandedCostPerUnit,
-                FefoDiscountPercent = representative.FefoDiscountPercent,
-                IsFefoDiscountActive = representative.IsFefoDiscountActive,
-                FefoDiscountStartAtUtc = representative.FefoDiscountStartAtUtc,
-                FefoDiscountEndAtUtc = representative.FefoDiscountEndAtUtc,
-                ZoneArea = representative.ZoneArea,
-                ShelfLocation = representative.ShelfLocation,
-                CreatedAt = representative.CreatedAt,
-                UpdatedAt = representative.UpdatedAt
-            };
-
             allItems.Add(MapBranchStockToListItem(
-                mergedLotStock,
+                stock,
                 products,
                 branches,
                 suppliers,
