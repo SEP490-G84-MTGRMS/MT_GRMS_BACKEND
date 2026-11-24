@@ -329,6 +329,323 @@ public class ScheduleService : IScheduleService
         return await BatchCreateAsync(batchRequest, cancellationToken);
     }
 
+    public async Task<RecurringSeriesResponse> GetRecurringSeriesAsync(
+        Guid employeeId,
+        Guid? shiftConfigId,
+        string? shiftName,
+        DateTime? fromDate,
+        DateTime? toDate,
+        CancellationToken cancellationToken = default)
+    {
+        var employee = await _employeeRepository.GetByIdAsync(employeeId, cancellationToken)
+            ?? throw new NotFoundException($"Nhân viên với ID {employeeId} không tồn tại.");
+
+        var start = (fromDate ?? DateTime.UtcNow.AddHours(7)).Date;
+        var end = (toDate ?? start.AddDays(90)).Date;
+        if (end < start)
+        {
+            (start, end) = (end, start);
+        }
+
+        var schedules = await _scheduleRepository.GetByEmployeeAndDateRangeAsync(
+            employeeId,
+            start,
+            end,
+            cancellationToken);
+
+        var trimmedShiftName = shiftName?.Trim();
+        var matching = schedules
+            .Where(s => !s.IsDeleted && s.Status != ScheduleStatus.Cancelled)
+            .Where(s =>
+            {
+                if (shiftConfigId.HasValue && shiftConfigId.Value != Guid.Empty && s.ShiftConfigId == shiftConfigId.Value)
+                {
+                    return true;
+                }
+                if (!string.IsNullOrWhiteSpace(trimmedShiftName))
+                {
+                    return string.Equals(s.ShiftName.Trim(), trimmedShiftName, StringComparison.OrdinalIgnoreCase);
+                }
+                return !shiftConfigId.HasValue || shiftConfigId.Value == Guid.Empty;
+            })
+            .OrderBy(s => s.WorkDate)
+            .ThenBy(s => s.PlannedStartTime)
+            .ToList();
+
+        var dayOrder = new[]
+        {
+            (DayOfWeek.Monday, "T2"),
+            (DayOfWeek.Tuesday, "T3"),
+            (DayOfWeek.Wednesday, "T4"),
+            (DayOfWeek.Thursday, "T5"),
+            (DayOfWeek.Friday, "T6"),
+            (DayOfWeek.Saturday, "T7"),
+            (DayOfWeek.Sunday, "CN"),
+        };
+
+        var activeDaysSet = matching.Select(m => m.WorkDate.DayOfWeek).ToHashSet();
+        var repeatDays = dayOrder
+            .Where(d => activeDaysSet.Contains(d.Item1))
+            .Select(d => d.Item2)
+            .ToList();
+
+        var first = matching.FirstOrDefault();
+        var last = matching.LastOrDefault();
+
+        return new RecurringSeriesResponse(
+            EmployeeId: employee.Id,
+            BranchId: first?.BranchId ?? employee.BranchId,
+            ShiftConfigId: first?.ShiftConfigId ?? shiftConfigId,
+            ShiftName: first?.ShiftName ?? trimmedShiftName ?? string.Empty,
+            PlannedStartTime: first?.PlannedStartTime ?? TimeSpan.Zero,
+            PlannedEndTime: first?.PlannedEndTime ?? TimeSpan.Zero,
+            IsRepeating: matching.Select(m => m.WorkDate.Date).Distinct().Count() > 1,
+            RepeatDays: repeatDays,
+            StartDate: first?.WorkDate.Date,
+            EndDate: last?.WorkDate.Date,
+            Schedules: matching.Select(MapToResponse).ToList()
+        );
+    }
+
+    public async Task<SyncRecurringScheduleResponse> SyncRecurringAsync(
+        SyncRecurringScheduleRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var employee = await _employeeRepository.GetByIdAsync(request.EmployeeId, cancellationToken)
+            ?? throw new NotFoundException($"Nhân viên với ID {request.EmployeeId} không tồn tại.");
+        if (employee.Status != EmployeeStatus.Active)
+        {
+            throw new BusinessException("EMPLOYEE_INACTIVE", $"Không thể phân ca cho nhân viên \"{employee.FullName}\" vì đã ngừng làm việc.");
+        }
+
+        var startDate = request.StartDate.Date;
+        DateTime targetEndDate;
+        if (request.HasEndDate && request.EndDate.HasValue)
+        {
+            targetEndDate = request.EndDate.Value.Date;
+            if (targetEndDate < startDate)
+            {
+                throw new BusinessException("INVALID_DATE_RANGE", "Ngày kết thúc không được nhỏ hơn ngày bắt đầu.");
+            }
+        }
+        else
+        {
+            var currentMonth = new DateTime(startDate.Year, startDate.Month, 1);
+            var nextMonth = currentMonth.AddMonths(1);
+            targetEndDate = new DateTime(nextMonth.Year, nextMonth.Month, DateTime.DaysInMonth(nextMonth.Year, nextMonth.Month));
+        }
+
+        var repeatDays = ParseDaysOfWeek(request.RepeatDays);
+        if (repeatDays.Count == 0)
+        {
+            repeatDays.Add(startDate.DayOfWeek);
+        }
+
+        ShiftConfig? shiftConfig = null;
+        if (request.ShiftConfigId.HasValue && request.ShiftConfigId.Value != Guid.Empty)
+        {
+            shiftConfig = await _shiftConfigRepository.GetByIdAsync(request.ShiftConfigId.Value, cancellationToken)
+                ?? throw new NotFoundException($"Cấu hình ca với ID {request.ShiftConfigId.Value} không tồn tại.");
+        }
+
+        var resolved = ResolveShiftInfo(
+            new CreateScheduleItemRequest(
+                request.EmployeeId,
+                request.BranchId,
+                startDate,
+                request.ShiftConfigId,
+                request.ShiftCode,
+                request.ShiftName,
+                request.PlannedStartTime,
+                request.PlannedEndTime,
+                request.DurationHours,
+                request.IsCheckInNextDay),
+            shiftConfig);
+
+        var allActiveSchedules = (await _scheduleRepository.GetActiveSchedulesForEmployeesAsync(
+            new[] { request.EmployeeId },
+            startDate.AddDays(-1),
+            targetEndDate.AddDays(1),
+            cancellationToken)).ToList();
+
+        var matchShiftConfigId = request.OriginalShiftConfigId ?? request.ShiftConfigId;
+        var matchShiftName = (request.OriginalShiftName ?? resolved.ShiftName).Trim();
+
+        bool IsInSeries(EmployeeSchedule s) =>
+            (request.SourceScheduleId.HasValue && s.Id == request.SourceScheduleId.Value)
+            || (matchShiftConfigId.HasValue && matchShiftConfigId.Value != Guid.Empty && s.ShiftConfigId == matchShiftConfigId.Value)
+            || (!string.IsNullOrWhiteSpace(matchShiftName) && string.Equals(s.ShiftName.Trim(), matchShiftName, StringComparison.OrdinalIgnoreCase));
+
+        var seriesSchedules = allActiveSchedules
+            .Where(s => s.WorkDate.Date >= startDate && s.WorkDate.Date <= targetEndDate && IsInSeries(s))
+            .OrderBy(s => s.WorkDate)
+            .ToList();
+
+        var updatedCount = 0;
+        var createdCount = 0;
+        var deletedCount = 0;
+        var skippedCount = 0;
+        var vnNow = DateTime.UtcNow.AddHours(7);
+        var resultSchedules = new List<EmployeeSchedule>();
+        var seriesIds = seriesSchedules.Select(s => s.Id).ToHashSet();
+        var coveredDates = new HashSet<DateTime>();
+
+        foreach (var existing in seriesSchedules)
+        {
+            if (await IsScheduleProtectedAsync(existing, cancellationToken))
+            {
+                skippedCount++;
+                coveredDates.Add(existing.WorkDate.Date);
+                resultSchedules.Add(existing);
+                continue;
+            }
+
+            var tracked = await _scheduleRepository.GetByIdAsync(existing.Id, cancellationToken);
+            if (tracked == null) continue;
+
+            if (!repeatDays.Contains(existing.WorkDate.DayOfWeek))
+            {
+                tracked.IsDeleted = true;
+                tracked.Status = ScheduleStatus.Cancelled;
+                tracked.UpdatedAt = vnNow;
+                _scheduleRepository.Update(tracked);
+                allActiveSchedules.RemoveAll(a => a.Id == tracked.Id);
+                deletedCount++;
+                continue;
+            }
+
+            var workDate = tracked.WorkDate.Date;
+            var startDateTime = GetStartDateTime(workDate, resolved.StartTime);
+            var endDateTime = GetEndDateTime(workDate, resolved.StartTime, resolved.EndTime, resolved.IsNextDay);
+            var otherSchedules = allActiveSchedules.Where(s => s.Id != tracked.Id).ToList();
+
+            CheckConflict(
+                employee,
+                request.ShiftConfigId,
+                resolved.ShiftName,
+                startDateTime,
+                endDateTime,
+                resolved.DurationHours,
+                workDate,
+                otherSchedules);
+
+            if (request.BranchId != Guid.Empty)
+            {
+                tracked.BranchId = request.BranchId;
+            }
+            tracked.ShiftConfigId = request.ShiftConfigId;
+            tracked.ShiftCode = resolved.ShiftCode;
+            tracked.ShiftName = resolved.ShiftName;
+            tracked.PlannedStartTime = resolved.StartTime;
+            tracked.PlannedEndTime = resolved.EndTime;
+            tracked.DurationHours = resolved.DurationHours;
+            tracked.IsCheckInNextDay = resolved.IsNextDay;
+            tracked.UpdatedAt = vnNow;
+            tracked.Employee = employee;
+
+            _scheduleRepository.Update(tracked);
+            // Cập nhật lại snapshot trong bộ nhớ để check conflict cho các ngày tạo mới
+            var idx = allActiveSchedules.FindIndex(a => a.Id == tracked.Id);
+            if (idx >= 0) allActiveSchedules[idx] = tracked;
+
+            coveredDates.Add(workDate);
+            resultSchedules.Add(tracked);
+            updatedCount++;
+        }
+
+        var toCreate = new List<EmployeeSchedule>();
+        for (var date = startDate; date <= targetEndDate; date = date.AddDays(1))
+        {
+            if (!repeatDays.Contains(date.DayOfWeek) || coveredDates.Contains(date))
+            {
+                continue;
+            }
+
+            if (employee.StartDate.HasValue && date < employee.StartDate.Value.Date)
+            {
+                throw new BusinessException(
+                    "WORK_DATE_BEFORE_START_DATE",
+                    $"Không thể phân ca cho nhân viên \"{employee.FullName}\" vào ngày {date:dd/MM/yyyy} trước ngày bắt đầu làm việc ({employee.StartDate.Value:dd/MM/yyyy}).");
+            }
+
+            var startDateTime = GetStartDateTime(date, resolved.StartTime);
+            var endDateTime = GetEndDateTime(date, resolved.StartTime, resolved.EndTime, resolved.IsNextDay);
+
+            CheckConflict(
+                employee,
+                request.ShiftConfigId,
+                resolved.ShiftName,
+                startDateTime,
+                endDateTime,
+                resolved.DurationHours,
+                date,
+                allActiveSchedules);
+
+            var newSchedule = new EmployeeSchedule
+            {
+                TenantId = _tenantContext.CurrentTenantId,
+                EmployeeId = request.EmployeeId,
+                BranchId = request.BranchId,
+                ShiftConfigId = request.ShiftConfigId,
+                WorkDate = date,
+                ShiftCode = resolved.ShiftCode,
+                ShiftName = resolved.ShiftName,
+                PlannedStartTime = resolved.StartTime,
+                PlannedEndTime = resolved.EndTime,
+                DurationHours = resolved.DurationHours,
+                IsCheckInNextDay = resolved.IsNextDay,
+                Status = ScheduleStatus.Draft,
+                Employee = employee
+            };
+
+            toCreate.Add(newSchedule);
+            allActiveSchedules.Add(newSchedule);
+            resultSchedules.Add(newSchedule);
+            createdCount++;
+        }
+
+        if (toCreate.Count > 0)
+        {
+            await _scheduleRepository.AddRangeAsync(toCreate, cancellationToken);
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return new SyncRecurringScheduleResponse(
+            UpdatedCount: updatedCount,
+            CreatedCount: createdCount,
+            DeletedCount: deletedCount,
+            SkippedCount: skippedCount,
+            Schedules: resultSchedules
+                .OrderBy(s => s.WorkDate)
+                .ThenBy(s => s.PlannedStartTime)
+                .Select(MapToResponse)
+                .ToList()
+        );
+    }
+
+    private async Task<bool> IsScheduleProtectedAsync(EmployeeSchedule schedule, CancellationToken cancellationToken)
+    {
+        if (schedule.Status == ScheduleStatus.Completed
+            || schedule.CheckInTime.HasValue
+            || schedule.CheckOutTime.HasValue
+            || schedule.IsLeave
+            || schedule.Status == ScheduleStatus.OnLeave)
+        {
+            return true;
+        }
+
+        try
+        {
+            await EnsureScheduleNotLockedByPaidPayslipAsync(schedule, cancellationToken);
+            return false;
+        }
+        catch (BusinessException)
+        {
+            return true;
+        }
+    }
+
     public async Task<ScheduleResponse> UpdateAsync(
         Guid id,
         UpdateScheduleRequest request,
@@ -412,6 +729,7 @@ public class ScheduleService : IScheduleService
             schedule.Status = request.Status.Value;
         }
 
+        schedule.UpdatedAt = DateTime.UtcNow.AddHours(7);
         _scheduleRepository.Update(schedule);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 

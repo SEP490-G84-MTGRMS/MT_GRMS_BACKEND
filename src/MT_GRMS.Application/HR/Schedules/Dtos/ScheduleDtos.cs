@@ -77,6 +77,47 @@ public record CreateRecurringScheduleRequest(
     bool? IsCheckInNextDay = null
 );
 
+public record RecurringSeriesResponse(
+    Guid EmployeeId,
+    Guid BranchId,
+    Guid? ShiftConfigId,
+    string ShiftName,
+    TimeSpan PlannedStartTime,
+    TimeSpan PlannedEndTime,
+    bool IsRepeating,
+    IReadOnlyList<string> RepeatDays,
+    DateTime? StartDate,
+    DateTime? EndDate,
+    IReadOnlyList<ScheduleResponse> Schedules
+);
+
+public record SyncRecurringScheduleRequest(
+    Guid EmployeeId,
+    Guid BranchId,
+    DateTime StartDate,
+    bool HasEndDate = false,
+    DateTime? EndDate = null,
+    IReadOnlyList<string>? RepeatDays = null,
+    Guid? SourceScheduleId = null,
+    Guid? OriginalShiftConfigId = null,
+    string? OriginalShiftName = null,
+    Guid? ShiftConfigId = null,
+    string? ShiftCode = null,
+    string? ShiftName = null,
+    TimeSpan? PlannedStartTime = null,
+    TimeSpan? PlannedEndTime = null,
+    decimal? DurationHours = null,
+    bool? IsCheckInNextDay = null
+);
+
+public record SyncRecurringScheduleResponse(
+    int UpdatedCount,
+    int CreatedCount,
+    int DeletedCount,
+    int SkippedCount,
+    IReadOnlyList<ScheduleResponse> Schedules
+);
+
 public record PublishSchedulesRequest(
     Guid BranchId,
     DateTime FromDate,

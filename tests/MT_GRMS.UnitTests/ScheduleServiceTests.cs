@@ -2540,6 +2540,156 @@ public class ScheduleServiceTests
         var ex = await Assert.ThrowsAsync<BusinessException>(() => service.ResetManualAttendanceAsync(sched.Id, request));
         Assert.Equal("INVALID_RESET_REASON", ex.ErrorCode);
     }
+
+    [Fact]
+    public async Task GetRecurringSeriesAsync_ShouldReturnRepeatDaysAndSeriesMetadata()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        var shiftId = Guid.NewGuid();
+
+        employeeRepo.Employees.Add(new Employee
+        {
+            Id = empId,
+            TenantId = tenantContext.CurrentTenantId,
+            FullName = "Nguyen Van C",
+            EmployeeCode = "NV03",
+            Status = EmployeeStatus.Active,
+            BranchId = branchId
+        });
+
+        // Thứ 2 (2026-11-23), Thứ 4 (2026-11-25), Thứ 2 tuần sau (2026-11-30)
+        var d1 = new DateTime(2026, 11, 23);
+        var d2 = new DateTime(2026, 11, 25);
+        var d3 = new DateTime(2026, 11, 30);
+        foreach (var d in new[] { d1, d2, d3 })
+        {
+            scheduleRepo.Schedules.Add(new EmployeeSchedule
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenantContext.CurrentTenantId,
+                EmployeeId = empId,
+                BranchId = branchId,
+                ShiftConfigId = shiftId,
+                ShiftCode = "CA-SANG",
+                ShiftName = "Ca Sáng",
+                WorkDate = d,
+                PlannedStartTime = new TimeSpan(8, 0, 0),
+                PlannedEndTime = new TimeSpan(12, 0, 0),
+                DurationHours = 4m,
+                Status = ScheduleStatus.Scheduled
+            });
+        }
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+        var series = await service.GetRecurringSeriesAsync(empId, shiftId, "Ca Sáng", d1, d3.AddDays(7));
+
+        Assert.True(series.IsRepeating);
+        Assert.Equal(new[] { "T2", "T4" }, series.RepeatDays);
+        Assert.Equal(3, series.Schedules.Count);
+        Assert.Equal(d1, series.StartDate);
+        Assert.Equal(d3, series.EndDate);
+    }
+
+    [Fact]
+    public async Task SyncRecurringAsync_ShouldUpdateCreateDeleteAndSkipCompleted()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        var shiftId = Guid.NewGuid();
+
+        employeeRepo.Employees.Add(new Employee
+        {
+            Id = empId,
+            TenantId = tenantContext.CurrentTenantId,
+            FullName = "Nguyen Van D",
+            EmployeeCode = "NV04",
+            Status = EmployeeStatus.Active,
+            BranchId = branchId
+        });
+
+        shiftConfigRepo.ShiftConfigs.Add(new ShiftConfig
+        {
+            Id = shiftId,
+            TenantId = tenantContext.CurrentTenantId,
+            BranchId = branchId,
+            ShiftCode = "CA-CHIEU",
+            ShiftName = "Ca Chiều",
+            StartTime = new TimeSpan(13, 0, 0),
+            EndTime = new TimeSpan(17, 0, 0),
+            DurationHours = 4m
+        });
+
+        var monCompleted = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            EmployeeId = empId,
+            BranchId = branchId,
+            ShiftConfigId = shiftId,
+            ShiftCode = "CA-CHIEU",
+            ShiftName = "Ca Chiều",
+            WorkDate = new DateTime(2026, 11, 23), // T2 (Completed -> phải được giữ nguyên)
+            PlannedStartTime = new TimeSpan(13, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            DurationHours = 4m,
+            Status = ScheduleStatus.Completed
+        };
+        var wedEditable = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            EmployeeId = empId,
+            BranchId = branchId,
+            ShiftConfigId = shiftId,
+            ShiftCode = "CA-CHIEU",
+            ShiftName = "Ca Chiều",
+            WorkDate = new DateTime(2026, 11, 25), // T4 (sẽ bị bỏ khi chỉ chọn T2, T6)
+            PlannedStartTime = new TimeSpan(13, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            DurationHours = 4m,
+            Status = ScheduleStatus.Scheduled
+        };
+        scheduleRepo.Schedules.AddRange(new[] { monCompleted, wedEditable });
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+        var result = await service.SyncRecurringAsync(new SyncRecurringScheduleRequest(
+            EmployeeId: empId,
+            BranchId: branchId,
+            StartDate: new DateTime(2026, 11, 23),
+            HasEndDate: true,
+            EndDate: new DateTime(2026, 11, 29),
+            RepeatDays: new[] { "T2", "T6" },
+            SourceScheduleId: wedEditable.Id,
+            OriginalShiftConfigId: shiftId,
+            OriginalShiftName: "Ca Chiều",
+            ShiftConfigId: shiftId,
+            ShiftCode: "CA-CHIEU",
+            ShiftName: "Ca Chiều",
+            PlannedStartTime: new TimeSpan(13, 30, 0),
+            PlannedEndTime: new TimeSpan(17, 30, 0),
+            DurationHours: 4m,
+            IsCheckInNextDay: false
+        ));
+
+        Assert.Equal(1, result.SkippedCount); // T2 Completed
+        Assert.Equal(1, result.DeletedCount); // T4 bị bỏ chọn
+        Assert.Equal(1, result.CreatedCount); // T6 được tạo mới
+        Assert.True(wedEditable.IsDeleted);
+        Assert.Equal(ScheduleStatus.Completed, monCompleted.Status);
+    }
 }
 
 
