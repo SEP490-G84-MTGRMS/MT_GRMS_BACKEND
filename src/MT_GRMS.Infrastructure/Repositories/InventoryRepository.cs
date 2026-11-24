@@ -273,6 +273,36 @@ public class InventoryRepository : IInventoryRepository
             allItems = allItems.Where(x => x.LocationShelf.Contains(loc, StringComparison.OrdinalIgnoreCase)).ToList();
         }
 
+        // Lọc đa chip chuẩn Golden Standard (INV-03: OR trong cùng field, AND giữa các field)
+        var skuTokens = query.Skus?.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
+        if (skuTokens is { Count: > 0 })
+        {
+            allItems = allItems.Where(x => skuTokens.Any(t =>
+                x.Sku.Contains(t, StringComparison.OrdinalIgnoreCase)
+                || x.Barcode.Contains(t, StringComparison.OrdinalIgnoreCase))).ToList();
+        }
+
+        var nameTokens = query.Names?.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
+        if (nameTokens is { Count: > 0 })
+        {
+            allItems = allItems.Where(x => nameTokens.Any(t =>
+                x.ProductName.Contains(t, StringComparison.OrdinalIgnoreCase))).ToList();
+        }
+
+        var branchCodeTokens = query.BranchCodes?.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
+        if (branchCodeTokens is { Count: > 0 })
+        {
+            allItems = allItems.Where(x => branchCodeTokens.Any(t =>
+                x.BranchCode.Contains(t, StringComparison.OrdinalIgnoreCase))).ToList();
+        }
+
+        var branchNameTokens = query.BranchNames?.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
+        if (branchNameTokens is { Count: > 0 })
+        {
+            allItems = allItems.Where(x => branchNameTokens.Any(t =>
+                x.BranchName.Contains(t, StringComparison.OrdinalIgnoreCase))).ToList();
+        }
+
         var kpis = new InventoryKpiSummaryDto(
             TotalSkus: allItems.Select(x => x.ProductId).Distinct().Count(),
             TotalValue: allItems.Sum(x => x.TotalValue),

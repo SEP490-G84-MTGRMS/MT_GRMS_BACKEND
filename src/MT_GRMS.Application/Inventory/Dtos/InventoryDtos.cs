@@ -28,6 +28,10 @@ public record StockOnHandResponse(
 public record InventoryFilterQuery
 {
     public string? Keyword { get; init; }
+    public List<string>? Skus { get; init; }
+    public List<string>? Names { get; init; }
+    public List<string>? BranchCodes { get; init; }
+    public List<string>? BranchNames { get; init; }
     public Guid? BranchId { get; init; }
     public string? Category { get; init; }
     public string? LocationShelf { get; init; }
