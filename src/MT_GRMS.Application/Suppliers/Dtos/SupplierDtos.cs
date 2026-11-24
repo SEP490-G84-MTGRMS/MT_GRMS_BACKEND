@@ -448,6 +448,9 @@ public class AssignSuppliersToBranchCommand
     public List<Guid> SupplierIds { get; set; } = [];
     /// <summary>Ưu tiên: từng NCC kèm DeliveryDays override.</summary>
     public List<AssignSupplierToBranchItemDto> Items { get; set; } = [];
+    /// <summary>Trạng thái khởi tạo (mặc định Active). Nếu Inactive thì bắt buộc có InactiveReason và không sync SP.</summary>
+    public SupplierStatus? Status { get; set; }
+    public string? InactiveReason { get; set; }
 }
 
 public class UpdateSupplierBranchAssignmentStatusRequest

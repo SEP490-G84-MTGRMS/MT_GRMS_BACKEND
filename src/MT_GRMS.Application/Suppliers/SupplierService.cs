@@ -1161,6 +1161,13 @@ public class SupplierService : ISupplierService
             suppliers.Add(sup);
         }
 
+        var targetStatus = command.Status ?? SupplierStatus.Active;
+        var inactiveReason = command.InactiveReason?.Trim();
+        if (targetStatus == SupplierStatus.Inactive && string.IsNullOrWhiteSpace(inactiveReason))
+        {
+            throw new BusinessException("REASON_REQUIRED", "Vui lòng nhập lý do tạm ngưng.");
+        }
+
         var resultAssignments = new List<SupplierBranchAssignmentDetailDto>();
         foreach (var sup in suppliers)
         {
@@ -1170,11 +1177,10 @@ public class SupplierService : ISupplierService
             var existing = await _supplierRepository.GetBranchAssignmentAsync(sup.Id, command.BranchId, cancellationToken);
             if (existing != null)
             {
-                // Tái kích hoạt quan hệ nếu đã từng bị Inactive
-                if (existing.Status == SupplierStatus.Inactive)
+                existing.Status = targetStatus;
+                existing.InactiveReason = targetStatus == SupplierStatus.Inactive ? inactiveReason : null;
+                if (targetStatus == SupplierStatus.Active)
                 {
-                    existing.Status = SupplierStatus.Active;
-                    existing.InactiveReason = null;
                     existing.CreatedAt = DateTime.UtcNow;
                 }
 
@@ -1197,7 +1203,8 @@ public class SupplierService : ISupplierService
                     BranchId = command.BranchId,
                     TenantId = _tenantContext.CurrentTenantId,
                     CreatedAt = DateTime.UtcNow,
-                    Status = SupplierStatus.Active
+                    Status = targetStatus,
+                    InactiveReason = targetStatus == SupplierStatus.Inactive ? inactiveReason : null
                 };
                 ApplyAssignmentDeliveryDays(newAssignment, deliveryDays);
                 await _supplierRepository.AddBranchAssignmentAsync(newAssignment, cancellationToken);
@@ -1212,10 +1219,13 @@ public class SupplierService : ISupplierService
             }
         }
 
-        // Chiều đồng bộ B: catalog Active của các NCC → BranchProducts chi nhánh này
-        foreach (var sup in suppliers)
+        // Chỉ đồng bộ catalog Active sang BranchProducts khi phân bổ được tạo ở trạng thái Active (SBA-02)
+        if (targetStatus == SupplierStatus.Active)
         {
-            await SyncActiveSupplierProductsToBranchAsync(sup.Id, command.BranchId, cancellationToken);
+            foreach (var sup in suppliers)
+            {
+                await SyncActiveSupplierProductsToBranchAsync(sup.Id, command.BranchId, cancellationToken);
+            }
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
