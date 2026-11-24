@@ -214,22 +214,32 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
         Guid? branchId,
         CancellationToken cancellationToken = default)
     {
-        // Điều kiện Mục 4: PO có trạng thái SENT hoặc CONFIRMED và chưa có GoodsReceipt khác ở trạng thái DRAFT hoặc COMPLETED
-        var activePoIdsWithReceipt = await _context.GoodsReceipts
+        // Chỉ loại PO đang có phiếu nhập NHÁP (DRAFT), hoặc PO thường (không phải PARTIALLY_RECEIVED) đã có GRN COMPLETED.
+        var poIdsWithDraftReceipt = await _context.GoodsReceipts
             .Where(gr => gr.TenantId == tenantId && !gr.IsDeleted &&
-                         (gr.Status == "DRAFT" || gr.Status == "COMPLETED") &&
+                         gr.Status == "DRAFT" &&
                          gr.PurchaseOrderId != null)
             .Select(gr => gr.PurchaseOrderId!.Value)
             .ToListAsync(cancellationToken);
 
-        // PO đủ điều kiện nhận hàng: đã duyệt / đã gửi NCC / đã chốt sau cutoff.
-        // PENDING_APPROVAL chưa đủ để nhập kho (chưa chốt với NCC).
+        var poIdsWithCompletedReceipt = await _context.GoodsReceipts
+            .Where(gr => gr.TenantId == tenantId && !gr.IsDeleted &&
+                         gr.Status == "COMPLETED" &&
+                         gr.PurchaseOrderId != null)
+            .Select(gr => gr.PurchaseOrderId!.Value)
+            .ToListAsync(cancellationToken);
+
+        // PO đủ điều kiện nhận hàng: gồm PENDING_APPROVAL ("Chờ nhập" ngay sau khi chốt ma trận),
+        // APPROVED, DISPATCHED, SENT, CONFIRMED, FINALIZED và PARTIALLY_RECEIVED (nhận tiếp đợt sau).
         var query = _context.PurchaseOrders
             .Include(po => po.Supplier)
             .Include(po => po.Branch)
             .Where(po => po.TenantId == tenantId && !po.IsDeleted &&
-                         (po.Status == "SENT" || po.Status == "CONFIRMED" || po.Status == "DISPATCHED" || po.Status == "APPROVED" || po.Status == "FINALIZED" || po.Status == "PARTIALLY_RECEIVED") &&
-                         !activePoIdsWithReceipt.Contains(po.Id))
+                         (po.Status == "PENDING_APPROVAL" || po.Status == "SENT" || po.Status == "CONFIRMED" ||
+                          po.Status == "DISPATCHED" || po.Status == "APPROVED" || po.Status == "FINALIZED" ||
+                          po.Status == "PARTIALLY_RECEIVED") &&
+                         !poIdsWithDraftReceipt.Contains(po.Id) &&
+                         (po.Status == "PARTIALLY_RECEIVED" || !poIdsWithCompletedReceipt.Contains(po.Id)))
             .AsNoTracking();
 
         if (branchId.HasValue && branchId.Value != Guid.Empty)
