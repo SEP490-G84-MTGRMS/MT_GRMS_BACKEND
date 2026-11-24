@@ -102,6 +102,45 @@ public class SupplierProductManagementTests
         Assert.Equal(2, _repo.BranchProducts.Count);
         Assert.Contains(_repo.BranchProducts, bp => bp.BranchId == branch1Id && bp.ProductId == product.Id && bp.Status == "Active");
         Assert.Contains(_repo.BranchProducts, bp => bp.BranchId == branch2Id && bp.ProductId == product.Id && bp.Status == "Active");
+        Assert.All(_repo.BranchProducts, bp => Assert.Equal(new[] { supplier.Id }, bp.GetAllowedSupplierIds()));
+    }
+
+    [Fact]
+    public async Task REQ_SP01_AssignProduct_SecondSupplierForSameBranchProduct_DoesNotAutoAddSecondSupplier()
+    {
+        // Arrange: Cửa hàng A liên kết cả NCC B và NCC C
+        var supplierB = CreateTestSupplier("NCC B", "NCC-B-001");
+        var supplierC = CreateTestSupplier("NCC C", "NCC-C-001");
+        var productZ = CreateTestProduct("Nước khoáng 500ml", "89312345699", "IMP-DEMO-001");
+        var branchAId = Guid.NewGuid();
+
+        _repo.Suppliers.Add(supplierB);
+        _repo.Suppliers.Add(supplierC);
+        _repo.Products.Add(productZ);
+        _repo.BranchAssignments.Add(new SupplierBranchAssignment { SupplierId = supplierB.Id, BranchId = branchAId, Status = SupplierStatus.Active });
+        _repo.BranchAssignments.Add(new SupplierBranchAssignment { SupplierId = supplierC.Id, BranchId = branchAId, Status = SupplierStatus.Active });
+
+        // Act 1: Gán SP Z cho NCC B -> tự động gán vào Chi nhánh A với AllowedSupplierIds = [B]
+        await _service.AssignSupplierProductAsync(supplierB.Id, new AssignSupplierProductCommand
+        {
+            ProductId = productZ.Id,
+            DeliveryUoM = "Chai",
+            AgreedWholesalePrice = 8600m,
+            MinimumOrderQuantity = 10
+        });
+
+        // Act 2: Gán SP Z cho NCC C -> KHÔNG tự động thêm NCC C vào BranchProduct của Chi nhánh A
+        await _service.AssignSupplierProductAsync(supplierC.Id, new AssignSupplierProductCommand
+        {
+            ProductId = productZ.Id,
+            DeliveryUoM = "Chai",
+            AgreedWholesalePrice = 8500m,
+            MinimumOrderQuantity = 10
+        });
+
+        // Assert
+        var bp = Assert.Single(_repo.BranchProducts, x => x.BranchId == branchAId && x.ProductId == productZ.Id);
+        Assert.Equal(new[] { supplierB.Id }, bp.GetAllowedSupplierIds());
     }
 
     [Fact]
@@ -648,7 +687,7 @@ public class SupplierProductManagementTests
     }
 
     [Fact]
-    public async Task ToggleSupplierProductStatusAsync_WhenProductInactive_ThrowsProductInactiveException()
+    public async Task ToggleSupplierProductStatusAsync_WhenProductInactive_StillActivatesSupplierProduct()
     {
         var supplier = CreateTestSupplier("Vinamilk", "NCC-VNM-001");
         var product = CreateTestProduct("Sữa", "8931", "PRD-1");
@@ -667,11 +706,10 @@ public class SupplierProductManagementTests
             MinimumOrderQuantity = 1
         });
 
-        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
-            _service.ToggleSupplierProductStatusAsync(supplier.Id, product.Id,
-                new ToggleSupplierProductStatusRequest { Status = SupplierProductStatus.Active }));
+        var result = await _service.ToggleSupplierProductStatusAsync(supplier.Id, product.Id,
+            new ToggleSupplierProductStatusRequest { Status = SupplierProductStatus.Active });
 
-        Assert.Equal("PRODUCT_INACTIVE", ex.ErrorCode);
+        Assert.Equal("Active", result.Status);
     }
 
     [Fact]

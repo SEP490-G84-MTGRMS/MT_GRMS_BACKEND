@@ -128,6 +128,9 @@ public record ProductUpdateRequest(
 public class ProductQueryFilter
 {
     public string? SearchTerm { get; set; }
+    public List<string>? Skus { get; set; }
+    public List<string>? Names { get; set; }
+    public List<string>? Barcodes { get; set; }
     public Guid? CategoryId { get; set; }
     public List<Guid>? CategoryIds { get; set; }
     public string? Status { get; set; }

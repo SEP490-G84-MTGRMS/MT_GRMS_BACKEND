@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.SupplierReturns;
 using MT_GRMS.Application.SupplierReturns.Dtos;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
@@ -83,16 +84,21 @@ public class SupplierReturnsController : BaseApiController
     public async Task<IActionResult> Submit(
         Guid id,
         [FromQuery] string? notes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken = default,
+        [FromBody] SubmitSupplierReturnBody? body = null)
     {
-        var result = await _service.SubmitAsync(id, notes, cancellationToken);
+        var effectiveNotes = !string.IsNullOrWhiteSpace(body?.Notes) ? body!.Notes : notes;
+        var result = await _service.SubmitAsync(id, effectiveNotes, cancellationToken);
         return Ok(ApiResponse<SupplierReturnDetailDto>.Ok(result, "Đã gửi yêu cầu trả hàng sang nhà cung cấp."));
     }
+
+    public sealed record SubmitSupplierReturnBody(string? Notes);
 
     /// <summary>
     /// Ghi nhận kết quả phản hồi từ nhà cung cấp (APPROVED hoặc REJECTED) (REQ-03)
     /// </summary>
     [HttpPost("{id:guid}/supplier-response")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> RecordSupplierResponse(
         Guid id,
         [FromBody] RecordSupplierResponseCommand command,
@@ -119,6 +125,7 @@ public class SupplierReturnsController : BaseApiController
     /// Hủy phiếu trả hàng (giải phóng số lượng chờ trả) (REQ-03)
     /// </summary>
     [HttpPost("{id:guid}/cancel")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> Cancel(
         Guid id,
         [FromBody] CancelSupplierReturnCommand command,
@@ -129,6 +136,7 @@ public class SupplierReturnsController : BaseApiController
     }
 
     [HttpPost("{id:guid}/exchange-purchase-orders")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> CreateExchangePurchaseOrders(Guid id, CancellationToken cancellationToken)
     {
         var result = await _service.CreateExchangePurchaseOrdersAsync(id, cancellationToken);
@@ -145,6 +153,7 @@ public class SupplierReturnsController : BaseApiController
     }
 
     [HttpPost("{id:guid}/cost-share-payments")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> RecordCostSharePayment(
         Guid id,
         [FromBody] RecordCostSharePaymentCommand command,

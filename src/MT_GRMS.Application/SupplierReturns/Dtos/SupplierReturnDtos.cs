@@ -6,11 +6,16 @@ namespace MT_GRMS.Application.SupplierReturns.Dtos;
 public record SupplierReturnFilterQuery
 {
     public string? Keyword { get; init; }
+    public List<string>? ReturnCodes { get; init; }
+    public List<string>? GrnCodes { get; init; }
+    public List<string>? SupplierCodes { get; init; }
+    public List<string>? SupplierNames { get; init; }
+    public List<string>? BranchNames { get; init; }
     public Guid? BranchId { get; init; }
     public Guid? SupplierId { get; init; }
-    public string? Status { get; init; } // ALL, DRAFT, PENDING_SUPPLIER, APPROVED, REJECTED, COMPLETED, CANCELLED
+    public string? Status { get; init; } // ALL, DRAFT, PENDING_SUPPLIER, APPROVED, PARTIALLY_HANDED_OVER, REJECTED, COMPLETED, CANCELLED
     public int PageIndex { get; init; } = 1;
-    public int PageSize { get; init; } = 10;
+    public int PageSize { get; init; } = 20;
 }
 
 public record SupplierReturnKpiSummaryDto(

@@ -62,6 +62,7 @@ public class SupplierService : ISupplierService
             PaymentTermDays = s.PaymentTermDays,
             CreditLimit = s.CreditLimit,
             CurrentDebt = canSeeDebt ? s.CurrentDebt : 0,
+            OverdueDebt = canSeeDebt ? s.OverdueDebt : 0,
             LinkedCustomerId = Guid.TryParse(s.LinkedCustomerId, out var lcid) ? lcid : null,
             Address = s.Address,
             Notes = s.Notes,
@@ -92,6 +93,7 @@ public class SupplierService : ISupplierService
         if (!SupplierAccess.IsStoreOwner(_tenantContext))
         {
             dto.CurrentDebt = 0;
+            dto.OverdueDebt = 0;
         }
 
         // Tính toán EarliestDeliveryDate nếu có DeliveryConfig
@@ -110,6 +112,8 @@ public class SupplierService : ISupplierService
     public async Task<SupplierDetailDto> CreateSupplierAsync(CreateSupplierCommand command, CancellationToken cancellationToken = default)
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        await ValidateCommandAsync(new CreateSupplierCommandValidator(), command, cancellationToken);
 
         // 1. Tự động sinh mã nếu trống (REQ-01)
         var code = command.Code?.Trim();
@@ -171,6 +175,8 @@ public class SupplierService : ISupplierService
     public async Task<SupplierDetailDto> UpdateSupplierAsync(Guid id, UpdateSupplierCommand command, CancellationToken cancellationToken = default)
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        await ValidateCommandAsync(new UpdateSupplierCommandValidator(), command, cancellationToken);
 
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
         if (supplier == null)
@@ -237,6 +243,8 @@ public class SupplierService : ISupplierService
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
 
+        await ValidateCommandAsync(new UpdateBasicSupplierCommandValidator(), command, cancellationToken);
+
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
         if (supplier == null)
         {
@@ -274,6 +282,8 @@ public class SupplierService : ISupplierService
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
 
+        await ValidateCommandAsync(new UpdateSupplierBankCommandValidator(), command, cancellationToken);
+
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
         if (supplier == null)
         {
@@ -293,6 +303,8 @@ public class SupplierService : ISupplierService
     public async Task<SupplierDetailDto> UpdateVatAsync(Guid id, UpdateSupplierVatCommand command, CancellationToken cancellationToken = default)
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        await ValidateCommandAsync(new UpdateSupplierVatCommandValidator(), command, cancellationToken);
 
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
         if (supplier == null)
@@ -316,6 +328,11 @@ public class SupplierService : ISupplierService
     public async Task<SupplierDetailDto> UpdateStatusAsync(Guid id, UpdateSupplierStatusRequest request, CancellationToken cancellationToken = default)
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        if (!Enum.IsDefined(typeof(SupplierStatus), request.Status))
+        {
+            throw new BusinessException("VALIDATION_ERROR", "Trạng thái nhà cung cấp không hợp lệ.");
+        }
 
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
         if (supplier == null)
@@ -373,6 +390,8 @@ public class SupplierService : ISupplierService
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
 
+        await ValidateCommandAsync(new UpdateSupplierDeliveryConfigCommandValidator(), command, cancellationToken);
+
         if (command.DeliveryDays == null || command.DeliveryDays.Count == 0)
         {
             throw new BusinessException("INVALID_DELIVERY_DAYS", "Phải chọn ít nhất một ngày giao hàng hoạt động trong tuần (Active Delivery Days).");
@@ -399,6 +418,22 @@ public class SupplierService : ISupplierService
         supplier.AllowUrgent = command.AllowUrgent;
         supplier.UrgentLeadTimeHours = command.UrgentLeadTimeHours;
         supplier.UrgentFeePercent = command.UrgentFeePercent;
+        if (command.AllowStoreEdit.HasValue)
+        {
+            supplier.AllowStoreEdit = command.AllowStoreEdit.Value;
+        }
+        if (!string.IsNullOrWhiteSpace(command.EditWindowType))
+        {
+            supplier.EditWindowType = command.EditWindowType.Trim();
+        }
+        if (command.HoursBeforeDelivery.HasValue && command.HoursBeforeDelivery.Value >= 0)
+        {
+            supplier.HoursBeforeDelivery = command.HoursBeforeDelivery.Value;
+        }
+        if (command.HoursAfterOrder.HasValue && command.HoursAfterOrder.Value >= 0)
+        {
+            supplier.HoursAfterOrder = command.HoursAfterOrder.Value;
+        }
 
         // Xử lý Blackout Dates nếu có
         if (command.BlackoutDates != null)
@@ -543,17 +578,23 @@ public class SupplierService : ISupplierService
         if (!command.AllowedResolutionTypes.Any(x => string.Equals(x, defaultRes, StringComparison.OrdinalIgnoreCase)))
             throw new BusinessException("INVALID_DEFAULT_RESOLUTION", "Hình thức mặc định phải nằm trong danh sách hình thức được phép.");
 
-        if (command.CostShareEnabled)
+        if (command.MaxReturnDaysAfterReceipt.HasValue && command.MaxReturnDaysAfterReceipt.Value < 0)
+            throw new BusinessException("INVALID_RETURN_WINDOW", "Số ngày tối đa được trả hàng sau nhập không được âm.");
+
+        if (command.NearExpiryMinDaysLeft.HasValue && command.NearExpiryMinDaysLeft.Value < 0)
+            throw new BusinessException("INVALID_NEAR_EXPIRY_DAYS", "Số ngày cận hạn tối thiểu không được âm.");
+
+        if (command.StoreCostSharePercent.HasValue || command.SupplierCostSharePercent.HasValue || command.CostShareEnabled)
         {
-            if (!command.StoreCostSharePercent.HasValue)
+            if (command.CostShareEnabled && !command.StoreCostSharePercent.HasValue)
                 throw new BusinessException("INVALID_COST_SHARE", "Khi bật chia sẻ chi phí phải nhập % cửa hàng chịu (mặc định NCC).");
 
-            var storePct = command.StoreCostSharePercent.Value;
+            var storePct = command.StoreCostSharePercent ?? 0m;
             if (storePct < 0 || storePct > 100)
                 throw new BusinessException("INVALID_COST_SHARE", "% cửa hàng chịu phải trong khoảng 0–100.");
 
             var supplierPct = command.SupplierCostSharePercent ?? (100m - storePct);
-            if (Math.Abs(storePct + supplierPct - 100m) > 0.01m)
+            if (supplierPct < 0 || supplierPct > 100 || Math.Abs(storePct + supplierPct - 100m) > 0.01m)
                 throw new BusinessException("INVALID_COST_SHARE", "Tổng % cửa hàng và % NCC phải bằng 100.");
 
             if (command.CostShareByCategoryEnabled)
@@ -674,6 +715,8 @@ public class SupplierService : ISupplierService
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
 
+        await ValidateCommandAsync(new RecordAPTransactionCommandValidator(), command, cancellationToken);
+
         // 1. Kiểm tra IdempotencyKey (BR-S08)
         if (!string.IsNullOrWhiteSpace(command.IdempotencyKey))
         {
@@ -741,6 +784,8 @@ public class SupplierService : ISupplierService
         supplier.CurrentDebt = newDebt;
 
         await _supplierRepository.AddLedgerAsync(ledger, cancellationToken);
+        var updatedAging = await ComputeAgingForSupplierAsync(supplier, ledger, cancellationToken);
+        supplier.OverdueDebt = updatedAging.TotalOverdue;
         _supplierRepository.Update(supplier);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -782,14 +827,153 @@ public class SupplierService : ISupplierService
             throw new NotFoundException("Nhà cung cấp", supplierId);
         }
 
+        var aging = await ComputeAgingForSupplierAsync(supplier, pendingLedger: null, cancellationToken);
+        if (supplier.OverdueDebt != aging.TotalOverdue)
+        {
+            supplier.OverdueDebt = aging.TotalOverdue;
+            _supplierRepository.Update(supplier);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
         return new SupplierApSummaryDto
         {
             SupplierId = supplier.Id,
             CurrentDebt = supplier.CurrentDebt,
-            OverdueDebt = supplier.OverdueDebt,
+            OverdueDebt = aging.TotalOverdue,
             CreditLimit = supplier.CreditLimit,
-            OpenPurchaseOrderCount = 0
+            PaymentTermDays = supplier.PaymentTermDays,
+            OpenPurchaseOrderCount = 0,
+            Aging = aging
         };
+    }
+
+    private async Task<SupplierApAgingDto> ComputeAgingForSupplierAsync(
+        Supplier supplier,
+        SupplierAPLedger? pendingLedger,
+        CancellationToken cancellationToken)
+    {
+        if (supplier.CurrentDebt <= 0)
+        {
+            return new SupplierApAgingDto();
+        }
+
+        var persistedLedgers = await _supplierRepository.GetAllLedgersForSupplierAsync(supplier.Id, cancellationToken);
+        var allLedgers = persistedLedgers.ToList();
+        if (pendingLedger != null && allLedgers.All(l => l.Id != pendingLedger.Id))
+        {
+            allLedgers.Add(pendingLedger);
+        }
+
+        // Legacy/seeded opening debt without any AP ledger entries: preserve existing OverdueDebt snapshot
+        if (allLedgers.Count == 0)
+        {
+            var clampedOverdue = Math.Clamp(supplier.OverdueDebt, 0m, supplier.CurrentDebt);
+            return new SupplierApAgingDto
+            {
+                Current = supplier.CurrentDebt - clampedOverdue,
+                Days1To30 = clampedOverdue
+            };
+        }
+
+        var grnCodes = allLedgers
+            .Where(l => l.Direction == 1 && l.DocType == APDocType.PurchaseInvoice && !string.IsNullOrWhiteSpace(l.DocNo))
+            .Select(l => l.DocNo)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var dueDatesByCode = grnCodes.Count > 0
+            ? await _supplierRepository.GetConfirmedGrnDueDatesByCodesAsync(supplier.Id, grnCodes, cancellationToken)
+            : new Dictionary<string, DateTime?>();
+
+        return CalculateAgingBuckets(
+            supplier.CurrentDebt,
+            supplier.PaymentTermDays,
+            allLedgers,
+            dueDatesByCode,
+            DateTime.UtcNow.Date);
+    }
+
+    internal static SupplierApAgingDto CalculateAgingBuckets(
+        decimal currentDebt,
+        int paymentTermDays,
+        IEnumerable<SupplierAPLedger> ledgers,
+        IReadOnlyDictionary<string, DateTime?> grnDueDates,
+        DateTime asOfDateUtc)
+    {
+        if (currentDebt <= 0)
+        {
+            return new SupplierApAgingDto();
+        }
+
+        var ordered = ledgers
+            .OrderBy(l => l.TransactionDate)
+            .ThenBy(l => l.CreatedAt)
+            .ToList();
+
+        var openLiabilities = new List<(DateTime DueDate, decimal Remaining)>();
+        var safeTermDays = Math.Max(0, paymentTermDays);
+
+        foreach (var entry in ordered)
+        {
+            if (entry.Amount <= 0) continue;
+
+            if (entry.Direction == 1)
+            {
+                DateTime dueDate;
+                if (entry.DocType == APDocType.PurchaseInvoice &&
+                    grnDueDates.TryGetValue(entry.DocNo, out var grnDue) &&
+                    grnDue.HasValue)
+                {
+                    dueDate = grnDue.Value.Date;
+                }
+                else
+                {
+                    dueDate = entry.TransactionDate.Date.AddDays(safeTermDays);
+                }
+
+                openLiabilities.Add((dueDate, entry.Amount));
+            }
+            else if (entry.Direction == -1)
+            {
+                var toSettle = entry.Amount;
+                for (var i = 0; i < openLiabilities.Count && toSettle > 0; i++)
+                {
+                    var item = openLiabilities[i];
+                    if (item.Remaining <= 0) continue;
+
+                    var applied = Math.Min(item.Remaining, toSettle);
+                    openLiabilities[i] = (item.DueDate, item.Remaining - applied);
+                    toSettle -= applied;
+                }
+            }
+        }
+
+        var aging = new SupplierApAgingDto();
+        var allocated = 0m;
+        var today = asOfDateUtc.Date;
+
+        foreach (var (dueDate, remaining) in openLiabilities)
+        {
+            if (remaining <= 0) continue;
+
+            var daysOverdue = (today - dueDate).Days;
+            if (daysOverdue <= 0) aging.Current += remaining;
+            else if (daysOverdue <= 30) aging.Days1To30 += remaining;
+            else if (daysOverdue <= 60) aging.Days31To60 += remaining;
+            else if (daysOverdue <= 90) aging.Days61To90 += remaining;
+            else aging.Over90Days += remaining;
+
+            allocated += remaining;
+        }
+
+        // Reconcile any residual (e.g. legacy opening debt without ledger rows) so TotalDebt == currentDebt
+        var residual = currentDebt - allocated;
+        if (residual > 0)
+        {
+            aging.Current += residual;
+        }
+
+        return aging;
     }
 
     public async Task<IReadOnlyList<SupplierBranchAssignmentDto>> GetAssignedBranchesAsync(Guid supplierId, CancellationToken cancellationToken = default)
@@ -847,6 +1031,8 @@ public class SupplierService : ISupplierService
             _ => null
         };
 
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, filter.BranchId);
+
         var (items, totalCount) = await _supplierRepository.GetPagedBranchAssignmentsAsync(
             filter.SupplierSearch,
             filter.BranchSearch,
@@ -855,7 +1041,7 @@ public class SupplierService : ISupplierService
             filter.BranchCodes,
             filter.BranchNames,
             filter.SupplierId,
-            filter.BranchId,
+            effectiveBranchId,
             statusFilter,
             filter.PageIndex,
             filter.PageSize,
@@ -881,11 +1067,19 @@ public class SupplierService : ISupplierService
         {
             throw new NotFoundException("Nhà cung cấp", command.SupplierId);
         }
+        if (supplier.Status != SupplierStatus.Active)
+        {
+            throw new BusinessException("SUPPLIER_INACTIVE", "Không thể gán chi nhánh cho nhà cung cấp đang tạm ngưng hoạt động.");
+        }
 
         var uniqueBranchIds = (command.BranchIds ?? [])
             .Where(bId => bId != Guid.Empty)
             .Distinct()
             .ToList();
+        if (uniqueBranchIds.Count == 0)
+        {
+            throw new BusinessException("BRANCH_IDS_REQUIRED", "Vui lòng chọn ít nhất một chi nhánh để gán nhà cung cấp.");
+        }
 
         var addedAssignments = new List<SupplierBranchAssignment>();
         foreach (var branchId in uniqueBranchIds)
@@ -977,6 +1171,13 @@ public class SupplierService : ISupplierService
             suppliers.Add(sup);
         }
 
+        var targetStatus = command.Status ?? SupplierStatus.Active;
+        var inactiveReason = command.InactiveReason?.Trim();
+        if (targetStatus == SupplierStatus.Inactive && string.IsNullOrWhiteSpace(inactiveReason))
+        {
+            throw new BusinessException("REASON_REQUIRED", "Vui lòng nhập lý do tạm ngưng.");
+        }
+
         var resultAssignments = new List<SupplierBranchAssignmentDetailDto>();
         foreach (var sup in suppliers)
         {
@@ -986,11 +1187,10 @@ public class SupplierService : ISupplierService
             var existing = await _supplierRepository.GetBranchAssignmentAsync(sup.Id, command.BranchId, cancellationToken);
             if (existing != null)
             {
-                // Tái kích hoạt quan hệ nếu đã từng bị Inactive
-                if (existing.Status == SupplierStatus.Inactive)
+                existing.Status = targetStatus;
+                existing.InactiveReason = targetStatus == SupplierStatus.Inactive ? inactiveReason : null;
+                if (targetStatus == SupplierStatus.Active)
                 {
-                    existing.Status = SupplierStatus.Active;
-                    existing.InactiveReason = null;
                     existing.CreatedAt = DateTime.UtcNow;
                 }
 
@@ -1013,7 +1213,8 @@ public class SupplierService : ISupplierService
                     BranchId = command.BranchId,
                     TenantId = _tenantContext.CurrentTenantId,
                     CreatedAt = DateTime.UtcNow,
-                    Status = SupplierStatus.Active
+                    Status = targetStatus,
+                    InactiveReason = targetStatus == SupplierStatus.Inactive ? inactiveReason : null
                 };
                 ApplyAssignmentDeliveryDays(newAssignment, deliveryDays);
                 await _supplierRepository.AddBranchAssignmentAsync(newAssignment, cancellationToken);
@@ -1028,10 +1229,13 @@ public class SupplierService : ISupplierService
             }
         }
 
-        // Chiều đồng bộ B: catalog Active của các NCC → BranchProducts chi nhánh này
-        foreach (var sup in suppliers)
+        // Chỉ đồng bộ catalog Active sang BranchProducts khi phân bổ được tạo ở trạng thái Active (SBA-02)
+        if (targetStatus == SupplierStatus.Active)
         {
-            await SyncActiveSupplierProductsToBranchAsync(sup.Id, command.BranchId, cancellationToken);
+            foreach (var sup in suppliers)
+            {
+                await SyncActiveSupplierProductsToBranchAsync(sup.Id, command.BranchId, cancellationToken);
+            }
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -1124,13 +1328,17 @@ public class SupplierService : ISupplierService
         var activeSupplierProducts = await _supplierRepository.GetActiveSupplierProductsForSupplierAsync(supplierId, cancellationToken);
         foreach (var sp in activeSupplierProducts)
         {
-            var exists = await _supplierRepository.BranchProductExistsAsync(branchId, sp.ProductId, cancellationToken);
-            if (exists)
+            var existingBp = await _supplierRepository.GetBranchProductAsync(branchId, sp.ProductId, cancellationToken);
+            if (existingBp != null)
             {
+                if (existingBp.AllowedSupplierIdsJson != null)
+                {
+                    existingBp.AddAllowedSupplierId(supplierId);
+                }
                 continue;
             }
 
-            await _supplierRepository.AddBranchProductAsync(new BranchProduct
+            var newBp = new BranchProduct
             {
                 Id = Guid.NewGuid(),
                 TenantId = _tenantContext.CurrentTenantId,
@@ -1140,7 +1348,9 @@ public class SupplierService : ISupplierService
                 Status = "Active",
                 ShelfLocation = "Kệ hàng",
                 CreatedAt = DateTime.UtcNow
-            }, cancellationToken);
+            };
+            newBp.SetAllowedSupplierIds(new[] { supplierId });
+            await _supplierRepository.AddBranchProductAsync(newBp, cancellationToken);
         }
     }
 
@@ -1307,6 +1517,7 @@ public class SupplierService : ISupplierService
             PaymentTermDays = s.PaymentTermDays,
             CreditLimit = s.CreditLimit,
             CurrentDebt = s.CurrentDebt,
+            OverdueDebt = s.OverdueDebt,
             LinkedCustomerId = Guid.TryParse(s.LinkedCustomerId, out var cid) ? cid : null,
             CreatedAt = s.CreatedAt,
             TaxCode = s.TaxCode,
@@ -1370,6 +1581,10 @@ public class SupplierService : ISupplierService
             AllowUrgent = supplier.AllowUrgent,
             UrgentLeadTimeHours = supplier.UrgentLeadTimeHours,
             UrgentFeePercent = supplier.UrgentFeePercent,
+            AllowStoreEdit = supplier.AllowStoreEdit,
+            EditWindowType = string.IsNullOrWhiteSpace(supplier.EditWindowType) ? "BEFORE_CUTOFF" : supplier.EditWindowType,
+            HoursBeforeDelivery = supplier.HoursBeforeDelivery,
+            HoursAfterOrder = supplier.HoursAfterOrder,
             BlackoutDates = blackoutDates?.Select(b => new SupplierBlackoutDateDto
             {
                 Id = b.Id,
@@ -1431,6 +1646,8 @@ public class SupplierService : ISupplierService
         AssignSupplierProductCommand command,
         CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         var validator = new AssignSupplierProductValidator();
         var validationResult = await validator.ValidateAsync(command, cancellationToken);
         if (!validationResult.IsValid)
@@ -1442,6 +1659,10 @@ public class SupplierService : ISupplierService
         if (supplier == null)
         {
             throw new NotFoundException($"Không tìm thấy nhà cung cấp với ID: {supplierId}");
+        }
+        if (supplier.Status != SupplierStatus.Active)
+        {
+            throw new BusinessException("SUPPLIER_INACTIVE", "Không thể gán sản phẩm cho nhà cung cấp đang tạm ngưng hoạt động.");
         }
 
         var product = await _supplierRepository.GetProductByIdAsync(command.ProductId, cancellationToken);
@@ -1460,9 +1681,7 @@ public class SupplierService : ISupplierService
         // NULL/0 = chưa thỏa thuận — không copy Master vào Agreed
         var purchasePrice = SupplierProductPricing.NormalizeAgreedPriceToPersist(command.AgreedWholesalePrice);
 
-        var deliveryUoM = string.IsNullOrWhiteSpace(command.DeliveryUoM)
-            ? ResolveDefaultDeliveryUoM(product)
-            : command.DeliveryUoM.Trim();
+        var (deliveryUomId, deliveryUoM, conversionRate) = ResolvePurchaseUnitBinding(product, command.DeliveryUoM);
 
         // BR-SP02: Độc quyền Primary Supplier — nếu đặt làm Primary thì tự động gỡ cờ Primary của NCC cũ
         if (command.IsPrimarySupplier)
@@ -1478,7 +1697,9 @@ public class SupplierService : ISupplierService
             ProductId = command.ProductId,
             Product = product,
             SupplierProductCode = command.SupplierProductCode,
+            DeliveryUomId = deliveryUomId,
             DeliveryUoM = deliveryUoM,
+            ConversionRate = conversionRate,
             AgreedWholesalePrice = purchasePrice,
             MinimumOrderQuantity = command.MinimumOrderQuantity,
             AllowedShortageQuantity = Math.Max(0, command.AllowedShortageQuantity),
@@ -1492,8 +1713,15 @@ public class SupplierService : ISupplierService
         var activeBranchIds = await _supplierRepository.GetActiveBranchIdsForSupplierAsync(supplierId, cancellationToken);
         foreach (var branchId in activeBranchIds)
         {
-            var exists = await _supplierRepository.BranchProductExistsAsync(branchId, command.ProductId, cancellationToken);
-            if (!exists)
+            var existingBp = await _supplierRepository.GetBranchProductAsync(branchId, command.ProductId, cancellationToken);
+            if (existingBp != null)
+            {
+                if (existingBp.AllowedSupplierIdsJson != null)
+                {
+                    existingBp.AddAllowedSupplierId(supplierId);
+                }
+            }
+            else
             {
                 var newBranchProduct = new BranchProduct
                 {
@@ -1506,6 +1734,7 @@ public class SupplierService : ISupplierService
                     ShelfLocation = "Kệ hàng",
                     CreatedAt = DateTime.UtcNow
                 };
+                newBranchProduct.SetAllowedSupplierIds(new[] { supplierId });
                 await _supplierRepository.AddBranchProductAsync(newBranchProduct, cancellationToken);
             }
         }
@@ -1520,31 +1749,36 @@ public class SupplierService : ISupplierService
         BatchAssignSupplierProductsCommand command,
         CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
         var workItems = ResolveBatchWorkItems(command);
         if (workItems.Count == 0)
         {
             throw new BusinessException("VALIDATION_ERROR", "Vui lòng chọn ít nhất một sản phẩm để gán cho nhà cung cấp.");
         }
 
-        if (workItems.Any(x => x.MinimumOrderQuantity <= 0))
+        if (workItems.Any(x => x.MinimumOrderQuantity <= 0 || x.MinimumOrderQuantity > 1_000_000))
         {
-            throw new BusinessException("VALIDATION_ERROR", "Số lượng đặt hàng tối thiểu (MOQ) phải lớn hơn 0.");
+            throw new BusinessException("VALIDATION_ERROR", "Số lượng đặt hàng tối thiểu (MOQ) phải từ 1 đến 1.000.000.");
         }
 
-        if (workItems.Any(x => x.AllowedShortageQuantity < 0))
+        if (workItems.Any(x => x.AllowedShortageQuantity < 0 || x.AllowedShortageQuantity > 1_000_000))
         {
-            throw new BusinessException("VALIDATION_ERROR", "Số lượng thiếu hàng cho phép phải lớn hơn hoặc bằng 0.");
+            throw new BusinessException("VALIDATION_ERROR", "Số lượng thiếu hàng cho phép phải từ 0 đến 1.000.000.");
         }
 
-        if (workItems.Any(x => x.AgreedWholesalePrice.HasValue && x.AgreedWholesalePrice.Value < 0))
+        if (workItems.Any(x => x.AgreedWholesalePrice.HasValue && (x.AgreedWholesalePrice.Value < 0 || x.AgreedWholesalePrice.Value > 1_000_000_000m)))
         {
-            throw new BusinessException("VALIDATION_ERROR", "Giá thỏa thuận không được âm.");
+            throw new BusinessException("VALIDATION_ERROR", "Giá thỏa thuận phải từ 0 đến 1.000.000.000 đ.");
         }
 
         var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
         if (supplier == null)
         {
             throw new NotFoundException($"Không tìm thấy nhà cung cấp với ID: {supplierId}");
+        }
+        if (supplier.Status != SupplierStatus.Active)
+        {
+            throw new BusinessException("SUPPLIER_INACTIVE", "Không thể gán sản phẩm cho nhà cung cấp đang tạm ngưng hoạt động.");
         }
 
         var prepared = new List<(Domain.Entities.Catalog.Product Product, decimal? PurchasePrice, int Moq, int AllowedShortage)>();
@@ -1573,9 +1807,10 @@ public class SupplierService : ISupplierService
         {
             foreach (var (product, purchasePrice, moq, allowedShortage) in prepared)
             {
-                var deliveryUoM = !string.IsNullOrWhiteSpace(command.DeliveryUoM) && command.DeliveryUoM != "Theo ĐVT cơ sở"
+                var requestedUom = !string.IsNullOrWhiteSpace(command.DeliveryUoM) && command.DeliveryUoM != "Theo ĐVT cơ sở"
                     ? command.DeliveryUoM
-                    : ResolveDefaultDeliveryUoM(product);
+                    : null;
+                var (deliveryUomId, deliveryUoM, conversionRate) = ResolvePurchaseUnitBinding(product, requestedUom);
 
                 var entity = new SupplierProduct
                 {
@@ -1585,7 +1820,9 @@ public class SupplierService : ISupplierService
                     ProductId = product.Id,
                     Product = product,
                     SupplierProductCode = command.SupplierProductCode,
+                    DeliveryUomId = deliveryUomId,
                     DeliveryUoM = deliveryUoM,
+                    ConversionRate = conversionRate,
                     AgreedWholesalePrice = purchasePrice,
                     MinimumOrderQuantity = moq,
                     AllowedShortageQuantity = allowedShortage,
@@ -1597,8 +1834,15 @@ public class SupplierService : ISupplierService
 
                 foreach (var branchId in activeBranchIds)
                 {
-                    var exists = await _supplierRepository.BranchProductExistsAsync(branchId, product.Id, ct);
-                    if (!exists)
+                    var existingBp = await _supplierRepository.GetBranchProductAsync(branchId, product.Id, ct);
+                    if (existingBp != null)
+                    {
+                        if (existingBp.AllowedSupplierIdsJson != null)
+                        {
+                            existingBp.AddAllowedSupplierId(supplierId);
+                        }
+                    }
+                    else
                     {
                         var newBranchProduct = new BranchProduct
                         {
@@ -1611,6 +1855,7 @@ public class SupplierService : ISupplierService
                             ShelfLocation = "Kệ hàng",
                             CreatedAt = DateTime.UtcNow
                         };
+                        newBranchProduct.SetAllowedSupplierIds(new[] { supplierId });
                         await _supplierRepository.AddBranchProductAsync(newBranchProduct, ct);
                     }
                 }
@@ -1635,6 +1880,8 @@ public class SupplierService : ISupplierService
         UpdateSupplierProductCommand command,
         CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         var validator = new UpdateSupplierProductValidator();
         var validationResult = await validator.ValidateAsync(command, cancellationToken);
         if (!validationResult.IsValid)
@@ -1657,13 +1904,16 @@ public class SupplierService : ISupplierService
         var product = entity.Product ?? await _supplierRepository.GetProductByIdAsync(productId, cancellationToken);
         var purchasePrice = SupplierProductPricing.NormalizeAgreedPriceToPersist(command.AgreedWholesalePrice);
 
-        if (!string.IsNullOrWhiteSpace(command.DeliveryUoM))
+        if (product != null)
+        {
+            var (deliveryUomId, deliveryUoM, conversionRate) = ResolvePurchaseUnitBinding(product, command.DeliveryUoM);
+            entity.DeliveryUomId = deliveryUomId;
+            entity.DeliveryUoM = deliveryUoM;
+            entity.ConversionRate = conversionRate;
+        }
+        else if (!string.IsNullOrWhiteSpace(command.DeliveryUoM))
         {
             entity.DeliveryUoM = command.DeliveryUoM.Trim();
-        }
-        else if (product != null)
-        {
-            entity.DeliveryUoM = ResolveDefaultDeliveryUoM(product);
         }
 
         entity.AgreedWholesalePrice = purchasePrice;
@@ -1687,6 +1937,8 @@ public class SupplierService : ISupplierService
         ToggleSupplierProductStatusRequest request,
         CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         var entity = await _supplierRepository.GetSupplierProductAsync(supplierId, productId, cancellationToken);
         if (entity == null)
         {
@@ -1702,14 +1954,6 @@ public class SupplierService : ISupplierService
                     "SUPPLIER_INACTIVE",
                     "Không thể kích hoạt sản phẩm khi nhà cung cấp đang ngưng hoạt động.");
             }
-
-            var product = entity.Product ?? await _supplierRepository.GetProductByIdAsync(productId, cancellationToken);
-            if (product == null || product.Status != ProductStatus.Active)
-            {
-                throw new BusinessException(
-                    "PRODUCT_INACTIVE",
-                    "Không thể kích hoạt sản phẩm khi hàng hóa đang ngưng kinh doanh.");
-            }
         }
 
         entity.Status = request.Status;
@@ -1724,6 +1968,8 @@ public class SupplierService : ISupplierService
         SetPrimarySupplierRequest request,
         CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         var entity = await _supplierRepository.GetSupplierProductAsync(supplierId, productId, cancellationToken);
         if (entity == null)
         {
@@ -1788,13 +2034,23 @@ public class SupplierService : ISupplierService
             throw new NotFoundException("Nhà cung cấp", supplierId);
         }
 
-        // Transactions history (currently 0 items, ready for PO/GRN linkage, no mock)
+        var effectiveBranchId = BranchScopeGuard.IsBranchScopedEmployee(_tenantContext)
+            ? BranchScopeGuard.ResolveRequiredBranchId(_tenantContext, Guid.Empty)
+            : (Guid?)null;
+
+        var (items, totalCount) = await _supplierRepository.GetPagedTransactionsAsync(
+            supplierId,
+            effectiveBranchId,
+            pageIndex,
+            pageSize,
+            cancellationToken);
+
         return new PagedResult<SupplierTransactionDto>
         {
-            Items = new List<SupplierTransactionDto>(),
-            Page = pageIndex,
-            PageSize = pageSize,
-            TotalItems = 0
+            Items = items,
+            Page = Math.Max(1, pageIndex),
+            PageSize = Math.Clamp(pageSize, 1, 100),
+            TotalItems = totalCount
         };
     }
 
@@ -1821,6 +2077,18 @@ public class SupplierService : ISupplierService
                 AllowedShortageQuantity = command.AllowedShortageQuantity
             })
             .ToList();
+    }
+
+    private static async Task ValidateCommandAsync<T>(
+        FluentValidation.IValidator<T> validator,
+        T command,
+        CancellationToken cancellationToken)
+    {
+        var result = await validator.ValidateAsync(command, cancellationToken);
+        if (!result.IsValid)
+        {
+            throw new BusinessException("VALIDATION_ERROR", result.Errors.First().ErrorMessage);
+        }
     }
 
     private static string ResolveDefaultDeliveryUoM(Product product)
@@ -1852,10 +2120,70 @@ public class SupplierService : ISupplierService
         return sp.Product?.BaseUnit?.Trim() ?? "Cái";
     }
 
+    private static (Guid? DeliveryUomId, string DeliveryUoM, decimal ConversionRate) ResolvePurchaseUnitBinding(
+        Product product,
+        string? requestedUoM)
+    {
+        var activeUnits = product.Units?.Where(u => !u.IsDeleted).ToList();
+        if (activeUnits is { Count: > 0 })
+        {
+            if (!string.IsNullOrWhiteSpace(requestedUoM))
+            {
+                var trimmed = requestedUoM.Trim();
+                var matched = activeUnits.FirstOrDefault(u =>
+                    string.Equals(u.UnitName?.Trim(), trimmed, StringComparison.OrdinalIgnoreCase));
+                if (matched != null)
+                {
+                    return (matched.Id, matched.UnitName.Trim(), matched.ConversionRate > 0 ? matched.ConversionRate : 1m);
+                }
+            }
+
+            var purchaseUnit = activeUnits.FirstOrDefault(u => u.IsPurchaseUnit && !string.IsNullOrWhiteSpace(u.UnitName));
+            if (purchaseUnit != null)
+            {
+                return (purchaseUnit.Id, purchaseUnit.UnitName.Trim(), purchaseUnit.ConversionRate > 0 ? purchaseUnit.ConversionRate : 1m);
+            }
+
+            var baseUnit = activeUnits.FirstOrDefault(u => u.IsBaseUnit && !string.IsNullOrWhiteSpace(u.UnitName));
+            if (baseUnit != null)
+            {
+                return (baseUnit.Id, baseUnit.UnitName.Trim(), 1m);
+            }
+        }
+
+        var fallbackName = !string.IsNullOrWhiteSpace(requestedUoM)
+            ? requestedUoM.Trim()
+            : (string.IsNullOrWhiteSpace(product.BaseUnit) ? "Cái" : product.BaseUnit.Trim());
+        return (null, fallbackName, 1m);
+    }
+
+    private static decimal ResolvePurchaseConversionRate(SupplierProduct sp)
+    {
+        var purchaseUnit = sp.Product?.Units?
+            .FirstOrDefault(u => !u.IsDeleted && u.IsPurchaseUnit);
+        if (purchaseUnit != null && purchaseUnit.ConversionRate > 0)
+            return purchaseUnit.ConversionRate;
+
+        if (!string.IsNullOrWhiteSpace(sp.DeliveryUoM) && sp.Product?.Units != null)
+        {
+            var matched = sp.Product.Units.FirstOrDefault(u =>
+                !u.IsDeleted &&
+                string.Equals(u.UnitName?.Trim(), sp.DeliveryUoM.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (matched != null && matched.ConversionRate > 0)
+                return matched.ConversionRate;
+        }
+
+        return sp.ConversionRate > 0 ? sp.ConversionRate : 1m;
+    }
+
     private static SupplierProductDto MapToSupplierProductDto(SupplierProduct sp, int syncedBranchesCount = 0)
     {
-        var costPrice = sp.Product?.CostPrice;
+        var baseCostPrice = sp.Product?.CostPrice;
         var purchaseUnit = ResolvePurchaseUnitName(sp);
+        var conversionRate = ResolvePurchaseConversionRate(sp);
+        var purchaseUnitCost = baseCostPrice.HasValue
+            ? Math.Round(baseCostPrice.Value * conversionRate, 2)
+            : (decimal?)null;
         return new SupplierProductDto
         {
             Id = sp.Id,
@@ -1867,14 +2195,14 @@ public class SupplierService : ISupplierService
             Sku = sp.Product?.SKU ?? string.Empty,
             ProductName = sp.Product?.ProductName ?? string.Empty,
             CategoryName = sp.Product?.Category?.CategoryName,
-            BaseUoM = purchaseUnit,
+            BaseUoM = sp.Product?.BaseUnit?.Trim() ?? purchaseUnit,
             SupplierProductCode = sp.SupplierProductCode,
             DeliveryUoM = purchaseUnit,
             AgreedWholesalePrice = sp.AgreedWholesalePrice,
-            CostPrice = costPrice,
+            CostPrice = purchaseUnitCost,
             EffectivePurchasePrice = SupplierProductPricing.GetEffectivePurchasePriceOrZero(
                 sp.AgreedWholesalePrice,
-                costPrice),
+                purchaseUnitCost),
             MinimumOrderQuantity = sp.MinimumOrderQuantity,
             AllowedShortageQuantity = sp.AllowedShortageQuantity,
             ImageUrl = sp.Product?.ImageUrl,

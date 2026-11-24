@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MT_GRMS.Application.Batches.Dtos;
@@ -18,15 +19,18 @@ public class BatchService : IBatchService
     private readonly IBatchRepository _repository;
     private readonly ITenantContext _tenantContext;
     private readonly IUnitOfWork _unitOfWork;
+    private readonly IRepository<Package>? _packages;
 
     public BatchService(
         IBatchRepository repository,
         ITenantContext tenantContext,
-        IUnitOfWork unitOfWork)
+        IUnitOfWork unitOfWork,
+        IRepository<Package>? packages = null)
     {
         _repository = repository;
         _tenantContext = tenantContext;
         _unitOfWork = unitOfWork;
+        _packages = packages;
     }
 
     public async Task<BatchPagedResultDto> GetPagedBatchesAsync(
@@ -34,7 +38,9 @@ public class BatchService : IBatchService
         CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        return await _repository.GetPagedBatchesAsync(tenantId, query, cancellationToken);
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, query.BranchId);
+        var scopedQuery = query with { BranchId = effectiveBranchId };
+        return await _repository.GetPagedBatchesAsync(tenantId, scopedQuery, cancellationToken);
     }
 
     public async Task<BatchListItemDto> GetBatchByIdAsync(
@@ -46,6 +52,7 @@ public class BatchService : IBatchService
         if (batch == null)
             throw new KeyNotFoundException($"Không tìm thấy thông tin lô hàng với ID {id}.");
 
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, batch.BranchId);
         return batch;
     }
 
@@ -66,7 +73,8 @@ public class BatchService : IBatchService
         CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        return await _repository.GetNearExpiryBatchesAsync(tenantId, daysThreshold, branchId, cancellationToken);
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, branchId);
+        return await _repository.GetNearExpiryBatchesAsync(tenantId, daysThreshold, effectiveBranchId, cancellationToken);
     }
 
     public async Task<FefoDiscountResponse> ApplyFefoDiscountAsync(Guid id, ApplyFefoDiscountRequest request, CancellationToken cancellationToken = default)
@@ -97,8 +105,14 @@ public class BatchService : IBatchService
                 throw new ArgumentOutOfRangeException(nameof(request.DiscountPercent), "Mức giảm FEFO phải từ 10% đến 90%.");
             if (!stock.ExpiryDate.HasValue)
                 throw new InvalidOperationException("Lô không có hạn sử dụng nên không thể lập lịch giảm giá cận hạn.");
-            if (stock.QuantityOnHand - stock.QuantityReserved - stock.QuantityQuarantined <= 0m)
-                throw new InvalidOperationException("Lô không còn tồn khả dụng để áp dụng giảm giá.");
+            var activePackageWeight = _packages == null
+                ? 0m
+                : (await _packages.FindAsync(
+                    p => p.TenantId == tenantId && p.BranchStockId == stock.Id && !p.IsDeleted
+                         && (p.Status == "AVAILABLE" || p.Status == "QUARANTINED"),
+                    cancellationToken)).Sum(p => p.NetWeight);
+            if (stock.QuantityOnHand - stock.QuantityReserved - stock.QuantityQuarantined - activePackageWeight <= 0m)
+                throw new InvalidOperationException("Lô không còn tồn bán thô khả dụng để áp dụng giảm giá.");
             var nearExpiryThreshold = stock.Product?.NearExpiryThresholdDays is > 0
                 ? stock.Product.NearExpiryThresholdDays.Value
                 : 30;
