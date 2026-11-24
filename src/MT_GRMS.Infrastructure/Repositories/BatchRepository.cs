@@ -31,7 +31,7 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
         BatchFilterQuery query,
         CancellationToken cancellationToken = default)
     {
-        var now = DateTime.UtcNow.Date;
+        var now = BusinessDateResolver.ToLocal(DateTime.UtcNow).Date;
 
         // Nguồn tồn theo lô thực tế: BranchStocks (GRN complete ghi vào đây). Chỉ hiện lô còn tồn.
         var stocksQuery = _appContext.BranchStocks.AsNoTracking()
@@ -306,7 +306,7 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
         Guid id,
         CancellationToken cancellationToken = default)
     {
-        var now = DateTime.UtcNow.Date;
+        var now = BusinessDateResolver.ToLocal(DateTime.UtcNow).Date;
 
         // Live ledger duy nhất: BranchStocks. Không fallback Batches/StockOnHands (legacy).
         var branchStock = await _appContext.BranchStocks.AsNoTracking()
@@ -417,7 +417,7 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
         Guid? branchId,
         CancellationToken cancellationToken = default)
     {
-        var now = DateTime.UtcNow.Date;
+        var now = BusinessDateResolver.ToLocal(DateTime.UtcNow).Date;
         // Fallback khi Product.NearExpiryThresholdDays null; vẫn quét rộng rồi lọc theo từng SP.
         var scanDays = daysThreshold > 0 ? daysThreshold : 30;
         var scanDate = now.AddDays(Math.Max(scanDays, 365));
@@ -480,12 +480,13 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
     }
 
     /// <summary>
-    /// Expired ≤0; trong cửa sổ cận hạn: ≤min(3,threshold)=Critical, còn lại=Warning; ngoài cửa sổ=Normal.
+    /// Expired &lt; 0 (theo lịch VN UTC+7, daysLeft == 0 vẫn bán hết ngày HSD — BAT-05);
+    /// trong cửa sổ cận hạn: ≤min(3,threshold)=Critical, còn lại=Warning; ngoài cửa sổ=Normal.
     /// </summary>
     private static string ResolveStatus(int daysLeft, int nearExpiryThresholdDays)
     {
         var threshold = ResolveNearExpiryThresholdDays(nearExpiryThresholdDays);
-        if (daysLeft <= 0) return "Expired";
+        if (daysLeft < 0) return "Expired";
         if (daysLeft > threshold) return "Normal";
         var criticalCap = Math.Min(3, threshold);
         if (daysLeft <= criticalCap) return "Critical";
