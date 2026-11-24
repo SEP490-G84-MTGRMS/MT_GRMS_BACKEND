@@ -537,6 +537,11 @@ public class ShiftService : IShiftService
             throw new BusinessException("INVALID_STATUS", "Chỉ có thể phê duyệt các phiếu đang ở trạng thái chờ duyệt.");
         }
 
+        if (movement.Shift != null && movement.Shift.Status != ShiftState.Open)
+        {
+            throw new BusinessException("SHIFT_NOT_OPEN", "Không thể phê duyệt phiếu chi của ca đã chốt hoặc đang khóa chốt ca.");
+        }
+
         movement.Status = CashMovementStatus.Recorded;
         movement.ApprovedBy = approverName;
         movement.ApprovedAtUtc = DateTime.UtcNow;
@@ -576,6 +581,11 @@ public class ShiftService : IShiftService
             throw new BusinessException("INVALID_STATUS", "Chỉ có thể từ chối các phiếu đang ở trạng thái chờ duyệt.");
         }
 
+        if (movement.Shift != null && movement.Shift.Status != ShiftState.Open)
+        {
+            throw new BusinessException("SHIFT_NOT_OPEN", "Không thể từ chối phiếu chi của ca đã chốt.");
+        }
+
         movement.Status = CashMovementStatus.Rejected;
         movement.ApprovedBy = approverName;
         movement.RejectionReason = reason.Trim();
@@ -599,6 +609,23 @@ public class ShiftService : IShiftService
         if (movement.Status != CashMovementStatus.PendingApproval)
         {
             throw new BusinessException("INVALID_STATUS", "Chỉ có thể hủy phiếu đang ở trạng thái chờ duyệt.");
+        }
+
+        var role = _tenantContext.CurrentRole;
+        var isOwner = string.Equals(role, MT_GRMS.Domain.Constants.SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, "StoreOwner", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase);
+        if (!isOwner)
+        {
+            if (movement.Shift != null && _tenantContext.CurrentBranchId.HasValue && movement.Shift.BranchId != _tenantContext.CurrentBranchId.Value)
+            {
+                throw new UnauthorizedAccessException("Không có quyền hủy phiếu chi của chi nhánh khác.");
+            }
+            if (movement.CreatedBy != Guid.Empty && currentUserId != Guid.Empty && movement.CreatedBy != currentUserId)
+            {
+                throw new UnauthorizedAccessException("Chỉ người lập phiếu hoặc chủ cửa hàng mới được hủy phiếu chi này.");
+            }
         }
 
         movement.Status = CashMovementStatus.Cancelled;
