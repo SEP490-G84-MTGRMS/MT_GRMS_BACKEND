@@ -21,5 +21,11 @@ public class UpdateLoyaltyConfigRequestValidator : AbstractValidator<UpdateLoyal
 
         RuleFor(x => x.MinRedemptionPoints)
             .GreaterThanOrEqualTo(0).WithMessage("Mức điểm tối thiểu để đổi không được âm");
+
+        RuleFor(x => x.PointsExpiryMonths)
+            .GreaterThanOrEqualTo(0).WithMessage("Thời hạn sử dụng điểm (tháng) không được âm");
+
+        RuleFor(x => x.MaxRedemptionPercent)
+            .InclusiveBetween(1, 100).WithMessage("Giới hạn tối đa % hóa đơn được đổi điểm phải nằm trong khoảng 1% - 100%");
     }
 }

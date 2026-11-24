@@ -779,12 +779,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                     ""RedemptionRatePoints"" integer NOT NULL DEFAULT 1,
                     ""RedemptionRateAmount"" numeric(18,2) NOT NULL DEFAULT 1000.00,
                     ""MinRedemptionPoints"" integer NOT NULL DEFAULT 20,
+                    ""PointsExpiryMonths"" integer NOT NULL DEFAULT 12,
+                    ""MaxRedemptionPercent"" integer NOT NULL DEFAULT 50,
                     ""AllowPointsWithPromotions"" boolean NOT NULL DEFAULT true,
                     ""CreatedBy"" uuid NULL,
                     ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
                     ""UpdatedAt"" timestamp with time zone NULL,
                     ""IsDeleted"" boolean NOT NULL DEFAULT false
                 );
+                ALTER TABLE IF EXISTS ""LoyaltySettings"" ADD COLUMN IF NOT EXISTS ""PointsExpiryMonths"" integer NOT NULL DEFAULT 12;
+                ALTER TABLE IF EXISTS ""LoyaltySettings"" ADD COLUMN IF NOT EXISTS ""MaxRedemptionPercent"" integer NOT NULL DEFAULT 50;
                 CREATE UNIQUE INDEX IF NOT EXISTS ""IX_LoyaltySettings_TenantID"" ON ""LoyaltySettings"" (""TenantID"");
 
 

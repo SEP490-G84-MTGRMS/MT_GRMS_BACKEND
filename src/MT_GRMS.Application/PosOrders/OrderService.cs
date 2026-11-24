@@ -653,28 +653,65 @@ public class OrderService : IOrderService
         {
             decimal earningRate = 10000m;
             int earningPoints = 1;
+            int redemptionRatePoints = 1;
+            decimal redemptionRateAmount = 1000m;
+            int minRedemptionPoints = 20;
+            int maxRedemptionPercent = 50;
+            bool allowPointsWithPromotions = true;
+
             if (_promotionRepository != null)
             {
                 var loyaltySetting = await _promotionRepository.GetLoyaltySettingAsync(customer.TenantId, cancellationToken);
                 if (loyaltySetting != null)
                 {
                     isLoyaltyEnabled = loyaltySetting.IsEnabled;
-                    if (isLoyaltyEnabled)
-                    {
-                        earningRate = loyaltySetting.EarningRateAmount > 0 ? loyaltySetting.EarningRateAmount : 10000m;
-                        earningPoints = loyaltySetting.EarningPoints > 0 ? loyaltySetting.EarningPoints : 1;
-                    }
+                    earningRate = loyaltySetting.EarningRateAmount > 0 ? loyaltySetting.EarningRateAmount : 10000m;
+                    earningPoints = loyaltySetting.EarningPoints > 0 ? loyaltySetting.EarningPoints : 1;
+                    redemptionRatePoints = loyaltySetting.RedemptionRatePoints > 0 ? loyaltySetting.RedemptionRatePoints : 1;
+                    redemptionRateAmount = loyaltySetting.RedemptionRateAmount > 0 ? loyaltySetting.RedemptionRateAmount : 1000m;
+                    minRedemptionPoints = Math.Max(0, loyaltySetting.MinRedemptionPoints);
+                    maxRedemptionPercent = loyaltySetting.MaxRedemptionPercent > 0 ? Math.Clamp(loyaltySetting.MaxRedemptionPercent, 1, 100) : 50;
+                    allowPointsWithPromotions = loyaltySetting.AllowPointsWithPromotions;
                 }
+            }
+
+            if (request.PointsRedeemed.HasValue && request.PointsRedeemed.Value > 0)
+            {
+                if (!isLoyaltyEnabled)
+                    throw new BusinessException("LOYALTY_DISABLED", "Hệ thống tích điểm đang tạm tắt, không thể sử dụng điểm thưởng.");
+
+                if (request.PointsRedeemed.Value < minRedemptionPoints)
+                    throw new BusinessException("MIN_REDEMPTION_POINTS", $"Cần tối thiểu {minRedemptionPoints} điểm để đổi thưởng.");
+
+                if (request.PointsRedeemed.Value > customer.RewardPoints)
+                    throw new BusinessException("INSUFFICIENT_POINTS", $"Khách hàng chỉ có {customer.RewardPoints} điểm, không đủ để đổi {request.PointsRedeemed.Value} điểm.");
+
+                bool hasPromosOrVoucher = (request.PromotionDiscountAmount ?? 0m) > 0m
+                    || (request.VoucherDiscountAmount ?? 0m) > 0m
+                    || request.Items.Any(i => i.IsGift);
+                if (!allowPointsWithPromotions && hasPromosOrVoucher)
+                    throw new BusinessException("LOYALTY_NOT_STACKABLE", "Cấu hình không cho phép dùng điểm thưởng đồng thời với khuyến mãi hoặc voucher.");
+
+                decimal computedPointsDiscount = Math.Round(
+                    (decimal)request.PointsRedeemed.Value / redemptionRatePoints * redemptionRateAmount, 2);
+                decimal requestedPointsDiscount = request.PointsDiscountAmount.HasValue && request.PointsDiscountAmount.Value > 0
+                    ? request.PointsDiscountAmount.Value
+                    : computedPointsDiscount;
+                decimal nonPointsOrderDiscount = Math.Max(0m, orderDiscount - requestedPointsDiscount);
+                decimal subTotalBeforePoints = Math.Max(0m, totalAmount - itemDiscountTotal - nonPointsOrderDiscount);
+                decimal maxAllowedPointsDiscount = Math.Round(subTotalBeforePoints * (maxRedemptionPercent / 100m), 2);
+
+                if (requestedPointsDiscount > maxAllowedPointsDiscount + 1m)
+                    throw new BusinessException(
+                        "LOYALTY_MAX_REDEMPTION_EXCEEDED",
+                        $"Giá trị đổi điểm ({requestedPointsDiscount:N0} đ) không được vượt quá {maxRedemptionPercent}% giá trị hóa đơn (tối đa {maxAllowedPointsDiscount:N0} đ).");
+
+                customer.RewardPoints -= request.PointsRedeemed.Value;
+                customer.UpdatedAt = DateTime.UtcNow;
             }
 
             if (isLoyaltyEnabled)
             {
-                if (request.PointsRedeemed.HasValue && request.PointsRedeemed.Value > 0)
-                {
-                    int pointsToDeduct = Math.Min(customer.RewardPoints, request.PointsRedeemed.Value);
-                    customer.RewardPoints -= pointsToDeduct;
-                }
-
                 if (!request.IsPendingPayment)
                 {
                     int earnedPoints = (int)(finalAmount / earningRate) * earningPoints;
