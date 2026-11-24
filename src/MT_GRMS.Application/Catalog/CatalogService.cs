@@ -307,7 +307,7 @@ public class CatalogService : ICatalogService
             ProcessedSellingPricePerKg = ResolveProcessedPrice(request.AllowRepack, request.ProcessedSellingPricePerKg, request.SellingPrice),
             IsFavorite = request.IsFavorite,
             IsActive = true,
-            TaxCategory = "STANDARD_1PCT",
+            TaxCategory = string.IsNullOrWhiteSpace(request.TaxCategory) ? "STANDARD_1PCT" : request.TaxCategory.Trim().ToUpperInvariant(),
             EligibleForVatReduction = request.EligibleForVatReduction
         };
 
