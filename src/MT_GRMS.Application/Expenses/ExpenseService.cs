@@ -491,8 +491,11 @@ public class ExpenseService : IExpenseService
 
         var vouchers = await _expenseRepo.FindAsync(e =>
             (!branchId.HasValue || e.BranchId == branchId.Value) &&
-            (!fromDate.HasValue || e.CreatedAt >= fromDate.Value) &&
-            (!toDate.HasValue || e.CreatedAt <= toDate.Value), ct);
+            (!fromDate.HasValue || e.ExpenseDate >= fromDate.Value) &&
+            (!toDate.HasValue || e.ExpenseDate <= toDate.Value) &&
+            e.Nature != FinancialNature.TaxPayment &&
+            e.Nature != FinancialNature.OwnerDraw &&
+            e.Nature != FinancialNature.InternalTransfer, ct);
 
         IEnumerable<ExpenseVoucher> query = vouchers;
 
@@ -586,8 +589,11 @@ public class ExpenseService : IExpenseService
         RequireOwner();
         var vouchers = await _expenseRepo.FindAsync(e =>
             (!branchId.HasValue || e.BranchId == branchId.Value) &&
-            (!fromDate.HasValue || e.CreatedAt >= fromDate.Value) &&
-            (!toDate.HasValue || e.CreatedAt <= toDate.Value), ct);
+            (!fromDate.HasValue || e.ExpenseDate >= fromDate.Value) &&
+            (!toDate.HasValue || e.ExpenseDate <= toDate.Value) &&
+            e.Nature != FinancialNature.TaxPayment &&
+            e.Nature != FinancialNature.OwnerDraw &&
+            e.Nature != FinancialNature.InternalTransfer, ct);
 
         var activeVouchers = vouchers
             .Where(v => v.Status != ExpenseVoucherStatus.Cancelled && v.Status != ExpenseVoucherStatus.Reversed)
