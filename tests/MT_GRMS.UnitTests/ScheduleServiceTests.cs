@@ -1996,6 +1996,81 @@ public class ScheduleServiceTests
     }
 
     [Fact]
+    public async Task FaceIdMultiShift_AutoDetectAndExplicitScheduleId_WorksForSecondShiftAndOvernight()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var policyRepo = new FakeBranchAttendancePolicyRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext, policyRepo);
+
+        var empId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        var vnNow = DateTime.UtcNow.AddHours(7);
+        var today = vnNow.Date;
+
+        // Ca 1 đã hoàn thành (Completed), Ca 2 chưa chấm công (Scheduled)
+        var shift1 = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            EmployeeId = empId,
+            BranchId = branchId,
+            WorkDate = today,
+            ShiftName = "Ca Sáng",
+            PlannedStartTime = new TimeSpan(7, 0, 0),
+            PlannedEndTime = new TimeSpan(11, 0, 0),
+            CheckInTime = today.AddHours(7),
+            CheckOutTime = today.AddHours(11),
+            Status = ScheduleStatus.Completed
+        };
+        var shift2 = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            EmployeeId = empId,
+            BranchId = branchId,
+            WorkDate = today,
+            ShiftName = "Ca Chiều",
+            PlannedStartTime = new TimeSpan(13, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            Status = ScheduleStatus.Scheduled
+        };
+        scheduleRepo.Schedules.AddRange(new[] { shift1, shift2 });
+
+        // Auto-detect Check-in (ScheduleId == null) -> phải chọn Ca 2 thay vì Ca 1 đã Completed
+        var checkInRes = await service.CheckInFaceIdAsync(new FaceIdCheckInRequest(null, empId, 0.25m, null));
+        Assert.Equal(shift2.Id, checkInRes.Id);
+        Assert.Equal(ScheduleStatus.InProgress, checkInRes.Status);
+
+        // Auto-detect Check-out (ScheduleId == null) -> phải chọn Ca 2 đang InProgress
+        var checkOutRes = await service.CheckOutFaceIdAsync(new FaceIdCheckOutRequest(null, empId, 0.25m, null));
+        Assert.Equal(shift2.Id, checkOutRes.Id);
+        Assert.Equal(ScheduleStatus.Completed, checkOutRes.Status);
+
+        // Explicit ScheduleId cho Ca 3
+        var shift3 = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            EmployeeId = empId,
+            BranchId = branchId,
+            WorkDate = today,
+            ShiftName = "Ca Tối",
+            PlannedStartTime = new TimeSpan(18, 0, 0),
+            PlannedEndTime = new TimeSpan(22, 0, 0),
+            Status = ScheduleStatus.Scheduled
+        };
+        scheduleRepo.Schedules.Add(shift3);
+
+        var explicitCheckIn = await service.CheckInFaceIdAsync(new FaceIdCheckInRequest(shift3.Id, empId, 0.20m, null));
+        Assert.Equal(shift3.Id, explicitCheckIn.Id);
+        Assert.Equal(ScheduleStatus.InProgress, explicitCheckIn.Status);
+    }
+
+    [Fact]
     public async Task SelfCheckInAsync_AllBranchConditions_ShouldWorkExpectedly()
     {
         var scheduleRepo = new FakeScheduleRepository();

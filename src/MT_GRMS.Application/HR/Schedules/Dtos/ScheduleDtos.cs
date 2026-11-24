@@ -155,14 +155,14 @@ public record TodayStaffDescriptorDto(
 );
 
 public record FaceIdCheckInRequest(
-    Guid ScheduleId,
+    Guid? ScheduleId,
     Guid EmployeeId,
     decimal FaceMatchScore,
     string? SnapshotBase64
 );
 
 public record FaceIdCheckOutRequest(
-    Guid ScheduleId,
+    Guid? ScheduleId,
     Guid EmployeeId,
     decimal FaceMatchScore,
     string? SnapshotBase64

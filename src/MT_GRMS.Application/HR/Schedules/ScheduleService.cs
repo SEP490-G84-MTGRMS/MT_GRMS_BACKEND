@@ -1184,10 +1184,14 @@ public class ScheduleService : IScheduleService
 
         var scheduleDict = schedules
             .Where(s => s.Status != ScheduleStatus.Cancelled)
-            .OrderByDescending(s => s.WorkDate)
-            .ThenBy(s => s.PlannedStartTime)
             .GroupBy(s => s.EmployeeId)
-            .ToDictionary(g => g.Key, g => g.First());
+            .ToDictionary(
+                g => g.Key,
+                g => g.FirstOrDefault(s => s.Status == ScheduleStatus.InProgress || (s.CheckInTime.HasValue && !s.CheckOutTime.HasValue))
+                    ?? g.Where(s => s.WorkDate.Date == today && s.Status != ScheduleStatus.Completed && s.Status != ScheduleStatus.OnLeave && !s.IsLeave)
+                        .OrderBy(s => s.PlannedStartTime)
+                        .FirstOrDefault()
+                    ?? g.OrderByDescending(s => s.WorkDate).ThenBy(s => s.PlannedStartTime).First());
 
         var result = employees
             .Where(e => !string.IsNullOrWhiteSpace(e.FaceDescriptor))
@@ -1216,20 +1220,107 @@ public class ScheduleService : IScheduleService
         return result;
     }
 
+    private async Task<EmployeeSchedule> ResolveFaceIdScheduleAsync(
+        Guid? scheduleId,
+        Guid employeeId,
+        bool isCheckOut,
+        DateTime vnNow,
+        CancellationToken cancellationToken)
+    {
+        if (scheduleId.HasValue && scheduleId.Value != Guid.Empty)
+        {
+            var explicitSchedule = await _scheduleRepository.GetByIdAsync(scheduleId.Value, cancellationToken);
+            if (explicitSchedule == null)
+            {
+                throw new NotFoundException($"Không tìm thấy ca làm việc với ID '{scheduleId.Value}'.");
+            }
+
+            if (!string.IsNullOrWhiteSpace(explicitSchedule.TenantId)
+                && !string.IsNullOrWhiteSpace(_tenantContext.CurrentTenantId)
+                && !string.Equals(explicitSchedule.TenantId, _tenantContext.CurrentTenantId, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new BusinessException("INVALID_TENANT", "Ca làm việc không thuộc cửa hàng hiện tại.");
+            }
+
+            if (explicitSchedule.EmployeeId != employeeId)
+            {
+                throw new BusinessException("INVALID_EMPLOYEE", "Nhân viên nhận diện không trùng khớp với ca làm việc.");
+            }
+
+            if (explicitSchedule.Status == ScheduleStatus.Cancelled)
+            {
+                throw new BusinessException("SCHEDULE_CANCELLED", "Ca làm việc đã bị hủy, không thể chấm công.");
+            }
+
+            if (explicitSchedule.Status == ScheduleStatus.OnLeave || explicitSchedule.IsLeave)
+            {
+                throw new BusinessException("SCHEDULE_ON_LEAVE", "Ca làm việc đang ở trạng thái nghỉ phép, không thể chấm công.");
+            }
+
+            return explicitSchedule;
+        }
+
+        // Auto-detect khi Frontend không truyền ScheduleId
+        var today = vnNow.Date;
+        var yesterday = today.AddDays(-1);
+        var candidateSchedules = await _scheduleRepository.GetByEmployeeAndDateRangeAsync(
+            employeeId,
+            yesterday,
+            today,
+            cancellationToken);
+
+        var tenantSchedules = candidateSchedules
+            .Where(s =>
+                string.IsNullOrWhiteSpace(s.TenantId)
+                || string.IsNullOrWhiteSpace(_tenantContext.CurrentTenantId)
+                || string.Equals(s.TenantId, _tenantContext.CurrentTenantId, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (isCheckOut)
+        {
+            var activeShift = tenantSchedules
+                .Where(s =>
+                    (s.Status == ScheduleStatus.InProgress || (s.CheckInTime.HasValue && !s.CheckOutTime.HasValue))
+                    && s.Status != ScheduleStatus.Cancelled
+                    && s.Status != ScheduleStatus.OnLeave
+                    && !s.IsLeave)
+                .OrderByDescending(s => s.CheckInTime ?? DateTime.MinValue)
+                .FirstOrDefault();
+
+            return activeShift
+                ?? throw new NotFoundException("Không tìm thấy ca làm việc đang thực hiện (chưa ra ca) để điểm danh ra.");
+        }
+
+        var checkInShift = tenantSchedules
+            .Where(s =>
+                s.WorkDate.Date == today
+                && !s.CheckInTime.HasValue
+                && s.Status != ScheduleStatus.Completed
+                && s.Status != ScheduleStatus.Cancelled
+                && s.Status != ScheduleStatus.OnLeave
+                && !s.IsLeave)
+            .OrderBy(s =>
+            {
+                var start = s.WorkDate.Date.Add(s.PlannedStartTime);
+                var isOvernight = s.IsCheckInNextDay || s.PlannedEndTime < s.PlannedStartTime;
+                var end = isOvernight ? s.WorkDate.Date.AddDays(1).Add(s.PlannedEndTime) : s.WorkDate.Date.Add(s.PlannedEndTime);
+                if (vnNow >= start && vnNow <= end) return 0; // Đang diễn ra
+                if (start > vnNow) return 1; // Sắp bắt đầu
+                return 2; // Đã qua giờ bắt đầu
+            })
+            .ThenBy(s => Math.Abs((vnNow - s.WorkDate.Date.Add(s.PlannedStartTime)).TotalMinutes))
+            .FirstOrDefault();
+
+        return checkInShift
+            ?? throw new NotFoundException("Không tìm thấy ca làm việc hợp lệ trong ngày để điểm danh vào.");
+    }
+
     public async Task<ScheduleResponse> CheckInFaceIdAsync(
         FaceIdCheckInRequest request,
         CancellationToken cancellationToken = default)
     {
-        var schedule = await _scheduleRepository.GetByIdAsync(request.ScheduleId, cancellationToken);
-        if (schedule == null)
-        {
-            throw new NotFoundException($"Không tìm thấy ca làm việc với ID '{request.ScheduleId}'.");
-        }
-
-        if (schedule.EmployeeId != request.EmployeeId)
-        {
-            throw new BusinessException("INVALID_EMPLOYEE", "Nhân viên nhận diện không trùng khớp với ca làm việc.");
-        }
+        var vnNow = DateTime.UtcNow.AddHours(7);
+        var schedule = await ResolveFaceIdScheduleAsync(request.ScheduleId, request.EmployeeId, false, vnNow, cancellationToken);
 
         await EnsureScheduleNotLockedByPaidPayslipAsync(schedule, cancellationToken);
 
@@ -1249,7 +1340,6 @@ public class ScheduleService : IScheduleService
             snapshotUrl = await UploadSnapshotAsync(request.SnapshotBase64, $"checkin_{schedule.EmployeeId}", cancellationToken);
         }
 
-        var vnNow = DateTime.UtcNow.AddHours(7);
         var workDate = schedule.WorkDate;
         var plannedStartDateTime = workDate.Add(schedule.PlannedStartTime);
 
@@ -1294,16 +1384,8 @@ public class ScheduleService : IScheduleService
         FaceIdCheckOutRequest request,
         CancellationToken cancellationToken = default)
     {
-        var schedule = await _scheduleRepository.GetByIdAsync(request.ScheduleId, cancellationToken);
-        if (schedule == null)
-        {
-            throw new NotFoundException($"Không tìm thấy ca làm việc với ID '{request.ScheduleId}'.");
-        }
-
-        if (schedule.EmployeeId != request.EmployeeId)
-        {
-            throw new BusinessException("INVALID_EMPLOYEE", "Nhân viên nhận diện không trùng khớp với ca làm việc.");
-        }
+        var vnNow = DateTime.UtcNow.AddHours(7);
+        var schedule = await ResolveFaceIdScheduleAsync(request.ScheduleId, request.EmployeeId, true, vnNow, cancellationToken);
 
         await EnsureScheduleNotLockedByPaidPayslipAsync(schedule, cancellationToken);
 
@@ -1323,7 +1405,6 @@ public class ScheduleService : IScheduleService
             snapshotUrl = await UploadSnapshotAsync(request.SnapshotBase64, $"checkout_{schedule.EmployeeId}", cancellationToken);
         }
 
-        var vnNow = DateTime.UtcNow.AddHours(7);
         var workDate = schedule.WorkDate;
         var plannedStartDateTime = workDate.Add(schedule.PlannedStartTime);
         var isNextDay = schedule.IsCheckInNextDay || schedule.PlannedEndTime < schedule.PlannedStartTime;
