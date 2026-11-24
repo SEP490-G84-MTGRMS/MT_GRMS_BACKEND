@@ -38,7 +38,8 @@ public record BranchCashHealthDto(
     decimal ReceivableAmount,
     decimal PendingPayableAmount,
     int PendingPayableCount,
-    string Status
+    string Status,
+    decimal BankBalance = 0
 );
 
 public record FinanceOverviewTotalsDto(

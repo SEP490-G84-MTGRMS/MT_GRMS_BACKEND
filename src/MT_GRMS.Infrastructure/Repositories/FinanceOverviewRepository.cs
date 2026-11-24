@@ -67,6 +67,23 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
             .Where(x => x.TotalDebt > 0)
             .ToListAsync(ct);
 
+        List<Domain.Entities.Sales.Customer> scopedCustomerDebts = customerDebts;
+        if (branchId.HasValue && customerDebts.Count > 0)
+        {
+            var debtorIds = customerDebts.Select(c => c.Id).ToList();
+            var branchDebtorIds = await _context.Orders.AsNoTracking()
+                .Where(o => o.BranchId == branchId.Value &&
+                            o.CustomerId.HasValue &&
+                            debtorIds.Contains(o.CustomerId.Value) &&
+                            (o.PaymentMethod == "DEBT" || o.PaymentMethod == "CREDIT") &&
+                            o.Status != "Cancelled")
+                .Select(o => o.CustomerId!.Value)
+                .Distinct()
+                .ToListAsync(ct);
+            var branchDebtorSet = branchDebtorIds.ToHashSet();
+            scopedCustomerDebts = customerDebts.Where(c => branchDebtorSet.Contains(c.Id)).ToList();
+        }
+
         var movements = await _context.ShiftCashMovements
             .AsNoTracking()
             .Include(x => x.Shift)
@@ -99,8 +116,8 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
 
         var totals = BuildTotals(accounts, entries, branchRows, fromUtc, toUtc);
         var attention = new FinanceAttentionDto(
-            ReceivableAmount: currentSnapshot && !branchId.HasValue ? customerDebts.Sum(x => x.TotalDebt) : 0,
-            DebtorCount: currentSnapshot && !branchId.HasValue ? customerDebts.Count : 0,
+            ReceivableAmount: currentSnapshot ? scopedCustomerDebts.Sum(x => x.TotalDebt) : 0,
+            DebtorCount: currentSnapshot ? scopedCustomerDebts.Count : 0,
             PendingPayableAmount: currentSnapshot ? expenses.Sum(x => x.Amount) : 0,
             PendingPayableCount: currentSnapshot ? expenses.Count : 0,
             CashInTransit: currentSnapshot ? movements.Sum(x => x.Amount) : 0,
@@ -137,6 +154,8 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
             .Sum(x => BalanceAt(x, entries, toUtc));
         var safeDeposit = accounts.Where(x => x.AccountType == FinanceAccountType.Safe)
             .Sum(x => BalanceAt(x, entries, toUtc));
+        var bankBalance = accounts.Where(x => x.AccountType == FinanceAccountType.Bank)
+            .Sum(x => BalanceAt(x, entries, toUtc));
         var pendingPayable = currentSnapshot ? expenses.Sum(x => x.Amount) : 0;
         var cashInTransit = currentSnapshot ? movements.Sum(x => x.Amount) : 0;
         var status = !currentSnapshot
@@ -159,7 +178,8 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
             0,
             pendingPayable,
             currentSnapshot ? expenses.Count : 0,
-            status);
+            status,
+            bankBalance);
     }
 
     private static FinanceOverviewTotalsDto BuildTotals(
