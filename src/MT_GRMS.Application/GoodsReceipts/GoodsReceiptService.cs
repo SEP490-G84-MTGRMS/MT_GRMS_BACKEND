@@ -169,6 +169,17 @@ public class GoodsReceiptService : IGoodsReceiptService
             throw new NotFoundException("Đơn đặt hàng PO", command.PurchaseOrderId);
         }
 
+        // Kiểm tra quyền chi nhánh theo PO gốc và đối chiếu BranchId/SupplierId (GRN-02)
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, po.BranchId);
+        if (command.BranchId != Guid.Empty && command.BranchId != po.BranchId)
+        {
+            throw new BusinessException("PO_BRANCH_MISMATCH", "Chi nhánh trên phiếu nhập không khớp với chi nhánh của đơn đặt hàng PO.");
+        }
+        if (command.SupplierId != Guid.Empty && command.SupplierId != po.SupplierId)
+        {
+            throw new BusinessException("PO_SUPPLIER_MISMATCH", "Nhà cung cấp trên phiếu nhập không khớp với nhà cung cấp của đơn đặt hàng PO.");
+        }
+
         EnsureDeliveryDateReachedForReceipt(po);
 
         // 2. Ràng buộc GRN active theo loại PO
@@ -203,8 +214,8 @@ public class GoodsReceiptService : IGoodsReceiptService
             TenantId = tenantId,
             Code = code,
             PurchaseOrderId = command.PurchaseOrderId,
-            SupplierId = command.SupplierId,
-            BranchId = command.BranchId,
+            SupplierId = po.SupplierId,
+            BranchId = po.BranchId,
             InvoiceNo = command.InvoiceNo,
             ReceivedAtUtc = command.ReceivedAtUtc ?? DateTime.UtcNow,
             ReceiverUserId = actorUserId,
@@ -386,6 +397,8 @@ public class GoodsReceiptService : IGoodsReceiptService
             throw new NotFoundException("Phiếu nhập kho", id);
         }
 
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, receipt.BranchId);
+
         if (!string.Equals(receipt.Status, "DRAFT", StringComparison.OrdinalIgnoreCase))
         {
             throw new BusinessException(
@@ -513,6 +526,8 @@ public class GoodsReceiptService : IGoodsReceiptService
             throw new NotFoundException("Phiếu nhập kho", id);
         }
 
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, receipt.BranchId);
+
         // Idempotency (Mục 7.10)
         if (receipt.Status == "COMPLETED")
         {
@@ -573,6 +588,8 @@ public class GoodsReceiptService : IGoodsReceiptService
         {
             throw new NotFoundException("Phiếu nhập kho", id);
         }
+
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, receipt.BranchId);
 
         // Quy tắc Mục 8.1 & 11: Chỉ phiếu DRAFT mới được hủy, không cho hủy COMPLETED
         if (receipt.Status == "COMPLETED")
