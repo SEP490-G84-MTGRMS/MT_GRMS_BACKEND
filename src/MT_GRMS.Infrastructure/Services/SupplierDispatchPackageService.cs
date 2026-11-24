@@ -228,7 +228,7 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
         if (pkg == null) return null;
 
         var codes = pkg.Items
-            .Where(i => i.PurchaseOrder != null)
+            .Where(i => !i.IsDeleted && i.PurchaseOrder != null)
             .Select(i => i.PurchaseOrder!.Code)
             .ToList();
         return MapDto(pkg, codes);
@@ -247,7 +247,7 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
         var list = await q.OrderByDescending(p => p.CreatedAt).Take(Math.Clamp(take, 1, 200)).ToListAsync(cancellationToken);
         return list.Select(p => MapDto(
             p,
-            p.Items.Where(i => i.PurchaseOrder != null).Select(i => i.PurchaseOrder!.Code).ToList())).ToList();
+            p.Items.Where(i => !i.IsDeleted && i.PurchaseOrder != null).Select(i => i.PurchaseOrder!.Code).ToList())).ToList();
     }
 
     public async Task RetryGenerationAsync(Guid packageId, CancellationToken cancellationToken = default)
@@ -413,7 +413,7 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
         pkg.AttemptCount += 1;
         await _db.SaveChangesAsync(ct);
 
-        var poIds = pkg.Items.Select(i => i.PurchaseOrderId).ToList();
+        var poIds = pkg.Items.Where(i => !i.IsDeleted).Select(i => i.PurchaseOrderId).ToList();
         var pos = await _db.PurchaseOrders
             .Include(p => p.Details)
             .Where(p => poIds.Contains(p.Id) && !p.IsDeleted)
