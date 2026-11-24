@@ -290,7 +290,9 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 AverageSales30Days = sales?.Avg30 ?? 0m,
                 SafetyStock = safetyStock,
                 IsPrimarySupplier = sp.IsPrimarySupplier,
-                PurchaseToStockRate = sp.ConversionRate > 0 ? sp.ConversionRate : 1m,
+                PurchaseToStockRate = (purchaseUnitByProductId.TryGetValue(p.Id, out var puRate) && puRate.ConversionRate > 0)
+                    ? puRate.ConversionRate
+                    : (sp.ConversionRate > 0 ? sp.ConversionRate : 1m),
                 IsProductActive = isProdActive,
                 ProductInactiveReason = prodInactiveReason,
                 IsSupplierActive = isSupActive,
@@ -318,7 +320,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         DateTime throughDate,
         CancellationToken cancellationToken = default)
     {
-        var activeStatuses = new[] { "APPROVED", "DISPATCHED", "SENT" };
+        var activeStatuses = new[] { "PENDING_APPROVAL", "APPROVED", "CONFIRMED", "DISPATCHED", "SENT", "PARTIALLY_RECEIVED" };
         var rows = await _context.PurchaseOrderDetails
             .Where(d => !d.IsDeleted
                         && !d.IsClosed
