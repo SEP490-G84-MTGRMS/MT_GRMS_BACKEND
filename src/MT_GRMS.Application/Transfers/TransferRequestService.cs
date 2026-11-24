@@ -22,8 +22,23 @@ public sealed class TransferRequestService(
     ITenantContext tenant,
     IUnitOfWork unitOfWork,
     NotificationOutbox? notificationOutbox = null,
-    IRepository<Package>? packages = null) : ITransferRequestService
+    IRepository<Package>? packages = null,
+    IRepository<ProductUnit>? productUnits = null) : ITransferRequestService
 {
+    private async Task<decimal> ResolveConversionRateAsync(Product product, string? unitName, CancellationToken ct)
+    {
+        var normalized = unitName?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized) ||
+            string.Equals(normalized, product.BaseUnit?.Trim(), StringComparison.OrdinalIgnoreCase))
+            return 1m;
+        if (productUnits != null)
+        {
+            var units = await productUnits.FindAsync(u => u.ProductId == product.Id && !u.IsDeleted, ct);
+            var matched = units.FirstOrDefault(u => string.Equals(u.UnitName?.Trim(), normalized, StringComparison.OrdinalIgnoreCase));
+            if (matched != null && matched.ConversionRate > 0m) return matched.ConversionRate;
+        }
+        return 1m;
+    }
     private sealed record Allocation(Guid BranchId, BranchStock Stock, Product Product, decimal Quantity, string Unit);
 
     private bool IsOwner => tenant.CurrentRole == SystemRoles.StoreOwner;
@@ -234,12 +249,14 @@ public sealed class TransferRequestService(
                 .OrderByDescending(group => group.Sum(x => x.Available))
                 .SelectMany(group => group.OrderBy(x => x.Stock.ExpiryDate ?? DateTime.MaxValue))
                 .ToList();
-            var remaining = input.Quantity;
+            var conversionRate = await ResolveConversionRateAsync(product, input.Unit, ct);
+            var remaining = Math.Round(input.Quantity * conversionRate, 3);
+            var baseUnit = string.IsNullOrWhiteSpace(product.BaseUnit) ? input.Unit.Trim() : product.BaseUnit.Trim();
             foreach (var candidate in candidates)
             {
                 var quantity = Math.Min(remaining, candidate.Available);
                 if (quantity <= 0) continue;
-                result.Add(new Allocation(candidate.Stock.BranchId, candidate.Stock, product, quantity, input.Unit.Trim()));
+                result.Add(new Allocation(candidate.Stock.BranchId, candidate.Stock, product, quantity, baseUnit));
                 remaining -= quantity;
                 if (remaining <= 0) break;
             }

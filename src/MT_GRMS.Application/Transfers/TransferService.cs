@@ -19,8 +19,30 @@ public sealed class TransferService(
     ITenantContext tenant,
     IUnitOfWork unitOfWork,
     NotificationOutbox? notificationOutbox = null,
-    IRepository<Package>? packages = null) : ITransferService
+    IRepository<Package>? packages = null,
+    IRepository<ProductUnit>? productUnits = null) : ITransferService
 {
+    private async Task<decimal> ResolveUnitConversionRateAsync(Product product, string? unitName, CancellationToken ct)
+    {
+        var normalized = unitName?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized) ||
+            string.Equals(normalized, product.BaseUnit?.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return 1m;
+        }
+
+        if (productUnits != null)
+        {
+            var units = await productUnits.FindAsync(u => u.ProductId == product.Id && !u.IsDeleted, ct);
+            var matched = units.FirstOrDefault(u => string.Equals(u.UnitName?.Trim(), normalized, StringComparison.OrdinalIgnoreCase));
+            if (matched != null && matched.ConversionRate > 0m)
+            {
+                return matched.ConversionRate;
+            }
+        }
+
+        return 1m;
+    }
     private async Task<decimal> RawAvailableAsync(BranchStock stock, CancellationToken ct)
     {
         var active = packages == null ? 0m : (await packages.FindAsync(p => p.TenantId == tenant.CurrentTenantId
@@ -160,20 +182,22 @@ public sealed class TransferService(
             {
                 var product = await products.GetByIdAsync(input.ProductId, ct) ?? throw new KeyNotFoundException("Không tìm thấy sản phẩm.");
                 var stock = await ResolveStockSourceAsync(request.FromBranchId, input.ProductId, input.BatchCode, input.ExpiryDate, ct);
+                var conversionRate = await ResolveUnitConversionRateAsync(product, input.Unit, ct);
+                var baseQuantity = Math.Round(input.Quantity * conversionRate, 3);
                 var available = await RawAvailableAsync(stock, ct);
-                if (available < input.Quantity)
-                    throw new InvalidOperationException($"Không đủ tồn khả dụng cho {product.Name}; hiện có {available}, yêu cầu chuyển {input.Quantity}.");
+                if (available < baseQuantity)
+                    throw new InvalidOperationException($"Không đủ tồn khả dụng cho {product.Name}; hiện có {available} {product.BaseUnit}, yêu cầu chuyển {baseQuantity} {product.BaseUnit}.");
                 var unitCost = stock.LandedCostPerUnit;
                 transfer.Details.Add(new TransferDetail
                 {
                     ProductId = input.ProductId,
-                    SentQuantity = input.Quantity,
-                    PackagingUnit = input.Unit.Trim(),
+                    SentQuantity = baseQuantity,
+                    PackagingUnit = string.IsNullOrWhiteSpace(product.BaseUnit) ? input.Unit.Trim() : product.BaseUnit.Trim(),
                     BatchNumber = string.IsNullOrWhiteSpace(input.BatchCode) ? stock.BatchCode : input.BatchCode.Trim(),
                     BranchStockId = stock.Id,
                     ExpiryDate = input.ExpiryDate ?? stock.ExpiryDate,
                     UnitPrice = unitCost,
-                    Amount = input.Quantity * unitCost
+                    Amount = baseQuantity * unitCost
                 });
             }
             transfer.TotalAmount = transfer.Details.Sum(x => x.Amount);
