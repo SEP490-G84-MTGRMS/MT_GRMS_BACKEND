@@ -295,7 +295,9 @@ public class RepackService : IRepackService
         }
 
         // Hao hụt trừ QOH; kg trong khay vẫn nằm trong QOH (chiếm ActivePackageWeight).
+        // Luôn cập nhật UpdatedAt để EF Core đánh dấu BranchStock là Modified và tăng RowVersion ngay cả khi WasteWeight == 0 (BAT-02).
         stock.QuantityOnHand -= request.WasteWeight;
+        stock.UpdatedAt = DateTime.UtcNow;
         var newActive = existingActiveWeight + packageWeight;
         if (!BranchStockAvailability.MeetsPackageInvariant(stock.QuantityOnHand, newActive))
         {
@@ -449,6 +451,8 @@ public class RepackService : IRepackService
             }
         }
         // UNPACK_TO_RAW: QOH giữ nguyên, chỉ bỏ khay khỏi ActivePackageWeight → nguyên quả tăng.
+        // Luôn chạm UpdatedAt trên BranchStock để kích hoạt Optimistic Concurrency (RowVersion).
+        stock.UpdatedAt = DateTime.UtcNow;
 
         package.Status = "VOID";
         package.VoidMode = mode;
