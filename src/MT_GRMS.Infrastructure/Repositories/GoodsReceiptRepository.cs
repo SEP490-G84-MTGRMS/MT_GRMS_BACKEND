@@ -129,11 +129,11 @@ public class GoodsReceiptRepository : IGoodsReceiptRepository
             PaymentMethod = gr.PaymentMethod,
             PaymentDueDate = gr.PaymentDueDate,
             TotalItems = gr.Lines.Count,
-            TotalOrderedQty = gr.Lines.Sum(l => l.OrderedQty),
+            TotalOrderedQty = gr.Lines.GroupBy(l => l.PurchaseOrderDetailId ?? l.ProductId).Sum(g => g.Max(l => l.OrderedQty)),
             TotalReceivedQty = gr.Lines.Sum(l => l.DeliveredQty),
             TotalAcceptedQty = gr.Lines.Sum(l => l.AcceptedQty),
             TotalRejectedQty = gr.Lines.Sum(l => l.RejectedQty),
-            HasMismatch = gr.Lines.Any(l => l.AcceptedQty != l.OrderedQty || l.RejectedQty > 0),
+            HasMismatch = gr.Lines.GroupBy(l => l.PurchaseOrderDetailId ?? l.ProductId).Any(g => g.Sum(l => l.AcceptedQty) != g.Max(l => l.OrderedQty) || g.Sum(l => l.RejectedQty) > 0),
             Note = gr.Note,
             Lines = gr.Lines.Select(l => new GoodsReceiptLineDto
             {
