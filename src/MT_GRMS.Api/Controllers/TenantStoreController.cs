@@ -434,6 +434,7 @@ public class TenantStoreController : BaseApiController
     /// Lấy danh sách lịch sử mua hàng, đăng ký và gia hạn các gói dịch vụ của gian hàng
     /// </summary>
     [HttpGet("subscriptions/history")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> GetSubscriptionOrderHistory(CancellationToken cancellationToken)
     {
         return SubscriptionResponse(await _subscriptions.GetSubscriptionOrderHistoryAsync(GetSubscriptionActor(), cancellationToken));

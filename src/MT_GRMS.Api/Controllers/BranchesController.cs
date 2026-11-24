@@ -110,6 +110,7 @@ public class BranchesController : BaseApiController
     /// Xóa chi nhánh khỏi chuỗi cửa hàng (Soft Delete)
     /// </summary>
     [HttpDelete("{id:guid}")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
         await _branchService.DeleteBranchAsync(id, cancellationToken);
