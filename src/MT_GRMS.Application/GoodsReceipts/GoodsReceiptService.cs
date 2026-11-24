@@ -737,10 +737,9 @@ public class GoodsReceiptService : IGoodsReceiptService
     }
 
     /// <summary>
-    /// Chỉ cho phép nhập kho từ ngày giao PO trở đi (so theo lịch VN UTC+7).
-    /// TEMP (test/UAT): bỏ chặn ngày giao — đặt lại false khi ship thật.
+    /// Chỉ cho phép nhập kho từ ngày giao PO trở đi (so theo lịch VN UTC+7) (GRN-04).
     /// </summary>
-    private static readonly bool AllowReceiveBeforeDeliveryDate = true;
+    private static readonly bool AllowReceiveBeforeDeliveryDate = false;
 
     /// <summary>Đơn vị nhập: DeliveryUoM / snapshot PO → ProductUnit IsPurchaseUnit → BaseUnit.</summary>
     private static string ResolveInboundUnit(string? deliveryUoM, string? purchaseUnitSnapshot, Product? product)
