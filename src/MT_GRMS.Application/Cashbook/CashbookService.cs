@@ -854,6 +854,22 @@ public class CashbookService : ICashbookService
         }, ct);
     }
 
+    private static readonly HashSet<string> NonVoidableSystemSources = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "COMPENSATING",
+        "REVERSAL",
+        "EXPENSE",
+        "EXPENSE_REVERSAL",
+        "DEBT_REPAYMENT",
+        "TAX_PAYMENT",
+        "POS_SALE",
+        "POS",
+        "INTERNAL_TRANSFER",
+        "CASH_DROP",
+        "BANK_DEPOSIT",
+        "PAYSLIP",
+    };
+
     public async Task<CashbookEntryResponse> VoidTransactionAsync(Guid entryId, VoidEntryRequest request, CancellationToken ct = default)
     {
         RequireOwner();
@@ -863,30 +879,65 @@ public class CashbookService : ICashbookService
             throw new BusinessException("REASON_REQUIRED", "Lý do gạch bỏ bút toán là bắt buộc.");
         }
 
-        var origEntry = await _cashbookRepo.GetByIdAsync(entryId, ct)
-            ?? throw new NotFoundException($"Không tìm thấy bút toán sổ cái với Id: {entryId}");
-
-        var existingCompList = await _cashbookRepo.FindAsync(e => e.SourceType == "COMPENSATING" && e.SourceId == entryId, ct);
-        if (existingCompList.Count > 0)
+        return await _unitOfWork.ExecuteInTransactionAsync(async token =>
         {
-            throw new BusinessException("ALREADY_VOIDED", "Bút toán này đã được gạch bỏ trước đó.");
-        }
+            var origEntry = await _cashbookRepo.GetByIdAsync(entryId, token)
+                ?? throw new NotFoundException($"Không tìm thấy bút toán sổ cái với Id: {entryId}");
 
-        var dateStr = DateTime.UtcNow.ToString("yyyyMMdd");
-        var rand = Random.Shared.Next(100, 999);
-        var compRefCode = $"GB-{dateStr}-{rand}";
-        var compDescription = $"[BÚT TOÁN GẠCH BỎ] Lý do: {request.Reason.Trim()}. Bù trừ cho phiếu gốc {origEntry.EntryCode}";
+            if (string.Equals(origEntry.SourceType, "COMPENSATING", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(origEntry.SourceType, "REVERSAL", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new BusinessException("CANNOT_VOID_REVERSAL", "Không thể gạch bỏ bút toán bù trừ/đảo ngược.");
+            }
 
-        if (origEntry.EntryType == CashbookEntryType.Receipt)
-        {
-            return await DisburseCashCoreAsync(origEntry.AccountId, origEntry.Amount, "COMPENSATING", origEntry.Id, compRefCode, compDescription,
-                new EntryClassification(origEntry.CategoryCode, origEntry.FinancialNature, origEntry.TaxTreatment, origEntry.TaxTreatmentReason), ct);
-        }
-        else
-        {
-            return await ReceiveCashCoreAsync(origEntry.AccountId, origEntry.Amount, "COMPENSATING", origEntry.Id, compRefCode, compDescription,
-                new EntryClassification(origEntry.CategoryCode, origEntry.FinancialNature, origEntry.TaxTreatment, origEntry.TaxTreatmentReason), ct);
-        }
+            if (NonVoidableSystemSources.Contains(origEntry.SourceType))
+            {
+                throw new BusinessException(
+                    "CANNOT_VOID_SYSTEM_ENTRY",
+                    $"Không thể gạch bỏ trực tiếp bút toán hệ thống ({origEntry.SourceType}) tại Sổ quỹ để tránh lệch công nợ/chi phí. Vui lòng hủy từ phân hệ gốc.");
+            }
+
+            // Lock account before checking existing compensating entries to prevent TOCTOU double-void
+            var lockedAccount = await _cashbookRepo.GetAccountWithLockAsync(origEntry.AccountId, token)
+                ?? throw new NotFoundException($"Không tìm thấy tài khoản quỹ với Id: {origEntry.AccountId}");
+
+            var existingCompList = await _cashbookRepo.FindAsync(
+                e => (e.SourceType == "COMPENSATING" || e.SourceType == "REVERSAL" || e.SourceType == "EXPENSE_REVERSAL") &&
+                     (e.SourceId == entryId || e.ReversedEntryId == entryId),
+                token);
+            if (existingCompList.Count > 0)
+            {
+                throw new BusinessException("ALREADY_VOIDED", "Bút toán này đã được gạch bỏ trước đó.");
+            }
+
+            var dateStr = DateTime.UtcNow.ToString("yyyyMMdd");
+            var rand = Random.Shared.Next(100, 999);
+            var compRefCode = $"GB-{dateStr}-{rand}";
+            var compDescription = $"[BÚT TOÁN GẠCH BỎ] Lý do: {request.Reason.Trim()}. Bù trừ cho phiếu gốc {origEntry.EntryCode}";
+            var classification = new EntryClassification(origEntry.CategoryCode, origEntry.FinancialNature, origEntry.TaxTreatment, origEntry.TaxTreatmentReason);
+
+            var reverseType = origEntry.EntryType == CashbookEntryType.Receipt
+                ? CashbookEntryType.Payment
+                : CashbookEntryType.Receipt;
+
+            if (reverseType == CashbookEntryType.Payment && lockedAccount.CurrentBalance < origEntry.Amount)
+            {
+                throw new BusinessException("INSUFFICIENT_BALANCE", $"Số dư tài khoản quỹ không đủ để gạch bỏ phiếu thu này (Hiện có: {lockedAccount.CurrentBalance:N0}đ).");
+            }
+
+            var compEntry = await RecordCashMovementAsync(
+                lockedAccount,
+                reverseType,
+                origEntry.Amount,
+                "COMPENSATING",
+                origEntry.Id,
+                compRefCode,
+                compDescription,
+                classification,
+                token);
+            await _unitOfWork.SaveChangesAsync(token);
+            return MapEntryResponse(compEntry);
+        }, ct);
     }
 
     private Task<CashbookEntry> RecordEntryInternalAsync(FinanceAccount account, Guid? branchId, CashbookEntryType entryType, decimal amount, string sourceType, Guid? sourceId, string referenceCode, string description, CancellationToken ct) =>
