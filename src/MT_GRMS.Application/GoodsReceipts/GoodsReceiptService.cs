@@ -561,12 +561,23 @@ public class GoodsReceiptService : IGoodsReceiptService
                 throw new BusinessException("REJECTION_REASON_REQUIRED", $"Dòng sản phẩm có {rejectedQty} hàng bị từ chối bắt buộc phải có lý do từ chối.");
             }
 
+            if (l.ManageBatch && l.AcceptedQty > 0)
+            {
+                if (!l.ManufactureDate.HasValue)
+                    throw new BusinessException("MFG_REQUIRED", "Dòng đang quản lý batch bắt buộc phải nhập ngày sản xuất (MFG).");
+                if (!l.ExpiryDate.HasValue)
+                    throw new BusinessException("EXPIRY_DATE_REQUIRED", "Dòng đang quản lý batch bắt buộc phải nhập hạn sử dụng (EXP).");
+                if (l.ExpiryDate.Value.Date < receipt.ReceivedAtUtc.Date)
+                    throw new BusinessException("EXPIRY_PAST", "Hạn sử dụng không được trước ngày nhập hàng.");
+            }
+
             var lineAmount = l.AcceptedQty * l.UnitPrice;
             var weight = subTotal > 0 ? (lineAmount / subTotal) : 0;
             var discountAlloc = Math.Round(command.DiscountAmount * weight, 2);
             var purchaseSubtotal = lineAmount - discountAlloc;
             var vatAlloc = Math.Round(purchaseSubtotal * (command.VatPercent / 100m), 2);
             var purchaseUnitCost = l.UnitPrice;
+            var shouldManageBatch = l.ManageBatch || !string.IsNullOrWhiteSpace(l.BatchCode) || l.ExpiryDate.HasValue || l.ManufactureDate.HasValue;
 
             receipt.Lines.Add(new GoodsReceiptLine
             {
@@ -581,9 +592,9 @@ public class GoodsReceiptService : IGoodsReceiptService
                 RejectedQty = rejectedQty,
                 UnitPrice = l.UnitPrice,
                 LineAmount = lineAmount,
-                BatchCode = l.ManageBatch && !string.IsNullOrWhiteSpace(l.BatchCode) ? l.BatchCode.Trim() : null,
-                ManufactureDate = l.ManageBatch ? l.ManufactureDate : null,
-                ExpiryDate = l.ManageBatch ? l.ExpiryDate : null,
+                BatchCode = shouldManageBatch && !string.IsNullOrWhiteSpace(l.BatchCode) ? l.BatchCode.Trim() : null,
+                ManufactureDate = shouldManageBatch ? l.ManufactureDate : null,
+                ExpiryDate = shouldManageBatch ? l.ExpiryDate : null,
                 DiscountAllocated = discountAlloc,
                 VatAllocated = vatAlloc,
                 PurchaseUnitCost = purchaseUnitCost,
