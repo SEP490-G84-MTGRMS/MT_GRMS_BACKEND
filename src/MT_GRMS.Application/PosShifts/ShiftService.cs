@@ -296,7 +296,7 @@ public class ShiftService : IShiftService
                     "CASH_APPROVAL_REQUEST",
                     $"🟠 Yêu cầu duyệt chi két POS ({request.Amount:N0}đ)",
                     $"Thu ngân {request.CreatedByName ?? "POS"} yêu cầu chi {request.Amount:N0} đ từ ca {shift.ShiftName} ({shift.ShiftCode}). Lý do: {request.Reason}. Vượt hạn mức, cần duyệt.",
-                    $"/pos/shifts",
+                    $"/store-owner/cash-control?tab=pending",
                     cancellationToken);
             }
             catch
