@@ -79,7 +79,7 @@ public class CashbookService : ICashbookService
                 TenantId = _tenantContext.CurrentTenantId ?? string.Empty,
                 BranchId = till.BranchId.Value,
                 TillId = request.TillId,
-                CashierUserId = Guid.NewGuid(),
+                CashierUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId : Guid.NewGuid(),
                 OpeningFloat = expectedOpeningFloat,
                 ExpectedCash = expectedOpeningFloat,
                 ActualCashCounted = request.CountedFloat,
@@ -124,8 +124,9 @@ public class CashbookService : ICashbookService
             shift.Status = ShiftState.Closed;
             shift.Notes = request.Notes;
 
-            // Xử lý chênh lệch ngoài dung sai (+- 2000đ)
+            // Cập nhật số dư thực tế theo kiểm kê trước khi ghi nhận chênh lệch để BalanceAfter phản ánh đúng
             decimal discrepancy = shift.Discrepancy ?? 0m;
+            till.CurrentBalance = request.ActualCashCounted;
             if (discrepancy > 2000)
             {
                 await RecordEntryInternalAsync(till, till.BranchId, CashbookEntryType.Receipt, discrepancy, "CASH_OVER_SUSPENSE", shift.Id, "SHF-" + shift.Id.ToString()[..8], "Thừa tiền chốt ca chờ chủ xử lý", token);
@@ -135,8 +136,23 @@ public class CashbookService : ICashbookService
                 await RecordEntryInternalAsync(till, till.BranchId, CashbookEntryType.Payment, Math.Abs(discrepancy), "CASH_SHORTAGE_PENDING", shift.Id, "SHF-" + shift.Id.ToString()[..8], "Thiếu tiền chốt ca chờ xử lý bồi hoàn", token);
             }
 
+            // Chuyển phần tiền bàn giao về két sắt chi nhánh thay vì làm bốc hơi khỏi hệ thống
+            if (shift.DroppedToSafeAmount > 0m && till.BranchId.HasValue)
+            {
+                var safe = await GetOrCreateSafeAsync(till.BranchId.Value, token);
+                var lockedSafe = await _cashbookRepo.GetAccountWithLockAsync(safe.Id, token) ?? safe;
+                till.CurrentBalance = request.RetainedFloatAmount;
+                lockedSafe.CurrentBalance += shift.DroppedToSafeAmount;
+                var dropRef = "SHF-DROP-" + shift.Id.ToString()[..8];
+                await RecordEntryInternalAsync(till, till.BranchId, CashbookEntryType.Payment, shift.DroppedToSafeAmount, "CASH_DROP", shift.Id, dropRef, "Bàn giao tiền chốt ca sang két sắt", token);
+                await RecordEntryInternalAsync(lockedSafe, till.BranchId, CashbookEntryType.Receipt, shift.DroppedToSafeAmount, "CASH_DROP", shift.Id, dropRef, "Nhận tiền bàn giao chốt ca từ két quầy", token);
+            }
+            else
+            {
+                till.CurrentBalance = request.RetainedFloatAmount;
+            }
+
             till.ActiveShiftId = null;
-            till.CurrentBalance = request.RetainedFloatAmount;
             if (Math.Abs(discrepancy) > 2000m && _notificationOutbox != null)
                 await _notificationOutbox.EnqueueShiftDiscrepancyAsync(shift, discrepancy, token);
             await _unitOfWork.SaveChangesAsync(token);
