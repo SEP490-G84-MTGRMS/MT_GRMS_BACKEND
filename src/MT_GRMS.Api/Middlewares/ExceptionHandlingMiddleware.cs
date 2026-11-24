@@ -77,9 +77,21 @@ public class ExceptionHandlingMiddleware
                 break;
 
             case UnauthorizedAccessException unauthEx:
-                statusCode = (int)HttpStatusCode.Unauthorized;
-                apiResponse = ApiResponse<object>.Fail("UNAUTHORIZED", unauthEx.Message, statusCode);
-                _logger.LogWarning(unauthEx, "Unauthorized access: {Message}", unauthEx.Message);
+                var isAuthenticated = context.User?.Identity?.IsAuthenticated == true;
+                statusCode = isAuthenticated
+                    ? (int)HttpStatusCode.Forbidden
+                    : (int)HttpStatusCode.Unauthorized;
+                apiResponse = ApiResponse<object>.Fail(
+                    isAuthenticated ? "FORBIDDEN" : "UNAUTHORIZED",
+                    unauthEx.Message,
+                    statusCode);
+                _logger.LogWarning(unauthEx, "Access denied ({StatusCode}): {Message}", statusCode, unauthEx.Message);
+                break;
+
+            case KeyNotFoundException keyNotFoundEx:
+                statusCode = (int)HttpStatusCode.NotFound;
+                apiResponse = ApiResponse<object>.Fail(ErrorCodes.NotFound, keyNotFoundEx.Message, statusCode);
+                _logger.LogWarning(keyNotFoundEx, "Resource not found: {Message}", keyNotFoundEx.Message);
                 break;
 
             case DbUpdateConcurrencyException concurrencyEx:
