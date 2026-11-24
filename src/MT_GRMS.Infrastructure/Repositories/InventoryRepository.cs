@@ -227,7 +227,9 @@ public class InventoryRepository : IInventoryRepository
             else status = "OK";
 
             deliveryUomByProductId.TryGetValue(product.Id, out var deliveryUom);
-            var inboundUnit = ResolveInboundUnit(deliveryUom, product);
+            var stockUnit = string.IsNullOrWhiteSpace(product.BaseUnit) ? "Cái" : product.BaseUnit.Trim();
+            var purchaseToStockRate = ResolvePurchaseToStockRate(deliveryUom, product);
+            var onOrderStockQty = Math.Round(onOrderQty * purchaseToStockRate, 3);
 
             allItems.Add(new InventoryStockItemDto(
                 ProductId: product.Id,
@@ -237,7 +239,7 @@ public class InventoryRepository : IInventoryRepository
                 CategoryName: product.Category?.Name ?? "Chung",
                 BranchId: branch.Id,
                 BranchName: branch.Name,
-                Unit: inboundUnit,
+                Unit: stockUnit,
                 PhysicalQty: physicalQty,
                 AvailableQty: availableQty,
                 PendingReturnQty: pendingQty,
@@ -245,7 +247,7 @@ public class InventoryRepository : IInventoryRepository
                 DamagedQty: 0,
                 QuarantinedQty: quarantinedQty,
                 ReservedQty: reservedQty,
-                OnOrderQty: onOrderQty,
+                OnOrderQty: onOrderStockQty,
                 MinStock: minStock,
                 AvgCost: Math.Round(weightedCost, 2),
                 TotalValue: Math.Round(totalValue, 2),
@@ -356,21 +358,28 @@ public class InventoryRepository : IInventoryRepository
     }
 
     /// <summary>
-    /// Đơn vị nhập (DVN): DeliveryUoM → IsPurchaseUnit → BaseUnit.
+    /// Tỷ lệ quy đổi 1 ĐVT nhập = bao nhiêu ĐVT gốc (BaseUnit).
     /// </summary>
-    private static string ResolveInboundUnit(
+    private static decimal ResolvePurchaseToStockRate(
         string? deliveryUoM,
         Domain.Entities.Catalog.Product product)
     {
-        if (!string.IsNullOrWhiteSpace(deliveryUoM))
-            return deliveryUoM.Trim();
+        var activeUnits = product.Units?.Where(u => !u.IsDeleted).ToList();
+        if (activeUnits is { Count: > 0 })
+        {
+            if (!string.IsNullOrWhiteSpace(deliveryUoM))
+            {
+                var matched = activeUnits.FirstOrDefault(u =>
+                    string.Equals(u.UnitName?.Trim(), deliveryUoM.Trim(), StringComparison.OrdinalIgnoreCase));
+                if (matched != null && matched.ConversionRate > 0m)
+                    return matched.ConversionRate;
+            }
 
-        var purchase = product.Units?
-            .Where(u => !u.IsDeleted)
-            .FirstOrDefault(u => u.IsPurchaseUnit);
-        if (purchase != null && !string.IsNullOrWhiteSpace(purchase.UnitName))
-            return purchase.UnitName.Trim();
+            var purchase = activeUnits.FirstOrDefault(u => u.IsPurchaseUnit);
+            if (purchase != null && purchase.ConversionRate > 0m)
+                return purchase.ConversionRate;
+        }
 
-        return string.IsNullOrWhiteSpace(product.BaseUnit) ? "Cái" : product.BaseUnit.Trim();
+        return 1m;
     }
 }
