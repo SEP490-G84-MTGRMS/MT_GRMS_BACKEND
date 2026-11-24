@@ -219,11 +219,9 @@ public class PnLReportRepository : IPnLReportRepository
             query = query.Where(e => e.BranchId == branchId.Value);
         }
 
-        // INV-12 & Đồng nhất 100% với S2c-HKD (FE-19):
-        // Ưu tiên lọc theo ExpenseDate; nếu chứng từ được khởi tạo trong kỳ (CreatedAt) mà chưa gán riêng ExpenseDate khác ngày thì vẫn nhận diện đầy đủ.
+        // Lọc nhất quán theo đúng 1 mốc hạch toán ExpenseDate (đồng nhất với S2c-HKD, tránh double-count qua 2 kỳ)
         query = query.Where(e =>
-            ((e.ExpenseDate >= fromDate && e.ExpenseDate <= toDate) ||
-             (e.CreatedAt >= fromDate && e.CreatedAt <= toDate)) &&
+            e.ExpenseDate >= fromDate && e.ExpenseDate <= toDate &&
             (e.Status == ExpenseVoucherStatus.Approved || e.Status == ExpenseVoucherStatus.Paid) &&
             e.Nature == FinancialNature.OperatingExpense &&
             !e.Category.ToLower().Contains("capital") &&
@@ -339,8 +337,7 @@ public class PnLReportRepository : IPnLReportRepository
         if (branchId.HasValue) expenseQuery = expenseQuery.Where(e => e.BranchId == branchId.Value);
         var expenses = await expenseQuery
             .Where(e =>
-                ((e.ExpenseDate >= fromDate && e.ExpenseDate <= toDate) ||
-                 (e.CreatedAt >= fromDate && e.CreatedAt <= toDate)) &&
+                e.ExpenseDate >= fromDate && e.ExpenseDate <= toDate &&
                 (e.Status == ExpenseVoucherStatus.Approved || e.Status == ExpenseVoucherStatus.Paid) &&
                 e.Nature == FinancialNature.OperatingExpense &&
                 !e.Category.ToLower().Contains("capital") &&
@@ -349,12 +346,11 @@ public class PnLReportRepository : IPnLReportRepository
                 !e.Category.ToLower().Contains("rút vốn"))
             .ToListAsync(ct);
 
-        // Khi cả fromDate và toDate có TimeOfDay > 0 hoặc thuộc UTC, chuẩn hóa về ngày theo múi giờ truy vấn để không lệch 1 ngày khi test Date thuần
-        var vnOffset = TimeSpan.FromHours(7);
-        bool useVnShift = fromDate.Kind == DateTimeKind.Utc && (fromDate.Hour == 17 || toDate.Hour == 16);
-        DateTime ToReportDate(DateTime dt) => (useVnShift && dt.Kind == DateTimeKind.Utc ? dt.Add(vnOffset) : dt).Date;
-        DateTime GetEffectiveExpenseDate(ExpenseVoucher e) =>
-            (e.ExpenseDate >= fromDate && e.ExpenseDate <= toDate) ? e.ExpenseDate : e.CreatedAt;
+        // Chuẩn hóa ngày báo cáo theo múi giờ Việt Nam (UTC+7)
+        var vnTz = MT_GRMS.Application.Tax.HouseholdTaxService.GetVietnamTimeZone();
+        DateTime ToReportDate(DateTime dt) =>
+            (dt.Kind == DateTimeKind.Utc ? TimeZoneInfo.ConvertTimeFromUtc(dt, vnTz) : dt).Date;
+        DateTime GetEffectiveExpenseDate(ExpenseVoucher e) => e.ExpenseDate;
 
         var ordersByDay = orders.GroupBy(o => ToReportDate(o.CreatedAt)).ToDictionary(g => g.Key, g => g.ToList());
         var expensesByDay = expenses.GroupBy(e => ToReportDate(GetEffectiveExpenseDate(e))).ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
