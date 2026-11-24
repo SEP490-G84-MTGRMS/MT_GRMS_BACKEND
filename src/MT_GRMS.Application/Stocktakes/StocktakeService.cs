@@ -81,6 +81,8 @@ public class StocktakeService : IStocktakeService
         var scope = IsEmployeeRole()
             ? "ALL"
             : (string.IsNullOrWhiteSpace(command.Scope) ? "LOT" : command.Scope.Trim().ToUpperInvariant());
+        if (scope is not ("ALL" or "CATEGORY" or "PRODUCT" or "LOT"))
+            throw new BusinessException("INVALID_SCOPE", $"Phạm vi kiểm kê '{command.Scope}' không hợp lệ. Chỉ chấp nhận ALL, CATEGORY, PRODUCT hoặc LOT.");
         var reasonType = string.IsNullOrWhiteSpace(command.ReasonType) ? "PERIODIC" : command.ReasonType.Trim().ToUpperInvariant();
         if (reasonType == "CUSTOMER_RETURN")
             throw new BusinessException("Phiếu kiểm kê hàng lỗi đổi/trả chỉ được tạo tự động từ giao dịch đổi/trả.");
