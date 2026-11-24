@@ -1921,11 +1921,10 @@ public class PurchaseOrderService : IPurchaseOrderService
                 }
 
                 var sp = await _repository.GetSupplierProductAsync(supplierId, productId, cancellationToken);
-                var unitPrice = lineCandidate.UnitPrice.HasValue && lineCandidate.UnitPrice.Value > 0
-                    ? lineCandidate.UnitPrice.Value
-                    : SupplierProductPricing.ResolveEffectivePurchasePrice(
-                        sp?.AgreedWholesalePrice,
-                        mp.Price > 0 ? mp.Price : null);
+                // Luôn lấy giá sỉ chuẩn từ server DB thay vì tin client UnitPrice (POM-05)
+                var unitPrice = SupplierProductPricing.ResolveEffectivePurchasePrice(
+                    sp?.AgreedWholesalePrice,
+                    mp.Price > 0 ? mp.Price : null);
                 var unit = !string.IsNullOrWhiteSpace(lineCandidate.Unit)
                     ? lineCandidate.Unit
                     : (!string.IsNullOrWhiteSpace(sp?.DeliveryUoM) ? sp!.DeliveryUoM : mp.Unit);
@@ -1954,6 +1953,18 @@ public class PurchaseOrderService : IPurchaseOrderService
             }
 
             var totalQty = validLines.Sum(l => l.Qty);
+            // Kiểm tra tổng MOQ đơn hàng của NCC (POM-05)
+            if (cfg.MinOrderQuantity > 0 && OrderMatrixRules.ViolatesSupplierOrderMoq(totalQty, cfg.MinOrderQuantity))
+            {
+                result.Status = OrderMatrixRules.ResultFailed;
+                result.ErrorCode = "ORDER_MOQ_VIOLATION";
+                result.ErrorMessage = $"Nhà cung cấp {supName} yêu cầu tổng SL đơn tối thiểu {cfg.MinOrderQuantity} (hiện tại: {totalQty}).";
+                result.ValidLineCount = validLines.Count;
+                result.TotalQuantity = totalQty;
+                groupResults.Add(result);
+                continue;
+            }
+
             var totalAmount = validLines.Sum(l => l.Qty * l.UnitPrice);
             var hasMissingPrice = validLines.Any(l => l.UnitPrice <= 0);
 
@@ -1983,6 +1994,20 @@ public class PurchaseOrderService : IPurchaseOrderService
             }
             else if (existingPo != null)
             {
+                // Chặn amend PO đã có phiếu nhập kho hoạt động (DRAFT / COMPLETED) (POM-05)
+                var activeGrns = await _repository.GetActiveGoodsReceiptsByPoIdsAsync(new[] { existingPo.Id }, cancellationToken);
+                if (activeGrns.TryGetValue(existingPo.Id, out var activeGrn))
+                {
+                    result.Status = OrderMatrixRules.ResultFailed;
+                    result.PurchaseOrderId = existingPo.Id;
+                    result.PurchaseOrderCode = existingPo.Code;
+                    result.RevisionNumber = existingPo.RevisionNumber;
+                    result.ErrorCode = "PO_HAS_ACTIVE_GRN";
+                    result.ErrorMessage = $"Đơn {existingPo.Code} đã có phiếu nhập kho {activeGrn.Code} ({activeGrn.Status}), không thể chỉnh sửa.";
+                    groupResults.Add(result);
+                    continue;
+                }
+
                 var previousSnapshot = BuildPoLinesSnapshot(existingPo);
                 var newQtyByProduct = validLines.ToDictionary(l => l.Product.Id, l => l.Qty);
                 var oldQtyByProduct = existingPo.Details
@@ -2095,6 +2120,7 @@ public class PurchaseOrderService : IPurchaseOrderService
                 result.PurchaseOrderId = existingPo.Id;
                 result.PurchaseOrderCode = existingPo.Code;
                 result.RevisionNumber = existingPo.RevisionNumber;
+                result.TotalAmount = existingPo.TotalAmount;
                 groupResults.Add(result);
             }
             else
