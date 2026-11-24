@@ -116,6 +116,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
     {
         RequireOwner();
+        ValidateTaxRates(filter.CustomVatRate, filter.CustomPitRate, filter.VatReductionPercentage);
 
         var (fromDateUtc, toDateUtc, priorPeriodToDateUtc) = GetDateRangesForPeriod(filter.Year, filter.PeriodType, filter.PeriodNumber);
 
@@ -938,6 +939,8 @@ public class HouseholdTaxService : IHouseholdTaxService
 
         // Chốt kỳ tính thuế luôn ở cấp toàn bộ hộ kinh doanh (Tenant-wide)
         request.BranchId = null;
+        ValidateTaxPeriod(request.Year, request.PeriodType, request.PeriodNumber);
+        ValidateTaxRates(request.CustomVatRate, request.CustomPitRate, request.VatReductionPercentage);
 
         // 1. Xác thực bảo mật mã PIN chủ hộ
 
@@ -1482,22 +1485,58 @@ public class HouseholdTaxService : IHouseholdTaxService
 
     }
 
-    public static (DateTime FromDateUtc, DateTime ToDateUtc, DateTime? PriorPeriodToDateUtc) GetDateRangesForPeriod(int year, TaxPeriodType periodType, int periodNumber)
-
+    private static void ValidateTaxPeriod(int year, TaxPeriodType periodType, int periodNumber)
     {
+        if (year < 2020 || year > 2100)
+        {
+            throw new BusinessException("INVALID_TAX_PERIOD", "Năm tính thuế phải nằm trong khoảng 2020 đến 2100.");
+        }
 
+        switch (periodType)
+        {
+            case TaxPeriodType.Month when periodNumber < 1 || periodNumber > 12:
+                throw new BusinessException("INVALID_TAX_PERIOD", "Kỳ tính thuế theo Tháng phải từ 1 đến 12.");
+            case TaxPeriodType.Quarter when periodNumber < 1 || periodNumber > 4:
+                throw new BusinessException("INVALID_TAX_PERIOD", "Kỳ tính thuế theo Quý phải từ 1 đến 4.");
+            case TaxPeriodType.Year when periodNumber != 1 && periodNumber != year:
+                throw new BusinessException("INVALID_TAX_PERIOD", "Kỳ tính thuế theo Năm không hợp lệ.");
+            case TaxPeriodType.Month:
+            case TaxPeriodType.Quarter:
+            case TaxPeriodType.Year:
+                break;
+            default:
+                throw new BusinessException("INVALID_TAX_PERIOD", "Loại kỳ tính thuế không hợp lệ.");
+        }
+    }
+
+    private static void ValidateTaxRates(decimal? customVatRate, decimal? customPitRate, decimal? vatReductionPercentage)
+    {
+        if (customVatRate.HasValue && (customVatRate.Value < 0m || customVatRate.Value > 100m))
+        {
+            throw new BusinessException("INVALID_TAX_RATE", "Thuế suất GTGT tùy chỉnh phải nằm trong khoảng 0% đến 100%.");
+        }
+
+        if (customPitRate.HasValue && (customPitRate.Value < 0m || customPitRate.Value > 100m))
+        {
+            throw new BusinessException("INVALID_TAX_RATE", "Thuế suất TNCN tùy chỉnh phải nằm trong khoảng 0% đến 100%.");
+        }
+
+        if (vatReductionPercentage.HasValue && (vatReductionPercentage.Value < 0m || vatReductionPercentage.Value > 100m))
+        {
+            throw new BusinessException("INVALID_TAX_RATE", "Tỷ lệ giảm thuế GTGT phải nằm trong khoảng 0% đến 100%.");
+        }
+    }
+
+    public static (DateTime FromDateUtc, DateTime ToDateUtc, DateTime? PriorPeriodToDateUtc) GetDateRangesForPeriod(int year, TaxPeriodType periodType, int periodNumber)
+    {
+        ValidateTaxPeriod(year, periodType, periodNumber);
         var vnTz = GetVietnamTimeZone();
-
         DateTime fromLocal;
-
         DateTime toLocal;
-
         DateTime? priorToLocal = null;
 
         switch (periodType)
-
         {
-
             case TaxPeriodType.Month:
                 fromLocal = new DateTime(year, periodNumber, 1, 0, 0, 0, DateTimeKind.Unspecified);
                 toLocal = fromLocal.AddMonths(1);
@@ -1526,20 +1565,23 @@ public class HouseholdTaxService : IHouseholdTaxService
                         priorToLocal = new DateTime(year, 7, 1, 0, 0, 0, DateTimeKind.Unspecified);
                         break;
                     case 4:
-                    default:
                         fromLocal = new DateTime(year, 10, 1, 0, 0, 0, DateTimeKind.Unspecified);
                         toLocal = new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
                         priorToLocal = new DateTime(year, 10, 1, 0, 0, 0, DateTimeKind.Unspecified);
                         break;
+                    default:
+                        throw new BusinessException("INVALID_TAX_PERIOD", "Kỳ tính thuế theo Quý phải từ 1 đến 4.");
                 }
                 break;
 
             case TaxPeriodType.Year:
-            default:
                 fromLocal = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
                 toLocal = new DateTime(year + 1, 1, 1, 0, 0, 0, DateTimeKind.Unspecified);
                 priorToLocal = null;
                 break;
+
+            default:
+                throw new BusinessException("INVALID_TAX_PERIOD", "Loại kỳ tính thuế không hợp lệ.");
         }
 
         var fromDateUtc = TimeZoneInfo.ConvertTimeToUtc(fromLocal, vnTz);
