@@ -63,7 +63,8 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         // payments so a voided receipt cannot inflate taxable revenue.
         var manualTaxableReceipts = await _context.CashbookEntries
             .Where(e => e.OccurredAtUtc >= startOfYearUtc && e.OccurredAtUtc < upToDateUtc &&
-                        e.SourceType == "MANUAL" && e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue)
+                        (e.SourceType == "MANUAL" || e.SourceType == "COMPENSATING") &&
+                        e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue)
             .SumAsync(e => (decimal?)(e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount), cancellationToken) ?? 0m;
 
         var netRevenue = orderGross - orderDiscounts - returns + manualTaxableReceipts;
@@ -99,7 +100,8 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
 
         var manualRevenueQuery = _context.CashbookEntries.Where(e =>
             e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc < toDateUtc &&
-            e.SourceType == "MANUAL" && e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue);
+            (e.SourceType == "MANUAL" || e.SourceType == "COMPENSATING") &&
+            e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue);
         if (branchId.HasValue)
         {
             manualRevenueQuery = manualRevenueQuery.Where(e => e.BranchId == branchId.Value);
@@ -139,7 +141,8 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
 
         var manualExpenseQuery = _context.CashbookEntries.Where(e =>
             e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc <= toDateUtc &&
-            e.SourceType == "MANUAL" && e.TaxTreatment == CashbookTaxTreatment.DeductibleExpense);
+            (e.SourceType == "MANUAL" || e.SourceType == "COMPENSATING") &&
+            e.TaxTreatment == CashbookTaxTreatment.DeductibleExpense);
         if (branchId.HasValue)
         {
             manualExpenseQuery = manualExpenseQuery.Where(e => e.BranchId == branchId.Value);
