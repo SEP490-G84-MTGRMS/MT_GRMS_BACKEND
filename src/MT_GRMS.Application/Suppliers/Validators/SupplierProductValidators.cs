@@ -16,13 +16,16 @@ public class AssignSupplierProductValidator : AbstractValidator<AssignSupplierPr
 
         RuleFor(x => x.AgreedWholesalePrice)
             .GreaterThanOrEqualTo(0).WithMessage("Giá thỏa thuận không được âm.")
+            .LessThanOrEqualTo(1_000_000_000m).WithMessage("Giá thỏa thuận không được vượt quá 1.000.000.000 đ.")
             .When(x => x.AgreedWholesalePrice.HasValue);
 
         RuleFor(x => x.MinimumOrderQuantity)
-            .GreaterThan(0).WithMessage("Số lượng đặt hàng tối thiểu (MOQ) phải lớn hơn 0.");
+            .GreaterThan(0).WithMessage("Số lượng đặt hàng tối thiểu (MOQ) phải lớn hơn 0.")
+            .LessThanOrEqualTo(1_000_000).WithMessage("Số lượng đặt hàng tối thiểu (MOQ) không được vượt quá 1.000.000.");
 
         RuleFor(x => x.AllowedShortageQuantity)
-            .GreaterThanOrEqualTo(0).WithMessage("Số lượng thiếu hàng cho phép phải lớn hơn hoặc bằng 0.");
+            .GreaterThanOrEqualTo(0).WithMessage("Số lượng thiếu hàng cho phép phải lớn hơn hoặc bằng 0.")
+            .LessThanOrEqualTo(1_000_000).WithMessage("Số lượng thiếu hàng cho phép không hợp lệ.");
 
         RuleFor(x => x.SupplierProductCode)
             .MaximumLength(50).WithMessage("Mã sản phẩm phía NCC không được vượt quá 50 ký tự.")
@@ -40,13 +43,16 @@ public class UpdateSupplierProductValidator : AbstractValidator<UpdateSupplierPr
 
         RuleFor(x => x.AgreedWholesalePrice)
             .GreaterThanOrEqualTo(0).WithMessage("Giá thỏa thuận không được âm.")
+            .LessThanOrEqualTo(1_000_000_000m).WithMessage("Giá thỏa thuận không được vượt quá 1.000.000.000 đ.")
             .When(x => x.AgreedWholesalePrice.HasValue);
 
         RuleFor(x => x.MinimumOrderQuantity)
-            .GreaterThan(0).WithMessage("Số lượng đặt hàng tối thiểu (MOQ) phải lớn hơn 0.");
+            .GreaterThan(0).WithMessage("Số lượng đặt hàng tối thiểu (MOQ) phải lớn hơn 0.")
+            .LessThanOrEqualTo(1_000_000).WithMessage("Số lượng đặt hàng tối thiểu (MOQ) không được vượt quá 1.000.000.");
 
         RuleFor(x => x.AllowedShortageQuantity)
-            .GreaterThanOrEqualTo(0).WithMessage("Số lượng thiếu hàng cho phép phải lớn hơn hoặc bằng 0.");
+            .GreaterThanOrEqualTo(0).WithMessage("Số lượng thiếu hàng cho phép phải lớn hơn hoặc bằng 0.")
+            .LessThanOrEqualTo(1_000_000).WithMessage("Số lượng thiếu hàng cho phép không hợp lệ.");
 
         RuleFor(x => x.SupplierProductCode)
             .MaximumLength(50).WithMessage("Mã sản phẩm phía NCC không được vượt quá 50 ký tự.")

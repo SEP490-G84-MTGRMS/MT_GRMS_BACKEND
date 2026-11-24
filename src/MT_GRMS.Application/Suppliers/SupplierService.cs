@@ -1676,19 +1676,19 @@ public class SupplierService : ISupplierService
             throw new BusinessException("VALIDATION_ERROR", "Vui lòng chọn ít nhất một sản phẩm để gán cho nhà cung cấp.");
         }
 
-        if (workItems.Any(x => x.MinimumOrderQuantity <= 0))
+        if (workItems.Any(x => x.MinimumOrderQuantity <= 0 || x.MinimumOrderQuantity > 1_000_000))
         {
-            throw new BusinessException("VALIDATION_ERROR", "Số lượng đặt hàng tối thiểu (MOQ) phải lớn hơn 0.");
+            throw new BusinessException("VALIDATION_ERROR", "Số lượng đặt hàng tối thiểu (MOQ) phải từ 1 đến 1.000.000.");
         }
 
-        if (workItems.Any(x => x.AllowedShortageQuantity < 0))
+        if (workItems.Any(x => x.AllowedShortageQuantity < 0 || x.AllowedShortageQuantity > 1_000_000))
         {
-            throw new BusinessException("VALIDATION_ERROR", "Số lượng thiếu hàng cho phép phải lớn hơn hoặc bằng 0.");
+            throw new BusinessException("VALIDATION_ERROR", "Số lượng thiếu hàng cho phép phải từ 0 đến 1.000.000.");
         }
 
-        if (workItems.Any(x => x.AgreedWholesalePrice.HasValue && x.AgreedWholesalePrice.Value < 0))
+        if (workItems.Any(x => x.AgreedWholesalePrice.HasValue && (x.AgreedWholesalePrice.Value < 0 || x.AgreedWholesalePrice.Value > 1_000_000_000m)))
         {
-            throw new BusinessException("VALIDATION_ERROR", "Giá thỏa thuận không được âm.");
+            throw new BusinessException("VALIDATION_ERROR", "Giá thỏa thuận phải từ 0 đến 1.000.000.000 đ.");
         }
 
         var supplier = await _supplierRepository.GetByIdAsync(supplierId, cancellationToken);
