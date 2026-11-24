@@ -38,7 +38,7 @@ public class InventoryRepository : IInventoryRepository
             branchQuery = branchQuery.Where(b => b.Id == query.BranchId.Value);
         }
 
-        var branches = await branchQuery.Select(b => new { b.Id, b.Name }).ToListAsync(cancellationToken);
+        var branches = await branchQuery.Select(b => new { b.Id, b.BranchCode, b.Name }).ToListAsync(cancellationToken);
         var branchIds = branches.Select(b => b.Id).ToList();
 
         // Catalog theo chi nhánh: hiện mọi SP đã gán CN, kể cả chưa có BranchStock.
@@ -50,10 +50,18 @@ public class InventoryRepository : IInventoryRepository
                 && bp.Status != "Inactive"
                 && bp.Status != "Deleted");
 
-        var catalogPairs = await branchCatalogQuery
+        var catalogRows = await branchCatalogQuery
+            .Select(bp => new { bp.BranchId, bp.ProductId, bp.ShelfLocation })
+            .ToListAsync(cancellationToken);
+
+        var shelfByPair = catalogRows
+            .GroupBy(x => (x.BranchId, x.ProductId))
+            .ToDictionary(g => g.Key, g => g.First().ShelfLocation ?? string.Empty);
+
+        var catalogPairs = catalogRows
             .Select(bp => new { bp.BranchId, bp.ProductId })
             .Distinct()
-            .ToListAsync(cancellationToken);
+            .ToList();
 
         // Gộp thêm SP đang có tồn nhưng chưa (hoặc không còn) trong catalog để không mất dòng tồn thực tế.
         var stockOnlyPairs = await _appContext.BranchStocks.AsNoTracking()
@@ -253,8 +261,16 @@ public class InventoryRepository : IInventoryRepository
                 TotalValue: Math.Round(totalValue, 2),
                 Status: status,
                 BatchCount: stocks.Count(),
-                Batches: batchDtos
+                Batches: batchDtos,
+                BranchCode: branch.BranchCode ?? string.Empty,
+                LocationShelf: shelfByPair.GetValueOrDefault((branch.Id, product.Id)) ?? string.Empty
             ));
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.LocationShelf) && !query.LocationShelf.Equals("ALL", StringComparison.OrdinalIgnoreCase))
+        {
+            var loc = query.LocationShelf.Trim();
+            allItems = allItems.Where(x => x.LocationShelf.Contains(loc, StringComparison.OrdinalIgnoreCase)).ToList();
         }
 
         var kpis = new InventoryKpiSummaryDto(

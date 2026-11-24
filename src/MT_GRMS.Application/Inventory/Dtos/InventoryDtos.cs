@@ -30,6 +30,7 @@ public record InventoryFilterQuery
     public string? Keyword { get; init; }
     public Guid? BranchId { get; init; }
     public string? Category { get; init; }
+    public string? LocationShelf { get; init; }
     public string? Status { get; init; } // ALL, OK, LOW_STOCK, OUT_OF_STOCK, NEAR_EXPIRY
     public int PageIndex { get; init; } = 1;
     public int PageSize { get; init; } = 10;
@@ -71,7 +72,9 @@ public record InventoryStockItemDto(
     decimal TotalValue,
     string Status, // OK, LOW_STOCK, OUT_OF_STOCK, NEAR_EXPIRY
     int BatchCount,
-    IReadOnlyList<InventoryBatchSummaryDto> Batches
+    IReadOnlyList<InventoryBatchSummaryDto> Batches,
+    string BranchCode = "",
+    string LocationShelf = ""
 );
 
 public record InventoryKpiSummaryDto(
