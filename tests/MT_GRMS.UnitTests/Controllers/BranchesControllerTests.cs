@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Claims;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
@@ -19,13 +21,33 @@ public class BranchesControllerTests
 {
     private readonly Mock<IBranchService> _mockBranchService;
     private readonly Mock<IBranchProductService> _mockBranchProductService;
+    private readonly Mock<ITenantContext> _mockTenantContext;
+    private readonly Mock<IAuthorizationService> _mockAuthService;
     private readonly BranchesController _controller;
 
     public BranchesControllerTests()
     {
         _mockBranchService = new Mock<IBranchService>();
         _mockBranchProductService = new Mock<IBranchProductService>();
-        _controller = new BranchesController(_mockBranchService.Object, _mockBranchProductService.Object);
+        _mockTenantContext = new Mock<ITenantContext>();
+        _mockTenantContext.SetupGet(t => t.CurrentTenantId).Returns("tenant-test");
+        _mockTenantContext.SetupGet(t => t.CurrentRole).Returns("STORE_OWNER");
+        _mockAuthService = new Mock<IAuthorizationService>();
+        _mockAuthService
+            .Setup(a => a.AuthorizeAsync(It.IsAny<ClaimsPrincipal>(), It.IsAny<object?>(), It.IsAny<string>()))
+            .ReturnsAsync(AuthorizationResult.Success());
+        _controller = new BranchesController(
+            _mockBranchService.Object,
+            _mockBranchProductService.Object,
+            _mockTenantContext.Object,
+            _mockAuthService.Object);
+        _controller.ControllerContext = new ControllerContext
+        {
+            HttpContext = new DefaultHttpContext
+            {
+                User = new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim(ClaimTypes.Role, "STORE_OWNER") }, "test"))
+            }
+        };
     }
 
     [Fact]

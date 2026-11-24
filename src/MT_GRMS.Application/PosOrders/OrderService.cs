@@ -1662,9 +1662,9 @@ public class OrderService : IOrderService
         bool isStoreOwner = string.Equals(effectiveRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
             || string.Equals(effectiveRole, "StoreOwner", StringComparison.OrdinalIgnoreCase);
 
-        if (order.Status == "Completed" && !isStoreOwner)
+        if (!isStoreOwner && (order.Status == "Completed" || order.Status == "PendingPayment" || !string.IsNullOrWhiteSpace(effectiveRole)))
         {
-            throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền hủy hóa đơn đã thanh toán. Nhân viên không được phép tự ý hủy.");
+            throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền hủy hóa đơn. Nhân viên không được phép tự ý hủy.");
         }
 
         if (order.Status == "Completed")

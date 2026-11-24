@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Promotions;
 using MT_GRMS.Application.Promotions.Dtos;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
@@ -42,6 +43,7 @@ public class PromotionsController : BaseApiController
     /// Tạo mới chương trình khuyến mại (REQ-PV01)
     /// </summary>
     [HttpPost]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> Create([FromBody] PromotionCreateRequest request, CancellationToken cancellationToken)
     {
         var result = await _promotionService.CreatePromotionAsync(request, cancellationToken);
@@ -52,6 +54,7 @@ public class PromotionsController : BaseApiController
     /// Cập nhật chương trình khuyến mại (REQ-PV01)
     /// </summary>
     [HttpPut("{id:guid}")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> Update(Guid id, [FromBody] PromotionUpdateRequest request, CancellationToken cancellationToken)
     {
         var result = await _promotionService.UpdatePromotionAsync(id, request, cancellationToken);
@@ -62,6 +65,7 @@ public class PromotionsController : BaseApiController
     /// Bật/Tắt trạng thái kích hoạt chương trình khuyến mại (REQ-PV01)
     /// </summary>
     [HttpPatch("{id:guid}/status")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> ToggleStatus(Guid id, CancellationToken cancellationToken)
     {
         var isActive = await _promotionService.TogglePromotionStatusAsync(id, cancellationToken);
@@ -72,6 +76,7 @@ public class PromotionsController : BaseApiController
     /// Xóa mềm chương trình khuyến mại (REQ-PV01)
     /// </summary>
     [HttpDelete("{id:guid}")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
         await _promotionService.DeletePromotionAsync(id, cancellationToken);
@@ -92,6 +97,7 @@ public class PromotionsController : BaseApiController
     /// Nạp dữ liệu mẫu khởi tạo khuyến mại và voucher phục vụ kiểm thử API (Seeder)
     /// </summary>
     [HttpPost("seed-sample-data")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> SeedSampleData(CancellationToken cancellationToken)
     {
         var addedCount = await _promotionService.SeedSampleDataAsync(cancellationToken);

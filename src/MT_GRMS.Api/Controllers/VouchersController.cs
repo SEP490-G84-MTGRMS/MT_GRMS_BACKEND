@@ -4,6 +4,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Application.Promotions;
 using MT_GRMS.Application.Promotions.Dtos;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
@@ -50,6 +51,7 @@ public class VouchersController : BaseApiController
     /// Cập nhật đợt phát hành voucher (REQ-PV04)
     /// </summary>
     [HttpPut("{id:guid}")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> UpdateBatch(Guid id, [FromBody] VoucherBatchUpdateRequest request, CancellationToken cancellationToken)
     {
         var result = await _promotionService.UpdateVoucherBatchAsync(id, request, cancellationToken);
@@ -57,6 +59,7 @@ public class VouchersController : BaseApiController
     }
 
     [HttpDelete("{id:guid}")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> DeleteBatch(Guid id, CancellationToken cancellationToken)
     {
         await _promotionService.DeletePromotionAsync(id, cancellationToken);
@@ -64,6 +67,7 @@ public class VouchersController : BaseApiController
     }
 
     [HttpPatch("{id:guid}/status")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> ToggleBatchStatus(Guid id, CancellationToken cancellationToken)
     {
         var isActive = await _promotionService.TogglePromotionStatusAsync(id, cancellationToken);
@@ -74,6 +78,7 @@ public class VouchersController : BaseApiController
     /// Tạo mới đợt phát hành voucher & tự động sinh mã (REQ-PV04)
     /// </summary>
     [HttpPost]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> CreateBatch([FromBody] VoucherBatchCreateRequest request, CancellationToken cancellationToken)
     {
         var result = await _promotionService.CreateVoucherBatchAsync(request, cancellationToken);
@@ -84,6 +89,7 @@ public class VouchersController : BaseApiController
     /// Sinh bổ sung mã voucher cho đợt (REQ-PV04)
     /// </summary>
     [HttpPost("{id:guid}/generate-codes")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> GenerateCodes(Guid id, [FromBody] GenerateVoucherCodesRequest request, CancellationToken cancellationToken)
     {
         var generatedCount = await _promotionService.GenerateVoucherCodesAsync(id, request, cancellationToken);
