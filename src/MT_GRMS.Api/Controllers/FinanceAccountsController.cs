@@ -186,10 +186,16 @@ public class FinanceAccountsController : BaseApiController
         if (account == null) return NotFound(ApiResponse<FinanceAccountDto>.Fail("FINANCE_ACCOUNT_NOT_FOUND", "Không tìm thấy tài khoản/két quỹ."));
         var validation = await ValidateRequest(request, id, ct);
         if (validation != null) return BadRequest(ApiResponse<FinanceAccountDto>.Fail("FINANCE_ACCOUNT_INVALID", validation));
+        var requestedType = Enum.Parse<FinanceAccountType>(request.AccountType, true);
+        if (requestedType != account.AccountType)
+            return Conflict(ApiResponse<FinanceAccountDto>.Fail("ACCOUNT_TYPE_IMMUTABLE", "Không thể thay đổi loại tài khoản/két sau khi đã tạo."));
         if (account.AccountType == FinanceAccountType.Bank &&
             (!string.Equals(account.BankCode, request.BankCode, StringComparison.OrdinalIgnoreCase) ||
              account.AccountNumber != request.AccountNumber || account.BranchId != request.BranchId))
             return Conflict(ApiResponse<FinanceAccountDto>.Fail("BANK_IDENTITY_IMMUTABLE", "Không sửa tài khoản Bank cũ; hãy thêm tài khoản mới để giữ lịch sử."));
+        if (request.IsActive && (account.AccountType == FinanceAccountType.Safe || account.AccountType == FinanceAccountType.Till) && account.BranchId.HasValue &&
+            await _db.FinanceAccounts.AnyAsync(x => x.Id != account.Id && x.BranchId == account.BranchId && x.AccountType == account.AccountType && x.IsActive && !x.IsDeleted && x.ActiveShiftId.HasValue, ct))
+            return Conflict(ApiResponse<FinanceAccountDto>.Fail("FINANCE_ACCOUNT_SHIFT_OPEN", "Không thể kích hoạt két mới vì két hiện tại của chi nhánh đang có ca POS mở."));
         Apply(account, request);
         await EnsureSingleDefault(account, ct);
         account.UpdatedAt = DateTime.UtcNow;
@@ -218,12 +224,14 @@ public class FinanceAccountsController : BaseApiController
         account.IsActive = request.IsActive;
         account.UpdatedAt = DateTime.UtcNow;
 
-        // REQ: Mỗi chi nhánh duy trì 01 Két sắt và 01 Két quầy hoạt động; khi đổi sang két khác thì két cũ tự động tắt
+        // REQ: Mỗi chi nhánh duy trì 01 Két sắt và 01 Két quầy hoạt động; khi đổi sang két khác thì két cũ tự động tắt (trừ khi két cũ đang có ca mở)
         if (request.IsActive && (account.AccountType == FinanceAccountType.Safe || account.AccountType == FinanceAccountType.Till) && account.BranchId.HasValue)
         {
             var others = await _db.FinanceAccounts
                 .Where(x => x.Id != account.Id && x.BranchId == account.BranchId && x.AccountType == account.AccountType && x.IsActive && !x.IsDeleted)
                 .ToListAsync(ct);
+            if (others.Any(o => o.ActiveShiftId.HasValue))
+                return Conflict(ApiResponse<bool>.Fail("FINANCE_ACCOUNT_SHIFT_OPEN", "Không thể tắt két đang có ca POS mở để kích hoạt két mới."));
             foreach (var other in others)
             {
                 other.IsActive = false;
@@ -309,11 +317,14 @@ public class FinanceAccountsController : BaseApiController
     {
         var account = await _db.FinanceAccounts.FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
         if (account == null || account.AccountType != FinanceAccountType.Bank) return NotFound(ApiResponse<bool>.Fail("BANK_ACCOUNT_NOT_FOUND", "Không tìm thấy tài khoản ngân hàng."));
-        var tenant = await _db.Tenants.FirstOrDefaultAsync(x => x.Id == account.TenantId && !x.IsDeleted, ct);
-        if (tenant != null) tenant.IsSepayEnabled = false;
         account.SepayConnectionStatus = "NotConfigured";
         account.SepayLastVerifiedAtUtc = null;
         account.SepayLastError = null;
+        var hasOtherSepayBank = await _db.FinanceAccounts.AnyAsync(
+            x => x.Id != account.Id && !x.IsDeleted && x.AccountType == FinanceAccountType.Bank && x.SepayConnectionStatus == "Connected",
+            ct);
+        var tenant = await _db.Tenants.FirstOrDefaultAsync(x => x.Id == account.TenantId && !x.IsDeleted, ct);
+        if (tenant != null && !hasOtherSepayBank) tenant.IsSepayEnabled = false;
         var branch = await _db.Branches.FirstOrDefaultAsync(x => x.CurrentBankFinanceAccountId == account.Id, ct);
         if (branch != null) branch.CurrentBankFinanceAccountId = null;
         account.UpdatedAt = DateTime.UtcNow;
