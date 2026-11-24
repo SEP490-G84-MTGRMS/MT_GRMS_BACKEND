@@ -195,6 +195,12 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
             transit);
     }
 
+    private static bool IsInternalSource(CashbookEntry entry) =>
+        entry.Nature == FinancialNature.InternalTransfer
+        || string.Equals(entry.SourceType, InternalTransferSource, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(entry.SourceType, "CASH_DROP", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(entry.SourceType, "BANK_DEPOSIT", StringComparison.OrdinalIgnoreCase);
+
     private static (decimal Opening, decimal CashIn, decimal CashOut, decimal InternalTransferNet, decimal Closing)
         CalculateFlow(
             IReadOnlyCollection<FinanceAccount> accounts,
@@ -205,13 +211,20 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
         var opening = accounts.Sum(x => BalanceAt(x, entries, fromUtc.AddTicks(-1)));
         var closing = accounts.Sum(x => BalanceAt(x, entries, toUtc));
         var periodEntries = entries.Where(x => x.OccurredAtUtc >= fromUtc && x.OccurredAtUtc <= toUtc).ToList();
-        var external = periodEntries.Where(x => !string.Equals(x.SourceType, InternalTransferSource, StringComparison.OrdinalIgnoreCase)).ToList();
-        var internalEntries = periodEntries.Where(x => string.Equals(x.SourceType, InternalTransferSource, StringComparison.OrdinalIgnoreCase)).ToList();
-        var cashIn = external.Where(x => x.EntryType == CashbookEntryType.Receipt).Sum(x => x.Amount);
-        var cashOut = external.Where(x => x.EntryType == CashbookEntryType.Payment).Sum(x => x.Amount);
+        var internalEntries = periodEntries.Where(IsInternalSource).ToList();
+        var external = periodEntries.Where(x => !IsInternalSource(x)).ToList();
+
+        // Net COMPENSATING reversal entries against the side they reverse so voided receipts/payments do not inflate gross CashIn/CashOut
+        var regularExternal = external.Where(x => !string.Equals(x.SourceType, "COMPENSATING", StringComparison.OrdinalIgnoreCase)).ToList();
+        var compensating = external.Where(x => string.Equals(x.SourceType, "COMPENSATING", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        var cashIn = regularExternal.Where(x => x.EntryType == CashbookEntryType.Receipt).Sum(x => x.Amount)
+            - compensating.Where(x => x.EntryType == CashbookEntryType.Payment).Sum(x => x.Amount);
+        var cashOut = regularExternal.Where(x => x.EntryType == CashbookEntryType.Payment).Sum(x => x.Amount)
+            - compensating.Where(x => x.EntryType == CashbookEntryType.Receipt).Sum(x => x.Amount);
         var internalNet = internalEntries.Where(x => x.EntryType == CashbookEntryType.Receipt).Sum(x => x.Amount)
             - internalEntries.Where(x => x.EntryType == CashbookEntryType.Payment).Sum(x => x.Amount);
-        return (opening, cashIn, cashOut, internalNet, closing);
+        return (opening, Math.Max(0m, cashIn), Math.Max(0m, cashOut), internalNet, closing);
     }
 
     private static decimal BalanceAt(
