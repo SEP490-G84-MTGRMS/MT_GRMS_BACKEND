@@ -173,9 +173,24 @@ public class CatalogService : ICatalogService
             throw new ArgumentException("Tên đơn vị cơ bản không được vượt quá 30 ký tự.");
         }
 
-        if (request.SellingPrice < 0 || request.SellingPrice > MaxAllowedPrice)
+        if (request.SellingPrice <= 0 || request.SellingPrice > MaxAllowedPrice)
         {
-            throw new ArgumentException("Giá bán không được nhỏ hơn 0 hoặc vượt quá 1.000.000.000 đ.");
+            throw new ArgumentException("Giá bán phải lớn hơn 0 và không vượt quá 1.000.000.000 đ.");
+        }
+
+        if (request.VatRate < 0 || request.VatRate > 100)
+        {
+            throw new ArgumentException("Thuế suất VAT phải nằm trong khoảng 0% đến 100%.");
+        }
+
+        if (request.NearExpiryThresholdDays.HasValue && request.NearExpiryThresholdDays.Value < 0)
+        {
+            throw new ArgumentException("Số ngày cảnh báo cận hạn không được âm.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Status) && !Enum.TryParse<ProductStatus>(request.Status.Trim(), true, out _))
+        {
+            throw new ArgumentException("Trạng thái sản phẩm không hợp lệ (chỉ chấp nhận Active, Inactive, Discontinued).");
         }
 
         if (request.CostPrice.HasValue && (request.CostPrice.Value < 0 || request.CostPrice.Value > MaxAllowedPrice))
@@ -347,9 +362,24 @@ public class CatalogService : ICatalogService
             throw new ArgumentException("Tên đơn vị cơ bản không được vượt quá 30 ký tự.");
         }
 
-        if (request.SellingPrice < 0 || request.SellingPrice > MaxAllowedPrice)
+        if (request.SellingPrice <= 0 || request.SellingPrice > MaxAllowedPrice)
         {
-            throw new ArgumentException("Giá bán không được nhỏ hơn 0 hoặc vượt quá 1.000.000.000 đ.");
+            throw new ArgumentException("Giá bán phải lớn hơn 0 và không vượt quá 1.000.000.000 đ.");
+        }
+
+        if (request.VatRate < 0 || request.VatRate > 100)
+        {
+            throw new ArgumentException("Thuế suất VAT phải nằm trong khoảng 0% đến 100%.");
+        }
+
+        if (request.NearExpiryThresholdDays.HasValue && request.NearExpiryThresholdDays.Value < 0)
+        {
+            throw new ArgumentException("Số ngày cảnh báo cận hạn không được âm.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Status) && !Enum.TryParse<ProductStatus>(request.Status.Trim(), true, out _))
+        {
+            throw new ArgumentException("Trạng thái sản phẩm không hợp lệ (chỉ chấp nhận Active, Inactive, Discontinued).");
         }
 
         if (request.CostPrice.HasValue && (request.CostPrice.Value < 0 || request.CostPrice.Value > MaxAllowedPrice))
