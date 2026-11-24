@@ -149,7 +149,9 @@ public class GoodsReceiptService : IGoodsReceiptService
                 ProductName = d.Product?.Name ?? string.Empty,
                 Unit = ResolveInboundUnit(d.DeliveryUoM, d.PurchaseUnitNameSnapshot, d.Product),
                 HasBatches = d.Product?.HasBatches ?? false,
-                OrderedQty = d.OrderedQty ?? d.FinalQty ?? 0,
+                OrderedQty = string.Equals(po.SourceType, "SUPPLIER_RETURN", StringComparison.OrdinalIgnoreCase)
+                    ? Math.Max(0m, (d.OrderedQty ?? d.FinalQty ?? 0m) - d.ReceivedQty)
+                    : (d.OrderedQty ?? d.FinalQty ?? 0m),
                 UnitPrice = d.UnitPrice,
                 LineAmount = d.LineAmount
             }).ToList()
