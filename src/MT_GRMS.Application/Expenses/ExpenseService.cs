@@ -87,6 +87,13 @@ public class ExpenseService : IExpenseService
             throw new BusinessException("INVALID_TAX_CODE", "Mã số thuế bên bán không vượt quá 50 ký tự.");
         }
 
+        EnsureNatureInScope(request.Nature);
+
+        if (request.Nature == FinancialNature.OwnerDraw || request.Nature == FinancialNature.TaxPayment)
+        {
+            ValidateFinancialManagementRole("thực hiện rút vốn hoặc nộp thuế");
+        }
+
         if (request.BranchId.HasValue)
         {
             var exists = await _expenseRepo.BranchExistsAsync(request.BranchId.Value, ct);
@@ -94,13 +101,6 @@ public class ExpenseService : IExpenseService
             {
                 throw new NotFoundException($"Không tìm thấy chi nhánh với mã {request.BranchId.Value}.");
             }
-        }
-
-        EnsureNatureInScope(request.Nature);
-
-        if (request.Nature == FinancialNature.OwnerDraw || request.Nature == FinancialNature.TaxPayment)
-        {
-            ValidateFinancialManagementRole("thực hiện rút vốn hoặc nộp thuế");
         }
 
         var expenseDate = request.ExpenseDate ?? DateTime.UtcNow;
