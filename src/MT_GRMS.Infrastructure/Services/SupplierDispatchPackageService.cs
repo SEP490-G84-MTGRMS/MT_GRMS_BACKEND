@@ -140,8 +140,16 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
             await _db.SaveChangesAsync(cancellationToken);
         }
 
-        // Supersede package chưa gửi / chưa xong của cùng NCC (tránh worker gửi revision cũ).
-        var pendingPkgs = await _db.SupplierDispatchPackages
+        var supersededByPoPackageIds = oldItems.Select(i => i.PackageId).ToHashSet();
+        var newDeliveryDates = pos
+            .Where(p => p.DeliveryDate.HasValue)
+            .Select(p => p.DeliveryDate!.Value.Date)
+            .ToHashSet();
+
+        // Chỉ supersede package chưa gửi/chưa xong của cùng NCC nếu giao nhau về PO hoặc ngày giao (DSP-02).
+        var candidatePendingPkgs = await _db.SupplierDispatchPackages
+            .Include(p => p.Items)
+                .ThenInclude(i => i.PurchaseOrder)
             .Where(p => p.SupplierId == supplierId
                         && !p.IsDeleted
                         && p.EmailStatus != PackageEmailStatuses.Sent
@@ -149,6 +157,13 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
                         && p.EmailStatus != PackageEmailStatuses.Cancelled
                         && p.EmailStatus != PackageEmailStatuses.Superseded)
             .ToListAsync(cancellationToken);
+
+        var pendingPkgs = candidatePendingPkgs
+            .Where(p => supersededByPoPackageIds.Contains(p.Id)
+                        || p.Items.Any(i => !i.IsDeleted
+                                            && i.PurchaseOrder?.DeliveryDate.HasValue == true
+                                            && newDeliveryDates.Contains(i.PurchaseOrder.DeliveryDate.Value.Date)))
+            .ToList();
 
         var package = new SupplierDispatchPackage
         {
