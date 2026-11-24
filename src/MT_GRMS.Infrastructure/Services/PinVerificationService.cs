@@ -300,18 +300,11 @@ public class PinVerificationService : IPinVerificationService
         }
 
         // Legacy SHA-256 hash migration path (rehashes to current password hasher on match)
-        try
+        var hashed = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(password))).ToLowerInvariant();
+        if (string.Equals(user.PasswordHash, hashed, StringComparison.OrdinalIgnoreCase))
         {
-            var hashed = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(password))).ToLowerInvariant();
-            if (string.Equals(user.PasswordHash, hashed, StringComparison.OrdinalIgnoreCase))
-            {
-                user.PasswordHash = _passwordHasher.HashPassword(password);
-                return true;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Legacy SHA-256 password verification failed for user {UserId}.", user.Id);
+            user.PasswordHash = _passwordHasher.HashPassword(password);
+            return true;
         }
 
         return false;
