@@ -594,7 +594,7 @@ public class HouseholdTaxService : IHouseholdTaxService
 
             BranchId = filter.BranchId,
 
-            BranchName = filter.BranchId.HasValue ? $"Chi nhánh {filter.BranchId.Value.ToString()[..8]}" : "Toàn bộ hộ kinh doanh (Tenant)",
+            BranchName = filter.BranchId.HasValue ? $"Chi nhánh {filter.BranchId.Value.ToString()[..8]}" : "Toàn bộ hộ kinh doanh",
 
             FilingDeadlineLocal = GetFilingDeadlineLocal(filter.Year, filter.PeriodType, filter.PeriodNumber),
 
