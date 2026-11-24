@@ -405,13 +405,6 @@ public class BranchProductRepository : IBranchProductRepository
 
             // Primary = NCC giá vốn thấp nhất (rawSp đã sort). Scalar Cost/MOQ/Unit lấy từ primary.
             var primarySp = sourcing.FirstOrDefault();
-            var cost = primarySp != null
-                ? MT_GRMS.Application.Suppliers.SupplierProductPricing.ResolveEffectivePurchasePrice(
-                    primarySp.AgreedWholesalePrice,
-                    x.CostPrice)
-                : x.CostPrice;
-            avgCostLookup.TryGetValue((x.BranchId, x.ProductId), out var stockAvgCost);
-            var averageCost = stockAvgCost > 0m ? stockAvgCost : cost;
             var moq = primarySp != null && primarySp.MinimumOrderQuantity > 0
                 ? (int)primarySp.MinimumOrderQuantity
                 : 0;
@@ -421,6 +414,16 @@ public class BranchProductRepository : IBranchProductRepository
                 purchaseUnitName: catalogPurchaseUnitName,
                 baseUnitName: stockUnitName,
                 units: extra?.Units.Select(u => (u.UnitName, u.ConversionRate, u.IsPurchaseUnit)));
+
+            var safeRate = purchaseToStockRate > 0m ? purchaseToStockRate : 1m;
+            var baseUnitFallbackCost = primarySp?.AgreedWholesalePrice is > 0m
+                ? Math.Round(primarySp.AgreedWholesalePrice.Value / safeRate, 2)
+                : x.CostPrice;
+            var cost = primarySp?.AgreedWholesalePrice is > 0m
+                ? primarySp.AgreedWholesalePrice.Value
+                : Math.Round(x.CostPrice * safeRate, 2);
+            avgCostLookup.TryGetValue((x.BranchId, x.ProductId), out var stockAvgCost);
+            var averageCost = stockAvgCost > 0m ? stockAvgCost : baseUnitFallbackCost;
 
             var supplierSources = sourcing.Select(sp => new BranchProductSupplierSourceDto
             {

@@ -201,9 +201,13 @@ public class BranchProductService : IBranchProductService
             }
 
             var sp = await _repository.GetSupplierProductAsync(productId, eligible.SupplierId, cancellationToken);
-            var effectiveCost = SupplierProductPricing.GetEffectivePurchasePriceOrZero(
-                sp?.AgreedWholesalePrice,
-                product.CostPrice);
+            var purchaseRate = ResolvePurchaseToStockRate(product, sp);
+            var baseUnitCost = sp?.AgreedWholesalePrice is > 0m
+                ? Math.Round(sp.AgreedWholesalePrice.Value / purchaseRate, 2)
+                : (product.CostPrice ?? 0m);
+            var effectiveCost = sp?.AgreedWholesalePrice is > 0m
+                ? sp.AgreedWholesalePrice.Value
+                : Math.Round((product.CostPrice ?? 0m) * purchaseRate, 2);
             var moq = sp != null && sp.MinimumOrderQuantity > 0 ? (int)sp.MinimumOrderQuantity : eligible.Moq;
 
             BranchProduct catalog;
@@ -275,7 +279,7 @@ public class BranchProductService : IBranchProductService
                         SupplierId = eligible.SupplierId,
                         QuantityOnHand = 0.000m,
                         QuantityReserved = 0.000m,
-                        LandedCostPerUnit = effectiveCost,
+                        LandedCostPerUnit = baseUnitCost,
                         RetailPrice = effectiveRetail,
                         Status = "Active",
                         ShelfLocation = catalog.ShelfLocation,
@@ -300,7 +304,7 @@ public class BranchProductService : IBranchProductService
                 PurchaseToStockRate = 1m,
                 RetailPrice = effectiveRetail,
                 CostPrice = effectiveCost,
-                AverageCost = effectiveCost,
+                AverageCost = baseUnitCost,
                 CurrentStock = 0,
                 MinStockLevel = product.MinStock,
                 SupplierId = eligible.SupplierId,
@@ -665,21 +669,27 @@ public class BranchProductService : IBranchProductService
             }
         }
 
-        var costPrice = SupplierProductPricing.GetEffectivePurchasePriceOrZero(
-            sp?.AgreedWholesalePrice,
-            product.CostPrice);
+        var purchaseRate = ResolvePurchaseToStockRate(product, sp);
+        var baseUnitFallbackCost = sp?.AgreedWholesalePrice is > 0m
+            ? Math.Round(sp.AgreedWholesalePrice.Value / purchaseRate, 2)
+            : (product.CostPrice ?? 0m);
+        var costPrice = sp?.AgreedWholesalePrice is > 0m
+            ? sp.AgreedWholesalePrice.Value
+            : Math.Round((product.CostPrice ?? 0m) * purchaseRate, 2);
         var moq = sp != null && sp.MinimumOrderQuantity > 0
             ? (int)sp.MinimumOrderQuantity
             : 0;
 
         var effectiveRetail = catalog.SellingPriceOverride ?? product.SellingPrice;
         var stockUnit = string.IsNullOrWhiteSpace(product.BaseUnit) ? "Cái" : product.BaseUnit.Trim();
+        var purchaseUnitName = product.Units?.FirstOrDefault(u => !u.IsDeleted && u.IsPurchaseUnit)?.UnitName?.Trim()
+            ?? (!string.IsNullOrWhiteSpace(sp?.DeliveryUoM) ? sp!.DeliveryUoM.Trim() : stockUnit);
         var sellable = stocks.Sum(s => BranchStockAvailability.GetSellableAvailable(s));
         var physicalQty = stocks.Sum(s => s.QuantityOnHand);
         var stockAvgCost = physicalQty > 0m
             ? Math.Round(stocks.Sum(s => s.QuantityOnHand * s.LandedCostPerUnit) / physicalQty, 2)
             : 0m;
-        var averageCost = stockAvgCost > 0m ? stockAvgCost : costPrice;
+        var averageCost = stockAvgCost > 0m ? stockAvgCost : baseUnitFallbackCost;
 
         return new BranchProductDto
         {
@@ -692,9 +702,9 @@ public class BranchProductService : IBranchProductService
             Sku = product.ProductCode,
             Barcode = product.Barcode ?? string.Empty,
             Category = product.Category?.Name ?? "Khác",
-            Unit = stockUnit,
+            Unit = purchaseUnitName,
             StockUnit = stockUnit,
-            PurchaseToStockRate = 1m,
+            PurchaseToStockRate = purchaseRate,
             RetailPrice = effectiveRetail,
             CostPrice = costPrice,
             AverageCost = averageCost,
@@ -712,6 +722,31 @@ public class BranchProductService : IBranchProductService
             AllowRepack = product.AllowRepack,
             ProcessedSellingPricePerKg = product.ProcessedSellingPricePerKg
         };
+    }
+
+    private static decimal ResolvePurchaseToStockRate(Product product, SupplierProduct? sp)
+    {
+        var activeUnits = product.Units?.Where(u => !u.IsDeleted).ToList();
+        if (activeUnits is { Count: > 0 })
+        {
+            if (!string.IsNullOrWhiteSpace(sp?.DeliveryUoM))
+            {
+                var matched = activeUnits.FirstOrDefault(u =>
+                    string.Equals(u.UnitName?.Trim(), sp!.DeliveryUoM.Trim(), StringComparison.OrdinalIgnoreCase));
+                if (matched != null && matched.ConversionRate > 0m)
+                {
+                    return matched.ConversionRate;
+                }
+            }
+
+            var purchaseUnit = activeUnits.FirstOrDefault(u => u.IsPurchaseUnit);
+            if (purchaseUnit != null && purchaseUnit.ConversionRate > 0m)
+            {
+                return purchaseUnit.ConversionRate;
+            }
+        }
+
+        return sp != null && sp.ConversionRate > 0m ? sp.ConversionRate : 1m;
     }
 
     /// <summary>
