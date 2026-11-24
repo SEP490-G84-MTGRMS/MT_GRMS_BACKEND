@@ -103,6 +103,7 @@ public class PayslipService : IPayslipService
         }
 
         var payslipCountInMonth = await _payslipRepository.GetCountByPeriodMonthAsync(request.PeriodMonth, cancellationToken);
+        var defaultCalendarStandardDays = CalculateCalendarStandardDays(year, month);
         var resultList = new List<Payslip>();
         var periodMonthShort = request.PeriodMonth.Replace("-", "").Substring(2);
 
@@ -137,14 +138,13 @@ public class PayslipService : IPayslipService
             var standardDayHours = policy?.StandardDayHours ?? 8.00m;
             if (standardDayHours <= 0) standardDayHours = 8.00m;
 
-            const decimal monthlyFormulaStandardDays = 26.00m;
             var assignedShiftCount = activeSchedulesInMonth
                 .Where(s => s.EmployeeId == emp.Id)
                 .Select(s => s.Id)
                 .Concat(empSchedules.Select(s => s.Id))
                 .Distinct()
                 .Count();
-            var standardDays = assignedShiftCount > 0 ? (decimal)assignedShiftCount : monthlyFormulaStandardDays;
+            var standardDays = Math.Max((decimal)defaultCalendarStandardDays, (decimal)assignedShiftCount);
 
             var workingSchedules = empSchedules
                 .Where(s => s.Status == ScheduleStatus.Completed && !IsPaidLeaveSchedule(s) && !IsUnpaidLeaveSchedule(s))
@@ -169,7 +169,7 @@ public class PayslipService : IPayslipService
 
             var hourlyRate = emp.SalaryType switch
             {
-                SalaryType.Monthly => (monthlyFormulaStandardDays * standardDayHours > 0) ? Math.Round(emp.BaseRate / (monthlyFormulaStandardDays * standardDayHours), 2) : 0m,
+                SalaryType.Monthly => (standardDays * standardDayHours > 0) ? Math.Round(emp.BaseRate / (standardDays * standardDayHours), 2) : 0m,
                 SalaryType.Shift => (standardDayHours > 0) ? Math.Round(emp.BaseRate / standardDayHours, 2) : 0m,
                 SalaryType.Hourly => emp.BaseRate,
                 _ => 0m
@@ -1002,6 +1002,20 @@ public class PayslipService : IPayslipService
         }
 
         return s.EarlyLeaveMinutes > policy.EarlyLeaveThresholdMinutes ? s.EarlyLeaveMinutes : 0;
+    }
+
+    public static int CalculateCalendarStandardDays(int year, int month)
+    {
+        var daysInMonth = DateTime.DaysInMonth(year, month);
+        var sundays = 0;
+        for (var day = 1; day <= daysInMonth; day++)
+        {
+            if (new DateTime(year, month, day).DayOfWeek == DayOfWeek.Sunday)
+            {
+                sundays++;
+            }
+        }
+        return daysInMonth - sundays;
     }
 
     private static decimal CalculateWorkedDays(
