@@ -547,9 +547,25 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
                 return;
             }
 
+            var sentAtUtc = DateTime.UtcNow;
             pkg.EmailStatus = PackageEmailStatuses.Sent;
-            pkg.SentAtUtc = DateTime.UtcNow;
+            pkg.SentAtUtc = sentAtUtc;
             pkg.LastError = null;
+
+            // Cập nhật các PO thuộc gói sang DISPATCHED để mở luồng nhập kho (DSP-01).
+            var linkedPos = await _db.PurchaseOrders
+                .Where(p => poIds.Contains(p.Id) && !p.IsDeleted)
+                .ToListAsync(ct);
+            foreach (var linkedPo in linkedPos)
+            {
+                if (linkedPo.Status is "PENDING_APPROVAL" or "APPROVED")
+                {
+                    linkedPo.Status = "DISPATCHED";
+                    linkedPo.DispatchedAtUtc ??= sentAtUtc;
+                    linkedPo.UpdatedAt = sentAtUtc;
+                }
+            }
+
             await _db.SaveChangesAsync(ct);
         }
         catch (Exception ex)
