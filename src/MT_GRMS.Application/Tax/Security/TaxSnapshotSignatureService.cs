@@ -20,8 +20,19 @@ public class TaxSnapshotSignatureService : ITaxSnapshotSignatureService
     public TaxSnapshotSignatureService(IConfiguration? configuration = null)
     {
         var primarySecret = Environment.GetEnvironmentVariable("TAX_AUDIT_SECRET_KEY")
-            ?? configuration?["TaxAudit:SecretKey"]
-            ?? "MT_GRMS_DEFAULT_TAX_SNAPSHOT_AUDIT_HMAC_SECRET_KEY_2026";
+            ?? configuration?["TaxAudit:SecretKey"];
+
+        if (string.IsNullOrWhiteSpace(primarySecret))
+        {
+            var envName = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? string.Empty;
+            var isProductionLike = string.Equals(envName, "Production", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(envName, "Staging", StringComparison.OrdinalIgnoreCase);
+            if (isProductionLike)
+            {
+                throw new InvalidOperationException("TAX_AUDIT_SECRET_KEY (hoặc TaxAudit:SecretKey) bắt buộc phải được cấu hình trong môi trường Production/Staging.");
+            }
+            primarySecret = "MT_GRMS_DEFAULT_TAX_SNAPSHOT_AUDIT_HMAC_SECRET_KEY_2026";
+        }
 
         _keyStore[DefaultKeyId] = Encoding.UTF8.GetBytes(primarySecret);
 
