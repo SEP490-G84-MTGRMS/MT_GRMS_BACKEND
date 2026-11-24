@@ -437,18 +437,113 @@ public class ExpenseService : IExpenseService
 
     public async Task<List<ExpenseVoucherResponse>> GetExpensesAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CancellationToken ct = default)
     {
+        var paged = await GetExpensesPageAsync(branchId, fromDate, toDate, page, pageSize, null, null, null, null, ct);
+        return paged.Items.ToList();
+    }
+
+    public async Task<PagedResult<ExpenseVoucherResponse>> GetExpensesPageAsync(
+        Guid? branchId,
+        DateTime? fromDate,
+        DateTime? toDate,
+        int page = 1,
+        int pageSize = 50,
+        string? keyword = null,
+        string? category = null,
+        string? status = null,
+        string? quickStatus = null,
+        CancellationToken ct = default)
+    {
         RequireOwner();
+        var safePage = Math.Max(1, page);
+        var safePageSize = Math.Clamp(pageSize, 1, 200);
+
         var vouchers = await _expenseRepo.FindAsync(e =>
             (!branchId.HasValue || e.BranchId == branchId.Value) &&
             (!fromDate.HasValue || e.CreatedAt >= fromDate.Value) &&
             (!toDate.HasValue || e.CreatedAt <= toDate.Value), ct);
 
-        return vouchers
-            .OrderByDescending(e => e.CreatedAt)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
+        IEnumerable<ExpenseVoucher> query = vouchers;
+
+        if (!string.IsNullOrWhiteSpace(keyword))
+        {
+            var q = keyword.Trim();
+            query = query.Where(v =>
+                (v.VoucherCode != null && v.VoucherCode.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                (v.InvoiceNumber != null && v.InvoiceNumber.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                (v.BeneficiaryName != null && v.BeneficiaryName.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                (v.Note != null && v.Note.Contains(q, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(category))
+        {
+            var cat = category.Trim();
+            query = query.Where(v => string.Equals(v.Category, cat, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            var st = status.Trim();
+            if (string.Equals(st, "Pending", StringComparison.OrdinalIgnoreCase))
+            {
+                query = query.Where(v =>
+                    v.Status != ExpenseVoucherStatus.Paid &&
+                    v.Status != ExpenseVoucherStatus.Cancelled &&
+                    v.Status != ExpenseVoucherStatus.Reversed);
+            }
+            else if (string.Equals(st, "Cancelled", StringComparison.OrdinalIgnoreCase))
+            {
+                query = query.Where(v =>
+                    v.Status == ExpenseVoucherStatus.Cancelled ||
+                    v.Status == ExpenseVoucherStatus.Reversed);
+            }
+            else
+            {
+                query = query.Where(v => string.Equals(v.Status.ToString(), st, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(quickStatus) && !string.Equals(quickStatus, "ALL", StringComparison.OrdinalIgnoreCase))
+        {
+            var qs = quickStatus.Trim().ToUpperInvariant();
+            if (qs == "PENDING_APPROVAL")
+            {
+                query = query.Where(v =>
+                    v.Status == ExpenseVoucherStatus.PendingApproval ||
+                    v.Status == ExpenseVoucherStatus.Draft ||
+                    v.Status == ExpenseVoucherStatus.Unresolved ||
+                    (v.Status != ExpenseVoucherStatus.Paid && v.Status != ExpenseVoucherStatus.Cancelled && v.Status != ExpenseVoucherStatus.Reversed && v.IsFlaggedAsSuspiciousSplit));
+            }
+            else if (qs == "PENDING_PAYMENT")
+            {
+                query = query.Where(v =>
+                    v.Status != ExpenseVoucherStatus.Paid &&
+                    v.Status != ExpenseVoucherStatus.Cancelled &&
+                    v.Status != ExpenseVoucherStatus.Reversed);
+            }
+            else if (qs == "PAID")
+            {
+                query = query.Where(v => v.Status == ExpenseVoucherStatus.Paid);
+            }
+            else if (qs == "SUSPICIOUS")
+            {
+                query = query.Where(v => v.IsFlaggedAsSuspiciousSplit);
+            }
+        }
+
+        var ordered = query.OrderByDescending(e => e.CreatedAt).ToList();
+        var items = ordered
+            .Skip((safePage - 1) * safePageSize)
+            .Take(safePageSize)
             .Select(MapVoucherResponse)
             .ToList();
+
+        return new PagedResult<ExpenseVoucherResponse>
+        {
+            Items = items,
+            Page = safePage,
+            PageSize = safePageSize,
+            TotalItems = ordered.Count,
+        };
     }
 
     public async Task<ExpenseSummaryResponse> GetExpenseSummaryAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, CancellationToken ct = default)
