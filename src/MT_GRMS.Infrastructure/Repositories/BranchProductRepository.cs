@@ -188,38 +188,105 @@ public class BranchProductRepository : IBranchProductRepository
             BranchProcessedSellingPricePerKg = bp.ProcessedSellingPricePerKg
         });
 
-        // Stock alert cần QuantityOnHand từ BranchStocks — lọc sau khi join qty.
+        // Stock alert cần QuantityOnHand từ BranchStocks; lọc NCC cần AllowedSupplierIdsJson + SupplierBranchAssignment.
         var stockAlert = filter.StockAlertFilter;
         var needsStockFilter = !string.IsNullOrWhiteSpace(stockAlert)
             && !string.Equals(stockAlert, "all", StringComparison.OrdinalIgnoreCase);
+        var needsSupplierPostFilter = supplierCodeTerms.Count > 0 || supplierNameTerms.Count > 0;
 
         List<Guid> filteredIds;
         int totalCount;
-        if (needsStockFilter)
+        if (needsStockFilter || needsSupplierPostFilter)
         {
             var allRows = await projected.ToListAsync(cancellationToken);
             var ids = allRows.Select(x => x.ProductId).Distinct().ToList();
             var branchIds = allRows.Select(x => x.BranchId).Distinct().ToList();
-            var todayForFilter = DateTime.UtcNow.Date;
-            var qtyRows = await _context.BranchStocks
-                .AsNoTracking()
-                .Where(bs => branchIds.Contains(bs.BranchId) && ids.Contains(bs.ProductId) && !bs.IsDeleted)
-                .ToListAsync(cancellationToken);
-            var qtyLookup = qtyRows
-                .GroupBy(bs => (bs.BranchId, bs.ProductId))
-                .ToDictionary(
-                    g => g.Key,
-                    g => g.Sum(bs => BranchStockAvailability.GetSellableAvailable(bs, todayForFilter)));
+
+            Dictionary<(Guid, Guid), decimal>? qtyLookup = null;
+            if (needsStockFilter)
+            {
+                var todayForFilter = DateTime.UtcNow.Date;
+                var qtyRows = await _context.BranchStocks
+                    .AsNoTracking()
+                    .Where(bs => branchIds.Contains(bs.BranchId) && ids.Contains(bs.ProductId) && !bs.IsDeleted)
+                    .ToListAsync(cancellationToken);
+                qtyLookup = qtyRows
+                    .GroupBy(bs => (bs.BranchId, bs.ProductId))
+                    .ToDictionary(
+                        g => g.Key,
+                        g => g.Sum(bs => BranchStockAvailability.GetSellableAvailable(bs, todayForFilter)));
+            }
+
+            Dictionary<Guid, List<SupplierProduct>>? preSpLookup = null;
+            HashSet<(Guid BranchId, Guid SupplierId)>? preBranchSupplierSet = null;
+            if (needsSupplierPostFilter && allRows.Count > 0)
+            {
+                var preRawSp = await _context.SupplierProducts
+                    .AsNoTracking()
+                    .Include(sp => sp.Supplier)
+                    .Where(sp =>
+                        ids.Contains(sp.ProductId) &&
+                        !sp.IsDeleted &&
+                        sp.Status == SupplierProductStatus.Active &&
+                        sp.Supplier != null &&
+                        !sp.Supplier.IsDeleted &&
+                        sp.Supplier.Status == SupplierStatus.Active)
+                    .ToListAsync(cancellationToken);
+                preSpLookup = preRawSp
+                    .GroupBy(sp => sp.ProductId)
+                    .ToDictionary(g => g.Key, g => g.ToList());
+
+                var preAssignments = await _context.SupplierBranchAssignments
+                    .AsNoTracking()
+                    .Where(a => branchIds.Contains(a.BranchId) && !a.IsDeleted && a.Status == SupplierStatus.Active)
+                    .Select(a => new { a.BranchId, a.SupplierId })
+                    .ToListAsync(cancellationToken);
+                preBranchSupplierSet = preAssignments.Select(a => (a.BranchId, a.SupplierId)).ToHashSet();
+            }
 
             var filtered = allRows.Where(x =>
             {
-                qtyLookup.TryGetValue((x.BranchId, x.ProductId), out var qty);
-                if (string.Equals(stockAlert, "OUT_OF_STOCK", StringComparison.OrdinalIgnoreCase))
-                    return qty == 0;
-                if (string.Equals(stockAlert, "LOW", StringComparison.OrdinalIgnoreCase))
-                    return qty > 0 && qty <= x.MinStock;
-                if (string.Equals(stockAlert, "NORMAL", StringComparison.OrdinalIgnoreCase))
-                    return qty > x.MinStock;
+                if (needsSupplierPostFilter)
+                {
+                    preSpLookup!.TryGetValue(x.ProductId, out var sList);
+                    var activeSourcing = (sList ?? new List<SupplierProduct>())
+                        .Where(sp => preBranchSupplierSet!.Contains((x.BranchId, sp.SupplierId)))
+                        .ToList();
+                    var allowed = BranchProduct.ParseAllowedSupplierIds(x.AllowedSupplierIdsJson);
+                    var sourcing = allowed != null
+                        ? activeSourcing.Where(sp => allowed.Contains(sp.SupplierId)).ToList()
+                        : activeSourcing;
+
+                    if (supplierCodeTerms.Count > 0 && !sourcing.Any(sp =>
+                    {
+                        var code = sp.Supplier?.Code?.ToLowerInvariant() ?? string.Empty;
+                        return supplierCodeTerms.Any(term => code.Contains(term));
+                    }))
+                    {
+                        return false;
+                    }
+
+                    if (supplierNameTerms.Count > 0 && !sourcing.Any(sp =>
+                    {
+                        var name = sp.Supplier?.Name?.ToLowerInvariant() ?? string.Empty;
+                        return supplierNameTerms.Any(term => name.Contains(term));
+                    }))
+                    {
+                        return false;
+                    }
+                }
+
+                if (needsStockFilter)
+                {
+                    qtyLookup!.TryGetValue((x.BranchId, x.ProductId), out var qty);
+                    if (string.Equals(stockAlert, "OUT_OF_STOCK", StringComparison.OrdinalIgnoreCase))
+                        return qty == 0;
+                    if (string.Equals(stockAlert, "LOW", StringComparison.OrdinalIgnoreCase))
+                        return qty > 0 && qty <= x.MinStock;
+                    if (string.Equals(stockAlert, "NORMAL", StringComparison.OrdinalIgnoreCase))
+                        return qty > x.MinStock;
+                }
+
                 return true;
             }).ToList();
 
