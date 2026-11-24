@@ -227,11 +227,13 @@ public class HouseholdTaxController : BaseApiController
         [FromServices] ITaxExportService exportService,
         CancellationToken ct)
     {
+        var effectivePeriodType = periodType ?? TaxPeriodType.Quarter;
+        var effectivePeriodNumber = effectivePeriodType == TaxPeriodType.Year ? 1 : (periodNumber ?? 1);
         var filter = new HouseholdTaxFilterDto
         {
             Year = year ?? DateTime.UtcNow.Year,
-            PeriodType = periodType ?? TaxPeriodType.Quarter,
-            PeriodNumber = periodNumber ?? 1,
+            PeriodType = effectivePeriodType,
+            PeriodNumber = effectivePeriodNumber,
             BranchId = branchId,
             BookType = bookType,
             CalculationMethod = calculationMethod ?? method ?? TaxCalculationMethod.RevenuePercentage,
@@ -241,7 +243,12 @@ public class HouseholdTaxController : BaseApiController
         };
 
         var bytes = await exportService.ExportTaxSummaryToExcelAsync(filter, bookType, ct);
-        var pCode = filter.PeriodType == TaxPeriodType.Quarter ? $"Q{filter.PeriodNumber}" : $"T{filter.PeriodNumber}";
+        var pCode = filter.PeriodType switch
+        {
+            TaxPeriodType.Quarter => $"Q{filter.PeriodNumber}",
+            TaxPeriodType.Year => "NAM",
+            _ => $"T{filter.PeriodNumber}",
+        };
         var bookSuffix = bookType.HasValue ? $"_{bookType.Value}" : "_Full152";
         var fileName = $"BaoCaoThue_{filter.Year}_{pCode}{bookSuffix}.xlsx";
 
