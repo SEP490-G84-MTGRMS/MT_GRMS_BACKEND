@@ -99,18 +99,44 @@ public class CustomersController : BaseApiController
             debtStats?.Count ?? 0, debtStats?.Total ?? 0m)));
     }
 
+    private static readonly HashSet<string> AllowedTiers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Standard", "Silver", "Gold", "Platinum", "VIP", "Bronze", "Diamond"
+    };
+
+    private static readonly System.Text.RegularExpressions.Regex VnPhoneRegex =
+        new(@"^(0|\+84)[35789]\d{8}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex EmailRegex =
+        new(@"^[^@\s]+@[^@\s]+\.[^@\s]+$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     [HttpPost]
     public async Task<ActionResult<ApiResponse<CustomerResponse>>> CreateCustomer(
         [FromBody] CreateCustomerRequest request, CancellationToken ct)
     {
         var tenantId = _tenantContext.CurrentTenantId;
         var cleanName = CleanText(request.FullName);
-        if (string.IsNullOrWhiteSpace(cleanName) || request.FullName.Contains('<') || request.FullName.Contains('>'))
-            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không hợp lệ."));
+        if (string.IsNullOrWhiteSpace(cleanName) || cleanName.Length > 100 || request.FullName.Contains('<') || request.FullName.Contains('>'))
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không hợp lệ (tối đa 100 ký tự)."));
         if (string.IsNullOrWhiteSpace(request.PhoneNumber))
             return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Số điện thoại không được để trống."));
 
         var phone = request.PhoneNumber.Trim();
+        if (phone.Length > 20 || !VnPhoneRegex.IsMatch(phone))
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Số điện thoại Việt Nam không đúng định dạng (10 chữ số, bắt đầu 03/05/07/08/09)."));
+
+        var email = request.Email?.Trim();
+        if (!string.IsNullOrWhiteSpace(email) && (email.Length > 100 || !EmailRegex.IsMatch(email)))
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Địa chỉ email không hợp lệ."));
+
+        var address = CleanText(request.Address);
+        if (address != null && address.Length > 255)
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Địa chỉ không được vượt quá 255 ký tự."));
+
+        var tier = string.IsNullOrWhiteSpace(request.MembershipTier) ? "Standard" : request.MembershipTier.Trim();
+        if (tier.Length > 30 || !AllowedTiers.Contains(tier))
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Hạng thành viên không hợp lệ."));
+
         if (await _context.Customers.AnyAsync(c => c.Phone == phone && c.TenantId == tenantId, ct))
             return Conflict(ApiResponse<object>.Fail("PHONE_EXISTS", "Số điện thoại này đã được sử dụng cho một khách hàng khác."));
 
@@ -120,9 +146,9 @@ public class CustomersController : BaseApiController
             CustomerCode = "KH" + DateTime.UtcNow.ToString("yyMMddHHmmss") + Random.Shared.Next(10, 99),
             Name = cleanName,
             Phone = phone,
-            Email = request.Email?.Trim(),
-            Address = CleanText(request.Address),
-            MembershipTier = request.MembershipTier ?? "Standard",
+            Email = email,
+            Address = address,
+            MembershipTier = tier,
             TotalDebt = 0m
         };
         await _context.Customers.AddAsync(customer, ct);
@@ -142,13 +168,31 @@ public class CustomersController : BaseApiController
         if (request.FullName != null)
         {
             var cleanName = CleanText(request.FullName);
-            if (string.IsNullOrWhiteSpace(cleanName) || request.FullName.Contains('<') || request.FullName.Contains('>'))
-                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không hợp lệ."));
+            if (string.IsNullOrWhiteSpace(cleanName) || cleanName.Length > 100 || request.FullName.Contains('<') || request.FullName.Contains('>'))
+                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không hợp lệ (tối đa 100 ký tự)."));
             customer.Name = cleanName;
         }
-        if (request.Email != null) customer.Email = request.Email.Trim();
-        if (request.Address != null) customer.Address = CleanText(request.Address);
-        if (request.MembershipTier != null) customer.MembershipTier = request.MembershipTier;
+        if (request.Email != null)
+        {
+            var email = request.Email.Trim();
+            if (!string.IsNullOrWhiteSpace(email) && (email.Length > 100 || !EmailRegex.IsMatch(email)))
+                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Địa chỉ email không hợp lệ."));
+            customer.Email = email;
+        }
+        if (request.Address != null)
+        {
+            var address = CleanText(request.Address);
+            if (address != null && address.Length > 255)
+                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Địa chỉ không được vượt quá 255 ký tự."));
+            customer.Address = address;
+        }
+        if (request.MembershipTier != null)
+        {
+            var tier = request.MembershipTier.Trim();
+            if (tier.Length > 30 || !AllowedTiers.Contains(tier))
+                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Hạng thành viên không hợp lệ."));
+            customer.MembershipTier = tier;
+        }
 
         await _context.SaveChangesAsync(ct);
         return Ok(ApiResponse<CustomerResponse>.Ok(MapCustomer(customer), "Cập nhật khách hàng thành công."));
