@@ -1181,7 +1181,7 @@ public class PurchaseOrderService : IPurchaseOrderService
         CancellationToken cancellationToken = default)
     {
         var now = OrderMatrixRules.GetVietnamNow();
-        var duration = Math.Clamp(query.DurationDays <= 0 ? 14 : query.DurationDays, 1, 31);
+        var duration = Math.Clamp(query.DurationDays <= 0 ? 31 : query.DurationDays, 1, 31);
         var viewFrom = now.Date;
         var branches = await _repository.GetActiveBranchesAsync(cancellationToken);
 
@@ -1386,7 +1386,7 @@ public class PurchaseOrderService : IPurchaseOrderService
         }
 
         var now = OrderMatrixRules.GetVietnamNow();
-        var duration = Math.Clamp(query.DurationDays <= 0 ? 14 : query.DurationDays, 1, 31);
+        var duration = Math.Clamp(query.DurationDays <= 0 ? 31 : query.DurationDays, 1, 31);
         var viewFrom = now.Date;
         var branchIds = await _repository.GetActiveBranchIdsForSupplierAsync(query.SupplierId, cancellationToken);
         var branches = new List<DispatchSupplierDetailBranchDto>();
