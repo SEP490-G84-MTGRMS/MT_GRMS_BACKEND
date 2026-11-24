@@ -227,12 +227,47 @@ public class GoodsReceiptService : IGoodsReceiptService
             CreatedAt = DateTime.UtcNow
         };
 
-        // 3. Tính toán và xác thực từng dòng sản phẩm
+        // 3. Tính toán và xác thực từng dòng sản phẩm (GRN-03: giá & SL đặt lấy từ PO DB, chặn giá/chiết khấu/VAT/HSD bất hợp lệ)
+        if (command.Lines == null || command.Lines.Count == 0)
+        {
+            throw new BusinessException("LINES_REQUIRED", "Phiếu nhập kho bắt buộc phải có ít nhất 1 dòng sản phẩm.");
+        }
+        if (command.DiscountAmount < 0)
+        {
+            throw new BusinessException("INVALID_DISCOUNT", "Chiết khấu không được âm.");
+        }
+        if (command.VatPercent < 0 || command.VatPercent > 100)
+        {
+            throw new BusinessException("INVALID_VAT", "Thuế suất VAT phải nằm trong khoảng 0% đến 100%.");
+        }
+
         decimal subTotal = 0;
         foreach (var l in command.Lines)
         {
+            var poDetail = po.Details.FirstOrDefault(d =>
+                (l.PurchaseOrderDetailId.HasValue && d.Id == l.PurchaseOrderDetailId.Value)
+                || d.ProductId == l.ProductId);
+            if (poDetail != null)
+            {
+                l.PurchaseOrderDetailId ??= poDetail.Id;
+                l.OrderedQty = poDetail.OrderedQty ?? poDetail.FinalQty ?? l.OrderedQty;
+                l.UnitPrice = poDetail.UnitPrice;
+            }
+            if (l.UnitPrice < 0)
+            {
+                throw new BusinessException("INVALID_UNIT_PRICE", "Đơn giá sản phẩm không được âm.");
+            }
+            if (l.RejectedQty < 0)
+            {
+                throw new BusinessException("INVALID_QTY", "Số lượng từ chối không được âm.");
+            }
             var lineAmount = l.AcceptedQty * l.UnitPrice;
             subTotal += lineAmount;
+        }
+
+        if (command.DiscountAmount > subTotal && subTotal > 0)
+        {
+            throw new BusinessException("INVALID_DISCOUNT", "Chiết khấu không được vượt quá tổng tiền hàng.");
         }
 
         receipt.SubTotal = subTotal;
@@ -294,6 +329,12 @@ public class GoodsReceiptService : IGoodsReceiptService
             if (rejectedQty > 0 && string.IsNullOrWhiteSpace(l.RejectionReason))
             {
                 throw new BusinessException("REJECTION_REASON_REQUIRED", $"Dòng sản phẩm có {rejectedQty} hàng bị từ chối bắt buộc phải có lý do từ chối.");
+            }
+
+            if (l.ManufactureDate.HasValue && l.ExpiryDate.HasValue
+                && l.ExpiryDate.Value.Date <= l.ManufactureDate.Value.Date)
+            {
+                throw new BusinessException("INVALID_EXPIRY_DATE", "Hạn sử dụng (EXP) phải lớn hơn ngày sản xuất (MFG).");
             }
 
             if (l.ManageBatch && l.AcceptedQty > 0)
@@ -427,10 +468,53 @@ public class GoodsReceiptService : IGoodsReceiptService
             receipt.Lines.Remove(existing);
         }
 
+        if (command.Lines == null || command.Lines.Count == 0)
+        {
+            throw new BusinessException("LINES_REQUIRED", "Phiếu nhập kho bắt buộc phải có ít nhất 1 dòng sản phẩm.");
+        }
+        if (command.DiscountAmount < 0)
+        {
+            throw new BusinessException("INVALID_DISCOUNT", "Chiết khấu không được âm.");
+        }
+        if (command.VatPercent < 0 || command.VatPercent > 100)
+        {
+            throw new BusinessException("INVALID_VAT", "Thuế suất VAT phải nằm trong khoảng 0% đến 100%.");
+        }
+
         decimal subTotal = 0;
         foreach (var l in command.Lines)
         {
+            if (po != null)
+            {
+                var poDetail = po.Details.FirstOrDefault(d =>
+                    (l.PurchaseOrderDetailId.HasValue && d.Id == l.PurchaseOrderDetailId.Value)
+                    || d.ProductId == l.ProductId);
+                if (poDetail != null)
+                {
+                    l.PurchaseOrderDetailId ??= poDetail.Id;
+                    l.OrderedQty = poDetail.OrderedQty ?? poDetail.FinalQty ?? l.OrderedQty;
+                    l.UnitPrice = poDetail.UnitPrice;
+                }
+            }
+            if (l.UnitPrice < 0)
+            {
+                throw new BusinessException("INVALID_UNIT_PRICE", "Đơn giá sản phẩm không được âm.");
+            }
+            if (l.RejectedQty < 0)
+            {
+                throw new BusinessException("INVALID_QTY", "Số lượng từ chối không được âm.");
+            }
+            if (l.ManufactureDate.HasValue && l.ExpiryDate.HasValue
+                && l.ExpiryDate.Value.Date <= l.ManufactureDate.Value.Date)
+            {
+                throw new BusinessException("INVALID_EXPIRY_DATE", "Hạn sử dụng (EXP) phải lớn hơn ngày sản xuất (MFG).");
+            }
             subTotal += l.AcceptedQty * l.UnitPrice;
+        }
+
+        if (command.DiscountAmount > subTotal && subTotal > 0)
+        {
+            throw new BusinessException("INVALID_DISCOUNT", "Chiết khấu không được vượt quá tổng tiền hàng.");
         }
 
         receipt.SubTotal = subTotal;
