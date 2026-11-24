@@ -16,6 +16,17 @@ public class PnLReportService : IPnLReportService
     public async Task<PnLSummaryResponse> GetPnLSummaryAsync(PnLFilterRequest request, CancellationToken ct = default)
     {
         RequireOwner();
+        string branchName;
+        if (request.BranchId.HasValue)
+        {
+            branchName = await _pnlRepo.GetBranchNameAsync(request.BranchId.Value, ct)
+                ?? throw new MT_GRMS.Domain.Exceptions.NotFoundException($"Không tìm thấy chi nhánh với mã {request.BranchId.Value}.");
+        }
+        else
+        {
+            branchName = "Toàn chuỗi (Consolidated)";
+        }
+
         var revenue = await _pnlRepo.GetRevenueAsync(request.BranchId, request.FromDate, request.ToDate, ct);
         var cogsData = await _pnlRepo.GetCogsAsync(request.BranchId, request.FromDate, request.ToDate, ct);
         var expenseItems = await _pnlRepo.GetOperatingExpensesAsync(request.BranchId, request.FromDate, request.ToDate, ct);
@@ -76,8 +87,6 @@ public class PnLReportService : IPnLReportService
             p.Profit,
             p.MarginPct
         )).ToList();
-
-        var branchName = request.BranchId.HasValue ? $"Chi nhánh {request.BranchId.Value.ToString()[..8]}" : "Toàn chuỗi (Consolidated)";
 
         return new PnLSummaryResponse(
             new PnLPeriod(request.FromDate, request.ToDate),

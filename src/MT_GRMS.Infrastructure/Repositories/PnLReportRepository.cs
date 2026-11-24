@@ -16,6 +16,14 @@ public class PnLReportRepository : IPnLReportRepository
         _context = context;
     }
 
+    public async Task<string?> GetBranchNameAsync(Guid branchId, CancellationToken ct = default)
+    {
+        return await _context.Branches.AsNoTracking()
+            .Where(b => b.Id == branchId)
+            .Select(b => b.Name)
+            .FirstOrDefaultAsync(ct);
+    }
+
     public async Task<RevenueAggregation> GetRevenueAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default)
     {
         var query = _context.Orders.AsQueryable();

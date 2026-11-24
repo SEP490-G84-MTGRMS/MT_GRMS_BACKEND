@@ -46,4 +46,6 @@ public interface IPnLReportRepository
     Task<List<CategoryExpenseItem>> GetOperatingExpensesAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default);
     Task<List<DailyPnLItem>> GetDailyTrendAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default);
     Task<List<TopProductPnLItem>> GetTopProductsAsync(Guid? branchId, DateTime fromDate, DateTime toDate, int limit = 10, CancellationToken ct = default);
+    Task<string?> GetBranchNameAsync(Guid branchId, CancellationToken ct = default) =>
+        Task.FromResult<string?>($"Chi nhánh {branchId.ToString()[..8]}");
 }
