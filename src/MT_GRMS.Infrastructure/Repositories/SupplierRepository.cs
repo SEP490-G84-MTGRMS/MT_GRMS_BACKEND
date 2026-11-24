@@ -480,6 +480,16 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
                 .ThenInclude(p => p!.Units)
             .AsNoTracking();
 
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, null);
+        if (effectiveBranchId.HasValue)
+        {
+            var scopedBranchId = effectiveBranchId.Value;
+            query = query.Where(sp => _context.BranchSupplierAssignments.Any(bsa =>
+                bsa.SupplierId == sp.SupplierId &&
+                bsa.BranchId == scopedBranchId &&
+                !bsa.IsDeleted));
+        }
+
         if (supplierId != Guid.Empty)
         {
             query = query.Where(sp => sp.SupplierId == supplierId);

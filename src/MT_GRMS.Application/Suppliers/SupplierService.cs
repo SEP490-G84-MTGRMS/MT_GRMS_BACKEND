@@ -1650,6 +1650,10 @@ public class SupplierService : ISupplierService
         {
             throw new NotFoundException($"Không tìm thấy nhà cung cấp với ID: {supplierId}");
         }
+        if (supplier.Status != SupplierStatus.Active)
+        {
+            throw new BusinessException("SUPPLIER_INACTIVE", "Không thể gán sản phẩm cho nhà cung cấp đang tạm ngưng hoạt động.");
+        }
 
         var product = await _supplierRepository.GetProductByIdAsync(command.ProductId, cancellationToken);
         if (product == null)
@@ -1761,6 +1765,10 @@ public class SupplierService : ISupplierService
         if (supplier == null)
         {
             throw new NotFoundException($"Không tìm thấy nhà cung cấp với ID: {supplierId}");
+        }
+        if (supplier.Status != SupplierStatus.Active)
+        {
+            throw new BusinessException("SUPPLIER_INACTIVE", "Không thể gán sản phẩm cho nhà cung cấp đang tạm ngưng hoạt động.");
         }
 
         var prepared = new List<(Domain.Entities.Catalog.Product Product, decimal? PurchasePrice, int Moq, int AllowedShortage)>();
