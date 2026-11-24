@@ -225,7 +225,9 @@ public class HouseholdTaxController : BaseApiController
         [FromQuery] bool? applyVatReduction,
         [FromQuery] decimal? vatReductionPercentage,
         [FromServices] ITaxExportService exportService,
-        CancellationToken ct)
+        CancellationToken ct = default,
+        [FromQuery] decimal? customVatRate = null,
+        [FromQuery] decimal? customPitRate = null)
     {
         var effectivePeriodType = periodType ?? TaxPeriodType.Quarter;
         var effectivePeriodNumber = effectivePeriodType == TaxPeriodType.Year ? 1 : (periodNumber ?? 1);
@@ -239,7 +241,9 @@ public class HouseholdTaxController : BaseApiController
             CalculationMethod = calculationMethod ?? method ?? TaxCalculationMethod.RevenuePercentage,
             Tier2Method = tier2Method ?? "REVENUE_EXCESS",
             ApplyVatReduction2026 = applyVatReduction ?? false,
-            VatReductionPercentage = vatReductionPercentage
+            VatReductionPercentage = vatReductionPercentage,
+            CustomVatRate = customVatRate,
+            CustomPitRate = customPitRate
         };
 
         var bytes = await exportService.ExportTaxSummaryToExcelAsync(filter, bookType, ct);
