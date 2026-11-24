@@ -1031,6 +1031,8 @@ public class SupplierService : ISupplierService
             _ => null
         };
 
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, filter.BranchId);
+
         var (items, totalCount) = await _supplierRepository.GetPagedBranchAssignmentsAsync(
             filter.SupplierSearch,
             filter.BranchSearch,
@@ -1039,7 +1041,7 @@ public class SupplierService : ISupplierService
             filter.BranchCodes,
             filter.BranchNames,
             filter.SupplierId,
-            filter.BranchId,
+            effectiveBranchId,
             statusFilter,
             filter.PageIndex,
             filter.PageSize,
@@ -1065,11 +1067,19 @@ public class SupplierService : ISupplierService
         {
             throw new NotFoundException("Nhà cung cấp", command.SupplierId);
         }
+        if (supplier.Status != SupplierStatus.Active)
+        {
+            throw new BusinessException("SUPPLIER_INACTIVE", "Không thể gán chi nhánh cho nhà cung cấp đang tạm ngưng hoạt động.");
+        }
 
         var uniqueBranchIds = (command.BranchIds ?? [])
             .Where(bId => bId != Guid.Empty)
             .Distinct()
             .ToList();
+        if (uniqueBranchIds.Count == 0)
+        {
+            throw new BusinessException("BRANCH_IDS_REQUIRED", "Vui lòng chọn ít nhất một chi nhánh để gán nhà cung cấp.");
+        }
 
         var addedAssignments = new List<SupplierBranchAssignment>();
         foreach (var branchId in uniqueBranchIds)
