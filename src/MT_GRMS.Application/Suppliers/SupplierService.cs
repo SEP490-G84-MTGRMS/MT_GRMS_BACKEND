@@ -1608,9 +1608,7 @@ public class SupplierService : ISupplierService
         // NULL/0 = chưa thỏa thuận — không copy Master vào Agreed
         var purchasePrice = SupplierProductPricing.NormalizeAgreedPriceToPersist(command.AgreedWholesalePrice);
 
-        var deliveryUoM = string.IsNullOrWhiteSpace(command.DeliveryUoM)
-            ? ResolveDefaultDeliveryUoM(product)
-            : command.DeliveryUoM.Trim();
+        var (deliveryUomId, deliveryUoM, conversionRate) = ResolvePurchaseUnitBinding(product, command.DeliveryUoM);
 
         // BR-SP02: Độc quyền Primary Supplier — nếu đặt làm Primary thì tự động gỡ cờ Primary của NCC cũ
         if (command.IsPrimarySupplier)
@@ -1626,7 +1624,9 @@ public class SupplierService : ISupplierService
             ProductId = command.ProductId,
             Product = product,
             SupplierProductCode = command.SupplierProductCode,
+            DeliveryUomId = deliveryUomId,
             DeliveryUoM = deliveryUoM,
+            ConversionRate = conversionRate,
             AgreedWholesalePrice = purchasePrice,
             MinimumOrderQuantity = command.MinimumOrderQuantity,
             AllowedShortageQuantity = Math.Max(0, command.AllowedShortageQuantity),
@@ -1723,9 +1723,10 @@ public class SupplierService : ISupplierService
         {
             foreach (var (product, purchasePrice, moq, allowedShortage) in prepared)
             {
-                var deliveryUoM = !string.IsNullOrWhiteSpace(command.DeliveryUoM) && command.DeliveryUoM != "Theo ĐVT cơ sở"
+                var requestedUom = !string.IsNullOrWhiteSpace(command.DeliveryUoM) && command.DeliveryUoM != "Theo ĐVT cơ sở"
                     ? command.DeliveryUoM
-                    : ResolveDefaultDeliveryUoM(product);
+                    : null;
+                var (deliveryUomId, deliveryUoM, conversionRate) = ResolvePurchaseUnitBinding(product, requestedUom);
 
                 var entity = new SupplierProduct
                 {
@@ -1735,7 +1736,9 @@ public class SupplierService : ISupplierService
                     ProductId = product.Id,
                     Product = product,
                     SupplierProductCode = command.SupplierProductCode,
+                    DeliveryUomId = deliveryUomId,
                     DeliveryUoM = deliveryUoM,
+                    ConversionRate = conversionRate,
                     AgreedWholesalePrice = purchasePrice,
                     MinimumOrderQuantity = moq,
                     AllowedShortageQuantity = allowedShortage,
@@ -1810,13 +1813,16 @@ public class SupplierService : ISupplierService
         var product = entity.Product ?? await _supplierRepository.GetProductByIdAsync(productId, cancellationToken);
         var purchasePrice = SupplierProductPricing.NormalizeAgreedPriceToPersist(command.AgreedWholesalePrice);
 
-        if (!string.IsNullOrWhiteSpace(command.DeliveryUoM))
+        if (product != null)
+        {
+            var (deliveryUomId, deliveryUoM, conversionRate) = ResolvePurchaseUnitBinding(product, command.DeliveryUoM);
+            entity.DeliveryUomId = deliveryUomId;
+            entity.DeliveryUoM = deliveryUoM;
+            entity.ConversionRate = conversionRate;
+        }
+        else if (!string.IsNullOrWhiteSpace(command.DeliveryUoM))
         {
             entity.DeliveryUoM = command.DeliveryUoM.Trim();
-        }
-        else if (product != null)
-        {
-            entity.DeliveryUoM = ResolveDefaultDeliveryUoM(product);
         }
 
         entity.AgreedWholesalePrice = purchasePrice;
@@ -2001,10 +2007,70 @@ public class SupplierService : ISupplierService
         return sp.Product?.BaseUnit?.Trim() ?? "Cái";
     }
 
+    private static (Guid? DeliveryUomId, string DeliveryUoM, decimal ConversionRate) ResolvePurchaseUnitBinding(
+        Product product,
+        string? requestedUoM)
+    {
+        var activeUnits = product.Units?.Where(u => !u.IsDeleted).ToList();
+        if (activeUnits is { Count: > 0 })
+        {
+            if (!string.IsNullOrWhiteSpace(requestedUoM))
+            {
+                var trimmed = requestedUoM.Trim();
+                var matched = activeUnits.FirstOrDefault(u =>
+                    string.Equals(u.UnitName?.Trim(), trimmed, StringComparison.OrdinalIgnoreCase));
+                if (matched != null)
+                {
+                    return (matched.Id, matched.UnitName.Trim(), matched.ConversionRate > 0 ? matched.ConversionRate : 1m);
+                }
+            }
+
+            var purchaseUnit = activeUnits.FirstOrDefault(u => u.IsPurchaseUnit && !string.IsNullOrWhiteSpace(u.UnitName));
+            if (purchaseUnit != null)
+            {
+                return (purchaseUnit.Id, purchaseUnit.UnitName.Trim(), purchaseUnit.ConversionRate > 0 ? purchaseUnit.ConversionRate : 1m);
+            }
+
+            var baseUnit = activeUnits.FirstOrDefault(u => u.IsBaseUnit && !string.IsNullOrWhiteSpace(u.UnitName));
+            if (baseUnit != null)
+            {
+                return (baseUnit.Id, baseUnit.UnitName.Trim(), 1m);
+            }
+        }
+
+        var fallbackName = !string.IsNullOrWhiteSpace(requestedUoM)
+            ? requestedUoM.Trim()
+            : (string.IsNullOrWhiteSpace(product.BaseUnit) ? "Cái" : product.BaseUnit.Trim());
+        return (null, fallbackName, 1m);
+    }
+
+    private static decimal ResolvePurchaseConversionRate(SupplierProduct sp)
+    {
+        var purchaseUnit = sp.Product?.Units?
+            .FirstOrDefault(u => !u.IsDeleted && u.IsPurchaseUnit);
+        if (purchaseUnit != null && purchaseUnit.ConversionRate > 0)
+            return purchaseUnit.ConversionRate;
+
+        if (!string.IsNullOrWhiteSpace(sp.DeliveryUoM) && sp.Product?.Units != null)
+        {
+            var matched = sp.Product.Units.FirstOrDefault(u =>
+                !u.IsDeleted &&
+                string.Equals(u.UnitName?.Trim(), sp.DeliveryUoM.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (matched != null && matched.ConversionRate > 0)
+                return matched.ConversionRate;
+        }
+
+        return sp.ConversionRate > 0 ? sp.ConversionRate : 1m;
+    }
+
     private static SupplierProductDto MapToSupplierProductDto(SupplierProduct sp, int syncedBranchesCount = 0)
     {
-        var costPrice = sp.Product?.CostPrice;
+        var baseCostPrice = sp.Product?.CostPrice;
         var purchaseUnit = ResolvePurchaseUnitName(sp);
+        var conversionRate = ResolvePurchaseConversionRate(sp);
+        var purchaseUnitCost = baseCostPrice.HasValue
+            ? Math.Round(baseCostPrice.Value * conversionRate, 2)
+            : (decimal?)null;
         return new SupplierProductDto
         {
             Id = sp.Id,
@@ -2016,14 +2082,14 @@ public class SupplierService : ISupplierService
             Sku = sp.Product?.SKU ?? string.Empty,
             ProductName = sp.Product?.ProductName ?? string.Empty,
             CategoryName = sp.Product?.Category?.CategoryName,
-            BaseUoM = purchaseUnit,
+            BaseUoM = sp.Product?.BaseUnit?.Trim() ?? purchaseUnit,
             SupplierProductCode = sp.SupplierProductCode,
             DeliveryUoM = purchaseUnit,
             AgreedWholesalePrice = sp.AgreedWholesalePrice,
-            CostPrice = costPrice,
+            CostPrice = purchaseUnitCost,
             EffectivePurchasePrice = SupplierProductPricing.GetEffectivePurchasePriceOrZero(
                 sp.AgreedWholesalePrice,
-                costPrice),
+                purchaseUnitCost),
             MinimumOrderQuantity = sp.MinimumOrderQuantity,
             AllowedShortageQuantity = sp.AllowedShortageQuantity,
             ImageUrl = sp.Product?.ImageUrl,

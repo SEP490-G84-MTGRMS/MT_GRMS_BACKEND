@@ -85,9 +85,16 @@ public class SupplierProductExcelService : ISupplierProductExcelService
         {
             var sku = sp.Product?.ProductCode ?? string.Empty;
             var name = sp.Product?.Name ?? string.Empty;
-            var uom = string.IsNullOrWhiteSpace(sp.DeliveryUoM)
-                ? (sp.Product?.BaseUnit ?? "Cái")
-                : sp.DeliveryUoM;
+            var purchaseUnitEntity = sp.Product?.Units?
+                .FirstOrDefault(u => !u.IsDeleted && u.IsPurchaseUnit);
+            var uom = !string.IsNullOrWhiteSpace(purchaseUnitEntity?.UnitName)
+                ? purchaseUnitEntity.UnitName.Trim()
+                : (!string.IsNullOrWhiteSpace(sp.DeliveryUoM)
+                    ? sp.DeliveryUoM.Trim()
+                    : (sp.Product?.BaseUnit ?? "Cái"));
+            var conversionRate = purchaseUnitEntity != null && purchaseUnitEntity.ConversionRate > 0
+                ? purchaseUnitEntity.ConversionRate
+                : (sp.ConversionRate > 0 ? sp.ConversionRate : 1m);
             var isEven = row % 2 == 0;
             var rowBg = isEven ? EvenRowBg : OddRowBg;
 
@@ -97,11 +104,14 @@ public class SupplierProductExcelService : ISupplierProductExcelService
             ws.Cell(row, 4).Value = supplier.Name;
             ws.Cell(row, 5).Value = uom;
             // Keep export consistent with the UI and purchase-order pricing:
-            // prefer the negotiated supplier price, then fall back to Master cost price.
+            // prefer the negotiated supplier price, then fall back to Master cost price scaled by PurchaseUnit conversion rate.
+            var scaledMasterCost = sp.Product?.CostPrice.HasValue == true
+                ? Math.Round(sp.Product.CostPrice.Value * conversionRate, 2)
+                : 0m;
             var effectivePurchasePrice = sp.AgreedWholesalePrice.HasValue
                                          && sp.AgreedWholesalePrice.Value > 0
                 ? sp.AgreedWholesalePrice.Value
-                : sp.Product?.CostPrice ?? 0m;
+                : scaledMasterCost;
             ws.Cell(row, 6).Value = effectivePurchasePrice;
 
             ws.Cell(row, 7).Value = sp.MinimumOrderQuantity > 0 ? sp.MinimumOrderQuantity : 1;

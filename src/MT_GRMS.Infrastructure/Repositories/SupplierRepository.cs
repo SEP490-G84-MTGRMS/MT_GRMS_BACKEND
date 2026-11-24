@@ -751,6 +751,8 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         return await _context.SupplierProducts
             .Include(sp => sp.Product)
                 .ThenInclude(p => p!.Category)
+            .Include(sp => sp.Product)
+                .ThenInclude(p => p!.Units)
             .Where(sp => sp.SupplierId == supplierId && !sp.IsDeleted)
             .ToListAsync(cancellationToken);
     }
