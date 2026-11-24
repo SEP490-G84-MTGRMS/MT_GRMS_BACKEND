@@ -223,7 +223,7 @@ public class StocktakeService : IStocktakeService
                 .ToList();
 
             var newGrnTraces = newBranchStockIds.Count > 0
-                ? await _repository.GetGrnTracesForStocksAsync(tenantId, newBranchStockIds, cancellationToken)
+                ? await _repository.GetGrnTraceByStockIdsAsync(tenantId, newBranchStockIds, cancellationToken)
                 : new Dictionary<Guid, (Guid GrnId, Guid GrnLineId, string GrnCode, Guid SupplierId)>();
 
             foreach (var input in command.Lines)

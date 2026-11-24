@@ -103,6 +103,12 @@ public class SupplierReturnService : ISupplierReturnService
         CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
+        var eligibleGrns = await _repository.GetEligibleGrnsAsync(tenantId, null, null, cancellationToken);
+        var grnInfo = eligibleGrns.FirstOrDefault(g => g.Id == grnId);
+        if (grnInfo != null)
+        {
+            BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, grnInfo.BranchId);
+        }
         return await _repository.GetGrnReturnableLinesAsync(tenantId, grnId, cancellationToken);
     }
 
@@ -121,6 +127,8 @@ public class SupplierReturnService : ISupplierReturnService
         var grnInfo = eligibleGrns.FirstOrDefault(g => g.Id == command.GoodsReceiptId);
         if (grnInfo == null)
             throw new BusinessException("Chỉ được phép trả hàng từ các phiếu nhập kho đã hoàn tất (COMPLETED).");
+
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, grnInfo.BranchId);
 
         if (command.Lines == null || !command.Lines.Any())
             throw new BusinessException("Phiếu trả hàng bắt buộc phải có ít nhất 1 dòng sản phẩm.");
@@ -239,6 +247,8 @@ public class SupplierReturnService : ISupplierReturnService
         if (entity == null)
             throw new NotFoundException($"Không tìm thấy phiếu trả hàng với ID {id}.");
 
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, entity.BranchId);
+
         if (entity.Status != "DRAFT")
             throw new BusinessException($"Chỉ có thể gửi yêu cầu khi phiếu ở trạng thái DRAFT (Trạng thái hiện tại: {entity.Status}).");
 
@@ -273,6 +283,8 @@ public class SupplierReturnService : ISupplierReturnService
         var entity = await _repository.GetByIdAsync(tenantId, id, cancellationToken);
         if (entity == null)
             throw new NotFoundException($"Không tìm thấy phiếu trả hàng với ID {id}.");
+
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, entity.BranchId);
 
         if (entity.Status != "PENDING_SUPPLIER")
             throw new BusinessException($"Chỉ có thể ghi nhận phản hồi NCC khi phiếu ở trạng thái PENDING_SUPPLIER (Trạng thái hiện tại: {entity.Status}).");
@@ -377,6 +389,8 @@ public class SupplierReturnService : ISupplierReturnService
         var entity = await _repository.GetByIdAsync(tenantId, id, cancellationToken);
         if (entity == null)
             throw new NotFoundException($"Không tìm thấy phiếu trả hàng với ID {id}.");
+
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, entity.BranchId);
 
         if (entity.Status != "APPROVED" && entity.Status != "PARTIALLY_HANDED_OVER")
             throw new BusinessException($"Chỉ có thể bàn giao khi phiếu ở trạng thái APPROVED hoặc PARTIALLY_HANDED_OVER (Trạng thái hiện tại: {entity.Status}).");
@@ -489,6 +503,8 @@ public class SupplierReturnService : ISupplierReturnService
         if (entity == null)
             throw new NotFoundException($"Không tìm thấy phiếu trả hàng với ID {id}.");
 
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, entity.BranchId);
+
         if (entity.Status is "COMPLETED" or "CANCELLED" or "REJECTED")
             throw new BusinessException("INVALID_STATUS", $"Không thể hủy phiếu trả hàng đang ở trạng thái {entity.Status}.");
 
@@ -524,7 +540,7 @@ public class SupplierReturnService : ISupplierReturnService
             foreach (var po in relatedPos.Where(p => p.SourceSupplierReturnId == entity.Id && !p.IsDeleted))
             {
                 if (po.Status is not ("COMPLETED" or "CANCELLED" or "PARTIALLY_RECEIVED")
-                    && (po.Details == null || po.Details.All(d => (d.ReceivedQty ?? 0) <= 0)))
+                    && (po.Details == null || po.Details.All(d => d.ReceivedQty <= 0)))
                 {
                     po.Status = "CANCELLED";
                     po.UpdatedAt = DateTime.UtcNow;
@@ -548,6 +564,8 @@ public class SupplierReturnService : ISupplierReturnService
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
         var entity = await _repository.GetByIdAsync(tenantId, id, cancellationToken)
             ?? throw new NotFoundException($"Không tìm thấy phiếu trả hàng với ID {id}.");
+
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, entity.BranchId);
 
         if (!IsExchangeResolution(entity.ResolutionType))
             throw new BusinessException("NOT_EXCHANGE", "Chỉ tạo PO đổi hàng khi ResolutionType là EXCHANGE.");
@@ -664,8 +682,10 @@ public class SupplierReturnService : ISupplierReturnService
         CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        _ = await _repository.GetByIdAsync(tenantId, id, cancellationToken)
+        var entity = await _repository.GetByIdAsync(tenantId, id, cancellationToken)
             ?? throw new NotFoundException($"Không tìm thấy phiếu trả hàng với ID {id}.");
+
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, entity.BranchId);
 
         // Reuse paged PO query via repository Find - scan committed by source
         var (items, _) = await _purchaseOrderRepository.GetPagedPurchaseOrdersAsync(
@@ -686,6 +706,8 @@ public class SupplierReturnService : ISupplierReturnService
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
         var entity = await _repository.GetByIdAsync(tenantId, id, cancellationToken)
             ?? throw new NotFoundException($"Không tìm thấy phiếu trả hàng với ID {id}.");
+
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, entity.BranchId);
 
         if (command.Amount <= 0)
             throw new BusinessException("INVALID_AMOUNT", "Số tiền thanh toán phải lớn hơn 0.");
