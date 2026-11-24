@@ -204,31 +204,35 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             .ToDictionaryAsync(p => p.Id, p => p.CostPrice ?? 0m, cancellationToken);
 
         decimal actualCogs = 0m;
-        bool hasAnyRealCost = false;
+        int totalItemsCount = 0;
+        int itemsWithRealCost = 0;
 
         foreach (var order in orders)
         {
             foreach (var item in order.Items)
             {
+                totalItemsCount++;
                 decimal itemCost = 0m;
+                bool itemHasCost = false;
                 if (item.CostPriceAtSale > 0)
                 {
                     itemCost = item.CostPriceAtSale;
-                    hasAnyRealCost = true;
+                    itemHasCost = true;
                 }
                 else if (productCostDict.TryGetValue(item.ProductId, out var costPrice) && costPrice > 0)
                 {
                     itemCost = costPrice;
-                    hasAnyRealCost = true;
+                    itemHasCost = true;
                 }
 
-                if (hasAnyRealCost)
+                if (itemHasCost)
                 {
+                    itemsWithRealCost++;
                     actualCogs += item.Quantity * itemCost;
                 }
                 else
                 {
-                    actualCogs += item.Quantity * item.UnitPrice * 0.70m;
+                    actualCogs += Math.Round(item.Quantity * item.UnitPrice * 0.70m, 0, MidpointRounding.AwayFromZero);
                 }
             }
         }
@@ -243,7 +247,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             .Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt < toDateUtc)
             .SumAsync(o => (decimal?)o.ReturnedAmount, cancellationToken) ?? 0m;
 
-        if (!hasAnyRealCost)
+        if (itemsWithRealCost == 0)
         {
             // Fallback: Ước tính 70% doanh thu thuần nếu sản phẩm chưa liên kết giá vốn
             var gross = orders.Sum(o => o.TotalAmount);
@@ -263,7 +267,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         }
 
         var finalCogs = Math.Max(0, actualCogs - returnCogs);
-        return (finalCogs, false);
+        return (finalCogs, itemsWithRealCost < totalItemsCount);
     }
 
     public async Task<List<AccountingBookEntryDto>> GetBookEntriesAsync(
