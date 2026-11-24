@@ -113,6 +113,8 @@ public class SupplierService : ISupplierService
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
 
+        await ValidateCommandAsync(new CreateSupplierCommandValidator(), command, cancellationToken);
+
         // 1. Tự động sinh mã nếu trống (REQ-01)
         var code = command.Code?.Trim();
         if (string.IsNullOrWhiteSpace(code))
@@ -173,6 +175,8 @@ public class SupplierService : ISupplierService
     public async Task<SupplierDetailDto> UpdateSupplierAsync(Guid id, UpdateSupplierCommand command, CancellationToken cancellationToken = default)
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        await ValidateCommandAsync(new UpdateSupplierCommandValidator(), command, cancellationToken);
 
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
         if (supplier == null)
@@ -239,6 +243,8 @@ public class SupplierService : ISupplierService
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
 
+        await ValidateCommandAsync(new UpdateBasicSupplierCommandValidator(), command, cancellationToken);
+
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
         if (supplier == null)
         {
@@ -276,6 +282,8 @@ public class SupplierService : ISupplierService
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
 
+        await ValidateCommandAsync(new UpdateSupplierBankCommandValidator(), command, cancellationToken);
+
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
         if (supplier == null)
         {
@@ -295,6 +303,8 @@ public class SupplierService : ISupplierService
     public async Task<SupplierDetailDto> UpdateVatAsync(Guid id, UpdateSupplierVatCommand command, CancellationToken cancellationToken = default)
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        await ValidateCommandAsync(new UpdateSupplierVatCommandValidator(), command, cancellationToken);
 
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
         if (supplier == null)
@@ -318,6 +328,11 @@ public class SupplierService : ISupplierService
     public async Task<SupplierDetailDto> UpdateStatusAsync(Guid id, UpdateSupplierStatusRequest request, CancellationToken cancellationToken = default)
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        if (!Enum.IsDefined(typeof(SupplierStatus), request.Status))
+        {
+            throw new BusinessException("VALIDATION_ERROR", "Trạng thái nhà cung cấp không hợp lệ.");
+        }
 
         var supplier = await _supplierRepository.GetByIdWithDetailsAsync(id, cancellationToken);
         if (supplier == null)
@@ -374,6 +389,8 @@ public class SupplierService : ISupplierService
     public async Task<SupplierDeliveryConfigDto> UpdateDeliveryConfigAsync(Guid supplierId, UpdateSupplierDeliveryConfigCommand command, CancellationToken cancellationToken = default)
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        await ValidateCommandAsync(new UpdateSupplierDeliveryConfigCommandValidator(), command, cancellationToken);
 
         if (command.DeliveryDays == null || command.DeliveryDays.Count == 0)
         {
@@ -545,17 +562,23 @@ public class SupplierService : ISupplierService
         if (!command.AllowedResolutionTypes.Any(x => string.Equals(x, defaultRes, StringComparison.OrdinalIgnoreCase)))
             throw new BusinessException("INVALID_DEFAULT_RESOLUTION", "Hình thức mặc định phải nằm trong danh sách hình thức được phép.");
 
-        if (command.CostShareEnabled)
+        if (command.MaxReturnDaysAfterReceipt.HasValue && command.MaxReturnDaysAfterReceipt.Value < 0)
+            throw new BusinessException("INVALID_RETURN_WINDOW", "Số ngày tối đa được trả hàng sau nhập không được âm.");
+
+        if (command.NearExpiryMinDaysLeft.HasValue && command.NearExpiryMinDaysLeft.Value < 0)
+            throw new BusinessException("INVALID_NEAR_EXPIRY_DAYS", "Số ngày cận hạn tối thiểu không được âm.");
+
+        if (command.StoreCostSharePercent.HasValue || command.SupplierCostSharePercent.HasValue || command.CostShareEnabled)
         {
-            if (!command.StoreCostSharePercent.HasValue)
+            if (command.CostShareEnabled && !command.StoreCostSharePercent.HasValue)
                 throw new BusinessException("INVALID_COST_SHARE", "Khi bật chia sẻ chi phí phải nhập % cửa hàng chịu (mặc định NCC).");
 
-            var storePct = command.StoreCostSharePercent.Value;
+            var storePct = command.StoreCostSharePercent ?? 0m;
             if (storePct < 0 || storePct > 100)
                 throw new BusinessException("INVALID_COST_SHARE", "% cửa hàng chịu phải trong khoảng 0–100.");
 
             var supplierPct = command.SupplierCostSharePercent ?? (100m - storePct);
-            if (Math.Abs(storePct + supplierPct - 100m) > 0.01m)
+            if (supplierPct < 0 || supplierPct > 100 || Math.Abs(storePct + supplierPct - 100m) > 0.01m)
                 throw new BusinessException("INVALID_COST_SHARE", "Tổng % cửa hàng và % NCC phải bằng 100.");
 
             if (command.CostShareByCategoryEnabled)
@@ -675,6 +698,8 @@ public class SupplierService : ISupplierService
     public async Task<SupplierAPLedgerDto> RecordAPTransactionAsync(RecordAPTransactionCommand command, CancellationToken cancellationToken = default)
     {
         SupplierAccess.EnsureStoreOwner(_tenantContext);
+
+        await ValidateCommandAsync(new RecordAPTransactionCommandValidator(), command, cancellationToken);
 
         // 1. Kiểm tra IdempotencyKey (BR-S08)
         if (!string.IsNullOrWhiteSpace(command.IdempotencyKey))
@@ -1994,6 +2019,18 @@ public class SupplierService : ISupplierService
                 AllowedShortageQuantity = command.AllowedShortageQuantity
             })
             .ToList();
+    }
+
+    private static async Task ValidateCommandAsync<T>(
+        FluentValidation.IValidator<T> validator,
+        T command,
+        CancellationToken cancellationToken)
+    {
+        var result = await validator.ValidateAsync(command, cancellationToken);
+        if (!result.IsValid)
+        {
+            throw new BusinessException("VALIDATION_ERROR", result.Errors.First().ErrorMessage);
+        }
     }
 
     private static string ResolveDefaultDeliveryUoM(Product product)
