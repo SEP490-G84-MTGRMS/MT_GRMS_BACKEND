@@ -13,6 +13,7 @@ using MT_GRMS.Application.PurchaseOrders.Dispatch;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Application.SupplierReturns.Dtos;
 using MT_GRMS.Domain.Entities.Supplier;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Domain.Exceptions;
 
 namespace MT_GRMS.Application.SupplierReturns;
@@ -433,6 +434,43 @@ public class SupplierReturnService : ISupplierReturnService
         else
         {
             entity.Status = totalHandedOver >= entity.TotalApprovedQty ? "COMPLETED" : "PARTIALLY_HANDED_OVER";
+
+            // Khi hoàn tất bàn giao REDUCE_PAYABLE, ghi nhận bút toán giảm công nợ NCC idempotent và đánh dấu SETTLED (RTV-02).
+            if (entity.Status == "COMPLETED"
+                && string.Equals(entity.ResolutionType, "REDUCE_PAYABLE", StringComparison.OrdinalIgnoreCase))
+            {
+                var creditAmount = Math.Round(entity.Lines.Sum(l => l.HandedOverQty * l.UnitCost), 2);
+                if (creditAmount > 0 && _supplierRepository != null)
+                {
+                    var idempotencyKey = $"rtv-ap-credit-{entity.Id:N}";
+                    var existingLedger = await _supplierRepository.GetLedgerByIdempotencyKeyAsync(idempotencyKey, cancellationToken);
+                    if (existingLedger == null)
+                    {
+                        var supplier = await _supplierRepository.GetByIdAsync(entity.SupplierId, cancellationToken);
+                        if (supplier != null)
+                        {
+                            supplier.CurrentDebt = Math.Round(supplier.CurrentDebt - creditAmount, 2);
+                            var ledger = new SupplierAPLedger
+                            {
+                                SupplierId = entity.SupplierId,
+                                TransactionDate = DateTime.UtcNow,
+                                DocType = APDocType.ReturnAdjustment,
+                                DocNo = entity.Code,
+                                Description = $"Giảm công nợ từ phiếu trả hàng {entity.Code}",
+                                Amount = creditAmount,
+                                Direction = -1,
+                                BalanceAfter = supplier.CurrentDebt,
+                                CreatedByName = entity.HandedOverBy ?? "Hệ thống",
+                                IdempotencyKey = idempotencyKey,
+                                ReferenceNo = entity.Code
+                            };
+                            await _supplierRepository.AddLedgerAsync(ledger, cancellationToken);
+                            _supplierRepository.Update(supplier);
+                        }
+                    }
+                }
+                entity.SettlementStatus = "SETTLED";
+            }
         }
 
         await _repository.UpdateAsync(entity, cancellationToken);
