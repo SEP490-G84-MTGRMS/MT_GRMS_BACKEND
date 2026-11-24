@@ -114,7 +114,7 @@ public class CashbookController : BaseApiController
         [FromBody] OwnerSafeDepositRequest request, CancellationToken ct)
     {
         if (request.BranchId == Guid.Empty || request.Amount <= 0)
-            return BadRequest("Cần chọn chi nhánh và nhập số tiền lớn hơn 0.");
+            return BadRequest(ApiResponse<CashbookEntryResponse>.Fail("INVALID_SAFE_DEPOSIT", "Cần chọn chi nhánh và nhập số tiền lớn hơn 0."));
         var safe = await _cashbookService.GetOrCreateSafeAsync(request.BranchId, ct);
         var result = await _cashbookService.CreateReceiptAsync(new CreateReceiptRequest(
             safe.Id, request.Amount, "Chủ nạp thêm vốn", request.Note,
