@@ -736,9 +736,9 @@ public class BranchProductRepository : IBranchProductRepository
                 Id = b.Id,
                 Code = b.Code,
                 Name = b.Name,
-                Address = b.Address ?? "Hồ Chí Minh, Việt Nam",
-                ManagerName = b.ManagerName ?? "Quản lý chi nhánh",
-                Phone = b.Phone ?? "0901 234 567",
+                Address = b.Address ?? string.Empty,
+                ManagerName = b.ManagerName ?? string.Empty,
+                Phone = b.Phone ?? string.Empty,
                 TotalProducts = productIds.Count,
                 TotalStock = totalStock,
                 LowStockCount = lowStockCount
