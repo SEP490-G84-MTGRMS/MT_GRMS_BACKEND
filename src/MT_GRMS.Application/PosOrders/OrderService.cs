@@ -1355,7 +1355,12 @@ public class OrderService : IOrderService
                 PaymentMethod = preOrderPaymentMethod,
                 PaymentStatus = request.DepositAmount >= finalAmount ? "PAID" : "PARTIALLY_PAID",
                 Status = "PendingPickup",
-                Note = $"Hẹn nhận: {request.ExpectedPickupDate:dd/MM/yyyy HH:mm}. {request.Note}".Trim(),
+                ExpectedPickupDate = request.ExpectedPickupDate.Kind == DateTimeKind.Local
+                    ? request.ExpectedPickupDate.ToUniversalTime()
+                    : DateTime.SpecifyKind(request.ExpectedPickupDate, DateTimeKind.Utc),
+                Note = string.IsNullOrWhiteSpace(request.Note)
+                    ? $"Hẹn nhận: {request.ExpectedPickupDate:dd/MM/yyyy HH:mm}"
+                    : $"Hẹn nhận: {request.ExpectedPickupDate:dd/MM/yyyy HH:mm}. {request.Note.Trim()}",
                 AppliedPromotionId = effectivePromoId,
                 AppliedPromotionSummary = effectivePromoSummary,
                 PromotionDiscountAmount = orderDiscount,
@@ -1667,10 +1672,15 @@ public class OrderService : IOrderService
             throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền hủy hóa đơn. Nhân viên không được phép tự ý hủy.");
         }
 
+        bool isPendingPreOrder = string.Equals(order.Status, "PendingPickup", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(order.Status, "PreOrder", StringComparison.OrdinalIgnoreCase);
+
         if (order.Status == "Completed")
             throw new BusinessException("PAID_ORDER_RETURN_REQUIRED", "Đơn đã thanh toán cần xử lý qua Đổi/Trả để ghi nhận hàng nhận lại và hoàn tiền đúng nguồn.");
-        if (order.DepositAmount > 0 || string.Equals(order.PaymentStatus, "PAID", StringComparison.OrdinalIgnoreCase))
+        if (!isPendingPreOrder && (order.DepositAmount > 0 || string.Equals(order.PaymentStatus, "PAID", StringComparison.OrdinalIgnoreCase)))
             throw new BusinessException("PAID_ORDER_RETURN_REQUIRED", "Đơn đã nhận tiền hoặc tiền cọc cần xử lý qua Đổi/Trả để ghi nhận hoàn tiền đúng nguồn.");
+        if (isPendingPreOrder && order.DepositAmount > 0 && !isStoreOwner)
+            throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền hủy và hoàn cọc đơn đặt trước.");
 
         // Hoàn trả tồn kho về BranchStocks (quy đổi về ĐVT cơ sở)
         foreach (var detail in order.Details)
@@ -1729,13 +1739,29 @@ public class OrderService : IOrderService
         bool wasPendingPayment = string.Equals(order.Status, "PendingPayment", StringComparison.OrdinalIgnoreCase);
         order.Status = "Cancelled";
         order.PaymentStatus = wasPendingPayment ||
+            (isPendingPreOrder && order.DepositAmount <= 0) ||
             string.Equals(order.PaymentMethod, "CREDIT", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(order.PaymentMethod, "DEBT", StringComparison.OrdinalIgnoreCase)
             ? "CANCELLED" : "REFUNDED";
         order.Note = $"Đã hủy: {request.Reason}. {request.Note} | Trước đó: {order.Note}".Trim();
 
+        // Hoàn tiền cọc đơn đặt trước từ Két sắt chi nhánh khi Chủ cửa hàng hủy đơn đã cọc (DEF-SC71-001)
+        if (isPendingPreOrder && order.DepositAmount > 0 && string.Equals(order.PaymentMethod, "CASH", StringComparison.OrdinalIgnoreCase) && _cashbookService != null)
+        {
+            var safe = await _cashbookService.GetOrCreateSafeAsync(order.BranchId, cancellationToken);
+            await _cashbookService.DisburseCashAsync(
+                safe.Id,
+                FinanceAccountType.Safe,
+                order.DepositAmount,
+                "PREORDER_CANCEL_REFUND",
+                order.Id,
+                order.OrderCode,
+                $"Hoàn tiền cọc hủy đơn đặt trước '{order.OrderCode}' (Chủ cửa hàng)",
+                cancellationToken
+            );
+        }
         // Hoàn tiền mặt từ Két sắt chi nhánh nếu đơn trước đó Chủ cửa hàng đã thu tiền mặt trực tiếp
-        if (!wasPendingPayment && order.PaymentMethod == "CASH" && order.FinalAmount > 0 && order.ShiftId == null && IsOwnerCaller() && _cashbookService != null)
+        else if (!wasPendingPayment && !isPendingPreOrder && order.PaymentMethod == "CASH" && order.FinalAmount > 0 && order.ShiftId == null && IsOwnerCaller() && _cashbookService != null)
         {
             var safe = await _cashbookService.GetOrCreateSafeAsync(order.BranchId, cancellationToken);
             await _cashbookService.DisburseCashAsync(
@@ -2064,7 +2090,12 @@ public class OrderService : IOrderService
             {
                 if (stock.ExpiryDate.HasValue && stock.ExpiryDate.Value.Date < DateTime.UtcNow.Date)
                     throw new BusinessException("RETURN_BATCH_EXPIRED", $"Lô {stock.BatchCode} đã hết hạn sử dụng ({stock.ExpiryDate:dd/MM/yyyy}), không thể nhập lại kho bán (Restock). Vui lòng chọn tình trạng Hàng lỗi/hỏng hoặc chọn lô khác còn hạn.");
-                if (!string.Equals(stock.Status, "Active", StringComparison.OrdinalIgnoreCase))
+                var batchStatus = (stock.Status ?? string.Empty).Trim();
+                bool isSellableStatus = string.IsNullOrEmpty(batchStatus)
+                    || string.Equals(batchStatus, "Active", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(batchStatus, "Good", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(batchStatus, "Normal", StringComparison.OrdinalIgnoreCase);
+                if (!isSellableStatus)
                     throw new BusinessException("RETURN_BATCH_INACTIVE", $"Lô {stock.BatchCode} không còn hoạt động ({stock.Status}), không thể nhập lại kho bán.");
             }
 
@@ -2585,7 +2616,10 @@ public class OrderService : IOrderService
             PointsRedeemed: order.PointsRedeemed,
             PointsDiscountAmount: order.PointsDiscountAmount,
             ReturnedAmount: order.ReturnedAmount,
-            GiftStockWarning: giftStockWarning
+            GiftStockWarning: giftStockWarning,
+            ExpectedPickupDate: order.ExpectedPickupDate.HasValue
+                ? DateTime.SpecifyKind(order.ExpectedPickupDate.Value, DateTimeKind.Utc)
+                : null
         );
     }
 
