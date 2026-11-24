@@ -1577,6 +1577,8 @@ public class SupplierService : ISupplierService
         AssignSupplierProductCommand command,
         CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         var validator = new AssignSupplierProductValidator();
         var validationResult = await validator.ValidateAsync(command, cancellationToken);
         if (!validationResult.IsValid)
@@ -1667,6 +1669,7 @@ public class SupplierService : ISupplierService
         BatchAssignSupplierProductsCommand command,
         CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
         var workItems = ResolveBatchWorkItems(command);
         if (workItems.Count == 0)
         {
@@ -1783,6 +1786,8 @@ public class SupplierService : ISupplierService
         UpdateSupplierProductCommand command,
         CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         var validator = new UpdateSupplierProductValidator();
         var validationResult = await validator.ValidateAsync(command, cancellationToken);
         if (!validationResult.IsValid)
@@ -1835,6 +1840,8 @@ public class SupplierService : ISupplierService
         ToggleSupplierProductStatusRequest request,
         CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         var entity = await _supplierRepository.GetSupplierProductAsync(supplierId, productId, cancellationToken);
         if (entity == null)
         {
@@ -1864,6 +1871,8 @@ public class SupplierService : ISupplierService
         SetPrimarySupplierRequest request,
         CancellationToken cancellationToken = default)
     {
+        SupplierAccess.EnsureStoreOwner(_tenantContext);
+
         var entity = await _supplierRepository.GetSupplierProductAsync(supplierId, productId, cancellationToken);
         if (entity == null)
         {
