@@ -785,6 +785,48 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         await _context.BranchStocks.AddAsync(branchStock, cancellationToken);
     }
 
+    public async Task<(IReadOnlyList<SupplierTransactionDto> Items, int TotalCount)> GetPagedTransactionsAsync(
+        Guid supplierId,
+        Guid? branchId,
+        int pageIndex,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _context.PurchaseOrders
+            .AsNoTracking()
+            .Include(po => po.Branch)
+            .Where(po => !po.IsDeleted && po.SupplierId == supplierId && po.Status != "DRAFT");
+
+        if (branchId.HasValue && branchId.Value != Guid.Empty)
+        {
+            query = query.Where(po => po.BranchId == branchId.Value);
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var safePage = Math.Max(1, pageIndex);
+        var safeSize = Math.Clamp(pageSize, 1, 100);
+
+        var items = await query
+            .OrderByDescending(po => po.CreatedAt)
+            .Skip((safePage - 1) * safeSize)
+            .Take(safeSize)
+            .Select(po => new SupplierTransactionDto
+            {
+                Id = po.Id,
+                TransactionCode = po.Code,
+                TransactionType = "PO",
+                TransactionDate = po.CreatedAt,
+                DeliveryDate = po.DeliveryDate,
+                Amount = po.TotalAmount,
+                Status = po.Status,
+                BranchId = po.BranchId,
+                BranchName = po.Branch != null ? po.Branch.Name : string.Empty
+            })
+            .ToListAsync(cancellationToken);
+
+        return (items, totalCount);
+    }
+
     private static List<string> CleanTerms(IReadOnlyList<string>? values)
     {
         if (values == null || values.Count == 0) return [];

@@ -120,5 +120,11 @@ public interface ISupplierRepository : IRepository<Supplier>
     Task AddBranchProductAsync(MT_GRMS.Domain.Entities.Catalog.BranchProduct branchProduct, CancellationToken cancellationToken = default);
     Task<bool> BranchStockExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default);
     Task AddBranchStockAsync(MT_GRMS.Domain.Entities.Inventory.BranchStock branchStock, CancellationToken cancellationToken = default);
+    Task<(IReadOnlyList<SupplierTransactionDto> Items, int TotalCount)> GetPagedTransactionsAsync(
+        Guid supplierId,
+        Guid? branchId,
+        int pageIndex,
+        int pageSize,
+        CancellationToken cancellationToken = default);
 }
 

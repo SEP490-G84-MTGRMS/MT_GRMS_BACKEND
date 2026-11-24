@@ -2006,13 +2006,23 @@ public class SupplierService : ISupplierService
             throw new NotFoundException("Nhà cung cấp", supplierId);
         }
 
-        // Transactions history (currently 0 items, ready for PO/GRN linkage, no mock)
+        var effectiveBranchId = BranchScopeGuard.IsBranchScopedEmployee(_tenantContext)
+            ? BranchScopeGuard.ResolveRequiredBranchId(_tenantContext, Guid.Empty)
+            : (Guid?)null;
+
+        var (items, totalCount) = await _supplierRepository.GetPagedTransactionsAsync(
+            supplierId,
+            effectiveBranchId,
+            pageIndex,
+            pageSize,
+            cancellationToken);
+
         return new PagedResult<SupplierTransactionDto>
         {
-            Items = new List<SupplierTransactionDto>(),
-            Page = pageIndex,
-            PageSize = pageSize,
-            TotalItems = 0
+            Items = items,
+            Page = Math.Max(1, pageIndex),
+            PageSize = Math.Clamp(pageSize, 1, 100),
+            TotalItems = totalCount
         };
     }
 

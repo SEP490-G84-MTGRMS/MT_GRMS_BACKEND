@@ -377,6 +377,7 @@ public class SupplierTransactionDto
     public string TransactionCode { get; set; } = string.Empty;
     public string TransactionType { get; set; } = string.Empty; // PO / GRN
     public DateTime TransactionDate { get; set; }
+    public DateTime? DeliveryDate { get; set; }
     public decimal Amount { get; set; }
     public string Status { get; set; } = string.Empty;
     public Guid? BranchId { get; set; }
