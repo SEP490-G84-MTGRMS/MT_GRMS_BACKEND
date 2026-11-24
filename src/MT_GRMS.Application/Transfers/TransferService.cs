@@ -476,11 +476,10 @@ public sealed class TransferService(
     private async Task EnsureCanViewBranchStockAsync(Guid branchId, CancellationToken ct)
     {
         EnsureTenantRole();
+        BranchScopeGuard.EnsureCanAccessBranch(tenant, branchId);
         var branch = await branches.GetByIdAsync(branchId, ct);
         if (branch is null || branch.TenantId != tenant.CurrentTenantId || !branch.IsActive)
             throw new KeyNotFoundException("Không tìm thấy chi nhánh nguồn hợp lệ.");
-        if (IsStaff && branchId == tenant.CurrentBranchId)
-            throw new InvalidOperationException("Chi nhánh nguồn phải khác chi nhánh hiện tại.");
     }
     private Task AddHistoryAsync(Transfer transfer, TransferStatus? from, TransferStatus to, string action, string? reason, CancellationToken ct)
         => statusHistory.AddAsync(new TransferStatusHistory
