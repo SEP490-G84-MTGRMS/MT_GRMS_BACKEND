@@ -133,8 +133,9 @@ public class SupplierReturnService : ISupplierReturnService
         if (command.Lines == null || !command.Lines.Any())
             throw new BusinessException("Phiếu trả hàng bắt buộc phải có ít nhất 1 dòng sản phẩm.");
 
-        // 2. Validate số lượng còn có thể trả của từng dòng
+        // 2. Validate số lượng còn có thể trả của từng dòng (RTV-06: gộp SL nếu trùng dòng GRN và luôn dùng sourceLine.UnitCost)
         var linesToCreate = new List<SupplierReturnLine>();
+        var cumulativeBySourceLine = new Dictionary<Guid, decimal>();
         foreach (var reqLine in command.Lines)
         {
             if (reqLine.RequestedQty <= 0)
@@ -147,27 +148,29 @@ public class SupplierReturnService : ISupplierReturnService
             if (sourceLine == null)
                 throw new BusinessException($"Sản phẩm với ID {reqLine.ProductId} không nằm trong phiếu nhập kho gốc.");
 
-            if (reqLine.RequestedQty > sourceLine.AvailableReturnQty)
+            var nextCumulative = cumulativeBySourceLine.GetValueOrDefault(sourceLine.GoodsReceiptLineId) + reqLine.RequestedQty;
+            if (nextCumulative > sourceLine.AvailableReturnQty)
             {
                 throw new BusinessException(
-                    $"Số lượng yêu cầu trả ({reqLine.RequestedQty}) của sản phẩm '{sourceLine.ProductName}' vượt quá số lượng còn được phép trả ({sourceLine.AvailableReturnQty}).");
+                    $"Tổng số lượng yêu cầu trả ({nextCumulative}) của sản phẩm '{sourceLine.ProductName}' vượt quá số lượng còn được phép trả ({sourceLine.AvailableReturnQty}).");
             }
+            cumulativeBySourceLine[sourceLine.GoodsReceiptLineId] = nextCumulative;
 
             linesToCreate.Add(new SupplierReturnLine
             {
                 TenantId = tenantId,
                 ProductId = reqLine.ProductId,
-                GoodsReceiptLineId = reqLine.GoodsReceiptLineId,
+                GoodsReceiptLineId = reqLine.GoodsReceiptLineId ?? sourceLine.GoodsReceiptLineId,
                 BranchStockId = sourceLine.BranchStockId,
                 StocktakeLineId = reqLine.StocktakeLineId,
-                BatchCode = reqLine.BatchCode,
+                BatchCode = reqLine.BatchCode ?? sourceLine.BatchCode,
                 ExpiryDate = reqLine.ExpiryDate ?? sourceLine.ExpiryDate,
                 RequestedQty = reqLine.RequestedQty,
                 SupplierAcceptedQty = 0,
                 ApprovedQty = 0,
                 RejectedQty = 0,
                 HandedOverQty = 0,
-                UnitCost = reqLine.UnitCost > 0 ? reqLine.UnitCost : sourceLine.UnitCost,
+                UnitCost = sourceLine.UnitCost > 0 ? sourceLine.UnitCost : reqLine.UnitCost,
                 Notes = reqLine.Notes
             });
         }

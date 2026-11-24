@@ -84,11 +84,15 @@ public class SupplierReturnsController : BaseApiController
     public async Task<IActionResult> Submit(
         Guid id,
         [FromQuery] string? notes,
+        [FromBody] SubmitSupplierReturnBody? body,
         CancellationToken cancellationToken)
     {
-        var result = await _service.SubmitAsync(id, notes, cancellationToken);
+        var effectiveNotes = !string.IsNullOrWhiteSpace(body?.Notes) ? body!.Notes : notes;
+        var result = await _service.SubmitAsync(id, effectiveNotes, cancellationToken);
         return Ok(ApiResponse<SupplierReturnDetailDto>.Ok(result, "Đã gửi yêu cầu trả hàng sang nhà cung cấp."));
     }
+
+    public sealed record SubmitSupplierReturnBody(string? Notes);
 
     /// <summary>
     /// Ghi nhận kết quả phản hồi từ nhà cung cấp (APPROVED hoặc REJECTED) (REQ-03)
