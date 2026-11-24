@@ -328,7 +328,10 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
 
         if (toDate.HasValue)
         {
-            query = query.Where(l => l.TransactionDate <= toDate.Value);
+            var effectiveTo = toDate.Value.TimeOfDay == TimeSpan.Zero
+                ? toDate.Value.Date.AddDays(1).AddTicks(-1)
+                : toDate.Value;
+            query = query.Where(l => l.TransactionDate <= effectiveTo);
         }
 
         if (docType.HasValue)
@@ -353,6 +356,51 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         return await _context.SupplierAPLedgers
             .AsNoTracking()
             .CountAsync(l => l.DocNo.StartsWith(docNoPrefix), cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<SupplierAPLedger>> GetAllLedgersForSupplierAsync(
+        Guid supplierId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _context.SupplierAPLedgers
+            .Where(l => l.SupplierId == supplierId)
+            .AsNoTracking()
+            .OrderBy(l => l.TransactionDate)
+            .ThenBy(l => l.CreatedAt)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyDictionary<string, DateTime?>> GetConfirmedGrnDueDatesByCodesAsync(
+        Guid supplierId,
+        IEnumerable<string> grnCodes,
+        CancellationToken cancellationToken = default)
+    {
+        var codeList = grnCodes
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (codeList.Count == 0)
+        {
+            return new Dictionary<string, DateTime?>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var rows = await _context.GoodsReceipts
+            .AsNoTracking()
+            .Where(g => g.SupplierId == supplierId && g.Status == "COMPLETED" && codeList.Contains(g.Code))
+            .Select(g => new { g.Code, g.PaymentDueDate })
+            .ToListAsync(cancellationToken);
+
+        var result = new Dictionary<string, DateTime?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in rows)
+        {
+            if (!result.ContainsKey(row.Code))
+            {
+                result[row.Code] = row.PaymentDueDate;
+            }
+        }
+
+        return result;
     }
 
     public async Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default)

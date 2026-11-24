@@ -623,11 +623,8 @@ public class StocktakeService : IStocktakeService
 
     private StocktakeFilterQuery EnforceBranchScopeForEmployee(StocktakeFilterQuery query)
     {
-        if (IsEmployeeRole() && _tenantContext.CurrentBranchId.HasValue && _tenantContext.CurrentBranchId.Value != Guid.Empty)
-        {
-            return query with { BranchId = _tenantContext.CurrentBranchId.Value };
-        }
-        return query;
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, query.BranchId);
+        return query with { BranchId = effectiveBranchId };
     }
 
     private static string NormalizeStocktakeResolution(string? resolutionType) =>

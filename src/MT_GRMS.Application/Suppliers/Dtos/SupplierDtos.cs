@@ -29,6 +29,7 @@ public class SupplierSummaryDto
     public int PaymentTermDays { get; set; }
     public decimal CreditLimit { get; set; }
     public decimal CurrentDebt { get; set; }
+    public decimal OverdueDebt { get; set; }
     public int OpenPurchaseOrderCount { get; set; }
     public Guid? LinkedCustomerId { get; set; }
     public string? Address { get; set; }
@@ -138,13 +139,26 @@ public class LinkCustomerRequest
     public Guid CustomerId { get; set; }
 }
 
+public class SupplierApAgingDto
+{
+    public decimal Current { get; set; }
+    public decimal Days1To30 { get; set; }
+    public decimal Days31To60 { get; set; }
+    public decimal Days61To90 { get; set; }
+    public decimal Over90Days { get; set; }
+    public decimal TotalOverdue => Days1To30 + Days31To60 + Days61To90 + Over90Days;
+    public decimal TotalDebt => Current + TotalOverdue;
+}
+
 public class SupplierApSummaryDto
 {
     public Guid SupplierId { get; set; }
     public decimal CurrentDebt { get; set; }
     public decimal OverdueDebt { get; set; }
     public decimal CreditLimit { get; set; }
+    public int PaymentTermDays { get; set; }
     public int OpenPurchaseOrderCount { get; set; }
+    public SupplierApAgingDto Aging { get; set; } = new();
 }
 
 public class ReplaceSupplierBranchesCommand

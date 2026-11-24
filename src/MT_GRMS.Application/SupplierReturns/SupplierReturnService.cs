@@ -61,7 +61,9 @@ public class SupplierReturnService : ISupplierReturnService
         CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        return await _repository.GetPagedAsync(tenantId, query, cancellationToken);
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, query.BranchId);
+        var scopedQuery = query with { BranchId = effectiveBranchId };
+        return await _repository.GetPagedAsync(tenantId, scopedQuery, cancellationToken);
     }
 
     public async Task<SupplierReturnDetailDto> GetByIdAsync(
@@ -72,6 +74,8 @@ public class SupplierReturnService : ISupplierReturnService
         var entity = await _repository.GetByIdAsync(tenantId, id, cancellationToken);
         if (entity == null)
             throw new NotFoundException($"Không tìm thấy phiếu trả hàng nhà cung cấp với ID {id}.");
+
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, entity.BranchId);
 
         List<GrnReturnableLineDto>? returnableLines = null;
         try
@@ -89,7 +93,8 @@ public class SupplierReturnService : ISupplierReturnService
         CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        return await _repository.GetEligibleGrnsAsync(tenantId, branchId, supplierId, cancellationToken);
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, branchId);
+        return await _repository.GetEligibleGrnsAsync(tenantId, effectiveBranchId, supplierId, cancellationToken);
     }
 
     public async Task<List<GrnReturnableLineDto>> GetGrnReturnableLinesAsync(

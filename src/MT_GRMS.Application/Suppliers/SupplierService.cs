@@ -62,6 +62,7 @@ public class SupplierService : ISupplierService
             PaymentTermDays = s.PaymentTermDays,
             CreditLimit = s.CreditLimit,
             CurrentDebt = canSeeDebt ? s.CurrentDebt : 0,
+            OverdueDebt = canSeeDebt ? s.OverdueDebt : 0,
             LinkedCustomerId = Guid.TryParse(s.LinkedCustomerId, out var lcid) ? lcid : null,
             Address = s.Address,
             Notes = s.Notes,
@@ -92,6 +93,7 @@ public class SupplierService : ISupplierService
         if (!SupplierAccess.IsStoreOwner(_tenantContext))
         {
             dto.CurrentDebt = 0;
+            dto.OverdueDebt = 0;
         }
 
         // Tính toán EarliestDeliveryDate nếu có DeliveryConfig
@@ -741,6 +743,8 @@ public class SupplierService : ISupplierService
         supplier.CurrentDebt = newDebt;
 
         await _supplierRepository.AddLedgerAsync(ledger, cancellationToken);
+        var updatedAging = await ComputeAgingForSupplierAsync(supplier, ledger, cancellationToken);
+        supplier.OverdueDebt = updatedAging.TotalOverdue;
         _supplierRepository.Update(supplier);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
@@ -782,14 +786,153 @@ public class SupplierService : ISupplierService
             throw new NotFoundException("Nhà cung cấp", supplierId);
         }
 
+        var aging = await ComputeAgingForSupplierAsync(supplier, pendingLedger: null, cancellationToken);
+        if (supplier.OverdueDebt != aging.TotalOverdue)
+        {
+            supplier.OverdueDebt = aging.TotalOverdue;
+            _supplierRepository.Update(supplier);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
         return new SupplierApSummaryDto
         {
             SupplierId = supplier.Id,
             CurrentDebt = supplier.CurrentDebt,
-            OverdueDebt = supplier.OverdueDebt,
+            OverdueDebt = aging.TotalOverdue,
             CreditLimit = supplier.CreditLimit,
-            OpenPurchaseOrderCount = 0
+            PaymentTermDays = supplier.PaymentTermDays,
+            OpenPurchaseOrderCount = 0,
+            Aging = aging
         };
+    }
+
+    private async Task<SupplierApAgingDto> ComputeAgingForSupplierAsync(
+        Supplier supplier,
+        SupplierAPLedger? pendingLedger,
+        CancellationToken cancellationToken)
+    {
+        if (supplier.CurrentDebt <= 0)
+        {
+            return new SupplierApAgingDto();
+        }
+
+        var persistedLedgers = await _supplierRepository.GetAllLedgersForSupplierAsync(supplier.Id, cancellationToken);
+        var allLedgers = persistedLedgers.ToList();
+        if (pendingLedger != null && allLedgers.All(l => l.Id != pendingLedger.Id))
+        {
+            allLedgers.Add(pendingLedger);
+        }
+
+        // Legacy/seeded opening debt without any AP ledger entries: preserve existing OverdueDebt snapshot
+        if (allLedgers.Count == 0)
+        {
+            var clampedOverdue = Math.Clamp(supplier.OverdueDebt, 0m, supplier.CurrentDebt);
+            return new SupplierApAgingDto
+            {
+                Current = supplier.CurrentDebt - clampedOverdue,
+                Days1To30 = clampedOverdue
+            };
+        }
+
+        var grnCodes = allLedgers
+            .Where(l => l.Direction == 1 && l.DocType == APDocType.PurchaseInvoice && !string.IsNullOrWhiteSpace(l.DocNo))
+            .Select(l => l.DocNo)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var dueDatesByCode = grnCodes.Count > 0
+            ? await _supplierRepository.GetConfirmedGrnDueDatesByCodesAsync(supplier.Id, grnCodes, cancellationToken)
+            : new Dictionary<string, DateTime?>();
+
+        return CalculateAgingBuckets(
+            supplier.CurrentDebt,
+            supplier.PaymentTermDays,
+            allLedgers,
+            dueDatesByCode,
+            DateTime.UtcNow.Date);
+    }
+
+    internal static SupplierApAgingDto CalculateAgingBuckets(
+        decimal currentDebt,
+        int paymentTermDays,
+        IEnumerable<SupplierAPLedger> ledgers,
+        IReadOnlyDictionary<string, DateTime?> grnDueDates,
+        DateTime asOfDateUtc)
+    {
+        if (currentDebt <= 0)
+        {
+            return new SupplierApAgingDto();
+        }
+
+        var ordered = ledgers
+            .OrderBy(l => l.TransactionDate)
+            .ThenBy(l => l.CreatedAt)
+            .ToList();
+
+        var openLiabilities = new List<(DateTime DueDate, decimal Remaining)>();
+        var safeTermDays = Math.Max(0, paymentTermDays);
+
+        foreach (var entry in ordered)
+        {
+            if (entry.Amount <= 0) continue;
+
+            if (entry.Direction == 1)
+            {
+                DateTime dueDate;
+                if (entry.DocType == APDocType.PurchaseInvoice &&
+                    grnDueDates.TryGetValue(entry.DocNo, out var grnDue) &&
+                    grnDue.HasValue)
+                {
+                    dueDate = grnDue.Value.Date;
+                }
+                else
+                {
+                    dueDate = entry.TransactionDate.Date.AddDays(safeTermDays);
+                }
+
+                openLiabilities.Add((dueDate, entry.Amount));
+            }
+            else if (entry.Direction == -1)
+            {
+                var toSettle = entry.Amount;
+                for (var i = 0; i < openLiabilities.Count && toSettle > 0; i++)
+                {
+                    var item = openLiabilities[i];
+                    if (item.Remaining <= 0) continue;
+
+                    var applied = Math.Min(item.Remaining, toSettle);
+                    openLiabilities[i] = (item.DueDate, item.Remaining - applied);
+                    toSettle -= applied;
+                }
+            }
+        }
+
+        var aging = new SupplierApAgingDto();
+        var allocated = 0m;
+        var today = asOfDateUtc.Date;
+
+        foreach (var (dueDate, remaining) in openLiabilities)
+        {
+            if (remaining <= 0) continue;
+
+            var daysOverdue = (today - dueDate).Days;
+            if (daysOverdue <= 0) aging.Current += remaining;
+            else if (daysOverdue <= 30) aging.Days1To30 += remaining;
+            else if (daysOverdue <= 60) aging.Days31To60 += remaining;
+            else if (daysOverdue <= 90) aging.Days61To90 += remaining;
+            else aging.Over90Days += remaining;
+
+            allocated += remaining;
+        }
+
+        // Reconcile any residual (e.g. legacy opening debt without ledger rows) so TotalDebt == currentDebt
+        var residual = currentDebt - allocated;
+        if (residual > 0)
+        {
+            aging.Current += residual;
+        }
+
+        return aging;
     }
 
     public async Task<IReadOnlyList<SupplierBranchAssignmentDto>> GetAssignedBranchesAsync(Guid supplierId, CancellationToken cancellationToken = default)
@@ -1307,6 +1450,7 @@ public class SupplierService : ISupplierService
             PaymentTermDays = s.PaymentTermDays,
             CreditLimit = s.CreditLimit,
             CurrentDebt = s.CurrentDebt,
+            OverdueDebt = s.OverdueDebt,
             LinkedCustomerId = Guid.TryParse(s.LinkedCustomerId, out var cid) ? cid : null,
             CreatedAt = s.CreatedAt,
             TaxCode = s.TaxCode,

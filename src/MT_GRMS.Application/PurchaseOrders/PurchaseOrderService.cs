@@ -2216,9 +2216,10 @@ public class PurchaseOrderService : IPurchaseOrderService
     {
         var pageIndex = Math.Max(1, query.PageIndex);
         var pageSize = Math.Clamp(query.PageSize, 1, 100);
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, query.BranchId);
 
         var (items, totalCount) = await _repository.GetPagedPurchaseOrdersAsync(
-            query.BranchId,
+            effectiveBranchId,
             query.SupplierId,
             query.Status,
             query.DateFrom,
@@ -2249,6 +2250,8 @@ public class PurchaseOrderService : IPurchaseOrderService
         {
             throw new NotFoundException("Đơn đặt hàng (PO)", id);
         }
+
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, po.BranchId);
 
         var dto = MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC");
         await AttachActiveGoodsReceiptsAsync(new List<PurchaseOrderDto> { dto }, cancellationToken);

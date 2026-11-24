@@ -38,7 +38,21 @@ public class GoodsReceiptService : IGoodsReceiptService
         CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        return await _repository.GetPagedAsync(tenantId, query, cancellationToken);
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, query.BranchId);
+        var scopedQuery = new GoodsReceiptFilterQuery
+        {
+            BranchId = effectiveBranchId,
+            SupplierId = query.SupplierId,
+            Status = query.Status,
+            Keyword = query.Keyword,
+            FromDate = query.FromDate,
+            ToDate = query.ToDate,
+            IsTodayDelivery = query.IsTodayDelivery,
+            HasMismatch = query.HasMismatch,
+            PageIndex = query.PageIndex,
+            PageSize = query.PageSize
+        };
+        return await _repository.GetPagedAsync(tenantId, scopedQuery, cancellationToken);
     }
 
     public async Task<GoodsReceiptDto> GetGoodsReceiptByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -50,13 +64,15 @@ public class GoodsReceiptService : IGoodsReceiptService
             throw new NotFoundException("Phiếu nhập kho", id);
         }
 
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, receipt.BranchId);
         return MapToDto(receipt);
     }
 
     public async Task<List<PurchaseOrderLookupDto>> GetPoLookupAsync(Guid? branchId, CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        var pos = await _repository.GetEligiblePurchaseOrdersAsync(tenantId, branchId, cancellationToken);
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, branchId);
+        var pos = await _repository.GetEligiblePurchaseOrdersAsync(tenantId, effectiveBranchId, cancellationToken);
 
         return pos.Select(po => new PurchaseOrderLookupDto
         {
@@ -93,6 +109,7 @@ public class GoodsReceiptService : IGoodsReceiptService
             throw new NotFoundException("Đơn đặt hàng PO", poIdOrCode);
         }
 
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, po.BranchId);
         EnsureDeliveryDateReachedForReceipt(po);
 
         // PO thường: chặn nếu đã có GRN active. PO đổi hàng: chỉ chặn khi còn phiếu nháp.
@@ -1049,6 +1066,11 @@ public class GoodsReceiptService : IGoodsReceiptService
                 }
                 else
                 {
+                    if (!receipt.PaymentDueDate.HasValue)
+                    {
+                        receipt.PaymentDueDate = txDate.Date.AddDays(Math.Max(0, supplier.PaymentTermDays));
+                    }
+
                     supplier.CurrentDebt = debtAfterInvoice;
                     supplier.UpdatedAt = DateTime.UtcNow;
                 }

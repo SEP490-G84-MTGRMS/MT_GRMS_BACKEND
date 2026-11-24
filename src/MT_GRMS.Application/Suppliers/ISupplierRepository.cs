@@ -49,6 +49,17 @@ public interface ISupplierRepository : IRepository<Supplier>
 
     Task<int> CountLedgersByDocNoPrefixAsync(string docNoPrefix, CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<SupplierAPLedger>> GetAllLedgersForSupplierAsync(
+        Guid supplierId,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<SupplierAPLedger>>(Array.Empty<SupplierAPLedger>());
+
+    Task<IReadOnlyDictionary<string, DateTime?>> GetConfirmedGrnDueDatesByCodesAsync(
+        Guid supplierId,
+        IEnumerable<string> grnCodes,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyDictionary<string, DateTime?>>(new Dictionary<string, DateTime?>());
+
     Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default);
     Task ReplaceBlackoutDatesAsync(Guid supplierId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default);
 

@@ -34,7 +34,9 @@ public class BatchService : IBatchService
         CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        return await _repository.GetPagedBatchesAsync(tenantId, query, cancellationToken);
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, query.BranchId);
+        var scopedQuery = query with { BranchId = effectiveBranchId };
+        return await _repository.GetPagedBatchesAsync(tenantId, scopedQuery, cancellationToken);
     }
 
     public async Task<BatchListItemDto> GetBatchByIdAsync(
@@ -46,6 +48,7 @@ public class BatchService : IBatchService
         if (batch == null)
             throw new KeyNotFoundException($"Không tìm thấy thông tin lô hàng với ID {id}.");
 
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, batch.BranchId);
         return batch;
     }
 
@@ -66,7 +69,8 @@ public class BatchService : IBatchService
         CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        return await _repository.GetNearExpiryBatchesAsync(tenantId, daysThreshold, branchId, cancellationToken);
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, branchId);
+        return await _repository.GetNearExpiryBatchesAsync(tenantId, daysThreshold, effectiveBranchId, cancellationToken);
     }
 
     public async Task<FefoDiscountResponse> ApplyFefoDiscountAsync(Guid id, ApplyFefoDiscountRequest request, CancellationToken cancellationToken = default)
