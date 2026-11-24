@@ -178,15 +178,18 @@ public sealed class TransferService(
                 CreatedBy = tenant.CurrentUserId,
                 CreatedByStaff = tenant.CurrentRawUserId
             };
+            var requiredByStock = new Dictionary<Guid, decimal>();
             foreach (var input in request.Items)
             {
                 var product = await products.GetByIdAsync(input.ProductId, ct) ?? throw new KeyNotFoundException("Không tìm thấy sản phẩm.");
                 var stock = await ResolveStockSourceAsync(request.FromBranchId, input.ProductId, input.BatchCode, input.ExpiryDate, ct);
                 var conversionRate = await ResolveUnitConversionRateAsync(product, input.Unit, ct);
                 var baseQuantity = Math.Round(input.Quantity * conversionRate, 3);
+                var cumulativeRequired = requiredByStock.GetValueOrDefault(stock.Id) + baseQuantity;
                 var available = await RawAvailableAsync(stock, ct);
-                if (available < baseQuantity)
-                    throw new InvalidOperationException($"Không đủ tồn khả dụng cho {product.Name}; hiện có {available} {product.BaseUnit}, yêu cầu chuyển {baseQuantity} {product.BaseUnit}.");
+                if (available < cumulativeRequired)
+                    throw new InvalidOperationException($"Không đủ tồn khả dụng cho {product.Name}; hiện có {available} {product.BaseUnit}, tổng yêu cầu chuyển {cumulativeRequired} {product.BaseUnit}.");
+                requiredByStock[stock.Id] = cumulativeRequired;
                 var unitCost = stock.LandedCostPerUnit;
                 transfer.Details.Add(new TransferDetail
                 {
