@@ -2690,6 +2690,67 @@ public class ScheduleServiceTests
         Assert.True(wedEditable.IsDeleted);
         Assert.Equal(ScheduleStatus.Completed, monCompleted.Status);
     }
+
+    [Fact]
+    public async Task CreateAsync_And_BatchCreateAsync_PaidPayslipMonth_ThrowsPaySlipLocked()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var policyRepo = new FakeBranchAttendancePolicyRepository();
+        var payslipRepo = new FakePayslipRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        employeeRepo.Employees.Add(new Employee
+        {
+            Id = empId,
+            TenantId = tenantContext.CurrentTenantId,
+            FullName = "Nguyen Van E",
+            EmployeeCode = "NV05",
+            Status = EmployeeStatus.Active,
+            BranchId = branchId
+        });
+
+        payslipRepo.Payslips.Add(new Payslip
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            EmployeeId = empId,
+            PeriodMonth = "2026-11",
+            Status = PayslipStatus.Paid
+        });
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext, policyRepo, null, payslipRepo);
+
+        var exSingle = await Assert.ThrowsAsync<BusinessException>(() => service.CreateAsync(new CreateScheduleItemRequest(
+            EmployeeId: empId,
+            BranchId: branchId,
+            WorkDate: new DateTime(2026, 11, 20),
+            ShiftName: "Ca Sáng",
+            PlannedStartTime: new TimeSpan(8, 0, 0),
+            PlannedEndTime: new TimeSpan(12, 0, 0)
+        )));
+        Assert.Equal("PAYSLIP_LOCKED", exSingle.ErrorCode);
+
+        var exBatch = await Assert.ThrowsAsync<BusinessException>(() => service.BatchCreateAsync(new BatchCreateScheduleRequest(
+            BranchId: branchId,
+            Schedules: new[]
+            {
+                new CreateScheduleItemRequest(
+                    EmployeeId: empId,
+                    BranchId: branchId,
+                    WorkDate: new DateTime(2026, 11, 25),
+                    ShiftName: "Ca Sáng",
+                    PlannedStartTime: new TimeSpan(8, 0, 0),
+                    PlannedEndTime: new TimeSpan(12, 0, 0)
+                )
+            }
+        )));
+        Assert.Equal("PAYSLIP_LOCKED", exBatch.ErrorCode);
+    }
 }
 
 

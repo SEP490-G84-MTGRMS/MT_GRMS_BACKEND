@@ -76,6 +76,7 @@ public class ScheduleService : IScheduleService
 
         var resolved = ResolveShiftInfo(request, shiftConfig);
         var workDate = request.WorkDate.Date;
+        await EnsurePeriodNotLockedByPaidPayslipAsync(request.EmployeeId, workDate, employee.FullName, cancellationToken);
         var startDateTime = GetStartDateTime(workDate, resolved.StartTime);
         var endDateTime = GetEndDateTime(workDate, resolved.StartTime, resolved.EndTime, resolved.IsNextDay);
 
@@ -180,6 +181,7 @@ public class ScheduleService : IScheduleService
 
         var newSchedules = new List<EmployeeSchedule>();
         var batchIntervals = new List<(Guid EmployeeId, Guid? ShiftConfigId, string ShiftName, DateTime Start, DateTime End, DateTime WorkDate, decimal DurationHours)>();
+        var paidPeriodLockCache = new Dictionary<(Guid EmployeeId, string PeriodMonth), bool>();
 
         foreach (var item in schedulesToProcess)
         {
@@ -194,6 +196,7 @@ public class ScheduleService : IScheduleService
 
             var resolved = ResolveShiftInfo(item, shiftConfig);
             var workDate = item.WorkDate.Date;
+            await EnsurePeriodNotLockedByPaidPayslipAsync(item.EmployeeId, workDate, employee.FullName, cancellationToken, paidPeriodLockCache);
             var startDateTime = GetStartDateTime(workDate, resolved.StartTime);
             var endDateTime = GetEndDateTime(workDate, resolved.StartTime, resolved.EndTime, resolved.IsNextDay);
 
@@ -554,6 +557,7 @@ public class ScheduleService : IScheduleService
         }
 
         var toCreate = new List<EmployeeSchedule>();
+        var syncPaidLockCache = new Dictionary<(Guid EmployeeId, string PeriodMonth), bool>();
         for (var date = startDate; date <= targetEndDate; date = date.AddDays(1))
         {
             if (!repeatDays.Contains(date.DayOfWeek) || coveredDates.Contains(date))
@@ -567,6 +571,8 @@ public class ScheduleService : IScheduleService
                     "WORK_DATE_BEFORE_START_DATE",
                     $"Không thể phân ca cho nhân viên \"{employee.FullName}\" vào ngày {date:dd/MM/yyyy} trước ngày bắt đầu làm việc ({employee.StartDate.Value:dd/MM/yyyy}).");
             }
+
+            await EnsurePeriodNotLockedByPaidPayslipAsync(request.EmployeeId, date, employee.FullName, cancellationToken, syncPaidLockCache);
 
             var startDateTime = GetStartDateTime(date, resolved.StartTime);
             var endDateTime = GetEndDateTime(date, resolved.StartTime, resolved.EndTime, resolved.IsNextDay);
@@ -673,6 +679,10 @@ public class ScheduleService : IScheduleService
         }
 
         var workDate = (request.WorkDate ?? schedule.WorkDate).Date;
+        if (employeeId != schedule.EmployeeId || workDate != schedule.WorkDate.Date)
+        {
+            await EnsurePeriodNotLockedByPaidPayslipAsync(employeeId, workDate, employee.FullName, cancellationToken);
+        }
         if (employee.StartDate.HasValue && workDate < employee.StartDate.Value.Date)
         {
             throw new BusinessException(
@@ -1335,15 +1345,44 @@ public class ScheduleService : IScheduleService
 
         if (_payslipRepository != null)
         {
-            var periodMonth = schedule.WorkDate.ToString("yyyy-MM");
+            await EnsurePeriodNotLockedByPaidPayslipAsync(schedule.EmployeeId, schedule.WorkDate, schedule.Employee?.FullName, cancellationToken);
+        }
+    }
+
+    private async Task EnsurePeriodNotLockedByPaidPayslipAsync(
+        Guid employeeId,
+        DateTime workDate,
+        string? employeeName,
+        CancellationToken cancellationToken,
+        Dictionary<(Guid EmployeeId, string PeriodMonth), bool>? lockCache = null)
+    {
+        if (_payslipRepository == null) return;
+
+        var periodMonth = workDate.ToString("yyyy-MM");
+        var cacheKey = (employeeId, periodMonth);
+        bool isLocked;
+
+        if (lockCache != null && lockCache.TryGetValue(cacheKey, out var cached))
+        {
+            isLocked = cached;
+        }
+        else
+        {
             var periodPayslip = await _payslipRepository.GetByEmployeeAndPeriodAsync(
-                schedule.EmployeeId, periodMonth, cancellationToken);
-            if (periodPayslip != null && periodPayslip.Status is PayslipStatus.Paid or PayslipStatus.Partial)
+                employeeId, periodMonth, cancellationToken);
+            isLocked = periodPayslip != null && periodPayslip.Status is PayslipStatus.Paid or PayslipStatus.Partial;
+            if (lockCache != null)
             {
-                throw new BusinessException(
-                    "PAYSLIP_LOCKED",
-                    $"Bản ghi chấm công tháng {schedule.WorkDate:MM/yyyy} đã bị khóa do phiếu lương của nhân viên đã được thanh toán.");
+                lockCache[cacheKey] = isLocked;
             }
+        }
+
+        if (isLocked)
+        {
+            var empLabel = string.IsNullOrWhiteSpace(employeeName) ? string.Empty : $" cho nhân viên \"{employeeName}\"";
+            throw new BusinessException(
+                "PAYSLIP_LOCKED",
+                $"Kỳ lương tháng {workDate:MM/yyyy}{empLabel} đã được thanh toán, hệ thống đã khóa thao tác tạo/chỉnh sửa lịch làm việc và chấm công trong tháng này.");
         }
     }
 
