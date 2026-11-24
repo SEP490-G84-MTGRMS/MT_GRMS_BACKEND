@@ -74,7 +74,13 @@ public sealed class TransferService(
         var receiveDate = string.Equals(filter.DateField, "receive", StringComparison.OrdinalIgnoreCase);
         if (filter.FromDate.HasValue) all = all.Where(x => (receiveDate ? x.ReceivedAt : x.DispatchedAt ?? x.CreatedAt) >= filter.FromDate);
         if (filter.ToDate.HasValue) all = all.Where(x => (receiveDate ? x.ReceivedAt : x.DispatchedAt ?? x.CreatedAt) < filter.ToDate.Value.Date.AddDays(1));
-        if (!string.IsNullOrWhiteSpace(filter.Search)) all = all.Where(x => x.TransferCode.Contains(filter.Search, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(filter.Search))
+        {
+            var q = filter.Search.Trim();
+            all = all.Where(x =>
+                x.TransferCode.Contains(q, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrWhiteSpace(x.Note) && x.Note.Contains(q, StringComparison.OrdinalIgnoreCase)));
+        }
         if (string.Equals(filter.ReceiveStatus, "match", StringComparison.OrdinalIgnoreCase)
             || string.Equals(filter.ReceiveStatus, "mismatch", StringComparison.OrdinalIgnoreCase))
         {
