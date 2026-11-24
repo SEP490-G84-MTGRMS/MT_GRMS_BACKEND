@@ -418,6 +418,22 @@ public class SupplierService : ISupplierService
         supplier.AllowUrgent = command.AllowUrgent;
         supplier.UrgentLeadTimeHours = command.UrgentLeadTimeHours;
         supplier.UrgentFeePercent = command.UrgentFeePercent;
+        if (command.AllowStoreEdit.HasValue)
+        {
+            supplier.AllowStoreEdit = command.AllowStoreEdit.Value;
+        }
+        if (!string.IsNullOrWhiteSpace(command.EditWindowType))
+        {
+            supplier.EditWindowType = command.EditWindowType.Trim();
+        }
+        if (command.HoursBeforeDelivery.HasValue && command.HoursBeforeDelivery.Value >= 0)
+        {
+            supplier.HoursBeforeDelivery = command.HoursBeforeDelivery.Value;
+        }
+        if (command.HoursAfterOrder.HasValue && command.HoursAfterOrder.Value >= 0)
+        {
+            supplier.HoursAfterOrder = command.HoursAfterOrder.Value;
+        }
 
         // Xử lý Blackout Dates nếu có
         if (command.BlackoutDates != null)
@@ -1545,6 +1561,10 @@ public class SupplierService : ISupplierService
             AllowUrgent = supplier.AllowUrgent,
             UrgentLeadTimeHours = supplier.UrgentLeadTimeHours,
             UrgentFeePercent = supplier.UrgentFeePercent,
+            AllowStoreEdit = supplier.AllowStoreEdit,
+            EditWindowType = string.IsNullOrWhiteSpace(supplier.EditWindowType) ? "BEFORE_CUTOFF" : supplier.EditWindowType,
+            HoursBeforeDelivery = supplier.HoursBeforeDelivery,
+            HoursAfterOrder = supplier.HoursAfterOrder,
             BlackoutDates = blackoutDates?.Select(b => new SupplierBlackoutDateDto
             {
                 Id = b.Id,

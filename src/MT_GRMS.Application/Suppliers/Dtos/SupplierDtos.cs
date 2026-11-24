@@ -227,6 +227,10 @@ public class SupplierDeliveryConfigDto
     public bool AllowUrgent { get; set; }
     public int UrgentLeadTimeHours { get; set; }
     public decimal UrgentFeePercent { get; set; }
+    public bool AllowStoreEdit { get; set; } = true;
+    public string EditWindowType { get; set; } = "BEFORE_CUTOFF";
+    public int HoursBeforeDelivery { get; set; } = 24;
+    public int HoursAfterOrder { get; set; } = 2;
     public DateTime? EarliestDeliveryDate { get; set; }
     public List<SupplierBlackoutDateDto> BlackoutDates { get; set; } = [];
 }
@@ -241,6 +245,10 @@ public class UpdateSupplierDeliveryConfigCommand
     public bool AllowUrgent { get; set; } = false;
     public int UrgentLeadTimeHours { get; set; } = 0;
     public decimal UrgentFeePercent { get; set; } = 0;
+    public bool? AllowStoreEdit { get; set; }
+    public string? EditWindowType { get; set; }
+    public int? HoursBeforeDelivery { get; set; }
+    public int? HoursAfterOrder { get; set; }
     public List<SupplierBlackoutDateDto>? BlackoutDates { get; set; }
 }
 
