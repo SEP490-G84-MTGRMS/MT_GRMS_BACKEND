@@ -2258,19 +2258,64 @@ public class PurchaseOrderService : IPurchaseOrderService
         return dto;
     }
 
+    private static readonly Dictionary<string, HashSet<string>> AllowedPoStatusTransitions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["DRAFT"] = new(StringComparer.OrdinalIgnoreCase) { "PENDING_APPROVAL", "CANCELLED" },
+        ["PENDING_APPROVAL"] = new(StringComparer.OrdinalIgnoreCase) { "APPROVED", "DISPATCHED", "SENT", "CONFIRMED", "REJECTED", "CANCELLED" },
+        ["APPROVED"] = new(StringComparer.OrdinalIgnoreCase) { "DISPATCHED", "SENT", "CONFIRMED", "CANCELLED" },
+        ["DISPATCHED"] = new(StringComparer.OrdinalIgnoreCase) { "SENT", "CONFIRMED", "CANCELLED" },
+        ["SENT"] = new(StringComparer.OrdinalIgnoreCase) { "CONFIRMED", "CANCELLED" },
+        ["CONFIRMED"] = new(StringComparer.OrdinalIgnoreCase) { "CANCELLED" },
+        ["PARTIALLY_RECEIVED"] = new(StringComparer.OrdinalIgnoreCase) { "CANCELLED" },
+    };
+
     public async Task<PurchaseOrderDto> UpdatePurchaseOrderStatusAsync(
         Guid id,
         string status,
         string? reason = null,
         CancellationToken cancellationToken = default)
     {
+        if (BranchScopeGuard.IsBranchScopedEmployee(_tenantContext))
+        {
+            throw new BusinessException("FORBIDDEN", "Chỉ Store Owner mới có quyền thay đổi trạng thái đơn mua hàng.");
+        }
+
         var po = await _repository.GetPurchaseOrderByIdAsync(id, cancellationToken);
         if (po == null || po.IsDeleted)
         {
             throw new NotFoundException("Đơn đặt hàng (PO)", id);
         }
 
-        var normalizedStatus = status.Trim().ToUpper();
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, po.BranchId);
+
+        if (string.IsNullOrWhiteSpace(status))
+        {
+            throw new BusinessException("INVALID_PO_STATUS", "Trạng thái đơn đặt hàng không được để trống.");
+        }
+
+        var normalizedStatus = status.Trim().ToUpperInvariant();
+        if (string.Equals(po.Status, normalizedStatus, StringComparison.OrdinalIgnoreCase))
+        {
+            var sameDto = MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC");
+            await AttachActiveGoodsReceiptsAsync(new List<PurchaseOrderDto> { sameDto }, cancellationToken);
+            return sameDto;
+        }
+
+        var currentStatus = (po.Status ?? string.Empty).Trim().ToUpperInvariant();
+        if (!AllowedPoStatusTransitions.TryGetValue(currentStatus, out var allowedNext) ||
+            !allowedNext.Contains(normalizedStatus))
+        {
+            throw new BusinessException(
+                "INVALID_PO_STATUS_TRANSITION",
+                $"Không thể chuyển trạng thái đơn PO từ '{currentStatus}' sang '{normalizedStatus}'.");
+        }
+
+        if ((normalizedStatus == "CANCELLED" || normalizedStatus == "REJECTED") &&
+            string.IsNullOrWhiteSpace(reason))
+        {
+            throw new BusinessException("REASON_REQUIRED", "Vui lòng nhập lý do hủy/từ chối đơn đặt hàng.");
+        }
+
         po.Status = normalizedStatus;
 
         if (normalizedStatus == "APPROVED")

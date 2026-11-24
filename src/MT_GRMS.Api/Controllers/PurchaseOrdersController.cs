@@ -5,6 +5,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PurchaseOrders;
 using MT_GRMS.Application.PurchaseOrders.Dispatch;
 using MT_GRMS.Application.PurchaseOrders.Dtos;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
@@ -210,6 +211,7 @@ public class PurchaseOrdersController : BaseApiController
     /// Cập nhật trạng thái đơn PO (APPROVED, REJECTED, DISPATCHED, CONFIRMED, CANCELLED)
     /// </summary>
     [HttpPatch("{id:guid}/status")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> UpdateStatus(
         Guid id,
         [FromQuery] string? status,
