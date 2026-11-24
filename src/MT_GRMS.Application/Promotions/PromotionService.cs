@@ -157,6 +157,7 @@ public class PromotionService : IPromotionService
             throw new NotFoundException("Chương trình khuyến mại", id);
 
         promo.IsActive = !promo.IsActive;
+        NormalizeTimestampsForSave(promo);
         _promotionRepository.Update(promo);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return promo.IsActive;
@@ -856,6 +857,7 @@ public class PromotionService : IPromotionService
         {
             await _promotionRepository.AddVoucherCodesAsync(newCodes, cancellationToken);
             batch.TotalVoucherQuantity += newCodes.Count;
+            NormalizeTimestampsForSave(batch);
             _promotionRepository.Update(batch);
             await _unitOfWork.SaveChangesAsync(cancellationToken);
         }
@@ -1292,6 +1294,16 @@ public class PromotionService : IPromotionService
         if (dt.Kind == DateTimeKind.Utc) return dt;
         if (dt.Kind == DateTimeKind.Local) return dt.ToUniversalTime();
         return DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+    }
+
+    private static void NormalizeTimestampsForSave(Promotion promo)
+    {
+        promo.StartDate = ToUtcKind(promo.StartDate);
+        promo.EndDate = ToUtcKind(promo.EndDate);
+        if (promo.CreatedAt != default)
+        {
+            promo.CreatedAt = ToUtcKind(promo.CreatedAt);
+        }
     }
 
     private static string? BuildVoucherDescription(string? rawDescription, string discountType, bool? allowWithPromotions)

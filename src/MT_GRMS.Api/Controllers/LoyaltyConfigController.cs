@@ -62,7 +62,7 @@ public class LoyaltyConfigController : BaseApiController
             var customerId = order.CustomerId!.Value;
             var balanceAfterOrder = balances[customerId];
             var earned = 0;
-            if (config.IsEnabled && config.EarningRateAmount > 0)
+            if (config.EarningRateAmount > 0 && config.EarningPoints > 0)
             {
                 earned = (int)Math.Floor(order.FinalAmount / config.EarningRateAmount) * config.EarningPoints;
                 if (earned > 0)

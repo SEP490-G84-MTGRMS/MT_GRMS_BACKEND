@@ -1392,9 +1392,11 @@ public class OrderService : IOrderService
                 PaymentMethod = preOrderPaymentMethod,
                 PaymentStatus = request.DepositAmount >= finalAmount ? "PAID" : "PARTIALLY_PAID",
                 Status = "PendingPickup",
-                ExpectedPickupDate = request.ExpectedPickupDate.Kind == DateTimeKind.Local
-                    ? request.ExpectedPickupDate.ToUniversalTime()
-                    : DateTime.SpecifyKind(request.ExpectedPickupDate, DateTimeKind.Utc),
+                ExpectedPickupDate = request.ExpectedPickupDate.Kind == DateTimeKind.Utc
+                    ? request.ExpectedPickupDate
+                    : request.ExpectedPickupDate.Kind == DateTimeKind.Local
+                        ? request.ExpectedPickupDate.ToUniversalTime()
+                        : DateTime.SpecifyKind(request.ExpectedPickupDate.AddHours(-7), DateTimeKind.Utc),
                 Note = string.IsNullOrWhiteSpace(request.Note)
                     ? $"Hẹn nhận: {request.ExpectedPickupDate:dd/MM/yyyy HH:mm}"
                     : $"Hẹn nhận: {request.ExpectedPickupDate:dd/MM/yyyy HH:mm}. {request.Note.Trim()}",
@@ -2655,7 +2657,9 @@ public class OrderService : IOrderService
             ReturnedAmount: order.ReturnedAmount,
             GiftStockWarning: giftStockWarning,
             ExpectedPickupDate: order.ExpectedPickupDate.HasValue
-                ? DateTime.SpecifyKind(order.ExpectedPickupDate.Value, DateTimeKind.Utc)
+                ? (order.ExpectedPickupDate.Value.Kind == DateTimeKind.Local
+                    ? order.ExpectedPickupDate.Value.ToUniversalTime()
+                    : DateTime.SpecifyKind(order.ExpectedPickupDate.Value, DateTimeKind.Utc))
                 : null
         );
     }

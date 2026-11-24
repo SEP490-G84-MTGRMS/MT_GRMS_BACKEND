@@ -790,6 +790,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 ALTER TABLE IF EXISTS ""LoyaltySettings"" ADD COLUMN IF NOT EXISTS ""PointsExpiryMonths"" integer NOT NULL DEFAULT 12;
                 ALTER TABLE IF EXISTS ""LoyaltySettings"" ADD COLUMN IF NOT EXISTS ""MaxRedemptionPercent"" integer NOT NULL DEFAULT 50;
                 CREATE UNIQUE INDEX IF NOT EXISTS ""IX_LoyaltySettings_TenantID"" ON ""LoyaltySettings"" (""TenantID"");
+                ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""ExpectedPickupDate"" timestamp with time zone NULL;
 
 
             ");

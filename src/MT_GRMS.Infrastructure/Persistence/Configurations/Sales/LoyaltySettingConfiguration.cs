@@ -20,8 +20,8 @@ public class LoyaltySettingConfiguration : IEntityTypeConfiguration<LoyaltySetti
         builder.Property(x => x.RedemptionRatePoints).HasDefaultValue(1);
         builder.Property(x => x.RedemptionRateAmount).HasColumnType("decimal(18,2)").HasDefaultValue(1000.00m);
         builder.Property(x => x.MinRedemptionPoints).HasDefaultValue(20);
-        builder.Property(x => x.PointsExpiryMonths).HasDefaultValue(12).HasDefaultValueSql("12");
-        builder.Property(x => x.MaxRedemptionPercent).HasDefaultValue(50).HasDefaultValueSql("50");
+        builder.Property(x => x.PointsExpiryMonths).HasDefaultValue(12);
+        builder.Property(x => x.MaxRedemptionPercent).HasDefaultValue(50);
         builder.Property(x => x.AllowPointsWithPromotions).HasDefaultValue(true);
 
         builder.HasIndex(x => x.TenantId).IsUnique();
