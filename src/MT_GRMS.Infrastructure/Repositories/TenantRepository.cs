@@ -22,6 +22,7 @@ public class TenantRepository : ITenantRepository
 
     public async Task<Tenant?> GetByIdWithDetailsAsync(string id, CancellationToken cancellationToken = default)
     {
+        var normalized = id.Trim().ToLower();
         return await _context.Tenants
             .IgnoreQueryFilters()
             .AsSplitQuery()
@@ -29,7 +30,7 @@ public class TenantRepository : ITenantRepository
             .Include(t => t.Branches.Where(b => !b.IsDeleted))
             .Include(t => t.TenantUsers.Where(tu => tu.IsActive && tu.User != null && !tu.User.IsDeleted))
                 .ThenInclude(tu => tu.User)
-            .FirstOrDefaultAsync(t => t.Id == id && !t.IsDeleted, cancellationToken);
+            .FirstOrDefaultAsync(t => (t.Id == id || t.Subdomain.ToLower() == normalized) && !t.IsDeleted, cancellationToken);
     }
 
     public async Task<Tenant?> GetByCodeAsync(string code, CancellationToken cancellationToken = default)

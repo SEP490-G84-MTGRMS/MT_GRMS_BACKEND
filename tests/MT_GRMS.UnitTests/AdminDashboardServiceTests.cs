@@ -122,9 +122,12 @@ public class AdminDashboardServiceTests
 
         var alerts = await _service.GetUrgentAlertsAsync();
         Assert.Equal(3, alerts.Count);
+        Assert.Equal(lockedTenant.Id, alerts[0].Id);
         Assert.Equal("locked", alerts[0].StatusType);
         Assert.Contains("Vi pham chinh sach", alerts[0].ExpiryNotice);
+        Assert.Equal(graceTenant.Id, alerts[1].Id);
         Assert.Equal("grace", alerts[1].StatusType);
+        Assert.Equal(expiringTenant.Id, alerts[2].Id);
         Assert.Equal("expiring", alerts[2].StatusType);
     }
 
