@@ -9,6 +9,8 @@ public interface ISupplierRepository : IRepository<Supplier>
 {
     Task<Supplier?> GetByIdWithDetailsAsync(Guid id, CancellationToken cancellationToken = default);
     Task<bool> ExistsByCodeAsync(string code, CancellationToken cancellationToken = default);
+    Task<bool> ExistsByTaxCodeAsync(string taxCode, Guid? excludeSupplierId = null, CancellationToken cancellationToken = default)
+        => Task.FromResult(false);
     Task<int> CountTodayAsync(CancellationToken cancellationToken = default);
     Task<(IReadOnlyList<Supplier> Items, int TotalCount)> GetPagedListAsync(
         string? searchTerm,

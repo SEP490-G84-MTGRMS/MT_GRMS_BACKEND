@@ -50,7 +50,7 @@ public class BatchService : IBatchService
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
         var batch = await _repository.GetBatchByIdAsync(tenantId, id, cancellationToken);
         if (batch == null)
-            throw new KeyNotFoundException($"Không tìm thấy thông tin lô hàng với ID {id}.");
+            throw new NotFoundException("Lô hàng", id);
 
         BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, batch.BranchId);
         return batch;
@@ -83,7 +83,7 @@ public class BatchService : IBatchService
 
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
         var stock = await _repository.GetBranchStockForUpdateAsync(tenantId, id, cancellationToken)
-            ?? throw new KeyNotFoundException($"Không tìm thấy lô hàng với ID {id}.");
+            ?? throw new NotFoundException("Lô hàng", id);
 
         var localNow = BusinessDateResolver.ToLocal(DateTime.UtcNow);
         if (stock.ExpiryDate.HasValue && stock.ExpiryDate.Value.Date < localNow.Date)
