@@ -95,6 +95,7 @@ public class SubscriptionPlanService : ISubscriptionPlanService
         }
 
         var tenantCount = await _planRepository.CountActiveTenantsByPlanIdAsync(id, cancellationToken);
+        var planTenants = await _planRepository.GetTenantsByPlanIdAsync(id, cancellationToken);
         var (description, quotas, features) = ParseModulesJson(plan.EnabledModulesJson, plan.MaxBranches, plan.MaxStaff);
         if (quotas.MaxStorageGb <= 0) quotas = quotas with { MaxStorageGb = 2 };
 
@@ -106,10 +107,10 @@ public class SubscriptionPlanService : ISubscriptionPlanService
             MonthlyPrice: plan.PriceMonthly,
             YearlyPrice: plan.PriceYearly,
             Status: plan.IsActive ? "ACTIVE" : "INACTIVE",
-            ActiveTenantCount: tenantCount,
+            ActiveTenantCount: Math.Max(tenantCount, planTenants.Count),
             Quotas: quotas,
             Features: features,
-            Tenants: new List<PlanTenantSummaryDto>(),
+            Tenants: planTenants.ToList(),
             CreatedAt: plan.CreatedAt,
             UpdatedAt: plan.UpdatedAt
         );

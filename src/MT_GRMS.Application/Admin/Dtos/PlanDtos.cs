@@ -54,7 +54,8 @@ public record PlanTenantSummaryDto(
     int ActiveBranches,
     int ActiveEmployees,
     DateTime JoinedDate,
-    DateTime? ExpiryDate
+    DateTime? ExpiryDate,
+    string Status = "ACTIVE"
 );
 
 public record PlanSummaryResponse(
