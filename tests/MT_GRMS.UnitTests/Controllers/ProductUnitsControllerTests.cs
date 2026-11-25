@@ -193,4 +193,19 @@ public class ProductUnitsControllerTests
         var res2 = await _controller.Delete(id, CancellationToken.None);
         Assert.IsType<BadRequestObjectResult>(res2);
     }
+
+    [Theory]
+    [InlineData(nameof(ProductUnitsController.Create))]
+    [InlineData(nameof(ProductUnitsController.Update))]
+    [InlineData(nameof(ProductUnitsController.Delete))]
+    public void WriteActions_RequireStoreOwnerRole(string methodName)
+    {
+        var method = typeof(ProductUnitsController).GetMethod(methodName);
+        Assert.NotNull(method);
+        var attr = method!.GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), inherit: true)
+            .OfType<Microsoft.AspNetCore.Authorization.AuthorizeAttribute>()
+            .FirstOrDefault();
+        Assert.NotNull(attr);
+        Assert.Equal(MT_GRMS.Domain.Constants.SystemRoles.StoreOwner, attr!.Roles);
+    }
 }

@@ -95,6 +95,7 @@ public class Product : BaseTenantEntity
             _imageUrls = value?
                 .Where(u => !string.IsNullOrWhiteSpace(u))
                 .Select(u => u.Trim())
+                .Distinct(StringComparer.Ordinal)
                 .ToList() ?? new List<string>();
             ImageUrl = _imageUrls.FirstOrDefault();
             ImageUrlsJson = _imageUrls.Count > 0 ? JsonSerializer.Serialize(_imageUrls) : null;

@@ -74,6 +74,14 @@ public class PayslipsController : BaseApiController
                     TotalItems = 0
                 }));
             }
+
+            if (branchId.HasValue && branchId.Value != Guid.Empty && emp.BranchId != branchId.Value)
+            {
+                return StatusCode(
+                    StatusCodes.Status403Forbidden,
+                    ApiResponse<object>.Fail(ErrorCodes.Forbidden, "Bạn không có quyền truy cập phiếu lương của chi nhánh khác."));
+            }
+
             employeeId = emp.Id;
         }
 
