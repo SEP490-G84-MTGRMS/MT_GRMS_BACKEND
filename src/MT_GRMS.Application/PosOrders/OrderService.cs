@@ -657,28 +657,65 @@ public class OrderService : IOrderService
         {
             decimal earningRate = 10000m;
             int earningPoints = 1;
+            int redemptionRatePoints = 1;
+            decimal redemptionRateAmount = 1000m;
+            int minRedemptionPoints = 20;
+            int maxRedemptionPercent = 50;
+            bool allowPointsWithPromotions = true;
+
             if (_promotionRepository != null)
             {
                 var loyaltySetting = await _promotionRepository.GetLoyaltySettingAsync(customer.TenantId, cancellationToken);
                 if (loyaltySetting != null)
                 {
                     isLoyaltyEnabled = loyaltySetting.IsEnabled;
-                    if (isLoyaltyEnabled)
-                    {
-                        earningRate = loyaltySetting.EarningRateAmount > 0 ? loyaltySetting.EarningRateAmount : 10000m;
-                        earningPoints = loyaltySetting.EarningPoints > 0 ? loyaltySetting.EarningPoints : 1;
-                    }
+                    earningRate = loyaltySetting.EarningRateAmount > 0 ? loyaltySetting.EarningRateAmount : 10000m;
+                    earningPoints = loyaltySetting.EarningPoints > 0 ? loyaltySetting.EarningPoints : 1;
+                    redemptionRatePoints = loyaltySetting.RedemptionRatePoints > 0 ? loyaltySetting.RedemptionRatePoints : 1;
+                    redemptionRateAmount = loyaltySetting.RedemptionRateAmount > 0 ? loyaltySetting.RedemptionRateAmount : 1000m;
+                    minRedemptionPoints = Math.Max(0, loyaltySetting.MinRedemptionPoints);
+                    maxRedemptionPercent = loyaltySetting.MaxRedemptionPercent > 0 ? Math.Clamp(loyaltySetting.MaxRedemptionPercent, 1, 100) : 50;
+                    allowPointsWithPromotions = loyaltySetting.AllowPointsWithPromotions;
                 }
+            }
+
+            if (request.PointsRedeemed.HasValue && request.PointsRedeemed.Value > 0)
+            {
+                if (!isLoyaltyEnabled)
+                    throw new BusinessException("LOYALTY_DISABLED", "Hệ thống tích điểm đang tạm tắt, không thể sử dụng điểm thưởng.");
+
+                if (request.PointsRedeemed.Value < minRedemptionPoints)
+                    throw new BusinessException("MIN_REDEMPTION_POINTS", $"Cần tối thiểu {minRedemptionPoints} điểm để đổi thưởng.");
+
+                if (request.PointsRedeemed.Value > customer.RewardPoints)
+                    throw new BusinessException("INSUFFICIENT_POINTS", $"Khách hàng chỉ có {customer.RewardPoints} điểm, không đủ để đổi {request.PointsRedeemed.Value} điểm.");
+
+                bool hasPromosOrVoucher = (request.PromotionDiscountAmount ?? 0m) > 0m
+                    || (request.VoucherDiscountAmount ?? 0m) > 0m
+                    || request.Items.Any(i => i.IsGift);
+                if (!allowPointsWithPromotions && hasPromosOrVoucher)
+                    throw new BusinessException("LOYALTY_NOT_STACKABLE", "Cấu hình không cho phép dùng điểm thưởng đồng thời với khuyến mãi hoặc voucher.");
+
+                decimal computedPointsDiscount = Math.Round(
+                    (decimal)request.PointsRedeemed.Value / redemptionRatePoints * redemptionRateAmount, 2);
+                decimal requestedPointsDiscount = request.PointsDiscountAmount.HasValue && request.PointsDiscountAmount.Value > 0
+                    ? request.PointsDiscountAmount.Value
+                    : computedPointsDiscount;
+                decimal nonPointsOrderDiscount = Math.Max(0m, orderDiscount - requestedPointsDiscount);
+                decimal subTotalBeforePoints = Math.Max(0m, totalAmount - itemDiscountTotal - nonPointsOrderDiscount);
+                decimal maxAllowedPointsDiscount = Math.Round(subTotalBeforePoints * (maxRedemptionPercent / 100m), 2);
+
+                if (requestedPointsDiscount > maxAllowedPointsDiscount + 1m)
+                    throw new BusinessException(
+                        "LOYALTY_MAX_REDEMPTION_EXCEEDED",
+                        $"Giá trị đổi điểm ({requestedPointsDiscount:N0} đ) không được vượt quá {maxRedemptionPercent}% giá trị hóa đơn (tối đa {maxAllowedPointsDiscount:N0} đ).");
+
+                customer.RewardPoints -= request.PointsRedeemed.Value;
+                customer.UpdatedAt = DateTime.UtcNow;
             }
 
             if (isLoyaltyEnabled)
             {
-                if (request.PointsRedeemed.HasValue && request.PointsRedeemed.Value > 0)
-                {
-                    int pointsToDeduct = Math.Min(customer.RewardPoints, request.PointsRedeemed.Value);
-                    customer.RewardPoints -= pointsToDeduct;
-                }
-
                 if (!request.IsPendingPayment)
                 {
                     int earnedPoints = (int)(finalAmount / earningRate) * earningPoints;
@@ -727,6 +764,12 @@ public class OrderService : IOrderService
 
         string orderCode = $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
         var orderBusinessDate = activeShift?.BusinessDate ?? BusinessDateResolver.Resolve(DateTime.UtcNow, new TimeSpan(6, 0, 0));
+        if (_shiftRepository != null && await _shiftRepository.IsBusinessDayClosedAsync(branchId, orderBusinessDate, cancellationToken))
+        {
+            throw new BusinessException(
+                "BUSINESS_DAY_CLOSED",
+                $"Ngày nghiệp vụ {orderBusinessDate:dd/MM/yyyy} đã khóa sổ cuối ngày. Không thể tạo hóa đơn mới.");
+        }
         var requiresBankAccount = request.IsPendingPayment && paymentMethodUpper is "VIETQR" or "TRANSFER" or "BANK";
         if (requiresBankAccount && !branch.CurrentBankFinanceAccountId.HasValue)
             throw new BusinessException("BANK_ACCOUNT_NOT_CONFIGURED", "Chi nhánh chưa chọn tài khoản ngân hàng nhận chuyển khoản.");
@@ -1340,6 +1383,12 @@ public class OrderService : IOrderService
             var preOrderBusinessDate = preOrderShift != null
                 ? preOrderShift.BusinessDate
                 : BusinessDateResolver.Resolve(DateTime.UtcNow, new TimeSpan(6, 0, 0));
+            if (_shiftRepository != null && await _shiftRepository.IsBusinessDayClosedAsync(request.BranchId, preOrderBusinessDate, cancellationToken))
+            {
+                throw new BusinessException(
+                    "BUSINESS_DAY_CLOSED",
+                    $"Ngày nghiệp vụ {preOrderBusinessDate:dd/MM/yyyy} đã khóa sổ cuối ngày. Không thể tạo đơn đặt trước mới.");
+            }
             var order = new Order
             {
                 Id = Guid.NewGuid(),
@@ -1359,7 +1408,14 @@ public class OrderService : IOrderService
                 PaymentMethod = preOrderPaymentMethod,
                 PaymentStatus = request.DepositAmount >= finalAmount ? "PAID" : "PARTIALLY_PAID",
                 Status = "PendingPickup",
-                Note = $"Hẹn nhận: {request.ExpectedPickupDate:dd/MM/yyyy HH:mm}. {request.Note}".Trim(),
+                ExpectedPickupDate = request.ExpectedPickupDate.Kind == DateTimeKind.Utc
+                    ? request.ExpectedPickupDate
+                    : request.ExpectedPickupDate.Kind == DateTimeKind.Local
+                        ? request.ExpectedPickupDate.ToUniversalTime()
+                        : DateTime.SpecifyKind(request.ExpectedPickupDate.AddHours(-7), DateTimeKind.Utc),
+                Note = string.IsNullOrWhiteSpace(request.Note)
+                    ? $"Hẹn nhận: {request.ExpectedPickupDate:dd/MM/yyyy HH:mm}"
+                    : $"Hẹn nhận: {request.ExpectedPickupDate:dd/MM/yyyy HH:mm}. {request.Note.Trim()}",
                 AppliedPromotionId = effectivePromoId,
                 AppliedPromotionSummary = effectivePromoSummary,
                 PromotionDiscountAmount = orderDiscount,
@@ -1666,15 +1722,20 @@ public class OrderService : IOrderService
         bool isStoreOwner = string.Equals(effectiveRole, "STORE_OWNER", StringComparison.OrdinalIgnoreCase)
             || string.Equals(effectiveRole, "StoreOwner", StringComparison.OrdinalIgnoreCase);
 
-        if (order.Status == "Completed" && !isStoreOwner)
+        if (!isStoreOwner && (order.Status == "Completed" || order.Status == "PendingPayment" || !string.IsNullOrWhiteSpace(effectiveRole)))
         {
-            throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền hủy hóa đơn đã thanh toán. Nhân viên không được phép tự ý hủy.");
+            throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền hủy hóa đơn. Nhân viên không được phép tự ý hủy.");
         }
+
+        bool isPendingPreOrder = string.Equals(order.Status, "PendingPickup", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(order.Status, "PreOrder", StringComparison.OrdinalIgnoreCase);
 
         if (order.Status == "Completed")
             throw new BusinessException("PAID_ORDER_RETURN_REQUIRED", "Đơn đã thanh toán cần xử lý qua Đổi/Trả để ghi nhận hàng nhận lại và hoàn tiền đúng nguồn.");
-        if (order.DepositAmount > 0 || string.Equals(order.PaymentStatus, "PAID", StringComparison.OrdinalIgnoreCase))
+        if (!isPendingPreOrder && (order.DepositAmount > 0 || string.Equals(order.PaymentStatus, "PAID", StringComparison.OrdinalIgnoreCase)))
             throw new BusinessException("PAID_ORDER_RETURN_REQUIRED", "Đơn đã nhận tiền hoặc tiền cọc cần xử lý qua Đổi/Trả để ghi nhận hoàn tiền đúng nguồn.");
+        if (isPendingPreOrder && order.DepositAmount > 0 && !isStoreOwner)
+            throw new UnauthorizedAccessException("Chỉ Chủ cửa hàng (STORE_OWNER) mới có quyền hủy và hoàn cọc đơn đặt trước.");
 
         // Hoàn trả tồn kho về BranchStocks (quy đổi về ĐVT cơ sở)
         foreach (var detail in order.Details)
@@ -1733,13 +1794,29 @@ public class OrderService : IOrderService
         bool wasPendingPayment = string.Equals(order.Status, "PendingPayment", StringComparison.OrdinalIgnoreCase);
         order.Status = "Cancelled";
         order.PaymentStatus = wasPendingPayment ||
+            (isPendingPreOrder && order.DepositAmount <= 0) ||
             string.Equals(order.PaymentMethod, "CREDIT", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(order.PaymentMethod, "DEBT", StringComparison.OrdinalIgnoreCase)
             ? "CANCELLED" : "REFUNDED";
         order.Note = $"Đã hủy: {request.Reason}. {request.Note} | Trước đó: {order.Note}".Trim();
 
+        // Hoàn tiền cọc đơn đặt trước từ Két sắt chi nhánh khi Chủ cửa hàng hủy đơn đã cọc (DEF-SC71-001)
+        if (isPendingPreOrder && order.DepositAmount > 0 && string.Equals(order.PaymentMethod, "CASH", StringComparison.OrdinalIgnoreCase) && _cashbookService != null)
+        {
+            var safe = await _cashbookService.GetOrCreateSafeAsync(order.BranchId, cancellationToken);
+            await _cashbookService.DisburseCashAsync(
+                safe.Id,
+                FinanceAccountType.Safe,
+                order.DepositAmount,
+                "PREORDER_CANCEL_REFUND",
+                order.Id,
+                order.OrderCode,
+                $"Hoàn tiền cọc hủy đơn đặt trước '{order.OrderCode}' (Chủ cửa hàng)",
+                cancellationToken
+            );
+        }
         // Hoàn tiền mặt từ Két sắt chi nhánh nếu đơn trước đó Chủ cửa hàng đã thu tiền mặt trực tiếp
-        if (!wasPendingPayment && order.PaymentMethod == "CASH" && order.FinalAmount > 0 && order.ShiftId == null && IsOwnerCaller() && _cashbookService != null)
+        else if (!wasPendingPayment && !isPendingPreOrder && order.PaymentMethod == "CASH" && order.FinalAmount > 0 && order.ShiftId == null && IsOwnerCaller() && _cashbookService != null)
         {
             var safe = await _cashbookService.GetOrCreateSafeAsync(order.BranchId, cancellationToken);
             await _cashbookService.DisburseCashAsync(
@@ -2068,7 +2145,12 @@ public class OrderService : IOrderService
             {
                 if (stock.ExpiryDate.HasValue && stock.ExpiryDate.Value.Date < DateTime.UtcNow.Date)
                     throw new BusinessException("RETURN_BATCH_EXPIRED", $"Lô {stock.BatchCode} đã hết hạn sử dụng ({stock.ExpiryDate:dd/MM/yyyy}), không thể nhập lại kho bán (Restock). Vui lòng chọn tình trạng Hàng lỗi/hỏng hoặc chọn lô khác còn hạn.");
-                if (!string.Equals(stock.Status, "Active", StringComparison.OrdinalIgnoreCase))
+                var batchStatus = (stock.Status ?? string.Empty).Trim();
+                bool isSellableStatus = string.IsNullOrEmpty(batchStatus)
+                    || string.Equals(batchStatus, "Active", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(batchStatus, "Good", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(batchStatus, "Normal", StringComparison.OrdinalIgnoreCase);
+                if (!isSellableStatus)
                     throw new BusinessException("RETURN_BATCH_INACTIVE", $"Lô {stock.BatchCode} không còn hoạt động ({stock.Status}), không thể nhập lại kho bán.");
             }
 
@@ -2230,6 +2312,7 @@ public class OrderService : IOrderService
         Guid? currentActiveShiftId = currentOpenShift?.Id;
 
         string exchangeCode = $"DT{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
+        var exchangeBusinessDate = currentOpenShift?.BusinessDate ?? BusinessDateResolver.Resolve(DateTime.UtcNow, new TimeSpan(6, 0, 0));
         var exchangeOrder = new Order
         {
             Id = Guid.NewGuid(),
@@ -2239,6 +2322,7 @@ public class OrderService : IOrderService
             OrderCode = exchangeCode,
             CashierName = exchangeCashierName,
             OrderDate = DateTime.UtcNow,
+            BusinessDate = exchangeBusinessDate,
             TotalAmount = totalNewAmount,
             DiscountAmount = 0m,
             FinalAmount = Math.Max(0, netAmount),
@@ -2259,6 +2343,12 @@ public class OrderService : IOrderService
         foreach (var d in newOrderDetails)
         {
             d.OrderId = exchangeOrder.Id;
+        }
+
+        if (totalReturnAmount > 0)
+        {
+            originalOrder.ReturnedAmount += totalReturnAmount;
+            originalOrder.UpdatedAt = DateTime.UtcNow;
         }
 
         await _orderRepository.AddAsync(exchangeOrder, cancellationToken);
@@ -2589,7 +2679,12 @@ public class OrderService : IOrderService
             PointsRedeemed: order.PointsRedeemed,
             PointsDiscountAmount: order.PointsDiscountAmount,
             ReturnedAmount: order.ReturnedAmount,
-            GiftStockWarning: giftStockWarning
+            GiftStockWarning: giftStockWarning,
+            ExpectedPickupDate: order.ExpectedPickupDate.HasValue
+                ? (order.ExpectedPickupDate.Value.Kind == DateTimeKind.Local
+                    ? order.ExpectedPickupDate.Value.ToUniversalTime()
+                    : DateTime.SpecifyKind(order.ExpectedPickupDate.Value, DateTimeKind.Utc))
+                : null
         );
     }
 

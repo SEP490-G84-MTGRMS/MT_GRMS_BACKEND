@@ -544,6 +544,35 @@ public class CatalogServiceTests
     }
 
     [Fact]
+    public async Task UpdateProductAsync_PriceUnchanged_DoesNotCreateDuplicatePriceHistory()
+    {
+        var (service, prodRepo, _, historyRepo, _, _, catId) = CreateSut();
+        var prodId = Guid.NewGuid();
+        var product = new Product
+        {
+            Id = prodId,
+            Name = "Nước suối",
+            ProductCode = "SP000009",
+            CategoryId = catId,
+            BaseUnit = "Chai",
+            CostPrice = 3000m,
+            SellingPrice = 5000m
+        };
+        product.Units.Add(new ProductUnit(prodId, "Chai", 1m, 5000m, isBaseUnit: true, isPurchaseUnit: false));
+        prodRepo.Products.Add(product);
+
+        await service.UpdateProductAsync(prodId, new ProductUpdateRequest(
+            Name: "Nước suối 500ml",
+            CategoryId: catId,
+            SellingPrice: 5000m,
+            CostPrice: 3000m,
+            BaseUnit: "Chai"
+        ));
+
+        Assert.Empty(historyRepo.Histories);
+    }
+
+    [Fact]
     public async Task GetPriceHistoryAsync_ReturnsRequestedPageAndTotalCount()
     {
         var (service, _, _, historyRepo, _, _, _) = CreateSut();

@@ -78,7 +78,8 @@ public record OrderResponse(
     int PointsRedeemed = 0,
     decimal PointsDiscountAmount = 0m,
     string? GiftStockWarning = null,
-    decimal ReturnedAmount = 0m
+    decimal ReturnedAmount = 0m,
+    DateTime? ExpectedPickupDate = null
 )
 {
     public Guid StoreId => BranchId;

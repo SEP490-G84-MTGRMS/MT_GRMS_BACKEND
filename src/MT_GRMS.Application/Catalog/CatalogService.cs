@@ -462,8 +462,12 @@ public class CatalogService : ICatalogService
                 IsBelowCost = isBelowCost,
                 ManagerApprovedBy = null,
                 ManagerApprovalReason = null,
-                ChangedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM",
-                ChangedByUserName = !string.IsNullOrEmpty(_tenantContext.CurrentRole) ? _tenantContext.CurrentRole : "Quản lý",
+                ChangedByUserId = !string.IsNullOrWhiteSpace(_tenantContext.CurrentRawUserId)
+                    ? _tenantContext.CurrentRawUserId
+                    : (_tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM"),
+                ChangedByUserName = !string.IsNullOrWhiteSpace(_tenantContext.CurrentUserName)
+                    ? _tenantContext.CurrentUserName
+                    : (!string.IsNullOrEmpty(_tenantContext.CurrentRole) ? _tenantContext.CurrentRole : "Quản lý"),
                 Reason = isBelowCost ? "Điều chỉnh giá bán (Dưới giá vốn)" : "Điều chỉnh giá bán",
                 CreatedAt = DateTime.UtcNow
             };
@@ -687,8 +691,6 @@ public class CatalogService : ICatalogService
             throw new ArgumentException("Phạm vi giá chỉ nhận MASTER hoặc BRANCH.", nameof(query.PriceScope));
         if (query.BranchId == Guid.Empty)
             query.BranchId = null;
-        if (!query.BranchId.HasValue)
-            query.PriceScope = "MASTER";
         if (query.ProductUnitId == Guid.Empty)
             query.ProductUnitId = null;
         if (query.FromDate.HasValue && query.ToDate.HasValue && query.FromDate > query.ToDate)
@@ -716,7 +718,7 @@ public class CatalogService : ICatalogService
             h.ChangedByUserId,
             h.ChangedByUserName,
             h.Reason,
-            h.CreatedAt
+            DateTime.SpecifyKind(h.CreatedAt, DateTimeKind.Utc)
         )).ToList();
 
         return new PagedResult<ProductPriceHistoryDto>

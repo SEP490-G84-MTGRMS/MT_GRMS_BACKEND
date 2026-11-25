@@ -827,13 +827,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                     ""RedemptionRatePoints"" integer NOT NULL DEFAULT 1,
                     ""RedemptionRateAmount"" numeric(18,2) NOT NULL DEFAULT 1000.00,
                     ""MinRedemptionPoints"" integer NOT NULL DEFAULT 20,
+                    ""PointsExpiryMonths"" integer NOT NULL DEFAULT 12,
+                    ""MaxRedemptionPercent"" integer NOT NULL DEFAULT 50,
                     ""AllowPointsWithPromotions"" boolean NOT NULL DEFAULT true,
                     ""CreatedBy"" uuid NULL,
                     ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
                     ""UpdatedAt"" timestamp with time zone NULL,
                     ""IsDeleted"" boolean NOT NULL DEFAULT false
                 );
+                ALTER TABLE IF EXISTS ""LoyaltySettings"" ADD COLUMN IF NOT EXISTS ""PointsExpiryMonths"" integer NOT NULL DEFAULT 12;
+                ALTER TABLE IF EXISTS ""LoyaltySettings"" ADD COLUMN IF NOT EXISTS ""MaxRedemptionPercent"" integer NOT NULL DEFAULT 50;
                 CREATE UNIQUE INDEX IF NOT EXISTS ""IX_LoyaltySettings_TenantID"" ON ""LoyaltySettings"" (""TenantID"");
+                ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""ExpectedPickupDate"" timestamp with time zone NULL;
 
 
             ");
@@ -1426,6 +1431,7 @@ END $$;
                         ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""ReopenedByUserId"" uuid;
                         ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""ReopenReason"" character varying(500);
                         DROP INDEX IF EXISTS ""IX_BusinessDayClosings_Tenant_Branch_Date"";
+            DROP INDEX IF EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate"";
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate_Version"" ON ""BusinessDayClosings"" (""TenantId"", ""BranchId"", ""BusinessDate"", ""Version"");
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate_IsActive"" ON ""BusinessDayClosings"" (""TenantId"", ""BranchId"", ""BusinessDate"", ""IsActive"") WHERE ""IsActive"" = TRUE;
 

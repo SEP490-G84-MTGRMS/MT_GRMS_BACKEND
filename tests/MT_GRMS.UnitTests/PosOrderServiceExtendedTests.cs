@@ -444,4 +444,134 @@ public class PosOrderServiceExtendedTests
             service.ProcessReturnExchangeAsync(dummyOrderId, req));
         Assert.Contains("Đơn giá hàng trả không được âm", ex.Message);
     }
+
+    [Fact]
+    public async Task CreateOrderAsync_OwnerShiftlessOnClosedBusinessDay_ThrowsBusinessDayClosed()
+    {
+        _tenantContextMock.Setup(t => t.CurrentRole).Returns("STORE_OWNER");
+        _shiftRepoMock.Setup(s => s.GetActiveShiftAsync(_branchId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ShiftZReport?)null);
+        _shiftRepoMock.Setup(s => s.IsBusinessDayClosedAsync(_branchId, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var service = CreateService();
+        var req = new OrderCreateRequest(
+            BranchId: _branchId,
+            ShiftId: null,
+            CustomerId: null,
+            Items: new List<OrderItemCreateDto> { new(_productId, 1, 10000m) },
+            PaymentMethod: "CASH"
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateOrderAsync(req));
+        Assert.Equal("BUSINESS_DAY_CLOSED", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreatePreOrderAsync_OnClosedBusinessDay_ThrowsBusinessDayClosed()
+    {
+        _tenantContextMock.Setup(t => t.CurrentRole).Returns("STORE_OWNER");
+        _uowMock.Setup(u => u.ExecuteInTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task>>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<System.Data.IsolationLevel>()))
+            .Returns((Func<CancellationToken, Task> op, CancellationToken ct, System.Data.IsolationLevel _) => op(ct));
+        _shiftRepoMock.Setup(s => s.GetActiveShiftAsync(_branchId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ShiftZReport?)null);
+        _shiftRepoMock.Setup(s => s.IsBusinessDayClosedAsync(_branchId, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var service = CreateService();
+        var req = new PreOrderCreateRequest(
+            BranchId: _branchId,
+            CustomerId: _customerId,
+            Items: new List<OrderItemCreateDto> { new(_productId, 2, 10000m) },
+            DepositAmount: 5000m,
+            ExpectedPickupDate: DateTime.UtcNow.AddDays(1),
+            PaymentMethod: "CASH"
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreatePreOrderAsync(req));
+        Assert.Equal("BUSINESS_DAY_CLOSED", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchangeAsync_SetsValidBusinessDateAndAccumulatesOriginalReturnedAmount()
+    {
+        _tenantContextMock.Setup(t => t.CurrentRole).Returns("STORE_OWNER");
+        _uowMock.Setup(u => u.ExecuteInTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<OrderResponse>>>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<System.Data.IsolationLevel>()))
+            .Returns((Func<CancellationToken, Task<OrderResponse>> op, CancellationToken ct, System.Data.IsolationLevel _) => op(ct));
+        _shiftRepoMock.Setup(s => s.GetActiveShiftAsync(_branchId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ShiftZReport?)null);
+
+        var originalOrderId = Guid.NewGuid();
+        var detailId = Guid.NewGuid();
+        var batchId = Guid.NewGuid();
+        var originalOrder = new Order
+        {
+            Id = originalOrderId,
+            BranchId = _branchId,
+            TenantId = "tenant-01",
+            OrderCode = "HD261125999",
+            Status = "Completed",
+            PaymentMethod = "CASH",
+            FinalAmount = 20000m,
+            ReturnedAmount = 0m,
+            Details = new List<OrderDetail>
+            {
+                new()
+                {
+                    Id = detailId,
+                    OrderId = originalOrderId,
+                    ProductId = _productId,
+                    ProductName = "Test Product",
+                    BatchId = batchId,
+                    BatchCode = "LOT-TEST-01",
+                    Quantity = 2,
+                    UnitPrice = 10000m,
+                    ActualPrice = 10000m,
+                    TotalLineAmount = 20000m,
+                    UnitName = "Cái",
+                    ConversionRate = 1m
+                }
+            }
+        };
+
+        _orderRepoMock.Setup(r => r.GetOrderWithDetailsAsync(originalOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(originalOrder);
+        _orderRepoMock.Setup(r => r.GetBranchStockByIdAsync(_branchId, _productId, batchId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BranchStock
+            {
+                Id = batchId,
+                BranchId = _branchId,
+                ProductId = _productId,
+                BatchCode = "LOT-TEST-01",
+                QuantityOnHand = 10m,
+                Status = "Active"
+            });
+
+        Order? capturedExchangeOrder = null;
+        _orderRepoMock.Setup(r => r.AddAsync(It.IsAny<Order>(), It.IsAny<CancellationToken>()))
+            .Callback<Order, CancellationToken>((o, _) => capturedExchangeOrder = o)
+            .Returns(Task.CompletedTask);
+
+        var service = CreateService();
+        var req = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_productId, 1, 10000m, OrderDetailId: detailId) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH",
+            Reason: "Khách đổi ý",
+            CashFundSource: "SAFE"
+        );
+
+        await service.ProcessReturnExchangeAsync(originalOrderId, req);
+
+        Assert.NotNull(capturedExchangeOrder);
+        Assert.NotEqual(default, capturedExchangeOrder!.BusinessDate);
+        Assert.True(capturedExchangeOrder.BusinessDate.Year >= 2026);
+        Assert.Equal(10000m, originalOrder.ReturnedAmount);
+    }
 }

@@ -36,7 +36,8 @@ public record CloseShiftRequest(
     decimal DroppedToSafeAmount,
     string? ReceiverUserId = null,
     string? Notes = null,
-    string? EarlyOrLateReason = null
+    string? EarlyOrLateReason = null,
+    string? DiscrepancyReason = null
 );
 
 /// <summary>
@@ -218,7 +219,8 @@ public record ShiftDetailResponse(
     DateOnly? BusinessDate = null,
     string? DiscrepancyReason = null,
     Guid? OpenedScheduleId = null,
-    Guid? ClosedScheduleId = null
+    Guid? ClosedScheduleId = null,
+    decimal TotalCashSales = 0m
 );
 
 /// <summary>

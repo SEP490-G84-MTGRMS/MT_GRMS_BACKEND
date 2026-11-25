@@ -13,6 +13,7 @@ public interface IBusinessDayClosingRepository
     Task<IReadOnlyList<BusinessDayClosing>> GetHistoryAsync(string tenantId, Guid branchId, DateOnly businessDate, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<ShiftZReport>> GetShiftsAsync(string tenantId, Guid branchId, DateOnly businessDate, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<Order>> GetShiftlessOrdersAsync(string tenantId, Guid branchId, DateOnly businessDate, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<Guid>> GetPostedPosSaleOrderIdsAsync(string tenantId, Guid branchId, Guid[] orderIds, CancellationToken cancellationToken = default);
     Task<bool> HasPendingPaymentOrdersAsync(string tenantId, Guid branchId, DateOnly businessDate, CancellationToken cancellationToken = default);
     Task<IReadOnlyList<FinanceAccount>> GetFundsAsync(string tenantId, Guid branchId, CancellationToken cancellationToken = default);
     Task<decimal> GetSafeRefundsAsync(string tenantId, Guid branchId, DateTime periodStartUtc, DateTime periodEndUtc, CancellationToken cancellationToken = default)

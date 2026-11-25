@@ -14,13 +14,19 @@ public class BranchesController : BaseApiController
 {
     private readonly IBranchService _branchService;
     private readonly IBranchProductService _branchProductService;
+    private readonly ITenantContext _tenantContext;
+    private readonly IAuthorizationService _authorizationService;
 
     public BranchesController(
         IBranchService branchService,
-        IBranchProductService branchProductService)
+        IBranchProductService branchProductService,
+        ITenantContext tenantContext,
+        IAuthorizationService authorizationService)
     {
         _branchService = branchService;
         _branchProductService = branchProductService;
+        _tenantContext = tenantContext;
+        _authorizationService = authorizationService;
     }
 
     /// <summary>
@@ -126,7 +132,13 @@ public class BranchesController : BaseApiController
         [FromQuery] BranchProductQueryFilter filter,
         CancellationToken cancellationToken)
     {
-        var result = await _branchProductService.GetBranchProductsAsync(branchId ?? Guid.Empty, filter, cancellationToken);
+        var isOwnerOrAdmin = User.IsInRole("STORE_OWNER") || User.IsInRole("StoreOwner") || User.IsInRole("ADMIN") || User.IsInRole("Admin");
+        var effectiveBranchId = branchId ?? (isOwnerOrAdmin ? null : _tenantContext.CurrentBranchId);
+        var scope = new TenantBranchScope(_tenantContext.CurrentTenantId, effectiveBranchId);
+        var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
+        if (!authResult.Succeeded) return Forbid();
+
+        var result = await _branchProductService.GetBranchProductsAsync(effectiveBranchId ?? Guid.Empty, filter, cancellationToken);
         return Ok(ApiResponse<PagedResult<BranchProductDto>>.Ok(result));
     }
 
@@ -139,6 +151,10 @@ public class BranchesController : BaseApiController
         [FromQuery] BranchProductQueryFilter filter,
         CancellationToken cancellationToken)
     {
+        var scope = new TenantBranchScope(_tenantContext.CurrentTenantId, id);
+        var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
+        if (!authResult.Succeeded) return Forbid();
+
         var result = await _branchProductService.GetBranchProductsAsync(id, filter, cancellationToken);
         return Ok(ApiResponse<PagedResult<BranchProductDto>>.Ok(result));
     }
@@ -151,6 +167,10 @@ public class BranchesController : BaseApiController
         Guid id,
         CancellationToken cancellationToken)
     {
+        var scope = new TenantBranchScope(_tenantContext.CurrentTenantId, id);
+        var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
+        if (!authResult.Succeeded) return Forbid();
+
         var result = await _branchProductService.GetAssignableProductsAsync(id, cancellationToken);
         return Ok(ApiResponse<IReadOnlyList<AssignableBranchProductDto>>.Ok(result));
     }
