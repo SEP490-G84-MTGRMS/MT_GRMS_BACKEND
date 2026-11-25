@@ -87,6 +87,8 @@ public class ExpenseService : IExpenseService
             throw new BusinessException("INVALID_TAX_CODE", "Mã số thuế bên bán không vượt quá 50 ký tự.");
         }
 
+        ValidateEvidenceAttachmentUrl(request.EvidenceAttachmentUrl);
+
         EnsureNatureInScope(request.Nature);
 
         if (request.Nature == FinancialNature.OwnerDraw || request.Nature == FinancialNature.TaxPayment)
@@ -103,7 +105,9 @@ public class ExpenseService : IExpenseService
             }
         }
 
-        var expenseDate = request.ExpenseDate ?? DateTime.UtcNow;
+        var expenseDate = request.ExpenseDate.HasValue
+            ? NormalizeDateToUtc(request.ExpenseDate.Value, isEndOfDay: false)
+            : DateTime.UtcNow;
 
         if (_taxPeriodLockGuard != null)
         {
@@ -219,7 +223,7 @@ public class ExpenseService : IExpenseService
             await QueueNotificationAsync(voucher, BusinessNotificationTypes.ExpenseApprovalRequired, "Phiếu chi cần duyệt", ct);
         await _unitOfWork.SaveChangesAsync(ct);
 
-        return MapVoucherResponse(voucher);
+        return await MapVoucherWithBranchNameAsync(voucher, ct);
     }
 
     public async Task<ExpenseVoucherResponse> ApproveExpenseAsync(ApproveExpenseRequest request, CancellationToken ct = default)
@@ -238,7 +242,7 @@ public class ExpenseService : IExpenseService
         // Idempotent: Nếu đã duyệt hoặc đã thanh toán thành công thì không báo lỗi 422
         if (voucher.Status == ExpenseVoucherStatus.Approved || voucher.Status == ExpenseVoucherStatus.Paid)
         {
-            return MapVoucherResponse(voucher);
+            return await MapVoucherWithBranchNameAsync(voucher, ct);
         }
 
         if (voucher.Status != ExpenseVoucherStatus.PendingApproval &&
@@ -266,7 +270,7 @@ public class ExpenseService : IExpenseService
         }
 
         await _unitOfWork.SaveChangesAsync(ct);
-        return MapVoucherResponse(voucher);
+        return await MapVoucherWithBranchNameAsync(voucher, ct);
     }
 
     public async Task<ExpenseVoucherResponse> RejectExpenseAsync(RejectExpenseRequest request, CancellationToken ct = default)
@@ -296,7 +300,7 @@ public class ExpenseService : IExpenseService
             : $"{voucher.Note} | [TỪ CHỐI DUYỆT]: {reasonText}";
 
         await _unitOfWork.SaveChangesAsync(ct);
-        return MapVoucherResponse(voucher);
+        return await MapVoucherWithBranchNameAsync(voucher, ct);
     }
 
     public async Task<ExpenseVoucherResponse> CancelExpenseAsync(CancelExpenseRequest request, CancellationToken ct = default)
@@ -362,7 +366,7 @@ public class ExpenseService : IExpenseService
             }
 
             await _unitOfWork.SaveChangesAsync(token);
-            return MapVoucherResponse(voucher);
+            return await MapVoucherWithBranchNameAsync(voucher, token);
         }, ct);
     }
 
@@ -384,7 +388,7 @@ public class ExpenseService : IExpenseService
             // Idempotent: Nếu đã xuất quỹ thành công từ trước thì trả về luôn không thực hiện trừ quỹ kép
             if (voucher.Status == ExpenseVoucherStatus.Paid)
             {
-                return (Voucher: MapVoucherResponse(voucher), Failure: (InsufficientStockException?)null);
+                return (Voucher: await MapVoucherWithBranchNameAsync(voucher, token), Failure: (InsufficientStockException?)null);
             }
 
             // Tự động phê duyệt cho Chủ cửa hàng / Quản lý nếu phiếu đang ở Draft, PendingApproval hoặc Unresolved (1-click payment flow)
@@ -439,11 +443,11 @@ public class ExpenseService : IExpenseService
                     await QueueNotificationAsync(voucher, BusinessNotificationTypes.ExpensePaymentFailed, "Phiếu chi chưa xuất được quỹ", token);
                 voucher.Status = ExpenseVoucherStatus.PaymentFailed;
                 await _unitOfWork.SaveChangesAsync(token);
-                return (Voucher: MapVoucherResponse(voucher), Failure: failure);
+                return (Voucher: await MapVoucherWithBranchNameAsync(voucher, token), Failure: failure);
             }
 
             await _unitOfWork.SaveChangesAsync(token);
-            return (Voucher: MapVoucherResponse(voucher), Failure: (InsufficientStockException?)null);
+            return (Voucher: await MapVoucherWithBranchNameAsync(voucher, token), Failure: (InsufficientStockException?)null);
         }, ct);
 
         if (result.Failure != null)
@@ -488,11 +492,13 @@ public class ExpenseService : IExpenseService
         RequireOwner();
         var safePage = Math.Max(1, page);
         var safePageSize = Math.Clamp(pageSize, 1, 200);
+        DateTime? fromUtc = fromDate.HasValue ? NormalizeDateToUtc(fromDate.Value, isEndOfDay: false) : null;
+        DateTime? toUtc = toDate.HasValue ? NormalizeDateToUtc(toDate.Value, isEndOfDay: true) : null;
 
         var vouchers = await _expenseRepo.FindAsync(e =>
             (!branchId.HasValue || e.BranchId == branchId.Value) &&
-            (!fromDate.HasValue || e.ExpenseDate >= fromDate.Value) &&
-            (!toDate.HasValue || e.ExpenseDate <= toDate.Value) &&
+            (!fromUtc.HasValue || e.ExpenseDate >= fromUtc.Value) &&
+            (!toUtc.HasValue || e.ExpenseDate <= toUtc.Value) &&
             e.Nature != FinancialNature.TaxPayment &&
             e.Nature != FinancialNature.OwnerDraw &&
             e.Nature != FinancialNature.InternalTransfer, ct);
@@ -587,10 +593,13 @@ public class ExpenseService : IExpenseService
     public async Task<ExpenseSummaryResponse> GetExpenseSummaryAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, CancellationToken ct = default)
     {
         RequireOwner();
+        DateTime? fromUtc = fromDate.HasValue ? NormalizeDateToUtc(fromDate.Value, isEndOfDay: false) : null;
+        DateTime? toUtc = toDate.HasValue ? NormalizeDateToUtc(toDate.Value, isEndOfDay: true) : null;
+
         var vouchers = await _expenseRepo.FindAsync(e =>
             (!branchId.HasValue || e.BranchId == branchId.Value) &&
-            (!fromDate.HasValue || e.ExpenseDate >= fromDate.Value) &&
-            (!toDate.HasValue || e.ExpenseDate <= toDate.Value) &&
+            (!fromUtc.HasValue || e.ExpenseDate >= fromUtc.Value) &&
+            (!toUtc.HasValue || e.ExpenseDate <= toUtc.Value) &&
             e.Nature != FinancialNature.TaxPayment &&
             e.Nature != FinancialNature.OwnerDraw &&
             e.Nature != FinancialNature.InternalTransfer, ct);
@@ -680,7 +689,91 @@ public class ExpenseService : IExpenseService
             : $"{voucher.Note} | [TRIAGE ĐÃ XỬ LÝ]: {request.ResolutionNote.Trim()}";
 
         await _unitOfWork.SaveChangesAsync(ct);
-        return MapVoucherResponse(voucher);
+        return await MapVoucherWithBranchNameAsync(voucher, ct);
+    }
+
+    private static void ValidateEvidenceAttachmentUrl(string? rawUrl)
+    {
+        if (string.IsNullOrWhiteSpace(rawUrl))
+        {
+            return;
+        }
+
+        var trimmed = rawUrl.Trim();
+        if (IsSafeImageDataUrl(trimmed))
+        {
+            return;
+        }
+
+        if (trimmed.StartsWith("/uploads/", StringComparison.OrdinalIgnoreCase) &&
+            !trimmed.Contains("..", StringComparison.Ordinal) &&
+            !trimmed.Contains('\\') &&
+            !trimmed.Any(char.IsControl))
+        {
+            return;
+        }
+
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) &&
+            uri.Scheme == Uri.UriSchemeHttps &&
+            !string.IsNullOrWhiteSpace(uri.Host))
+        {
+            return;
+        }
+
+        throw new BusinessException(
+            "INVALID_ATTACHMENT_URL",
+            "Đường dẫn chứng từ không hợp lệ. Chỉ chấp nhận ảnh hợp lệ (png/jpg/webp/gif), đường dẫn /uploads/ hoặc HTTPS an toàn.");
+    }
+
+    private static bool IsSafeImageDataUrl(string trimmed)
+    {
+        const string marker = ";base64,";
+        var markerIndex = trimmed.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (markerIndex <= 0)
+        {
+            return false;
+        }
+
+        var prefix = trimmed[..markerIndex].ToLowerInvariant();
+        if (prefix is not ("data:image/png" or "data:image/jpeg" or "data:image/jpg" or "data:image/webp" or "data:image/gif"))
+        {
+            return false;
+        }
+
+        var payload = trimmed[(markerIndex + marker.Length)..].Trim();
+        if (payload.Length == 0)
+        {
+            return false;
+        }
+
+        var buffer = new byte[(payload.Length * 3 / 4) + 4];
+        return Convert.TryFromBase64String(payload, buffer, out var bytesWritten) && bytesWritten > 0;
+    }
+
+    private static DateTime NormalizeDateToUtc(DateTime raw, bool isEndOfDay)
+    {
+        if (raw.Kind == DateTimeKind.Utc)
+        {
+            return isEndOfDay && raw.TimeOfDay == TimeSpan.Zero ? raw.AddDays(1).AddTicks(-1) : raw;
+        }
+
+        if (raw.Kind == DateTimeKind.Local)
+        {
+            var utc = raw.ToUniversalTime();
+            return isEndOfDay && raw.TimeOfDay == TimeSpan.Zero ? utc.AddDays(1).AddTicks(-1) : utc;
+        }
+
+        // Unspecified timestamps represent Vietnam local time (+07:00).
+        var effectiveVn = isEndOfDay && raw.TimeOfDay == TimeSpan.Zero
+            ? raw.Date.AddDays(1).AddTicks(-1)
+            : raw;
+        return DateTime.SpecifyKind(effectiveVn.AddHours(-7), DateTimeKind.Utc);
+    }
+
+    private async Task<ExpenseVoucherResponse> MapVoucherWithBranchNameAsync(ExpenseVoucher voucher, CancellationToken ct)
+    {
+        var branchNames = await ResolveBranchNamesAsync([voucher], ct);
+        return MapVoucherResponse(voucher, branchNames);
     }
 
     /// <summary>

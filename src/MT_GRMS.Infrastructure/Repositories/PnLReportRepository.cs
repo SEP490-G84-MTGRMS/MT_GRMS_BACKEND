@@ -404,6 +404,12 @@ public class PnLReportRepository : IPnLReportRepository
             }
 
             var dayReturns = returnsByDay.GetValueOrDefault(current, 0m);
+            if (grossRev > 0 && dayReturns > 0)
+            {
+                var cogsRatio = dayCogs / grossRev;
+                var returnCogs = Math.Round(dayReturns * cogsRatio, 0, MidpointRounding.AwayFromZero);
+                dayCogs = Math.Max(0m, dayCogs - returnCogs);
+            }
             var netRev = Math.Max(0, grossRev - discounts - dayReturns);
             var dayExp = expensesByDay.GetValueOrDefault(current, 0m);
 
@@ -418,5 +424,62 @@ public class PnLReportRepository : IPnLReportRepository
         }
 
         return result;
+    }
+
+    public async Task<decimal> GetShrinkageLossAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default)
+    {
+        var stocktakeQuery = _context.Stocktakes
+            .AsNoTracking()
+            .Include(s => s.Lines)
+            .Where(s => !s.IsDeleted && s.Status == "APPROVED");
+
+        if (branchId.HasValue)
+        {
+            stocktakeQuery = stocktakeQuery.Where(s => s.BranchId == branchId.Value);
+        }
+
+        var approvedStocktakes = await stocktakeQuery
+            .Where(s => (s.ReviewedAt ?? s.UpdatedAt ?? s.StartedAt) >= fromDate &&
+                        (s.ReviewedAt ?? s.UpdatedAt ?? s.StartedAt) <= toDate)
+            .ToListAsync(ct);
+
+        if (approvedStocktakes.Count == 0)
+        {
+            return 0m;
+        }
+
+        var allLines = approvedStocktakes.SelectMany(s => s.Lines).Where(l => !l.IsDeleted).ToList();
+        var missingCostProductIds = allLines
+            .Where(l => l.UnitCost <= 0m)
+            .Select(l => l.ProductId)
+            .Distinct()
+            .ToList();
+
+        var productCostDict = missingCostProductIds.Count > 0
+            ? await _context.Products.AsNoTracking()
+                .Where(p => missingCostProductIds.Contains(p.Id))
+                .ToDictionaryAsync(p => p.Id, p => p.CostPrice ?? 0m, ct)
+            : new Dictionary<Guid, decimal>();
+
+        decimal totalLoss = 0m;
+        foreach (var line in allLines)
+        {
+            var missingQty = line.VarianceQty < 0 ? Math.Abs(line.VarianceQty) : 0m;
+            var damagedWriteOffQty = line.DamagedQty > 0 && (string.IsNullOrWhiteSpace(line.DamagedAction) || string.Equals(line.DamagedAction, "WRITE_OFF", StringComparison.OrdinalIgnoreCase))
+                ? line.DamagedQty
+                : 0m;
+            var expiredWriteOffQty = line.ExpiredQty > 0 && (string.IsNullOrWhiteSpace(line.ExpiredAction) || string.Equals(line.ExpiredAction, "WRITE_OFF", StringComparison.OrdinalIgnoreCase))
+                ? line.ExpiredQty
+                : 0m;
+            var totalLossQty = missingQty + damagedWriteOffQty + expiredWriteOffQty;
+            if (totalLossQty <= 0m) continue;
+
+            var unitCost = line.UnitCost > 0m
+                ? line.UnitCost
+                : productCostDict.GetValueOrDefault(line.ProductId, 0m);
+            totalLoss += totalLossQty * unitCost;
+        }
+
+        return Math.Round(totalLoss, 0, MidpointRounding.AwayFromZero);
     }
 }

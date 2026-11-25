@@ -529,4 +529,172 @@ public class CashbookServiceTests
 
         Assert.Equal("EVIDENCE_REQUIRED", ex.ErrorCode);
     }
+
+    [Fact]
+    public async Task InactiveAccount_CannotRecordMovementAndIsExcludedFromGetAccounts()
+    {
+        var inactiveTill = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Till,
+            AccountName = "Két cũ ngừng hoạt động", CurrentBalance = 1_000_000m, IsActive = false
+        };
+        _accountRepo.Items.Add(inactiveTill);
+        _cashbookRepo.Accounts.Add(inactiveTill);
+
+        var accounts = await _service.GetAccountsAsync();
+        Assert.DoesNotContain(accounts, a => a.Id == inactiveTill.Id);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.DisburseCashAsync(inactiveTill.Id, FinanceAccountType.Till, 100_000m, "EXPENSE", null, "REF", "Test"));
+        Assert.Equal("ACCOUNT_INACTIVE", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task DisburseExpense_ClassifiesAsOperatingExpenseAndBlocksVoidingDebtOrReturnRefund()
+    {
+        var till = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Till,
+            AccountName = "Két quầy", CurrentBalance = 1_000_000m, IsActive = true
+        };
+        _accountRepo.Items.Add(till);
+        _cashbookRepo.Accounts.Add(till);
+
+        var expenseEntry = await _service.DisburseCashAsync(till.Id, FinanceAccountType.Till, 100_000m, "EXPENSE", Guid.NewGuid(), "EXP-01", "Chi điện");
+        Assert.Equal(FinancialNature.OperatingExpense, expenseEntry.FinancialNature);
+        Assert.Equal(CashbookTaxTreatment.DeductibleExpense, expenseEntry.TaxTreatment);
+
+        var debtEntry = new CashbookEntry
+        {
+            Id = Guid.NewGuid(), AccountId = till.Id, SourceType = "DEBT", EntryType = CashbookEntryType.Receipt,
+            Amount = 50_000m, OccurredAtUtc = DateTime.UtcNow, AuditHash = "H1"
+        };
+        var refundEntry = new CashbookEntry
+        {
+            Id = Guid.NewGuid(), AccountId = till.Id, SourceType = "RETURN_REFUND", EntryType = CashbookEntryType.Payment,
+            Amount = 50_000m, OccurredAtUtc = DateTime.UtcNow, AuditHash = "H2"
+        };
+        _cashbookRepo.Items.Add(debtEntry);
+        _cashbookRepo.Items.Add(refundEntry);
+
+        var exDebt = await Assert.ThrowsAsync<BusinessException>(() => _service.VoidTransactionAsync(debtEntry.Id, new VoidEntryRequest("Test")));
+        var exRefund = await Assert.ThrowsAsync<BusinessException>(() => _service.VoidTransactionAsync(refundEntry.Id, new VoidEntryRequest("Test")));
+        Assert.Equal("CANNOT_VOID_SYSTEM_ENTRY", exDebt.ErrorCode);
+        Assert.Equal("CANNOT_VOID_SYSTEM_ENTRY", exRefund.ErrorCode);
+    }
+
+    [Fact]
+    public async Task GetEntriesAsync_WithDateOnlyToDate_IncludesFullVietnamDay()
+    {
+        var accountId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        // 2026-11-24 22:00 VN == 2026-11-24 15:00 UTC
+        _cashbookRepo.Items.Add(new CashbookEntry
+        {
+            Id = Guid.NewGuid(), AccountId = accountId, BranchId = branchId,
+            OccurredAtUtc = new DateTime(2026, 11, 24, 15, 0, 0, DateTimeKind.Utc),
+            AuditHash = "H1", EntryCode = "C1", Description = "Late evening VN"
+        });
+
+        var dateOnly = new DateTime(2026, 11, 24, 0, 0, 0, DateTimeKind.Unspecified);
+        var entries = await _service.GetEntriesAsync(accountId, branchId, dateOnly, dateOnly, 1, 10);
+        Assert.Single(entries);
+    }
+
+    private sealed class AlwaysLockedTaxGuard : MT_GRMS.Application.Tax.ITaxPeriodLockGuard
+    {
+        public Task<bool> IsPeriodFinalizedAsync(DateTime dateUtc, Guid? branchId = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult(true);
+
+        public Task ValidateTaxPeriodUnlockedAsync(DateTime dateUtc, string actionDescription, Guid? branchId = null, CancellationToken cancellationToken = default) =>
+            throw new BusinessException("TAX_PERIOD_FINALIZED", $"Kỳ thuế đã khóa sổ, không thể {actionDescription}.");
+    }
+
+    [Fact]
+    public async Task TaxPeriodLockGuard_BlocksReceiptPaymentTransferAndVoidWhenFinalized()
+    {
+        var branchId = Guid.NewGuid();
+        var acc1 = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), BranchId = branchId, AccountType = FinanceAccountType.Till,
+            AccountName = "Két 1", CurrentBalance = 1_000_000m, IsActive = true
+        };
+        var acc2 = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), BranchId = branchId, AccountType = FinanceAccountType.Safe,
+            AccountName = "Két sắt", CurrentBalance = 500_000m, IsActive = true
+        };
+        var manualEntry = new CashbookEntry
+        {
+            Id = Guid.NewGuid(), AccountId = acc1.Id, BranchId = branchId, SourceType = "MANUAL",
+            EntryType = CashbookEntryType.Receipt, Amount = 100_000m, OccurredAtUtc = DateTime.UtcNow, AuditHash = "H1"
+        };
+        _accountRepo.Items.AddRange(new[] { acc1, acc2 });
+        _cashbookRepo.Accounts.AddRange(new[] { acc1, acc2 });
+        _cashbookRepo.Items.Add(manualEntry);
+
+        var guardedService = new CashbookService(
+            _cashbookRepo,
+            _accountRepo,
+            _shiftRepo,
+            _auditHashService,
+            _tenantContext,
+            _unitOfWork,
+            taxPeriodLockGuard: new AlwaysLockedTaxGuard());
+
+        var exReceipt = await Assert.ThrowsAsync<BusinessException>(() =>
+            guardedService.CreateReceiptAsync(new CreateReceiptRequest(acc1.Id, 50_000m, "Nạp vốn", "Nạp vốn đầu kỳ", "PT-1", "OWNER_DEPOSIT", CashbookTaxTreatment.NonTaxableReceipt)));
+        var exPayment = await Assert.ThrowsAsync<BusinessException>(() =>
+            guardedService.CreatePaymentAsync(new CreatePaymentRequest(acc1.Id, 50_000m, "Rút vốn", "Rút vốn chủ", "PC-1", "OWNER_DRAW", CashbookTaxTreatment.NonDeductibleExpense)));
+        var exTransfer = await Assert.ThrowsAsync<BusinessException>(() =>
+            guardedService.TransferFundsAsync(new TransferFundRequest(acc1.Id, acc2.Id, 50_000m, "Chuyển quỹ")));
+        var exVoid = await Assert.ThrowsAsync<BusinessException>(() =>
+            guardedService.VoidTransactionAsync(manualEntry.Id, new VoidEntryRequest("Hủy sai")));
+
+        Assert.Equal("TAX_PERIOD_FINALIZED", exReceipt.ErrorCode);
+        Assert.Equal("TAX_PERIOD_FINALIZED", exPayment.ErrorCode);
+        Assert.Equal("TAX_PERIOD_FINALIZED", exTransfer.ErrorCode);
+        Assert.Equal("TAX_PERIOD_FINALIZED", exVoid.ErrorCode);
+    }
+
+    [Fact]
+    public async Task DisburseExpense_WhenVoucherIsNonDeductible_ClassifiesAsNonDeductibleExpense()
+    {
+        var expenseRepo = new FakeGenericRepository<ExpenseVoucher>();
+        var voucher = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            BranchId = Guid.NewGuid(),
+            VoucherCode = "EXP-ND-01",
+            Category = "Phạt hành chính",
+            BeneficiaryName = "Cơ quan chức năng",
+            Amount = 200_000m,
+            Nature = FinancialNature.OperatingExpense,
+            IsTaxDeductible = false
+        };
+        expenseRepo.Items.Add(voucher);
+
+        var till = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), BranchId = voucher.BranchId, AccountType = FinanceAccountType.Till,
+            AccountName = "Két quầy", CurrentBalance = 1_000_000m, IsActive = true
+        };
+        _accountRepo.Items.Add(till);
+        _cashbookRepo.Accounts.Add(till);
+
+        var serviceWithExpenses = new CashbookService(
+            _cashbookRepo,
+            _accountRepo,
+            _shiftRepo,
+            _auditHashService,
+            _tenantContext,
+            _unitOfWork,
+            expenseVoucherRepo: expenseRepo);
+
+        var entry = await serviceWithExpenses.DisburseCashAsync(
+            till.Id, FinanceAccountType.Till, voucher.Amount, "EXPENSE", voucher.Id, voucher.VoucherCode, "Chi phạt");
+
+        Assert.Equal(FinancialNature.OperatingExpense, entry.FinancialNature);
+        Assert.Equal(CashbookTaxTreatment.NonDeductibleExpense, entry.TaxTreatment);
+    }
 }

@@ -67,20 +67,35 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
             .Where(x => x.TotalDebt > 0)
             .ToListAsync(ct);
 
-        List<Domain.Entities.Sales.Customer> scopedCustomerDebts = customerDebts;
-        if (branchId.HasValue && customerDebts.Count > 0)
+        var branchDebtorMap = new Dictionary<Guid, HashSet<Guid>>();
+        if (customerDebts.Count > 0 && selectedBranchIds.Count > 0)
         {
             var debtorIds = customerDebts.Select(c => c.Id).ToList();
-            var branchDebtorIds = await _context.Orders.AsNoTracking()
-                .Where(o => o.BranchId == branchId.Value &&
+            var branchDebtPairs = await _context.Orders.AsNoTracking()
+                .Where(o => selectedBranchIds.Contains(o.BranchId) &&
                             o.CustomerId.HasValue &&
                             debtorIds.Contains(o.CustomerId.Value) &&
                             (o.PaymentMethod == "DEBT" || o.PaymentMethod == "CREDIT") &&
                             o.Status != "Cancelled")
-                .Select(o => o.CustomerId!.Value)
+                .Select(o => new { o.BranchId, CustomerId = o.CustomerId!.Value })
                 .Distinct()
                 .ToListAsync(ct);
-            var branchDebtorSet = branchDebtorIds.ToHashSet();
+
+            foreach (var pair in branchDebtPairs)
+            {
+                if (!branchDebtorMap.TryGetValue(pair.BranchId, out var set))
+                {
+                    set = new HashSet<Guid>();
+                    branchDebtorMap[pair.BranchId] = set;
+                }
+                set.Add(pair.CustomerId);
+            }
+        }
+
+        List<Domain.Entities.Sales.Customer> scopedCustomerDebts = customerDebts;
+        if (branchId.HasValue && customerDebts.Count > 0)
+        {
+            var branchDebtorSet = branchDebtorMap.GetValueOrDefault(branchId.Value) ?? new HashSet<Guid>();
             scopedCustomerDebts = customerDebts.Where(c => branchDebtorSet.Contains(c.Id)).ToList();
         }
 
@@ -101,6 +116,9 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
         {
             var branchAccounts = accounts.Where(x => x.BranchId == branch.Id).ToList();
             var branchAccountIds = branchAccounts.Select(x => x.Id).ToHashSet();
+            var branchReceivable = currentSnapshot && branchDebtorMap.TryGetValue(branch.Id, out var bDebtors)
+                ? customerDebts.Where(c => bDebtors.Contains(c.Id)).Sum(c => c.TotalDebt)
+                : 0m;
             return BuildBranchRow(
             branch.Id,
             branch.BranchCode,
@@ -109,6 +127,7 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
             entries.Where(x => branchAccountIds.Contains(x.AccountId)).ToList(),
             expenses.Where(x => x.BranchId == branch.Id).ToList(),
             movements.Where(x => x.Shift?.BranchId == branch.Id).ToList(),
+            branchReceivable,
             fromUtc,
             toUtc,
             currentSnapshot);
@@ -145,6 +164,7 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
         IReadOnlyCollection<CashbookEntry> entries,
         IReadOnlyCollection<ExpenseVoucher> expenses,
         IReadOnlyCollection<ShiftCashMovement> movements,
+        decimal receivableAmount,
         DateTime fromUtc,
         DateTime toUtc,
         bool currentSnapshot)
@@ -175,7 +195,7 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
             cashAtRegisters,
             safeDeposit,
             cashInTransit,
-            0,
+            receivableAmount,
             pendingPayable,
             currentSnapshot ? expenses.Count : 0,
             status,
