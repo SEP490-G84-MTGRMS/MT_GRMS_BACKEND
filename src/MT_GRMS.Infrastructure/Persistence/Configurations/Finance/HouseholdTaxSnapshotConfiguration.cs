@@ -51,6 +51,7 @@ public class HouseholdTaxSnapshotConfiguration : IEntityTypeConfiguration<Househ
 
         builder.Property(x => x.TaxPolicyJson)
             .HasColumnType("jsonb")
+            .HasDefaultValueSql("'{}'::jsonb")
             .IsRequired();
 
         builder.Property(x => x.Status)
@@ -70,15 +71,17 @@ public class HouseholdTaxSnapshotConfiguration : IEntityTypeConfiguration<Househ
             .HasMaxLength(1000)
             .IsRequired(false);
 
-        // Unique index cho từng revision (tên gọn <= 63 ký tự tương thích PostgreSQL)
+        // Unique index cho từng revision (tên gọn <= 63 ký tự tương thích PostgreSQL; NULLS NOT DISTINCT cho BranchId = NULL)
         builder.HasIndex(x => new { x.TenantId, x.BranchId, x.PeriodType, x.Year, x.PeriodNumber, x.RevisionNumber })
             .HasDatabaseName("IX_HouseholdTaxSnapshots_Tenant_Period_Revision")
-            .IsUnique();
+            .IsUnique()
+            .AreNullsDistinct(false);
 
-        // Unique index cho active snapshot duy nhất đang khóa kỳ (Status = Finalized = 1)
+        // Unique index cho active snapshot duy nhất đang khóa kỳ (Status = Finalized = 1; NULLS NOT DISTINCT cho BranchId = NULL)
         builder.HasIndex(x => new { x.TenantId, x.BranchId, x.PeriodType, x.Year, x.PeriodNumber })
             .HasDatabaseName("IX_HouseholdTaxSnapshots_Tenant_Period_Active")
             .IsUnique()
+            .AreNullsDistinct(false)
             .HasFilter("\"Status\" = 1");
     }
 }

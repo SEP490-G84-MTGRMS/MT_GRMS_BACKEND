@@ -9,4 +9,7 @@ public interface IExpenseRepository : IRepository<ExpenseVoucher>
     Task<decimal> GetDailyExpenseSumAsync(Guid branchId, DateTime dateUtc, CancellationToken ct = default);
     Task<int> GetRecentVouchersCountAsync(Guid branchId, Guid createdByUserId, DateTime sinceUtc, decimal minAmount, CancellationToken ct = default);
     Task<decimal> GetSameVendorDailySumAsync(Guid branchId, string beneficiaryName, string category, DateTime dateUtc, CancellationToken ct = default);
+    Task<bool> BranchExistsAsync(Guid branchId, CancellationToken ct = default) => Task.FromResult(true);
+    Task<Dictionary<Guid, string>> GetBranchNamesAsync(IEnumerable<Guid> branchIds, CancellationToken ct = default) =>
+        Task.FromResult(new Dictionary<Guid, string>());
 }

@@ -86,9 +86,24 @@ public class ExpensesController : BaseApiController
         [FromQuery] DateTime? toDate,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        [FromQuery] string? keyword = null,
+        [FromQuery] string? category = null,
+        [FromQuery] string? status = null,
+        [FromQuery] string? quickStatus = null)
     {
-        var result = await _expenseService.GetExpensesAsync(branchId, fromDate, toDate, page, pageSize, ct);
-        return Ok(ApiResponse<List<ExpenseVoucherResponse>>.Ok(result));
+        var paged = await _expenseService.GetExpensesPageAsync(
+            branchId, fromDate, toDate, page, pageSize, keyword, category, status, quickStatus, ct);
+        return Ok(new ExpensesPagedResponse
+        {
+            Success = true,
+            Data = paged.Items.ToList(),
+            TotalItems = paged.TotalItems,
+        });
     }
+}
+
+public class ExpensesPagedResponse : ApiResponse<List<ExpenseVoucherResponse>>
+{
+    public int TotalItems { get; set; }
 }

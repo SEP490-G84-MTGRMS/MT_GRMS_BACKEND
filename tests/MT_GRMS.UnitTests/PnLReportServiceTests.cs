@@ -67,6 +67,11 @@ public class PnLReportServiceTests
             return Task.FromResult(result);
         }
 
+        public bool MissingBranch { get; set; }
+
+        public Task<string?> GetBranchNameAsync(Guid branchId, CancellationToken ct = default) =>
+            Task.FromResult<string?>(MissingBranch ? null : $"Chi nhánh {branchId.ToString()[..8]}");
+
         public Task<List<TopProductPnLItem>> GetTopProductsAsync(Guid? branchId, DateTime fromDate, DateTime toDate, int limit = 10, CancellationToken ct = default) =>
             Task.FromResult(TopProducts.Take(limit).ToList());
     }
@@ -195,6 +200,26 @@ public class PnLReportServiceTests
         Assert.Equal(3, trend.Count); // 3 ngày: mùng 1, 2, 3
         Assert.Equal(from.Date, trend[0].Date);
         Assert.Equal(93_000_000m, trend[0].Revenue);
+    }
+
+    [Fact]
+    public async Task GetTrendAsync_WhenBranchDoesNotExist_ThrowsNotFoundException()
+    {
+        _fakeRepo.MissingBranch = true;
+        var request = new PnLFilterRequest(Guid.NewGuid(), new DateTime(2026, 10, 1), new DateTime(2026, 10, 3));
+
+        await Assert.ThrowsAsync<MT_GRMS.Domain.Exceptions.NotFoundException>(() => _service.GetTrendAsync(request));
+    }
+
+    [Fact]
+    public async Task GetPnLSummaryAsync_IncludesEstimatedTaxAmountAndShrinkageLoss()
+    {
+        var request = new PnLFilterRequest(null, new DateTime(2026, 10, 1), new DateTime(2026, 10, 31));
+        var response = await _service.GetPnLSummaryAsync(request);
+
+        Assert.Equal(0m, response.ShrinkageLoss);
+        // 1.5% of 93,000,000 = 1,395,000
+        Assert.Equal(1_395_000m, response.EstimatedTaxAmount);
     }
 
     [Theory]

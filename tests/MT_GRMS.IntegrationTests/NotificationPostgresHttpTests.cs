@@ -94,6 +94,7 @@ public class NotificationPostgresHttpTests(ITestOutputHelper output)
             builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
             builder.Services.AddScoped<IUserRepository, UserRepository>();
             builder.Services.AddScoped(typeof(IRepository<>), typeof(GenericRepository<>));
+            builder.Services.AddScoped<ITransferRepository, TransferRepository>();
             builder.Services.AddScoped<ITransferService, TransferService>();
             builder.Services.AddScoped<INotificationRepository, NotificationRepository>();
             builder.Services.AddScoped<INotificationService, NotificationService>();
@@ -170,18 +171,27 @@ public class NotificationPostgresHttpTests(ITestOutputHelper output)
 
             var create = new CreateTransferRequest(seed.Source, seed.Destination, false, null, "Isolated PostgreSQL flow",
                 new[] { new TransferLineRequest(seed.Product, 2m, "unit", "B01", null, 500m) });
-            using var created = await owner.PostAsJsonAsync("/api/transfers", create, ct);
+            using var createReq = new HttpRequestMessage(HttpMethod.Post, "/api/transfers")
+            {
+                Content = JsonContent.Create(create)
+            };
+            createReq.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString());
+            using var created = await owner.SendAsync(createReq, ct);
             var transfer = await ReadDataAsync(created, ct);
             var id = transfer.GetProperty("id").GetGuid();
 
-            using var submitted = await owner.PostAsync($"/api/transfers/{id}/submit", null, ct);
+            using var submitReq = new HttpRequestMessage(HttpMethod.Post, $"/api/transfers/{id}/submit");
+            submitReq.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString());
+            using var submitted = await owner.SendAsync(submitReq, ct);
             submitted.EnsureSuccessStatusCode();
             await AssertPushAsync(sourceSocket, BusinessNotificationTypes.TransferDispatchRequired, ct);
             output.WriteLine("Source branch received the submit notification.");
             using var emptyInbox = await destination.GetAsync("/api/notifications", ct);
             Assert.Equal(0, (await ReadDataAsync(emptyInbox, ct)).GetProperty("unreadCount").GetInt32());
 
-            using var dispatched = await source.PostAsync($"/api/transfers/{id}/dispatch", null, ct);
+            using var dispatchReq = new HttpRequestMessage(HttpMethod.Post, $"/api/transfers/{id}/dispatch");
+            dispatchReq.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString());
+            using var dispatched = await source.SendAsync(dispatchReq, ct);
             var dispatch = await ReadDataAsync(dispatched, ct);
             var pushed = await AssertPushAsync(destinationSocket, BusinessNotificationTypes.TransferReceiveRequired, ct);
             output.WriteLine("Destination branch received the dispatch notification.");
@@ -201,8 +211,12 @@ public class NotificationPostgresHttpTests(ITestOutputHelper output)
             var returnDb = returnScope.ServiceProvider.GetRequiredService<AppDbContext>();
             var staleTransfer = await returnDb.Transfers.SingleAsync(transfer => transfer.Id == id, ct);
 
-            using var received = await destination.PutAsJsonAsync($"/api/transfers/{id}/receive",
-                new ReceiveTransferRequest("Short shipment", new[] { new ReceiveTransferLineRequest(lineId, 1, 0, null) }), ct);
+            using var receiveReq = new HttpRequestMessage(HttpMethod.Put, $"/api/transfers/{id}/receive")
+            {
+                Content = JsonContent.Create(new ReceiveTransferRequest("Short shipment", new[] { new ReceiveTransferLineRequest(lineId, 1, 0, null) }))
+            };
+            receiveReq.Headers.Add("Idempotency-Key", Guid.NewGuid().ToString());
+            using var received = await destination.SendAsync(receiveReq, ct);
             received.EnsureSuccessStatusCode();
             await AssertPushAsync(sourceSocket, BusinessNotificationTypes.TransferReceiptDiscrepancy, ct);
             using var finalInbox = await destination.GetAsync("/api/notifications", ct);

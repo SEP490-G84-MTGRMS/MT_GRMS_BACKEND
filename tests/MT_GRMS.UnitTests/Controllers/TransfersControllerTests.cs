@@ -1,10 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
 using MT_GRMS.Api.Controllers;
+using MT_GRMS.Api.Filters;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Transfers;
 using MT_GRMS.Domain.Enums;
@@ -68,7 +71,7 @@ public class TransfersControllerTests
         _mockTransferService.Setup(s => s.GetTransfersAsync(It.IsAny<TransferFilterParams>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(paged);
 
-        var actionResult = await _controller.Get(null, null, null, null, null, null, 1, 20, null, null, null, CancellationToken.None);
+        var actionResult = await _controller.Get(null, null, null, null, null, null, 1, 20, null, null, null, null, CancellationToken.None);
 
         var ok = Assert.IsType<OkObjectResult>(actionResult.Result);
         var resp = Assert.IsType<ApiResponse<PagedResult<TransferDto>>>(ok.Value);
@@ -176,5 +179,28 @@ public class TransfersControllerTests
         var resp = Assert.IsType<ApiResponse<TransferDto>>(ok.Value);
         Assert.True(resp.Success);
         Assert.Equal("Hủy phiếu điều chuyển thành công.", resp.Message);
+    }
+
+    [Theory]
+    [InlineData(nameof(TransfersController.Create))]
+    [InlineData(nameof(TransfersController.Submit))]
+    [InlineData(nameof(TransfersController.Dispatch))]
+    [InlineData(nameof(TransfersController.Receive))]
+    [InlineData(nameof(TransfersController.Cancel))]
+    [InlineData(nameof(TransfersController.Return))]
+    public void TransfersController_MutationEndpoints_RequireIdempotencyAttribute(string methodName)
+    {
+        var method = typeof(TransfersController).GetMethod(methodName);
+        Assert.NotNull(method);
+        var hasIdempotency = method!.GetCustomAttributes<RequireIdempotencyAttribute>().Any();
+        Assert.True(hasIdempotency, $"Expected [RequireIdempotency] on TransfersController.{methodName}");
+    }
+
+    [Fact]
+    public void TransferRequestsController_Create_RequiresIdempotencyAttribute()
+    {
+        var method = typeof(TransferRequestsController).GetMethod(nameof(TransferRequestsController.Create));
+        Assert.NotNull(method);
+        Assert.True(method!.GetCustomAttributes<RequireIdempotencyAttribute>().Any());
     }
 }

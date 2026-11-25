@@ -62,4 +62,18 @@ public class ExpenseRepository : GenericRepository<ExpenseVoucher>, IExpenseRepo
                         e.Status != ExpenseVoucherStatus.Reversed)
             .SumAsync(e => (decimal?)e.Amount, ct) ?? 0;
     }
+
+    public Task<bool> BranchExistsAsync(Guid branchId, CancellationToken ct = default) =>
+        _context.Branches.AsNoTracking().AnyAsync(b => b.Id == branchId, ct);
+
+    public async Task<Dictionary<Guid, string>> GetBranchNamesAsync(IEnumerable<Guid> branchIds, CancellationToken ct = default)
+    {
+        var ids = branchIds.Distinct().ToList();
+        if (ids.Count == 0)
+            return new Dictionary<Guid, string>();
+
+        return await _context.Branches.AsNoTracking()
+            .Where(b => ids.Contains(b.Id))
+            .ToDictionaryAsync(b => b.Id, b => b.Name, ct);
+    }
 }

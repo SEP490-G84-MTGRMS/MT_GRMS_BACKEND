@@ -60,6 +60,99 @@ public class CustomerDebtDatabaseIntegrationTests
         Assert.Equal(2, ledger.Count);
         Assert.Equal("DebtRepayment", ledger[0].EntryType);
         Assert.Equal("DebtIncurred", ledger[1].EntryType);
+        Assert.Equal(300_000m, ledger[0].TotalIncreased);
+        Assert.Equal(100_000m, ledger[0].TotalDecreased);
+        Assert.Equal(200_000m, ledger[0].CurrentBalance);
+    }
+
+    [Fact]
+    public async Task CustomerDebtRepository_GetLedger_ExcludesPendingOrdersAndReversedReceipts_AndComputesFullHistoryTotals()
+    {
+        using var context = CreateDbContext();
+        var repo = new CustomerDebtRepository(context);
+
+        var customerId = Guid.NewGuid();
+        var t0 = new DateTime(2026, 11, 20, 10, 0, 0, DateTimeKind.Utc);
+
+        // Completed debt order (should be included)
+        context.Orders.Add(new Order
+        {
+            CustomerId = customerId, OrderCode = "ORD-COMP", PaymentMethod = "DEBT",
+            PaymentStatus = "DEBT", Status = "Completed", FinalAmount = 500_000m,
+            OrderDate = t0
+        });
+        // PendingPayment order (must be excluded)
+        context.Orders.Add(new Order
+        {
+            CustomerId = customerId, OrderCode = "ORD-PEND", PaymentMethod = "DEBT",
+            PaymentStatus = "PENDING", Status = "PendingPayment", FinalAmount = 900_000m,
+            OrderDate = t0.AddMinutes(1)
+        });
+        // Same-second repayment (legacy SourceType = "DEBT") -> must sort AFTER DebtIncurred
+        var legacyReceiptId = Guid.NewGuid();
+        context.CashbookEntries.Add(new CashbookEntry
+        {
+            Id = legacyReceiptId, SourceType = "DEBT", SourceId = customerId,
+            EntryCode = "PT-LEGACY", Amount = 150_000m, AccountId = Guid.NewGuid(),
+            EntryType = CashbookEntryType.Receipt, OccurredAtUtc = t0
+        });
+        // Reversed receipt via COMPENSATING SourceId (must be excluded)
+        var voidedByCompId = Guid.NewGuid();
+        context.CashbookEntries.Add(new CashbookEntry
+        {
+            Id = voidedByCompId, SourceType = "DEBT_REPAYMENT", SourceId = customerId,
+            EntryCode = "PT-VOID-1", Amount = 200_000m, AccountId = Guid.NewGuid(),
+            EntryType = CashbookEntryType.Receipt, OccurredAtUtc = t0.AddMinutes(5)
+        });
+        context.CashbookEntries.Add(new CashbookEntry
+        {
+            Id = Guid.NewGuid(), SourceType = "COMPENSATING", SourceId = voidedByCompId,
+            EntryCode = "PC-COMP-1", Amount = 200_000m, AccountId = Guid.NewGuid(),
+            EntryType = CashbookEntryType.Payment, OccurredAtUtc = t0.AddMinutes(6)
+        });
+        // Reversed receipt via REVERSAL ReversedEntryId (must be excluded)
+        var voidedByRevId = Guid.NewGuid();
+        context.CashbookEntries.Add(new CashbookEntry
+        {
+            Id = voidedByRevId, SourceType = "DEBT_REPAYMENT", SourceId = customerId,
+            EntryCode = "PT-VOID-2", Amount = 100_000m, AccountId = Guid.NewGuid(),
+            EntryType = CashbookEntryType.Receipt, OccurredAtUtc = t0.AddMinutes(7)
+        });
+        context.CashbookEntries.Add(new CashbookEntry
+        {
+            Id = Guid.NewGuid(), SourceType = "REVERSAL", ReversedEntryId = voidedByRevId,
+            EntryCode = "PC-REV-2", Amount = 100_000m, AccountId = Guid.NewGuid(),
+            EntryType = CashbookEntryType.Payment, OccurredAtUtc = t0.AddMinutes(8)
+        });
+        // Active repayment
+        context.CashbookEntries.Add(new CashbookEntry
+        {
+            Id = Guid.NewGuid(), SourceType = "DEBT_REPAYMENT", SourceId = customerId,
+            EntryCode = "PT-ACTIVE", Amount = 50_000m, AccountId = Guid.NewGuid(),
+            EntryType = CashbookEntryType.Receipt, OccurredAtUtc = t0.AddMinutes(10)
+        });
+        await context.SaveChangesAsync();
+
+        // Request pageSize = 1 to verify full-history totals are NOT truncated by pagination
+        var page1 = await repo.GetLedgerAsync(customerId, 1, 1);
+        var latest = Assert.Single(page1);
+        Assert.Equal("PT-ACTIVE", latest.EntryCode);
+        Assert.Equal(350_000m, latest.BalanceBefore);
+        Assert.Equal(300_000m, latest.BalanceAfter);
+        Assert.Equal(500_000m, latest.TotalIncreased);
+        Assert.Equal(200_000m, latest.TotalDecreased);
+        Assert.Equal(300_000m, latest.CurrentBalance);
+        Assert.Equal(3, latest.TotalCount);
+
+        // Verify full chronological order & same-second ordering (DebtIncurred before DebtRepayment)
+        var all = await repo.GetLedgerAsync(customerId, 1, 50);
+        Assert.Equal(3, all.Count);
+        Assert.Equal("ORD-COMP", all[2].EntryCode);
+        Assert.Equal(0m, all[2].BalanceBefore);
+        Assert.Equal(500_000m, all[2].BalanceAfter);
+        Assert.Equal("PT-LEGACY", all[1].EntryCode);
+        Assert.Equal(500_000m, all[1].BalanceBefore);
+        Assert.Equal(350_000m, all[1].BalanceAfter);
     }
 
     [Fact]

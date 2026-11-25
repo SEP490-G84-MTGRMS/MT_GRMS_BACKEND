@@ -80,6 +80,12 @@ public class CustomersControllerTests
         var ok3 = Assert.IsType<OkObjectResult>(res3.Result);
         var apiRes3 = Assert.IsType<ApiResponse<List<CustomerResponse>>>(ok3.Value);
         Assert.Equal("KH02", Assert.Single(apiRes3.Data!).CustomerCode);
+
+        // Case-insensitive tier filtering (e.g. lowercase "gold" matches "Gold")
+        var res4 = await controller.GetCustomers(null, "gold", "DEBT", CancellationToken.None);
+        var ok4 = Assert.IsType<OkObjectResult>(res4.Result);
+        var apiRes4 = Assert.IsType<ApiResponse<List<CustomerResponse>>>(ok4.Value);
+        Assert.Equal("KH02", Assert.Single(apiRes4.Data!).CustomerCode);
     }
 
     [Fact]
@@ -120,21 +126,21 @@ public class CustomersControllerTests
         var controller = new CustomersController(context, _mockTenant.Object);
 
         // HTML tag in name
-        var reqHtml = new CreateCustomerRequest("0901234567", "<b>Customer</b>", null, null, null, "Standard");
+        var reqHtml = new CreateCustomerRequest("0901234567", "<b>Customer</b>", null, null, "Standard");
         var resHtml = await controller.CreateCustomer(reqHtml, CancellationToken.None);
         Assert.IsType<BadRequestObjectResult>(resHtml.Result);
 
         // Empty phone
-        var reqEmptyPhone = new CreateCustomerRequest("", "Nguyen Van C", null, null, null, "Standard");
+        var reqEmptyPhone = new CreateCustomerRequest("", "Nguyen Van C", null, null, "Standard");
         var resEmptyPhone = await controller.CreateCustomer(reqEmptyPhone, CancellationToken.None);
         Assert.IsType<BadRequestObjectResult>(resEmptyPhone.Result);
 
-        var reqEmptyName = new CreateCustomerRequest("0901234567", "  ", null, null, null, "Standard");
+        var reqEmptyName = new CreateCustomerRequest("0901234567", "  ", null, null, "Standard");
         var resEmptyName = await controller.CreateCustomer(reqEmptyName, CancellationToken.None);
         Assert.IsType<BadRequestObjectResult>(resEmptyName.Result);
 
         // Success
-        var reqSuccess = new CreateCustomerRequest(" 0901234567 ", " Nguyen Van C ", "c@example.com", "Hanoi", null, null);
+        var reqSuccess = new CreateCustomerRequest(" 0901234567 ", " Nguyen Van C ", "c@example.com", "Hanoi", null);
         var resSuccess = await controller.CreateCustomer(reqSuccess, CancellationToken.None);
         var ok = Assert.IsType<OkObjectResult>(resSuccess.Result);
         var apiRes = Assert.IsType<ApiResponse<CustomerResponse>>(ok.Value);
@@ -147,6 +153,35 @@ public class CustomersControllerTests
         // Duplicate phone -> Conflict (409)
         var resDup = await controller.CreateCustomer(reqSuccess, CancellationToken.None);
         Assert.IsType<ConflictObjectResult>(resDup.Result);
+    }
+
+    [Fact]
+    public async Task CreateCustomer_StaffCannotAssignNonStandardTier_AndOwnerCanonicalizesTier()
+    {
+        using var context = CreateDbContext();
+        _mockTenant.SetupGet(t => t.CurrentRole).Returns("STAFF");
+        var controller = new CustomersController(context, _mockTenant.Object);
+
+        // Staff attempting to create VIP customer -> 403 Forbidden
+        var staffVipReq = new CreateCustomerRequest("0903111222", "Khach VIP", null, null, "VIP");
+        var staffVipRes = await controller.CreateCustomer(staffVipReq, CancellationToken.None);
+        var forbidden = Assert.IsType<ObjectResult>(staffVipRes.Result);
+        Assert.Equal(403, forbidden.StatusCode);
+
+        // Staff creating Standard customer (case-insensitive) -> 200 OK with canonical "Standard"
+        var staffStdReq = new CreateCustomerRequest("0903111223", "Khach Standard", null, null, "standard");
+        var staffStdRes = await controller.CreateCustomer(staffStdReq, CancellationToken.None);
+        var stdOk = Assert.IsType<OkObjectResult>(staffStdRes.Result);
+        var stdApi = Assert.IsType<ApiResponse<CustomerResponse>>(stdOk.Value);
+        Assert.Equal("Standard", stdApi.Data?.MembershipTier);
+
+        // StoreOwner creating with lowercase "vip" -> 200 OK with canonical "VIP"
+        _mockTenant.SetupGet(t => t.CurrentRole).Returns("STORE_OWNER");
+        var ownerVipReq = new CreateCustomerRequest("0903111224", "Khach Owner VIP", null, null, "vip");
+        var ownerVipRes = await controller.CreateCustomer(ownerVipReq, CancellationToken.None);
+        var ownerOk = Assert.IsType<OkObjectResult>(ownerVipRes.Result);
+        var ownerApi = Assert.IsType<ApiResponse<CustomerResponse>>(ownerOk.Value);
+        Assert.Equal("VIP", ownerApi.Data?.MembershipTier);
     }
 
     [Fact]
@@ -168,16 +203,16 @@ public class CustomersControllerTests
         var controller = new CustomersController(context, _mockTenant.Object);
 
         // 1. NotFound
-        var dummyReq = new UpdateCustomerRequest(null, null, null, null, null, null);
+        var dummyReq = new UpdateCustomerRequest(null, null, null, null);
         var resNotFound = await controller.UpdateCustomer(Guid.NewGuid(), dummyReq, CancellationToken.None);
         Assert.IsType<NotFoundObjectResult>(resNotFound.Result);
 
         // 2. HTML tag in FullName -> BadRequest
-        var reqHtml = new UpdateCustomerRequest("Name <script>", null, null, null, null, null);
+        var reqHtml = new UpdateCustomerRequest("Name <script>", null, null, null);
         var resHtml = await controller.UpdateCustomer(id, reqHtml, CancellationToken.None);
         Assert.IsType<BadRequestObjectResult>(resHtml.Result);
 
-        var reqBlank = new UpdateCustomerRequest("  ", null, null, null, null, null);
+        var reqBlank = new UpdateCustomerRequest("  ", null, null, null);
         var resBlank = await controller.UpdateCustomer(id, reqBlank, CancellationToken.None);
         Assert.IsType<BadRequestObjectResult>(resBlank.Result);
 
@@ -185,9 +220,7 @@ public class CustomersControllerTests
             FullName: "New Clean Name",
             Email: " new@test.com ",
             Address: " <b>New Address</b> ",
-            TaxCode: null,
-            MembershipTier: "Gold",
-            Status: null
+            MembershipTier: "gold"
         );
         var resSuccess = await controller.UpdateCustomer(id, reqSuccess, CancellationToken.None);
         var ok = Assert.IsType<OkObjectResult>(resSuccess.Result);

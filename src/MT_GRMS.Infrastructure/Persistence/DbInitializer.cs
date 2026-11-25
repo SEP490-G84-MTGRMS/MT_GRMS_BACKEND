@@ -30,6 +30,7 @@ public static class DbInitializer
 
         await context.Database.ExecuteSqlRawAsync(Migrations.AddOrderDetailStockAllocations.UpSql);
         await context.Database.ExecuteSqlRawAsync(Migrations.AddExpenseVoucherDueDate.UpSql);
+        await context.Database.ExecuteSqlRawAsync(@"ALTER TABLE IF EXISTS ""Transfers"" ADD COLUMN IF NOT EXISTS ""RowVersion"" integer NOT NULL DEFAULT 1;");
     }
 
     private static async Task EnsureSupplierDispatchSchemaAsync(AppDbContext context, ILogger? logger = null)
@@ -968,6 +969,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
         try
         {
+            // Bắt buộc: ADD IF NOT EXISTS không sửa cột nullable đã tồn tại trên DB cũ.
+            // Không dùng ExecuteSqlSafeAsync ở đây: lỗi chuẩn hóa phải dừng khởi động.
+            if (context.Database.IsNpgsql())
+                await context.Database.ExecuteSqlRawAsync(Migrations.NormalizeTaxPolicyJson.UpSql.Replace("{", "{{").Replace("}", "}}"));
+
             // 1. Bổ sung các cột Status, RevisionNumber, SupersededSnapshotId, RectificationReason nếu chưa có
             await ExecuteSqlSafeAsync(context, @"
                 ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""Status"" integer NOT NULL DEFAULT 1;
@@ -1029,7 +1035,7 @@ ON ""HouseholdTaxSnapshots"" (
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ schema cho bảng HouseholdTaxSnapshots");
+            throw new HouseholdTaxSnapshotSchemaException(ex);
         }
     }
 
@@ -1094,6 +1100,7 @@ ON ""HouseholdTaxSnapshots"" (
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""RetailPrice"" numeric(18,2) NULL;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""ZoneArea"" character varying(50) NULL;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""RowVersion"" integer NOT NULL DEFAULT 1;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""Transfers"" ADD COLUMN IF NOT EXISTS ""RowVersion"" integer NOT NULL DEFAULT 1;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid NULL;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;", logger);
@@ -1808,6 +1815,7 @@ END $$;
                 }
                 catch (Exception ex)
                 {
+                    if (ex is HouseholdTaxSnapshotSchemaException) throw;
                     logger?.LogError(ex, "Lỗi khi chạy EnsureSupplierDispatchSchemaAsync / EnsureBranchColumnsAsync");
                 }
 
@@ -1818,7 +1826,6 @@ END $$;
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddTaxFilingConfirmations.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchConversionRulesAndNotifications.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.RemoveGoodsReceiptFreight.UpSql);
-                    await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductAllowedSupplierIds.UpSql);
                 }
                 catch (Exception ex)
                 {
@@ -1844,7 +1851,8 @@ END $$;
         }
         catch (Exception ex)
         {
-            if (ex is InvalidOperationException && ex.Message.StartsWith("MERGE_SCHEMA_FAILED:", StringComparison.Ordinal))
+            if (ex is HouseholdTaxSnapshotSchemaException ||
+                ex is InvalidOperationException && ex.Message.StartsWith("MERGE_SCHEMA_FAILED:", StringComparison.Ordinal))
                 throw;
             logger?.LogWarning(ex, "Lỗi trong quá trình kiểm tra cấu trúc CSDL hoặc migrations (bỏ qua nếu bảng đã tồn tại).");
         }

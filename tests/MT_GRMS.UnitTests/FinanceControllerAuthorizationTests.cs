@@ -53,13 +53,35 @@ public class FinanceControllerAuthorizationTests
             typeof(ExpensesController),
             typeof(CustomerDebtController),
             typeof(FinanceOverviewController),
-            typeof(FinanceAccountsController),
             typeof(PnLReportController)
         })
         {
             var authorization = controller.GetCustomAttribute<AuthorizeAttribute>();
             Assert.NotNull(authorization);
             Assert.Equal(SystemRoles.StoreOwner, authorization!.Roles);
+        }
+
+        // FinanceAccountsController allows Staff/Employee ONLY on GetVietQrDefault; all management endpoints require StoreOwner.
+        var faType = typeof(FinanceAccountsController);
+        Assert.Equal(SystemRoles.HrAllStaffAndOwner, faType.GetCustomAttribute<AuthorizeAttribute>()?.Roles);
+        Assert.Equal(
+            SystemRoles.HrAllStaffAndOwner,
+            faType.GetMethod(nameof(FinanceAccountsController.GetVietQrDefault))?.GetCustomAttribute<AuthorizeAttribute>()?.Roles);
+        foreach (var ownerAction in new[]
+        {
+            nameof(FinanceAccountsController.GetAll),
+            nameof(FinanceAccountsController.GetSepayTransactions),
+            nameof(FinanceAccountsController.GetSepayTransactionsByAccount),
+            nameof(FinanceAccountsController.Create),
+            nameof(FinanceAccountsController.Update),
+            nameof(FinanceAccountsController.SetStatus),
+            nameof(FinanceAccountsController.ConnectSepay),
+            nameof(FinanceAccountsController.DisconnectSepay)
+        })
+        {
+            var methodAuth = faType.GetMethod(ownerAction)?.GetCustomAttribute<AuthorizeAttribute>();
+            Assert.NotNull(methodAuth);
+            Assert.Equal(SystemRoles.StoreOwner, methodAuth!.Roles);
         }
     }
 

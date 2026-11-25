@@ -8,7 +8,15 @@ public sealed record CreateTransferRequestGroupRequest(
     DateTime? RequiredAt,
     Guid? RelatedOrderId,
     string? Note,
-    IReadOnlyList<TransferDemandLineRequest> Items);
+    IReadOnlyList<TransferDemandLineRequest> Items,
+    string? RelatedOrderCode = null);
+
+public sealed record TransferAvailableProductDto(
+    Guid ProductId,
+    string ProductCode,
+    string ProductName,
+    string BaseUnit,
+    decimal TotalAvailableQuantity);
 
 public sealed record TransferAllocationLineDto(
     Guid ProductId,

@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using MT_GRMS.Api.Common;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Finance;
@@ -14,23 +15,31 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/finance-accounts")]
-[Authorize(Roles = SystemRoles.StoreOwner)]
+[Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
 public class FinanceAccountsController : BaseApiController
 {
     private readonly AppDbContext _db;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IDataProtector _protector;
     private readonly IConfiguration _configuration;
+    private readonly ITenantContext? _tenantContext;
 
-    public FinanceAccountsController(AppDbContext db, IHttpClientFactory httpClientFactory, IDataProtectionProvider dataProtectionProvider, IConfiguration configuration)
+    public FinanceAccountsController(
+        AppDbContext db,
+        IHttpClientFactory httpClientFactory,
+        IDataProtectionProvider dataProtectionProvider,
+        IConfiguration configuration,
+        ITenantContext? tenantContext = null)
     {
         _db = db;
         _httpClientFactory = httpClientFactory;
         _protector = dataProtectionProvider.CreateProtector("MT_GRMS.SePay.ApiToken.v1");
         _configuration = configuration;
+        _tenantContext = tenantContext;
     }
 
     [HttpGet]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<List<FinanceAccountDto>>>> GetAll([FromQuery] Guid? branchId, CancellationToken ct)
     {
         var query = _db.FinanceAccounts.AsNoTracking().Where(x => !x.IsDeleted);
@@ -41,6 +50,7 @@ public class FinanceAccountsController : BaseApiController
     }
 
     [HttpGet("sepay/transactions")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<IActionResult> GetSepayTransactions(
         [FromQuery] Guid? branchId,
         [FromQuery] Guid? financeAccountId,
@@ -141,16 +151,40 @@ public class FinanceAccountsController : BaseApiController
     }
 
     [HttpGet("{id:guid}/sepay/transactions")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public Task<IActionResult> GetSepayTransactionsByAccount(Guid id, [FromQuery] int page = 1, [FromQuery] int pageSize = 9, CancellationToken ct = default)
     {
         return GetSepayTransactions(null, id, page, pageSize, ct);
     }
 
     [HttpGet("vietqr-default")]
+    [Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
     public async Task<ActionResult<ApiResponse<VietQrAccountDto>>> GetVietQrDefault([FromQuery] Guid? branchId, CancellationToken ct)
     {
-        var branch = branchId.HasValue
-            ? await _db.Branches.AsNoTracking().FirstOrDefaultAsync(x => x.Id == branchId.Value && !x.IsDeleted, ct)
+        var effectiveBranchId = branchId;
+        var isOwner = User?.IsInRole(SystemRoles.StoreOwner) == true ||
+                      string.Equals(_tenantContext?.CurrentRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase);
+        var isStaffOrEmployee = User?.IsInRole(SystemRoles.Staff) == true ||
+                                User?.IsInRole(SystemRoles.Employee) == true ||
+                                string.Equals(_tenantContext?.CurrentRole, SystemRoles.Staff, StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(_tenantContext?.CurrentRole, SystemRoles.Employee, StringComparison.OrdinalIgnoreCase);
+
+        if (!isOwner && isStaffOrEmployee)
+        {
+            var staffBranchId = ResolveCallerBranchId();
+            if (!staffBranchId.HasValue || staffBranchId.Value == Guid.Empty)
+            {
+                return Forbid();
+            }
+            if (branchId.HasValue && branchId.Value != staffBranchId.Value)
+            {
+                return Forbid();
+            }
+            effectiveBranchId = staffBranchId.Value;
+        }
+
+        var branch = effectiveBranchId.HasValue
+            ? await _db.Branches.AsNoTracking().FirstOrDefaultAsync(x => x.Id == effectiveBranchId.Value && !x.IsDeleted, ct)
             : null;
         var account = branch?.CurrentBankFinanceAccountId is Guid bankId
             ? await _db.FinanceAccounts.AsNoTracking().FirstOrDefaultAsync(x => x.Id == bankId &&
@@ -165,80 +199,162 @@ public class FinanceAccountsController : BaseApiController
     }
 
     [HttpPost]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<FinanceAccountDto>>> Create([FromBody] SaveFinanceAccountRequest request, CancellationToken ct)
     {
         var validation = await ValidateRequest(request, null, ct);
         if (validation != null) return BadRequest(ApiResponse<FinanceAccountDto>.Fail("FINANCE_ACCOUNT_INVALID", validation));
 
-        var account = new FinanceAccount();
+        var account = new FinanceAccount { IsActive = request.IsActive };
         Apply(account, request);
-        await EnsureSingleDefault(account, ct);
-        _db.FinanceAccounts.Add(account);
-        await _db.SaveChangesAsync(ct);
-        if (account.AccountType == FinanceAccountType.Bank && request.IsDefaultForVietQr && account.BranchId.HasValue)
+        // RULE-VERIFY-02: Bank accounts must remain inactive until SePay connection verification succeeds.
+        if (account.AccountType == FinanceAccountType.Bank)
         {
-            var branch = await _db.Branches.FirstAsync(x => x.Id == account.BranchId.Value, ct);
-            branch.CurrentBankFinanceAccountId = account.Id;
+            account.IsActive = false;
+            account.SepayConnectionStatus = "NotConfigured";
+        }
+
+        var isActivatingCashFund = account.IsActive
+            && (account.AccountType == FinanceAccountType.Safe || account.AccountType == FinanceAccountType.Till)
+            && account.BranchId.HasValue;
+
+        if (isActivatingCashFund &&
+            await _db.FinanceAccounts.AnyAsync(
+                x => x.BranchId == account.BranchId && x.AccountType == account.AccountType && x.IsActive && !x.IsDeleted && x.ActiveShiftId.HasValue,
+                ct))
+        {
+            return Conflict(ApiResponse<FinanceAccountDto>.Fail(
+                "FINANCE_ACCOUNT_SHIFT_OPEN",
+                "Không thể tạo hoặc kích hoạt két mới vì két hiện tại của chi nhánh đang có ca POS mở.",
+                409));
+        }
+
+        if (isActivatingCashFund)
+        {
+            await using var tx = _db.Database.IsRelational() ? await _db.Database.BeginTransactionAsync(ct) : null;
+            await DeactivateOtherCashFundsAsync(account.Id, account.BranchId!.Value, account.AccountType, ct);
+            await _db.SaveChangesAsync(ct);
+            _db.FinanceAccounts.Add(account);
+            await _db.SaveChangesAsync(ct);
+            if (tx != null) await tx.CommitAsync(ct);
+        }
+        else
+        {
+            await EnsureSingleDefault(account, ct);
+            _db.FinanceAccounts.Add(account);
             await _db.SaveChangesAsync(ct);
         }
+
         return Ok(ApiResponse<FinanceAccountDto>.Ok(Map(account, await BranchNames(ct)), "Đã thêm tài khoản/két quỹ."));
     }
 
     [HttpPut("{id:guid}")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<FinanceAccountDto>>> Update(Guid id, [FromBody] SaveFinanceAccountRequest request, CancellationToken ct)
     {
         var account = await _db.FinanceAccounts.FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
         if (account == null) return NotFound(ApiResponse<FinanceAccountDto>.Fail("FINANCE_ACCOUNT_NOT_FOUND", "Không tìm thấy tài khoản/két quỹ."));
         var validation = await ValidateRequest(request, id, ct);
         if (validation != null) return BadRequest(ApiResponse<FinanceAccountDto>.Fail("FINANCE_ACCOUNT_INVALID", validation));
+        var requestedType = Enum.Parse<FinanceAccountType>(request.AccountType, true);
+        if (requestedType != account.AccountType)
+            return Conflict(ApiResponse<FinanceAccountDto>.Fail("ACCOUNT_TYPE_IMMUTABLE", "Không thể thay đổi loại tài khoản/két sau khi đã tạo."));
         if (account.AccountType == FinanceAccountType.Bank &&
             (!string.Equals(account.BankCode, request.BankCode, StringComparison.OrdinalIgnoreCase) ||
              account.AccountNumber != request.AccountNumber || account.BranchId != request.BranchId))
             return Conflict(ApiResponse<FinanceAccountDto>.Fail("BANK_IDENTITY_IMMUTABLE", "Không sửa tài khoản Bank cũ; hãy thêm tài khoản mới để giữ lịch sử."));
-        Apply(account, request);
-        await EnsureSingleDefault(account, ct);
-        account.UpdatedAt = DateTime.UtcNow;
-        if (account.AccountType == FinanceAccountType.Bank && account.BranchId.HasValue && request.IsDefaultForVietQr)
+        if (account.ActiveShiftId.HasValue && (!request.IsActive || request.BranchId != account.BranchId))
+            return Conflict(ApiResponse<FinanceAccountDto>.Fail("FINANCE_ACCOUNT_SHIFT_OPEN", "Không thể ngừng hoặc chuyển chi nhánh két đang có ca POS mở.", 409));
+        if (request.IsActive && (account.AccountType == FinanceAccountType.Safe || account.AccountType == FinanceAccountType.Till) && request.BranchId.HasValue &&
+            await _db.FinanceAccounts.AnyAsync(x => x.Id != account.Id && x.BranchId == request.BranchId && x.AccountType == account.AccountType && x.IsActive && !x.IsDeleted && x.ActiveShiftId.HasValue, ct))
+            return Conflict(ApiResponse<FinanceAccountDto>.Fail("FINANCE_ACCOUNT_SHIFT_OPEN", "Không thể kích hoạt két mới vì két hiện tại của chi nhánh đang có ca POS mở.", 409));
+
+        var isActivatingCashFund = request.IsActive
+            && (account.AccountType == FinanceAccountType.Safe || account.AccountType == FinanceAccountType.Till)
+            && request.BranchId.HasValue;
+
+        if (isActivatingCashFund)
         {
-            var branch = await _db.Branches.FirstAsync(x => x.Id == account.BranchId.Value, ct);
-            branch.CurrentBankFinanceAccountId = account.Id;
+            await using var tx = _db.Database.IsRelational() ? await _db.Database.BeginTransactionAsync(ct) : null;
+            await DeactivateOtherCashFundsAsync(account.Id, request.BranchId!.Value, account.AccountType, ct);
+            await _db.SaveChangesAsync(ct);
+
+            Apply(account, request);
+            account.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            if (tx != null) await tx.CommitAsync(ct);
         }
-        await _db.SaveChangesAsync(ct);
+        else
+        {
+            Apply(account, request);
+            await EnsureSingleDefault(account, ct);
+            account.UpdatedAt = DateTime.UtcNow;
+            if (account.AccountType == FinanceAccountType.Bank && account.SepayConnectionStatus == "Connected" && account.IsDefaultForVietQr && account.BranchId.HasValue)
+            {
+                var branch = await _db.Branches.FirstAsync(x => x.Id == account.BranchId.Value, ct);
+                branch.CurrentBankFinanceAccountId = account.Id;
+            }
+            await _db.SaveChangesAsync(ct);
+        }
+
         return Ok(ApiResponse<FinanceAccountDto>.Ok(Map(account, await BranchNames(ct)), "Đã cập nhật tài khoản/két quỹ."));
     }
 
     [HttpPatch("{id:guid}/status")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<bool>>> SetStatus(Guid id, [FromBody] SetFinanceAccountStatusRequest request, CancellationToken ct)
     {
         var account = await _db.FinanceAccounts.FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
         if (account == null) return NotFound(ApiResponse<bool>.Fail("FINANCE_ACCOUNT_NOT_FOUND", "Không tìm thấy tài khoản/két quỹ."));
-        if (!request.IsActive && account.ActiveShiftId.HasValue) return Conflict(ApiResponse<bool>.Fail("FINANCE_ACCOUNT_SHIFT_OPEN", "Không thể ngừng két đang có ca POS mở."));
+        if (!request.IsActive && account.ActiveShiftId.HasValue) return Conflict(ApiResponse<bool>.Fail("FINANCE_ACCOUNT_SHIFT_OPEN", "Không thể ngừng két đang có ca POS mở.", 409));
         if (!request.IsActive && account.AccountType == FinanceAccountType.Bank && account.BranchId.HasValue &&
             await _db.Branches.AnyAsync(x => x.Id == account.BranchId.Value && x.CurrentBankFinanceAccountId == account.Id, ct))
-            return Conflict(ApiResponse<bool>.Fail("BANK_CURRENT", "Đổi tài khoản nhận QR của chi nhánh trước khi ngừng tài khoản này."));
-        if (request.IsActive && account.AccountType == FinanceAccountType.Bank && account.SepayConnectionStatus != "Connected")
-            return Conflict(ApiResponse<bool>.Fail("SEPAY_REQUIRED", "Phải kết nối và kiểm tra SePay thành công trước khi kích hoạt tài khoản ngân hàng."));
-        account.IsActive = request.IsActive;
-        account.UpdatedAt = DateTime.UtcNow;
+            return Conflict(ApiResponse<bool>.Fail("BANK_CURRENT", "Đổi tài khoản nhận QR của chi nhánh trước khi ngừng tài khoản này.", 409));
+        if (request.IsActive && account.AccountType == FinanceAccountType.Bank &&
+            !string.Equals(account.SepayConnectionStatus, "Connected", StringComparison.OrdinalIgnoreCase))
+            return UnprocessableEntity(ApiResponse<bool>.Fail("SEPAY_CONNECTION_REQUIRED", "Tài khoản ngân hàng cần kết nối và xác minh SePay trước khi kích hoạt.", 422));
+        if (request.IsActive && account.AccountType == FinanceAccountType.Bank &&
+            (string.IsNullOrWhiteSpace(account.BankCode) || string.IsNullOrWhiteSpace(account.AccountNumber) ||
+             string.IsNullOrWhiteSpace(account.AccountHolderName)))
+            return BadRequest(ApiResponse<bool>.Fail("FINANCE_ACCOUNT_INVALID", "Tài khoản ngân hàng cần đủ ngân hàng, số tài khoản và chủ tài khoản."));
 
-        // REQ: Mỗi chi nhánh duy trì 01 Két sắt và 01 Két quầy hoạt động; khi đổi sang két khác thì két cũ tự động tắt
+        // REQ: Mỗi chi nhánh duy trì 01 Két sắt và 01 Két quầy hoạt động; khi đổi sang két khác thì két cũ tự động tắt (trừ khi két cũ đang có ca mở)
         if (request.IsActive && (account.AccountType == FinanceAccountType.Safe || account.AccountType == FinanceAccountType.Till) && account.BranchId.HasValue)
         {
             var others = await _db.FinanceAccounts
                 .Where(x => x.Id != account.Id && x.BranchId == account.BranchId && x.AccountType == account.AccountType && x.IsActive && !x.IsDeleted)
                 .ToListAsync(ct);
+            if (others.Any(o => o.ActiveShiftId.HasValue))
+                return Conflict(ApiResponse<bool>.Fail("FINANCE_ACCOUNT_SHIFT_OPEN", "Không thể tắt két đang có ca POS mở để kích hoạt két mới.", 409));
+
+            await using var tx = _db.Database.IsRelational() ? await _db.Database.BeginTransactionAsync(ct) : null;
             foreach (var other in others)
             {
                 other.IsActive = false;
                 other.UpdatedAt = DateTime.UtcNow;
             }
+            if (others.Count > 0)
+            {
+                await _db.SaveChangesAsync(ct);
+            }
+
+            account.IsActive = true;
+            account.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            if (tx != null) await tx.CommitAsync(ct);
+        }
+        else
+        {
+            account.IsActive = request.IsActive;
+            account.UpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
         }
 
-        await _db.SaveChangesAsync(ct);
-        return Ok(ApiResponse<bool>.Ok(true, request.IsActive ? "Đã kích hoạt và chuyển làm két hoạt động chính của chi nhánh." : "Đã ngừng hoạt động."));
+        return Ok(ApiResponse<bool>.Ok(true, request.IsActive ? "Đã kích hoạt tài khoản." : "Đã ngừng hoạt động."));
     }
 
     [HttpPost("{id:guid}/sepay/connect")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<SepayConnectionDto>>> ConnectSepay(Guid id, [FromBody] ConnectSepayRequest request, CancellationToken ct)
     {
         var account = await _db.FinanceAccounts.FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
@@ -251,11 +367,15 @@ public class FinanceAccountsController : BaseApiController
         {
             var client = _httpClientFactory.CreateClient();
             client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", request.ApiToken.Trim());
-            var url = "https://my.sepay.vn/userapi/bankaccounts/list?limit=100";
+            var accountNumber = account.AccountNumber ?? string.Empty;
+            var testMode = SePayTestMode.IsEnabled(_configuration);
+            var url = testMode ? SePayTestMode.BankAccountsUrl(accountNumber) : "https://my.sepay.vn/userapi/bankaccounts/list?limit=100";
             using var response = await client.GetAsync(url, ct);
             if (!response.IsSuccessStatusCode) throw new InvalidOperationException($"SePay trả về HTTP {(int)response.StatusCode}.");
             using var payload = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
-            if (!ContainsAccountNumber(payload.RootElement, account.AccountNumber ?? string.Empty))
+            if (!(testMode
+                ? SePayTestMode.ContainsAccount(payload.RootElement, accountNumber)
+                : ContainsAccountNumber(payload.RootElement, accountNumber)))
                 throw new InvalidOperationException("Số tài khoản chưa được liên kết trong tài khoản SePay này.");
             var tenant = await _db.Tenants.FirstOrDefaultAsync(x => x.Id == account.TenantId && !x.IsDeleted, ct);
             if (tenant == null) return NotFound(ApiResponse<SepayConnectionDto>.Fail("TENANT_NOT_FOUND", "Không tìm thấy cửa hàng."));
@@ -267,6 +387,7 @@ public class FinanceAccountsController : BaseApiController
             account.SepayLastVerifiedAtUtc = DateTime.UtcNow;
             account.SepayLastError = null;
             account.IsDefaultForVietQr = true;
+            await EnsureSingleDefault(account, ct);
             account.IsActive = true;
             account.UpdatedAt = DateTime.UtcNow;
             if (account.BranchId.HasValue)
@@ -292,11 +413,10 @@ public class FinanceAccountsController : BaseApiController
             }
             return Ok(ApiResponse<SepayConnectionDto>.Ok(new("Connected", account.SepayLastVerifiedAtUtc, null, webhookUrl, tenant.SepayWebhookSecret), "Kết nối SePay thành công."));
         }
-        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
+        catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException or JsonException)
         {
             account.SepayConnectionStatus = "Error";
             account.SepayLastError = ex.Message.Length > 500 ? ex.Message[..500] : ex.Message;
-            account.IsActive = false;
             account.UpdatedAt = DateTime.UtcNow;
             await _db.SaveChangesAsync(ct);
             return BadRequest(ApiResponse<SepayConnectionDto>.Fail("SEPAY_VERIFICATION_FAILED", $"Không thể xác minh SePay: {account.SepayLastError}"));
@@ -304,20 +424,24 @@ public class FinanceAccountsController : BaseApiController
     }
 
     [HttpDelete("{id:guid}/sepay")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<bool>>> DisconnectSepay(Guid id, CancellationToken ct)
     {
         var account = await _db.FinanceAccounts.FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
         if (account == null || account.AccountType != FinanceAccountType.Bank) return NotFound(ApiResponse<bool>.Fail("BANK_ACCOUNT_NOT_FOUND", "Không tìm thấy tài khoản ngân hàng."));
-        var tenant = await _db.Tenants.FirstOrDefaultAsync(x => x.Id == account.TenantId && !x.IsDeleted, ct);
-        if (tenant != null) tenant.IsSepayEnabled = false;
         account.SepayConnectionStatus = "NotConfigured";
         account.SepayLastVerifiedAtUtc = null;
         account.SepayLastError = null;
-        account.IsDefaultForVietQr = false;
-        account.IsActive = false;
+        var hasOtherSepayBank = await _db.FinanceAccounts.AnyAsync(
+            x => x.Id != account.Id && !x.IsDeleted && x.AccountType == FinanceAccountType.Bank && x.SepayConnectionStatus == "Connected",
+            ct);
+        var tenant = await _db.Tenants.FirstOrDefaultAsync(x => x.Id == account.TenantId && !x.IsDeleted, ct);
+        if (tenant != null && !hasOtherSepayBank) tenant.IsSepayEnabled = false;
+        var branch = await _db.Branches.FirstOrDefaultAsync(x => x.CurrentBankFinanceAccountId == account.Id, ct);
+        if (branch != null) branch.CurrentBankFinanceAccountId = null;
         account.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
-        return Ok(ApiResponse<bool>.Ok(true, "Đã ngắt SePay và tắt nhận VietQR."));
+        return Ok(ApiResponse<bool>.Ok(true, "Đã ngắt SePay. Trạng thái sử dụng thủ công của tài khoản vẫn được giữ."));
     }
 
     private async Task<string?> ValidateRequest(SaveFinanceAccountRequest request, Guid? excludeId, CancellationToken ct)
@@ -339,12 +463,49 @@ public class FinanceAccountsController : BaseApiController
         account.AccountType = Enum.Parse<FinanceAccountType>(request.AccountType, true);
         account.AccountName = request.AccountName.Trim();
         account.BranchId = request.BranchId;
-        account.BankCode = request.BankCode?.Trim().ToUpperInvariant();
-        account.BankName = request.BankName?.Trim();
-        account.AccountNumber = request.AccountNumber?.Trim();
-        account.AccountHolderName = request.AccountHolderName?.Trim().ToUpperInvariant();
-        account.IsDefaultForVietQr = account.AccountType == FinanceAccountType.Bank && request.IsDefaultForVietQr;
-        account.IsActive = account.AccountType == FinanceAccountType.Bank ? account.IsActive && account.SepayConnectionStatus == "Connected" : request.IsActive;
+        if (account.AccountType == FinanceAccountType.Bank)
+        {
+            account.BankCode = request.BankCode?.Trim().ToUpperInvariant();
+            account.BankName = request.BankName?.Trim();
+            account.AccountNumber = request.AccountNumber?.Trim();
+            account.AccountHolderName = request.AccountHolderName?.Trim().ToUpperInvariant();
+            account.IsDefaultForVietQr = request.IsDefaultForVietQr;
+        }
+        else
+        {
+            // Non-bank cash funds (Till/Safe) must never retain bank metadata.
+            account.BankCode = null;
+            account.BankName = null;
+            account.AccountNumber = null;
+            account.AccountHolderName = null;
+            account.IsDefaultForVietQr = false;
+            account.IsActive = request.IsActive;
+        }
+    }
+
+    private async Task DeactivateOtherCashFundsAsync(Guid excludeId, Guid branchId, FinanceAccountType accountType, CancellationToken ct)
+    {
+        var others = await _db.FinanceAccounts
+            .Where(x => x.Id != excludeId && x.BranchId == branchId && x.AccountType == accountType && x.IsActive && !x.IsDeleted)
+            .ToListAsync(ct);
+        foreach (var other in others)
+        {
+            other.IsActive = false;
+            other.UpdatedAt = DateTime.UtcNow;
+        }
+    }
+
+    private Guid? ResolveCallerBranchId()
+    {
+        if (_tenantContext?.CurrentBranchId is Guid ctxBranchId && ctxBranchId != Guid.Empty)
+        {
+            return ctxBranchId;
+        }
+
+        var claimValue = User?.FindFirst("branchId")?.Value
+            ?? User?.FindFirst("BranchId")?.Value
+            ?? User?.FindFirst("branch_id")?.Value;
+        return Guid.TryParse(claimValue, out var parsed) && parsed != Guid.Empty ? parsed : null;
     }
 
     private async Task EnsureSingleDefault(FinanceAccount account, CancellationToken ct)

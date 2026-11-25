@@ -16,6 +16,14 @@ public class PnLReportRepository : IPnLReportRepository
         _context = context;
     }
 
+    public async Task<string?> GetBranchNameAsync(Guid branchId, CancellationToken ct = default)
+    {
+        return await _context.Branches.AsNoTracking()
+            .Where(b => b.Id == branchId)
+            .Select(b => b.Name)
+            .FirstOrDefaultAsync(ct);
+    }
+
     public async Task<RevenueAggregation> GetRevenueAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default)
     {
         var query = _context.Orders.AsQueryable();
@@ -219,11 +227,9 @@ public class PnLReportRepository : IPnLReportRepository
             query = query.Where(e => e.BranchId == branchId.Value);
         }
 
-        // INV-12 & Đồng nhất 100% với S2c-HKD (FE-19):
-        // Ưu tiên lọc theo ExpenseDate; nếu chứng từ được khởi tạo trong kỳ (CreatedAt) mà chưa gán riêng ExpenseDate khác ngày thì vẫn nhận diện đầy đủ.
+        // Lọc nhất quán theo đúng 1 mốc hạch toán ExpenseDate (đồng nhất với S2c-HKD, tránh double-count qua 2 kỳ)
         query = query.Where(e =>
-            ((e.ExpenseDate >= fromDate && e.ExpenseDate <= toDate) ||
-             (e.CreatedAt >= fromDate && e.CreatedAt <= toDate)) &&
+            e.ExpenseDate >= fromDate && e.ExpenseDate <= toDate &&
             (e.Status == ExpenseVoucherStatus.Approved || e.Status == ExpenseVoucherStatus.Paid) &&
             e.Nature == FinancialNature.OperatingExpense &&
             !e.Category.ToLower().Contains("capital") &&
@@ -339,8 +345,7 @@ public class PnLReportRepository : IPnLReportRepository
         if (branchId.HasValue) expenseQuery = expenseQuery.Where(e => e.BranchId == branchId.Value);
         var expenses = await expenseQuery
             .Where(e =>
-                ((e.ExpenseDate >= fromDate && e.ExpenseDate <= toDate) ||
-                 (e.CreatedAt >= fromDate && e.CreatedAt <= toDate)) &&
+                e.ExpenseDate >= fromDate && e.ExpenseDate <= toDate &&
                 (e.Status == ExpenseVoucherStatus.Approved || e.Status == ExpenseVoucherStatus.Paid) &&
                 e.Nature == FinancialNature.OperatingExpense &&
                 !e.Category.ToLower().Contains("capital") &&
@@ -349,12 +354,11 @@ public class PnLReportRepository : IPnLReportRepository
                 !e.Category.ToLower().Contains("rút vốn"))
             .ToListAsync(ct);
 
-        // Khi cả fromDate và toDate có TimeOfDay > 0 hoặc thuộc UTC, chuẩn hóa về ngày theo múi giờ truy vấn để không lệch 1 ngày khi test Date thuần
-        var vnOffset = TimeSpan.FromHours(7);
-        bool useVnShift = fromDate.Kind == DateTimeKind.Utc && (fromDate.Hour == 17 || toDate.Hour == 16);
-        DateTime ToReportDate(DateTime dt) => (useVnShift && dt.Kind == DateTimeKind.Utc ? dt.Add(vnOffset) : dt).Date;
-        DateTime GetEffectiveExpenseDate(ExpenseVoucher e) =>
-            (e.ExpenseDate >= fromDate && e.ExpenseDate <= toDate) ? e.ExpenseDate : e.CreatedAt;
+        // Chuẩn hóa ngày báo cáo theo múi giờ Việt Nam (UTC+7)
+        var vnTz = MT_GRMS.Application.Tax.HouseholdTaxService.GetVietnamTimeZone();
+        DateTime ToReportDate(DateTime dt) =>
+            (dt.Kind == DateTimeKind.Utc ? TimeZoneInfo.ConvertTimeFromUtc(dt, vnTz) : dt).Date;
+        DateTime GetEffectiveExpenseDate(ExpenseVoucher e) => e.ExpenseDate;
 
         var ordersByDay = orders.GroupBy(o => ToReportDate(o.CreatedAt)).ToDictionary(g => g.Key, g => g.ToList());
         var expensesByDay = expenses.GroupBy(e => ToReportDate(GetEffectiveExpenseDate(e))).ToDictionary(g => g.Key, g => g.Sum(x => x.Amount));
@@ -400,6 +404,12 @@ public class PnLReportRepository : IPnLReportRepository
             }
 
             var dayReturns = returnsByDay.GetValueOrDefault(current, 0m);
+            if (grossRev > 0 && dayReturns > 0)
+            {
+                var cogsRatio = dayCogs / grossRev;
+                var returnCogs = Math.Round(dayReturns * cogsRatio, 0, MidpointRounding.AwayFromZero);
+                dayCogs = Math.Max(0m, dayCogs - returnCogs);
+            }
             var netRev = Math.Max(0, grossRev - discounts - dayReturns);
             var dayExp = expensesByDay.GetValueOrDefault(current, 0m);
 
@@ -414,5 +424,62 @@ public class PnLReportRepository : IPnLReportRepository
         }
 
         return result;
+    }
+
+    public async Task<decimal> GetShrinkageLossAsync(Guid? branchId, DateTime fromDate, DateTime toDate, CancellationToken ct = default)
+    {
+        var stocktakeQuery = _context.Stocktakes
+            .AsNoTracking()
+            .Include(s => s.Lines)
+            .Where(s => !s.IsDeleted && s.Status == "APPROVED");
+
+        if (branchId.HasValue)
+        {
+            stocktakeQuery = stocktakeQuery.Where(s => s.BranchId == branchId.Value);
+        }
+
+        var approvedStocktakes = await stocktakeQuery
+            .Where(s => (s.ReviewedAt ?? s.UpdatedAt ?? s.StartedAt) >= fromDate &&
+                        (s.ReviewedAt ?? s.UpdatedAt ?? s.StartedAt) <= toDate)
+            .ToListAsync(ct);
+
+        if (approvedStocktakes.Count == 0)
+        {
+            return 0m;
+        }
+
+        var allLines = approvedStocktakes.SelectMany(s => s.Lines).Where(l => !l.IsDeleted).ToList();
+        var missingCostProductIds = allLines
+            .Where(l => l.UnitCost <= 0m)
+            .Select(l => l.ProductId)
+            .Distinct()
+            .ToList();
+
+        var productCostDict = missingCostProductIds.Count > 0
+            ? await _context.Products.AsNoTracking()
+                .Where(p => missingCostProductIds.Contains(p.Id))
+                .ToDictionaryAsync(p => p.Id, p => p.CostPrice ?? 0m, ct)
+            : new Dictionary<Guid, decimal>();
+
+        decimal totalLoss = 0m;
+        foreach (var line in allLines)
+        {
+            var missingQty = line.VarianceQty < 0 ? Math.Abs(line.VarianceQty) : 0m;
+            var damagedWriteOffQty = line.DamagedQty > 0 && (string.IsNullOrWhiteSpace(line.DamagedAction) || string.Equals(line.DamagedAction, "WRITE_OFF", StringComparison.OrdinalIgnoreCase))
+                ? line.DamagedQty
+                : 0m;
+            var expiredWriteOffQty = line.ExpiredQty > 0 && (string.IsNullOrWhiteSpace(line.ExpiredAction) || string.Equals(line.ExpiredAction, "WRITE_OFF", StringComparison.OrdinalIgnoreCase))
+                ? line.ExpiredQty
+                : 0m;
+            var totalLossQty = missingQty + damagedWriteOffQty + expiredWriteOffQty;
+            if (totalLossQty <= 0m) continue;
+
+            var unitCost = line.UnitCost > 0m
+                ? line.UnitCost
+                : productCostDict.GetValueOrDefault(line.ProductId, 0m);
+            totalLoss += totalLossQty * unitCost;
+        }
+
+        return Math.Round(totalLoss, 0, MidpointRounding.AwayFromZero);
     }
 }

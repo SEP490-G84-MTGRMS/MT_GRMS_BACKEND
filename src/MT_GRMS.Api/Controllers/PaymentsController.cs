@@ -23,6 +23,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using MT_GRMS.Api.Common;
 using MT_GRMS.Api.Hubs;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Services;
@@ -327,6 +328,7 @@ public class PaymentsController : BaseApiController
             .FirstOrDefaultAsync(c => c.Id == tenantId && !c.IsDeleted, ct);
 
         string decryptedKey = config != null ? DecryptSecret(config.SepayApiKeyEncrypted) : string.Empty;
+        var testMode = SePayTestMode.IsEnabled(_configuration);
         bool isRealSePayKey = !string.IsNullOrWhiteSpace(decryptedKey) &&
                               !decryptedKey.StartsWith("mock_", StringComparison.OrdinalIgnoreCase) &&
                               !decryptedKey.Contains("_demo_", StringComparison.OrdinalIgnoreCase) &&
@@ -341,46 +343,49 @@ public class PaymentsController : BaseApiController
                 client.DefaultRequestHeaders.Authorization =
                     new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", decryptedKey);
 
-                var res = await client.GetAsync("https://my.sepay.vn/userapi/bankaccounts/list", ct);
+                var url = testMode ? SePayTestMode.BankAccountsUrl() : "https://my.sepay.vn/userapi/bankaccounts/list";
+                using var res = await client.GetAsync(url, ct);
                 if (res.IsSuccessStatusCode)
                 {
                     var json = await res.Content.ReadAsStringAsync(ct);
                     using var doc = JsonDocument.Parse(json);
-                    if (doc.RootElement.TryGetProperty("bankaccounts", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                    var accounts = testMode
+                        ? SePayTestMode.ReadResults(doc.RootElement)
+                        : doc.RootElement.TryGetProperty("bankaccounts", out var arr) && arr.ValueKind == JsonValueKind.Array
+                            ? arr.EnumerateArray().ToArray()
+                            : Array.Empty<JsonElement>();
+                    var sepayAccounts = new List<object>();
+                    foreach (var item in accounts)
                     {
-                        var liveAccounts = new List<object>();
-                        foreach (var item in arr.EnumerateArray())
-                        {
-                            var accNum = item.TryGetProperty("account_number", out var pAcc) ? pAcc.GetString() ?? "" : "";
-                            var accName = item.TryGetProperty("account_holder_name", out var pHolder) ? pHolder.GetString() ?? "" : "";
-                            var brand = item.TryGetProperty("bank_short_name", out var pBrand) ? pBrand.GetString() ?? "MB" : "MB";
-                            var fullName = item.TryGetProperty("bank_full_name", out var pFull) ? pFull.GetString() ?? brand : brand;
-                            var label = item.TryGetProperty("label", out var pLabel) ? pLabel.GetString() ?? "TK SePay" : "TK SePay";
+                        var accNum = item.TryGetProperty("account_number", out var pAcc) ? pAcc.GetString() ?? "" : "";
+                        var accName = item.TryGetProperty("account_holder_name", out var pHolder) ? pHolder.GetString() ?? "" : "";
+                        var brand = item.TryGetProperty("bank_short_name", out var pBrand) ? pBrand.GetString() ?? "MB" : "MB";
+                        var fullName = item.TryGetProperty("bank_full_name", out var pFull) ? pFull.GetString() ?? brand : brand;
+                        var label = item.TryGetProperty("label", out var pLabel) ? pLabel.GetString() ?? "TK SePay" : "TK SePay";
 
-                            if (!string.IsNullOrWhiteSpace(accNum))
-                            {
-                                liveAccounts.Add(new
-                                {
-                                    bankCode = NormalizeBankCode(brand),
-                                    bankName = $"{brand} - {fullName}",
-                                    bankAccountNumber = accNum,
-                                    bankAccountName = accName.ToUpperInvariant(),
-                                    label,
-                                    source = "SEPAY_API"
-                                });
-                            }
-                        }
-
-                        if (liveAccounts.Count > 0)
+                        if (!string.IsNullOrWhiteSpace(accNum))
                         {
-                            return Ok(new
+                            sepayAccounts.Add(new
                             {
-                                success = true,
-                                source = "SEPAY_LIVE_API",
-                                message = $"Đã đồng bộ {liveAccounts.Count} tài khoản ngân hàng trực tiếp từ SePay!",
-                                accounts = liveAccounts
+                                bankCode = NormalizeBankCode(brand),
+                                bankName = $"{brand} - {fullName}",
+                                bankAccountNumber = accNum,
+                                bankAccountName = accName.ToUpperInvariant(),
+                                label,
+                                source = "SEPAY_API"
                             });
                         }
+                    }
+
+                    if (sepayAccounts.Count > 0)
+                    {
+                        return Ok(new
+                        {
+                            success = true,
+                            source = testMode ? "SEPAY_SANDBOX_API" : "SEPAY_LIVE_API",
+                            message = $"Đã đồng bộ {sepayAccounts.Count} tài khoản ngân hàng trực tiếp từ SePay!",
+                            accounts = sepayAccounts
+                        });
                     }
                 }
             }
@@ -695,8 +700,9 @@ public class PaymentsController : BaseApiController
         }
 
         // LỚP 5: Kiểm tra Idempotency (Chống tấn công Replay Attack lặp lại cùng một giao dịch ngân hàng)
+        var testMode = SePayTestMode.IsEnabled(_configuration);
         string bankTxId = payload.Id.ToString();
-        bool isAlreadyProcessed = await _context.PaymentTransactions
+        bool isAlreadyProcessed = !testMode && await _context.PaymentTransactions
             .AnyAsync(p => p.BankTransactionId == bankTxId, ct);
 
         if (isAlreadyProcessed)
@@ -714,7 +720,8 @@ public class PaymentsController : BaseApiController
                                     decryptedApiKey.Contains("_demo_", StringComparison.OrdinalIgnoreCase) ||
                                     decryptedApiKey.EndsWith("_8899", StringComparison.OrdinalIgnoreCase);
 
-        if (isLocalDemoOrMockKey && !_environment.IsDevelopment())
+        if ((testMode && !_environment.IsDevelopment()) ||
+            (isLocalDemoOrMockKey && (testMode || !_environment.IsDevelopment())))
         {
             _logger.LogError("Từ chối xử lý Webhook ở production vì cửa hàng {TenantId} chưa cấu hình API Key SePay thật.", order.TenantId);
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new
@@ -723,7 +730,38 @@ public class PaymentsController : BaseApiController
             });
         }
 
-        if (!isLocalDemoOrMockKey)
+        if (testMode)
+        {
+            if (string.IsNullOrWhiteSpace(payload.ReferenceNumber) || string.IsNullOrWhiteSpace(expectedAccountNumber))
+                return BadRequest(new { message = "Thiếu mã tham chiếu hoặc tài khoản để đối soát SePay Test Mode." });
+
+            try
+            {
+                using var client = _httpClientFactory.CreateClient();
+                client.Timeout = TimeSpan.FromSeconds(8);
+                var verifiedId = await SePayTestMode.VerifyIncomingPaymentAsync(
+                    client, decryptedApiKey, payload.ReferenceNumber.Trim(), expectedAccountNumber.Trim(), payload.AmountIn,
+                    ledgerContent =>
+                    {
+                        var (_, ledgerCode) = ExtractTenantPrefixAndOrderCode(ledgerContent);
+                        return ledgerCode.Length != 0 &&
+                            (string.Equals(ledgerCode, order.OrderCode, StringComparison.OrdinalIgnoreCase) ||
+                             string.Equals($"HD{ledgerCode}", order.OrderCode, StringComparison.OrdinalIgnoreCase));
+                    }, ct);
+                if (!verifiedId.HasValue)
+                    return BadRequest(new { message = "Không tìm thấy giao dịch SePay Test Mode khớp duy nhất với đơn hàng." });
+
+                bankTxId = $"test:{verifiedId.Value:D}";
+                verifiedBySePay = true;
+            }
+            catch (Exception ex) when (ex is HttpRequestException or JsonException or InvalidOperationException ||
+                                      ex is OperationCanceledException && !ct.IsCancellationRequested)
+            {
+                _logger.LogWarning(ex, "Không thể đối soát giao dịch từ SePay Test Mode.");
+                return StatusCode(StatusCodes.Status502BadGateway, new { message = "Không thể đối soát với SePay Test Mode." });
+            }
+        }
+        else if (!isLocalDemoOrMockKey)
         {
             try
             {

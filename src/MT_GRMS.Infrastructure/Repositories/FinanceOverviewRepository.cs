@@ -67,6 +67,38 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
             .Where(x => x.TotalDebt > 0)
             .ToListAsync(ct);
 
+        var branchDebtorMap = new Dictionary<Guid, HashSet<Guid>>();
+        if (customerDebts.Count > 0 && selectedBranchIds.Count > 0)
+        {
+            var debtorIds = customerDebts.Select(c => c.Id).ToList();
+            var branchDebtPairs = await _context.Orders.AsNoTracking()
+                .Where(o => selectedBranchIds.Contains(o.BranchId) &&
+                            o.CustomerId.HasValue &&
+                            debtorIds.Contains(o.CustomerId.Value) &&
+                            (o.PaymentMethod == "DEBT" || o.PaymentMethod == "CREDIT") &&
+                            o.Status != "Cancelled")
+                .Select(o => new { o.BranchId, CustomerId = o.CustomerId!.Value })
+                .Distinct()
+                .ToListAsync(ct);
+
+            foreach (var pair in branchDebtPairs)
+            {
+                if (!branchDebtorMap.TryGetValue(pair.BranchId, out var set))
+                {
+                    set = new HashSet<Guid>();
+                    branchDebtorMap[pair.BranchId] = set;
+                }
+                set.Add(pair.CustomerId);
+            }
+        }
+
+        List<Domain.Entities.Sales.Customer> scopedCustomerDebts = customerDebts;
+        if (branchId.HasValue && customerDebts.Count > 0)
+        {
+            var branchDebtorSet = branchDebtorMap.GetValueOrDefault(branchId.Value) ?? new HashSet<Guid>();
+            scopedCustomerDebts = customerDebts.Where(c => branchDebtorSet.Contains(c.Id)).ToList();
+        }
+
         var movements = await _context.ShiftCashMovements
             .AsNoTracking()
             .Include(x => x.Shift)
@@ -84,6 +116,9 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
         {
             var branchAccounts = accounts.Where(x => x.BranchId == branch.Id).ToList();
             var branchAccountIds = branchAccounts.Select(x => x.Id).ToHashSet();
+            var branchReceivable = currentSnapshot && branchDebtorMap.TryGetValue(branch.Id, out var bDebtors)
+                ? customerDebts.Where(c => bDebtors.Contains(c.Id)).Sum(c => c.TotalDebt)
+                : 0m;
             return BuildBranchRow(
             branch.Id,
             branch.BranchCode,
@@ -92,6 +127,7 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
             entries.Where(x => branchAccountIds.Contains(x.AccountId)).ToList(),
             expenses.Where(x => x.BranchId == branch.Id).ToList(),
             movements.Where(x => x.Shift?.BranchId == branch.Id).ToList(),
+            branchReceivable,
             fromUtc,
             toUtc,
             currentSnapshot);
@@ -99,8 +135,8 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
 
         var totals = BuildTotals(accounts, entries, branchRows, fromUtc, toUtc);
         var attention = new FinanceAttentionDto(
-            ReceivableAmount: currentSnapshot && !branchId.HasValue ? customerDebts.Sum(x => x.TotalDebt) : 0,
-            DebtorCount: currentSnapshot && !branchId.HasValue ? customerDebts.Count : 0,
+            ReceivableAmount: currentSnapshot ? scopedCustomerDebts.Sum(x => x.TotalDebt) : 0,
+            DebtorCount: currentSnapshot ? scopedCustomerDebts.Count : 0,
             PendingPayableAmount: currentSnapshot ? expenses.Sum(x => x.Amount) : 0,
             PendingPayableCount: currentSnapshot ? expenses.Count : 0,
             CashInTransit: currentSnapshot ? movements.Sum(x => x.Amount) : 0,
@@ -128,6 +164,7 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
         IReadOnlyCollection<CashbookEntry> entries,
         IReadOnlyCollection<ExpenseVoucher> expenses,
         IReadOnlyCollection<ShiftCashMovement> movements,
+        decimal receivableAmount,
         DateTime fromUtc,
         DateTime toUtc,
         bool currentSnapshot)
@@ -136,6 +173,8 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
         var cashAtRegisters = accounts.Where(x => x.AccountType == FinanceAccountType.Till)
             .Sum(x => BalanceAt(x, entries, toUtc));
         var safeDeposit = accounts.Where(x => x.AccountType == FinanceAccountType.Safe)
+            .Sum(x => BalanceAt(x, entries, toUtc));
+        var bankBalance = accounts.Where(x => x.AccountType == FinanceAccountType.Bank)
             .Sum(x => BalanceAt(x, entries, toUtc));
         var pendingPayable = currentSnapshot ? expenses.Sum(x => x.Amount) : 0;
         var cashInTransit = currentSnapshot ? movements.Sum(x => x.Amount) : 0;
@@ -156,10 +195,11 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
             cashAtRegisters,
             safeDeposit,
             cashInTransit,
-            0,
+            receivableAmount,
             pendingPayable,
             currentSnapshot ? expenses.Count : 0,
-            status);
+            status,
+            bankBalance);
     }
 
     private static FinanceOverviewTotalsDto BuildTotals(
@@ -195,6 +235,12 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
             transit);
     }
 
+    private static bool IsInternalSource(CashbookEntry entry) =>
+        entry.FinancialNature == FinancialNature.InternalTransfer
+        || string.Equals(entry.SourceType, InternalTransferSource, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(entry.SourceType, "CASH_DROP", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(entry.SourceType, "BANK_DEPOSIT", StringComparison.OrdinalIgnoreCase);
+
     private static (decimal Opening, decimal CashIn, decimal CashOut, decimal InternalTransferNet, decimal Closing)
         CalculateFlow(
             IReadOnlyCollection<FinanceAccount> accounts,
@@ -205,13 +251,20 @@ public sealed class FinanceOverviewRepository : IFinanceOverviewRepository
         var opening = accounts.Sum(x => BalanceAt(x, entries, fromUtc.AddTicks(-1)));
         var closing = accounts.Sum(x => BalanceAt(x, entries, toUtc));
         var periodEntries = entries.Where(x => x.OccurredAtUtc >= fromUtc && x.OccurredAtUtc <= toUtc).ToList();
-        var external = periodEntries.Where(x => !string.Equals(x.SourceType, InternalTransferSource, StringComparison.OrdinalIgnoreCase)).ToList();
-        var internalEntries = periodEntries.Where(x => string.Equals(x.SourceType, InternalTransferSource, StringComparison.OrdinalIgnoreCase)).ToList();
-        var cashIn = external.Where(x => x.EntryType == CashbookEntryType.Receipt).Sum(x => x.Amount);
-        var cashOut = external.Where(x => x.EntryType == CashbookEntryType.Payment).Sum(x => x.Amount);
+        var internalEntries = periodEntries.Where(IsInternalSource).ToList();
+        var external = periodEntries.Where(x => !IsInternalSource(x)).ToList();
+
+        // Net COMPENSATING reversal entries against the side they reverse so voided receipts/payments do not inflate gross CashIn/CashOut
+        var regularExternal = external.Where(x => !string.Equals(x.SourceType, "COMPENSATING", StringComparison.OrdinalIgnoreCase)).ToList();
+        var compensating = external.Where(x => string.Equals(x.SourceType, "COMPENSATING", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        var cashIn = regularExternal.Where(x => x.EntryType == CashbookEntryType.Receipt).Sum(x => x.Amount)
+            - compensating.Where(x => x.EntryType == CashbookEntryType.Payment).Sum(x => x.Amount);
+        var cashOut = regularExternal.Where(x => x.EntryType == CashbookEntryType.Payment).Sum(x => x.Amount)
+            - compensating.Where(x => x.EntryType == CashbookEntryType.Receipt).Sum(x => x.Amount);
         var internalNet = internalEntries.Where(x => x.EntryType == CashbookEntryType.Receipt).Sum(x => x.Amount)
             - internalEntries.Where(x => x.EntryType == CashbookEntryType.Payment).Sum(x => x.Amount);
-        return (opening, cashIn, cashOut, internalNet, closing);
+        return (opening, Math.Max(0m, cashIn), Math.Max(0m, cashOut), internalNet, closing);
     }
 
     private static decimal BalanceAt(
