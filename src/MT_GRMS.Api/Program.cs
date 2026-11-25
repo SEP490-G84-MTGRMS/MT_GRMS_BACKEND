@@ -170,6 +170,7 @@ if (app.Configuration.GetValue<bool>("Database:RepairTransferStockColumns"))
     var repairDb = repairScope.ServiceProvider.GetRequiredService<AppDbContext>();
     await repairDb.Database.ExecuteSqlRawAsync("ALTER TABLE \"BranchStocks\" ADD COLUMN IF NOT EXISTS \"FefoDiscountPercent\" numeric(5,2) NOT NULL DEFAULT 0;");
     await repairDb.Database.ExecuteSqlRawAsync("ALTER TABLE \"BranchStocks\" ADD COLUMN IF NOT EXISTS \"IsFefoDiscountActive\" boolean NOT NULL DEFAULT false;");
+    await repairDb.Database.ExecuteSqlRawAsync("ALTER TABLE IF EXISTS \"Transfers\" ADD COLUMN IF NOT EXISTS \"RowVersion\" integer NOT NULL DEFAULT 1;");
 }
 
 if (app.Environment.IsDevelopment() && app.Configuration.GetValue<bool>("Database:RepairLocalSchema"))

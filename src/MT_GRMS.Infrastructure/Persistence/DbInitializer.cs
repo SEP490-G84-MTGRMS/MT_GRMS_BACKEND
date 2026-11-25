@@ -30,6 +30,7 @@ public static class DbInitializer
 
         await context.Database.ExecuteSqlRawAsync(Migrations.AddOrderDetailStockAllocations.UpSql);
         await context.Database.ExecuteSqlRawAsync(Migrations.AddExpenseVoucherDueDate.UpSql);
+        await context.Database.ExecuteSqlRawAsync(@"ALTER TABLE IF EXISTS ""Transfers"" ADD COLUMN IF NOT EXISTS ""RowVersion"" integer NOT NULL DEFAULT 1;");
     }
 
     private static async Task EnsureSupplierDispatchSchemaAsync(AppDbContext context, ILogger? logger = null)
