@@ -81,15 +81,18 @@ public class StocktakeService : IStocktakeService
         var scope = IsEmployeeRole()
             ? "ALL"
             : (string.IsNullOrWhiteSpace(command.Scope) ? "LOT" : command.Scope.Trim().ToUpperInvariant());
+        if (scope is not ("ALL" or "CATEGORY" or "PRODUCT" or "LOT"))
+            throw new BusinessException("INVALID_SCOPE", $"Phạm vi kiểm kê '{command.Scope}' không hợp lệ. Chỉ chấp nhận ALL, CATEGORY, PRODUCT hoặc LOT.");
         var reasonType = string.IsNullOrWhiteSpace(command.ReasonType) ? "PERIODIC" : command.ReasonType.Trim().ToUpperInvariant();
         if (reasonType == "CUSTOMER_RETURN")
             throw new BusinessException("Phiếu kiểm kê hàng lỗi đổi/trả chỉ được tạo tự động từ giao dịch đổi/trả.");
 
+        var scopedBranchStockIds = scope == "ALL" ? null : command.BranchStockIds;
         var stocks = await _repository.GetBranchStocksForScopeAsync(
             tenantId,
             branchId,
             scope,
-            command.BranchStockIds,
+            scopedBranchStockIds,
             command.CategoryId,
             cancellationToken);
 
@@ -213,6 +216,19 @@ public class StocktakeService : IStocktakeService
 
         if (command.Lines != null && command.Lines.Any())
         {
+            var matchedLineIds = new HashSet<Guid>();
+            var newBranchStockIds = command.Lines
+                .Where(i => i.BranchStockId.HasValue && !entity.Lines.Any(l =>
+                    (i.Id.HasValue && l.Id == i.Id.Value) ||
+                    (l.BranchStockId.HasValue && l.BranchStockId.Value == i.BranchStockId.Value)))
+                .Select(i => i.BranchStockId!.Value)
+                .Distinct()
+                .ToList();
+
+            var newGrnTraces = newBranchStockIds.Count > 0
+                ? await _repository.GetGrnTraceByStockIdsAsync(tenantId, newBranchStockIds, cancellationToken)
+                : new Dictionary<Guid, (Guid GrnId, Guid GrnLineId, string GrnCode, Guid SupplierId)>();
+
             foreach (var input in command.Lines)
             {
                 // Match theo line Id hoặc BranchStockId (lô). Không fallback ProductId — 1 SP nhiều lô.
@@ -220,15 +236,63 @@ public class StocktakeService : IStocktakeService
                     (input.Id.HasValue && l.Id == input.Id.Value) ||
                     (input.BranchStockId.HasValue && l.BranchStockId == input.BranchStockId.Value));
 
-                if (line == null) continue;
+                ValidateNonNegativeQuantities(input.GoodQty, input.DefectiveQty, input.DamagedQty, input.NearExpiryQty, input.ExpiredQty);
+
+                if (line == null)
+                {
+                    if (entity.ReasonType == "CUSTOMER_RETURN" || !input.BranchStockId.HasValue)
+                        continue;
+
+                    var stock = await _repository.GetBranchStockByIdAsync(tenantId, input.BranchStockId.Value, cancellationToken);
+                    if (stock == null || stock.BranchId != entity.BranchId)
+                        continue;
+
+                    newGrnTraces.TryGetValue(stock.Id, out var trace);
+                    var newActual = input.GoodQty + input.DefectiveQty + input.DamagedQty + input.NearExpiryQty + input.ExpiredQty;
+                    var newLine = new StocktakeLine
+                    {
+                        TenantId = tenantId,
+                        StocktakeId = entity.Id,
+                        ProductId = stock.ProductId,
+                        BranchStockId = stock.Id,
+                        BatchCode = stock.BatchCode,
+                        ManufactureDate = stock.ManufactureDate,
+                        ExpiryDate = stock.ExpiryDate,
+                        UnitCost = stock.LandedCostPerUnit,
+                        SystemQty = stock.QuantityOnHand,
+                        GoodQty = input.GoodQty,
+                        DefectiveQty = input.DefectiveQty,
+                        DamagedQty = input.DamagedQty,
+                        NearExpiryQty = input.NearExpiryQty,
+                        ExpiredQty = input.ExpiredQty,
+                        ActualQty = newActual,
+                        VarianceQty = newActual - stock.QuantityOnHand,
+                        DefectiveReasonCode = input.DefectiveQty > 0
+                            ? (string.IsNullOrWhiteSpace(input.DefectiveReasonCode) ? "DEFECTIVE_SUPPLIER" : input.DefectiveReasonCode)
+                            : null,
+                        NearExpiryAction = input.NearExpiryQty > 0
+                            ? (string.IsNullOrWhiteSpace(input.NearExpiryAction) ? "NEAR_EXPIRY_MARKDOWN" : input.NearExpiryAction)
+                            : null,
+                        ReturnedQty = 0m,
+                        OriginalGrnId = trace.GrnId != Guid.Empty ? trace.GrnId : null,
+                        OriginalGrnLineId = trace.GrnLineId != Guid.Empty ? trace.GrnLineId : null,
+                        OriginalGrnCode = trace.GrnCode,
+                        SupplierId = stock.SupplierId ?? (trace.SupplierId != Guid.Empty ? trace.SupplierId : null),
+                        EvidenceUrl = input.EvidenceUrl,
+                        Note = input.Note
+                    };
+                    entity.Lines.Add(newLine);
+                    matchedLineIds.Add(newLine.Id);
+                    continue;
+                }
+
+                matchedLineIds.Add(line.Id);
 
                 if (entity.ReasonType == "CUSTOMER_RETURN" &&
                     (input.GoodQty != line.GoodQty || input.DefectiveQty != line.DefectiveQty ||
                      input.DamagedQty != line.DamagedQty || input.NearExpiryQty != line.NearExpiryQty ||
                      input.ExpiredQty != line.ExpiredQty))
                     throw new BusinessException("Số lượng trên phiếu kiểm kê hàng lỗi đổi/trả đã được cách ly; chỉ được cập nhật ghi chú và bằng chứng.");
-
-                ValidateNonNegativeQuantities(input.GoodQty, input.DefectiveQty, input.DamagedQty, input.NearExpiryQty, input.ExpiredQty);
 
                 if (entity.Status == "NEEDS_RECOUNT" && line.BranchStockId.HasValue)
                 {
@@ -254,6 +318,15 @@ public class StocktakeService : IStocktakeService
                     : null;
                 line.EvidenceUrl = input.EvidenceUrl;
                 line.Note = input.Note;
+            }
+
+            if (entity.ReasonType != "CUSTOMER_RETURN")
+            {
+                var toRemove = entity.Lines.Where(l => !matchedLineIds.Contains(l.Id)).ToList();
+                foreach (var rem in toRemove)
+                {
+                    entity.Lines.Remove(rem);
+                }
             }
         }
 
@@ -443,66 +516,76 @@ public class StocktakeService : IStocktakeService
             stLine.ReturnedQty += reqItem.RequestedQty;
         }
 
-        await _repository.UpdateAsync(stocktake, cancellationToken);
-
-        var created = new List<SupplierReturnDetailDto>();
-        var groups = prepared.GroupBy(x => (x.GrnId, x.ReasonType));
-
-        foreach (var group in groups)
+        await _unitOfWork.BeginTransactionAsync(cancellationToken);
+        try
         {
-            var groupLines = group.ToList();
-            var reasonType = group.Key.ReasonType;
-            var primaryReason = groupLines[0].ReasonText;
-            var attachment = command.AttachmentUrl
-                ?? string.Join(
-                    ";",
-                    groupLines
-                        .Select(x => x.StLine.EvidenceUrl)
-                        .Where(u => !string.IsNullOrWhiteSpace(u))
-                        .Distinct());
-            if (string.IsNullOrWhiteSpace(attachment))
-                attachment = stocktake.Lines.Select(l => l.EvidenceUrl).FirstOrDefault(u => !string.IsNullOrWhiteSpace(u));
+            await _repository.UpdateAsync(stocktake, cancellationToken);
 
-            var returnLinesToCreate = groupLines.Select(x => new CreateSupplierReturnLineDto(
-                ProductId: x.StLine.ProductId,
-                GoodsReceiptLineId: x.Req.GoodsReceiptLineId ?? x.StLine.OriginalGrnLineId,
-                BatchCode: x.StLine.BatchCode,
-                ExpiryDate: x.StLine.ExpiryDate,
-                RequestedQty: x.Req.RequestedQty,
-                UnitCost: x.StLine.UnitCost,
-                Notes: x.Req.Notes ?? x.StLine.Note ?? $"Từ phiếu kiểm kê {stocktake.Code}",
-                StocktakeLineId: x.StLine.Id
-            )).ToList();
+            var created = new List<SupplierReturnDetailDto>();
+            var groups = prepared.GroupBy(x => (x.GrnId, x.ReasonType));
 
-            var createReturnCmd = new CreateSupplierReturnCommand(
-                GoodsReceiptId: group.Key.GrnId,
-                Reason: primaryReason,
-                ReasonNotes: string.IsNullOrWhiteSpace(command.ReasonNotes)
-                    ? $"Khởi tạo từ Phiếu kiểm kê {stocktake.Code}"
-                    : command.ReasonNotes,
-                AttachmentUrl: attachment,
-                Lines: returnLinesToCreate,
-                AutoSubmit: command.AutoSubmit,
-                StocktakeId: stocktake.Id,
-                ResolutionType: NormalizeStocktakeResolution(command.ResolutionType),
-                ReturnReasonType: reasonType
-            );
-
-            var createdReturn = await _supplierReturnService.CreateAsync(createReturnCmd, cancellationToken);
-
-            var returnEntity = await _supplierReturnRepository.GetByIdAsync(tenantId, createdReturn.Id, cancellationToken);
-            if (returnEntity != null)
+            foreach (var group in groups)
             {
-                returnEntity.StocktakeId = stocktake.Id;
-                returnEntity.StocktakeCode = stocktake.Code;
-                await _supplierReturnRepository.UpdateAsync(returnEntity, cancellationToken);
+                var groupLines = group.ToList();
+                var reasonType = group.Key.ReasonType;
+                var primaryReason = groupLines[0].ReasonText;
+                var attachment = command.AttachmentUrl
+                    ?? string.Join(
+                        ";",
+                        groupLines
+                            .Select(x => x.StLine.EvidenceUrl)
+                            .Where(u => !string.IsNullOrWhiteSpace(u))
+                            .Distinct());
+                if (string.IsNullOrWhiteSpace(attachment))
+                    attachment = stocktake.Lines.Select(l => l.EvidenceUrl).FirstOrDefault(u => !string.IsNullOrWhiteSpace(u));
+
+                var returnLinesToCreate = groupLines.Select(x => new CreateSupplierReturnLineDto(
+                    ProductId: x.StLine.ProductId,
+                    GoodsReceiptLineId: x.Req.GoodsReceiptLineId ?? x.StLine.OriginalGrnLineId,
+                    BatchCode: x.StLine.BatchCode,
+                    ExpiryDate: x.StLine.ExpiryDate,
+                    RequestedQty: x.Req.RequestedQty,
+                    UnitCost: x.StLine.UnitCost,
+                    Notes: x.Req.Notes ?? x.StLine.Note ?? $"Từ phiếu kiểm kê {stocktake.Code}",
+                    StocktakeLineId: x.StLine.Id
+                )).ToList();
+
+                var createReturnCmd = new CreateSupplierReturnCommand(
+                    GoodsReceiptId: group.Key.GrnId,
+                    Reason: primaryReason,
+                    ReasonNotes: string.IsNullOrWhiteSpace(command.ReasonNotes)
+                        ? $"Khởi tạo từ Phiếu kiểm kê {stocktake.Code}"
+                        : command.ReasonNotes,
+                    AttachmentUrl: attachment,
+                    Lines: returnLinesToCreate,
+                    AutoSubmit: command.AutoSubmit,
+                    StocktakeId: stocktake.Id,
+                    ResolutionType: NormalizeStocktakeResolution(command.ResolutionType),
+                    ReturnReasonType: reasonType
+                );
+
+                var createdReturn = await _supplierReturnService.CreateAsync(createReturnCmd, cancellationToken);
+
+                var returnEntity = await _supplierReturnRepository.GetByIdAsync(tenantId, createdReturn.Id, cancellationToken);
+                if (returnEntity != null)
+                {
+                    returnEntity.StocktakeId = stocktake.Id;
+                    returnEntity.StocktakeCode = stocktake.Code;
+                    await _supplierReturnRepository.UpdateAsync(returnEntity, cancellationToken);
+                }
+
+                created.Add(await _supplierReturnService.GetByIdAsync(createdReturn.Id, cancellationToken));
             }
 
-            created.Add(await _supplierReturnService.GetByIdAsync(createdReturn.Id, cancellationToken));
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+            await _unitOfWork.CommitTransactionAsync(cancellationToken);
+            return created;
         }
-
-        await _unitOfWork.SaveChangesAsync(cancellationToken);
-        return created;
+        catch
+        {
+            await _unitOfWork.RollbackTransactionAsync(cancellationToken);
+            throw;
+        }
     }
 
     public static decimal GetLineEligibleReturnQty(StocktakeLine line)
@@ -623,11 +706,8 @@ public class StocktakeService : IStocktakeService
 
     private StocktakeFilterQuery EnforceBranchScopeForEmployee(StocktakeFilterQuery query)
     {
-        if (IsEmployeeRole() && _tenantContext.CurrentBranchId.HasValue && _tenantContext.CurrentBranchId.Value != Guid.Empty)
-        {
-            return query with { BranchId = _tenantContext.CurrentBranchId.Value };
-        }
-        return query;
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, query.BranchId);
+        return query with { BranchId = effectiveBranchId };
     }
 
     private static string NormalizeStocktakeResolution(string? resolutionType) =>

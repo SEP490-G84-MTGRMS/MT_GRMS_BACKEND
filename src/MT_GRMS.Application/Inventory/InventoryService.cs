@@ -28,7 +28,9 @@ public class InventoryService : IInventoryService
         CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        return await _repository.GetPagedStockSummaryAsync(tenantId, query, cancellationToken);
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, query.BranchId);
+        var scopedQuery = query with { BranchId = effectiveBranchId };
+        return await _repository.GetPagedStockSummaryAsync(tenantId, scopedQuery, cancellationToken);
     }
 
     public async Task<IReadOnlyList<InventoryBatchSummaryDto>> GetProductBatchesAsync(
@@ -37,7 +39,8 @@ public class InventoryService : IInventoryService
         CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        return await _repository.GetProductBatchesAsync(tenantId, branchId, productId, cancellationToken);
+        var effectiveBranchId = BranchScopeGuard.ResolveRequiredBranchId(_tenantContext, branchId);
+        return await _repository.GetProductBatchesAsync(tenantId, effectiveBranchId, productId, cancellationToken);
     }
 }
 

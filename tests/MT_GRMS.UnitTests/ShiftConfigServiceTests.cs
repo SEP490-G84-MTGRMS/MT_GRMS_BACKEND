@@ -526,5 +526,214 @@ public class ShiftConfigServiceTests
         var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateShiftConfigAsync(createReq));
         Assert.Equal("INVALID_SHIFT_DURATION", ex.ErrorCode);
     }
+
+    [Fact]
+    public async Task CreateShiftConfig_ExactDuplicateTimeRange_ThrowsDuplicateShiftTime()
+    {
+        var repo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        var service = new ShiftConfigService(repo, uow, tenantContext);
+        var branchId = Guid.NewGuid();
+
+        repo.ShiftConfigs.Add(new ShiftConfig
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            BranchId = branchId,
+            ShiftCode = "CA-HC",
+            ShiftName = "Ca Hành chính",
+            StartTime = new TimeSpan(8, 0, 0),
+            EndTime = new TimeSpan(17, 0, 0),
+            DurationHours = 9m,
+            IsActive = true
+        });
+
+        var createReq = new CreateShiftConfigRequest(
+            ShiftName: "Ca Trùng Giờ",
+            StartTime: new TimeSpan(8, 0, 0),
+            EndTime: new TimeSpan(17, 0, 0),
+            BranchId: branchId
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateShiftConfigAsync(createReq));
+        Assert.Equal("DUPLICATE_SHIFT_TIME", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task CreateShiftConfig_PartialOverlapAndInactiveOrOtherBranch_Succeeds()
+    {
+        var repo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        var service = new ShiftConfigService(repo, uow, tenantContext);
+        var branch1 = Guid.NewGuid();
+        var branch2 = Guid.NewGuid();
+
+        repo.ShiftConfigs.AddRange(new[]
+        {
+            new ShiftConfig
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenantContext.CurrentTenantId,
+                BranchId = branch1,
+                ShiftCode = "CA-HC",
+                ShiftName = "Ca Hành chính",
+                StartTime = new TimeSpan(8, 0, 0),
+                EndTime = new TimeSpan(17, 0, 0),
+                DurationHours = 9m,
+                IsActive = true
+            },
+            new ShiftConfig
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenantContext.CurrentTenantId,
+                BranchId = branch1,
+                ShiftCode = "CA-OFF",
+                ShiftName = "Ca Đã Tắt",
+                StartTime = new TimeSpan(9, 0, 0),
+                EndTime = new TimeSpan(18, 0, 0),
+                DurationHours = 9m,
+                IsActive = false
+            }
+        });
+
+        // 1. Giao nhau một phần (08:00 - 12:00) -> hợp lệ
+        var partialRes = await service.CreateShiftConfigAsync(new CreateShiftConfigRequest(
+            ShiftName: "Ca Sáng",
+            StartTime: new TimeSpan(8, 0, 0),
+            EndTime: new TimeSpan(12, 0, 0),
+            BranchId: branch1
+        ));
+        Assert.Equal("Ca Sáng", partialRes.ShiftName);
+
+        // 2. Trùng giờ với ca đã ngừng hoạt động (IsActive == false) -> hợp lệ
+        var reuseInactiveRes = await service.CreateShiftConfigAsync(new CreateShiftConfigRequest(
+            ShiftName: "Ca Mới 9-18",
+            StartTime: new TimeSpan(9, 0, 0),
+            EndTime: new TimeSpan(18, 0, 0),
+            BranchId: branch1
+        ));
+        Assert.Equal("Ca Mới 9-18", reuseInactiveRes.ShiftName);
+
+        // 3. Trùng giờ nhưng khác chi nhánh -> hợp lệ
+        var otherBranchRes = await service.CreateShiftConfigAsync(new CreateShiftConfigRequest(
+            ShiftName: "Ca Hành chính CN2",
+            StartTime: new TimeSpan(8, 0, 0),
+            EndTime: new TimeSpan(17, 0, 0),
+            BranchId: branch2
+        ));
+        Assert.Equal(branch2, otherBranchRes.BranchId);
+    }
+
+    [Fact]
+    public async Task CreateShiftConfig_OvernightShift_SupportsCreationAndBlocksExactDuplicate()
+    {
+        var repo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        var service = new ShiftConfigService(repo, uow, tenantContext);
+        var branchId = Guid.NewGuid();
+
+        var created = await service.CreateShiftConfigAsync(new CreateShiftConfigRequest(
+            ShiftName: "Ca Đêm",
+            StartTime: new TimeSpan(22, 0, 0),
+            EndTime: new TimeSpan(6, 0, 0),
+            BranchId: branchId
+        ));
+        Assert.True(created.IsCheckInNextDay);
+        Assert.Equal(8m, created.DurationHours);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.CreateShiftConfigAsync(new CreateShiftConfigRequest(
+            ShiftName: "Ca Đêm 2",
+            StartTime: new TimeSpan(22, 0, 0),
+            EndTime: new TimeSpan(6, 0, 0),
+            BranchId: branchId
+        )));
+        Assert.Equal("DUPLICATE_SHIFT_TIME", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task UpdateShiftConfig_ExcludesSelfAndBlocksDuplicateWithAnotherActiveShift()
+    {
+        var repo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        var service = new ShiftConfigService(repo, uow, tenantContext);
+        var branchId = Guid.NewGuid();
+
+        var shift1Id = Guid.NewGuid();
+        var shift2Id = Guid.NewGuid();
+        repo.ShiftConfigs.AddRange(new[]
+        {
+            new ShiftConfig
+            {
+                Id = shift1Id,
+                TenantId = tenantContext.CurrentTenantId,
+                BranchId = branchId,
+                ShiftCode = "CA-1",
+                ShiftName = "Ca Một",
+                StartTime = new TimeSpan(8, 0, 0),
+                EndTime = new TimeSpan(17, 0, 0),
+                DurationHours = 9m,
+                IsActive = true
+            },
+            new ShiftConfig
+            {
+                Id = shift2Id,
+                TenantId = tenantContext.CurrentTenantId,
+                BranchId = branchId,
+                ShiftCode = "CA-2",
+                ShiftName = "Ca Hai",
+                StartTime = new TimeSpan(13, 0, 0),
+                EndTime = new TimeSpan(21, 0, 0),
+                DurationHours = 8m,
+                IsActive = true
+            }
+        });
+
+        // Cập nhật chính shift1 giữ nguyên 08:00 - 17:00 -> hợp lệ (loại trừ chính mình)
+        var updatedSelf = await service.UpdateShiftConfigAsync(shift1Id, new UpdateShiftConfigRequest(
+            ShiftName: "Ca Một Đã Sửa",
+            StartTime: new TimeSpan(8, 0, 0),
+            EndTime: new TimeSpan(17, 0, 0),
+            BranchId: branchId
+        ));
+        Assert.Equal("Ca Một Đã Sửa", updatedSelf.ShiftName);
+
+        // Cập nhật shift2 trùng giờ với shift1 (08:00 - 17:00) -> chặn
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.UpdateShiftConfigAsync(shift2Id, new UpdateShiftConfigRequest(
+            ShiftName: "Ca Hai",
+            StartTime: new TimeSpan(8, 0, 0),
+            EndTime: new TimeSpan(17, 0, 0),
+            BranchId: branchId
+        )));
+        Assert.Equal("DUPLICATE_SHIFT_TIME", ex.ErrorCode);
+    }
+
+    [Fact]
+    public void ShiftConfigValidators_BlockZeroMinuteShiftEvenWhenDurationProvided()
+    {
+        var createValidator = new MT_GRMS.Application.HR.ShiftConfigs.Validators.CreateShiftConfigRequestValidator();
+        var updateValidator = new MT_GRMS.Application.HR.ShiftConfigs.Validators.UpdateShiftConfigRequestValidator();
+
+        var createResult = createValidator.Validate(new CreateShiftConfigRequest(
+            ShiftName: "Ca 0 phút",
+            StartTime: new TimeSpan(8, 0, 0),
+            EndTime: new TimeSpan(8, 0, 0),
+            DurationHours: 8m,
+            BranchId: Guid.NewGuid()
+        ));
+        Assert.False(createResult.IsValid);
+
+        var updateResult = updateValidator.Validate(new UpdateShiftConfigRequest(
+            ShiftName: "Ca 0 phút",
+            StartTime: new TimeSpan(8, 0, 0),
+            EndTime: new TimeSpan(8, 0, 0),
+            DurationHours: 8m,
+            BranchId: Guid.NewGuid()
+        ));
+        Assert.False(updateResult.IsValid);
+    }
 }
 

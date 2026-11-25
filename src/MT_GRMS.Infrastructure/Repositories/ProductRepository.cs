@@ -1,6 +1,8 @@
+using System.Linq.Expressions;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Catalog.Dtos;
+using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
@@ -9,8 +11,11 @@ namespace MT_GRMS.Infrastructure.Repositories;
 
 public class ProductRepository : GenericRepository<Product>, IProductRepository
 {
-    public ProductRepository(AppDbContext context) : base(context)
+    private readonly ITenantContext? _tenantContext;
+
+    public ProductRepository(AppDbContext context, ITenantContext? tenantContext = null) : base(context)
     {
+        _tenantContext = tenantContext;
     }
 
     public async Task<(IReadOnlyList<Product> Items, int TotalCount)> GetPagedListAsync(
@@ -30,6 +35,24 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
                 p.Name.ToLower().Contains(term) ||
                 p.ProductCode.ToLower().Contains(term) ||
                 (p.Barcode != null && p.Barcode.ToLower().Contains(term)));
+        }
+
+        var skuTerms = CleanTerms(filter.Skus);
+        if (skuTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, p => p.ProductCode, skuTerms);
+        }
+
+        var nameTerms = CleanTerms(filter.Names);
+        if (nameTerms.Count > 0)
+        {
+            query = WhereAnyContains(query, p => p.Name, nameTerms);
+        }
+
+        var barcodeTerms = CleanTerms(filter.Barcodes);
+        if (barcodeTerms.Count > 0)
+        {
+            query = WhereAnyBarcodeContains(query, barcodeTerms);
         }
 
         if (filter.CategoryIds != null && filter.CategoryIds.Any())
@@ -104,10 +127,16 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
     public async Task<string?> GetMaxSequentialCodeAsync(string prefix, int totalLength, CancellationToken cancellationToken = default)
     {
         var normalizedPrefix = prefix.Trim().ToUpper();
-        return await _dbSet
+        var tenantId = _tenantContext?.CurrentTenantId;
+        var query = _dbSet
             .IgnoreQueryFilters()
             .Where(p => p.ProductCode.StartsWith(normalizedPrefix) &&
-                        p.ProductCode.Length == totalLength)
+                        p.ProductCode.Length == totalLength);
+        if (!string.IsNullOrWhiteSpace(tenantId))
+        {
+            query = query.Where(p => p.TenantId == tenantId);
+        }
+        return await query
             .OrderByDescending(p => p.ProductCode)
             .Select(p => p.ProductCode)
             .FirstOrDefaultAsync(cancellationToken);
@@ -148,5 +177,63 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
             unit.UpdatedAt = DateTime.UtcNow;
             _context.ProductUnits.Update(unit);
         }
+    }
+
+    private static List<string> CleanTerms(IReadOnlyList<string>? values)
+    {
+        if (values == null || values.Count == 0) return [];
+        return values
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v.Trim().ToLower())
+            .Distinct()
+            .ToList();
+    }
+
+    private static IQueryable<Product> WhereAnyContains(
+        IQueryable<Product> query,
+        Expression<Func<Product, string>> selector,
+        IReadOnlyList<string> terms)
+    {
+        if (terms.Count == 0) return query;
+        var parameter = selector.Parameters[0];
+        var source = Expression.Call(selector.Body, nameof(string.ToLower), Type.EmptyTypes);
+        Expression? body = null;
+        foreach (var term in terms)
+        {
+            var contains = Expression.Call(source, nameof(string.Contains), Type.EmptyTypes, Expression.Constant(term));
+            body = body is null ? contains : Expression.OrElse(body, contains);
+        }
+        return query.Where(Expression.Lambda<Func<Product, bool>>(body!, parameter));
+    }
+
+    private static IQueryable<Product> WhereAnyBarcodeContains(
+        IQueryable<Product> query,
+        IReadOnlyList<string> terms)
+    {
+        if (terms.Count == 0) return query;
+        var p = Expression.Parameter(typeof(Product), "p");
+        var barcodeProp = Expression.Property(p, nameof(Product.Barcode));
+        var notNull = Expression.NotEqual(barcodeProp, Expression.Constant(null, typeof(string)));
+        var lowerBarcode = Expression.Call(barcodeProp, nameof(string.ToLower), Type.EmptyTypes);
+        Expression? body = null;
+        foreach (var term in terms)
+        {
+            var mainMatch = Expression.AndAlso(
+                notNull,
+                Expression.Call(lowerBarcode, nameof(string.Contains), Type.EmptyTypes, Expression.Constant(term)));
+
+            // p.Units.Any(u => !u.IsDeleted && u.Barcode != null && u.Barcode.ToLower().Contains(term))
+            Expression<Func<Product, bool>> unitExpr = prod =>
+                prod.Units.Any(u => !u.IsDeleted && u.Barcode != null && u.Barcode.ToLower().Contains(term));
+            var invoked = new ParameterReplacer(unitExpr.Parameters[0], p).Visit(unitExpr.Body)!;
+            var either = Expression.OrElse(mainMatch, invoked);
+            body = body is null ? either : Expression.OrElse(body, either);
+        }
+        return query.Where(Expression.Lambda<Func<Product, bool>>(body!, p));
+    }
+
+    private sealed class ParameterReplacer(ParameterExpression from, ParameterExpression to) : ExpressionVisitor
+    {
+        protected override Expression VisitParameter(ParameterExpression node) => node == from ? to : base.VisitParameter(node);
     }
 }

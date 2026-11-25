@@ -56,6 +56,12 @@ public class Supplier : BaseTenantEntity
     public int UrgentLeadTimeHours { get; set; } = 4;
     public decimal UrgentFeePercent { get; set; } = 0;
 
+    // PO Modification Rules (SUP-02)
+    public bool AllowStoreEdit { get; set; } = true;
+    public string EditWindowType { get; set; } = "BEFORE_CUTOFF";
+    public int HoursBeforeDelivery { get; set; } = 24;
+    public int HoursAfterOrder { get; set; } = 2;
+
     public ICollection<SupplierAPLedger> APLedgers { get; set; } = new List<SupplierAPLedger>();
     public ICollection<SupplierBlackoutDate> BlackoutDates { get; set; } = new List<SupplierBlackoutDate>();
     public ICollection<SupplierBranchAssignment> BranchAssignments { get; set; } = new List<SupplierBranchAssignment>();

@@ -381,7 +381,7 @@ public class AuthControllerTests
         var forgotReq = new ForgotPasswordRequest("user@test.com");
         _mockAuth.Setup(a => a.ForgotPasswordAsync(forgotReq, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new KeyNotFoundException("Email not found"));
-        Assert.IsType<NotFoundObjectResult>(await _controller.ForgotPassword(forgotReq, CancellationToken.None));
+        Assert.IsType<OkObjectResult>(await _controller.ForgotPassword(forgotReq, CancellationToken.None));
 
         _mockAuth.Setup(a => a.ForgotPasswordAsync(forgotReq, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new ArgumentException("Invalid email format"));

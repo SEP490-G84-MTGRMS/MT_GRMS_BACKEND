@@ -322,6 +322,50 @@ public class GoodsReceiptTests
     }
 
     [Fact]
+    public async Task CompleteGoodsReceipt_ApPaymentWithoutDueDate_AutoSetsPaymentDueDateFromSupplierTerm()
+    {
+        var supplier = _repo.PurchaseOrders[0].Supplier!;
+        supplier.PaymentTermDays = 15;
+
+        var draft = await _service.CreateGoodsReceiptAsync(new CreateGoodsReceiptCommand
+        {
+            PurchaseOrderId = _poId,
+            SupplierId = _supplierId,
+            BranchId = _branchId,
+            PaymentMethod = "AP",
+            Lines = new List<CreateGoodsReceiptLineCommand>
+            {
+                new()
+                {
+                    ProductId = _milkProdId,
+                    OrderedQty = 100,
+                    DeliveredQty = 100,
+                    AcceptedQty = 100,
+                    UnitPrice = 25000,
+                    ManageBatch = true,
+                    BatchCode = "LOT-DUE-15",
+                    ManufactureDate = DateTime.UtcNow.AddMonths(-1),
+                    ExpiryDate = DateTime.UtcNow.AddMonths(12)
+                }
+            }
+        });
+
+        Assert.Null(draft.PaymentDueDate);
+
+        var completed = await _service.CompleteGoodsReceiptAsync(draft.Id, new CompleteGoodsReceiptCommand
+        {
+            Note = "Xác nhận nhập kho ghi nợ"
+        });
+
+        Assert.Equal("COMPLETED", completed.Status);
+        Assert.NotNull(completed.PaymentDueDate);
+        Assert.Single(_repo.Ledgers);
+        Assert.Equal(_repo.Ledgers[0].TransactionDate.Date.AddDays(15), completed.PaymentDueDate!.Value.Date);
+        Assert.Equal(APDocType.PurchaseInvoice, _repo.Ledgers[0].DocType);
+        Assert.Equal(1, _repo.Ledgers[0].Direction);
+    }
+
+    [Fact]
     public async Task CancelGoodsReceipt_WhenDraft_CancelsAndReleasesPo()
     {
         var command = new CreateGoodsReceiptCommand

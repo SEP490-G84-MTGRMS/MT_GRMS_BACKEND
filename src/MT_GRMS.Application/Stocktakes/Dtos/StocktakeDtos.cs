@@ -29,7 +29,10 @@ public record StocktakeListItemDto(
     int TotalLines,
     int AnomalyLines,
     int ReturnEligibleLines,
-    string? Note
+    string? Note,
+    decimal TotalDefectiveQty = 0m,
+    decimal TotalDamagedAndExpiredQty = 0m,
+    decimal TotalVarianceQty = 0m
 );
 
 public record StocktakeLineDto(

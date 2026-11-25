@@ -177,6 +177,48 @@ public class BranchProductManagementTests
     }
 
     [Fact]
+    public async Task REQ_STOREPROD_03c_ManualAssignSecondSupplier_AppendsToAllowedSupplierIds()
+    {
+        // Arrange: Product 1 đã gán tại _branchId với _defaultSupplierId (NCC B); thêm NCC C cũng cung cấp Product 1
+        var supplierCId = Guid.NewGuid();
+        var existingBp = _repo.BranchProducts.First(bp => bp.BranchId == _branchId && bp.ProductId == _prod1Id);
+        existingBp.SetAllowedSupplierIds(new[] { _defaultSupplierId });
+
+        _repo.ActiveSupplierIdsForBranch.Add(supplierCId);
+        _repo.SupplierProducts.Add(new SupplierProduct
+        {
+            Id = Guid.NewGuid(),
+            ProductId = _prod1Id,
+            SupplierId = supplierCId,
+            Supplier = new Domain.Entities.Supplier.Supplier { Id = supplierCId, Code = "NCC-C", Name = "Nhà cung cấp C" },
+            AgreedWholesalePrice = 155000m,
+            MinimumOrderQuantity = 6,
+            Status = SupplierProductStatus.Active
+        });
+
+        // Verify GetAssignableProducts trả cả 2 cặp: NCC B (Đã gán), NCC C (Chưa gán)
+        var assignable = await _service.GetAssignableProductsAsync(_branchId);
+        var prod1Pairs = assignable.Where(x => x.ProductId == _prod1Id).ToList();
+        Assert.Equal(2, prod1Pairs.Count);
+        Assert.True(prod1Pairs.Single(x => x.SupplierId == _defaultSupplierId).IsAlreadyAssigned);
+        Assert.False(prod1Pairs.Single(x => x.SupplierId == supplierCId).IsAlreadyAssigned);
+
+        // Act: User add tay cặp (Product 1, NCC C)
+        var result = await _service.AssignProductsAsync(_branchId, new AssignBranchProductsCommand
+        {
+            Items = new List<BranchProductAssignItemCommand>
+            {
+                new() { ProductId = _prod1Id, SupplierId = supplierCId }
+            }
+        });
+
+        // Assert
+        Assert.Single(result);
+        Assert.Equal(supplierCId, result[0].SupplierId);
+        Assert.Equal(new[] { _defaultSupplierId, supplierCId }, existingBp.GetAllowedSupplierIds());
+    }
+
+    [Fact]
     public async Task REQ_STOREPROD_03b_AssignProducts_ReusesSupplierProductTerms_DoesNotWriteMoq()
     {
         var prod3Id = Guid.NewGuid();
@@ -896,14 +938,18 @@ public class BranchProductManagementTests
                 return Task.FromResult((IReadOnlyList<AssignableBranchProductDto>)AssignableProducts);
             }
 
-            // Default: mọi SupplierProduct Active đều khả dụng nếu chi nhánh có NCC liên kết
+            // Default: mọi cặp (Product × Supplier) Active đều khả dụng nếu chi nhánh có NCC liên kết
             var items = SupplierProducts
                 .Where(sp => ActiveSupplierIdsForBranch.Contains(sp.SupplierId))
-                .GroupBy(sp => sp.ProductId)
+                .GroupBy(sp => (sp.ProductId, sp.SupplierId))
                 .Select(g =>
                 {
                     var sp = g.First();
                     var prod = Products.FirstOrDefault(p => p.Id == sp.ProductId);
+                    var existingBp = BranchProducts.FirstOrDefault(bp =>
+                        bp.BranchId == branchId && bp.ProductId == sp.ProductId && !bp.IsDeleted);
+                    var allowed = existingBp?.GetAllowedSupplierIds();
+                    var isAssigned = existingBp != null && (allowed == null || allowed.Contains(sp.SupplierId));
                     return new AssignableBranchProductDto
                     {
                         ProductId = sp.ProductId,
@@ -916,8 +962,7 @@ public class BranchProductManagementTests
                         SupplierId = sp.SupplierId,
                         SupplierCode = sp.Supplier?.Code ?? string.Empty,
                         SupplierName = sp.Supplier?.Name ?? string.Empty,
-                        IsAlreadyAssigned = BranchProducts.Any(bp =>
-                            bp.BranchId == branchId && bp.ProductId == sp.ProductId && !bp.IsDeleted)
+                        IsAlreadyAssigned = isAssigned
                     };
                 })
                 .ToList();

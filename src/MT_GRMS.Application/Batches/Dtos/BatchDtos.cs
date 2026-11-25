@@ -94,11 +94,25 @@ public record BatchListItemDto(
     bool AllowRepack = false,
     decimal PackagedQty = 0m,
     int PackageCount = 0,
-    decimal RawSellableQty = 0m
+    decimal RawSellableQty = 0m,
+    DateTime? FefoDiscountStartAtUtc = null,
+    DateTime? FefoDiscountEndAtUtc = null,
+    string FefoDiscountStatus = "None"
 );
 
-public record ApplyFefoDiscountRequest(decimal DiscountPercent, bool IsActive = true);
-public record FefoDiscountResponse(Guid BatchId, decimal DiscountPercent, bool IsActive);
+public record ApplyFefoDiscountRequest(
+    decimal DiscountPercent,
+    bool IsActive = true,
+    int StartDaysBeforeExpiry = 0,
+    TimeSpan? StartTime = null);
+
+public record FefoDiscountResponse(
+    Guid BatchId,
+    decimal DiscountPercent,
+    bool IsActive,
+    DateTime? StartAtUtc = null,
+    DateTime? EndAtUtc = null,
+    string Status = "None");
 
 public record BatchPagedResultDto(
     IReadOnlyList<BatchListItemDto> Items,

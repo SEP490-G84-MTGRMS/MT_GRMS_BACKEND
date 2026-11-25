@@ -408,9 +408,13 @@ public class AuthController : BaseApiController
             await _authService.ForgotPasswordAsync(request, cancellationToken);
             return Ok(ApiResponse<object>.Ok(new { success = true }, "Mã xác thực OTP đã được gửi đến email của bạn.", StatusCodes.Status200OK));
         }
-        catch (KeyNotFoundException ex)
+        catch (KeyNotFoundException)
         {
-            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message, StatusCodes.Status404NotFound));
+            // Trả phản hồi trung tính 200 OK để chống lộ thông tin tài khoản (OWASP Account Enumeration)
+            return Ok(ApiResponse<object>.Ok(
+                new { success = true },
+                "Nếu tài khoản tồn tại trong hệ thống, mã xác thực OTP đã được gửi đến email đăng ký.",
+                StatusCodes.Status200OK));
         }
         catch (ArgumentException ex)
         {
