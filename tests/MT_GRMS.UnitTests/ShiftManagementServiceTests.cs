@@ -1448,24 +1448,30 @@ public class ShiftManagementServiceTests
         Assert.Equal("MOVEMENT_NOT_FOUND", exNotFound.ErrorCode);
 
         // Add movement with Recorded status
+        var creatorId = Guid.NewGuid();
         var movement = new ShiftCashMovement
         {
             Id = movId,
             ShiftId = shiftId,
             Category = CashMovementCategory.EXPENSE,
             Amount = 50000m,
-            Status = CashMovementStatus.Recorded
+            Status = CashMovementStatus.Recorded,
+            CreatedBy = creatorId
         };
         _shiftRepository.CashMovements.Add(movement);
 
         // 2. Invalid status
         var exStatus = await Assert.ThrowsAsync<BusinessException>(() =>
-            _service.CancelCashMovementAsync(movId, Guid.NewGuid()));
+            _service.CancelCashMovementAsync(movId, creatorId));
         Assert.Equal("INVALID_STATUS", exStatus.ErrorCode);
 
-        // 3. Valid cancellation
+        // 3. Another staff member cannot cancel someone else's movement (CB-13)
         movement.Status = CashMovementStatus.PendingApproval;
-        var cancelled = await _service.CancelCashMovementAsync(movId, Guid.NewGuid());
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _service.CancelCashMovementAsync(movId, Guid.NewGuid()));
+
+        // 4. Valid cancellation by creator
+        var cancelled = await _service.CancelCashMovementAsync(movId, creatorId);
         Assert.Equal(CashMovementStatus.Cancelled, cancelled.Status);
     }
 

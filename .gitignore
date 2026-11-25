@@ -68,6 +68,7 @@ ehthumbs.db
 !src/MT_GRMS.Infrastructure/Persistence/Migrations/20261117150000_RecordOrderReturns.cs
 !src/MT_GRMS.Infrastructure/Persistence/Migrations/20261117160000_RemoveCustomerDebtEntries.cs
 !src/MT_GRMS.Infrastructure/Persistence/Migrations/20261117170000_MoveTaxPolicyToSnapshot.cs
+!src/MT_GRMS.Infrastructure/Persistence/Migrations/20261123110000_NormalizeTaxPolicyJson.cs
 
 ## Supplier order Excel local storage
 **/storage/supplier-orders/

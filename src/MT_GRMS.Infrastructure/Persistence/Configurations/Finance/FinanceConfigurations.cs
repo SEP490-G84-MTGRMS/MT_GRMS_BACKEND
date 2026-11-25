@@ -76,7 +76,7 @@ public class FinanceAccountConfiguration : IEntityTypeConfiguration<FinanceAccou
         builder.Property(a => a.SepayLastError).HasMaxLength(500);
 
         builder.Property(a => a.RowVersion)
-            .IsRowVersion();
+            .IsConcurrencyToken();
 
         builder.HasIndex(a => new { a.TenantId, a.BranchId });
         builder.HasIndex(a => new { a.TenantId, a.AccountType });

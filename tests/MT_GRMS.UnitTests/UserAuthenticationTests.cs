@@ -496,11 +496,14 @@ public class UserAuthenticationTests
         await authService.ForgotPasswordAsync(new ForgotPasswordRequest("owner@mtgrms.vn"));
 
         Assert.NotNull(user.PasswordResetOtp);
-        Assert.Equal(6, user.PasswordResetOtp.Length);
+        Assert.NotNull(emailService.LastOtp);
+        Assert.Equal(6, emailService.LastOtp!.Length);
+        Assert.NotEqual(emailService.LastOtp, user.PasswordResetOtp);
+        Assert.Equal(20, user.PasswordResetOtp.Length);
+        Assert.Equal(AuthService.HashPasswordResetOtp(user.Id, emailService.LastOtp!), user.PasswordResetOtp);
         Assert.NotNull(user.OtpExpiry);
         Assert.True(user.OtpExpiry > DateTime.UtcNow);
         Assert.Equal("owner@mtgrms.vn", emailService.LastToEmail);
-        Assert.Equal(user.PasswordResetOtp, emailService.LastOtp);
     }
 
     [Fact]
@@ -522,7 +525,7 @@ public class UserAuthenticationTests
             Id = "usr_verify",
             Username = "user_verify",
             Email = "verify@mtgrms.vn",
-            PasswordResetOtp = "849201",
+            PasswordResetOtp = AuthService.HashPasswordResetOtp("usr_verify", "849201"),
             OtpExpiry = DateTime.UtcNow.AddMinutes(5)
         };
         await repo.AddAsync(user);
@@ -552,7 +555,7 @@ public class UserAuthenticationTests
             Username = "user_reset",
             Email = "reset@mtgrms.vn",
             PasswordHash = "OldHash",
-            PasswordResetOtp = "123456",
+            PasswordResetOtp = AuthService.HashPasswordResetOtp("usr_reset", "123456"),
             OtpExpiry = DateTime.UtcNow.AddMinutes(5)
         };
         await repo.AddAsync(user);
@@ -897,7 +900,9 @@ public class UserAuthenticationTests
     {
         var repo = new FakeUserRepository();
         var mockEmail = new Mock<IEmailService>();
+        string? capturedResetOtp = null;
         mockEmail.Setup(e => e.SendPasswordResetOtpAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<string, string, string, CancellationToken>((_, _, otp, _) => capturedResetOtp = otp)
             .Returns(Task.CompletedTask);
 
         var user = new User
@@ -921,11 +926,13 @@ public class UserAuthenticationTests
         await Assert.ThrowsAsync<KeyNotFoundException>(() =>
             authService.ForgotPasswordAsync(new ForgotPasswordRequest("unknown@mtgrms.vn")));
 
-        // 3. Valid ForgotPassword sets OTP
+        // 3. Valid ForgotPassword sets hashed OTP (not plaintext)
         await authService.ForgotPasswordAsync(new ForgotPasswordRequest("forgot@mtgrms.vn"));
         Assert.NotNull(user.PasswordResetOtp);
+        Assert.NotNull(capturedResetOtp);
+        Assert.NotEqual(capturedResetOtp, user.PasswordResetOtp);
         Assert.NotNull(user.OtpExpiry);
-        var validOtp = user.PasswordResetOtp!;
+        var validOtp = capturedResetOtp!;
 
         // 4. VerifyOtp wrong OTP throws ArgumentException
         await Assert.ThrowsAsync<ArgumentException>(() =>
@@ -944,6 +951,22 @@ public class UserAuthenticationTests
         Assert.Null(user.PasswordResetOtp);
         Assert.Null(user.OtpExpiry);
         Assert.True(PasswordHasher.Verify(user.PasswordHash, "BrandNewPass@123", out _));
+
+        // 8. Exceeding 5 wrong OTP attempts invalidates OTP, and weak 8-char password is rejected
+        await authService.ForgotPasswordAsync(new ForgotPasswordRequest("forgot@mtgrms.vn"));
+        var secondOtp = capturedResetOtp!;
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            authService.ResetPasswordAsync(new ResetPasswordRequest("forgot@mtgrms.vn", secondOtp, "12345678")));
+
+        for (var i = 0; i < 4; i++)
+        {
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                authService.VerifyOtpAsync(new VerifyOtpRequest("forgot@mtgrms.vn", "999999")));
+        }
+        var exceeded = await Assert.ThrowsAsync<ArgumentException>(() =>
+            authService.VerifyOtpAsync(new VerifyOtpRequest("forgot@mtgrms.vn", "999999")));
+        Assert.Contains("OTP_ATTEMPTS_EXCEEDED", exceeded.Message);
+        Assert.Null(user.PasswordResetOtp);
     }
 
     [Fact]
@@ -1084,14 +1107,14 @@ public class UserAuthenticationTests
         Assert.Contains("chưa được yêu cầu", exNoOtp.Message);
 
         // 4. Expired OTP
-        var userExpired = new User { Id = "u2", Username = "user2", Email = "user2@test.com", PasswordResetOtp = "123456", OtpExpiry = DateTime.UtcNow.AddMinutes(-5) };
+        var userExpired = new User { Id = "u2", Username = "user2", Email = "user2@test.com", PasswordResetOtp = AuthService.HashPasswordResetOtp("u2", "123456"), OtpExpiry = DateTime.UtcNow.AddMinutes(-5) };
         await repo.AddAsync(userExpired);
         var exExpired = await Assert.ThrowsAsync<ArgumentException>(() =>
             authService.VerifyOtpAsync(new VerifyOtpRequest("user2@test.com", "123456")));
         Assert.Contains("hết hạn", exExpired.Message);
 
         // 5. Wrong OTP
-        var userValid = new User { Id = "u3", Username = "user3", Email = "user3@test.com", PasswordResetOtp = "123456", OtpExpiry = DateTime.UtcNow.AddMinutes(5) };
+        var userValid = new User { Id = "u3", Username = "user3", Email = "user3@test.com", PasswordResetOtp = AuthService.HashPasswordResetOtp("u3", "123456"), OtpExpiry = DateTime.UtcNow.AddMinutes(5) };
         await repo.AddAsync(userValid);
         var exWrong = await Assert.ThrowsAsync<ArgumentException>(() =>
             authService.VerifyOtpAsync(new VerifyOtpRequest("user3@test.com", "654321")));
@@ -1235,5 +1258,125 @@ public class UserAuthenticationTests
         var exExceeded = await Assert.ThrowsAsync<ArgumentException>(() =>
             authService.VerifyRegistrationOtpAsync(new VerifyRegistrationOtpRequest("attempts@test.com", "000000")));
         Assert.Contains("OTP_ATTEMPTS_EXCEEDED", exExceeded.Message);
+    }
+
+    [Fact]
+    public async Task ChangePasswordAsync_ValidRequest_UpdatesHashRotatesStampAndRevokesOldSession()
+    {
+        var repo = new FakeUserRepository();
+        var user = new User
+        {
+            Id = "owner-change-pwd",
+            Username = "0912345678",
+            Email = "owner@mtgrms.vn",
+            FullName = "Chủ Tiệm",
+            Password = "OldPassword@123",
+            IsTwoFactorEnabled = false
+        };
+        user.TenantUsers.Add(new TenantUser { TenantId = "tenant-01", UserId = user.Id, Role = "STORE_OWNER", IsActive = true });
+        await repo.AddAsync(user);
+
+        var service = CreateAuthService(repo);
+        var initialSession = await service.LoginAsync(new LoginRequest(user.Username, "OldPassword@123", "tenant-01"));
+        var initialStamp = user.SecurityStamp;
+
+        var newSession = await service.ChangePasswordAsync(
+            user.Id,
+            new ChangePasswordRequest("OldPassword@123", "NewPassword@456"));
+
+        Assert.NotEqual(initialStamp, user.SecurityStamp);
+        Assert.NotEqual(initialSession.RefreshToken, newSession.RefreshToken);
+
+        var jwt = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ReadJwtToken(newSession.AccessToken);
+        Assert.Contains(jwt.Claims, c => c.Type == "security_stamp" && c.Value == user.SecurityStamp);
+
+        // Old refresh token from another device is rejected
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            service.RefreshTokenAsync(new RefreshTokenRequest(initialSession.RefreshToken)));
+
+        // Old password rejected, new password succeeds
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            service.LoginAsync(new LoginRequest(user.Username, "OldPassword@123", "tenant-01")));
+        var relogin = await service.LoginAsync(new LoginRequest(user.Username, "NewPassword@456", "tenant-01"));
+        Assert.Equal(user.Id, relogin.User.Id);
+    }
+
+    [Fact]
+    public async Task ChangePasswordAsync_InvalidCurrentOrWeakOrSamePassword_ThrowsArgumentExceptionAndKeepsStamp()
+    {
+        var repo = new FakeUserRepository();
+        var user = new User
+        {
+            Id = "owner-change-invalid",
+            Username = "0987654321",
+            Password = "OldPassword@123",
+            IsTwoFactorEnabled = false
+        };
+        user.TenantUsers.Add(new TenantUser { TenantId = "tenant-01", UserId = user.Id, Role = "STORE_OWNER", IsActive = true });
+        await repo.AddAsync(user);
+
+        var service = CreateAuthService(repo);
+        await service.LoginAsync(new LoginRequest(user.Username, "OldPassword@123", "tenant-01"));
+        var originalStamp = user.SecurityStamp;
+
+        var wrongCurrent = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.ChangePasswordAsync(user.Id, new ChangePasswordRequest("WrongPass@123", "NewPassword@456")));
+        Assert.Contains("INVALID_CURRENT_PASSWORD", wrongCurrent.Message);
+        Assert.Equal(originalStamp, user.SecurityStamp);
+
+        var samePass = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.ChangePasswordAsync(user.Id, new ChangePasswordRequest("OldPassword@123", "OldPassword@123")));
+        Assert.Contains("PASSWORD_SAME_AS_OLD", samePass.Message);
+        Assert.Equal(originalStamp, user.SecurityStamp);
+
+        var weakPass = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.ChangePasswordAsync(user.Id, new ChangePasswordRequest("OldPassword@123", "weakpass")));
+        Assert.Contains("WEAK_PASSWORD", weakPass.Message);
+        Assert.Equal(originalStamp, user.SecurityStamp);
+    }
+
+    [Fact]
+    public async Task UpdateProfileAsync_UpdatesFullNameAndPhone_AndRejectsDuplicatePhone()
+    {
+        var repo = new FakeUserRepository();
+        var user1 = new User
+        {
+            Id = "owner-profile-1",
+            Username = "0912345678",
+            FullName = "Chu Cua Hang Cu",
+            Email = "owner1@mtgrms.vn",
+            Phone = "0912345678",
+            NormalizedPhone = "0912345678",
+            Password = "OldPassword@123",
+            IsActive = true
+        };
+        user1.TenantUsers.Add(new TenantUser { TenantId = "tenant-01", UserId = user1.Id, Role = "STORE_OWNER", IsActive = true });
+
+        var user2 = new User
+        {
+            Id = "owner-profile-2",
+            Username = "0988776655",
+            FullName = "Chu Cua Hang 2",
+            Email = "owner2@mtgrms.vn",
+            Phone = "0988776655",
+            NormalizedPhone = "0988776655",
+            Password = "OldPassword@123",
+            IsActive = true
+        };
+        user2.TenantUsers.Add(new TenantUser { TenantId = "tenant-02", UserId = user2.Id, Role = "STORE_OWNER", IsActive = true });
+
+        await repo.AddAsync(user1);
+        await repo.AddAsync(user2);
+
+        var service = CreateAuthService(repo);
+        var updated = await service.UpdateProfileAsync(user1.Id, new UpdateProfileRequest("  Nguyễn Văn Mới  ", "+84933445566"));
+
+        Assert.Equal("Nguyễn Văn Mới", updated.FullName);
+        Assert.Equal("0933445566", updated.Phone);
+        Assert.Equal("0933445566", user1.NormalizedPhone);
+
+        var dupEx = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.UpdateProfileAsync(user1.Id, new UpdateProfileRequest("Nguyễn Văn Mới", "0988776655")));
+        Assert.Contains("PHONE_EXISTS", dupEx.Message);
     }
 }

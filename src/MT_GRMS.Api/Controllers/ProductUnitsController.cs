@@ -66,7 +66,7 @@ public class ProductUnitsController : BaseApiController
     /// <param name="request">Thông tin đơn vị tính mới</param>
     /// <param name="cancellationToken">Cancellation Token</param>
     [HttpPost("products/{productId:guid}/units")]
-    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<IActionResult> Create(
         Guid productId,
         [FromBody] ProductUnitCreateRequest request,
@@ -101,7 +101,7 @@ public class ProductUnitsController : BaseApiController
     /// <param name="request">Thông tin cập nhật mới</param>
     /// <param name="cancellationToken">Cancellation Token</param>
     [HttpPut("product-units/{id:guid}")]
-    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<IActionResult> Update(
         Guid id,
         [FromBody] ProductUnitUpdateRequest request,
@@ -132,7 +132,7 @@ public class ProductUnitsController : BaseApiController
     /// <param name="id">ID đơn vị tính cần xóa</param>
     /// <param name="cancellationToken">Cancellation Token</param>
     [HttpDelete("product-units/{id:guid}")]
-    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
         try

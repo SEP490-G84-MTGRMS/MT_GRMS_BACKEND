@@ -1774,6 +1774,13 @@ public class PurchaseOrderService : IPurchaseOrderService
                 .ToList();
         }
 
+        if (!isDryRun && targetGroups.Count == 0)
+        {
+            throw new BusinessException(
+                "EMPTY_SPLIT_REQUEST",
+                "Không có nhóm đơn hàng hợp lệ nào để chốt PO. Vui lòng nhập số lượng đặt hàng trước khi chốt.");
+        }
+
         // 2. Chạy business engine xử lý từng group độc lập (Partial Success)
         var groupResults = new List<SplitGroupResultDto>();
         var createdPos = new List<PurchaseOrder>();

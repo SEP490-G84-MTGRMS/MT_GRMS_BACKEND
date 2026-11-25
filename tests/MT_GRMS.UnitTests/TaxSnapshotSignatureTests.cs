@@ -10,6 +10,40 @@ public class TaxSnapshotSignatureTests
     private readonly TaxSnapshotSignatureService _signatureService = new();
 
     [Fact]
+    public void SnapshotSignature_SurvivesJsonbOrderingAndUnspecifiedTimestamp()
+    {
+        var snapshot = new HouseholdTaxSnapshot
+        {
+            TenantId = "tenant-1", Year = 2026, PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1, FinalizedBy = "owner",
+            FinalizedAtUtc = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc),
+            TaxPolicyJson = """{"Rules":{"Version":"2026","Threshold":1000},"MethodLock":null}"""
+        };
+        snapshot.AuditSignatureHash = _signatureService.ComputeSignature(snapshot);
+
+        snapshot.TaxPolicyJson = """{"MethodLock": null, "Rules": {"Threshold": 1000, "Version": "2026"}}""";
+        snapshot.FinalizedAtUtc = DateTime.SpecifyKind(snapshot.FinalizedAtUtc, DateTimeKind.Unspecified);
+        Assert.True(_signatureService.VerifySignature(snapshot));
+
+        snapshot.TaxPolicyJson = snapshot.TaxPolicyJson.Replace("1000", "1001");
+        Assert.False(_signatureService.VerifySignature(snapshot));
+    }
+
+    [Fact]
+    public void NormalizingLegacyNullPolicy_PreservesOriginalSignature()
+    {
+        var snapshot = new HouseholdTaxSnapshot
+        {
+            TenantId = "legacy-tenant", Year = 2026, PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1, TaxPolicyJson = null!, FinalizedBy = "owner",
+            FinalizedAtUtc = new DateTime(2026, 4, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+        snapshot.AuditSignatureHash = _signatureService.ComputeSignature(snapshot);
+        snapshot.TaxPolicyJson = "{}";
+        Assert.True(_signatureService.VerifySignature(snapshot));
+    }
+
+    [Fact]
     public void ComputeSignature_And_VerifySignature_UntamperedData_ShouldBeValid()
     {
         // Arrange

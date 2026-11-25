@@ -312,7 +312,7 @@ public class DomainAndDependencyInjectionTests
         var kpiSummary = new CustomerKpiSummaryResponse(100, 5000000m, 20, 1000);
         Assert.NotNull(kpiSummary.ToString());
 
-        var updateCustomer = new UpdateCustomerRequest("Nguyen Van B", "cust@example.com", "Address", "0123456789", "GOLD", "ACTIVE");
+        var updateCustomer = new UpdateCustomerRequest("Nguyen Van B", "cust@example.com", "Address", "GOLD");
         Assert.Equal("GOLD", updateCustomer.MembershipTier);
 
         var paymentSummary = new CustomerPaymentSummaryResponse("PAY01", "2026-11-16", 3000000m, "CASH", "Staff 1", "Note");

@@ -280,4 +280,47 @@ public class PnLReportDatabaseIntegrationTests
         var dailyTrend = await repo.GetDailyTrendAsync(branchId, now.AddDays(-1), now.AddDays(1));
         Assert.NotEmpty(dailyTrend);
     }
+
+    [Fact]
+    public async Task PnLReportRepository_DailyTrendCogs_MatchesSummaryWhenOrderHasReturns()
+    {
+        using var context = CreateDbContext();
+        var repo = new PnLReportRepository(context);
+
+        var branchId = Guid.NewGuid();
+        var prodId = Guid.NewGuid();
+        var fromUtc = new DateTime(2026, 10, 14, 17, 0, 0, DateTimeKind.Utc);
+        var toUtc = new DateTime(2026, 10, 15, 16, 59, 59, DateTimeKind.Utc);
+        var orderTime = new DateTime(2026, 10, 15, 5, 0, 0, DateTimeKind.Utc);
+
+        var order = new Order
+        {
+            OrderCode = "ORD-RET-01",
+            BranchId = branchId,
+            TotalAmount = 1_000_000m,
+            FinalAmount = 1_000_000m,
+            ReturnedAmount = 200_000m,
+            PaymentStatus = "PAID",
+            Status = "Completed",
+            CreatedAt = orderTime
+        };
+        order.Details.Add(new OrderDetail
+        {
+            Id = Guid.NewGuid(),
+            OrderId = order.Id,
+            ProductId = prodId,
+            Qty = 10,
+            UnitPrice = 100_000m,
+            ActualPrice = 100_000m,
+            CostPriceAtSale = 60_000m
+        });
+        context.Orders.Add(order);
+        await context.SaveChangesAsync();
+
+        var summaryCogs = await repo.GetCogsAsync(branchId, fromUtc, toUtc);
+        var trend = await repo.GetDailyTrendAsync(branchId, fromUtc, toUtc);
+
+        Assert.Equal(summaryCogs.TotalCogs, trend.Sum(x => x.Cogs));
+        Assert.Equal(480_000m, trend.Sum(x => x.Cogs));
+    }
 }

@@ -34,6 +34,16 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         return await _context.Suppliers.AnyAsync(s => s.Code == code, cancellationToken);
     }
 
+    public async Task<bool> ExistsByTaxCodeAsync(string taxCode, Guid? excludeSupplierId = null, CancellationToken cancellationToken = default)
+    {
+        var normalized = taxCode.Trim().ToLower();
+        return await _context.Suppliers.AnyAsync(
+            s => s.TaxCode != null
+                 && s.TaxCode.Trim().ToLower() == normalized
+                 && (!excludeSupplierId.HasValue || s.Id != excludeSupplierId.Value),
+            cancellationToken);
+    }
+
     public async Task<int> CountTodayAsync(CancellationToken cancellationToken = default)
     {
         var today = DateTime.UtcNow.Date;

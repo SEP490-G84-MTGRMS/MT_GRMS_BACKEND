@@ -33,8 +33,8 @@ public class ProductCreateRequestValidator : AbstractValidator<ProductCreateRequ
             .WithMessage("Mã vạch không hợp lệ (tối đa 50 ký tự, không chứa khoảng trắng).");
 
         RuleFor(x => x.BaseUnit)
-            .MaximumLength(30).When(x => !string.IsNullOrWhiteSpace(x.BaseUnit))
-            .WithMessage("Tên đơn vị cơ bản không được vượt quá 30 ký tự.");
+            .NotEmpty().WithMessage("Tên đơn vị cơ bản không được để trống.")
+            .MaximumLength(30).WithMessage("Tên đơn vị cơ bản không được vượt quá 30 ký tự.");
 
         RuleFor(x => x.Description)
             .MaximumLength(1000).When(x => !string.IsNullOrWhiteSpace(x.Description))

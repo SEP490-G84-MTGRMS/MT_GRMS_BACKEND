@@ -131,6 +131,14 @@ public class SupplierService : ISupplierService
             throw new BusinessException("DUPLICATE_SUPPLIER_CODE", $"Mã nhà cung cấp '{code}' đã tồn tại trong hệ thống.");
         }
 
+        // 2b. Kiểm tra trùng Mã số thuế trong cùng Tenant
+        var taxCode = command.TaxCode?.Trim();
+        if (!string.IsNullOrWhiteSpace(taxCode)
+            && await _supplierRepository.ExistsByTaxCodeAsync(taxCode, null, cancellationToken))
+        {
+            throw new BusinessException("DUPLICATE_TAX_CODE", $"Mã số thuế '{taxCode}' đã tồn tại cho một nhà cung cấp khác trong hệ thống.");
+        }
+
         var supplier = new Supplier
         {
             Code = code,
@@ -208,9 +216,16 @@ public class SupplierService : ISupplierService
             }
         }
 
+        var normalizedTaxCode = command.TaxCode?.Trim();
+        if (!string.IsNullOrWhiteSpace(normalizedTaxCode)
+            && await _supplierRepository.ExistsByTaxCodeAsync(normalizedTaxCode, id, cancellationToken))
+        {
+            throw new BusinessException("DUPLICATE_TAX_CODE", $"Mã số thuế '{normalizedTaxCode}' đã tồn tại cho một nhà cung cấp khác trong hệ thống.");
+        }
+
         supplier.Name = command.Name.Trim();
         supplier.SupplierType = command.SupplierType;
-        supplier.TaxCode = command.TaxCode?.Trim();
+        supplier.TaxCode = normalizedTaxCode;
         supplier.Phone = command.Phone.Trim();
         supplier.Email = command.Email?.Trim();
         supplier.Address = command.Address?.Trim();
@@ -261,7 +276,13 @@ public class SupplierService : ISupplierService
         }
         if (command.TaxCode != null)
         {
-            supplier.TaxCode = command.TaxCode.Trim();
+            var trimmedTax = command.TaxCode.Trim();
+            if (!string.IsNullOrWhiteSpace(trimmedTax)
+                && await _supplierRepository.ExistsByTaxCodeAsync(trimmedTax, id, cancellationToken))
+            {
+                throw new BusinessException("DUPLICATE_TAX_CODE", $"Mã số thuế '{trimmedTax}' đã tồn tại cho một nhà cung cấp khác trong hệ thống.");
+            }
+            supplier.TaxCode = trimmedTax;
         }
         if (command.Address != null)
         {

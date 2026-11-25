@@ -1,6 +1,7 @@
 using ClosedXML.Excel;
 using Microsoft.EntityFrameworkCore;
 using Moq;
+using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Tax;
 using MT_GRMS.Application.Tax.Dtos;
 using MT_GRMS.Domain.Entities.Catalog;
@@ -782,5 +783,253 @@ public class Circular152TaxExportServiceTests
             TaxExportService.BuildS3aSheet(wbEmpty, summary, filter, emptySnapshots, emptyExpenses, null, null);
             Assert.Equal(7, wbEmpty.Worksheets.Count);
         }
+    }
+
+    [Fact]
+    public async Task ExportTaxSummaryToExcel_S2dAndS2e_ShouldUseRealOpeningBalancesAndNeverFabricateData()
+    {
+        // Tạo DbContext gắn ITenantContext đúng như runtime thực tế để query filter trả dữ liệu của tenant đang đăng nhập
+        var tenantId = "tenant-s2d-s2e-real";
+        var tenantContextMock = new Mock<ITenantContext>();
+        tenantContextMock.SetupGet(c => c.CurrentTenantId).Returns(tenantId);
+
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(databaseName: Guid.NewGuid().ToString())
+            .Options;
+        using var tenantDb = new AppDbContext(options, tenantContextMock.Object);
+
+        var tenant = new Tenant { Id = tenantId, Name = "HKD Thực Tế", TaxCode = "0311223344", Address = "TP.HCM" };
+        var branch = new Branch { Id = Guid.NewGuid(), TenantId = tenantId, BranchCode = "CN01", Name = "CN1", Address = "TP.HCM", IsActive = true };
+        var supplier = new Supplier { Id = Guid.NewGuid(), TenantId = tenantId, Code = "NCC-01", Name = "NCC Thực", Status = SupplierStatus.Active };
+        var product = new Product { Id = Guid.NewGuid(), TenantId = tenantId, ProductCode = "SP-01", Barcode = "8930001", Name = "Hàng A", BaseUnit = "Hộp", CostPrice = 8000m, SellingPrice = 10000m, Status = ProductStatus.Active };
+        tenantDb.Tenants.Add(tenant);
+        tenantDb.Branches.Add(branch);
+        tenantDb.Suppliers.Add(supplier);
+        tenantDb.Products.Add(product);
+
+        var receiptQ1 = new GoodsReceipt
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantId,
+            BranchId = branch.Id,
+            SupplierId = supplier.Id,
+            Code = "PN-Q1-001",
+            Status = "COMPLETED",
+            ReceivedAtUtc = new DateTime(2026, 1, 10, 9, 0, 0, DateTimeKind.Utc),
+            GrandTotal = 800000m
+        };
+        receiptQ1.Lines.Add(new GoodsReceiptLine { Id = Guid.NewGuid(), GoodsReceiptId = receiptQ1.Id, ProductId = product.Id, AcceptedQty = 100m, DeliveredQty = 100m, OrderedQty = 100m });
+        tenantDb.GoodsReceipts.Add(receiptQ1);
+
+        var orderQ1 = new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantId,
+            BranchId = branch.Id,
+            OrderCode = "DH-Q1-001",
+            TotalAmount = 50000m,
+            DiscountAmount = 5000m,
+            PaymentStatus = "PAID",
+            Status = "COMPLETED",
+            CreatedAt = new DateTime(2026, 1, 15, 8, 30, 0, DateTimeKind.Utc)
+        };
+        orderQ1.Details.Add(new OrderDetail { Id = Guid.NewGuid(), OrderId = orderQ1.Id, ProductId = product.Id, ProductName = product.Name, UnitName = product.BaseUnit, Qty = 5m, UnitPrice = 10000m, CostPriceAtSale = 8000m });
+        tenantDb.Orders.Add(orderQ1);
+
+        tenantDb.CashbookEntries.AddRange(
+            new CashbookEntry
+            {
+                Id = Guid.NewGuid(), TenantId = tenantId, BranchId = branch.Id, EntryCode = "PT-001",
+                AccountType = FinanceAccountType.Till, EntryType = CashbookEntryType.Receipt,
+                Amount = 45000m, OccurredAtUtc = new DateTime(2026, 1, 15, 9, 0, 0, DateTimeKind.Utc),
+                Description = "Thu tiền mặt Q1", SourceType = "POS", ReferenceCode = "DH-Q1-001"
+            },
+            new CashbookEntry
+            {
+                Id = Guid.NewGuid(), TenantId = tenantId, BranchId = branch.Id, EntryCode = "PC-001",
+                AccountType = FinanceAccountType.Bank, EntryType = CashbookEntryType.Payment,
+                Amount = 15000000m, OccurredAtUtc = new DateTime(2026, 1, 16, 10, 0, 0, DateTimeKind.Utc),
+                Description = "Chi ngân hàng Q1", SourceType = "TAX", ReferenceCode = "TT-001"
+            },
+            new CashbookEntry
+            {
+                Id = Guid.NewGuid(), TenantId = tenantId, BranchId = branch.Id, EntryCode = "PT-002",
+                AccountType = FinanceAccountType.Bank, EntryType = CashbookEntryType.Receipt,
+                Amount = 90000m, OccurredAtUtc = new DateTime(2026, 4, 20, 10, 30, 0, DateTimeKind.Utc),
+                Description = "Thu ngân hàng Q2", SourceType = "POS", ReferenceCode = "DH-Q2-001"
+            });
+        await tenantDb.SaveChangesAsync();
+
+        var tenantExportService = new TaxExportService(_mockTaxService.Object, _mockTaxRepo.Object, tenantDb, tenantContextMock.Object);
+
+        // 1. Q1 has no prior transactions -> opening inventory S2d = 0 / 0 (no fake 5000 / 150,000,000)
+        var q1Filter = new HouseholdTaxFilterDto { Year = 2026, PeriodType = TaxPeriodType.Quarter, PeriodNumber = 1 };
+        var q1S2dBytes = await tenantExportService.ExportTaxSummaryToExcelAsync(q1Filter, AccountingBookType.S2d_MaterialsAndGoods, CancellationToken.None);
+        using (var ms = new MemoryStream(q1S2dBytes))
+        using (var wb = new XLWorkbook(ms))
+        {
+            var ws = wb.Worksheet("S2d-HKD");
+            Assert.Equal("Số dư đầu kỳ", ws.Cell(12, 4).GetString());
+            Assert.Equal(0m, ws.Cell(12, 11).GetValue<decimal>());
+            Assert.Equal(0m, ws.Cell(12, 12).GetValue<decimal>());
+        }
+
+        // 2. Q2 has prior Q1 receipt (100 qty, 800,000) minus order (5 qty, 40,000) -> opening = 95 qty / 760,000
+        var q2Filter = new HouseholdTaxFilterDto { Year = 2026, PeriodType = TaxPeriodType.Quarter, PeriodNumber = 2 };
+        var q2S2dBytes = await tenantExportService.ExportTaxSummaryToExcelAsync(q2Filter, AccountingBookType.S2d_MaterialsAndGoods, CancellationToken.None);
+        using (var ms = new MemoryStream(q2S2dBytes))
+        using (var wb = new XLWorkbook(ms))
+        {
+            var ws = wb.Worksheet("S2d-HKD");
+            Assert.Equal(95m, ws.Cell(12, 11).GetValue<decimal>());
+            Assert.Equal(760000m, ws.Cell(12, 12).GetValue<decimal>());
+        }
+
+        // 3. Q3 has NO CashbookEntries in Q3, only prior Q1/Q2 cash (+45,000 Till), bank (-15,000,000 + 90,000 = -14,910,000)
+        // Must compute real opening balances (NO 20,000,000 / 50,000,000 and NO fabricated 60%/40% split)
+        var q3Filter = new HouseholdTaxFilterDto { Year = 2026, PeriodType = TaxPeriodType.Quarter, PeriodNumber = 3 };
+        var q3S2eBytes = await tenantExportService.ExportTaxSummaryToExcelAsync(q3Filter, AccountingBookType.S2e_CashAndBank, CancellationToken.None);
+        using (var ms = new MemoryStream(q3S2eBytes))
+        using (var wb = new XLWorkbook(ms))
+        {
+            var ws = wb.Worksheet("S2e-HKD");
+            var allCellStrings = ws.CellsUsed().Select(c => c.GetString()).ToList();
+
+            Assert.DoesNotContain(allCellStrings, s => s is "THU-TM" or "CHI-TM" or "CK-BAN" or "CK-CHI");
+            Assert.Contains(allCellStrings, s => s.Contains("Không phát sinh giao dịch trong kỳ"));
+
+            var cashInitRow = ws.RowsUsed().First(r => r.Cell(3).GetString().Contains("A. Số dư đầu kỳ Quỹ tiền mặt"));
+            Assert.Equal(45000m, cashInitRow.Cell(4).GetValue<decimal>());
+
+            var bankInitRow = ws.RowsUsed().First(r => r.Cell(3).GetString().Contains("A. Số dư đầu kỳ Tiền gửi ngân hàng"));
+            Assert.Equal(-14910000m, bankInitRow.Cell(4).GetValue<decimal>());
+        }
+    }
+
+    [Fact]
+    public async Task ExportTaxSummaryToExcel_SummarySheet_ShouldNotMultiplyRatesBy100OrDoubleDeductCogs()
+    {
+        // Case 1: RevenuePercentage mode (PitRate = 0.5% already in percentage units)
+        var revSummary = new HouseholdTaxSummaryDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            HouseholdGroup = HouseholdTaxGroup.Group2_1BTo3B,
+            CalculationMethod = TaxCalculationMethod.RevenuePercentage,
+            TaxableRevenueInPeriod = 400_000_000m,
+            VatRate = 1.0m,
+            VatAmount = 4_000_000m,
+            PitRate = 0.5m,
+            PitAmount = 2_000_000m,
+            TotalTaxAmount = 6_000_000m,
+            VatBreakdown = new VatBreakdownDto
+            {
+                RevenueStandardRate10 = 400_000_000m,
+                TaxAmountStandardRate10 = 4_000_000m
+            }
+        };
+        _mockTaxService
+            .Setup(s => s.GetTaxSummaryAsync(It.IsAny<HouseholdTaxFilterDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(revSummary);
+
+        var revBytes = await _exportService.ExportTaxSummaryToExcelAsync(
+            new HouseholdTaxFilterDto { Year = 2026, PeriodType = TaxPeriodType.Quarter, PeriodNumber = 1 },
+            null,
+            CancellationToken.None);
+
+        using (var ms = new MemoryStream(revBytes))
+        using (var wb = new XLWorkbook(ms))
+        {
+            var ws = wb.Worksheet("Tổng hợp (Tỷ lệ % doanh thu)");
+            Assert.Equal("0.5%", ws.Cell(5, 4).GetString());
+
+            // Also verify RenderCircularHeader does not use fake MST 0123456789 when tenantContext is null
+            var s1a = wb.Worksheet("S1a-HKD");
+            Assert.Equal("Mã số thuế: Chưa cập nhật", s1a.Cell("A4").GetString());
+
+            // Verify S2a-HKD formulas use invariant decimal point and correct PIT rate (0.005, not 0.5)
+            var s2a = wb.Worksheet("S2a-HKD");
+            var s2aFormulas = s2a.CellsUsed(c => c.HasFormula).Select(c => c.FormulaA1).ToList();
+            Assert.Contains(s2aFormulas, f => f.Contains("* 0.01, 0"));
+            Assert.Contains(s2aFormulas, f => f.Contains("* 0.005, 0"));
+        }
+
+        // Case 2: DeclarationBased mode (DeductibleExpensesInPeriod = CogsAmount + OpexAmount)
+        var declSummary = new HouseholdTaxSummaryDto
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            HouseholdGroup = HouseholdTaxGroup.Group3_3BTo50B,
+            CalculationMethod = TaxCalculationMethod.DeclarationBased,
+            TaxableRevenueInPeriod = 500_000_000m,
+            VatRate = 1.0m,
+            VatAmount = 5_000_000m,
+            PitRate = 15m,
+            PitAmount = 22_500_000m,
+            TotalTaxAmount = 27_500_000m,
+            CogsAmount = 300_000_000m,
+            OpexAmount = 50_000_000m,
+            DeductibleExpensesInPeriod = 350_000_000m
+        };
+        _mockTaxService
+            .Setup(s => s.GetTaxSummaryAsync(It.IsAny<HouseholdTaxFilterDto>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(declSummary);
+
+        var declBytes = await _exportService.ExportTaxSummaryToExcelAsync(
+            new HouseholdTaxFilterDto { Year = 2026, PeriodType = TaxPeriodType.Quarter, PeriodNumber = 1 },
+            null,
+            CancellationToken.None);
+
+        using (var ms = new MemoryStream(declBytes))
+        using (var wb = new XLWorkbook(ms))
+        {
+            var ws = wb.Worksheet("Tổng hợp (Mô hình Kê khai)");
+            // Row 3 = VAT line (index 2), Row 4 = COGS (index 3), Row 5 = OPEX (index 4), Row 6 = Net profit (index 5), Row 7 = PIT (index 6)
+            Assert.Equal("1%", ws.Cell(3, 4).GetString());
+            Assert.Equal(300_000_000m, ws.Cell(4, 3).GetValue<decimal>());
+            Assert.Equal(50_000_000m, ws.Cell(5, 3).GetValue<decimal>());
+            Assert.Equal(150_000_000m, ws.Cell(6, 3).GetValue<decimal>()); // 500M - 300M - 50M (no COGS double deduction)
+            Assert.Equal("15%", ws.Cell(7, 4).GetString());
+        }
+    }
+
+    [Fact]
+    public async Task ExportTaxSummaryToExcel_MultiTenantIsolation_ShouldNotLeakOtherTenantNameOrTaxCode()
+    {
+        // BUG-077: Seed Tenant B alongside existing Tenant A in the same database
+        var tenantB = new Tenant
+        {
+            Id = "tenant-b-isolated",
+            Name = "Hộ Kinh Doanh B Độc Lập",
+            TaxCode = "0399887766",
+            Address = "789 Lê Lợi, Quận 3, TP. Hồ Chí Minh"
+        };
+        _context.Tenants.Add(tenantB);
+        await _context.SaveChangesAsync();
+
+        var tenantContextMock = new Mock<ITenantContext>();
+        tenantContextMock.SetupGet(c => c.CurrentTenantId).Returns(tenantB.Id);
+
+        var isolatedService = new TaxExportService(
+            _mockTaxService.Object,
+            _mockTaxRepo.Object,
+            _context,
+            tenantContextMock.Object);
+
+        var bytes = await isolatedService.ExportTaxSummaryToExcelAsync(
+            new HouseholdTaxFilterDto { Year = 2026, PeriodType = TaxPeriodType.Quarter, PeriodNumber = 1 },
+            AccountingBookType.S1a_RevenueGroup1,
+            CancellationToken.None);
+
+        using var ms = new MemoryStream(bytes);
+        using var wb = new XLWorkbook(ms);
+        var ws = wb.Worksheet("S1a-HKD");
+
+        Assert.Contains("Hộ Kinh Doanh B Độc Lập", ws.Cell("A2").GetString());
+        Assert.Contains("0399887766", ws.Cell("A4").GetString());
+        Assert.DoesNotContain("Siêu Thị Mini MT", ws.Cell("A2").GetString());
+        Assert.DoesNotContain("0109988776", ws.Cell("A4").GetString());
     }
 }

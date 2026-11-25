@@ -132,6 +132,20 @@ public class CategoryService : ICategoryService
             throw new BusinessException("CATEGORY_NAME_EXISTS", $"Nhóm hàng với tên '{trimmedName}' đã tồn tại trong hệ thống.");
         }
 
+        if (!string.IsNullOrWhiteSpace(request.Code))
+        {
+            var normalizedCode = request.Code.Trim().ToUpper();
+            if (normalizedCode.Length > 30 || !CodeRegex.IsMatch(normalizedCode))
+            {
+                throw new ArgumentException("Mã nhóm hàng chỉ gồm chữ cái không dấu, số, gạch ngang/dưới và tối đa 30 ký tự.");
+            }
+            if (await _categoryRepository.ExistsByCodeAsync(normalizedCode, id, cancellationToken))
+            {
+                throw new BusinessException("CATEGORY_CODE_EXISTS", $"Mã nhóm hàng '{normalizedCode}' đã tồn tại trong hệ thống.");
+            }
+            category.CategoryCode = normalizedCode;
+        }
+
         category.Name = trimmedName;
         category.Description = trimmedDesc;
         category.UpdatedAt = DateTime.UtcNow;

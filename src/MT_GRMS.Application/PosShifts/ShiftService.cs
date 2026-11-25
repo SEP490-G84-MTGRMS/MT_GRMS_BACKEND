@@ -237,6 +237,7 @@ public class ShiftService : IShiftService
         // 1. Kiểm tra cấu hình hạn mức chi của tenant
         var paymentConfig = await _shiftRepository.GetPaymentConfigAsync(_tenantContext.CurrentTenantId, cancellationToken);
         decimal threshold = paymentConfig?.CashOutApprovalThreshold ?? 200000m;
+        decimal shiftTotalLimit = paymentConfig?.CashOutShiftTotalLimit ?? 0m;
 
         CashMovementStatus initialStatus = CashMovementStatus.Recorded;
 
@@ -255,9 +256,17 @@ public class ShiftService : IShiftService
             }
             else // EXPENSE
             {
-                if (request.Amount > threshold)
+                var existingShiftExpenseOut = shift.CashMovements
+                    .Where(m => !m.IsDeleted &&
+                                m.MovementType == CashMovementType.OUT &&
+                                m.Category == CashMovementCategory.EXPENSE &&
+                                m.Status == CashMovementStatus.Recorded)
+                    .Sum(m => m.Amount);
+                var exceedsShiftTotalLimit = shiftTotalLimit > 0m && (existingShiftExpenseOut + request.Amount) > shiftTotalLimit;
+
+                if (request.Amount > threshold || exceedsShiftTotalLimit)
                 {
-                    // Vượt hạn mức: Cần chủ duyệt, chưa trừ vào két (chưa ảnh hưởng G)
+                    // Vượt hạn mức đơn lẻ hoặc trần tổng chi trong ca: Cần chủ duyệt, chưa trừ vào két (chưa ảnh hưởng G)
                     initialStatus = CashMovementStatus.PendingApproval;
                 }
                 else
@@ -297,7 +306,7 @@ public class ShiftService : IShiftService
                     "CASH_APPROVAL_REQUEST",
                     $"🟠 Yêu cầu duyệt chi két POS ({request.Amount:N0}đ)",
                     $"Thu ngân {request.CreatedByName ?? "POS"} yêu cầu chi {request.Amount:N0} đ từ ca {shift.ShiftName} ({shift.ShiftCode}). Lý do: {request.Reason}. Vượt hạn mức, cần duyệt.",
-                    $"/pos/shifts",
+                    $"/store-owner/cash-control?tab=pending",
                     cancellationToken);
             }
             catch
@@ -566,8 +575,10 @@ public class ShiftService : IShiftService
         }
 
         var shift = movement.Shift ?? await _shiftRepository.GetByIdAsync(movement.ShiftId, cancellationToken);
-        if (shift is null || shift.Status is not (ShiftState.Open or ShiftState.Closing))
-            throw new BusinessException("SHIFT_NOT_OPEN", "Ca đã đóng, không thể duyệt phiếu chi.");
+        if (shift is null || shift.Status != ShiftState.Open)
+        {
+            throw new BusinessException("SHIFT_NOT_OPEN", "Không thể phê duyệt phiếu chi của ca đã chốt hoặc đang khóa chốt ca.");
+        }
 
         var (cashSales, _, _) = await _shiftRepository.GetShiftSalesMetricsAsync(movement.ShiftId, cancellationToken);
         var availableCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
@@ -609,6 +620,11 @@ public class ShiftService : IShiftService
             throw new BusinessException("INVALID_STATUS", "Chỉ có thể từ chối các phiếu đang ở trạng thái chờ duyệt.");
         }
 
+        if (movement.Shift != null && movement.Shift.Status != ShiftState.Open)
+        {
+            throw new BusinessException("SHIFT_NOT_OPEN", "Không thể từ chối phiếu chi của ca đã chốt.");
+        }
+
         movement.Status = CashMovementStatus.Rejected;
         movement.ApprovedBy = approverName;
         movement.RejectionReason = reason.Trim();
@@ -632,6 +648,23 @@ public class ShiftService : IShiftService
         if (movement.Status != CashMovementStatus.PendingApproval)
         {
             throw new BusinessException("INVALID_STATUS", "Chỉ có thể hủy phiếu đang ở trạng thái chờ duyệt.");
+        }
+
+        var role = _tenantContext.CurrentRole;
+        var isOwner = string.Equals(role, MT_GRMS.Domain.Constants.SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, "StoreOwner", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase);
+        if (!isOwner)
+        {
+            if (movement.Shift != null && _tenantContext.CurrentBranchId.HasValue && movement.Shift.BranchId != _tenantContext.CurrentBranchId.Value)
+            {
+                throw new UnauthorizedAccessException("Không có quyền hủy phiếu chi của chi nhánh khác.");
+            }
+            if (movement.CreatedBy != Guid.Empty && currentUserId != Guid.Empty && movement.CreatedBy != currentUserId)
+            {
+                throw new UnauthorizedAccessException("Chỉ người lập phiếu hoặc chủ cửa hàng mới được hủy phiếu chi này.");
+            }
         }
 
         movement.Status = CashMovementStatus.Cancelled;
@@ -714,6 +747,11 @@ public class ShiftService : IShiftService
         if (request.CashOutApprovalThreshold < 0)
         {
             throw new BusinessException("INVALID_THRESHOLD", "Hạn mức duyệt chi không được âm.");
+        }
+
+        if (request.CashOutShiftTotalLimit < 0)
+        {
+            throw new BusinessException("INVALID_SHIFT_LIMIT", "Trần tổng chi trong ca không được âm.");
         }
 
         var config = await _shiftRepository.GetPaymentConfigAsync(_tenantContext.CurrentTenantId, cancellationToken)

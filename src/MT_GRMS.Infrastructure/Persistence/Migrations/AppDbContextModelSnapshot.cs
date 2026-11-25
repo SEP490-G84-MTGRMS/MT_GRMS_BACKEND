@@ -1218,7 +1218,9 @@ namespace MT_GRMS.Infrastructure.Persistence.Migrations
 
                     b.Property<string>("TaxPolicyJson")
                         .IsRequired()
-                        .HasColumnType("jsonb");
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("jsonb")
+                        .HasDefaultValueSql("'{}'::jsonb");
 
                     b.Property<decimal>("TaxableRevenueInPeriod")
                         .HasPrecision(18, 2)

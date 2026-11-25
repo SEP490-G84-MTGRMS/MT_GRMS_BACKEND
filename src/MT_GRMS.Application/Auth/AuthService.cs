@@ -37,6 +37,7 @@ public class AuthService : IAuthService
     private static readonly object InMemoryOtpSync = new();
     private static readonly ConcurrentDictionary<string, LoginOtpEntry> LoginOtpStore = new();
     private static readonly ConcurrentDictionary<string, TwoFactorSettingsEntry> TwoFactorSettingsStore = new();
+    private static readonly ConcurrentDictionary<string, int> PasswordResetFailedAttempts = new();
 
     private readonly IUserRepository _userRepository;
     private readonly IConfiguration? _configuration;
@@ -221,6 +222,93 @@ public class AuthService : IAuthService
         return new TwoFactorStatusResponse(user.IsTwoFactorEnabled, MaskEmailDisplay(user.Email), user.IsEmailVerified);
     }
 
+    public async Task<LoginResponse> ChangePasswordAsync(string userId, ChangePasswordRequest request, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            throw new UnauthorizedAccessException("Chưa xác thực danh tính.");
+        }
+
+        ArgumentNullException.ThrowIfNull(request);
+        AuthRequestValidation.EnsureValid(new ChangePasswordRequestValidator(), request);
+
+        if (string.Equals(request.CurrentPassword, request.NewPassword, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("PASSWORD_SAME_AS_OLD: Mật khẩu mới không được trùng với mật khẩu hiện tại.");
+        }
+
+        var user = await _userRepository.GetByIdAsync(userId, cancellationToken)
+            ?? throw new UnauthorizedAccessException("Tài khoản người dùng không tồn tại.");
+
+        var (_, tenantUser) = ResolveTenant(user, null);
+        await EnsureAccountActiveAsync(user, tenantUser, cancellationToken);
+
+        try
+        {
+            await VerifyPasswordAsync(user, request.CurrentPassword, cancellationToken);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            throw new ArgumentException("INVALID_CURRENT_PASSWORD: Mật khẩu hiện tại không chính xác.");
+        }
+
+        user.PasswordHash = _passwordHasher.HashPassword(request.NewPassword);
+        user.SecurityStamp = Guid.NewGuid().ToString("N");
+        user.PasswordResetOtp = null;
+        user.OtpExpiry = null;
+
+        return await IssueLoginSessionAsync(user, null, cancellationToken);
+    }
+
+    public async Task<UserInfo> UpdateProfileAsync(string userId, UpdateProfileRequest request, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            throw new UnauthorizedAccessException("Chưa xác thực danh tính người dùng.");
+        }
+
+        ArgumentNullException.ThrowIfNull(request);
+
+        var trimmedName = (request.FullName ?? string.Empty).Trim();
+        var normalizedPhone = string.IsNullOrWhiteSpace(request.Phone)
+            ? null
+            : NormalizePhoneKey(request.Phone);
+
+        var normalizedRequest = new UpdateProfileRequest(trimmedName, normalizedPhone);
+        AuthRequestValidation.EnsureValid(new UpdateProfileRequestValidator(), normalizedRequest);
+
+        var user = await _userRepository.GetByIdAsync(userId, cancellationToken)
+                   ?? throw new UnauthorizedAccessException("Tài khoản không tồn tại hoặc đã bị vô hiệu hóa.");
+
+        var (_, tenantUser) = ResolveTenant(user, null);
+        await EnsureAccountActiveAsync(user, tenantUser, cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(normalizedPhone))
+        {
+            var duplicates = await _userRepository.FindAsync(
+                u => u.Id != user.Id && !u.IsDeleted &&
+                     (u.NormalizedPhone == normalizedPhone || u.Phone == normalizedPhone),
+                cancellationToken);
+            if (duplicates.Any())
+            {
+                throw new ArgumentException("PHONE_EXISTS: Số điện thoại này đã được sử dụng bởi một tài khoản khác.");
+            }
+        }
+
+        user.FullName = trimmedName;
+        if (!string.IsNullOrWhiteSpace(normalizedPhone))
+        {
+            user.Phone = normalizedPhone;
+            user.NormalizedPhone = normalizedPhone;
+        }
+
+        _userRepository.Update(user);
+        await _userRepository.SaveChangesAsync(cancellationToken);
+
+        return await GetCurrentUserAsync(user.Id, cancellationToken)
+               ?? throw new UnauthorizedAccessException("Không thể tải lại thông tin tài khoản.");
+    }
+
     private async Task<LoginResponse> IssueLoginSessionAsync(User user, string? tenantCode, CancellationToken cancellationToken)
     {
         var (tenantId, tenantUser) = ResolveTenant(user, tenantCode);
@@ -239,7 +327,8 @@ public class AuthService : IAuthService
             BranchId: branchId,
             TenantId: tenantId,
             IsAdmin: isAdmin,
-            IsTwoFactorEnabled: user.IsTwoFactorEnabled
+            IsTwoFactorEnabled: user.IsTwoFactorEnabled,
+            Phone: user.Phone
         );
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) && parsedMins > 0 ? parsedMins : 15;
@@ -413,7 +502,8 @@ public class AuthService : IAuthService
             BranchId: branchId,
             TenantId: tenantId,
             IsAdmin: isAdmin,
-            IsTwoFactorEnabled: user.IsTwoFactorEnabled
+            IsTwoFactorEnabled: user.IsTwoFactorEnabled,
+            Phone: user.Phone
         );
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) && parsedMins > 0 ? parsedMins : 15;
@@ -462,7 +552,8 @@ public class AuthService : IAuthService
             BranchId: branchId,
             TenantId: tenantId,
             IsAdmin: isAdmin,
-            IsTwoFactorEnabled: user.IsTwoFactorEnabled
+            IsTwoFactorEnabled: user.IsTwoFactorEnabled,
+            Phone: user.Phone
         );
     }
 
@@ -671,7 +762,8 @@ public class AuthService : IAuthService
             BranchId: branch.Id,
             TenantId: tenant.Id,
             IsAdmin: false,
-            IsTwoFactorEnabled: user.IsTwoFactorEnabled
+            IsTwoFactorEnabled: user.IsTwoFactorEnabled,
+            Phone: user.Phone
         );
 
         return new LoginResponse(
@@ -760,8 +852,9 @@ public class AuthService : IAuthService
         var targetEmail = string.IsNullOrWhiteSpace(user.Email) ? cleanInput : user.Email;
         var otpCode = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
 
-        user.PasswordResetOtp = otpCode;
+        user.PasswordResetOtp = HashPasswordResetOtp(user.Id, otpCode);
         user.OtpExpiry = DateTime.UtcNow.AddMinutes(10);
+        PasswordResetFailedAttempts.TryRemove(user.Id, out _);
 
         _userRepository.Update(user);
         await _userRepository.SaveChangesAsync(cancellationToken);
@@ -779,26 +872,50 @@ public class AuthService : IAuthService
             throw new ArgumentException("Email và mã OTP không được để trống.");
         }
 
+        var cleanOtp = request.OtpCode.Trim();
+        if (!Regex.IsMatch(cleanOtp, "^[0-9]{6}$"))
+        {
+            throw new ArgumentException("OTP_INVALID: Mã xác thực OTP phải gồm đúng 6 chữ số.");
+        }
+
         var cleanInput = request.Email.Trim().ToLowerInvariant();
         var user = await _userRepository.GetByUsernameAsync(cleanInput, cancellationToken);
         if (user == null)
         {
-            throw new KeyNotFoundException("Không tìm thấy tài khoản với thông tin đã cung cấp.");
+            throw new KeyNotFoundException("Mã xác thực OTP không hợp lệ hoặc đã hết hạn.");
         }
 
         if (string.IsNullOrWhiteSpace(user.PasswordResetOtp) || user.OtpExpiry == null)
         {
-            throw new ArgumentException("Mã OTP không tồn tại hoặc chưa được yêu cầu.");
+            throw new ArgumentException("OTP_INVALID: Mã xác thực OTP không hợp lệ, đã hết hạn hoặc chưa được yêu cầu.");
         }
 
         if (user.OtpExpiry < DateTime.UtcNow)
         {
-            throw new ArgumentException("Mã OTP đã hết hạn sử dụng (quá 10 phút). Vui lòng yêu cầu mã mới.");
+            user.PasswordResetOtp = null;
+            user.OtpExpiry = null;
+            PasswordResetFailedAttempts.TryRemove(user.Id, out _);
+            _userRepository.Update(user);
+            await _userRepository.SaveChangesAsync(cancellationToken);
+            throw new ArgumentException("OTP_EXPIRED: Mã OTP đã hết hạn sử dụng (quá 10 phút). Vui lòng yêu cầu mã mới.");
         }
 
-        if (user.PasswordResetOtp.Trim() != request.OtpCode.Trim())
+        var expectedBytes = Encoding.UTF8.GetBytes(user.PasswordResetOtp.Trim());
+        var actualBytes = Encoding.UTF8.GetBytes(HashPasswordResetOtp(user.Id, cleanOtp));
+        if (!CryptographicOperations.FixedTimeEquals(expectedBytes, actualBytes))
         {
-            throw new ArgumentException("Mã OTP không chính xác. Vui lòng kiểm tra lại.");
+            var failures = PasswordResetFailedAttempts.AddOrUpdate(user.Id, 1, (_, count) => count + 1);
+            if (failures >= MaxOtpFailedAttempts)
+            {
+                user.PasswordResetOtp = null;
+                user.OtpExpiry = null;
+                PasswordResetFailedAttempts.TryRemove(user.Id, out _);
+                _userRepository.Update(user);
+                await _userRepository.SaveChangesAsync(cancellationToken);
+                throw new ArgumentException("OTP_ATTEMPTS_EXCEEDED: Bạn đã nhập sai mã OTP quá 5 lần. Vui lòng yêu cầu gửi lại mã mới.");
+            }
+
+            throw new ArgumentException($"OTP_INVALID: Mã OTP không chính xác (còn {MaxOtpFailedAttempts - failures} lần thử).");
         }
 
         return true;
@@ -811,9 +928,16 @@ public class AuthService : IAuthService
             throw new ArgumentException("Vui lòng điền đầy đủ email, mã OTP và mật khẩu mới.");
         }
 
-        if (request.NewPassword.Length < 8)
+        var pwd = request.NewPassword;
+        if (pwd.Length < 8 ||
+            pwd.Length > 64 ||
+            pwd.Any(char.IsWhiteSpace) ||
+            !Regex.IsMatch(pwd, "[A-Z]") ||
+            !Regex.IsMatch(pwd, "[a-z]") ||
+            !Regex.IsMatch(pwd, "[0-9]") ||
+            !Regex.IsMatch(pwd, "[^A-Za-z0-9]"))
         {
-            throw new ArgumentException("Mật khẩu mới phải có tối thiểu 8 ký tự.");
+            throw new ArgumentException("WEAK_PASSWORD: Mật khẩu mới phải có tối thiểu 8 ký tự (tối đa 64 ký tự), gồm chữ hoa, chữ thường, số, ký tự đặc biệt và không có khoảng trắng.");
         }
 
         await VerifyOtpAsync(new VerifyOtpRequest(request.Email, request.OtpCode), cancellationToken);
@@ -822,7 +946,7 @@ public class AuthService : IAuthService
         var user = await _userRepository.GetByUsernameAsync(cleanInput, cancellationToken);
         if (user == null)
         {
-            throw new KeyNotFoundException("Không tìm thấy tài khoản người dùng.");
+            throw new KeyNotFoundException("Mã xác thực OTP không hợp lệ hoặc đã hết hạn.");
         }
 
         user.PasswordHash = _passwordHasher.HashPassword(request.NewPassword);
@@ -831,8 +955,7 @@ public class AuthService : IAuthService
         user.RefreshTokenExpiryTime = null;
         user.PasswordResetOtp = null;
         user.OtpExpiry = null;
-        user.RefreshToken = null;
-        user.RefreshTokenExpiryTime = null;
+        PasswordResetFailedAttempts.TryRemove(user.Id, out _);
 
         _userRepository.Update(user);
         await _userRepository.SaveChangesAsync(cancellationToken);
@@ -1153,6 +1276,15 @@ public class AuthService : IAuthService
 
     private static string HashChallengeOtp(string challengeId, string otp)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{challengeId}:{otp}")));
+
+    public static string HashPasswordResetOtp(string userId, string otp)
+    {
+        // 15-byte (120-bit) salted SHA-256 digest encoded as 20-char Base64Url (fits Users.PasswordResetOtp varchar(20) without schema migration)
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes($"pwd-reset:{userId}:{otp.Trim()}"));
+        return Convert.ToBase64String(digest.AsSpan(0, 15))
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
 
     private static string ComputeRegistrationFingerprint(string normalizedEmail, string normalizedPhone, string? storeName)
     {

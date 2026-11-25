@@ -19,7 +19,6 @@ public class CustomerDebtController : BaseApiController
         _debtService = debtService;
     }
 
-    [Authorize(Roles = SystemRoles.StoreOwner)]
     [HttpPost("repay")]
     [RequireIdempotency(transactional: true)]
     public async Task<ActionResult<ApiResponse<RepaymentResultResponse>>> RepayDebt([FromBody] RepayDebtRequest request, CancellationToken ct)
@@ -28,7 +27,6 @@ public class CustomerDebtController : BaseApiController
         return Ok(ApiResponse<RepaymentResultResponse>.Ok(result, "Thu nợ khách hàng thành công."));
     }
 
-    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
     [HttpGet("profile/{customerId:guid}")]
     public async Task<ActionResult<ApiResponse<CustomerDebtProfileResponse>>> GetProfile(Guid customerId, CancellationToken ct)
     {
@@ -36,7 +34,6 @@ public class CustomerDebtController : BaseApiController
         return Ok(ApiResponse<CustomerDebtProfileResponse>.Ok(result));
     }
 
-    [Authorize(Roles = SystemRoles.AllStaffAndOwner)]
     [HttpGet("ledger/{customerId:guid}")]
     public async Task<ActionResult<ApiResponse<List<CustomerDebtLedgerItemResponse>>>> GetLedger(Guid customerId, [FromQuery] int page = 1, [FromQuery] int pageSize = 50, CancellationToken ct = default)
     {

@@ -56,6 +56,7 @@ public class UpdateBasicSupplierCommandValidator : AbstractValidator<UpdateBasic
         RuleFor(x => x.Phone)
             .NotEmpty().WithMessage("Số điện thoại không được để trống.")
             .Must(x => !string.IsNullOrWhiteSpace(x)).WithMessage("Số điện thoại không được chỉ chứa khoảng trắng.")
+            .Matches(@"^[0-9+\-\s().]{8,20}$").WithMessage("Số điện thoại không đúng định dạng (8-20 ký tự số).")
             .MaximumLength(20).WithMessage("Số điện thoại tối đa 20 ký tự.");
 
         RuleFor(x => x.Status)
@@ -70,6 +71,7 @@ public class UpdateBasicSupplierCommandValidator : AbstractValidator<UpdateBasic
         When(x => !string.IsNullOrWhiteSpace(x.TaxCode), () =>
         {
             RuleFor(x => x.TaxCode)
+                .Matches(@"^[0-9]{10}(-[0-9]{3})?$|^[0-9]{13}$").WithMessage("Mã số thuế phải đúng định dạng 10 hoặc 13 chữ số.")
                 .MaximumLength(50).WithMessage("Mã số thuế tối đa 50 ký tự.");
         });
 
