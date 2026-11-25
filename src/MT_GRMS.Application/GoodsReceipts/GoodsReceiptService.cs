@@ -721,6 +721,13 @@ public class GoodsReceiptService : IGoodsReceiptService
     /// </summary>
     private async Task<string> ResolveValidActorUserIdAsync(CancellationToken cancellationToken = default)
     {
+        var rawUserId = (_tenantContext.CurrentRawUserId ?? string.Empty).Trim();
+        if (!string.IsNullOrWhiteSpace(rawUserId)
+            && await _repository.UserExistsAsync(rawUserId, cancellationToken))
+        {
+            return rawUserId;
+        }
+
         if (_tenantContext.CurrentUserId != Guid.Empty)
         {
             var strId = _tenantContext.CurrentUserId.ToString();

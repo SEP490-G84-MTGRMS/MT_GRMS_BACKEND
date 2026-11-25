@@ -1818,7 +1818,7 @@ END $$;
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddTaxFilingConfirmations.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchConversionRulesAndNotifications.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.RemoveGoodsReceiptFreight.UpSql);
-                    await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductAllowedSupplierIds.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(AddBranchProductAllowedSupplierIdsSql);
                 }
                 catch (Exception ex)
                 {
@@ -2171,5 +2171,74 @@ END $$;
         }
         await db.SaveChangesAsync(ct);
     }
+
+    private const string AddBranchProductAllowedSupplierIdsSql = """
+        ALTER TABLE IF EXISTS "BranchProducts"
+          ADD COLUMN IF NOT EXISTS "AllowedSupplierIdsJson" text;
+
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'BranchProducts'
+          ) AND EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'SupplierProducts'
+          ) AND EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'SupplierBranch'
+          ) THEN
+            IF EXISTS (
+              SELECT 1 FROM information_schema.tables
+              WHERE table_schema = 'public' AND table_name = 'BranchStocks'
+            ) THEN
+              UPDATE "BranchProducts" bp
+              SET "AllowedSupplierIdsJson" = sub.supplier_ids_json
+              FROM (
+                SELECT bs."TenantId", bs."BranchId", bs."ProductId",
+                       json_agg(DISTINCT bs."SupplierId"::text)::text AS supplier_ids_json
+                FROM "BranchStocks" bs
+                WHERE bs."IsDeleted" = false
+                  AND bs."SupplierId" IS NOT NULL
+                GROUP BY bs."TenantId", bs."BranchId", bs."ProductId"
+              ) sub
+              WHERE bp."IsDeleted" = false
+                AND bp."AllowedSupplierIdsJson" IS NULL
+                AND bp."TenantId" = sub."TenantId"
+                AND bp."BranchId" = sub."BranchId"
+                AND bp."ProductId" = sub."ProductId";
+            END IF;
+
+            UPDATE "BranchProducts" bp
+            SET "AllowedSupplierIdsJson" = json_build_array(picked."SupplierId"::text)::text
+            FROM (
+              SELECT DISTINCT ON (bp2."Id")
+                     bp2."Id" AS bp_id,
+                     sp."SupplierId"
+              FROM "BranchProducts" bp2
+              INNER JOIN "SupplierBranch" sb
+                ON sb."TenantId" = bp2."TenantId"
+               AND sb."BranchId" = bp2."BranchId"
+               AND sb."IsDeleted" = false
+               AND sb."Status" = 1
+              INNER JOIN "SupplierProducts" sp
+                ON sp."TenantId" = bp2."TenantId"
+               AND sp."SupplierId" = sb."SupplierId"
+               AND sp."ProductId" = bp2."ProductId"
+               AND sp."IsDeleted" = false
+               AND sp."Status" = 1
+              INNER JOIN "Suppliers" s
+                ON s."Id" = sp."SupplierId"
+               AND s."IsDeleted" = false
+               AND s."Status" = 1
+              WHERE bp2."IsDeleted" = false
+                AND bp2."AllowedSupplierIdsJson" IS NULL
+              ORDER BY bp2."Id", sp."IsPrimarySupplier" DESC, sp."CreatedAt" ASC
+            ) picked
+            WHERE bp."Id" = picked.bp_id
+              AND bp."AllowedSupplierIdsJson" IS NULL;
+          END IF;
+        END $$;
+        """;
 
 }
