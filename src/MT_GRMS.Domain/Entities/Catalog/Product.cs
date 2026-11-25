@@ -50,9 +50,8 @@ public class Product : BaseTenantEntity
     private List<string> _imageUrls = new();
 
     /// <summary>
-    /// Tương thích API nhiều ảnh. DB local hiện lưu 1 ảnh tại cột ImageUrl.
+    /// Danh sách nhiều ảnh sản phẩm (lưu cột ImageUrls text[] trong DB; ảnh đầu tiên đồng bộ với ImageUrl đại diện).
     /// </summary>
-    [NotMapped]
     public List<string> ImageUrls
     {
         get
@@ -68,6 +67,7 @@ public class Product : BaseTenantEntity
             _imageUrls = value?
                 .Where(u => !string.IsNullOrWhiteSpace(u))
                 .Select(u => u.Trim())
+                .Distinct(StringComparer.Ordinal)
                 .ToList() ?? new List<string>();
             ImageUrl = _imageUrls.FirstOrDefault();
         }

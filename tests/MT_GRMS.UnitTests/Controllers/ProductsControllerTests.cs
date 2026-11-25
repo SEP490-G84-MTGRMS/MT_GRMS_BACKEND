@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -14,6 +15,7 @@ using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Application.Suppliers.Dtos;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Exceptions;
 using Npgsql;
 using Xunit;
@@ -382,5 +384,19 @@ public class ProductsControllerTests
         var resp = Assert.IsType<ApiResponse<PagedResult<ProductPriceHistoryDto>>>(ok.Value);
         Assert.True(resp.Success);
         Assert.Single(resp.Data!.Items);
+    }
+
+    [Theory]
+    [InlineData(nameof(ProductsController.Create))]
+    [InlineData(nameof(ProductsController.Update))]
+    [InlineData(nameof(ProductsController.Delete))]
+    public void WriteEndpoints_RequireStoreOwnerRole(string actionName)
+    {
+        var method = typeof(ProductsController).GetMethod(actionName);
+        Assert.NotNull(method);
+
+        var authorizeAttr = method!.GetCustomAttribute<AuthorizeAttribute>();
+        Assert.NotNull(authorizeAttr);
+        Assert.Equal(SystemRoles.StoreOwner, authorizeAttr!.Roles);
     }
 }
