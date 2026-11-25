@@ -471,13 +471,18 @@ public class AuthController : BaseApiController
         Response.Cookies.Delete("refresh_token", new CookieOptions { Path = "/api" });
     }
 
+    private const string NeutralForgotPasswordMessage =
+        "Nếu tài khoản tồn tại trong hệ thống, mã xác thực OTP đã được gửi đến email đăng ký.";
+
+    private const string NeutralPasswordResetOtpErrorMessage =
+        "Mã xác thực OTP không hợp lệ hoặc đã hết hạn.";
+
     /// <summary>
     /// Gửi mã xác thực OTP khôi phục mật khẩu qua Email
     /// </summary>
     [HttpPost("forgot-password")]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request, CancellationToken cancellationToken)
     {
         if (request == null || string.IsNullOrWhiteSpace(request.Email))
@@ -488,15 +493,12 @@ public class AuthController : BaseApiController
         try
         {
             await _authService.ForgotPasswordAsync(request, cancellationToken);
-            return Ok(ApiResponse<object>.Ok(new { success = true }, "Mã xác thực OTP đã được gửi đến email của bạn.", StatusCodes.Status200OK));
+            return Ok(ApiResponse<object>.Ok(new { success = true }, NeutralForgotPasswordMessage, StatusCodes.Status200OK));
         }
         catch (KeyNotFoundException)
         {
-            // Trả phản hồi trung tính 200 OK để chống lộ thông tin tài khoản (OWASP Account Enumeration)
-            return Ok(ApiResponse<object>.Ok(
-                new { success = true },
-                "Nếu tài khoản tồn tại trong hệ thống, mã xác thực OTP đã được gửi đến email đăng ký.",
-                StatusCodes.Status200OK));
+            // Trả phản hồi trung tính đồng nhất 100% để chống lộ thông tin tài khoản (OWASP Account Enumeration)
+            return Ok(ApiResponse<object>.Ok(new { success = true }, NeutralForgotPasswordMessage, StatusCodes.Status200OK));
         }
         catch (ArgumentException ex)
         {
@@ -510,7 +512,6 @@ public class AuthController : BaseApiController
     [HttpPost("verify-otp")]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> VerifyOtp([FromBody] VerifyOtpRequest request, CancellationToken cancellationToken)
     {
         if (request == null || string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.OtpCode))
@@ -527,13 +528,15 @@ public class AuthController : BaseApiController
         {
             return BadRequest(ApiResponse<object>.Fail(
                 "OTP_INVALID",
-                "Mã xác thực OTP không hợp lệ, đã hết hạn hoặc chưa được yêu cầu.",
+                NeutralPasswordResetOtpErrorMessage,
                 StatusCodes.Status400BadRequest));
         }
-        catch (ArgumentException ex)
+        catch (ArgumentException)
         {
-            var (code, msg) = ParseCodedMessage(ex.Message, "BAD_REQUEST");
-            return BadRequest(ApiResponse<object>.Fail(code, msg, StatusCodes.Status400BadRequest));
+            return BadRequest(ApiResponse<object>.Fail(
+                "OTP_INVALID",
+                NeutralPasswordResetOtpErrorMessage,
+                StatusCodes.Status400BadRequest));
         }
     }
 
@@ -559,13 +562,21 @@ public class AuthController : BaseApiController
         {
             return BadRequest(ApiResponse<object>.Fail(
                 "OTP_INVALID",
-                "Mã xác thực OTP không hợp lệ, đã hết hạn hoặc chưa được yêu cầu.",
+                NeutralPasswordResetOtpErrorMessage,
                 StatusCodes.Status400BadRequest));
         }
         catch (ArgumentException ex)
         {
             var (code, msg) = ParseCodedMessage(ex.Message, "BAD_REQUEST");
-            return BadRequest(ApiResponse<object>.Fail(code, msg, StatusCodes.Status400BadRequest));
+            if (code == "WEAK_PASSWORD")
+            {
+                return BadRequest(ApiResponse<object>.Fail(code, msg, StatusCodes.Status400BadRequest));
+            }
+
+            return BadRequest(ApiResponse<object>.Fail(
+                "OTP_INVALID",
+                NeutralPasswordResetOtpErrorMessage,
+                StatusCodes.Status400BadRequest));
         }
     }
 

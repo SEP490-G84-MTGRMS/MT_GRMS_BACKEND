@@ -381,7 +381,8 @@ public class AuthControllerTests
         var forgotReq = new ForgotPasswordRequest("user@test.com");
         _mockAuth.Setup(a => a.ForgotPasswordAsync(forgotReq, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new KeyNotFoundException("Email not found"));
-        Assert.IsType<OkObjectResult>(await _controller.ForgotPassword(forgotReq, CancellationToken.None));
+        var forgotMissing = Assert.IsType<OkObjectResult>(await _controller.ForgotPassword(forgotReq, CancellationToken.None));
+        var forgotMissingBody = Assert.IsType<ApiResponse<object>>(forgotMissing.Value);
 
         _mockAuth.Setup(a => a.ForgotPasswordAsync(forgotReq, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new ArgumentException("Invalid email format"));
@@ -389,7 +390,9 @@ public class AuthControllerTests
 
         _mockAuth.Setup(a => a.ForgotPasswordAsync(forgotReq, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
-        Assert.IsType<OkObjectResult>(await _controller.ForgotPassword(forgotReq, CancellationToken.None));
+        var forgotFound = Assert.IsType<OkObjectResult>(await _controller.ForgotPassword(forgotReq, CancellationToken.None));
+        var forgotFoundBody = Assert.IsType<ApiResponse<object>>(forgotFound.Value);
+        Assert.Equal(forgotMissingBody.Message, forgotFoundBody.Message);
 
         // VerifyOtp
         Assert.IsType<BadRequestObjectResult>(await _controller.VerifyOtp(new VerifyOtpRequest("", "123"), CancellationToken.None));
@@ -398,11 +401,24 @@ public class AuthControllerTests
         var verifyReq = new VerifyOtpRequest("user@test.com", "123456");
         _mockAuth.Setup(a => a.VerifyOtpAsync(verifyReq, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new KeyNotFoundException("Not found"));
-        Assert.IsType<BadRequestObjectResult>(await _controller.VerifyOtp(verifyReq, CancellationToken.None));
+        var verifyNotFound = Assert.IsType<BadRequestObjectResult>(await _controller.VerifyOtp(verifyReq, CancellationToken.None));
+        var verifyNotFoundBody = Assert.IsType<ApiResponse<object>>(verifyNotFound.Value);
 
         _mockAuth.Setup(a => a.VerifyOtpAsync(verifyReq, It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new ArgumentException("Wrong code"));
-        Assert.IsType<BadRequestObjectResult>(await _controller.VerifyOtp(verifyReq, CancellationToken.None));
+            .ThrowsAsync(new ArgumentException("OTP_INVALID: Mã OTP không chính xác (còn 4 lần thử)."));
+        var verifyWrong = Assert.IsType<BadRequestObjectResult>(await _controller.VerifyOtp(verifyReq, CancellationToken.None));
+        var verifyWrongBody = Assert.IsType<ApiResponse<object>>(verifyWrong.Value);
+
+        _mockAuth.Setup(a => a.VerifyOtpAsync(verifyReq, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ArgumentException("OTP_EXPIRED: Mã OTP đã hết hạn sử dụng."));
+        var verifyExpired = Assert.IsType<BadRequestObjectResult>(await _controller.VerifyOtp(verifyReq, CancellationToken.None));
+        var verifyExpiredBody = Assert.IsType<ApiResponse<object>>(verifyExpired.Value);
+
+        Assert.Equal("OTP_INVALID", verifyNotFoundBody.ErrorCode);
+        Assert.Equal(verifyNotFoundBody.ErrorCode, verifyWrongBody.ErrorCode);
+        Assert.Equal(verifyNotFoundBody.ErrorCode, verifyExpiredBody.ErrorCode);
+        Assert.Equal(verifyNotFoundBody.Message, verifyWrongBody.Message);
+        Assert.Equal(verifyNotFoundBody.Message, verifyExpiredBody.Message);
 
         _mockAuth.Setup(a => a.VerifyOtpAsync(verifyReq, It.IsAny<CancellationToken>()))
             .ReturnsAsync(true);
@@ -416,11 +432,23 @@ public class AuthControllerTests
         var resetReq = new ResetPasswordRequest("user@test.com", "123456", "NewPass@123");
         _mockAuth.Setup(a => a.ResetPasswordAsync(resetReq, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new KeyNotFoundException("Not found"));
-        Assert.IsType<BadRequestObjectResult>(await _controller.ResetPassword(resetReq, CancellationToken.None));
+        var resetNotFound = Assert.IsType<BadRequestObjectResult>(await _controller.ResetPassword(resetReq, CancellationToken.None));
+        var resetNotFoundBody = Assert.IsType<ApiResponse<object>>(resetNotFound.Value);
 
         _mockAuth.Setup(a => a.ResetPasswordAsync(resetReq, It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new ArgumentException("Weak password"));
-        Assert.IsType<BadRequestObjectResult>(await _controller.ResetPassword(resetReq, CancellationToken.None));
+            .ThrowsAsync(new ArgumentException("OTP_EXPIRED: Mã OTP đã hết hạn sử dụng."));
+        var resetExpired = Assert.IsType<BadRequestObjectResult>(await _controller.ResetPassword(resetReq, CancellationToken.None));
+        var resetExpiredBody = Assert.IsType<ApiResponse<object>>(resetExpired.Value);
+
+        Assert.Equal("OTP_INVALID", resetNotFoundBody.ErrorCode);
+        Assert.Equal(resetNotFoundBody.ErrorCode, resetExpiredBody.ErrorCode);
+        Assert.Equal(resetNotFoundBody.Message, resetExpiredBody.Message);
+
+        _mockAuth.Setup(a => a.ResetPasswordAsync(resetReq, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ArgumentException("WEAK_PASSWORD: Mật khẩu mới phải có tối thiểu 8 ký tự."));
+        var resetWeak = Assert.IsType<BadRequestObjectResult>(await _controller.ResetPassword(resetReq, CancellationToken.None));
+        var resetWeakBody = Assert.IsType<ApiResponse<object>>(resetWeak.Value);
+        Assert.Equal("WEAK_PASSWORD", resetWeakBody.ErrorCode);
 
         _mockAuth.Setup(a => a.ResetPasswordAsync(resetReq, It.IsAny<CancellationToken>()))
             .Returns(Task.CompletedTask);
