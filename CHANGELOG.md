@@ -34,6 +34,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - API Admin `POST /api/admin/tenants` tạo cửa hàng, tài khoản chủ sở hữu và chi nhánh chính trong một transaction, kiểm tra dữ liệu trùng và ghi audit log. Cửa hàng khởi tạo ở trạng thái `NO_PLAN`. [worklog: docs/worklogs/2026-11-15_ADMIN-TENANT_AI_create-tenant.md]
 
 ### Fixed
+- Khắc phục lỗi biên dịch `CS0234` thiếu migration `AddBranchProductAllowedSupplierIds` và lỗi `500 (42703: column p.ImageUrlsJson does not exist)` trên `/store-owner/dashboard` bằng cách đồng bộ toàn bộ `UpSql` mới và các cột còn thiếu trong `ApplyLocalSchemaRepairsAsync` khi chạy API bằng profile local. [worklog: docs/worklogs/2026-11-25_FIX-BUILD_AI_add-missing-branch-product-allowed-supplier-migration.md]
 - Giữ chi nhánh duy nhất làm trụ sở chính và chặn thao tác ngừng hoạt động hoặc xóa chi nhánh đó. [worklog: docs/worklogs/2026-11-23_BE-BRANCH_AI_protect-only-branch.md]
 - Bổ sung cột `OrderDetails.StockAllocationsJson` khi chạy API bằng profile local để khắc phục lỗi tải Tổng quan trên cơ sở dữ liệu chưa cập nhật schema.
 - Áp dụng bổ sung schema `ExpenseVouchers.DueDate` khi chạy API bằng profile local để worker nhắc thanh toán đọc được phiếu chi trên cơ sở dữ liệu cũ.
