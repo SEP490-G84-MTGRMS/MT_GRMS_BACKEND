@@ -1116,7 +1116,7 @@ public class EmployeeServiceTests
         Assert.Equal("user_b_01", updatedUserId);
         Assert.Equal("lethib_updated", user.UserName);
         Assert.NotEqual("NewSecretPassword@123", user.PasswordHash);
-        Assert.True(new MT_GRMS.Application.Auth.PasswordHasher().VerifyPassword("NewSecretPassword@123", user.PasswordHash));
+        Assert.True(new MT_GRMS.Application.Auth.PasswordHasher().VerifyPassword(user.PasswordHash, "NewSecretPassword@123"));
         Assert.Equal("Le Thi B (Manager)", user.FullName);
     }
 
@@ -1366,7 +1366,7 @@ public class EmployeeServiceTests
         Assert.Equal(userId, updatedId);
         Assert.Equal("new_unique_name", user.UserName);
         Assert.NotEqual("NewPwd@2026", user.PasswordHash);
-        Assert.True(new MT_GRMS.Application.Auth.PasswordHasher().VerifyPassword("NewPwd@2026", user.PasswordHash));
+        Assert.True(new MT_GRMS.Application.Auth.PasswordHasher().VerifyPassword(user.PasswordHash, "NewPwd@2026"));
         Assert.Equal("Nguyen Updated", user.FullName);
     }
 
@@ -1675,7 +1675,7 @@ public class EmployeeServiceTests
             Phone: "0901234570",
             BranchId: Guid.NewGuid(),
             UserName: "new_username",
-            Password: "NewSecretPassword!"
+            Password: "NewSecretPassword!1"
         );
 
         var result = await service.UpdateEmployeeAsync(emp.Id, request);

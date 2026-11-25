@@ -56,8 +56,9 @@ public class Product : BaseTenantEntity
     private List<string> _imageUrls = new();
 
     /// <summary>
-    /// Danh sách nhiều ảnh sản phẩm (lưu cột ImageUrls text[] trong DB; ảnh đầu tiên đồng bộ với ImageUrl đại diện).
+    /// Danh sách ảnh sản phẩm (lưu bền vững qua cột ImageUrlsJson, đồng bộ ảnh đại diện vào ImageUrl).
     /// </summary>
+    [NotMapped]
     public List<string> ImageUrls
     {
         get
