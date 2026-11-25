@@ -221,6 +221,44 @@ public class AuthService : IAuthService
         return new TwoFactorStatusResponse(user.IsTwoFactorEnabled, MaskEmailDisplay(user.Email), user.IsEmailVerified);
     }
 
+    public async Task<LoginResponse> ChangePasswordAsync(string userId, ChangePasswordRequest request, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            throw new UnauthorizedAccessException("Chưa xác thực danh tính.");
+        }
+
+        ArgumentNullException.ThrowIfNull(request);
+        AuthRequestValidation.EnsureValid(new ChangePasswordRequestValidator(), request);
+
+        if (string.Equals(request.CurrentPassword, request.NewPassword, StringComparison.Ordinal))
+        {
+            throw new ArgumentException("PASSWORD_SAME_AS_OLD: Mật khẩu mới không được trùng với mật khẩu hiện tại.");
+        }
+
+        var user = await _userRepository.GetByIdAsync(userId, cancellationToken)
+            ?? throw new UnauthorizedAccessException("Tài khoản người dùng không tồn tại.");
+
+        var (_, tenantUser) = ResolveTenant(user, null);
+        await EnsureAccountActiveAsync(user, tenantUser, cancellationToken);
+
+        try
+        {
+            await VerifyPasswordAsync(user, request.CurrentPassword, cancellationToken);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            throw new ArgumentException("INVALID_CURRENT_PASSWORD: Mật khẩu hiện tại không chính xác.");
+        }
+
+        user.PasswordHash = _passwordHasher.HashPassword(request.NewPassword);
+        user.SecurityStamp = Guid.NewGuid().ToString("N");
+        user.PasswordResetOtp = null;
+        user.OtpExpiry = null;
+
+        return await IssueLoginSessionAsync(user, null, cancellationToken);
+    }
+
     private async Task<LoginResponse> IssueLoginSessionAsync(User user, string? tenantCode, CancellationToken cancellationToken)
     {
         var (tenantId, tenantUser) = ResolveTenant(user, tenantCode);

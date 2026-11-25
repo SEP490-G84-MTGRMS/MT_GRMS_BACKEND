@@ -1236,4 +1236,79 @@ public class UserAuthenticationTests
             authService.VerifyRegistrationOtpAsync(new VerifyRegistrationOtpRequest("attempts@test.com", "000000")));
         Assert.Contains("OTP_ATTEMPTS_EXCEEDED", exExceeded.Message);
     }
+
+    [Fact]
+    public async Task ChangePasswordAsync_ValidRequest_UpdatesHashRotatesStampAndRevokesOldSession()
+    {
+        var repo = new FakeUserRepository();
+        var user = new User
+        {
+            Id = "owner-change-pwd",
+            Username = "0912345678",
+            Email = "owner@mtgrms.vn",
+            FullName = "Chủ Tiệm",
+            Password = "OldPassword@123",
+            IsTwoFactorEnabled = false
+        };
+        user.TenantUsers.Add(new TenantUser { TenantId = "tenant-01", UserId = user.Id, Role = "STORE_OWNER", IsActive = true });
+        await repo.AddAsync(user);
+
+        var service = CreateAuthService(repo);
+        var initialSession = await service.LoginAsync(new LoginRequest(user.Username, "OldPassword@123", "tenant-01"));
+        var initialStamp = user.SecurityStamp;
+
+        var newSession = await service.ChangePasswordAsync(
+            user.Id,
+            new ChangePasswordRequest("OldPassword@123", "NewPassword@456"));
+
+        Assert.NotEqual(initialStamp, user.SecurityStamp);
+        Assert.NotEqual(initialSession.RefreshToken, newSession.RefreshToken);
+
+        var jwt = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ReadJwtToken(newSession.AccessToken);
+        Assert.Contains(jwt.Claims, c => c.Type == "security_stamp" && c.Value == user.SecurityStamp);
+
+        // Old refresh token from another device is rejected
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            service.RefreshTokenAsync(new RefreshTokenRequest(initialSession.RefreshToken)));
+
+        // Old password rejected, new password succeeds
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            service.LoginAsync(new LoginRequest(user.Username, "OldPassword@123", "tenant-01")));
+        var relogin = await service.LoginAsync(new LoginRequest(user.Username, "NewPassword@456", "tenant-01"));
+        Assert.Equal(user.Id, relogin.User.Id);
+    }
+
+    [Fact]
+    public async Task ChangePasswordAsync_InvalidCurrentOrWeakOrSamePassword_ThrowsArgumentExceptionAndKeepsStamp()
+    {
+        var repo = new FakeUserRepository();
+        var user = new User
+        {
+            Id = "owner-change-invalid",
+            Username = "0987654321",
+            Password = "OldPassword@123",
+            IsTwoFactorEnabled = false
+        };
+        user.TenantUsers.Add(new TenantUser { TenantId = "tenant-01", UserId = user.Id, Role = "STORE_OWNER", IsActive = true });
+        await repo.AddAsync(user);
+
+        var service = CreateAuthService(repo);
+        await service.LoginAsync(new LoginRequest(user.Username, "OldPassword@123", "tenant-01"));
+        var originalStamp = user.SecurityStamp;
+
+        var wrongCurrent = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.ChangePasswordAsync(user.Id, new ChangePasswordRequest("WrongPass@123", "NewPassword@456")));
+        Assert.Contains("INVALID_CURRENT_PASSWORD", wrongCurrent.Message);
+        Assert.Equal(originalStamp, user.SecurityStamp);
+
+        var samePass = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.ChangePasswordAsync(user.Id, new ChangePasswordRequest("OldPassword@123", "OldPassword@123")));
+        Assert.Contains("PASSWORD_SAME_AS_OLD", samePass.Message);
+        Assert.Equal(originalStamp, user.SecurityStamp);
+
+        var weakPass = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.ChangePasswordAsync(user.Id, new ChangePasswordRequest("OldPassword@123", "weakpass")));
+        Assert.Contains("WEAK_PASSWORD", weakPass.Message);
+        Assert.Equal(originalStamp, user.SecurityStamp);
+    }
 }

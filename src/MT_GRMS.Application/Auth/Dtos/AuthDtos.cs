@@ -110,3 +110,8 @@ public record ResetPasswordRequest(
     string OtpCode,
     string NewPassword
 );
+
+public record ChangePasswordRequest(
+    string CurrentPassword,
+    string NewPassword
+);

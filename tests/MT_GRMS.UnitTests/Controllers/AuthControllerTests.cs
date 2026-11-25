@@ -440,4 +440,37 @@ public class AuthControllerTests
         var ok = Assert.IsType<OkObjectResult>(result);
         Assert.NotNull(ok.Value);
     }
+
+    [Fact]
+    public async Task ChangePassword_Branches_ShouldWork()
+    {
+        var req = new ChangePasswordRequest("OldPass@123", "NewPass@456");
+
+        // 1. Unauthenticated -> 401
+        _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(new ClaimsIdentity());
+        Assert.IsType<UnauthorizedObjectResult>(await _controller.ChangePassword(req, CancellationToken.None));
+
+        // Authenticated user
+        _controller.ControllerContext.HttpContext.User = new ClaimsPrincipal(
+            new ClaimsIdentity(new[] { new Claim(ClaimTypes.NameIdentifier, "usr-01") }, "TestAuth"));
+
+        // 2. Empty fields -> 400
+        Assert.IsType<BadRequestObjectResult>(await _controller.ChangePassword(new ChangePasswordRequest("", "NewPass@456"), CancellationToken.None));
+        Assert.IsType<BadRequestObjectResult>(await _controller.ChangePassword(new ChangePasswordRequest("OldPass@123", ""), CancellationToken.None));
+
+        // 3. Wrong current password -> 400 with INVALID_CURRENT_PASSWORD
+        _mockAuth.Setup(a => a.ChangePasswordAsync("usr-01", req, It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new ArgumentException("INVALID_CURRENT_PASSWORD: Mật khẩu hiện tại không chính xác."));
+        var badResult = Assert.IsType<BadRequestObjectResult>(await _controller.ChangePassword(req, CancellationToken.None));
+        var badBody = Assert.IsType<ApiResponse<object>>(badResult.Value);
+        Assert.Equal("INVALID_CURRENT_PASSWORD", badBody.ErrorCode);
+
+        // 4. Valid -> sets new cookies and returns 200 OK
+        var session = new LoginResponse("new-acc", "new-ref", DateTime.UtcNow.AddMinutes(15), SampleUserInfo(), DateTime.UtcNow.AddDays(7));
+        _mockAuth.Setup(a => a.ChangePasswordAsync("usr-01", req, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(session);
+        var okResult = Assert.IsType<OkObjectResult>(await _controller.ChangePassword(req, CancellationToken.None));
+        var okBody = Assert.IsType<ApiResponse<UserInfo>>(okResult.Value);
+        Assert.True(okBody.Success);
+    }
 }

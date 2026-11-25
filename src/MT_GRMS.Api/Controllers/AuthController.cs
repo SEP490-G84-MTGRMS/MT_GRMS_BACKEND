@@ -338,6 +338,49 @@ public class AuthController : BaseApiController
     }
 
     /// <summary>
+    /// Đổi mật khẩu tài khoản đang đăng nhập, xoay SecurityStamp thu hồi các thiết bị khác và cấp lại HttpOnly cookies cho phiên hiện tại
+    /// </summary>
+    [HttpPost("me/change-password")]
+    [Authorize]
+    [ProducesResponseType(typeof(ApiResponse<UserInfo>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest? request, CancellationToken cancellationToken)
+    {
+        var userId = User?.FindFirstValue(ClaimTypes.NameIdentifier)
+                     ?? User?.FindFirstValue("sub")
+                     ?? User?.FindFirstValue("userId");
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", "Chưa xác thực danh tính.", StatusCodes.Status401Unauthorized));
+        }
+
+        if (request == null || string.IsNullOrWhiteSpace(request.CurrentPassword) || string.IsNullOrWhiteSpace(request.NewPassword))
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Vui lòng nhập đầy đủ mật khẩu hiện tại và mật khẩu mới.", StatusCodes.Status400BadRequest));
+        }
+
+        try
+        {
+            var session = await _authService.ChangePasswordAsync(userId, request, cancellationToken);
+            SetAuthCookies(session.AccessToken, session.RefreshToken, session.ExpiresAt, session.RefreshExpiresAt);
+            return Ok(ApiResponse<UserInfo>.Ok(
+                session.User,
+                "Đổi mật khẩu thành công. Các phiên đăng nhập cũ trên thiết bị khác đã được thu hồi.",
+                StatusCodes.Status200OK));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", ex.Message, StatusCodes.Status401Unauthorized));
+        }
+        catch (ArgumentException ex)
+        {
+            var (code, msg) = ParseCodedMessage(ex.Message, "BAD_REQUEST");
+            return BadRequest(ApiResponse<object>.Fail(code, msg, StatusCodes.Status400BadRequest));
+        }
+    }
+
+    /// <summary>
     /// Đăng xuất khỏi hệ thống & xóa HttpOnly Cookies
     /// </summary>
     [HttpPost("logout")]

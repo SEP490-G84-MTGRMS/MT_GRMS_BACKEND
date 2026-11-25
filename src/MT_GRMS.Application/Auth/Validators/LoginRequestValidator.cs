@@ -74,6 +74,31 @@ public sealed class VerifyRegistrationOtpRequestValidator : AbstractValidator<Ve
     }
 }
 
+public sealed class ChangePasswordRequestValidator : AbstractValidator<ChangePasswordRequest>
+{
+    private const string StrongPasswordMessage =
+        "WEAK_PASSWORD: Mật khẩu mới phải có 8–64 ký tự, gồm chữ hoa, chữ thường, số, ký tự đặc biệt và không có khoảng trắng.";
+
+    public ChangePasswordRequestValidator()
+    {
+        RuleFor(x => x.CurrentPassword)
+            .NotEmpty().WithMessage("CURRENT_PASSWORD_REQUIRED: Vui lòng nhập mật khẩu hiện tại.")
+            .MaximumLength(128).WithMessage("INVALID_CURRENT_PASSWORD: Mật khẩu hiện tại không hợp lệ.");
+
+        RuleFor(x => x.NewPassword)
+            .Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("WEAK_PASSWORD: Vui lòng nhập mật khẩu mới.")
+            .MinimumLength(8).WithMessage(StrongPasswordMessage)
+            .MaximumLength(64).WithMessage(StrongPasswordMessage)
+            .Matches("[A-Z]").WithMessage(StrongPasswordMessage)
+            .Matches("[a-z]").WithMessage(StrongPasswordMessage)
+            .Matches("[0-9]").WithMessage(StrongPasswordMessage)
+            .Matches("[^A-Za-z0-9]").WithMessage(StrongPasswordMessage)
+            .Must(password => password is not null && !password.Any(char.IsWhiteSpace))
+            .WithMessage(StrongPasswordMessage);
+    }
+}
+
 internal static class AuthRequestValidation
 {
     public static void EnsureValid<T>(IValidator<T> validator, T request)
