@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace MT_GRMS.Application.Admin.Dtos;
 
 public record MasterProductFilterRequest(
@@ -29,7 +31,8 @@ public record MasterProductDto(
     string? ImageUrl,
     int UsageCount,
     bool IsActive,
-    List<MasterProductUnitDto> Units
+    List<MasterProductUnitDto> Units,
+    string? Description = null
 );
 
 public record MasterProductDetailDto(
@@ -57,6 +60,20 @@ public record CreateMasterProductUnitRequest(
     bool IsPurchaseUnit = true
 );
 
+public interface IMasterProductFields
+{
+    string Name { get; }
+    string Brand { get; }
+    string CategoryName { get; }
+    string BaseUnit { get; }
+    decimal? SuggestedRetailPrice { get; }
+    decimal VatRate { get; }
+    string TaxCategory { get; }
+    string? ImageUrl { get; }
+    string? Description { get; }
+    List<CreateMasterProductUnitRequest>? Units { get; }
+}
+
 public record CreateMasterProductRequest(
     string Barcode,
     string Name,
@@ -69,7 +86,7 @@ public record CreateMasterProductRequest(
     string? ImageUrl = null,
     string? Description = null,
     List<CreateMasterProductUnitRequest>? Units = null
-);
+) : IMasterProductFields;
 
 public record UpdateMasterProductRequest(
     string Name,
@@ -77,13 +94,13 @@ public record UpdateMasterProductRequest(
     string CategoryName,
     string BaseUnit,
     decimal? SuggestedRetailPrice,
-    decimal VatRate,
+    [property: JsonRequired] decimal VatRate,
     string TaxCategory,
     string? ImageUrl,
     string? Description,
-    bool IsActive,
+    [property: JsonRequired] bool IsActive,
     List<CreateMasterProductUnitRequest>? Units = null
-);
+) : IMasterProductFields;
 
 public record MasterCatalogKpiDto(
     int TotalProducts,

@@ -79,7 +79,7 @@ public class TenantServiceExtendedTests
         var request = new UpdateTenantRequest(
             Name: "Updated Shop",
             TaxCode: "0101234567",
-            Hotline: "19001234",
+            Hotline: "0901234567",
             Address: "456 Le Loi",
             City: "HCM"
         );

@@ -1,4 +1,6 @@
 using Microsoft.EntityFrameworkCore;
+using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Entities.HR;
 using MT_GRMS.Domain.Entities.SaaS;
@@ -200,6 +202,42 @@ public class UserDatabaseIntegrationTests
         var res2 = await repo.RegisterStoreOwnerAsync(owner2, tenant2, branch2, audit);
         Assert.NotNull(res2);
         Assert.Equal("usr_owner_02", res2.Id);
+    }
+
+    [Fact]
+    public async Task RegisterStoreOwner_WithExistingSession_UsesNewTenantForBranchAndCatalog()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString())
+            .Options;
+        var session = new TenantContext();
+        session.SetContext("existing-store", Guid.NewGuid(), null);
+        session.SetRole("STORE_OWNER");
+        using var context = new AppDbContext(options, session);
+        context.MasterProducts.Add(new MasterProduct { Name = "Gạo", BaseUnit = "Kg", IsActive = true });
+        await context.SaveChangesAsync();
+
+        var tenant = new Tenant { Id = "new-store", Name = "Cửa hàng mới", Code = "NEW" };
+        var branch = new Branch { TenantId = tenant.Id, BranchCode = "BR-01", Name = "Chi nhánh chính", IsHeadquarter = true, IsActive = true };
+        var owner = new User { Id = "new-owner", UserName = "new-owner" };
+        await new UserRepository(context).RegisterStoreOwnerAsync(owner, tenant, branch);
+        context.ChangeTracker.Clear();
+
+        Assert.Empty(await context.Branches.ToListAsync());
+        var savedBranch = await context.Branches.IgnoreQueryFilters().SingleAsync();
+        Assert.Equal(tenant.Id, savedBranch.TenantId);
+        Assert.True(savedBranch.IsHeadquarter);
+        Assert.Equal(tenant.Id, (await context.TenantUsers.IgnoreQueryFilters().SingleAsync()).TenantId);
+        Assert.Equal(tenant.Id, (await context.Products.IgnoreQueryFilters().SingleAsync()).TenantId);
+        Assert.Equal(tenant.Id, (await context.ProductUnits.IgnoreQueryFilters().SingleAsync()).TenantId);
+        Assert.Equal(tenant.Id, (await context.Categories.IgnoreQueryFilters().SingleAsync()).TenantId);
+        var assignment = await context.BranchProducts.IgnoreQueryFilters().SingleAsync();
+        Assert.Equal(tenant.Id, assignment.TenantId);
+        Assert.Equal(savedBranch.Id, assignment.BranchId);
+
+        context.Branches.Add(new Branch { TenantId = tenant.Id, BranchCode = "BR-02", Name = "Chi nhánh khác" });
+        await context.SaveChangesAsync();
+        Assert.Equal("existing-store", (await context.Branches.SingleAsync()).TenantId);
     }
 
     [Fact]

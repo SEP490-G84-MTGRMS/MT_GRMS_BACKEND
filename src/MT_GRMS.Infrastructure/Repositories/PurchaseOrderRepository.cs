@@ -115,11 +115,22 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
             return Array.Empty<OrderMatrixProductDto>();
         }
 
-        // ALL và filter 1 NCC: giữ mọi dòng Product×NCC (không collapse 1 SP → 1 NCC).
-        var supplierProducts = rawSupplierProducts;
+        // Chỉ giữ các NCC đã được gán tường minh cho (Branch, Product) trong AllowedSupplierIdsJson
+        var supplierProducts = rawSupplierProducts
+            .Where(sp =>
+            {
+                if (!branchProductLookup.TryGetValue(sp.ProductId, out var bp))
+                {
+                    return true;
+                }
+
+                var allowedSupplierIds = bp.GetAllowedSupplierIds();
+                return allowedSupplierIds == null || allowedSupplierIds.Contains(sp.SupplierId);
+            })
+            .ToList();
         if (supplierId.HasValue && supplierId.Value != Guid.Empty)
         {
-            supplierProducts = rawSupplierProducts
+            supplierProducts = supplierProducts
                 .Where(sp => sp.SupplierId == supplierId.Value)
                 .ToList();
         }
@@ -279,7 +290,9 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
                 AverageSales30Days = sales?.Avg30 ?? 0m,
                 SafetyStock = safetyStock,
                 IsPrimarySupplier = sp.IsPrimarySupplier,
-                PurchaseToStockRate = sp.ConversionRate > 0 ? sp.ConversionRate : 1m,
+                PurchaseToStockRate = (p.Units?.FirstOrDefault(u => !u.IsDeleted && u.IsPurchaseUnit)?.ConversionRate is decimal puConv && puConv > 0)
+                    ? puConv
+                    : (sp.ConversionRate > 0 ? sp.ConversionRate : 1m),
                 IsProductActive = isProdActive,
                 ProductInactiveReason = prodInactiveReason,
                 IsSupplierActive = isSupActive,
@@ -307,7 +320,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         DateTime throughDate,
         CancellationToken cancellationToken = default)
     {
-        var activeStatuses = new[] { "APPROVED", "DISPATCHED", "SENT" };
+        var activeStatuses = new[] { "PENDING_APPROVAL", "APPROVED", "CONFIRMED", "DISPATCHED", "SENT", "PARTIALLY_RECEIVED" };
         var rows = await _context.PurchaseOrderDetails
             .Where(d => !d.IsDeleted
                         && !d.IsClosed
@@ -581,7 +594,7 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
         var totalCount = await query.CountAsync(cancellationToken);
 
         var safePageIndex = Math.Max(1, pageIndex);
-        var safePageSize = Math.Clamp(pageSize, 1, 100);
+        var safePageSize = Math.Clamp(pageSize, 1, 500);
 
         var items = await query
             .OrderByDescending(po => po.CreatedAt)
@@ -622,13 +635,31 @@ public class PurchaseOrderRepository : IPurchaseOrderRepository
     {
         var datePrefix = deliveryDate.ToString("yyyyMMdd");
         var basePattern = $"PO-{datePrefix}-";
+        var tenantId = _tenantContext.CurrentTenantId;
 
-        var count = await _context.PurchaseOrders
+        var existingCodes = await _context.PurchaseOrders
             .IgnoreQueryFilters()
-            .CountAsync(po => po.TenantId == _tenantContext.CurrentTenantId && po.Code.StartsWith(basePattern), cancellationToken);
+            .Where(po => po.TenantId == tenantId && po.Code.StartsWith(basePattern))
+            .Select(po => po.Code)
+            .ToListAsync(cancellationToken);
 
-        var nextSeq = count + 1;
-        return $"PO-{datePrefix}-{nextSeq:D4}";
+        var trackedCodes = _context.ChangeTracker.Entries<PurchaseOrder>()
+            .Where(e => e.Entity.TenantId == tenantId &&
+                        !string.IsNullOrEmpty(e.Entity.Code) &&
+                        e.Entity.Code.StartsWith(basePattern, StringComparison.Ordinal))
+            .Select(e => e.Entity.Code);
+
+        var maxSeq = 0;
+        foreach (var code in existingCodes.Concat(trackedCodes))
+        {
+            var suffix = code.Length > basePattern.Length ? code[basePattern.Length..] : string.Empty;
+            if (int.TryParse(suffix, out var seq) && seq > maxSeq)
+            {
+                maxSeq = seq;
+            }
+        }
+
+        return $"PO-{datePrefix}-{(maxSeq + 1):D4}";
     }
 
     public async Task<bool> UserExistsAsync(string userId, CancellationToken cancellationToken = default)

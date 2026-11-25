@@ -122,7 +122,8 @@ public class CatalogService : ICatalogService
             unitPrices,
             p.AllowRepack,
             p.SellRawByWeight,
-            p.ProcessedSellingPricePerKg
+            p.ProcessedSellingPricePerKg,
+            p.NearExpiryThresholdDays
         );
     }
 
@@ -175,6 +176,21 @@ public class CatalogService : ICatalogService
         if (request.SellingPrice <= 0 || request.SellingPrice > MaxAllowedPrice)
         {
             throw new ArgumentException("Giá bán phải lớn hơn 0 và không vượt quá 1.000.000.000 đ.");
+        }
+
+        if (request.VatRate < 0 || request.VatRate > 100)
+        {
+            throw new ArgumentException("Thuế suất VAT phải nằm trong khoảng 0% đến 100%.");
+        }
+
+        if (request.NearExpiryThresholdDays.HasValue && request.NearExpiryThresholdDays.Value < 0)
+        {
+            throw new ArgumentException("Số ngày cảnh báo cận hạn không được âm.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Status) && !Enum.TryParse<ProductStatus>(request.Status.Trim(), true, out _))
+        {
+            throw new ArgumentException("Trạng thái sản phẩm không hợp lệ (chỉ chấp nhận Active, Inactive, Discontinued).");
         }
 
         if (request.CostPrice.HasValue && (request.CostPrice.Value < 0 || request.CostPrice.Value > MaxAllowedPrice))
@@ -300,12 +316,13 @@ public class CatalogService : ICatalogService
             Description = trimmedDescription,
             InternalNote = trimmedInternalNote,
             HasBatches = request.HasBatches || request.AllowRepack,
+            NearExpiryThresholdDays = NormalizeNearExpiryDays(request.NearExpiryThresholdDays),
             AllowRepack = request.AllowRepack,
             SellRawByWeight = request.SellRawByWeight,
             ProcessedSellingPricePerKg = ResolveProcessedPrice(request.AllowRepack, request.ProcessedSellingPricePerKg, request.SellingPrice),
             IsFavorite = request.IsFavorite,
             IsActive = true,
-            TaxCategory = "STANDARD_1PCT",
+            TaxCategory = string.IsNullOrWhiteSpace(request.TaxCategory) ? "STANDARD_1PCT" : request.TaxCategory.Trim().ToUpperInvariant(),
             EligibleForVatReduction = request.EligibleForVatReduction
         };
 
@@ -348,6 +365,21 @@ public class CatalogService : ICatalogService
         if (request.SellingPrice <= 0 || request.SellingPrice > MaxAllowedPrice)
         {
             throw new ArgumentException("Giá bán phải lớn hơn 0 và không vượt quá 1.000.000.000 đ.");
+        }
+
+        if (request.VatRate < 0 || request.VatRate > 100)
+        {
+            throw new ArgumentException("Thuế suất VAT phải nằm trong khoảng 0% đến 100%.");
+        }
+
+        if (request.NearExpiryThresholdDays.HasValue && request.NearExpiryThresholdDays.Value < 0)
+        {
+            throw new ArgumentException("Số ngày cảnh báo cận hạn không được âm.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Status) && !Enum.TryParse<ProductStatus>(request.Status.Trim(), true, out _))
+        {
+            throw new ArgumentException("Trạng thái sản phẩm không hợp lệ (chỉ chấp nhận Active, Inactive, Discontinued).");
         }
 
         if (request.CostPrice.HasValue && (request.CostPrice.Value < 0 || request.CostPrice.Value > MaxAllowedPrice))
@@ -459,6 +491,7 @@ public class CatalogService : ICatalogService
         product.Description = trimmedDescription;
         product.InternalNote = trimmedInternalNote;
         product.HasBatches = request.HasBatches || request.AllowRepack;
+        product.NearExpiryThresholdDays = NormalizeNearExpiryDays(request.NearExpiryThresholdDays);
         product.AllowRepack = request.AllowRepack;
         product.SellRawByWeight = request.SellRawByWeight;
         product.ProcessedSellingPricePerKg = ResolveProcessedPrice(request.AllowRepack, request.ProcessedSellingPricePerKg, request.SellingPrice);
@@ -678,4 +711,7 @@ public class CatalogService : ICatalogService
 
         return sellingPrice > 0 ? sellingPrice : null;
     }
+
+    private static int? NormalizeNearExpiryDays(int? days)
+        => days is > 0 ? days : null;
 }

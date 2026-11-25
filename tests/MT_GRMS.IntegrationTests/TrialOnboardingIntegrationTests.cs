@@ -272,7 +272,7 @@ public class TrialOnboardingIntegrationTests
             new TenantUser { TenantId = "tenant-B", UserId = "usr-trial-1", Role = "STORE_OWNER", IsActive = true });
         await db1.SaveChangesAsync();
 
-        var controller1 = new TenantStoreController(new StubTenantService(db1), new StubPlanService(), db1)
+        var controller1 = new TenantStoreController(new StubTenantService(db1), new StubPlanService(), db1, new TenantSubscriptionService(db1))
         {
             ControllerContext = new ControllerContext
             {
@@ -281,7 +281,7 @@ public class TrialOnboardingIntegrationTests
         };
         controller1.Request.Headers["X-Tenant-Id"] = "tenant-B";
 
-        var controller2 = new TenantStoreController(new StubTenantService(db2), new StubPlanService(), db2)
+        var controller2 = new TenantStoreController(new StubTenantService(db2), new StubPlanService(), db2, new TenantSubscriptionService(db2))
         {
             ControllerContext = new ControllerContext
             {
@@ -305,7 +305,7 @@ public class TrialOnboardingIntegrationTests
         Assert.Equal(1, await verifyDb.AuditLogs.CountAsync(a => a.ActionType == "TRIAL_ACTIVATED"));
 
         // Account đã dùng Trial trên tenant A -> thử kích hoạt trên tenant B bị 409 TRIAL_ALREADY_USED
-        var controllerB = new TenantStoreController(new StubTenantService(verifyDb), new StubPlanService(), verifyDb)
+        var controllerB = new TenantStoreController(new StubTenantService(verifyDb), new StubPlanService(), verifyDb, new TenantSubscriptionService(verifyDb))
         {
             ControllerContext = new ControllerContext
             {
@@ -405,7 +405,7 @@ public class TrialOnboardingIntegrationTests
         db.TenantUsers.Add(new TenantUser { TenantId = "t-paid", UserId = "usr-paid", Role = "STORE_OWNER", IsActive = true });
         await db.SaveChangesAsync();
 
-        var controller = new TenantStoreController(new StubTenantService(db), new StubPlanService(), db)
+        var controller = new TenantStoreController(new StubTenantService(db), new StubPlanService(), db, new TenantSubscriptionService(db))
         {
             ControllerContext = new ControllerContext
             {
@@ -652,7 +652,7 @@ public class TrialOnboardingIntegrationTests
         await middleware.InvokeAsync(accessCtx, db);
         Assert.True(nextCalled);
 
-        var controller = new TenantStoreController(new StubTenantService(db), new StubPlanService(), db)
+        var controller = new TenantStoreController(new StubTenantService(db), new StubPlanService(), db, new TenantSubscriptionService(db))
         {
             ControllerContext = new ControllerContext { HttpContext = accessCtx }
         };

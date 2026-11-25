@@ -1,3 +1,4 @@
+using MT_GRMS.Api.Middlewares;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
@@ -11,6 +12,7 @@ namespace MT_GRMS.Api.Controllers;
 [Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
 [ApiController]
 [Route("api/shift-configs")]
+[RequiresStaffManagement]
 public class ShiftConfigsController : BaseApiController
 {
     private readonly IShiftConfigService _shiftConfigService;

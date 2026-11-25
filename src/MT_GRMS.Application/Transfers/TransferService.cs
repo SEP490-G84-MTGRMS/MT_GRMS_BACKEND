@@ -19,8 +19,30 @@ public sealed class TransferService(
     ITenantContext tenant,
     IUnitOfWork unitOfWork,
     NotificationOutbox? notificationOutbox = null,
-    IRepository<Package>? packages = null) : ITransferService
+    IRepository<Package>? packages = null,
+    IRepository<ProductUnit>? productUnits = null) : ITransferService
 {
+    private async Task<decimal> ResolveUnitConversionRateAsync(Product product, string? unitName, CancellationToken ct)
+    {
+        var normalized = unitName?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized) ||
+            string.Equals(normalized, product.BaseUnit?.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            return 1m;
+        }
+
+        if (productUnits != null)
+        {
+            var units = await productUnits.FindAsync(u => u.ProductId == product.Id && !u.IsDeleted, ct);
+            var matched = units.FirstOrDefault(u => string.Equals(u.UnitName?.Trim(), normalized, StringComparison.OrdinalIgnoreCase));
+            if (matched != null && matched.ConversionRate > 0m)
+            {
+                return matched.ConversionRate;
+            }
+        }
+
+        return 1m;
+    }
     private async Task<decimal> RawAvailableAsync(BranchStock stock, CancellationToken ct)
     {
         var active = packages == null ? 0m : (await packages.FindAsync(p => p.TenantId == tenant.CurrentTenantId
@@ -47,7 +69,13 @@ public sealed class TransferService(
         var receiveDate = string.Equals(filter.DateField, "receive", StringComparison.OrdinalIgnoreCase);
         if (filter.FromDate.HasValue) all = all.Where(x => (receiveDate ? x.ReceivedAt : x.DispatchedAt ?? x.CreatedAt) >= filter.FromDate);
         if (filter.ToDate.HasValue) all = all.Where(x => (receiveDate ? x.ReceivedAt : x.DispatchedAt ?? x.CreatedAt) < filter.ToDate.Value.Date.AddDays(1));
-        if (!string.IsNullOrWhiteSpace(filter.Search)) all = all.Where(x => x.TransferCode.Contains(filter.Search, StringComparison.OrdinalIgnoreCase));
+        if (!string.IsNullOrWhiteSpace(filter.Search))
+        {
+            var term = filter.Search.Trim();
+            all = all.Where(x =>
+                x.TransferCode.Contains(term, StringComparison.OrdinalIgnoreCase)
+                || (!string.IsNullOrWhiteSpace(x.Note) && x.Note.Contains(term, StringComparison.OrdinalIgnoreCase)));
+        }
         if (string.Equals(filter.ReceiveStatus, "match", StringComparison.OrdinalIgnoreCase)
             || string.Equals(filter.ReceiveStatus, "mismatch", StringComparison.OrdinalIgnoreCase))
         {
@@ -156,24 +184,29 @@ public sealed class TransferService(
                 CreatedBy = tenant.CurrentUserId,
                 CreatedByStaff = tenant.CurrentRawUserId
             };
+            var requiredByStock = new Dictionary<Guid, decimal>();
             foreach (var input in request.Items)
             {
                 var product = await products.GetByIdAsync(input.ProductId, ct) ?? throw new KeyNotFoundException("Không tìm thấy sản phẩm.");
                 var stock = await ResolveStockSourceAsync(request.FromBranchId, input.ProductId, input.BatchCode, input.ExpiryDate, ct);
+                var conversionRate = await ResolveUnitConversionRateAsync(product, input.Unit, ct);
+                var baseQuantity = Math.Round(input.Quantity * conversionRate, 3);
+                var cumulativeRequired = requiredByStock.GetValueOrDefault(stock.Id) + baseQuantity;
                 var available = await RawAvailableAsync(stock, ct);
-                if (available < input.Quantity)
-                    throw new InvalidOperationException($"Không đủ tồn khả dụng cho {product.Name}; hiện có {available}, yêu cầu chuyển {input.Quantity}.");
+                if (available < cumulativeRequired)
+                    throw new InvalidOperationException($"Không đủ tồn khả dụng cho {product.Name}; hiện có {available} {product.BaseUnit}, tổng yêu cầu chuyển {cumulativeRequired} {product.BaseUnit}.");
+                requiredByStock[stock.Id] = cumulativeRequired;
                 var unitCost = stock.LandedCostPerUnit;
                 transfer.Details.Add(new TransferDetail
                 {
                     ProductId = input.ProductId,
-                    SentQuantity = input.Quantity,
-                    PackagingUnit = input.Unit.Trim(),
+                    SentQuantity = baseQuantity,
+                    PackagingUnit = string.IsNullOrWhiteSpace(product.BaseUnit) ? input.Unit.Trim() : product.BaseUnit.Trim(),
                     BatchNumber = string.IsNullOrWhiteSpace(input.BatchCode) ? stock.BatchCode : input.BatchCode.Trim(),
                     BranchStockId = stock.Id,
                     ExpiryDate = input.ExpiryDate ?? stock.ExpiryDate,
                     UnitPrice = unitCost,
-                    Amount = input.Quantity * unitCost
+                    Amount = baseQuantity * unitCost
                 });
             }
             transfer.TotalAmount = transfer.Details.Sum(x => x.Amount);
@@ -218,42 +251,69 @@ public sealed class TransferService(
         await unitOfWork.BeginTransactionAsync(ct);
         try
         {
+            var createdDestStocks = new Dictionary<(Guid ProductId, string BatchKey, DateTime? ExpDate, Guid? SupplierId), BranchStock>();
             foreach (var input in request.Items)
             {
                 var line = lines[input.DetailId]; line.ReceivedQuantity = input.ReceivedQuantity; line.DamagedQuantity = input.DamagedQuantity; line.DiscrepancyReason = input.DiscrepancyReason?.Trim();
                 line.LineStatus = input.DamagedQuantity > 0 ? TransferLineStatus.Damaged : input.ReceivedQuantity == line.SentQuantity ? TransferLineStatus.Matched : TransferLineStatus.Deficit; details.Update(line);
                 if (input.ReceivedQuantity + input.DamagedQuantity == 0) continue;
-                var destStocks = await stocks.FindAsync(s => s.BranchId == transfer.ToBranchId && s.ProductId == line.ProductId, ct);
-                BranchStock? destStock = null;
+
+                // Lấy SupplierId và ManufactureDate từ BranchStock nguồn để giữ nguồn gốc lô khi chuyển kho (TRF-01)
+                BranchStock? sourceStock = line.BranchStockId.HasValue
+                    ? await stocks.GetByIdAsync(line.BranchStockId.Value, ct)
+                    : null;
+                var sourceSupplierId = sourceStock?.SupplierId;
+                var sourceMfgDate = sourceStock?.ManufactureDate;
+                var effectiveExpiry = line.ExpiryDate ?? sourceStock?.ExpiryDate;
                 var normalizedBatch = line.BatchNumber?.Trim();
-                if (!string.IsNullOrWhiteSpace(normalizedBatch))
+                var batchKey = (normalizedBatch ?? string.Empty).ToUpperInvariant();
+                var cacheKey = (line.ProductId, batchKey, effectiveExpiry?.Date, sourceSupplierId);
+
+                if (!createdDestStocks.TryGetValue(cacheKey, out var destStock))
                 {
-                    destStock = destStocks.FirstOrDefault(s => string.Equals(s.BatchCode?.Trim(), normalizedBatch, StringComparison.OrdinalIgnoreCase));
-                }
-                else if (destStocks.Count == 1)
-                {
-                    destStock = destStocks[0];
+                    var destStocks = await stocks.FindAsync(s => s.BranchId == transfer.ToBranchId && s.ProductId == line.ProductId && !s.IsDeleted, ct);
+                    if (!string.IsNullOrWhiteSpace(normalizedBatch))
+                    {
+                        destStock = destStocks.FirstOrDefault(s =>
+                            string.Equals(s.BatchCode?.Trim(), normalizedBatch, StringComparison.OrdinalIgnoreCase) &&
+                            s.ExpiryDate?.Date == effectiveExpiry?.Date &&
+                            s.SupplierId == sourceSupplierId);
+                    }
+                    else
+                    {
+                        destStock = destStocks.FirstOrDefault(s =>
+                            string.IsNullOrWhiteSpace(s.BatchCode) &&
+                            s.ExpiryDate?.Date == effectiveExpiry?.Date &&
+                            s.SupplierId == sourceSupplierId);
+                    }
                 }
 
                 if (destStock == null)
                 {
-                    await stocks.AddAsync(new BranchStock
+                    destStock = new BranchStock
                     {
                         TenantId = tenant.CurrentTenantId,
                         BranchId = transfer.ToBranchId,
                         ProductId = line.ProductId,
-                        BatchCode = line.BatchNumber,
-                        ExpiryDate = line.ExpiryDate,
+                        SupplierId = sourceSupplierId,
+                        BatchCode = normalizedBatch,
+                        ManufactureDate = sourceMfgDate,
+                        ExpiryDate = effectiveExpiry,
                         QuantityOnHand = input.ReceivedQuantity + input.DamagedQuantity,
                         QuantityQuarantined = input.DamagedQuantity,
                         LandedCostPerUnit = line.UnitPrice
-                    }, ct);
+                    };
+                    await stocks.AddAsync(destStock, ct);
+                    createdDestStocks[cacheKey] = destStock;
                 }
                 else
                 {
                     destStock.QuantityOnHand += input.ReceivedQuantity + input.DamagedQuantity;
                     destStock.QuantityQuarantined += input.DamagedQuantity;
-                    stocks.Update(destStock);
+                    if (!createdDestStocks.ContainsValue(destStock))
+                    {
+                        stocks.Update(destStock);
+                    }
                 }
             }
             var hasDiscrepancy = request.Items.Any(input =>
@@ -425,11 +485,10 @@ public sealed class TransferService(
     private async Task EnsureCanViewBranchStockAsync(Guid branchId, CancellationToken ct)
     {
         EnsureTenantRole();
+        BranchScopeGuard.EnsureCanAccessBranch(tenant, branchId);
         var branch = await branches.GetByIdAsync(branchId, ct);
         if (branch is null || branch.TenantId != tenant.CurrentTenantId || !branch.IsActive)
             throw new KeyNotFoundException("Không tìm thấy chi nhánh nguồn hợp lệ.");
-        if (IsStaff && branchId == tenant.CurrentBranchId)
-            throw new InvalidOperationException("Chi nhánh nguồn phải khác chi nhánh hiện tại.");
     }
     private Task AddHistoryAsync(Transfer transfer, TransferStatus? from, TransferStatus to, string action, string? reason, CancellationToken ct)
         => statusHistory.AddAsync(new TransferStatusHistory

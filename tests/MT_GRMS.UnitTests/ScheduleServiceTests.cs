@@ -1996,6 +1996,130 @@ public class ScheduleServiceTests
     }
 
     [Fact]
+    public async Task FaceIdMultiShift_AutoDetectAndExplicitScheduleId_WorksForSecondShiftAndOvernight()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var policyRepo = new FakeBranchAttendancePolicyRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext, policyRepo);
+
+        var empId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        var vnNow = DateTime.UtcNow.AddHours(7);
+        var today = vnNow.Date;
+
+        // Ca 1 đã hoàn thành (Completed), Ca 2 chưa chấm công (Scheduled)
+        var shift1 = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            EmployeeId = empId,
+            BranchId = branchId,
+            WorkDate = today,
+            ShiftName = "Ca Sáng",
+            PlannedStartTime = new TimeSpan(7, 0, 0),
+            PlannedEndTime = new TimeSpan(11, 0, 0),
+            CheckInTime = today.AddHours(7),
+            CheckOutTime = today.AddHours(11),
+            Status = ScheduleStatus.Completed
+        };
+        var shift2 = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            EmployeeId = empId,
+            BranchId = branchId,
+            WorkDate = today,
+            ShiftName = "Ca Chiều",
+            PlannedStartTime = new TimeSpan(13, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            Status = ScheduleStatus.Scheduled
+        };
+        scheduleRepo.Schedules.AddRange(new[] { shift1, shift2 });
+
+        // Auto-detect Check-in (ScheduleId == null) -> phải chọn Ca 2 thay vì Ca 1 đã Completed
+        var checkInRes = await service.CheckInFaceIdAsync(new FaceIdCheckInRequest(null, empId, 0.25m, null));
+        Assert.Equal(shift2.Id, checkInRes.Id);
+        Assert.Equal(ScheduleStatus.InProgress, checkInRes.Status);
+
+        // Auto-detect Check-out (ScheduleId == null) -> phải chọn Ca 2 đang InProgress
+        var checkOutRes = await service.CheckOutFaceIdAsync(new FaceIdCheckOutRequest(null, empId, 0.25m, null));
+        Assert.Equal(shift2.Id, checkOutRes.Id);
+        Assert.Equal(ScheduleStatus.Completed, checkOutRes.Status);
+
+        // Explicit ScheduleId cho Ca 3
+        var shift3 = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            EmployeeId = empId,
+            BranchId = branchId,
+            WorkDate = today,
+            ShiftName = "Ca Tối",
+            PlannedStartTime = new TimeSpan(18, 0, 0),
+            PlannedEndTime = new TimeSpan(22, 0, 0),
+            Status = ScheduleStatus.Scheduled
+        };
+        scheduleRepo.Schedules.Add(shift3);
+
+        var explicitCheckIn = await service.CheckInFaceIdAsync(new FaceIdCheckInRequest(shift3.Id, empId, 0.20m, null));
+        Assert.Equal(shift3.Id, explicitCheckIn.Id);
+        Assert.Equal(ScheduleStatus.InProgress, explicitCheckIn.Status);
+    }
+
+    [Fact]
+    public async Task RecordManualAttendance_WithCustom3TierConversionRules_ComputesWorkUnitsCorrectly()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var policyRepo = new FakeBranchAttendancePolicyRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext, policyRepo);
+
+        var branchId = Guid.NewGuid();
+        var empId = Guid.NewGuid();
+        policyRepo.Policies.Add(new MT_GRMS.Domain.Entities.SaaS.Branch
+        {
+            Id = branchId,
+            TenantId = tenantContext.CurrentTenantId,
+            Name = "Chi nhánh 3 mức",
+            StandardDayHours = 8.0m,
+            IsConvertHoursToDays = true,
+            ConversionRulesJson =
+                "[{\"id\":\"rule-1\",\"type\":\"range\",\"fromHours\":1,\"fromMinutes\":0,\"toHours\":4,\"toMinutes\":30,\"workUnits\":0.5,\"workUnitsLabel\":\"0.5 công\"},{\"id\":\"rule-2\",\"type\":\"range\",\"fromHours\":4,\"fromMinutes\":30,\"toHours\":8,\"toMinutes\":0,\"workUnits\":1,\"workUnitsLabel\":\"1 công\"},{\"id\":\"rule-3\",\"type\":\"gte\",\"fromHours\":8,\"fromMinutes\":0,\"workUnits\":1.5,\"workUnitsLabel\":\"1.5 công\"}]",
+            IsAttendancePolicyCustomized = true
+        });
+
+        var schedule = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            EmployeeId = empId,
+            BranchId = branchId,
+            WorkDate = DateTime.UtcNow.Date,
+            PlannedStartTime = new TimeSpan(8, 0, 0),
+            PlannedEndTime = new TimeSpan(16, 0, 0),
+            DurationHours = 8.0m,
+            Status = ScheduleStatus.Scheduled
+        };
+        scheduleRepo.Schedules.Add(schedule);
+
+        var res = await service.RecordManualAttendanceAsync(schedule.Id, new ManualAttendanceRequest(
+            AttendanceType: ManualAttendanceType.Working,
+            CheckInTime: new TimeSpan(8, 0, 0),
+            CheckOutTime: new TimeSpan(16, 0, 0)
+        ));
+
+        Assert.Equal(8.00m, res.ActualWorkHours);
+        Assert.Equal(1.50m, res.WorkUnits);
+    }
+
+    [Fact]
     public async Task SelfCheckInAsync_AllBranchConditions_ShouldWorkExpectedly()
     {
         var scheduleRepo = new FakeScheduleRepository();
@@ -2415,6 +2539,217 @@ public class ScheduleServiceTests
 
         var ex = await Assert.ThrowsAsync<BusinessException>(() => service.ResetManualAttendanceAsync(sched.Id, request));
         Assert.Equal("INVALID_RESET_REASON", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task GetRecurringSeriesAsync_ShouldReturnRepeatDaysAndSeriesMetadata()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        var shiftId = Guid.NewGuid();
+
+        employeeRepo.Employees.Add(new Employee
+        {
+            Id = empId,
+            TenantId = tenantContext.CurrentTenantId,
+            FullName = "Nguyen Van C",
+            EmployeeCode = "NV03",
+            Status = EmployeeStatus.Active,
+            BranchId = branchId
+        });
+
+        // Thứ 2 (2026-11-23), Thứ 4 (2026-11-25), Thứ 2 tuần sau (2026-11-30)
+        var d1 = new DateTime(2026, 11, 23);
+        var d2 = new DateTime(2026, 11, 25);
+        var d3 = new DateTime(2026, 11, 30);
+        foreach (var d in new[] { d1, d2, d3 })
+        {
+            scheduleRepo.Schedules.Add(new EmployeeSchedule
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenantContext.CurrentTenantId,
+                EmployeeId = empId,
+                BranchId = branchId,
+                ShiftConfigId = shiftId,
+                ShiftCode = "CA-SANG",
+                ShiftName = "Ca Sáng",
+                WorkDate = d,
+                PlannedStartTime = new TimeSpan(8, 0, 0),
+                PlannedEndTime = new TimeSpan(12, 0, 0),
+                DurationHours = 4m,
+                Status = ScheduleStatus.Scheduled
+            });
+        }
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+        var series = await service.GetRecurringSeriesAsync(empId, shiftId, "Ca Sáng", d1, d3.AddDays(7));
+
+        Assert.True(series.IsRepeating);
+        Assert.Equal(new[] { "T2", "T4" }, series.RepeatDays);
+        Assert.Equal(3, series.Schedules.Count);
+        Assert.Equal(d1, series.StartDate);
+        Assert.Equal(d3, series.EndDate);
+    }
+
+    [Fact]
+    public async Task SyncRecurringAsync_ShouldUpdateCreateDeleteAndSkipCompleted()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        var shiftId = Guid.NewGuid();
+
+        employeeRepo.Employees.Add(new Employee
+        {
+            Id = empId,
+            TenantId = tenantContext.CurrentTenantId,
+            FullName = "Nguyen Van D",
+            EmployeeCode = "NV04",
+            Status = EmployeeStatus.Active,
+            BranchId = branchId
+        });
+
+        shiftConfigRepo.ShiftConfigs.Add(new ShiftConfig
+        {
+            Id = shiftId,
+            TenantId = tenantContext.CurrentTenantId,
+            BranchId = branchId,
+            ShiftCode = "CA-CHIEU",
+            ShiftName = "Ca Chiều",
+            StartTime = new TimeSpan(13, 0, 0),
+            EndTime = new TimeSpan(17, 0, 0),
+            DurationHours = 4m
+        });
+
+        var monCompleted = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            EmployeeId = empId,
+            BranchId = branchId,
+            ShiftConfigId = shiftId,
+            ShiftCode = "CA-CHIEU",
+            ShiftName = "Ca Chiều",
+            WorkDate = new DateTime(2026, 11, 23), // T2 (Completed -> phải được giữ nguyên)
+            PlannedStartTime = new TimeSpan(13, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            DurationHours = 4m,
+            Status = ScheduleStatus.Completed
+        };
+        var wedEditable = new EmployeeSchedule
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            EmployeeId = empId,
+            BranchId = branchId,
+            ShiftConfigId = shiftId,
+            ShiftCode = "CA-CHIEU",
+            ShiftName = "Ca Chiều",
+            WorkDate = new DateTime(2026, 11, 25), // T4 (sẽ bị bỏ khi chỉ chọn T2, T6)
+            PlannedStartTime = new TimeSpan(13, 0, 0),
+            PlannedEndTime = new TimeSpan(17, 0, 0),
+            DurationHours = 4m,
+            Status = ScheduleStatus.Scheduled
+        };
+        scheduleRepo.Schedules.AddRange(new[] { monCompleted, wedEditable });
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext);
+        var result = await service.SyncRecurringAsync(new SyncRecurringScheduleRequest(
+            EmployeeId: empId,
+            BranchId: branchId,
+            StartDate: new DateTime(2026, 11, 23),
+            HasEndDate: true,
+            EndDate: new DateTime(2026, 11, 29),
+            RepeatDays: new[] { "T2", "T6" },
+            SourceScheduleId: wedEditable.Id,
+            OriginalShiftConfigId: shiftId,
+            OriginalShiftName: "Ca Chiều",
+            ShiftConfigId: shiftId,
+            ShiftCode: "CA-CHIEU",
+            ShiftName: "Ca Chiều",
+            PlannedStartTime: new TimeSpan(13, 30, 0),
+            PlannedEndTime: new TimeSpan(17, 30, 0),
+            DurationHours: 4m,
+            IsCheckInNextDay: false
+        ));
+
+        Assert.Equal(1, result.SkippedCount); // T2 Completed
+        Assert.Equal(1, result.DeletedCount); // T4 bị bỏ chọn
+        Assert.Equal(1, result.CreatedCount); // T6 được tạo mới
+        Assert.True(wedEditable.IsDeleted);
+        Assert.Equal(ScheduleStatus.Completed, monCompleted.Status);
+    }
+
+    [Fact]
+    public async Task CreateAsync_And_BatchCreateAsync_PaidPayslipMonth_ThrowsPaySlipLocked()
+    {
+        var scheduleRepo = new FakeScheduleRepository();
+        var employeeRepo = new FakeEmployeeRepository();
+        var shiftConfigRepo = new FakeShiftConfigRepository();
+        var policyRepo = new FakeBranchAttendancePolicyRepository();
+        var payslipRepo = new FakePayslipRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantContext = new FakeTenantContext();
+
+        var empId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        employeeRepo.Employees.Add(new Employee
+        {
+            Id = empId,
+            TenantId = tenantContext.CurrentTenantId,
+            FullName = "Nguyen Van E",
+            EmployeeCode = "NV05",
+            Status = EmployeeStatus.Active,
+            BranchId = branchId
+        });
+
+        payslipRepo.Payslips.Add(new Payslip
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantContext.CurrentTenantId,
+            EmployeeId = empId,
+            PeriodMonth = "2026-11",
+            Status = PayslipStatus.Paid
+        });
+
+        var service = new ScheduleService(scheduleRepo, employeeRepo, shiftConfigRepo, uow, tenantContext, policyRepo, null, payslipRepo);
+
+        var exSingle = await Assert.ThrowsAsync<BusinessException>(() => service.CreateAsync(new CreateScheduleItemRequest(
+            EmployeeId: empId,
+            BranchId: branchId,
+            WorkDate: new DateTime(2026, 11, 20),
+            ShiftName: "Ca Sáng",
+            PlannedStartTime: new TimeSpan(8, 0, 0),
+            PlannedEndTime: new TimeSpan(12, 0, 0)
+        )));
+        Assert.Equal("PAYSLIP_LOCKED", exSingle.ErrorCode);
+
+        var exBatch = await Assert.ThrowsAsync<BusinessException>(() => service.BatchCreateAsync(new BatchCreateScheduleRequest(
+            BranchId: branchId,
+            Schedules: new[]
+            {
+                new CreateScheduleItemRequest(
+                    EmployeeId: empId,
+                    BranchId: branchId,
+                    WorkDate: new DateTime(2026, 11, 25),
+                    ShiftName: "Ca Sáng",
+                    PlannedStartTime: new TimeSpan(8, 0, 0),
+                    PlannedEndTime: new TimeSpan(12, 0, 0)
+                )
+            }
+        )));
+        Assert.Equal("PAYSLIP_LOCKED", exBatch.ErrorCode);
     }
 }
 

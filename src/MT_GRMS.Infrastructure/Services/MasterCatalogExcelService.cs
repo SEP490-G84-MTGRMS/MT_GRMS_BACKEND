@@ -1,3 +1,4 @@
+using MT_GRMS.Application.Admin.Validators;
 using System.Globalization;
 using ClosedXML.Excel;
 using MT_GRMS.Application.Admin.Dtos;
@@ -137,7 +138,7 @@ public class MasterCatalogExcelService : IMasterCatalogExcelService
         var successCount = 0;
         var failedCount = 0;
 
-        using var workbook = new XLWorkbook(fileStream);
+        using var workbook = OpenWorkbook(fileStream);
         var worksheet = workbook.Worksheets.FirstOrDefault(w => w.Name == SheetName)
             ?? workbook.Worksheets.FirstOrDefault();
 
@@ -153,6 +154,7 @@ public class MasterCatalogExcelService : IMasterCatalogExcelService
         }
 
         var totalRows = lastRow - 1;
+        var acceptedBarcodes = new HashSet<string>(StringComparer.Ordinal);
 
         for (var rowIdx = 2; rowIdx <= lastRow; rowIdx++)
         {
@@ -169,7 +171,7 @@ public class MasterCatalogExcelService : IMasterCatalogExcelService
             var desc = row.Cell(10).GetString()?.Trim();
 
             // Bỏ qua dòng hoàn toàn trống
-            if (string.IsNullOrWhiteSpace(barcode) && string.IsNullOrWhiteSpace(name))
+            if (row.Cells(1, 10).All(cell => cell.IsEmpty()))
             {
                 continue;
             }
@@ -194,24 +196,23 @@ public class MasterCatalogExcelService : IMasterCatalogExcelService
             }
 
             decimal? suggestedPrice = null;
-            if (!string.IsNullOrWhiteSpace(priceStr) && decimal.TryParse(priceStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var p))
-            {
-                suggestedPrice = p;
-            }
-            else if (!string.IsNullOrWhiteSpace(priceStr) && decimal.TryParse(priceStr, NumberStyles.Any, ViCulture, out var pVi))
-            {
-                suggestedPrice = pVi;
-            }
-
-            decimal vatRate = 8.00m;
-            if (!string.IsNullOrWhiteSpace(vatStr) && decimal.TryParse(vatStr, NumberStyles.Any, CultureInfo.InvariantCulture, out var v))
-            {
-                vatRate = v;
-            }
-
+            decimal vatRate = 8m;
             try
             {
+                if (!string.IsNullOrWhiteSpace(priceStr))
+                    suggestedPrice = ReadDecimal(priceStr, "Giá bán lẻ");
+                if (!string.IsNullOrWhiteSpace(vatStr))
+                    vatRate = ReadDecimal(vatStr, "Thuế suất");
+                if (acceptedBarcodes.Contains(barcode))
+                    throw new FormatException("Mã vạch trùng với một dòng đã nhập trong tệp.");
+                var units = ParseUnits(packagingStr);
                 var existing = await _masterRepo.GetByBarcodeWithUnitsAsync(barcode, cancellationToken);
+                var candidate = new CreateMasterProductRequest(barcode, name,
+                    brand.Length > 0 ? brand : existing?.Brand ?? string.Empty,
+                    category.Length > 0 ? category : existing?.CategoryName ?? string.Empty,
+                    baseUnit.Length > 0 ? baseUnit : existing?.BaseUnit ?? string.Empty,
+                    suggestedPrice, vatRate, ImageUrl: imageUrl, Description: desc, Units: units);
+                MasterProductValidator.ValidateCreate(candidate);
                 if (existing != null)
                 {
                     if (!upsert)
@@ -234,7 +235,7 @@ public class MasterCatalogExcelService : IMasterCatalogExcelService
                     if (!string.IsNullOrWhiteSpace(desc)) existing.Description = desc;
 
                     // Parse lại quy cách
-                    ParseAndApplyUnits(existing, packagingStr);
+                    ApplyUnits(existing, units);
                     _masterRepo.Update(existing);
                 }
                 else
@@ -243,9 +244,9 @@ public class MasterCatalogExcelService : IMasterCatalogExcelService
                     {
                         Barcode = barcode,
                         Name = name,
-                        Brand = string.IsNullOrWhiteSpace(brand) ? "Khác" : brand,
-                        CategoryName = string.IsNullOrWhiteSpace(category) ? "Bách hóa" : category,
-                        BaseUnit = string.IsNullOrWhiteSpace(baseUnit) ? "Cái" : baseUnit,
+                        Brand = candidate.Brand,
+                        CategoryName = candidate.CategoryName,
+                        BaseUnit = candidate.BaseUnit,
                         SuggestedRetailPrice = suggestedPrice,
                         VatRate = vatRate,
                         TaxCategory = "STANDARD_1PCT",
@@ -255,17 +256,18 @@ public class MasterCatalogExcelService : IMasterCatalogExcelService
                         UsageCount = 0
                     };
 
-                    ParseAndApplyUnits(newProduct, packagingStr);
+                    ApplyUnits(newProduct, units);
                     await _masterRepo.AddAsync(newProduct, cancellationToken);
                 }
 
+                acceptedBarcodes.Add(barcode);
                 successCount++;
                 resultRows.Add(new MasterProductExcelImportRow(rowIdx, barcode, name, brand, category, baseUnit, suggestedPrice, vatRate, imageUrl, packagingStr, true, null));
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 failedCount++;
-                var err = $"Dòng {rowIdx} ({barcode}): Lỗi xử lý CSDL - {ex.Message}";
+                var err = $"Dòng {rowIdx} ({barcode}): {ex.Message}";
                 errorMessages.Add(err);
                 resultRows.Add(new MasterProductExcelImportRow(rowIdx, barcode, name, brand, category, baseUnit, suggestedPrice, vatRate, imageUrl, packagingStr, false, err));
             }
@@ -276,25 +278,46 @@ public class MasterCatalogExcelService : IMasterCatalogExcelService
         return new MasterProductExcelImportResult(totalRows, successCount, failedCount, errorMessages, resultRows);
     }
 
-    private static void ParseAndApplyUnits(MasterProduct product, string? packagingStr)
+    private static XLWorkbook OpenWorkbook(Stream stream)
     {
-        if (string.IsNullOrWhiteSpace(packagingStr)) return;
-
-        // Cú pháp: "Thùng:30:8934563138172; Lốc:6:8935049500551"
-        var segments = packagingStr.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        foreach (var seg in segments)
+        try
         {
-            var parts = seg.Split(':', StringSplitOptions.TrimEntries);
-            if (parts.Length < 2) continue;
+            return new XLWorkbook(stream);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or FileFormatException or DocumentFormat.OpenXml.Packaging.OpenXmlPackageException or System.Xml.XmlException)
+        {
+            throw new MT_GRMS.Domain.Exceptions.BusinessException("INVALID_FILE_TYPE", "Không đọc được tệp Excel. Vui lòng chọn tệp .xlsx hợp lệ.");
+        }
+    }
 
-            var unitName = parts[0];
-            if (!decimal.TryParse(parts[1], NumberStyles.Any, CultureInfo.InvariantCulture, out var rate) || rate <= 1)
-            {
-                continue;
-            }
+    private static decimal ReadDecimal(string text, string field)
+    {
+        const NumberStyles style = NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint;
+        if (decimal.TryParse(text, style, CultureInfo.InvariantCulture, out var value) ||
+            decimal.TryParse(text, style, ViCulture, out value))
+            return value;
+        throw new FormatException($"{field} phải là số hợp lệ.");
+    }
 
-            var unitBarcode = parts.Length >= 3 ? parts[2] : null;
+    private static List<CreateMasterProductUnitRequest> ParseUnits(string? specs)
+    {
+        var units = new List<CreateMasterProductUnitRequest>();
+        if (string.IsNullOrWhiteSpace(specs)) return units;
+        foreach (var segment in specs.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var parts = segment.Split(':', StringSplitOptions.TrimEntries);
+            if (parts.Length is < 2 or > 3)
+                throw new FormatException("Quy cách đóng gói cần có tên đơn vị và hệ số, có thể thêm mã vạch.");
+            units.Add(new(parts[0], ReadDecimal(parts[1], "Hệ số quy đổi"), parts.Length == 3 ? parts[2] : null));
+        }
+        if (units.Count == 0) throw new FormatException("Thiếu đơn vị quy đổi.");
+        return units;
+    }
 
+    private static void ApplyUnits(MasterProduct product, List<CreateMasterProductUnitRequest> units)
+    {
+        foreach (var (unitName, rate, unitBarcode, _) in units)
+        {
             // Kiểm tra xem unit đã có chưa
             var existingUnit = product.Units.FirstOrDefault(u => u.UnitName.Equals(unitName, StringComparison.OrdinalIgnoreCase));
             if (existingUnit != null)

@@ -464,10 +464,21 @@ public class PayslipServiceTests
 
         Assert.Single(result);
         var payslip = result[0];
-        Assert.Equal(20m, payslip.StandardDays);
+        // Tháng 11/2026 có 30 ngày, 5 Chủ nhật => công chuẩn lịch = 25 ngày; assignedShiftCount = 20 => StandardDays = max(25, 20) = 25
+        Assert.Equal(25m, payslip.StandardDays);
         Assert.Equal(18m, payslip.WorkedDays);
-        // 18 / 20 * 10,000,000 = 9,000,000 (không chia cứng cho 26)
-        Assert.Equal(9_000_000m, payslip.BaseSalaryEarned);
+        // 18 / 25 * 10,000,000 = 7,200,000
+        Assert.Equal(7_200_000m, payslip.BaseSalaryEarned);
+    }
+
+    [Theory]
+    [InlineData(2026, 9, 26)]  // 30 ngày - 4 Chủ nhật = 26
+    [InlineData(2026, 5, 26)]  // 31 ngày - 5 Chủ nhật = 26
+    [InlineData(2026, 2, 24)]  // Tháng 2/2026: 28 ngày - 4 Chủ nhật = 24
+    [InlineData(2026, 12, 27)] // 31 ngày - 4 Chủ nhật = 27
+    public void CalculateCalendarStandardDays_MatchesActualMonthCalendar(int year, int month, int expectedDays)
+    {
+        Assert.Equal(expectedDays, PayslipService.CalculateCalendarStandardDays(year, month));
     }
 
     [Fact]
@@ -581,10 +592,11 @@ public class PayslipServiceTests
         Assert.Single(result);
         var payslip = result[0];
         Assert.Equal(4.0m, payslip.OtHours);
-        // Weekday: 2h * 50,000 * 1.5 = 150,000
-        // Sunday: 2h * 50,000 * 2.0 = 200,000
-        // Total OT Pay = 350,000
-        Assert.Equal(350_000m, payslip.OvertimePay);
+        // 2026-11 có standardDays = 25 => hourlyRate = 10,400,000 / (25 * 8) = 52,000
+        // Weekday: 2h * 52,000 * 1.5 = 156,000
+        // Sunday: 2h * 52,000 * 2.0 = 208,000
+        // Total OT Pay = 364,000
+        Assert.Equal(364_000m, payslip.OvertimePay);
     }
 
     [Fact]
@@ -1248,8 +1260,9 @@ public class PayslipServiceTests
         var payslip = generated[0];
         Assert.Equal(1.5m, payslip.WorkedDays); // 0.5 (ca 4h) + 1.0 (ca 8h)
         Assert.Equal(4.0m, payslip.OtHours); // Capped at 4h instead of 6h
-        // OT Sunday (200% default): 4h * 50,000 * 2.0 = 400,000
-        Assert.Equal(400_000m, payslip.OvertimePay);
+        // 2026-11 có standardDays = 25 => hourlyRate = 10,400,000 / (25 * 8) = 52,000
+        // OT Sunday (200% default): 4h * 52,000 * 2.0 = 416,000
+        Assert.Equal(416_000m, payslip.OvertimePay);
     }
 
     [Theory]

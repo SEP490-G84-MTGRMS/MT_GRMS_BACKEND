@@ -131,7 +131,7 @@ public class UserRepository : IUserRepository
             await _context.AuditLogs.AddAsync(auditLog, cancellationToken);
         }
 
-        await _context.SaveChangesAsync(cancellationToken);
+        await _context.SaveNewTenantAsync(tenant, cancellationToken);
 
         if (transaction != null)
         {

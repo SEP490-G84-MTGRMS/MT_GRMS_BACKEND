@@ -244,6 +244,11 @@ public class EmployeeService : IEmployeeService
         // Tạo hoặc liên kết tài khoản Identity nếu có cung cấp UserName/UserId
         if (!string.IsNullOrWhiteSpace(request.UserName))
         {
+            if (!string.IsNullOrEmpty(request.Password) && !EmployeePasswordPolicy.IsValid(request.Password))
+            {
+                throw new ArgumentException(EmployeePasswordPolicy.ErrorMessage);
+            }
+
             var normalizedUsername = request.UserName.Trim();
             var existingUser = await _userRepository.GetByUsernameAsync(normalizedUsername, cancellationToken);
             if (existingUser != null)
@@ -390,6 +395,11 @@ public class EmployeeService : IEmployeeService
         // Tạo hoặc cập nhật tài khoản Identity nếu có cung cấp UserName/UserId
         if (!string.IsNullOrWhiteSpace(request.UserName))
         {
+            if (!string.IsNullOrEmpty(request.Password) && !EmployeePasswordPolicy.IsValid(request.Password))
+            {
+                throw new ArgumentException(EmployeePasswordPolicy.ErrorMessage);
+            }
+
             var normalizedUsername = request.UserName.Trim();
             if (string.IsNullOrEmpty(employee.UserId))
             {
@@ -628,6 +638,11 @@ public class EmployeeService : IEmployeeService
             throw new ArgumentException("Mật khẩu không được để trống.");
         }
 
+        if (!EmployeePasswordPolicy.IsValid(request.Password))
+        {
+            throw new ArgumentException(EmployeePasswordPolicy.ErrorMessage);
+        }
+
         var employee = await _employeeRepository.GetByIdAsync(employeeId, cancellationToken);
         if (employee == null)
         {
@@ -702,6 +717,11 @@ public class EmployeeService : IEmployeeService
             throw new ArgumentException("Tên đăng nhập không được để trống.");
         }
 
+        if (!string.IsNullOrEmpty(request.Password) && !EmployeePasswordPolicy.IsValid(request.Password))
+        {
+            throw new ArgumentException(EmployeePasswordPolicy.ErrorMessage);
+        }
+
         var employee = await _employeeRepository.GetByIdAsync(employeeId, cancellationToken);
         if (employee == null)
         {
@@ -735,7 +755,7 @@ public class EmployeeService : IEmployeeService
             user.UserName = normalizedUsername;
         }
 
-        if (!string.IsNullOrWhiteSpace(request.Password))
+        if (!string.IsNullOrEmpty(request.Password))
         {
             user.PasswordHash = request.Password;
         }

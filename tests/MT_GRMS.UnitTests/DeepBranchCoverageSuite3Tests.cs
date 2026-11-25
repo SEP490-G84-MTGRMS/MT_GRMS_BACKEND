@@ -1,3 +1,4 @@
+using MT_GRMS.Infrastructure.Services;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -661,7 +662,7 @@ public class DeepBranchCoverageSuite3Tests
 
         var tenantServiceMock = new Mock<ITenantService>();
         var planServiceMock = new Mock<ISubscriptionPlanService>();
-        var controller = new TenantStoreController(tenantServiceMock.Object, planServiceMock.Object, dbContext);
+        var controller = new TenantStoreController(tenantServiceMock.Object, planServiceMock.Object, dbContext, new TenantSubscriptionService(dbContext));
 
         // 1. Unauthenticated or missing tenant -> 403 Forbidden
         controller.ControllerContext = new ControllerContext

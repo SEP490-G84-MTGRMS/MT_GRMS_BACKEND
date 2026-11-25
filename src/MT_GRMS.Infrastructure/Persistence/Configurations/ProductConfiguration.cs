@@ -32,10 +32,12 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
             .HasDefaultValue(ProductStatus.Active)
             .HasSentinel((ProductStatus)0);
         builder.Property(x => x.ImageUrl).HasMaxLength(500);
+        builder.Property(x => x.ImageUrlsJson).HasColumnType("text").IsRequired(false);
         builder.Ignore(x => x.ImageUrls);
         builder.Property(x => x.Description).HasMaxLength(1000);
         builder.Property(x => x.InternalNote).HasMaxLength(500);
         builder.Property(x => x.HasBatches).HasDefaultValue(false);
+        builder.Property(x => x.NearExpiryThresholdDays).IsRequired(false);
         builder.Property(x => x.IsFavorite).HasDefaultValue(false);
         builder.Property(x => x.AllowRepack).HasDefaultValue(false);
         builder.Property(x => x.SellRawByWeight).HasDefaultValue(true);

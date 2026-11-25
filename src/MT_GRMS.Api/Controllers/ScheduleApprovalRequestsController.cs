@@ -1,3 +1,4 @@
+using MT_GRMS.Api.Middlewares;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
@@ -14,6 +15,7 @@ namespace MT_GRMS.Api.Controllers;
 [Authorize(Roles = SystemRoles.HrAllStaffAndOwner)]
 [ApiController]
 [Route("api/schedule-approval-requests")]
+[RequiresStaffManagement]
 public class ScheduleApprovalRequestsController : BaseApiController
 {
     private readonly IScheduleApprovalService _approvalService;

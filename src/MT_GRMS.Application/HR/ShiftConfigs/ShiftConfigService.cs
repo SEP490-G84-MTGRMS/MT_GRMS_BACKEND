@@ -110,6 +110,9 @@ public class ShiftConfigService : IShiftConfigService
             }
         }
 
+        // 2.6. Chặn StartTime == EndTime và chặn trùng lặp 100% khung giờ (cùng StartTime & EndTime) với ca đang hoạt động trong cùng chi nhánh
+        await EnsureNoDuplicateTimeRangeAsync(branchIds, request.StartTime, request.EndTime, excludeShiftId: null, cancellationToken);
+
         // 3. Tính toán DurationHours nếu không truyền
         var durationHours = request.DurationHours ?? CalculateDuration(request.StartTime, request.EndTime);
         if (durationHours <= 0 || durationHours > 24)
@@ -204,6 +207,10 @@ public class ShiftConfigService : IShiftConfigService
             }
         }
 
+        // Kiểm tra StartTime == EndTime và chặn trùng lặp 100% khung giờ (loại trừ chính ca đang sửa)
+        var effectiveBranchIds = ParseBranchIds(shift.BranchIds, shift.BranchId);
+        await EnsureNoDuplicateTimeRangeAsync(effectiveBranchIds, request.StartTime, request.EndTime, excludeShiftId: id, cancellationToken);
+
         shift.ShiftName = request.ShiftName.Trim();
         shift.StartTime = request.StartTime;
         shift.EndTime = request.EndTime;
@@ -251,6 +258,84 @@ public class ShiftConfigService : IShiftConfigService
 
         _repository.Delete(shift);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task EnsureNoDuplicateTimeRangeAsync(
+        IReadOnlyCollection<Guid> targetBranchIds,
+        TimeSpan startTime,
+        TimeSpan endTime,
+        Guid? excludeShiftId,
+        CancellationToken cancellationToken)
+    {
+        if (startTime == endTime)
+        {
+            throw new BusinessException(
+                "INVALID_SHIFT_DURATION",
+                "Giờ bắt đầu và giờ kết thúc ca không được trùng nhau (ca làm việc phải lớn hơn 0 phút).");
+        }
+
+        var branchesToCheck = targetBranchIds.Where(g => g != Guid.Empty).Distinct().ToList();
+        if (branchesToCheck.Count == 0)
+        {
+            var tenantActiveShifts = await _repository.GetByBranchIdAsync(null, isActive: true, cancellationToken);
+            var duplicate = tenantActiveShifts.FirstOrDefault(s =>
+                !s.IsDeleted &&
+                s.IsActive &&
+                (!excludeShiftId.HasValue || s.Id != excludeShiftId.Value) &&
+                s.StartTime == startTime &&
+                s.EndTime == endTime);
+            if (duplicate != null)
+            {
+                throw new BusinessException(
+                    "DUPLICATE_SHIFT_TIME",
+                    $"Khung giờ {startTime:hh\\:mm} - {endTime:hh\\:mm} bị trùng hoàn toàn với ca '{duplicate.ShiftName}' ({duplicate.ShiftCode}) đang hoạt động.");
+            }
+            return;
+        }
+
+        foreach (var branchId in branchesToCheck)
+        {
+            var branchActiveShifts = await _repository.GetByBranchIdAsync(branchId, isActive: true, cancellationToken);
+            var duplicate = branchActiveShifts.FirstOrDefault(s =>
+                !s.IsDeleted &&
+                s.IsActive &&
+                (!excludeShiftId.HasValue || s.Id != excludeShiftId.Value) &&
+                s.StartTime == startTime &&
+                s.EndTime == endTime);
+            if (duplicate != null)
+            {
+                throw new BusinessException(
+                    "DUPLICATE_SHIFT_TIME",
+                    $"Khung giờ {startTime:hh\\:mm} - {endTime:hh\\:mm} bị trùng hoàn toàn với ca '{duplicate.ShiftName}' ({duplicate.ShiftCode}) đang hoạt động trong chi nhánh.");
+            }
+        }
+    }
+
+    private static List<Guid> ParseBranchIds(string? branchIdsJson, Guid primaryBranchId)
+    {
+        var result = new List<Guid>();
+        if (!string.IsNullOrWhiteSpace(branchIdsJson))
+        {
+            try
+            {
+                var parsed = JsonSerializer.Deserialize<List<string>>(branchIdsJson);
+                if (parsed != null)
+                {
+                    result.AddRange(parsed.Select(str => Guid.TryParse(str, out var g) ? g : Guid.Empty).Where(g => g != Guid.Empty));
+                }
+            }
+            catch
+            {
+                result.AddRange(branchIdsJson.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(str => Guid.TryParse(str.Trim(), out var g) ? g : Guid.Empty)
+                    .Where(g => g != Guid.Empty));
+            }
+        }
+        if (result.Count == 0 && primaryBranchId != Guid.Empty)
+        {
+            result.Add(primaryBranchId);
+        }
+        return result.Distinct().ToList();
     }
 
     private static string GenerateShiftCode(string shiftName)

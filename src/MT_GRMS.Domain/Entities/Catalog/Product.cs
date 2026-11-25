@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations.Schema;
+using System.Text.Json;
 using MT_GRMS.Domain.Common;
 using MT_GRMS.Domain.Enums;
 
@@ -23,9 +24,14 @@ public class Product : BaseTenantEntity
     public string ProductType { get; set; } = "STANDARD";
     public ProductStatus Status { get; set; } = ProductStatus.Active;
     public string? ImageUrl { get; set; }
+    public string? ImageUrlsJson { get; set; }
     public string? Description { get; set; }
     public string? InternalNote { get; set; }
     public bool HasBatches { get; set; } = false;
+
+    /// <summary>Số ngày trước HSD được tính cận hạn. Null = mặc định 30 ngày.</summary>
+    public int? NearExpiryThresholdDays { get; set; }
+
     public bool IsFavorite { get; set; } = false;
 
     /// <summary>Cho phép chia khay / sơ chế (chỉ có ý nghĩa với SP cân kg).</summary>
@@ -50,16 +56,37 @@ public class Product : BaseTenantEntity
     private List<string> _imageUrls = new();
 
     /// <summary>
-    /// Tương thích API nhiều ảnh. DB local hiện lưu 1 ảnh tại cột ImageUrl.
+    /// Danh sách ảnh sản phẩm (lưu bền vững qua cột ImageUrlsJson, đồng bộ ảnh đại diện vào ImageUrl).
     /// </summary>
     [NotMapped]
     public List<string> ImageUrls
     {
         get
         {
-            if (_imageUrls.Count == 0 && !string.IsNullOrWhiteSpace(ImageUrl))
+            if (_imageUrls.Count == 0)
             {
-                _imageUrls.Add(ImageUrl);
+                if (!string.IsNullOrWhiteSpace(ImageUrlsJson))
+                {
+                    try
+                    {
+                        var parsed = JsonSerializer.Deserialize<List<string>>(ImageUrlsJson);
+                        if (parsed != null && parsed.Count > 0)
+                        {
+                            _imageUrls = parsed
+                                .Where(u => !string.IsNullOrWhiteSpace(u))
+                                .Select(u => u.Trim())
+                                .ToList();
+                        }
+                    }
+                    catch
+                    {
+                        // fallback to ImageUrl below
+                    }
+                }
+                if (_imageUrls.Count == 0 && !string.IsNullOrWhiteSpace(ImageUrl))
+                {
+                    _imageUrls.Add(ImageUrl);
+                }
             }
             return _imageUrls;
         }
@@ -70,6 +97,7 @@ public class Product : BaseTenantEntity
                 .Select(u => u.Trim())
                 .ToList() ?? new List<string>();
             ImageUrl = _imageUrls.FirstOrDefault();
+            ImageUrlsJson = _imageUrls.Count > 0 ? JsonSerializer.Serialize(_imageUrls) : null;
         }
     }
 

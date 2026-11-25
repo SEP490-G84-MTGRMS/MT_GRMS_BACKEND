@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace MT_GRMS.Application.Admin.Dtos;
 
 public record PlanQuotaDto(
@@ -20,23 +22,24 @@ public record CreatePlanRequest(
     string Code,
     string Name,
     string? Description,
-    decimal MonthlyPrice,
-    decimal YearlyPrice,
+    [property: JsonRequired] decimal MonthlyPrice,
+    [property: JsonRequired] decimal YearlyPrice,
     PlanQuotaDto? Quotas,
-    PlanFeatureDto? Features
+    PlanFeatureDto? Features,
+    bool IsActive = true
 );
 
 public record UpdatePlanRequest(
     string Name,
     string? Description,
-    decimal MonthlyPrice,
-    decimal YearlyPrice,
+    [property: JsonRequired] decimal MonthlyPrice,
+    [property: JsonRequired] decimal YearlyPrice,
     PlanQuotaDto? Quotas,
     PlanFeatureDto? Features
 );
 
 public record UpdatePlanStatusRequest(
-    bool IsActive
+    [property: JsonRequired] bool IsActive
 );
 
 public record PlanFilterRequest(

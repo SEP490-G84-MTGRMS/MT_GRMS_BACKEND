@@ -36,6 +36,37 @@ public static class VietnameseTextNormalizer
     }
 }
 
+public static class EmployeePasswordPolicy
+{
+    public const int MinLength = 8;
+    public const int MaxLength = 64;
+
+    /// <summary>
+    /// Thông báo lỗi đồng bộ 100% với quy tắc mật khẩu của module Auth (RegisterTenantRequestValidator / authValidation.ts).
+    /// </summary>
+    public const string ErrorMessage =
+        "Mật khẩu phải có 8–64 ký tự, gồm chữ hoa, chữ thường, số, ký tự đặc biệt và không có khoảng trắng.";
+
+    public static bool IsValid(string? password)
+    {
+        if (string.IsNullOrEmpty(password))
+            return false;
+
+        if (password.Length < MinLength || password.Length > MaxLength)
+            return false;
+
+        if (password.Any(char.IsWhiteSpace))
+            return false;
+
+        var hasUpper = Regex.IsMatch(password, "[A-Z]");
+        var hasLower = Regex.IsMatch(password, "[a-z]");
+        var hasDigit = Regex.IsMatch(password, "[0-9]");
+        var hasSpecial = Regex.IsMatch(password, "[^A-Za-z0-9]");
+
+        return hasUpper && hasLower && hasDigit && hasSpecial;
+    }
+}
+
 public class CreateEmployeeRequestValidator : AbstractValidator<CreateEmployeeRequest>
 {
     public CreateEmployeeRequestValidator()
@@ -180,6 +211,13 @@ public class CreateEmployeeRequestValidator : AbstractValidator<CreateEmployeeRe
         {
             RuleFor(x => x.AvatarUrl)
                 .MaximumLength(255).WithMessage("Đường dẫn ảnh đại diện không vượt quá 255 ký tự.");
+        });
+
+        When(x => !string.IsNullOrEmpty(x.Password), () =>
+        {
+            RuleFor(x => x.Password!)
+                .Must(EmployeePasswordPolicy.IsValid)
+                .WithMessage(EmployeePasswordPolicy.ErrorMessage);
         });
     }
 }
@@ -329,6 +367,13 @@ public class UpdateEmployeeRequestValidator : AbstractValidator<UpdateEmployeeRe
             RuleFor(x => x.AvatarUrl)
                 .MaximumLength(255).WithMessage("Đường dẫn ảnh đại diện không vượt quá 255 ký tự.");
         });
+
+        When(x => !string.IsNullOrEmpty(x.Password), () =>
+        {
+            RuleFor(x => x.Password!)
+                .Must(EmployeePasswordPolicy.IsValid)
+                .WithMessage(EmployeePasswordPolicy.ErrorMessage);
+        });
     }
 }
 
@@ -349,11 +394,19 @@ public class CreateIdentityAccountRequestValidator : AbstractValidator<CreateIde
                 .MaximumLength(100).WithMessage("Tên hiển thị không vượt quá 100 ký tự.");
         });
 
-        RuleFor(x => x.Password)
-            .MinimumLength(6).When(x => !string.IsNullOrEmpty(x.Password))
-            .WithMessage("Mật khẩu tối thiểu 6 ký tự.")
-            .MaximumLength(50).When(x => !string.IsNullOrEmpty(x.Password))
-            .WithMessage("Mật khẩu không vượt quá 50 ký tự.");
+        When(x => !string.IsNullOrEmpty(x.Password), () =>
+        {
+            RuleFor(x => x.Password)
+                .Cascade(CascadeMode.Stop)
+                .MinimumLength(EmployeePasswordPolicy.MinLength).WithMessage(EmployeePasswordPolicy.ErrorMessage)
+                .MaximumLength(EmployeePasswordPolicy.MaxLength).WithMessage(EmployeePasswordPolicy.ErrorMessage)
+                .Matches("[A-Z]").WithMessage(EmployeePasswordPolicy.ErrorMessage)
+                .Matches("[a-z]").WithMessage(EmployeePasswordPolicy.ErrorMessage)
+                .Matches("[0-9]").WithMessage(EmployeePasswordPolicy.ErrorMessage)
+                .Matches("[^A-Za-z0-9]").WithMessage(EmployeePasswordPolicy.ErrorMessage)
+                .Must(password => password is not null && !password.Any(char.IsWhiteSpace))
+                .WithMessage(EmployeePasswordPolicy.ErrorMessage);
+        });
 
         RuleFor(x => x.Role)
             .NotEmpty().WithMessage("Vai trò phân quyền không được để trống.")

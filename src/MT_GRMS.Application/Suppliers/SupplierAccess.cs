@@ -15,7 +15,7 @@ internal static class SupplierAccess
             .Replace("_", string.Empty, StringComparison.Ordinal)
             .Replace(" ", string.Empty, StringComparison.Ordinal)
             .ToUpperInvariant();
-        return string.IsNullOrEmpty(role) || role is "STOREOWNER" or "ADMIN";
+        return role is "STOREOWNER" or "ADMIN";
     }
 
     public static void EnsureStoreOwner(ITenantContext tenantContext)

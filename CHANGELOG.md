@@ -7,6 +7,11 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-15
 
 ### Changed
+- Bổ sung `[Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]` cho `DELETE /api/branches/{id}` và `GET /api/tenant/subscriptions/history`; chuẩn hóa phản hồi trung tính `200 OK` cho `POST /api/Auth/forgot-password` nhằm chống dò tài khoản (OWASP). [Worklog](./docs/worklogs/2026-11-24_QA-NHAT_AI_fix-rbac-and-auth-enumeration.md)
+- Đồng bộ kiểm tra dữ liệu nhập admin cho cửa hàng, gói dịch vụ, hàng mẫu, Excel và cấu hình nền tảng. [Worklog](./docs/worklogs/2026-11-23_ADMIN-VALIDATION_Codex_admin-input-boundaries.md)
+- Áp dụng quyền Quản lý nhân viên theo gói cho API ca làm, chấm công, lịch làm, duyệt yêu cầu và bảng lương.
+- Yêu cầu tên chi nhánh có ít nhất 2 ký tự sau khi bỏ khoảng trắng hai đầu khi thêm mới hoặc cập nhật chi nhánh.
+- Giữ đúng mã gian hàng cho chi nhánh chính và danh mục mẫu khi đăng ký trong phiên của một gian hàng khác.
 - Tách truy vấn tải nhiều danh sách và giảm dữ liệu, số lần duyệt trong truy vấn tồn kho.
 - Đồng bộ cột cấu hình chi nhánh và bảng thông báo khi chạy API bằng profile local.
 - Xử lý cảnh báo nullable ở email, OTP và mã vạch.
@@ -20,6 +25,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - Hợp nhất yêu cầu nạp VietQR và giao dịch ví vào `WalletTransactions`. Giữ hợp đồng API, chuyển dữ liệu đơn cũ qua đối soát và ngăn webhook cộng trùng số dư. [worklog: docs/worklogs/2026-11-16_WALLET_AI_merge-topup-orders.md]
 
 ### Added
+- Cho chủ Gói Thường mua riêng tiện ích Quản lý nhân viên bằng Ví gian hàng, tính phí theo số ngày còn lại và kiểm tra quyền dùng ở API hồ sơ nhân viên. [worklog: docs/worklogs/2026-11-22_BE-STORE_AI_staff-management-addon.md]
 - API Admin xem lịch sử mua gói dịch vụ theo tenant, phân trang và giới hạn truy cập Admin. Chi tiết tenant không trả danh sách chi nhánh. [worklog: docs/worklogs/2026-11-16_ADMIN-TENANT_AI_tenant-records.md]
 - Khởi tạo danh mục sản phẩm, nhóm hàng, đơn vị quy đổi và gán chi nhánh chính từ MasterProducts đang bật trong transaction đăng ký cửa hàng. [worklog: docs/worklogs/2026-11-15_ADMIN-CATALOG_AI_new-tenant-default-data.md]
 - **Kho Danh mục Hàng hóa Mẫu Toàn Cầu (Global FMCG Master Catalog)**: Xây dựng thực thể nền tảng `MasterProduct` & `MasterProductUnit`, bộ API quản trị cho Super Admin `AdminMasterCatalogController` (`/api/admin/master-catalog`), xử lý ClosedXML xuất template và import Excel hàng loạt (>5.000 SKU) cùng API tra cứu mã vạch công khai `GET /api/products/lookup-master` phục vụ auto-fill tức thì khi tiệm tạp hóa onboard [REQ-MC-01 -> REQ-MC-04] [worklog: docs/worklogs/2026-11-15_FMCG-MASTER-CATALOG_Ortus24_add-global-master-catalog.md].
@@ -28,6 +34,9 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - API Admin `POST /api/admin/tenants` tạo cửa hàng, tài khoản chủ sở hữu và chi nhánh chính trong một transaction, kiểm tra dữ liệu trùng và ghi audit log. Cửa hàng khởi tạo ở trạng thái `NO_PLAN`. [worklog: docs/worklogs/2026-11-15_ADMIN-TENANT_AI_create-tenant.md]
 
 ### Fixed
+- Giữ chi nhánh duy nhất làm trụ sở chính và chặn thao tác ngừng hoạt động hoặc xóa chi nhánh đó. [worklog: docs/worklogs/2026-11-23_BE-BRANCH_AI_protect-only-branch.md]
+- Bổ sung cột `OrderDetails.StockAllocationsJson` khi chạy API bằng profile local để khắc phục lỗi tải Tổng quan trên cơ sở dữ liệu chưa cập nhật schema.
+- Áp dụng bổ sung schema `ExpenseVouchers.DueDate` khi chạy API bằng profile local để worker nhắc thanh toán đọc được phiếu chi trên cơ sở dữ liệu cũ.
 - Kiểm tra tên, số điện thoại, mã số thuế, tỉnh/thành phố và địa chỉ trước khi lưu thông tin gian hàng. [worklog: docs/worklogs/2026-11-22_BE-STORE_AI_store-info-validation.md]
 - Không áp điều kiện mua gói tenant cho Admin đã xác thực, sửa API quản trị trả 403 sau reset dữ liệu. [worklog: docs/worklogs/2026-11-16_ADMIN-AUTH_AI_subscription-bypass.md]
 - Bổ sung CreatedAt và IsDeleted trong khởi tạo PlatformSettings để tránh lỗi PostgreSQL 23502 khi chạy backend. [worklog: docs/worklogs/2026-11-16_PLATFORM-SETTINGS_AI_fix-startup-seed.md]

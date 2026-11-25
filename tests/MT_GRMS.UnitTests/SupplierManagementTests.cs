@@ -203,6 +203,30 @@ public class SupplierManagementTests
             return Task.FromResult(Ledgers.Count(l => l.DocNo.StartsWith(docNoPrefix, StringComparison.Ordinal)));
         }
 
+        public Dictionary<string, DateTime?> ConfirmedGrnDueDates { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+        public Task<IReadOnlyList<SupplierAPLedger>> GetAllLedgersForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default)
+        {
+            IReadOnlyList<SupplierAPLedger> list = Ledgers
+                .Where(l => l.SupplierId == supplierId)
+                .OrderBy(l => l.TransactionDate)
+                .ThenBy(l => l.CreatedAt)
+                .ToList();
+            return Task.FromResult(list);
+        }
+
+        public Task<IReadOnlyDictionary<string, DateTime?>> GetConfirmedGrnDueDatesByCodesAsync(
+            Guid supplierId,
+            IEnumerable<string> grnCodes,
+            CancellationToken cancellationToken = default)
+        {
+            var codeSet = new HashSet<string>(grnCodes, StringComparer.OrdinalIgnoreCase);
+            IReadOnlyDictionary<string, DateTime?> result = ConfirmedGrnDueDates
+                .Where(kv => codeSet.Contains(kv.Key))
+                .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+            return Task.FromResult(result);
+        }
+
         public Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default)
         {
             IReadOnlyList<SupplierBlackoutDate> list = BlackoutDates.Where(b => b.SupplierId == supplierId).ToList();
@@ -2660,6 +2684,204 @@ public class SupplierManagementTests
 
         await Assert.ThrowsAsync<NotFoundException>(() =>
             service.GetSupplierProductsAsync(nonExistentId, filter));
+    }
+
+    [Fact]
+    public async Task GetApSummaryAsync_CalculatesAllAgingBucketsAndSyncsOverdueDebt()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var today = DateTime.UtcNow.Date;
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid(),
+            Code = "SUP-AGE-01",
+            Name = "NCC Tuổi Nợ",
+            Phone = "0901234567",
+            PaymentTermDays = 10,
+            CurrentDebt = 15_000_000m,
+            OverdueDebt = 0m
+        };
+        await repo.AddAsync(supplier);
+
+        // 5 open invoices across all 5 buckets:
+        // GRN-OVER90: due 100 days ago -> >90 (1M)
+        // GRN-61-90: due 75 days ago -> 61-90 (2M)
+        // GRN-31-60: due 45 days ago -> 31-60 (3M)
+        // GRN-1-30: explicit GRN PaymentDueDate = 15 days ago (overrides PaymentTermDays) -> 1-30 (4M)
+        // GRN-CURR: tx 2 days ago + term 10 -> due in 8 days -> Current (5M)
+        repo.ConfirmedGrnDueDates["GRN-1-30"] = today.AddDays(-15);
+
+        await repo.AddLedgerAsync(new SupplierAPLedger
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            DocType = APDocType.PurchaseInvoice,
+            DocNo = "GRN-OVER90",
+            TransactionDate = today.AddDays(-110),
+            Amount = 1_000_000m,
+            Direction = 1,
+            BalanceAfter = 1_000_000m,
+            IdempotencyKey = "GRN-OVER90"
+        });
+        await repo.AddLedgerAsync(new SupplierAPLedger
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            DocType = APDocType.PurchaseInvoice,
+            DocNo = "GRN-61-90",
+            TransactionDate = today.AddDays(-85),
+            Amount = 2_000_000m,
+            Direction = 1,
+            BalanceAfter = 3_000_000m,
+            IdempotencyKey = "GRN-61-90"
+        });
+        await repo.AddLedgerAsync(new SupplierAPLedger
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            DocType = APDocType.PurchaseInvoice,
+            DocNo = "GRN-31-60",
+            TransactionDate = today.AddDays(-55),
+            Amount = 3_000_000m,
+            Direction = 1,
+            BalanceAfter = 6_000_000m,
+            IdempotencyKey = "GRN-31-60"
+        });
+        await repo.AddLedgerAsync(new SupplierAPLedger
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            DocType = APDocType.PurchaseInvoice,
+            DocNo = "GRN-1-30",
+            TransactionDate = today.AddDays(-2), // without explicit due date this would be Current
+            Amount = 4_000_000m,
+            Direction = 1,
+            BalanceAfter = 10_000_000m,
+            IdempotencyKey = "GRN-1-30"
+        });
+        await repo.AddLedgerAsync(new SupplierAPLedger
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            DocType = APDocType.PurchaseInvoice,
+            DocNo = "GRN-CURR",
+            TransactionDate = today.AddDays(-2),
+            Amount = 5_000_000m,
+            Direction = 1,
+            BalanceAfter = 15_000_000m,
+            IdempotencyKey = "GRN-CURR"
+        });
+
+        var summary = await service.GetApSummaryAsync(supplier.Id);
+
+        Assert.Equal(15_000_000m, summary.CurrentDebt);
+        Assert.Equal(10_000_000m, summary.OverdueDebt);
+        Assert.Equal(10_000_000m, supplier.OverdueDebt);
+        Assert.Equal(5_000_000m, summary.Aging.Current);
+        Assert.Equal(4_000_000m, summary.Aging.Days1To30);
+        Assert.Equal(3_000_000m, summary.Aging.Days31To60);
+        Assert.Equal(2_000_000m, summary.Aging.Days61To90);
+        Assert.Equal(1_000_000m, summary.Aging.Over90Days);
+        Assert.Equal(10_000_000m, summary.Aging.TotalOverdue);
+        Assert.Equal(15_000_000m, summary.Aging.TotalDebt);
+    }
+
+    [Fact]
+    public async Task RecordAPTransactionAsync_PaymentSettlesOldestOverdueFirstViaFifo()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var service = new SupplierService(repo, uow, new FakeTenantContext());
+
+        var today = DateTime.UtcNow.Date;
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid(),
+            Code = "SUP-FIFO-01",
+            Name = "NCC FIFO",
+            Phone = "0909876543",
+            PaymentTermDays = 10,
+            CurrentDebt = 5_000_000m,
+            OverdueDebt = 3_000_000m
+        };
+        await repo.AddAsync(supplier);
+
+        // Oldest invoice: overdue 45 days (3M)
+        await repo.AddLedgerAsync(new SupplierAPLedger
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            DocType = APDocType.PurchaseInvoice,
+            DocNo = "GRN-OLD",
+            TransactionDate = today.AddDays(-55),
+            Amount = 3_000_000m,
+            Direction = 1,
+            BalanceAfter = 3_000_000m,
+            IdempotencyKey = "GRN-OLD"
+        });
+        // Newer invoice: current (2M)
+        await repo.AddLedgerAsync(new SupplierAPLedger
+        {
+            Id = Guid.NewGuid(),
+            SupplierId = supplier.Id,
+            DocType = APDocType.PurchaseInvoice,
+            DocNo = "GRN-NEW",
+            TransactionDate = today.AddDays(-1),
+            Amount = 2_000_000m,
+            Direction = 1,
+            BalanceAfter = 5_000_000m,
+            IdempotencyKey = "GRN-NEW"
+        });
+
+        // Pay 2M -> reduces 31-60 overdue bucket from 3M down to 1M
+        await service.RecordAPTransactionAsync(new RecordAPTransactionCommand
+        {
+            SupplierId = supplier.Id,
+            DocType = APDocType.PaymentVoucher,
+            Amount = 2_000_000m,
+            Direction = -1,
+            PaymentMethod = "BANK_TRANSFER",
+            ReferenceNo = "FT-FIFO-01",
+            Description = "Thanh toán đợt 1",
+            IdempotencyKey = "PAY-FIFO-01"
+        });
+
+        Assert.Equal(3_000_000m, supplier.CurrentDebt);
+        Assert.Equal(1_000_000m, supplier.OverdueDebt);
+
+        var summary = await service.GetApSummaryAsync(supplier.Id);
+        Assert.Equal(2_000_000m, summary.Aging.Current);
+        Assert.Equal(1_000_000m, summary.Aging.Days31To60);
+        Assert.Equal(1_000_000m, summary.Aging.TotalOverdue);
+    }
+
+    [Fact]
+    public async Task GetByIdAsync_NonOwner_MasksCurrentAndOverdueDebt()
+    {
+        var repo = new FakeSupplierRepository();
+        var uow = new FakeUnitOfWork();
+        var tenantCtx = new FakeTenantContext { CurrentRole = "STAFF", CurrentBranchId = Guid.NewGuid() };
+        var service = new SupplierService(repo, uow, tenantCtx);
+
+        var supplier = new Supplier
+        {
+            Id = Guid.NewGuid(),
+            Code = "SUP-MASK-01",
+            Name = "NCC Masked",
+            Phone = "0911222333",
+            CurrentDebt = 4_000_000m,
+            OverdueDebt = 1_500_000m
+        };
+        await repo.AddAsync(supplier);
+
+        var dto = await service.GetByIdAsync(supplier.Id);
+
+        Assert.NotNull(dto);
+        Assert.Equal(0m, dto.CurrentDebt);
+        Assert.Equal(0m, dto.OverdueDebt);
     }
 }
 

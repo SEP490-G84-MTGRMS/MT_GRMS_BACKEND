@@ -134,7 +134,7 @@ public class SubscriptionPlanService : ISubscriptionPlanService
             MaxBranches = request.Quotas?.MaxBranches ?? 1,
             MaxStaff = request.Quotas?.MaxEmployees ?? 5,
             EnabledModulesJson = modulesJson,
-            IsActive = true
+            IsActive = request.IsActive
         };
 
         await _planRepository.AddAsync(plan, cancellationToken);

@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Batches;
 using MT_GRMS.Application.Batches.Dtos;
+using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Infrastructure.Persistence;
@@ -22,7 +23,7 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
     }
 
     public Task<BranchStock?> GetBranchStockForUpdateAsync(string tenantId, Guid id, CancellationToken cancellationToken = default)
-        => _appContext.BranchStocks.FirstOrDefaultAsync(
+        => _appContext.BranchStocks.Include(x => x.Product).FirstOrDefaultAsync(
             x => x.Id == id && x.TenantId == tenantId && !x.IsDeleted,
             cancellationToken);
 
@@ -31,11 +32,11 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
         BatchFilterQuery query,
         CancellationToken cancellationToken = default)
     {
-        var now = DateTime.UtcNow.Date;
+        var now = BusinessDateResolver.ToLocal(DateTime.UtcNow).Date;
 
         // Nguồn tồn theo lô thực tế: BranchStocks (GRN complete ghi vào đây). Chỉ hiện lô còn tồn.
         var stocksQuery = _appContext.BranchStocks.AsNoTracking()
-            .Where(bs => !bs.IsDeleted && bs.QuantityOnHand > 0);
+            .Where(bs => bs.TenantId == tenantId && !bs.IsDeleted && bs.QuantityOnHand > 0);
 
         if (query.BranchId.HasValue && query.BranchId.Value != Guid.Empty)
         {
@@ -116,80 +117,39 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
 
         var allItems = new List<BatchListItemDto>();
 
-        // Nhóm 1 (Product.HasBatches == true): Hiển thị chi tiết từng dòng lô theo từng cửa hàng (BranchId)
+        // Nhóm 1 (Product.HasBatches == true): Hiển thị từng dòng BranchStock độc lập theo đúng Id (BAT-03),
+        // tránh gộp nhiều bản ghi dưới 1 representative.Id khiến FEFO/Repack/Stocktake thao tác thiếu.
         var batchManagedStocks = stocks
-            .Where(bs => products.TryGetValue(bs.ProductId, out var p) && p.HasBatches)
-            .GroupBy(bs => new
-            {
-                bs.BranchId,
-                bs.ProductId,
-                BatchCodeKey = (bs.BatchCode ?? string.Empty).Trim().ToUpperInvariant(),
-                MfgKey = bs.ManufactureDate?.Date,
-                ExpKey = bs.ExpiryDate?.Date
-            });
+            .Where(bs => products.TryGetValue(bs.ProductId, out var p) && p.HasBatches);
 
-        foreach (var lotGroup in batchManagedStocks)
+        foreach (var stock in batchManagedStocks)
         {
-            var representative = lotGroup
-                .OrderByDescending(x => x.UpdatedAt ?? x.CreatedAt)
-                .First();
-            var totalLotQty = lotGroup.Sum(x => x.QuantityOnHand);
-            var grnCode = lotGroup
-                .Select(x => grnLookup.TryGetValue(x.Id, out var code) ? code : null)
-                .FirstOrDefault(c => !string.IsNullOrWhiteSpace(c));
-            var grnId = lotGroup
-                .Select(x => grnIdLookup.TryGetValue(x.Id, out var gid) ? gid : null)
-                .FirstOrDefault(g => g.HasValue);
-            products.TryGetValue(representative.ProductId, out var lotProduct);
+            var grnCode = grnLookup.TryGetValue(stock.Id, out var code) ? code : null;
+            var grnId = grnIdLookup.TryGetValue(stock.Id, out var gid) ? gid : (Guid?)null;
+            products.TryGetValue(stock.ProductId, out var lotProduct);
             string? lotDeliveryUom = null;
-            if (representative.SupplierId.HasValue
+            if (stock.SupplierId.HasValue
                 && deliveryUomBySupplierProduct != null
-                && deliveryUomBySupplierProduct.TryGetValue((representative.SupplierId.Value, representative.ProductId), out var lotDu))
+                && deliveryUomBySupplierProduct.TryGetValue((stock.SupplierId.Value, stock.ProductId), out var lotDu))
             {
                 lotDeliveryUom = lotDu;
             }
             var (_, lotPurchaseToStockRate) = ResolveInboundUnitAndRate(lotDeliveryUom, lotProduct);
             // AcceptedQty trên GRN theo ĐVT nhập → quy về ĐVT tồn (cùng hệ với QuantityOnHand).
-            var initQty = lotGroup.Sum(x =>
-                initialQtyLookup.TryGetValue(x.Id, out var iq)
-                    ? Math.Round(iq * lotPurchaseToStockRate, 3)
-                    : x.QuantityOnHand);
+            var initQty = initialQtyLookup.TryGetValue(stock.Id, out var iq)
+                ? Math.Round(iq * lotPurchaseToStockRate, 3)
+                : stock.QuantityOnHand;
 
             decimal packagedQty = 0m;
             var packageCount = 0;
-            foreach (var s in lotGroup)
+            if (packageStats.TryGetValue(stock.Id, out var ps))
             {
-                if (packageStats.TryGetValue(s.Id, out var ps))
-                {
-                    packagedQty += ps.Weight;
-                    packageCount += ps.Count;
-                }
+                packagedQty = ps.Weight;
+                packageCount = ps.Count;
             }
 
-            var mergedLotStock = new BranchStock
-            {
-                Id = representative.Id,
-                TenantId = representative.TenantId,
-                BranchId = representative.BranchId,
-                ProductId = representative.ProductId,
-                SupplierId = representative.SupplierId,
-                BatchCode = representative.BatchCode,
-                ManufactureDate = representative.ManufactureDate,
-                ExpiryDate = representative.ExpiryDate,
-                QuantityOnHand = totalLotQty,
-                QuantityReserved = lotGroup.Sum(x => x.QuantityReserved),
-                QuantityQuarantined = lotGroup.Sum(x => x.QuantityQuarantined),
-                LandedCostPerUnit = representative.LandedCostPerUnit,
-                FefoDiscountPercent = representative.FefoDiscountPercent,
-                IsFefoDiscountActive = representative.IsFefoDiscountActive,
-                ZoneArea = representative.ZoneArea,
-                ShelfLocation = representative.ShelfLocation,
-                CreatedAt = representative.CreatedAt,
-                UpdatedAt = representative.UpdatedAt
-            };
-
             allItems.Add(MapBranchStockToListItem(
-                mergedLotStock,
+                stock,
                 products,
                 branches,
                 suppliers,
@@ -347,7 +307,7 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
         Guid id,
         CancellationToken cancellationToken = default)
     {
-        var now = DateTime.UtcNow.Date;
+        var now = BusinessDateResolver.ToLocal(DateTime.UtcNow).Date;
 
         // Live ledger duy nhất: BranchStocks. Không fallback Batches/StockOnHands (legacy).
         var branchStock = await _appContext.BranchStocks.AsNoTracking()
@@ -410,10 +370,17 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 branchStock.ExpiryDate = null;
             }
 
-            string? grnNo = await _appContext.GoodsReceiptLines.AsNoTracking()
+            var grnInfo = await _appContext.GoodsReceiptLines.AsNoTracking()
                 .Where(l => l.BranchStockId == branchStock.Id && !l.IsDeleted)
-                .Select(l => l.GoodsReceipt!.Code)
+                .Select(l => new { l.GoodsReceiptId, Code = l.GoodsReceipt!.Code, l.AcceptedQty })
                 .FirstOrDefaultAsync(cancellationToken);
+
+            var activePackages = await _appContext.Packages.AsNoTracking()
+                .Where(p => p.BranchStockId == branchStock.Id && !p.IsDeleted && (p.Status == "AVAILABLE" || p.Status == "QUARANTINED"))
+                .Select(p => p.NetWeight)
+                .ToListAsync(cancellationToken);
+            var packagedQty = activePackages.Sum();
+            var packageCount = activePackages.Count;
 
             return MapBranchStockToListItem(
                 branchStock,
@@ -421,8 +388,12 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
                 branches,
                 suppliers,
                 now,
-                grnNo,
+                grnInfo?.Code,
                 isBatchManaged,
+                originalGrnId: grnInfo?.GoodsReceiptId,
+                initialQtyOverride: grnInfo?.AcceptedQty,
+                packagedQty: packagedQty,
+                packageCount: packageCount,
                 deliveryUomBySupplierProduct: deliveryUomBySupplierProduct);
         }
 
@@ -447,14 +418,17 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
         Guid? branchId,
         CancellationToken cancellationToken = default)
     {
-        var now = DateTime.UtcNow.Date;
-        var thresholdDate = now.AddDays(daysThreshold);
+        var now = BusinessDateResolver.ToLocal(DateTime.UtcNow).Date;
+        // Fallback khi Product.NearExpiryThresholdDays null; vẫn quét rộng rồi lọc theo từng SP.
+        var scanDays = daysThreshold > 0 ? daysThreshold : 30;
+        var scanDate = now.AddDays(Math.Max(scanDays, 365));
 
         var query = _appContext.BranchStocks.AsNoTracking()
-            .Where(bs => !bs.IsDeleted
+            .Where(bs => bs.TenantId == tenantId
+                && !bs.IsDeleted
                 && bs.QuantityOnHand > 0
                 && bs.ExpiryDate.HasValue
-                && bs.ExpiryDate.Value.Date <= thresholdDate);
+                && bs.ExpiryDate.Value.Date <= scanDate);
 
         if (branchId.HasValue && branchId.Value != Guid.Empty)
         {
@@ -468,30 +442,57 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
             .Where(p => productIds.Contains(p.Id))
             .ToDictionaryAsync(p => p.Id, cancellationToken);
 
-        return stocks.Select(bs =>
-        {
-            products.TryGetValue(bs.ProductId, out var product);
-            var expiry = bs.ExpiryDate!.Value;
-            var daysRemaining = (expiry.Date - now).Days;
+        return stocks
+            .Select(bs =>
+            {
+                products.TryGetValue(bs.ProductId, out var product);
+                var expiry = bs.ExpiryDate!.Value;
+                var daysRemaining = (expiry.Date - now).Days;
+                var productThreshold = ResolveNearExpiryThresholdDays(
+                    product?.NearExpiryThresholdDays,
+                    daysThreshold);
 
-            return new ExpiryAlertDto(
-                BatchId: bs.Id,
-                BatchCode: string.IsNullOrWhiteSpace(bs.BatchCode) ? "—" : bs.BatchCode,
-                ProductName: product?.Name ?? "Sản phẩm",
-                ExpiryDate: expiry,
-                DaysRemaining: daysRemaining,
-                RemainingQuantity: bs.QuantityOnHand
-            );
-        }).OrderBy(x => x.DaysRemaining).ToList();
+                return new
+                {
+                    Dto = new ExpiryAlertDto(
+                        BatchId: bs.Id,
+                        BatchCode: string.IsNullOrWhiteSpace(bs.BatchCode) ? "—" : bs.BatchCode,
+                        ProductName: product?.Name ?? "Sản phẩm",
+                        ExpiryDate: expiry,
+                        DaysRemaining: daysRemaining,
+                        RemainingQuantity: bs.QuantityOnHand
+                    ),
+                    Threshold = productThreshold
+                };
+            })
+            .Where(x => x.Dto.DaysRemaining <= x.Threshold)
+            .Select(x => x.Dto)
+            .OrderBy(x => x.DaysRemaining)
+            .ToList();
     }
 
-    private static string ResolveStatus(int daysLeft) => daysLeft switch
+    /// <summary>
+    /// Ngưỡng cận hạn theo SP (NearExpiryThresholdDays); null/≤0 → fallback (mặc định 30).
+    /// </summary>
+    private static int ResolveNearExpiryThresholdDays(int? productDays, int fallback = 30)
     {
-        <= 0 => "Expired",
-        <= 3 => "Critical",
-        <= 30 => "Warning",
-        _ => "Normal"
-    };
+        if (productDays is > 0) return productDays.Value;
+        return fallback > 0 ? fallback : 30;
+    }
+
+    /// <summary>
+    /// Expired &lt; 0 (theo lịch VN UTC+7, daysLeft == 0 vẫn bán hết ngày HSD — BAT-05);
+    /// trong cửa sổ cận hạn: ≤min(3,threshold)=Critical, còn lại=Warning; ngoài cửa sổ=Normal.
+    /// </summary>
+    private static string ResolveStatus(int daysLeft, int nearExpiryThresholdDays)
+    {
+        var threshold = ResolveNearExpiryThresholdDays(nearExpiryThresholdDays);
+        if (daysLeft < 0) return "Expired";
+        if (daysLeft > threshold) return "Normal";
+        var criticalCap = Math.Min(3, threshold);
+        if (daysLeft <= criticalCap) return "Critical";
+        return "Warning";
+    }
 
     /// <summary>
     /// ĐVT nhập: DeliveryUoM (SupplierProduct) → IsPurchaseUnit → BaseUnit (giống màn SP cửa hàng).
@@ -561,7 +562,8 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
         var daysLeft = hasBatches && bs.ExpiryDate.HasValue
             ? (bs.ExpiryDate.Value.Date - now).Days
             : 9999;
-        var status = hasBatches ? ResolveStatus(daysLeft) : "Normal";
+        var nearExpiryDays = ResolveNearExpiryThresholdDays(product?.NearExpiryThresholdDays);
+        var status = hasBatches ? ResolveStatus(daysLeft, nearExpiryDays) : "Normal";
         var qty = bs.QuantityOnHand;
         var reservedQty = bs.QuantityReserved;
         var quarantinedQty = bs.QuantityQuarantined;
@@ -621,10 +623,13 @@ public class BatchRepository : GenericRepository<Batch>, IBatchRepository
             FefoDiscountPercent: bs.FefoDiscountPercent,
             IsFefoDiscountActive: bs.IsFefoDiscountActive,
             IsWeightProduct: isWeight,
-            AllowRepack: isWeight || allowRepack,
+            AllowRepack: allowRepack,
             PackagedQty: effectivePackaged,
             PackageCount: isWeight ? packageCount : 0,
-            RawSellableQty: availableQty
+            RawSellableQty: availableQty,
+            FefoDiscountStartAtUtc: bs.FefoDiscountStartAtUtc,
+            FefoDiscountEndAtUtc: bs.FefoDiscountEndAtUtc,
+            FefoDiscountStatus: FefoDiscountWindow.ResolveStatus(bs, DateTime.UtcNow)
         );
     }
 }

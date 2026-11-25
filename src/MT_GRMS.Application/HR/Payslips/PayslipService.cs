@@ -3,6 +3,7 @@ using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Expenses;
 using MT_GRMS.Application.Branches;
+using MT_GRMS.Application.HR.AttendancePolicies;
 using MT_GRMS.Application.HR.Employees;
 using MT_GRMS.Application.HR.Payslips.Dtos;
 using MT_GRMS.Application.HR.Schedules;
@@ -103,6 +104,7 @@ public class PayslipService : IPayslipService
         }
 
         var payslipCountInMonth = await _payslipRepository.GetCountByPeriodMonthAsync(request.PeriodMonth, cancellationToken);
+        var defaultCalendarStandardDays = CalculateCalendarStandardDays(year, month);
         var resultList = new List<Payslip>();
         var periodMonthShort = request.PeriodMonth.Replace("-", "").Substring(2);
 
@@ -137,14 +139,13 @@ public class PayslipService : IPayslipService
             var standardDayHours = policy?.StandardDayHours ?? 8.00m;
             if (standardDayHours <= 0) standardDayHours = 8.00m;
 
-            const decimal monthlyFormulaStandardDays = 26.00m;
             var assignedShiftCount = activeSchedulesInMonth
                 .Where(s => s.EmployeeId == emp.Id)
                 .Select(s => s.Id)
                 .Concat(empSchedules.Select(s => s.Id))
                 .Distinct()
                 .Count();
-            var standardDays = assignedShiftCount > 0 ? (decimal)assignedShiftCount : monthlyFormulaStandardDays;
+            var standardDays = Math.Max((decimal)defaultCalendarStandardDays, (decimal)assignedShiftCount);
 
             var workingSchedules = empSchedules
                 .Where(s => s.Status == ScheduleStatus.Completed && !IsPaidLeaveSchedule(s) && !IsUnpaidLeaveSchedule(s))
@@ -169,7 +170,7 @@ public class PayslipService : IPayslipService
 
             var hourlyRate = emp.SalaryType switch
             {
-                SalaryType.Monthly => (monthlyFormulaStandardDays * standardDayHours > 0) ? Math.Round(emp.BaseRate / (monthlyFormulaStandardDays * standardDayHours), 2) : 0m,
+                SalaryType.Monthly => (standardDays * standardDayHours > 0) ? Math.Round(emp.BaseRate / (standardDays * standardDayHours), 2) : 0m,
                 SalaryType.Shift => (standardDayHours > 0) ? Math.Round(emp.BaseRate / standardDayHours, 2) : 0m,
                 SalaryType.Hourly => emp.BaseRate,
                 _ => 0m
@@ -1004,6 +1005,20 @@ public class PayslipService : IPayslipService
         return s.EarlyLeaveMinutes > policy.EarlyLeaveThresholdMinutes ? s.EarlyLeaveMinutes : 0;
     }
 
+    public static int CalculateCalendarStandardDays(int year, int month)
+    {
+        var daysInMonth = DateTime.DaysInMonth(year, month);
+        var sundays = 0;
+        for (var day = 1; day <= daysInMonth; day++)
+        {
+            if (new DateTime(year, month, day).DayOfWeek == DayOfWeek.Sunday)
+            {
+                sundays++;
+            }
+        }
+        return daysInMonth - sundays;
+    }
+
     private static decimal CalculateWorkedDays(
         IReadOnlyList<EmployeeSchedule> workingSchedules,
         decimal totalWorkHours,
@@ -1011,80 +1026,16 @@ public class PayslipService : IPayslipService
         Branch? policy)
     {
         var shouldConvert = policy == null || policy.IsConvertHoursToDays;
-        var rulesJson = (policy != null && !string.IsNullOrWhiteSpace(policy.ConversionRulesJson))
-            ? policy.ConversionRulesJson
-            : DefaultConversionRulesJson;
-
-        if (shouldConvert && !string.IsNullOrWhiteSpace(rulesJson))
+        if (shouldConvert)
         {
-            try
+            decimal convertedDays = 0m;
+            var schedulesByDate = workingSchedules.GroupBy(s => s.WorkDate.Date);
+            foreach (var dayGroup in schedulesByDate)
             {
-                using var doc = JsonDocument.Parse(rulesJson);
-                if (doc.RootElement.ValueKind == JsonValueKind.Array && doc.RootElement.GetArrayLength() > 0)
-                {
-                    var rules = new List<(string Type, int FromMinutes, int ToMinutes, decimal WorkUnits)>();
-                    foreach (var item in doc.RootElement.EnumerateArray())
-                    {
-                        if (item.ValueKind != JsonValueKind.Object) continue;
-                        var type = item.TryGetProperty("type", out var tProp) ? (tProp.GetString() ?? "range") : "range";
-                        var fh = item.TryGetProperty("fromHours", out var fhProp) && fhProp.TryGetInt32(out var fhv) ? fhv : 0;
-                        var fm = item.TryGetProperty("fromMinutes", out var fmProp) && fmProp.TryGetInt32(out var fmv) ? fmv : 0;
-                        var th = item.TryGetProperty("toHours", out var thProp) && thProp.TryGetInt32(out var thv) ? thv : 0;
-                        var tm = item.TryGetProperty("toMinutes", out var tmProp) && tmProp.TryGetInt32(out var tmv) ? tmv : 0;
-                        var wu = item.TryGetProperty("workUnits", out var wuProp) && wuProp.TryGetDecimal(out var wuv) ? wuv : 0m;
-
-                        if (wu > 0m)
-                        {
-                            rules.Add((type, fh * 60 + fm, th * 60 + tm, wu));
-                        }
-                    }
-
-                    if (rules.Count > 0)
-                    {
-                        decimal convertedDays = 0m;
-                        var schedulesByDate = workingSchedules.GroupBy(s => s.WorkDate.Date);
-                        foreach (var dayGroup in schedulesByDate)
-                        {
-                            var dayHours = dayGroup.Sum(GetInShiftWorkHours);
-                            var dayMinutes = (int)Math.Round(dayHours * 60m, MidpointRounding.AwayFromZero);
-
-                            decimal matchedUnits = 0m;
-                            var matched = false;
-
-                            foreach (var rule in rules)
-                            {
-                                if (string.Equals(rule.Type, "range", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    if (dayMinutes >= rule.FromMinutes && dayMinutes < rule.ToMinutes)
-                                    {
-                                        matchedUnits = Math.Max(matchedUnits, rule.WorkUnits);
-                                        matched = true;
-                                    }
-                                }
-                                else if (string.Equals(rule.Type, "gte", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    if (dayMinutes >= rule.FromMinutes)
-                                    {
-                                        matchedUnits = Math.Max(matchedUnits, rule.WorkUnits);
-                                        matched = true;
-                                    }
-                                }
-                            }
-
-                            if (matched)
-                            {
-                                convertedDays += matchedUnits;
-                            }
-                        }
-
-                        return Math.Round(convertedDays, 2);
-                    }
-                }
+                var dayHours = dayGroup.Sum(GetInShiftWorkHours);
+                convertedDays += WorkdayConversionHelper.CalculateWorkUnits(dayHours, policy);
             }
-            catch
-            {
-                // Fallback to standard linear conversion if JSON is malformed
-            }
+            return Math.Round(convertedDays, 2);
         }
 
         return standardDayHours > 0 ? Math.Round(totalWorkHours / standardDayHours, 2) : 0m;

@@ -15,6 +15,20 @@ public class BranchProductUnitPriceDto
     public bool IsBaseUnit { get; set; }
 }
 
+/// <summary>
+/// Một nguồn nhập (NCC) của sản phẩm tại chi nhánh — dùng khi 1 BranchProduct có nhiều NCC.
+/// </summary>
+public class BranchProductSupplierSourceDto
+{
+    public Guid SupplierId { get; set; }
+    public string SupplierCode { get; set; } = string.Empty;
+    public string SupplierName { get; set; } = string.Empty;
+    public decimal CostPrice { get; set; }
+    public int MinOrderQuantity { get; set; }
+    public bool IsPrimarySupplier { get; set; }
+    public string? DeliveryUoM { get; set; }
+}
+
 public class BranchProductDto
 {
     public Guid Id { get; set; }
@@ -35,6 +49,12 @@ public class BranchProductDto
     public string? ImageUrl { get; set; }
     public decimal RetailPrice { get; set; }
     public decimal CostPrice { get; set; }
+    /// <summary>
+    /// Giá vốn trung bình tồn (WAC) theo ĐVT cơ sở:
+    /// Σ(QOH × LandedCostPerUnit) / Σ(QOH). Không tồn → fallback CostPrice (NCC/Master).
+    /// ĐVT khác = AverageCost × ConversionRate.
+    /// </summary>
+    public decimal AverageCost { get; set; }
     /// <summary>Tồn khả dụng bán (RULE-01) theo ĐVT tồn gốc — chỉ cộng lô còn hạn.</summary>
     public decimal CurrentStock { get; set; }
     public decimal MinStockLevel { get; set; }
@@ -47,6 +67,10 @@ public class BranchProductDto
     public bool HasActiveSupplierSource { get; set; } = true;
     /// <summary>true = SP đang bán tại CN nhưng mất nguồn NCC (không còn assignment Active).</summary>
     public bool LostSupplierSource { get; set; }
+    /// <summary>Tất cả NCC Active đang phục vụ CN cho SP này (1 dòng catalog = 1 list).</summary>
+    public List<BranchProductSupplierSourceDto> Suppliers { get; set; } = new();
+    /// <summary>Số NCC nguồn nhập — &gt;1 thì UI hiện "N NCC" thay vì tên.</summary>
+    public int SupplierCount { get; set; }
     public int MinOrderQuantity { get; set; } = 1;
     public string Status { get; set; } = "Active";
     public string? ShelfLocation { get; set; }
@@ -96,11 +120,22 @@ public class BranchProductQueryFilter
 }
 
 /// <summary>
+/// Cặp (ProductId, SupplierId) khi gán thủ công sản phẩm + nhà cung cấp vào chi nhánh
+/// </summary>
+public class BranchProductAssignItemCommand
+{
+    public Guid ProductId { get; set; }
+    public Guid? SupplierId { get; set; }
+}
+
+/// <summary>
 /// Lệnh gán một hoặc nhiều sản phẩm từ Master Catalog vào Chi nhánh
 /// </summary>
 public class AssignBranchProductsCommand
 {
     public List<Guid> ProductIds { get; set; } = new();
+    /// <summary>Danh sách cặp (ProductId, SupplierId) cụ thể — ưu tiên dùng khi có.</summary>
+    public List<BranchProductAssignItemCommand>? Items { get; set; }
     public decimal? DefaultRetailPrice { get; set; }
     public decimal? DefaultMinStock { get; set; }
     public int? DefaultMinOrderQuantity { get; set; }
@@ -124,6 +159,11 @@ public class UpdateBranchProductCommand
     /// (khác Master → lưu override; trùng Master → xóa override).
     /// </summary>
     public List<BranchProductUnitPriceDto>? UnitPrices { get; set; }
+    /// <summary>
+    /// Giá đóng khay đ/kg (PROCESSED). Chỉ áp khi Product.AllowRepack.
+    /// Hiện lưu trên Master Product (cùng giá khay mọi CN) — null = không đổi.
+    /// </summary>
+    public decimal? ProcessedSellingPricePerKg { get; set; }
 }
 
 /// <summary>

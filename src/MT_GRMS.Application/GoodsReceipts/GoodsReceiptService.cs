@@ -38,7 +38,21 @@ public class GoodsReceiptService : IGoodsReceiptService
         CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        return await _repository.GetPagedAsync(tenantId, query, cancellationToken);
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, query.BranchId);
+        var scopedQuery = new GoodsReceiptFilterQuery
+        {
+            BranchId = effectiveBranchId,
+            SupplierId = query.SupplierId,
+            Status = query.Status,
+            Keyword = query.Keyword,
+            FromDate = query.FromDate,
+            ToDate = query.ToDate,
+            IsTodayDelivery = query.IsTodayDelivery,
+            HasMismatch = query.HasMismatch,
+            PageIndex = query.PageIndex,
+            PageSize = query.PageSize
+        };
+        return await _repository.GetPagedAsync(tenantId, scopedQuery, cancellationToken);
     }
 
     public async Task<GoodsReceiptDto> GetGoodsReceiptByIdAsync(Guid id, CancellationToken cancellationToken = default)
@@ -50,13 +64,15 @@ public class GoodsReceiptService : IGoodsReceiptService
             throw new NotFoundException("Phiếu nhập kho", id);
         }
 
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, receipt.BranchId);
         return MapToDto(receipt);
     }
 
     public async Task<List<PurchaseOrderLookupDto>> GetPoLookupAsync(Guid? branchId, CancellationToken cancellationToken = default)
     {
         var tenantId = _tenantContext.CurrentTenantId ?? string.Empty;
-        var pos = await _repository.GetEligiblePurchaseOrdersAsync(tenantId, branchId, cancellationToken);
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, branchId);
+        var pos = await _repository.GetEligiblePurchaseOrdersAsync(tenantId, effectiveBranchId, cancellationToken);
 
         return pos.Select(po => new PurchaseOrderLookupDto
         {
@@ -93,6 +109,7 @@ public class GoodsReceiptService : IGoodsReceiptService
             throw new NotFoundException("Đơn đặt hàng PO", poIdOrCode);
         }
 
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, po.BranchId);
         EnsureDeliveryDateReachedForReceipt(po);
 
         // PO thường: chặn nếu đã có GRN active. PO đổi hàng: chỉ chặn khi còn phiếu nháp.
@@ -132,7 +149,9 @@ public class GoodsReceiptService : IGoodsReceiptService
                 ProductName = d.Product?.Name ?? string.Empty,
                 Unit = ResolveInboundUnit(d.DeliveryUoM, d.PurchaseUnitNameSnapshot, d.Product),
                 HasBatches = d.Product?.HasBatches ?? false,
-                OrderedQty = d.OrderedQty ?? d.FinalQty ?? 0,
+                OrderedQty = string.Equals(po.SourceType, "SUPPLIER_RETURN", StringComparison.OrdinalIgnoreCase)
+                    ? Math.Max(0m, (d.OrderedQty ?? d.FinalQty ?? 0m) - d.ReceivedQty)
+                    : (d.OrderedQty ?? d.FinalQty ?? 0m),
                 UnitPrice = d.UnitPrice,
                 LineAmount = d.LineAmount
             }).ToList()
@@ -150,6 +169,17 @@ public class GoodsReceiptService : IGoodsReceiptService
         if (po == null || po.IsDeleted)
         {
             throw new NotFoundException("Đơn đặt hàng PO", command.PurchaseOrderId);
+        }
+
+        // Kiểm tra quyền chi nhánh theo PO gốc và đối chiếu BranchId/SupplierId (GRN-02)
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, po.BranchId);
+        if (command.BranchId != Guid.Empty && command.BranchId != po.BranchId)
+        {
+            throw new BusinessException("PO_BRANCH_MISMATCH", "Chi nhánh trên phiếu nhập không khớp với chi nhánh của đơn đặt hàng PO.");
+        }
+        if (command.SupplierId != Guid.Empty && command.SupplierId != po.SupplierId)
+        {
+            throw new BusinessException("PO_SUPPLIER_MISMATCH", "Nhà cung cấp trên phiếu nhập không khớp với nhà cung cấp của đơn đặt hàng PO.");
         }
 
         EnsureDeliveryDateReachedForReceipt(po);
@@ -186,8 +216,8 @@ public class GoodsReceiptService : IGoodsReceiptService
             TenantId = tenantId,
             Code = code,
             PurchaseOrderId = command.PurchaseOrderId,
-            SupplierId = command.SupplierId,
-            BranchId = command.BranchId,
+            SupplierId = po.SupplierId,
+            BranchId = po.BranchId,
             InvoiceNo = command.InvoiceNo,
             ReceivedAtUtc = command.ReceivedAtUtc ?? DateTime.UtcNow,
             ReceiverUserId = actorUserId,
@@ -199,12 +229,47 @@ public class GoodsReceiptService : IGoodsReceiptService
             CreatedAt = DateTime.UtcNow
         };
 
-        // 3. Tính toán và xác thực từng dòng sản phẩm
+        // 3. Tính toán và xác thực từng dòng sản phẩm (GRN-03: giá & SL đặt lấy từ PO DB, chặn giá/chiết khấu/VAT/HSD bất hợp lệ)
+        if (command.Lines == null || command.Lines.Count == 0)
+        {
+            throw new BusinessException("LINES_REQUIRED", "Phiếu nhập kho bắt buộc phải có ít nhất 1 dòng sản phẩm.");
+        }
+        if (command.DiscountAmount < 0)
+        {
+            throw new BusinessException("INVALID_DISCOUNT", "Chiết khấu không được âm.");
+        }
+        if (command.VatPercent < 0 || command.VatPercent > 100)
+        {
+            throw new BusinessException("INVALID_VAT", "Thuế suất VAT phải nằm trong khoảng 0% đến 100%.");
+        }
+
         decimal subTotal = 0;
         foreach (var l in command.Lines)
         {
+            var poDetail = po.Details.FirstOrDefault(d =>
+                (l.PurchaseOrderDetailId.HasValue && d.Id == l.PurchaseOrderDetailId.Value)
+                || d.ProductId == l.ProductId);
+            if (poDetail != null)
+            {
+                l.PurchaseOrderDetailId ??= poDetail.Id;
+                l.OrderedQty = poDetail.OrderedQty ?? poDetail.FinalQty ?? l.OrderedQty;
+                l.UnitPrice = poDetail.UnitPrice;
+            }
+            if (l.UnitPrice < 0)
+            {
+                throw new BusinessException("INVALID_UNIT_PRICE", "Đơn giá sản phẩm không được âm.");
+            }
+            if (l.RejectedQty < 0)
+            {
+                throw new BusinessException("INVALID_QTY", "Số lượng từ chối không được âm.");
+            }
             var lineAmount = l.AcceptedQty * l.UnitPrice;
             subTotal += lineAmount;
+        }
+
+        if (command.DiscountAmount > subTotal && subTotal > 0)
+        {
+            throw new BusinessException("INVALID_DISCOUNT", "Chiết khấu không được vượt quá tổng tiền hàng.");
         }
 
         receipt.SubTotal = subTotal;
@@ -266,6 +331,12 @@ public class GoodsReceiptService : IGoodsReceiptService
             if (rejectedQty > 0 && string.IsNullOrWhiteSpace(l.RejectionReason))
             {
                 throw new BusinessException("REJECTION_REASON_REQUIRED", $"Dòng sản phẩm có {rejectedQty} hàng bị từ chối bắt buộc phải có lý do từ chối.");
+            }
+
+            if (l.ManufactureDate.HasValue && l.ExpiryDate.HasValue
+                && l.ExpiryDate.Value.Date <= l.ManufactureDate.Value.Date)
+            {
+                throw new BusinessException("INVALID_EXPIRY_DATE", "Hạn sử dụng (EXP) phải lớn hơn ngày sản xuất (MFG).");
             }
 
             if (l.ManageBatch && l.AcceptedQty > 0)
@@ -369,6 +440,8 @@ public class GoodsReceiptService : IGoodsReceiptService
             throw new NotFoundException("Phiếu nhập kho", id);
         }
 
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, receipt.BranchId);
+
         if (!string.Equals(receipt.Status, "DRAFT", StringComparison.OrdinalIgnoreCase))
         {
             throw new BusinessException(
@@ -397,10 +470,53 @@ public class GoodsReceiptService : IGoodsReceiptService
             receipt.Lines.Remove(existing);
         }
 
+        if (command.Lines == null || command.Lines.Count == 0)
+        {
+            throw new BusinessException("LINES_REQUIRED", "Phiếu nhập kho bắt buộc phải có ít nhất 1 dòng sản phẩm.");
+        }
+        if (command.DiscountAmount < 0)
+        {
+            throw new BusinessException("INVALID_DISCOUNT", "Chiết khấu không được âm.");
+        }
+        if (command.VatPercent < 0 || command.VatPercent > 100)
+        {
+            throw new BusinessException("INVALID_VAT", "Thuế suất VAT phải nằm trong khoảng 0% đến 100%.");
+        }
+
         decimal subTotal = 0;
         foreach (var l in command.Lines)
         {
+            if (po != null)
+            {
+                var poDetail = po.Details.FirstOrDefault(d =>
+                    (l.PurchaseOrderDetailId.HasValue && d.Id == l.PurchaseOrderDetailId.Value)
+                    || d.ProductId == l.ProductId);
+                if (poDetail != null)
+                {
+                    l.PurchaseOrderDetailId ??= poDetail.Id;
+                    l.OrderedQty = poDetail.OrderedQty ?? poDetail.FinalQty ?? l.OrderedQty;
+                    l.UnitPrice = poDetail.UnitPrice;
+                }
+            }
+            if (l.UnitPrice < 0)
+            {
+                throw new BusinessException("INVALID_UNIT_PRICE", "Đơn giá sản phẩm không được âm.");
+            }
+            if (l.RejectedQty < 0)
+            {
+                throw new BusinessException("INVALID_QTY", "Số lượng từ chối không được âm.");
+            }
+            if (l.ManufactureDate.HasValue && l.ExpiryDate.HasValue
+                && l.ExpiryDate.Value.Date <= l.ManufactureDate.Value.Date)
+            {
+                throw new BusinessException("INVALID_EXPIRY_DATE", "Hạn sử dụng (EXP) phải lớn hơn ngày sản xuất (MFG).");
+            }
             subTotal += l.AcceptedQty * l.UnitPrice;
+        }
+
+        if (command.DiscountAmount > subTotal && subTotal > 0)
+        {
+            throw new BusinessException("INVALID_DISCOUNT", "Chiết khấu không được vượt quá tổng tiền hàng.");
         }
 
         receipt.SubTotal = subTotal;
@@ -447,12 +563,23 @@ public class GoodsReceiptService : IGoodsReceiptService
                 throw new BusinessException("REJECTION_REASON_REQUIRED", $"Dòng sản phẩm có {rejectedQty} hàng bị từ chối bắt buộc phải có lý do từ chối.");
             }
 
+            if (l.ManageBatch && l.AcceptedQty > 0)
+            {
+                if (!l.ManufactureDate.HasValue)
+                    throw new BusinessException("MFG_REQUIRED", "Dòng đang quản lý batch bắt buộc phải nhập ngày sản xuất (MFG).");
+                if (!l.ExpiryDate.HasValue)
+                    throw new BusinessException("EXPIRY_DATE_REQUIRED", "Dòng đang quản lý batch bắt buộc phải nhập hạn sử dụng (EXP).");
+                if (l.ExpiryDate.Value.Date < receipt.ReceivedAtUtc.Date)
+                    throw new BusinessException("EXPIRY_PAST", "Hạn sử dụng không được trước ngày nhập hàng.");
+            }
+
             var lineAmount = l.AcceptedQty * l.UnitPrice;
             var weight = subTotal > 0 ? (lineAmount / subTotal) : 0;
             var discountAlloc = Math.Round(command.DiscountAmount * weight, 2);
             var purchaseSubtotal = lineAmount - discountAlloc;
             var vatAlloc = Math.Round(purchaseSubtotal * (command.VatPercent / 100m), 2);
             var purchaseUnitCost = l.UnitPrice;
+            var shouldManageBatch = l.ManageBatch || !string.IsNullOrWhiteSpace(l.BatchCode) || l.ExpiryDate.HasValue || l.ManufactureDate.HasValue;
 
             receipt.Lines.Add(new GoodsReceiptLine
             {
@@ -467,9 +594,9 @@ public class GoodsReceiptService : IGoodsReceiptService
                 RejectedQty = rejectedQty,
                 UnitPrice = l.UnitPrice,
                 LineAmount = lineAmount,
-                BatchCode = l.ManageBatch && !string.IsNullOrWhiteSpace(l.BatchCode) ? l.BatchCode.Trim() : null,
-                ManufactureDate = l.ManageBatch ? l.ManufactureDate : null,
-                ExpiryDate = l.ManageBatch ? l.ExpiryDate : null,
+                BatchCode = shouldManageBatch && !string.IsNullOrWhiteSpace(l.BatchCode) ? l.BatchCode.Trim() : null,
+                ManufactureDate = shouldManageBatch ? l.ManufactureDate : null,
+                ExpiryDate = shouldManageBatch ? l.ExpiryDate : null,
                 DiscountAllocated = discountAlloc,
                 VatAllocated = vatAlloc,
                 PurchaseUnitCost = purchaseUnitCost,
@@ -495,6 +622,8 @@ public class GoodsReceiptService : IGoodsReceiptService
         {
             throw new NotFoundException("Phiếu nhập kho", id);
         }
+
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, receipt.BranchId);
 
         // Idempotency (Mục 7.10)
         if (receipt.Status == "COMPLETED")
@@ -556,6 +685,8 @@ public class GoodsReceiptService : IGoodsReceiptService
         {
             throw new NotFoundException("Phiếu nhập kho", id);
         }
+
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, receipt.BranchId);
 
         // Quy tắc Mục 8.1 & 11: Chỉ phiếu DRAFT mới được hủy, không cho hủy COMPLETED
         if (receipt.Status == "COMPLETED")
@@ -619,10 +750,9 @@ public class GoodsReceiptService : IGoodsReceiptService
     }
 
     /// <summary>
-    /// Chỉ cho phép nhập kho từ ngày giao PO trở đi (so theo lịch VN UTC+7).
-    /// TEMP (test/UAT): bỏ chặn ngày giao — đặt lại false khi ship thật.
+    /// Chỉ cho phép nhập kho từ ngày giao PO trở đi (so theo lịch VN UTC+7) (GRN-04).
     /// </summary>
-    private static readonly bool AllowReceiveBeforeDeliveryDate = true;
+    private static readonly bool AllowReceiveBeforeDeliveryDate = false;
 
     /// <summary>Đơn vị nhập: DeliveryUoM / snapshot PO → ProductUnit IsPurchaseUnit → BaseUnit.</summary>
     private static string ResolveInboundUnit(string? deliveryUoM, string? purchaseUnitSnapshot, Product? product)
@@ -1049,6 +1179,11 @@ public class GoodsReceiptService : IGoodsReceiptService
                 }
                 else
                 {
+                    if (!receipt.PaymentDueDate.HasValue)
+                    {
+                        receipt.PaymentDueDate = txDate.Date.AddDays(Math.Max(0, supplier.PaymentTermDays));
+                    }
+
                     supplier.CurrentDebt = debtAfterInvoice;
                     supplier.UpdatedAt = DateTime.UtcNow;
                 }
@@ -1182,11 +1317,11 @@ public class GoodsReceiptService : IGoodsReceiptService
             PaymentMethod = gr.PaymentMethod,
             PaymentDueDate = gr.PaymentDueDate,
             TotalItems = gr.Lines.Count,
-            TotalOrderedQty = gr.Lines.Sum(l => l.OrderedQty),
+            TotalOrderedQty = gr.Lines.GroupBy(l => l.PurchaseOrderDetailId ?? l.ProductId).Sum(g => g.Max(l => l.OrderedQty)),
             TotalReceivedQty = gr.Lines.Sum(l => l.DeliveredQty),
             TotalAcceptedQty = gr.Lines.Sum(l => l.AcceptedQty),
             TotalRejectedQty = gr.Lines.Sum(l => l.RejectedQty),
-            HasMismatch = gr.Lines.Any(l => l.AcceptedQty != l.OrderedQty || l.RejectedQty > 0),
+            HasMismatch = gr.Lines.GroupBy(l => l.PurchaseOrderDetailId ?? l.ProductId).Any(g => g.Sum(l => l.AcceptedQty) != g.Max(l => l.OrderedQty) || g.Sum(l => l.RejectedQty) > 0),
             Note = gr.Note,
             Lines = gr.Lines.Select(l => new GoodsReceiptLineDto
             {
