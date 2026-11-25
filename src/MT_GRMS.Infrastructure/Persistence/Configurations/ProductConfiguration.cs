@@ -1,4 +1,8 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Enums;
@@ -32,8 +36,14 @@ public class ProductConfiguration : IEntityTypeConfiguration<Product>
             .HasDefaultValue(ProductStatus.Active)
             .HasSentinel((ProductStatus)0);
         builder.Property(x => x.ImageUrl).HasMaxLength(500);
-        builder.Property(x => x.ImageUrlsJson).HasColumnType("text").IsRequired(false);
-        builder.Ignore(x => x.ImageUrls);
+        var imageUrlsComparer = new ValueComparer<List<string>>(
+            (c1, c2) => (c1 ?? new List<string>()).SequenceEqual(c2 ?? new List<string>(), StringComparer.Ordinal),
+            c => (c ?? new List<string>()).Aggregate(0, (a, v) => HashCode.Combine(a, StringComparer.Ordinal.GetHashCode(v))),
+            c => c == null ? new List<string>() : c.ToList());
+        builder.Property(x => x.ImageUrls)
+            .HasColumnName("ImageUrls")
+            .HasColumnType("text[]")
+            .Metadata.SetValueComparer(imageUrlsComparer);
         builder.Property(x => x.Description).HasMaxLength(1000);
         builder.Property(x => x.InternalNote).HasMaxLength(500);
         builder.Property(x => x.HasBatches).HasDefaultValue(false);

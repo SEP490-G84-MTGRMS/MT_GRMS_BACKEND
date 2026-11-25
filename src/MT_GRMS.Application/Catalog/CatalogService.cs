@@ -167,7 +167,12 @@ public class CatalogService : ICatalogService
             throw new ArgumentException("Tên sản phẩm không được vượt quá 200 ký tự.");
         }
 
-        var trimmedBaseUnit = string.IsNullOrWhiteSpace(request.BaseUnit) ? "Cái" : request.BaseUnit.Trim();
+        if (string.IsNullOrWhiteSpace(request.BaseUnit))
+        {
+            throw new ArgumentException("Tên đơn vị cơ bản không được để trống.");
+        }
+
+        var trimmedBaseUnit = request.BaseUnit.Trim();
         if (trimmedBaseUnit.Length > 30)
         {
             throw new ArgumentException("Tên đơn vị cơ bản không được vượt quá 30 ký tự.");
@@ -269,15 +274,7 @@ public class CatalogService : ICatalogService
             }
         }
 
-        var imageUrls = new List<string>();
-        if (request.ImageUrls != null && request.ImageUrls.Any())
-        {
-            imageUrls = request.ImageUrls.Where(u => !string.IsNullOrWhiteSpace(u)).Select(u => u.Trim()).ToList();
-        }
-        else if (!string.IsNullOrWhiteSpace(request.ImageUrl))
-        {
-            imageUrls.Add(request.ImageUrl.Trim());
-        }
+        var imageUrls = BuildOrderedImageList(request.ImageUrl, request.ImageUrls);
 
         if (imageUrls.Any(u => !CloudinaryDataUrlHelper.IsDataImageUrl(u) && u.Length > 500))
         {
@@ -357,7 +354,12 @@ public class CatalogService : ICatalogService
             throw new ArgumentException("Tên sản phẩm không được vượt quá 200 ký tự.");
         }
 
-        if (!string.IsNullOrWhiteSpace(request.BaseUnit) && request.BaseUnit.Trim().Length > 30)
+        if (string.IsNullOrWhiteSpace(request.BaseUnit))
+        {
+            throw new ArgumentException("Tên đơn vị cơ bản không được để trống.");
+        }
+
+        if (request.BaseUnit.Trim().Length > 30)
         {
             throw new ArgumentException("Tên đơn vị cơ bản không được vượt quá 30 ký tự.");
         }
@@ -555,9 +557,14 @@ public class CatalogService : ICatalogService
 
         if (request.ImageUrls != null)
         {
+            var orderedInputs = BuildOrderedImageList(request.ImageUrl, request.ImageUrls);
+            if (orderedInputs.Any(u => !CloudinaryDataUrlHelper.IsDataImageUrl(u) && u.Length > 500))
+            {
+                throw new ArgumentException("Đường dẫn ảnh hàng hóa không được vượt quá 500 ký tự.");
+            }
             product.ImageUrls = await CloudinaryDataUrlHelper.ResolveImageUrlsAsync(
                 _cloudinaryService,
-                request.ImageUrls,
+                orderedInputs,
                 "mtgrms/products",
                 $"product-{product.ProductCode}",
                 cancellationToken);
@@ -568,17 +575,22 @@ public class CatalogService : ICatalogService
             {
                 product.ImageUrls = new List<string>();
             }
-            else if (!product.ImageUrls.Contains(request.ImageUrl.Trim()))
+            else
             {
+                var trimmedPrimary = request.ImageUrl.Trim();
+                if (!CloudinaryDataUrlHelper.IsDataImageUrl(trimmedPrimary) && trimmedPrimary.Length > 500)
+                {
+                    throw new ArgumentException("Đường dẫn ảnh hàng hóa không được vượt quá 500 ký tự.");
+                }
                 var resolvedUrl = await CloudinaryDataUrlHelper.ResolveImageUrlAsync(
                     _cloudinaryService,
-                    request.ImageUrl,
+                    trimmedPrimary,
                     "mtgrms/products",
                     $"product-{product.ProductCode}",
                     cancellationToken);
                 if (!string.IsNullOrWhiteSpace(resolvedUrl))
                 {
-                    product.ImageUrls = new List<string> { resolvedUrl };
+                    product.ImageUrls = BuildOrderedImageList(resolvedUrl, product.ImageUrls);
                 }
             }
         }
@@ -587,6 +599,36 @@ public class CatalogService : ICatalogService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return MapToResponse(product, CanViewCostPrice());
+    }
+
+    private static List<string> BuildOrderedImageList(string? primaryImageUrl, IEnumerable<string>? imageUrls)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        if (!string.IsNullOrWhiteSpace(primaryImageUrl))
+        {
+            var trimmedPrimary = primaryImageUrl.Trim();
+            if (seen.Add(trimmedPrimary))
+            {
+                result.Add(trimmedPrimary);
+            }
+        }
+
+        if (imageUrls != null)
+        {
+            foreach (var raw in imageUrls)
+            {
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                var trimmed = raw.Trim();
+                if (seen.Add(trimmed))
+                {
+                    result.Add(trimmed);
+                }
+            }
+        }
+
+        return result;
     }
 
     public async Task DeleteProductAsync(Guid id, CancellationToken cancellationToken = default)

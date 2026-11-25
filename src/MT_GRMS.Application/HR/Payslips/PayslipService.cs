@@ -555,6 +555,7 @@ public class PayslipService : IPayslipService
             cancellationToken);
 
         payslip.Status = PayslipStatus.Paid;
+        payslip.RemainingDebt = 0m;
         payslip.PaidAt = paidAtVn;
         payslip.PaymentMethod = method;
         payslip.PaidBy = _tenantContext.CurrentUserId.ToString();
@@ -641,6 +642,7 @@ public class PayslipService : IPayslipService
                 cancellationToken);
 
             payslip.Status = PayslipStatus.Paid;
+            payslip.RemainingDebt = 0m;
             payslip.PaidAt = paidAtVn;
             payslip.PaymentMethod = method;
             payslip.PaidBy = _tenantContext.CurrentUserId.ToString();

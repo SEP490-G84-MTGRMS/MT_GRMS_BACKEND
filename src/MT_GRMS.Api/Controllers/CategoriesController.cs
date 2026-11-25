@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
@@ -46,6 +47,7 @@ public class CategoriesController : BaseApiController
     /// Tạo mới một nhóm hàng
     /// </summary>
     [HttpPost]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<IActionResult> Create([FromBody] CategoryCreateRequest request, CancellationToken cancellationToken)
     {
         var result = await _categoryService.CreateAsync(request, cancellationToken);
@@ -56,6 +58,7 @@ public class CategoriesController : BaseApiController
     /// Cập nhật thông tin nhóm hàng
     /// </summary>
     [HttpPut("{id:guid}")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<IActionResult> Update(Guid id, [FromBody] CategoryUpdateRequest request, CancellationToken cancellationToken)
     {
         var result = await _categoryService.UpdateAsync(id, request, cancellationToken);
@@ -66,6 +69,7 @@ public class CategoriesController : BaseApiController
     /// Xóa mềm nhóm hàng (chặn nếu còn sản phẩm)
     /// </summary>
     [HttpDelete("{id:guid}")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
         await _categoryService.DeleteAsync(id, cancellationToken);

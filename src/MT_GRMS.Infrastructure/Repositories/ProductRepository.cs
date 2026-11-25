@@ -18,6 +18,23 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
         _tenantContext = tenantContext;
     }
 
+    private static Expression<Func<Product, bool>> CombineOr(IEnumerable<Expression<Func<Product, bool>>> predicates)
+    {
+        var param = Expression.Parameter(typeof(Product), "p");
+        Expression? body = null;
+        foreach (var pred in predicates)
+        {
+            var replaced = new ParameterReplacer(pred.Parameters[0], param).Visit(pred.Body)!;
+            body = body == null ? replaced : Expression.OrElse(body, replaced);
+        }
+        return Expression.Lambda<Func<Product, bool>>(body ?? Expression.Constant(true), param);
+    }
+
+    private sealed class ParameterReplacer(ParameterExpression source, ParameterExpression target) : ExpressionVisitor
+    {
+        protected override Expression VisitParameter(ParameterExpression node) => node == source ? target : base.VisitParameter(node);
+    }
+
     public async Task<(IReadOnlyList<Product> Items, int TotalCount)> GetPagedListAsync(
         ProductQueryFilter filter,
         CancellationToken cancellationToken = default)
@@ -34,7 +51,30 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
             query = query.Where(p =>
                 p.Name.ToLower().Contains(term) ||
                 p.ProductCode.ToLower().Contains(term) ||
-                (p.Barcode != null && p.Barcode.ToLower().Contains(term)));
+                (p.Barcode != null && p.Barcode.ToLower().Contains(term)) ||
+                p.Units.Any(u => !u.IsDeleted && u.Barcode != null && u.Barcode.ToLower().Contains(term)));
+        }
+
+        var skuTokens = filter.Skus?.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim().ToLower()).Distinct().ToList();
+        if (skuTokens is { Count: > 0 })
+        {
+            query = query.Where(CombineOr(skuTokens.Select<string, Expression<Func<Product, bool>>>(t =>
+                p => p.ProductCode.ToLower().Contains(t))));
+        }
+
+        var nameTokens = filter.Names?.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim().ToLower()).Distinct().ToList();
+        if (nameTokens is { Count: > 0 })
+        {
+            query = query.Where(CombineOr(nameTokens.Select<string, Expression<Func<Product, bool>>>(t =>
+                p => p.Name.ToLower().Contains(t))));
+        }
+
+        var barcodeTokens = filter.Barcodes?.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim().ToLower()).Distinct().ToList();
+        if (barcodeTokens is { Count: > 0 })
+        {
+            query = query.Where(CombineOr(barcodeTokens.Select<string, Expression<Func<Product, bool>>>(t =>
+                p => (p.Barcode != null && p.Barcode.ToLower().Contains(t)) ||
+                     p.Units.Any(u => !u.IsDeleted && u.Barcode != null && u.Barcode.ToLower().Contains(t)))));
         }
 
         var skuTerms = CleanTerms(filter.Skus);
@@ -70,7 +110,12 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
 
         if (!string.IsNullOrWhiteSpace(filter.Status))
         {
-            if (Enum.TryParse<ProductStatus>(filter.Status.Trim(), true, out var prodStatus))
+            var normalizedStatus = filter.Status.Trim();
+            if (normalizedStatus.Equals("Discontinued", StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedStatus = nameof(ProductStatus.Inactive);
+            }
+            if (Enum.TryParse<ProductStatus>(normalizedStatus, true, out var prodStatus))
             {
                 query = query.Where(p => p.Status == prodStatus);
             }
