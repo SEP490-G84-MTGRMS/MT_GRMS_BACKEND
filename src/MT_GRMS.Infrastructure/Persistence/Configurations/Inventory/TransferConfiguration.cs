@@ -29,6 +29,7 @@ public class TransferConfiguration : IEntityTypeConfiguration<Transfer>
         builder.Property(x => x.IsFavorite).HasDefaultValue(false);
         builder.Property(x => x.HasDiscrepancy).HasDefaultValue(false);
         builder.Property(x => x.IsStockReserved).HasDefaultValue(false);
+        builder.Property(x => x.RowVersion).IsConcurrencyToken().HasDefaultValue(1);
 
         builder.HasIndex(x => new { x.TenantId, x.TransferCode }).IsUnique();
 

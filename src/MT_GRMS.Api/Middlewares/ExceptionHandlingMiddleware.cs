@@ -66,7 +66,7 @@ public class ExceptionHandlingMiddleware
 
             case InvalidOperationException invEx:
                 statusCode = (int)HttpStatusCode.UnprocessableEntity;
-                apiResponse = ApiResponse<object>.Fail("INVALID_OPERATION", invEx.Message);
+                apiResponse = ApiResponse<object>.Fail("INVALID_OPERATION", invEx.Message, statusCode);
                 _logger.LogWarning(invEx, "Invalid operation occurred: {Message}", invEx.Message);
                 break;
 
@@ -119,7 +119,7 @@ public class ExceptionHandlingMiddleware
                     var c when c != null && c.Contains("IX_Branches", StringComparison.OrdinalIgnoreCase) => "Mã chi nhánh bị trùng lặp trong cửa hàng.",
                     _ => "Dữ liệu bị trùng lặp trong hệ thống (vi phạm ràng buộc duy nhất)."
                 };
-                apiResponse = ApiResponse<object>.Fail("DUPLICATE_KEY", friendlyMsg);
+                apiResponse = ApiResponse<object>.Fail("DUPLICATE_KEY", friendlyMsg, statusCode);
                 _logger.LogWarning(dbUpdateEx, "Postgres unique constraint 23505: {Constraint}", pgEx.ConstraintName);
                 break;
 

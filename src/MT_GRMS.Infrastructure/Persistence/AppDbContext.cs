@@ -344,6 +344,10 @@ public partial class AppDbContext : DbContext
                     // CONC-03: Optimistic Concurrency token increment for BranchStock
                     branchStock.RowVersion++;
                 }
+                else if (entry.Entity is Transfer modifiedTransfer)
+                {
+                    modifiedTransfer.RowVersion++;
+                }
                 else if (entry.Entity is Customer modifiedCustomer)
                 {
                     modifiedCustomer.RowVersion = Guid.NewGuid().ToByteArray();

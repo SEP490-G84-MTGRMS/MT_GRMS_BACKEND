@@ -9,8 +9,10 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Notifications;
 using MT_GRMS.Application.Transfers;
 using MT_GRMS.Domain.Entities.Catalog;
+using MT_GRMS.Domain.Entities.Identity;
 using MT_GRMS.Domain.Entities.Inventory;
 using MT_GRMS.Domain.Entities.SaaS;
+using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Entities.System;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
@@ -78,7 +80,14 @@ public class TransferBusinessFlowIntegrationTests
             historyRepo,
             tenantContext,
             uow,
-            new NotificationOutbox(new GenericRepository<OutboxMessage>(context)));
+            new NotificationOutbox(new GenericRepository<OutboxMessage>(context)),
+            packages: new GenericRepository<Package>(context),
+            productUnits: new GenericRepository<ProductUnit>(context),
+            transferRequests: new GenericRepository<TransferRequest>(context),
+            transferRequestDetails: new GenericRepository<TransferRequestDetail>(context),
+            transferRepository: new TransferRepository(context),
+            branchProducts: new GenericRepository<BranchProduct>(context),
+            userRepository: new UserRepository(context));
 
         return (service, context);
     }
@@ -536,5 +545,300 @@ public class TransferBusinessFlowIntegrationTests
         var dispatchedSourceStock = context.BranchStocks.Single(x => x.BranchId == firstTransfer.FromBranchId && x.ProductId == productId);
         Assert.Equal(0m, dispatchedSourceStock.QuantityReserved);
         Assert.Equal(0m, dispatchedSourceStock.QuantityOnHand);
+    }
+
+    [Fact]
+    public async Task ReceiveTransfer_CreatesAndActivatesBranchProduct_AndPreventsDuplicateBranchStock_AndRequiresShortageReason()
+    {
+        var dbName = $"TransferDb_Bug041_061_{Guid.NewGuid()}";
+        var tenant = new FakeTenantContext();
+        var (service, context) = CreateServiceScope(dbName, tenant);
+        var (branchA, branchB, prodA, prodB) = await SeedBaseDataAsync(context, tenant.CurrentTenantId);
+
+        // prodB already has an Inactive BranchProduct at branchB
+        context.BranchProducts.Add(new BranchProduct
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.CurrentTenantId,
+            BranchId = branchB,
+            ProductId = prodB,
+            Status = "Inactive"
+        });
+        context.BranchStocks.AddRange(
+            new BranchStock
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenant.CurrentTenantId,
+                BranchId = branchA,
+                ProductId = prodA,
+                BatchCode = "L-SAME",
+                ExpiryDate = DateTime.UtcNow.AddMonths(6),
+                QuantityOnHand = 50m,
+                LandedCostPerUnit = 18_000m
+            },
+            new BranchStock
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenant.CurrentTenantId,
+                BranchId = branchA,
+                ProductId = prodB,
+                BatchCode = "L-B",
+                ExpiryDate = DateTime.UtcNow.AddMonths(6),
+                QuantityOnHand = 20m,
+                LandedCostPerUnit = 8_000m
+            });
+        await context.SaveChangesAsync();
+
+        // Create atomic Pending transfer with 2 lines of the SAME product/batch + 1 line of prodB (BUG-057 & BUG-061)
+        var created = await service.CreateTransferAsync(new CreateTransferRequest(
+            FromBranchId: branchA,
+            ToBranchId: branchB,
+            DispatchNow: false,
+            ExpectedDeliveryDate: null,
+            Note: "Gửi ngay",
+            Items:
+            [
+                new(prodA, 10m, "Lon", "L-SAME", null, 18_000m),
+                new(prodA, 5m, "Lon", "L-SAME", null, 18_000m),
+                new(prodB, 10m, "Gói", "L-B", null, 8_000m)
+            ],
+            SubmitImmediately: true), CancellationToken.None);
+
+        Assert.Equal("Pending", created.Status);
+        Assert.NotNull(created.SubmittedAt);
+        Assert.Contains(created.History, h => h.Action == "Created");
+        Assert.Contains(created.History, h => h.Action == "Submitted");
+
+        var dispatched = await service.DispatchTransferAsync(created.Id, CancellationToken.None);
+
+        // Shortage without damage and without reason must throw (BUG-061)
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.ReceiveTransferAsync(dispatched.Id, new ReceiveTransferRequest(
+                Note: null,
+                Items:
+                [
+                    new(dispatched.Items[0].Id, 8m, 0m, null),
+                    new(dispatched.Items[1].Id, 5m, 0m, null),
+                    new(dispatched.Items[2].Id, 10m, 0m, null)
+                ]), CancellationToken.None));
+
+        // Receive with shortage reason succeeds
+        var received = await service.ReceiveTransferAsync(dispatched.Id, new ReceiveTransferRequest(
+            Note: "Kiểm nhận thực tế",
+            Items:
+            [
+                new(dispatched.Items[0].Id, 8m, 0m, "Thiếu 2 lon khi giao"),
+                new(dispatched.Items[1].Id, 5m, 0m, null),
+                new(dispatched.Items[2].Id, 10m, 0m, null)
+            ]), CancellationToken.None);
+
+        Assert.Equal("Completed", received.Status);
+        Assert.Equal("ReceivedWithDiscrepancy", received.CompletionResult);
+
+        // Only 1 BranchStock row created for (branchB, prodA, L-SAME) with merged qty 8 + 5 = 13 (BUG-061)
+        var destStocksA = await context.BranchStocks
+            .Where(s => s.BranchId == branchB && s.ProductId == prodA && s.BatchCode == "L-SAME")
+            .ToListAsync();
+        Assert.Single(destStocksA);
+        Assert.Equal(13m, destStocksA[0].QuantityOnHand);
+
+        // BUG-041: BranchProduct auto-created Active for prodA and reactivated to Active for prodB
+        var bpA = await context.BranchProducts.SingleOrDefaultAsync(bp => bp.BranchId == branchB && bp.ProductId == prodA);
+        var bpB = await context.BranchProducts.SingleOrDefaultAsync(bp => bp.BranchId == branchB && bp.ProductId == prodB);
+        Assert.NotNull(bpA);
+        Assert.Equal("Active", bpA.Status);
+        Assert.NotNull(bpB);
+        Assert.Equal("Active", bpB.Status);
+    }
+
+    [Fact]
+    public async Task ExpiredBatch_CreatorName_ReturnTransferNullReceivedAt_AndCompletionResultFilter()
+    {
+        var dbName = $"TransferDb_Bug046_056_060_{Guid.NewGuid()}";
+        var tenant = new FakeTenantContext();
+        var (service, context) = CreateServiceScope(dbName, tenant);
+        var (branchA, branchB, prodA, _) = await SeedBaseDataAsync(context, tenant.CurrentTenantId);
+
+        context.Users.Add(new User
+        {
+            Id = tenant.CurrentRawUserId,
+            FullName = "Nguyễn Văn Chủ Shop",
+            UserName = "chushop",
+            Email = "owner@test.vn"
+        });
+        context.BranchStocks.AddRange(
+            new BranchStock
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenant.CurrentTenantId,
+                BranchId = branchA,
+                ProductId = prodA,
+                BatchCode = "L-EXPIRED",
+                ExpiryDate = DateTime.UtcNow.AddDays(-5),
+                QuantityOnHand = 20m,
+                LandedCostPerUnit = 18_000m
+            },
+            new BranchStock
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenant.CurrentTenantId,
+                BranchId = branchA,
+                ProductId = prodA,
+                BatchCode = "L-VALID",
+                ExpiryDate = DateTime.UtcNow.AddMonths(3),
+                QuantityOnHand = 20m,
+                LandedCostPerUnit = 18_000m
+            });
+        await context.SaveChangesAsync();
+
+        // BUG-056: Expired batch throws explicit message
+        var expiredEx = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.CreateTransferAsync(new CreateTransferRequest(
+                branchA, branchB, false, null, null,
+                [new(prodA, 5m, "Lon", "L-EXPIRED", null, 18_000m)]), CancellationToken.None));
+        Assert.Equal("Không thể điều chuyển lô hàng đã hết hạn sử dụng.", expiredEx.Message);
+
+        // Valid transfer -> creator name resolved (BUG-060)
+        var created = await service.CreateTransferAsync(new CreateTransferRequest(
+            branchA, branchB, false, null, "Test hoàn trả",
+            [new(prodA, 5m, "Lon", "L-VALID", null, 18_000m)],
+            SubmitImmediately: true), CancellationToken.None);
+        Assert.Equal("Nguyễn Văn Chủ Shop", created.CreatedBy);
+
+        await service.DispatchTransferAsync(created.Id, CancellationToken.None);
+
+        // BUG-046: ReturnTransfer leaves ReceivedAt null and filter CompletionResult=Returned finds it
+        var returned = await service.ReturnTransferAsync(created.Id, new ReturnTransferRequest("Xe hỏng quay về"), CancellationToken.None);
+        Assert.Equal("Completed", returned.Status);
+        Assert.Equal("Returned", returned.CompletionResult);
+        Assert.Null(returned.ReceivedAt);
+
+        var filtered = await service.GetTransfersAsync(
+            new TransferFilterParams(null, null, null, null, null, null, 1, 20, null, null, null, TransferCompletionResult.Returned),
+            CancellationToken.None);
+        Assert.Single(filtered.Items);
+        Assert.Equal(created.Id, filtered.Items[0].Id);
+        Assert.Equal("Nguyễn Văn Chủ Shop", filtered.Items[0].CreatedBy);
+    }
+
+    [Fact]
+    public async Task UrgentRequest_AvailableProducts_OrderCode_UnitConversion_AndLifecycleSync()
+    {
+        var dbName = $"TransferDb_Bug057_062_063_{Guid.NewGuid()}";
+        var tenant = new FakeTenantContext();
+        var (transferService, context) = CreateServiceScope(dbName, tenant);
+        var (sourceA, destination, prodA, _) = await SeedBaseDataAsync(context, tenant.CurrentTenantId);
+
+        // Add ProductUnit: 1 Thùng = 24 Lon
+        context.ProductUnits.Add(new ProductUnit
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenant.CurrentTenantId,
+            ProductId = prodA,
+            UnitName = "Thùng",
+            ConversionRate = 24m
+        });
+        var orderId = Guid.NewGuid();
+        context.Orders.Add(new Order
+        {
+            Id = orderId,
+            TenantId = tenant.CurrentTenantId,
+            BranchId = destination,
+            OrderCode = "HD261125001"
+        });
+        context.BranchStocks.AddRange(
+            new BranchStock
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenant.CurrentTenantId,
+                BranchId = sourceA,
+                ProductId = prodA,
+                BatchCode = "L-OK",
+                ExpiryDate = DateTime.UtcNow.AddMonths(4),
+                QuantityOnHand = 50m,
+                QuantityReserved = 2m,
+                LandedCostPerUnit = 18_000m
+            },
+            new BranchStock
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenant.CurrentTenantId,
+                BranchId = sourceA,
+                ProductId = prodA,
+                BatchCode = "L-EXP",
+                ExpiryDate = DateTime.UtcNow.AddDays(-1),
+                QuantityOnHand = 100m,
+                LandedCostPerUnit = 18_000m
+            });
+        await context.SaveChangesAsync();
+
+        var requestService = new TransferRequestService(
+            new GenericRepository<TransferRequest>(context),
+            new GenericRepository<TransferRequestDetail>(context),
+            new GenericRepository<Transfer>(context),
+            new GenericRepository<TransferDetail>(context),
+            new GenericRepository<TransferStatusHistory>(context),
+            new GenericRepository<BranchStock>(context),
+            new GenericRepository<Product>(context),
+            new GenericRepository<Branch>(context),
+            transferService,
+            tenant,
+            new UnitOfWork(context),
+            packages: new GenericRepository<Package>(context),
+            productUnits: new GenericRepository<ProductUnit>(context),
+            orders: new GenericRepository<Order>(context),
+            transferRepository: new TransferRepository(context));
+
+        // BUG-062: Available products excludes expired stock and returns 50 - 2 = 48
+        var available = await requestService.GetAvailableProductsAsync(destination, CancellationToken.None);
+        var prodAvail = Assert.Single(available);
+        Assert.Equal(prodA, prodAvail.ProductId);
+        Assert.Equal(48m, prodAvail.TotalAvailableQuantity);
+
+        // BUG-062: Unknown order code throws 422 (InvalidOperationException)
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            requestService.CreateAndAllocateAsync(new CreateTransferRequestGroupRequest(
+                destination, null, null, "Khẩn",
+                [new TransferDemandLineRequest(prodA, 1m, "Thùng")],
+                RelatedOrderCode: "HD-KHONG-TON-TAI"), CancellationToken.None));
+
+        // BUG-057 & BUG-062: 1 Thùng -> 24 Lon reserved & OrderCode resolved
+        var group = await requestService.CreateAndAllocateAsync(new CreateTransferRequestGroupRequest(
+            destination, null, null, "Khẩn",
+            [new TransferDemandLineRequest(prodA, 1m, "Thùng")],
+            RelatedOrderCode: "HD261125001"), CancellationToken.None);
+
+        Assert.Equal(orderId, group.RelatedOrderId);
+        Assert.Equal(24m, group.Items[0].RequestedQuantity);
+        Assert.Equal("Lon", group.Items[0].Unit);
+        var childTransfer = Assert.Single(group.Transfers);
+        Assert.Equal(24m, childTransfer.Items[0].SentQuantity);
+
+        // BUG-063: Cancel child transfer syncs TransferRequest -> Cancelled
+        await transferService.CancelTransferAsync(childTransfer.Id, new CancelTransferRequest("Hết nhu cầu"), CancellationToken.None);
+        var updatedGroup = await requestService.GetAsync(group.Id, CancellationToken.None);
+        Assert.Equal("Cancelled", updatedGroup.Status);
+
+        // BUG-063: Return child transfer syncs TransferRequest -> Cancelled
+        var groupForReturn = await requestService.CreateAndAllocateAsync(new CreateTransferRequestGroupRequest(
+            destination, null, null, "Khẩn hoàn trả",
+            [new TransferDemandLineRequest(prodA, 10m, "Lon")]), CancellationToken.None);
+        var returnTransfer = Assert.Single(groupForReturn.Transfers);
+        await transferService.DispatchTransferAsync(returnTransfer.Id, CancellationToken.None);
+        await transferService.ReturnTransferAsync(returnTransfer.Id, new ReturnTransferRequest("Quay đầu kho nguồn"), CancellationToken.None);
+        var afterReturn = await requestService.GetAsync(groupForReturn.Id, CancellationToken.None);
+        Assert.Equal("Cancelled", afterReturn.Status);
+
+        // BUG-063: Receive with shortage syncs TransferRequest -> Completed (no longer stuck Open)
+        var groupForShortage = await requestService.CreateAndAllocateAsync(new CreateTransferRequestGroupRequest(
+            destination, null, null, "Khẩn thiếu hàng",
+            [new TransferDemandLineRequest(prodA, 10m, "Lon")]), CancellationToken.None);
+        var shortageTransfer = Assert.Single(groupForShortage.Transfers);
+        await transferService.DispatchTransferAsync(shortageTransfer.Id, CancellationToken.None);
+        await transferService.ReceiveTransferAsync(shortageTransfer.Id, new ReceiveTransferRequest(
+            Note: "Thiếu 2 lon",
+            Items: [new ReceiveTransferLineRequest(shortageTransfer.Items[0].Id, 8m, 0m, "Thiếu 2 lon khi giao")]), CancellationToken.None);
+        var afterShortage = await requestService.GetAsync(groupForShortage.Id, CancellationToken.None);
+        Assert.Equal("Completed", afterShortage.Status);
     }
 }
