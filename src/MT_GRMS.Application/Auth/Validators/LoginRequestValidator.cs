@@ -99,6 +99,22 @@ public sealed class ChangePasswordRequestValidator : AbstractValidator<ChangePas
     }
 }
 
+public sealed class UpdateProfileRequestValidator : AbstractValidator<UpdateProfileRequest>
+{
+    public UpdateProfileRequestValidator()
+    {
+        RuleFor(x => x.FullName)
+            .NotEmpty().WithMessage("INVALID_FULL_NAME: Họ và tên không được để trống.")
+            .MinimumLength(2).WithMessage("INVALID_FULL_NAME: Họ và tên phải có từ 2 đến 100 ký tự.")
+            .MaximumLength(100).WithMessage("INVALID_FULL_NAME: Họ và tên phải có từ 2 đến 100 ký tự.");
+
+        RuleFor(x => x.Phone)
+            .Matches(@"^(03|05|07|08|09)\d{8}$")
+            .When(x => !string.IsNullOrWhiteSpace(x.Phone))
+            .WithMessage("INVALID_PHONE: Số điện thoại phải gồm 10 chữ số hợp lệ tại Việt Nam.");
+    }
+}
+
 internal static class AuthRequestValidation
 {
     public static void EnsureValid<T>(IValidator<T> validator, T request)

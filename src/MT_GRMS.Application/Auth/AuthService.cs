@@ -259,6 +259,55 @@ public class AuthService : IAuthService
         return await IssueLoginSessionAsync(user, null, cancellationToken);
     }
 
+    public async Task<UserInfo> UpdateProfileAsync(string userId, UpdateProfileRequest request, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            throw new UnauthorizedAccessException("Chưa xác thực danh tính người dùng.");
+        }
+
+        ArgumentNullException.ThrowIfNull(request);
+
+        var trimmedName = (request.FullName ?? string.Empty).Trim();
+        var normalizedPhone = string.IsNullOrWhiteSpace(request.Phone)
+            ? null
+            : NormalizePhoneKey(request.Phone);
+
+        var normalizedRequest = new UpdateProfileRequest(trimmedName, normalizedPhone);
+        AuthRequestValidation.EnsureValid(new UpdateProfileRequestValidator(), normalizedRequest);
+
+        var user = await _userRepository.GetByIdAsync(userId, cancellationToken)
+                   ?? throw new UnauthorizedAccessException("Tài khoản không tồn tại hoặc đã bị vô hiệu hóa.");
+
+        var (_, tenantUser) = ResolveTenant(user, null);
+        await EnsureAccountActiveAsync(user, tenantUser, cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(normalizedPhone))
+        {
+            var duplicates = await _userRepository.FindAsync(
+                u => u.Id != user.Id && !u.IsDeleted &&
+                     (u.NormalizedPhone == normalizedPhone || u.Phone == normalizedPhone),
+                cancellationToken);
+            if (duplicates.Any())
+            {
+                throw new ArgumentException("PHONE_EXISTS: Số điện thoại này đã được sử dụng bởi một tài khoản khác.");
+            }
+        }
+
+        user.FullName = trimmedName;
+        if (!string.IsNullOrWhiteSpace(normalizedPhone))
+        {
+            user.Phone = normalizedPhone;
+            user.NormalizedPhone = normalizedPhone;
+        }
+
+        _userRepository.Update(user);
+        await _userRepository.SaveChangesAsync(cancellationToken);
+
+        return await GetCurrentUserAsync(user.Id, cancellationToken)
+               ?? throw new UnauthorizedAccessException("Không thể tải lại thông tin tài khoản.");
+    }
+
     private async Task<LoginResponse> IssueLoginSessionAsync(User user, string? tenantCode, CancellationToken cancellationToken)
     {
         var (tenantId, tenantUser) = ResolveTenant(user, tenantCode);
@@ -277,7 +326,8 @@ public class AuthService : IAuthService
             BranchId: branchId,
             TenantId: tenantId,
             IsAdmin: isAdmin,
-            IsTwoFactorEnabled: user.IsTwoFactorEnabled
+            IsTwoFactorEnabled: user.IsTwoFactorEnabled,
+            Phone: user.Phone
         );
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) && parsedMins > 0 ? parsedMins : 15;
@@ -451,7 +501,8 @@ public class AuthService : IAuthService
             BranchId: branchId,
             TenantId: tenantId,
             IsAdmin: isAdmin,
-            IsTwoFactorEnabled: user.IsTwoFactorEnabled
+            IsTwoFactorEnabled: user.IsTwoFactorEnabled,
+            Phone: user.Phone
         );
 
         var expiresMinutes = int.TryParse(_configuration?["Jwt:ExpiresMinutes"], out var parsedMins) && parsedMins > 0 ? parsedMins : 15;
@@ -500,7 +551,8 @@ public class AuthService : IAuthService
             BranchId: branchId,
             TenantId: tenantId,
             IsAdmin: isAdmin,
-            IsTwoFactorEnabled: user.IsTwoFactorEnabled
+            IsTwoFactorEnabled: user.IsTwoFactorEnabled,
+            Phone: user.Phone
         );
     }
 
@@ -709,7 +761,8 @@ public class AuthService : IAuthService
             BranchId: branch.Id,
             TenantId: tenant.Id,
             IsAdmin: false,
-            IsTwoFactorEnabled: user.IsTwoFactorEnabled
+            IsTwoFactorEnabled: user.IsTwoFactorEnabled,
+            Phone: user.Phone
         );
 
         return new LoginResponse(

@@ -297,6 +297,45 @@ public class AuthController : BaseApiController
         return Ok(ApiResponse<UserInfo>.Ok(user, "Lấy thông tin người dùng thành công.", StatusCodes.Status200OK));
     }
 
+    /// <summary>
+    /// Cập nhật thông tin hồ sơ cá nhân của tài khoản đang đăng nhập (Họ tên & Số điện thoại)
+    /// </summary>
+    [HttpPut("me/profile")]
+    [Authorize]
+    [ProducesResponseType(typeof(ApiResponse<UserInfo>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileRequest? request, CancellationToken cancellationToken)
+    {
+        var userId = User?.FindFirstValue(ClaimTypes.NameIdentifier)
+                     ?? User?.FindFirstValue("sub")
+                     ?? User?.FindFirstValue("userId");
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", "Chưa xác thực danh tính.", StatusCodes.Status401Unauthorized));
+        }
+
+        if (request == null || string.IsNullOrWhiteSpace(request.FullName))
+        {
+            return BadRequest(ApiResponse<object>.Fail("INVALID_FULL_NAME", "Vui lòng nhập họ và tên hiển thị.", StatusCodes.Status400BadRequest));
+        }
+
+        try
+        {
+            var updated = await _authService.UpdateProfileAsync(userId, request, cancellationToken);
+            return Ok(ApiResponse<UserInfo>.Ok(updated, "Cập nhật thông tin cá nhân thành công.", StatusCodes.Status200OK));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", ex.Message, StatusCodes.Status401Unauthorized));
+        }
+        catch (ArgumentException ex)
+        {
+            var (code, msg) = ParseCodedMessage(ex.Message, "BAD_REQUEST");
+            return BadRequest(ApiResponse<object>.Fail(code, msg, StatusCodes.Status400BadRequest));
+        }
+    }
+
     [HttpGet("me/2fa")]
     [Authorize]
     public async Task<IActionResult> GetTwoFactorStatus(CancellationToken cancellationToken)

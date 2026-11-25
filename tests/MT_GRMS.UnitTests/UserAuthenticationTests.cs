@@ -1311,4 +1311,49 @@ public class UserAuthenticationTests
         Assert.Contains("WEAK_PASSWORD", weakPass.Message);
         Assert.Equal(originalStamp, user.SecurityStamp);
     }
+
+    [Fact]
+    public async Task UpdateProfileAsync_UpdatesFullNameAndPhone_AndRejectsDuplicatePhone()
+    {
+        var repo = new FakeUserRepository();
+        var user1 = new User
+        {
+            Id = "owner-profile-1",
+            Username = "0912345678",
+            FullName = "Chu Cua Hang Cu",
+            Email = "owner1@mtgrms.vn",
+            Phone = "0912345678",
+            NormalizedPhone = "0912345678",
+            Password = "OldPassword@123",
+            IsActive = true
+        };
+        user1.TenantUsers.Add(new TenantUser { TenantId = "tenant-01", UserId = user1.Id, Role = "STORE_OWNER", IsActive = true });
+
+        var user2 = new User
+        {
+            Id = "owner-profile-2",
+            Username = "0988776655",
+            FullName = "Chu Cua Hang 2",
+            Email = "owner2@mtgrms.vn",
+            Phone = "0988776655",
+            NormalizedPhone = "0988776655",
+            Password = "OldPassword@123",
+            IsActive = true
+        };
+        user2.TenantUsers.Add(new TenantUser { TenantId = "tenant-02", UserId = user2.Id, Role = "STORE_OWNER", IsActive = true });
+
+        await repo.AddAsync(user1);
+        await repo.AddAsync(user2);
+
+        var service = CreateAuthService(repo);
+        var updated = await service.UpdateProfileAsync(user1.Id, new UpdateProfileRequest("  Nguyễn Văn Mới  ", "+84933445566"));
+
+        Assert.Equal("Nguyễn Văn Mới", updated.FullName);
+        Assert.Equal("0933445566", updated.Phone);
+        Assert.Equal("0933445566", user1.NormalizedPhone);
+
+        var dupEx = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.UpdateProfileAsync(user1.Id, new UpdateProfileRequest("Nguyễn Văn Mới", "0988776655")));
+        Assert.Contains("PHONE_EXISTS", dupEx.Message);
+    }
 }

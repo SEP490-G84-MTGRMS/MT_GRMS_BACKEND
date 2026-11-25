@@ -20,4 +20,5 @@ public interface IAuthService
     Task<TwoFactorChallengeResponse> CreateTwoFactorChallengeAsync(string userId, TwoFactorChallengeRequest request, CancellationToken cancellationToken = default);
     Task<TwoFactorStatusResponse> ConfirmTwoFactorChallengeAsync(string userId, TwoFactorConfirmRequest request, CancellationToken cancellationToken = default);
     Task<LoginResponse> ChangePasswordAsync(string userId, ChangePasswordRequest request, CancellationToken cancellationToken = default);
+    Task<UserInfo> UpdateProfileAsync(string userId, UpdateProfileRequest request, CancellationToken cancellationToken = default);
 }

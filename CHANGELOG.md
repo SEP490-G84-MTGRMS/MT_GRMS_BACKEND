@@ -25,6 +25,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - Hợp nhất yêu cầu nạp VietQR và giao dịch ví vào `WalletTransactions`. Giữ hợp đồng API, chuyển dữ liệu đơn cũ qua đối soát và ngăn webhook cộng trùng số dư. [worklog: docs/worklogs/2026-11-16_WALLET_AI_merge-topup-orders.md]
 
 ### Added
+- Bổ sung API `PUT /api/auth/me/profile` (`[Authorize]`) cập nhật họ tên và số điện thoại tài khoản đang đăng nhập (chặn trùng SĐT `PHONE_EXISTS`), đồng thời trả `Phone` trong `UserInfo` (`REQ-AUTH-15` / `NHAT-V2-05`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-05_Ortus24_account-profile-update-api.md)
 - Bổ sung API `POST /api/auth/me/change-password` (`[Authorize]`) xác minh mật khẩu hiện tại, kiểm tra mật khẩu mới mạnh, xoay `SecurityStamp` + `RefreshToken` để thu hồi phiên trên các thiết bị khác và cấp lại HttpOnly cookies mới cho phiên hiện tại (`REQ-AUTH-14` / `NHAT-V2-01`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-01_Ortus24_implement-account-change-password.md)
 - Cho chủ Gói Thường mua riêng tiện ích Quản lý nhân viên bằng Ví gian hàng, tính phí theo số ngày còn lại và kiểm tra quyền dùng ở API hồ sơ nhân viên. [worklog: docs/worklogs/2026-11-22_BE-STORE_AI_staff-management-addon.md]
 - API Admin xem lịch sử mua gói dịch vụ theo tenant, phân trang và giới hạn truy cập Admin. Chi tiết tenant không trả danh sách chi nhánh. [worklog: docs/worklogs/2026-11-16_ADMIN-TENANT_AI_tenant-records.md]

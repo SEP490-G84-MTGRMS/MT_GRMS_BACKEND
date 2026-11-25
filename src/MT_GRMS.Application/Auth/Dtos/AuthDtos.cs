@@ -49,7 +49,8 @@ public record UserInfo(
     Guid? BranchId,
     string TenantId,
     bool IsAdmin = false,
-    bool IsTwoFactorEnabled = false
+    bool IsTwoFactorEnabled = false,
+    string? Phone = null
 )
 {
     public string Role => RoleName;
@@ -114,4 +115,9 @@ public record ResetPasswordRequest(
 public record ChangePasswordRequest(
     string CurrentPassword,
     string NewPassword
+);
+
+public record UpdateProfileRequest(
+    string FullName,
+    string? Phone
 );
