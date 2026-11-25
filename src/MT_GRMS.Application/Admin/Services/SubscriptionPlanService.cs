@@ -37,7 +37,7 @@ public class SubscriptionPlanService : ISubscriptionPlanService
             else if (tenantCounts.TryGetValue(plan.Id, out var c2)) count = c2;
 
             var (description, quotas, features) = ParseModulesJson(plan.EnabledModulesJson, plan.MaxBranches, plan.MaxStaff);
-            if (plan.PlanCode is "STANDARD" or "PRO") quotas = quotas with { MaxStorageGb = 2 };
+            if (quotas.MaxStorageGb <= 0) quotas = quotas with { MaxStorageGb = 2 };
 
             result.Add(new PlanSummaryResponse(
                 Id: plan.Id,
@@ -96,7 +96,7 @@ public class SubscriptionPlanService : ISubscriptionPlanService
 
         var tenantCount = await _planRepository.CountActiveTenantsByPlanIdAsync(id, cancellationToken);
         var (description, quotas, features) = ParseModulesJson(plan.EnabledModulesJson, plan.MaxBranches, plan.MaxStaff);
-        if (plan.PlanCode is "STANDARD" or "PRO") quotas = quotas with { MaxStorageGb = 2 };
+        if (quotas.MaxStorageGb <= 0) quotas = quotas with { MaxStorageGb = 2 };
 
         return new PlanDetailResponse(
             Id: plan.Id,

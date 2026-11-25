@@ -196,13 +196,11 @@ public sealed class TenantSubscriptionService(AppDbContext context)
         // Trial có endpoint riêng để đảm bảo one-time eligibility; purchase chỉ dành cho gói trả phí.
         var targetCode = (request.PlanCode ?? "").Trim().ToUpperInvariant();
         var currentPlanCode = (tenant.CurrentPlan ?? "").Trim().ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(targetCode))
+            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("INVALID_PLAN_CODE", "Mã gói dịch vụ không hợp lệ."));
         if (targetCode.Contains("TRIAL") || (request.Months == 0 && targetCode != "PRO") ||
             string.Equals(request.PaymentMethod, "TRIAL", StringComparison.OrdinalIgnoreCase))
             return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("TRIAL_ENDPOINT_REQUIRED", "Vui lòng dùng chức năng Bắt đầu dùng thử."));
-        if (targetCode != "STANDARD" && targetCode != "PRO")
-        {
-            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail("INVALID_PLAN_CODE", "Mã gói dịch vụ không hợp lệ. Vui lòng chọn STANDARD hoặc PRO."));
-        }
 
         if (targetCode == "STANDARD" &&
             string.Equals(tenant.CurrentPlan, "PRO", StringComparison.OrdinalIgnoreCase) &&
@@ -221,32 +219,37 @@ public sealed class TenantSubscriptionService(AppDbContext context)
             return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
                 "INVALID_PLAN_ADDON", "Số chi nhánh mua thêm không được âm."));
 
-        // Tìm gói cước theo PlanCode
+        // Tìm gói cước theo PlanCode hoặc Id
         var plan = await _context.SubscriptionPlans.FirstOrDefaultAsync(
-            p => (p.PlanCode == targetCode || p.Id == request.PlanCode) && p.IsActive,
+            p => (p.PlanCode == targetCode || p.Id == request.PlanCode) && !p.IsDeleted,
             cancellationToken);
 
-        if (plan == null)
+        if (plan != null && !plan.IsActive)
         {
-            plan = await _context.SubscriptionPlans.FirstOrDefaultAsync(
-                p => p.PlanCode == targetCode,
-                cancellationToken);
+            return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
+                "PLAN_INACTIVE", "Gói dịch vụ này hiện đang tạm ngừng mở bán."));
         }
 
         if (plan == null)
         {
+            if (targetCode != "STANDARD" && targetCode != "PRO")
+            {
+                return BadRequest(ApiResponse<PurchaseSubscriptionResponse>.Fail(
+                    "INVALID_PLAN_CODE", "Mã gói dịch vụ không hợp lệ hoặc không tồn tại."));
+            }
+
             plan = new SubscriptionPlan
             {
-                Id = targetCode == "PRO" ? "plan_pro" : (targetCode == "TRIAL" ? "plan_trial" : "plan_standard"),
+                Id = targetCode == "PRO" ? "plan_pro" : "plan_standard",
                 PlanCode = targetCode,
-                PlanName = targetCode == "PRO" ? "Gói Pro (Chuỗi Cửa Hàng)" : (targetCode == "TRIAL" ? "Gói Dùng Thử (Trải Nghiệm)" : "Gói Thường (Cửa Hàng Độc Lập)"),
-                PriceMonthly = targetCode == "PRO" ? 249000.00m : (targetCode == "TRIAL" ? 0m : 99000.00m),
-                PriceYearly = targetCode == "PRO" ? 2988000.00m : (targetCode == "TRIAL" ? 0m : 1188000.00m),
+                PlanName = targetCode == "PRO" ? "Gói Pro (Chuỗi Cửa Hàng)" : "Gói Thường (Cửa Hàng Độc Lập)",
+                PriceMonthly = targetCode == "PRO" ? 249000.00m : 99000.00m,
+                PriceYearly = targetCode == "PRO" ? 2988000.00m : 1188000.00m,
                 MaxBranches = targetCode == "PRO" ? 2 : 1,
-                MaxStaff = targetCode == "PRO" ? 100 : (targetCode == "TRIAL" ? 5 : 1),
+                MaxStaff = targetCode == "PRO" ? 100 : 1,
                 EnabledModulesJson = targetCode == "PRO"
                     ? "[\"Catalog\",\"Pos\",\"Inventory\",\"Supplier\",\"Finance\",\"HR\",\"Tax\",\"MultiBranch\"]"
-                    : (targetCode == "TRIAL" ? "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\",\"HR\"]" : "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\"]"),
+                    : "[\"Catalog\",\"Pos\",\"Inventory\",\"Finance\"]",
                 IsActive = true
             };
             if (!preview) _context.SubscriptionPlans.Add(plan);
@@ -325,12 +328,13 @@ public sealed class TenantSubscriptionService(AppDbContext context)
         var hasActiveStandardAddon = currentPlanCode == "STANDARD" && tenant.HasStaffManagementAddon && baseDate > now;
 
         tenant.CurrentPlan = plan.PlanCode;
+        tenant.SubscriptionPlan = plan;
         tenant.FirstPaidAt ??= now;
         tenant.SubscriptionExpiresAt = newExpiresAt;
         tenant.SubscriptionStatus = "ACTIVE";
         tenant.Status = "ACTIVE";
-        tenant.HasStaffManagementAddon = plan.PlanCode == "PRO" || request.HasStaffManagementAddon || hasActiveStandardAddon;
-        if (plan.PlanCode == "PRO") tenant.ExtraBranches += request.ExtraBranches;
+        tenant.HasStaffManagementAddon = plan.PlanCode != "STANDARD" || request.HasStaffManagementAddon || hasActiveStandardAddon;
+        if (plan.PlanCode != "STANDARD") tenant.ExtraBranches += request.ExtraBranches;
         tenant.ExtraStorageGb = request.ExtraStorageGb;
         tenant.StorageAddonExpiresAt = request.ExtraStorageGb > 0 ? newExpiresAt : null;
 
