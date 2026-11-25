@@ -314,6 +314,32 @@ public class TenantStoreControllerTests
     }
 
     [Fact]
+    public async Task GetPricingPlans_IncludesCustomActivePlan_AndDoesNotResurrectInactiveStandardPlan()
+    {
+        using var context = CreateDbContext();
+        _mockPlanService.Setup(s => s.GetPlansAsync(It.IsAny<PlanFilterRequest>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<PlanSummaryResponse>
+            {
+                new("1", "STANDARD", "Gói Thường", "Đã ngừng bán", 99000m, 990000m, "INACTIVE", 0, new PlanQuotaDto(1, 1, 2, "Daily"), new PlanFeatureDto(), DateTime.UtcNow, null),
+                new("2", "PRO", "Gói Pro Chuỗi", "Đang mở bán", 249000m, 2490000m, "ACTIVE", 2, new PlanQuotaDto(2, 50, 10, "Hourly"), new PlanFeatureDto(), DateTime.UtcNow, null),
+                new("3", "ENTERPRISE", "Gói Chuỗi Lớn", "Mở rộng chuỗi", 499000m, 4990000m, "ACTIVE", 1, new PlanQuotaDto(10, -1, 50, "Hourly"), new PlanFeatureDto(), DateTime.UtcNow, null)
+            });
+
+        var controller = new TenantStoreController(_mockTenantService.Object, _mockPlanService.Object, context, new TenantSubscriptionService(context))
+        {
+            ControllerContext = CreateControllerContext()
+        };
+
+        var result = await controller.GetPricingPlans(CancellationToken.None);
+        var okObj = Assert.IsType<OkObjectResult>(result);
+        var apiResp = Assert.IsAssignableFrom<ApiResponse<IReadOnlyList<PlanSummaryResponse>>>(okObj.Value);
+        Assert.True(apiResp.Success);
+        Assert.DoesNotContain(apiResp.Data!, p => p.Code == "STANDARD");
+        Assert.Contains(apiResp.Data!, p => p.Code == "ENTERPRISE" && p.Quotas!.MaxStorageGb == 50);
+        Assert.Contains(apiResp.Data!, p => p.Code == "PRO" && p.Quotas!.MaxStorageGb == 10);
+    }
+
+    [Fact]
     public async Task PurchaseSubscription_Validations()
     {
         using var context = CreateDbContext();

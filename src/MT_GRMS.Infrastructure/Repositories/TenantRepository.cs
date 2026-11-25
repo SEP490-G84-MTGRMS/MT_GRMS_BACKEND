@@ -22,6 +22,7 @@ public class TenantRepository : ITenantRepository
 
     public async Task<Tenant?> GetByIdWithDetailsAsync(string id, CancellationToken cancellationToken = default)
     {
+        var normalized = id.Trim().ToLower();
         return await _context.Tenants
             .IgnoreQueryFilters()
             .AsSplitQuery()
@@ -29,7 +30,7 @@ public class TenantRepository : ITenantRepository
             .Include(t => t.Branches.Where(b => !b.IsDeleted))
             .Include(t => t.TenantUsers.Where(tu => tu.IsActive && tu.User != null && !tu.User.IsDeleted))
                 .ThenInclude(tu => tu.User)
-            .FirstOrDefaultAsync(t => t.Id == id && !t.IsDeleted, cancellationToken);
+            .FirstOrDefaultAsync(t => (t.Id == id || t.Subdomain.ToLower() == normalized) && !t.IsDeleted, cancellationToken);
     }
 
     public async Task<Tenant?> GetByCodeAsync(string code, CancellationToken cancellationToken = default)
@@ -69,7 +70,14 @@ public class TenantRepository : ITenantRepository
                 t.Subdomain.ToLower().Contains(kw) ||
                 t.Code.ToLower().Contains(kw) ||
                 (t.TaxCode != null && t.TaxCode.ToLower().Contains(kw)) ||
-                (t.Hotline != null && t.Hotline.ToLower().Contains(kw)));
+                (t.Hotline != null && t.Hotline.ToLower().Contains(kw)) ||
+                t.TenantUsers.Any(tu =>
+                    tu.IsActive &&
+                    tu.User != null &&
+                    !tu.User.IsDeleted &&
+                    (tu.User.Email.ToLower().Contains(kw) ||
+                     tu.User.FullName.ToLower().Contains(kw) ||
+                     (tu.User.Phone != null && tu.User.Phone.ToLower().Contains(kw)))));
         }
 
         if (!string.IsNullOrWhiteSpace(planCode))
@@ -96,6 +104,10 @@ public class TenantRepository : ITenantRepository
                     break;
                 case "LOCKED":
                     query = query.Where(t => t.Status == "LOCKED" || t.LockType != null);
+                    break;
+                case "PENDING":
+                case "NO_PLAN":
+                    query = query.Where(t => (t.Status == "PENDING" || t.Status == "NO_PLAN") && t.LockType == null);
                     break;
                 case "INACTIVE":
                     query = query.Where(t => t.Status == "INACTIVE");
@@ -157,7 +169,11 @@ public class TenantRepository : ITenantRepository
     public async Task<int> GetSuccessfulUpgradeCountAsync(CancellationToken cancellationToken = default)
     {
         return await _context.WalletTransactions
-            .CountAsync(transaction => transaction.Type == "UPGRADE_PLAN" && transaction.Status == "SUCCESS", cancellationToken);
+            .CountAsync(
+                transaction => !transaction.IsDeleted &&
+                               (transaction.Type == "PURCHASE_PLAN" || transaction.Type == "UPGRADE_PLAN") &&
+                               transaction.Status == "SUCCESS",
+                cancellationToken);
     }
 
     public async Task<IReadOnlyList<Tenant>> GetUrgentAlertTenantsAsync(int limit = 10, CancellationToken cancellationToken = default)

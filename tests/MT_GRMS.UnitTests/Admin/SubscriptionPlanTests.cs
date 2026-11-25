@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Admin.Dtos;
 using MT_GRMS.Application.Admin.Repositories;
 using MT_GRMS.Application.Admin.Services;
@@ -313,6 +314,59 @@ public class SubscriptionPlanTests
     {
         await Assert.ThrowsAsync<KeyNotFoundException>(() => _service.ToggleStatusAsync("non-existent"));
         await Assert.ThrowsAsync<KeyNotFoundException>(() => _service.DeletePlanAsync("non-existent"));
+    }
+
+    [Fact]
+    public async Task SubscriptionPlanRepository_GetTenantsByPlanIdAsync_ReturnsMatchingTenantsWithStatus()
+    {
+        var options = new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<MT_GRMS.Infrastructure.Persistence.AppDbContext>()
+            .UseInMemoryDatabase($"PlanTenants_{Guid.NewGuid()}")
+            .Options;
+        await using var db = new MT_GRMS.Infrastructure.Persistence.AppDbContext(options);
+
+        db.SubscriptionPlans.Add(new SubscriptionPlan
+        {
+            Id = "plan-pro",
+            PlanCode = "PRO",
+            PlanName = "Gói Pro",
+            PriceMonthly = 249000m,
+            PriceYearly = 2490000m,
+            MaxBranches = 5,
+            MaxStaff = 20,
+            IsActive = true
+        });
+        db.Tenants.AddRange(
+            new Tenant
+            {
+                Id = "t-pro-active",
+                Name = "Siêu Thị An Phú",
+                Subdomain = "an-phu",
+                Code = "AP-01",
+                CurrentPlan = "PRO",
+                Status = "ACTIVE",
+                SubscriptionExpiresAt = DateTime.UtcNow.AddDays(30)
+            },
+            new Tenant
+            {
+                Id = "t-pro-locked",
+                Name = "Tạp Hóa Bị Khóa",
+                Subdomain = "locked-shop",
+                Code = "LK-01",
+                CurrentPlan = "PRO",
+                Status = "LOCKED",
+                LockType = "SOFT"
+            }
+        );
+        await db.SaveChangesAsync();
+
+        var realRepo = new MT_GRMS.Infrastructure.Repositories.SubscriptionPlanRepository(db);
+        var realService = new SubscriptionPlanService(realRepo, _uow);
+
+        var detail = await realService.GetByIdAsync("plan-pro");
+        Assert.Equal(2, detail.ActiveTenantCount);
+        Assert.Equal(2, detail.Tenants.Count);
+        Assert.Contains(detail.Tenants, t => t.Id == "t-pro-active" && t.Status == "ACTIVE");
+        Assert.Contains(detail.Tenants, t => t.Id == "t-pro-locked" && t.Status == "LOCKED");
     }
 }
 

@@ -151,6 +151,7 @@ public class AdminDashboardService : IAdminDashboardService
             }
 
             alerts.Add(new UrgentAlertResponse(
+                Id: t.Id,
                 Subdomain: t.Subdomain,
                 Name: t.Name,
                 OwnerName: ownerName,

@@ -256,6 +256,12 @@ public class TenantService : ITenantService
             return ("EXPIRING", graceDays, daysUntilExpiry);
         }
 
+        if (string.Equals(t.Status, "NO_PLAN", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(t.Status, "PENDING", StringComparison.OrdinalIgnoreCase))
+        {
+            return ("PENDING", graceDays, daysUntilExpiry);
+        }
+
         return (t.Status, graceDays, daysUntilExpiry);
     }
 }

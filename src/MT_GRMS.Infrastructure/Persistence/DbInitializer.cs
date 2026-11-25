@@ -31,6 +31,15 @@ public static class DbInitializer
         await context.Database.ExecuteSqlRawAsync(Migrations.AddOrderDetailStockAllocations.UpSql);
         await context.Database.ExecuteSqlRawAsync(Migrations.AddExpenseVoucherDueDate.UpSql);
         await context.Database.ExecuteSqlRawAsync(@"ALTER TABLE IF EXISTS ""Transfers"" ADD COLUMN IF NOT EXISTS ""RowVersion"" integer NOT NULL DEFAULT 1;");
+        await ExecuteSqlSafeAsync(context, Migrations.AddTaxFilingConfirmations.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchConversionRulesAndNotifications.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.ScheduleFefoDiscounts.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.RemoveGoodsReceiptFreight.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductAllowedSupplierIds.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddProductImageUrlsJson.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductProcessedPrice.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddSupplierPoModificationRules.UpSql);
+        await SyncMissingColumnsAsync(context);
     }
 
     private static async Task EnsureSupplierDispatchSchemaAsync(AppDbContext context, ILogger? logger = null)
@@ -282,10 +291,38 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
     /// </summary>
     private static async Task SyncMissingColumnsAsync(AppDbContext context, ILogger? logger = null)
     {
+        if (!context.Database.IsRelational())
+        {
+            return;
+        }
+
+        HashSet<string>? existingTables = null;
+        HashSet<string>? existingColumns = null;
+        if (context.Database.IsNpgsql())
+        {
+            try
+            {
+                var tables = await context.Database
+                    .SqlQueryRaw<string>("SELECT table_name AS \"Value\" FROM information_schema.tables WHERE table_schema = 'public'")
+                    .ToListAsync();
+                existingTables = new HashSet<string>(tables, StringComparer.Ordinal);
+
+                var cols = await context.Database
+                    .SqlQueryRaw<string>("SELECT table_name || '.' || column_name AS \"Value\" FROM information_schema.columns WHERE table_schema = 'public'")
+                    .ToListAsync();
+                existingColumns = new HashSet<string>(cols, StringComparer.Ordinal);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogDebug(ex, "Không đọc được information_schema, dùng fallback tuần tự.");
+            }
+        }
+
         foreach (var entityType in context.Model.GetEntityTypes())
         {
             var table = entityType.GetTableName();
             if (string.IsNullOrEmpty(table)) continue;
+            if (existingTables != null && !existingTables.Contains(table)) continue;
             var store = StoreObjectIdentifier.Table(table, entityType.GetSchema());
 
             foreach (var prop in entityType.GetProperties())
@@ -293,6 +330,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 var column = prop.GetColumnName(store);
                 var type = prop.GetColumnType(store);
                 if (string.IsNullOrEmpty(column) || string.IsNullOrEmpty(type) || column == "xmin") continue;
+                if (existingColumns != null && existingColumns.Contains($"{table}.{column}")) continue;
 
                 var t = type.ToLowerInvariant();
                 string? defaultExpr = prop.GetDefaultValueSql(store);
@@ -1826,6 +1864,10 @@ END $$;
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddTaxFilingConfirmations.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchConversionRulesAndNotifications.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.RemoveGoodsReceiptFreight.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductAllowedSupplierIds.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddProductImageUrlsJson.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductProcessedPrice.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddSupplierPoModificationRules.UpSql);
                 }
                 catch (Exception ex)
                 {
