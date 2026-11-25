@@ -69,7 +69,7 @@ public class CustomerDebtService : ICustomerDebtService
     public async Task<CustomerDebtProfileResponse> GetProfileAsync(Guid customerId, CancellationToken ct = default)
     {
         TenantRoleGuard.RequireStoreOwner(_tenantContext, "công nợ khách hàng");
-        var customer = await _debtRepo.GetByIdAsync(customerId, ct)
+        var customer = await _debtRepo.GetByIdReadOnlyAsync(customerId, ct)
             ?? throw new NotFoundException($"Không tìm thấy khách hàng với Id: {customerId}");
         return new CustomerDebtProfileResponse(customer.Id, customer.TotalDebt,
             customer.LastDebtIncurredAtUtc, customer.LastRepaymentAtUtc);

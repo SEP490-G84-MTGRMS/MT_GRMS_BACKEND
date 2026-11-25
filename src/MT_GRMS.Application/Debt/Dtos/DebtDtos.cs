@@ -31,7 +31,11 @@ public record CustomerDebtLedgerItemResponse(
     DateTime OccurredAtUtc,
     Guid? PaymentAccountId,
     string? PaymentMethod,
-    Guid? CashbookEntryId
+    Guid? CashbookEntryId,
+    decimal? TotalIncreased = null,
+    decimal? TotalDecreased = null,
+    decimal? CurrentBalance = null,
+    int? TotalCount = null
 );
 
 public record RepaymentResultResponse(
@@ -90,7 +94,6 @@ public record CreateCustomerRequest(
     string FullName,
     string? Email,
     string? Address,
-    string? TaxCode,
     string? MembershipTier
 );
 
@@ -98,7 +101,5 @@ public record UpdateCustomerRequest(
     string? FullName,
     string? Email,
     string? Address,
-    string? TaxCode,
-    string? MembershipTier,
-    string? Status
+    string? MembershipTier
 );

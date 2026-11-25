@@ -44,7 +44,13 @@ public class CustomersController : BaseApiController
         }
 
         if (!string.IsNullOrWhiteSpace(tier) && !tier.Equals("ALL", StringComparison.OrdinalIgnoreCase))
-            query = query.Where(c => c.MembershipTier == tier);
+        {
+            var normalizedTier = CanonicalTiers.TryGetValue(tier.Trim(), out var canonicalTier)
+                ? canonicalTier
+                : tier.Trim();
+            var normalizedTierLower = normalizedTier.ToLower();
+            query = query.Where(c => c.MembershipTier.ToLower() == normalizedTierLower);
+        }
         if (debtStatus is not null && debtStatus.Equals("NO_DEBT", StringComparison.OrdinalIgnoreCase))
             query = query.Where(c => c.TotalDebt <= 0);
         else if (debtStatus is not null && !debtStatus.Equals("ALL", StringComparison.OrdinalIgnoreCase))
@@ -80,14 +86,34 @@ public class CustomersController : BaseApiController
                 o.FinalAmount, "Debt"))
             .ToListAsync(ct);
 
-        var recentPayments = await _context.CashbookEntries.AsNoTracking()
-            .Where(e => e.SourceId == id && e.TenantId == tenantId && e.SourceType == "DEBT_REPAYMENT")
-            .OrderByDescending(e => e.OccurredAtUtc).Take(10)
+        var rawRecentPayments = await _context.CashbookEntries.AsNoTracking()
+            .Where(e => e.SourceId == id && e.TenantId == tenantId && !e.IsDeleted &&
+                (e.SourceType == "DEBT_REPAYMENT" || e.SourceType == "DEBT") &&
+                e.EntryType != CashbookEntryType.Payment)
+            .OrderByDescending(e => e.OccurredAtUtc)
+            .ToListAsync(ct);
+        var paymentIds = rawRecentPayments.Select(e => e.Id).ToList();
+        var reversedPaymentIds = paymentIds.Count == 0
+            ? new HashSet<Guid>()
+            : (await _context.CashbookEntries.AsNoTracking()
+                .Where(r => r.TenantId == tenantId && !r.IsDeleted &&
+                    (r.SourceType == "COMPENSATING" || r.SourceType == "REVERSAL") &&
+                    ((r.SourceId.HasValue && paymentIds.Contains(r.SourceId.Value)) ||
+                     (r.ReversedEntryId.HasValue && paymentIds.Contains(r.ReversedEntryId.Value))))
+                .Select(r => new { r.SourceId, r.ReversedEntryId })
+                .ToListAsync(ct))
+                .SelectMany(r => new[] { r.SourceId, r.ReversedEntryId })
+                .Where(x => x.HasValue)
+                .Select(x => x!.Value)
+                .ToHashSet();
+        var recentPayments = rawRecentPayments
+            .Where(e => !reversedPaymentIds.Contains(e.Id))
+            .Take(10)
             .Select(e => new CustomerPaymentSummaryResponse(
                 string.IsNullOrEmpty(e.ReferenceCode) ? e.EntryCode : e.ReferenceCode,
                 e.OccurredAtUtc.ToString("yyyy-MM-dd HH:mm"), e.Amount,
                 e.AccountType.ToString(), "Chủ cửa hàng", e.Description))
-            .ToListAsync(ct);
+            .ToList();
 
         var debtStats = await _context.Orders.AsNoTracking()
             .Where(o => o.CustomerId == id && o.TenantId == tenantId && o.Status == "Completed" && !o.IsDeleted
@@ -99,9 +125,15 @@ public class CustomersController : BaseApiController
             debtStats?.Count ?? 0, debtStats?.Total ?? 0m)));
     }
 
-    private static readonly HashSet<string> AllowedTiers = new(StringComparer.OrdinalIgnoreCase)
+    private static readonly Dictionary<string, string> CanonicalTiers = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Standard", "Silver", "Gold", "Platinum", "VIP", "Bronze", "Diamond"
+        ["Standard"] = "Standard",
+        ["Silver"] = "Silver",
+        ["Gold"] = "Gold",
+        ["Platinum"] = "Platinum",
+        ["VIP"] = "VIP",
+        ["Bronze"] = "Bronze",
+        ["Diamond"] = "Diamond"
     };
 
     private static readonly System.Text.RegularExpressions.Regex VnPhoneRegex =
@@ -133,8 +165,21 @@ public class CustomersController : BaseApiController
         if (address != null && address.Length > 255)
             return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Địa chỉ không được vượt quá 255 ký tự."));
 
-        var tier = string.IsNullOrWhiteSpace(request.MembershipTier) ? "Standard" : request.MembershipTier.Trim();
-        if (tier.Length > 30 || !AllowedTiers.Contains(tier))
+        var isStoreOwner =
+            (User?.IsInRole(SystemRoles.StoreOwner) == true) ||
+            string.Equals(_tenantContext.CurrentRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase);
+        var requestedTier = request.MembershipTier?.Trim();
+        if (!isStoreOwner && !string.IsNullOrWhiteSpace(requestedTier) &&
+            !requestedTier.Equals("Standard", StringComparison.OrdinalIgnoreCase))
+        {
+            return StatusCode(403, ApiResponse<object>.Fail(
+                "FORBIDDEN",
+                "Chỉ chủ cửa hàng mới có quyền gán hạng thành viên cho khách hàng.",
+                403));
+        }
+
+        var rawTier = !isStoreOwner || string.IsNullOrWhiteSpace(requestedTier) ? "Standard" : requestedTier;
+        if (rawTier.Length > 30 || !CanonicalTiers.TryGetValue(rawTier, out var tier))
             return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Hạng thành viên không hợp lệ."));
 
         if (await _context.Customers.AnyAsync(c => c.Phone == phone && c.TenantId == tenantId, ct))
@@ -188,10 +233,10 @@ public class CustomersController : BaseApiController
         }
         if (request.MembershipTier != null)
         {
-            var tier = request.MembershipTier.Trim();
-            if (tier.Length > 30 || !AllowedTiers.Contains(tier))
+            var rawTier = request.MembershipTier.Trim();
+            if (rawTier.Length > 30 || !CanonicalTiers.TryGetValue(rawTier, out var canonicalTier))
                 return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Hạng thành viên không hợp lệ."));
-            customer.MembershipTier = tier;
+            customer.MembershipTier = canonicalTier;
         }
 
         await _context.SaveChangesAsync(ct);

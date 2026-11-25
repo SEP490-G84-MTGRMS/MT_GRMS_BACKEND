@@ -260,7 +260,9 @@ public class InventoryRepository : IInventoryRepository
             TotalValue: allItems.Sum(x => x.TotalValue),
             LowStockCount: allItems.Count(x => x.Status == "LOW_STOCK"),
             OutOfStockCount: allItems.Count(x => x.Status == "OUT_OF_STOCK"),
-            ExpiryWarningCount: allItems.Count(x => x.Status == "NEAR_EXPIRY" || x.ExpiredQty > 0),
+            ExpiryWarningCount: allItems.Count(x =>
+                x.ExpiredQty > 0 ||
+                x.Batches.Any(b => b.DaysLeft.HasValue && b.DaysLeft.Value <= 30 && b.QuantityOnHand > 0)),
             TotalOnOrder: allItems.Sum(x => x.OnOrderQty)
         );
 
