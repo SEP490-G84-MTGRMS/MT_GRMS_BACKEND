@@ -889,14 +889,7 @@ public class CatalogServiceTests
     [Fact]
     public async Task CreateAndUpdateProduct_EmptyBaseUnit_ThrowsArgumentException()
     {
-        var prodRepo = new FakeProductRepository();
-        var catRepo = new FakeCategoryRepository();
-        var uow = new FakeUnitOfWork();
-        var tenant = new FakeTenantContext();
-        var service = new CatalogService(prodRepo, catRepo, uow, tenant);
-
-        var catId = Guid.NewGuid();
-        catRepo.Categories.Add(new Category { Id = catId, Name = "Đồ uống" });
+        var (service, _, _, _, _, _, catId) = CreateSut();
 
         await Assert.ThrowsAsync<ArgumentException>(() => service.CreateProductAsync(new ProductCreateRequest(
             Name: "Nước lọc",
@@ -923,14 +916,7 @@ public class CatalogServiceTests
     [Fact]
     public async Task UpdateProduct_MultiImageSync_MovesPrimaryImageUrlFirstAndPreservesAllImages()
     {
-        var prodRepo = new FakeProductRepository();
-        var catRepo = new FakeCategoryRepository();
-        var uow = new FakeUnitOfWork();
-        var tenant = new FakeTenantContext();
-        var service = new CatalogService(prodRepo, catRepo, uow, tenant);
-
-        var catId = Guid.NewGuid();
-        catRepo.Categories.Add(new Category { Id = catId, Name = "Sữa" });
+        var (service, _, _, _, _, _, catId) = CreateSut();
 
         var created = await service.CreateProductAsync(new ProductCreateRequest(
             Name: "Sữa tươi",
