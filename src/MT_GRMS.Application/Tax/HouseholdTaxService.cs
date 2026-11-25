@@ -931,36 +931,14 @@ public class HouseholdTaxService : IHouseholdTaxService
 
     {
         RequireOwner();
-        if (_unitOfWork == null)
-        {
-            return await FinalizeTaxSnapshotCoreAsync(request, finalizedBy, userId, cancellationToken);
-        }
-
-        return await _unitOfWork.ExecuteInTransactionAsync(
-            token => FinalizeTaxSnapshotCoreAsync(request, finalizedBy, userId, token),
-            cancellationToken,
-            IsolationLevel.Serializable);
-    }
-
-    private async Task<HouseholdTaxSnapshotDto> FinalizeTaxSnapshotCoreAsync(
-
-        CreateTaxSnapshotRequest request,
-
-        string finalizedBy,
-
-        string? userId = null,
-
-        CancellationToken cancellationToken = default)
-
-    {
 
         // Chốt kỳ tính thuế luôn ở cấp toàn bộ hộ kinh doanh (Tenant-wide)
         request.BranchId = null;
         ValidateTaxPeriod(request.Year, request.PeriodType, request.PeriodNumber);
         ValidateTaxRates(request.CustomVatRate, request.CustomPitRate, request.VatReductionPercentage);
 
-        // 1. Xác thực bảo mật mã PIN chủ hộ
-
+        // 1. Xác thực bảo mật mã PIN chủ hộ NGOÀI transaction chốt kỳ
+        // để FailedPinAttempts & PinLockedUntilUtc được commit độc lập, không bị rollback khi ném INVALID_PIN.
         if (string.IsNullOrWhiteSpace(userId))
         {
             throw new BusinessException("USER_ID_REQUIRED", "Không xác định được chủ cửa hàng thực hiện chốt kỳ tính thuế.");
@@ -982,6 +960,26 @@ public class HouseholdTaxService : IHouseholdTaxService
             throw new BusinessException(pinResult.ErrorCode ?? "INVALID_PIN", pinResult.ErrorMessage ?? "Mã PIN xác thực chốt kỳ không chính xác.");
         }
 
+        if (_unitOfWork == null)
+        {
+            return await FinalizeTaxSnapshotCoreAsync(request, finalizedBy, cancellationToken);
+        }
+
+        return await _unitOfWork.ExecuteInTransactionAsync(
+            token => FinalizeTaxSnapshotCoreAsync(request, finalizedBy, token),
+            cancellationToken,
+            IsolationLevel.Serializable);
+    }
+
+    private async Task<HouseholdTaxSnapshotDto> FinalizeTaxSnapshotCoreAsync(
+
+        CreateTaxSnapshotRequest request,
+
+        string finalizedBy,
+
+        CancellationToken cancellationToken = default)
+
+    {
         // Tìm toàn bộ các bản ghi snapshot hiện hành của kỳ này (bao gồm cả tenant-wide và chi nhánh cũ nếu có)
         var existingList = await _repository.GetSnapshotsAsync(
             request.Year,
