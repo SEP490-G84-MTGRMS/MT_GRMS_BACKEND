@@ -7,6 +7,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-15
 
 ### Changed
+- Băm một chiều SHA-256 gắn salt theo `UserId` (Base64Url 120-bit) trước khi lưu `Users.PasswordResetOtp` thay vì lưu OTP 6 chữ số dạng thuần (`NHAT-V2-11`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-RETEST2_Ortus24_hash-password-reset-otp.md)
 - Đồng nhất 100% thông điệp phản hồi trung tính tại `POST /api/auth/forgot-password`, `POST /api/auth/verify-otp` và `POST /api/auth/reset-password` bất kể trạng thái tồn tại của tài khoản hay vòng đời OTP (`NHAT-V2-11` / `NHAT-AUTH-01`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-RETEST_Ortus24_neutralize-password-recovery-responses.md)
 - Bổ sung `[Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]` cho `DELETE /api/branches/{id}` và `GET /api/tenant/subscriptions/history`; chuẩn hóa phản hồi trung tính `200 OK` cho `POST /api/Auth/forgot-password` nhằm chống dò tài khoản (OWASP). [Worklog](./docs/worklogs/2026-11-24_QA-NHAT_AI_fix-rbac-and-auth-enumeration.md)
 - Đồng bộ kiểm tra dữ liệu nhập admin cho cửa hàng, gói dịch vụ, hàng mẫu, Excel và cấu hình nền tảng. [Worklog](./docs/worklogs/2026-11-23_ADMIN-VALIDATION_Codex_admin-input-boundaries.md)

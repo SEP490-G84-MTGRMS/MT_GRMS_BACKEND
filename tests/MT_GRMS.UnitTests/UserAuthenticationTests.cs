@@ -496,11 +496,14 @@ public class UserAuthenticationTests
         await authService.ForgotPasswordAsync(new ForgotPasswordRequest("owner@mtgrms.vn"));
 
         Assert.NotNull(user.PasswordResetOtp);
-        Assert.Equal(6, user.PasswordResetOtp.Length);
+        Assert.NotNull(emailService.LastOtp);
+        Assert.Equal(6, emailService.LastOtp!.Length);
+        Assert.NotEqual(emailService.LastOtp, user.PasswordResetOtp);
+        Assert.Equal(20, user.PasswordResetOtp.Length);
+        Assert.Equal(AuthService.HashPasswordResetOtp(user.Id, emailService.LastOtp!), user.PasswordResetOtp);
         Assert.NotNull(user.OtpExpiry);
         Assert.True(user.OtpExpiry > DateTime.UtcNow);
         Assert.Equal("owner@mtgrms.vn", emailService.LastToEmail);
-        Assert.Equal(user.PasswordResetOtp, emailService.LastOtp);
     }
 
     [Fact]
@@ -522,7 +525,7 @@ public class UserAuthenticationTests
             Id = "usr_verify",
             Username = "user_verify",
             Email = "verify@mtgrms.vn",
-            PasswordResetOtp = "849201",
+            PasswordResetOtp = AuthService.HashPasswordResetOtp("usr_verify", "849201"),
             OtpExpiry = DateTime.UtcNow.AddMinutes(5)
         };
         await repo.AddAsync(user);
@@ -552,7 +555,7 @@ public class UserAuthenticationTests
             Username = "user_reset",
             Email = "reset@mtgrms.vn",
             PasswordHash = "OldHash",
-            PasswordResetOtp = "123456",
+            PasswordResetOtp = AuthService.HashPasswordResetOtp("usr_reset", "123456"),
             OtpExpiry = DateTime.UtcNow.AddMinutes(5)
         };
         await repo.AddAsync(user);
@@ -897,7 +900,9 @@ public class UserAuthenticationTests
     {
         var repo = new FakeUserRepository();
         var mockEmail = new Mock<IEmailService>();
+        string? capturedResetOtp = null;
         mockEmail.Setup(e => e.SendPasswordResetOtpAsync(It.IsAny<string>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .Callback<string, string, string, CancellationToken>((_, _, otp, _) => capturedResetOtp = otp)
             .Returns(Task.CompletedTask);
 
         var user = new User
@@ -921,11 +926,13 @@ public class UserAuthenticationTests
         await Assert.ThrowsAsync<KeyNotFoundException>(() =>
             authService.ForgotPasswordAsync(new ForgotPasswordRequest("unknown@mtgrms.vn")));
 
-        // 3. Valid ForgotPassword sets OTP
+        // 3. Valid ForgotPassword sets hashed OTP (not plaintext)
         await authService.ForgotPasswordAsync(new ForgotPasswordRequest("forgot@mtgrms.vn"));
         Assert.NotNull(user.PasswordResetOtp);
+        Assert.NotNull(capturedResetOtp);
+        Assert.NotEqual(capturedResetOtp, user.PasswordResetOtp);
         Assert.NotNull(user.OtpExpiry);
-        var validOtp = user.PasswordResetOtp!;
+        var validOtp = capturedResetOtp!;
 
         // 4. VerifyOtp wrong OTP throws ArgumentException
         await Assert.ThrowsAsync<ArgumentException>(() =>
@@ -947,7 +954,7 @@ public class UserAuthenticationTests
 
         // 8. Exceeding 5 wrong OTP attempts invalidates OTP, and weak 8-char password is rejected
         await authService.ForgotPasswordAsync(new ForgotPasswordRequest("forgot@mtgrms.vn"));
-        var secondOtp = user.PasswordResetOtp!;
+        var secondOtp = capturedResetOtp!;
         await Assert.ThrowsAsync<ArgumentException>(() =>
             authService.ResetPasswordAsync(new ResetPasswordRequest("forgot@mtgrms.vn", secondOtp, "12345678")));
 
@@ -1100,14 +1107,14 @@ public class UserAuthenticationTests
         Assert.Contains("chưa được yêu cầu", exNoOtp.Message);
 
         // 4. Expired OTP
-        var userExpired = new User { Id = "u2", Username = "user2", Email = "user2@test.com", PasswordResetOtp = "123456", OtpExpiry = DateTime.UtcNow.AddMinutes(-5) };
+        var userExpired = new User { Id = "u2", Username = "user2", Email = "user2@test.com", PasswordResetOtp = AuthService.HashPasswordResetOtp("u2", "123456"), OtpExpiry = DateTime.UtcNow.AddMinutes(-5) };
         await repo.AddAsync(userExpired);
         var exExpired = await Assert.ThrowsAsync<ArgumentException>(() =>
             authService.VerifyOtpAsync(new VerifyOtpRequest("user2@test.com", "123456")));
         Assert.Contains("hết hạn", exExpired.Message);
 
         // 5. Wrong OTP
-        var userValid = new User { Id = "u3", Username = "user3", Email = "user3@test.com", PasswordResetOtp = "123456", OtpExpiry = DateTime.UtcNow.AddMinutes(5) };
+        var userValid = new User { Id = "u3", Username = "user3", Email = "user3@test.com", PasswordResetOtp = AuthService.HashPasswordResetOtp("u3", "123456"), OtpExpiry = DateTime.UtcNow.AddMinutes(5) };
         await repo.AddAsync(userValid);
         var exWrong = await Assert.ThrowsAsync<ArgumentException>(() =>
             authService.VerifyOtpAsync(new VerifyOtpRequest("user3@test.com", "654321")));

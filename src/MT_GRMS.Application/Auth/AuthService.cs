@@ -852,7 +852,7 @@ public class AuthService : IAuthService
         var targetEmail = string.IsNullOrWhiteSpace(user.Email) ? cleanInput : user.Email;
         var otpCode = RandomNumberGenerator.GetInt32(100000, 1000000).ToString();
 
-        user.PasswordResetOtp = otpCode;
+        user.PasswordResetOtp = HashPasswordResetOtp(user.Id, otpCode);
         user.OtpExpiry = DateTime.UtcNow.AddMinutes(10);
         PasswordResetFailedAttempts.TryRemove(user.Id, out _);
 
@@ -901,7 +901,7 @@ public class AuthService : IAuthService
         }
 
         var expectedBytes = Encoding.UTF8.GetBytes(user.PasswordResetOtp.Trim());
-        var actualBytes = Encoding.UTF8.GetBytes(cleanOtp);
+        var actualBytes = Encoding.UTF8.GetBytes(HashPasswordResetOtp(user.Id, cleanOtp));
         if (!CryptographicOperations.FixedTimeEquals(expectedBytes, actualBytes))
         {
             var failures = PasswordResetFailedAttempts.AddOrUpdate(user.Id, 1, (_, count) => count + 1);
@@ -1276,6 +1276,15 @@ public class AuthService : IAuthService
 
     private static string HashChallengeOtp(string challengeId, string otp)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes($"{challengeId}:{otp}")));
+
+    public static string HashPasswordResetOtp(string userId, string otp)
+    {
+        // 15-byte (120-bit) salted SHA-256 digest encoded as 20-char Base64Url (fits Users.PasswordResetOtp varchar(20) without schema migration)
+        var digest = SHA256.HashData(Encoding.UTF8.GetBytes($"pwd-reset:{userId}:{otp.Trim()}"));
+        return Convert.ToBase64String(digest.AsSpan(0, 15))
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
 
     private static string ComputeRegistrationFingerprint(string normalizedEmail, string normalizedPhone, string? storeName)
     {
