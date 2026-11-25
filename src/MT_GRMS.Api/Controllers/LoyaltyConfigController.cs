@@ -69,29 +69,44 @@ public class LoyaltyConfigController : BaseApiController
                 {
                     result.Add(new LoyaltyLedgerDto($"{order.Id}-earn", $"LP-{order.OrderCode}-E", customerId,
                         order.CustomerName, order.CustomerPhone ?? "", "EARN_PURCHASE", earned,
-                        balanceAfterOrder, order.OrderCode, "Tích điểm từ đơn hàng", order.CreatedAt, "POS"));
+                        balanceAfterOrder, order.OrderCode, "Tích điểm từ đơn hàng", DateTime.SpecifyKind(order.CreatedAt, DateTimeKind.Utc), "POS"));
                 }
             }
             if (order.PointsRedeemed > 0)
             {
                 result.Add(new LoyaltyLedgerDto($"{order.Id}-redeem", $"LP-{order.OrderCode}-R", customerId,
                     order.CustomerName, order.CustomerPhone ?? "", "REDEEM_PURCHASE", -order.PointsRedeemed,
-                    balanceAfterOrder - earned, order.OrderCode, "Tiêu điểm khi thanh toán đơn hàng", order.CreatedAt, "POS"));
+                    balanceAfterOrder - earned, order.OrderCode, "Tiêu điểm khi thanh toán đơn hàng", DateTime.SpecifyKind(order.CreatedAt, DateTimeKind.Utc), "POS"));
             }
             balances[customerId] = balanceAfterOrder - earned + order.PointsRedeemed;
         }
 
-        var adjustments = await _dbContext.LoyaltyPointAdjustments
+        var rawAdjustments = await _dbContext.LoyaltyPointAdjustments
             .AsNoTracking()
             .Include(entry => entry.Customer)
             .OrderByDescending(entry => entry.CreatedAt)
             .Take(500)
-            .Select(entry => new LoyaltyLedgerDto(
-                entry.Id.ToString(), entry.TransactionCode, entry.CustomerId,
-                entry.Customer.Name, entry.Customer.Phone, entry.Type,
-                entry.PointsChanged, entry.BalanceAfter, null, entry.Reason,
-                entry.CreatedAt, entry.PerformedBy))
+            .Select(entry => new
+            {
+                entry.Id,
+                entry.TransactionCode,
+                entry.CustomerId,
+                CustomerName = entry.Customer.Name,
+                CustomerPhone = entry.Customer.Phone,
+                entry.Type,
+                entry.PointsChanged,
+                entry.BalanceAfter,
+                entry.Reason,
+                entry.CreatedAt,
+                entry.PerformedBy,
+            })
             .ToListAsync(cancellationToken);
+
+        var adjustments = rawAdjustments.Select(entry => new LoyaltyLedgerDto(
+            entry.Id.ToString(), entry.TransactionCode, entry.CustomerId,
+            entry.CustomerName, entry.CustomerPhone, entry.Type,
+            entry.PointsChanged, entry.BalanceAfter, null, entry.Reason,
+            DateTime.SpecifyKind(entry.CreatedAt, DateTimeKind.Utc), entry.PerformedBy));
 
         result.AddRange(adjustments);
         result = result.OrderByDescending(entry => entry.CreatedAt).Take(500).ToList();

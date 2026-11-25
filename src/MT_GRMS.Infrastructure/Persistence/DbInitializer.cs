@@ -1386,6 +1386,7 @@ END $$;
                         ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""ReopenedByUserId"" uuid;
                         ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""ReopenReason"" character varying(500);
                         DROP INDEX IF EXISTS ""IX_BusinessDayClosings_Tenant_Branch_Date"";
+            DROP INDEX IF EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate"";
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate_Version"" ON ""BusinessDayClosings"" (""TenantId"", ""BranchId"", ""BusinessDate"", ""Version"");
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate_IsActive"" ON ""BusinessDayClosings"" (""TenantId"", ""BranchId"", ""BusinessDate"", ""IsActive"") WHERE ""IsActive"" = TRUE;
 
@@ -1823,7 +1824,7 @@ END $$;
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddTaxFilingConfirmations.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchConversionRulesAndNotifications.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.RemoveGoodsReceiptFreight.UpSql);
-                    await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductAllowedSupplierIds.UpSql);
+                    await context.Database.ExecuteSqlRawAsync("ALTER TABLE IF EXISTS \"BranchProducts\" ADD COLUMN IF NOT EXISTS \"AllowedSupplierIdsJson\" text NULL;");
                 }
                 catch (Exception ex)
                 {

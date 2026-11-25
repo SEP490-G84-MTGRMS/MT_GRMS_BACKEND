@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.BusinessDays;
 using MT_GRMS.Domain.Entities.Finance;
 using MT_GRMS.Domain.Entities.Sales;
+using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
 
 namespace MT_GRMS.Infrastructure.Repositories;
@@ -39,6 +40,17 @@ public class BusinessDayClosingRepository : IBusinessDayClosingRepository
 
     public async Task<IReadOnlyList<Order>> GetShiftlessOrdersAsync(string tenantId, Guid branchId, DateOnly businessDate, CancellationToken cancellationToken = default) =>
         await _context.Orders.Where(x => x.TenantId == tenantId && x.BranchId == branchId && x.ShiftId == null && x.BusinessDate == businessDate)
+            .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<Guid>> GetPostedPosSaleOrderIdsAsync(string tenantId, Guid branchId, Guid[] orderIds, CancellationToken cancellationToken = default) =>
+        await _context.CashbookEntries.AsNoTracking()
+            .Where(entry => entry.TenantId == tenantId && entry.BranchId == branchId && !entry.IsDeleted &&
+                entry.AccountType == FinanceAccountType.Safe && entry.EntryType == CashbookEntryType.Receipt &&
+                (entry.SourceType == "POS_SALE" || entry.SourceType == "PREORDER_DEPOSIT" || entry.SourceType == "PREORDER_PICKUP") &&
+                entry.Amount > 0 &&
+                entry.SourceId.HasValue && orderIds.Contains(entry.SourceId.Value))
+            .Select(entry => entry.SourceId!.Value)
+            .Distinct()
             .ToListAsync(cancellationToken);
 
     public Task<bool> HasPendingPaymentOrdersAsync(string tenantId, Guid branchId, DateOnly businessDate, CancellationToken cancellationToken = default) =>

@@ -528,6 +528,17 @@ public class ShiftService : IShiftService
         CancellationToken cancellationToken = default)
     {
         var list = await _shiftRepository.GetHistoryAsync(branchId, fromUtc, toUtc, cancellationToken);
+        foreach (var shift in list)
+        {
+            if (shift.Status == ShiftState.Open || shift.Status == ShiftState.Closing)
+            {
+                var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shift.Id, cancellationToken);
+                shift.TotalCashSales = cashSales;
+                shift.TotalBankRevenue = bankRevenue;
+                shift.TotalOrdersCount = ordersCount;
+                shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
+            }
+        }
         return list.Select(MapToDetailResponse).ToList();
     }
 
@@ -1387,7 +1398,8 @@ public class ShiftService : IShiftService
 
         if (!ReadParticipants(shift).Any(p => p.UserId == userId))
         {
-            throw new UnauthorizedAccessException(
+            throw new BusinessException(
+                "SHIFT_CLOSE_FORBIDDEN",
                 "Bạn không thuộc nhóm nhân viên thực tế tham gia ca này nên không thể thao tác chốt ca.");
         }
         return Task.CompletedTask;

@@ -211,5 +211,6 @@ public class LoyaltyConfigControllerTests
         var apiRes = Assert.IsType<ApiResponse<IReadOnlyList<LoyaltyLedgerDto>>>(ok.Value);
         Assert.True(apiRes.Success);
         Assert.NotEmpty(apiRes.Data!);
+        Assert.All(apiRes.Data!, row => Assert.Equal(DateTimeKind.Utc, row.CreatedAt.Kind));
     }
 }

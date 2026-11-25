@@ -764,6 +764,12 @@ public class OrderService : IOrderService
 
         string orderCode = $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
         var orderBusinessDate = activeShift?.BusinessDate ?? BusinessDateResolver.Resolve(DateTime.UtcNow, new TimeSpan(6, 0, 0));
+        if (_shiftRepository != null && await _shiftRepository.IsBusinessDayClosedAsync(branchId, orderBusinessDate, cancellationToken))
+        {
+            throw new BusinessException(
+                "BUSINESS_DAY_CLOSED",
+                $"Ngày nghiệp vụ {orderBusinessDate:dd/MM/yyyy} đã khóa sổ cuối ngày. Không thể tạo hóa đơn mới.");
+        }
         var requiresBankAccount = request.IsPendingPayment && paymentMethodUpper is "VIETQR" or "TRANSFER" or "BANK";
         if (requiresBankAccount && !branch.CurrentBankFinanceAccountId.HasValue)
             throw new BusinessException("BANK_ACCOUNT_NOT_CONFIGURED", "Chi nhánh chưa chọn tài khoản ngân hàng nhận chuyển khoản.");
@@ -1377,6 +1383,12 @@ public class OrderService : IOrderService
             var preOrderBusinessDate = preOrderShift != null
                 ? preOrderShift.BusinessDate
                 : BusinessDateResolver.Resolve(DateTime.UtcNow, new TimeSpan(6, 0, 0));
+            if (_shiftRepository != null && await _shiftRepository.IsBusinessDayClosedAsync(request.BranchId, preOrderBusinessDate, cancellationToken))
+            {
+                throw new BusinessException(
+                    "BUSINESS_DAY_CLOSED",
+                    $"Ngày nghiệp vụ {preOrderBusinessDate:dd/MM/yyyy} đã khóa sổ cuối ngày. Không thể tạo đơn đặt trước mới.");
+            }
             var order = new Order
             {
                 Id = Guid.NewGuid(),
@@ -2300,6 +2312,7 @@ public class OrderService : IOrderService
         Guid? currentActiveShiftId = currentOpenShift?.Id;
 
         string exchangeCode = $"DT{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
+        var exchangeBusinessDate = currentOpenShift?.BusinessDate ?? BusinessDateResolver.Resolve(DateTime.UtcNow, new TimeSpan(6, 0, 0));
         var exchangeOrder = new Order
         {
             Id = Guid.NewGuid(),
@@ -2309,6 +2322,7 @@ public class OrderService : IOrderService
             OrderCode = exchangeCode,
             CashierName = exchangeCashierName,
             OrderDate = DateTime.UtcNow,
+            BusinessDate = exchangeBusinessDate,
             TotalAmount = totalNewAmount,
             DiscountAmount = 0m,
             FinalAmount = Math.Max(0, netAmount),
@@ -2329,6 +2343,12 @@ public class OrderService : IOrderService
         foreach (var d in newOrderDetails)
         {
             d.OrderId = exchangeOrder.Id;
+        }
+
+        if (totalReturnAmount > 0)
+        {
+            originalOrder.ReturnedAmount += totalReturnAmount;
+            originalOrder.UpdatedAt = DateTime.UtcNow;
         }
 
         await _orderRepository.AddAsync(exchangeOrder, cancellationToken);

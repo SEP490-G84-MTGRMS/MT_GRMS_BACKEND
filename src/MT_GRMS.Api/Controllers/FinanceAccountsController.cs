@@ -231,6 +231,10 @@ public class FinanceAccountsController : BaseApiController
             await _db.Branches.AnyAsync(x => x.Id == account.BranchId.Value && x.CurrentBankFinanceAccountId == account.Id, ct))
             return Conflict(ApiResponse<bool>.Fail("BANK_CURRENT", "Đổi tài khoản nhận QR của chi nhánh trước khi ngừng tài khoản này."));
 
+        if (request.IsActive && account.AccountType == FinanceAccountType.Bank &&
+            !string.Equals(account.SepayConnectionStatus, "Connected", StringComparison.OrdinalIgnoreCase))
+            return UnprocessableEntity(ApiResponse<bool>.Fail("SEPAY_NOT_CONNECTED", "Chỉ được kích hoạt tài khoản ngân hàng sau khi kết nối SePay thành công."));
+
         // REQ: Mỗi chi nhánh duy trì 01 Két sắt và 01 Két quầy hoạt động; khi đổi sang két khác thì két cũ tự động tắt (chặn nếu két cũ đang mở ca)
         if (request.IsActive && (account.AccountType == FinanceAccountType.Safe || account.AccountType == FinanceAccountType.Till) && account.BranchId.HasValue)
         {
