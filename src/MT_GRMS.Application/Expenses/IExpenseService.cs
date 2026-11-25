@@ -1,3 +1,4 @@
+using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Expenses.Dtos;
 
 namespace MT_GRMS.Application.Expenses;
@@ -11,6 +12,17 @@ public interface IExpenseService
     Task<ExpenseVoucherResponse> DisburseExpenseAsync(DisburseExpenseRequest request, CancellationToken ct = default);
     Task<ExpenseVoucherResponse> GetExpenseByIdAsync(Guid expenseId, CancellationToken ct = default);
     Task<List<ExpenseVoucherResponse>> GetExpensesAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CancellationToken ct = default);
+    Task<PagedResult<ExpenseVoucherResponse>> GetExpensesPageAsync(
+        Guid? branchId,
+        DateTime? fromDate,
+        DateTime? toDate,
+        int page = 1,
+        int pageSize = 50,
+        string? keyword = null,
+        string? category = null,
+        string? status = null,
+        string? quickStatus = null,
+        CancellationToken ct = default);
     Task<ExpenseSummaryResponse> GetExpenseSummaryAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, CancellationToken ct = default);
     Task<List<ExpenseVoucherResponse>> GetPendingTriageAsync(Guid? branchId, CancellationToken ct = default);
     Task<ExpenseVoucherResponse> ResolveTriageAsync(Guid voucherId, ResolveTriageRequest request, CancellationToken ct = default);

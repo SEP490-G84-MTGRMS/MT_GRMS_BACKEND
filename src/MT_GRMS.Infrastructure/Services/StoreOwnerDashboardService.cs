@@ -84,15 +84,16 @@ public sealed class StoreOwnerDashboardService : IStoreOwnerDashboardService
             item.AvailableQty, item.MinStock, item.Unit)).ToList();
         var expiryCutoffUtc = TimeZoneInfo.ConvertTimeToUtc(
             DateTime.SpecifyKind(todayVn.AddDays(31), DateTimeKind.Unspecified), vnZone);
-        var expiringBatches = await (
+        var expiringQuery =
             from bs in _db.BranchStocks.AsNoTracking()
             join product in _db.Products.AsNoTracking() on bs.ProductId equals product.Id
             where bs.TenantId == tenantId && product.TenantId == tenantId && !bs.IsDeleted && !product.IsDeleted &&
                 (!branchId.HasValue || bs.BranchId == branchId.Value) &&
                 bs.QuantityOnHand > 0 && bs.ExpiryDate.HasValue && bs.ExpiryDate.Value < expiryCutoffUtc
             orderby bs.ExpiryDate
-            select new { bs.ProductId, bs.BranchId, ProductName = product.Name, bs.BatchCode, bs.ExpiryDate, bs.QuantityOnHand }
-        ).Take(5).ToListAsync(ct);
+            select new { bs.ProductId, bs.BranchId, ProductName = product.Name, bs.BatchCode, bs.ExpiryDate, bs.QuantityOnHand };
+        var expiringBatchCount = await expiringQuery.CountAsync(ct);
+        var expiringBatches = await expiringQuery.Take(5).ToListAsync(ct);
         var expiryItems = expiringBatches.Select(item => new DashboardExpiryItemDto(
             item.ProductId, item.BranchId, item.ProductName,
             branchNames.GetValueOrDefault(item.BranchId, "Chi nhánh"), item.BatchCode,
@@ -113,7 +114,7 @@ public sealed class StoreOwnerDashboardService : IStoreOwnerDashboardService
                 summary.NetProfit, summary.CogsSource, summary.CogsWarningNotice),
             new DashboardProcurementDto(pendingApproval, awaitingReceipt, receivedAmount),
             new DashboardInventoryDto(stock.KpiSummary.LowStockCount, stock.KpiSummary.OutOfStockCount,
-                stock.KpiSummary.ExpiryWarningCount, lowStockItems, expiryItems),
+                Math.Max(stock.KpiSummary.ExpiryWarningCount, expiringBatchCount), lowStockItems, expiryItems),
             new DashboardEmployeesDto(totalEmployees, activeEmployees))
         {
             Tasks = await GetTasksAsync(tenantId, branchId, DateOnly.FromDateTime(todayVn), ct)

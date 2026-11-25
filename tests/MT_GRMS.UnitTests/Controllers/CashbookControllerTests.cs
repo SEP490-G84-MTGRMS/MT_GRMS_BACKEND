@@ -155,13 +155,14 @@ public class CashbookControllerTests
         };
 
         _mockCashbookService
-            .Setup(s => s.GetEntriesAsync(null, null, null, null, 1, 50, null, null, null, It.IsAny<CancellationToken>()))
-            .ReturnsAsync(entries);
+            .Setup(s => s.GetEntriesPageAsync(null, null, null, null, 1, 50, null, null, null, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new PagedResult<CashbookEntryResponse> { Items = entries, TotalItems = 51 });
 
         var actionResult = await _controller.GetEntries(null, null, null, null, null, null, null, 1, 50, CancellationToken.None);
 
         var okResult = Assert.IsType<OkObjectResult>(actionResult.Result);
-        var apiResponse = Assert.IsType<ApiResponse<List<CashbookEntryResponse>>>(okResult.Value);
+        var apiResponse = Assert.IsType<CashbookEntriesResponse>(okResult.Value);
+        Assert.Equal(51, apiResponse.TotalItems);
         Assert.True(apiResponse.Success);
         Assert.Single(apiResponse.Data!);
     }
@@ -308,22 +309,6 @@ public class CashbookControllerTests
         var apiResponse = Assert.IsType<ApiResponse<TransferFundResponse>>(okResult.Value);
         Assert.True(apiResponse.Success);
         Assert.Equal("CB-OUT", apiResponse.Data?.Payment.EntryCode);
-    }
-
-    [Fact]
-    public async Task ReconcileCashAccount_ShouldReturnOk()
-    {
-        var request = new ReconcileAccountRequest(Guid.NewGuid(), 1_000_000m, "Kiem ke khop");
-        _mockCashbookService
-            .Setup(s => s.ReconcileCashAccountAsync(request, It.IsAny<CancellationToken>()))
-            .ReturnsAsync((CashbookEntryResponse?)null);
-
-        var actionResult = await _controller.ReconcileCashAccount(request, CancellationToken.None);
-
-        var okResult = Assert.IsType<OkObjectResult>(actionResult.Result);
-        var apiResponse = Assert.IsType<ApiResponse<CashbookEntryResponse?>>(okResult.Value);
-        Assert.True(apiResponse.Success);
-        Assert.Null(apiResponse.Data);
     }
 
     [Fact]

@@ -30,6 +30,16 @@ public static class DbInitializer
 
         await context.Database.ExecuteSqlRawAsync(Migrations.AddOrderDetailStockAllocations.UpSql);
         await context.Database.ExecuteSqlRawAsync(Migrations.AddExpenseVoucherDueDate.UpSql);
+        await context.Database.ExecuteSqlRawAsync(@"ALTER TABLE IF EXISTS ""Transfers"" ADD COLUMN IF NOT EXISTS ""RowVersion"" integer NOT NULL DEFAULT 1;");
+        await ExecuteSqlSafeAsync(context, Migrations.AddTaxFilingConfirmations.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchConversionRulesAndNotifications.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.ScheduleFefoDiscounts.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.RemoveGoodsReceiptFreight.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductAllowedSupplierIds.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddProductImageUrlsJson.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductProcessedPrice.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddSupplierPoModificationRules.UpSql);
+        await SyncMissingColumnsAsync(context);
     }
 
     private static async Task EnsureSupplierDispatchSchemaAsync(AppDbContext context, ILogger? logger = null)
@@ -281,10 +291,38 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
     /// </summary>
     private static async Task SyncMissingColumnsAsync(AppDbContext context, ILogger? logger = null)
     {
+        if (!context.Database.IsRelational())
+        {
+            return;
+        }
+
+        HashSet<string>? existingTables = null;
+        HashSet<string>? existingColumns = null;
+        if (context.Database.IsNpgsql())
+        {
+            try
+            {
+                var tables = await context.Database
+                    .SqlQueryRaw<string>("SELECT table_name AS \"Value\" FROM information_schema.tables WHERE table_schema = 'public'")
+                    .ToListAsync();
+                existingTables = new HashSet<string>(tables, StringComparer.Ordinal);
+
+                var cols = await context.Database
+                    .SqlQueryRaw<string>("SELECT table_name || '.' || column_name AS \"Value\" FROM information_schema.columns WHERE table_schema = 'public'")
+                    .ToListAsync();
+                existingColumns = new HashSet<string>(cols, StringComparer.Ordinal);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogDebug(ex, "Không đọc được information_schema, dùng fallback tuần tự.");
+            }
+        }
+
         foreach (var entityType in context.Model.GetEntityTypes())
         {
             var table = entityType.GetTableName();
             if (string.IsNullOrEmpty(table)) continue;
+            if (existingTables != null && !existingTables.Contains(table)) continue;
             var store = StoreObjectIdentifier.Table(table, entityType.GetSchema());
 
             foreach (var prop in entityType.GetProperties())
@@ -292,6 +330,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 var column = prop.GetColumnName(store);
                 var type = prop.GetColumnType(store);
                 if (string.IsNullOrEmpty(column) || string.IsNullOrEmpty(type) || column == "xmin") continue;
+                if (existingColumns != null && existingColumns.Contains($"{table}.{column}")) continue;
 
                 var t = type.ToLowerInvariant();
                 string? defaultExpr = prop.GetDefaultValueSql(store);
@@ -968,6 +1007,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
 
         try
         {
+            // Bắt buộc: ADD IF NOT EXISTS không sửa cột nullable đã tồn tại trên DB cũ.
+            // Không dùng ExecuteSqlSafeAsync ở đây: lỗi chuẩn hóa phải dừng khởi động.
+            if (context.Database.IsNpgsql())
+                await context.Database.ExecuteSqlRawAsync(Migrations.NormalizeTaxPolicyJson.UpSql.Replace("{", "{{").Replace("}", "}}"));
+
             // 1. Bổ sung các cột Status, RevisionNumber, SupersededSnapshotId, RectificationReason nếu chưa có
             await ExecuteSqlSafeAsync(context, @"
                 ALTER TABLE IF EXISTS ""HouseholdTaxSnapshots"" ADD COLUMN IF NOT EXISTS ""Status"" integer NOT NULL DEFAULT 1;
@@ -1029,7 +1073,7 @@ ON ""HouseholdTaxSnapshots"" (
         }
         catch (Exception ex)
         {
-            logger?.LogWarning(ex, "Cảnh báo khi đồng bộ schema cho bảng HouseholdTaxSnapshots");
+            throw new HouseholdTaxSnapshotSchemaException(ex);
         }
     }
 
@@ -1094,6 +1138,7 @@ ON ""HouseholdTaxSnapshots"" (
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""RetailPrice"" numeric(18,2) NULL;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""ZoneArea"" character varying(50) NULL;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""RowVersion"" integer NOT NULL DEFAULT 1;", logger);
+        await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""Transfers"" ADD COLUMN IF NOT EXISTS ""RowVersion"" integer NOT NULL DEFAULT 1;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""CreatedBy"" uuid NULL;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""CreatedAt"" timestamp without time zone DEFAULT CURRENT_TIMESTAMP;", logger);
         await ExecuteSqlSafeAsync(context, @"ALTER TABLE IF EXISTS ""BranchStocks"" ADD COLUMN IF NOT EXISTS ""UpdatedAt"" timestamp without time zone;", logger);
@@ -1808,6 +1853,7 @@ END $$;
                 }
                 catch (Exception ex)
                 {
+                    if (ex is HouseholdTaxSnapshotSchemaException) throw;
                     logger?.LogError(ex, "Lỗi khi chạy EnsureSupplierDispatchSchemaAsync / EnsureBranchColumnsAsync");
                 }
 
@@ -1818,7 +1864,10 @@ END $$;
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddTaxFilingConfirmations.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchConversionRulesAndNotifications.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.RemoveGoodsReceiptFreight.UpSql);
-                    await context.Database.ExecuteSqlRawAsync(AddBranchProductAllowedSupplierIdsSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductAllowedSupplierIds.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddProductImageUrlsJson.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductProcessedPrice.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddSupplierPoModificationRules.UpSql);
                 }
                 catch (Exception ex)
                 {
@@ -1844,7 +1893,8 @@ END $$;
         }
         catch (Exception ex)
         {
-            if (ex is InvalidOperationException && ex.Message.StartsWith("MERGE_SCHEMA_FAILED:", StringComparison.Ordinal))
+            if (ex is HouseholdTaxSnapshotSchemaException ||
+                ex is InvalidOperationException && ex.Message.StartsWith("MERGE_SCHEMA_FAILED:", StringComparison.Ordinal))
                 throw;
             logger?.LogWarning(ex, "Lỗi trong quá trình kiểm tra cấu trúc CSDL hoặc migrations (bỏ qua nếu bảng đã tồn tại).");
         }
@@ -2171,74 +2221,5 @@ END $$;
         }
         await db.SaveChangesAsync(ct);
     }
-
-    private const string AddBranchProductAllowedSupplierIdsSql = """
-        ALTER TABLE IF EXISTS "BranchProducts"
-          ADD COLUMN IF NOT EXISTS "AllowedSupplierIdsJson" text;
-
-        DO $$
-        BEGIN
-          IF EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_schema = 'public' AND table_name = 'BranchProducts'
-          ) AND EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_schema = 'public' AND table_name = 'SupplierProducts'
-          ) AND EXISTS (
-            SELECT 1 FROM information_schema.tables
-            WHERE table_schema = 'public' AND table_name = 'SupplierBranch'
-          ) THEN
-            IF EXISTS (
-              SELECT 1 FROM information_schema.tables
-              WHERE table_schema = 'public' AND table_name = 'BranchStocks'
-            ) THEN
-              UPDATE "BranchProducts" bp
-              SET "AllowedSupplierIdsJson" = sub.supplier_ids_json
-              FROM (
-                SELECT bs."TenantId", bs."BranchId", bs."ProductId",
-                       json_agg(DISTINCT bs."SupplierId"::text)::text AS supplier_ids_json
-                FROM "BranchStocks" bs
-                WHERE bs."IsDeleted" = false
-                  AND bs."SupplierId" IS NOT NULL
-                GROUP BY bs."TenantId", bs."BranchId", bs."ProductId"
-              ) sub
-              WHERE bp."IsDeleted" = false
-                AND bp."AllowedSupplierIdsJson" IS NULL
-                AND bp."TenantId" = sub."TenantId"
-                AND bp."BranchId" = sub."BranchId"
-                AND bp."ProductId" = sub."ProductId";
-            END IF;
-
-            UPDATE "BranchProducts" bp
-            SET "AllowedSupplierIdsJson" = json_build_array(picked."SupplierId"::text)::text
-            FROM (
-              SELECT DISTINCT ON (bp2."Id")
-                     bp2."Id" AS bp_id,
-                     sp."SupplierId"
-              FROM "BranchProducts" bp2
-              INNER JOIN "SupplierBranch" sb
-                ON sb."TenantId" = bp2."TenantId"
-               AND sb."BranchId" = bp2."BranchId"
-               AND sb."IsDeleted" = false
-               AND sb."Status" = 1
-              INNER JOIN "SupplierProducts" sp
-                ON sp."TenantId" = bp2."TenantId"
-               AND sp."SupplierId" = sb."SupplierId"
-               AND sp."ProductId" = bp2."ProductId"
-               AND sp."IsDeleted" = false
-               AND sp."Status" = 1
-              INNER JOIN "Suppliers" s
-                ON s."Id" = sp."SupplierId"
-               AND s."IsDeleted" = false
-               AND s."Status" = 1
-              WHERE bp2."IsDeleted" = false
-                AND bp2."AllowedSupplierIdsJson" IS NULL
-              ORDER BY bp2."Id", sp."IsPrimarySupplier" DESC, sp."CreatedAt" ASC
-            ) picked
-            WHERE bp."Id" = picked.bp_id
-              AND bp."AllowedSupplierIdsJson" IS NULL;
-          END IF;
-        END $$;
-        """;
 
 }

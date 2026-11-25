@@ -21,11 +21,35 @@ public sealed class FinanceOverviewController : BaseApiController
     [HttpGet]
     public async Task<ActionResult<ApiResponse<FinanceOverviewResponse>>> GetOverview(
         [FromQuery] Guid? branchId,
-        [FromQuery] DateTime fromDate,
-        [FromQuery] DateTime toDate,
-        CancellationToken ct)
+        [FromQuery] DateTime? fromDate = null,
+        [FromQuery] DateTime? toDate = null,
+        CancellationToken ct = default)
     {
-        var result = await _service.GetOverviewAsync(branchId, fromDate, toDate, ct);
+        var nowUtc = DateTime.UtcNow;
+        var nowVn = nowUtc.AddHours(7);
+        var defaultFromUtc = new DateTime(nowVn.Year, nowVn.Month, 1, 0, 0, 0, DateTimeKind.Utc).AddHours(-7);
+
+        var resolvedFrom = NormalizeUtc(fromDate, defaultFromUtc, endOfDayIfDateOnly: false);
+        var resolvedTo = NormalizeUtc(toDate, nowUtc, endOfDayIfDateOnly: true);
+
+        var result = await _service.GetOverviewAsync(branchId, resolvedFrom, resolvedTo, ct);
         return Ok(ApiResponse<FinanceOverviewResponse>.Ok(result));
+    }
+
+    private static DateTime NormalizeUtc(DateTime? input, DateTime fallbackUtc, bool endOfDayIfDateOnly)
+    {
+        if (!input.HasValue || input.Value == default)
+            return fallbackUtc;
+
+        var dt = input.Value;
+        if (dt.Kind == DateTimeKind.Utc)
+            return dt;
+        if (dt.Kind == DateTimeKind.Local)
+            return dt.ToUniversalTime();
+
+        var vnDt = endOfDayIfDateOnly && dt.TimeOfDay == TimeSpan.Zero
+            ? dt.Date.AddDays(1).AddTicks(-1)
+            : dt;
+        return DateTime.SpecifyKind(vnDt.AddHours(-7), DateTimeKind.Utc);
     }
 }

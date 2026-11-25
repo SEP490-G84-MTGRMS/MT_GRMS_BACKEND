@@ -60,7 +60,9 @@ public record PnLSummaryResponse(
     int TotalOrders = 0,
     decimal AverageOrderValue = 0m,
     CogsValuationComparisonDto? CogsComparison = null,
-    List<TopProductPnLDto>? TopProducts = null
+    List<TopProductPnLDto>? TopProducts = null,
+    decimal ShrinkageLoss = 0m,
+    decimal EstimatedTaxAmount = 0m
 );
 
 public record PnLComparisonResponse(

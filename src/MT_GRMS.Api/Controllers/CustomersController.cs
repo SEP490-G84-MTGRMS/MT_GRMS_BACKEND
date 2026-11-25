@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Debt.Dtos;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Entities.Sales;
 using MT_GRMS.Domain.Enums;
 using MT_GRMS.Infrastructure.Persistence;
@@ -43,7 +44,13 @@ public class CustomersController : BaseApiController
         }
 
         if (!string.IsNullOrWhiteSpace(tier) && !tier.Equals("ALL", StringComparison.OrdinalIgnoreCase))
-            query = query.Where(c => c.MembershipTier == tier);
+        {
+            var normalizedTier = CanonicalTiers.TryGetValue(tier.Trim(), out var canonicalTier)
+                ? canonicalTier
+                : tier.Trim();
+            var normalizedTierLower = normalizedTier.ToLower();
+            query = query.Where(c => c.MembershipTier.ToLower() == normalizedTierLower);
+        }
         if (debtStatus is not null && debtStatus.Equals("NO_DEBT", StringComparison.OrdinalIgnoreCase))
             query = query.Where(c => c.TotalDebt <= 0);
         else if (debtStatus is not null && !debtStatus.Equals("ALL", StringComparison.OrdinalIgnoreCase))
@@ -79,14 +86,34 @@ public class CustomersController : BaseApiController
                 o.FinalAmount, "Debt"))
             .ToListAsync(ct);
 
-        var recentPayments = await _context.CashbookEntries.AsNoTracking()
-            .Where(e => e.SourceId == id && e.TenantId == tenantId && e.SourceType == "DEBT_REPAYMENT")
-            .OrderByDescending(e => e.OccurredAtUtc).Take(10)
+        var rawRecentPayments = await _context.CashbookEntries.AsNoTracking()
+            .Where(e => e.SourceId == id && e.TenantId == tenantId && !e.IsDeleted &&
+                (e.SourceType == "DEBT_REPAYMENT" || e.SourceType == "DEBT") &&
+                e.EntryType != CashbookEntryType.Payment)
+            .OrderByDescending(e => e.OccurredAtUtc)
+            .ToListAsync(ct);
+        var paymentIds = rawRecentPayments.Select(e => e.Id).ToList();
+        var reversedPaymentIds = paymentIds.Count == 0
+            ? new HashSet<Guid>()
+            : (await _context.CashbookEntries.AsNoTracking()
+                .Where(r => r.TenantId == tenantId && !r.IsDeleted &&
+                    (r.SourceType == "COMPENSATING" || r.SourceType == "REVERSAL") &&
+                    ((r.SourceId.HasValue && paymentIds.Contains(r.SourceId.Value)) ||
+                     (r.ReversedEntryId.HasValue && paymentIds.Contains(r.ReversedEntryId.Value))))
+                .Select(r => new { r.SourceId, r.ReversedEntryId })
+                .ToListAsync(ct))
+                .SelectMany(r => new[] { r.SourceId, r.ReversedEntryId })
+                .Where(x => x.HasValue)
+                .Select(x => x!.Value)
+                .ToHashSet();
+        var recentPayments = rawRecentPayments
+            .Where(e => !reversedPaymentIds.Contains(e.Id))
+            .Take(10)
             .Select(e => new CustomerPaymentSummaryResponse(
                 string.IsNullOrEmpty(e.ReferenceCode) ? e.EntryCode : e.ReferenceCode,
                 e.OccurredAtUtc.ToString("yyyy-MM-dd HH:mm"), e.Amount,
                 e.AccountType.ToString(), "Chủ cửa hàng", e.Description))
-            .ToListAsync(ct);
+            .ToList();
 
         var debtStats = await _context.Orders.AsNoTracking()
             .Where(o => o.CustomerId == id && o.TenantId == tenantId && o.Status == "Completed" && !o.IsDeleted
@@ -98,18 +125,63 @@ public class CustomersController : BaseApiController
             debtStats?.Count ?? 0, debtStats?.Total ?? 0m)));
     }
 
+    private static readonly Dictionary<string, string> CanonicalTiers = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Standard"] = "Standard",
+        ["Silver"] = "Silver",
+        ["Gold"] = "Gold",
+        ["Platinum"] = "Platinum",
+        ["VIP"] = "VIP",
+        ["Bronze"] = "Bronze",
+        ["Diamond"] = "Diamond"
+    };
+
+    private static readonly System.Text.RegularExpressions.Regex VnPhoneRegex =
+        new(@"^(0|\+84)[35789]\d{8}$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    private static readonly System.Text.RegularExpressions.Regex EmailRegex =
+        new(@"^[^@\s]+@[^@\s]+\.[^@\s]+$", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     [HttpPost]
     public async Task<ActionResult<ApiResponse<CustomerResponse>>> CreateCustomer(
         [FromBody] CreateCustomerRequest request, CancellationToken ct)
     {
         var tenantId = _tenantContext.CurrentTenantId;
         var cleanName = CleanText(request.FullName);
-        if (string.IsNullOrWhiteSpace(cleanName) || request.FullName.Contains('<') || request.FullName.Contains('>'))
-            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không hợp lệ."));
+        if (string.IsNullOrWhiteSpace(cleanName) || cleanName.Length > 100 || request.FullName.Contains('<') || request.FullName.Contains('>'))
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không hợp lệ (tối đa 100 ký tự)."));
         if (string.IsNullOrWhiteSpace(request.PhoneNumber))
             return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Số điện thoại không được để trống."));
 
         var phone = request.PhoneNumber.Trim();
+        if (phone.Length > 20 || !VnPhoneRegex.IsMatch(phone))
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Số điện thoại Việt Nam không đúng định dạng (10 chữ số, bắt đầu 03/05/07/08/09)."));
+
+        var email = request.Email?.Trim();
+        if (!string.IsNullOrWhiteSpace(email) && (email.Length > 100 || !EmailRegex.IsMatch(email)))
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Địa chỉ email không hợp lệ."));
+
+        var address = CleanText(request.Address);
+        if (address != null && address.Length > 255)
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Địa chỉ không được vượt quá 255 ký tự."));
+
+        var isStoreOwner =
+            (User?.IsInRole(SystemRoles.StoreOwner) == true) ||
+            string.Equals(_tenantContext.CurrentRole, SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase);
+        var requestedTier = request.MembershipTier?.Trim();
+        if (!isStoreOwner && !string.IsNullOrWhiteSpace(requestedTier) &&
+            !requestedTier.Equals("Standard", StringComparison.OrdinalIgnoreCase))
+        {
+            return StatusCode(403, ApiResponse<object>.Fail(
+                "FORBIDDEN",
+                "Chỉ chủ cửa hàng mới có quyền gán hạng thành viên cho khách hàng.",
+                403));
+        }
+
+        var rawTier = !isStoreOwner || string.IsNullOrWhiteSpace(requestedTier) ? "Standard" : requestedTier;
+        if (rawTier.Length > 30 || !CanonicalTiers.TryGetValue(rawTier, out var tier))
+            return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Hạng thành viên không hợp lệ."));
+
         if (await _context.Customers.AnyAsync(c => c.Phone == phone && c.TenantId == tenantId, ct))
             return Conflict(ApiResponse<object>.Fail("PHONE_EXISTS", "Số điện thoại này đã được sử dụng cho một khách hàng khác."));
 
@@ -119,9 +191,9 @@ public class CustomersController : BaseApiController
             CustomerCode = "KH" + DateTime.UtcNow.ToString("yyMMddHHmmss") + Random.Shared.Next(10, 99),
             Name = cleanName,
             Phone = phone,
-            Email = request.Email?.Trim(),
-            Address = CleanText(request.Address),
-            MembershipTier = request.MembershipTier ?? "Standard",
+            Email = email,
+            Address = address,
+            MembershipTier = tier,
             TotalDebt = 0m
         };
         await _context.Customers.AddAsync(customer, ct);
@@ -130,6 +202,7 @@ public class CustomersController : BaseApiController
     }
 
     [HttpPut("{id:guid}")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<CustomerResponse>>> UpdateCustomer(
         Guid id, [FromBody] UpdateCustomerRequest request, CancellationToken ct)
     {
@@ -140,19 +213,38 @@ public class CustomersController : BaseApiController
         if (request.FullName != null)
         {
             var cleanName = CleanText(request.FullName);
-            if (string.IsNullOrWhiteSpace(cleanName) || request.FullName.Contains('<') || request.FullName.Contains('>'))
-                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không hợp lệ."));
+            if (string.IsNullOrWhiteSpace(cleanName) || cleanName.Length > 100 || request.FullName.Contains('<') || request.FullName.Contains('>'))
+                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Tên khách hàng không hợp lệ (tối đa 100 ký tự)."));
             customer.Name = cleanName;
         }
-        if (request.Email != null) customer.Email = request.Email.Trim();
-        if (request.Address != null) customer.Address = CleanText(request.Address);
-        if (request.MembershipTier != null) customer.MembershipTier = request.MembershipTier;
+        if (request.Email != null)
+        {
+            var email = request.Email.Trim();
+            if (!string.IsNullOrWhiteSpace(email) && (email.Length > 100 || !EmailRegex.IsMatch(email)))
+                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Địa chỉ email không hợp lệ."));
+            customer.Email = email;
+        }
+        if (request.Address != null)
+        {
+            var address = CleanText(request.Address);
+            if (address != null && address.Length > 255)
+                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Địa chỉ không được vượt quá 255 ký tự."));
+            customer.Address = address;
+        }
+        if (request.MembershipTier != null)
+        {
+            var rawTier = request.MembershipTier.Trim();
+            if (rawTier.Length > 30 || !CanonicalTiers.TryGetValue(rawTier, out var canonicalTier))
+                return BadRequest(ApiResponse<object>.Fail("VALIDATION_ERROR", "Hạng thành viên không hợp lệ."));
+            customer.MembershipTier = canonicalTier;
+        }
 
         await _context.SaveChangesAsync(ct);
         return Ok(ApiResponse<CustomerResponse>.Ok(MapCustomer(customer), "Cập nhật khách hàng thành công."));
     }
 
     [HttpGet("debts/summary")]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<ActionResult<ApiResponse<CustomerKpiSummaryResponse>>> GetDebtsSummary(CancellationToken ct)
     {
         var tenantId = _tenantContext.CurrentTenantId;

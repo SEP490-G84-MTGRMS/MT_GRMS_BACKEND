@@ -299,35 +299,12 @@ public class PinVerificationService : IPinVerificationService
             return true;
         }
 
-        // Fallback SHA-256
-        try
-        {
-            var hashed = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(password))).ToLowerInvariant();
-            if (string.Equals(user.PasswordHash, hashed, StringComparison.OrdinalIgnoreCase))
-            {
-                user.PasswordHash = _passwordHasher.HashPassword(password);
-                return true;
-            }
-        }
-        catch { }
-
-        // Fallback plain text
-        if (string.Equals(user.PasswordHash, password, StringComparison.Ordinal))
+        // Legacy SHA-256 hash migration path (rehashes to current password hasher on match)
+        var hashed = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(password))).ToLowerInvariant();
+        if (string.Equals(user.PasswordHash, hashed, StringComparison.OrdinalIgnoreCase))
         {
             user.PasswordHash = _passwordHasher.HashPassword(password);
             return true;
-        }
-
-        // Fallback demo credentials
-        if (password is "password123" or "123456")
-        {
-            var isDemoUser = string.Equals(user.UserName, "admin", StringComparison.OrdinalIgnoreCase) ||
-                             string.Equals(user.UserName, "owner", StringComparison.OrdinalIgnoreCase) ||
-                             string.Equals(user.UserName, "staff", StringComparison.OrdinalIgnoreCase);
-            if (isDemoUser)
-            {
-                return true;
-            }
         }
 
         return false;

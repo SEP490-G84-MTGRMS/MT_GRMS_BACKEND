@@ -63,7 +63,8 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         // payments so a voided receipt cannot inflate taxable revenue.
         var manualTaxableReceipts = await _context.CashbookEntries
             .Where(e => e.OccurredAtUtc >= startOfYearUtc && e.OccurredAtUtc < upToDateUtc &&
-                        e.SourceType == "MANUAL" && e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue)
+                        (e.SourceType == "MANUAL" || e.SourceType == "COMPENSATING") &&
+                        e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue)
             .SumAsync(e => (decimal?)(e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount), cancellationToken) ?? 0m;
 
         var netRevenue = orderGross - orderDiscounts - returns + manualTaxableReceipts;
@@ -99,7 +100,8 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
 
         var manualRevenueQuery = _context.CashbookEntries.Where(e =>
             e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc < toDateUtc &&
-            e.SourceType == "MANUAL" && e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue);
+            (e.SourceType == "MANUAL" || e.SourceType == "COMPENSATING") &&
+            e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue);
         if (branchId.HasValue)
         {
             manualRevenueQuery = manualRevenueQuery.Where(e => e.BranchId == branchId.Value);
@@ -139,7 +141,8 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
 
         var manualExpenseQuery = _context.CashbookEntries.Where(e =>
             e.OccurredAtUtc >= fromDateUtc && e.OccurredAtUtc <= toDateUtc &&
-            e.SourceType == "MANUAL" && e.TaxTreatment == CashbookTaxTreatment.DeductibleExpense);
+            (e.SourceType == "MANUAL" || e.SourceType == "COMPENSATING") &&
+            e.TaxTreatment == CashbookTaxTreatment.DeductibleExpense);
         if (branchId.HasValue)
         {
             manualExpenseQuery = manualExpenseQuery.Where(e => e.BranchId == branchId.Value);
@@ -201,31 +204,35 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             .ToDictionaryAsync(p => p.Id, p => p.CostPrice ?? 0m, cancellationToken);
 
         decimal actualCogs = 0m;
-        bool hasAnyRealCost = false;
+        int totalItemsCount = 0;
+        int itemsWithRealCost = 0;
 
         foreach (var order in orders)
         {
             foreach (var item in order.Items)
             {
+                totalItemsCount++;
                 decimal itemCost = 0m;
+                bool itemHasCost = false;
                 if (item.CostPriceAtSale > 0)
                 {
                     itemCost = item.CostPriceAtSale;
-                    hasAnyRealCost = true;
+                    itemHasCost = true;
                 }
                 else if (productCostDict.TryGetValue(item.ProductId, out var costPrice) && costPrice > 0)
                 {
                     itemCost = costPrice;
-                    hasAnyRealCost = true;
+                    itemHasCost = true;
                 }
 
-                if (hasAnyRealCost)
+                if (itemHasCost)
                 {
+                    itemsWithRealCost++;
                     actualCogs += item.Quantity * itemCost;
                 }
                 else
                 {
-                    actualCogs += item.Quantity * item.UnitPrice * 0.70m;
+                    actualCogs += Math.Round(item.Quantity * item.UnitPrice * 0.70m, 0, MidpointRounding.AwayFromZero);
                 }
             }
         }
@@ -240,7 +247,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             .Where(o => o.CreatedAt >= fromDateUtc && o.CreatedAt < toDateUtc)
             .SumAsync(o => (decimal?)o.ReturnedAmount, cancellationToken) ?? 0m;
 
-        if (!hasAnyRealCost)
+        if (itemsWithRealCost == 0)
         {
             // Fallback: Ước tính 70% doanh thu thuần nếu sản phẩm chưa liên kết giá vốn
             var gross = orders.Sum(o => o.TotalAmount);
@@ -260,7 +267,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
         }
 
         var finalCogs = Math.Max(0, actualCogs - returnCogs);
-        return (finalCogs, false);
+        return (finalCogs, itemsWithRealCost < totalItemsCount);
     }
 
     public async Task<List<AccountingBookEntryDto>> GetBookEntriesAsync(
@@ -284,6 +291,20 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
 
         var orders = await orderQuery
             .OrderBy(o => o.CreatedAt)
+            .ToListAsync(cancellationToken);
+
+        // Truy vấn phiếu thu thủ công / bút toán bù trừ chịu thuế ngoài POS để khớp 100% với tờ khai 01/CNKD
+        var manualRevenueQuery = _context.CashbookEntries.AsNoTracking().Where(e =>
+            e.OccurredAtUtc >= fromDateUtc &&
+            e.OccurredAtUtc < toDateUtc &&
+            (e.SourceType == "MANUAL" || e.SourceType == "COMPENSATING") &&
+            e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue);
+        if (branchId.HasValue)
+        {
+            manualRevenueQuery = manualRevenueQuery.Where(e => e.BranchId == branchId.Value);
+        }
+        var manualTaxableEntries = await manualRevenueQuery
+            .OrderBy(e => e.OccurredAtUtc)
             .ToListAsync(cancellationToken);
 
         // Truy vấn phiếu chi trong kỳ (loại trừ vốn chủ sở hữu)
@@ -323,6 +344,22 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
                     BookCode = "S1a-HKD"
                 };
             }));
+            result.AddRange(manualTaxableEntries.Select(e =>
+            {
+                var signedAmount = e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount;
+                return new AccountingBookEntryDto
+                {
+                    VoucherNumber = e.EntryCode,
+                    VoucherDate = e.OccurredAtUtc,
+                    Description = !string.IsNullOrWhiteSpace(e.Description) ? e.Description : $"Doanh thu ngoài POS ({e.EntryCode})",
+                    Amount = signedAmount,
+                    Category = "Doanh thu ngoài POS chịu thuế",
+                    SectionGroup = "Doanh thu bán lẻ",
+                    BookType = AccountingBookType.S1a_RevenueGroup1,
+                    BookCode = "S1a-HKD",
+                    InvoiceNumber = e.ReferenceCode
+                };
+            }));
         }
 
         // 2. Phân loại theo Nhóm 2 (Phương pháp tỷ lệ % doanh thu): Dùng mẫu S2a-HKD
@@ -343,6 +380,24 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
                     TaxAmount = Math.Round(netAmount * 0.01m, 0, MidpointRounding.AwayFromZero),
                     BookType = AccountingBookType.S2a_RevenueGroup2,
                     BookCode = "S2a-HKD"
+                };
+            }));
+            result.AddRange(manualTaxableEntries.Select(e =>
+            {
+                var signedAmount = e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount;
+                return new AccountingBookEntryDto
+                {
+                    VoucherNumber = e.EntryCode,
+                    VoucherDate = e.OccurredAtUtc,
+                    Description = !string.IsNullOrWhiteSpace(e.Description) ? e.Description : $"Doanh thu ngoài POS chịu thuế ({e.EntryCode})",
+                    Amount = signedAmount,
+                    Category = "Doanh thu ngoài POS chịu thuế",
+                    SectionGroup = "1. Phân phối, cung cấp hàng hóa",
+                    TaxRate = 1.0m,
+                    TaxAmount = Math.Round(signedAmount * 0.01m, 0, MidpointRounding.AwayFromZero),
+                    BookType = AccountingBookType.S2a_RevenueGroup2,
+                    BookCode = "S2a-HKD",
+                    InvoiceNumber = e.ReferenceCode
                 };
             }));
         }
@@ -368,6 +423,24 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
                     BookCode = "S2b-HKD"
                 };
             }));
+            result.AddRange(manualTaxableEntries.Select(e =>
+            {
+                var signedAmount = e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount;
+                return new AccountingBookEntryDto
+                {
+                    VoucherNumber = e.EntryCode,
+                    VoucherDate = e.OccurredAtUtc,
+                    Description = !string.IsNullOrWhiteSpace(e.Description) ? e.Description : $"Doanh thu ngoài POS kê khai ({e.EntryCode})",
+                    Amount = signedAmount,
+                    Category = "Doanh thu ngoài POS kê khai",
+                    SectionGroup = "1. Phân phối, cung cấp hàng hóa",
+                    TaxRate = 1.0m,
+                    TaxAmount = Math.Round(signedAmount * 0.01m, 0, MidpointRounding.AwayFromZero),
+                    BookType = AccountingBookType.S2b_RevenueDeclaration,
+                    BookCode = "S2b-HKD",
+                    InvoiceNumber = e.ReferenceCode
+                };
+            }));
         }
 
         // S2c-HKD: Sổ chi tiết doanh thu, chi phí (Thu & Chi)
@@ -389,6 +462,22 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
                     BookCode = "S2c-HKD"
                 };
             }));
+            result.AddRange(manualTaxableEntries.Select(e =>
+            {
+                var signedAmount = e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount;
+                return new AccountingBookEntryDto
+                {
+                    VoucherNumber = e.EntryCode,
+                    VoucherDate = e.OccurredAtUtc,
+                    Description = $"[Thu] {(!string.IsNullOrWhiteSpace(e.Description) ? e.Description : $"Doanh thu ngoài POS ({e.EntryCode})")}",
+                    Amount = signedAmount,
+                    Category = "Doanh thu",
+                    SectionGroup = "1. Doanh thu",
+                    BookType = AccountingBookType.S2c_RevenueAndExpense,
+                    BookCode = "S2c-HKD",
+                    InvoiceNumber = e.ReferenceCode
+                };
+            }));
 
             // Kết chuyển COGS trong kỳ
             var cogs = await GetPeriodCogsAsync(fromDateUtc, toDateUtc, branchId, cancellationToken);
@@ -407,9 +496,9 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
                 });
             }
 
-            // Chi phí SXKD hợp lý từ ExpenseVouchers (chỉ lấy OperatingExpense, loại trừ cọc vỏ / rút vốn / tạm ứng)
+            // Chi phí SXKD hợp lý từ ExpenseVouchers (chỉ lấy OperatingExpense và IsTaxDeductible == true)
             result.AddRange(vouchers
-                .Where(v => v.Nature == FinancialNature.OperatingExpense)
+                .Where(v => v.Nature == FinancialNature.OperatingExpense && v.IsTaxDeductible)
                 .Select(v => new AccountingBookEntryDto
             {
                 VoucherNumber = v.VoucherCode ?? string.Empty,
@@ -434,7 +523,7 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
             {
                 receiptQuery = receiptQuery.Where(g => g.BranchId == branchId.Value);
             }
-            receiptQuery = receiptQuery.Where(g => g.ReceivedAtUtc >= fromDateUtc && g.ReceivedAtUtc <= toDateUtc && (g.Status == "CONFIRMED" || g.Status == "COMPLETED" || g.Status == "DRAFT"));
+            receiptQuery = receiptQuery.Where(g => g.ReceivedAtUtc >= fromDateUtc && g.ReceivedAtUtc <= toDateUtc && (g.Status == "CONFIRMED" || g.Status == "COMPLETED"));
             var receipts = await receiptQuery.OrderBy(g => g.ReceivedAtUtc).ToListAsync(cancellationToken);
 
             result.AddRange(receipts.Select(g =>
@@ -750,26 +839,54 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
 
             decimal runningTaxDue = openingTaxDue;
 
-            // 2. Nghĩa vụ thuế phát sinh từ các kỳ đã chốt thuế trong kỳ (Snapshots)
+            // 2. Nghĩa vụ thuế phát sinh từ các kỳ đã chốt thuế thuộc phạm vi kỳ kế toán
+            var periodFromVn = fromDateUtc.AddHours(7);
+            var periodToVn = toDateUtc.AddHours(7);
             var snapshotQuery = _context.HouseholdTaxSnapshots.AsQueryable();
             if (branchId.HasValue)
             {
                 snapshotQuery = snapshotQuery.Where(s => s.BranchId == branchId.Value || s.BranchId == null);
             }
-            snapshotQuery = snapshotQuery.Where(s => s.Status == TaxSnapshotStatus.Finalized && s.CreatedAt >= fromDateUtc && s.CreatedAt <= toDateUtc);
-            var snapshots = await snapshotQuery.OrderBy(s => s.CreatedAt).ToListAsync(cancellationToken);
+            var candidateSnapshots = await snapshotQuery
+                .Where(s => s.Status == TaxSnapshotStatus.Finalized && s.Year >= periodFromVn.Year && s.Year <= periodToVn.Year)
+                .OrderBy(s => s.Year).ThenBy(s => s.PeriodNumber)
+                .ToListAsync(cancellationToken);
+
+            var snapshots = candidateSnapshots.Where(s =>
+            {
+                var pStart = s.PeriodType switch
+                {
+                    TaxPeriodType.Month => new DateTime(s.Year, Math.Clamp(s.PeriodNumber, 1, 12), 1),
+                    TaxPeriodType.Quarter => new DateTime(s.Year, (Math.Clamp(s.PeriodNumber, 1, 4) - 1) * 3 + 1, 1),
+                    _ => new DateTime(s.Year, 1, 1),
+                };
+                return pStart >= periodFromVn.Date && pStart <= periodToVn.Date;
+            }).ToList();
 
             foreach (var s in snapshots)
             {
+                var pCode = s.PeriodType switch
+                {
+                    TaxPeriodType.Month => $"T{s.PeriodNumber}",
+                    TaxPeriodType.Quarter => $"Q{s.PeriodNumber}",
+                    _ => "NAM",
+                };
+                var pText = s.PeriodType switch
+                {
+                    TaxPeriodType.Month => $"Tháng {s.PeriodNumber}/{s.Year}",
+                    TaxPeriodType.Quarter => $"Quý {s.PeriodNumber}/{s.Year}",
+                    _ => $"Năm {s.Year}",
+                };
+
                 // Thuế GTGT phát sinh
                 if (s.VatAmount > 0)
                 {
                     runningTaxDue += s.VatAmount;
                     result.Add(new AccountingBookEntryDto
                     {
-                        VoucherNumber = $"TAX-VAT-{s.Year}-Q{s.PeriodNumber}",
-                        VoucherDate = s.CreatedAt,
-                        Description = $"[Nghĩa vụ thuế] Thuế GTGT phát sinh Q{s.PeriodNumber}/{s.Year}",
+                        VoucherNumber = $"TAX-VAT-{s.Year}-{pCode}",
+                        VoucherDate = s.FinalizedAtUtc != default ? s.FinalizedAtUtc : s.CreatedAt,
+                        Description = $"[Nghĩa vụ thuế] Thuế GTGT phát sinh {pText}",
                         Amount = s.VatAmount,
                         InAmount = s.VatAmount,
                         OutAmount = 0m,
@@ -789,9 +906,9 @@ public class HouseholdTaxRepository : IHouseholdTaxRepository
                     runningTaxDue += s.PitAmount;
                     result.Add(new AccountingBookEntryDto
                     {
-                        VoucherNumber = $"TAX-PIT-{s.Year}-Q{s.PeriodNumber}",
-                        VoucherDate = s.CreatedAt,
-                        Description = $"[Nghĩa vụ thuế] Thuế TNCN phát sinh Q{s.PeriodNumber}/{s.Year}",
+                        VoucherNumber = $"TAX-PIT-{s.Year}-{pCode}",
+                        VoucherDate = s.FinalizedAtUtc != default ? s.FinalizedAtUtc : s.CreatedAt,
+                        Description = $"[Nghĩa vụ thuế] Thuế TNCN phát sinh {pText}",
                         Amount = s.PitAmount,
                         InAmount = s.PitAmount,
                         OutAmount = 0m,

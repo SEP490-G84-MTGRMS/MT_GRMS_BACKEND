@@ -62,10 +62,13 @@ public class CashbookController : BaseApiController
         [FromQuery] string? keyword,
         [FromQuery] int page = 1,
         [FromQuery] int pageSize = 50,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        [FromQuery] string? status = null,
+        [FromQuery] string? counterparty = null)
     {
-        var result = await _cashbookService.GetEntriesAsync(accountId, branchId, fromDate, toDate, page, pageSize, entryType, sourceType, keyword, ct);
-        return Ok(ApiResponse<List<CashbookEntryResponse>>.Ok(result));
+        var result = await _cashbookService.GetEntriesPageAsync(accountId, branchId, fromDate, toDate,
+            Math.Max(1, page), Math.Clamp(pageSize, 1, 500), entryType, sourceType, keyword, status, counterparty, ct);
+        return Ok(new CashbookEntriesResponse { Success = true, Data = result.Items.ToList(), TotalItems = result.TotalItems });
     }
 
     [HttpPost("tills/init")]
@@ -111,7 +114,7 @@ public class CashbookController : BaseApiController
         [FromBody] OwnerSafeDepositRequest request, CancellationToken ct)
     {
         if (request.BranchId == Guid.Empty || request.Amount <= 0)
-            return BadRequest("Cần chọn chi nhánh và nhập số tiền lớn hơn 0.");
+            return BadRequest(ApiResponse<CashbookEntryResponse>.Fail("INVALID_SAFE_DEPOSIT", "Cần chọn chi nhánh và nhập số tiền lớn hơn 0."));
         var safe = await _cashbookService.GetOrCreateSafeAsync(request.BranchId, ct);
         var result = await _cashbookService.CreateReceiptAsync(new CreateReceiptRequest(
             safe.Id, request.Amount, "Chủ nạp thêm vốn", request.Note,
@@ -150,17 +153,6 @@ public class CashbookController : BaseApiController
     {
         var result = await _cashbookService.TransferFundsAsync(request, ct);
         return Ok(ApiResponse<TransferFundResponse>.Ok(result, "Điều chuyển tiền nội bộ thành công."));
-    }
-
-    [HttpPost("reconcile")]
-    [RequireIdempotency(transactional: true)]
-    [Authorize(Roles = SystemRoles.StoreOwner)]
-    public async Task<ActionResult<ApiResponse<CashbookEntryResponse?>>> ReconcileCashAccount(
-        [FromBody] ReconcileAccountRequest request,
-        CancellationToken ct)
-    {
-        var result = await _cashbookService.ReconcileCashAccountAsync(request, ct);
-        return Ok(ApiResponse<CashbookEntryResponse?>.Ok(result, "Hoàn tất kiểm kê và đối soát két quỹ."));
     }
 
     [HttpPost("entries/{id:guid}/void")]
@@ -206,4 +198,9 @@ public class CashbookController : BaseApiController
             isValid ? "Chuỗi băm sổ quỹ toàn vẹn 100%." : "CẢNH BÁO: Phát hiện chuỗi băm sổ quỹ bị đứt gãy hoặc có dấu hiệu can thiệp trái phép!"
         ));
     }
+}
+
+public sealed class CashbookEntriesResponse : ApiResponse<List<CashbookEntryResponse>>
+{
+    public int TotalItems { get; init; }
 }

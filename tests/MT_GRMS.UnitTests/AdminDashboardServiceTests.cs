@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.EntityFrameworkCore;
 using Moq;
 using MT_GRMS.Application.Admin.Repositories;
 using MT_GRMS.Application.Admin.Services;
@@ -122,9 +123,12 @@ public class AdminDashboardServiceTests
 
         var alerts = await _service.GetUrgentAlertsAsync();
         Assert.Equal(3, alerts.Count);
+        Assert.Equal(lockedTenant.Id, alerts[0].Id);
         Assert.Equal("locked", alerts[0].StatusType);
         Assert.Contains("Vi pham chinh sach", alerts[0].ExpiryNotice);
+        Assert.Equal(graceTenant.Id, alerts[1].Id);
         Assert.Equal("grace", alerts[1].StatusType);
+        Assert.Equal(expiringTenant.Id, alerts[2].Id);
         Assert.Equal("expiring", alerts[2].StatusType);
     }
 
@@ -146,5 +150,28 @@ public class AdminDashboardServiceTests
 
         var analytics = await _service.GetMonthlyAnalyticsAsync();
         Assert.Empty(analytics);
+    }
+
+    [Fact]
+    public async Task TenantRepository_GetSuccessfulUpgradeCountAsync_CountsPurchaseAndUpgradePlanOnly()
+    {
+        var options = new Microsoft.EntityFrameworkCore.DbContextOptionsBuilder<MT_GRMS.Infrastructure.Persistence.AppDbContext>()
+            .UseInMemoryDatabase($"DashboardKpi_{Guid.NewGuid()}")
+            .Options;
+        await using var db = new MT_GRMS.Infrastructure.Persistence.AppDbContext(options);
+        db.WalletTransactions.AddRange(
+            new WalletTransaction { TenantId = "t1", TransactionCode = "TX1", Type = "PURCHASE_PLAN", Status = "SUCCESS" },
+            new WalletTransaction { TenantId = "t1", TransactionCode = "TX2", Type = "UPGRADE_PLAN", Status = "SUCCESS" },
+            new WalletTransaction { TenantId = "t1", TransactionCode = "TX3", Type = "PURCHASE_PLAN", Status = "SUCCESS", IsDeleted = true },
+            new WalletTransaction { TenantId = "t1", TransactionCode = "TX4", Type = "PURCHASE_ADDON", Status = "SUCCESS" },
+            new WalletTransaction { TenantId = "t1", TransactionCode = "TX5", Type = "TOPUP", Status = "SUCCESS" },
+            new WalletTransaction { TenantId = "t1", TransactionCode = "TX6", Type = "PURCHASE_PLAN", Status = "PENDING" }
+        );
+        await db.SaveChangesAsync();
+
+        var repo = new MT_GRMS.Infrastructure.Repositories.TenantRepository(db);
+        var count = await repo.GetSuccessfulUpgradeCountAsync();
+
+        Assert.Equal(2, count);
     }
 }

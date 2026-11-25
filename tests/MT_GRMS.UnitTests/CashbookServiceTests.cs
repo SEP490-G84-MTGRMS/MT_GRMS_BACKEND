@@ -111,6 +111,24 @@ public class CashbookServiceTests
     }
 
     [Fact]
+    public async Task GetAccounts_PreservesBankQrIdentityAndDefaultFlag()
+    {
+        var bankId = Guid.NewGuid();
+        _accountRepo.Items.Add(new FinanceAccount
+        {
+            Id = bankId, TenantId = _tenantContext.CurrentTenantId,
+            AccountType = FinanceAccountType.Bank, IsActive = true,
+            BankCode = "MB", BankName = "MBBank", AccountNumber = "123456789",
+            AccountHolderName = "TEST HOLDER", IsDefaultForVietQr = true
+        });
+        var account = Assert.Single((await _service.GetAccountsAsync()).Where(a => a.Id == bankId));
+        Assert.Equal("MB", account.BankCode);
+        Assert.Equal("TEST HOLDER", account.AccountHolderName);
+        Assert.Equal("123456789", account.AccountNumber);
+        Assert.True(account.IsDefaultForVietQr);
+    }
+
+    [Fact]
     public async Task GetOrCreateBankAccountAsync_MustNotReuseAnotherBranchLedger()
     {
         var branchA = Guid.NewGuid();
@@ -151,9 +169,9 @@ public class CashbookServiceTests
     public async Task OpenShiftAsync_WhenActiveShiftExists_ShouldThrowBusinessException()
     {
         var till = new FinanceAccount { Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Till, AccountName = "Quầy 01", CurrentBalance = 500_000m };
-        var activeShift = new ShiftZReport { Id = Guid.NewGuid(), TillId = till.Id, Status = ShiftState.Open };
+        var activeShift = new ShiftZReport { Id = Guid.NewGuid(), TillId = till.Id, BranchId = till.BranchId!.Value, Status = ShiftState.Open };
         _cashbookRepo.Accounts.Add(till);
-        _cashbookRepo.Shifts.Add(activeShift);
+        _shiftRepo.Items.Add(activeShift);
 
         var request = new OpenShiftRequest(till.Id, 500_000m, null);
         var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.OpenShiftAsync(request));
@@ -437,33 +455,6 @@ public class CashbookServiceTests
     }
 
     [Fact]
-    public async Task ReconcileCashAccountAsync_ComputesDifferenceFromTheLockedBalance()
-    {
-        var accountId = Guid.NewGuid();
-        var current = new FinanceAccount { Id = accountId, CurrentBalance = 150_000m, AccountType = FinanceAccountType.Safe };
-        _cashbookRepo.Accounts.Add(current);
-        _accountRepo.Items.Add(new FinanceAccount { Id = accountId, CurrentBalance = 100_000m });
-
-        await _service.ReconcileCashAccountAsync(new ReconcileAccountRequest(accountId, 140_000m, "Kiểm kê"));
-
-        var entry = Assert.Single(_cashbookRepo.Items);
-        Assert.Equal(CashbookEntryType.Payment, entry.EntryType);
-        Assert.Equal(10_000m, entry.Amount);
-        Assert.Equal(140_000m, entry.BalanceAfter);
-        Assert.Equal(140_000m, current.CurrentBalance);
-    }
-
-    [Fact]
-    public async Task ReconcileCashAccountAsync_WhenUserHasUnauthorizedRole_ShouldThrowUnauthorizedAccessException()
-    {
-        _tenantContext.SetRole("Staff");
-        var accountId = Guid.NewGuid();
-        var request = new ReconcileAccountRequest(accountId, 5_000_000m, "Kiểm kê định kỳ");
-
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => _service.ReconcileCashAccountAsync(request));
-    }
-
-    [Fact]
     public async Task VerifyChainIntegrityAsync_WhenEmptyOrValid_ShouldReturnTrue()
     {
         var accountId = Guid.NewGuid();
@@ -472,29 +463,16 @@ public class CashbookServiceTests
     }
 
     [Fact]
-    public async Task REQ_POS_BANK_01_GetAccountsAndReceiveBankTransfer_WhenTenantOnlyHasTill_ShouldAutoProvisionTenantBankAccount()
+    public async Task GetAccounts_WhenOnlyTillConfigured_DoesNotInventBankOrRequireBranch()
     {
         var branchId = Guid.NewGuid();
-        _tenantContext.SetContext("tenant_an_nhien_02", Guid.NewGuid(), branchId);
-
-        // Mở ca POS đã tạo sẵn 1 tài khoản Till (accounts.Count == 1, chưa có Bank)
+        _tenantContext.SetContext("tenant-test-01", Guid.NewGuid(), branchId);
         var till = await _service.GetOrCreateTillAsync(branchId, "Két quầy chính");
-        _cashbookRepo.Accounts.Add(till);
-
-        var accounts = await _service.GetAccountsAsync(branchId);
-        var bankResp = accounts.FirstOrDefault(a => string.Equals(a.AccountType, "Bank", StringComparison.OrdinalIgnoreCase));
-
-        Assert.NotNull(bankResp);
-        Assert.NotEqual(Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559"), bankResp!.Id);
-
-        // Đồng bộ danh sách lock của FakeCashbookRepository như DbContext thật
-        foreach (var acc in _accountRepo.Items.Where(i => _cashbookRepo.Accounts.All(a => a.Id != i.Id)))
-        {
-            _cashbookRepo.Accounts.Add(acc);
-        }
-
-        var entry = await _service.ReceiveCashAsync(bankResp.Id, FinanceAccountType.Bank, 150_000m, "POS_SALE", Guid.NewGuid(), "HD-TEST-01", "Doanh thu bán hàng POS (BANK)");
-        Assert.Equal(150_000m, entry.BalanceAfter);
+        var savesBefore = _unitOfWork.SaveChangesCount;
+        var accounts = await _service.GetAccountsAsync();
+        Assert.Equal(till.Id, Assert.Single(accounts).Id);
+        Assert.DoesNotContain(accounts, a => a.AccountType == "BANK");
+        Assert.Equal(savesBefore, _unitOfWork.SaveChangesCount);
     }
 
     [Fact]
@@ -550,5 +528,173 @@ public class CashbookServiceTests
                 "OTHER_PAYMENT", CashbookTaxTreatment.DeductibleExpense)));
 
         Assert.Equal("EVIDENCE_REQUIRED", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task InactiveAccount_CannotRecordMovementAndIsExcludedFromGetAccounts()
+    {
+        var inactiveTill = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Till,
+            AccountName = "Két cũ ngừng hoạt động", CurrentBalance = 1_000_000m, IsActive = false
+        };
+        _accountRepo.Items.Add(inactiveTill);
+        _cashbookRepo.Accounts.Add(inactiveTill);
+
+        var accounts = await _service.GetAccountsAsync();
+        Assert.DoesNotContain(accounts, a => a.Id == inactiveTill.Id);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.DisburseCashAsync(inactiveTill.Id, FinanceAccountType.Till, 100_000m, "EXPENSE", null, "REF", "Test"));
+        Assert.Equal("ACCOUNT_INACTIVE", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task DisburseExpense_ClassifiesAsOperatingExpenseAndBlocksVoidingDebtOrReturnRefund()
+    {
+        var till = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), BranchId = Guid.NewGuid(), AccountType = FinanceAccountType.Till,
+            AccountName = "Két quầy", CurrentBalance = 1_000_000m, IsActive = true
+        };
+        _accountRepo.Items.Add(till);
+        _cashbookRepo.Accounts.Add(till);
+
+        var expenseEntry = await _service.DisburseCashAsync(till.Id, FinanceAccountType.Till, 100_000m, "EXPENSE", Guid.NewGuid(), "EXP-01", "Chi điện");
+        Assert.Equal(FinancialNature.OperatingExpense, expenseEntry.FinancialNature);
+        Assert.Equal(CashbookTaxTreatment.DeductibleExpense, expenseEntry.TaxTreatment);
+
+        var debtEntry = new CashbookEntry
+        {
+            Id = Guid.NewGuid(), AccountId = till.Id, SourceType = "DEBT", EntryType = CashbookEntryType.Receipt,
+            Amount = 50_000m, OccurredAtUtc = DateTime.UtcNow, AuditHash = "H1"
+        };
+        var refundEntry = new CashbookEntry
+        {
+            Id = Guid.NewGuid(), AccountId = till.Id, SourceType = "RETURN_REFUND", EntryType = CashbookEntryType.Payment,
+            Amount = 50_000m, OccurredAtUtc = DateTime.UtcNow, AuditHash = "H2"
+        };
+        _cashbookRepo.Items.Add(debtEntry);
+        _cashbookRepo.Items.Add(refundEntry);
+
+        var exDebt = await Assert.ThrowsAsync<BusinessException>(() => _service.VoidTransactionAsync(debtEntry.Id, new VoidEntryRequest("Test")));
+        var exRefund = await Assert.ThrowsAsync<BusinessException>(() => _service.VoidTransactionAsync(refundEntry.Id, new VoidEntryRequest("Test")));
+        Assert.Equal("CANNOT_VOID_SYSTEM_ENTRY", exDebt.ErrorCode);
+        Assert.Equal("CANNOT_VOID_SYSTEM_ENTRY", exRefund.ErrorCode);
+    }
+
+    [Fact]
+    public async Task GetEntriesAsync_WithDateOnlyToDate_IncludesFullVietnamDay()
+    {
+        var accountId = Guid.NewGuid();
+        var branchId = Guid.NewGuid();
+        // 2026-11-24 22:00 VN == 2026-11-24 15:00 UTC
+        _cashbookRepo.Items.Add(new CashbookEntry
+        {
+            Id = Guid.NewGuid(), AccountId = accountId, BranchId = branchId,
+            OccurredAtUtc = new DateTime(2026, 11, 24, 15, 0, 0, DateTimeKind.Utc),
+            AuditHash = "H1", EntryCode = "C1", Description = "Late evening VN"
+        });
+
+        var dateOnly = new DateTime(2026, 11, 24, 0, 0, 0, DateTimeKind.Unspecified);
+        var entries = await _service.GetEntriesAsync(accountId, branchId, dateOnly, dateOnly, 1, 10);
+        Assert.Single(entries);
+    }
+
+    private sealed class AlwaysLockedTaxGuard : MT_GRMS.Application.Tax.ITaxPeriodLockGuard
+    {
+        public Task<bool> IsPeriodFinalizedAsync(DateTime dateUtc, Guid? branchId = null, CancellationToken cancellationToken = default) =>
+            Task.FromResult(true);
+
+        public Task ValidateTaxPeriodUnlockedAsync(DateTime dateUtc, string actionDescription, Guid? branchId = null, CancellationToken cancellationToken = default) =>
+            throw new BusinessException("TAX_PERIOD_FINALIZED", $"Kỳ thuế đã khóa sổ, không thể {actionDescription}.");
+    }
+
+    [Fact]
+    public async Task TaxPeriodLockGuard_BlocksReceiptPaymentTransferAndVoidWhenFinalized()
+    {
+        var branchId = Guid.NewGuid();
+        var acc1 = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), BranchId = branchId, AccountType = FinanceAccountType.Till,
+            AccountName = "Két 1", CurrentBalance = 1_000_000m, IsActive = true
+        };
+        var acc2 = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), BranchId = branchId, AccountType = FinanceAccountType.Safe,
+            AccountName = "Két sắt", CurrentBalance = 500_000m, IsActive = true
+        };
+        var manualEntry = new CashbookEntry
+        {
+            Id = Guid.NewGuid(), AccountId = acc1.Id, BranchId = branchId, SourceType = "MANUAL",
+            EntryType = CashbookEntryType.Receipt, Amount = 100_000m, OccurredAtUtc = DateTime.UtcNow, AuditHash = "H1"
+        };
+        _accountRepo.Items.AddRange(new[] { acc1, acc2 });
+        _cashbookRepo.Accounts.AddRange(new[] { acc1, acc2 });
+        _cashbookRepo.Items.Add(manualEntry);
+
+        var guardedService = new CashbookService(
+            _cashbookRepo,
+            _accountRepo,
+            _shiftRepo,
+            _auditHashService,
+            _tenantContext,
+            _unitOfWork,
+            taxPeriodLockGuard: new AlwaysLockedTaxGuard());
+
+        var exReceipt = await Assert.ThrowsAsync<BusinessException>(() =>
+            guardedService.CreateReceiptAsync(new CreateReceiptRequest(acc1.Id, 50_000m, "Nạp vốn", "Nạp vốn đầu kỳ", "PT-1", "OWNER_DEPOSIT", CashbookTaxTreatment.NonTaxableReceipt)));
+        var exPayment = await Assert.ThrowsAsync<BusinessException>(() =>
+            guardedService.CreatePaymentAsync(new CreatePaymentRequest(acc1.Id, 50_000m, "Rút vốn", "Rút vốn chủ", "PC-1", "OWNER_DRAW", CashbookTaxTreatment.NonDeductibleExpense)));
+        var exTransfer = await Assert.ThrowsAsync<BusinessException>(() =>
+            guardedService.TransferFundsAsync(new TransferFundRequest(acc1.Id, acc2.Id, 50_000m, "Chuyển quỹ")));
+        var exVoid = await Assert.ThrowsAsync<BusinessException>(() =>
+            guardedService.VoidTransactionAsync(manualEntry.Id, new VoidEntryRequest("Hủy sai")));
+
+        Assert.Equal("TAX_PERIOD_FINALIZED", exReceipt.ErrorCode);
+        Assert.Equal("TAX_PERIOD_FINALIZED", exPayment.ErrorCode);
+        Assert.Equal("TAX_PERIOD_FINALIZED", exTransfer.ErrorCode);
+        Assert.Equal("TAX_PERIOD_FINALIZED", exVoid.ErrorCode);
+    }
+
+    [Fact]
+    public async Task DisburseExpense_WhenVoucherIsNonDeductible_ClassifiesAsNonDeductibleExpense()
+    {
+        var expenseRepo = new FakeGenericRepository<ExpenseVoucher>();
+        var voucher = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            BranchId = Guid.NewGuid(),
+            VoucherCode = "EXP-ND-01",
+            Category = "Phạt hành chính",
+            BeneficiaryName = "Cơ quan chức năng",
+            Amount = 200_000m,
+            Nature = FinancialNature.OperatingExpense,
+            IsTaxDeductible = false
+        };
+        expenseRepo.Items.Add(voucher);
+
+        var till = new FinanceAccount
+        {
+            Id = Guid.NewGuid(), BranchId = voucher.BranchId, AccountType = FinanceAccountType.Till,
+            AccountName = "Két quầy", CurrentBalance = 1_000_000m, IsActive = true
+        };
+        _accountRepo.Items.Add(till);
+        _cashbookRepo.Accounts.Add(till);
+
+        var serviceWithExpenses = new CashbookService(
+            _cashbookRepo,
+            _accountRepo,
+            _shiftRepo,
+            _auditHashService,
+            _tenantContext,
+            _unitOfWork,
+            expenseVoucherRepo: expenseRepo);
+
+        var entry = await serviceWithExpenses.DisburseCashAsync(
+            till.Id, FinanceAccountType.Till, voucher.Amount, "EXPENSE", voucher.Id, voucher.VoucherCode, "Chi phạt");
+
+        Assert.Equal(FinancialNature.OperatingExpense, entry.FinancialNature);
+        Assert.Equal(CashbookTaxTreatment.NonDeductibleExpense, entry.TaxTreatment);
     }
 }

@@ -16,10 +16,22 @@ public class PnLReportService : IPnLReportService
     public async Task<PnLSummaryResponse> GetPnLSummaryAsync(PnLFilterRequest request, CancellationToken ct = default)
     {
         RequireOwner();
+        string branchName;
+        if (request.BranchId.HasValue)
+        {
+            branchName = await _pnlRepo.GetBranchNameAsync(request.BranchId.Value, ct)
+                ?? throw new MT_GRMS.Domain.Exceptions.NotFoundException($"Không tìm thấy chi nhánh với mã {request.BranchId.Value}.");
+        }
+        else
+        {
+            branchName = "Toàn chuỗi (Consolidated)";
+        }
+
         var revenue = await _pnlRepo.GetRevenueAsync(request.BranchId, request.FromDate, request.ToDate, ct);
         var cogsData = await _pnlRepo.GetCogsAsync(request.BranchId, request.FromDate, request.ToDate, ct);
         var expenseItems = await _pnlRepo.GetOperatingExpensesAsync(request.BranchId, request.FromDate, request.ToDate, ct);
         var topProductItems = await _pnlRepo.GetTopProductsAsync(request.BranchId, request.FromDate, request.ToDate, 10, ct);
+        var shrinkageLoss = await _pnlRepo.GetShrinkageLossAsync(request.BranchId, request.FromDate, request.ToDate, ct);
 
         var netRevenue = Math.Max(0, revenue.GrossRevenue - revenue.Discounts - revenue.SalesReturns);
         var cogs = cogsData.TotalCogs;
@@ -35,9 +47,15 @@ public class PnLReportService : IPnLReportService
             netRevenue > 0 ? Math.Round((e.Amount / netRevenue) * 100m, 2, MidpointRounding.AwayFromZero) : 0m
         )).ToList();
 
-        var netProfit = grossProfit - totalOpex;
+        var netProfit = grossProfit - totalOpex - shrinkageLoss;
         var netMarginPct = netRevenue > 0
             ? Math.Round((netProfit / netRevenue) * 100m, 2, MidpointRounding.AwayFromZero)
+            : 0m;
+
+        var totalTaxRatePct = MT_GRMS.Application.Tax.HouseholdTaxService.RetailVatRate
+            + MT_GRMS.Application.Tax.HouseholdTaxService.RetailPitRate;
+        var estimatedTaxAmount = netRevenue > 0
+            ? Math.Round(netRevenue * (totalTaxRatePct / 100m), 0, MidpointRounding.AwayFromZero)
             : 0m;
 
         var totalOrders = revenue.TotalOrders;
@@ -50,8 +68,8 @@ public class PnLReportService : IPnLReportService
         var fefoGp = netRevenue - fefoSpecificCogs;
         var weightedGpMarginPct = netRevenue > 0 ? Math.Round((weightedGp / netRevenue) * 100m, 2, MidpointRounding.AwayFromZero) : 0m;
         var fefoGpMarginPct = netRevenue > 0 ? Math.Round((fefoGp / netRevenue) * 100m, 2, MidpointRounding.AwayFromZero) : 0m;
-        var weightedNp = weightedGp - totalOpex;
-        var fefoNp = fefoGp - totalOpex;
+        var weightedNp = weightedGp - totalOpex - shrinkageLoss;
+        var fefoNp = fefoGp - totalOpex - shrinkageLoss;
 
         var cogsComparison = new CogsValuationComparisonDto(
             weightedAvgCogs,
@@ -77,8 +95,6 @@ public class PnLReportService : IPnLReportService
             p.MarginPct
         )).ToList();
 
-        var branchName = request.BranchId.HasValue ? $"Chi nhánh {request.BranchId.Value.ToString()[..8]}" : "Toàn chuỗi (Consolidated)";
-
         return new PnLSummaryResponse(
             new PnLPeriod(request.FromDate, request.ToDate),
             request.BranchId,
@@ -99,7 +115,9 @@ public class PnLReportService : IPnLReportService
             totalOrders,
             aov,
             cogsComparison,
-            topProducts
+            topProducts,
+            shrinkageLoss,
+            estimatedTaxAmount
         );
     }
 
@@ -140,6 +158,12 @@ public class PnLReportService : IPnLReportService
     public async Task<List<PnLTrendPointResponse>> GetTrendAsync(PnLFilterRequest request, CancellationToken ct = default)
     {
         RequireOwner();
+        if (request.BranchId.HasValue)
+        {
+            _ = await _pnlRepo.GetBranchNameAsync(request.BranchId.Value, ct)
+                ?? throw new MT_GRMS.Domain.Exceptions.NotFoundException($"Không tìm thấy chi nhánh với mã {request.BranchId.Value}.");
+        }
+
         // Tối ưu hóa: Thay thế vòng lặp N+1 queries bằng 1 lần gom toàn kỳ qua GetDailyTrendAsync
         var dailyItems = await _pnlRepo.GetDailyTrendAsync(request.BranchId, request.FromDate, request.ToDate, ct);
 

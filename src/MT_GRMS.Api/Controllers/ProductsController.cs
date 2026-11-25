@@ -92,7 +92,7 @@ public class ProductsController : BaseApiController
     /// Tạo mới một sản phẩm
     /// </summary>
     [HttpPost]
-    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<IActionResult> Create([FromBody] ProductCreateRequest request, CancellationToken cancellationToken)
     {
         try
@@ -130,7 +130,7 @@ public class ProductsController : BaseApiController
     /// Cập nhật thông tin sản phẩm
     /// </summary>
     [HttpPut("{id:guid}")]
-    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<IActionResult> Update(Guid id, [FromBody] ProductUpdateRequest request, CancellationToken cancellationToken)
     {
         try
@@ -172,7 +172,7 @@ public class ProductsController : BaseApiController
     /// Xóa mềm một sản phẩm
     /// </summary>
     [HttpDelete("{id:guid}")]
-    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
+    [Authorize(Roles = SystemRoles.StoreOwner)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken cancellationToken)
     {
         try
