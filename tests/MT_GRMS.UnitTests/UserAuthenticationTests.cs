@@ -944,6 +944,22 @@ public class UserAuthenticationTests
         Assert.Null(user.PasswordResetOtp);
         Assert.Null(user.OtpExpiry);
         Assert.True(PasswordHasher.Verify(user.PasswordHash, "BrandNewPass@123", out _));
+
+        // 8. Exceeding 5 wrong OTP attempts invalidates OTP, and weak 8-char password is rejected
+        await authService.ForgotPasswordAsync(new ForgotPasswordRequest("forgot@mtgrms.vn"));
+        var secondOtp = user.PasswordResetOtp!;
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            authService.ResetPasswordAsync(new ResetPasswordRequest("forgot@mtgrms.vn", secondOtp, "12345678")));
+
+        for (var i = 0; i < 4; i++)
+        {
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                authService.VerifyOtpAsync(new VerifyOtpRequest("forgot@mtgrms.vn", "999999")));
+        }
+        var exceeded = await Assert.ThrowsAsync<ArgumentException>(() =>
+            authService.VerifyOtpAsync(new VerifyOtpRequest("forgot@mtgrms.vn", "999999")));
+        Assert.Contains("OTP_ATTEMPTS_EXCEEDED", exceeded.Message);
+        Assert.Null(user.PasswordResetOtp);
     }
 
     [Fact]

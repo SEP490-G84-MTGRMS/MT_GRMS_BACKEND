@@ -36,6 +36,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - API Admin `POST /api/admin/tenants` tạo cửa hàng, tài khoản chủ sở hữu và chi nhánh chính trong một transaction, kiểm tra dữ liệu trùng và ghi audit log. Cửa hàng khởi tạo ở trạng thái `NO_PLAN`. [worklog: docs/worklogs/2026-11-15_ADMIN-TENANT_AI_create-tenant.md]
 
 ### Fixed
+- Chống dò tài khoản (OWASP Account Enumeration) tại `POST /api/Auth/verify-otp` & `reset-password` (trả `400` trung tính thay vì `404`), giới hạn tối đa 5 lần đoán sai OTP và bắt buộc mật khẩu đặt lại đạt chuẩn mật khẩu mạnh (`NHAT-V2-11`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-11_Ortus24_harden-forgot-password-otp-security.md)
 - Truy vấn danh sách khách hàng thuê thực tế kèm trạng thái hoạt động trong `SubscriptionPlanService.GetByIdAsync` cho trang chi tiết gói dịch vụ (`/admin/plans/:id`) (`NHAT-V2-09`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-09_Ortus24_populate-plan-detail-tenants.md)
 - Bổ sung tìm kiếm theo Email/Họ tên/SĐT chủ cửa hàng và lọc trạng thái `PENDING` (`NO_PLAN`) tại `TenantRepository.GetPagedAsync` & `TenantService` (`NHAT-V2-08`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-08_Ortus24_fix-admin-tenant-search-and-pending-filter.md)
 - Sửa truy vấn `TenantRepository.GetSuccessfulUpgradeCountAsync` đếm đầy đủ cả `PURCHASE_PLAN` và `UPGRADE_PLAN` thành công chưa xóa mềm cho KPI "Lượt mua gói thành công" trên Admin Dashboard (`NHAT-V2-07`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-07_Ortus24_fix-admin-dashboard-purchase-kpi.md)

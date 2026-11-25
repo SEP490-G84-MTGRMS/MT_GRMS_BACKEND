@@ -397,8 +397,8 @@ public class AuthControllerTests
 
         var verifyReq = new VerifyOtpRequest("user@test.com", "123456");
         _mockAuth.Setup(a => a.VerifyOtpAsync(verifyReq, It.IsAny<CancellationToken>()))
-            .ThrowsAsync(new KeyNotFoundException("Expired"));
-        Assert.IsType<NotFoundObjectResult>(await _controller.VerifyOtp(verifyReq, CancellationToken.None));
+            .ThrowsAsync(new KeyNotFoundException("Not found"));
+        Assert.IsType<BadRequestObjectResult>(await _controller.VerifyOtp(verifyReq, CancellationToken.None));
 
         _mockAuth.Setup(a => a.VerifyOtpAsync(verifyReq, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new ArgumentException("Wrong code"));
@@ -416,7 +416,7 @@ public class AuthControllerTests
         var resetReq = new ResetPasswordRequest("user@test.com", "123456", "NewPass@123");
         _mockAuth.Setup(a => a.ResetPasswordAsync(resetReq, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new KeyNotFoundException("Not found"));
-        Assert.IsType<NotFoundObjectResult>(await _controller.ResetPassword(resetReq, CancellationToken.None));
+        Assert.IsType<BadRequestObjectResult>(await _controller.ResetPassword(resetReq, CancellationToken.None));
 
         _mockAuth.Setup(a => a.ResetPasswordAsync(resetReq, It.IsAny<CancellationToken>()))
             .ThrowsAsync(new ArgumentException("Weak password"));

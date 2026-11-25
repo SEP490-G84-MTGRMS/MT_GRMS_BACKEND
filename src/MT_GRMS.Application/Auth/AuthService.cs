@@ -37,6 +37,7 @@ public class AuthService : IAuthService
     private static readonly object InMemoryOtpSync = new();
     private static readonly ConcurrentDictionary<string, LoginOtpEntry> LoginOtpStore = new();
     private static readonly ConcurrentDictionary<string, TwoFactorSettingsEntry> TwoFactorSettingsStore = new();
+    private static readonly ConcurrentDictionary<string, int> PasswordResetFailedAttempts = new();
 
     private readonly IUserRepository _userRepository;
     private readonly IConfiguration? _configuration;
@@ -853,6 +854,7 @@ public class AuthService : IAuthService
 
         user.PasswordResetOtp = otpCode;
         user.OtpExpiry = DateTime.UtcNow.AddMinutes(10);
+        PasswordResetFailedAttempts.TryRemove(user.Id, out _);
 
         _userRepository.Update(user);
         await _userRepository.SaveChangesAsync(cancellationToken);
@@ -870,26 +872,50 @@ public class AuthService : IAuthService
             throw new ArgumentException("Email và mã OTP không được để trống.");
         }
 
+        var cleanOtp = request.OtpCode.Trim();
+        if (!Regex.IsMatch(cleanOtp, "^[0-9]{6}$"))
+        {
+            throw new ArgumentException("OTP_INVALID: Mã xác thực OTP phải gồm đúng 6 chữ số.");
+        }
+
         var cleanInput = request.Email.Trim().ToLowerInvariant();
         var user = await _userRepository.GetByUsernameAsync(cleanInput, cancellationToken);
         if (user == null)
         {
-            throw new KeyNotFoundException("Không tìm thấy tài khoản với thông tin đã cung cấp.");
+            throw new KeyNotFoundException("Mã xác thực OTP không hợp lệ hoặc đã hết hạn.");
         }
 
         if (string.IsNullOrWhiteSpace(user.PasswordResetOtp) || user.OtpExpiry == null)
         {
-            throw new ArgumentException("Mã OTP không tồn tại hoặc chưa được yêu cầu.");
+            throw new ArgumentException("OTP_INVALID: Mã xác thực OTP không hợp lệ, đã hết hạn hoặc chưa được yêu cầu.");
         }
 
         if (user.OtpExpiry < DateTime.UtcNow)
         {
-            throw new ArgumentException("Mã OTP đã hết hạn sử dụng (quá 10 phút). Vui lòng yêu cầu mã mới.");
+            user.PasswordResetOtp = null;
+            user.OtpExpiry = null;
+            PasswordResetFailedAttempts.TryRemove(user.Id, out _);
+            _userRepository.Update(user);
+            await _userRepository.SaveChangesAsync(cancellationToken);
+            throw new ArgumentException("OTP_EXPIRED: Mã OTP đã hết hạn sử dụng (quá 10 phút). Vui lòng yêu cầu mã mới.");
         }
 
-        if (user.PasswordResetOtp.Trim() != request.OtpCode.Trim())
+        var expectedBytes = Encoding.UTF8.GetBytes(user.PasswordResetOtp.Trim());
+        var actualBytes = Encoding.UTF8.GetBytes(cleanOtp);
+        if (!CryptographicOperations.FixedTimeEquals(expectedBytes, actualBytes))
         {
-            throw new ArgumentException("Mã OTP không chính xác. Vui lòng kiểm tra lại.");
+            var failures = PasswordResetFailedAttempts.AddOrUpdate(user.Id, 1, (_, count) => count + 1);
+            if (failures >= MaxOtpFailedAttempts)
+            {
+                user.PasswordResetOtp = null;
+                user.OtpExpiry = null;
+                PasswordResetFailedAttempts.TryRemove(user.Id, out _);
+                _userRepository.Update(user);
+                await _userRepository.SaveChangesAsync(cancellationToken);
+                throw new ArgumentException("OTP_ATTEMPTS_EXCEEDED: Bạn đã nhập sai mã OTP quá 5 lần. Vui lòng yêu cầu gửi lại mã mới.");
+            }
+
+            throw new ArgumentException($"OTP_INVALID: Mã OTP không chính xác (còn {MaxOtpFailedAttempts - failures} lần thử).");
         }
 
         return true;
@@ -902,9 +928,16 @@ public class AuthService : IAuthService
             throw new ArgumentException("Vui lòng điền đầy đủ email, mã OTP và mật khẩu mới.");
         }
 
-        if (request.NewPassword.Length < 8)
+        var pwd = request.NewPassword;
+        if (pwd.Length < 8 ||
+            pwd.Length > 64 ||
+            pwd.Any(char.IsWhiteSpace) ||
+            !Regex.IsMatch(pwd, "[A-Z]") ||
+            !Regex.IsMatch(pwd, "[a-z]") ||
+            !Regex.IsMatch(pwd, "[0-9]") ||
+            !Regex.IsMatch(pwd, "[^A-Za-z0-9]"))
         {
-            throw new ArgumentException("Mật khẩu mới phải có tối thiểu 8 ký tự.");
+            throw new ArgumentException("WEAK_PASSWORD: Mật khẩu mới phải có tối thiểu 8 ký tự (tối đa 64 ký tự), gồm chữ hoa, chữ thường, số, ký tự đặc biệt và không có khoảng trắng.");
         }
 
         await VerifyOtpAsync(new VerifyOtpRequest(request.Email, request.OtpCode), cancellationToken);
@@ -913,7 +946,7 @@ public class AuthService : IAuthService
         var user = await _userRepository.GetByUsernameAsync(cleanInput, cancellationToken);
         if (user == null)
         {
-            throw new KeyNotFoundException("Không tìm thấy tài khoản người dùng.");
+            throw new KeyNotFoundException("Mã xác thực OTP không hợp lệ hoặc đã hết hạn.");
         }
 
         user.PasswordHash = _passwordHasher.HashPassword(request.NewPassword);
@@ -922,8 +955,7 @@ public class AuthService : IAuthService
         user.RefreshTokenExpiryTime = null;
         user.PasswordResetOtp = null;
         user.OtpExpiry = null;
-        user.RefreshToken = null;
-        user.RefreshTokenExpiryTime = null;
+        PasswordResetFailedAttempts.TryRemove(user.Id, out _);
 
         _userRepository.Update(user);
         await _userRepository.SaveChangesAsync(cancellationToken);

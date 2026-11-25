@@ -523,13 +523,17 @@ public class AuthController : BaseApiController
             await _authService.VerifyOtpAsync(request, cancellationToken);
             return Ok(ApiResponse<object>.Ok(new { success = true }, "Mã xác thực hợp lệ.", StatusCodes.Status200OK));
         }
-        catch (KeyNotFoundException ex)
+        catch (KeyNotFoundException)
         {
-            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message, StatusCodes.Status404NotFound));
+            return BadRequest(ApiResponse<object>.Fail(
+                "OTP_INVALID",
+                "Mã xác thực OTP không hợp lệ, đã hết hạn hoặc chưa được yêu cầu.",
+                StatusCodes.Status400BadRequest));
         }
         catch (ArgumentException ex)
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+            var (code, msg) = ParseCodedMessage(ex.Message, "BAD_REQUEST");
+            return BadRequest(ApiResponse<object>.Fail(code, msg, StatusCodes.Status400BadRequest));
         }
     }
 
@@ -539,7 +543,6 @@ public class AuthController : BaseApiController
     [HttpPost("reset-password")]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request, CancellationToken cancellationToken)
     {
         if (request == null || string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.OtpCode) || string.IsNullOrWhiteSpace(request.NewPassword))
@@ -552,13 +555,17 @@ public class AuthController : BaseApiController
             await _authService.ResetPasswordAsync(request, cancellationToken);
             return Ok(ApiResponse<object>.Ok(new { success = true }, "Đặt lại mật khẩu thành công. Vui lòng đăng nhập bằng mật khẩu mới.", StatusCodes.Status200OK));
         }
-        catch (KeyNotFoundException ex)
+        catch (KeyNotFoundException)
         {
-            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message, StatusCodes.Status404NotFound));
+            return BadRequest(ApiResponse<object>.Fail(
+                "OTP_INVALID",
+                "Mã xác thực OTP không hợp lệ, đã hết hạn hoặc chưa được yêu cầu.",
+                StatusCodes.Status400BadRequest));
         }
         catch (ArgumentException ex)
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+            var (code, msg) = ParseCodedMessage(ex.Message, "BAD_REQUEST");
+            return BadRequest(ApiResponse<object>.Fail(code, msg, StatusCodes.Status400BadRequest));
         }
     }
 
