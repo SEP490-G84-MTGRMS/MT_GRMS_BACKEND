@@ -36,6 +36,7 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - API Admin `POST /api/admin/tenants` tạo cửa hàng, tài khoản chủ sở hữu và chi nhánh chính trong một transaction, kiểm tra dữ liệu trùng và ghi audit log. Cửa hàng khởi tạo ở trạng thái `NO_PLAN`. [worklog: docs/worklogs/2026-11-15_ADMIN-TENANT_AI_create-tenant.md]
 
 ### Fixed
+- Bổ sung tìm kiếm theo Email/Họ tên/SĐT chủ cửa hàng và lọc trạng thái `PENDING` (`NO_PLAN`) tại `TenantRepository.GetPagedAsync` & `TenantService` (`NHAT-V2-08`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-08_Ortus24_fix-admin-tenant-search-and-pending-filter.md)
 - Sửa truy vấn `TenantRepository.GetSuccessfulUpgradeCountAsync` đếm đầy đủ cả `PURCHASE_PLAN` và `UPGRADE_PLAN` thành công chưa xóa mềm cho KPI "Lượt mua gói thành công" trên Admin Dashboard (`NHAT-V2-07`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-07_Ortus24_fix-admin-dashboard-purchase-kpi.md)
 - Đồng bộ danh mục gói cước giữa Admin và Store Owner: hiển thị đầy đủ gói mới đang `ACTIVE`, không tự hồi sinh gói đã chuyển `INACTIVE`, chặn mua gói `INACTIVE` và giữ nguyên `MaxStorageGb` do Admin cấu hình (`NHAT-V2-06`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-06_Ortus24_sync-subscription-plans-admin-store.md)
 - Bổ sung trường `Id` cho `UrgentAlertResponse` trên Admin Dashboard và hỗ trợ tra cứu chi tiết cửa hàng theo cả `Id` lẫn `Subdomain`, khắc phục lỗi 404 khi mở cửa hàng từ bảng "Khách hàng cần chú ý" (`NHAT-V2-04`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-04_Ortus24_fix-admin-dashboard-alert-tenant-link.md)

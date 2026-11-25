@@ -70,7 +70,14 @@ public class TenantRepository : ITenantRepository
                 t.Subdomain.ToLower().Contains(kw) ||
                 t.Code.ToLower().Contains(kw) ||
                 (t.TaxCode != null && t.TaxCode.ToLower().Contains(kw)) ||
-                (t.Hotline != null && t.Hotline.ToLower().Contains(kw)));
+                (t.Hotline != null && t.Hotline.ToLower().Contains(kw)) ||
+                t.TenantUsers.Any(tu =>
+                    tu.IsActive &&
+                    tu.User != null &&
+                    !tu.User.IsDeleted &&
+                    (tu.User.Email.ToLower().Contains(kw) ||
+                     tu.User.FullName.ToLower().Contains(kw) ||
+                     (tu.User.Phone != null && tu.User.Phone.ToLower().Contains(kw)))));
         }
 
         if (!string.IsNullOrWhiteSpace(planCode))
@@ -97,6 +104,10 @@ public class TenantRepository : ITenantRepository
                     break;
                 case "LOCKED":
                     query = query.Where(t => t.Status == "LOCKED" || t.LockType != null);
+                    break;
+                case "PENDING":
+                case "NO_PLAN":
+                    query = query.Where(t => (t.Status == "PENDING" || t.Status == "NO_PLAN") && t.LockType == null);
                     break;
                 case "INACTIVE":
                     query = query.Where(t => t.Status == "INACTIVE");
