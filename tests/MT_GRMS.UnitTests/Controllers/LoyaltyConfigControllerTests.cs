@@ -213,4 +213,71 @@ public class LoyaltyConfigControllerTests
         Assert.NotEmpty(apiRes.Data!);
         Assert.All(apiRes.Data!, row => Assert.Equal(DateTimeKind.Utc, row.CreatedAt.Kind));
     }
+
+    [Fact]
+    public async Task GetLedger_ShouldConvertLocalOrderTimestampToUtc_WithoutDoubleShifting()
+    {
+        using var context = CreateDbContext();
+        var customer = new Customer
+        {
+            Id = Guid.NewGuid(),
+            TenantId = TenantId,
+            CustomerCode = "KH-02",
+            Name = "Tran Van B",
+            Phone = "0909888777",
+            RewardPoints = 50
+        };
+        context.Customers.Add(customer);
+
+        var orderUtcInstant = new DateTime(2026, 11, 25, 13, 46, 41, DateTimeKind.Utc);
+        var orderAsLocal = orderUtcInstant.ToLocalTime();
+        var newerAdjustmentUtc = new DateTime(2026, 11, 25, 17, 50, 0, DateTimeKind.Unspecified);
+
+        context.Orders.Add(new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = TenantId,
+            OrderCode = "HD2002",
+            CustomerId = customer.Id,
+            Customer = customer,
+            FinalAmount = 100_000m,
+            PointsRedeemed = 0,
+            Status = "Completed",
+            CreatedAt = orderAsLocal
+        });
+        context.LoyaltyPointAdjustments.Add(new LoyaltyPointAdjustment
+        {
+            Id = Guid.NewGuid(),
+            CustomerId = customer.Id,
+            Customer = customer,
+            TransactionCode = "LP-ADJ-NEW",
+            Type = "MANUAL_ADJUST_ADD",
+            PointsChanged = 10,
+            BalanceAfter = 50,
+            Reason = "Newer manual adjust",
+            PerformedBy = "Owner",
+            CreatedAt = newerAdjustmentUtc
+        });
+        await context.SaveChangesAsync();
+
+        var config = new LoyaltyConfigDto(true, 10_000m, 1, 1, 1_000m, 100, false);
+        _mockLoyalty.Setup(s => s.GetConfigAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(config);
+
+        var controller = new LoyaltyConfigController(_mockLoyalty.Object, context, _mockTenant.Object)
+        {
+            ControllerContext = CreateContext()
+        };
+
+        var result = await controller.GetLedger(CancellationToken.None);
+        var ok = Assert.IsType<OkObjectResult>(result);
+        var rows = Assert.IsType<ApiResponse<IReadOnlyList<LoyaltyLedgerDto>>>(ok.Value).Data!;
+
+        Assert.Equal(2, rows.Count);
+        Assert.Equal("LP-ADJ-NEW", rows[0].TransactionCode);
+        Assert.Equal(DateTimeKind.Utc, rows[0].CreatedAt.Kind);
+        Assert.Equal("LP-HD2002-E", rows[1].TransactionCode);
+        Assert.Equal(DateTimeKind.Utc, rows[1].CreatedAt.Kind);
+        Assert.Equal(orderUtcInstant, rows[1].CreatedAt);
+    }
 }

@@ -573,5 +573,188 @@ public class PosOrderServiceExtendedTests
         Assert.NotEqual(default, capturedExchangeOrder!.BusinessDate);
         Assert.True(capturedExchangeOrder.BusinessDate.Year >= 2026);
         Assert.Equal(10000m, originalOrder.ReturnedAmount);
+        Assert.Contains("[HÀNG TRẢ:", capturedExchangeOrder.Note);
+        Assert.Contains("[LÝ DO: Khách đổi ý]", capturedExchangeOrder.Note);
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchangeAsync_WhenParentIsDtOrder_DoesNotOverwriteParentReturnedAmount_AndFallsBackProductName()
+    {
+        _tenantContextMock.Setup(t => t.CurrentRole).Returns("STORE_OWNER");
+        _uowMock.Setup(u => u.ExecuteInTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<OrderResponse>>>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<System.Data.IsolationLevel>()))
+            .Returns((Func<CancellationToken, Task<OrderResponse>> op, CancellationToken ct, System.Data.IsolationLevel _) => op(ct));
+        _shiftRepoMock.Setup(s => s.GetActiveShiftAsync(_branchId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ShiftZReport?)null);
+
+        var parentDtId = Guid.NewGuid();
+        var detailId = Guid.NewGuid();
+        var batchId = Guid.NewGuid();
+        var parentDtOrder = new Order
+        {
+            Id = parentDtId,
+            BranchId = _branchId,
+            TenantId = "tenant-01",
+            OrderCode = "DT261125194055482",
+            Status = "Completed",
+            PaymentMethod = "CASH",
+            TotalAmount = 116000m,
+            FinalAmount = 51000m,
+            ReturnedAmount = 65000m,
+            Details = new List<OrderDetail>
+            {
+                new()
+                {
+                    Id = detailId,
+                    OrderId = parentDtId,
+                    ProductId = _productId,
+                    ProductName = null!,
+                    Product = new Product { Id = _productId, Name = "Nước ngọt Coca-Cola Sleek 320ml", BaseUnit = "Lon" },
+                    BatchId = batchId,
+                    BatchCode = "LOT-COCA-01",
+                    Quantity = 2,
+                    UnitPrice = 58000m,
+                    ActualPrice = 58000m,
+                    TotalLineAmount = 116000m,
+                    UnitName = "Lốc 6 lon",
+                    ConversionRate = 6m
+                }
+            }
+        };
+
+        _orderRepoMock.Setup(r => r.GetOrderWithDetailsAsync(parentDtId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(parentDtOrder);
+        _orderRepoMock.Setup(r => r.GetBranchStockByIdAsync(_branchId, _productId, batchId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new BranchStock
+            {
+                Id = batchId,
+                BranchId = _branchId,
+                ProductId = _productId,
+                BatchCode = "LOT-COCA-01",
+                QuantityOnHand = 20m,
+                Status = "Active"
+            });
+
+        Order? capturedChildDt = null;
+        _orderRepoMock.Setup(r => r.AddAsync(It.IsAny<Order>(), It.IsAny<CancellationToken>()))
+            .Callback<Order, CancellationToken>((o, _) => capturedChildDt = o)
+            .Returns(Task.CompletedTask);
+
+        var service = CreateService();
+        var req = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_productId, 1, 58000m, OrderDetailId: detailId) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH",
+            Reason: "CHANGE_MIND",
+            CashFundSource: "SAFE"
+        );
+
+        await service.ProcessReturnExchangeAsync(parentDtId, req);
+
+        // R5-BUG-02: Không cộng dồn ReturnedAmount lên phiếu DT cha (giữ nguyên 65.000 đ)
+        Assert.Equal(65000m, parentDtOrder.ReturnedAmount);
+        // R5-BUG-04: Fallback sang origDetail.Product.Name thay vì "Sản phẩm"
+        Assert.NotNull(capturedChildDt);
+        Assert.Contains("Nước ngọt Coca-Cola Sleek 320ml", capturedChildDt!.Note);
+        Assert.DoesNotContain("[HÀNG TRẢ: Sản phẩm x", capturedChildDt.Note);
+    }
+
+    [Fact]
+    public async Task ProcessReturnExchangeAsync_WhenBusinessDayClosed_ThrowsBusinessDayClosedException()
+    {
+        _tenantContextMock.Setup(t => t.CurrentRole).Returns("STORE_OWNER");
+        _uowMock.Setup(u => u.ExecuteInTransactionAsync(
+                It.IsAny<Func<CancellationToken, Task<OrderResponse>>>(),
+                It.IsAny<CancellationToken>(),
+                It.IsAny<System.Data.IsolationLevel>()))
+            .Returns((Func<CancellationToken, Task<OrderResponse>> op, CancellationToken ct, System.Data.IsolationLevel _) => op(ct));
+        _shiftRepoMock.Setup(s => s.GetActiveShiftAsync(_branchId, It.IsAny<Guid?>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((ShiftZReport?)null);
+
+        var originalOrderId = Guid.NewGuid();
+        var detailId = Guid.NewGuid();
+        var batchId = Guid.NewGuid();
+        var originalOrder = new Order
+        {
+            Id = originalOrderId,
+            BranchId = _branchId,
+            TenantId = "tenant-01",
+            OrderCode = "HD261125888",
+            Status = "Completed",
+            PaymentMethod = "CASH",
+            FinalAmount = 20000m,
+            Details = new List<OrderDetail>
+            {
+                new()
+                {
+                    Id = detailId,
+                    OrderId = originalOrderId,
+                    ProductId = _productId,
+                    ProductName = "Test Product",
+                    BatchId = batchId,
+                    BatchCode = "LOT-EOD-01",
+                    Quantity = 1,
+                    UnitPrice = 20000m,
+                    ActualPrice = 20000m,
+                    TotalLineAmount = 20000m,
+                    UnitName = "Cái",
+                    ConversionRate = 1m
+                }
+            }
+        };
+
+        _orderRepoMock.Setup(r => r.GetOrderWithDetailsAsync(originalOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(originalOrder);
+        _shiftRepoMock.Setup(r => r.IsBusinessDayClosedAsync(_branchId, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var service = CreateService();
+        var req = new ReturnExchangeRequest(
+            ReturnedItems: new List<ReturnItemDto> { new(_productId, 1, 20000m, OrderDetailId: detailId) },
+            NewItems: new List<OrderItemCreateDto>(),
+            SettlementMethod: "CASH",
+            CashFundSource: "SAFE"
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.ProcessReturnExchangeAsync(originalOrderId, req));
+        Assert.Equal("BUSINESS_DAY_CLOSED", ex.ErrorCode);
+        _orderRepoMock.Verify(r => r.AddAsync(It.IsAny<Order>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task FulfillPreOrderAsync_WhenBusinessDayClosed_ThrowsBusinessDayClosedException()
+    {
+        _tenantContextMock.Setup(t => t.CurrentRole).Returns("STORE_OWNER");
+        var preOrderId = Guid.NewGuid();
+        var preOrder = new Order
+        {
+            Id = preOrderId,
+            BranchId = _branchId,
+            TenantId = "tenant-01",
+            OrderCode = "PO261111143829714",
+            Status = "PendingPickup",
+            PaymentMethod = "CASH",
+            FinalAmount = 500000m,
+            DepositAmount = 43700m,
+            Details = new List<OrderDetail>()
+        };
+
+        _orderRepoMock.Setup(r => r.GetOrderWithDetailsAsync(preOrderId, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(preOrder);
+        _shiftRepoMock.Setup(r => r.IsBusinessDayClosedAsync(_branchId, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(true);
+
+        var service = CreateService();
+        var req = new PreOrderFulfillRequest(
+            PaymentMethod: "CASH",
+            AmountPaid: 456300m
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => service.FulfillPreOrderAsync(preOrderId, req));
+        Assert.Equal("BUSINESS_DAY_CLOSED", ex.ErrorCode);
+        Assert.Equal("PendingPickup", preOrder.Status);
+        _uowMock.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Never);
     }
 }

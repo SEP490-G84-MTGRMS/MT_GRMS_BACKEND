@@ -1,4 +1,5 @@
 using System;
+using MT_GRMS.Application.Common;
 using MT_GRMS.Domain.Entities.Inventory;
 
 namespace MT_GRMS.Application.Inventory;
@@ -9,6 +10,9 @@ namespace MT_GRMS.Application.Inventory;
 /// </summary>
 public static class BranchStockAvailability
 {
+    /// <summary>Ngày hiện tại theo múi giờ cửa hàng (VN UTC+7) để so hạn sử dụng nhất quán từ 00:00–06:59.</summary>
+    public static DateTime StoreToday => BusinessDateResolver.ToLocal(DateTime.UtcNow).Date;
+
     public static decimal GetSellableAvailable(
         BranchStock stock,
         DateTime? asOfUtcDate = null,
@@ -16,7 +20,7 @@ public static class BranchStockAvailability
     {
         ArgumentNullException.ThrowIfNull(stock);
 
-        var today = (asOfUtcDate ?? DateTime.UtcNow).Date;
+        var today = (asOfUtcDate ?? StoreToday).Date;
         if (stock.ExpiryDate.HasValue && stock.ExpiryDate.Value.Date < today)
         {
             return 0m;

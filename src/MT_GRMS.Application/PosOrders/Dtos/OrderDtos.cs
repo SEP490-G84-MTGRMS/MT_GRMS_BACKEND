@@ -103,7 +103,8 @@ public record OrderItemResponse(
     bool IsGift = false,
     Guid? PromotionId = null,
     Guid? BatchId = null,
-    List<OrderStockAllocationDto>? StockAllocations = null
+    List<OrderStockAllocationDto>? StockAllocations = null,
+    decimal ConversionRate = 1m
 );
 
 public record OrderStockAllocationDto(Guid BranchStockId, string? BatchCode, decimal QuantityBase, decimal ReturnedBase = 0m, decimal CostPerBase = 0m, bool IsManualSelection = false);

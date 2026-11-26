@@ -69,14 +69,14 @@ public class LoyaltyConfigController : BaseApiController
                 {
                     result.Add(new LoyaltyLedgerDto($"{order.Id}-earn", $"LP-{order.OrderCode}-E", customerId,
                         order.CustomerName, order.CustomerPhone ?? "", "EARN_PURCHASE", earned,
-                        balanceAfterOrder, order.OrderCode, "Tích điểm từ đơn hàng", DateTime.SpecifyKind(order.CreatedAt, DateTimeKind.Utc), "POS"));
+                        balanceAfterOrder, order.OrderCode, "Tích điểm từ đơn hàng", ToUtc(order.CreatedAt), "POS"));
                 }
             }
             if (order.PointsRedeemed > 0)
             {
                 result.Add(new LoyaltyLedgerDto($"{order.Id}-redeem", $"LP-{order.OrderCode}-R", customerId,
                     order.CustomerName, order.CustomerPhone ?? "", "REDEEM_PURCHASE", -order.PointsRedeemed,
-                    balanceAfterOrder - earned, order.OrderCode, "Tiêu điểm khi thanh toán đơn hàng", DateTime.SpecifyKind(order.CreatedAt, DateTimeKind.Utc), "POS"));
+                    balanceAfterOrder - earned, order.OrderCode, "Tiêu điểm khi thanh toán đơn hàng", ToUtc(order.CreatedAt), "POS"));
             }
             balances[customerId] = balanceAfterOrder - earned + order.PointsRedeemed;
         }
@@ -106,13 +106,20 @@ public class LoyaltyConfigController : BaseApiController
             entry.Id.ToString(), entry.TransactionCode, entry.CustomerId,
             entry.CustomerName, entry.CustomerPhone, entry.Type,
             entry.PointsChanged, entry.BalanceAfter, null, entry.Reason,
-            DateTime.SpecifyKind(entry.CreatedAt, DateTimeKind.Utc), entry.PerformedBy));
+            ToUtc(entry.CreatedAt), entry.PerformedBy));
 
         result.AddRange(adjustments);
         result = result.OrderByDescending(entry => entry.CreatedAt).Take(500).ToList();
 
         return Ok(ApiResponse<IReadOnlyList<LoyaltyLedgerDto>>.Ok(result));
     }
+
+    private static DateTime ToUtc(DateTime dt) => dt.Kind switch
+    {
+        DateTimeKind.Utc => dt,
+        DateTimeKind.Local => dt.ToUniversalTime(),
+        _ => DateTime.SpecifyKind(dt, DateTimeKind.Utc)
+    };
 
     [HttpPost("adjustments")]
     public async Task<IActionResult> AdjustPoints([FromBody] AdjustLoyaltyPointsRequest request, CancellationToken cancellationToken)

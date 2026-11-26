@@ -309,7 +309,7 @@ public class OrderService : IOrderService
                 ?? throw new BusinessException("PACKAGE_NOT_FOUND", "Khay không thuộc sản phẩm/chi nhánh hiện tại.");
             if (package.Status != "AVAILABLE" || package.NetWeight <= 0m)
                 throw new BusinessException("PACKAGE_NOT_AVAILABLE", "Khay đã bán, cách ly hoặc không còn khả dụng.");
-            if (package.ExpiryDate?.Date < DateTime.UtcNow.Date)
+            if (package.ExpiryDate?.Date < BranchStockAvailability.StoreToday)
                 throw new BusinessException("PACKAGE_EXPIRED", "Khay đã hết hạn sử dụng.");
             if (item.BatchId.HasValue && item.BatchId.Value != package.BranchStockId)
                 throw new BusinessException("PACKAGE_BATCH_MISMATCH", "Khay không thuộc lô đã chọn.");
@@ -321,7 +321,7 @@ public class OrderService : IOrderService
                 selectedStocks[stock.Id] = stock;
             }
 
-            if (stock.ExpiryDate.HasValue && stock.ExpiryDate.Value.Date < DateTime.UtcNow.Date)
+            if (stock.ExpiryDate.HasValue && stock.ExpiryDate.Value.Date < BranchStockAvailability.StoreToday)
                 throw new BusinessException("PACKAGE_BATCH_EXPIRED", "Lô gốc của khay đã hết hạn sử dụng.");
 
             if (!packageWeightsByProduct.TryGetValue(item.ProductId, out var packageWeights))
@@ -361,7 +361,7 @@ public class OrderService : IOrderService
                 selectedStocks[batchId] = selectedStock;
             }
 
-            if (selectedStock.ExpiryDate.HasValue && selectedStock.ExpiryDate.Value.Date < DateTime.UtcNow.Date)
+            if (selectedStock.ExpiryDate.HasValue && selectedStock.ExpiryDate.Value.Date < BranchStockAvailability.StoreToday)
                 throw new BusinessException("BATCH_EXPIRED", $"Lô {selectedStock.BatchCode} đã hết hạn và không được phép bán.");
 
             var required = item.Quantity * GetConversionRate(item);
@@ -763,7 +763,7 @@ public class OrderService : IOrderService
             : combinedPromoSummary;
 
         string orderCode = $"HD{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
-        var orderBusinessDate = activeShift?.BusinessDate ?? BusinessDateResolver.Resolve(DateTime.UtcNow, new TimeSpan(6, 0, 0));
+        var orderBusinessDate = await ResolveBusinessDateAsync(branchId, activeShift, cancellationToken);
         if (_shiftRepository != null && await _shiftRepository.IsBusinessDayClosedAsync(branchId, orderBusinessDate, cancellationToken))
         {
             throw new BusinessException(
@@ -1380,9 +1380,7 @@ public class OrderService : IOrderService
                 effectivePromoSummary = effectivePromoSummary.Substring(0, 300);
             }
 
-            var preOrderBusinessDate = preOrderShift != null
-                ? preOrderShift.BusinessDate
-                : BusinessDateResolver.Resolve(DateTime.UtcNow, new TimeSpan(6, 0, 0));
+            var preOrderBusinessDate = await ResolveBusinessDateAsync(request.BranchId, preOrderShift, cancellationToken);
             if (_shiftRepository != null && await _shiftRepository.IsBusinessDayClosedAsync(request.BranchId, preOrderBusinessDate, cancellationToken))
             {
                 throw new BusinessException(
@@ -1551,6 +1549,27 @@ public class OrderService : IOrderService
             throw new InvalidOperationException($"Đơn hàng '{order.OrderCode}' không ở trạng thái Chờ nhận hàng (trạng thái hiện tại: {order.Status}).");
         }
 
+        Domain.Entities.Finance.ShiftZReport? fulfillShift = null;
+        if (_shiftRepository != null)
+        {
+            if (request.ShiftId.HasValue && request.ShiftId.Value != Guid.Empty)
+            {
+                fulfillShift = await _shiftRepository.GetByIdAsync(request.ShiftId.Value, cancellationToken);
+            }
+            else if (!IsOwnerCaller())
+            {
+                fulfillShift = await _shiftRepository.GetActiveShiftAsync(order.BranchId, cancellationToken: cancellationToken);
+            }
+        }
+
+        var fulfillBusinessDate = await ResolveBusinessDateAsync(order.BranchId, fulfillShift, cancellationToken);
+        if (_shiftRepository != null && await _shiftRepository.IsBusinessDayClosedAsync(order.BranchId, fulfillBusinessDate, cancellationToken))
+        {
+            throw new BusinessException(
+                "BUSINESS_DAY_CLOSED",
+                $"Ngày nghiệp vụ {fulfillBusinessDate:dd/MM/yyyy} đã khóa sổ cuối ngày. Không thể bàn giao đơn đặt trước.");
+        }
+
         // Đơn mới giữ tồn trong QOH; chỉ xuất vật lý khi bàn giao.
         foreach (var detail in order.Details.Where(d => !string.IsNullOrWhiteSpace(d.StockAllocationsJson)))
         {
@@ -1610,9 +1629,10 @@ public class OrderService : IOrderService
             }
             else if (_shiftRepository != null)
             {
-                var activeShift = request.ShiftId.HasValue && request.ShiftId.Value != Guid.Empty
-                    ? await _shiftRepository.GetByIdAsync(request.ShiftId.Value, cancellationToken)
-                    : await _shiftRepository.GetActiveShiftAsync(order.BranchId, cancellationToken: cancellationToken);
+                var activeShift = fulfillShift
+                    ?? (request.ShiftId.HasValue && request.ShiftId.Value != Guid.Empty
+                        ? await _shiftRepository.GetByIdAsync(request.ShiftId.Value, cancellationToken)
+                        : await _shiftRepository.GetActiveShiftAsync(order.BranchId, cancellationToken: cancellationToken));
 
                 if (activeShift != null)
                 {
@@ -2017,7 +2037,8 @@ public class OrderService : IOrderService
                 var conversionRate = origDetail.ConversionRate > 0m ? origDetail.ConversionRate : 1m;
                 if (previousReturnedBase + cumulativeReturnQty * conversionRate > origDetail.Qty * conversionRate)
                 {
-                    throw new InvalidOperationException($"Số lượng trả vượt quá số lượng còn được trả của sản phẩm '{origDetail.ProductName}'.");
+                    var origName = !string.IsNullOrWhiteSpace(origDetail.ProductName) ? origDetail.ProductName : (origDetail.Product?.Name ?? "Sản phẩm");
+                    throw new InvalidOperationException($"Số lượng trả vượt quá số lượng còn được trả của sản phẩm '{origName}'.");
                 }
                 returnedQtyByDetailId[origDetail.Id] = cumulativeReturnQty;
 
@@ -2095,6 +2116,14 @@ public class OrderService : IOrderService
         if (cashFundSource == "SHIFT" && currentOpenShift == null)
             throw new BusinessException("OPEN_SHIFT_REQUIRED", "Chi nhánh chưa có ca mở để thu hoặc hoàn tiền tại két quầy.");
 
+        var exchangeBusinessDate = await ResolveBusinessDateAsync(originalOrder.BranchId, currentOpenShift, cancellationToken);
+        if (_shiftRepository != null && await _shiftRepository.IsBusinessDayClosedAsync(originalOrder.BranchId, exchangeBusinessDate, cancellationToken))
+        {
+            throw new BusinessException(
+                "BUSINESS_DAY_CLOSED",
+                $"Ngày nghiệp vụ {exchangeBusinessDate:dd/MM/yyyy} đã khóa sổ cuối ngày. Không thể thực hiện đổi/trả hàng.");
+        }
+
         if (netAmount < 0 && cashFundSource == "SHIFT" &&
             settlementMethodUpper is not ("REDUCE_DEBT" or "DEBT") && !IsOwnerCaller() && _shiftRepository != null)
         {
@@ -2143,7 +2172,7 @@ public class OrderService : IOrderService
             bool isDamaged = string.Equals(retItem.Condition?.Trim(), "Damaged", StringComparison.OrdinalIgnoreCase);
             if (!isDamaged)
             {
-                if (stock.ExpiryDate.HasValue && stock.ExpiryDate.Value.Date < DateTime.UtcNow.Date)
+                if (stock.ExpiryDate.HasValue && stock.ExpiryDate.Value.Date < BranchStockAvailability.StoreToday)
                     throw new BusinessException("RETURN_BATCH_EXPIRED", $"Lô {stock.BatchCode} đã hết hạn sử dụng ({stock.ExpiryDate:dd/MM/yyyy}), không thể nhập lại kho bán (Restock). Vui lòng chọn tình trạng Hàng lỗi/hỏng hoặc chọn lô khác còn hạn.");
                 var batchStatus = (stock.Status ?? string.Empty).Trim();
                 bool isSellableStatus = string.IsNullOrEmpty(batchStatus)
@@ -2312,7 +2341,33 @@ public class OrderService : IOrderService
         Guid? currentActiveShiftId = currentOpenShift?.Id;
 
         string exchangeCode = $"DT{DateTime.UtcNow:yyMMddHHmmss}{Random.Shared.Next(100, 999)}";
-        var exchangeBusinessDate = currentOpenShift?.BusinessDate ?? BusinessDateResolver.Resolve(DateTime.UtcNow, new TimeSpan(6, 0, 0));
+        var returnedItemSummaries = resolvedReturns.Select(r =>
+        {
+            var (retItem, origDetail) = r;
+            var rawName = !string.IsNullOrWhiteSpace(origDetail.ProductName)
+                ? origDetail.ProductName
+                : (origDetail.Product?.Name ?? "Sản phẩm");
+            var name = rawName.Replace(";", ",").Replace("]", ")");
+            var unit = !string.IsNullOrWhiteSpace(origDetail.UnitName) ? origDetail.UnitName : "Cái";
+            var condLabel = string.Equals(retItem.Condition?.Trim(), "Damaged", StringComparison.OrdinalIgnoreCase) ? "Hàng lỗi" : "Nhập lại kho";
+            var unitRefund = origDetail.IsGift
+                ? 0m
+                : (origDetail.ActualPrice > 0m ? Math.Min(Math.Max(0m, retItem.UnitPrice), origDetail.ActualPrice) : Math.Max(0m, retItem.UnitPrice));
+            var lineRefund = retItem.Quantity * unitRefund;
+            return $"{name} x {retItem.Quantity:0.###} {unit} ({condLabel}) - {lineRefund:N0} đ";
+        }).ToList();
+
+        var noteSegments = new List<string>
+        {
+            $"Đổi/Trả từ đơn '{originalOrder.OrderCode}'. Tiền hàng trả: {totalReturnAmount:N0} đ. Tiền hàng mới: {totalNewAmount:N0} đ. Chênh lệch: {netAmount:N0} đ."
+        };
+        if (returnedItemSummaries.Count > 0)
+            noteSegments.Add($"[HÀNG TRẢ: {string.Join("; ", returnedItemSummaries)}]");
+        if (!string.IsNullOrWhiteSpace(request.Reason))
+            noteSegments.Add($"[LÝ DO: {request.Reason.Trim()}]");
+        if (!string.IsNullOrWhiteSpace(request.Note))
+            noteSegments.Add(request.Note.Trim());
+
         var exchangeOrder = new Order
         {
             Id = Guid.NewGuid(),
@@ -2332,7 +2387,7 @@ public class OrderService : IOrderService
             PaymentMethod = settlementMethodUpper,
             PaymentStatus = paymentStatus,
             Status = "Completed",
-            Note = $"Đổi/Trả từ đơn '{originalOrder.OrderCode}'. Tiền hàng trả: {totalReturnAmount:N0} đ. Tiền hàng mới: {totalNewAmount:N0} đ. Chênh lệch: {netAmount:N0} đ. {request.Note}".Trim(),
+            Note = string.Join(" ", noteSegments).Trim(),
             Details = newOrderDetails,
             Branch = originalOrder.Branch,
             Customer = customer,
@@ -2345,7 +2400,7 @@ public class OrderService : IOrderService
             d.OrderId = exchangeOrder.Id;
         }
 
-        if (totalReturnAmount > 0)
+        if (totalReturnAmount > 0 && !originalOrder.OrderCode.StartsWith("DT", StringComparison.OrdinalIgnoreCase))
         {
             originalOrder.ReturnedAmount += totalReturnAmount;
             originalOrder.UpdatedAt = DateTime.UtcNow;
@@ -2620,6 +2675,23 @@ public class OrderService : IOrderService
         );
     }
 
+    private async Task<DateOnly> ResolveBusinessDateAsync(
+        Guid branchId,
+        Domain.Entities.Finance.ShiftZReport? shift,
+        CancellationToken cancellationToken)
+    {
+        if (shift != null && shift.BusinessDate != default)
+            return shift.BusinessDate;
+
+        var startTime = _shiftRepository != null
+            ? await _shiftRepository.GetBusinessDayStartTimeAsync(branchId, cancellationToken)
+            : new TimeSpan(6, 0, 0);
+        if (startTime == default)
+            startTime = new TimeSpan(6, 0, 0);
+
+        return BusinessDateResolver.Resolve(DateTime.UtcNow, startTime);
+    }
+
     private static OrderResponse MapToOrderResponse(
         Order order,
         decimal cashTendered,
@@ -2644,7 +2716,8 @@ public class OrderService : IOrderService
             IsGift: d.IsGift,
             PromotionId: d.PromotionId,
             BatchId: d.BatchId,
-            StockAllocations: ReadAllocations(d)
+            StockAllocations: ReadAllocations(d),
+            ConversionRate: d.ConversionRate > 0m ? d.ConversionRate : 1m
         )).ToList();
 
         return new OrderResponse(
