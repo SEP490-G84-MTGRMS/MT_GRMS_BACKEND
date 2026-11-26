@@ -122,6 +122,7 @@ public class LoyaltyConfigController : BaseApiController
     };
 
     [HttpPost("adjustments")]
+    [Authorize(Policy = "StoreOwnerOnly")]
     public async Task<IActionResult> AdjustPoints([FromBody] AdjustLoyaltyPointsRequest request, CancellationToken cancellationToken)
     {
         var phone = request.CustomerPhone?.Trim() ?? string.Empty;
