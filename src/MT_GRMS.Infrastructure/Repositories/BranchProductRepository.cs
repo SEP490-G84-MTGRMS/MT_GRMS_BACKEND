@@ -5,6 +5,7 @@ using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using MT_GRMS.Application.Batches;
 using MT_GRMS.Application.Branches;
 using MT_GRMS.Application.Branches.Dtos;
 using MT_GRMS.Application.Common;
@@ -205,7 +206,7 @@ public class BranchProductRepository : IBranchProductRepository
             Dictionary<(Guid, Guid), decimal>? qtyLookup = null;
             if (needsStockFilter)
             {
-                var todayForFilter = DateTime.UtcNow.Date;
+                var todayForFilter = BranchStockAvailability.StoreToday;
                 var qtyRows = await _context.BranchStocks
                     .AsNoTracking()
                     .Where(bs => branchIds.Contains(bs.BranchId) && ids.Contains(bs.ProductId) && !bs.IsDeleted)
@@ -326,7 +327,8 @@ public class BranchProductRepository : IBranchProductRepository
         var pagedProductIds = pagedData.Select(x => x.ProductId).Distinct().ToList();
         var pagedBranchIds = pagedData.Select(x => x.BranchId).Distinct().ToList();
 
-        var today = DateTime.UtcNow.Date;
+        var today = BranchStockAvailability.StoreToday;
+        var utcNow = DateTime.UtcNow;
         var stockRows = await _context.BranchStocks
             .AsNoTracking()
             .Where(bs => pagedBranchIds.Contains(bs.BranchId)
@@ -338,6 +340,23 @@ public class BranchProductRepository : IBranchProductRepository
             .ToDictionary(
                 g => g.Key,
                 g => g.Sum(bs => BranchStockAvailability.GetSellableAvailable(bs, today)));
+
+        var autoFefoDiscountLookup = stockRows
+            .GroupBy(bs => (bs.BranchId, bs.ProductId))
+            .ToDictionary(
+                g => g.Key,
+                g =>
+                {
+                    var firstSellable = g
+                        .Where(bs => BranchStockAvailability.GetSellableAvailable(bs, today) > 0m)
+                        .OrderBy(bs => bs.ExpiryDate ?? DateTime.MaxValue)
+                        .ThenBy(bs => bs.ManufactureDate ?? DateTime.MaxValue)
+                        .ThenBy(bs => bs.CreatedAt)
+                        .FirstOrDefault();
+                    return firstSellable != null && FefoDiscountWindow.IsEffective(firstSellable, utcNow)
+                        ? firstSellable.FefoDiscountPercent
+                        : 0m;
+                });
 
         // WAC theo ĐVT cơ sở: Σ(QOH × LandedCost) / Σ(QOH) — giống Inventory AvgCost.
         var avgCostLookup = stockRows
@@ -540,7 +559,8 @@ public class BranchProductRepository : IBranchProductRepository
                 AssignedDate = x.AssignedDate,
                 UnitPrices = unitPrices,
                 AllowRepack = extra?.AllowRepack ?? false,
-                ProcessedSellingPricePerKg = x.BranchProcessedSellingPricePerKg ?? extra?.ProcessedSellingPricePerKg
+                ProcessedSellingPricePerKg = x.BranchProcessedSellingPricePerKg ?? extra?.ProcessedSellingPricePerKg,
+                AutoFefoDiscountPercent = autoFefoDiscountLookup.GetValueOrDefault((x.BranchId, x.ProductId))
             });
         }
 
