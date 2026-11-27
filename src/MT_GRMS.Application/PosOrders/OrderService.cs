@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentValidation;
+using Microsoft.Extensions.Configuration;
 using MT_GRMS.Application.Batches;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
@@ -35,6 +36,7 @@ public class OrderService : IOrderService
     private readonly Notifications.INotificationService? _notificationService;
     private readonly Notifications.NotificationOutbox? _notificationOutbox;
     private readonly IStocktakeRepository? _stocktakeRepository;
+    private readonly Tax.TaxPolicy _taxPolicy;
 
     private static readonly Guid DefaultTillId = Guid.Parse("01a19664-6210-7b12-a9eb-6fa16ca5b9db");
     private static readonly Guid DefaultBankId = Guid.Parse("01a19664-6741-7f3d-9be7-cb4c7b876559");
@@ -52,7 +54,8 @@ public class OrderService : IOrderService
         Tax.ITaxPeriodLockGuard? taxPeriodLockGuard = null,
         Notifications.INotificationService? notificationService = null,
         Notifications.NotificationOutbox? notificationOutbox = null,
-        IStocktakeRepository? stocktakeRepository = null)
+        IStocktakeRepository? stocktakeRepository = null,
+        IConfiguration? configuration = null)
     {
         _orderRepository = orderRepository;
         _unitOfWork = unitOfWork;
@@ -67,6 +70,22 @@ public class OrderService : IOrderService
         _notificationService = notificationService;
         _notificationOutbox = notificationOutbox;
         _stocktakeRepository = stocktakeRepository;
+        _taxPolicy = Tax.TaxPolicy.Load(configuration);
+    }
+
+    /// <summary>
+    /// Resolves the effective retail VAT rate at point of sale, automatically restoring 1.0% when
+    /// Resolution 204/2025/QH15 (0.8% reduced VAT) expires on 2027-01-01 00:00:00 VN time.
+    /// </summary>
+    public static decimal ResolveEffectiveProductVatRate(decimal productVatRate, DateTime saleUtc, Tax.TaxPolicy? policy = null)
+    {
+        var baseRate = productVatRate > 0 ? productVatRate : 0.01m;
+        var activePolicy = policy ?? Tax.TaxPolicy.Default;
+        if (baseRate == 0.008m && !activePolicy.IsVatReductionActive(saleUtc))
+        {
+            return 0.01m;
+        }
+        return baseRate;
     }
 
     public OrderService(
@@ -480,7 +499,7 @@ public class OrderService : IOrderService
                     CostPriceAtSale = (prod.CostPrice ?? 0m) * giftConvRate,
                     IsGift = true,
                     StockAllocationsJson = JsonSerializer.Serialize(giftAllocations),
-                    AppliedVatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m,
+                    AppliedVatRate = ResolveEffectiveProductVatRate(prod.VatRate, DateTime.UtcNow, _taxPolicy),
                     VatAmount = 0m,
                     ProductName = !string.IsNullOrWhiteSpace(item.ProductName) ? item.ProductName : prod.Name,
                     ProductUnitId = item.UnitId,
@@ -521,8 +540,8 @@ public class OrderService : IOrderService
             decimal itemDiscount = Math.Max(item.DiscountAmount ?? 0m, fefoDiscount);
             decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : effectiveUnitPrice;
 
-            // Tính VAT theo tỷ lệ của sản phẩm (hoặc mặc định 1% cho tạp hóa)
-            decimal vatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m;
+            // Tính VAT theo tỷ lệ của sản phẩm (tự động về 1.0% sau 31/12/2026 khi hết NQ 204/2025/QH15)
+            decimal vatRate = ResolveEffectiveProductVatRate(prod.VatRate, pricingUtcNow, _taxPolicy);
             decimal vatAmount = (actualPrice * item.Quantity) * vatRate;
 
             totalAmount += lineTotal;
@@ -1235,7 +1254,7 @@ public class OrderService : IOrderService
                         CostPriceAtSale = (prod.CostPrice ?? 0m) * rate,
                         IsGift = true,
                         StockAllocationsJson = JsonSerializer.Serialize(giftAllocations),
-                        AppliedVatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m,
+                        AppliedVatRate = ResolveEffectiveProductVatRate(prod.VatRate, DateTime.UtcNow, _taxPolicy),
                         VatAmount = 0m,
                         ProductUnitId = item.UnitId,
                         UnitName = unitName,
@@ -1262,7 +1281,7 @@ public class OrderService : IOrderService
                 decimal lineTotal = item.Quantity * effectiveUnitPrice;
                 decimal itemDiscount = item.DiscountAmount ?? 0m;
                 decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : effectiveUnitPrice;
-                decimal vatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m;
+                decimal vatRate = ResolveEffectiveProductVatRate(prod.VatRate, DateTime.UtcNow, _taxPolicy);
                 decimal vatAmount = (actualPrice * item.Quantity) * vatRate;
 
                 totalAmount += lineTotal;
@@ -2119,7 +2138,7 @@ public class OrderService : IOrderService
                 decimal lineTotal = item.Quantity * item.UnitPrice;
                 decimal itemDiscount = item.DiscountAmount ?? 0m;
                 decimal actualPrice = item.Quantity > 0 ? Math.Max(0, (lineTotal - itemDiscount) / item.Quantity) : item.UnitPrice;
-                decimal vatRate = prod.VatRate > 0 ? prod.VatRate : 0.01m;
+                decimal vatRate = ResolveEffectiveProductVatRate(prod.VatRate, DateTime.UtcNow, _taxPolicy);
                 decimal vatAmount = (actualPrice * item.Quantity) * vatRate;
 
                 var rate = item.ConversionRate > 0m ? item.ConversionRate : (prod.Units?.FirstOrDefault(u => u.Id == item.UnitId)?.ConversionRate ?? 1.00m);

@@ -439,13 +439,17 @@ public class HouseholdTaxServiceTests
         Assert.Equal(3_000_000m, result.QuarterlyVatAmount);
         Assert.Equal(12_000_000m, result.RetrospectiveVatAmount);
 
-        // TNCN CHỈ tính trên phần vượt 1 tỷ: (1.2 tỷ - 1.0 tỷ) - 0 = 200M * 0.5% = 1.000.000 VNĐ
+        // TNCN CHỈ tính trên phần vượt 1 tỷ: (1.2 tỷ - 1.0 tỷ) = 200M * 0.5% = 1.000.000 VNĐ
+        // Năm 2026 doanh thu <= 10 tỷ: giảm 30% TNCN theo NQ 43/2026 & NĐ 398/2026 (-300.000đ) -> còn 700.000 VNĐ
         Assert.Equal(0.5m, result.PitRate);
         Assert.Equal(200_000_000m, result.PitTaxableRevenue);
-        Assert.Equal(1_000_000m, result.PitAmount);
+        Assert.Equal(1_000_000m, result.PitBeforeReduction);
+        Assert.Equal(300_000m, result.PitReductionAmount);
+        Assert.True(result.IsPitReduced);
+        Assert.Equal(700_000m, result.PitAmount);
 
-        // Tổng thuế = 12M (GTGT thận trọng) + 1M (TNCN) = 13.000.000 VNĐ
-        Assert.Equal(13_000_000m, result.TotalTaxAmount);
+        // Tổng thuế = 12M (GTGT thận trọng) + 700k (TNCN sau giảm 30%) = 12.700.000 VNĐ
+        Assert.Equal(12_700_000m, result.TotalTaxAmount);
 
         Assert.Equal("S2a-HKD", result.BooksSummary.PrimaryBookCode);
 
@@ -457,7 +461,7 @@ public class HouseholdTaxServiceTests
 
     {
 
-        // Arrange: Phương pháp Kê khai theo mô hình lũy kế YTD (Nhóm 2 doanh thu 1.5B > 1B)
+        // Arrange: Phương pháp Kê khai quyết toán năm (Year) theo NĐ 68/2026 & giảm 30% TNCN theo NĐ 398/2026 (Nhóm 2 doanh thu 1.5B > 1B)
 
         _fakeRepo.AnnualAccumulatedRevenue = 1_500_000_000m;
 
@@ -477,9 +481,9 @@ public class HouseholdTaxServiceTests
 
             Year = 2026,
 
-            PeriodType = TaxPeriodType.Quarter,
+            PeriodType = TaxPeriodType.Year,
 
-            PeriodNumber = 2,
+            PeriodNumber = 1,
 
             CalculationMethod = TaxCalculationMethod.DeclarationBased,
 
@@ -491,19 +495,25 @@ public class HouseholdTaxServiceTests
 
         var result = await _service.GetTaxSummaryAsync(filter);
 
-        // Assert
+        // Assert: 200M * 15% = 30M; giảm 30% NĐ 398 (-9M) => 21M; hạn quyết toán 31/03/2027
 
         Assert.Equal(500_000_000m, result.TaxableRevenueInPeriod);
 
         Assert.Equal(1_300_000_000m, result.DeductibleExpensesInPeriod);
 
-        Assert.Equal(200_000_000m, result.TaxableIncomeYtd); // 1.5B - 1.3B = 200M
+        Assert.Equal(200_000_000m, result.TaxableIncomeYtd);
 
-        Assert.Equal(30_000_000m, result.TaxDueYtd); // 200M * 15% = 30M
+        Assert.Equal(30_000_000m, result.TaxDueYtdBeforeReduction);
 
-        Assert.Equal(30_000_000m, result.DeclarationPitAmount); // Phải nộp kỳ 2: 30M
+        Assert.Equal(9_000_000m, result.PitReductionYtd);
+
+        Assert.Equal(21_000_000m, result.TaxDueYtd);
+
+        Assert.Equal(21_000_000m, result.DeclarationPitAmount);
 
         Assert.Equal(0m, result.OverpaidTaxCarry);
+
+        Assert.Equal(new DateTime(2027, 3, 31), result.FilingDeadlineLocal.Date);
 
     }
 
@@ -513,141 +523,67 @@ public class HouseholdTaxServiceTests
 
     {
 
-        // Kịch bản đối chiếu 4 quý theo chuẩn phản biện (Doanh thu năm thuộc Nhóm 2 > 1 tỷ):
-
-        // Q1: DT YTD=1.1B, CP YTD=1.15B (Lỗ -50M) -> YTD Lỗ -50M -> Thuế Q1 = 0
-
-        // Q2: DT YTD=1.3B, CP YTD=1.25B (Lãi +100M) -> YTD Lãi +50M -> Thuế Q2 = 50M * 15% = 7.5M
-
-        // Q3: DT YTD=1.4B, CP YTD=1.37B (Lỗ -20M) -> YTD Lãi +30M (Thuế YTD=4.5M, đã nộp 7.5M) -> Thuế Q3 = 0, nộp thừa 3M
-
-        // Q4: DT YTD=1.6B, CP YTD=1.47B (Lãi +100M) -> YTD Lãi +130M (Thuế YTD=19.5M, đã nộp 7.5M) -> Thuế Q4 = 12M
-
-        // Tổng thuế 4 quý = 0 + 7.5 + 0 + 12 = 19.5M (khớp đúng 130M * 15%)
-
-        // --- Quý 1 ---
+        // Kịch bản đối chiếu 4 quý tạm nộp (Khoản 2 Điều 10 NĐ 68) + Quyết toán năm (15% lợi nhuận, giảm 30% NĐ 398):
+        // Q1: DT YTD=1.1B -> vượt 100M -> tạm nộp = 100M * 0.5% * 70% = 350k
+        // Q2: DT YTD=1.3B -> vượt 300M -> YTD tạm nộp = 1.05M -> Q2 nộp thêm 700k
+        // Q3: DT YTD=1.4B -> vượt 400M -> YTD tạm nộp = 1.4M -> Q3 nộp thêm 350k
+        // Q4: DT YTD=1.6B -> vượt 600M -> YTD tạm nộp = 2.1M -> Q4 nộp thêm 700k (Tổng 4 quý = 2.1M)
+        // Quyết toán năm: DT 1.6B - CP 1.47B = Lãi 130M -> 130M * 15% * 70% = 13.65M -> Nộp bổ sung 13.65M - 2.1M = 11.55M
 
         _fakeRepo.AnnualAccumulatedRevenue = 1_100_000_000m;
-
         _fakeRepo.DeductibleExpenses = 1_150_000_000m;
-
         var q1 = await _service.GetTaxSummaryAsync(new HouseholdTaxFilterDto
-
         {
-
-            Year = 2026,
-
-            PeriodType = TaxPeriodType.Quarter,
-
-            PeriodNumber = 1,
-
-            CalculationMethod = TaxCalculationMethod.DeclarationBased,
-
-            PriorDeclaredPitTaxOverride = 0m
-
+            Year = 2026, PeriodType = TaxPeriodType.Quarter, PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.DeclarationBased, PriorDeclaredPitTaxOverride = 0m
         });
-
+        Assert.True(q1.IsProvisionalPitPeriod);
         Assert.Equal(0m, q1.TaxableIncomeYtd);
-
-        Assert.Equal(0m, q1.DeclarationPitAmount);
-
-        Assert.Equal(0m, q1.OverpaidTaxCarry);
-
-        // --- Quý 2 ---
+        Assert.Equal(350_000m, q1.PitAmount);
 
         _fakeRepo.AnnualAccumulatedRevenue = 1_300_000_000m;
-
         _fakeRepo.DeductibleExpenses = 1_250_000_000m;
-
         var q2 = await _service.GetTaxSummaryAsync(new HouseholdTaxFilterDto
-
         {
-
-            Year = 2026,
-
-            PeriodType = TaxPeriodType.Quarter,
-
-            PeriodNumber = 2,
-
-            CalculationMethod = TaxCalculationMethod.DeclarationBased,
-
-            PriorDeclaredPitTaxOverride = 0m // Q1 nộp 0
-
+            Year = 2026, PeriodType = TaxPeriodType.Quarter, PeriodNumber = 2,
+            CalculationMethod = TaxCalculationMethod.DeclarationBased, PriorDeclaredPitTaxOverride = q1.PitAmount
         });
-
-        Assert.Equal(50_000_000m, q2.TaxableIncomeYtd); // YTD = 1.3B - 1.25B = 50M
-
-        Assert.Equal(7_500_000m, q2.TaxDueYtd); // 50M * 15% = 7.5M
-
-        Assert.Equal(7_500_000m, q2.DeclarationPitAmount); // Q2 phải nộp = 7.5M
-
-        Assert.Equal(0m, q2.OverpaidTaxCarry);
-
-        // --- Quý 3 ---
+        Assert.Equal(50_000_000m, q2.TaxableIncomeYtd);
+        Assert.Equal(700_000m, q2.PitAmount);
 
         _fakeRepo.AnnualAccumulatedRevenue = 1_400_000_000m;
-
         _fakeRepo.DeductibleExpenses = 1_370_000_000m;
-
         var q3 = await _service.GetTaxSummaryAsync(new HouseholdTaxFilterDto
-
         {
-
-            Year = 2026,
-
-            PeriodType = TaxPeriodType.Quarter,
-
-            PeriodNumber = 3,
-
-            CalculationMethod = TaxCalculationMethod.DeclarationBased,
-
-            PriorDeclaredPitTaxOverride = 7_500_000m // Đã nộp Q1(0) + Q2(7.5M)
-
+            Year = 2026, PeriodType = TaxPeriodType.Quarter, PeriodNumber = 3,
+            CalculationMethod = TaxCalculationMethod.DeclarationBased, PriorDeclaredPitTaxOverride = q1.PitAmount + q2.PitAmount
         });
-
-        Assert.Equal(30_000_000m, q3.TaxableIncomeYtd); // YTD = 1.4B - 1.37B = 30M
-
-        Assert.Equal(4_500_000m, q3.TaxDueYtd); // 30M * 15% = 4.5M
-
-        Assert.Equal(0m, q3.DeclarationPitAmount); // Q3 phải nộp = 0 (vì đã nộp 7.5M > 4.5M)
-
-        Assert.Equal(3_000_000m, q3.OverpaidTaxCarry); // Nộp thừa 3.0M chuyển sang kỳ sau
-
-        // --- Quý 4 ---
+        Assert.Equal(30_000_000m, q3.TaxableIncomeYtd);
+        Assert.Equal(350_000m, q3.PitAmount);
 
         _fakeRepo.AnnualAccumulatedRevenue = 1_600_000_000m;
-
         _fakeRepo.DeductibleExpenses = 1_470_000_000m;
-
         var q4 = await _service.GetTaxSummaryAsync(new HouseholdTaxFilterDto
-
         {
-
-            Year = 2026,
-
-            PeriodType = TaxPeriodType.Quarter,
-
-            PeriodNumber = 4,
-
-            CalculationMethod = TaxCalculationMethod.DeclarationBased,
-
-            PriorDeclaredPitTaxOverride = 7_500_000m // Đã nộp Q1(0) + Q2(7.5M) + Q3(0)
-
+            Year = 2026, PeriodType = TaxPeriodType.Quarter, PeriodNumber = 4,
+            CalculationMethod = TaxCalculationMethod.DeclarationBased, PriorDeclaredPitTaxOverride = q1.PitAmount + q2.PitAmount + q3.PitAmount
         });
+        Assert.Equal(130_000_000m, q4.TaxableIncomeYtd);
+        Assert.Equal(700_000m, q4.PitAmount);
 
-        Assert.Equal(130_000_000m, q4.TaxableIncomeYtd); // YTD cả năm = 1.6B - 1.47B = 130M
+        var totalProvisional = q1.PitAmount + q2.PitAmount + q3.PitAmount + q4.PitAmount;
+        Assert.Equal(2_100_000m, totalProvisional);
 
-        Assert.Equal(19_500_000m, q4.TaxDueYtd); // Cả năm = 130M * 15% = 19.5M
-
-        Assert.Equal(12_000_000m, q4.DeclarationPitAmount); // Q4 phải nộp = 19.5M - 7.5M = 12M
-
-        Assert.Equal(0m, q4.OverpaidTaxCarry);
-
-        // Tổng số thuế TNCN tạm nộp 4 quý khớp 100% nghĩa vụ thuế cả năm:
-
-        var totalTaxPaid = q1.DeclarationPitAmount + q2.DeclarationPitAmount + q3.DeclarationPitAmount + q4.DeclarationPitAmount;
-
-        Assert.Equal(19_500_000m, totalTaxPaid);
+        // Quyết toán năm 2026: 130M * 15% * 70% = 13.65M -> Nộp thêm = 11.55M
+        var annualSettlement = await _service.GetTaxSummaryAsync(new HouseholdTaxFilterDto
+        {
+            Year = 2026, PeriodType = TaxPeriodType.Year, PeriodNumber = 1,
+            CalculationMethod = TaxCalculationMethod.DeclarationBased, PriorDeclaredPitTaxOverride = totalProvisional
+        });
+        Assert.False(annualSettlement.IsProvisionalPitPeriod);
+        Assert.Equal(13_650_000m, annualSettlement.TaxDueYtd);
+        Assert.Equal(11_550_000m, annualSettlement.PitAmount);
+        Assert.Equal(13_650_000m, totalProvisional + annualSettlement.PitAmount);
 
     }
 
@@ -657,7 +593,7 @@ public class HouseholdTaxServiceTests
 
     {
 
-        // Kịch bản: 2 quý liên tiếp bị lỗ (Doanh thu YTD 1.15B, Chi phí YTD 1.22B -> YTD lỗ -70M)
+        // Kịch bản quyết toán năm bị lỗ (Doanh thu YTD 1.15B, Chi phí YTD 1.22B -> YTD lỗ -70M)
 
         _fakeRepo.AnnualAccumulatedRevenue = 1_150_000_000m;
 
@@ -669,13 +605,13 @@ public class HouseholdTaxServiceTests
 
             Year = 2026,
 
-            PeriodType = TaxPeriodType.Quarter,
+            PeriodType = TaxPeriodType.Year,
 
-            PeriodNumber = 2,
+            PeriodNumber = 1,
 
             CalculationMethod = TaxCalculationMethod.DeclarationBased,
 
-            PriorDeclaredPitTaxOverride = 0m
+            PriorDeclaredPitTaxOverride = 525_000m // Đã tạm nộp quý trước
 
         };
 
@@ -687,7 +623,7 @@ public class HouseholdTaxServiceTests
 
         Assert.Equal(0m, result.DeclarationPitAmount);
 
-        Assert.Equal(0m, result.OverpaidTaxCarry);
+        Assert.Equal(525_000m, result.OverpaidTaxCarry); // Hoàn / bù trừ theo Điều 12 NĐ 68
 
     }
 
@@ -697,11 +633,11 @@ public class HouseholdTaxServiceTests
 
     {
 
-        // Kịch bản: Đang nộp thừa 5M ở quý trước, quý này lãi nhẹ khiến thuế YTD tăng lên 4M -> vẫn nộp 0, nộp thừa còn 1M
+        // Kịch bản quyết toán năm: Đã tạm nộp 5M, lãi YTD = 26.666.667đ -> 15% = 4M, giảm 30% NĐ 398 = 2.8M -> nộp thêm 0, nộp thừa 2.2M
 
         _fakeRepo.AnnualAccumulatedRevenue = 1_400_000_000m;
 
-        _fakeRepo.DeductibleExpenses = 1_373_333_333m; // Lãi YTD ~ 26.666.667đ * 15% = 4.000.000đ
+        _fakeRepo.DeductibleExpenses = 1_373_333_333m; // Lãi YTD ~ 26.666.667đ * 15% = 4.000.000đ -> sau giảm 30% = 2.800.000đ
 
         var filter = new HouseholdTaxFilterDto
 
@@ -709,23 +645,25 @@ public class HouseholdTaxServiceTests
 
             Year = 2026,
 
-            PeriodType = TaxPeriodType.Quarter,
+            PeriodType = TaxPeriodType.Year,
 
-            PeriodNumber = 3,
+            PeriodNumber = 1,
 
             CalculationMethod = TaxCalculationMethod.DeclarationBased,
 
-            PriorDeclaredPitTaxOverride = 5_000_000m // Đã nộp trước 5M
+            PriorDeclaredPitTaxOverride = 5_000_000m // Đã tạm nộp 5M
 
         };
 
         var result = await _service.GetTaxSummaryAsync(filter);
 
-        Assert.Equal(4_000_000m, result.TaxDueYtd);
+        Assert.Equal(4_000_000m, result.TaxDueYtdBeforeReduction);
+
+        Assert.Equal(2_800_000m, result.TaxDueYtd);
 
         Assert.Equal(0m, result.DeclarationPitAmount); // Không phải nộp thêm
 
-        Assert.Equal(1_000_000m, result.OverpaidTaxCarry); // Nộp thừa còn lại: 5M - 4M = 1M
+        Assert.Equal(2_200_000m, result.OverpaidTaxCarry); // Nộp thừa còn lại: 5M - 2.8M = 2.2M
 
     }
 
@@ -966,9 +904,11 @@ public class HouseholdTaxServiceTests
 
         Assert.Equal(0.5m, result.PitRate);
 
-        Assert.Equal(2_500_000m, result.PitAmount); // 500M * 0.5% = 2.500.000 VNĐ
+        Assert.Equal(2_500_000m, result.PitBeforeReduction); // 500M * 0.5% = 2.500.000 VNĐ
+        Assert.Equal(750_000m, result.PitReductionAmount); // Giảm 30% NQ 43/2026 & NĐ 398/2026
+        Assert.Equal(1_750_000m, result.PitAmount); // Sau giảm 30% = 1.750.000 VNĐ
 
-        Assert.Equal(6_500_000m, result.TotalTaxAmount);
+        Assert.Equal(5_750_000m, result.TotalTaxAmount);
 
     }
 
@@ -1074,11 +1014,11 @@ public class HouseholdTaxServiceTests
 
     {
 
-        // Arrange: Doanh thu năm đạt 3.500.000.000 VNĐ (> 3 tỷ)
+        // Arrange: Doanh thu năm đạt 3.500.000.000 VNĐ (> 3 tỷ, kỳ trước đã > 3 tỷ) — Quyết toán năm Nhóm 3 (17% lợi nhuận, giảm 30% NĐ 398)
 
         _fakeRepo.AnnualAccumulatedRevenue = 3_500_000_000m;
 
-        _fakeRepo.PriorPeriodsAccumulatedRevenue = 2_800_000_000m;
+        _fakeRepo.PriorPeriodsAccumulatedRevenue = 3_100_000_000m;
 
         _fakeRepo.GrossRevenue = 700_000_000m;
 
@@ -1094,9 +1034,9 @@ public class HouseholdTaxServiceTests
 
             Year = 2026,
 
-            PeriodType = TaxPeriodType.Quarter,
+            PeriodType = TaxPeriodType.Year,
 
-            PeriodNumber = 4,
+            PeriodNumber = 1,
 
             CalculationMethod = TaxCalculationMethod.RevenuePercentage // Dù người dùng chọn Tỷ lệ
 
@@ -1106,7 +1046,7 @@ public class HouseholdTaxServiceTests
 
         var result = await _service.GetTaxSummaryAsync(filter);
 
-        // Assert: Tự động chuyển sang Nhóm 3 bắt buộc tính theo Thu nhập tính thuế (thuế suất 17%)
+        // Assert: Tự động chuyển sang Nhóm 3 bắt buộc tính theo Thu nhập tính thuế (17%, giảm 30% NĐ 398 vì <= 10 tỷ)
 
         Assert.Equal(HouseholdTaxGroup.Group3_3BTo50B, result.HouseholdGroup);
 
@@ -1114,13 +1054,15 @@ public class HouseholdTaxServiceTests
 
         Assert.Equal(7_000_000m, result.VatAmount); // 700M * 1% = 7M
 
-        // YTD = 3.5B - 500M = 3.0B
+        // YTD = 3.5B - 500M = 3.0B; 3.0B * 17% = 510M; giảm 30% NĐ 398 (-153M) = 357M
 
         Assert.Equal(3_000_000_000m, result.TaxableIncomeYtd);
 
-        Assert.Equal(17.0m, result.PitRate); // Thuế suất Nhóm 3: 17%
+        Assert.Equal(17.0m, result.PitRate); // Thuế suất quyết toán Nhóm 3: 17%
 
-        Assert.Equal(510_000_000m, result.DeclarationPitAmount); // 3.0B * 17% = 510M
+        Assert.Equal(510_000_000m, result.TaxDueYtdBeforeReduction);
+
+        Assert.Equal(357_000_000m, result.DeclarationPitAmount);
 
         Assert.Equal("Bộ 5 sổ: S2b, S2c, S2d, S2e, S3a-HKD", result.BooksSummary.PrimaryBookCode);
 
@@ -1505,9 +1447,9 @@ public class HouseholdTaxServiceTests
 
             Year = 2026,
 
-            PeriodType = TaxPeriodType.Quarter,
+            PeriodType = TaxPeriodType.Year,
 
-            PeriodNumber = 3,
+            PeriodNumber = 1,
 
             Tier2Method = "PROFIT_15"
 
@@ -1523,11 +1465,12 @@ public class HouseholdTaxServiceTests
 
         Assert.Equal(TaxCalculationMethod.DeclarationBased, summary.CalculationMethod);
 
-        // Mô hình YTD Kê khai: Thu nhập tính thuế lũy kế = 1.500tr (YTD Rev) - 250tr (YTD Exp: 200tr COGS + 50tr OPEX) = 1.250.000.000đ
+        // Mô hình quyết toán năm Kê khai: Thu nhập tính thuế lũy kế = 1.500tr - 250tr = 1.250.000.000đ
+        // Thuế TNCN 15% = 187.500.000đ -> Giảm 30% NĐ 398 (-56.250.000đ) = 131.250.000đ
 
-        // Thuế TNCN (15% theo PROFIT_15) = 1.250tr * 15% = 187.500.000đ
+        Assert.Equal(187_500_000m, summary.PitBeforeReduction);
 
-        Assert.Equal(187_500_000m, summary.PitAmount);
+        Assert.Equal(131_250_000m, summary.PitAmount);
 
         Assert.Equal(15.0m, summary.PitRate);
 
@@ -1790,11 +1733,11 @@ public class HouseholdTaxServiceTests
         // Act
         var result = await _service.GetTaxSummaryAsync(filter);
 
-        // Assert: Trả về số theo quý (400M * 1% = 4.000.000đ), nhưng vẫn lưu số thận trọng (12.000.000đ)
-        Assert.Equal(4_000_000m, result.VatAmount);
+        // Assert: Tùy chọn QUARTER_ONLY đã bị bãi bỏ vì thiếu căn cứ pháp lý; luôn áp dụng PRUDENT_YTD (12.000.000đ)
+        Assert.Equal(12_000_000m, result.VatAmount);
         Assert.Equal(4_000_000m, result.QuarterlyVatAmount);
         Assert.Equal(12_000_000m, result.RetrospectiveVatAmount);
-        Assert.Equal("QUARTER_ONLY", result.VatCalculationOption);
+        Assert.Equal("PRUDENT_YTD", result.VatCalculationOption);
     }
     [Fact]
     public async Task GetTaxSummary_Sequence35_35_20_Year2029_ShouldBeFree()

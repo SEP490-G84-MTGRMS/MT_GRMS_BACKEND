@@ -104,11 +104,15 @@ public sealed class OperationalReminderWorker(
             .Where(row => row.TenantId == tenantId && row.BranchId == null && row.Status == TaxSnapshotStatus.Finalized
                 && row.Year >= today.Year - 1 && row.Year <= today.Year
                 && !db.TaxFilingConfirmations.Any(receipt => receipt.TenantId == tenantId && receipt.SnapshotId == row.Id))
-            .Select(row => new { row.Id, row.Year, row.PeriodType, row.PeriodNumber }).ToListAsync(ct);
+            .Select(row => new { row.Id, row.Year, row.PeriodType, row.PeriodNumber, row.IsTaxExempt, row.AppliedPitMethod }).ToListAsync(ct);
 
         foreach (var row in snapshots)
         {
-            var deadline = DateOnly.FromDateTime(HouseholdTaxService.GetFilingDeadlineLocal(row.Year, row.PeriodType, row.PeriodNumber));
+            var isAnnualPitSettlement = row.PeriodType == TaxPeriodType.Year
+                && !row.IsTaxExempt
+                && row.AppliedPitMethod == TaxCalculationMethod.DeclarationBased;
+            var deadline = DateOnly.FromDateTime(HouseholdTaxService.GetFilingDeadlineLocal(
+                row.Year, row.PeriodType, row.PeriodNumber, isAnnualPitSettlement));
             if (deadline < today || deadline > today.AddDays(daysBefore)) continue;
             if (await AlreadyQueuedAsync(db, tenantId, BusinessNotificationTypes.TaxFilingReminder, row.Id, ct)) continue;
 

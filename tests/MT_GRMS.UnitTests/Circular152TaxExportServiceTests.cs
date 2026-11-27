@@ -948,11 +948,12 @@ public class Circular152TaxExportServiceTests
             var s1a = wb.Worksheet("S1a-HKD");
             Assert.Equal("Mã số thuế: Chưa cập nhật", s1a.Cell("A4").GetString());
 
-            // Verify S2a-HKD formulas use invariant decimal point and correct PIT rate (0.005, not 0.5)
+            // Verify S2a-HKD formulas use invariant decimal point for VAT and exact reconciled PIT matching summary.PitAmount
             var s2a = wb.Worksheet("S2a-HKD");
             var s2aFormulas = s2a.CellsUsed(c => c.HasFormula).Select(c => c.FormulaA1).ToList();
             Assert.Contains(s2aFormulas, f => f.Contains("* 0.01, 0"));
-            Assert.Contains(s2aFormulas, f => f.Contains("* 0.005, 0"));
+            var totalPitRow = s2a.RowsUsed().First(r => r.Cell(1).GetString().Contains("TỔNG SỐ THUẾ TNCN PHẢI NỘP TOÀN BỘ"));
+            Assert.Equal(2_000_000m, totalPitRow.Cell(4).GetValue<decimal>());
         }
 
         // Case 2: DeclarationBased mode (DeductibleExpensesInPeriod = CogsAmount + OpexAmount)

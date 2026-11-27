@@ -662,4 +662,109 @@ public class ExpenseServiceTests
         var response = await _service.CreateExpenseAsync(request);
         Assert.Equal(safeUrl, response.EvidenceAttachmentUrl);
     }
+
+    [Fact]
+    public async Task CreateExpenseAsync_WhenCashPaymentAtLeast5M_ShouldForceIsTaxDeductibleFalse()
+    {
+        var request = new CreateExpenseRequest(
+            Guid.NewGuid(),
+            "Chủ nhà cho thuê",
+            "Thuê mặt bằng",
+            6_000_000m,
+            FinanceAccountType.Till,
+            Guid.NewGuid(),
+            true,
+            "HD-RENT-01",
+            "0101234567",
+            null,
+            "Trả tiền mặt thuê mặt bằng"
+        );
+
+        var response = await _service.CreateExpenseAsync(request);
+
+        Assert.False(response.IsTaxDeductible);
+    }
+
+    [Fact]
+    public async Task CreateExpenseAsync_WhenBankPaymentAtLeast5M_ShouldPreserveIsTaxDeductibleTrue()
+    {
+        var request = new CreateExpenseRequest(
+            Guid.NewGuid(),
+            "Chủ nhà cho thuê",
+            "Thuê mặt bằng",
+            6_000_000m,
+            FinanceAccountType.Bank,
+            Guid.NewGuid(),
+            true,
+            "HD-RENT-02",
+            "0101234567",
+            null,
+            "Chuyển khoản thuê mặt bằng"
+        );
+
+        var response = await _service.CreateExpenseAsync(request);
+
+        Assert.True(response.IsTaxDeductible);
+    }
+
+    [Fact]
+    public async Task CreateExpenseAsync_WhenOwnerSalary_ShouldForceFalseExceptMandatoryInsurance()
+    {
+        var salaryReq = new CreateExpenseRequest(
+            Guid.NewGuid(),
+            "Chủ hộ Nguyễn Văn A",
+            "Lương chủ hộ",
+            10_000_000m,
+            FinanceAccountType.Bank,
+            Guid.NewGuid(),
+            true,
+            "PC-LUONG-01",
+            null,
+            null,
+            "Trả lương tháng 10 cho chủ hộ"
+        );
+        var insuranceReq = new CreateExpenseRequest(
+            Guid.NewGuid(),
+            "BHXH Quận 1",
+            "Bảo hiểm bắt buộc chủ hộ",
+            2_000_000m,
+            FinanceAccountType.Bank,
+            Guid.NewGuid(),
+            true,
+            "GNT-BHXH-01",
+            null,
+            null,
+            "Đóng BHXH bắt buộc cho chủ hộ"
+        );
+
+        var salaryRes = await _service.CreateExpenseAsync(salaryReq);
+        var insuranceRes = await _service.CreateExpenseAsync(insuranceReq);
+
+        Assert.False(salaryRes.IsTaxDeductible);
+        Assert.True(insuranceRes.IsTaxDeductible);
+    }
+
+    [Fact]
+    public async Task DisburseExpenseAsync_WhenPayingAtLeast5MViaCash_ShouldForceIsTaxDeductibleFalse()
+    {
+        var voucher = new ExpenseVoucher
+        {
+            Id = Guid.NewGuid(),
+            VoucherCode = "EXP-ART6-01",
+            Category = "Thuê mặt bằng",
+            BeneficiaryName = "Chủ nhà",
+            Amount = 5_000_000m,
+            Nature = FinancialNature.OperatingExpense,
+            IsTaxDeductible = true,
+            PaymentSourceType = FinanceAccountType.Bank,
+            Status = ExpenseVoucherStatus.Approved
+        };
+        _expenseRepo.Items.Add(voucher);
+
+        var response = await _service.DisburseExpenseAsync(
+            new DisburseExpenseRequest(voucher.Id, FinanceAccountType.Till, Guid.NewGuid(), "Chi tiền mặt"));
+
+        Assert.Equal(ExpenseVoucherStatus.Paid.ToString(), response.Status);
+        Assert.False(response.IsTaxDeductible);
+    }
 }

@@ -304,24 +304,26 @@ public class AccountingBooksTT152Tests
         IsTaxDeductible = true,
         ExpenseDate = new DateTime(2026, 1, 25, 0, 0, 0, DateTimeKind.Utc)
       },
-      // 2.b: Lương, tiền công nhân viên
+      // 2.b: Lương, tiền công nhân viên (>= 5 triệu thanh toán qua ngân hàng theo Đ6 NĐ 68/2026)
       new ExpenseVoucher
       {
         VoucherCode = "PC-2B",
         BranchId = branchId,
         Category = "Tiền lương nhân viên ca trực",
         Amount = 15_000_000m,
+        PaymentSourceType = FinanceAccountType.Bank,
         Status = ExpenseVoucherStatus.Paid,
         IsTaxDeductible = true,
         ExpenseDate = new DateTime(2026, 1, 31, 0, 0, 0, DateTimeKind.Utc)
       },
-      // 2.c: Thuê mặt bằng, kho bãi
+      // 2.c: Thuê mặt bằng, kho bãi (>= 5 triệu thanh toán qua ngân hàng theo Đ6 NĐ 68/2026)
       new ExpenseVoucher
       {
         VoucherCode = "PC-2C",
         BranchId = branchId,
         Category = "Tiền thuê mặt bằng kinh doanh",
         Amount = 20_000_000m,
+        PaymentSourceType = FinanceAccountType.Bank,
         Status = ExpenseVoucherStatus.Paid,
         IsTaxDeductible = true,
         ExpenseDate = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc)

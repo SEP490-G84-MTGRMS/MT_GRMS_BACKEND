@@ -33,7 +33,8 @@ public class HouseholdTaxController : BaseApiController
         [FromQuery] decimal? vatReductionPercentage,
         [FromQuery] decimal? customVatRate,
         [FromQuery] decimal? customPitRate,
-        CancellationToken ct)
+        CancellationToken ct = default,
+        [FromQuery] bool? applyPitReduction = null)
     {
         var filter = new HouseholdTaxFilterDto
         {
@@ -45,6 +46,7 @@ public class HouseholdTaxController : BaseApiController
             Tier2Method = tier2Method ?? "REVENUE_EXCESS",
             ApplyVatReduction2026 = applyVatReduction ?? false,
             VatReductionPercentage = vatReductionPercentage,
+            ApplyPitReduction = applyPitReduction,
             CustomVatRate = customVatRate,
             CustomPitRate = customPitRate
         };
@@ -83,7 +85,8 @@ public class HouseholdTaxController : BaseApiController
         [FromQuery] decimal? vatReductionPercentage,
         [FromQuery] decimal? customVatRate,
         [FromQuery] decimal? customPitRate,
-        CancellationToken ct)
+        CancellationToken ct = default,
+        [FromQuery] bool? applyPitReduction = null)
     {
         var filter = new HouseholdTaxFilterDto
         {
@@ -95,6 +98,7 @@ public class HouseholdTaxController : BaseApiController
             Tier2Method = tier2Method ?? "REVENUE_EXCESS",
             ApplyVatReduction2026 = applyVatReduction ?? false,
             VatReductionPercentage = vatReductionPercentage,
+            ApplyPitReduction = applyPitReduction,
             CustomVatRate = customVatRate,
             CustomPitRate = customPitRate
         };
@@ -227,7 +231,8 @@ public class HouseholdTaxController : BaseApiController
         [FromServices] ITaxExportService exportService,
         CancellationToken ct = default,
         [FromQuery] decimal? customVatRate = null,
-        [FromQuery] decimal? customPitRate = null)
+        [FromQuery] decimal? customPitRate = null,
+        [FromQuery] bool? applyPitReduction = null)
     {
         var effectivePeriodType = periodType ?? TaxPeriodType.Quarter;
         var effectivePeriodNumber = effectivePeriodType == TaxPeriodType.Year ? 1 : (periodNumber ?? 1);
@@ -242,6 +247,7 @@ public class HouseholdTaxController : BaseApiController
             Tier2Method = tier2Method ?? "REVENUE_EXCESS",
             ApplyVatReduction2026 = applyVatReduction ?? false,
             VatReductionPercentage = vatReductionPercentage,
+            ApplyPitReduction = applyPitReduction,
             CustomVatRate = customVatRate,
             CustomPitRate = customPitRate
         };
