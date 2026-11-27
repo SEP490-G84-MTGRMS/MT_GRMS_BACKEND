@@ -173,11 +173,12 @@ if (app.Configuration.GetValue<bool>("Database:RepairTransferStockColumns"))
     await repairDb.Database.ExecuteSqlRawAsync("ALTER TABLE IF EXISTS \"Transfers\" ADD COLUMN IF NOT EXISTS \"RowVersion\" integer NOT NULL DEFAULT 1;");
 }
 
-if (app.Environment.IsDevelopment() && app.Configuration.GetValue<bool>("Database:RepairLocalSchema"))
+if (app.Environment.IsDevelopment() || app.Configuration.GetValue<bool>("Database:RepairLocalSchema"))
 {
     using var repairScope = app.Services.CreateScope();
     var repairDb = repairScope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await DbInitializer.ApplyLocalSchemaRepairsAsync(repairDb);
+    var repairLogger = repairScope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+    await DbInitializer.ApplyLocalSchemaRepairsAsync(repairDb, repairLogger);
 }
 
 if (!skipDbInit)

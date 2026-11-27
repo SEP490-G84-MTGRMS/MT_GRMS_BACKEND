@@ -24,13 +24,35 @@ namespace MT_GRMS.Infrastructure.Persistence;
 /// </summary>
 public static class DbInitializer
 {
-    public static async Task ApplyLocalSchemaRepairsAsync(AppDbContext context)
+    /// <summary>
+    /// Fast startup schema synchronization that applies pending idempotent migrations
+    /// and reconciles missing EF Core model tables/columns without running full legacy seed loops.
+    /// </summary>
+    public static async Task ApplyLocalSchemaRepairsAsync(AppDbContext context, ILogger? logger = null)
     {
         if (!context.Database.IsNpgsql()) return;
 
+        var sw = Stopwatch.StartNew();
         await context.Database.ExecuteSqlRawAsync(Migrations.AddOrderDetailStockAllocations.UpSql);
         await context.Database.ExecuteSqlRawAsync(Migrations.AddExpenseVoucherDueDate.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.ScheduleFefoDiscounts.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddProductImageUrlsJson.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductProcessedPrice.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddSupplierPoModificationRules.UpSql);
         await context.Database.ExecuteSqlRawAsync(@"ALTER TABLE IF EXISTS ""Transfers"" ADD COLUMN IF NOT EXISTS ""RowVersion"" integer NOT NULL DEFAULT 1;");
+
+        await EnsureMissingModelSchemaAsync(context, logger);
+
+        var pending = (await context.Database.GetPendingMigrationsAsync()).ToList();
+        foreach (var migrationId in pending)
+        {
+            await RecordMigrationAsync(context, migrationId);
+        }
+
+        logger?.LogInformation(
+            "Startup schema sync verified in {ElapsedMs} ms (recorded {PendingCount} pending migrations).",
+            sw.ElapsedMilliseconds,
+            pending.Count);
     }
 
     private static async Task EnsureSupplierDispatchSchemaAsync(AppDbContext context, ILogger? logger = null)
@@ -1826,6 +1848,10 @@ END $$;
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddTaxFilingConfirmations.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchConversionRulesAndNotifications.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.RemoveGoodsReceiptFreight.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.ScheduleFefoDiscounts.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddProductImageUrlsJson.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductProcessedPrice.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddSupplierPoModificationRules.UpSql);
                 }
                 catch (Exception ex)
                 {
@@ -1841,7 +1867,10 @@ END $$;
                             m);
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    logger?.LogWarning(ex, "Không thể ghi nhận lịch sử migration vào __EFMigrationsHistory.");
+                }
             }
             else
             {
