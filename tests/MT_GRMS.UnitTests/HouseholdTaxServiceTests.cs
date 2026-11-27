@@ -252,6 +252,8 @@ public class HouseholdTaxServiceTests
     private sealed class RecordingUnitOfWork : IUnitOfWork
     {
         public IsolationLevel? RequestedIsolationLevel { get; private set; }
+        public int TransactionExecutionCount { get; private set; }
+        public List<string>? CallOrder { get; init; }
 
         public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) => Task.FromResult(0);
 
@@ -260,9 +262,34 @@ public class HouseholdTaxServiceTests
             CancellationToken cancellationToken = default,
             IsolationLevel isolationLevel = IsolationLevel.ReadCommitted)
         {
+            TransactionExecutionCount++;
+            CallOrder?.Add("ExecuteInTransaction");
             RequestedIsolationLevel = isolationLevel;
             return operation(cancellationToken);
         }
+    }
+
+    private sealed class RecordingPinService : IPinVerificationService
+    {
+        private readonly PinVerificationResult _result;
+        public int VerifyCallCount { get; private set; }
+        public List<string>? CallOrder { get; init; }
+
+        public RecordingPinService(PinVerificationResult result)
+        {
+            _result = result;
+        }
+
+        public Task<PinVerificationResult> VerifyStoreOwnerPinAsync(string userId, string inputPin, CancellationToken ct = default)
+        {
+            VerifyCallCount++;
+            CallOrder?.Add("VerifyPin");
+            return Task.FromResult(_result);
+        }
+
+        public Task SetStoreOwnerPinAsync(string userId, string newPin, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ChangeSecurityPinAsync(string userId, ChangeSecurityPinRequest request, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ResetSecurityPinAsync(string userId, ResetSecurityPinRequest request, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private readonly FakeHouseholdTaxRepository _fakeRepo = new();
@@ -2096,6 +2123,65 @@ public class HouseholdTaxServiceTests
             _service.FinalizeTaxSnapshotAsync(request, "owner"));
 
         Assert.Equal("USER_ID_REQUIRED", error.ErrorCode);
+    }
+
+    [Fact]
+    public async Task FinalizeTaxSnapshot_WhenPinIsInvalid_VerifiesPinOutsideTransactionSoLockoutIsNotRolledBack()
+    {
+        // BUG-074: Wrong PIN must fail BEFORE opening Serializable transaction so FailedPinAttempts / PinLockedUntilUtc commits independently
+        var callOrder = new List<string>();
+        var unitOfWork = new RecordingUnitOfWork { CallOrder = callOrder };
+        var pinService = new RecordingPinService(new PinVerificationResult(false, "INVALID_PIN", "Mã PIN không chính xác."))
+        {
+            CallOrder = callOrder
+        };
+        var service = CreateService(_fakeRepo, unitOfWork: unitOfWork, pinService: pinService);
+
+        var request = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            BranchId = Guid.NewGuid(),
+            SecurityPin = "000000"
+        };
+
+        var error = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.FinalizeTaxSnapshotAsync(request, "owner", "owner-user-id"));
+
+        Assert.Equal("INVALID_PIN", error.ErrorCode);
+        Assert.Equal(1, pinService.VerifyCallCount);
+        Assert.Equal(0, unitOfWork.TransactionExecutionCount);
+        Assert.Equal(new[] { "VerifyPin" }, callOrder);
+        Assert.Null(request.BranchId);
+    }
+
+    [Fact]
+    public async Task FinalizeTaxSnapshot_WhenPinIsValid_VerifiesPinBeforeOpeningTransaction()
+    {
+        var callOrder = new List<string>();
+        var unitOfWork = new RecordingUnitOfWork { CallOrder = callOrder };
+        var pinService = new RecordingPinService(new PinVerificationResult(true))
+        {
+            CallOrder = callOrder
+        };
+        var service = CreateService(_fakeRepo, unitOfWork: unitOfWork, pinService: pinService);
+
+        var request = new CreateTaxSnapshotRequest
+        {
+            Year = 2026,
+            PeriodType = TaxPeriodType.Quarter,
+            PeriodNumber = 1,
+            SecurityPin = "123456"
+        };
+
+        var snapshot = await service.FinalizeTaxSnapshotAsync(request, "owner", "owner-user-id");
+
+        Assert.NotNull(snapshot);
+        Assert.Equal(1, pinService.VerifyCallCount);
+        Assert.Equal(1, unitOfWork.TransactionExecutionCount);
+        Assert.Equal(IsolationLevel.Serializable, unitOfWork.RequestedIsolationLevel);
+        Assert.Equal(new[] { "VerifyPin", "ExecuteInTransaction" }, callOrder);
     }
 
 }

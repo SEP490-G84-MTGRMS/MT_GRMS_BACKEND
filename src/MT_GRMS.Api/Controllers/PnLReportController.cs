@@ -27,9 +27,12 @@ public class PnLReportController : BaseApiController
         DateTime fromUtc;
         if (fromDate.HasValue)
         {
-            fromUtc = fromDate.Value.Kind == DateTimeKind.Utc
-                ? fromDate.Value
-                : DateTime.SpecifyKind(fromDate.Value, DateTimeKind.Utc);
+            fromUtc = fromDate.Value.Kind switch
+            {
+                DateTimeKind.Utc => fromDate.Value,
+                DateTimeKind.Local => fromDate.Value.ToUniversalTime(),
+                _ => TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(fromDate.Value, DateTimeKind.Unspecified), vnTz),
+            };
         }
         else if (defaultDaysIfNull > 0)
         {
@@ -42,9 +45,34 @@ public class PnLReportController : BaseApiController
             fromUtc = TimeZoneInfo.ConvertTimeToUtc(startOfMonthVn, vnTz);
         }
 
-        DateTime toUtc = toDate.HasValue
-            ? (toDate.Value.Kind == DateTimeKind.Utc ? toDate.Value : DateTime.SpecifyKind(toDate.Value, DateTimeKind.Utc))
-            : DateTime.UtcNow;
+        DateTime toUtc;
+        if (toDate.HasValue)
+        {
+            if (toDate.Value.Kind == DateTimeKind.Utc)
+            {
+                toUtc = toDate.Value;
+            }
+            else if (toDate.Value.Kind == DateTimeKind.Local)
+            {
+                toUtc = toDate.Value.ToUniversalTime();
+            }
+            else
+            {
+                var localTo = toDate.Value.TimeOfDay == TimeSpan.Zero
+                    ? toDate.Value.Date.AddDays(1).AddTicks(-1)
+                    : toDate.Value;
+                toUtc = TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(localTo, DateTimeKind.Unspecified), vnTz);
+            }
+        }
+        else
+        {
+            toUtc = DateTime.UtcNow;
+        }
+
+        if (fromUtc > toUtc)
+        {
+            throw new ArgumentException("Ngày bắt đầu (fromDate) không được lớn hơn ngày kết thúc (toDate).");
+        }
 
         return (fromUtc, toUtc);
     }

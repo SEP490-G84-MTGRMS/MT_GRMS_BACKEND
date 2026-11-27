@@ -75,8 +75,15 @@ public class StocktakeRepository : GenericRepository<Stocktake>, IStocktakeRepos
             ReviewedAt: s.ReviewedAt,
             TotalLines: s.Lines.Count,
             AnomalyLines: s.Lines.Count(l => l.DefectiveQty > 0 || l.DamagedQty > 0 || l.NearExpiryQty > 0 || l.ExpiredQty > 0 || l.VarianceQty != 0),
-            ReturnEligibleLines: s.Lines.Count(l => (l.DefectiveQty + (l.NearExpiryAction == "NEAR_EXPIRY_RETURN" ? l.NearExpiryQty : 0)) > l.ReturnedQty),
-            Note: s.Note
+            ReturnEligibleLines: s.Lines.Count(l =>
+                (l.DefectiveQty
+                 + (l.NearExpiryAction == "NEAR_EXPIRY_RETURN" ? l.NearExpiryQty : 0m)
+                 + (l.DamagedAction == "RETURN_SUPPLIER" ? l.DamagedQty : 0m)
+                 + (l.ExpiredAction == "RETURN_SUPPLIER" ? l.ExpiredQty : 0m)) > l.ReturnedQty),
+            Note: s.Note,
+            TotalDefectiveQty: s.Lines.Sum(l => l.DefectiveQty),
+            TotalDamagedAndExpiredQty: s.Lines.Sum(l => l.DamagedQty + l.ExpiredQty),
+            TotalVarianceQty: s.Lines.Sum(l => l.VarianceQty)
         )).ToList();
 
         return new PagedResult<StocktakeListItemDto>

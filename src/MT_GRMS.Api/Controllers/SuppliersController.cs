@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Suppliers;
 using MT_GRMS.Application.Suppliers.Dtos;
+using MT_GRMS.Domain.Constants;
 using MT_GRMS.Domain.Enums;
 
 namespace MT_GRMS.Api.Controllers;
@@ -356,6 +357,7 @@ public class SuppliersController : BaseApiController
     /// Gán sản phẩm mới cho Nhà cung cấp kèm đơn vị giao hàng, giá sỉ và MOQ (REQ-SP01, BR-SP01, BR-SP02)
     /// </summary>
     [HttpPost("{id:guid}/products")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> AssignProduct(
         Guid id,
         [FromBody] AssignSupplierProductCommand command,
@@ -369,6 +371,7 @@ public class SuppliersController : BaseApiController
     /// Gán đồng thời nhiều sản phẩm cho Nhà cung cấp và tự động phân bổ đến chi nhánh
     /// </summary>
     [HttpPost("{id:guid}/products/batch")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> BatchAssignProducts(
         Guid id,
         [FromBody] BatchAssignSupplierProductsCommand command,
@@ -384,6 +387,7 @@ public class SuppliersController : BaseApiController
     /// Cập nhật giá sỉ thỏa thuận, đơn vị giao hàng và MOQ của sản phẩm (REQ-SP02)
     /// </summary>
     [HttpPut("{id:guid}/products/{productId:guid}")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> UpdateSupplierProduct(
         Guid id,
         Guid productId,
@@ -398,6 +402,7 @@ public class SuppliersController : BaseApiController
     /// Chuyển đổi trạng thái hoạt động / tạm ngưng của sản phẩm theo NCC (REQ-SP03)
     /// </summary>
     [HttpPatch("{id:guid}/products/{productId:guid}/status")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> ToggleProductStatus(
         Guid id,
         Guid productId,
@@ -412,6 +417,7 @@ public class SuppliersController : BaseApiController
     /// Đặt hoặc hủy quyền Nhà cung cấp chính (Primary Supplier) cho sản phẩm (REQ-SP04, BR-SP02)
     /// </summary>
     [HttpPatch("{id:guid}/products/{productId:guid}/primary")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> SetPrimarySupplier(
         Guid id,
         Guid productId,
@@ -426,6 +432,7 @@ public class SuppliersController : BaseApiController
     /// Xuất Excel SP đã gán NCC theo bộ lọc màn hình (giá nhập sỉ + MOQ).
     /// </summary>
     [HttpGet("{id:guid}/products/export")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> ExportSupplierProducts(
         Guid id,
         [FromQuery] SupplierProductQueryFilter filter,
@@ -440,6 +447,7 @@ public class SuppliersController : BaseApiController
     /// Import Excel: validate theo bộ lọc màn hình + override giá nhập sỉ &amp; MOQ (partial success).
     /// </summary>
     [HttpPost("{id:guid}/products/import")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(10_000_000)]
     public async Task<IActionResult> ImportSupplierProducts(

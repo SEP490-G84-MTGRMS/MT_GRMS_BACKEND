@@ -21,7 +21,6 @@ public static class BusinessNotificationTypes
     public const string TransferDispatchRequired = "TRANSFER_DISPATCH_REQUIRED";
     public const string TransferReceiveRequired = "TRANSFER_RECEIVE_REQUIRED";
     public const string TransferReceiptDiscrepancy = "TRANSFER_RECEIPT_DISCREPANCY";
-    public const string CashbookReconciliationDiscrepancy = "CASHBOOK_RECONCILIATION_DISCREPANCY";
     public const string ShiftDiscrepancy = "SHIFT_DISCREPANCY";
     public const string TaxSnapshotFinalized = "TAX_SNAPSHOT_FINALIZED";
     public const string TaxPaymentRecorded = "TAX_PAYMENT_RECORDED";

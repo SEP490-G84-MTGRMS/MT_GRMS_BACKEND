@@ -37,6 +37,12 @@ public class CustomerDebtServiceTests
     private sealed class Customers : ICustomerDebtRepository
     {
         public Customer? Customer { get; set; }
+        public int ReadOnlyCalls { get; private set; }
+        public Task<Customer?> GetByIdReadOnlyAsync(Guid id, CancellationToken ct = default)
+        {
+            ReadOnlyCalls++;
+            return Task.FromResult(Customer?.Id == id ? Customer : null);
+        }
         public Task<Customer?> GetCustomerWithLockAsync(Guid id, CancellationToken ct = default) => Task.FromResult(Customer?.Id == id ? Customer : null);
         public Task<List<CustomerDebtLedgerItemResponse>> GetLedgerAsync(Guid id, int page, int pageSize, CancellationToken ct = default) => Task.FromResult(new List<CustomerDebtLedgerItemResponse>());
         public Task<Customer?> GetByIdAsync(Guid id, CancellationToken ct = default) => GetCustomerWithLockAsync(id, ct);
@@ -107,5 +113,18 @@ public class CustomerDebtServiceTests
         var request = new RepayDebtRequest(Guid.NewGuid(), 1m, FinanceAccountType.Safe, Guid.NewGuid(), null, null);
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.RepayDebtAsync(request));
+    }
+
+    [Fact]
+    public async Task GetProfile_UsesReadOnlyRepositoryMethod()
+    {
+        var customer = new Customer { Id = Guid.NewGuid(), Name = "Khách", TotalDebt = 300_000m };
+        var repo = new Customers { Customer = customer };
+        var service = new CustomerDebtService(repo, new Cashbook(), new Tenant(), new UnitOfWork());
+
+        var profile = await service.GetProfileAsync(customer.Id);
+
+        Assert.Equal(300_000m, profile.CurrentDebtBalance);
+        Assert.Equal(1, repo.ReadOnlyCalls);
     }
 }

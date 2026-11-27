@@ -34,17 +34,7 @@ public class PurchaseOrderService : IPurchaseOrderService
 
     private void EnsureBranchAccess(Guid branchId)
     {
-        var role = (_tenantContext.CurrentRole ?? string.Empty).Trim().ToUpperInvariant();
-        if (role is "EMPLOYEE" or "STAFF" or "CASHIER")
-        {
-            if (_tenantContext.CurrentBranchId.HasValue && _tenantContext.CurrentBranchId.Value != Guid.Empty)
-            {
-                if (branchId != _tenantContext.CurrentBranchId.Value)
-                {
-                    throw new UnauthorizedAccessException("Nhân viên chỉ có quyền truy cập và thao tác đặt hàng tại chi nhánh được phân công.");
-                }
-            }
-        }
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, branchId);
     }
 
     private async Task<string?> ResolveValidUserIdAsync(CancellationToken ct = default)
@@ -395,6 +385,25 @@ public class PurchaseOrderService : IPurchaseOrderService
         bool isStoreOwner = string.IsNullOrEmpty(role) || role is "STORE_OWNER" or "ADMIN";
 
         var nowVn = OrderMatrixRules.GetVietnamNow();
+        if (command.Cells == null || command.Cells.Count == 0)
+        {
+            throw new BusinessException("EMPTY_MATRIX_CELLS", "Bản thảo ma trận cần ít nhất một ô đặt hàng hợp lệ.");
+        }
+
+        foreach (var cell in command.Cells)
+        {
+            if (cell.EmployeeQty < 0 || (cell.StoreQty.HasValue && cell.StoreQty.Value < 0))
+            {
+                throw new BusinessException("NEGATIVE_QUANTITY", "Số lượng đặt hàng trên ma trận không được âm.");
+            }
+
+            var hasPositiveQty = cell.EmployeeQty > 0 || (cell.StoreQty.HasValue && cell.StoreQty.Value > 0);
+            if (hasPositiveQty && cell.DeliveryDate.Date < nowVn.Date)
+            {
+                throw new BusinessException("PAST_DELIVERY_DATE", $"Ngày giao hàng {cell.DeliveryDate:dd/MM/yyyy} không được nằm trong quá khứ.");
+            }
+        }
+
         var matrixProducts = await _repository.GetMatrixProductsAsync(command.BranchId, null, cancellationToken);
         var productByKey = matrixProducts
             .GroupBy(p => (p.Id, p.SupplierId))
@@ -605,8 +614,9 @@ public class PurchaseOrderService : IPurchaseOrderService
             }
 
             var existingDetails = draft.Details
-                .Where(d => d.DeliveryDate.HasValue)
-                .ToDictionary(d => (d.ProductId, d.DeliveryDate!.Value.Date));
+                .Where(d => !d.IsDeleted && d.DeliveryDate.HasValue)
+                .GroupBy(d => (d.ProductId, d.DeliveryDate!.Value.Date))
+                .ToDictionary(g => g.Key, g => g.First());
 
             foreach (var (cell, _) in supplierGroup)
             {
@@ -638,9 +648,23 @@ public class PurchaseOrderService : IPurchaseOrderService
 
                 if (isStoreOwner)
                 {
-                    storeQty = cell.StoreQty;
-                    isOwnerAdjusted = cell.IsOwnerAdjusted || cell.StoreQty.HasValue;
-                    employeeQty = detail?.EmployeeQty ?? cell.EmployeeQty;
+                    // Gỡ chốt (khôi phục đề xuất NV): FE gửi IsOwnerAdjusted=false + StoreQty=null
+                    if (!cell.IsOwnerAdjusted && !cell.StoreQty.HasValue)
+                    {
+                        storeQty = null;
+                        isOwnerAdjusted = false;
+                        // Ưu tiên SL NV từ payload; fallback bản nháp đã lưu
+                        employeeQty = cell.EmployeeQty > 0
+                            ? cell.EmployeeQty
+                            : (detail?.EmployeeQty ?? 0m);
+                    }
+                    else
+                    {
+                        storeQty = cell.StoreQty;
+                        isOwnerAdjusted = cell.IsOwnerAdjusted || cell.StoreQty.HasValue;
+                        // Owner chỉnh: không ghi đè EmployeeQty đã có
+                        employeeQty = detail?.EmployeeQty ?? cell.EmployeeQty;
+                    }
                 }
                 else
                 {
@@ -1157,7 +1181,7 @@ public class PurchaseOrderService : IPurchaseOrderService
         CancellationToken cancellationToken = default)
     {
         var now = OrderMatrixRules.GetVietnamNow();
-        var duration = Math.Clamp(query.DurationDays <= 0 ? 14 : query.DurationDays, 1, 31);
+        var duration = Math.Clamp(query.DurationDays <= 0 ? 31 : query.DurationDays, 1, 31);
         var viewFrom = now.Date;
         var branches = await _repository.GetActiveBranchesAsync(cancellationToken);
 
@@ -1362,7 +1386,7 @@ public class PurchaseOrderService : IPurchaseOrderService
         }
 
         var now = OrderMatrixRules.GetVietnamNow();
-        var duration = Math.Clamp(query.DurationDays <= 0 ? 14 : query.DurationDays, 1, 31);
+        var duration = Math.Clamp(query.DurationDays <= 0 ? 31 : query.DurationDays, 1, 31);
         var viewFrom = now.Date;
         var branchIds = await _repository.GetActiveBranchIdsForSupplierAsync(query.SupplierId, cancellationToken);
         var branches = new List<DispatchSupplierDetailBranchDto>();
@@ -1458,6 +1482,11 @@ public class PurchaseOrderService : IPurchaseOrderService
         SplitMatrixPoCommand command,
         CancellationToken cancellationToken = default)
     {
+        if (BranchScopeGuard.IsBranchScopedEmployee(_tenantContext))
+        {
+            throw new BusinessException("FORBIDDEN", "Chỉ Store Owner mới có quyền chốt đơn đặt hàng.");
+        }
+
         SplitMatrixBatchResultDto result;
         if (command.SupplierId.HasValue
             && command.SupplierId.Value != Guid.Empty
@@ -1745,6 +1774,13 @@ public class PurchaseOrderService : IPurchaseOrderService
                 .ToList();
         }
 
+        if (!isDryRun && targetGroups.Count == 0)
+        {
+            throw new BusinessException(
+                "EMPTY_SPLIT_REQUEST",
+                "Không có nhóm đơn hàng hợp lệ nào để chốt PO. Vui lòng nhập số lượng đặt hàng trước khi chốt.");
+        }
+
         // 2. Chạy business engine xử lý từng group độc lập (Partial Success)
         var groupResults = new List<SplitGroupResultDto>();
         var createdPos = new List<PurchaseOrder>();
@@ -1893,11 +1929,10 @@ public class PurchaseOrderService : IPurchaseOrderService
                 }
 
                 var sp = await _repository.GetSupplierProductAsync(supplierId, productId, cancellationToken);
-                var unitPrice = lineCandidate.UnitPrice.HasValue && lineCandidate.UnitPrice.Value > 0
-                    ? lineCandidate.UnitPrice.Value
-                    : SupplierProductPricing.ResolveEffectivePurchasePrice(
-                        sp?.AgreedWholesalePrice,
-                        mp.Price > 0 ? mp.Price : null);
+                // Luôn lấy giá sỉ chuẩn từ server DB thay vì tin client UnitPrice (POM-05)
+                var unitPrice = SupplierProductPricing.ResolveEffectivePurchasePrice(
+                    sp?.AgreedWholesalePrice,
+                    mp.Price > 0 ? mp.Price : null);
                 var unit = !string.IsNullOrWhiteSpace(lineCandidate.Unit)
                     ? lineCandidate.Unit
                     : (!string.IsNullOrWhiteSpace(sp?.DeliveryUoM) ? sp!.DeliveryUoM : mp.Unit);
@@ -1926,6 +1961,18 @@ public class PurchaseOrderService : IPurchaseOrderService
             }
 
             var totalQty = validLines.Sum(l => l.Qty);
+            // Kiểm tra tổng MOQ đơn hàng của NCC (POM-05)
+            if (cfg.MinOrderQuantity > 0 && OrderMatrixRules.ViolatesSupplierOrderMoq(totalQty, cfg.MinOrderQuantity))
+            {
+                result.Status = OrderMatrixRules.ResultFailed;
+                result.ErrorCode = "ORDER_MOQ_VIOLATION";
+                result.ErrorMessage = $"Nhà cung cấp {supName} yêu cầu tổng SL đơn tối thiểu {cfg.MinOrderQuantity} (hiện tại: {totalQty}).";
+                result.ValidLineCount = validLines.Count;
+                result.TotalQuantity = totalQty;
+                groupResults.Add(result);
+                continue;
+            }
+
             var totalAmount = validLines.Sum(l => l.Qty * l.UnitPrice);
             var hasMissingPrice = validLines.Any(l => l.UnitPrice <= 0);
 
@@ -1955,6 +2002,20 @@ public class PurchaseOrderService : IPurchaseOrderService
             }
             else if (existingPo != null)
             {
+                // Chặn amend PO đã có phiếu nhập kho hoạt động (DRAFT / COMPLETED) (POM-05)
+                var activeGrns = await _repository.GetActiveGoodsReceiptsByPoIdsAsync(new[] { existingPo.Id }, cancellationToken);
+                if (activeGrns.TryGetValue(existingPo.Id, out var activeGrn))
+                {
+                    result.Status = OrderMatrixRules.ResultFailed;
+                    result.PurchaseOrderId = existingPo.Id;
+                    result.PurchaseOrderCode = existingPo.Code;
+                    result.RevisionNumber = existingPo.RevisionNumber;
+                    result.ErrorCode = "PO_HAS_ACTIVE_GRN";
+                    result.ErrorMessage = $"Đơn {existingPo.Code} đã có phiếu nhập kho {activeGrn.Code} ({activeGrn.Status}), không thể chỉnh sửa.";
+                    groupResults.Add(result);
+                    continue;
+                }
+
                 var previousSnapshot = BuildPoLinesSnapshot(existingPo);
                 var newQtyByProduct = validLines.ToDictionary(l => l.Product.Id, l => l.Qty);
                 var oldQtyByProduct = existingPo.Details
@@ -2067,6 +2128,7 @@ public class PurchaseOrderService : IPurchaseOrderService
                 result.PurchaseOrderId = existingPo.Id;
                 result.PurchaseOrderCode = existingPo.Code;
                 result.RevisionNumber = existingPo.RevisionNumber;
+                result.TotalAmount = existingPo.TotalAmount;
                 groupResults.Add(result);
             }
             else
@@ -2202,9 +2264,10 @@ public class PurchaseOrderService : IPurchaseOrderService
     {
         var pageIndex = Math.Max(1, query.PageIndex);
         var pageSize = Math.Clamp(query.PageSize, 1, 100);
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, query.BranchId);
 
         var (items, totalCount) = await _repository.GetPagedPurchaseOrdersAsync(
-            query.BranchId,
+            effectiveBranchId,
             query.SupplierId,
             query.Status,
             query.DateFrom,
@@ -2236,10 +2299,23 @@ public class PurchaseOrderService : IPurchaseOrderService
             throw new NotFoundException("Đơn đặt hàng (PO)", id);
         }
 
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, po.BranchId);
+
         var dto = MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC");
         await AttachActiveGoodsReceiptsAsync(new List<PurchaseOrderDto> { dto }, cancellationToken);
         return dto;
     }
+
+    private static readonly Dictionary<string, HashSet<string>> AllowedPoStatusTransitions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["DRAFT"] = new(StringComparer.OrdinalIgnoreCase) { "PENDING_APPROVAL", "CANCELLED" },
+        ["PENDING_APPROVAL"] = new(StringComparer.OrdinalIgnoreCase) { "APPROVED", "DISPATCHED", "SENT", "CONFIRMED", "REJECTED", "CANCELLED" },
+        ["APPROVED"] = new(StringComparer.OrdinalIgnoreCase) { "DISPATCHED", "SENT", "CONFIRMED", "CANCELLED" },
+        ["DISPATCHED"] = new(StringComparer.OrdinalIgnoreCase) { "SENT", "CONFIRMED", "CANCELLED" },
+        ["SENT"] = new(StringComparer.OrdinalIgnoreCase) { "CONFIRMED", "CANCELLED" },
+        ["CONFIRMED"] = new(StringComparer.OrdinalIgnoreCase) { "CANCELLED" },
+        ["PARTIALLY_RECEIVED"] = new(StringComparer.OrdinalIgnoreCase) { "CANCELLED" },
+    };
 
     public async Task<PurchaseOrderDto> UpdatePurchaseOrderStatusAsync(
         Guid id,
@@ -2247,13 +2323,47 @@ public class PurchaseOrderService : IPurchaseOrderService
         string? reason = null,
         CancellationToken cancellationToken = default)
     {
+        if (BranchScopeGuard.IsBranchScopedEmployee(_tenantContext))
+        {
+            throw new BusinessException("FORBIDDEN", "Chỉ Store Owner mới có quyền thay đổi trạng thái đơn mua hàng.");
+        }
+
         var po = await _repository.GetPurchaseOrderByIdAsync(id, cancellationToken);
         if (po == null || po.IsDeleted)
         {
             throw new NotFoundException("Đơn đặt hàng (PO)", id);
         }
 
-        var normalizedStatus = status.Trim().ToUpper();
+        BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, po.BranchId);
+
+        if (string.IsNullOrWhiteSpace(status))
+        {
+            throw new BusinessException("INVALID_PO_STATUS", "Trạng thái đơn đặt hàng không được để trống.");
+        }
+
+        var normalizedStatus = status.Trim().ToUpperInvariant();
+        if (string.Equals(po.Status, normalizedStatus, StringComparison.OrdinalIgnoreCase))
+        {
+            var sameDto = MapToDto(po, po.Branch?.Name ?? "Chi nhánh", po.Supplier?.Name ?? "NCC");
+            await AttachActiveGoodsReceiptsAsync(new List<PurchaseOrderDto> { sameDto }, cancellationToken);
+            return sameDto;
+        }
+
+        var currentStatus = (po.Status ?? string.Empty).Trim().ToUpperInvariant();
+        if (!AllowedPoStatusTransitions.TryGetValue(currentStatus, out var allowedNext) ||
+            !allowedNext.Contains(normalizedStatus))
+        {
+            throw new BusinessException(
+                "INVALID_PO_STATUS_TRANSITION",
+                $"Không thể chuyển trạng thái đơn PO từ '{currentStatus}' sang '{normalizedStatus}'.");
+        }
+
+        if ((normalizedStatus == "CANCELLED" || normalizedStatus == "REJECTED") &&
+            string.IsNullOrWhiteSpace(reason))
+        {
+            throw new BusinessException("REASON_REQUIRED", "Vui lòng nhập lý do hủy/từ chối đơn đặt hàng.");
+        }
+
         po.Status = normalizedStatus;
 
         if (normalizedStatus == "APPROVED")
@@ -2302,7 +2412,7 @@ public class PurchaseOrderService : IPurchaseOrderService
 
     private static PurchaseOrderDto MapToDto(PurchaseOrder po, string branchName, string supplierName)
     {
-        var details = po.Details?.Select(d => new PurchaseOrderDetailDto
+        var details = po.Details?.Where(d => !d.IsDeleted).Select(d => new PurchaseOrderDetailDto
         {
             Id = d.Id,
             ProductId = d.ProductId,

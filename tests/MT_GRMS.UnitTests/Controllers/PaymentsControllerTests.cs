@@ -590,6 +590,71 @@ public class PaymentsControllerTests
     }
 
     [PaymentPostgresFact]
+    public async Task HandleSePayWebhook_TestMode_VerifiesSandboxLedgerBeforePostingOnce()
+    {
+        await using var database = await PaymentTestSupport.OpenPostgresAsync(_mockTenant.Object);
+        var context = database.Context;
+        var config = new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["SePay:UseTestMode"] = "true" }).Build();
+        var controller = PaymentTestSupport.CreateController(context, _mockHttpClientFactory.Object,
+            config, _mockLogger.Object, _mockTenant.Object);
+        controller.ControllerContext = CreateContext();
+        const string token = "sandbox-access-token-fixture";
+        const string webhookKey = "sandbox-webhook-key-fixture";
+        controller.Request.Headers["Authorization"] = $"Bearer {webhookKey}";
+        PaymentTestSupport.AddTenant(context, TenantId, enabled: true, apiKey: token, secret: webhookKey);
+        var bank = PaymentTestSupport.AddBank(context, TenantId, "999888777");
+        var order = new Order
+        {
+            Id = Guid.NewGuid(), TenantId = TenantId, BranchId = bank.BranchId!.Value,
+            FinanceAccountId = bank.Id, OrderCode = "HD2001", Status = "PendingPayment",
+            PaymentStatus = "UNPAID", FinalAmount = 150_000m, CreatedAt = DateTime.UtcNow
+        };
+        context.Orders.Add(order);
+        await context.SaveChangesAsync();
+
+        var ledgerId = Guid.NewGuid();
+        var ledgerAmount = 149_000;
+        var lookups = 0;
+        var handler = new MockHttpMessageHandler(request =>
+        {
+            lookups++;
+            Assert.Equal("userapi-sandbox.sepay.vn", request.RequestUri!.Host);
+            Assert.Equal("/v2/transactions", request.RequestUri.AbsolutePath);
+            Assert.Contains("reference_number=QAFT2001", request.RequestUri.Query);
+            Assert.Equal(token, request.Headers.Authorization?.Parameter);
+            return new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new System.Net.Http.StringContent(
+                    $$"""{"status":"success","data":[{"id":"{{ledgerId}}","reference_number":"QAFT2001","account_number":"999888777","transfer_type":"in","amount_in":{{ledgerAmount}},"code":"HD2001","transaction_content":"HD2001"}]}""")
+            };
+        });
+        _mockHttpClientFactory.Setup(f => f.CreateClient(It.IsAny<string>()))
+            .Returns(() => new System.Net.Http.HttpClient(handler, disposeHandler: false));
+        var payload = new SePayWebhookPayload
+        {
+            Id = 99001, AccountNumber = "999888777", AmountIn = 150_000m,
+            TransactionContent = "HD2001", ReferenceNumber = "QAFT2001", Gateway = "MB"
+        };
+
+        Assert.IsType<BadRequestObjectResult>(await controller.HandleSePayWebhook(payload, CancellationToken.None));
+        Assert.Empty(await context.PaymentTransactions.ToListAsync());
+        Assert.Empty(await context.CashbookEntries.ToListAsync());
+        Assert.Equal("UNPAID", order.PaymentStatus);
+
+        ledgerAmount = 150_000;
+        Assert.IsType<OkObjectResult>(await controller.HandleSePayWebhook(payload, CancellationToken.None));
+        var duplicate = Assert.IsType<OkObjectResult>(await controller.HandleSePayWebhook(payload, CancellationToken.None));
+        Assert.True(PaymentTestSupport.Json(duplicate).GetProperty("isIdempotentReplay").GetBoolean());
+        Assert.Equal(3, lookups);
+        Assert.Equal($"test:{ledgerId:D}", (await context.PaymentTransactions.SingleAsync()).BankTransactionId);
+        Assert.Equal(150_000m, (await context.CashbookEntries.SingleAsync()).Amount);
+        Assert.Equal(150_000m, bank.CurrentBalance);
+        Assert.Equal("PAID", order.PaymentStatus);
+        Assert.Equal("Completed", order.Status);
+    }
+
+    [PaymentPostgresFact]
     public async Task HandleSePayWebhook_SameOrderCodeAcrossStores_PaysAuthenticatedStoreOnly()
     {
         await using var database = await PaymentTestSupport.OpenPostgresAsync(_mockTenant.Object);
@@ -1120,7 +1185,10 @@ internal static class PaymentTestSupport
             await database.Context.Database.OpenConnectionAsync();
             await database.Context.Database.ExecuteSqlInterpolatedAsync($"SELECT set_config('search_path', {schema}, false)");
             Assert.Equal(schema, await database.Context.Database.SqlQueryRaw<string>("SELECT current_schema() AS \"Value\"").SingleAsync());
-            await database.Context.Database.ExecuteSqlRawAsync(database.Context.Database.GenerateCreateScript());
+            await using var createTables = new NpgsqlCommand(
+                database.Context.Database.GenerateCreateScript(),
+                (NpgsqlConnection)database.Context.Database.GetDbConnection());
+            await createTables.ExecuteNonQueryAsync();
             return database;
         }
         catch

@@ -176,6 +176,64 @@ public class SchedulesController : BaseApiController
     }
 
     /// <summary>
+    /// Lấy thông tin chuỗi ca lặp lại hàng tuần của nhân viên
+    /// </summary>
+    [Authorize(Roles = SystemRoles.StoreOwner + "," + SystemRoles.Employee)]
+    [HttpGet("recurring-series")]
+    public async Task<IActionResult> GetRecurringSeries(
+        [FromQuery] Guid employeeId,
+        [FromQuery] Guid? shiftConfigId = null,
+        [FromQuery] string? shiftName = null,
+        [FromQuery] DateTime? fromDate = null,
+        [FromQuery] DateTime? toDate = null,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await _scheduleService.GetRecurringSeriesAsync(
+                employeeId,
+                shiftConfigId,
+                shiftName,
+                fromDate,
+                toDate,
+                cancellationToken);
+            return Ok(ApiResponse<RecurringSeriesResponse>.Ok(result, "Lấy thông tin chuỗi ca lặp lại thành công."));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
+        }
+        catch (BusinessException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail(ex.ErrorCode ?? "BAD_REQUEST", ex.Message));
+        }
+    }
+
+    /// <summary>
+    /// Đồng bộ cập nhật chuỗi ca lặp lại hàng tuần (cập nhật/thêm/bỏ các ca tương lai chưa chấm công)
+    /// </summary>
+    [Authorize(Roles = SystemRoles.StoreOwner)]
+    [HttpPut("recurring-sync")]
+    public async Task<IActionResult> SyncRecurring(
+        [FromBody] SyncRecurringScheduleRequest request,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _scheduleService.SyncRecurringAsync(request, cancellationToken);
+            return Ok(ApiResponse<SyncRecurringScheduleResponse>.Ok(result, "Đồng bộ chuỗi ca lặp lại thành công."));
+        }
+        catch (NotFoundException ex)
+        {
+            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message));
+        }
+        catch (BusinessException ex)
+        {
+            return BadRequest(ApiResponse<object>.Fail(ex.ErrorCode ?? "SCHEDULE_CONFLICT", ex.Message));
+        }
+    }
+
+    /// <summary>
     /// Cập nhật thông tin ca làm việc
     /// </summary>
     [Authorize(Roles = SystemRoles.StoreOwner)]

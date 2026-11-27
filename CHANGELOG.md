@@ -7,6 +7,9 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 ## [Unreleased] - 2026-11-15
 
 ### Changed
+- Băm một chiều SHA-256 gắn salt theo `UserId` (Base64Url 120-bit) trước khi lưu `Users.PasswordResetOtp` thay vì lưu OTP 6 chữ số dạng thuần (`NHAT-V2-11`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-RETEST2_Ortus24_hash-password-reset-otp.md)
+- Đồng nhất 100% thông điệp phản hồi trung tính tại `POST /api/auth/forgot-password`, `POST /api/auth/verify-otp` và `POST /api/auth/reset-password` bất kể trạng thái tồn tại của tài khoản hay vòng đời OTP (`NHAT-V2-11` / `NHAT-AUTH-01`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-RETEST_Ortus24_neutralize-password-recovery-responses.md)
+- Bổ sung `[Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]` cho `DELETE /api/branches/{id}` và `GET /api/tenant/subscriptions/history`; chuẩn hóa phản hồi trung tính `200 OK` cho `POST /api/Auth/forgot-password` nhằm chống dò tài khoản (OWASP). [Worklog](./docs/worklogs/2026-11-24_QA-NHAT_AI_fix-rbac-and-auth-enumeration.md)
 - Đồng bộ kiểm tra dữ liệu nhập admin cho cửa hàng, gói dịch vụ, hàng mẫu, Excel và cấu hình nền tảng. [Worklog](./docs/worklogs/2026-11-23_ADMIN-VALIDATION_Codex_admin-input-boundaries.md)
 - Áp dụng quyền Quản lý nhân viên theo gói cho API ca làm, chấm công, lịch làm, duyệt yêu cầu và bảng lương.
 - Yêu cầu tên chi nhánh có ít nhất 2 ký tự sau khi bỏ khoảng trắng hai đầu khi thêm mới hoặc cập nhật chi nhánh.
@@ -24,6 +27,8 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - Hợp nhất yêu cầu nạp VietQR và giao dịch ví vào `WalletTransactions`. Giữ hợp đồng API, chuyển dữ liệu đơn cũ qua đối soát và ngăn webhook cộng trùng số dư. [worklog: docs/worklogs/2026-11-16_WALLET_AI_merge-topup-orders.md]
 
 ### Added
+- Bổ sung API `PUT /api/auth/me/profile` (`[Authorize]`) cập nhật họ tên và số điện thoại tài khoản đang đăng nhập (chặn trùng SĐT `PHONE_EXISTS`), đồng thời trả `Phone` trong `UserInfo` (`REQ-AUTH-15` / `NHAT-V2-05`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-05_Ortus24_account-profile-update-api.md)
+- Bổ sung API `POST /api/auth/me/change-password` (`[Authorize]`) xác minh mật khẩu hiện tại, kiểm tra mật khẩu mới mạnh, xoay `SecurityStamp` + `RefreshToken` để thu hồi phiên trên các thiết bị khác và cấp lại HttpOnly cookies mới cho phiên hiện tại (`REQ-AUTH-14` / `NHAT-V2-01`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-01_Ortus24_implement-account-change-password.md)
 - Cho chủ Gói Thường mua riêng tiện ích Quản lý nhân viên bằng Ví gian hàng, tính phí theo số ngày còn lại và kiểm tra quyền dùng ở API hồ sơ nhân viên. [worklog: docs/worklogs/2026-11-22_BE-STORE_AI_staff-management-addon.md]
 - API Admin xem lịch sử mua gói dịch vụ theo tenant, phân trang và giới hạn truy cập Admin. Chi tiết tenant không trả danh sách chi nhánh. [worklog: docs/worklogs/2026-11-16_ADMIN-TENANT_AI_tenant-records.md]
 - Khởi tạo danh mục sản phẩm, nhóm hàng, đơn vị quy đổi và gán chi nhánh chính từ MasterProducts đang bật trong transaction đăng ký cửa hàng. [worklog: docs/worklogs/2026-11-15_ADMIN-CATALOG_AI_new-tenant-default-data.md]
@@ -33,6 +38,13 @@ Toàn bộ các thay đổi của repository Backend được tổng hợp tại
 - API Admin `POST /api/admin/tenants` tạo cửa hàng, tài khoản chủ sở hữu và chi nhánh chính trong một transaction, kiểm tra dữ liệu trùng và ghi audit log. Cửa hàng khởi tạo ở trạng thái `NO_PLAN`. [worklog: docs/worklogs/2026-11-15_ADMIN-TENANT_AI_create-tenant.md]
 
 ### Fixed
+- Chống dò tài khoản (OWASP Account Enumeration) tại `POST /api/Auth/verify-otp` & `reset-password` (trả `400` trung tính thay vì `404`), giới hạn tối đa 5 lần đoán sai OTP và bắt buộc mật khẩu đặt lại đạt chuẩn mật khẩu mạnh (`NHAT-V2-11`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-11_Ortus24_harden-forgot-password-otp-security.md)
+- Truy vấn danh sách khách hàng thuê thực tế kèm trạng thái hoạt động trong `SubscriptionPlanService.GetByIdAsync` cho trang chi tiết gói dịch vụ (`/admin/plans/:id`) (`NHAT-V2-09`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-09_Ortus24_populate-plan-detail-tenants.md)
+- Bổ sung tìm kiếm theo Email/Họ tên/SĐT chủ cửa hàng và lọc trạng thái `PENDING` (`NO_PLAN`) tại `TenantRepository.GetPagedAsync` & `TenantService` (`NHAT-V2-08`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-08_Ortus24_fix-admin-tenant-search-and-pending-filter.md)
+- Sửa truy vấn `TenantRepository.GetSuccessfulUpgradeCountAsync` đếm đầy đủ cả `PURCHASE_PLAN` và `UPGRADE_PLAN` thành công chưa xóa mềm cho KPI "Lượt mua gói thành công" trên Admin Dashboard (`NHAT-V2-07`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-07_Ortus24_fix-admin-dashboard-purchase-kpi.md)
+- Đồng bộ danh mục gói cước giữa Admin và Store Owner: hiển thị đầy đủ gói mới đang `ACTIVE`, không tự hồi sinh gói đã chuyển `INACTIVE`, chặn mua gói `INACTIVE` và giữ nguyên `MaxStorageGb` do Admin cấu hình (`NHAT-V2-06`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-06_Ortus24_sync-subscription-plans-admin-store.md)
+- Bổ sung trường `Id` cho `UrgentAlertResponse` trên Admin Dashboard và hỗ trợ tra cứu chi tiết cửa hàng theo cả `Id` lẫn `Subdomain`, khắc phục lỗi 404 khi mở cửa hàng từ bảng "Khách hàng cần chú ý" (`NHAT-V2-04`). [Worklog](./docs/worklogs/2026-11-25_NHAT-V2-04_Ortus24_fix-admin-dashboard-alert-tenant-link.md)
+- Khắc phục lỗi biên dịch `CS0234` thiếu migration `AddBranchProductAllowedSupplierIds` và lỗi `500 (42703: column p.ImageUrlsJson does not exist)` trên `/store-owner/dashboard` bằng cách đồng bộ toàn bộ `UpSql` mới và các cột còn thiếu trong `ApplyLocalSchemaRepairsAsync` khi chạy API bằng profile local. [worklog: docs/worklogs/2026-11-25_FIX-BUILD_AI_add-missing-branch-product-allowed-supplier-migration.md]
 - Giữ chi nhánh duy nhất làm trụ sở chính và chặn thao tác ngừng hoạt động hoặc xóa chi nhánh đó. [worklog: docs/worklogs/2026-11-23_BE-BRANCH_AI_protect-only-branch.md]
 - Bổ sung cột `OrderDetails.StockAllocationsJson` khi chạy API bằng profile local để khắc phục lỗi tải Tổng quan trên cơ sở dữ liệu chưa cập nhật schema.
 - Áp dụng bổ sung schema `ExpenseVouchers.DueDate` khi chạy API bằng profile local để worker nhắc thanh toán đọc được phiếu chi trên cơ sở dữ liệu cũ.

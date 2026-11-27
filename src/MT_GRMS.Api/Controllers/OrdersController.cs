@@ -181,11 +181,18 @@ public class OrdersController : BaseApiController
         var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
         if (!authResult.Succeeded) return Forbid();
 
+        var isOwnerOrAdmin = User.IsInRole("STORE_OWNER") || User.IsInRole("StoreOwner")
+            || User.IsInRole("ADMIN") || User.IsInRole("Admin");
+        if (!isOwnerOrAdmin)
+        {
+            return Forbid();
+        }
+
         try
         {
-            var userRole = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value 
-                           ?? User.FindFirst("role")?.Value 
-                           ?? request.UserRole;
+            var userRole = User.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value
+                           ?? User.FindFirst("role")?.Value
+                           ?? _tenantContext.CurrentRole;
             var effectiveRequest = request with { UserRole = userRole };
             var response = await _orderService.CancelOrderAsync(id, effectiveRequest, cancellationToken);
             return Ok(response);

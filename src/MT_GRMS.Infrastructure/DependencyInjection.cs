@@ -87,6 +87,7 @@ public static class DependencyInjection
         services.AddScoped<IRegistrationOtpStore, RegistrationOtpStore>();
         services.AddScoped<Application.SaaS.Services.ITrialOnboardingBackfillService, Services.TrialOnboardingBackfillService>();
         services.AddScoped<IInventoryRepository, InventoryRepository>();
+        services.AddScoped<Application.Transfers.ITransferRepository, TransferRepository>();
         services.AddScoped<IOrderRepository, OrderRepository>();
         services.AddScoped<Application.PosShifts.IShiftRepository, ShiftRepository>();
         services.AddScoped<IProductRepository, ProductRepository>();

@@ -41,6 +41,7 @@ public class BusinessDayClosingServiceTests
         public List<BusinessDayClosing> History { get; } = [];
         public List<ShiftZReport> Shifts { get; } = [];
         public List<Order> Orders { get; } = [];
+        public HashSet<Guid> PostedPosSales { get; } = [];
         public bool HasPendingPayment { get; set; }
         public bool BranchAccessible { get; set; } = true;
         public BusinessDayClosing? Added { get; private set; }
@@ -56,6 +57,8 @@ public class BusinessDayClosingServiceTests
             Task.FromResult<IReadOnlyList<BusinessDayClosing>>(History.Where(x => x.TenantId == tenantId && x.BranchId == branchId && x.BusinessDate == businessDate).OrderByDescending(x => x.Version).ToList());
         public Task<IReadOnlyList<ShiftZReport>> GetShiftsAsync(string tenantId, Guid branchId, DateOnly businessDate, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<ShiftZReport>>(Shifts);
         public Task<IReadOnlyList<Order>> GetShiftlessOrdersAsync(string tenantId, Guid branchId, DateOnly businessDate, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<Order>>(Orders);
+        public Task<IReadOnlyList<Guid>> GetPostedPosSaleOrderIdsAsync(string tenantId, Guid branchId, Guid[] orderIds, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Guid>>(orderIds.Where(PostedPosSales.Contains).ToList());
         public Task<bool> HasPendingPaymentOrdersAsync(string tenantId, Guid branchId, DateOnly businessDate, CancellationToken cancellationToken = default) => Task.FromResult(HasPendingPayment);
         public Task<IReadOnlyList<FinanceAccount>> GetFundsAsync(string tenantId, Guid branchId, CancellationToken cancellationToken = default) => Task.FromResult<IReadOnlyList<FinanceAccount>>(Funds);
         public Task AddAsync(BusinessDayClosing closing, CancellationToken cancellationToken = default) { Added = closing; History.Add(closing); return Task.CompletedTask; }
@@ -106,14 +109,65 @@ public class BusinessDayClosingServiceTests
         });
         repo.Orders.Add(new Order { BranchId = branchId, BusinessDate = new DateOnly(2026, 11, 12), Status = "Completed", PaymentMethod = "CASH", FinalAmount = 300_000m });
 
-        var result = await service.CloseAsync(await ValidRequestAsync(service, repo, branchId, new DateOnly(2026, 11, 12), 1_300_000m));
+        var result = await service.CloseAsync(await ValidRequestAsync(service, repo, branchId, new DateOnly(2026, 11, 12), 1_000_000m));
 
         Assert.Equal(1_300_000m, result.TotalCashSales);
         Assert.Equal(1_500_000m, result.TotalRetainedFloat);
+        Assert.Equal(1_000_000m, result.ExpectedCash);
         Assert.Equal(0m, result.CashDiscrepancy);
         Assert.Equal(CashbookPostingStatus.Posted, repo.Shifts[0].CashbookPostingStatus);
-        cashbook.Verify(x => x.ReceiveCashAsync(It.IsAny<Guid>(), FinanceAccountType.Safe, 1_300_000m, "BUSINESS_DAY_CLOSE", It.IsAny<Guid?>(), It.Is<string>(s => s.EndsWith("-CASH")), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        cashbook.Verify(x => x.ReceiveCashAsync(It.IsAny<Guid>(), FinanceAccountType.Safe, 300_000m, "BUSINESS_DAY_CLOSE", It.IsAny<Guid?>(), It.Is<string>(s => s.EndsWith("-CASH")), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+        cashbook.Verify(x => x.ReceiveCashAsync(It.IsAny<Guid>(), FinanceAccountType.Safe, 1_000_000m, "CASH_DROP", repo.Shifts[0].Id, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
         cashbook.Verify(x => x.ReceiveCashAsync(It.IsAny<Guid>(), FinanceAccountType.Safe, 1_500_000m, It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task CloseAsync_IncludesPostedOwnerSaleInRevenueButOnlyPostsMissingReceipt()
+    {
+        var (service, repo, cashbook) = Create();
+        var branchId = Guid.NewGuid();
+        var date = new DateOnly(2026, 11, 12);
+        var postedId = Guid.NewGuid();
+        repo.PostedPosSales.Add(postedId);
+        repo.Orders.Add(new Order { Id = postedId, BranchId = branchId, BusinessDate = date, Status = "Completed", PaymentMethod = "CASH", FinalAmount = 100_000m });
+        repo.Orders.Add(new Order { Id = Guid.NewGuid(), BranchId = branchId, BusinessDate = date, Status = "Completed", PaymentMethod = "CASH", FinalAmount = 50_000m });
+
+        var result = await service.CloseAsync(await ValidRequestAsync(service, repo, branchId, date, 150_000m));
+
+        Assert.Equal(150_000m, result.TotalCashSales);
+        cashbook.Verify(x => x.ReceiveCashAsync(It.IsAny<Guid>(), FinanceAccountType.Safe, 50_000m,
+            "BUSINESS_DAY_CLOSE", It.IsAny<Guid?>(), It.Is<string>(s => s.EndsWith("-CASH")),
+            It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task CloseAsync_RejectsUnconfirmedCashDrop_WithoutPostingToSafe()
+    {
+        var (service, repo, cashbook) = Create();
+        var branchId = Guid.NewGuid();
+        var date = new DateOnly(2026, 11, 12);
+        var shift = new ShiftZReport
+        {
+            Id = Guid.NewGuid(), BranchId = branchId, BusinessDate = date, Status = ShiftState.Closed,
+            HandoverStatus = HandoverStatus.CONFIRMED, SnapshotLocked = true
+        };
+        shift.CashMovements.Add(new ShiftCashMovement
+        {
+            Id = Guid.NewGuid(), ShiftId = shift.Id, Category = CashMovementCategory.CASH_DRAW,
+            MovementType = CashMovementType.OUT, Status = CashMovementStatus.Recorded,
+            Amount = 100_000m, Reason = "Nộp két sắt"
+        });
+        repo.Shifts.Add(shift);
+
+        var preview = await service.PreviewAsync(branchId, date);
+        Assert.Contains(preview.Blockers, blocker => blocker.Code == "UNCONFIRMED_CASH_DROP");
+        Assert.Equal(0m, preview.TotalCashOut);
+        var request = await ValidRequestAsync(service, repo, branchId, date, 1_000_000m);
+        var exception = await Assert.ThrowsAsync<BusinessException>(() => service.CloseAsync(request));
+        Assert.Equal("UNCONFIRMED_CASH_DROP", exception.ErrorCode);
+        cashbook.Verify(x => x.ReceiveCashAsync(It.IsAny<Guid>(), It.IsAny<FinanceAccountType>(),
+            It.IsAny<decimal>(), It.IsAny<string>(), It.IsAny<Guid?>(), It.IsAny<string>(),
+            It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 
     [Fact]
@@ -460,5 +514,27 @@ public class BusinessDayClosingServiceTests
     {
         var result = BusinessDateResolver.Resolve(DateTime.Parse(utc).ToUniversalTime(), new TimeSpan(6, 0, 0));
         Assert.Equal(new DateOnly(year, month, day), result);
+    }
+
+    [Fact]
+    public async Task CloseAsync_TwoUuidV7BranchesSharingFirst8Chars_GenerateDistinctReferenceCodes()
+    {
+        var date = new DateOnly(2026, 11, 25);
+        var branchA = Guid.Parse("01a1ac70-b750-7000-8000-111122223333");
+        var branchB = Guid.Parse("01a1ac70-b7ab-7000-8000-444455556666");
+
+        var (svcA, repoA, _) = Create();
+        var prevA = await svcA.PreviewAsync(branchA, date);
+        var resA = await svcA.CloseAsync(new CloseBusinessDayRequest(branchA, date,
+            [new BusinessDayFundCount(repoA.Funds[0].Id, 0m)], prevA.PreviewToken));
+
+        var (svcB, repoB, _) = Create();
+        var prevB = await svcB.PreviewAsync(branchB, date);
+        var resB = await svcB.CloseAsync(new CloseBusinessDayRequest(branchB, date,
+            [new BusinessDayFundCount(repoB.Funds[0].Id, 0m)], prevB.PreviewToken));
+
+        Assert.NotEqual(resA.ReferenceCode, resB.ReferenceCode);
+        Assert.Contains("111122223333"[^8..], resA.ReferenceCode);
+        Assert.Contains("444455556666"[^8..], resB.ReferenceCode);
     }
 }

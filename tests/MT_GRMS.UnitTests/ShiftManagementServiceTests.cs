@@ -799,6 +799,19 @@ public class ShiftManagementServiceTests
         Assert.Equal("Chủ shop Nguyễn Văn A", result.ApprovedBy);
         Assert.Equal(350_000m, shift.TotalCashOut);
         Assert.Equal(650_000m, shift.ExpectedCash);
+
+        var second = new ShiftCashMovement
+        {
+            Id = Guid.NewGuid(), ShiftId = shiftId, Shift = shift,
+            Category = CashMovementCategory.EXPENSE, MovementType = CashMovementType.OUT,
+            Amount = 700_000m, Status = CashMovementStatus.PendingApproval
+        };
+        _shiftRepository.CashMovements.Add(second);
+        var error = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.ApproveCashMovementAsync(second.Id, "Chủ shop Nguyễn Văn A"));
+        Assert.Equal("EXCEED_DRAWER_CASH", error.ErrorCode);
+        Assert.Equal(CashMovementStatus.PendingApproval, second.Status);
+        Assert.Equal(350_000m, shift.TotalCashOut);
     }
 
     [Fact]
@@ -1435,24 +1448,30 @@ public class ShiftManagementServiceTests
         Assert.Equal("MOVEMENT_NOT_FOUND", exNotFound.ErrorCode);
 
         // Add movement with Recorded status
+        var creatorId = Guid.NewGuid();
         var movement = new ShiftCashMovement
         {
             Id = movId,
             ShiftId = shiftId,
             Category = CashMovementCategory.EXPENSE,
             Amount = 50000m,
-            Status = CashMovementStatus.Recorded
+            Status = CashMovementStatus.Recorded,
+            CreatedBy = creatorId
         };
         _shiftRepository.CashMovements.Add(movement);
 
         // 2. Invalid status
         var exStatus = await Assert.ThrowsAsync<BusinessException>(() =>
-            _service.CancelCashMovementAsync(movId, Guid.NewGuid()));
+            _service.CancelCashMovementAsync(movId, creatorId));
         Assert.Equal("INVALID_STATUS", exStatus.ErrorCode);
 
-        // 3. Valid cancellation
+        // 3. Another staff member cannot cancel someone else's movement (CB-13)
         movement.Status = CashMovementStatus.PendingApproval;
-        var cancelled = await _service.CancelCashMovementAsync(movId, Guid.NewGuid());
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _service.CancelCashMovementAsync(movId, Guid.NewGuid()));
+
+        // 4. Valid cancellation by creator
+        var cancelled = await _service.CancelCashMovementAsync(movId, creatorId);
         Assert.Equal(CashMovementStatus.Cancelled, cancelled.Status);
     }
 
@@ -1486,9 +1505,18 @@ public class ShiftManagementServiceTests
 
         // 3. Success with CASH_DRAW
         movement.Category = CashMovementCategory.CASH_DRAW;
-        var confirmed = await _service.ConfirmCashDropAsync(movId, "Store Owner");
+        var shift = new ShiftZReport { Id = movement.ShiftId, BranchId = Guid.NewGuid() };
+        _shiftRepository.Shifts.Add(shift);
+        var safe = new FinanceAccount { Id = Guid.NewGuid() };
+        var cashbook = new Mock<ICashbookService>();
+        cashbook.Setup(x => x.GetOrCreateSafeAsync(shift.BranchId, It.IsAny<CancellationToken>())).ReturnsAsync(safe);
+        var service = new ShiftService(_shiftRepository, _unitOfWork, _tenantContext, cashbook.Object);
+        var confirmed = await service.ConfirmCashDropAsync(movId, "Store Owner");
+        await service.ConfirmCashDropAsync(movId, "Store Owner");
         Assert.True(confirmed.IsConfirmedByOwner);
         Assert.Equal("Store Owner", confirmed.ApprovedBy);
+        cashbook.Verify(x => x.ReceiveCashAsync(safe.Id, FinanceAccountType.Safe, movement.Amount,
+            "CASH_DROP", movId, It.IsAny<string>(), It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Once);
     }
 
     [Fact]
@@ -2188,6 +2216,107 @@ public class ShiftManagementServiceTests
         var ex = await Assert.ThrowsAsync<BusinessException>(() =>
             _service.RejectCashMovementAsync(Guid.NewGuid(), "Admin", "   "));
         Assert.Equal("REQUIRED_REASON", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task GetShiftHistoryAsync_ForOpenShift_ComputesLiveTotalCashSalesAndExpectedCash()
+    {
+        var branchId = Guid.NewGuid();
+        var shiftId = Guid.NewGuid();
+        _shiftRepository.Shifts.Add(new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            BranchId = branchId,
+            ShiftCode = "CA-20261125-LIVE",
+            Status = ShiftState.Open,
+            OpeningFloat = 1_000_000m,
+            TotalCashIn = 150_000m,
+            TotalCashOut = 25_000m,
+            TotalCashSales = 0m,
+            ExpectedCash = 1_125_000m,
+            OpenedAtUtc = DateTime.UtcNow
+        });
+        _shiftRepository.MockCashSales = 50_000m;
+        _shiftRepository.MockBankRevenue = 120_000m;
+        _shiftRepository.MockOrdersCount = 2;
+
+        var history = await _service.GetShiftHistoryAsync(branchId);
+
+        var dto = Assert.Single(history);
+        Assert.Equal(50_000m, dto.TotalCashSales);
+        Assert.Equal(120_000m, dto.TotalBankRevenue);
+        Assert.Equal(2, dto.TotalOrdersCount);
+        Assert.Equal(1_175_000m, dto.ExpectedCash);
+    }
+
+    [Fact]
+    public async Task StartClosingShiftAsync_NonParticipantStaff_ThrowsBusinessExceptionNotUnauthorized()
+    {
+        _tenantContext.CurrentRole = "STAFF";
+        var ownerCashierId = Guid.NewGuid();
+        var otherStaffId = Guid.NewGuid();
+        var shiftId = Guid.NewGuid();
+        _shiftRepository.Shifts.Add(new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            BranchId = Guid.NewGuid(),
+            CashierUserId = ownerCashierId,
+            Status = ShiftState.Open,
+            ParticipantsJson = $"[{{\"userId\":\"{ownerCashierId}\",\"userName\":\"NV1\",\"fullName\":\"NV1\",\"joinedAtUtc\":\"2026-11-25T08:00:00Z\"}}]"
+        });
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.StartClosingShiftAsync(shiftId, otherStaffId, new StartClosingShiftRequest("Thu chot ca")));
+        Assert.Equal("SHIFT_CLOSE_FORBIDDEN", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ConfirmCloseShiftAsync_DiscrepancyUnder1000_DoesNotRequireReason()
+    {
+        var shiftId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            BranchId = Guid.NewGuid(),
+            Status = ShiftState.Closing,
+            CashierUserId = _tenantContext.CurrentUserId,
+            OpeningFloat = 500_500m
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        // Expected = 500_500, Actual = 500_000 -> discrepancy = -500 (< 1,000đ)
+        var request = new ConfirmCloseShiftRequest(500_000m, 500_000m, 0m, DiscrepancyReason: null);
+        var result = await _service.ConfirmCloseShiftAsync(shiftId, _tenantContext.CurrentUserId, "Staff", request);
+
+        Assert.Equal(ShiftState.Closed, result.Status);
+        Assert.Equal(-500m, result.Discrepancy);
+        Assert.Null(result.DiscrepancyReason);
+    }
+
+    [Fact]
+    public async Task ConfirmCloseShiftAsync_DiscrepancyAt1000_RequiresReason()
+    {
+        var shiftId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            BranchId = Guid.NewGuid(),
+            Status = ShiftState.Closing,
+            CashierUserId = _tenantContext.CurrentUserId,
+            OpeningFloat = 501_000m
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        // Expected = 501_000, Actual = 500_000 -> discrepancy = -1,000 (>= 1,000đ)
+        var request = new ConfirmCloseShiftRequest(500_000m, 500_000m, 0m, DiscrepancyReason: null);
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.ConfirmCloseShiftAsync(shiftId, _tenantContext.CurrentUserId, "Staff", request));
+
+        Assert.Equal("DISCREPANCY_REASON_REQUIRED", ex.ErrorCode);
     }
 }
 

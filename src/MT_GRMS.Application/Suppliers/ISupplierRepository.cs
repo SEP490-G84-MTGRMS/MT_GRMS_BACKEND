@@ -9,6 +9,8 @@ public interface ISupplierRepository : IRepository<Supplier>
 {
     Task<Supplier?> GetByIdWithDetailsAsync(Guid id, CancellationToken cancellationToken = default);
     Task<bool> ExistsByCodeAsync(string code, CancellationToken cancellationToken = default);
+    Task<bool> ExistsByTaxCodeAsync(string taxCode, Guid? excludeSupplierId = null, CancellationToken cancellationToken = default)
+        => Task.FromResult(false);
     Task<int> CountTodayAsync(CancellationToken cancellationToken = default);
     Task<(IReadOnlyList<Supplier> Items, int TotalCount)> GetPagedListAsync(
         string? searchTerm,
@@ -48,6 +50,17 @@ public interface ISupplierRepository : IRepository<Supplier>
         APDocType? docType = null);
 
     Task<int> CountLedgersByDocNoPrefixAsync(string docNoPrefix, CancellationToken cancellationToken = default);
+
+    Task<IReadOnlyList<SupplierAPLedger>> GetAllLedgersForSupplierAsync(
+        Guid supplierId,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyList<SupplierAPLedger>>(Array.Empty<SupplierAPLedger>());
+
+    Task<IReadOnlyDictionary<string, DateTime?>> GetConfirmedGrnDueDatesByCodesAsync(
+        Guid supplierId,
+        IEnumerable<string> grnCodes,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<IReadOnlyDictionary<string, DateTime?>>(new Dictionary<string, DateTime?>());
 
     Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default);
     Task ReplaceBlackoutDatesAsync(Guid supplierId, IEnumerable<SupplierBlackoutDate> blackoutDates, CancellationToken cancellationToken = default);
@@ -105,8 +118,17 @@ public interface ISupplierRepository : IRepository<Supplier>
     /// <summary>Mọi SP đã gán NCC (kể cả Inactive), Include Product+Category — dùng Excel filter/import.</summary>
     Task<IReadOnlyList<SupplierProduct>> GetSupplierProductsForSupplierAsync(Guid supplierId, CancellationToken cancellationToken = default);
     Task<bool> BranchProductExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default);
+    Task<MT_GRMS.Domain.Entities.Catalog.BranchProduct?> GetBranchProductAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
+        => Task.FromResult<MT_GRMS.Domain.Entities.Catalog.BranchProduct?>(null);
     Task AddBranchProductAsync(MT_GRMS.Domain.Entities.Catalog.BranchProduct branchProduct, CancellationToken cancellationToken = default);
     Task<bool> BranchStockExistsAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default);
     Task AddBranchStockAsync(MT_GRMS.Domain.Entities.Inventory.BranchStock branchStock, CancellationToken cancellationToken = default);
+    Task<(IReadOnlyList<SupplierTransactionDto> Items, int TotalCount)> GetPagedTransactionsAsync(
+        Guid supplierId,
+        Guid? branchId,
+        int pageIndex,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+        => Task.FromResult<(IReadOnlyList<SupplierTransactionDto>, int)>((Array.Empty<SupplierTransactionDto>(), 0));
 }
 

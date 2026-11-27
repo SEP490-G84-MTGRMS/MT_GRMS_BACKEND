@@ -16,6 +16,8 @@ namespace MT_GRMS.Application.PosShifts;
 
 public class ShiftService : IShiftService
 {
+    private const decimal DiscrepancyReasonThreshold = 1_000m;
+
     private readonly IShiftRepository _shiftRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
@@ -72,11 +74,19 @@ public class ShiftService : IShiftService
         decimal openingFloatExpected = prevShift?.RetainedFloatAmount ?? request.OpeningFloat;
         decimal openingDiscrepancy = request.OpeningFloat - openingFloatExpected;
 
+        var openedAtUtc = DateTime.UtcNow;
+        var businessDayStart = await _shiftRepository.GetBusinessDayStartTimeAsync(request.BranchId, cancellationToken);
+        var businessDate = BusinessDateResolver.Resolve(openedAtUtc, businessDayStart);
+        if (await _shiftRepository.IsBusinessDayClosedAsync(request.BranchId, businessDate, cancellationToken))
+        {
+            throw new BusinessException(
+                "BUSINESS_DAY_CLOSED",
+                $"Ngày nghiệp vụ {businessDate:dd/MM/yyyy} đã khóa sổ cuối ngày. Không thể mở ca mới vào ngày đã chốt sổ.");
+        }
+
         // 3. Sinh mã ca tự động
         var shiftCode = await _shiftRepository.GenerateNextShiftCodeAsync(request.BranchId, cancellationToken);
 
-        var openedAtUtc = DateTime.UtcNow;
-        var businessDayStart = await _shiftRepository.GetBusinessDayStartTimeAsync(request.BranchId, cancellationToken);
         var shift = new ShiftZReport
         {
             TenantId = _tenantContext.CurrentTenantId,
@@ -88,7 +98,7 @@ public class ShiftService : IShiftService
             OpenedScheduleId = eligibility.ActiveSchedule?.ScheduleId,
             PrevShiftId = prevShift?.Id,
             OpenedAtUtc = openedAtUtc,
-            BusinessDate = BusinessDateResolver.Resolve(openedAtUtc, businessDayStart),
+            BusinessDate = businessDate,
             OpeningFloatExpected = openingFloatExpected,
             OpeningFloat = request.OpeningFloat,
             OpeningDiscrepancy = openingDiscrepancy,
@@ -127,6 +137,7 @@ public class ShiftService : IShiftService
         if (shift == null) return null;
 
         var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shift.Id, cancellationToken);
+        shift.TotalCashSales = cashSales;
         shift.TotalBankRevenue = bankRevenue;
         shift.TotalOrdersCount = ordersCount;
         shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
@@ -144,6 +155,7 @@ public class ShiftService : IShiftService
         if (shift.Status == ShiftState.Open)
         {
             var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shift.Id, cancellationToken);
+            shift.TotalCashSales = cashSales;
             shift.TotalBankRevenue = bankRevenue;
             shift.TotalOrdersCount = ordersCount;
             shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
@@ -227,6 +239,7 @@ public class ShiftService : IShiftService
         // 1. Kiểm tra cấu hình hạn mức chi của tenant
         var paymentConfig = await _shiftRepository.GetPaymentConfigAsync(_tenantContext.CurrentTenantId, cancellationToken);
         decimal threshold = paymentConfig?.CashOutApprovalThreshold ?? 200000m;
+        decimal shiftTotalLimit = paymentConfig?.CashOutShiftTotalLimit ?? 0m;
 
         CashMovementStatus initialStatus = CashMovementStatus.Recorded;
 
@@ -245,9 +258,17 @@ public class ShiftService : IShiftService
             }
             else // EXPENSE
             {
-                if (request.Amount > threshold)
+                var existingShiftExpenseOut = shift.CashMovements
+                    .Where(m => !m.IsDeleted &&
+                                m.MovementType == CashMovementType.OUT &&
+                                m.Category == CashMovementCategory.EXPENSE &&
+                                m.Status == CashMovementStatus.Recorded)
+                    .Sum(m => m.Amount);
+                var exceedsShiftTotalLimit = shiftTotalLimit > 0m && (existingShiftExpenseOut + request.Amount) > shiftTotalLimit;
+
+                if (request.Amount > threshold || exceedsShiftTotalLimit)
                 {
-                    // Vượt hạn mức: Cần chủ duyệt, chưa trừ vào két (chưa ảnh hưởng G)
+                    // Vượt hạn mức đơn lẻ hoặc trần tổng chi trong ca: Cần chủ duyệt, chưa trừ vào két (chưa ảnh hưởng G)
                     initialStatus = CashMovementStatus.PendingApproval;
                 }
                 else
@@ -287,7 +308,7 @@ public class ShiftService : IShiftService
                     "CASH_APPROVAL_REQUEST",
                     $"🟠 Yêu cầu duyệt chi két POS ({request.Amount:N0}đ)",
                     $"Thu ngân {request.CreatedByName ?? "POS"} yêu cầu chi {request.Amount:N0} đ từ ca {shift.ShiftName} ({shift.ShiftCode}). Lý do: {request.Reason}. Vượt hạn mức, cần duyệt.",
-                    $"/pos/shifts",
+                    $"/store-owner/cash-control?tab=pending",
                     cancellationToken);
             }
             catch
@@ -380,6 +401,10 @@ public class ShiftService : IShiftService
         shift.TotalCashSales = cashSales;
         shift.TotalOrdersCount = ordersCount;
         shift.ReceiverUserId = request.ReceiverUserId;
+        if (!string.IsNullOrWhiteSpace(request.DiscrepancyReason))
+        {
+            shift.DiscrepancyReason = request.DiscrepancyReason.Trim();
+        }
         shift.Status = ShiftState.Closed;
         shift.HandoverStatus = HandoverStatus.PENDING;
         shift.SnapshotLocked = true;
@@ -388,20 +413,10 @@ public class ShiftService : IShiftService
         if (!string.IsNullOrWhiteSpace(request.EarlyOrLateReason))
         {
             var reasonTag = $"[GIẢI TRÌNH GIỜ CHỐT CA: {request.EarlyOrLateReason.Trim()}]";
-            if (shift.Notes == null || !shift.Notes.Contains(request.EarlyOrLateReason.Trim(), StringComparison.OrdinalIgnoreCase))
-            {
-                shift.Notes = string.IsNullOrWhiteSpace(shift.Notes)
-                    ? reasonTag
-                    : $"{shift.Notes} | {reasonTag}";
-            }
+            AppendUniqueNote(shift, reasonTag);
         }
 
-        if (!string.IsNullOrWhiteSpace(request.Notes))
-        {
-            shift.Notes = string.IsNullOrWhiteSpace(shift.Notes)
-                ? request.Notes.Trim()
-                : $"{shift.Notes} | {request.Notes.Trim()}";
-        }
+        AppendUniqueNote(shift, request.Notes);
 
         await QueueShiftDiscrepancyAsync(shift, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -443,11 +458,27 @@ public class ShiftService : IShiftService
         shift.HandoverStatus = request.Status;
         shift.ReceiverUserId = receiverUserId;
 
+        if (request.Status == HandoverStatus.CONFIRMED
+            && shift.CashbookPostingStatus != CashbookPostingStatus.Posted
+            && shift.DroppedToSafeAmount > 0
+            && _cashbookService != null)
+        {
+            var safe = await _cashbookService.GetOrCreateSafeAsync(shift.BranchId, cancellationToken);
+            await _cashbookService.ReceiveCashAsync(
+                safe.Id,
+                FinanceAccountType.Safe,
+                shift.DroppedToSafeAmount,
+                "CASH_DROP",
+                shift.Id,
+                $"HANDOVER-{shift.Id:N}",
+                $"Nhận tiền bàn giao cuối ca '{shift.ShiftCode}'",
+                cancellationToken);
+            shift.CashbookPostingStatus = CashbookPostingStatus.Posted;
+        }
+
         if (request.Status == HandoverStatus.DISPUTED && !string.IsNullOrWhiteSpace(request.DisputeReason))
         {
-            shift.Notes = string.IsNullOrWhiteSpace(shift.Notes)
-                ? $"[KHIẾU NẠI BÀN GIAO]: {request.DisputeReason.Trim()}"
-                : $"{shift.Notes} | [KHIẾU NẠI BÀN GIAO]: {request.DisputeReason.Trim()}";
+            AppendUniqueNote(shift, $"[KHIẾU NẠI BÀN GIAO]: {request.DisputeReason.Trim()}");
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -508,6 +539,17 @@ public class ShiftService : IShiftService
         CancellationToken cancellationToken = default)
     {
         var list = await _shiftRepository.GetHistoryAsync(branchId, fromUtc, toUtc, cancellationToken);
+        foreach (var shift in list)
+        {
+            if (shift.Status == ShiftState.Open || shift.Status == ShiftState.Closing)
+            {
+                var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shift.Id, cancellationToken);
+                shift.TotalCashSales = cashSales;
+                shift.TotalBankRevenue = bankRevenue;
+                shift.TotalOrdersCount = ordersCount;
+                shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
+            }
+        }
         return list.Select(MapToDetailResponse).ToList();
     }
 
@@ -515,6 +557,12 @@ public class ShiftService : IShiftService
         Guid movementId,
         string approverName,
         CancellationToken cancellationToken = default)
+        => await _unitOfWork.ExecuteInTransactionAsync(
+            token => ApproveCashMovementCoreAsync(movementId, approverName, token),
+            cancellationToken, System.Data.IsolationLevel.Serializable);
+
+    private async Task<ShiftCashMovementDto> ApproveCashMovementCoreAsync(
+        Guid movementId, string approverName, CancellationToken cancellationToken)
     {
         EnsureOwnerOrAdmin();
         var movement = await _shiftRepository.GetCashMovementByIdAsync(movementId, cancellationToken);
@@ -528,17 +576,24 @@ public class ShiftService : IShiftService
             throw new BusinessException("INVALID_STATUS", "Chỉ có thể phê duyệt các phiếu đang ở trạng thái chờ duyệt.");
         }
 
+        var shift = movement.Shift ?? await _shiftRepository.GetByIdAsync(movement.ShiftId, cancellationToken);
+        if (shift is null || shift.Status != ShiftState.Open)
+        {
+            throw new BusinessException("SHIFT_NOT_OPEN", "Không thể phê duyệt phiếu chi của ca đã chốt hoặc đang khóa chốt ca.");
+        }
+
+        var (cashSales, _, _) = await _shiftRepository.GetShiftSalesMetricsAsync(movement.ShiftId, cancellationToken);
+        var availableCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
+        if (movement.Amount > availableCash)
+            throw new BusinessException("EXCEED_DRAWER_CASH",
+                $"Két quầy còn {Math.Max(0, availableCash):N0} đ, không đủ để duyệt phiếu chi {movement.Amount:N0} đ.");
+
         movement.Status = CashMovementStatus.Recorded;
         movement.ApprovedBy = approverName;
         movement.ApprovedAtUtc = DateTime.UtcNow;
 
-        if (movement.Shift != null)
-        {
-            // Trừ tiền chi vào ca
-            movement.Shift.TotalCashOut += movement.Amount;
-            var (cashSales, _, _) = await _shiftRepository.GetShiftSalesMetricsAsync(movement.ShiftId, cancellationToken);
-            movement.Shift.ExpectedCash = movement.Shift.OpeningFloat + cashSales + movement.Shift.TotalCashIn - movement.Shift.TotalCashOut;
-        }
+        shift.TotalCashOut += movement.Amount;
+        shift.ExpectedCash = availableCash - movement.Amount;
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return MapToMovementDto(movement);
@@ -567,6 +622,11 @@ public class ShiftService : IShiftService
             throw new BusinessException("INVALID_STATUS", "Chỉ có thể từ chối các phiếu đang ở trạng thái chờ duyệt.");
         }
 
+        if (movement.Shift != null && movement.Shift.Status != ShiftState.Open)
+        {
+            throw new BusinessException("SHIFT_NOT_OPEN", "Không thể từ chối phiếu chi của ca đã chốt.");
+        }
+
         movement.Status = CashMovementStatus.Rejected;
         movement.ApprovedBy = approverName;
         movement.RejectionReason = reason.Trim();
@@ -592,6 +652,23 @@ public class ShiftService : IShiftService
             throw new BusinessException("INVALID_STATUS", "Chỉ có thể hủy phiếu đang ở trạng thái chờ duyệt.");
         }
 
+        var role = _tenantContext.CurrentRole;
+        var isOwner = string.Equals(role, MT_GRMS.Domain.Constants.SystemRoles.StoreOwner, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, "StoreOwner", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(role, "Admin", StringComparison.OrdinalIgnoreCase);
+        if (!isOwner)
+        {
+            if (movement.Shift != null && _tenantContext.CurrentBranchId.HasValue && movement.Shift.BranchId != _tenantContext.CurrentBranchId.Value)
+            {
+                throw new UnauthorizedAccessException("Không có quyền hủy phiếu chi của chi nhánh khác.");
+            }
+            if (movement.CreatedBy != Guid.Empty && currentUserId != Guid.Empty && movement.CreatedBy != currentUserId)
+            {
+                throw new UnauthorizedAccessException("Chỉ người lập phiếu hoặc chủ cửa hàng mới được hủy phiếu chi này.");
+            }
+        }
+
         movement.Status = CashMovementStatus.Cancelled;
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return MapToMovementDto(movement);
@@ -601,6 +678,12 @@ public class ShiftService : IShiftService
         Guid movementId,
         string ownerName,
         CancellationToken cancellationToken = default)
+        => await _unitOfWork.ExecuteInTransactionAsync(
+            token => ConfirmCashDropCoreAsync(movementId, ownerName, token),
+            cancellationToken, System.Data.IsolationLevel.Serializable);
+
+    private async Task<ShiftCashMovementDto> ConfirmCashDropCoreAsync(
+        Guid movementId, string ownerName, CancellationToken cancellationToken)
     {
         EnsureOwnerOrAdmin();
         var movement = await _shiftRepository.GetCashMovementByIdAsync(movementId, cancellationToken);
@@ -614,6 +697,20 @@ public class ShiftService : IShiftService
             throw new BusinessException("INVALID_CATEGORY", "Chỉ phiếu rút két nộp chủ mới cần xác nhận nhận tiền.");
         }
 
+        if (movement.PostedAtUtc.HasValue)
+            return MapToMovementDto(movement);
+
+        var shift = movement.Shift ?? await _shiftRepository.GetByIdAsync(movement.ShiftId, cancellationToken);
+        if (shift is null || movement.Status != CashMovementStatus.Recorded)
+            throw new BusinessException("INVALID_STATUS", "Phiếu rút két chưa được ghi nhận trong ca.");
+        if (shift.BusinessDayClosingId.HasValue)
+            throw new BusinessException("BUSINESS_DAY_FINALIZED", "Ngày nghiệp vụ đã khóa sổ.");
+        var cashbook = _cashbookService
+            ?? throw new BusinessException("CASHBOOK_UNAVAILABLE", "Không thể ghi tiền nộp vào két sắt.");
+        var safe = await cashbook.GetOrCreateSafeAsync(shift.BranchId, cancellationToken);
+        await cashbook.ReceiveCashAsync(safe.Id, FinanceAccountType.Safe, movement.Amount, "CASH_DROP",
+            movement.Id, $"DROP-{movement.Id:N}", "Nhận tiền rút từ két quầy", cancellationToken);
+        movement.PostedAtUtc = DateTime.UtcNow;
         movement.IsConfirmedByOwner = true;
         movement.ConfirmedByOwnerAtUtc = DateTime.UtcNow;
         movement.ApprovedBy = ownerName;
@@ -654,6 +751,11 @@ public class ShiftService : IShiftService
             throw new BusinessException("INVALID_THRESHOLD", "Hạn mức duyệt chi không được âm.");
         }
 
+        if (request.CashOutShiftTotalLimit < 0)
+        {
+            throw new BusinessException("INVALID_SHIFT_LIMIT", "Trần tổng chi trong ca không được âm.");
+        }
+
         var config = await _shiftRepository.GetPaymentConfigAsync(_tenantContext.CurrentTenantId, cancellationToken)
             ?? throw new BusinessException("TENANT_NOT_FOUND", "Không tìm thấy cửa hàng để lưu hạn mức chi.");
 
@@ -687,6 +789,7 @@ public class ShiftService : IShiftService
         await EnsureClosingParticipantAsync(shift, userId, cancellationToken);
 
         var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shiftId, cancellationToken);
+        shift.TotalCashSales = cashSales;
         shift.TotalBankRevenue = bankRevenue;
         shift.TotalOrdersCount = ordersCount;
         shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
@@ -695,10 +798,7 @@ public class ShiftService : IShiftService
         shift.ClosingStartedByUserId = userId;
         shift.ClosingStartedAtUtc = DateTime.UtcNow;
 
-        if (!string.IsNullOrWhiteSpace(request.Notes))
-        {
-            shift.Notes = string.IsNullOrWhiteSpace(shift.Notes) ? request.Notes : $"{shift.Notes} | {request.Notes}";
-        }
+        AppendUniqueNote(shift, request.Notes);
 
         await QueueShiftDiscrepancyAsync(shift, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
@@ -766,6 +866,7 @@ public class ShiftService : IShiftService
         }
 
         var (cashSales, bankRevenue, ordersCount) = await _shiftRepository.GetShiftSalesMetricsAsync(shiftId, cancellationToken);
+        shift.TotalCashSales = cashSales;
         shift.TotalBankRevenue = bankRevenue;
         shift.TotalOrdersCount = ordersCount;
         shift.ExpectedCash = shift.OpeningFloat + cashSales + shift.TotalCashIn - shift.TotalCashOut;
@@ -773,11 +874,7 @@ public class ShiftService : IShiftService
         shift.ActualCashCounted = request.CountedCash;
         shift.Discrepancy = shift.ActualCashCounted - shift.ExpectedCash;
 
-
-        if (!string.IsNullOrWhiteSpace(request.Notes))
-        {
-            shift.Notes = string.IsNullOrWhiteSpace(shift.Notes) ? request.Notes : $"{shift.Notes} | {request.Notes}";
-        }
+        AppendUniqueNote(shift, request.Notes);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return MapToDetailResponse(shift);
@@ -840,8 +937,8 @@ public class ShiftService : IShiftService
 
         shift.ActualCashCounted = request.ActualCashCounted;
         shift.Discrepancy = shift.ActualCashCounted - shift.ExpectedCash;
-        if (shift.Discrepancy != 0 && string.IsNullOrWhiteSpace(request.DiscrepancyReason))
-            throw new BusinessException("DISCREPANCY_REASON_REQUIRED", "Vui lòng nhập lý do chênh lệch tiền trong két.");
+        if (Math.Abs(shift.Discrepancy.Value) >= DiscrepancyReasonThreshold && string.IsNullOrWhiteSpace(request.DiscrepancyReason))
+            throw new BusinessException("DISCREPANCY_REASON_REQUIRED", "Vui lòng nhập lý do chênh lệch tiền trong két (từ 1.000đ trở lên).");
         shift.DiscrepancyReason = request.DiscrepancyReason?.Trim();
 
         shift.RetainedFloatAmount = request.RetainedFloatAmount;
@@ -860,18 +957,10 @@ public class ShiftService : IShiftService
         if (!string.IsNullOrWhiteSpace(request.EarlyOrLateReason))
         {
             var reasonTag = $"[GIẢI TRÌNH GIỜ CHỐT CA: {request.EarlyOrLateReason.Trim()}]";
-            if (shift.Notes == null || !shift.Notes.Contains(request.EarlyOrLateReason.Trim(), StringComparison.OrdinalIgnoreCase))
-            {
-                shift.Notes = string.IsNullOrWhiteSpace(shift.Notes)
-                    ? reasonTag
-                    : $"{shift.Notes} | {reasonTag}";
-            }
+            AppendUniqueNote(shift, reasonTag);
         }
 
-        if (!string.IsNullOrWhiteSpace(request.Notes))
-        {
-            shift.Notes = string.IsNullOrWhiteSpace(shift.Notes) ? request.Notes : $"{shift.Notes} | {request.Notes}";
-        }
+        AppendUniqueNote(shift, request.Notes);
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
         return MapToDetailResponse(shift);
@@ -946,7 +1035,7 @@ public class ShiftService : IShiftService
 
     private Task QueueShiftDiscrepancyAsync(ShiftZReport shift, CancellationToken ct)
     {
-        if (_notificationOutbox == null || shift.Discrepancy is not decimal discrepancy || Math.Abs(discrepancy) <= 0.01m)
+        if (_notificationOutbox == null || shift.Discrepancy is not decimal discrepancy || Math.Abs(discrepancy) < DiscrepancyReasonThreshold)
             return Task.CompletedTask;
 
         return _notificationOutbox.EnqueueShiftDiscrepancyAsync(shift, discrepancy, ct);
@@ -1091,6 +1180,30 @@ public class ShiftService : IShiftService
         }
     }
 
+    private static void AppendUniqueNote(ShiftZReport shift, string? rawNote)
+    {
+        if (string.IsNullOrWhiteSpace(rawNote)) return;
+        var trimmed = rawNote.Trim();
+        if (string.IsNullOrWhiteSpace(shift.Notes))
+        {
+            shift.Notes = trimmed;
+            return;
+        }
+        var segments = shift.Notes.Split('|', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segments.Any(s => string.Equals(s, trimmed, StringComparison.OrdinalIgnoreCase)) ||
+            shift.Notes.Contains(trimmed, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+        shift.Notes = $"{shift.Notes} | {trimmed}";
+    }
+
+    private static DateTime ToUtcKind(DateTime dt) =>
+        dt.Kind == DateTimeKind.Utc ? dt : dt.Kind == DateTimeKind.Local ? dt.ToUniversalTime() : DateTime.SpecifyKind(dt, DateTimeKind.Utc);
+
+    private static DateTime? ToUtcKind(DateTime? dt) =>
+        dt.HasValue ? ToUtcKind(dt.Value) : null;
+
     private static ShiftCashMovementDto MapToMovementDto(ShiftCashMovement movement)
     {
         return new ShiftCashMovementDto(
@@ -1101,13 +1214,13 @@ public class ShiftService : IShiftService
             movement.Amount,
             movement.Reason,
             movement.CreatedByName,
-            movement.OccurredAtUtc,
+            ToUtcKind(movement.OccurredAtUtc),
             movement.Status,
             movement.ApprovedBy,
-            movement.ApprovedAtUtc,
+            ToUtcKind(movement.ApprovedAtUtc),
             movement.RejectionReason,
             movement.IsConfirmedByOwner,
-            movement.ConfirmedByOwnerAtUtc
+            ToUtcKind(movement.ConfirmedByOwnerAtUtc)
         );
     }
 
@@ -1132,8 +1245,8 @@ public class ShiftService : IShiftService
             shift.CashierUserId,
             shift.ReceiverUserId,
             shift.PrevShiftId,
-            shift.OpenedAtUtc,
-            shift.ClosedAtUtc,
+            ToUtcKind(shift.OpenedAtUtc),
+            ToUtcKind(shift.ClosedAtUtc),
             shift.OpeningFloatExpected,
             shift.OpeningFloat,
             shift.OpeningDiscrepancy,
@@ -1151,7 +1264,7 @@ public class ShiftService : IShiftService
             shift.Notes,
             movements,
             shift.ClosingStartedByUserId,
-            shift.ClosingStartedAtUtc,
+            ToUtcKind(shift.ClosingStartedAtUtc),
             shift.ClosedByUserId,
             shift.ForceCloseReason,
             participants,
@@ -1159,7 +1272,8 @@ public class ShiftService : IShiftService
             shift.BusinessDate,
             shift.DiscrepancyReason,
             shift.OpenedScheduleId,
-            shift.ClosedScheduleId
+            shift.ClosedScheduleId,
+            shift.TotalCashSales
         );
     }
 
@@ -1324,7 +1438,8 @@ public class ShiftService : IShiftService
 
         if (!ReadParticipants(shift).Any(p => p.UserId == userId))
         {
-            throw new UnauthorizedAccessException(
+            throw new BusinessException(
+                "SHIFT_CLOSE_FORBIDDEN",
                 "Bạn không thuộc nhóm nhân viên thực tế tham gia ca này nên không thể thao tác chốt ca.");
         }
         return Task.CompletedTask;

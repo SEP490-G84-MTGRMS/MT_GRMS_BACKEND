@@ -122,7 +122,8 @@ public class CatalogService : ICatalogService
             unitPrices,
             p.AllowRepack,
             p.SellRawByWeight,
-            p.ProcessedSellingPricePerKg
+            p.ProcessedSellingPricePerKg,
+            p.NearExpiryThresholdDays
         );
     }
 
@@ -166,15 +167,35 @@ public class CatalogService : ICatalogService
             throw new ArgumentException("Tên sản phẩm không được vượt quá 200 ký tự.");
         }
 
-        var trimmedBaseUnit = string.IsNullOrWhiteSpace(request.BaseUnit) ? "Cái" : request.BaseUnit.Trim();
+        if (string.IsNullOrWhiteSpace(request.BaseUnit))
+        {
+            throw new ArgumentException("Tên đơn vị cơ bản không được để trống.");
+        }
+
+        var trimmedBaseUnit = request.BaseUnit.Trim();
         if (trimmedBaseUnit.Length > 30)
         {
             throw new ArgumentException("Tên đơn vị cơ bản không được vượt quá 30 ký tự.");
         }
 
-        if (request.SellingPrice < 0 || request.SellingPrice > MaxAllowedPrice)
+        if (request.SellingPrice <= 0 || request.SellingPrice > MaxAllowedPrice)
         {
-            throw new ArgumentException("Giá bán không được nhỏ hơn 0 hoặc vượt quá 1.000.000.000 đ.");
+            throw new ArgumentException("Giá bán phải lớn hơn 0 và không vượt quá 1.000.000.000 đ.");
+        }
+
+        if (request.VatRate < 0 || request.VatRate > 100)
+        {
+            throw new ArgumentException("Thuế suất VAT phải nằm trong khoảng 0% đến 100%.");
+        }
+
+        if (request.NearExpiryThresholdDays.HasValue && request.NearExpiryThresholdDays.Value < 0)
+        {
+            throw new ArgumentException("Số ngày cảnh báo cận hạn không được âm.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Status) && !Enum.TryParse<ProductStatus>(request.Status.Trim(), true, out _))
+        {
+            throw new ArgumentException("Trạng thái sản phẩm không hợp lệ (chỉ chấp nhận Active, Inactive, Discontinued).");
         }
 
         if (request.CostPrice.HasValue && (request.CostPrice.Value < 0 || request.CostPrice.Value > MaxAllowedPrice))
@@ -253,15 +274,7 @@ public class CatalogService : ICatalogService
             }
         }
 
-        var imageUrls = new List<string>();
-        if (request.ImageUrls != null && request.ImageUrls.Any())
-        {
-            imageUrls = request.ImageUrls.Where(u => !string.IsNullOrWhiteSpace(u)).Select(u => u.Trim()).ToList();
-        }
-        else if (!string.IsNullOrWhiteSpace(request.ImageUrl))
-        {
-            imageUrls.Add(request.ImageUrl.Trim());
-        }
+        var imageUrls = BuildOrderedImageList(request.ImageUrl, request.ImageUrls);
 
         if (imageUrls.Any(u => !CloudinaryDataUrlHelper.IsDataImageUrl(u) && u.Length > 500))
         {
@@ -300,12 +313,13 @@ public class CatalogService : ICatalogService
             Description = trimmedDescription,
             InternalNote = trimmedInternalNote,
             HasBatches = request.HasBatches || request.AllowRepack,
+            NearExpiryThresholdDays = NormalizeNearExpiryDays(request.NearExpiryThresholdDays),
             AllowRepack = request.AllowRepack,
             SellRawByWeight = request.SellRawByWeight,
             ProcessedSellingPricePerKg = ResolveProcessedPrice(request.AllowRepack, request.ProcessedSellingPricePerKg, request.SellingPrice),
             IsFavorite = request.IsFavorite,
             IsActive = true,
-            TaxCategory = "STANDARD_1PCT",
+            TaxCategory = string.IsNullOrWhiteSpace(request.TaxCategory) ? "STANDARD_1PCT" : request.TaxCategory.Trim().ToUpperInvariant(),
             EligibleForVatReduction = request.EligibleForVatReduction
         };
 
@@ -340,14 +354,34 @@ public class CatalogService : ICatalogService
             throw new ArgumentException("Tên sản phẩm không được vượt quá 200 ký tự.");
         }
 
-        if (!string.IsNullOrWhiteSpace(request.BaseUnit) && request.BaseUnit.Trim().Length > 30)
+        if (string.IsNullOrWhiteSpace(request.BaseUnit))
+        {
+            throw new ArgumentException("Tên đơn vị cơ bản không được để trống.");
+        }
+
+        if (request.BaseUnit.Trim().Length > 30)
         {
             throw new ArgumentException("Tên đơn vị cơ bản không được vượt quá 30 ký tự.");
         }
 
-        if (request.SellingPrice < 0 || request.SellingPrice > MaxAllowedPrice)
+        if (request.SellingPrice <= 0 || request.SellingPrice > MaxAllowedPrice)
         {
-            throw new ArgumentException("Giá bán không được nhỏ hơn 0 hoặc vượt quá 1.000.000.000 đ.");
+            throw new ArgumentException("Giá bán phải lớn hơn 0 và không vượt quá 1.000.000.000 đ.");
+        }
+
+        if (request.VatRate < 0 || request.VatRate > 100)
+        {
+            throw new ArgumentException("Thuế suất VAT phải nằm trong khoảng 0% đến 100%.");
+        }
+
+        if (request.NearExpiryThresholdDays.HasValue && request.NearExpiryThresholdDays.Value < 0)
+        {
+            throw new ArgumentException("Số ngày cảnh báo cận hạn không được âm.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Status) && !Enum.TryParse<ProductStatus>(request.Status.Trim(), true, out _))
+        {
+            throw new ArgumentException("Trạng thái sản phẩm không hợp lệ (chỉ chấp nhận Active, Inactive, Discontinued).");
         }
 
         if (request.CostPrice.HasValue && (request.CostPrice.Value < 0 || request.CostPrice.Value > MaxAllowedPrice))
@@ -428,8 +462,12 @@ public class CatalogService : ICatalogService
                 IsBelowCost = isBelowCost,
                 ManagerApprovedBy = null,
                 ManagerApprovalReason = null,
-                ChangedByUserId = _tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM",
-                ChangedByUserName = !string.IsNullOrEmpty(_tenantContext.CurrentRole) ? _tenantContext.CurrentRole : "Quản lý",
+                ChangedByUserId = !string.IsNullOrWhiteSpace(_tenantContext.CurrentRawUserId)
+                    ? _tenantContext.CurrentRawUserId
+                    : (_tenantContext.CurrentUserId != Guid.Empty ? _tenantContext.CurrentUserId.ToString() : "SYSTEM"),
+                ChangedByUserName = !string.IsNullOrWhiteSpace(_tenantContext.CurrentUserName)
+                    ? _tenantContext.CurrentUserName
+                    : (!string.IsNullOrEmpty(_tenantContext.CurrentRole) ? _tenantContext.CurrentRole : "Quản lý"),
                 Reason = isBelowCost ? "Điều chỉnh giá bán (Dưới giá vốn)" : "Điều chỉnh giá bán",
                 CreatedAt = DateTime.UtcNow
             };
@@ -455,6 +493,7 @@ public class CatalogService : ICatalogService
         product.Description = trimmedDescription;
         product.InternalNote = trimmedInternalNote;
         product.HasBatches = request.HasBatches || request.AllowRepack;
+        product.NearExpiryThresholdDays = NormalizeNearExpiryDays(request.NearExpiryThresholdDays);
         product.AllowRepack = request.AllowRepack;
         product.SellRawByWeight = request.SellRawByWeight;
         product.ProcessedSellingPricePerKg = ResolveProcessedPrice(request.AllowRepack, request.ProcessedSellingPricePerKg, request.SellingPrice);
@@ -522,9 +561,14 @@ public class CatalogService : ICatalogService
 
         if (request.ImageUrls != null)
         {
+            var orderedInputs = BuildOrderedImageList(request.ImageUrl, request.ImageUrls);
+            if (orderedInputs.Any(u => !CloudinaryDataUrlHelper.IsDataImageUrl(u) && u.Length > 500))
+            {
+                throw new ArgumentException("Đường dẫn ảnh hàng hóa không được vượt quá 500 ký tự.");
+            }
             product.ImageUrls = await CloudinaryDataUrlHelper.ResolveImageUrlsAsync(
                 _cloudinaryService,
-                request.ImageUrls,
+                orderedInputs,
                 "mtgrms/products",
                 $"product-{product.ProductCode}",
                 cancellationToken);
@@ -535,17 +579,22 @@ public class CatalogService : ICatalogService
             {
                 product.ImageUrls = new List<string>();
             }
-            else if (!product.ImageUrls.Contains(request.ImageUrl.Trim()))
+            else
             {
+                var trimmedPrimary = request.ImageUrl.Trim();
+                if (!CloudinaryDataUrlHelper.IsDataImageUrl(trimmedPrimary) && trimmedPrimary.Length > 500)
+                {
+                    throw new ArgumentException("Đường dẫn ảnh hàng hóa không được vượt quá 500 ký tự.");
+                }
                 var resolvedUrl = await CloudinaryDataUrlHelper.ResolveImageUrlAsync(
                     _cloudinaryService,
-                    request.ImageUrl,
+                    trimmedPrimary,
                     "mtgrms/products",
                     $"product-{product.ProductCode}",
                     cancellationToken);
                 if (!string.IsNullOrWhiteSpace(resolvedUrl))
                 {
-                    product.ImageUrls = new List<string> { resolvedUrl };
+                    product.ImageUrls = BuildOrderedImageList(resolvedUrl, product.ImageUrls);
                 }
             }
         }
@@ -554,6 +603,36 @@ public class CatalogService : ICatalogService
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
         return MapToResponse(product, CanViewCostPrice());
+    }
+
+    private static List<string> BuildOrderedImageList(string? primaryImageUrl, IEnumerable<string>? imageUrls)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        if (!string.IsNullOrWhiteSpace(primaryImageUrl))
+        {
+            var trimmedPrimary = primaryImageUrl.Trim();
+            if (seen.Add(trimmedPrimary))
+            {
+                result.Add(trimmedPrimary);
+            }
+        }
+
+        if (imageUrls != null)
+        {
+            foreach (var raw in imageUrls)
+            {
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                var trimmed = raw.Trim();
+                if (seen.Add(trimmed))
+                {
+                    result.Add(trimmed);
+                }
+            }
+        }
+
+        return result;
     }
 
     public async Task DeleteProductAsync(Guid id, CancellationToken cancellationToken = default)
@@ -612,8 +691,6 @@ public class CatalogService : ICatalogService
             throw new ArgumentException("Phạm vi giá chỉ nhận MASTER hoặc BRANCH.", nameof(query.PriceScope));
         if (query.BranchId == Guid.Empty)
             query.BranchId = null;
-        if (!query.BranchId.HasValue)
-            query.PriceScope = "MASTER";
         if (query.ProductUnitId == Guid.Empty)
             query.ProductUnitId = null;
         if (query.FromDate.HasValue && query.ToDate.HasValue && query.FromDate > query.ToDate)
@@ -641,7 +718,7 @@ public class CatalogService : ICatalogService
             h.ChangedByUserId,
             h.ChangedByUserName,
             h.Reason,
-            h.CreatedAt
+            DateTime.SpecifyKind(h.CreatedAt, DateTimeKind.Utc)
         )).ToList();
 
         return new PagedResult<ProductPriceHistoryDto>
@@ -676,4 +753,7 @@ public class CatalogService : ICatalogService
 
         return sellingPrice > 0 ? sellingPrice : null;
     }
+
+    private static int? NormalizeNearExpiryDays(int? days)
+        => days is > 0 ? days : null;
 }

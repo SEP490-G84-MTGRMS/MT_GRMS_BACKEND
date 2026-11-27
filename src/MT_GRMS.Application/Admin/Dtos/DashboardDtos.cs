@@ -25,6 +25,7 @@ public record PlanDistributionResponse(
 );
 
 public record UrgentAlertResponse(
+    string Id,
     string Subdomain,
     string Name,
     string OwnerName,

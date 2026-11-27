@@ -92,11 +92,16 @@ public class StocktakesController : BaseApiController
     }
 
     [HttpPost("{id:guid}/submit")]
-    [Authorize(Policy = "StoreOwnerOnly")]
+    [Authorize(Policy = "TenantOwnerOrAssignedBranchStaff")]
     public async Task<IActionResult> Submit(
         Guid id,
         CancellationToken cancellationToken)
     {
+        var existing = await _service.GetByIdAsync(id, cancellationToken);
+        var scope = new TenantBranchScope(_tenantContext.CurrentTenantId, existing.BranchId);
+        var authResult = await _authorizationService.AuthorizeAsync(User, scope, "TenantOwnerOrAssignedBranchStaff");
+        if (!authResult.Succeeded) return Forbid();
+
         var result = await _service.SubmitAsync(id, cancellationToken);
         return Ok(ApiResponse<StocktakeDetailDto>.Ok(result, "Đã gửi phiếu kiểm kê lên Store Owner phê duyệt."));
     }

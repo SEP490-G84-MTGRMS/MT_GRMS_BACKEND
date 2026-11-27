@@ -367,6 +367,75 @@ public class CategoryServiceTests
     }
 
     [Fact]
+    public async Task UpdateAsync_WithNewValidCode_UpdatesCodeAndNormalizesUppercase()
+    {
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var catId = Guid.NewGuid();
+        fakeRepo.Categories.Add(new Category { Id = catId, Name = "Đồ uống", CategoryCode = "CAT000001", Description = "Cũ" });
+
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        var result = await service.UpdateAsync(catId, new CategoryUpdateRequest("Đồ uống mới", "Mô tả mới", "  bev-new_01 "));
+
+        Assert.Equal("BEV-NEW_01", result.Code);
+        Assert.Equal("Đồ uống mới", result.Name);
+        Assert.Equal("Mô tả mới", result.Description);
+        Assert.True(fakeUow.SaveChangesCalled);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_WithSameCodeOnSameCategory_Succeeds()
+    {
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var catId = Guid.NewGuid();
+        fakeRepo.Categories.Add(new Category { Id = catId, Name = "Đồ uống", CategoryCode = "BEV-01" });
+
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        var result = await service.UpdateAsync(catId, new CategoryUpdateRequest("Đồ uống cập nhật", null, "bev-01"));
+
+        Assert.Equal("BEV-01", result.Code);
+        Assert.Equal("Đồ uống cập nhật", result.Name);
+    }
+
+    [Theory]
+    [InlineData("CAT 001")]
+    [InlineData("CAT@001")]
+    [InlineData("ABCDEFGHIJKLMNOPQRSTUVWXYZ12345")]
+    public async Task UpdateAsync_InvalidCode_ThrowsArgumentException(string invalidCode)
+    {
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var catId = Guid.NewGuid();
+        fakeRepo.Categories.Add(new Category { Id = catId, Name = "Đồ uống", CategoryCode = "CAT01" });
+
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.UpdateAsync(catId, new CategoryUpdateRequest("Đồ uống", null, invalidCode)));
+        Assert.Contains("Mã nhóm hàng", ex.Message);
+    }
+
+    [Fact]
+    public async Task UpdateAsync_DuplicateCodeWithAnotherCategory_ThrowsBusinessException()
+    {
+        var fakeRepo = new FakeCategoryRepository();
+        var fakeUow = new FakeUnitOfWork();
+        var cat1Id = Guid.NewGuid();
+        var cat2Id = Guid.NewGuid();
+        fakeRepo.Categories.Add(new Category { Id = cat1Id, Name = "Bánh kẹo", CategoryCode = "CAT-01" });
+        fakeRepo.Categories.Add(new Category { Id = cat2Id, Name = "Đồ uống", CategoryCode = "CAT-02" });
+
+        var service = new CategoryService(fakeRepo, fakeUow);
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            service.UpdateAsync(cat2Id, new CategoryUpdateRequest("Đồ uống", null, "cat-01")));
+        Assert.Equal("CATEGORY_CODE_EXISTS", ex.ErrorCode);
+    }
+
+    [Fact]
     public async Task DeleteAsync_CategoryWithProducts_ThrowsBusinessException()
     {
         var fakeRepo = new FakeCategoryRepository();

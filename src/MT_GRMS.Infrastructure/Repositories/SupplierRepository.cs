@@ -34,6 +34,16 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         return await _context.Suppliers.AnyAsync(s => s.Code == code, cancellationToken);
     }
 
+    public async Task<bool> ExistsByTaxCodeAsync(string taxCode, Guid? excludeSupplierId = null, CancellationToken cancellationToken = default)
+    {
+        var normalized = taxCode.Trim().ToLower();
+        return await _context.Suppliers.AnyAsync(
+            s => s.TaxCode != null
+                 && s.TaxCode.Trim().ToLower() == normalized
+                 && (!excludeSupplierId.HasValue || s.Id != excludeSupplierId.Value),
+            cancellationToken);
+    }
+
     public async Task<int> CountTodayAsync(CancellationToken cancellationToken = default)
     {
         var today = DateTime.UtcNow.Date;
@@ -328,7 +338,10 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
 
         if (toDate.HasValue)
         {
-            query = query.Where(l => l.TransactionDate <= toDate.Value);
+            var effectiveTo = toDate.Value.TimeOfDay == TimeSpan.Zero
+                ? toDate.Value.Date.AddDays(1).AddTicks(-1)
+                : toDate.Value;
+            query = query.Where(l => l.TransactionDate <= effectiveTo);
         }
 
         if (docType.HasValue)
@@ -353,6 +366,51 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         return await _context.SupplierAPLedgers
             .AsNoTracking()
             .CountAsync(l => l.DocNo.StartsWith(docNoPrefix), cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<SupplierAPLedger>> GetAllLedgersForSupplierAsync(
+        Guid supplierId,
+        CancellationToken cancellationToken = default)
+    {
+        return await _context.SupplierAPLedgers
+            .Where(l => l.SupplierId == supplierId)
+            .AsNoTracking()
+            .OrderBy(l => l.TransactionDate)
+            .ThenBy(l => l.CreatedAt)
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<IReadOnlyDictionary<string, DateTime?>> GetConfirmedGrnDueDatesByCodesAsync(
+        Guid supplierId,
+        IEnumerable<string> grnCodes,
+        CancellationToken cancellationToken = default)
+    {
+        var codeList = grnCodes
+            .Where(c => !string.IsNullOrWhiteSpace(c))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (codeList.Count == 0)
+        {
+            return new Dictionary<string, DateTime?>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        var rows = await _context.GoodsReceipts
+            .AsNoTracking()
+            .Where(g => g.SupplierId == supplierId && g.Status == "COMPLETED" && codeList.Contains(g.Code))
+            .Select(g => new { g.Code, g.PaymentDueDate })
+            .ToListAsync(cancellationToken);
+
+        var result = new Dictionary<string, DateTime?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in rows)
+        {
+            if (!result.ContainsKey(row.Code))
+            {
+                result[row.Code] = row.PaymentDueDate;
+            }
+        }
+
+        return result;
     }
 
     public async Task<IReadOnlyList<SupplierBlackoutDate>> GetBlackoutDatesAsync(Guid supplierId, CancellationToken cancellationToken = default)
@@ -431,6 +489,16 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
             .Include(sp => sp.Product)
                 .ThenInclude(p => p!.Units)
             .AsNoTracking();
+
+        var effectiveBranchId = BranchScopeGuard.ResolveEffectiveBranchId(_tenantContext, null);
+        if (effectiveBranchId.HasValue)
+        {
+            var scopedBranchId = effectiveBranchId.Value;
+            query = query.Where(sp => _context.SupplierBranchAssignments.Any(bsa =>
+                bsa.SupplierId == sp.SupplierId &&
+                bsa.BranchId == scopedBranchId &&
+                !bsa.IsDeleted));
+        }
 
         if (supplierId != Guid.Empty)
         {
@@ -703,6 +771,8 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
         return await _context.SupplierProducts
             .Include(sp => sp.Product)
                 .ThenInclude(p => p!.Category)
+            .Include(sp => sp.Product)
+                .ThenInclude(p => p!.Units)
             .Where(sp => sp.SupplierId == supplierId && !sp.IsDeleted)
             .ToListAsync(cancellationToken);
     }
@@ -711,6 +781,12 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
     {
         return await _context.BranchProducts
             .AnyAsync(bp => bp.BranchId == branchId && bp.ProductId == productId && !bp.IsDeleted, cancellationToken);
+    }
+
+    public async Task<BranchProduct?> GetBranchProductAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
+    {
+        return await _context.BranchProducts
+            .FirstOrDefaultAsync(bp => bp.BranchId == branchId && bp.ProductId == productId && !bp.IsDeleted, cancellationToken);
     }
 
     public async Task AddBranchProductAsync(BranchProduct branchProduct, CancellationToken cancellationToken = default)
@@ -727,6 +803,48 @@ public class SupplierRepository : GenericRepository<Supplier>, ISupplierReposito
     public async Task AddBranchStockAsync(MT_GRMS.Domain.Entities.Inventory.BranchStock branchStock, CancellationToken cancellationToken = default)
     {
         await _context.BranchStocks.AddAsync(branchStock, cancellationToken);
+    }
+
+    public async Task<(IReadOnlyList<SupplierTransactionDto> Items, int TotalCount)> GetPagedTransactionsAsync(
+        Guid supplierId,
+        Guid? branchId,
+        int pageIndex,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _context.PurchaseOrders
+            .AsNoTracking()
+            .Include(po => po.Branch)
+            .Where(po => !po.IsDeleted && po.SupplierId == supplierId && po.Status != "DRAFT");
+
+        if (branchId.HasValue && branchId.Value != Guid.Empty)
+        {
+            query = query.Where(po => po.BranchId == branchId.Value);
+        }
+
+        var totalCount = await query.CountAsync(cancellationToken);
+        var safePage = Math.Max(1, pageIndex);
+        var safeSize = Math.Clamp(pageSize, 1, 100);
+
+        var items = await query
+            .OrderByDescending(po => po.CreatedAt)
+            .Skip((safePage - 1) * safeSize)
+            .Take(safeSize)
+            .Select(po => new SupplierTransactionDto
+            {
+                Id = po.Id,
+                TransactionCode = po.Code,
+                TransactionType = "PO",
+                TransactionDate = po.CreatedAt,
+                DeliveryDate = po.DeliveryDate,
+                Amount = po.TotalAmount,
+                Status = po.Status,
+                BranchId = po.BranchId,
+                BranchName = po.Branch != null ? po.Branch.Name : string.Empty
+            })
+            .ToListAsync(cancellationToken);
+
+        return (items, totalCount);
     }
 
     private static List<string> CleanTerms(IReadOnlyList<string>? values)

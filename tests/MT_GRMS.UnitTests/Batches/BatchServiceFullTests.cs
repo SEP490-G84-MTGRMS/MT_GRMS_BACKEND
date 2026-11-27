@@ -25,9 +25,19 @@ public class BatchServiceFullTests
         _mockRepo = new Mock<IBatchRepository>();
         _mockTenant = new Mock<ITenantContext>();
         _mockTenant.SetupGet(t => t.CurrentTenantId).Returns(TenantId);
+        _mockTenant.SetupGet(t => t.CurrentRole).Returns("STORE_OWNER");
         _mockUow = new Mock<IUnitOfWork>();
 
         _service = new BatchService(_mockRepo.Object, _mockTenant.Object, _mockUow.Object);
+    }
+
+    [Fact]
+    public async Task ApplyFefoDiscountAsync_Staff_ShouldBeRejected()
+    {
+        _mockTenant.SetupGet(t => t.CurrentRole).Returns("STAFF");
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            _service.ApplyFefoDiscountAsync(Guid.NewGuid(), new ApplyFefoDiscountRequest(20m)));
     }
 
     [Fact]
@@ -119,13 +129,85 @@ public class BatchServiceFullTests
     public async Task ApplyFefoDiscountAsync_InvalidPercentage_ShouldThrowArgumentOutOfRangeException()
     {
         var id = Guid.NewGuid();
-        var badRequest1 = new ApplyFefoDiscountRequest(-5m, true);
-        var badRequest2 = new ApplyFefoDiscountRequest(95m, true);
+        var stock = new BranchStock
+        {
+            Id = id,
+            TenantId = TenantId,
+            ExpiryDate = DateTime.UtcNow.AddDays(10),
+            QuantityOnHand = 5m
+        };
+        _mockRepo.Setup(r => r.GetBranchStockForUpdateAsync(TenantId, id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(stock);
 
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
-            _service.ApplyFefoDiscountAsync(id, badRequest1));
+            _service.ApplyFefoDiscountAsync(id, new ApplyFefoDiscountRequest(-5m, true)));
         await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
-            _service.ApplyFefoDiscountAsync(id, badRequest2));
+            _service.ApplyFefoDiscountAsync(id, new ApplyFefoDiscountRequest(95m, true)));
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            _service.ApplyFefoDiscountAsync(id, new ApplyFefoDiscountRequest(5m, true)));
+    }
+
+    [Fact]
+    public async Task ApplyFefoDiscountAsync_DaysBeforeExpiryOutOfRange_ShouldThrow()
+    {
+        var id = Guid.NewGuid();
+        var stock = new BranchStock
+        {
+            Id = id,
+            TenantId = TenantId,
+            ExpiryDate = DateTime.UtcNow.AddDays(20),
+            QuantityOnHand = 5m,
+            Product = new Domain.Entities.Catalog.Product
+            {
+                NearExpiryThresholdDays = 7
+            }
+        };
+        _mockRepo.Setup(r => r.GetBranchStockForUpdateAsync(TenantId, id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(stock);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            _service.ApplyFefoDiscountAsync(id, new ApplyFefoDiscountRequest(20m, true, StartDaysBeforeExpiry: 10)));
+    }
+
+    [Fact]
+    public async Task ApplyFefoDiscountAsync_WrongTenant_ShouldThrowNotFound()
+    {
+        var id = Guid.NewGuid();
+        _mockRepo.Setup(r => r.GetBranchStockForUpdateAsync(TenantId, id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync((BranchStock?)null);
+
+        await Assert.ThrowsAsync<KeyNotFoundException>(() =>
+            _service.ApplyFefoDiscountAsync(id, new ApplyFefoDiscountRequest(20m, true)));
+    }
+
+    [Fact]
+    public async Task ApplyFefoDiscountAsync_Cancel_ShouldClearSchedule()
+    {
+        var id = Guid.NewGuid();
+        var stock = new BranchStock
+        {
+            Id = id,
+            TenantId = TenantId,
+            ExpiryDate = DateTime.UtcNow.AddDays(10),
+            QuantityOnHand = 5m,
+            FefoDiscountPercent = 20m,
+            IsFefoDiscountActive = true,
+            FefoDiscountStartAtUtc = DateTime.UtcNow.AddDays(-1),
+            FefoDiscountEndAtUtc = DateTime.UtcNow.AddDays(5)
+        };
+        _mockRepo.Setup(r => r.GetBranchStockForUpdateAsync(TenantId, id, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(stock);
+        _mockUow.Setup(u => u.SaveChangesAsync(It.IsAny<CancellationToken>())).ReturnsAsync(1);
+
+        var result = await _service.ApplyFefoDiscountAsync(id, new ApplyFefoDiscountRequest(0m, false));
+
+        Assert.False(result.IsActive);
+        Assert.Equal(0m, result.DiscountPercent);
+        Assert.Null(result.StartAtUtc);
+        Assert.Null(result.EndAtUtc);
+        Assert.Equal("None", result.Status);
+        Assert.Null(stock.FefoDiscountStartAtUtc);
+        Assert.Null(stock.FefoDiscountEndAtUtc);
     }
 
     [Fact]
@@ -162,12 +244,14 @@ public class BatchServiceFullTests
     public async Task ApplyFefoDiscountAsync_ValidStock_ShouldUpdateDiscount()
     {
         var id = Guid.NewGuid();
-        var request = new ApplyFefoDiscountRequest(20m, true);
+        var request = new ApplyFefoDiscountRequest(20m, true, StartDaysBeforeExpiry: 3, StartTime: TimeSpan.FromHours(14));
         var stock = new BranchStock
         {
             Id = id,
             TenantId = TenantId,
-            ExpiryDate = DateTime.UtcNow.AddDays(10) // Not expired
+            ExpiryDate = DateTime.UtcNow.Date.AddDays(10),
+            QuantityOnHand = 10m,
+            Product = new Domain.Entities.Catalog.Product { NearExpiryThresholdDays = 7 }
         };
         _mockRepo.Setup(r => r.GetBranchStockForUpdateAsync(TenantId, id, It.IsAny<CancellationToken>()))
             .ReturnsAsync(stock);
@@ -179,6 +263,10 @@ public class BatchServiceFullTests
         Assert.Equal(id, result.BatchId);
         Assert.Equal(20m, result.DiscountPercent);
         Assert.True(result.IsActive);
+        Assert.NotNull(result.StartAtUtc);
+        Assert.NotNull(result.EndAtUtc);
+        Assert.True(result.StartAtUtc < result.EndAtUtc);
+        Assert.Contains(result.Status, new[] { "Scheduled", "Active" });
         _mockUow.Verify(u => u.SaveChangesAsync(It.IsAny<CancellationToken>()), Times.Once);
     }
 }

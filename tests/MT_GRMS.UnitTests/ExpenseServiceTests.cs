@@ -610,4 +610,56 @@ public class ExpenseServiceTests
         Assert.Equal("REV-EXP-20261102-001", _cashbookService.LastReceivedReferenceCode);
         Assert.Contains("ĐÃ ĐẢO BÚT TOÁN HOÀN TIỀN", response.Note);
     }
+
+    [Theory]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("vbscript:msgbox(1)")]
+    [InlineData("http://insecure.example.com/bill.png")]
+    [InlineData("data:text/html,<script>alert(1)</script>")]
+    [InlineData("data:image/svg+xml,<svg onload=alert(1)>")]
+    [InlineData("data:image/png;base64,not-valid-base64!!!")]
+    [InlineData("/uploads/../etc/passwd")]
+    public async Task CreateExpenseAsync_WithUnsafeAttachmentUrl_ShouldThrowInvalidAttachmentUrl(string unsafeUrl)
+    {
+        var request = new CreateExpenseRequest(
+            Guid.NewGuid(),
+            "NCC A",
+            "Văn phòng phẩm",
+            100_000m,
+            FinanceAccountType.Till,
+            Guid.NewGuid(),
+            true,
+            null,
+            null,
+            unsafeUrl,
+            "Test XSS"
+        );
+
+        var ex = await Assert.ThrowsAsync<BusinessException>(() => _service.CreateExpenseAsync(request));
+        Assert.Equal("INVALID_ATTACHMENT_URL", ex.ErrorCode);
+    }
+
+    [Theory]
+    [InlineData("https://cdn.example.com/bill.png")]
+    [InlineData("/uploads/expenses/bill.png")]
+    [InlineData("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")]
+    public async Task CreateExpenseAsync_WithSafeAttachmentUrl_ShouldSucceed(string safeUrl)
+    {
+        var request = new CreateExpenseRequest(
+            Guid.NewGuid(),
+            "NCC A",
+            "Văn phòng phẩm",
+            100_000m,
+            FinanceAccountType.Till,
+            Guid.NewGuid(),
+            true,
+            null,
+            null,
+            safeUrl,
+            "Chứng từ hợp lệ"
+        );
+
+        var response = await _service.CreateExpenseAsync(request);
+        Assert.Equal(safeUrl, response.EvidenceAttachmentUrl);
+    }
 }

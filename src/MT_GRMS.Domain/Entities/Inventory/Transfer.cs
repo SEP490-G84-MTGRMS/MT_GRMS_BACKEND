@@ -37,6 +37,7 @@ public class Transfer : BaseTenantEntity
     public bool HasDiscrepancy { get; set; }
     public bool IsStockReserved { get; set; }
     public bool IsFavorite { get; set; } = false;
+    public int RowVersion { get; set; } = 1;
 
     // Navigations
     public Branch? FromBranch { get; set; }

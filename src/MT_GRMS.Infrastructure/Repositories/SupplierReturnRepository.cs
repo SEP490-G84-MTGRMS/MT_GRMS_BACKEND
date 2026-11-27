@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Linq.Expressions;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
@@ -56,7 +57,41 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
                 r.Code.ToLower().Contains(kw) ||
                 r.Reason.ToLower().Contains(kw) ||
                 (r.GoodsReceipt != null && r.GoodsReceipt.Code.ToLower().Contains(kw)) ||
-                (r.Supplier != null && r.Supplier.Name.ToLower().Contains(kw)));
+                (r.Supplier != null && (r.Supplier.Code.ToLower().Contains(kw) || r.Supplier.Name.ToLower().Contains(kw))));
+        }
+
+        var returnCodeTerms = CleanTerms(query.ReturnCodes);
+        if (returnCodeTerms.Count > 0)
+        {
+            dbQuery = WhereAnyContains(dbQuery, r => r.Code, returnCodeTerms);
+        }
+
+        var grnCodeTerms = CleanTerms(query.GrnCodes);
+        if (grnCodeTerms.Count > 0)
+        {
+            dbQuery = dbQuery.Where(r => r.GoodsReceipt != null);
+            dbQuery = WhereAnyContains(dbQuery, r => r.GoodsReceipt!.Code, grnCodeTerms);
+        }
+
+        var supplierCodeTerms = CleanTerms(query.SupplierCodes);
+        if (supplierCodeTerms.Count > 0)
+        {
+            dbQuery = dbQuery.Where(r => r.Supplier != null);
+            dbQuery = WhereAnyContains(dbQuery, r => r.Supplier!.Code, supplierCodeTerms);
+        }
+
+        var supplierNameTerms = CleanTerms(query.SupplierNames);
+        if (supplierNameTerms.Count > 0)
+        {
+            dbQuery = dbQuery.Where(r => r.Supplier != null);
+            dbQuery = WhereAnyContains(dbQuery, r => r.Supplier!.Name, supplierNameTerms);
+        }
+
+        var branchTerms = CleanTerms(query.BranchNames);
+        if (branchTerms.Count > 0)
+        {
+            dbQuery = dbQuery.Where(r => r.Branch != null);
+            dbQuery = WhereAnyContainsEither(dbQuery, r => r.Branch!.Name, r => r.Branch!.BranchCode, branchTerms);
         }
 
         var totalItems = await dbQuery.CountAsync(cancellationToken);
@@ -99,6 +134,83 @@ public class SupplierReturnRepository : GenericRepository<SupplierReturn>, ISupp
             Page = query.PageIndex,
             PageSize = query.PageSize
         };
+    }
+
+    private static List<string> CleanTerms(IReadOnlyList<string>? values)
+    {
+        if (values == null || values.Count == 0) return [];
+        return values
+            .Where(v => !string.IsNullOrWhiteSpace(v))
+            .Select(v => v.Trim().ToLower())
+            .Distinct()
+            .ToList();
+    }
+
+    private static IQueryable<T> WhereAnyContains<T>(
+        IQueryable<T> query,
+        Expression<Func<T, string>> selector,
+        IReadOnlyList<string> terms)
+    {
+        if (terms.Count == 0) return query;
+
+        var parameter = selector.Parameters[0];
+        var lowered = Expression.Call(selector.Body, nameof(string.ToLower), Type.EmptyTypes);
+
+        Expression? body = null;
+        foreach (var term in terms)
+        {
+            var contains = Expression.Call(
+                lowered,
+                nameof(string.Contains),
+                Type.EmptyTypes,
+                Expression.Constant(term));
+            body = body is null ? contains : Expression.OrElse(body, contains);
+        }
+
+        var predicate = Expression.Lambda<Func<T, bool>>(body!, parameter);
+        return query.Where(predicate);
+    }
+
+    private static IQueryable<T> WhereAnyContainsEither<T>(
+        IQueryable<T> query,
+        Expression<Func<T, string>> firstSelector,
+        Expression<Func<T, string>> secondSelector,
+        IReadOnlyList<string> terms)
+    {
+        if (terms.Count == 0) return query;
+
+        var parameter = firstSelector.Parameters[0];
+        var secondBody = new ParameterReplacer(secondSelector.Parameters[0], parameter).Visit(secondSelector.Body)!;
+        var firstLowered = Expression.Call(firstSelector.Body, nameof(string.ToLower), Type.EmptyTypes);
+        var secondLowered = Expression.Call(secondBody, nameof(string.ToLower), Type.EmptyTypes);
+
+        Expression? body = null;
+        foreach (var term in terms)
+        {
+            var termConst = Expression.Constant(term);
+            var matchFirst = Expression.Call(firstLowered, nameof(string.Contains), Type.EmptyTypes, termConst);
+            var matchSecond = Expression.Call(secondLowered, nameof(string.Contains), Type.EmptyTypes, termConst);
+            var matchEither = Expression.OrElse(matchFirst, matchSecond);
+            body = body is null ? matchEither : Expression.OrElse(body, matchEither);
+        }
+
+        var predicate = Expression.Lambda<Func<T, bool>>(body!, parameter);
+        return query.Where(predicate);
+    }
+
+    private sealed class ParameterReplacer : ExpressionVisitor
+    {
+        private readonly ParameterExpression _from;
+        private readonly ParameterExpression _to;
+
+        public ParameterReplacer(ParameterExpression from, ParameterExpression to)
+        {
+            _from = from;
+            _to = to;
+        }
+
+        protected override Expression VisitParameter(ParameterExpression node)
+            => node == _from ? _to : base.VisitParameter(node);
     }
 
     public async Task<SupplierReturn?> GetByIdAsync(

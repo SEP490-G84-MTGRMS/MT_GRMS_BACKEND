@@ -23,6 +23,23 @@ public class ExpenseService : IExpenseService
     private const decimal T1_AutoApprovalThreshold = 500_000m; // Ngưỡng tự duyệt chi dưới 500k
     private const decimal C1_ShiftCapLimit = 500_000m; // Hạn mức trần ca chi vặt
     private const decimal C2_DailyCumulativeLimit = 20_000_000m; // Hạn mức ngày 20 triệu
+    private static readonly string[] TaxBlacklistKeywords =
+    [
+        "phạt",
+        "vi phạm",
+        "cá nhân",
+        "từ thiện",
+        "phong bì",
+        "không hóa đơn",
+        "rút vốn",
+        "tiếp khách không chứng từ",
+    ];
+
+    private static bool IsTaxBlacklisted(string? category, string? beneficiaryName, string? note)
+    {
+        var combined = $"{category} {beneficiaryName} {note}".ToLowerInvariant();
+        return TaxBlacklistKeywords.Any(kw => combined.Contains(kw, StringComparison.Ordinal));
+    }
 
     public ExpenseService(
         IExpenseRepository expenseRepo,
@@ -50,6 +67,28 @@ public class ExpenseService : IExpenseService
             throw new BusinessException("INVALID_AMOUNT", "Số tiền chi phí phải lớn hơn 0.");
         }
 
+        if (string.IsNullOrWhiteSpace(request.BeneficiaryName) || request.BeneficiaryName.Trim().Length > 200)
+        {
+            throw new BusinessException("INVALID_BENEFICIARY", "Tên người thụ hưởng/nhà cung cấp không được để trống và tối đa 200 ký tự.");
+        }
+
+        if (string.IsNullOrWhiteSpace(request.Category) || request.Category.Trim().Length > 100)
+        {
+            throw new BusinessException("INVALID_CATEGORY", "Danh mục chi phí không được để trống và tối đa 100 ký tự.");
+        }
+
+        if (!Enum.IsDefined(typeof(FinanceAccountType), request.PaymentSourceType))
+        {
+            throw new BusinessException("INVALID_PAYMENT_SOURCE", "Loại nguồn chi thanh toán không hợp lệ.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.SellerTaxCode) && request.SellerTaxCode.Trim().Length > 50)
+        {
+            throw new BusinessException("INVALID_TAX_CODE", "Mã số thuế bên bán không vượt quá 50 ký tự.");
+        }
+
+        ValidateEvidenceAttachmentUrl(request.EvidenceAttachmentUrl);
+
         EnsureNatureInScope(request.Nature);
 
         if (request.Nature == FinancialNature.OwnerDraw || request.Nature == FinancialNature.TaxPayment)
@@ -57,19 +96,34 @@ public class ExpenseService : IExpenseService
             ValidateFinancialManagementRole("thực hiện rút vốn hoặc nộp thuế");
         }
 
-        var expenseDate = request.ExpenseDate ?? DateTime.UtcNow;
+        if (request.BranchId.HasValue)
+        {
+            var exists = await _expenseRepo.BranchExistsAsync(request.BranchId.Value, ct);
+            if (!exists)
+            {
+                throw new NotFoundException($"Không tìm thấy chi nhánh với mã {request.BranchId.Value}.");
+            }
+        }
+
+        var expenseDate = request.ExpenseDate.HasValue
+            ? NormalizeDateToUtc(request.ExpenseDate.Value, isEndOfDay: false)
+            : DateTime.UtcNow;
 
         if (_taxPeriodLockGuard != null)
         {
             await _taxPeriodLockGuard.ValidateTaxPeriodUnlockedAsync(expenseDate, "tạo phiếu chi", request.BranchId, ct);
         }
-        var voucherCode = "EXP-" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff");
+        var voucherCode = $"EXP-{DateTime.UtcNow:yyyyMMddHHmmssfff}-{Random.Shared.Next(100, 999)}";
         var resolvedEvidenceUrl = await CloudinaryDataUrlHelper.ResolveImageUrlAsync(
             _cloudinaryService,
             request.EvidenceAttachmentUrl,
             "mtgrms/expenses",
             voucherCode,
             ct);
+
+        var effectiveTaxDeductible = request.IsTaxDeductible
+            && request.Nature == FinancialNature.OperatingExpense
+            && !IsTaxBlacklisted(request.Category, request.BeneficiaryName, request.Note);
 
         var voucher = new ExpenseVoucher
         {
@@ -80,7 +134,7 @@ public class ExpenseService : IExpenseService
             Amount = request.Amount,
             PaymentSourceType = request.PaymentSourceType,
             PaymentSourceAccountId = request.PaymentSourceAccountId,
-            IsTaxDeductible = request.IsTaxDeductible,
+            IsTaxDeductible = effectiveTaxDeductible,
             InvoiceNumber = request.InvoiceNumber,
             SellerTaxCode = request.SellerTaxCode,
             EvidenceAttachmentUrl = resolvedEvidenceUrl,
@@ -94,23 +148,24 @@ public class ExpenseService : IExpenseService
 
         // Thuật toán Anti-Splitting Engine (REQ-EXP-02) & Trần ca C1
         var isSuspicious = false;
-        string? suspiciousReason = null;
+        var suspiciousReasons = new List<string>();
         var requiresApproval = false;
         var isOverShiftCap = false;
 
         if (request.BranchId.HasValue)
         {
             var branchId = request.BranchId.Value;
+            var vnDayStartUtc = DateTime.UtcNow.AddHours(7).Date.AddHours(-7);
 
             // 0. Kiểm tra trần ca chi vặt C1 (500.000đ)
             if (request.Nature == FinancialNature.OperatingExpense && request.Amount <= T1_AutoApprovalThreshold)
             {
-                var shiftSum = await _expenseRepo.GetShiftExpenseSumAsync(branchId, DateTime.UtcNow.Date, ct);
+                var shiftSum = await _expenseRepo.GetShiftExpenseSumAsync(branchId, vnDayStartUtc, ct);
                 if (shiftSum + request.Amount > C1_ShiftCapLimit)
                 {
                     isOverShiftCap = true;
                     isSuspicious = true;
-                    suspiciousReason = $"Tổng chi trong ca ({shiftSum + request.Amount:N0}đ) vượt trần ca cho phép ({C1_ShiftCapLimit:N0}đ). Đã chuyển vào Triage Inbox chờ chủ duyệt.";
+                    suspiciousReasons.Add($"Tổng chi trong ca ({shiftSum + request.Amount:N0}đ) vượt trần ca cho phép ({C1_ShiftCapLimit:N0}đ). Đã chuyển vào Triage Inbox chờ chủ duyệt.");
                 }
             }
 
@@ -118,8 +173,9 @@ public class ExpenseService : IExpenseService
             var sameVendorSum = await _expenseRepo.GetSameVendorDailySumAsync(branchId, request.BeneficiaryName, request.Category, DateTime.UtcNow, ct);
             if (sameVendorSum + request.Amount > T1_AutoApprovalThreshold)
             {
+                isSuspicious = true;
                 requiresApproval = true;
-                suspiciousReason = $"Tổng chi cùng đối tượng '{request.BeneficiaryName}' trong ngày vượt ngưỡng tự duyệt ({sameVendorSum + request.Amount:N0}đ > {T1_AutoApprovalThreshold:N0}đ).";
+                suspiciousReasons.Add($"Tổng chi cùng đối tượng '{request.BeneficiaryName}' trong ngày vượt ngưỡng tự duyệt ({sameVendorSum + request.Amount:N0}đ > {T1_AutoApprovalThreshold:N0}đ).");
             }
 
             // 2. Mẫu hình tần suất: >= 3 phiếu trong 60 phút có giá trị >= 60% T1 (300.000đ)
@@ -129,7 +185,7 @@ public class ExpenseService : IExpenseService
             {
                 isSuspicious = true;
                 requiresApproval = true;
-                suspiciousReason = "Phát hiện mẫu hình tạo nhiều phiếu chi giá trị lớn trong 60 phút (nghi vấn chia nhỏ hóa đơn né duyệt).";
+                suspiciousReasons.Add("Phát hiện mẫu hình tạo nhiều phiếu chi giá trị lớn trong 60 phút (nghi vấn chia nhỏ hóa đơn né duyệt).");
             }
 
             // 3. Hạn mức lũy kế ngày C2
@@ -141,7 +197,7 @@ public class ExpenseService : IExpenseService
         }
 
         voucher.IsFlaggedAsSuspiciousSplit = isSuspicious;
-        voucher.SuspiciousReason = suspiciousReason;
+        voucher.SuspiciousReason = suspiciousReasons.Count > 0 ? string.Join(" | ", suspiciousReasons) : null;
 
         // Quyết định trạng thái phê duyệt ban đầu
         if (request.Nature == FinancialNature.Suspense || isOverShiftCap)
@@ -167,7 +223,7 @@ public class ExpenseService : IExpenseService
             await QueueNotificationAsync(voucher, BusinessNotificationTypes.ExpenseApprovalRequired, "Phiếu chi cần duyệt", ct);
         await _unitOfWork.SaveChangesAsync(ct);
 
-        return MapVoucherResponse(voucher);
+        return await MapVoucherWithBranchNameAsync(voucher, ct);
     }
 
     public async Task<ExpenseVoucherResponse> ApproveExpenseAsync(ApproveExpenseRequest request, CancellationToken ct = default)
@@ -186,7 +242,7 @@ public class ExpenseService : IExpenseService
         // Idempotent: Nếu đã duyệt hoặc đã thanh toán thành công thì không báo lỗi 422
         if (voucher.Status == ExpenseVoucherStatus.Approved || voucher.Status == ExpenseVoucherStatus.Paid)
         {
-            return MapVoucherResponse(voucher);
+            return await MapVoucherWithBranchNameAsync(voucher, ct);
         }
 
         if (voucher.Status != ExpenseVoucherStatus.PendingApproval &&
@@ -197,8 +253,8 @@ public class ExpenseService : IExpenseService
             throw new BusinessException("INVALID_STATUS", $"Phiếu chi đang ở trạng thái '{voucher.Status}', không thể phê duyệt.");
         }
 
-        // Kiểm toán tiệm 1 chủ solo: Nếu phiếu bị cảnh báo xé nhỏ hạn mức thì bắt buộc phải nhập lý do/ghi chú giải trình
-        if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note) && string.IsNullOrWhiteSpace(voucher.Note))
+        // Kiểm toán tiệm 1 chủ solo: Nếu phiếu bị cảnh báo xé nhỏ hạn mức thì bắt buộc phải nhập lý do/ghi chú giải trình khi duyệt
+        if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note))
         {
             throw new BusinessException("NOTE_REQUIRED_FOR_SUSPICIOUS_EXPENSE", "Phiếu chi bị gắn cờ nghi vấn xé nhỏ hạn mức. Bắt buộc nhập ghi chú giải trình khi phê duyệt.");
         }
@@ -214,7 +270,7 @@ public class ExpenseService : IExpenseService
         }
 
         await _unitOfWork.SaveChangesAsync(ct);
-        return MapVoucherResponse(voucher);
+        return await MapVoucherWithBranchNameAsync(voucher, ct);
     }
 
     public async Task<ExpenseVoucherResponse> RejectExpenseAsync(RejectExpenseRequest request, CancellationToken ct = default)
@@ -244,7 +300,7 @@ public class ExpenseService : IExpenseService
             : $"{voucher.Note} | [TỪ CHỐI DUYỆT]: {reasonText}";
 
         await _unitOfWork.SaveChangesAsync(ct);
-        return MapVoucherResponse(voucher);
+        return await MapVoucherWithBranchNameAsync(voucher, ct);
     }
 
     public async Task<ExpenseVoucherResponse> CancelExpenseAsync(CancelExpenseRequest request, CancellationToken ct = default)
@@ -310,7 +366,7 @@ public class ExpenseService : IExpenseService
             }
 
             await _unitOfWork.SaveChangesAsync(token);
-            return MapVoucherResponse(voucher);
+            return await MapVoucherWithBranchNameAsync(voucher, token);
         }, ct);
     }
 
@@ -332,7 +388,7 @@ public class ExpenseService : IExpenseService
             // Idempotent: Nếu đã xuất quỹ thành công từ trước thì trả về luôn không thực hiện trừ quỹ kép
             if (voucher.Status == ExpenseVoucherStatus.Paid)
             {
-                return (Voucher: MapVoucherResponse(voucher), Failure: (InsufficientStockException?)null);
+                return (Voucher: await MapVoucherWithBranchNameAsync(voucher, token), Failure: (InsufficientStockException?)null);
             }
 
             // Tự động phê duyệt cho Chủ cửa hàng / Quản lý nếu phiếu đang ở Draft, PendingApproval hoặc Unresolved (1-click payment flow)
@@ -340,7 +396,7 @@ public class ExpenseService : IExpenseService
                 voucher.Status == ExpenseVoucherStatus.PendingApproval ||
                 voucher.Status == ExpenseVoucherStatus.Unresolved)
             {
-                if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note) && string.IsNullOrWhiteSpace(voucher.Note))
+                if (voucher.IsFlaggedAsSuspiciousSplit && string.IsNullOrWhiteSpace(request.Note))
                 {
                     throw new BusinessException("NOTE_REQUIRED_FOR_SUSPICIOUS_EXPENSE", "Phiếu chi bị gắn cờ nghi vấn xé nhỏ hạn mức. Bắt buộc nhập ghi chú giải trình khi phê duyệt và xuất quỹ.");
                 }
@@ -387,11 +443,11 @@ public class ExpenseService : IExpenseService
                     await QueueNotificationAsync(voucher, BusinessNotificationTypes.ExpensePaymentFailed, "Phiếu chi chưa xuất được quỹ", token);
                 voucher.Status = ExpenseVoucherStatus.PaymentFailed;
                 await _unitOfWork.SaveChangesAsync(token);
-                return (Voucher: MapVoucherResponse(voucher), Failure: failure);
+                return (Voucher: await MapVoucherWithBranchNameAsync(voucher, token), Failure: failure);
             }
 
             await _unitOfWork.SaveChangesAsync(token);
-            return (Voucher: MapVoucherResponse(voucher), Failure: (InsufficientStockException?)null);
+            return (Voucher: await MapVoucherWithBranchNameAsync(voucher, token), Failure: (InsufficientStockException?)null);
         }, ct);
 
         if (result.Failure != null)
@@ -411,32 +467,142 @@ public class ExpenseService : IExpenseService
         var voucher = await _expenseRepo.GetByIdAsync(expenseId, ct)
             ?? throw new NotFoundException("Không tìm thấy phiếu chi.");
 
-        return MapVoucherResponse(voucher);
+        var branchNames = await ResolveBranchNamesAsync([voucher], ct);
+        return MapVoucherResponse(voucher, branchNames);
     }
 
     public async Task<List<ExpenseVoucherResponse>> GetExpensesAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, int page = 1, int pageSize = 50, CancellationToken ct = default)
     {
+        var paged = await GetExpensesPageAsync(branchId, fromDate, toDate, page, pageSize, null, null, null, null, ct);
+        return paged.Items.ToList();
+    }
+
+    public async Task<PagedResult<ExpenseVoucherResponse>> GetExpensesPageAsync(
+        Guid? branchId,
+        DateTime? fromDate,
+        DateTime? toDate,
+        int page = 1,
+        int pageSize = 50,
+        string? keyword = null,
+        string? category = null,
+        string? status = null,
+        string? quickStatus = null,
+        CancellationToken ct = default)
+    {
         RequireOwner();
+        var safePage = Math.Max(1, page);
+        var safePageSize = Math.Clamp(pageSize, 1, 200);
+        DateTime? fromUtc = fromDate.HasValue ? NormalizeDateToUtc(fromDate.Value, isEndOfDay: false) : null;
+        DateTime? toUtc = toDate.HasValue ? NormalizeDateToUtc(toDate.Value, isEndOfDay: true) : null;
+
         var vouchers = await _expenseRepo.FindAsync(e =>
             (!branchId.HasValue || e.BranchId == branchId.Value) &&
-            (!fromDate.HasValue || e.CreatedAt >= fromDate.Value) &&
-            (!toDate.HasValue || e.CreatedAt <= toDate.Value), ct);
+            (!fromUtc.HasValue || e.ExpenseDate >= fromUtc.Value) &&
+            (!toUtc.HasValue || e.ExpenseDate <= toUtc.Value) &&
+            e.Nature != FinancialNature.TaxPayment &&
+            e.Nature != FinancialNature.OwnerDraw &&
+            e.Nature != FinancialNature.InternalTransfer, ct);
 
-        return vouchers
-            .OrderByDescending(e => e.CreatedAt)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .Select(MapVoucherResponse)
+        IEnumerable<ExpenseVoucher> query = vouchers;
+
+        if (!string.IsNullOrWhiteSpace(keyword))
+        {
+            var q = keyword.Trim();
+            query = query.Where(v =>
+                (v.VoucherCode != null && v.VoucherCode.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                (v.InvoiceNumber != null && v.InvoiceNumber.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                (v.BeneficiaryName != null && v.BeneficiaryName.Contains(q, StringComparison.OrdinalIgnoreCase)) ||
+                (v.Note != null && v.Note.Contains(q, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        if (!string.IsNullOrWhiteSpace(category))
+        {
+            var cat = category.Trim();
+            query = query.Where(v => string.Equals(v.Category, cat, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            var st = status.Trim();
+            if (string.Equals(st, "Pending", StringComparison.OrdinalIgnoreCase))
+            {
+                query = query.Where(v =>
+                    v.Status != ExpenseVoucherStatus.Paid &&
+                    v.Status != ExpenseVoucherStatus.Cancelled &&
+                    v.Status != ExpenseVoucherStatus.Reversed);
+            }
+            else if (string.Equals(st, "Cancelled", StringComparison.OrdinalIgnoreCase))
+            {
+                query = query.Where(v =>
+                    v.Status == ExpenseVoucherStatus.Cancelled ||
+                    v.Status == ExpenseVoucherStatus.Reversed);
+            }
+            else
+            {
+                query = query.Where(v => string.Equals(v.Status.ToString(), st, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(quickStatus) && !string.Equals(quickStatus, "ALL", StringComparison.OrdinalIgnoreCase))
+        {
+            var qs = quickStatus.Trim().ToUpperInvariant();
+            if (qs == "PENDING_APPROVAL")
+            {
+                query = query.Where(v =>
+                    v.Status == ExpenseVoucherStatus.PendingApproval ||
+                    v.Status == ExpenseVoucherStatus.Draft ||
+                    v.Status == ExpenseVoucherStatus.Unresolved ||
+                    (v.Status != ExpenseVoucherStatus.Paid && v.Status != ExpenseVoucherStatus.Cancelled && v.Status != ExpenseVoucherStatus.Reversed && v.IsFlaggedAsSuspiciousSplit));
+            }
+            else if (qs == "PENDING_PAYMENT")
+            {
+                query = query.Where(v =>
+                    v.Status != ExpenseVoucherStatus.Paid &&
+                    v.Status != ExpenseVoucherStatus.Cancelled &&
+                    v.Status != ExpenseVoucherStatus.Reversed);
+            }
+            else if (qs == "PAID")
+            {
+                query = query.Where(v => v.Status == ExpenseVoucherStatus.Paid);
+            }
+            else if (qs == "SUSPICIOUS")
+            {
+                query = query.Where(v => v.IsFlaggedAsSuspiciousSplit);
+            }
+        }
+
+        var ordered = query.OrderByDescending(e => e.CreatedAt).ToList();
+        var pageEntities = ordered
+            .Skip((safePage - 1) * safePageSize)
+            .Take(safePageSize)
             .ToList();
+        var branchNames = await ResolveBranchNamesAsync(pageEntities, ct);
+        var items = pageEntities
+            .Select(v => MapVoucherResponse(v, branchNames))
+            .ToList();
+
+        return new PagedResult<ExpenseVoucherResponse>
+        {
+            Items = items,
+            Page = safePage,
+            PageSize = safePageSize,
+            TotalItems = ordered.Count,
+        };
     }
 
     public async Task<ExpenseSummaryResponse> GetExpenseSummaryAsync(Guid? branchId, DateTime? fromDate, DateTime? toDate, CancellationToken ct = default)
     {
         RequireOwner();
+        DateTime? fromUtc = fromDate.HasValue ? NormalizeDateToUtc(fromDate.Value, isEndOfDay: false) : null;
+        DateTime? toUtc = toDate.HasValue ? NormalizeDateToUtc(toDate.Value, isEndOfDay: true) : null;
+
         var vouchers = await _expenseRepo.FindAsync(e =>
             (!branchId.HasValue || e.BranchId == branchId.Value) &&
-            (!fromDate.HasValue || e.CreatedAt >= fromDate.Value) &&
-            (!toDate.HasValue || e.CreatedAt <= toDate.Value), ct);
+            (!fromUtc.HasValue || e.ExpenseDate >= fromUtc.Value) &&
+            (!toUtc.HasValue || e.ExpenseDate <= toUtc.Value) &&
+            e.Nature != FinancialNature.TaxPayment &&
+            e.Nature != FinancialNature.OwnerDraw &&
+            e.Nature != FinancialNature.InternalTransfer, ct);
 
         var activeVouchers = vouchers
             .Where(v => v.Status != ExpenseVoucherStatus.Cancelled && v.Status != ExpenseVoucherStatus.Reversed)
@@ -451,6 +617,9 @@ public class ExpenseService : IExpenseService
         var taxDeductibleVouchers = activeVouchers.Where(v => v.IsTaxDeductible).ToList();
         var nonTaxDeductibleVouchers = activeVouchers.Where(v => !v.IsTaxDeductible).ToList();
 
+        var todayVn = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(7));
+        var overdueCount = pendingVouchers.Count(v => v.DueDate.HasValue && v.DueDate.Value < todayVn);
+
         return new ExpenseSummaryResponse(
             TotalAmount: totalAmount,
             TotalCount: totalCount,
@@ -463,7 +632,8 @@ public class ExpenseService : IExpenseService
             TaxDeductibleAmount: taxDeductibleVouchers.Sum(v => v.Amount),
             TaxDeductibleCount: taxDeductibleVouchers.Count,
             NonTaxDeductibleAmount: nonTaxDeductibleVouchers.Sum(v => v.Amount),
-            NonTaxDeductibleCount: nonTaxDeductibleVouchers.Count
+            NonTaxDeductibleCount: nonTaxDeductibleVouchers.Count,
+            OverdueCount: overdueCount
         );
     }
 
@@ -478,9 +648,10 @@ public class ExpenseService : IExpenseService
             ct
         );
 
-        return vouchers
-            .OrderByDescending(e => e.CreatedAt)
-            .Select(MapVoucherResponse)
+        var list = vouchers.OrderByDescending(e => e.CreatedAt).ToList();
+        var branchNames = await ResolveBranchNamesAsync(list, ct);
+        return list
+            .Select(v => MapVoucherResponse(v, branchNames))
             .ToList();
     }
 
@@ -518,7 +689,91 @@ public class ExpenseService : IExpenseService
             : $"{voucher.Note} | [TRIAGE ĐÃ XỬ LÝ]: {request.ResolutionNote.Trim()}";
 
         await _unitOfWork.SaveChangesAsync(ct);
-        return MapVoucherResponse(voucher);
+        return await MapVoucherWithBranchNameAsync(voucher, ct);
+    }
+
+    private static void ValidateEvidenceAttachmentUrl(string? rawUrl)
+    {
+        if (string.IsNullOrWhiteSpace(rawUrl))
+        {
+            return;
+        }
+
+        var trimmed = rawUrl.Trim();
+        if (IsSafeImageDataUrl(trimmed))
+        {
+            return;
+        }
+
+        if (trimmed.StartsWith("/uploads/", StringComparison.OrdinalIgnoreCase) &&
+            !trimmed.Contains("..", StringComparison.Ordinal) &&
+            !trimmed.Contains('\\') &&
+            !trimmed.Any(char.IsControl))
+        {
+            return;
+        }
+
+        if (Uri.TryCreate(trimmed, UriKind.Absolute, out var uri) &&
+            uri.Scheme == Uri.UriSchemeHttps &&
+            !string.IsNullOrWhiteSpace(uri.Host))
+        {
+            return;
+        }
+
+        throw new BusinessException(
+            "INVALID_ATTACHMENT_URL",
+            "Đường dẫn chứng từ không hợp lệ. Chỉ chấp nhận ảnh hợp lệ (png/jpg/webp/gif), đường dẫn /uploads/ hoặc HTTPS an toàn.");
+    }
+
+    private static bool IsSafeImageDataUrl(string trimmed)
+    {
+        const string marker = ";base64,";
+        var markerIndex = trimmed.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
+        if (markerIndex <= 0)
+        {
+            return false;
+        }
+
+        var prefix = trimmed[..markerIndex].ToLowerInvariant();
+        if (prefix is not ("data:image/png" or "data:image/jpeg" or "data:image/jpg" or "data:image/webp" or "data:image/gif"))
+        {
+            return false;
+        }
+
+        var payload = trimmed[(markerIndex + marker.Length)..].Trim();
+        if (payload.Length == 0)
+        {
+            return false;
+        }
+
+        var buffer = new byte[(payload.Length * 3 / 4) + 4];
+        return Convert.TryFromBase64String(payload, buffer, out var bytesWritten) && bytesWritten > 0;
+    }
+
+    private static DateTime NormalizeDateToUtc(DateTime raw, bool isEndOfDay)
+    {
+        if (raw.Kind == DateTimeKind.Utc)
+        {
+            return isEndOfDay && raw.TimeOfDay == TimeSpan.Zero ? raw.AddDays(1).AddTicks(-1) : raw;
+        }
+
+        if (raw.Kind == DateTimeKind.Local)
+        {
+            var utc = raw.ToUniversalTime();
+            return isEndOfDay && raw.TimeOfDay == TimeSpan.Zero ? utc.AddDays(1).AddTicks(-1) : utc;
+        }
+
+        // Unspecified timestamps represent Vietnam local time (+07:00).
+        var effectiveVn = isEndOfDay && raw.TimeOfDay == TimeSpan.Zero
+            ? raw.Date.AddDays(1).AddTicks(-1)
+            : raw;
+        return DateTime.SpecifyKind(effectiveVn.AddHours(-7), DateTimeKind.Utc);
+    }
+
+    private async Task<ExpenseVoucherResponse> MapVoucherWithBranchNameAsync(ExpenseVoucher voucher, CancellationToken ct)
+    {
+        var branchNames = await ResolveBranchNamesAsync([voucher], ct);
+        return MapVoucherResponse(voucher, branchNames);
     }
 
     /// <summary>
@@ -536,6 +791,23 @@ public class ExpenseService : IExpenseService
 
     private void RequireOwner() => TenantRoleGuard.RequireStoreOwner(_tenantContext, "chi phí và phiếu chi");
 
-    private static ExpenseVoucherResponse MapVoucherResponse(ExpenseVoucher v) =>
-        new(v.Id, v.VoucherCode, v.BranchId, v.BeneficiaryName, v.Category, v.Amount, v.Status.ToString(), v.PaymentSourceType.ToString(), v.PaymentSourceAccountId, v.IsTaxDeductible, v.InvoiceNumber, v.SellerTaxCode, v.EvidenceAttachmentUrl, v.IsFlaggedAsSuspiciousSplit, v.SuspiciousReason, v.ApprovedByUserId, v.ApprovedAtUtc, v.PaidAtUtc, v.ExpenseDate, v.Note, v.Nature, v.ReferenceCode, v.RefundedAmount, v.IsSettled, v.DueDate);
+    private async Task<Dictionary<Guid, string>> ResolveBranchNamesAsync(IEnumerable<ExpenseVoucher> vouchers, CancellationToken ct)
+    {
+        var ids = vouchers.Where(v => v.BranchId.HasValue).Select(v => v.BranchId!.Value).Distinct().ToList();
+        return ids.Count == 0
+            ? new Dictionary<Guid, string>()
+            : await _expenseRepo.GetBranchNamesAsync(ids, ct);
+    }
+
+    private static ExpenseVoucherResponse MapVoucherResponse(ExpenseVoucher v) => MapVoucherResponse(v, null);
+
+    private static ExpenseVoucherResponse MapVoucherResponse(ExpenseVoucher v, Dictionary<Guid, string>? branchNames)
+    {
+        string? branchName = null;
+        if (v.BranchId.HasValue && branchNames != null && branchNames.TryGetValue(v.BranchId.Value, out var resolved))
+        {
+            branchName = resolved;
+        }
+        return new(v.Id, v.VoucherCode, v.BranchId, v.BeneficiaryName, v.Category, v.Amount, v.Status.ToString(), v.PaymentSourceType.ToString(), v.PaymentSourceAccountId, v.IsTaxDeductible, v.InvoiceNumber, v.SellerTaxCode, v.EvidenceAttachmentUrl, v.IsFlaggedAsSuspiciousSplit, v.SuspiciousReason, v.ApprovedByUserId, v.ApprovedAtUtc, v.PaidAtUtc, v.ExpenseDate, v.Note, v.Nature, v.ReferenceCode, v.RefundedAmount, v.IsSettled, v.DueDate, branchName);
+    }
 }

@@ -32,7 +32,9 @@ public class LoyaltyService : ILoyaltyService
                 RedemptionRatePoints: 1,
                 RedemptionRateAmount: 1000m,
                 MinRedemptionPoints: 20,
-                AllowPointsWithPromotions: true
+                AllowPointsWithPromotions: true,
+                PointsExpiryMonths: 12,
+                MaxRedemptionPercent: 50
             );
         }
 
@@ -43,7 +45,9 @@ public class LoyaltyService : ILoyaltyService
             setting.RedemptionRatePoints,
             setting.RedemptionRateAmount,
             setting.MinRedemptionPoints,
-            setting.AllowPointsWithPromotions
+            setting.AllowPointsWithPromotions,
+            setting.PointsExpiryMonths,
+            setting.MaxRedemptionPercent > 0 ? setting.MaxRedemptionPercent : 50
         );
     }
 
@@ -66,7 +70,9 @@ public class LoyaltyService : ILoyaltyService
             RedemptionRatePoints = request.RedemptionRatePoints,
             RedemptionRateAmount = request.RedemptionRateAmount,
             MinRedemptionPoints = request.MinRedemptionPoints,
-            AllowPointsWithPromotions = request.AllowPointsWithPromotions
+            AllowPointsWithPromotions = request.AllowPointsWithPromotions,
+            PointsExpiryMonths = request.PointsExpiryMonths,
+            MaxRedemptionPercent = request.MaxRedemptionPercent
         };
 
         await _promotionRepository.SaveLoyaltySettingAsync(setting, cancellationToken);
@@ -78,7 +84,9 @@ public class LoyaltyService : ILoyaltyService
             setting.RedemptionRatePoints,
             setting.RedemptionRateAmount,
             setting.MinRedemptionPoints,
-            setting.AllowPointsWithPromotions
+            setting.AllowPointsWithPromotions,
+            setting.PointsExpiryMonths,
+            setting.MaxRedemptionPercent
         );
     }
 }

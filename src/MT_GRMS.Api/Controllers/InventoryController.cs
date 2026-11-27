@@ -11,7 +11,7 @@ namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/inventory")]
-[Authorize]
+[Authorize(Policy = "TenantOwnerOrAssignedBranchStaff")]
 public class InventoryController : BaseApiController
 {
     private readonly IInventoryService _inventoryService;

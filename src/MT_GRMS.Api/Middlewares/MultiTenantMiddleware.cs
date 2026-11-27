@@ -26,8 +26,14 @@ public class MultiTenantMiddleware
             var role = context.User.FindFirst(ClaimTypes.Role)?.Value
                 ?? context.User.FindFirst("role")?.Value
                 ?? context.User.FindFirst("RoleName")?.Value;
+            var userName = context.User.FindFirst("fullName")?.Value
+                ?? context.User.FindFirst("full_name")?.Value
+                ?? context.User.FindFirst(ClaimTypes.Name)?.Value
+                ?? context.User.FindFirst("name")?.Value
+                ?? context.User.Identity?.Name;
 
             tenantContext.SetRawUserId(userIdClaim);
+            tenantContext.SetUserName(userName);
 
             // SaaS Admin never has tenant context. X-Tenant-Id header must never establish tenant scope for Admin.
             var isSystemAdmin = string.Equals(role, "ADMIN", StringComparison.OrdinalIgnoreCase)

@@ -128,15 +128,21 @@ public class ShiftsController : BaseApiController
     }
 
     /// <summary>
-    /// Nhân viên nhận ca tiếp theo xác nhận bàn giao (CONFIRMED hoặc DISPUTED).
+    /// Chủ cửa hàng / quản trị xác nhận bàn giao ca (CONFIRMED hoặc DISPUTED).
     /// </summary>
     [HttpPost("{id:guid}/confirm-handover")]
     [RequireIdempotency]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<ActionResult<ApiResponse<ShiftDetailResponse>>> ConfirmHandover(
         [FromRoute] Guid id,
         [FromBody] ConfirmHandoverRequest request,
         CancellationToken cancellationToken)
     {
+        if (!User.IsInRole("STORE_OWNER") && !User.IsInRole("StoreOwner") && !User.IsInRole("ADMIN") && !User.IsInRole("Admin"))
+        {
+            return Forbid();
+        }
+
         if (_tenantContext.CurrentUserId == Guid.Empty)
         {
             return Unauthorized();

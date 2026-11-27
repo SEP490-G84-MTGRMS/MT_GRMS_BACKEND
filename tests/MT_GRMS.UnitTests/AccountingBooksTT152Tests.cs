@@ -301,6 +301,7 @@ public class AccountingBooksTT152Tests
         Category = "Bao bì đóng gói siêu thị",
         Amount = 500_000m,
         Status = ExpenseVoucherStatus.Paid,
+        IsTaxDeductible = true,
         ExpenseDate = new DateTime(2026, 1, 25, 0, 0, 0, DateTimeKind.Utc)
       },
       // 2.b: Lương, tiền công nhân viên
@@ -311,6 +312,7 @@ public class AccountingBooksTT152Tests
         Category = "Tiền lương nhân viên ca trực",
         Amount = 15_000_000m,
         Status = ExpenseVoucherStatus.Paid,
+        IsTaxDeductible = true,
         ExpenseDate = new DateTime(2026, 1, 31, 0, 0, 0, DateTimeKind.Utc)
       },
       // 2.c: Thuê mặt bằng, kho bãi
@@ -321,6 +323,7 @@ public class AccountingBooksTT152Tests
         Category = "Tiền thuê mặt bằng kinh doanh",
         Amount = 20_000_000m,
         Status = ExpenseVoucherStatus.Paid,
+        IsTaxDeductible = true,
         ExpenseDate = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc)
       },
       // 2.d: Dịch vụ mua ngoài (điện, nước, internet)
@@ -331,6 +334,7 @@ public class AccountingBooksTT152Tests
         Category = "Tiền điện nước và internet",
         Amount = 4_500_000m,
         Status = ExpenseVoucherStatus.Paid,
+        IsTaxDeductible = true,
         ExpenseDate = new DateTime(2026, 2, 15, 0, 0, 0, DateTimeKind.Utc)
       },
       // 2.e: Thuế, phí, lệ phí được trừ (lệ phí môn bài)
@@ -341,6 +345,7 @@ public class AccountingBooksTT152Tests
         Category = "Lệ phí môn bài và phí công chứng",
         Amount = 300_000m,
         Status = ExpenseVoucherStatus.Paid,
+        IsTaxDeductible = true,
         ExpenseDate = new DateTime(2026, 2, 20, 0, 0, 0, DateTimeKind.Utc)
       },
       // 2.đ: Chi phí khác phục vụ SXKD
@@ -351,6 +356,7 @@ public class AccountingBooksTT152Tests
         Category = "Văn phòng phẩm và tiếp khách",
         Amount = 800_000m,
         Status = ExpenseVoucherStatus.Paid,
+        IsTaxDeductible = true,
         ExpenseDate = new DateTime(2026, 3, 1, 0, 0, 0, DateTimeKind.Utc)
       },
       // EXCLUDED: Equity / Capital withdrawal (Rút vốn chủ sở hữu)

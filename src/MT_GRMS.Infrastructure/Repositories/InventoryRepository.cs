@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using MT_GRMS.Application.Batches;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.Inventory.Dtos;
 using MT_GRMS.Domain.Entities.Inventory;
@@ -28,7 +29,7 @@ public class InventoryRepository : IInventoryRepository
         InventoryFilterQuery query,
         CancellationToken cancellationToken = default)
     {
-        var now = DateTime.UtcNow.Date;
+        var now = BranchStockAvailability.StoreToday;
 
         var branchQuery = _appContext.Branches.AsNoTracking()
             .Where(b => b.TenantId == tenantId && !b.IsDeleted);
@@ -38,7 +39,7 @@ public class InventoryRepository : IInventoryRepository
             branchQuery = branchQuery.Where(b => b.Id == query.BranchId.Value);
         }
 
-        var branches = await branchQuery.Select(b => new { b.Id, b.Name }).ToListAsync(cancellationToken);
+        var branches = await branchQuery.Select(b => new { b.Id, b.BranchCode, b.Name }).ToListAsync(cancellationToken);
         var branchIds = branches.Select(b => b.Id).ToList();
 
         // Catalog theo chi nhánh: hiện mọi SP đã gán CN, kể cả chưa có BranchStock.
@@ -50,10 +51,18 @@ public class InventoryRepository : IInventoryRepository
                 && bp.Status != "Inactive"
                 && bp.Status != "Deleted");
 
-        var catalogPairs = await branchCatalogQuery
+        var catalogRows = await branchCatalogQuery
+            .Select(bp => new { bp.BranchId, bp.ProductId, bp.ShelfLocation })
+            .ToListAsync(cancellationToken);
+
+        var shelfByPair = catalogRows
+            .GroupBy(x => (x.BranchId, x.ProductId))
+            .ToDictionary(g => g.Key, g => g.First().ShelfLocation ?? string.Empty);
+
+        var catalogPairs = catalogRows
             .Select(bp => new { bp.BranchId, bp.ProductId })
             .Distinct()
-            .ToListAsync(cancellationToken);
+            .ToList();
 
         // Gộp thêm SP đang có tồn nhưng chưa (hoặc không còn) trong catalog để không mất dòng tồn thực tế.
         var stockOnlyPairs = await _appContext.BranchStocks.AsNoTracking()
@@ -227,7 +236,9 @@ public class InventoryRepository : IInventoryRepository
             else status = "OK";
 
             deliveryUomByProductId.TryGetValue(product.Id, out var deliveryUom);
-            var inboundUnit = ResolveInboundUnit(deliveryUom, product);
+            var stockUnit = string.IsNullOrWhiteSpace(product.BaseUnit) ? "Cái" : product.BaseUnit.Trim();
+            var purchaseToStockRate = ResolvePurchaseToStockRate(deliveryUom, product);
+            var onOrderStockQty = Math.Round(onOrderQty * purchaseToStockRate, 3);
 
             allItems.Add(new InventoryStockItemDto(
                 ProductId: product.Id,
@@ -237,7 +248,7 @@ public class InventoryRepository : IInventoryRepository
                 CategoryName: product.Category?.Name ?? "Chung",
                 BranchId: branch.Id,
                 BranchName: branch.Name,
-                Unit: inboundUnit,
+                Unit: stockUnit,
                 PhysicalQty: physicalQty,
                 AvailableQty: availableQty,
                 PendingReturnQty: pendingQty,
@@ -245,14 +256,52 @@ public class InventoryRepository : IInventoryRepository
                 DamagedQty: 0,
                 QuarantinedQty: quarantinedQty,
                 ReservedQty: reservedQty,
-                OnOrderQty: onOrderQty,
+                OnOrderQty: onOrderStockQty,
                 MinStock: minStock,
                 AvgCost: Math.Round(weightedCost, 2),
                 TotalValue: Math.Round(totalValue, 2),
                 Status: status,
                 BatchCount: stocks.Count(),
-                Batches: batchDtos
+                Batches: batchDtos,
+                BranchCode: branch.BranchCode ?? string.Empty,
+                LocationShelf: shelfByPair.GetValueOrDefault((branch.Id, product.Id)) ?? string.Empty
             ));
+        }
+
+        if (!string.IsNullOrWhiteSpace(query.LocationShelf) && !query.LocationShelf.Equals("ALL", StringComparison.OrdinalIgnoreCase))
+        {
+            var loc = query.LocationShelf.Trim();
+            allItems = allItems.Where(x => x.LocationShelf.Contains(loc, StringComparison.OrdinalIgnoreCase)).ToList();
+        }
+
+        // Lọc đa chip chuẩn Golden Standard (INV-03: OR trong cùng field, AND giữa các field)
+        var skuTokens = query.Skus?.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
+        if (skuTokens is { Count: > 0 })
+        {
+            allItems = allItems.Where(x => skuTokens.Any(t =>
+                x.Sku.Contains(t, StringComparison.OrdinalIgnoreCase)
+                || x.Barcode.Contains(t, StringComparison.OrdinalIgnoreCase))).ToList();
+        }
+
+        var nameTokens = query.Names?.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
+        if (nameTokens is { Count: > 0 })
+        {
+            allItems = allItems.Where(x => nameTokens.Any(t =>
+                x.ProductName.Contains(t, StringComparison.OrdinalIgnoreCase))).ToList();
+        }
+
+        var branchCodeTokens = query.BranchCodes?.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
+        if (branchCodeTokens is { Count: > 0 })
+        {
+            allItems = allItems.Where(x => branchCodeTokens.Any(t =>
+                x.BranchCode.Contains(t, StringComparison.OrdinalIgnoreCase))).ToList();
+        }
+
+        var branchNameTokens = query.BranchNames?.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList();
+        if (branchNameTokens is { Count: > 0 })
+        {
+            allItems = allItems.Where(x => branchNameTokens.Any(t =>
+                x.BranchName.Contains(t, StringComparison.OrdinalIgnoreCase))).ToList();
         }
 
         var kpis = new InventoryKpiSummaryDto(
@@ -260,7 +309,9 @@ public class InventoryRepository : IInventoryRepository
             TotalValue: allItems.Sum(x => x.TotalValue),
             LowStockCount: allItems.Count(x => x.Status == "LOW_STOCK"),
             OutOfStockCount: allItems.Count(x => x.Status == "OUT_OF_STOCK"),
-            ExpiryWarningCount: allItems.Count(x => x.Status == "NEAR_EXPIRY" || x.ExpiredQty > 0),
+            ExpiryWarningCount: allItems.Count(x =>
+                x.ExpiredQty > 0 ||
+                x.Batches.Any(b => b.DaysLeft.HasValue && b.DaysLeft.Value <= 30 && b.QuantityOnHand > 0)),
             TotalOnOrder: allItems.Sum(x => x.OnOrderQty)
         );
 
@@ -296,7 +347,7 @@ public class InventoryRepository : IInventoryRepository
         Guid productId,
         CancellationToken cancellationToken = default)
     {
-        var now = DateTime.UtcNow.Date;
+        var now = BranchStockAvailability.StoreToday;
         // BranchStocks mới là nguồn tồn theo lô mà POS/GRN đang cập nhật.
         // Không dùng Batches.InitialQuantity vì đó chỉ là số lượng nhập ban đầu,
         // không phản ánh tồn còn lại sau bán, giữ hàng hoặc trả nhà cung cấp.
@@ -339,6 +390,7 @@ public class InventoryRepository : IInventoryRepository
             _ => "Normal"
         };
         var availableQty = BranchStockAvailability.GetSellableAvailable(stock, now, packageWeight);
+        var isFefoEffective = status != "Expired" && FefoDiscountWindow.IsEffective(stock, DateTime.UtcNow);
 
         return new InventoryBatchSummaryDto(
             stock.Id,
@@ -350,27 +402,34 @@ public class InventoryRepository : IInventoryRepository
             stock.QuantityReserved,
             availableQty,
             status,
-            stock.FefoDiscountPercent,
-            stock.IsFefoDiscountActive
+            isFefoEffective ? stock.FefoDiscountPercent : 0m,
+            isFefoEffective
         );
     }
 
     /// <summary>
-    /// Đơn vị nhập (DVN): DeliveryUoM → IsPurchaseUnit → BaseUnit.
+    /// Tỷ lệ quy đổi 1 ĐVT nhập = bao nhiêu ĐVT gốc (BaseUnit).
     /// </summary>
-    private static string ResolveInboundUnit(
+    private static decimal ResolvePurchaseToStockRate(
         string? deliveryUoM,
         Domain.Entities.Catalog.Product product)
     {
-        if (!string.IsNullOrWhiteSpace(deliveryUoM))
-            return deliveryUoM.Trim();
+        var activeUnits = product.Units?.Where(u => !u.IsDeleted).ToList();
+        if (activeUnits is { Count: > 0 })
+        {
+            if (!string.IsNullOrWhiteSpace(deliveryUoM))
+            {
+                var matched = activeUnits.FirstOrDefault(u =>
+                    string.Equals(u.UnitName?.Trim(), deliveryUoM.Trim(), StringComparison.OrdinalIgnoreCase));
+                if (matched != null && matched.ConversionRate > 0m)
+                    return matched.ConversionRate;
+            }
 
-        var purchase = product.Units?
-            .Where(u => !u.IsDeleted)
-            .FirstOrDefault(u => u.IsPurchaseUnit);
-        if (purchase != null && !string.IsNullOrWhiteSpace(purchase.UnitName))
-            return purchase.UnitName.Trim();
+            var purchase = activeUnits.FirstOrDefault(u => u.IsPurchaseUnit);
+            if (purchase != null && purchase.ConversionRate > 0m)
+                return purchase.ConversionRate;
+        }
 
-        return string.IsNullOrWhiteSpace(product.BaseUnit) ? "Cái" : product.BaseUnit.Trim();
+        return 1m;
     }
 }

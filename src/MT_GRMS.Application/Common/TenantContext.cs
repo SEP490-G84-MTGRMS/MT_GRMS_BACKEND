@@ -8,6 +8,7 @@ public class TenantContext : ITenantContext
     public string CurrentTenantId { get; private set; } = string.Empty;
     public Guid CurrentUserId { get; private set; } = Guid.Empty;
     public string CurrentRawUserId { get; private set; } = string.Empty;
+    public string CurrentUserName { get; private set; } = string.Empty;
     public Guid? CurrentBranchId { get; private set; }
     public string CurrentRole { get; private set; } = string.Empty;
 
@@ -25,6 +26,11 @@ public class TenantContext : ITenantContext
     public void SetRawUserId(string? rawUserId)
     {
         CurrentRawUserId = rawUserId?.Trim() ?? string.Empty;
+    }
+
+    public void SetUserName(string? userName)
+    {
+        CurrentUserName = userName?.Trim() ?? string.Empty;
     }
 
     public void SetRole(string? role)

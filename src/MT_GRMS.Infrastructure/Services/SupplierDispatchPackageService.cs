@@ -140,8 +140,16 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
             await _db.SaveChangesAsync(cancellationToken);
         }
 
-        // Supersede package chưa gửi / chưa xong của cùng NCC (tránh worker gửi revision cũ).
-        var pendingPkgs = await _db.SupplierDispatchPackages
+        var supersededByPoPackageIds = oldItems.Select(i => i.PackageId).ToHashSet();
+        var newDeliveryDates = pos
+            .Where(p => p.DeliveryDate.HasValue)
+            .Select(p => p.DeliveryDate!.Value.Date)
+            .ToHashSet();
+
+        // Chỉ supersede package chưa gửi/chưa xong của cùng NCC nếu giao nhau về PO hoặc ngày giao (DSP-02).
+        var candidatePendingPkgs = await _db.SupplierDispatchPackages
+            .Include(p => p.Items)
+                .ThenInclude(i => i.PurchaseOrder)
             .Where(p => p.SupplierId == supplierId
                         && !p.IsDeleted
                         && p.EmailStatus != PackageEmailStatuses.Sent
@@ -149,6 +157,13 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
                         && p.EmailStatus != PackageEmailStatuses.Cancelled
                         && p.EmailStatus != PackageEmailStatuses.Superseded)
             .ToListAsync(cancellationToken);
+
+        var pendingPkgs = candidatePendingPkgs
+            .Where(p => supersededByPoPackageIds.Contains(p.Id)
+                        || p.Items.Any(i => !i.IsDeleted
+                                            && i.PurchaseOrder?.DeliveryDate.HasValue == true
+                                            && newDeliveryDates.Contains(i.PurchaseOrder.DeliveryDate.Value.Date)))
+            .ToList();
 
         var package = new SupplierDispatchPackage
         {
@@ -213,7 +228,7 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
         if (pkg == null) return null;
 
         var codes = pkg.Items
-            .Where(i => i.PurchaseOrder != null)
+            .Where(i => !i.IsDeleted && i.PurchaseOrder != null)
             .Select(i => i.PurchaseOrder!.Code)
             .ToList();
         return MapDto(pkg, codes);
@@ -232,7 +247,7 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
         var list = await q.OrderByDescending(p => p.CreatedAt).Take(Math.Clamp(take, 1, 200)).ToListAsync(cancellationToken);
         return list.Select(p => MapDto(
             p,
-            p.Items.Where(i => i.PurchaseOrder != null).Select(i => i.PurchaseOrder!.Code).ToList())).ToList();
+            p.Items.Where(i => !i.IsDeleted && i.PurchaseOrder != null).Select(i => i.PurchaseOrder!.Code).ToList())).ToList();
     }
 
     public async Task RetryGenerationAsync(Guid packageId, CancellationToken cancellationToken = default)
@@ -398,7 +413,7 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
         pkg.AttemptCount += 1;
         await _db.SaveChangesAsync(ct);
 
-        var poIds = pkg.Items.Select(i => i.PurchaseOrderId).ToList();
+        var poIds = pkg.Items.Where(i => !i.IsDeleted).Select(i => i.PurchaseOrderId).ToList();
         var pos = await _db.PurchaseOrders
             .Include(p => p.Details)
             .Where(p => poIds.Contains(p.Id) && !p.IsDeleted)
@@ -547,9 +562,25 @@ public class SupplierDispatchPackageService : ISupplierDispatchPackageService
                 return;
             }
 
+            var sentAtUtc = DateTime.UtcNow;
             pkg.EmailStatus = PackageEmailStatuses.Sent;
-            pkg.SentAtUtc = DateTime.UtcNow;
+            pkg.SentAtUtc = sentAtUtc;
             pkg.LastError = null;
+
+            // Cập nhật các PO thuộc gói sang DISPATCHED để mở luồng nhập kho (DSP-01).
+            var linkedPos = await _db.PurchaseOrders
+                .Where(p => poIds.Contains(p.Id) && !p.IsDeleted)
+                .ToListAsync(ct);
+            foreach (var linkedPo in linkedPos)
+            {
+                if (linkedPo.Status is "PENDING_APPROVAL" or "APPROVED")
+                {
+                    linkedPo.Status = "DISPATCHED";
+                    linkedPo.DispatchedAtUtc ??= sentAtUtc;
+                    linkedPo.UpdatedAt = sentAtUtc;
+                }
+            }
+
             await _db.SaveChangesAsync(ct);
         }
         catch (Exception ex)

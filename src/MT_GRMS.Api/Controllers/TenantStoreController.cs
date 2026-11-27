@@ -123,20 +123,15 @@ public class TenantStoreController : BaseApiController
     [HttpGet("pricing-plans")]
     public async Task<IActionResult> GetPricingPlans(CancellationToken cancellationToken)
     {
-        var plans = await _planService.GetPlansAsync(new PlanFilterRequest(Status: "ACTIVE"), cancellationToken);
-
-        // Lấy 3 gói cước chính thức của hệ thống SaaS bán lẻ: TRIAL (Trải nghiệm 0đ 3 ngày), STANDARD (Gói Thường 99k) và PRO (Gói Pro 249k)
-        var officialPlans = plans
-            .Where(p => string.Equals(p.Code, "TRIAL", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(p.Code, "STANDARD", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(p.Code, "PRO", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(p => p.MonthlyPrice)
+        var allPlans = await _planService.GetPlansAsync(new PlanFilterRequest(), cancellationToken);
+        var activePlans = allPlans
+            .Where(p => string.Equals(p.Status, "ACTIVE", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        // Đảm bảo luôn có gói TRIAL ở đầu danh sách nếu CSDL chưa nạp
-        if (!officialPlans.Any(p => string.Equals(p.Code, "TRIAL", StringComparison.OrdinalIgnoreCase)))
+        // Chỉ khởi tạo gói mặc định nếu mã gói đó hoàn toàn chưa tồn tại trong danh mục (không hồi sinh gói đã bị Admin chuyển sang INACTIVE)
+        if (!allPlans.Any(p => string.Equals(p.Code, "TRIAL", StringComparison.OrdinalIgnoreCase)))
         {
-            var defaultTrial = new PlanSummaryResponse(
+            activePlans.Insert(0, new PlanSummaryResponse(
                 Id: "plan_trial",
                 Code: "TRIAL",
                 Name: "Gói Dùng Thử (Trải Nghiệm)",
@@ -149,13 +144,12 @@ public class TenantStoreController : BaseApiController
                 Features: new PlanFeatureDto(FefoExpiryAlert: true, MultiUnitConversion: true, VietQrDynamic: true, DebtZaloBook: false, BarcodeScanning: true, FinancialReporting: false),
                 CreatedAt: DateTime.UtcNow,
                 UpdatedAt: null
-            );
-            officialPlans.Insert(0, defaultTrial);
+            ));
         }
 
-        if (!officialPlans.Any(p => string.Equals(p.Code, "STANDARD", StringComparison.OrdinalIgnoreCase)))
+        if (!allPlans.Any(p => string.Equals(p.Code, "STANDARD", StringComparison.OrdinalIgnoreCase)))
         {
-            var defaultStandard = new PlanSummaryResponse(
+            activePlans.Add(new PlanSummaryResponse(
                 Id: "plan_standard",
                 Code: "STANDARD",
                 Name: "Gói Thường (Cửa Hàng Độc Lập)",
@@ -168,13 +162,12 @@ public class TenantStoreController : BaseApiController
                 Features: new PlanFeatureDto(FefoExpiryAlert: true, MultiUnitConversion: true, VietQrDynamic: true, DebtZaloBook: false, BarcodeScanning: true, FinancialReporting: false),
                 CreatedAt: DateTime.UtcNow,
                 UpdatedAt: null
-            );
-            officialPlans.Add(defaultStandard);
+            ));
         }
 
-        if (!officialPlans.Any(p => string.Equals(p.Code, "PRO", StringComparison.OrdinalIgnoreCase)))
+        if (!allPlans.Any(p => string.Equals(p.Code, "PRO", StringComparison.OrdinalIgnoreCase)))
         {
-            var defaultPro = new PlanSummaryResponse(
+            activePlans.Add(new PlanSummaryResponse(
                 Id: "plan_pro",
                 Code: "PRO",
                 Name: "Gói Pro (Chuỗi Cửa Hàng)",
@@ -187,20 +180,16 @@ public class TenantStoreController : BaseApiController
                 Features: new PlanFeatureDto(FefoExpiryAlert: true, MultiUnitConversion: true, VietQrDynamic: true, DebtZaloBook: true, BarcodeScanning: true, FinancialReporting: true),
                 CreatedAt: DateTime.UtcNow,
                 UpdatedAt: null
-            );
-            officialPlans.Add(defaultPro);
+            ));
         }
 
-        // Sắp xếp thứ tự: TRIAL (1, trái) -> STANDARD (2, giữa) -> PRO (3, phải)
-        var orderMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["TRIAL"] = 1,
-            ["STANDARD"] = 2,
-            ["PRO"] = 3
-        };
-        officialPlans = officialPlans.OrderBy(p => orderMap.TryGetValue(p.Code, out var o) ? o : 99).ToList();
+        activePlans = activePlans
+            .OrderBy(p => string.Equals(p.Code, "TRIAL", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(p => p.MonthlyPrice)
+            .ThenBy(p => p.Code, StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
-        return Ok(ApiResponse<IReadOnlyList<PlanSummaryResponse>>.Ok(officialPlans));
+        return Ok(ApiResponse<IReadOnlyList<PlanSummaryResponse>>.Ok(activePlans));
     }
 
     /// <summary>
@@ -434,6 +423,7 @@ public class TenantStoreController : BaseApiController
     /// Lấy danh sách lịch sử mua hàng, đăng ký và gia hạn các gói dịch vụ của gian hàng
     /// </summary>
     [HttpGet("subscriptions/history")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> GetSubscriptionOrderHistory(CancellationToken cancellationToken)
     {
         return SubscriptionResponse(await _subscriptions.GetSubscriptionOrderHistoryAsync(GetSubscriptionActor(), cancellationToken));

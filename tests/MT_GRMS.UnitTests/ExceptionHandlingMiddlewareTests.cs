@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
+using MT_GRMS.Api.Common;
 using MT_GRMS.Api.Middlewares;
 using MT_GRMS.Application.Common;
 using Xunit;
@@ -79,5 +80,49 @@ public class ExceptionHandlingMiddlewareTests
         Assert.NotNull(json);
         Assert.False(json.Success);
         Assert.Contains("Debug internal error details", json.Message);
+    }
+
+    [Fact]
+    public async Task HandleInvalidOperationException_ShouldReturnHttp422AndMatchingBodyStatusCode()
+    {
+        var context = new DefaultHttpContext();
+        context.Response.Body = new MemoryStream();
+
+        var middleware = new ExceptionHandlingMiddleware(
+            next: _ => throw new InvalidOperationException("Phiếu điều chuyển đã hoàn tất."),
+            logger: NullLogger<ExceptionHandlingMiddleware>.Instance,
+            env: new FakeHostEnvironment { EnvironmentName = Environments.Production }
+        );
+
+        await middleware.InvokeAsync(context);
+
+        Assert.Equal((int)HttpStatusCode.UnprocessableEntity, context.Response.StatusCode);
+
+        context.Response.Body.Seek(0, SeekOrigin.Begin);
+        using var reader = new StreamReader(context.Response.Body);
+        var responseBody = await reader.ReadToEndAsync();
+        var json = JsonSerializer.Deserialize<ApiResponse<object>>(responseBody, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        Assert.NotNull(json);
+        Assert.False(json.Success);
+        Assert.Equal(422, json.StatusCode);
+        Assert.Equal("INVALID_OPERATION", json.ErrorCode);
+    }
+
+    [Fact]
+    public void UtcDateTimeJsonConverter_ShouldSerializeUnspecifiedKindWithTrailingZ()
+    {
+        var options = new JsonSerializerOptions();
+        options.Converters.Add(new UtcDateTimeJsonConverter());
+        options.Converters.Add(new UtcNullableDateTimeJsonConverter());
+
+        var unspecified = new DateTime(2026, 11, 24, 10, 2, 44, DateTimeKind.Unspecified);
+        DateTime? nullableUnspecified = unspecified;
+
+        var serialized = JsonSerializer.Serialize(unspecified, options);
+        var serializedNullable = JsonSerializer.Serialize(nullableUnspecified, options);
+
+        Assert.Equal("\"2026-11-24T10:02:44Z\"", serialized);
+        Assert.Equal("\"2026-11-24T10:02:44Z\"", serializedNullable);
     }
 }

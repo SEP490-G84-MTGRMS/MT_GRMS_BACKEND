@@ -5,6 +5,7 @@ using MT_GRMS.Application.Common;
 using MT_GRMS.Application.PurchaseOrders;
 using MT_GRMS.Application.PurchaseOrders.Dispatch;
 using MT_GRMS.Application.PurchaseOrders.Dtos;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
@@ -71,6 +72,7 @@ public class PurchaseOrdersController : BaseApiController
     /// Hub chốt đơn với nhà cung cấp — gom từ PurchaseOrders + PurchaseOrderDetails theo Scope (NEAREST / WEEK / ALL)
     /// </summary>
     [HttpGet("dispatch-hub")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> GetDispatchHub([FromQuery] DispatchHubQuery query, CancellationToken cancellationToken)
     {
         var result = await _poService.GetDispatchHubAsync(query, cancellationToken);
@@ -81,6 +83,7 @@ public class PurchaseOrdersController : BaseApiController
     /// Hub theo NCC (multi-branch): list toàn bộ NCC + tóm tắt theo cửa hàng.
     /// </summary>
     [HttpGet("dispatch-hub/suppliers")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> GetDispatchSupplierHub(
         [FromQuery] DispatchSupplierHubQuery query,
         CancellationToken cancellationToken)
@@ -93,6 +96,7 @@ public class PurchaseOrdersController : BaseApiController
     /// Chi tiết chốt đơn 1 NCC — dòng hàng nhóm theo cửa hàng.
     /// </summary>
     [HttpGet("dispatch-hub/suppliers/{supplierId:guid}")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> GetDispatchSupplierDetail(
         Guid supplierId,
         [FromQuery] int durationDays = 14,
@@ -186,6 +190,7 @@ public class PurchaseOrdersController : BaseApiController
     /// Xem trước kết quả chốt PO theo phạm vi (NEAREST / WEEK / ALL) không ghi DB (Dùng cho Modal Preview)
     /// </summary>
     [HttpPost("matrix/split/preview")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> PreviewSplitMatrixPo([FromBody] SplitMatrixPoCommand command, CancellationToken cancellationToken)
     {
         var result = await _poService.PreviewSplitMatrixPoAsync(command, cancellationToken);
@@ -196,6 +201,7 @@ public class PurchaseOrdersController : BaseApiController
     /// Chốt ma trận và tự động phát hành các đơn PO độc lập theo từng Ngày giao hàng và NCC (FE-05 / P0 Engine)
     /// </summary>
     [HttpPost("matrix/split")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> SplitMatrixPo([FromBody] SplitMatrixPoCommand command, CancellationToken cancellationToken)
     {
         var result = await _poService.SplitMatrixPoBatchAsync(command, cancellationToken);
@@ -210,6 +216,7 @@ public class PurchaseOrdersController : BaseApiController
     /// Cập nhật trạng thái đơn PO (APPROVED, REJECTED, DISPATCHED, CONFIRMED, CANCELLED)
     /// </summary>
     [HttpPatch("{id:guid}/status")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> UpdateStatus(
         Guid id,
         [FromQuery] string? status,
@@ -225,6 +232,7 @@ public class PurchaseOrdersController : BaseApiController
     }
 
     [HttpGet("dispatch-packages")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> ListDispatchPackages(
         [FromQuery] Guid? supplierId,
         [FromQuery] int take = 50,
@@ -235,6 +243,7 @@ public class PurchaseOrdersController : BaseApiController
     }
 
     [HttpGet("dispatch-packages/{packageId:guid}")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> GetDispatchPackage(Guid packageId, CancellationToken cancellationToken)
     {
         var result = await _dispatchPackageService.GetByIdAsync(packageId, cancellationToken);
@@ -243,6 +252,7 @@ public class PurchaseOrdersController : BaseApiController
     }
 
     [HttpGet("dispatch-packages/{packageId:guid}/download")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> DownloadDispatchPackage(Guid packageId, CancellationToken cancellationToken)
     {
         var (content, fileName, contentType) = await _dispatchPackageService.DownloadAsync(packageId, cancellationToken);
@@ -250,6 +260,7 @@ public class PurchaseOrdersController : BaseApiController
     }
 
     [HttpPost("dispatch-packages/{packageId:guid}/retry-generation")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> RetryPackageGeneration(Guid packageId, CancellationToken cancellationToken)
     {
         await _dispatchPackageService.RetryGenerationAsync(packageId, cancellationToken);
@@ -258,6 +269,7 @@ public class PurchaseOrdersController : BaseApiController
     }
 
     [HttpPost("dispatch-packages/{packageId:guid}/retry-email")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> RetryPackageEmail(Guid packageId, CancellationToken cancellationToken)
     {
         await _dispatchPackageService.RetryEmailAsync(packageId, cancellationToken);
@@ -266,6 +278,7 @@ public class PurchaseOrdersController : BaseApiController
     }
 
     [HttpPost("dispatch-packages/{packageId:guid}/cancel-schedule")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> CancelPackageSchedule(Guid packageId, CancellationToken cancellationToken)
     {
         await _dispatchPackageService.CancelScheduledAsync(packageId, cancellationToken);

@@ -21,19 +21,22 @@ public class EmployeeService : IEmployeeService
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
     private readonly ICloudinaryService? _cloudinaryService;
+    private readonly IPasswordHasher _passwordHasher;
 
     public EmployeeService(
         IEmployeeRepository employeeRepository,
         IUserRepository userRepository,
         IUnitOfWork unitOfWork,
         ITenantContext tenantContext,
-        ICloudinaryService? cloudinaryService = null)
+        ICloudinaryService? cloudinaryService = null,
+        IPasswordHasher? passwordHasher = null)
     {
         _employeeRepository = employeeRepository;
         _userRepository = userRepository;
         _unitOfWork = unitOfWork;
         _tenantContext = tenantContext;
         _cloudinaryService = cloudinaryService;
+        _passwordHasher = passwordHasher ?? new PasswordHasher();
     }
 
     public async Task<PagedResult<EmployeeSummaryDto>> GetEmployeesPagedAsync(
@@ -244,6 +247,11 @@ public class EmployeeService : IEmployeeService
         // Tạo hoặc liên kết tài khoản Identity nếu có cung cấp UserName/UserId
         if (!string.IsNullOrWhiteSpace(request.UserName))
         {
+            if (!string.IsNullOrEmpty(request.Password) && !EmployeePasswordPolicy.IsValid(request.Password))
+            {
+                throw new ArgumentException(EmployeePasswordPolicy.ErrorMessage);
+            }
+
             var normalizedUsername = request.UserName.Trim();
             var existingUser = await _userRepository.GetByUsernameAsync(normalizedUsername, cancellationToken);
             if (existingUser != null)
@@ -390,6 +398,11 @@ public class EmployeeService : IEmployeeService
         // Tạo hoặc cập nhật tài khoản Identity nếu có cung cấp UserName/UserId
         if (!string.IsNullOrWhiteSpace(request.UserName))
         {
+            if (!string.IsNullOrEmpty(request.Password) && !EmployeePasswordPolicy.IsValid(request.Password))
+            {
+                throw new ArgumentException(EmployeePasswordPolicy.ErrorMessage);
+            }
+
             var normalizedUsername = request.UserName.Trim();
             if (string.IsNullOrEmpty(employee.UserId))
             {
@@ -447,7 +460,9 @@ public class EmployeeService : IEmployeeService
                     }
                     if (!string.IsNullOrWhiteSpace(request.Password))
                     {
-                        user.PasswordHash = request.Password;
+                        user.PasswordHash = _passwordHasher.HashPassword(request.Password);
+                        user.SecurityStamp = Guid.NewGuid().ToString("N");
+                        user.RefreshToken = null;
                     }
                     user.FullName = employee.FullName;
                     _userRepository.Update(user);
@@ -628,6 +643,11 @@ public class EmployeeService : IEmployeeService
             throw new ArgumentException("Mật khẩu không được để trống.");
         }
 
+        if (!EmployeePasswordPolicy.IsValid(request.Password))
+        {
+            throw new ArgumentException(EmployeePasswordPolicy.ErrorMessage);
+        }
+
         var employee = await _employeeRepository.GetByIdAsync(employeeId, cancellationToken);
         if (employee == null)
         {
@@ -702,6 +722,11 @@ public class EmployeeService : IEmployeeService
             throw new ArgumentException("Tên đăng nhập không được để trống.");
         }
 
+        if (!string.IsNullOrEmpty(request.Password) && !EmployeePasswordPolicy.IsValid(request.Password))
+        {
+            throw new ArgumentException(EmployeePasswordPolicy.ErrorMessage);
+        }
+
         var employee = await _employeeRepository.GetByIdAsync(employeeId, cancellationToken);
         if (employee == null)
         {
@@ -735,9 +760,11 @@ public class EmployeeService : IEmployeeService
             user.UserName = normalizedUsername;
         }
 
-        if (!string.IsNullOrWhiteSpace(request.Password))
+        if (!string.IsNullOrEmpty(request.Password))
         {
-            user.PasswordHash = request.Password;
+            user.PasswordHash = _passwordHasher.HashPassword(request.Password);
+            user.SecurityStamp = Guid.NewGuid().ToString("N");
+            user.RefreshToken = null;
         }
 
         if (!string.IsNullOrWhiteSpace(request.DisplayName))
@@ -979,11 +1006,12 @@ public class EmployeeService : IEmployeeService
             }
         }
 
+        var rawPassword = !string.IsNullOrWhiteSpace(password) ? password : "Staff@123456";
         return new User
         {
             Id = newUserId,
             UserName = normalizedUsername,
-            PasswordHash = !string.IsNullOrWhiteSpace(password) ? password : "Staff@123456",
+            PasswordHash = _passwordHasher.HashPassword(rawPassword),
             FullName = fullName,
             Email = candidateEmail,
             NormalizedEmail = normalizedEmail,

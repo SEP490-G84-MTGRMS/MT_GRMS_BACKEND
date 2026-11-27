@@ -327,6 +327,14 @@ public partial class AppDbContext : DbContext
                 {
                     entry.Entity.CreatedAt = DateTime.UtcNow;
                 }
+                if (entry.Entity is Customer addedCustomer && (addedCustomer.RowVersion == null || addedCustomer.RowVersion.Length == 0))
+                {
+                    addedCustomer.RowVersion = Guid.NewGuid().ToByteArray();
+                }
+                else if (entry.Entity is FinanceAccount addedAccount && (addedAccount.RowVersion == null || addedAccount.RowVersion.Length == 0))
+                {
+                    addedAccount.RowVersion = Guid.NewGuid().ToByteArray();
+                }
             }
             else if (entry.State == EntityState.Modified)
             {
@@ -335,6 +343,18 @@ public partial class AppDbContext : DbContext
                 {
                     // CONC-03: Optimistic Concurrency token increment for BranchStock
                     branchStock.RowVersion++;
+                }
+                else if (entry.Entity is Transfer modifiedTransfer)
+                {
+                    modifiedTransfer.RowVersion++;
+                }
+                else if (entry.Entity is Customer modifiedCustomer)
+                {
+                    modifiedCustomer.RowVersion = Guid.NewGuid().ToByteArray();
+                }
+                else if (entry.Entity is FinanceAccount modifiedAccount)
+                {
+                    modifiedAccount.RowVersion = Guid.NewGuid().ToByteArray();
                 }
             }
         }

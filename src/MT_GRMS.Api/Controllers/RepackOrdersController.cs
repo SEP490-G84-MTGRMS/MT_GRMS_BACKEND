@@ -7,12 +7,13 @@ using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Repacks;
 using MT_GRMS.Application.Repacks.Dtos;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api")]
-[Authorize]
+[Authorize(Roles = SystemRoles.StoreOwner + "," + SystemRoles.Staff)]
 public class RepackOrdersController : BaseApiController
 {
     private readonly IRepackService _repackService;
@@ -55,6 +56,7 @@ public class RepackOrdersController : BaseApiController
     }
 
     [HttpPatch("packages/{id:guid}/price")]
+    [Authorize(Roles = RoleConstants.StoreOwnerOrAdmin)]
     public async Task<IActionResult> UpdatePrice(Guid id, [FromBody] UpdatePackagePriceRequest request, CancellationToken cancellationToken)
     {
         var result = await _repackService.UpdatePackagePriceAsync(id, request, cancellationToken);

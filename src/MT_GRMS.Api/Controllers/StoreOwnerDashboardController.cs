@@ -3,12 +3,13 @@ using Microsoft.AspNetCore.Mvc;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Reports;
 using MT_GRMS.Application.Reports.Dtos;
+using MT_GRMS.Domain.Constants;
 
 namespace MT_GRMS.Api.Controllers;
 
 [ApiController]
 [Route("api/store-owner/dashboard")]
-[Authorize(Roles = "StoreOwner,STORE_OWNER")]
+[Authorize(Roles = SystemRoles.StoreOwner)]
 public class StoreOwnerDashboardController : BaseApiController
 {
     private static readonly HashSet<string> Periods = new(StringComparer.Ordinal)
@@ -30,7 +31,7 @@ public class StoreOwnerDashboardController : BaseApiController
         [FromQuery] string period = "today", [FromQuery] Guid? branchId = null, CancellationToken ct = default)
     {
         if (!Periods.Contains(period))
-            return BadRequest(new ProblemDetails { Status = 400, Title = "Kỳ xem không hợp lệ." });
+            return BadRequest(ApiResponse<object>.Fail("INVALID_PERIOD", "Kỳ xem không hợp lệ."));
 
         var tokenTenantId = User.FindFirst("tenant_id")?.Value;
         if (string.IsNullOrWhiteSpace(tokenTenantId) || tokenTenantId != _tenant.CurrentTenantId)

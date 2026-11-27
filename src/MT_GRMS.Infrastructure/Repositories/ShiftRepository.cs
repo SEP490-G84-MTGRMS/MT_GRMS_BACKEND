@@ -215,4 +215,16 @@ public class ShiftRepository : GenericRepository<ShiftZReport>, IShiftRepository
             .Where(s => s.BranchId == branchId && s.WorkDate.Date == workDate.Date && s.Status != ScheduleStatus.Cancelled)
             .ToListAsync(cancellationToken);
     }
+
+    public async Task<bool> IsBusinessDayClosedAsync(Guid branchId, DateOnly businessDate, CancellationToken cancellationToken = default)
+    {
+        return await _context.BusinessDayClosings
+            .AnyAsync(c =>
+                c.BranchId == branchId &&
+                c.BusinessDate == businessDate &&
+                c.IsActive &&
+                c.Status == BusinessDayClosingStatus.Closed &&
+                !c.IsDeleted,
+                cancellationToken);
+    }
 }

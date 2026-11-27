@@ -297,6 +297,45 @@ public class AuthController : BaseApiController
         return Ok(ApiResponse<UserInfo>.Ok(user, "Lấy thông tin người dùng thành công.", StatusCodes.Status200OK));
     }
 
+    /// <summary>
+    /// Cập nhật thông tin hồ sơ cá nhân của tài khoản đang đăng nhập (Họ tên & Số điện thoại)
+    /// </summary>
+    [HttpPut("me/profile")]
+    [Authorize]
+    [ProducesResponseType(typeof(ApiResponse<UserInfo>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> UpdateProfile([FromBody] UpdateProfileRequest? request, CancellationToken cancellationToken)
+    {
+        var userId = User?.FindFirstValue(ClaimTypes.NameIdentifier)
+                     ?? User?.FindFirstValue("sub")
+                     ?? User?.FindFirstValue("userId");
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", "Chưa xác thực danh tính.", StatusCodes.Status401Unauthorized));
+        }
+
+        if (request == null || string.IsNullOrWhiteSpace(request.FullName))
+        {
+            return BadRequest(ApiResponse<object>.Fail("INVALID_FULL_NAME", "Vui lòng nhập họ và tên hiển thị.", StatusCodes.Status400BadRequest));
+        }
+
+        try
+        {
+            var updated = await _authService.UpdateProfileAsync(userId, request, cancellationToken);
+            return Ok(ApiResponse<UserInfo>.Ok(updated, "Cập nhật thông tin cá nhân thành công.", StatusCodes.Status200OK));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", ex.Message, StatusCodes.Status401Unauthorized));
+        }
+        catch (ArgumentException ex)
+        {
+            var (code, msg) = ParseCodedMessage(ex.Message, "BAD_REQUEST");
+            return BadRequest(ApiResponse<object>.Fail(code, msg, StatusCodes.Status400BadRequest));
+        }
+    }
+
     [HttpGet("me/2fa")]
     [Authorize]
     public async Task<IActionResult> GetTwoFactorStatus(CancellationToken cancellationToken)
@@ -335,6 +374,49 @@ public class AuthController : BaseApiController
         }
         catch (UnauthorizedAccessException ex) { return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", ex.Message, 401)); }
         catch (ArgumentException ex) { return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, 400)); }
+    }
+
+    /// <summary>
+    /// Đổi mật khẩu tài khoản đang đăng nhập, xoay SecurityStamp thu hồi các thiết bị khác và cấp lại HttpOnly cookies cho phiên hiện tại
+    /// </summary>
+    [HttpPost("me/change-password")]
+    [Authorize]
+    [ProducesResponseType(typeof(ApiResponse<UserInfo>), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> ChangePassword([FromBody] ChangePasswordRequest? request, CancellationToken cancellationToken)
+    {
+        var userId = User?.FindFirstValue(ClaimTypes.NameIdentifier)
+                     ?? User?.FindFirstValue("sub")
+                     ?? User?.FindFirstValue("userId");
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", "Chưa xác thực danh tính.", StatusCodes.Status401Unauthorized));
+        }
+
+        if (request == null || string.IsNullOrWhiteSpace(request.CurrentPassword) || string.IsNullOrWhiteSpace(request.NewPassword))
+        {
+            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", "Vui lòng nhập đầy đủ mật khẩu hiện tại và mật khẩu mới.", StatusCodes.Status400BadRequest));
+        }
+
+        try
+        {
+            var session = await _authService.ChangePasswordAsync(userId, request, cancellationToken);
+            SetAuthCookies(session.AccessToken, session.RefreshToken, session.ExpiresAt, session.RefreshExpiresAt);
+            return Ok(ApiResponse<UserInfo>.Ok(
+                session.User,
+                "Đổi mật khẩu thành công. Các phiên đăng nhập cũ trên thiết bị khác đã được thu hồi.",
+                StatusCodes.Status200OK));
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            return Unauthorized(ApiResponse<object>.Fail("UNAUTHORIZED", ex.Message, StatusCodes.Status401Unauthorized));
+        }
+        catch (ArgumentException ex)
+        {
+            var (code, msg) = ParseCodedMessage(ex.Message, "BAD_REQUEST");
+            return BadRequest(ApiResponse<object>.Fail(code, msg, StatusCodes.Status400BadRequest));
+        }
     }
 
     /// <summary>
@@ -389,13 +471,18 @@ public class AuthController : BaseApiController
         Response.Cookies.Delete("refresh_token", new CookieOptions { Path = "/api" });
     }
 
+    private const string NeutralForgotPasswordMessage =
+        "Nếu tài khoản tồn tại trong hệ thống, mã xác thực OTP đã được gửi đến email đăng ký.";
+
+    private const string NeutralPasswordResetOtpErrorMessage =
+        "Mã xác thực OTP không hợp lệ hoặc đã hết hạn.";
+
     /// <summary>
     /// Gửi mã xác thực OTP khôi phục mật khẩu qua Email
     /// </summary>
     [HttpPost("forgot-password")]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> ForgotPassword([FromBody] ForgotPasswordRequest request, CancellationToken cancellationToken)
     {
         if (request == null || string.IsNullOrWhiteSpace(request.Email))
@@ -406,11 +493,12 @@ public class AuthController : BaseApiController
         try
         {
             await _authService.ForgotPasswordAsync(request, cancellationToken);
-            return Ok(ApiResponse<object>.Ok(new { success = true }, "Mã xác thực OTP đã được gửi đến email của bạn.", StatusCodes.Status200OK));
+            return Ok(ApiResponse<object>.Ok(new { success = true }, NeutralForgotPasswordMessage, StatusCodes.Status200OK));
         }
-        catch (KeyNotFoundException ex)
+        catch (KeyNotFoundException)
         {
-            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message, StatusCodes.Status404NotFound));
+            // Trả phản hồi trung tính đồng nhất 100% để chống lộ thông tin tài khoản (OWASP Account Enumeration)
+            return Ok(ApiResponse<object>.Ok(new { success = true }, NeutralForgotPasswordMessage, StatusCodes.Status200OK));
         }
         catch (ArgumentException ex)
         {
@@ -424,7 +512,6 @@ public class AuthController : BaseApiController
     [HttpPost("verify-otp")]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> VerifyOtp([FromBody] VerifyOtpRequest request, CancellationToken cancellationToken)
     {
         if (request == null || string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.OtpCode))
@@ -437,13 +524,19 @@ public class AuthController : BaseApiController
             await _authService.VerifyOtpAsync(request, cancellationToken);
             return Ok(ApiResponse<object>.Ok(new { success = true }, "Mã xác thực hợp lệ.", StatusCodes.Status200OK));
         }
-        catch (KeyNotFoundException ex)
+        catch (KeyNotFoundException)
         {
-            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message, StatusCodes.Status404NotFound));
+            return BadRequest(ApiResponse<object>.Fail(
+                "OTP_INVALID",
+                NeutralPasswordResetOtpErrorMessage,
+                StatusCodes.Status400BadRequest));
         }
-        catch (ArgumentException ex)
+        catch (ArgumentException)
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+            return BadRequest(ApiResponse<object>.Fail(
+                "OTP_INVALID",
+                NeutralPasswordResetOtpErrorMessage,
+                StatusCodes.Status400BadRequest));
         }
     }
 
@@ -453,7 +546,6 @@ public class AuthController : BaseApiController
     [HttpPost("reset-password")]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status200OK)]
     [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status400BadRequest)]
-    [ProducesResponseType(typeof(ApiResponse<object>), StatusCodes.Status404NotFound)]
     public async Task<IActionResult> ResetPassword([FromBody] ResetPasswordRequest request, CancellationToken cancellationToken)
     {
         if (request == null || string.IsNullOrWhiteSpace(request.Email) || string.IsNullOrWhiteSpace(request.OtpCode) || string.IsNullOrWhiteSpace(request.NewPassword))
@@ -466,13 +558,25 @@ public class AuthController : BaseApiController
             await _authService.ResetPasswordAsync(request, cancellationToken);
             return Ok(ApiResponse<object>.Ok(new { success = true }, "Đặt lại mật khẩu thành công. Vui lòng đăng nhập bằng mật khẩu mới.", StatusCodes.Status200OK));
         }
-        catch (KeyNotFoundException ex)
+        catch (KeyNotFoundException)
         {
-            return NotFound(ApiResponse<object>.Fail("NOT_FOUND", ex.Message, StatusCodes.Status404NotFound));
+            return BadRequest(ApiResponse<object>.Fail(
+                "OTP_INVALID",
+                NeutralPasswordResetOtpErrorMessage,
+                StatusCodes.Status400BadRequest));
         }
         catch (ArgumentException ex)
         {
-            return BadRequest(ApiResponse<object>.Fail("BAD_REQUEST", ex.Message, StatusCodes.Status400BadRequest));
+            var (code, msg) = ParseCodedMessage(ex.Message, "BAD_REQUEST");
+            if (code == "WEAK_PASSWORD")
+            {
+                return BadRequest(ApiResponse<object>.Fail(code, msg, StatusCodes.Status400BadRequest));
+            }
+
+            return BadRequest(ApiResponse<object>.Fail(
+                "OTP_INVALID",
+                NeutralPasswordResetOtpErrorMessage,
+                StatusCodes.Status400BadRequest));
         }
     }
 

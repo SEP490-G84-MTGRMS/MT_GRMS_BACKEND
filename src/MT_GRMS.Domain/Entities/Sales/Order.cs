@@ -33,6 +33,7 @@ public class Order : BaseTenantEntity
     public string? CashierName { get; set; }
     public string? FulfilledByCashierName { get; set; }
     public DateTime? FulfilledAtUtc { get; set; }
+    public DateTime? ExpectedPickupDate { get; set; }
     public string? Note { get; set; }
     public Guid? AppliedPromotionId { get; set; }
     public string? AppliedPromotionSummary { get; set; }

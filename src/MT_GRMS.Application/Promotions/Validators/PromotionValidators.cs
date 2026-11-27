@@ -91,6 +91,14 @@ internal static class PromotionValidationRules
         validator.RuleFor(endDateExpr)
             .GreaterThan(startDateExpr).WithMessage("Thời gian kết thúc phải lớn hơn thời gian bắt đầu");
 
+        validator.RuleFor(conditionsExpr)
+            .Must(conditions => conditions != null && conditions.Any(c => c.ProductId != Guid.Empty && c.ProductRole == "DISCOUNT"))
+            .WithMessage("Phải chọn ít nhất một sản phẩm giảm giá")
+            .When(x => string.Equals(getType(x)?.Trim(), "PRODUCT_DISCOUNT", StringComparison.OrdinalIgnoreCase));
+        validator.RuleFor(conditionsExpr)
+            .Must(conditions => conditions == null || conditions.Select(c => c.ProductId).Distinct().Count() == conditions.Count())
+            .WithMessage("Mỗi sản phẩm chỉ được xuất hiện một lần trong chương trình giảm giá")
+            .When(x => string.Equals(getType(x)?.Trim(), "PRODUCT_DISCOUNT", StringComparison.OrdinalIgnoreCase));
         validator.RuleForEach(conditionsExpr).ChildRules(cond =>
         {
             cond.RuleFor(c => c.ProductRole)

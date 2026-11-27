@@ -29,6 +29,7 @@ public class SupplierSummaryDto
     public int PaymentTermDays { get; set; }
     public decimal CreditLimit { get; set; }
     public decimal CurrentDebt { get; set; }
+    public decimal OverdueDebt { get; set; }
     public int OpenPurchaseOrderCount { get; set; }
     public Guid? LinkedCustomerId { get; set; }
     public string? Address { get; set; }
@@ -138,13 +139,26 @@ public class LinkCustomerRequest
     public Guid CustomerId { get; set; }
 }
 
+public class SupplierApAgingDto
+{
+    public decimal Current { get; set; }
+    public decimal Days1To30 { get; set; }
+    public decimal Days31To60 { get; set; }
+    public decimal Days61To90 { get; set; }
+    public decimal Over90Days { get; set; }
+    public decimal TotalOverdue => Days1To30 + Days31To60 + Days61To90 + Over90Days;
+    public decimal TotalDebt => Current + TotalOverdue;
+}
+
 public class SupplierApSummaryDto
 {
     public Guid SupplierId { get; set; }
     public decimal CurrentDebt { get; set; }
     public decimal OverdueDebt { get; set; }
     public decimal CreditLimit { get; set; }
+    public int PaymentTermDays { get; set; }
     public int OpenPurchaseOrderCount { get; set; }
+    public SupplierApAgingDto Aging { get; set; } = new();
 }
 
 public class ReplaceSupplierBranchesCommand
@@ -213,6 +227,10 @@ public class SupplierDeliveryConfigDto
     public bool AllowUrgent { get; set; }
     public int UrgentLeadTimeHours { get; set; }
     public decimal UrgentFeePercent { get; set; }
+    public bool AllowStoreEdit { get; set; } = true;
+    public string EditWindowType { get; set; } = "BEFORE_CUTOFF";
+    public int HoursBeforeDelivery { get; set; } = 24;
+    public int HoursAfterOrder { get; set; } = 2;
     public DateTime? EarliestDeliveryDate { get; set; }
     public List<SupplierBlackoutDateDto> BlackoutDates { get; set; } = [];
 }
@@ -227,6 +245,10 @@ public class UpdateSupplierDeliveryConfigCommand
     public bool AllowUrgent { get; set; } = false;
     public int UrgentLeadTimeHours { get; set; } = 0;
     public decimal UrgentFeePercent { get; set; } = 0;
+    public bool? AllowStoreEdit { get; set; }
+    public string? EditWindowType { get; set; }
+    public int? HoursBeforeDelivery { get; set; }
+    public int? HoursAfterOrder { get; set; }
     public List<SupplierBlackoutDateDto>? BlackoutDates { get; set; }
 }
 
@@ -355,6 +377,7 @@ public class SupplierTransactionDto
     public string TransactionCode { get; set; } = string.Empty;
     public string TransactionType { get; set; } = string.Empty; // PO / GRN
     public DateTime TransactionDate { get; set; }
+    public DateTime? DeliveryDate { get; set; }
     public decimal Amount { get; set; }
     public string Status { get; set; } = string.Empty;
     public Guid? BranchId { get; set; }
@@ -425,6 +448,9 @@ public class AssignSuppliersToBranchCommand
     public List<Guid> SupplierIds { get; set; } = [];
     /// <summary>Ưu tiên: từng NCC kèm DeliveryDays override.</summary>
     public List<AssignSupplierToBranchItemDto> Items { get; set; } = [];
+    /// <summary>Trạng thái khởi tạo (mặc định Active). Nếu Inactive thì bắt buộc có InactiveReason và không sync SP.</summary>
+    public SupplierStatus? Status { get; set; }
+    public string? InactiveReason { get; set; }
 }
 
 public class UpdateSupplierBranchAssignmentStatusRequest
