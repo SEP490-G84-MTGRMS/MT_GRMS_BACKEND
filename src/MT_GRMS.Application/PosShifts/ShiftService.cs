@@ -16,6 +16,8 @@ namespace MT_GRMS.Application.PosShifts;
 
 public class ShiftService : IShiftService
 {
+    private const decimal DiscrepancyReasonThreshold = 1_000m;
+
     private readonly IShiftRepository _shiftRepository;
     private readonly IUnitOfWork _unitOfWork;
     private readonly ITenantContext _tenantContext;
@@ -935,8 +937,8 @@ public class ShiftService : IShiftService
 
         shift.ActualCashCounted = request.ActualCashCounted;
         shift.Discrepancy = shift.ActualCashCounted - shift.ExpectedCash;
-        if (shift.Discrepancy != 0 && string.IsNullOrWhiteSpace(request.DiscrepancyReason))
-            throw new BusinessException("DISCREPANCY_REASON_REQUIRED", "Vui lòng nhập lý do chênh lệch tiền trong két.");
+        if (Math.Abs(shift.Discrepancy.Value) >= DiscrepancyReasonThreshold && string.IsNullOrWhiteSpace(request.DiscrepancyReason))
+            throw new BusinessException("DISCREPANCY_REASON_REQUIRED", "Vui lòng nhập lý do chênh lệch tiền trong két (từ 1.000đ trở lên).");
         shift.DiscrepancyReason = request.DiscrepancyReason?.Trim();
 
         shift.RetainedFloatAmount = request.RetainedFloatAmount;
@@ -1033,7 +1035,7 @@ public class ShiftService : IShiftService
 
     private Task QueueShiftDiscrepancyAsync(ShiftZReport shift, CancellationToken ct)
     {
-        if (_notificationOutbox == null || shift.Discrepancy is not decimal discrepancy || Math.Abs(discrepancy) <= 0.01m)
+        if (_notificationOutbox == null || shift.Discrepancy is not decimal discrepancy || Math.Abs(discrepancy) < DiscrepancyReasonThreshold)
             return Task.CompletedTask;
 
         return _notificationOutbox.EnqueueShiftDiscrepancyAsync(shift, discrepancy, ct);

@@ -2271,5 +2271,52 @@ public class ShiftManagementServiceTests
             _service.StartClosingShiftAsync(shiftId, otherStaffId, new StartClosingShiftRequest("Thu chot ca")));
         Assert.Equal("SHIFT_CLOSE_FORBIDDEN", ex.ErrorCode);
     }
+
+    [Fact]
+    public async Task ConfirmCloseShiftAsync_DiscrepancyUnder1000_DoesNotRequireReason()
+    {
+        var shiftId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            BranchId = Guid.NewGuid(),
+            Status = ShiftState.Closing,
+            CashierUserId = _tenantContext.CurrentUserId,
+            OpeningFloat = 500_500m
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        // Expected = 500_500, Actual = 500_000 -> discrepancy = -500 (< 1,000đ)
+        var request = new ConfirmCloseShiftRequest(500_000m, 500_000m, 0m, DiscrepancyReason: null);
+        var result = await _service.ConfirmCloseShiftAsync(shiftId, _tenantContext.CurrentUserId, "Staff", request);
+
+        Assert.Equal(ShiftState.Closed, result.Status);
+        Assert.Equal(-500m, result.Discrepancy);
+        Assert.Null(result.DiscrepancyReason);
+    }
+
+    [Fact]
+    public async Task ConfirmCloseShiftAsync_DiscrepancyAt1000_RequiresReason()
+    {
+        var shiftId = Guid.NewGuid();
+        var shift = new ShiftZReport
+        {
+            Id = shiftId,
+            TenantId = _tenantContext.CurrentTenantId,
+            BranchId = Guid.NewGuid(),
+            Status = ShiftState.Closing,
+            CashierUserId = _tenantContext.CurrentUserId,
+            OpeningFloat = 501_000m
+        };
+        _shiftRepository.Shifts.Add(shift);
+
+        // Expected = 501_000, Actual = 500_000 -> discrepancy = -1,000 (>= 1,000đ)
+        var request = new ConfirmCloseShiftRequest(500_000m, 500_000m, 0m, DiscrepancyReason: null);
+        var ex = await Assert.ThrowsAsync<BusinessException>(() =>
+            _service.ConfirmCloseShiftAsync(shiftId, _tenantContext.CurrentUserId, "Staff", request));
+
+        Assert.Equal("DISCREPANCY_REASON_REQUIRED", ex.ErrorCode);
+    }
 }
 
