@@ -1,4 +1,6 @@
-﻿using MT_GRMS.Application.Reports.Dtos;
+﻿using Microsoft.Extensions.Configuration;
+using MT_GRMS.Application.Reports.Dtos;
+using MT_GRMS.Application.Tax;
 
 namespace MT_GRMS.Application.Reports;
 
@@ -6,11 +8,16 @@ public class PnLReportService : IPnLReportService
 {
     private readonly IPnLReportRepository _pnlRepo;
     private readonly MT_GRMS.Application.Common.ITenantContext _tenantContext;
+    private readonly TaxPolicy _taxPolicy;
 
-    public PnLReportService(IPnLReportRepository pnlRepo, MT_GRMS.Application.Common.ITenantContext tenantContext)
+    public PnLReportService(
+        IPnLReportRepository pnlRepo,
+        MT_GRMS.Application.Common.ITenantContext tenantContext,
+        IConfiguration? configuration = null)
     {
         _pnlRepo = pnlRepo;
         _tenantContext = tenantContext;
+        _taxPolicy = TaxPolicy.Load(configuration);
     }
 
     public async Task<PnLSummaryResponse> GetPnLSummaryAsync(PnLFilterRequest request, CancellationToken ct = default)
@@ -52,11 +59,7 @@ public class PnLReportService : IPnLReportService
             ? Math.Round((netProfit / netRevenue) * 100m, 2, MidpointRounding.AwayFromZero)
             : 0m;
 
-        var totalTaxRatePct = MT_GRMS.Application.Tax.HouseholdTaxService.RetailVatRate
-            + MT_GRMS.Application.Tax.HouseholdTaxService.RetailPitRate;
-        var estimatedTaxAmount = netRevenue > 0
-            ? Math.Round(netRevenue * (totalTaxRatePct / 100m), 0, MidpointRounding.AwayFromZero)
-            : 0m;
+        var estimatedTaxAmount = await CalculatePolicyDrivenEstimatedTaxAsync(request.ToDate, netRevenue, ct);
 
         var totalOrders = revenue.TotalOrders;
         var aov = totalOrders > 0 ? Math.Round(netRevenue / totalOrders, 0, MidpointRounding.AwayFromZero) : 0m;
@@ -174,6 +177,54 @@ public class PnLReportService : IPnLReportService
             d.Expenses,
             d.NetRevenue - d.Cogs - d.Expenses
         )).ToList();
+    }
+
+    /// <summary>
+    /// Computes policy-driven estimated retail household tax (Decree 68/2026 &amp; Decree 398/2026):
+    /// 0 VND when annual YTD net revenue &lt;= 1B; otherwise VAT on full period revenue + PIT on excess over 1B (with 30% PIT relief when &lt;= 10B in 2026-2027).
+    /// </summary>
+    private async Task<decimal> CalculatePolicyDrivenEstimatedTaxAsync(DateTime periodToDate, decimal periodNetRevenue, CancellationToken ct)
+    {
+        if (periodNetRevenue <= 0m) return 0m;
+
+        var vnTz = HouseholdTaxService.GetVietnamTimeZone();
+        var toDateUtc = periodToDate.Kind == DateTimeKind.Local
+            ? periodToDate.ToUniversalTime()
+            : DateTime.SpecifyKind(periodToDate, DateTimeKind.Utc);
+        var toDateVn = TimeZoneInfo.ConvertTimeFromUtc(toDateUtc, vnTz);
+        var periodYear = toDateVn.Year;
+        var startOfYearUtc = TimeZoneInfo.ConvertTimeToUtc(
+            new DateTime(periodYear, 1, 1, 0, 0, 0, DateTimeKind.Unspecified),
+            vnTz);
+
+        var ytdRevenue = await _pnlRepo.GetRevenueAsync(null, startOfYearUtc, toDateUtc, ct);
+        var ytdNetRevenue = Math.Max(
+            periodNetRevenue,
+            Math.Max(0m, ytdRevenue.GrossRevenue - ytdRevenue.Discounts - ytdRevenue.SalesReturns));
+
+        if (ytdNetRevenue <= _taxPolicy.ExemptionThreshold) return 0m;
+
+        var vatAmount = Math.Round(
+            periodNetRevenue * (HouseholdTaxService.RetailVatRate / 100m),
+            0,
+            MidpointRounding.AwayFromZero);
+
+        var pitTaxableInPeriod = Math.Min(
+            periodNetRevenue,
+            Math.Max(0m, ytdNetRevenue - _taxPolicy.ExemptionThreshold));
+        var pitBeforeReduction = Math.Round(
+            pitTaxableInPeriod * (HouseholdTaxService.RetailPitRate / 100m),
+            0,
+            MidpointRounding.AwayFromZero);
+        var pitReduction = _taxPolicy.IsPitReductionEligible(periodYear, ytdNetRevenue)
+            ? Math.Round(
+                pitBeforeReduction * (_taxPolicy.EffectivePitReductionPercentage / 100m),
+                0,
+                MidpointRounding.AwayFromZero)
+            : 0m;
+        var pitAmount = Math.Max(0m, pitBeforeReduction - pitReduction);
+
+        return vatAmount + pitAmount;
     }
 
     private void RequireOwner() => MT_GRMS.Application.Common.TenantRoleGuard.RequireStoreOwner(_tenantContext, "báo cáo lãi lỗ");

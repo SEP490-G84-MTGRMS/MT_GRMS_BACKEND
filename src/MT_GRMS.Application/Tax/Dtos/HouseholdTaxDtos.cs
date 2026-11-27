@@ -11,6 +11,27 @@ public class VatBreakdownDto
     public decimal EffectiveVatRate { get; set; }
 }
 
+public class RiskyGoodsReceiptDto
+{
+    public Guid Id { get; set; }
+    public string Code { get; set; } = string.Empty;
+    public DateTime ReceivedAtUtc { get; set; }
+    public string SupplierName { get; set; } = string.Empty;
+    public decimal GrandTotal { get; set; }
+    public string PaymentMethod { get; set; } = string.Empty;
+    public string? InvoiceNo { get; set; }
+    public string RiskReason { get; set; } = string.Empty;
+}
+
+public class TaxExpenseComplianceSummaryDto
+{
+    public decimal ExcludedCashExpensesAmount { get; set; }
+    public int ExcludedCashExpensesCount { get; set; }
+    public decimal ExcludedOwnerSalaryAmount { get; set; }
+    public int ExcludedOwnerSalaryCount { get; set; }
+    public List<RiskyGoodsReceiptDto> RiskyGoodsReceipts { get; set; } = new();
+}
+
 public class HouseholdTaxFilterDto
 {
     public int Year { get; set; } = DateTime.UtcNow.Year;
@@ -20,15 +41,16 @@ public class HouseholdTaxFilterDto
     public AccountingBookType? BookType { get; set; }
     public TaxCalculationMethod CalculationMethod { get; set; } = TaxCalculationMethod.RevenuePercentage;
     public string? Tier2Method { get; set; } // "REVENUE_EXCESS" (Cách 1: 0.5% vượt 1 tỷ) hoặc "PROFIT_15" (Cách 2: 15% lợi nhuận)
-    public bool ApplyVatReduction2026 { get; set; } = false; // Bật/tắt chính sách giảm thuế GTGT (có thời hạn)
+    public bool ApplyVatReduction2026 { get; set; } = false; // Bật/tắt chính sách giảm thuế GTGT (có thời hạn đến 31/12/2026)
     public decimal? VatReductionPercentage { get; set; } // Mức giảm thuế GTGT tùy chỉnh (%, ví dụ: 20% hoặc 30%), mặc định 20% khi bật
+    public bool? ApplyPitReduction { get; set; } // Giảm 30% thuế TNCN theo NQ 43/2026 & NĐ 398/2026 (null = tự động áp dụng năm 2026-2027)
     public decimal? ReducedVatRevenueInPeriod { get; set; } // Doanh thu hàng thường được giảm 0.8%
     public decimal? StandardVatRevenueInPeriod { get; set; } // Doanh thu hàng chịu 1.0% (bia, rượu, thuốc lá...)
     public decimal? CustomVatRate { get; set; }
     public decimal? CustomPitRate { get; set; }
     public decimal? PriorDeclaredPitTaxOverride { get; set; }
-    public decimal? PriorDeclaredVatTaxOverride { get; set; } // Mock số thuế GTGT đã kê khai các kỳ trước // Cho phép mock số thuế TNCN đã khai các kỳ trước khi test
-    public string? VatOption { get; set; } = "PRUDENT_YTD"; // "PRUDENT_YTD" (Thận trọng - Dự phòng toàn bộ năm) hoặc "QUARTER_ONLY" (Chỉ tính quý vượt)
+    public decimal? PriorDeclaredVatTaxOverride { get; set; }
+    public string? VatOption { get; set; } = "PRUDENT_YTD"; // Luôn áp dụng PRUDENT_YTD theo hướng dẫn NĐ 68/2026
 }
 
 public class HouseholdTaxSummaryDto
@@ -60,11 +82,13 @@ public class HouseholdTaxSummaryDto
     // Cảnh báo vượt ngưỡng miễn thuế giữa năm (từ <= 1 tỷ lên > 1 tỷ)
     public bool IsThresholdCrossedMidYear { get; set; }
     public string? ThresholdExceededNote { get; set; }
+    public DateTime? EInvoiceRegistrationDeadlineLocal { get; set; } // Hạn 30 ngày đăng ký HĐĐT từ máy tính tiền theo NĐ 254/2026
 
-    // Cảnh báo tiến trình ngưỡng 3 tỷ VNĐ (Điểm d Khoản 5 Điều 4 Nghị định 68/2026/NĐ-CP)
-    public bool IsApproaching3BThreshold { get; set; } // >= 2.7 tỷ (90% của 3 tỷ)
-    public bool IsExceeding3BThreshold { get; set; } // > 3 tỷ
-    public bool Is3BCrossedMidYear { get; set; } // Vừa vượt 3 tỷ giữa năm (giữ tỷ lệ % đến hết năm, năm sau mới chuyển)
+    // Cảnh báo tiến trình ngưỡng chuyển đổi phương pháp (3 tỷ năm 2026, 10 tỷ từ năm 2027)
+    public decimal EffectiveMethodSwitchThreshold { get; set; } = 3_000_000_000m;
+    public bool IsApproaching3BThreshold { get; set; } // >= 90% ngưỡng chuyển đổi
+    public bool IsExceeding3BThreshold { get; set; } // > ngưỡng chuyển đổi
+    public bool Is3BCrossedMidYear { get; set; } // Vừa vượt ngưỡng giữa năm (giữ tỷ lệ % đến hết năm)
     public int? DeclarationMethodStartYear { get; set; } // Năm bắt buộc áp dụng phương pháp kê khai (ổn định 2 năm)
 
     // Cảnh báo tiến trình ngưỡng Nhóm 4 (toàn chuỗi Tenant)
@@ -82,6 +106,7 @@ public class HouseholdTaxSummaryDto
     public decimal VatReductionPercentage { get; set; } = 0m; // Mức giảm GTGT đang áp dụng (ví dụ: 20%)
     public decimal VatRate { get; set; } // Thuế suất GTGT hiệu dụng (VatAmount / TaxableRevenue)
     public bool IsVatReduced { get; set; } // Cờ xác nhận áp dụng chính sách giảm thuế GTGT 2026
+    public bool IsVatReductionPolicyActive { get; set; } = true; // True nếu kỳ đang nằm trong thời hạn VatReductionDeadlineUtc của TaxSettings:Policy
     public decimal VatTaxableRevenue { get; set; }
     public decimal VatAmount { get; set; }
     public decimal PriorDeclaredVatTax { get; set; } // Số thuế GTGT đã kê khai các kỳ trước trong năm
@@ -94,23 +119,42 @@ public class HouseholdTaxSummaryDto
     public decimal PeriodNetRevenue { get; set; }
 
     // Chi tiết thuế TNCN (Chỉ tính trên phần doanh thu lũy kế vượt 1 tỷ hoặc trên lợi nhuận)
-    public decimal PitRate { get; set; } // 0.5% (tỷ lệ) hoặc 15-20% (kê khai)
-    public decimal PitTaxableRevenue { get; set; } // Doanh thu chịu thuế TNCN
+    public decimal PitRate { get; set; } // 0.5% (tỷ lệ/tạm nộp) hoặc 15-20% (quyết toán kê khai)
+    public decimal PitTaxableRevenue { get; set; } // Doanh thu chịu thuế TNCN hoặc thu nhập tính thuế khi quyết toán
+    public decimal PitBeforeReduction { get; set; } // Thuế TNCN trước khi giảm 30% (NQ 43/2026 & NĐ 398/2026)
+    public decimal PitReductionPercentage { get; set; } // Tỷ lệ giảm thuế TNCN đang áp dụng (30% nếu <= 10 tỷ)
+    public decimal PitReductionAmount { get; set; } // Số tiền thuế TNCN được giảm 30% trong kỳ
+    public bool IsPitReduced { get; set; } // True nếu kỳ đang áp dụng giảm 30% TNCN theo NĐ 398/2026
+    public bool RequiresPitReductionAdjustmentForm03 { get; set; } // True khi vượt 10 tỷ và cần nộp Mẫu số 03 (NĐ 398/2026)
+    public string? PitReductionFormCode { get; set; } // "Mẫu số 01 (NĐ 398/2026)" | "Mẫu số 03 (NĐ 398/2026)" | null
     public decimal PitAmount { get; set; }
 
     // Phương pháp Kê khai theo mô hình lũy kế từ đầu năm YTD (Year-To-Date)
-    public decimal CogsAmount { get; set; } // Giá vốn hàng bán (COGS) trong kỳ
-    public decimal OpexAmount { get; set; } // Chi phí vận hành hợp lý (OPEX) trong kỳ
-    public bool IsCogsEstimated { get; set; } // Cờ cảnh báo: True nếu giá vốn đang áp dụng ước tính 70% do thiếu giá vốn sản phẩm
+    public decimal CogsAmount { get; set; } // Giá vốn hàng bán có chứng từ hợp lệ trong kỳ
+    public decimal OpexAmount { get; set; } // Chi phí vận hành hợp lệ theo Điều 6 NĐ 68 trong kỳ
+    public bool IsCogsEstimated { get; set; } // True nếu có mặt hàng bán ra thiếu giá vốn nhập kho (KHÔNG tự cộng 70% vào chi phí được trừ)
+    public decimal EstimatedCogsWarningAmount { get; set; } // Giá vốn ước tính tham khảo nội bộ cho các mặt hàng thiếu chứng từ (KHÔNG đưa vào tờ khai)
     public decimal DeductibleExpensesInPeriod { get; set; }
     public decimal YtdRevenue { get; set; }
     public decimal YtdExpenses { get; set; }
     public decimal TaxableIncomeYtd { get; set; }
+    public decimal TaxDueYtdBeforeReduction { get; set; }
+    public decimal PitReductionYtd { get; set; }
     public decimal TaxDueYtd { get; set; }
     public decimal PriorDeclaredPitTax { get; set; }
     public decimal OverpaidTaxCarry { get; set; }
     public decimal TaxableIncomeDeclaration { get; set; } // Thu nhập tính thuế lũy kế
     public decimal DeclarationPitAmount { get; set; }
+    public bool IsProvisionalPitPeriod { get; set; } // True khi kê khai theo thu nhập đang ở kỳ tạm nộp Tháng/Quý (Khoản 2 Điều 10 NĐ 68)
+    public decimal AnnualSettlementPitRate { get; set; } // Thuế suất quyết toán năm (15% / 17% / 20%)
+    public decimal EstimatedAnnualSettlementPit { get; set; } // Thuế TNCN dự kiến khi quyết toán năm theo lợi nhuận thực tế
+
+    // Kiểm soát chi phí hợp lệ theo Điều 6 NĐ 68/2026/NĐ-CP
+    public decimal ExcludedCashExpensesAmount { get; set; }
+    public int ExcludedCashExpensesCount { get; set; }
+    public decimal ExcludedOwnerSalaryAmount { get; set; }
+    public int ExcludedOwnerSalaryCount { get; set; }
+    public List<RiskyGoodsReceiptDto> RiskyGoodsReceipts { get; set; } = new();
 
     public decimal TotalTaxAmount { get; set; }
 
@@ -169,6 +213,14 @@ public class HouseholdTaxDeclarationPreviewDto
     public List<TaxDeclarationLineDto> Lines { get; set; } = new();
     public decimal TotalVatAmount { get; set; }
     public decimal TotalPitAmount { get; set; }
+    public decimal PitBeforeReduction { get; set; }
+    public decimal PitReductionPercentage { get; set; }
+    public decimal PitReductionAmount { get; set; }
+    public bool IsPitReduced { get; set; }
+    public string? PitReductionFormCode { get; set; }
+    public string? PitReductionNote { get; set; }
+    public bool IsProvisionalPitPeriod { get; set; }
+    public decimal EstimatedAnnualSettlementPit { get; set; }
     public decimal TotalTaxAmount { get; set; }
     public bool RequiresBusinessActivityAppendix { get; set; }
     public string AppendixCode { get; set; } = "01-2/BK-HĐKD";
@@ -238,6 +290,7 @@ public class CreateTaxSnapshotRequest
     public string SecurityPin { get; set; } = string.Empty;
     public bool ApplyVatReduction2026 { get; set; } = false;
     public decimal? VatReductionPercentage { get; set; }
+    public bool? ApplyPitReduction { get; set; }
     public decimal? ReducedVatRevenueInPeriod { get; set; }
     public decimal? StandardVatRevenueInPeriod { get; set; }
     public decimal? CustomVatRate { get; set; }

@@ -12,7 +12,12 @@ public interface IHouseholdTaxRepository
     Task<decimal> GetPeriodDeductibleExpensesAsync(DateTime fromDateUtc, DateTime toDateUtc, Guid? branchId, CancellationToken cancellationToken = default);
     Task<List<ExpenseVoucher>> GetDeductibleExpenseVouchersAsync(DateTime fromDateUtc, DateTime toDateUtc, Guid? branchId, CancellationToken cancellationToken = default);
     Task<(decimal TotalCogs, bool IsEstimated)> GetPeriodCogsAsync(DateTime fromDateUtc, DateTime toDateUtc, Guid? branchId, CancellationToken cancellationToken = default);
+    Task<(decimal DocumentedCogs, bool HasMissingCostItems, decimal EstimatedMissingCogsWarning)> GetPeriodCogsDetailedAsync(DateTime fromDateUtc, DateTime toDateUtc, Guid? branchId, CancellationToken cancellationToken = default)
+        => GetPeriodCogsAsync(fromDateUtc, toDateUtc, branchId, cancellationToken)
+            .ContinueWith(t => (t.Result.TotalCogs, t.Result.IsEstimated, 0m), cancellationToken);
     Task<decimal> GetPeriodOpexAsync(DateTime fromDateUtc, DateTime toDateUtc, Guid? branchId, CancellationToken cancellationToken = default);
+    Task<TaxExpenseComplianceSummaryDto> GetExpenseComplianceSummaryAsync(DateTime fromDateUtc, DateTime toDateUtc, Guid? branchId, decimal cashlessThreshold = 5_000_000m, CancellationToken cancellationToken = default)
+        => Task.FromResult(new TaxExpenseComplianceSummaryDto());
     Task<List<AccountingBookEntryDto>> GetBookEntriesAsync(DateTime fromDateUtc, DateTime toDateUtc, Guid? branchId, HouseholdTaxGroup group, TaxCalculationMethod method, AccountingBookType? bookType, CancellationToken cancellationToken = default);
     Task<HouseholdTaxSnapshot?> GetSnapshotAsync(int year, TaxPeriodType periodType, int periodNumber, Guid? branchId, CancellationToken cancellationToken = default);
     Task<HouseholdTaxSnapshot?> GetSnapshotByIdAsync(Guid id, CancellationToken cancellationToken = default);

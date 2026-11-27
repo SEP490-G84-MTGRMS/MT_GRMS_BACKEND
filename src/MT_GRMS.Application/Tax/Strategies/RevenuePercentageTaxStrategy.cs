@@ -81,14 +81,39 @@ public class RevenuePercentageTaxStrategy : ITaxCalculationStrategy
             EffectiveVatRate = effectiveVatRate
         };
 
-        // 2. PIT Calculation (YTD Cumulative Model)
+        // 2. PIT Calculation (YTD Cumulative Model + 30% PIT Reduction per Res. 43/2026 & Decree 398/2026)
         var ytdRevenue = context.AnnualAccumulatedRevenue;
         var currentExcess = Math.Max(0, ytdRevenue - context.ExemptionThreshold);
         var pitRate = context.CustomPitRate ?? RetailPitRate;
-        var taxDueYtd = Math.Round(currentExcess * (pitRate / 100m), 0, MidpointRounding.AwayFromZero);
+        var taxDueYtdBeforeReduction = Math.Round(currentExcess * (pitRate / 100m), 0, MidpointRounding.AwayFromZero);
+
+        var isPitReduced = context.ApplyPitReduction
+            && ytdRevenue <= context.PitReductionMaxRevenue
+            && context.PitReductionPercentage > 0m;
+        var pitReductionPct = isPitReduced ? context.PitReductionPercentage : 0m;
+        var pitReductionYtd = isPitReduced
+            ? Math.Round(taxDueYtdBeforeReduction * (pitReductionPct / 100m), 0, MidpointRounding.AwayFromZero)
+            : 0m;
+        var taxDueYtd = taxDueYtdBeforeReduction - pitReductionYtd;
 
         var pitPayable = Math.Max(0, taxDueYtd - context.PriorDeclaredPitTax);
         var overpaidTaxCarry = Math.Max(0, context.PriorDeclaredPitTax - taxDueYtd);
+
+        decimal pitBeforeReduction;
+        if (!isPitReduced)
+        {
+            pitBeforeReduction = pitPayable;
+        }
+        else if (context.PriorDeclaredPitTax == 0m)
+        {
+            pitBeforeReduction = taxDueYtdBeforeReduction;
+        }
+        else
+        {
+            var netFactor = Math.Max(0.0001m, 1m - (pitReductionPct / 100m));
+            pitBeforeReduction = Math.Round(pitPayable / netFactor, 0, MidpointRounding.AwayFromZero);
+        }
+        var pitReductionAmount = Math.Max(0m, pitBeforeReduction - pitPayable);
 
         return new TaxCalculationResult
         {
@@ -102,6 +127,10 @@ public class RevenuePercentageTaxStrategy : ITaxCalculationStrategy
             VatBreakdown = vatBreakdown,
             PitTaxableRevenue = currentExcess,
             PitRate = pitRate,
+            PitBeforeReduction = pitBeforeReduction,
+            PitReductionPercentage = pitReductionPct,
+            PitReductionAmount = pitReductionAmount,
+            IsPitReduced = isPitReduced,
             PitAmount = pitPayable,
             TotalTaxAmount = vatAmount + pitPayable,
             CogsAmount = 0,
@@ -111,11 +140,16 @@ public class RevenuePercentageTaxStrategy : ITaxCalculationStrategy
             YtdExpenses = 0,
             YtdRevenue = ytdRevenue,
             TaxableIncomeYtd = 0,
+            TaxDueYtdBeforeReduction = taxDueYtdBeforeReduction,
+            PitReductionYtd = pitReductionYtd,
             TaxDueYtd = taxDueYtd,
             PriorDeclaredPitTax = context.PriorDeclaredPitTax,
             OverpaidTaxCarry = overpaidTaxCarry,
             TaxableIncomeDeclaration = 0,
-            DeclarationPitAmount = 0
+            DeclarationPitAmount = 0,
+            IsProvisionalPitPeriod = false,
+            AnnualSettlementPitRate = pitRate,
+            EstimatedAnnualSettlementPit = taxDueYtd
         };
     }
 }

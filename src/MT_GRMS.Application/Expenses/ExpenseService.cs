@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using MT_GRMS.Application.Cashbook;
 using MT_GRMS.Application.Common;
 using MT_GRMS.Application.Common.Interfaces;
@@ -18,6 +19,7 @@ public class ExpenseService : IExpenseService
     private readonly Tax.ITaxPeriodLockGuard? _taxPeriodLockGuard;
     private readonly ICloudinaryService? _cloudinaryService;
     private readonly NotificationOutbox? _notificationOutbox;
+    private readonly Tax.TaxPolicy _taxPolicy;
 
     // Định mức thẩm quyền theo BR-17-06 / TT 152/2025/TT-BTC
     private const decimal T1_AutoApprovalThreshold = 500_000m; // Ngưỡng tự duyệt chi dưới 500k
@@ -41,6 +43,49 @@ public class ExpenseService : IExpenseService
         return TaxBlacklistKeywords.Any(kw => combined.Contains(kw, StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// Detects Store Owner or household family member salary/compensation (non-deductible per Art. 6(2)(c) Decree 68/2026,
+    /// except mandatory social/health insurance contributions).
+    /// </summary>
+    private static bool IsOwnerOrFamilySalary(string? category, string? beneficiaryName, string? note)
+    {
+        var text = $"{category} {beneficiaryName} {note}".ToLowerInvariant();
+        if (text.Contains("bảo hiểm bắt buộc", StringComparison.Ordinal) ||
+            text.Contains("bhxh", StringComparison.Ordinal) ||
+            text.Contains("bhyt", StringComparison.Ordinal) ||
+            text.Contains("bhtn", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var hasSalaryKeyword = text.Contains("lương", StringComparison.Ordinal) ||
+                               text.Contains("thù lao", StringComparison.Ordinal) ||
+                               text.Contains("tiền công", StringComparison.Ordinal) ||
+                               text.Contains("salary", StringComparison.Ordinal);
+        var hasOwnerKeyword = text.Contains("chủ hộ", StringComparison.Ordinal) ||
+                              text.Contains("chủ tiệm", StringComparison.Ordinal) ||
+                              text.Contains("chủ cửa hàng", StringComparison.Ordinal) ||
+                              text.Contains("thành viên hộ", StringComparison.Ordinal) ||
+                              text.Contains("owner", StringComparison.Ordinal);
+        return hasSalaryKeyword && hasOwnerKeyword;
+    }
+
+    private bool EvaluateTaxDeductibility(
+        bool requestedDeductible,
+        FinancialNature nature,
+        decimal amount,
+        FinanceAccountType paymentSourceType,
+        string? category,
+        string? beneficiaryName,
+        string? note)
+    {
+        if (!requestedDeductible || nature != FinancialNature.OperatingExpense) return false;
+        if (IsTaxBlacklisted(category, beneficiaryName, note)) return false;
+        if (IsOwnerOrFamilySalary(category, beneficiaryName, note)) return false;
+        if (amount >= _taxPolicy.EffectiveCashlessExpenseThreshold && paymentSourceType != FinanceAccountType.Bank) return false;
+        return true;
+    }
+
     public ExpenseService(
         IExpenseRepository expenseRepo,
         ICashbookService cashbookService,
@@ -48,7 +93,8 @@ public class ExpenseService : IExpenseService
         IUnitOfWork unitOfWork,
         Tax.ITaxPeriodLockGuard? taxPeriodLockGuard = null,
         ICloudinaryService? cloudinaryService = null,
-        NotificationOutbox? notificationOutbox = null)
+        NotificationOutbox? notificationOutbox = null,
+        IConfiguration? configuration = null)
     {
         _expenseRepo = expenseRepo;
         _cashbookService = cashbookService;
@@ -57,6 +103,7 @@ public class ExpenseService : IExpenseService
         _taxPeriodLockGuard = taxPeriodLockGuard;
         _cloudinaryService = cloudinaryService;
         _notificationOutbox = notificationOutbox;
+        _taxPolicy = Tax.TaxPolicy.Load(configuration);
     }
 
     public async Task<ExpenseVoucherResponse> CreateExpenseAsync(CreateExpenseRequest request, CancellationToken ct = default)
@@ -121,9 +168,14 @@ public class ExpenseService : IExpenseService
             voucherCode,
             ct);
 
-        var effectiveTaxDeductible = request.IsTaxDeductible
-            && request.Nature == FinancialNature.OperatingExpense
-            && !IsTaxBlacklisted(request.Category, request.BeneficiaryName, request.Note);
+        var effectiveTaxDeductible = EvaluateTaxDeductibility(
+            request.IsTaxDeductible,
+            request.Nature,
+            request.Amount,
+            request.PaymentSourceType,
+            request.Category,
+            request.BeneficiaryName,
+            request.Note);
 
         var voucher = new ExpenseVoucher
         {
@@ -420,6 +472,18 @@ public class ExpenseService : IExpenseService
 
             voucher.PaymentSourceType = request.PaymentSourceType;
             voucher.PaymentSourceAccountId = request.PaymentSourceAccountId;
+            if (voucher.IsTaxDeductible &&
+                !EvaluateTaxDeductibility(
+                    true,
+                    voucher.Nature,
+                    voucher.Amount,
+                    request.PaymentSourceType,
+                    voucher.Category,
+                    voucher.BeneficiaryName,
+                    voucher.Note))
+            {
+                voucher.IsTaxDeductible = false;
+            }
 
             try
             {
