@@ -704,4 +704,76 @@ public class CatalogAndBranchRepositoriesIntegrationTests
             Assert.Equal(0, cnt12);
         }
     }
+
+    [Fact]
+    public async Task ProductRepository_MultiTokenFiltersAndStatus_AndImageUrlsPersistence_ShouldWork()
+    {
+        var (context, _) = CreateDbContext();
+        using (context)
+        {
+            var repo = new ProductRepository(context);
+            var cat = new Category { Id = Guid.NewGuid(), TenantId = TenantId, Name = "Đồ uống" };
+            var p1 = new Product
+            {
+                Id = Guid.NewGuid(), TenantId = TenantId, CategoryId = cat.Id, ProductCode = "SP-001",
+                Name = "Coca Cola 330ml", Barcode = "8930001", BaseUnit = "Lon", SellingPrice = 10000m,
+                Status = ProductStatus.Active,
+                ImageUrls = new List<string> { "https://cdn.test/mat-sau.jpg", "https://cdn.test/mat-truoc.jpg" }
+            };
+            var p2 = new Product
+            {
+                Id = Guid.NewGuid(), TenantId = TenantId, CategoryId = cat.Id, ProductCode = "SP-002",
+                Name = "Pepsi 330ml", Barcode = "8930002", BaseUnit = "Lon", SellingPrice = 10000m,
+                Status = ProductStatus.Inactive
+            };
+            var p3 = new Product
+            {
+                Id = Guid.NewGuid(), TenantId = TenantId, CategoryId = cat.Id, ProductCode = "SP-003",
+                Name = "Nước suối 500ml", Barcode = "8930003", BaseUnit = "Chai", SellingPrice = 5000m,
+                Status = ProductStatus.Active
+            };
+
+            await context.Categories.AddAsync(cat);
+            await context.Products.AddRangeAsync(p1, p2, p3);
+            await context.SaveChangesAsync();
+
+            // Verify multi-image persistence after reload
+            var reloaded = await repo.GetByIdWithCategoryAsync(p1.Id);
+            Assert.NotNull(reloaded);
+            Assert.Equal("https://cdn.test/mat-sau.jpg", reloaded!.ImageUrl);
+            Assert.Equal(2, reloaded.ImageUrls.Count);
+            Assert.Equal("https://cdn.test/mat-truoc.jpg", reloaded.ImageUrls[1]);
+
+            // Multi-token Skus filter
+            var (skuItems, skuTotal) = await repo.GetPagedListAsync(new ProductQueryFilter
+            {
+                Skus = new List<string> { "SP-001", "SP-003" },
+                PageIndex = 1,
+                PageSize = 10
+            });
+            Assert.Equal(2, skuTotal);
+            Assert.Equal(2, skuItems.Count);
+
+            // Multi-token Names filter
+            var (nameItems, nameTotal) = await repo.GetPagedListAsync(new ProductQueryFilter
+            {
+                Names = new List<string> { "Coca", "Pepsi" },
+                PageIndex = 1,
+                PageSize = 10
+            });
+            Assert.Equal(2, nameTotal);
+            Assert.Equal(2, nameItems.Count);
+
+            // Status filter (Discontinued mapped to Inactive)
+            var (statusItems, statusTotal) = await repo.GetPagedListAsync(new ProductQueryFilter
+            {
+                Status = "Discontinued",
+                PageIndex = 1,
+                PageSize = 10
+            });
+            Assert.Equal(1, statusTotal);
+            Assert.Single(statusItems);
+            Assert.Equal("SP-002", statusItems[0].ProductCode);
+        }
+    }
 }

@@ -38,8 +38,8 @@ public class MockDashboardService : IAdminDashboardService
     {
         var list = new List<UrgentAlertResponse>
         {
-            new("bachhoa-hn", "Bách Hóa Hà Nội", "Anh Tuấn", "0912345678", "Gói Cơ Bản", "Còn 2 ngày", "Sắp hết hạn", "warning"),
-            new("sieuthi-sg", "Siêu Thị Sài Gòn", "Chị Mai", "0987654321", "Gói Pro", "Còn 5 ngày ân hạn", "Đang ân hạn", "error")
+            new("tenant_01", "bachhoa-hn", "Bách Hóa Hà Nội", "Anh Tuấn", "0912345678", "Gói Cơ Bản", "Còn 2 ngày", "Sắp hết hạn", "warning"),
+            new("tenant_02", "sieuthi-sg", "Siêu Thị Sài Gòn", "Chị Mai", "0987654321", "Gói Pro", "Còn 5 ngày ân hạn", "Đang ân hạn", "error")
         };
         return Task.FromResult<IReadOnlyList<UrgentAlertResponse>>(list);
     }

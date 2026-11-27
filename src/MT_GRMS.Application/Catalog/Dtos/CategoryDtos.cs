@@ -23,6 +23,7 @@ public record CategoryCreateRequest(
 
 public record CategoryUpdateRequest(
     string Name,
-    string? Description = null
+    string? Description = null,
+    string? Code = null
 );
 

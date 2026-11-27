@@ -401,5 +401,23 @@ public class CatalogDomainAndValidatorTests
         Assert.Contains(result.Errors, e => e.PropertyName == nameof(ProductCreateRequest.Description));
         Assert.Contains(result.Errors, e => e.PropertyName == nameof(ProductCreateRequest.InternalNote));
     }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void Validate_EmptyBaseUnit_FailsWithNotEmpty(string emptyBaseUnit)
+    {
+        var request = new ProductCreateRequest(
+            Name: "Sản phẩm test",
+            CategoryId: Guid.NewGuid(),
+            SellingPrice: 15000m,
+            BaseUnit: emptyBaseUnit
+        );
+
+        var result = _validator.Validate(request);
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.PropertyName == nameof(ProductCreateRequest.BaseUnit));
+    }
 }
 

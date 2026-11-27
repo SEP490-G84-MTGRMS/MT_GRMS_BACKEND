@@ -61,19 +61,23 @@ public class BusinessDayClosingService : IBusinessDayClosingService
                 blockers.Add(new("UNCONFIRMED_HANDOVER", "Shift", shift.Id.ToString(), shift.ShiftCode, shift.DroppedToSafeAmount, shift.HandoverStatus.ToString(), $"/store-owner/shifts?shiftId={shift.Id}"));
             foreach (var movement in shift.CashMovements.Where(x => x.Status == CashMovementStatus.PendingApproval))
                 blockers.Add(new("PENDING_CASH_MOVEMENT", "CashMovement", movement.Id.ToString(), movement.Reason, movement.Amount, movement.Status.ToString(), "/store-owner/pos-cash-control"));
+            foreach (var movement in shift.CashMovements.Where(x => IsCashDrop(x) && !x.IsConfirmedByOwner))
+                blockers.Add(new("UNCONFIRMED_CASH_DROP", "CashMovement", movement.Id.ToString(), movement.Reason,
+                    movement.Amount, "Chờ chủ nhận tiền", "/store-owner/pos-cash-control"));
         }
         if (await _repository.HasPendingPaymentOrdersAsync(tenantId, branchId, businessDate, cancellationToken))
-            blockers.Add(new("PENDING_PAYMENT_ORDERS", "Order", businessDate.ToString("yyyy-MM-dd"), "Đơn VietQR chưa hoàn tất thanh toán", null, "PendingPayment", $"/pos/orders?status=PENDING_PAYMENT&branchId={branchId}"));
+            blockers.Add(new("PENDING_PAYMENT_ORDERS", "Order", businessDate.ToString("yyyy-MM-dd"), "Đơn VietQR chưa hoàn tất thanh toán", null, "Chờ thanh toán", $"/pos/orders?status=PENDING_PAYMENT&branchId={branchId}"));
 
         var completed = orders.Where(o => o.Status == "Completed" && o.PaymentMethod != "DEBT").ToList();
         var ownerCash = completed.Where(o => o.PaymentMethod == "CASH").Sum(o => o.FinalAmount);
         var ownerBank = completed.Where(o => IsBank(o.PaymentMethod)).Sum(o => o.FinalAmount);
-        if (shifts.Sum(s => s.TotalCashSales) + ownerCash > 0 && !funds.Any(f => f.AccountType == FinanceAccountType.Safe))
+        if ((ownerCash > 0 || shifts.Any(s => s.DroppedToSafeAmount > 0 || s.CashMovements.Any(IsCashDrop))) &&
+            !funds.Any(f => f.AccountType == FinanceAccountType.Safe))
             blockers.Add(new("SAFE_NOT_CONFIGURED", "FinanceAccount", branchId.ToString(), "Két sắt chi nhánh", null, "Chưa có két đang hoạt động", "/store-owner/finance"));
         if (shifts.Sum(s => s.TotalBankRevenue) + ownerBank > 0 && !funds.Any(f => f.AccountType == FinanceAccountType.Bank))
             blockers.Add(new("BANK_NOT_CONFIGURED", "FinanceAccount", branchId.ToString(), "Tài khoản ngân hàng chi nhánh", null, "Chưa có tài khoản đang hoạt động", "/store-owner/finance"));
         var cashIn = shifts.SelectMany(s => s.CashMovements).Where(IsEffectiveIn).Sum(m => m.Amount);
-        var cashOut = shifts.SelectMany(s => s.CashMovements).Where(IsEffectiveOut).Sum(m => m.Amount);
+        var cashOut = shifts.SelectMany(s => s.CashMovements).Where(IsReportableOut).Sum(m => m.Amount);
         var fundDtos = funds.Select(f => new BusinessDayFundPreview(f.Id, f.AccountName, f.AccountType.ToString(), f.CurrentBalance, f.AccountType != FinanceAccountType.Bank)).ToList();
 
         var localStart = businessDate.ToDateTime(TimeOnly.FromTimeSpan(startTime), DateTimeKind.Unspecified);
@@ -158,24 +162,27 @@ public class BusinessDayClosingService : IBusinessDayClosingService
             throw new BusinessException("UNCONFIRMED_HANDOVERS", "Tất cả ca phải được Chủ cửa hàng xác nhận bàn giao.");
         if (shifts.SelectMany(s => s.CashMovements).Any(m => m.Status == CashMovementStatus.PendingApproval))
             throw new BusinessException("PENDING_CASH_MOVEMENTS", "Vẫn còn phiếu thu/chi đang chờ duyệt.");
+        if (shifts.SelectMany(s => s.CashMovements).Any(m => IsCashDrop(m) && !m.IsConfirmedByOwner))
+            throw new BusinessException("UNCONFIRMED_CASH_DROP", "Vẫn còn phiếu rút két chờ xác nhận đã nhận tiền.");
         if (shifts.Any(s => !s.SnapshotLocked))
             throw new BusinessException("SHIFT_SNAPSHOT_NOT_LOCKED", "Tất cả ca phải có snapshot đã khóa.");
         if (await _repository.HasPendingPaymentOrdersAsync(tenantId, request.BranchId, request.BusinessDate, cancellationToken))
-            throw new BusinessException("PENDING_PAYMENT_ORDERS", "Vẫn còn đơn PendingPayment chưa xử lý.");
+            throw new BusinessException("PENDING_PAYMENT_ORDERS", "Vẫn còn đơn chờ thanh toán VietQR chưa xử lý.");
 
         var shiftlessOrders = await _repository.GetShiftlessOrdersAsync(tenantId, request.BranchId, request.BusinessDate, cancellationToken);
         var completedShiftless = shiftlessOrders.Where(o => o.Status == "Completed" && o.PaymentMethod != "DEBT").ToList();
-        var ownerCash = completedShiftless.Where(o => o.PaymentMethod == "CASH").Sum(o => o.FinalAmount);
+        var ownerCashOrders = completedShiftless.Where(o => o.PaymentMethod == "CASH").ToList();
+        var ownerCash = ownerCashOrders.Sum(o => o.FinalAmount);
         var ownerBank = completedShiftless.Where(o => IsBank(o.PaymentMethod)).Sum(o => o.FinalAmount);
         var shiftCash = shifts.Sum(s => s.TotalCashSales);
         var shiftBank = shifts.Sum(s => s.TotalBankRevenue);
         var cashIn = shifts.SelectMany(s => s.CashMovements).Where(IsEffectiveIn).Sum(m => m.Amount);
-        var cashOut = shifts.SelectMany(s => s.CashMovements).Where(IsEffectiveOut).Sum(m => m.Amount);
-        var expectedCash = shiftCash + ownerCash + cashIn - cashOut;
+        var cashOut = shifts.SelectMany(s => s.CashMovements).Where(IsReportableOut).Sum(m => m.Amount);
+        var expectedCash = currentPreview.Funds.Where(fund => fund.RequiresPhysicalCount).Sum(fund => fund.ExpectedCash);
         var actualCashCounted = request.FundCounts.Sum(x => x.ActualCashCounted);
         var discrepancy = actualCashCounted - expectedCash;
         var now = DateTime.UtcNow;
-        var reference = $"EOD-{request.BusinessDate:yyyyMMdd}-{request.BranchId.ToString("N")[..8].ToUpperInvariant()}-V{version}";
+        var reference = $"EOD-{request.BusinessDate:yyyyMMdd}-{request.BranchId.ToString("N")[^8..].ToUpperInvariant()}-V{version}";
         var startTime = await _repository.GetBusinessDayStartTimeAsync(tenantId, request.BranchId, cancellationToken);
 
         var closing = new BusinessDayClosing
@@ -200,24 +207,32 @@ public class BusinessDayClosingService : IBusinessDayClosingService
         {
             await _repository.AddAsync(closing, cancellationToken);
             var safe = await _cashbook.GetOrCreateSafeAsync(request.BranchId, cancellationToken);
-            // Ca đã Posted chỉ được tổng hợp vào snapshot, không ghi Cashbook lần hai.
-            var unpostedShiftCash = shifts.Where(s => s.CashbookPostingStatus != CashbookPostingStatus.Posted).Sum(s => s.TotalCashSales);
-            var unpostedCashIn = shifts.SelectMany(s => s.CashMovements).Where(IsPostableIn).Sum(m => m.Amount);
-            var unpostedCashOut = shifts.SelectMany(s => s.CashMovements).Where(IsPostableOut).Sum(m => m.Amount);
-            var cashToPost = ownerCash + unpostedShiftCash;
+            var unpostedOwnerCash = 0m;
+            if (ownerCashOrders.Count > 0)
+            {
+                var postedOrderIds = await _repository.GetPostedPosSaleOrderIdsAsync(
+                    tenantId, request.BranchId, ownerCashOrders.Select(order => order.Id).ToArray(), cancellationToken);
+                var postedOrders = postedOrderIds.ToHashSet();
+                unpostedOwnerCash = ownerCashOrders.Where(order => !postedOrders.Contains(order.Id)).Sum(order => order.FinalAmount);
+            }
+            var cashToPost = unpostedOwnerCash;
             if (cashToPost > 0)
                 await _cashbook.ReceiveCashAsync(safe.Id, FinanceAccountType.Safe, cashToPost, "BUSINESS_DAY_CLOSE", closing.Id, reference + "-CASH", "Thu doanh thu tiền mặt chưa kết toán của ngày nghiệp vụ", cancellationToken);
-            if (unpostedCashIn > 0)
-                await _cashbook.ReceiveCashAsync(safe.Id, FinanceAccountType.Safe, unpostedCashIn, "BUSINESS_DAY_CLOSE", closing.Id, reference + "-IN", "Tổng thu khác đã duyệt trong ngày", cancellationToken);
-            if (unpostedCashOut > 0)
-                await _cashbook.DisburseCashAsync(safe.Id, FinanceAccountType.Safe, unpostedCashOut, "BUSINESS_DAY_CLOSE", closing.Id, reference + "-OUT", "Tổng chi đã duyệt trong ngày", cancellationToken);
-
             foreach (var shift in shifts)
             {
+                if (shift.CashbookPostingStatus != CashbookPostingStatus.Posted && shift.DroppedToSafeAmount > 0)
+                    await _cashbook.ReceiveCashAsync(safe.Id, FinanceAccountType.Safe, shift.DroppedToSafeAmount,
+                        "CASH_DROP", shift.Id, $"HANDOVER-{shift.Id:N}", "Nhận tiền bàn giao cuối ca", cancellationToken);
+
+                // Phiếu cũ có thể đã xác nhận trước khi chức năng ghi nhận két sắt được bổ sung.
+                foreach (var movement in shift.CashMovements.Where(m => IsCashDrop(m) && m.IsConfirmedByOwner && m.PostedAtUtc == null))
+                {
+                    await _cashbook.ReceiveCashAsync(safe.Id, FinanceAccountType.Safe, movement.Amount,
+                        "CASH_DROP", movement.Id, $"DROP-{movement.Id:N}", "Nhận tiền rút từ két quầy", cancellationToken);
+                    movement.PostedAtUtc = now;
+                }
                 shift.CashbookPostingStatus = CashbookPostingStatus.Posted;
                 shift.BusinessDayClosingId = closing.Id;
-                foreach (var movement in shift.CashMovements.Where(m => IsPostableIn(m) || IsPostableOut(m)))
-                    movement.PostedAtUtc = now;
             }
             foreach (var order in completedShiftless) order.BusinessDayClosingId = closing.Id;
             closing.Status = BusinessDayClosingStatus.Closed;
@@ -273,6 +288,6 @@ public class BusinessDayClosingService : IBusinessDayClosingService
     private static bool IsEffective(ShiftCashMovement m) => m.Status == CashMovementStatus.Recorded;
     private static bool IsEffectiveIn(ShiftCashMovement m) => IsEffective(m) && m.MovementType == CashMovementType.IN;
     private static bool IsEffectiveOut(ShiftCashMovement m) => IsEffective(m) && m.MovementType == CashMovementType.OUT;
-    private static bool IsPostableIn(ShiftCashMovement m) => IsEffectiveIn(m) && m.PostedAtUtc == null;
-    private static bool IsPostableOut(ShiftCashMovement m) => IsEffectiveOut(m) && m.PostedAtUtc == null;
+    private static bool IsCashDrop(ShiftCashMovement m) => IsEffectiveOut(m) && m.Category == CashMovementCategory.CASH_DRAW;
+    private static bool IsReportableOut(ShiftCashMovement m) => IsEffectiveOut(m) && !IsCashDrop(m);
 }

@@ -15,7 +15,7 @@ public class ProductCreateRequestValidator : AbstractValidator<ProductCreateRequ
             .NotEmpty().WithMessage("Vui lòng chọn nhóm hàng hợp lệ.");
 
         RuleFor(x => x.SellingPrice)
-            .GreaterThanOrEqualTo(0).WithMessage("Giá bán không được nhỏ hơn 0.")
+            .GreaterThan(0).WithMessage("Giá bán phải lớn hơn 0.")
             .LessThanOrEqualTo(1_000_000_000m).WithMessage("Giá bán không được vượt quá 1.000.000.000 đ.");
 
         RuleFor(x => x.CostPrice)
@@ -33,8 +33,8 @@ public class ProductCreateRequestValidator : AbstractValidator<ProductCreateRequ
             .WithMessage("Mã vạch không hợp lệ (tối đa 50 ký tự, không chứa khoảng trắng).");
 
         RuleFor(x => x.BaseUnit)
-            .MaximumLength(30).When(x => !string.IsNullOrWhiteSpace(x.BaseUnit))
-            .WithMessage("Tên đơn vị cơ bản không được vượt quá 30 ký tự.");
+            .NotEmpty().WithMessage("Tên đơn vị cơ bản không được để trống.")
+            .MaximumLength(30).WithMessage("Tên đơn vị cơ bản không được vượt quá 30 ký tự.");
 
         RuleFor(x => x.Description)
             .MaximumLength(1000).When(x => !string.IsNullOrWhiteSpace(x.Description))

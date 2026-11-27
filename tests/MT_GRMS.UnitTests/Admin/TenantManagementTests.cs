@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using MT_GRMS.Application.Admin.Dtos;
 using MT_GRMS.Application.Admin.Repositories;
 using MT_GRMS.Application.Admin.Services;
@@ -212,6 +213,64 @@ public class TenantManagementTests
 
         var badGrace = graceValidator.Validate(new ExtendGraceRequest(0, ""));
         Assert.False(badGrace.IsValid);
+    }
+
+    [Fact]
+    public async Task TenantRepository_GetPagedAsync_SearchesOwnerEmailAndFiltersPending()
+    {
+        var options = new DbContextOptionsBuilder<MT_GRMS.Infrastructure.Persistence.AppDbContext>()
+            .UseInMemoryDatabase($"TenantPaged_{Guid.NewGuid()}")
+            .Options;
+        await using var db = new MT_GRMS.Infrastructure.Persistence.AppDbContext(options);
+
+        var owner = new User
+        {
+            Id = "u-owner-99",
+            UserName = "0909888777",
+            FullName = "Phạm Thị Hoa",
+            Email = "hoa.tap-hoa@mtgrms.vn",
+            NormalizedEmail = "hoa.tap-hoa@mtgrms.vn",
+            Phone = "0909888777"
+        };
+        var pendingTenant = new Tenant
+        {
+            Id = "tenant-pending-01",
+            Name = "Tạp Hóa Hoa Mai",
+            Subdomain = "hoa-mai",
+            Code = "HM-01",
+            Status = "NO_PLAN",
+            SubscriptionStatus = "NO_PLAN"
+        };
+        pendingTenant.TenantUsers.Add(new TenantUser
+        {
+            TenantId = pendingTenant.Id,
+            UserId = owner.Id,
+            User = owner,
+            Role = "STORE_OWNER",
+            IsActive = true
+        });
+        db.Users.Add(owner);
+        db.Tenants.Add(pendingTenant);
+        db.Tenants.Add(new Tenant
+        {
+            Id = "tenant-active-02",
+            Name = "Tạp Hóa Bình Minh",
+            Subdomain = "binh-minh",
+            Code = "BM-02",
+            Status = "ACTIVE",
+            SubscriptionStatus = "ACTIVE"
+        });
+        await db.SaveChangesAsync();
+
+        var repo = new MT_GRMS.Infrastructure.Repositories.TenantRepository(db);
+
+        var (byEmail, emailTotal) = await repo.GetPagedAsync(keyword: "hoa.tap-hoa@mtgrms.vn");
+        Assert.Equal(1, emailTotal);
+        Assert.Equal("tenant-pending-01", byEmail[0].Id);
+
+        var (pendingItems, pendingTotal) = await repo.GetPagedAsync(status: "PENDING");
+        Assert.Equal(1, pendingTotal);
+        Assert.Equal("tenant-pending-01", pendingItems[0].Id);
     }
 }
 

@@ -7,7 +7,9 @@ public record LoyaltyConfigDto(
     int RedemptionRatePoints,
     decimal RedemptionRateAmount,
     int MinRedemptionPoints,
-    bool AllowPointsWithPromotions
+    bool AllowPointsWithPromotions,
+    int PointsExpiryMonths = 12,
+    int MaxRedemptionPercent = 50
 );
 
 public record UpdateLoyaltyConfigRequest(
@@ -17,7 +19,9 @@ public record UpdateLoyaltyConfigRequest(
     int RedemptionRatePoints,
     decimal RedemptionRateAmount,
     int MinRedemptionPoints,
-    bool AllowPointsWithPromotions
+    bool AllowPointsWithPromotions,
+    int PointsExpiryMonths = 12,
+    int MaxRedemptionPercent = 50
 );
 
 public record LoyaltyLedgerDto(

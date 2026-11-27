@@ -63,6 +63,39 @@ public class ProductPriceHistoryRepository : GenericRepository<ProductPriceHisto
             .Take(filter.PageSize)
             .ToListAsync(cancellationToken);
 
+        // Enrich phone-only or ID-only ChangedByUserName with User.FullName for readable audit trail (FE-03.2)
+        var userIds = items
+            .Select(h => h.ChangedByUserId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct()
+            .ToList();
+        var phoneNames = items
+            .Select(h => h.ChangedByUserName)
+            .Where(name => !string.IsNullOrWhiteSpace(name) && name.All(char.IsDigit))
+            .Distinct()
+            .ToList();
+        if (userIds.Count > 0 || phoneNames.Count > 0)
+        {
+            var matchedUsers = await _context.Users.AsNoTracking()
+                .Where(u => (userIds.Contains(u.Id) || (u.Phone != null && phoneNames.Contains(u.Phone))) && !string.IsNullOrWhiteSpace(u.FullName))
+                .Select(u => new { u.Id, u.Phone, u.FullName })
+                .ToListAsync(cancellationToken);
+
+            var byId = matchedUsers.GroupBy(u => u.Id).ToDictionary(g => g.Key, g => g.First().FullName);
+            var byPhone = matchedUsers.Where(u => !string.IsNullOrWhiteSpace(u.Phone)).GroupBy(u => u.Phone!).ToDictionary(g => g.Key, g => g.First().FullName);
+
+            foreach (var h in items)
+            {
+                if (string.IsNullOrWhiteSpace(h.ChangedByUserName) || h.ChangedByUserName.All(char.IsDigit))
+                {
+                    if (!string.IsNullOrWhiteSpace(h.ChangedByUserId) && byId.TryGetValue(h.ChangedByUserId, out var fullName))
+                        h.ChangedByUserName = fullName;
+                    else if (!string.IsNullOrWhiteSpace(h.ChangedByUserName) && byPhone.TryGetValue(h.ChangedByUserName, out var byPhoneName))
+                        h.ChangedByUserName = byPhoneName;
+                }
+            }
+        }
+
         return (items, totalCount);
     }
 }

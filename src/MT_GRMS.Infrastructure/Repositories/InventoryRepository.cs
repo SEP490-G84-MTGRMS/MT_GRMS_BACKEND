@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using MT_GRMS.Application.Batches;
 using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.Inventory.Dtos;
 using MT_GRMS.Domain.Entities.Inventory;
@@ -28,7 +29,7 @@ public class InventoryRepository : IInventoryRepository
         InventoryFilterQuery query,
         CancellationToken cancellationToken = default)
     {
-        var now = DateTime.UtcNow.Date;
+        var now = BranchStockAvailability.StoreToday;
 
         var branchQuery = _appContext.Branches.AsNoTracking()
             .Where(b => b.TenantId == tenantId && !b.IsDeleted);
@@ -346,7 +347,7 @@ public class InventoryRepository : IInventoryRepository
         Guid productId,
         CancellationToken cancellationToken = default)
     {
-        var now = DateTime.UtcNow.Date;
+        var now = BranchStockAvailability.StoreToday;
         // BranchStocks mới là nguồn tồn theo lô mà POS/GRN đang cập nhật.
         // Không dùng Batches.InitialQuantity vì đó chỉ là số lượng nhập ban đầu,
         // không phản ánh tồn còn lại sau bán, giữ hàng hoặc trả nhà cung cấp.
@@ -389,6 +390,7 @@ public class InventoryRepository : IInventoryRepository
             _ => "Normal"
         };
         var availableQty = BranchStockAvailability.GetSellableAvailable(stock, now, packageWeight);
+        var isFefoEffective = status != "Expired" && FefoDiscountWindow.IsEffective(stock, DateTime.UtcNow);
 
         return new InventoryBatchSummaryDto(
             stock.Id,
@@ -400,8 +402,8 @@ public class InventoryRepository : IInventoryRepository
             stock.QuantityReserved,
             availableQty,
             status,
-            stock.FefoDiscountPercent,
-            stock.IsFefoDiscountActive
+            isFefoEffective ? stock.FefoDiscountPercent : 0m,
+            isFefoEffective
         );
     }
 

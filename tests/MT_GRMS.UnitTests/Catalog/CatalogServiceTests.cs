@@ -544,6 +544,35 @@ public class CatalogServiceTests
     }
 
     [Fact]
+    public async Task UpdateProductAsync_PriceUnchanged_DoesNotCreateDuplicatePriceHistory()
+    {
+        var (service, prodRepo, _, historyRepo, _, _, catId) = CreateSut();
+        var prodId = Guid.NewGuid();
+        var product = new Product
+        {
+            Id = prodId,
+            Name = "Nước suối",
+            ProductCode = "SP000009",
+            CategoryId = catId,
+            BaseUnit = "Chai",
+            CostPrice = 3000m,
+            SellingPrice = 5000m
+        };
+        product.Units.Add(new ProductUnit(prodId, "Chai", 1m, 5000m, isBaseUnit: true, isPurchaseUnit: false));
+        prodRepo.Products.Add(product);
+
+        await service.UpdateProductAsync(prodId, new ProductUpdateRequest(
+            Name: "Nước suối 500ml",
+            CategoryId: catId,
+            SellingPrice: 5000m,
+            CostPrice: 3000m,
+            BaseUnit: "Chai"
+        ));
+
+        Assert.Empty(historyRepo.Histories);
+    }
+
+    [Fact]
     public async Task GetPriceHistoryAsync_ReturnsRequestedPageAndTotalCount()
     {
         var (service, _, _, historyRepo, _, _, _) = CreateSut();
@@ -884,6 +913,78 @@ public class CatalogServiceTests
         // 15. Status change to Inactive
         var updatedInactive = await service.UpdateProductAsync(prodId, validReq with { Status = "Inactive" });
         Assert.Equal("Inactive", updatedInactive.Status);
+    }
+
+    [Fact]
+    public async Task CreateAndUpdateProduct_EmptyBaseUnit_ThrowsArgumentException()
+    {
+        var (service, _, _, _, _, _, catId) = CreateSut();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.CreateProductAsync(new ProductCreateRequest(
+            Name: "Nước lọc",
+            CategoryId: catId,
+            SellingPrice: 5000m,
+            BaseUnit: ""
+        )));
+
+        var created = await service.CreateProductAsync(new ProductCreateRequest(
+            Name: "Nước lọc",
+            CategoryId: catId,
+            SellingPrice: 5000m,
+            BaseUnit: "Chai"
+        ));
+
+        await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateProductAsync(created.Id, new ProductUpdateRequest(
+            Name: "Nước lọc",
+            CategoryId: catId,
+            SellingPrice: 5000m,
+            BaseUnit: "   "
+        )));
+    }
+
+    [Fact]
+    public async Task UpdateProduct_MultiImageSync_MovesPrimaryImageUrlFirstAndPreservesAllImages()
+    {
+        var (service, _, _, _, _, _, catId) = CreateSut();
+
+        var created = await service.CreateProductAsync(new ProductCreateRequest(
+            Name: "Sữa tươi",
+            CategoryId: catId,
+            SellingPrice: 30000m,
+            BaseUnit: "Hộp",
+            ImageUrl: "https://cdn.test/mat-truoc.jpg",
+            ImageUrls: new List<string> { "https://cdn.test/mat-truoc.jpg", "https://cdn.test/mat-sau.jpg" }
+        ));
+
+        Assert.Equal("https://cdn.test/mat-truoc.jpg", created.ImageUrl);
+        Assert.Equal(2, created.ImageUrls!.Count);
+
+        // Switch primary image to mat-sau.jpg while passing both images in original order
+        var updated = await service.UpdateProductAsync(created.Id, new ProductUpdateRequest(
+            Name: "Sữa tươi",
+            CategoryId: catId,
+            SellingPrice: 30000m,
+            BaseUnit: "Hộp",
+            ImageUrl: "https://cdn.test/mat-sau.jpg",
+            ImageUrls: new List<string> { "https://cdn.test/mat-truoc.jpg", "https://cdn.test/mat-sau.jpg" }
+        ));
+
+        Assert.Equal("https://cdn.test/mat-sau.jpg", updated.ImageUrl);
+        Assert.Equal(new[] { "https://cdn.test/mat-sau.jpg", "https://cdn.test/mat-truoc.jpg" }, updated.ImageUrls);
+
+        // Updating only ImageUrl (ImageUrls == null) promotes new image without losing existing images
+        var updatedPrimaryOnly = await service.UpdateProductAsync(created.Id, new ProductUpdateRequest(
+            Name: "Sữa tươi",
+            CategoryId: catId,
+            SellingPrice: 30000m,
+            BaseUnit: "Hộp",
+            ImageUrl: "https://cdn.test/mat-ben.jpg",
+            ImageUrls: null
+        ));
+
+        Assert.Equal("https://cdn.test/mat-ben.jpg", updatedPrimaryOnly.ImageUrl);
+        Assert.Equal(3, updatedPrimaryOnly.ImageUrls!.Count);
+        Assert.Equal("https://cdn.test/mat-ben.jpg", updatedPrimaryOnly.ImageUrls[0]);
     }
 }
 

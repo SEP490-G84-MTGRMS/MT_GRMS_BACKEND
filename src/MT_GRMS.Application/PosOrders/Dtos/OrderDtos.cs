@@ -78,7 +78,8 @@ public record OrderResponse(
     int PointsRedeemed = 0,
     decimal PointsDiscountAmount = 0m,
     string? GiftStockWarning = null,
-    decimal ReturnedAmount = 0m
+    decimal ReturnedAmount = 0m,
+    DateTime? ExpectedPickupDate = null
 )
 {
     public Guid StoreId => BranchId;
@@ -102,7 +103,8 @@ public record OrderItemResponse(
     bool IsGift = false,
     Guid? PromotionId = null,
     Guid? BatchId = null,
-    List<OrderStockAllocationDto>? StockAllocations = null
+    List<OrderStockAllocationDto>? StockAllocations = null,
+    decimal ConversionRate = 1m
 );
 
 public record OrderStockAllocationDto(Guid BranchStockId, string? BatchCode, decimal QuantityBase, decimal ReturnedBase = 0m, decimal CostPerBase = 0m, bool IsManualSelection = false);

@@ -44,7 +44,7 @@ public class RepackService : IRepackService
     {
         var tenantId = RequireTenant();
         var stock = await _repository.GetBranchStockAsync(tenantId, branchStockId, ct)
-            ?? throw new BusinessException("BRANCH_STOCK_NOT_FOUND", "Không tìm thấy lô tồn kho.");
+            ?? throw new NotFoundException("Lô tồn kho", branchStockId);
         BranchScopeGuard.EnsureCanAccessBranch(_tenantContext, stock.BranchId);
 
         var product = await _repository.GetProductWithUnitsAsync(tenantId, stock.ProductId, ct)

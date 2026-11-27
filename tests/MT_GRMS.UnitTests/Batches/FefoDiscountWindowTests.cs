@@ -59,4 +59,20 @@ public class FefoDiscountWindowTests
         Assert.False(FefoDiscountWindow.IsEffective(stock, start.AddHours(1)));
         Assert.Equal("None", FefoDiscountWindow.ResolveStatus(stock, start.AddHours(1)));
     }
+
+    [Fact]
+    public void IsEffective_ActiveWithNullWindow_ReturnsTrueAndActiveStatus()
+    {
+        var stock = new BranchStock
+        {
+            IsFefoDiscountActive = true,
+            FefoDiscountPercent = 50m,
+            FefoDiscountStartAtUtc = null,
+            FefoDiscountEndAtUtc = null
+        };
+
+        var now = new DateTime(2026, 11, 26, 7, 0, 0, DateTimeKind.Utc);
+        Assert.True(FefoDiscountWindow.IsEffective(stock, now));
+        Assert.Equal("Active", FefoDiscountWindow.ResolveStatus(stock, now));
+    }
 }

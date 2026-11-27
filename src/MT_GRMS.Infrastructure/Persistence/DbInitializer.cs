@@ -35,13 +35,18 @@ public static class DbInitializer
         var sw = Stopwatch.StartNew();
         await context.Database.ExecuteSqlRawAsync(Migrations.AddOrderDetailStockAllocations.UpSql);
         await context.Database.ExecuteSqlRawAsync(Migrations.AddExpenseVoucherDueDate.UpSql);
+        await context.Database.ExecuteSqlRawAsync(@"ALTER TABLE IF EXISTS ""Transfers"" ADD COLUMN IF NOT EXISTS ""RowVersion"" integer NOT NULL DEFAULT 1;");
+        await ExecuteSqlSafeAsync(context, Migrations.AddTaxFilingConfirmations.UpSql, logger);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchConversionRulesAndNotifications.UpSql);
         await context.Database.ExecuteSqlRawAsync(Migrations.ScheduleFefoDiscounts.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.RemoveGoodsReceiptFreight.UpSql);
+        await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductAllowedSupplierIds.UpSql);
         await context.Database.ExecuteSqlRawAsync(Migrations.AddProductImageUrlsJson.UpSql);
         await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductProcessedPrice.UpSql);
         await context.Database.ExecuteSqlRawAsync(Migrations.AddSupplierPoModificationRules.UpSql);
-        await context.Database.ExecuteSqlRawAsync(@"ALTER TABLE IF EXISTS ""Transfers"" ADD COLUMN IF NOT EXISTS ""RowVersion"" integer NOT NULL DEFAULT 1;");
 
         await EnsureMissingModelSchemaAsync(context, logger);
+        await SyncMissingColumnsAsync(context, logger);
 
         var pending = (await context.Database.GetPendingMigrationsAsync()).ToList();
         foreach (var migrationId in pending)
@@ -304,10 +309,38 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
     /// </summary>
     private static async Task SyncMissingColumnsAsync(AppDbContext context, ILogger? logger = null)
     {
+        if (!context.Database.IsRelational())
+        {
+            return;
+        }
+
+        HashSet<string>? existingTables = null;
+        HashSet<string>? existingColumns = null;
+        if (context.Database.IsNpgsql())
+        {
+            try
+            {
+                var tables = await context.Database
+                    .SqlQueryRaw<string>("SELECT table_name AS \"Value\" FROM information_schema.tables WHERE table_schema = 'public'")
+                    .ToListAsync();
+                existingTables = new HashSet<string>(tables, StringComparer.Ordinal);
+
+                var cols = await context.Database
+                    .SqlQueryRaw<string>("SELECT table_name || '.' || column_name AS \"Value\" FROM information_schema.columns WHERE table_schema = 'public'")
+                    .ToListAsync();
+                existingColumns = new HashSet<string>(cols, StringComparer.Ordinal);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogDebug(ex, "Không đọc được information_schema, dùng fallback tuần tự.");
+            }
+        }
+
         foreach (var entityType in context.Model.GetEntityTypes())
         {
             var table = entityType.GetTableName();
             if (string.IsNullOrEmpty(table)) continue;
+            if (existingTables != null && !existingTables.Contains(table)) continue;
             var store = StoreObjectIdentifier.Table(table, entityType.GetSchema());
 
             foreach (var prop in entityType.GetProperties())
@@ -315,6 +348,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                 var column = prop.GetColumnName(store);
                 var type = prop.GetColumnType(store);
                 if (string.IsNullOrEmpty(column) || string.IsNullOrEmpty(type) || column == "xmin") continue;
+                if (existingColumns != null && existingColumns.Contains($"{table}.{column}")) continue;
 
                 var t = type.ToLowerInvariant();
                 string? defaultExpr = prop.GetDefaultValueSql(store);
@@ -811,13 +845,18 @@ CREATE UNIQUE INDEX IF NOT EXISTS ""IX_OutboxMessages_TenantId_IdempotencyKey""
                     ""RedemptionRatePoints"" integer NOT NULL DEFAULT 1,
                     ""RedemptionRateAmount"" numeric(18,2) NOT NULL DEFAULT 1000.00,
                     ""MinRedemptionPoints"" integer NOT NULL DEFAULT 20,
+                    ""PointsExpiryMonths"" integer NOT NULL DEFAULT 12,
+                    ""MaxRedemptionPercent"" integer NOT NULL DEFAULT 50,
                     ""AllowPointsWithPromotions"" boolean NOT NULL DEFAULT true,
                     ""CreatedBy"" uuid NULL,
                     ""CreatedAt"" timestamp with time zone NOT NULL DEFAULT (NOW() AT TIME ZONE 'UTC'),
                     ""UpdatedAt"" timestamp with time zone NULL,
                     ""IsDeleted"" boolean NOT NULL DEFAULT false
                 );
+                ALTER TABLE IF EXISTS ""LoyaltySettings"" ADD COLUMN IF NOT EXISTS ""PointsExpiryMonths"" integer NOT NULL DEFAULT 12;
+                ALTER TABLE IF EXISTS ""LoyaltySettings"" ADD COLUMN IF NOT EXISTS ""MaxRedemptionPercent"" integer NOT NULL DEFAULT 50;
                 CREATE UNIQUE INDEX IF NOT EXISTS ""IX_LoyaltySettings_TenantID"" ON ""LoyaltySettings"" (""TenantID"");
+                ALTER TABLE IF EXISTS ""Orders"" ADD COLUMN IF NOT EXISTS ""ExpectedPickupDate"" timestamp with time zone NULL;
 
 
             ");
@@ -1410,6 +1449,7 @@ END $$;
                         ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""ReopenedByUserId"" uuid;
                         ALTER TABLE IF EXISTS ""BusinessDayClosings"" ADD COLUMN IF NOT EXISTS ""ReopenReason"" character varying(500);
                         DROP INDEX IF EXISTS ""IX_BusinessDayClosings_Tenant_Branch_Date"";
+            DROP INDEX IF EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate"";
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate_Version"" ON ""BusinessDayClosings"" (""TenantId"", ""BranchId"", ""BusinessDate"", ""Version"");
                         CREATE UNIQUE INDEX IF NOT EXISTS ""IX_BusinessDayClosings_TenantId_BranchId_BusinessDate_IsActive"" ON ""BusinessDayClosings"" (""TenantId"", ""BranchId"", ""BusinessDate"", ""IsActive"") WHERE ""IsActive"" = TRUE;
 
@@ -1849,6 +1889,7 @@ END $$;
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchConversionRulesAndNotifications.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.RemoveGoodsReceiptFreight.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.ScheduleFefoDiscounts.UpSql);
+                    await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductAllowedSupplierIds.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddProductImageUrlsJson.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddBranchProductProcessedPrice.UpSql);
                     await context.Database.ExecuteSqlRawAsync(Migrations.AddSupplierPoModificationRules.UpSql);

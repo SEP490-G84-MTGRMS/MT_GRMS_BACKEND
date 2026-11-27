@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.EntityFrameworkCore;
+using MT_GRMS.Application.Inventory;
 using MT_GRMS.Application.PosOrders;
 using MT_GRMS.Domain.Entities.Catalog;
 using MT_GRMS.Domain.Entities.Inventory;
@@ -49,6 +50,8 @@ public class OrderRepository : GenericRepository<Order>, IOrderRepository
 
     public async Task<IReadOnlyList<BranchStock>> GetBranchStocksForProductFefoAsync(Guid branchId, Guid productId, CancellationToken cancellationToken = default)
     {
+        var storeToday = BranchStockAvailability.StoreToday;
+        var storeTodayDateOnly = DateOnly.FromDateTime(storeToday);
         if (_context.Database.IsNpgsql())
         {
             return await _context.BranchStocks
@@ -57,7 +60,7 @@ public class OrderRepository : GenericRepository<Order>, IOrderRepository
                     WHERE ""BranchId"" = {branchId}
                       AND ""ProductId"" = {productId}
                       AND ""QuantityOnHand"" > 0
-                      AND (""ExpiryDate"" IS NULL OR ""ExpiryDate""::date >= CURRENT_DATE)
+                      AND (""ExpiryDate"" IS NULL OR ""ExpiryDate""::date >= {storeTodayDateOnly})
                       AND NOT ""IsDeleted""
                     ORDER BY ""ExpiryDate"" ASC NULLS LAST, ""ManufactureDate"" ASC NULLS LAST
                     FOR UPDATE")
@@ -66,7 +69,7 @@ public class OrderRepository : GenericRepository<Order>, IOrderRepository
 
         return await _context.BranchStocks
             .Where(s => s.BranchId == branchId && s.ProductId == productId && s.QuantityOnHand > 0 && !s.IsDeleted
-                && (!s.ExpiryDate.HasValue || s.ExpiryDate.Value.Date >= DateTime.UtcNow.Date))
+                && (!s.ExpiryDate.HasValue || s.ExpiryDate.Value.Date >= storeToday))
             .OrderBy(s => s.ExpiryDate ?? DateTime.MaxValue)
             .ThenBy(s => s.ManufactureDate ?? DateTime.MaxValue)
             .ToListAsync(cancellationToken);

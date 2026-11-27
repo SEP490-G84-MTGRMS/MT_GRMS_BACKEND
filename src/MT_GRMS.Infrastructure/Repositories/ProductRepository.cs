@@ -34,7 +34,8 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
             query = query.Where(p =>
                 p.Name.ToLower().Contains(term) ||
                 p.ProductCode.ToLower().Contains(term) ||
-                (p.Barcode != null && p.Barcode.ToLower().Contains(term)));
+                (p.Barcode != null && p.Barcode.ToLower().Contains(term)) ||
+                p.Units.Any(u => !u.IsDeleted && u.Barcode != null && u.Barcode.ToLower().Contains(term)));
         }
 
         var skuTerms = CleanTerms(filter.Skus);
@@ -70,7 +71,12 @@ public class ProductRepository : GenericRepository<Product>, IProductRepository
 
         if (!string.IsNullOrWhiteSpace(filter.Status))
         {
-            if (Enum.TryParse<ProductStatus>(filter.Status.Trim(), true, out var prodStatus))
+            var normalizedStatus = filter.Status.Trim();
+            if (normalizedStatus.Equals("Discontinued", StringComparison.OrdinalIgnoreCase))
+            {
+                normalizedStatus = nameof(ProductStatus.Inactive);
+            }
+            if (Enum.TryParse<ProductStatus>(normalizedStatus, true, out var prodStatus))
             {
                 query = query.Where(p => p.Status == prodStatus);
             }

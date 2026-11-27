@@ -411,6 +411,8 @@ public class PromotionRepository : GenericRepository<Promotion>, IPromotionRepos
             existing.RedemptionRatePoints = setting.RedemptionRatePoints;
             existing.RedemptionRateAmount = setting.RedemptionRateAmount;
             existing.MinRedemptionPoints = setting.MinRedemptionPoints;
+            existing.PointsExpiryMonths = setting.PointsExpiryMonths;
+            existing.MaxRedemptionPercent = setting.MaxRedemptionPercent;
             existing.AllowPointsWithPromotions = setting.AllowPointsWithPromotions;
             existing.UpdatedAt = DateTime.UtcNow;
         }

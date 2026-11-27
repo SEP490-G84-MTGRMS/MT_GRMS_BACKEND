@@ -80,6 +80,8 @@ public class BranchProductDto
     public bool AllowRepack { get; set; }
     /// <summary>Giá đ/kg khi đóng khay. Null/≤0 → dùng RetailPrice (RAW).</summary>
     public decimal? ProcessedSellingPricePerKg { get; set; }
+    /// <summary>Phần trăm giảm giá cận date FEFO đang hiệu lực của lô bán tự động ưu tiên đầu tiên (0 nếu không có).</summary>
+    public decimal AutoFefoDiscountPercent { get; set; }
 }
 
 /// <summary>

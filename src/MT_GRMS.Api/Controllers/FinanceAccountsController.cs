@@ -306,7 +306,20 @@ public class FinanceAccountsController : BaseApiController
     {
         var account = await _db.FinanceAccounts.FirstOrDefaultAsync(x => x.Id == id && !x.IsDeleted, ct);
         if (account == null) return NotFound(ApiResponse<bool>.Fail("FINANCE_ACCOUNT_NOT_FOUND", "Không tìm thấy tài khoản/két quỹ."));
-        if (!request.IsActive && account.ActiveShiftId.HasValue) return Conflict(ApiResponse<bool>.Fail("FINANCE_ACCOUNT_SHIFT_OPEN", "Không thể ngừng két đang có ca POS mở.", 409));
+        if (!request.IsActive && account.AccountType == FinanceAccountType.Till)
+        {
+            var hasOpenPosShift = account.ActiveShiftId.HasValue || await _db.ShiftZReports.AsNoTracking().AnyAsync(s =>
+                !s.IsDeleted &&
+                (s.Status == ShiftState.Open || s.Status == ShiftState.Closing) &&
+                (s.TillId == account.Id || (account.BranchId.HasValue && s.BranchId == account.BranchId.Value && s.TillId == Guid.Empty)), ct);
+            if (hasOpenPosShift)
+                return Conflict(ApiResponse<bool>.Fail("FINANCE_ACCOUNT_SHIFT_OPEN", "Không thể ngừng hoạt động két quầy đang có ca POS mở hoặc đang kiểm đếm.", 409));
+        }
+        else if (!request.IsActive && account.ActiveShiftId.HasValue)
+        {
+            return Conflict(ApiResponse<bool>.Fail("FINANCE_ACCOUNT_SHIFT_OPEN", "Không thể ngừng két đang có ca POS mở.", 409));
+        }
+
         if (!request.IsActive && account.AccountType == FinanceAccountType.Bank && account.BranchId.HasValue &&
             await _db.Branches.AnyAsync(x => x.Id == account.BranchId.Value && x.CurrentBankFinanceAccountId == account.Id, ct))
             return Conflict(ApiResponse<bool>.Fail("BANK_CURRENT", "Đổi tài khoản nhận QR của chi nhánh trước khi ngừng tài khoản này.", 409));
@@ -324,8 +337,21 @@ public class FinanceAccountsController : BaseApiController
             var others = await _db.FinanceAccounts
                 .Where(x => x.Id != account.Id && x.BranchId == account.BranchId && x.AccountType == account.AccountType && x.IsActive && !x.IsDeleted)
                 .ToListAsync(ct);
-            if (others.Any(o => o.ActiveShiftId.HasValue))
+
+            if (account.AccountType == FinanceAccountType.Till && others.Count > 0)
+            {
+                var otherIds = others.Select(o => o.Id).ToList();
+                var otherHasOpenShift = others.Any(o => o.ActiveShiftId.HasValue) || await _db.ShiftZReports.AsNoTracking().AnyAsync(s =>
+                    !s.IsDeleted &&
+                    (s.Status == ShiftState.Open || s.Status == ShiftState.Closing) &&
+                    (s.BranchId == account.BranchId.Value || otherIds.Contains(s.TillId)), ct);
+                if (otherHasOpenShift)
+                    return Conflict(ApiResponse<bool>.Fail("FINANCE_ACCOUNT_SHIFT_OPEN", "Không thể đổi két quầy khi chi nhánh đang có ca POS mở hoặc đang kiểm đếm.", 409));
+            }
+            else if (others.Any(o => o.ActiveShiftId.HasValue))
+            {
                 return Conflict(ApiResponse<bool>.Fail("FINANCE_ACCOUNT_SHIFT_OPEN", "Không thể tắt két đang có ca POS mở để kích hoạt két mới.", 409));
+            }
 
             await using var tx = _db.Database.IsRelational() ? await _db.Database.BeginTransactionAsync(ct) : null;
             foreach (var other in others)
@@ -350,7 +376,12 @@ public class FinanceAccountsController : BaseApiController
             await _db.SaveChangesAsync(ct);
         }
 
-        return Ok(ApiResponse<bool>.Ok(true, request.IsActive ? "Đã kích hoạt tài khoản." : "Đã ngừng hoạt động."));
+        var successMsg = !request.IsActive
+            ? "Đã ngừng hoạt động."
+            : account.AccountType == FinanceAccountType.Bank
+                ? "Đã kích hoạt lại tài khoản ngân hàng."
+                : "Đã kích hoạt và chuyển làm két hoạt động chính của chi nhánh.";
+        return Ok(ApiResponse<bool>.Ok(true, successMsg));
     }
 
     [HttpPost("{id:guid}/sepay/connect")]

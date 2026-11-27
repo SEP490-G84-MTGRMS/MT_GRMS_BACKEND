@@ -1,13 +1,16 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Moq;
 using MT_GRMS.Api.Controllers;
 using MT_GRMS.Application.Catalog;
 using MT_GRMS.Application.Catalog.Dtos;
 using MT_GRMS.Application.Common;
+using MT_GRMS.Domain.Constants;
 using Xunit;
 
 namespace MT_GRMS.UnitTests.Controllers;
@@ -116,5 +119,38 @@ public class CategoriesControllerTests
         var ok = Assert.IsType<OkObjectResult>(result);
         var resp = Assert.IsType<ApiResponse<object>>(ok.Value);
         Assert.True(resp.Success);
+    }
+
+    [Theory]
+    [InlineData(nameof(CategoriesController.Create))]
+    [InlineData(nameof(CategoriesController.Update))]
+    [InlineData(nameof(CategoriesController.Delete))]
+    public void WriteEndpoints_RequireStoreOwnerRole(string actionName)
+    {
+        var method = typeof(CategoriesController).GetMethod(actionName);
+        Assert.NotNull(method);
+
+        var authorizeAttributes = method!
+            .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true)
+            .Cast<AuthorizeAttribute>()
+            .ToList();
+
+        Assert.Contains(authorizeAttributes, a => a.Roles == SystemRoles.StoreOwner);
+    }
+
+    [Theory]
+    [InlineData(nameof(CategoriesController.GetAll))]
+    [InlineData(nameof(CategoriesController.GetById))]
+    public void ReadEndpoints_DoNotRestrictToStoreOwnerOnly(string actionName)
+    {
+        var method = typeof(CategoriesController).GetMethod(actionName);
+        Assert.NotNull(method);
+
+        var authorizeAttributes = method!
+            .GetCustomAttributes(typeof(AuthorizeAttribute), inherit: true)
+            .Cast<AuthorizeAttribute>()
+            .ToList();
+
+        Assert.DoesNotContain(authorizeAttributes, a => a.Roles == SystemRoles.StoreOwner);
     }
 }

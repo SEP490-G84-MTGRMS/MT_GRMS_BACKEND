@@ -13,6 +13,8 @@ public class LoyaltySetting : BaseTenantEntity
     public int RedemptionRatePoints { get; set; } = 1; // 1 điểm = RedemptionRateAmount VNĐ
     public decimal RedemptionRateAmount { get; set; } = 1000.00m;
     public int MinRedemptionPoints { get; set; } = 20; // Tối thiểu 20 điểm mới được tiêu
+    public int PointsExpiryMonths { get; set; } = 12; // Thời hạn sử dụng điểm (tháng), 0 = vĩnh viễn
+    public int MaxRedemptionPercent { get; set; } = 50; // Giới hạn tối đa % giá trị hóa đơn được đổi điểm (mặc định 50%)
     public bool AllowPointsWithPromotions { get; set; } = true;
 }
 
