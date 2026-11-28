@@ -2531,9 +2531,26 @@ public class OrderService : IOrderService
         }
 
         bool wasPendingPayment = string.Equals(order.Status, "PendingPayment", StringComparison.OrdinalIgnoreCase);
+        decimal previousDeposit = order.DepositAmount;
+        decimal remainingToCredit = Math.Max(0m, order.FinalAmount - previousDeposit);
+        bool isBankMethod = string.Equals(order.PaymentMethod, "VIETQR", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(order.PaymentMethod, "BANK", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(order.PaymentMethod, "TRANSFER", StringComparison.OrdinalIgnoreCase);
+        bool shouldCreditBankCashbook = wasPendingPayment
+            && isBankMethod
+            && remainingToCredit > 0m
+            && _cashbookService != null
+            && (order.Note == null || !order.Note.Contains("[ĐÃ VÀO NGÂN HÀNG]"));
+
         order.Status = "Completed";
         order.PaymentStatus = "PAID";
         order.DepositAmount = order.FinalAmount;
+        if (shouldCreditBankCashbook)
+        {
+            order.Note = string.IsNullOrWhiteSpace(order.Note)
+                ? "[ĐÃ VÀO NGÂN HÀNG]"
+                : $"{order.Note} [ĐÃ VÀO NGÂN HÀNG]";
+        }
         order.UpdatedAt = DateTime.UtcNow;
 
         if (wasPendingPayment && order.CustomerId.HasValue && order.FinalAmount > 0m)
@@ -2568,6 +2585,23 @@ public class OrderService : IOrderService
         }
 
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        if (shouldCreditBankCashbook && _cashbookService != null)
+        {
+            Guid bankAccountId = order.FinanceAccountId
+                ?? (await _cashbookService.GetOrCreateBankAccountAsync(order.BranchId, ct: cancellationToken)).Id;
+            await _cashbookService.ReceiveCashAsync(
+                bankAccountId,
+                FinanceAccountType.Bank,
+                remainingToCredit,
+                "POS_SALE",
+                order.Id,
+                order.OrderCode,
+                $"Thu chuyển khoản đơn '{order.OrderCode}' (Xác nhận thủ công)",
+                cancellationToken
+            );
+        }
+
         return MapToOrderResponse(order, order.FinalAmount, 0m);
     }
 
@@ -2578,6 +2612,7 @@ public class OrderService : IOrderService
             .Where(o => o.ShiftId == null
                 && o.Status == "Completed"
                 && o.PaymentMethod != "DEBT"
+                && o.PaymentMethod != "CREDIT"
                 && (o.Note == null || !o.Note.Contains("[CHỐT CUỐI NGÀY:")))
             .OrderByDescending(o => o.OrderDate)
             .ToList();
@@ -2610,6 +2645,7 @@ public class OrderService : IOrderService
             .Where(o => o.ShiftId == null
                 && o.Status == "Completed"
                 && o.PaymentMethod != "DEBT"
+                && o.PaymentMethod != "CREDIT"
                 && (o.Note == null || !o.Note.Contains("[CHỐT CUỐI NGÀY:")))
             .ToList();
 
@@ -2656,17 +2692,45 @@ public class OrderService : IOrderService
 
                 if (branchBank > 0m)
                 {
-                    var bank = await _cashbookService.GetOrCreateBankAccountAsync(bId, ct: cancellationToken);
-                    await _cashbookService.ReceiveCashAsync(
-                        bank.Id,
-                        FinanceAccountType.Bank,
-                        branchBank,
-                        "POS_SALE",
-                        null,
-                        $"{settlementCode}-BANK",
-                        $"Chốt doanh thu CK/VietQR cuối ngày của Chủ cửa hàng ({branchBankOrders.Count} đơn CK){noteSuffix}",
-                        cancellationToken
-                    );
+                    // Chỉ nộp vào Ngân hàng những đơn CK/VietQR CHƯA từng được cộng vào sổ quỹ Bank (qua SePay webhook hoặc xác nhận thủ công)
+                    var existingBankEntries = await _cashbookService.GetEntriesAsync(
+                        accountId: null,
+                        branchId: bId,
+                        fromDate: null,
+                        toDate: null,
+                        page: 1,
+                        pageSize: 500,
+                        entryType: CashbookEntryType.Receipt,
+                        sourceType: "POS_SALE",
+                        keyword: null,
+                        ct: cancellationToken);
+                    var postedBankOrderCodes = new HashSet<string>(
+                        (existingBankEntries ?? [])
+                            .Where(e => string.Equals(e.AccountType, "Bank", StringComparison.OrdinalIgnoreCase)
+                                && !string.IsNullOrWhiteSpace(e.ReferenceCode))
+                            .Select(e => e.ReferenceCode.Trim()),
+                        StringComparer.OrdinalIgnoreCase);
+
+                    var uncreditedBankOrders = branchBankOrders
+                        .Where(o => (o.Note == null || !o.Note.Contains("[ĐÃ VÀO NGÂN HÀNG]"))
+                            && !postedBankOrderCodes.Contains(o.OrderCode ?? string.Empty))
+                        .ToList();
+                    decimal uncreditedBank = uncreditedBankOrders.Sum(o => o.FinalAmount);
+
+                    if (uncreditedBank > 0m)
+                    {
+                        var bank = await _cashbookService.GetOrCreateBankAccountAsync(bId, ct: cancellationToken);
+                        await _cashbookService.ReceiveCashAsync(
+                            bank.Id,
+                            FinanceAccountType.Bank,
+                            uncreditedBank,
+                            "POS_SALE",
+                            null,
+                            $"{settlementCode}-BANK",
+                            $"Chốt doanh thu CK/VietQR cuối ngày của Chủ cửa hàng ({uncreditedBankOrders.Count} đơn CK){noteSuffix}",
+                            cancellationToken
+                        );
+                    }
                 }
             }
 

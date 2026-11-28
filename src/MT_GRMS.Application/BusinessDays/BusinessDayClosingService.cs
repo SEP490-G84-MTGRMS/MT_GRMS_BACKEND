@@ -68,7 +68,7 @@ public class BusinessDayClosingService : IBusinessDayClosingService
         if (await _repository.HasPendingPaymentOrdersAsync(tenantId, branchId, businessDate, cancellationToken))
             blockers.Add(new("PENDING_PAYMENT_ORDERS", "Order", businessDate.ToString("yyyy-MM-dd"), "Đơn VietQR chưa hoàn tất thanh toán", null, "Chờ thanh toán", $"/pos/orders?status=PENDING_PAYMENT&branchId={branchId}"));
 
-        var completed = orders.Where(o => o.Status == "Completed" && o.PaymentMethod != "DEBT").ToList();
+        var completed = orders.Where(o => o.Status == "Completed" && o.PaymentMethod != "DEBT" && o.PaymentMethod != "CREDIT").ToList();
         var ownerCash = completed.Where(o => o.PaymentMethod == "CASH").Sum(o => o.FinalAmount);
         var ownerBank = completed.Where(o => IsBank(o.PaymentMethod)).Sum(o => o.FinalAmount);
         if ((ownerCash > 0 || shifts.Any(s => s.DroppedToSafeAmount > 0 || s.CashMovements.Any(IsCashDrop))) &&
@@ -170,7 +170,7 @@ public class BusinessDayClosingService : IBusinessDayClosingService
             throw new BusinessException("PENDING_PAYMENT_ORDERS", "Vẫn còn đơn chờ thanh toán VietQR chưa xử lý.");
 
         var shiftlessOrders = await _repository.GetShiftlessOrdersAsync(tenantId, request.BranchId, request.BusinessDate, cancellationToken);
-        var completedShiftless = shiftlessOrders.Where(o => o.Status == "Completed" && o.PaymentMethod != "DEBT").ToList();
+        var completedShiftless = shiftlessOrders.Where(o => o.Status == "Completed" && o.PaymentMethod != "DEBT" && o.PaymentMethod != "CREDIT").ToList();
         var ownerCashOrders = completedShiftless.Where(o => o.PaymentMethod == "CASH").ToList();
         var ownerCash = ownerCashOrders.Sum(o => o.FinalAmount);
         var ownerBank = completedShiftless.Where(o => IsBank(o.PaymentMethod)).Sum(o => o.FinalAmount);
