@@ -3940,6 +3940,114 @@ public class PosOrderServiceTests
     }
 
     [Fact]
+    public async Task ConfirmOrderPaymentAsync_ManualBankConfirm_CreditsBankCashbookOnce()
+    {
+        var mockCashbook = new Mock<ICashbookService>();
+        var bankAccountId = Guid.NewGuid();
+        var service = new OrderService(_orderRepo, _uow, _printService, cashbookService: mockCashbook.Object, tenantContext: _tenantContext);
+
+        var pendingBankOrder = new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            FinanceAccountId = bankAccountId,
+            OrderCode = "HD_MANUAL_QR_01",
+            PaymentMethod = "BANK",
+            Status = "PendingPayment",
+            PaymentStatus = "PENDING_PAYMENT",
+            FinalAmount = 150_000m,
+            DepositAmount = 50_000m
+        };
+        _orderRepo.Orders.Add(pendingBankOrder);
+
+        var confirmed = await service.ConfirmOrderPaymentAsync(pendingBankOrder.Id);
+        Assert.Equal("Completed", confirmed.Status);
+        Assert.Contains("[ĐÃ VÀO NGÂN HÀNG]", pendingBankOrder.Note);
+
+        // Chỉ cộng phần còn thiếu (150k - 50k = 100k) vào đúng tài khoản Bank gắn trên đơn
+        mockCashbook.Verify(c => c.ReceiveCashAsync(
+            bankAccountId,
+            FinanceAccountType.Bank,
+            100_000m,
+            "POS_SALE",
+            pendingBankOrder.Id,
+            "HD_MANUAL_QR_01",
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+
+        // Gọi lại lần 2 (idempotent) không được cộng trùng sổ quỹ
+        await service.ConfirmOrderPaymentAsync(pendingBankOrder.Id);
+        mockCashbook.Verify(c => c.ReceiveCashAsync(
+            It.IsAny<Guid>(),
+            FinanceAccountType.Bank,
+            It.IsAny<decimal>(),
+            It.IsAny<string>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task SettleOwnerDailyOrdersAsync_SkipsBankOrdersAlreadyCreditedBySepayOrManualConfirm()
+    {
+        var mockCashbook = new Mock<ICashbookService>();
+        var bankAcc = new FinanceAccount { Id = Guid.NewGuid(), AccountName = "TK Bank", AccountType = FinanceAccountType.Bank };
+        mockCashbook.Setup(c => c.GetOrCreateBankAccountAsync(_branchId, null, null, null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(bankAcc);
+        mockCashbook.Setup(c => c.GetEntriesAsync(
+                null, _branchId, null, null, 1, 500, CashbookEntryType.Receipt, "POS_SALE", null, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new List<MT_GRMS.Application.Cashbook.Dtos.CashbookEntryResponse>
+            {
+                new(Guid.NewGuid(), "CB-SEPAY-103274277", bankAcc.Id, "Bank", _branchId, "Receipt", 2450m, 4450m, "POS_SALE", null, "HD_SEPAY_OLD", "SePay", "SePay", DateTime.UtcNow)
+            });
+
+        var ownerContext = new FakeTenantContext();
+        ownerContext.SetRole("STORE_OWNER");
+        var serviceOwner = new OrderService(_orderRepo, _uow, _printService, cashbookService: mockCashbook.Object, tenantContext: ownerContext);
+
+        // 1) Đơn SePay cũ (chưa có tag nhưng đã có bút toán CB-SEPAY)
+        _orderRepo.Orders.Add(new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            OrderCode = "HD_SEPAY_OLD",
+            Status = "Completed",
+            PaymentMethod = "VIETQR",
+            FinalAmount = 2450m,
+            ShiftId = null
+        });
+        // 2) Đơn đã có tag [ĐÃ VÀO NGÂN HÀNG]
+        _orderRepo.Orders.Add(new Order
+        {
+            Id = Guid.NewGuid(),
+            TenantId = "tenant-01",
+            BranchId = _branchId,
+            OrderCode = "HD_TAGGED_BANK",
+            Status = "Completed",
+            PaymentMethod = "BANK",
+            FinalAmount = 50_000m,
+            Note = "[ĐÃ VÀO NGÂN HÀNG]",
+            ShiftId = null
+        });
+
+        await serviceOwner.SettleOwnerDailyOrdersAsync(new SettleOwnerDailyRequest(_branchId, "Chốt ngày"));
+
+        // Không được cộng trùng bất kỳ khoản Bank nào vào Cashbook
+        mockCashbook.Verify(c => c.ReceiveCashAsync(
+            It.IsAny<Guid>(),
+            FinanceAccountType.Bank,
+            It.IsAny<decimal>(),
+            It.IsAny<string>(),
+            It.IsAny<Guid?>(),
+            It.IsAny<string>(),
+            It.IsAny<string>(),
+            It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task CreateOrderAsync_ShiftClosing_ThrowsBusinessException()
     {
         var mockShiftRepo = new Mock<IShiftRepository>();
