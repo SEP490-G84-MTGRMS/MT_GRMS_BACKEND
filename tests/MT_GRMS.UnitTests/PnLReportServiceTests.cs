@@ -218,8 +218,32 @@ public class PnLReportServiceTests
         var response = await _service.GetPnLSummaryAsync(request);
 
         Assert.Equal(0m, response.ShrinkageLoss);
-        // 1.5% of 93,000,000 = 1,395,000
-        Assert.Equal(1_395_000m, response.EstimatedTaxAmount);
+        // 93,000,000 <= 1B VND exemption threshold (Decree 68/2026) -> 0 estimated tax
+        Assert.Equal(0m, response.EstimatedTaxAmount);
+    }
+
+    [Fact]
+    public async Task GetPnLSummaryAsync_WhenRevenueOver1BAndUnder10B_ShouldApplyVatTotalAndPitExcessWith30PctReduction()
+    {
+        _fakeRepo.Revenue = new RevenueAggregation(1_500_000_000m, 0m, 0m, 5000);
+        var request = new PnLFilterRequest(null, new DateTime(2026, 1, 1), new DateTime(2026, 12, 31));
+
+        var response = await _service.GetPnLSummaryAsync(request);
+
+        // VAT = 1.5B * 1.0% = 15,000,000; PIT = (500M * 0.5%) * 70% (NĐ 398) = 1,750,000 -> Total = 16,750,000
+        Assert.Equal(16_750_000m, response.EstimatedTaxAmount);
+    }
+
+    [Fact]
+    public async Task GetPnLSummaryAsync_WhenRevenueOver10B_ShouldNotApplyPit30PctReduction()
+    {
+        _fakeRepo.Revenue = new RevenueAggregation(12_000_000_000m, 0m, 0m, 40000);
+        var request = new PnLFilterRequest(null, new DateTime(2026, 1, 1), new DateTime(2026, 12, 31));
+
+        var response = await _service.GetPnLSummaryAsync(request);
+
+        // VAT = 12B * 1.0% = 120,000,000; PIT = (11B * 0.5%) = 55,000,000 (no 30% reduction > 10B) -> Total = 175,000,000
+        Assert.Equal(175_000_000m, response.EstimatedTaxAmount);
     }
 
     [Theory]

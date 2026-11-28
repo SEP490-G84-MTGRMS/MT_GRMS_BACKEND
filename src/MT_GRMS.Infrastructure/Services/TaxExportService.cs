@@ -124,6 +124,24 @@ public class TaxExportService : ITaxExportService
             .OrderBy(o => o.CreatedAt)
             .ToListAsync(cancellationToken);
 
+        // Lấy danh sách phiếu thu thủ công / bút toán bù trừ doanh thu chịu thuế ngoài POS để khớp 100% tờ khai
+        var manualRevenueQuery = _context.CashbookEntries.AsNoTracking().Where(e =>
+            e.OccurredAtUtc >= fromDateUtc &&
+            e.OccurredAtUtc < toDateUtc &&
+            (e.SourceType == "MANUAL" || e.SourceType == "COMPENSATING") &&
+            e.TaxTreatment == CashbookTaxTreatment.TaxableRevenue);
+        if (!string.IsNullOrWhiteSpace(currentTenantId))
+        {
+            manualRevenueQuery = manualRevenueQuery.Where(e => e.TenantId == currentTenantId);
+        }
+        if (filter.BranchId.HasValue)
+        {
+            manualRevenueQuery = manualRevenueQuery.Where(e => e.BranchId == filter.BranchId.Value);
+        }
+        var manualTaxableEntries = await manualRevenueQuery
+            .OrderBy(e => e.OccurredAtUtc)
+            .ToListAsync(cancellationToken);
+
         // Lấy danh sách phiếu nhập kho trong kỳ (Include Lines để tính số lượng nhập S2d)
         var baseReceiptQuery = _context.GoodsReceipts.Include(g => g.Supplier).Include(g => g.Lines).AsNoTracking().AsQueryable();
         if (!string.IsNullOrWhiteSpace(currentTenantId))
@@ -252,13 +270,13 @@ public class TaxExportService : ITaxExportService
             switch (effectiveBookType.Value)
             {
                 case AccountingBookType.S1a_RevenueGroup1:
-                    BuildS1aSheet(workbook, summary, filter, orders, tenant, branch);
+                    BuildS1aSheet(workbook, summary, filter, orders, tenant, branch, manualTaxableEntries);
                     break;
                 case AccountingBookType.S2a_RevenueGroup2:
-                    BuildS2aSheet(workbook, summary, filter, orders, tenant, branch);
+                    BuildS2aSheet(workbook, summary, filter, orders, tenant, branch, manualTaxableEntries);
                     break;
                 case AccountingBookType.S2b_RevenueDeclaration:
-                    BuildS2bSheet(workbook, summary, filter, orders, tenant, branch);
+                    BuildS2bSheet(workbook, summary, filter, orders, tenant, branch, manualTaxableEntries);
                     break;
                 case AccountingBookType.S2c_RevenueAndExpense:
                     BuildS2cSheet(workbook, summary, filter, orders, deductibleExpenses, tenant, branch);
@@ -277,9 +295,9 @@ public class TaxExportService : ITaxExportService
         else
         {
             // Xuất trọn bộ đầy đủ cả 7 Sheet theo Thông tư 152/2025/TT-BTC
-            BuildS1aSheet(workbook, summary, filter, orders, tenant, branch);
-            BuildS2aSheet(workbook, summary, filter, orders, tenant, branch);
-            BuildS2bSheet(workbook, summary, filter, orders, tenant, branch);
+            BuildS1aSheet(workbook, summary, filter, orders, tenant, branch, manualTaxableEntries);
+            BuildS2aSheet(workbook, summary, filter, orders, tenant, branch, manualTaxableEntries);
+            BuildS2bSheet(workbook, summary, filter, orders, tenant, branch, manualTaxableEntries);
             BuildS2cSheet(workbook, summary, filter, orders, deductibleExpenses, tenant, branch);
             BuildS2dSheet(workbook, summary, filter, receipts, orders, deductibleExpenses, tenant, branch, openingStockQty, openingStockAmount);
             BuildS2eSheet(workbook, summary, filter, cashEntries, orders, deductibleExpenses, tenant, branch, openingCash, openingBank);
@@ -302,13 +320,50 @@ public class TaxExportService : ITaxExportService
     /// 1. Mẫu số S1a-HKD: Sổ chi tiết doanh thu bán hàng hóa, dịch vụ (dành cho Nhóm 1).
     /// Bảng 3 cột: [Ngày tháng A, Diễn giải B, Doanh thu 1], dòng Tổng cộng doanh thu, phần ký.
     /// </summary>
+    private static (decimal StandardRev, decimal ReducedRev) SplitOrderRevenueByVatRate(
+        Order order,
+        bool hasReducedVat,
+        decimal fallbackReducedRatio)
+    {
+        var netOrderRevenue = Math.Max(0m, order.TotalAmount - order.DiscountAmount - order.ReturnedAmount);
+        if (!hasReducedVat || netOrderRevenue <= 0m)
+        {
+            return (netOrderRevenue, 0m);
+        }
+
+        if (order.Details != null && order.Details.Count > 0)
+        {
+            decimal detailReduced = 0m;
+            decimal detailStandard = 0m;
+            foreach (var d in order.Details)
+            {
+                var lineVal = d.Qty * d.UnitPrice;
+                if (d.AppliedVatRate == 0.008m || (d.AppliedVatRate == 0m && d.Product != null && d.Product.EligibleForVatReduction))
+                    detailReduced += lineVal;
+                else
+                    detailStandard += lineVal;
+            }
+            var detailTotal = detailReduced + detailStandard;
+            if (detailTotal > 0m)
+            {
+                var ratioReduced = detailReduced / detailTotal;
+                var reduced = Math.Round(netOrderRevenue * ratioReduced, 0, MidpointRounding.AwayFromZero);
+                return (netOrderRevenue - reduced, reduced);
+            }
+        }
+
+        var fallbackReduced = Math.Round(netOrderRevenue * fallbackReducedRatio, 0, MidpointRounding.AwayFromZero);
+        return (netOrderRevenue - fallbackReduced, fallbackReduced);
+    }
+
     public static void BuildS1aSheet(
         IXLWorkbook workbook,
         HouseholdTaxSummaryDto summary,
         HouseholdTaxFilterDto filter,
         List<Order> orders,
         Tenant? tenant,
-        Branch? branch)
+        Branch? branch,
+        List<CashbookEntry>? manualTaxableEntries = null)
     {
         var ws = workbook.Worksheets.Add("S1a-HKD");
         ws.Column(1).Width = 18;
@@ -330,8 +385,9 @@ public class TaxExportService : ITaxExportService
 
         int row = 12;
         var startRow = row;
+        var manualEntries = manualTaxableEntries ?? new List<CashbookEntry>();
 
-        if (orders.Count > 0)
+        if (orders.Count > 0 || manualEntries.Count > 0)
         {
             foreach (var o in orders)
             {
@@ -339,7 +395,7 @@ public class TaxExportService : ITaxExportService
                 ws.Cell(row, 1).Value = localDate.ToString("dd/MM/yyyy");
                 ws.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
 
-                var netOrderRevenue = Math.Max(0m, o.TotalAmount - o.DiscountAmount);
+                var netOrderRevenue = Math.Max(0m, o.TotalAmount - o.DiscountAmount - o.ReturnedAmount);
                 ws.Cell(row, 2).Value = $"Bán lẻ hàng hóa theo đơn hàng {o.OrderCode}";
                 ws.Cell(row, 2).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Left;
 
@@ -347,6 +403,21 @@ public class TaxExportService : ITaxExportService
                 ws.Cell(row, 3).Style.NumberFormat.Format = NumberFormatVnd;
                 ws.Cell(row, 3).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
 
+                FormatDataRow(ws.Range(row, 1, row, 3));
+                row++;
+            }
+
+            foreach (var e in manualEntries)
+            {
+                var localDate = ToVietnamTime(e.OccurredAtUtc);
+                var signedAmount = e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount;
+                ws.Cell(row, 1).Value = localDate.ToString("dd/MM/yyyy");
+                ws.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+                ws.Cell(row, 2).Value = !string.IsNullOrWhiteSpace(e.Description) ? e.Description : $"Doanh thu ngoài POS ({e.EntryCode})";
+                ws.Cell(row, 2).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Left;
+                ws.Cell(row, 3).Value = signedAmount;
+                ws.Cell(row, 3).Style.NumberFormat.Format = NumberFormatVnd;
+                ws.Cell(row, 3).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
                 FormatDataRow(ws.Range(row, 1, row, 3));
                 row++;
             }
@@ -386,8 +457,7 @@ public class TaxExportService : ITaxExportService
 
     /// <summary>
     /// 2. Mẫu số S2a-HKD: Sổ chi tiết doanh thu bán hàng hóa, dịch vụ theo tỷ lệ % (dành cho Nhóm 2).
-    /// Bảng 4 cột: [Số hiệu A, Ngày B, Diễn giải C, Doanh thu 1], gom theo từng ngành nghề kinh doanh,
-    /// dưới mỗi ngành có dòng Tổng cộng (1), dòng Số thuế GTGT phải nộp, dòng Số thuế TNCN phải nộp. Cuối sổ có 2 dòng tổng kết.
+    /// Tách rạch ròi nhóm hàng 1.0% và 0.8% (KHÔNG tính trùng) và đối soát khớp 100% thuế TNCN (trừ ngưỡng 1 tỷ + giảm 30% NĐ 398/2026).
     /// </summary>
     public static void BuildS2aSheet(
         IXLWorkbook workbook,
@@ -395,15 +465,16 @@ public class TaxExportService : ITaxExportService
         HouseholdTaxFilterDto filter,
         List<Order> orders,
         Tenant? tenant,
-        Branch? branch)
+        Branch? branch,
+        List<CashbookEntry>? manualTaxableEntries = null)
     {
         var ws = workbook.Worksheets.Add("S2a-HKD");
         ws.Column(1).Width = 18;
         ws.Column(2).Width = 16;
-        ws.Column(3).Width = 46;
+        ws.Column(3).Width = 48;
         ws.Column(4).Width = 24;
 
-        RenderCircularHeader(ws, "S2a", "SỔ CHI TIẾT DOANH THU BÁN HÀNG HÓA, DỊCH VỤ THEO TỶ LỆ %", "Hộ kinh doanh Nhóm 2 - Nộp thuế theo tỷ lệ % trên doanh thu", summary, tenant, branch, 4);
+        RenderCircularHeader(ws, "S2a", "SỔ CHI TIẾT DOANH THU BÁN HÀNG HÓA, DỊCH VỤ THEO TỶ LỆ %", "Hộ kinh doanh nộp thuế theo tỷ lệ % trên doanh thu", summary, tenant, branch, 4);
 
         // Header bảng (Dòng 10-11)
         ws.Cell(10, 1).Value = "Số hiệu chứng từ";
@@ -419,21 +490,80 @@ public class TaxExportService : ITaxExportService
         FormatColLettersRow(ws.Range(11, 1, 11, 4));
 
         int row = 12;
-        var vnTz = GetVietnamTimeZone();
-
         var vatTotalRowList = new List<int>();
         var pitTotalRowList = new List<int>();
+        var manualEntries = manualTaxableEntries ?? new List<CashbookEntry>();
 
-        // Phân ngành 1: Phân phối, cung cấp hàng hóa (Áp dụng mức thuế suất tiêu chuẩn 1.0% GTGT, 0.5% TNCN)
-        var hasReducedVat = summary.VatBreakdown.RevenueReducedRate08 > 0;
+        var hasReducedVat = summary.VatBreakdown.RevenueReducedRate08 > 0m;
+        var baseVatRate = (summary.OriginalVatRate > 0m ? summary.OriginalVatRate : 1.0m) / 100m;
+        var vatRedPct = summary.IsVatReduced ? summary.VatReductionPercentage : 0m;
+        var reducedVatRate = hasReducedVat
+            ? Math.Round(baseVatRate * Math.Max(0m, 1m - (vatRedPct > 0m ? vatRedPct : 20m) / 100m), 6, MidpointRounding.AwayFromZero)
+            : baseVatRate;
+        var pitRatePct = summary.PitRate > 0 ? summary.PitRate : 0.5m;
+        var pitNoteSuffix = summary.IsPitReduced && summary.PitReductionAmount > 0m
+            ? $" (đã trừ ngưỡng 1 tỷ & giảm {summary.PitReductionPercentage:0.##}% theo NĐ 398/2026)"
+            : " (tính trên phần doanh thu vượt ngưỡng 1 tỷ)";
+
+        var breakdownTotal = summary.VatBreakdown.RevenueStandardRate10 + summary.VatBreakdown.RevenueReducedRate08;
+        var fallbackReducedRatio = breakdownTotal > 0m ? summary.VatBreakdown.RevenueReducedRate08 / breakdownTotal : 0m;
+
+        // Tách chứng từ thành 2 rổ không chồng lấn: Nhóm chuẩn (1.0%) và Nhóm giảm thuế (0.8%)
+        var standardRows = new List<(string Code, string Date, string Desc, decimal Amount)>();
+        var reducedRows = new List<(string Code, string Date, string Desc, decimal Amount)>();
+
+        if (orders.Count > 0 || manualEntries.Count > 0)
+        {
+            foreach (var o in orders)
+            {
+                var localDate = ToVietnamTime(o.CreatedAt).ToString("dd/MM/yyyy");
+                var (stdAmt, redAmt) = SplitOrderRevenueByVatRate(o, hasReducedVat, fallbackReducedRatio);
+                if (stdAmt > 0m || (!hasReducedVat && redAmt == 0m))
+                {
+                    standardRows.Add((o.OrderCode, localDate, $"Bán lẻ hàng hóa đơn hàng {o.OrderCode}", stdAmt));
+                }
+                if (redAmt > 0m)
+                {
+                    reducedRows.Add((o.OrderCode, localDate, $"Bán lẻ hàng hóa giảm GTGT đơn hàng {o.OrderCode}", redAmt));
+                }
+            }
+
+            foreach (var e in manualEntries)
+            {
+                var localDate = ToVietnamTime(e.OccurredAtUtc).ToString("dd/MM/yyyy");
+                var signedAmount = e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount;
+                standardRows.Add((e.EntryCode, localDate, !string.IsNullOrWhiteSpace(e.Description) ? e.Description : $"Doanh thu ngoài POS ({e.EntryCode})", signedAmount));
+            }
+        }
+        else
+        {
+            var todayStr = DateTime.Now.ToString("dd/MM/yyyy");
+            var stdFallback = hasReducedVat ? summary.VatBreakdown.RevenueStandardRate10 : summary.TaxableRevenueInPeriod;
+            standardRows.Add(("TH-001", todayStr, "Doanh thu bán lẻ hàng hóa tính thuế chuẩn trong kỳ", stdFallback));
+            if (hasReducedVat)
+            {
+                reducedRows.Add(("TH-002", todayStr, "Doanh thu hàng hóa thuộc đối tượng giảm thuế GTGT (NQ 204/2025)", summary.VatBreakdown.RevenueReducedRate08));
+            }
+        }
+
+        if (standardRows.Count == 0)
+        {
+            standardRows.Add(("-", "-", "Không phát sinh doanh thu nhóm chuẩn trong kỳ", 0m));
+        }
+
+        var totalStdRev = standardRows.Sum(r => r.Amount);
+        var totalRedRev = reducedRows.Sum(r => r.Amount);
+        var combinedRev = totalStdRev + totalRedRev;
+        var sec1PitShare = hasReducedVat && combinedRev > 0m
+            ? Math.Round(summary.PitAmount * (totalStdRev / combinedRev), 0, MidpointRounding.AwayFromZero)
+            : summary.PitAmount;
+        var sec2PitShare = hasReducedVat ? Math.Max(0m, summary.PitAmount - sec1PitShare) : 0m;
+
+        // Phân ngành 1: Hàng hóa chịu mức thuế suất chuẩn 1.0%
         var sec1Name = hasReducedVat
-            ? "1. Hàng hóa chịu mức thuế suất tiêu chuẩn (1.0% GTGT, 0.5% TNCN)"
-            : "1. Hoạt động phân phối, cung cấp hàng hóa (1.0% GTGT, 0.5% TNCN)";
-        var sec1VatRate = 0.01m;
-        var sec1PitRatePct = summary.PitRate > 0 ? summary.PitRate : 0.5m;
-        var sec1PitRate = sec1PitRatePct / 100m;
+            ? $"1. Hàng hóa chịu mức thuế suất chuẩn ({baseVatRate * 100:0.##}% GTGT, {pitRatePct:0.##}% TNCN)"
+            : $"1. Hoạt động phân phối, cung cấp hàng hóa ({baseVatRate * 100:0.##}% GTGT, {pitRatePct:0.##}% TNCN)";
 
-        // Tiêu đề Ngành 1
         ws.Cell(row, 1).Value = sec1Name;
         ws.Range(row, 1, row, 4).Merge();
         ws.Cell(row, 1).Style.Font.Bold = true;
@@ -441,29 +571,13 @@ public class TaxExportService : ITaxExportService
         row++;
 
         int sec1StartRow = row;
-        if (orders.Count > 0)
+        foreach (var item in standardRows)
         {
-            foreach (var o in orders)
-            {
-                var localDate = ToVietnamTime(o.CreatedAt);
-                var netOrderRevenue = Math.Max(0m, o.TotalAmount - o.DiscountAmount);
-                SetTextCell(ws.Cell(row, 1), o.OrderCode);
-                ws.Cell(row, 2).Value = localDate.ToString("dd/MM/yyyy");
-                ws.Cell(row, 2).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
-                ws.Cell(row, 3).Value = $"Bán lẻ hàng hóa đơn hàng {o.OrderCode}";
-                ws.Cell(row, 4).Value = netOrderRevenue;
-                ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
-                FormatDataRow(ws.Range(row, 1, row, 4));
-                row++;
-            }
-        }
-        else
-        {
-            SetTextCell(ws.Cell(row, 1), "TH-001");
-            ws.Cell(row, 2).Value = DateTime.Now.ToString("dd/MM/yyyy");
+            SetTextCell(ws.Cell(row, 1), item.Code);
+            ws.Cell(row, 2).Value = item.Date;
             ws.Cell(row, 2).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
-            ws.Cell(row, 3).Value = "Doanh thu bán lẻ hàng hóa tính thuế trong kỳ";
-            ws.Cell(row, 4).Value = hasReducedVat ? summary.VatBreakdown.RevenueStandardRate10 : summary.TaxableRevenueInPeriod;
+            ws.Cell(row, 3).Value = item.Desc;
+            ws.Cell(row, 4).Value = item.Amount;
             ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
             FormatDataRow(ws.Range(row, 1, row, 4));
             row++;
@@ -483,47 +597,50 @@ public class TaxExportService : ITaxExportService
         row++;
 
         // Dòng Số thuế GTGT phải nộp Ngành 1
-        ws.Cell(row, 1).Value = $"Số thuế GTGT phải nộp = (1) x {sec1VatRate * 100:0.##}%";
+        ws.Cell(row, 1).Value = $"Số thuế GTGT phải nộp = (1) x {baseVatRate * 100:0.##}%";
         ws.Range(row, 1, row, 3).Merge();
         ws.Cell(row, 1).Style.Font.Bold = true;
         ws.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
-        ws.Cell(row, 4).FormulaA1 = $"ROUND(D{sec1TotalRow} * {sec1VatRate.ToString(CultureInfo.InvariantCulture)}, 0)";
+        ws.Cell(row, 4).FormulaA1 = $"ROUND(D{sec1TotalRow} * {baseVatRate.ToString(CultureInfo.InvariantCulture)}, 0)";
         ws.Cell(row, 4).Style.Font.Bold = true;
         ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
         FormatSubTotalRow(ws.Range(row, 1, row, 4));
         vatTotalRowList.Add(row);
         row++;
 
-        // Dòng Số thuế TNCN phải nộp Ngành 1
-        ws.Cell(row, 1).Value = $"Số thuế TNCN phải nộp = (1) x {sec1PitRate * 100:0.##}%";
+        // Dòng Số thuế TNCN phải nộp Ngành 1 (khớp theo phần vượt 1 tỷ & giảm 30% NĐ 398)
+        ws.Cell(row, 1).Value = $"Số thuế TNCN phải nộp ({pitRatePct:0.##}%){pitNoteSuffix}";
         ws.Range(row, 1, row, 3).Merge();
         ws.Cell(row, 1).Style.Font.Bold = true;
         ws.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
-        ws.Cell(row, 4).FormulaA1 = $"ROUND(D{sec1TotalRow} * {sec1PitRate.ToString(CultureInfo.InvariantCulture)}, 0)";
+        ws.Cell(row, 4).Value = sec1PitShare;
         ws.Cell(row, 4).Style.Font.Bold = true;
         ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
         FormatSubTotalRow(ws.Range(row, 1, row, 4));
         pitTotalRowList.Add(row);
         row++;
 
-        // Nếu có hàng hóa giảm thuế 20% GTGT theo Nghị quyết 204/2025/QH15
-        if (hasReducedVat)
+        // Phân ngành 2: Hàng hóa giảm 20% mức thuế suất GTGT theo Nghị quyết 204/2025/QH15
+        if (hasReducedVat && reducedRows.Count > 0)
         {
-            ws.Cell(row, 1).Value = "2. Hàng hóa giảm 20% mức thuế suất GTGT theo NQ 204/2025 (0.8% GTGT, 0.5% TNCN)";
+            ws.Cell(row, 1).Value = $"2. Hàng hóa giảm thuế GTGT theo NQ 204/2025 ({reducedVatRate * 100:0.##}% GTGT, {pitRatePct:0.##}% TNCN)";
             ws.Range(row, 1, row, 4).Merge();
             ws.Cell(row, 1).Style.Font.Bold = true;
             ws.Cell(row, 1).Style.Fill.BackgroundColor = SectionBgColor;
             row++;
 
             int sec2StartRow = row;
-            SetTextCell(ws.Cell(row, 1), "TH-002");
-            ws.Cell(row, 2).Value = DateTime.Now.ToString("dd/MM/yyyy");
-            ws.Cell(row, 2).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
-            ws.Cell(row, 3).Value = "Doanh thu hàng hóa thuộc đối tượng giảm thuế GTGT (NQ 204/2025)";
-            ws.Cell(row, 4).Value = summary.VatBreakdown.RevenueReducedRate08;
-            ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
-            FormatDataRow(ws.Range(row, 1, row, 4));
-            row++;
+            foreach (var item in reducedRows)
+            {
+                SetTextCell(ws.Cell(row, 1), item.Code);
+                ws.Cell(row, 2).Value = item.Date;
+                ws.Cell(row, 2).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+                ws.Cell(row, 3).Value = item.Desc;
+                ws.Cell(row, 4).Value = item.Amount;
+                ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
+                FormatDataRow(ws.Range(row, 1, row, 4));
+                row++;
+            }
             int sec2EndRow = row - 1;
 
             // Dòng Tổng cộng (1) Ngành 2
@@ -539,27 +656,37 @@ public class TaxExportService : ITaxExportService
             row++;
 
             // Dòng Số thuế GTGT phải nộp Ngành 2 (0.8%)
-            ws.Cell(row, 1).Value = "Số thuế GTGT phải nộp = (1) x 0.8%";
+            ws.Cell(row, 1).Value = $"Số thuế GTGT phải nộp = (1) x {reducedVatRate * 100:0.##}%";
             ws.Range(row, 1, row, 3).Merge();
             ws.Cell(row, 1).Style.Font.Bold = true;
             ws.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
-            ws.Cell(row, 4).FormulaA1 = $"ROUND(D{sec2TotalRow} * 0.008, 0)";
+            ws.Cell(row, 4).FormulaA1 = $"ROUND(D{sec2TotalRow} * {reducedVatRate.ToString(CultureInfo.InvariantCulture)}, 0)";
             ws.Cell(row, 4).Style.Font.Bold = true;
             ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
             FormatSubTotalRow(ws.Range(row, 1, row, 4));
             vatTotalRowList.Add(row);
             row++;
 
-            // Dòng Số thuế TNCN phải nộp Ngành 2 (0.5%)
-            ws.Cell(row, 1).Value = $"Số thuế TNCN phải nộp = (1) x {sec1PitRate * 100:0.##}%";
+            // Dòng Số thuế TNCN phải nộp Ngành 2
+            ws.Cell(row, 1).Value = $"Số thuế TNCN phải nộp ({pitRatePct:0.##}%){pitNoteSuffix}";
             ws.Range(row, 1, row, 3).Merge();
             ws.Cell(row, 1).Style.Font.Bold = true;
             ws.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
-            ws.Cell(row, 4).FormulaA1 = $"ROUND(D{sec2TotalRow} * {sec1PitRate.ToString(CultureInfo.InvariantCulture)}, 0)";
+            ws.Cell(row, 4).Value = sec2PitShare;
             ws.Cell(row, 4).Style.Font.Bold = true;
             ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
             FormatSubTotalRow(ws.Range(row, 1, row, 4));
             pitTotalRowList.Add(row);
+            row++;
+        }
+
+        // Dòng tham chiếu đối chiếu giảm 30% TNCN (NĐ 398/2026) nếu áp dụng
+        if (summary.IsPitReduced && summary.PitReductionAmount > 0m)
+        {
+            ws.Cell(row, 1).Value = $"Thông tin ưu đãi NQ 43/2026 & NĐ 398/2026: TNCN trước giảm = {summary.PitBeforeReduction:N0}đ | Giảm {summary.PitReductionPercentage:0.##}% = -{summary.PitReductionAmount:N0}đ";
+            ws.Range(row, 1, row, 4).Merge();
+            ws.Cell(row, 1).Style.Font.Italic = true;
+            ws.Cell(row, 1).Style.Font.FontColor = PrimaryColor;
             row++;
         }
 
@@ -595,7 +722,7 @@ public class TaxExportService : ITaxExportService
 
     /// <summary>
     /// 3. Mẫu số S2b-HKD: Sổ chi tiết doanh thu bán hàng hóa, dịch vụ (dành cho hộ Kê khai).
-    /// Bảng 4 cột: [Số hiệu A, Ngày B, Diễn giải C, Doanh thu 1], gom theo ngành nghề, dưới mỗi ngành CÓ dòng thuế GTGT,
+    /// Bảng 4 cột: [Số hiệu A, Ngày B, Diễn giải C, Doanh thu 1], gom theo nhóm thuế suất GTGT,
     /// TUYỆT ĐỐI KHÔNG CÓ dòng thuế TNCN (TNCN tính tại S2c). Cuối sổ có dòng tổng kết thuế GTGT.
     /// </summary>
     public static void BuildS2bSheet(
@@ -604,12 +731,13 @@ public class TaxExportService : ITaxExportService
         HouseholdTaxFilterDto filter,
         List<Order> orders,
         Tenant? tenant,
-        Branch? branch)
+        Branch? branch,
+        List<CashbookEntry>? manualTaxableEntries = null)
     {
         var ws = workbook.Worksheets.Add("S2b-HKD");
         ws.Column(1).Width = 18;
         ws.Column(2).Width = 16;
-        ws.Column(3).Width = 46;
+        ws.Column(3).Width = 48;
         ws.Column(4).Width = 24;
 
         RenderCircularHeader(ws, "S2b", "SỔ CHI TIẾT DOANH THU BÁN HÀNG HÓA, DỊCH VỤ", "Hộ kinh doanh nộp thuế theo phương pháp Kê khai (Doanh thu tính thuế GTGT)", summary, tenant, branch, 4);
@@ -628,40 +756,73 @@ public class TaxExportService : ITaxExportService
         FormatColLettersRow(ws.Range(11, 1, 11, 4));
 
         int row = 12;
-        var vnTz = GetVietnamTimeZone();
         var vatTotalRowList = new List<int>();
+        var manualEntries = manualTaxableEntries ?? new List<CashbookEntry>();
+        var hasReducedVat = summary.VatBreakdown.RevenueReducedRate08 > 0m;
+        var baseVatRate = (summary.OriginalVatRate > 0m ? summary.OriginalVatRate : 1.0m) / 100m;
+        var vatRedPct = summary.IsVatReduced ? summary.VatReductionPercentage : 0m;
+        var reducedVatRate = hasReducedVat
+            ? Math.Round(baseVatRate * Math.Max(0m, 1m - (vatRedPct > 0m ? vatRedPct : 20m) / 100m), 6, MidpointRounding.AwayFromZero)
+            : baseVatRate;
 
-        var sec1VatRate = 0.01m;
-        ws.Cell(row, 1).Value = "1. Hoạt động phân phối, cung cấp hàng hóa (1.0% GTGT)";
+        var breakdownTotal = summary.VatBreakdown.RevenueStandardRate10 + summary.VatBreakdown.RevenueReducedRate08;
+        var fallbackReducedRatio = breakdownTotal > 0m ? summary.VatBreakdown.RevenueReducedRate08 / breakdownTotal : 0m;
+
+        var standardRows = new List<(string Code, string Date, string Desc, decimal Amount)>();
+        var reducedRows = new List<(string Code, string Date, string Desc, decimal Amount)>();
+
+        if (orders.Count > 0 || manualEntries.Count > 0)
+        {
+            foreach (var o in orders)
+            {
+                var localDate = ToVietnamTime(o.CreatedAt).ToString("dd/MM/yyyy");
+                var (stdAmt, redAmt) = SplitOrderRevenueByVatRate(o, hasReducedVat, fallbackReducedRatio);
+                if (stdAmt > 0m || (!hasReducedVat && redAmt == 0m))
+                {
+                    standardRows.Add((o.OrderCode, localDate, $"Doanh thu bán lẻ đơn hàng kê khai {o.OrderCode}", stdAmt));
+                }
+                if (redAmt > 0m)
+                {
+                    reducedRows.Add((o.OrderCode, localDate, $"Doanh thu bán lẻ giảm GTGT đơn hàng {o.OrderCode}", redAmt));
+                }
+            }
+            foreach (var e in manualEntries)
+            {
+                var localDate = ToVietnamTime(e.OccurredAtUtc).ToString("dd/MM/yyyy");
+                var signedAmount = e.EntryType == CashbookEntryType.Receipt ? e.Amount : -e.Amount;
+                standardRows.Add((e.EntryCode, localDate, !string.IsNullOrWhiteSpace(e.Description) ? e.Description : $"Doanh thu ngoài POS kê khai ({e.EntryCode})", signedAmount));
+            }
+        }
+        else
+        {
+            var todayStr = DateTime.Now.ToString("dd/MM/yyyy");
+            var stdFallback = hasReducedVat ? summary.VatBreakdown.RevenueStandardRate10 : summary.TaxableRevenueInPeriod;
+            standardRows.Add(("KK-001", todayStr, "Tổng doanh thu bán hàng hóa tính thuế GTGT trong kỳ", stdFallback));
+            if (hasReducedVat)
+            {
+                reducedRows.Add(("KK-002", todayStr, "Doanh thu hàng hóa thuộc đối tượng giảm thuế GTGT (NQ 204/2025)", summary.VatBreakdown.RevenueReducedRate08));
+            }
+        }
+
+        if (standardRows.Count == 0)
+        {
+            standardRows.Add(("-", "-", "Không phát sinh doanh thu nhóm chuẩn trong kỳ", 0m));
+        }
+
+        ws.Cell(row, 1).Value = $"1. Hoạt động phân phối, cung cấp hàng hóa ({baseVatRate * 100:0.##}% GTGT)";
         ws.Range(row, 1, row, 4).Merge();
         ws.Cell(row, 1).Style.Font.Bold = true;
         ws.Cell(row, 1).Style.Fill.BackgroundColor = SectionBgColor;
         row++;
 
         int secStartRow = row;
-        if (orders.Count > 0)
+        foreach (var item in standardRows)
         {
-            foreach (var o in orders)
-            {
-                var localDate = ToVietnamTime(o.CreatedAt);
-                var netOrderRevenue = Math.Max(0m, o.TotalAmount - o.DiscountAmount);
-                SetTextCell(ws.Cell(row, 1), o.OrderCode);
-                ws.Cell(row, 2).Value = localDate.ToString("dd/MM/yyyy");
-                ws.Cell(row, 2).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
-                ws.Cell(row, 3).Value = $"Doanh thu bán lẻ đơn hàng kê khai {o.OrderCode}";
-                ws.Cell(row, 4).Value = netOrderRevenue;
-                ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
-                FormatDataRow(ws.Range(row, 1, row, 4));
-                row++;
-            }
-        }
-        else
-        {
-            SetTextCell(ws.Cell(row, 1), "KK-001");
-            ws.Cell(row, 2).Value = DateTime.Now.ToString("dd/MM/yyyy");
+            SetTextCell(ws.Cell(row, 1), item.Code);
+            ws.Cell(row, 2).Value = item.Date;
             ws.Cell(row, 2).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
-            ws.Cell(row, 3).Value = "Tổng doanh thu bán hàng hóa tính thuế GTGT trong kỳ";
-            ws.Cell(row, 4).Value = summary.TaxableRevenueInPeriod;
+            ws.Cell(row, 3).Value = item.Desc;
+            ws.Cell(row, 4).Value = item.Amount;
             ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
             FormatDataRow(ws.Range(row, 1, row, 4));
             row++;
@@ -681,16 +842,61 @@ public class TaxExportService : ITaxExportService
         row++;
 
         // Dòng Số thuế GTGT phải nộp = (1) x [Tỷ lệ %]
-        ws.Cell(row, 1).Value = $"Số thuế GTGT phải nộp = (1) x {sec1VatRate * 100:0.##}%";
+        ws.Cell(row, 1).Value = $"Số thuế GTGT phải nộp = (1) x {baseVatRate * 100:0.##}%";
         ws.Range(row, 1, row, 3).Merge();
         ws.Cell(row, 1).Style.Font.Bold = true;
         ws.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
-        ws.Cell(row, 4).FormulaA1 = $"ROUND(D{secTotalRow} * {sec1VatRate.ToString(CultureInfo.InvariantCulture)}, 0)";
+        ws.Cell(row, 4).FormulaA1 = $"ROUND(D{secTotalRow} * {baseVatRate.ToString(CultureInfo.InvariantCulture)}, 0)";
         ws.Cell(row, 4).Style.Font.Bold = true;
         ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
         FormatSubTotalRow(ws.Range(row, 1, row, 4));
         vatTotalRowList.Add(row);
         row++;
+
+        if (hasReducedVat && reducedRows.Count > 0)
+        {
+            ws.Cell(row, 1).Value = $"2. Hàng hóa giảm thuế GTGT theo NQ 204/2025 ({reducedVatRate * 100:0.##}% GTGT)";
+            ws.Range(row, 1, row, 4).Merge();
+            ws.Cell(row, 1).Style.Font.Bold = true;
+            ws.Cell(row, 1).Style.Fill.BackgroundColor = SectionBgColor;
+            row++;
+
+            int sec2StartRow = row;
+            foreach (var item in reducedRows)
+            {
+                SetTextCell(ws.Cell(row, 1), item.Code);
+                ws.Cell(row, 2).Value = item.Date;
+                ws.Cell(row, 2).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+                ws.Cell(row, 3).Value = item.Desc;
+                ws.Cell(row, 4).Value = item.Amount;
+                ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
+                FormatDataRow(ws.Range(row, 1, row, 4));
+                row++;
+            }
+            int sec2EndRow = row - 1;
+
+            ws.Cell(row, 1).Value = "Tổng cộng doanh thu (1)";
+            ws.Range(row, 1, row, 3).Merge();
+            ws.Cell(row, 1).Style.Font.Bold = true;
+            ws.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+            ws.Cell(row, 4).FormulaA1 = $"SUM(D{sec2StartRow}:D{sec2EndRow})";
+            ws.Cell(row, 4).Style.Font.Bold = true;
+            ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
+            FormatSubTotalRow(ws.Range(row, 1, row, 4));
+            int sec2TotalRow = row;
+            row++;
+
+            ws.Cell(row, 1).Value = $"Số thuế GTGT phải nộp = (1) x {reducedVatRate * 100:0.##}%";
+            ws.Range(row, 1, row, 3).Merge();
+            ws.Cell(row, 1).Style.Font.Bold = true;
+            ws.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
+            ws.Cell(row, 4).FormulaA1 = $"ROUND(D{sec2TotalRow} * {reducedVatRate.ToString(CultureInfo.InvariantCulture)}, 0)";
+            ws.Cell(row, 4).Style.Font.Bold = true;
+            ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
+            FormatSubTotalRow(ws.Range(row, 1, row, 4));
+            vatTotalRowList.Add(row);
+            row++;
+        }
 
         // TUYỆT ĐỐI KHÔNG CÓ DÒNG THUẾ TNCN Ở ĐÂY (TNCN tính tại S2c)
 
@@ -855,13 +1061,13 @@ public class TaxExportService : ITaxExportService
             return subTotalRow;
         }
 
-        // 2.a Chi phí NVL, hàng hóa (có dòng Giá vốn COGS)
+        // 2.a Chi phí NVL, hàng hóa (có dòng Giá vốn COGS có chứng từ hợp lệ — KHÔNG cộng 70% ước tính theo Điều 6 NĐ 68)
         var cogsDesc = summary.IsCogsEstimated
-            ? "Giá vốn hàng bán trong kỳ (COGS ước tính theo tỷ lệ)"
+            ? "Giá vốn hàng bán có chứng từ hợp lệ trong kỳ (còn mặt hàng thiếu giá vốn chưa được trừ)"
             : "Giá vốn hàng bán xuất trong kỳ (COGS có hóa đơn chứng từ hợp lệ)";
         var row2a = RenderExpenseSubSection("2.a: Chi phí nguyên vật liệu, hàng hóa (bao gồm Giá vốn COGS)", "nguyên vật liệu|hàng hóa|nhập hàng|vật tư|cogs", summary.CogsAmount, cogsDesc);
 
-        // 2.b Chi phí tiền lương, tiền công
+        // 2.b Chi phí tiền lương, tiền công (đã loại lương chủ hộ/thành viên hộ theo Điều 6 NĐ 68)
         var row2b = RenderExpenseSubSection("2.b: Chi phí tiền lương, tiền công và các khoản chi cho người lao động", "lương|salary|nhân viên|tiền công|thưởng|bảo hiểm");
 
         // 2.c Chi phí thuê mặt bằng
@@ -873,8 +1079,8 @@ public class TaxExportService : ITaxExportService
         // 2.đ Chi phí khác
         var row2đ = RenderExpenseSubSection("2.đ: Chi phí quản lý và các chi phí khác", "văn phòng phẩm|công cụ|dụng cụ|tiếp khách|vệ sinh|rác");
 
-        // 2.e Thuế phí được trừ
-        var row2e = RenderExpenseSubSection("2.e: Thuế, phí, lệ phí liên quan đến hoạt động SXKD được trừ", "môn bài|lệ phí|phí kiểm định|thuế đất");
+        // 2.e Thuế phí được trừ (không gồm lệ phí môn bài từ 2026)
+        var row2e = RenderExpenseSubSection("2.e: Thuế, phí, lệ phí liên quan đến hoạt động SXKD được trừ", "lệ phí|phí kiểm định|thuế đất");
 
         // Dòng Tổng chi phí SXKD hợp lý hợp lệ (2)
         ws.Cell(row, 1).Value = "Tổng chi phí SXKD hợp lý hợp lệ (2) = 2.a + 2.b + 2.c + 2.d + 2.đ + 2.e";
@@ -901,16 +1107,46 @@ public class TaxExportService : ITaxExportService
         row++;
 
         // ================= NHÓM 4: THUẾ TNCN PHẢI NỘP =================
-        var pitRateDecimal = summary.PitRate / 100m;
-        var pitRateStr = $"{summary.PitRate:0.##}%";
-        ws.Cell(row, 1).Value = $"4. Thuế Thu nhập cá nhân (TNCN) phải nộp theo tỷ lệ kê khai ({pitRateStr})";
-        ws.Range(row, 1, row, 3).Merge();
-        ws.Cell(row, 1).Style.Font.Bold = true;
-        ws.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
-        ws.Cell(row, 4).FormulaA1 = $"ROUND(D{profitRow} * {pitRateDecimal.ToString(System.Globalization.CultureInfo.InvariantCulture)}, 0)";
-        ws.Cell(row, 4).Style.Font.Bold = true;
-        ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
-        FormatTotalRow(ws.Range(row, 1, row, 4));
+        var settlementRate = summary.AnnualSettlementPitRate > 0 ? summary.AnnualSettlementPitRate : (summary.PitRate > 0 ? summary.PitRate : 15m);
+        var settlementRateDec = settlementRate / 100m;
+        if (summary.IsProvisionalPitPeriod)
+        {
+            ws.Cell(row, 1).Value = $"4.a Thuế TNCN dự kiến quyết toán năm theo lợi nhuận ({settlementRate:0.##}%){(summary.IsPitReduced ? $" - đã giảm {summary.PitReductionPercentage:0.##}% NĐ 398" : string.Empty)}";
+            ws.Range(row, 1, row, 3).Merge();
+            ws.Cell(row, 1).Style.Font.Bold = true;
+            ws.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
+            ws.Cell(row, 4).Value = summary.EstimatedAnnualSettlementPit;
+            ws.Cell(row, 4).Style.Font.Bold = true;
+            ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
+            FormatSubTotalRow(ws.Range(row, 1, row, 4));
+            row++;
+
+            ws.Cell(row, 1).Value = $"4. Thuế Thu nhập cá nhân (TNCN) tạm nộp kỳ này (Khoản 2 Điều 10 NĐ 68 - {summary.PitRate:0.##}%)";
+            ws.Range(row, 1, row, 3).Merge();
+            ws.Cell(row, 1).Style.Font.Bold = true;
+            ws.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+            ws.Cell(row, 4).Value = summary.PitAmount;
+            ws.Cell(row, 4).Style.Font.Bold = true;
+            ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
+            FormatTotalRow(ws.Range(row, 1, row, 4));
+        }
+        else
+        {
+            var netFactor = summary.IsPitReduced && summary.PitReductionPercentage > 0m
+                ? Math.Max(0m, 1m - summary.PitReductionPercentage / 100m)
+                : 1m;
+            var labelSuffix = summary.IsPitReduced && summary.PitReductionPercentage > 0m
+                ? $" (đã giảm {summary.PitReductionPercentage:0.##}% theo NQ 43/2026 & NĐ 398/2026)"
+                : string.Empty;
+            ws.Cell(row, 1).Value = $"4. Thuế Thu nhập cá nhân (TNCN) phải nộp theo tỷ lệ kê khai ({settlementRate:0.##}%){labelSuffix}";
+            ws.Range(row, 1, row, 3).Merge();
+            ws.Cell(row, 1).Style.Font.Bold = true;
+            ws.Cell(row, 1).Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Center;
+            ws.Cell(row, 4).FormulaA1 = $"ROUND(D{profitRow} * {settlementRateDec.ToString(CultureInfo.InvariantCulture)} * {netFactor.ToString(CultureInfo.InvariantCulture)}, 0)";
+            ws.Cell(row, 4).Style.Font.Bold = true;
+            ws.Cell(row, 4).Style.NumberFormat.Format = NumberFormatVnd;
+            FormatTotalRow(ws.Range(row, 1, row, 4));
+        }
 
         // Khối chữ ký
         RenderSignatureBlock(ws, ref row, 4);
@@ -1496,12 +1732,48 @@ public class TaxExportService : ITaxExportService
         int row = 12;
         int startDataRow = row;
 
-        // Tìm chứng từ nộp thuế nếu có
+        // Tìm chứng từ thực nộp thuế NSNN đã phát sinh trong kỳ
         var taxPaidVouchers = deductibleExpenses.Where(v =>
         {
-            var cat = (v.Category ?? string.Empty).ToLowerInvariant();
-            return cat.Contains("thuế") || cat.Contains("tax") || cat.Contains("nsnn") || cat.Contains("kho bạc");
+            var text = $"{v.Category} {v.Note}".ToLowerInvariant();
+            return v.Nature == FinancialNature.TaxPayment ||
+                   text.Contains("thuế") || text.Contains("tax") || text.Contains("nsnn") ||
+                   text.Contains("kho bạc") || text.Contains("môn bài");
         }).ToList();
+
+        (string VoucherCodes, string LatestDate, decimal PaidAmount) SummarizeTaxPayments(Func<ExpenseVoucher, bool> predicate)
+        {
+            var matched = taxPaidVouchers.Where(predicate).ToList();
+            if (matched.Count == 0) return ("-", "-", 0m);
+            var codes = string.Join(", ", matched.Select(v => v.VoucherCode).Where(c => !string.IsNullOrWhiteSpace(c)));
+            var latestDate = ToVietnamTime(matched.Max(v => v.ExpenseDate)).ToString("dd/MM/yyyy");
+            return (string.IsNullOrWhiteSpace(codes) ? "-" : codes, latestDate, matched.Sum(v => v.Amount));
+        }
+
+        static bool IsPitVoucher(ExpenseVoucher v)
+        {
+            var text = $"{v.Category} {v.Note}".ToLowerInvariant();
+            return text.Contains("tncn") || text.Contains("pit") || text.Contains("thu nhập cá nhân");
+        }
+
+        static bool IsVatVoucher(ExpenseVoucher v)
+        {
+            var text = $"{v.Category} {v.Note}".ToLowerInvariant();
+            return text.Contains("gtgt") || text.Contains("vat") || text.Contains("giá trị gia tăng");
+        }
+
+        static bool IsLicenseFeeVoucher(ExpenseVoucher v)
+        {
+            var text = $"{v.Category} {v.Note}".ToLowerInvariant();
+            return text.Contains("môn bài") || text.Contains("license");
+        }
+
+        var vatPaid = SummarizeTaxPayments(v => IsVatVoucher(v) && !IsPitVoucher(v));
+        var pitPaid = SummarizeTaxPayments(v => IsPitVoucher(v));
+        var licensePaid = SummarizeTaxPayments(v => IsLicenseFeeVoucher(v));
+        var deadlineDisplay = summary.FilingDeadlineLocal != default
+            ? $"Chậm nhất {summary.FilingDeadlineLocal:dd/MM/yyyy}"
+            : "Chậm nhất ngày cuối tháng đầu quý sau";
 
         // 1. Thuế GTGT
         ws.Cell(row, 1).Value = 1;
@@ -1509,12 +1781,12 @@ public class TaxExportService : ITaxExportService
         ws.Cell(row, 3).Value = 0m;
         ws.Cell(row, 4).Value = summary.VatAmount;
         ws.Cell(row, 5).FormulaA1 = $"C{row} + D{row}";
-        SetTextCell(ws.Cell(row, 6), "-");
-        ws.Cell(row, 7).Value = "-";
-        ws.Cell(row, 8).Value = 0m;
+        SetTextCell(ws.Cell(row, 6), vatPaid.VoucherCodes);
+        ws.Cell(row, 7).Value = vatPaid.LatestDate;
+        ws.Cell(row, 8).Value = vatPaid.PaidAmount;
         ws.Cell(row, 9).FormulaA1 = $"MAX(0, E{row} - H{row})";
         ws.Cell(row, 10).FormulaA1 = $"MAX(0, H{row} - E{row})";
-        ws.Cell(row, 11).Value = "Chậm nhất ngày cuối tháng đầu quý sau";
+        ws.Cell(row, 11).Value = deadlineDisplay;
         ws.Cell(row, 12).Value = "Thuế GTGT phát sinh trong kỳ";
         FormatDataRow(ws.Range(row, 1, row, 12));
         row++;
@@ -1525,13 +1797,15 @@ public class TaxExportService : ITaxExportService
         ws.Cell(row, 3).Value = 0m;
         ws.Cell(row, 4).Value = summary.PitAmount;
         ws.Cell(row, 5).FormulaA1 = $"C{row} + D{row}";
-        SetTextCell(ws.Cell(row, 6), "-");
-        ws.Cell(row, 7).Value = "-";
-        ws.Cell(row, 8).Value = 0m;
+        SetTextCell(ws.Cell(row, 6), pitPaid.VoucherCodes);
+        ws.Cell(row, 7).Value = pitPaid.LatestDate;
+        ws.Cell(row, 8).Value = pitPaid.PaidAmount;
         ws.Cell(row, 9).FormulaA1 = $"MAX(0, E{row} - H{row})";
         ws.Cell(row, 10).FormulaA1 = $"MAX(0, H{row} - E{row})";
-        ws.Cell(row, 11).Value = "Chậm nhất ngày cuối tháng đầu quý sau";
-        ws.Cell(row, 12).Value = "Thuế TNCN phát sinh trong kỳ";
+        ws.Cell(row, 11).Value = deadlineDisplay;
+        ws.Cell(row, 12).Value = summary.IsPitReduced && summary.PitReductionAmount > 0m
+            ? $"Đã giảm {summary.PitReductionPercentage:0.##}% theo NĐ 398/2026 ({summary.PitReductionAmount:N0}đ)"
+            : "Thuế TNCN phát sinh trong kỳ";
         FormatDataRow(ws.Range(row, 1, row, 12));
         row++;
 
@@ -1615,20 +1889,25 @@ public class TaxExportService : ITaxExportService
         FormatDataRow(ws.Range(row, 1, row, 12));
         row++;
 
-        // 8. Lệ phí môn bài
-        var licenseFee = summary.AnnualAccumulatedRevenue > 500_000_000m ? 1_000_000m : 500_000m;
+        // 8. Lệ phí môn bài — ĐÃ BÃI BỎ TỪ 01/01/2026 theo K7 Đ10 NQ 198/2025/QH15 & K4 Đ6 NĐ 362/2025/NĐ-CP
+        var isLicenseFeeAbolished = summary.Year >= 2026;
+        var licenseFee = isLicenseFeeAbolished
+            ? 0m
+            : (summary.AnnualAccumulatedRevenue > 500_000_000m ? 1_000_000m : 500_000m);
         ws.Cell(row, 1).Value = 8;
         ws.Cell(row, 2).Value = "Lệ phí môn bài";
         ws.Cell(row, 3).Value = 0m;
         ws.Cell(row, 4).Value = licenseFee;
         ws.Cell(row, 5).FormulaA1 = $"C{row} + D{row}";
-        SetTextCell(ws.Cell(row, 6), "-");
-        ws.Cell(row, 7).Value = "-";
-        ws.Cell(row, 8).Value = 0m;
+        SetTextCell(ws.Cell(row, 6), licensePaid.VoucherCodes);
+        ws.Cell(row, 7).Value = licensePaid.LatestDate;
+        ws.Cell(row, 8).Value = licensePaid.PaidAmount;
         ws.Cell(row, 9).FormulaA1 = $"MAX(0, E{row} - H{row})";
         ws.Cell(row, 10).FormulaA1 = $"MAX(0, H{row} - E{row})";
-        ws.Cell(row, 11).Value = "Chậm nhất ngày 30/01 hàng năm";
-        ws.Cell(row, 12).Value = "Lệ phí môn bài hàng năm";
+        ws.Cell(row, 11).Value = isLicenseFeeAbolished ? "Đã bãi bỏ từ 01/01/2026" : "Chậm nhất ngày 30/01 hàng năm";
+        ws.Cell(row, 12).Value = isLicenseFeeAbolished
+            ? "Bãi bỏ theo NQ 198/2025/QH15 & NĐ 362/2025/NĐ-CP (chỉ ghi nhận nếu nộp nợ cũ ≤ 2025)"
+            : "Lệ phí môn bài hàng năm";
         FormatDataRow(ws.Range(row, 1, row, 12));
         int endDataRow = row;
         row++;
@@ -1730,10 +2009,13 @@ public class TaxExportService : ITaxExportService
 
         string[] legalBases =
         {
-            "- Nghị định số 68/2026/NĐ-CP: Quy định chính sách và quản lý thuế đối với hộ kinh doanh.",
-            "- Nghị định số 141/2026/NĐ-CP: Hướng dẫn khung doanh thu và phương pháp tính thuế GTGT & TNCN.",
-            "- Thông tư số 152/2025/TT-BTC: Chế độ kế toán và mẫu biểu sổ sách dành cho hộ kinh doanh (hiệu lực 01/01/2026).",
-            "- Nghị quyết số 204/2025/QH15: Chính sách giảm 20% mức tỷ lệ thuế GTGT cho hộ kinh doanh đến hết 31/12/2026."
+            "- Nghị quyết số 198/2025/QH15 & Nghị định số 362/2025/NĐ-CP: Bãi bỏ thuế khoán và lệ phí môn bài từ 01/01/2026.",
+            "- Nghị định số 68/2026/NĐ-CP & Nghị định số 141/2026/NĐ-CP: Chính sách thuế hộ kinh doanh (ngưỡng 1 tỷ, tạm nộp/quyết toán, Điều 6 chi phí hợp lệ không dùng tiền mặt từ 5 triệu).",
+            "- Nghị quyết số 43/2026/QH16 & Nghị định số 398/2026/NĐ-CP: Giảm 30% thuế TNCN năm 2026-2027 cho hộ kinh doanh có doanh thu năm ≤ 10 tỷ đồng (Mẫu số 01/03).",
+            "- Nghị định số 254/2026/NĐ-CP & Thông tư số 91/2026/TT-BTC: Hóa đơn điện tử khởi tạo từ máy tính tiền (hiệu lực 01/07/2026).",
+            "- Thông tư số 152/2025/TT-BTC (ban hành 31/12/2025): Chế độ kế toán và mẫu biểu sổ sách dành cho hộ kinh doanh (hiệu lực 01/01/2026).",
+            "- Nghị quyết số 204/2025/QH15: Chính sách giảm 20% mức tỷ lệ thuế GTGT cho hộ kinh doanh đến hết 31/12/2026.",
+            "- Luật sửa đổi được Quốc hội thông qua ngày 20/11/2026: Nâng ngưỡng được chọn phương pháp tính thuế tỷ lệ % lên 10 tỷ đồng/năm từ kỳ tính thuế 2027."
         };
 
         foreach (var item in legalBases)
@@ -1931,28 +2213,41 @@ public class TaxExportService : ITaxExportService
         {
             AddSummaryRow(1, "1. Doanh thu hàng hóa chịu thuế suất chuẩn 1%", summary.VatBreakdown.RevenueStandardRate10, "1.0%", summary.VatBreakdown.TaxAmountStandardRate10, "Bán lẻ hàng hóa chuẩn");
             AddSummaryRow(2, "2. Doanh thu hàng hóa giảm 20% thuế GTGT (NQ 204/2025)", summary.VatBreakdown.RevenueReducedRate08, "0.8%", summary.VatBreakdown.TaxAmountReducedRate08, "Giảm 20% mức tỷ lệ GTGT đến 31/12/2026");
-            AddSummaryRow(3, "3. Tổng thuế Giá trị gia tăng (GTGT) phát sinh", summary.TaxableRevenueInPeriod, "-", summary.VatAmount, "GTGT trực tiếp trên doanh thu", true);
+            AddSummaryRow(3, "3. Tổng thuế Giá trị gia tăng (GTGT) phát sinh", summary.TaxableRevenueInPeriod, "-", summary.VatAmount, "GTGT trực tiếp trên toàn bộ doanh thu", true);
 
             var pitRatePercent = $"{summary.PitRate:0.##}%";
-            AddSummaryRow(4, "4. Thuế Thu nhập cá nhân (TNCN)", summary.HouseholdGroup == HouseholdTaxGroup.Group1_Under1B ? 0m : summary.TaxableRevenueInPeriod, pitRatePercent, summary.PitAmount, "Ngưỡng trừ 1 tỷ chỉ áp dụng một lần cho cả hộ", true);
-            AddSummaryRow(5, "5. TỔNG CỘNG NGHĨA VỤ THUẾ ƯỚC TÍNH", summary.TaxableRevenueInPeriod, "-", summary.TotalTaxAmount, "⚠️ Dữ liệu ước tính, mang tính tham khảo", true);
+            var stt = 4;
+            if (summary.IsPitReduced && summary.PitReductionAmount > 0m)
+            {
+                AddSummaryRow(stt++, "4. Thuế TNCN trước giảm 30% (trên phần vượt ngưỡng 1 tỷ)", summary.PitTaxableRevenue, pitRatePercent, summary.PitBeforeReduction, "Ngưỡng trừ 1 tỷ chỉ áp dụng một lần cho cả hộ");
+                AddSummaryRow(stt++, $"5. Giảm {summary.PitReductionPercentage:0.##}% thuế TNCN (NQ 43/2026 & NĐ 398/2026)", null, $"-{summary.PitReductionPercentage:0.##}%", -summary.PitReductionAmount, "Áp dụng cho hộ kinh doanh có doanh thu năm ≤ 10 tỷ (Mẫu số 01)");
+                AddSummaryRow(stt++, "6. Thuế Thu nhập cá nhân (TNCN) thực nộp", summary.PitTaxableRevenue, pitRatePercent, summary.PitAmount, "Số thuế TNCN sau giảm 30%", true);
+            }
+            else
+            {
+                AddSummaryRow(stt++, "4. Thuế Thu nhập cá nhân (TNCN)", summary.HouseholdGroup == HouseholdTaxGroup.Group1_Under1B ? 0m : summary.PitTaxableRevenue, pitRatePercent, summary.PitAmount, "Ngưỡng trừ 1 tỷ chỉ áp dụng một lần cho cả hộ", true);
+            }
+            AddSummaryRow(stt, $"{stt}. TỔNG CỘNG NGHĨA VỤ THUẾ ƯỚC TÍNH", summary.TaxableRevenueInPeriod, "-", summary.TotalTaxAmount, "⚠️ Dữ liệu ước tính, mang tính tham khảo", true);
         }
         else
         {
             AddSummaryRow(1, "1. Tổng doanh thu bán hàng hóa", summary.TaxableRevenueInPeriod, "-", 0m, "Doanh thu thuần tính thuế trong kỳ");
             AddSummaryRow(2, "2. Thuế GTGT trực tiếp trên doanh thu", summary.TaxableRevenueInPeriod, $"{summary.VatRate:0.##}%", summary.VatAmount, "GTGT trực tiếp theo tỷ lệ %", true);
-            AddSummaryRow(3, "3. Giá vốn hàng bán (COGS)", summary.CogsAmount, "-", 0m, summary.IsCogsEstimated ? "Giá vốn ước tính (Cần cam kết chịu trách nhiệm)" : "Chứng từ hóa đơn hợp lệ");
+            AddSummaryRow(3, "3. Giá vốn hàng bán hợp lệ (COGS)", summary.CogsAmount, "-", 0m, summary.IsCogsEstimated ? "Chỉ tính phần có chứng từ (không cộng 70% ước tính theo Điều 6 NĐ 68)" : "Chứng từ hóa đơn hợp lệ");
             var effectiveOpex = (summary.CogsAmount > 0m || summary.OpexAmount > 0m)
                 ? summary.OpexAmount
                 : summary.DeductibleExpensesInPeriod;
             var totalDeductible = summary.DeductibleExpensesInPeriod > 0m
                 ? summary.DeductibleExpensesInPeriod
                 : (summary.CogsAmount + summary.OpexAmount);
-            AddSummaryRow(4, "4. Chi phí kinh doanh được trừ (OPEX)", effectiveOpex, "-", 0m, "Chi phí vận hành có hóa đơn chứng từ");
+            AddSummaryRow(4, "4. Chi phí kinh doanh được trừ (OPEX - Điều 6 NĐ 68)", effectiveOpex, "-", 0m, "Đã loại chi tiền mặt ≥ 5 triệu và lương chủ hộ");
 
-            var netProfit = Math.Max(0m, summary.TaxableRevenueInPeriod - totalDeductible);
-            AddSummaryRow(5, "5. Thu nhập chịu thuế TNCN (Doanh thu - Chi phí)", netProfit, "-", 0m, "Lợi nhuận kinh doanh làm căn cứ tính TNCN");
-            AddSummaryRow(6, "6. Thuế Thu nhập cá nhân (TNCN kê khai)", netProfit, $"{summary.PitRate:0.##}%", summary.PitAmount, "Áp mức thuế suất theo khung doanh thu", true);
+            var netProfit = summary.TaxableIncomeYtd > 0m ? summary.TaxableIncomeYtd : Math.Max(0m, summary.TaxableRevenueInPeriod - totalDeductible);
+            AddSummaryRow(5, "5. Thu nhập tính thuế TNCN lũy kế (Doanh thu - Chi phí hợp lệ)", netProfit, "-", 0m, "Lợi nhuận kinh doanh làm căn cứ quyết toán năm");
+            var pitLabel = summary.IsProvisionalPitPeriod
+                ? $"6. Thuế TNCN tạm nộp kỳ này (Khoản 2 Điều 10 NĐ 68{(summary.IsPitReduced ? $" - đã giảm {summary.PitReductionPercentage:0.##}% NĐ 398" : string.Empty)})"
+                : $"6. Thuế TNCN quyết toán kê khai{(summary.IsPitReduced ? $" (đã giảm {summary.PitReductionPercentage:0.##}% NĐ 398)" : string.Empty)}";
+            AddSummaryRow(6, pitLabel, summary.PitTaxableRevenue, $"{summary.PitRate:0.##}%", summary.PitAmount, summary.IsProvisionalPitPeriod ? $"Dự kiến quyết toán năm ({summary.AnnualSettlementPitRate:0.##}%): {summary.EstimatedAnnualSettlementPit:N0}đ" : "Quyết toán năm hạn 31/03 năm sau", true);
             AddSummaryRow(7, "7. TỔNG CỘNG NGHĨA VỤ THUẾ ƯỚC TÍNH", summary.TaxableRevenueInPeriod, "-", summary.TotalTaxAmount, "⚠️ Dữ liệu ước tính, mang tính tham khảo", true);
         }
 
@@ -1994,7 +2289,7 @@ public class TaxExportService : ITaxExportService
         ws.Cell($"{rightColLetter}3").Style.Font.FontSize = 9;
         ws.Cell($"{rightColLetter}3").Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;
 
-        ws.Cell($"{rightColLetter}4").Value = "ngày 23/12/2025 của Bộ Tài chính)";
+        ws.Cell($"{rightColLetter}4").Value = "ngày 31/12/2025 của Bộ Tài chính)";
         ws.Cell($"{rightColLetter}4").Style.Font.Italic = true;
         ws.Cell($"{rightColLetter}4").Style.Font.FontSize = 9;
         ws.Cell($"{rightColLetter}4").Style.Alignment.Horizontal = XLAlignmentHorizontalValues.Right;

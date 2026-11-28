@@ -105,6 +105,56 @@ public class OperationalReminderTests
 
     private sealed class FixedClock : TimeProvider
     {
-        public override DateTimeOffset GetUtcNow() => new(2026, 10, 20, 8, 0, 0, TimeSpan.Zero);
+        private readonly DateTimeOffset _now;
+        public FixedClock() : this(new DateTimeOffset(2026, 10, 20, 8, 0, 0, TimeSpan.Zero)) { }
+        public FixedClock(DateTimeOffset now) => _now = now;
+        public override DateTimeOffset GetUtcNow() => _now;
+    }
+
+    [Fact]
+    public async Task QueuesAnnualDeclarationSettlementReminderAgainstMarch31Deadline()
+    {
+        var settings = CreateSettings();
+        var databaseName = Guid.NewGuid().ToString();
+        await using var services = new ServiceCollection()
+            .AddDbContext<AppDbContext>(options => options.UseInMemoryDatabase(databaseName))
+            .AddScoped<ITenantContext, TenantContext>()
+            .AddScoped<IUnitOfWork, UnitOfWork>()
+            .AddScoped<IRepository<OutboxMessage>, GenericRepository<OutboxMessage>>()
+            .AddScoped<IPnLReportRepository, PnLReportRepository>()
+            .AddScoped<NotificationOutbox>()
+            .AddSingleton<IConfiguration>(settings)
+            .BuildServiceProvider();
+        using var scope = services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+        var annualDeclarationSnapshot = new HouseholdTaxSnapshot
+        {
+            TenantId = TenantId,
+            Year = 2026,
+            PeriodType = TaxPeriodType.Year,
+            PeriodNumber = 1,
+            IsTaxExempt = false,
+            AppliedPitMethod = TaxCalculationMethod.DeclarationBased,
+            Status = TaxSnapshotStatus.Finalized
+        };
+        db.Tenants.Add(new Tenant { Id = TenantId });
+        db.HouseholdTaxSnapshots.Add(annualDeclarationSnapshot);
+        await db.SaveChangesAsync();
+
+        // 2027-03-20 is 11 days before 31/03/2027 (within 14-day TaxReminderDaysBefore window)
+        using var worker = new OperationalReminderWorker(
+            services.GetRequiredService<IServiceScopeFactory>(),
+            settings,
+            NullLogger<OperationalReminderWorker>.Instance,
+            new FixedClock(new DateTimeOffset(2027, 3, 20, 8, 0, 0, TimeSpan.Zero)));
+        await worker.StartAsync(CancellationToken.None);
+        await worker.StopAsync(CancellationToken.None);
+
+        var messages = await db.OutboxMessages.IgnoreQueryFilters().ToListAsync();
+        var reminder = Assert.Single(messages
+            .Select(m => JsonSerializer.Deserialize<BusinessNotification>(m.PayloadJson)!)
+            .Where(n => n.Type == BusinessNotificationTypes.TaxFilingReminder));
+        Assert.Equal(annualDeclarationSnapshot.Id, reminder.TaxFilingSnapshotId);
+        Assert.Contains("31/03/2027", reminder.Message);
     }
 }

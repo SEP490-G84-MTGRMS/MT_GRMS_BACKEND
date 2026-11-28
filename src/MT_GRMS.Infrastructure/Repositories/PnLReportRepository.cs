@@ -72,8 +72,10 @@ public class PnLReportRepository : IPnLReportRepository
 
         var productIds = orders.SelectMany(o => o.Details).Select(i => i.ProductId).Distinct().ToList();
         var productCostDict = await _context.Products
+            .AsNoTracking()
             .Where(p => productIds.Contains(p.Id))
-            .ToDictionaryAsync(p => p.Id, p => p.CostPrice ?? 0m, ct);
+            .Select(p => new { p.Id, CostPrice = p.CostPrice ?? 0m })
+            .ToDictionaryAsync(p => p.Id, p => p.CostPrice, ct);
 
         // Truy vấn giá nhập bình quân gia quyền từ các phiếu nhập kho (GoodsReceiptLines) và lô tồn (BranchStocks)
         var grnLines = await _context.GoodsReceiptLines
@@ -267,8 +269,10 @@ public class PnLReportRepository : IPnLReportRepository
 
         var productIds = allDetails.Select(d => d.ProductId).Distinct().ToList();
         var productDict = await _context.Products
+            .AsNoTracking()
             .Where(p => productIds.Contains(p.Id))
-            .ToDictionaryAsync(p => p.Id, p => new { p.ProductCode, p.Name, CostPrice = p.CostPrice ?? 0m }, ct);
+            .Select(p => new { p.Id, p.ProductCode, p.Name, CostPrice = p.CostPrice ?? 0m })
+            .ToDictionaryAsync(p => p.Id, p => new { p.ProductCode, p.Name, p.CostPrice }, ct);
 
         var grouped = allDetails
             .GroupBy(d => d.ProductId)
@@ -337,8 +341,10 @@ public class PnLReportRepository : IPnLReportRepository
         // Lấy bảng giá vốn cho các sản phẩm liên quan (1 query)
         var productIds = orders.SelectMany(o => o.Details).Select(i => i.ProductId).Distinct().ToList();
         var productCostDict = await _context.Products
+            .AsNoTracking()
             .Where(p => productIds.Contains(p.Id))
-            .ToDictionaryAsync(p => p.Id, p => p.CostPrice ?? 0m, ct);
+            .Select(p => new { p.Id, CostPrice = p.CostPrice ?? 0m })
+            .ToDictionaryAsync(p => p.Id, p => p.CostPrice, ct);
 
         // 2. Gom chi phí trong toàn kỳ (1 query)
         var expenseQuery = _context.ExpenseVouchers.AsQueryable();
