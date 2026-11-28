@@ -51,7 +51,7 @@ public class ShiftsController : BaseApiController
     /// Lấy thông tin ca làm việc đang mở của chi nhánh / quầy thu ngân.
     /// </summary>
     [HttpGet("current")]
-    public async Task<ActionResult<ApiResponse<ShiftDetailResponse>>> GetCurrentShift(
+    public async Task<ActionResult<ApiResponse<ShiftDetailResponse?>>> GetCurrentShift(
         [FromQuery] string? branchId,
         [FromQuery] Guid? tillId,
         CancellationToken cancellationToken)
@@ -60,16 +60,16 @@ public class ShiftsController : BaseApiController
         var targetBranchId = resolved ?? (_tenantContext.CurrentBranchId ?? Guid.Empty);
         if (targetBranchId == Guid.Empty)
         {
-            return BadRequest(ApiResponse<ShiftDetailResponse>.Fail("REQUIRED_BRANCH_ID", "Vui lòng cung cấp branchId chi nhánh hợp lệ."));
+            return BadRequest(ApiResponse<ShiftDetailResponse?>.Fail("REQUIRED_BRANCH_ID", "Vui lòng cung cấp branchId chi nhánh hợp lệ."));
         }
 
         var shift = await _shiftService.GetCurrentShiftAsync(targetBranchId, tillId, cancellationToken);
         if (shift == null)
         {
-            return NotFound(ApiResponse<ShiftDetailResponse>.Fail("NO_ACTIVE_SHIFT", "Hiện tại không có ca làm việc nào đang mở trên quầy này."));
+            return Ok(ApiResponse<ShiftDetailResponse?>.Ok(null, "Hiện tại không có ca làm việc nào đang mở trên quầy này."));
         }
 
-        return Ok(ApiResponse<ShiftDetailResponse>.Ok(shift));
+        return Ok(ApiResponse<ShiftDetailResponse?>.Ok(shift));
     }
 
     /// <summary>

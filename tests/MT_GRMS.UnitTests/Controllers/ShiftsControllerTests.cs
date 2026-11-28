@@ -114,15 +114,19 @@ public class ShiftsControllerTests
 
         var resFound = await _controller.GetCurrentShift(null, null, CancellationToken.None);
         var ok = Assert.IsType<OkObjectResult>(resFound.Result);
-        var apiRes = Assert.IsType<ApiResponse<ShiftDetailResponse>>(ok.Value);
+        var apiRes = Assert.IsType<ApiResponse<ShiftDetailResponse?>>(ok.Value);
         Assert.True(apiRes.Success);
+        Assert.NotNull(apiRes.Data);
 
-        // NotFound
+        // No active shift returns HTTP 200 with null Data (avoids red 404 console noise on POS load)
         _mockShiftService
             .Setup(s => s.GetCurrentShiftAsync(_branchId, null, It.IsAny<CancellationToken>()))
             .ReturnsAsync((ShiftDetailResponse?)null);
-        var resNotFound = await _controller.GetCurrentShift(null, null, CancellationToken.None);
-        Assert.IsType<NotFoundObjectResult>(resNotFound.Result);
+        var resNoShift = await _controller.GetCurrentShift(null, null, CancellationToken.None);
+        var okEmpty = Assert.IsType<OkObjectResult>(resNoShift.Result);
+        var emptyApiRes = Assert.IsType<ApiResponse<ShiftDetailResponse?>>(okEmpty.Value);
+        Assert.True(emptyApiRes.Success);
+        Assert.Null(emptyApiRes.Data);
     }
 
     [Fact]

@@ -883,6 +883,8 @@ public class PaymentsController : BaseApiController
         await _context.PaymentTransactions.AddAsync(paymentTx, ct);
 
         // Tính toán lũy kế thanh toán của đơn hàng (Hỗ trợ chuyển thiếu tiền / nhiều lần)
+        bool wasPendingPayment = string.Equals(order.Status, "PendingPayment", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(order.Status, "PENDING_PAYMENT", StringComparison.OrdinalIgnoreCase);
         decimal previousDeposit = order.DepositAmount;
         decimal totalPaidSoFar = previousDeposit + verifiedAmountIn;
         bool isFullPayment = totalPaidSoFar >= order.FinalAmount;
@@ -891,12 +893,42 @@ public class PaymentsController : BaseApiController
         if (isFullPayment)
         {
             order.PaymentStatus = "PAID";
-            if (string.Equals(order.Status, "PendingPayment", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(order.Status, "PENDING_PAYMENT", StringComparison.OrdinalIgnoreCase))
+            if (wasPendingPayment)
             {
                 order.Status = "Completed";
             }
             order.DepositAmount = order.FinalAmount;
+            if (order.Note == null || !order.Note.Contains("[ĐÃ VÀO NGÂN HÀNG]"))
+            {
+                order.Note = string.IsNullOrWhiteSpace(order.Note)
+                    ? "[ĐÃ VÀO NGÂN HÀNG]"
+                    : $"{order.Note} [ĐÃ VÀO NGÂN HÀNG]";
+            }
+
+            // Cộng điểm thưởng & tổng chi tiêu cho khách thành viên ngay khi thanh toán đủ qua SePay
+            if (wasPendingPayment && order.CustomerId.HasValue && order.FinalAmount > 0m)
+            {
+                var customer = await _context.Customers.IgnoreQueryFilters()
+                    .FirstOrDefaultAsync(c => c.Id == order.CustomerId.Value && c.TenantId == order.TenantId && !c.IsDeleted, ct);
+                if (customer != null)
+                {
+                    var loyaltySetting = await _context.LoyaltySettings.IgnoreQueryFilters().AsNoTracking()
+                        .FirstOrDefaultAsync(ls => ls.TenantId == order.TenantId && !ls.IsDeleted, ct);
+                    bool isLoyaltyEnabled = loyaltySetting?.IsEnabled ?? true;
+                    decimal earningRate = (loyaltySetting != null && loyaltySetting.EarningRateAmount > 0m)
+                        ? loyaltySetting.EarningRateAmount : 10000m;
+                    int earningPoints = (loyaltySetting != null && loyaltySetting.EarningPoints > 0)
+                        ? loyaltySetting.EarningPoints : 1;
+
+                    if (isLoyaltyEnabled)
+                    {
+                        int pointsEarned = (int)(order.FinalAmount / earningRate) * earningPoints;
+                        customer.RewardPoints += pointsEarned;
+                    }
+                    customer.TotalSpending += order.FinalAmount;
+                    customer.UpdatedAt = DateTime.UtcNow;
+                }
+            }
         }
         else
         {
@@ -937,6 +969,7 @@ public class PaymentsController : BaseApiController
         var paymentRealtimePayload = new
         {
             orderCode = order.OrderCode,
+            branchId = order.BranchId,
             isFullPayment,
             amountIn = verifiedAmountIn,
             totalPaid = totalPaidSoFar,
